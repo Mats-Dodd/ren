@@ -1416,6 +1416,43 @@ fn main() =
     fn main()
     |}]
 
+let%expect_test "inout is part of a function's type" =
+  (* if `ap` could take `bump`, `ap` would call it without `&` and the push
+     would be lost *)
+  run
+    {|
+fn bump(inout xs: Array<Int>) = push(&xs, 1)
+fn ap(f, x) = f(x)
+fn main() =
+  var xs = [0]
+  ap(bump, &xs)
+  print(xs)
+|};
+  [%expect
+    {|
+    error: expected `fn(_) -> _`, found `fn(inout Array<Int>)`
+      ┌─ test.ren:5:6
+    5 │   ap(bump, &xs)
+      │      ^^^^
+      = a function that changes its argument (`inout`) can't stand in for one that only reads it: its caller wouldn't pass the argument with `&`, so the change would be lost
+      help: pass it only where the parameter's type says `fn(inout ...)`, or call it directly
+    |}];
+  run
+    {|
+fn apply(f: fn(inout Int), inout x: Int) = f(&x)
+fn main() =
+  var a = 1
+  apply(fn(n) => (), &a)
+|};
+  [%expect
+    {|
+    error: expected `fn(inout Int)`, found `fn(_)`
+      ┌─ test.ren:4:9
+    4 │   apply(fn(n) => (), &a)
+      │         ^^^^^^^^^^^
+      = a function that only reads its argument can't stand in for one that changes it (`inout`)
+    |}]
+
 let%expect_test "nested places and for &" =
   run
     {|

@@ -62,6 +62,25 @@ type ctx = {
 let rec result_loc (e : expr) =
   match e.kind with Block (_, last) -> result_loc last | _ -> e.loc
 
+(* Where [found] and [expected] disagree on whether a function parameter is
+   `inout`, the mode [found] has there. Error messages explain that, since
+   the two types can otherwise look alike. *)
+let rec mode_clash found expected =
+  match (repr found, repr expected) with
+  | TFun (p1, r1, _, _), TFun (p2, r2, _, _)
+    when List.length p1 = List.length p2 ->
+      let here =
+        List.find_map
+          (fun ((x : Types.param), (y : Types.param)) ->
+            if x.mode <> y.mode then Some x.mode else mode_clash x.ty y.ty)
+          (List.combine p1 p2)
+      in
+      if here <> None then here else mode_clash r1 r2
+  | TCon (n1, a1), TCon (n2, a2) when n1 = n2 && List.length a1 = List.length a2
+    ->
+      List.find_map (fun (x, y) -> mode_clash x y) (List.combine a1 a2)
+  | _ -> None
+
 (* Unify [found] (what the code has) with [expected] (what it needs). [msg]
    words the error, given both types printed. *)
 let unify_at ?(notes = []) ?help ?msg loc ~found ~expected =
@@ -77,6 +96,7 @@ let unify_at ?(notes = []) ?help ?msg loc ~found ~expected =
       let params =
         List.sort_uniq compare (List.map snd (skolems found @ skolems expected))
       in
+      let clash = mode_clash found expected in
       let notes =
         notes
         @ List.map
@@ -86,6 +106,28 @@ let unify_at ?(notes = []) ?help ?msg loc ~found ~expected =
                  type `%s` could be"
                 t t)
             params
+        @
+        match clash with
+        | Some Inout ->
+            [
+              "a function that changes its argument (`inout`) can't stand in \
+               for one that only reads it: its caller wouldn't pass the \
+               argument with `&`, so the change would be lost";
+            ]
+        | Some Read ->
+            [
+              "a function that only reads its argument can't stand in for one \
+               that changes it (`inout`)";
+            ]
+        | None -> []
+      in
+      let help =
+        match (help, clash) with
+        | None, Some Inout ->
+            Some
+              "pass it only where the parameter's type says `fn(inout ...)`, \
+               or call it directly"
+        | h, _ -> h
       in
       Diag.error ?help ~notes loc msg
   | Unify.Infinite ->
@@ -114,8 +156,14 @@ let rec convert ~tvars ~row (t : Ast.ty) =
       let ret =
         match ret with Some r -> convert ~tvars ~row r | None -> unit
       in
-      TFun (List.map (convert ~tvars ~row) ps, ret, row (), row ())
-  | TyInout (t, _) -> TInout (convert ~tvars ~row t)
+      TFun (List.map (convert_param ~tvars ~row) ps, ret, row (), row ())
+  | TyInout _ ->
+      (* the parser only writes `inout` on a function type's parameter *)
+      assert false
+
+and convert_param ~tvars ~row = function
+  | TyInout (t, _) -> { mode = Inout; ty = convert ~tvars ~row t }
+  | t -> read (convert ~tvars ~row t)
 
 let closed () = REmpty
 
@@ -329,20 +377,19 @@ let rec infer env cx (e : expr) : ty =
         (infer env { cx with locals = Env.add var.name elem cx.locals } body);
       unit
 
-and param_type cx (p : param) =
+and param_type cx (p : Ast.param) =
   let t =
     match p.pty with
     | Some t -> convert ~tvars:cx.tparams ~row:fresh_row t
     | None -> fresh_var ()
   in
-  match p.pmode with Inout -> TInout t | Read -> t
+  { mode = p.pmode; ty = t }
 
 (* Inside the function, an `inout` parameter is an ordinary variable. *)
 and bind_params locals params ps =
   List.fold_left2
-    (fun locals (p : param) t ->
-      let t = match t with TInout t -> t | t -> t in
-      Env.add p.pname.name t locals)
+    (fun locals (p : Ast.param) (t : Types.param) ->
+      Env.add p.pname.name t.ty locals)
     locals params ps
 
 and infer_call env cx (e : expr) (f : expr) args =
@@ -360,12 +407,12 @@ and infer_call env cx (e : expr) (f : expr) args =
           (sprintf "%s takes %d argument%s but was given %d" name n (plural n)
              given);
       List.iter2
-        (fun p (a : expr) ->
-          match (repr p, a.kind) with
-          | TInout p, Ref place ->
+        (fun (p : Types.param) (a : expr) ->
+          match (p.mode, a.kind) with
+          | Inout, Ref place ->
               unify_at (result_loc place) ~found:(infer env cx place)
-                ~expected:p
-          | TInout _, _ ->
+                ~expected:p.ty
+          | Inout, _ ->
               let help =
                 match a.kind with
                 | Var x
@@ -377,7 +424,7 @@ and infer_call env cx (e : expr) (f : expr) args =
               Diag.error a.loc ~help
                 ~notes:[ "`&` shows at the call that the argument is changed" ]
                 (sprintf "%s changes this argument, so it needs `&`" name)
-          | _, Ref _ ->
+          | Read, Ref _ ->
               Diag.error a.loc ~help:"remove the `&`"
                 ~notes:
                   [
@@ -385,7 +432,8 @@ and infer_call env cx (e : expr) (f : expr) args =
                      parameter";
                   ]
                 (sprintf "%s doesn't change this argument" name)
-          | _ -> unify_at (result_loc a) ~found:(infer env cx a) ~expected:p)
+          | Read, _ ->
+              unify_at (result_loc a) ~found:(infer env cx a) ~expected:p.ty)
         ps args;
       absorb cx e.loc errs uses;
       ret
@@ -394,8 +442,8 @@ and infer_call env cx (e : expr) (f : expr) args =
          function, and its errors and dependencies become the caller's *)
       let arg (a : expr) =
         match a.kind with
-        | Ref place -> TInout (infer env cx place)
-        | _ -> infer env cx a
+        | Ref place -> { mode = Inout; ty = infer env cx place }
+        | _ -> read (infer env cx a)
       in
       let ps = List.map arg args in
       let ret = fresh_var () in
@@ -602,7 +650,7 @@ let rec free bound (e : expr) acc =
   | Lambda (ps, body) ->
       free
         (List.fold_left
-           (fun b (p : param) -> Names.add p.pname.name b)
+           (fun b (p : Ast.param) -> Names.add p.pname.name b)
            bound ps)
         body acc
   | Block (stmts, last) ->
@@ -728,7 +776,8 @@ let check_transparent (f : fn_def) =
             walk ~ok:true callee;
             List.iter (walk ~ok:true) args
         | Lambda (ps, body) ->
-            if List.exists (fun (p : param) -> p.pname.name = name) ps then ()
+            if List.exists (fun (p : Ast.param) -> p.pname.name = name) ps then
+              ()
             else if (not ok) && mentions body then
               fail e.loc "is captured by a lambda that outlives the call"
             else walk ~ok:false body
@@ -779,10 +828,10 @@ let signature (f : fn_def) scheme =
       reserve pr scheme;
       let params =
         List.map2
-          (fun (p : param) t ->
-            match repr t with
-            | TInout t -> "inout " ^ p.pname.name ^ ": " ^ show pr t
-            | t -> p.pname.name ^ ": " ^ show pr t)
+          (fun (p : Ast.param) (t : Types.param) ->
+            match t.mode with
+            | Inout -> "inout " ^ p.pname.name ^ ": " ^ show pr t.ty
+            | Read -> p.pname.name ^ ": " ^ show pr t.ty)
           f.params ps
       in
       let ret = show_ret pr ret in
@@ -808,16 +857,22 @@ let builtins () =
     (* fn<T>(T) uses Io *)
     ( "print",
       TFun
-        ( [ generic_var () ],
+        ( [ read (generic_var ()) ],
           unit,
           generic_row (),
           RExtend ("Io", generic_row ()) ) );
     (* fn<T>(Array<T>) -> Int *)
     ( "len",
-      TFun ([ array (generic_var ()) ], int, generic_row (), generic_row ()) );
+      TFun
+        ([ read (array (generic_var ())) ], int, generic_row (), generic_row ())
+    );
     (* fn<T>(inout Array<T>, T) *)
     ( "push",
-      TFun ([ TInout (array t); t ], unit, generic_row (), generic_row ()) );
+      TFun
+        ( [ { mode = Inout; ty = array t }; read t ],
+          unit,
+          generic_row (),
+          generic_row () ) );
   ]
 
 (* Infer every function's type, and return each function's signature. *)
@@ -939,13 +994,13 @@ let program ~file (prog : program) =
             match Hashtbl.find schemes f.name.name with
             | TFun (ps, _, _, _) as scheme ->
                 List.iter2
-                  (fun (p : param) t ->
+                  (fun (p : Ast.param) (t : Types.param) ->
                     if p.pty = None then (
                       let pr = printer () in
                       reserve pr scheme;
                       Diag.error p.pname.loc
                         ~help:
-                          (sprintf "write `%s: %s`" p.pname.name (show pr t))
+                          (sprintf "write `%s: %s`" p.pname.name (show pr t.ty))
                         ~notes:
                           [ "public functions spell out their full signature" ]
                         (sprintf

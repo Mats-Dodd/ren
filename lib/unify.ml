@@ -22,10 +22,9 @@ let rec occurs id level t =
   | TSkol _ -> ()
   | TCon (_, args) -> List.iter (occurs id level) args
   | TFun (ps, r, e, u) ->
-      List.iter (occurs id level) (r :: ps);
+      List.iter (occurs id level) (r :: param_tys ps);
       occurs_row (-1) level e;
       occurs_row (-1) level u
-  | TInout t -> occurs id level t
 
 (* The same for row variables. Type and row ids never clash, so passing -1
    as [id] just adjusts levels. *)
@@ -50,11 +49,15 @@ let rec unify a b =
       List.iter2 unify a1 a2
   | TFun (p1, r1, e1, u1), TFun (p2, r2, e2, u2)
     when List.length p1 = List.length p2 ->
-      List.iter2 unify p1 p2;
+      List.iter2
+        (fun a b ->
+          (* `fn(inout Int)` and `fn(Int)` are different types *)
+          if a.mode <> b.mode then raise Mismatch;
+          unify a.ty b.ty)
+        p1 p2;
       unify r1 r2;
       unify_row e1 e2;
       unify_row u1 u2
-  | TInout a, TInout b -> unify a b
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 

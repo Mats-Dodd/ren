@@ -21,18 +21,24 @@
    levels honest: binding a variable to a type lowers the levels inside that
    type to the variable's own. *)
 
+(* The same [Read | Inout] as in the AST. Writing [= Ast.mode] re-exports
+   that type, so both modules' constructors are interchangeable. *)
+type mode = Ast.mode = Read | Inout
+
 type ty =
   | TCon of string * ty list  (** [Int], [Option<Int>], [User] *)
-  | TFun of ty list * ty * row * row  (** params, result, errors, uses *)
-  | TInout of ty
-      (** an [inout] parameter's type; appears only as a parameter of a [TFun],
-          never as the type of a value *)
+  | TFun of param list * ty * row * row  (** params, result, errors, uses *)
   | TVar of tvar ref
   | TSkol of int * string
       (** a type parameter like [T], while checking the function that declares
           it: equal only to itself, since the function has to work for every [T]
       *)
 
+(* A function type's parameter: its type, and whether the function changes
+   it. The mode is part of the type, so a function that changes its argument
+   can't be passed where one that only reads it is expected: the caller
+   wouldn't write `&`, and the change would be lost. *)
+and param = { mode : mode; ty : ty }
 and tvar = Unbound of int * int  (** id, level *) | Link of ty
 and row = REmpty | RExtend of string * row | RVar of rvar ref
 and rvar = RUnbound of int * int  (** id, level *) | RLink of row
@@ -55,6 +61,8 @@ let int = TCon ("Int", [])
 let bool = TCon ("Bool", [])
 let unit = TCon ("Unit", [])
 let array t = TCon ("Array", [ t ])
+let read ty = { mode = Read; ty }
+let param_tys ps = List.map (fun p -> p.ty) ps
 
 (* Follow links to the type a variable currently stands for, shortening the
    chain as it goes so later lookups are quick. *)
@@ -116,8 +124,8 @@ let generalize ~skolems t =
               Hashtbl.add table id v;
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
-    | TFun (ps, r, e, u) -> TFun (List.map go ps, go r, row e, row u)
-    | TInout t -> TInout (go t)
+    | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
+  and param p = { p with ty = go p.ty }
   and row r =
     match repr_row r with
     | RVar ({ contents = RUnbound (id, l) } as cell) as r ->
@@ -144,8 +152,8 @@ let instantiate t =
             v)
     | (TVar _ | TSkol _) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
-    | TFun (ps, r, e, u) -> TFun (List.map go ps, go r, row e, row u)
-    | TInout t -> TInout (go t)
+    | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
+  and param p = { p with ty = go p.ty }
   and row r =
     match repr_row r with
     | RVar { contents = RUnbound (id, l) } when l = generic_level -> (
@@ -215,8 +223,7 @@ let rec reserve pr t =
         (Hashtbl.find_opt hints id)
   | TVar { contents = Link _ } | TSkol _ -> ()
   | TCon (_, args) -> List.iter (reserve pr) args
-  | TFun (ps, r, _, _) -> List.iter (reserve pr) (r :: ps)
-  | TInout t -> reserve pr t
+  | TFun (ps, r, _, _) -> List.iter (reserve pr) (r :: param_tys ps)
 
 let tail_name pr id kind =
   match Hashtbl.find_opt pr.tail_names id with
@@ -255,10 +262,12 @@ let rec show pr t =
   | TFun (ps, r, e, u) ->
       (* `let`s fix the order variables are named in: OCaml evaluates the
          operands of `^` right to left *)
-      let ps = List.map (show pr) ps in
+      let ps = List.map (show_param pr) ps in
       let r = show_ret pr r in
       "fn(" ^ String.concat ", " ps ^ ")" ^ r ^ show_effects pr e u
-  | TInout t -> "inout " ^ show pr t
+
+and show_param pr p =
+  match p.mode with Inout -> "inout " ^ show pr p.ty | Read -> show pr p.ty
 
 (* ` -> R`, or nothing for Unit. A returned function with effects is
    parenthesized, so it's clear whose effects they are. *)
@@ -280,8 +289,7 @@ let rec skolems t =
   | TSkol (id, n) -> [ (id, n) ]
   | TVar _ -> []
   | TCon (_, args) -> List.concat_map skolems args
-  | TFun (ps, r, _, _) -> List.concat_map skolems (r :: ps)
-  | TInout t -> skolems t
+  | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)
 
 (* The ids of every row variable inside a type. *)
 let rec row_vars t =
@@ -290,5 +298,4 @@ let rec row_vars t =
   | TVar _ | TSkol _ -> []
   | TCon (_, args) -> List.concat_map row_vars args
   | TFun (ps, r, e, u) ->
-      List.concat_map row_vars (r :: ps) @ of_row e @ of_row u
-  | TInout t -> row_vars t
+      List.concat_map row_vars (r :: param_tys ps) @ of_row e @ of_row u
