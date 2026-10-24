@@ -19,7 +19,8 @@ type t = {
 exception Error of t
 
 (* [notes] are extra facts printed as `= ...` lines; [help] suggests a fix. *)
-let error ?help ?(notes = []) loc msg = raise (Error { loc; msg; notes; help })
+let make ?help ?(notes = []) loc msg = { loc; msg; notes; help }
+let error ?help ?notes loc msg = raise (Error (make ?help ?notes loc msg))
 
 let line_text src n =
   match List.nth_opt (String.split_on_char '\n' src) (n - 1) with

@@ -38,9 +38,12 @@ let () =
         | _ ->
             prerr_endline usage;
             exit 2
-      with Diag.Error d ->
-        prerr_string (Diag.render ~src d);
-        exit 1)
+      with e -> (
+        match Driver.render_error ~src e with
+        | Some msg ->
+            prerr_string msg;
+            exit 1
+        | None -> raise e))
   | _ ->
       prerr_endline usage;
       exit 2

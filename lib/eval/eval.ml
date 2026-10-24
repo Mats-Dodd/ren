@@ -3,7 +3,9 @@
    By the time a program gets here it has been checked (check.ml, mut.ml)
    and type-checked (infer.ml), so it can't add a Bool to an Int, call a
    function that doesn't exist, or change a `let`. The only errors left are
-   panics, like division by zero.
+   panics, like division by zero. A panic is the running program's fault,
+   not a mistake in its source, so it's an exception of its own rather than
+   a diagnostic.
 
    Values are never changed in place. A variable is a cell ([ref]) holding a
    value, and assigning to `user.plan` or `xs[i]` builds a new value and puts
@@ -12,6 +14,10 @@
 
 open Ast
 open Value
+
+exception Panic of Loc.t * string
+
+let panic loc msg = raise (Panic (loc, msg))
 
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug what = failwith ("bug: the type checker let through " ^ what)
@@ -27,7 +33,7 @@ let rec equal loc a b =
       Array.length xs = Array.length ys && Array.for_all2 (equal loc) xs ys
   | (VClosure _ | VFn _ | VBuiltin _), _ | _, (VClosure _ | VFn _ | VBuiltin _)
     ->
-      Diag.error loc "panic: functions can't be compared"
+      panic loc "functions can't be compared"
   | _ -> a = b
 
 (* Everything the evaluator looks up by name. *)
@@ -41,7 +47,7 @@ let binop loc op a b =
   | Add, VInt x, VInt y -> VInt (x + y)
   | Sub, VInt x, VInt y -> VInt (x - y)
   | Mul, VInt x, VInt y -> VInt (x * y)
-  | (Div | Mod), VInt _, VInt 0 -> Diag.error loc "panic: division by zero"
+  | (Div | Mod), VInt _, VInt 0 -> panic loc "division by zero"
   | Div, VInt x, VInt y -> VInt (x / y)
   | Mod, VInt x, VInt y -> VInt (x mod y)
   | Lt, VInt x, VInt y -> VBool (x < y)
@@ -62,9 +68,8 @@ type step = SField of string | SIndex of int * Loc.t
 
 let element loc xs i =
   if i < 0 || i >= Array.length xs then
-    Diag.error loc
-      (Printf.sprintf
-         "panic: index %d is out of bounds for an array of length %d" i
+    panic loc
+      (Printf.sprintf "index %d is out of bounds for an array of length %d" i
          (Array.length xs))
   else xs.(i)
 
@@ -232,7 +237,7 @@ let rec eval cx env (e : expr) =
             | _ -> bug "a non-Bool guard")
       in
       let rec first = function
-        | [] -> Diag.error e.loc "panic: no arm of this `match` matched"
+        | [] -> panic e.loc "no arm of this `match` matched"
         | a :: rest -> (
             match match_pattern a.arm_pat v env with
             | Some env when guard_passes env a.arm_guard ->
@@ -281,7 +286,7 @@ and apply cx f args =
   | VClosure { params; body; env }, _ -> run params body env
   | _ -> bug "a call to something that isn't a function"
 
-let run ~file (prog : program) =
+let run (prog : program) =
   let cx = { fns = Hashtbl.create 16; ctor_types = Hashtbl.create 16 } in
   List.iter
     (function
@@ -294,8 +299,11 @@ let run ~file (prog : program) =
       | Type { type_body = Fields _; _ } -> ())
     prog;
   match Hashtbl.find_opt cx.fns "main" with
-  | None ->
-      Diag.error (Loc.point ~file 1 1)
-        ~help:"add `fn main() = ...`, which is where the program starts"
-        "this program has no `main` function"
-  | Some f -> fst (apply cx (VFn f.name.name) [])
+  | None -> bug "a program with no `main`"
+  | Some f -> (
+      (* OCaml's own stack runs out when a Ren function calls itself too
+         deeply; that's the program's fault, so it's a panic *)
+      try fst (apply cx (VFn f.name.name) [])
+      with Stack_overflow ->
+        panic f.name.loc
+          "the stack overflowed: a function called itself too deeply")

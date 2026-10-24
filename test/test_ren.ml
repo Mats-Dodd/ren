@@ -18,7 +18,11 @@ let clean src =
   else src
 
 let report src f =
-  try f () with Diag.Error d -> print_string (Diag.render ~src d)
+  try f ()
+  with e -> (
+    match Driver.render_error ~src e with
+    | Some msg -> print_string msg
+    | None -> raise e)
 
 let run src =
   let src = clean src in
