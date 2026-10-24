@@ -23,11 +23,6 @@ type env = {
   ctors : (string, ctor_info) Hashtbl.t;
 }
 
-(* Built-in types, with how many type arguments each takes. *)
-let builtin_types = [ ("Int", 0); ("Bool", 0); ("Unit", 0); ("Array", 1) ]
-let is_builtin_type name = List.mem_assoc name builtin_types
-let builtin_fns = [ "print"; "len"; "push" ]
-
 let no_duplicates what (ids : ident list) =
   let seen = Hashtbl.create 8 in
   List.iter
@@ -70,7 +65,10 @@ let rec check_ty env ~params (t : ty) =
       let name = id.name in
       let arity =
         if List.mem name params then Some 0
-        else if is_builtin_type name then List.assoc_opt name builtin_types
+        else if Prelude.is_type name then
+          Option.map
+            (fun (t : Prelude.builtin_type) -> t.arity)
+            (Prelude.find_type name)
         else
           Option.map
             (fun td -> List.length td.type_params)
@@ -89,7 +87,7 @@ let rec check_ty env ~params (t : ty) =
 (* Record a type and its constructors, so later checks can look them up. *)
 let declare env td =
   let name = td.type_name in
-  if is_builtin_type name.name then
+  if Prelude.is_type name.name then
     Diag.error name.loc ~help:"choose another name"
       (sprintf "`%s` is a built-in type" name.name);
   if Hashtbl.mem env.types name.name then
@@ -454,13 +452,13 @@ let program (prog : program) =
   no_duplicates "functions" (List.map (fun f -> f.name) fns);
   List.iter
     (fun f ->
-      if List.mem f.name.name builtin_fns then
+      if Prelude.is_fn f.name.name then
         Diag.error f.name.loc ~help:"choose another name"
           (sprintf "`%s` is a built-in function" f.name.name);
       no_duplicates "type parameters" f.tparams;
       List.iter
         (fun (t : ident) ->
-          if is_builtin_type t.name || Hashtbl.mem env.types t.name then
+          if Prelude.is_type t.name || Hashtbl.mem env.types t.name then
             Diag.error t.loc ~help:"choose another name"
               (sprintf "`%s` is already the name of a type" t.name))
         f.tparams;

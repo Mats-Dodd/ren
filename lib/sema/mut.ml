@@ -303,7 +303,7 @@ and exclusive cx args =
 
 let program (prog : program) =
   let fns =
-    Check.builtin_fns
+    List.map (fun (f : Prelude.builtin_fn) -> f.name) Prelude.fns
     @ List.filter_map
         (function Fn f -> Some f.name.name | Type _ -> None)
         prog

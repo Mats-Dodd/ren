@@ -11,40 +11,7 @@
    That's value semantics, done the slow way; Stage 11 makes it cheap. *)
 
 open Ast
-
-(* Variables in scope: an immutable map from name to a cell holding the
-   variable's value. Map.Make is a functor: a function from a module
-   (String) to a module (Env). *)
-module Env = Map.Make (String)
-
-type value =
-  | VInt of int
-  | VBool of bool
-  | VUnit
-  | VCon of { ty : string; name : string; args : value list }
-      (** [Pro(5)]: the type it belongs to, the constructor, its fields *)
-  | VRecord of (string * value) list
-      (** fields sorted by name, so structural equality ignores field order *)
-  | VArray of value array  (** never changed in place: an update copies it *)
-  | VClosure of { params : string list; body : expr; env : value ref Env.t }
-      (** a lambda, with the variables it captured when it was created *)
-  | VFn of string  (** a top-level function used as a value *)
-  | VBuiltin of string  (** [print], [len], [push] *)
-
-let rec show_value = function
-  | VInt n -> string_of_int n
-  | VBool b -> string_of_bool b
-  | VUnit -> "()"
-  | VCon { name; args = []; _ } -> name
-  | VCon { name; args; _ } ->
-      name ^ "(" ^ String.concat ", " (List.map show_value args) ^ ")"
-  | VRecord fields ->
-      let show_field (f, v) = f ^ ": " ^ show_value v in
-      "{ " ^ String.concat ", " (List.map show_field fields) ^ " }"
-  | VArray xs ->
-      "[" ^ String.concat ", " (Array.to_list (Array.map show_value xs)) ^ "]"
-  | VClosure _ -> "<fn>"
-  | VFn name | VBuiltin name -> "<fn " ^ name ^ ">"
+open Value
 
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug what = failwith ("bug: the type checker let through " ^ what)
@@ -152,7 +119,7 @@ let rec eval cx env (e : expr) =
       match Env.find_opt x env with
       | Some cell -> !cell
       | None when Hashtbl.mem cx.fns x -> VFn x
-      | None when List.mem x Check.builtin_fns -> VBuiltin x
+      | None when Prelude.is_fn x -> VBuiltin x
       | None -> bug ("the unknown name `" ^ x ^ "`"))
   | Unop (Neg, a) -> (
       match eval cx env a with
@@ -304,12 +271,10 @@ and apply cx f args =
     (result, List.map ( ! ) cells)
   in
   match (f, args) with
-  | VBuiltin "print", _ ->
-      List.iter (fun v -> print_endline (show_value v)) args;
-      (VUnit, args)
-  | VBuiltin "len", [ VArray xs ] -> (VInt (Array.length xs), args)
-  | VBuiltin "push", [ VArray xs; x ] ->
-      (VUnit, [ VArray (Array.append xs [| x |]); x ])
+  | VBuiltin name, _ -> (
+      match Prelude.find_fn name with
+      | Some b -> b.eval args
+      | None -> bug ("the unknown built-in `" ^ name ^ "`"))
   | VFn name, _ ->
       let f = Hashtbl.find cx.fns name in
       run (List.map (fun p -> p.pname.name) f.params) f.body Env.empty

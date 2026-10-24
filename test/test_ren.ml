@@ -22,7 +22,7 @@ let report src f =
 
 let run src =
   let src = clean src in
-  report src (fun () -> print_endline (Eval.show_value (Driver.run ~file src)))
+  report src (fun () -> print_endline (Value.show (Driver.run ~file src)))
 
 let tokens src =
   let src = clean src in

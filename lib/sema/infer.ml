@@ -856,31 +856,6 @@ let signature st (f : fn_def) scheme =
 
 (* ---- the program ---- *)
 
-(* The built-in functions and their type schemes. *)
-let builtins st =
-  let t = generic_var st in
-  [
-    (* fn<T>(T) uses Io *)
-    ( "print",
-      TFun
-        ( [ read (generic_var st) ],
-          unit,
-          generic_row st,
-          RExtend ("Io", generic_row st) ) );
-    (* fn<T>(Array<T>) -> Int *)
-    ( "len",
-      TFun
-        ([ read (array (generic_var st)) ], int, generic_row st, generic_row st)
-    );
-    (* fn<T>(inout Array<T>, T) *)
-    ( "push",
-      TFun
-        ( [ { mode = Inout; ty = array t }; read t ],
-          unit,
-          generic_row st,
-          generic_row st ) );
-  ]
-
 (* Infer every function's type, and return each function's signature. *)
 let program ~file (prog : program) =
   let st = Types.new_state () in
@@ -893,7 +868,10 @@ let program ~file (prog : program) =
       deferred = [];
     }
   in
-  List.iter (fun (n, t) -> Hashtbl.replace env.globals n t) (builtins st);
+  List.iter
+    (fun (b : Prelude.builtin_fn) ->
+      Hashtbl.replace env.globals b.name (b.scheme st))
+    Prelude.fns;
   let fns = List.filter_map (function Fn f -> Some f | Type _ -> None) prog in
   List.iter
     (function

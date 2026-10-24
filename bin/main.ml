@@ -26,7 +26,7 @@ let () =
         | "run" -> (
             match Driver.run ~file:path src with
             | VUnit -> ()
-            | v -> print_endline (Eval.show_value v))
+            | v -> print_endline (Value.show v))
         | "check" -> ignore (Driver.check ~file:path src)
         | "types" -> List.iter print_endline (Driver.types ~file:path src)
         | "tokens" ->
