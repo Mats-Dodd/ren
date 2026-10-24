@@ -17,7 +17,12 @@
    Top-level functions are checked in dependency order: callees before
    callers, with mutually recursive functions checked together (a strongly
    connected component of the call graph). Inside one group every function
-   has a single type; the group is generalized once it's done. *)
+   has a single type; the group is generalized once it's done.
+
+   A type error is reported to the sink (diag.ml), and inference carries
+   on. The code with the error gets the type [TError], which unifies with
+   everything, so the one mistake isn't reported again wherever its value
+   goes. *)
 
 open Ast
 open Types
@@ -36,6 +41,7 @@ let article name =
 
 type env = {
   st : Types.state;
+  sink : Diag.sink;
   types : (string, type_def) Hashtbl.t;
   ctors : (string, type_def * ctor) Hashtbl.t;
   globals : (string, ty) Hashtbl.t;
@@ -57,6 +63,11 @@ type ctx = {
 }
 
 (* ---- reporting ---- *)
+
+(* Report an error, and carry on: the code it's about has type [TError]. *)
+let fail env ?help ?notes ?labels loc msg =
+  Diag.report env.sink (Diag.make ?help ?notes ?labels loc msg);
+  TError
 
 (* The value an expression produces is its last line, which is where to
    point when that value has the wrong type. *)
@@ -82,11 +93,13 @@ let rec mode_clash found expected =
       List.find_map (fun (x, y) -> mode_clash x y) (List.combine a1 a2)
   | _ -> None
 
-(* Unify [found] (what the code has) with [expected] (what it needs). [msg]
-   words the error, given both types printed. *)
-let unify_at env ?(notes = []) ?help ?msg loc ~found ~expected =
-  try Unify.unify env.st found expected with
-  | Unify.Mismatch ->
+(* Unify [found] (what the code has) with [expected] (what it needs), and
+   say whether that worked. [msg] words the error, given both types
+   printed. *)
+let unifies env ?(notes = []) ?help ?msg loc ~found ~expected =
+  match Unify.unify env.st found expected with
+  | () -> true
+  | exception Unify.Mismatch ->
       let pr = printer env.st in
       let f = show pr found and x = show pr expected in
       let msg =
@@ -130,16 +143,22 @@ let unify_at env ?(notes = []) ?help ?msg loc ~found ~expected =
                or call it directly"
         | h, _ -> h
       in
-      Diag.error ?help ~notes loc msg
-  | Unify.Infinite ->
+      ignore (fail env ?help ~notes loc msg);
+      false
+  | exception Unify.Infinite ->
       let pr = printer env.st in
-      Diag.error loc
-        ~notes:
-          [
-            sprintf "it would have to be `%s` and `%s` at the same time"
-              (show pr expected) (show pr found);
-          ]
-        "this value's type would have to contain itself"
+      ignore
+        (fail env loc
+           ~notes:
+             [
+               sprintf "it would have to be `%s` and `%s` at the same time"
+                 (show pr expected) (show pr found);
+             ]
+           "this value's type would have to contain itself");
+      false
+
+let unify_at env ?notes ?help ?msg loc ~found ~expected =
+  ignore (unifies env ?notes ?help ?msg loc ~found ~expected)
 
 (* ---- types as written ---- *)
 
@@ -199,7 +218,7 @@ let lookup env cx loc ~what x =
   | None -> (
       match Hashtbl.find_opt env.globals x with
       | Some t -> instantiate env.st t
-      | None -> Diag.error loc (sprintf "there's no %s named `%s`" what x))
+      | None -> fail env loc (sprintf "there's no %s named `%s`" what x))
 
 let want_int env op (e : expr) t =
   unify_at env e.loc ~found:t ~expected:int
@@ -216,9 +235,10 @@ let absorb env cx loc errs uses =
     Unify.unify_row env.st uses cx.uses
   with Unify.Mismatch | Unify.Infinite ->
     let pr = printer env.st in
-    Diag.error loc
-      (sprintf "this call%s, which isn't allowed here"
-         (show_effects pr errs uses))
+    ignore
+      (fail env loc
+         (sprintf "this call%s, which isn't allowed here"
+            (show_effects pr errs uses)))
 
 let rec infer env cx (e : expr) : ty =
   match e.kind with
@@ -261,11 +281,15 @@ let rec infer env cx (e : expr) : ty =
       tt
   | If (c, t, None) ->
       want_bool env "an `if` condition" c (infer env cx c);
-      unify_at env (result_loc t) ~found:(infer env cx t) ~expected:unit
-        ~msg:(fun f _ ->
-          sprintf "this `if` has no `else`, so it can't produce %s" (article f))
-        ~help:"add an `else` branch for when the condition is false";
-      unit
+      let ok =
+        unifies env (result_loc t) ~found:(infer env cx t) ~expected:unit
+          ~msg:(fun f _ ->
+            sprintf "this `if` has no `else`, so it can't produce %s"
+              (article f))
+          ~help:"add an `else` branch for when the condition is false"
+      in
+      (* if it was meant to produce a value, it isn't a `Unit` *)
+      if ok then unit else TError
   | Call (f, args) -> infer_call env cx e f args
   | Lambda (params, body) ->
       let ps = List.map (param_type env cx) params in
@@ -349,11 +373,13 @@ let rec infer env cx (e : expr) : ty =
       array elem
   | Index (a, i) ->
       let elem = fresh_var env.st in
-      unify_at env (result_loc a) ~found:(infer env cx a) ~expected:(array elem)
-        ~msg:(fun f _ ->
-          sprintf "only an `Array` can be indexed, but this is %s" (article f));
+      let ok =
+        unifies env (result_loc a) ~found:(infer env cx a)
+          ~expected:(array elem) ~msg:(fun f _ ->
+            sprintf "only an `Array` can be indexed, but this is %s" (article f))
+      in
       want_int env "an index" i (infer env cx i);
-      elem
+      if ok then elem else TError
   | Ref a ->
       (* mut.ml allows `&` only on call arguments and `for` loops, which
          handle it themselves *)
@@ -375,10 +401,13 @@ let rec infer env cx (e : expr) : ty =
   | For { var; iter; body } ->
       let iter = match iter.kind with Ref a -> a | _ -> iter in
       let elem = fresh_var env.st in
-      unify_at env (result_loc iter) ~found:(infer env cx iter)
-        ~expected:(array elem) ~msg:(fun f _ ->
-          sprintf "a `for` loop goes over an `Array`, but this is %s"
-            (article f));
+      let ok =
+        unifies env (result_loc iter) ~found:(infer env cx iter)
+          ~expected:(array elem) ~msg:(fun f _ ->
+            sprintf "a `for` loop goes over an `Array`, but this is %s"
+              (article f))
+      in
+      let elem = if ok then elem else TError in
       ignore
         (infer env { cx with locals = Env.add var.name elem cx.locals } body);
       unit
@@ -408,57 +437,71 @@ and infer_call env cx (e : expr) (f : expr) args =
   match repr tf with
   | TFun (ps, ret, errs, uses) ->
       let n = List.length ps and given = List.length args in
-      if n <> given then
-        Diag.error e.loc
+      if n <> given then (
+        (* still check the arguments, for errors of their own *)
+        List.iter (fun a -> ignore (infer_arg env cx a)) args;
+        fail env e.loc
           (sprintf "%s takes %d argument%s but was given %d" name n (plural n)
-             given);
-      List.iter2
-        (fun (p : Types.param) (a : expr) ->
-          match (p.mode, a.kind) with
-          | Inout, Ref place ->
-              unify_at env (result_loc place) ~found:(infer env cx place)
-                ~expected:p.ty
-          | Inout, _ ->
-              let help =
-                match a.kind with
-                | Var x
-                | Field ({ kind = Var x; _ }, _)
-                | Index ({ kind = Var x; _ }, _) ->
-                    sprintf "write `&` before it, as in `&%s`" x
-                | _ -> "pass a variable, marked with `&`"
-              in
-              Diag.error a.loc ~help
-                ~notes:[ "`&` shows at the call that the argument is changed" ]
-                (sprintf "%s changes this argument, so it needs `&`" name)
-          | Read, Ref _ ->
-              Diag.error a.loc ~help:"remove the `&`"
-                ~notes:
-                  [
-                    "`&` marks an argument the call changes: an `inout` \
-                     parameter";
-                  ]
-                (sprintf "%s doesn't change this argument" name)
-          | Read, _ ->
-              unify_at env (result_loc a) ~found:(infer env cx a) ~expected:p.ty)
-        ps args;
-      absorb env cx e.loc errs uses;
-      ret
+             given))
+      else (
+        List.iter2
+          (fun (p : Types.param) (a : expr) ->
+            match (p.mode, a.kind) with
+            | Inout, Ref place ->
+                unify_at env (result_loc place) ~found:(infer env cx place)
+                  ~expected:p.ty
+            | Inout, _ ->
+                let help =
+                  match a.kind with
+                  | Var x
+                  | Field ({ kind = Var x; _ }, _)
+                  | Index ({ kind = Var x; _ }, _) ->
+                      sprintf "write `&` before it, as in `&%s`" x
+                  | _ -> "pass a variable, marked with `&`"
+                in
+                ignore (infer env cx a);
+                ignore
+                  (fail env a.loc ~help
+                     ~notes:
+                       [ "`&` shows at the call that the argument is changed" ]
+                     (sprintf "%s changes this argument, so it needs `&`" name))
+            | Read, Ref place ->
+                ignore (infer env cx place);
+                ignore
+                  (fail env a.loc ~help:"remove the `&`"
+                     ~notes:
+                       [
+                         "`&` marks an argument the call changes: an `inout` \
+                          parameter";
+                       ]
+                     (sprintf "%s doesn't change this argument" name))
+            | Read, _ ->
+                unify_at env (result_loc a) ~found:(infer env cx a)
+                  ~expected:p.ty)
+          ps args;
+        absorb env cx e.loc errs uses;
+        ret)
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
          function, and its errors and dependencies become the caller's *)
-      let arg (a : expr) =
-        match a.kind with
-        | Ref place -> { mode = Inout; ty = infer env cx place }
-        | _ -> read (infer env cx a)
-      in
-      let ps = List.map arg args in
+      let ps = List.map (infer_arg env cx) args in
       let ret = fresh_var env.st in
       unify_at env f.loc ~found:tf ~expected:(TFun (ps, ret, cx.errs, cx.uses));
       ret
+  | TError ->
+      List.iter (fun a -> ignore (infer_arg env cx a)) args;
+      TError
   | t ->
-      Diag.error f.loc
+      List.iter (fun a -> ignore (infer_arg env cx a)) args;
+      fail env f.loc
         (sprintf "%s is %s, not a function" name
            (article (show (printer env.st) t)))
+
+(* An argument's type, and whether it's passed with `&`. *)
+and infer_arg env cx (a : expr) =
+  match a.kind with
+  | Ref place -> { mode = Inout; ty = infer env cx place }
+  | _ -> read (infer env cx a)
 
 and infer_record env cx (e : expr) name fields =
   let given =
@@ -506,11 +549,12 @@ and infer_record env cx (e : expr) name fields =
                 true
           in
           let fail () =
-            Diag.error e.loc
-              ~help:
-                (sprintf "write the type's name first, like `%s { ... }`"
-                   (List.hd fits))
-              (sprintf "these fields fit more than one type: %s" (quote fits))
+            ignore
+              (fail env e.loc
+                 ~help:
+                   (sprintf "write the type's name first, like `%s { ... }`"
+                      (List.hd fits))
+                 (sprintf "these fields fit more than one type: %s" (quote fits)))
           in
           env.deferred <- { attempt; fail } :: env.deferred;
           t)
@@ -524,7 +568,7 @@ and infer_field env cx (e : expr) r (f : ident) =
     | TCon (n, args) as t -> (
         match record_fields env n with
         | None ->
-            Diag.error f.loc
+            fail env f.loc
               (sprintf "`.%s` needs a record, but this is %s" f.name
                  (article (show pr t)))
         | Some decl -> (
@@ -538,13 +582,14 @@ and infer_field env cx (e : expr) r (f : ident) =
                 in
                 field_type ~tvars fd
             | None ->
-                Diag.error f.loc
+                fail env f.loc
                   ~help:
                     (sprintf "its fields: %s"
                        (quote (List.map (fun d -> d.field_name.name) decl)))
                   (sprintf "`%s` has no field named `%s`" n f.name)))
+    | TError -> TError
     | t ->
-        Diag.error f.loc
+        fail env f.loc
           (sprintf "`.%s` needs a record, but this is %s" f.name
              (article (show pr t)))
   in
@@ -553,7 +598,7 @@ and infer_field env cx (e : expr) r (f : ident) =
       let has fs = List.exists (fun d -> d.field_name.name = f.name) fs in
       match records_where env has with
       | [] ->
-          Diag.error f.loc
+          fail env f.loc
             (sprintf "no record type has a field named `%s`" f.name)
       | [ n ] ->
           unify_at env r.loc ~found:tr
@@ -579,14 +624,15 @@ and infer_field env cx (e : expr) r (f : ident) =
                       x (List.hd candidates) )
               | _ -> ("this", "add a type annotation to say which")
             in
-            Diag.error r.loc ~help
-              ~notes:
-                [
-                  sprintf "`%s` is a field of %s" f.name
-                    (String.concat " and "
-                       (List.map (sprintf "`%s`") candidates));
-                ]
-              (sprintf "can't tell which record type %s is" what)
+            ignore
+              (fail env r.loc ~help
+                 ~notes:
+                   [
+                     sprintf "`%s` is a field of %s" f.name
+                       (String.concat " and "
+                          (List.map (sprintf "`%s`") candidates));
+                   ]
+                 (sprintf "can't tell which record type %s is" what))
           in
           env.deferred <- { attempt; fail } :: env.deferred;
           result)
@@ -623,7 +669,7 @@ let resolve_deferred env =
   let rec loop pending =
     let still = List.filter (fun d -> not (d.attempt ())) pending in
     if List.length still < List.length pending then loop still
-    else match still with [] -> () | d :: _ -> d.fail ()
+    else List.iter (fun d -> d.fail ()) still
   in
   let pending = List.rev env.deferred in
   env.deferred <- [];
@@ -746,7 +792,7 @@ let components (fns : fn_def list) =
    another function. Storing it, returning it, or capturing it in a lambda
    that escapes would let it outlive the call. *)
 
-let check_transparent (f : fn_def) =
+let check_transparent sink (f : fn_def) =
   let fn_params =
     List.filter_map
       (fun p ->
@@ -818,7 +864,7 @@ let check_transparent (f : fn_def) =
                   walk ~ok:false a.arm_body))
               arms
       in
-      walk ~ok:false f.body)
+      Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
     fn_params
 
 (* ---- signatures ---- *)
@@ -857,11 +903,12 @@ let signature st (f : fn_def) scheme =
 (* ---- the program ---- *)
 
 (* Infer every function's type, and return each function's signature. *)
-let program ~file (prog : program) =
+let program sink ~file (prog : program) =
   let st = Types.new_state () in
   let env =
     {
       st;
+      sink;
       types = Hashtbl.create 16;
       ctors = Hashtbl.create 16;
       globals = Hashtbl.create 16;
@@ -885,7 +932,7 @@ let program ~file (prog : program) =
           | Fields _ -> ())
       | Fn _ -> ())
     prog;
-  List.iter check_transparent fns;
+  List.iter (check_transparent sink) fns;
   let schemes = Hashtbl.create 16 in
   List.iter
     (fun group ->
@@ -953,21 +1000,23 @@ let program ~file (prog : program) =
                 List.find (fun (_, sk, _, _, _) -> List.mem_assoc id sk) setups
               in
               let (o : fn_def), _, _, _, _ = owner in
-              Diag.error f.name.loc
-                ~notes:
-                  [
-                    sprintf
-                      "`%s` and `%s` call each other, and functions that call \
-                       each other are checked at a single type"
-                      f.name.name o.name.name;
-                  ]
-                ~help:
-                  (sprintf
-                     "remove the type parameter from `%s`, or break the cycle"
-                     o.name.name)
-                (sprintf
-                   "`%s` would have to use `%s`, the type parameter of `%s`"
-                   f.name.name t o.name.name)
+              ignore
+              @@ fail env f.name.loc
+                   ~notes:
+                     [
+                       sprintf
+                         "`%s` and `%s` call each other, and functions that \
+                          call each other are checked at a single type"
+                         f.name.name o.name.name;
+                     ]
+                   ~help:
+                     (sprintf
+                        "remove the type parameter from `%s`, or break the \
+                         cycle"
+                        o.name.name)
+                   (sprintf
+                      "`%s` would have to use `%s`, the type parameter of `%s`"
+                      f.name.name t o.name.name)
           | [] -> ());
           let scheme = generalize env.st ~skolems mono in
           Hashtbl.replace env.globals f.name.name scheme;
@@ -984,26 +1033,32 @@ let program ~file (prog : program) =
                     if p.pty = None then (
                       let pr = printer env.st in
                       reserve pr scheme;
-                      Diag.error p.pname.loc
-                        ~help:
-                          (sprintf "write `%s: %s`" p.pname.name (show pr t.ty))
-                        ~notes:
-                          [ "public functions spell out their full signature" ]
-                        (sprintf
-                           "the parameter `%s` of the public function `%s` has \
-                            no type"
-                           p.pname.name f.name.name)))
+                      ignore
+                      @@ fail env p.pname.loc
+                           ~help:
+                             (sprintf "write `%s: %s`" p.pname.name
+                                (show pr t.ty))
+                           ~notes:
+                             [
+                               "public functions spell out their full signature";
+                             ]
+                           (sprintf
+                              "the parameter `%s` of the public function `%s` \
+                               has no type"
+                              p.pname.name f.name.name)))
                   f.params ps
             | _ -> assert false)
         setups)
     (components fns);
   (match List.find_opt (fun (f : fn_def) -> f.name.name = "main") fns with
   | None ->
-      Diag.error (Loc.point ~file 1 1)
-        ~help:"add `fn main() = ...`, which is where the program starts"
-        "this program has no `main` function"
+      ignore
+        (fail env (Loc.point ~file 1 1)
+           ~help:"add `fn main() = ...`, which is where the program starts"
+           "this program has no `main` function")
   | Some f when f.params <> [] ->
-      Diag.error (List.hd f.params).pname.loc ~help:"remove the parameters"
-        "`main` can't take parameters"
+      ignore
+        (fail env (List.hd f.params).pname.loc ~help:"remove the parameters"
+           "`main` can't take parameters")
   | Some _ -> ());
   List.map (fun f -> signature st f (Hashtbl.find schemes f.name.name)) fns

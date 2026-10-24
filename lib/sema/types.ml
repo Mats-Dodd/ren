@@ -33,6 +33,10 @@ type ty =
       (** a type parameter like [T], while checking the function that declares
           it: equal only to itself, since the function has to work for every [T]
       *)
+  | TError
+      (** the type of code that has an error, already reported. It unifies with
+          every type, so the one mistake isn't reported again everywhere its
+          value goes. *)
 
 (* A function type's parameter: its type, and whether the function changes
    it. The mode is part of the type, so a function that changes its argument
@@ -132,6 +136,7 @@ let generalize st ~skolems t =
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
+    | TError -> TError
   and param p = { p with ty = go p.ty }
   and row r =
     match repr_row r with
@@ -157,7 +162,7 @@ let instantiate st t =
             let v = fresh_var st in
             Hashtbl.add tys id v;
             v)
-    | (TVar _ | TSkol _) as t -> t
+    | (TVar _ | TSkol _ | TError) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
   and param p = { p with ty = go p.ty }
@@ -230,7 +235,7 @@ let rec reserve pr t =
       Option.iter
         (fun h -> Hashtbl.replace pr.reserved h ())
         (Hashtbl.find_opt pr.hints id)
-  | TVar { contents = Link _ } | TSkol _ -> ()
+  | TVar { contents = Link _ } | TSkol _ | TError -> ()
   | TCon (_, args) -> List.iter (reserve pr) args
   | TFun (ps, r, _, _) -> List.iter (reserve pr) (r :: param_tys ps)
 
@@ -265,6 +270,7 @@ let rec show pr t =
   | TCon (n, args) ->
       n ^ "<" ^ String.concat ", " (List.map (show pr) args) ^ ">"
   | TSkol (_, n) -> n
+  | TError -> "_"
   | TVar { contents = Unbound (id, l) } ->
       if l = generic_level then var_name pr id else "_"
   | TVar { contents = Link _ } -> assert false
@@ -296,7 +302,7 @@ and show_effects pr e u =
 let rec skolems t =
   match repr t with
   | TSkol (id, n) -> [ (id, n) ]
-  | TVar _ -> []
+  | TVar _ | TError -> []
   | TCon (_, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)
 
@@ -304,7 +310,7 @@ let rec skolems t =
 let rec row_vars t =
   let of_row r = Option.to_list (snd (row_parts r)) in
   match repr t with
-  | TVar _ | TSkol _ -> []
+  | TVar _ | TSkol _ | TError -> []
   | TCon (_, args) -> List.concat_map row_vars args
   | TFun (ps, r, e, u) ->
       List.concat_map row_vars (r :: param_tys ps) @ of_row e @ of_row u

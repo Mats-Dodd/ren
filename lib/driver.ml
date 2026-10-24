@@ -9,14 +9,29 @@ exception Internal_error of { pass : string; message : string }
    so it can't be mistaken for a problem with the program. *)
 let pass name f =
   try f () with
-  | (Diag.Error _ | Eval.Panic _ | Internal_error _) as e -> raise e
+  | (Diag.Error _ | Diag.Errors _ | Eval.Panic _ | Internal_error _) as e ->
+      raise e
   | e -> raise (Internal_error { pass = name; message = Printexc.to_string e })
 
-let tokens ~file src = pass "lex" (fun () -> Lexer.tokenize ~file src)
+(* Run a pass that reports diagnostics to a sink. If it reported any, the
+   program stops here: later passes would only trip over the same mistakes,
+   and could rely on nothing this pass promises. *)
+let checked name f =
+  let sink = Diag.sink () in
+  let result =
+    try pass name (fun () -> f sink)
+    with Diag.Error d ->
+      Diag.report sink d;
+      raise (Diag.Errors (Diag.reported sink))
+  in
+  if Diag.has_errors sink then raise (Diag.Errors (Diag.reported sink));
+  result
+
+let tokens ~file src = checked "lex" (fun _ -> Lexer.tokenize ~file src)
 
 let parse ~file src =
   let toks = tokens ~file src in
-  pass "parse" (fun () -> Parser.parse_program toks)
+  checked "parse" (fun sink -> Parser.parse_program sink toks)
 
 (* Parsed once, the first time it's needed. [lazy] delays a computation and
    [Lazy.force] runs it (at most once). *)
@@ -27,9 +42,9 @@ let prelude = lazy (parse ~file:"<prelude>" (String.trim Prelude.source))
    signature. *)
 let check_with_types ~file src =
   let prog = Lazy.force prelude @ parse ~file src in
-  pass "check" (fun () -> Check.program prog);
-  pass "mut" (fun () -> Mut.program prog);
-  let sigs = pass "infer" (fun () -> Infer.program ~file prog) in
+  checked "check" (fun sink -> Check.program sink prog);
+  checked "mut" (fun sink -> Mut.program sink prog);
+  let sigs = checked "infer" (fun sink -> Infer.program sink ~file prog) in
   (prog, sigs)
 
 let check ~file src = fst (check_with_types ~file src)
@@ -48,6 +63,7 @@ let dump_tokens toks =
    the compiler knows about. *)
 let render_error ~src = function
   | Diag.Error d -> Some (Diag.render ~src d)
+  | Diag.Errors ds -> Some (Diag.render_all ~src ds)
   | Eval.Panic (loc, msg) ->
       Some (Diag.render ~src (Diag.make loc ("panic: " ^ msg)))
   | Internal_error { pass; message } ->

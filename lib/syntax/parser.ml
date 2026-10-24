@@ -597,14 +597,40 @@ let parse_item p =
            now)"
         (Printf.sprintf "expected `fn` or `type`, found %s" (describe (peek p)))
 
-let parse_program toks =
+(* After a syntax error, skip to where the next top-level item starts: a
+   line beginning in the first column. Nothing inside an item starts there,
+   since its body is indented, so parsing can pick up cleanly from it.
+   [start] is where the broken item began; if the error was found at the
+   start of the next item, that item is kept. *)
+let skip_to_item p ~start =
+  let at_item p =
+    p.i > 0
+    && fst p.toks.(p.i - 1) = NEWLINE
+    && (loc p).start.col = 1
+    && not (List.mem (peek p) [ NEWLINE; INDENT; DEDENT ])
+  in
+  if p.i = start || not (at_item p) then (
+    advance p;
+    while peek p <> EOF && not (at_item p) do
+      advance p
+    done)
+
+let parse_program sink toks =
   let p = { toks; i = 0 } in
   let rec loop acc =
     if peek p = EOF then List.rev acc
     else
-      let item = parse_item p in
-      if peek p = NEWLINE then advance p
-      else if peek p <> EOF then fail_expected p "a new line";
-      loop (item :: acc)
+      let start = p.i in
+      match
+        let item = parse_item p in
+        if peek p = NEWLINE then advance p
+        else if peek p <> EOF then fail_expected p "a new line";
+        item
+      with
+      | item -> loop (item :: acc)
+      | exception Diag.Error d ->
+          Diag.report sink d;
+          skip_to_item p ~start;
+          loop acc
   in
   loop []

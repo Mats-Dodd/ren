@@ -618,6 +618,13 @@ fn main() =
       │      ^^^^
       = a function that changes its argument (`inout`) can't stand in for one that only reads it: its caller wouldn't pass the argument with `&`, so the change would be lost
       help: pass it only where the parameter's type says `fn(inout ...)`, or call it directly
+
+    error: `ap` doesn't change this argument
+      ┌─ test.ren:5:12
+    5 │   ap(bump, &xs)
+      │            ^^^
+      = `&` marks an argument the call changes: an `inout` parameter
+      help: remove the `&`
     |}];
   run
     {|
@@ -724,4 +731,61 @@ fn main() =
       ┌─ test.ren:2:12
     2 │   for x in 3
       │            ^
+    |}]
+
+(* every independent error, and none that follow from one already reported *)
+
+let%expect_test "independent type errors are all reported" =
+  run {|
+fn f() = 1 + true
+fn g() = if 1 then 2 else 3
+fn main() = h()
+|};
+  [%expect
+    {|
+    error: expected `Int`, found `Bool`
+      ┌─ test.ren:1:14
+    1 │ fn f() = 1 + true
+      │              ^^^^
+      = `+` works on `Int`s
+
+    error: expected `Bool`, found `Int`
+      ┌─ test.ren:2:13
+    2 │ fn g() = if 1 then 2 else 3
+      │             ^
+      = an `if` condition has to be a `Bool`
+
+    error: there's no function named `h`
+      ┌─ test.ren:3:13
+    3 │ fn main() = h()
+      │             ^
+    |}]
+
+let%expect_test "an error isn't reported again where its value goes" =
+  run
+    {|
+fn main() =
+  let s = 5[0]
+  let t = s + 1
+  print(s.name)
+  if s then s(1) else t
+|};
+  [%expect
+    {|
+    error: only an `Array` can be indexed, but this is an `Int`
+      ┌─ test.ren:2:11
+    2 │   let s = 5[0]
+      │           ^
+    |}];
+  run {|
+fn main() =
+  let n = missing
+  n.size + n(1)
+|};
+  [%expect
+    {|
+    error: there's no variable named `missing`
+      ┌─ test.ren:2:11
+    2 │   let n = missing
+      │           ^^^^^^^
     |}]

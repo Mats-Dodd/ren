@@ -106,3 +106,27 @@ fn main() = fn x => x
       │                ^
       help: functions are defined at the top level; a lambda is `fn(x) => ...`
     |}]
+
+(* after a syntax error, parsing picks up at the next top-level item *)
+
+let%expect_test "syntax errors in two functions" =
+  ast {|
+fn f() = 1 < 2 < 3
+fn g() =
+  let x = 1 +
+  x
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: comparisons can't be chained
+      ┌─ test.ren:1:16
+    1 │ fn f() = 1 < 2 < 3
+      │                ^
+      help: split it into two comparisons
+
+    error: expected an expression, found a new line
+      ┌─ test.ren:4:3
+    4 │   x
+      │   ^
+    |}]

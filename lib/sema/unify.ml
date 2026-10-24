@@ -22,7 +22,7 @@ let rec occurs id level t =
       if id = id' then raise Infinite;
       if l > level then r := Unbound (id', level)
   | TVar { contents = Link _ } -> assert false
-  | TSkol _ -> ()
+  | TSkol _ | TError -> ()
   | TCon (_, args) -> List.iter (occurs id level) args
   | TFun (ps, r, e, u) ->
       List.iter (occurs id level) (r :: param_tys ps);
@@ -47,6 +47,9 @@ let rec unify st a b =
   | t, TVar ({ contents = Unbound (id, l) } as r) ->
       occurs id l t;
       r := Link t
+  (* code with an error, already reported, fits anywhere; a variable unified
+     with it becomes an error too, so the mistake isn't reported again *)
+  | TError, _ | _, TError -> ()
   | TCon (n1, a1), TCon (n2, a2) when n1 = n2 && List.length a1 = List.length a2
     ->
       List.iter2 (unify st) a1 a2

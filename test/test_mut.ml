@@ -213,3 +213,28 @@ fn main() =
       │           ^^
       help: inside the loop, use `x`
     |}]
+
+let%expect_test "independent errors are all reported" =
+  run
+    {|
+fn main() =
+  let x = 1
+  x = 2
+  var n = 1
+  let f = fn() => n = 2
+  f()
+|};
+  [%expect
+    {|
+    error: `x` is a `let`, so it can't be changed
+      ┌─ test.ren:3:3
+    3 │   x = 2
+      │   ^
+      help: declare it with `var` to change it
+
+    error: a lambda can't change `n`, a variable from outside it
+      ┌─ test.ren:5:19
+    5 │   let f = fn() => n = 2
+      │                   ^
+      = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+    |}]

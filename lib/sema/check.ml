@@ -8,7 +8,10 @@
 
    The second works without type inference because constructor names are
    unique across the program: a `Pro` pattern can only be matching a `Plan`,
-   and the `type Plan` declaration lists every constructor a `Plan` can be. *)
+   and the `type Plan` declaration lists every constructor a `Plan` can be.
+
+   Each problem is reported to the sink (diag.ml), and checking carries on
+   with the next declaration, constructor, record or `match`. *)
 
 open Ast
 
@@ -21,15 +24,21 @@ type ctor_info = { owner : type_def; ctor : ctor }
 type env = {
   types : (string, type_def) Hashtbl.t;
   ctors : (string, ctor_info) Hashtbl.t;
+  sink : Diag.sink;
 }
 
-let no_duplicates what (ids : ident list) =
+(* Run a check; if it finds a problem, report it and carry on. *)
+let guard env f = Diag.recover env.sink ~default:() f
+
+let no_duplicates env what (ids : ident list) =
   let seen = Hashtbl.create 8 in
   List.iter
     (fun (id : ident) ->
       if Hashtbl.mem seen id.name then
-        Diag.error id.loc (sprintf "there are two %s named `%s`" what id.name);
-      Hashtbl.replace seen id.name ())
+        Diag.report env.sink
+          (Diag.make id.loc
+             (sprintf "there are two %s named `%s`" what id.name))
+      else Hashtbl.replace seen id.name ())
     ids
 
 let find_ctor env (c : ident) =
@@ -98,6 +107,7 @@ let declare env td =
   | Ctors cs ->
       List.iter
         (fun c ->
+          guard env @@ fun () ->
           if Hashtbl.mem env.ctors c.ctor_name.name then
             Diag.error c.ctor_name.loc
               ~help:"constructor names must be unique across all types"
@@ -106,11 +116,13 @@ let declare env td =
         cs
 
 let check_type_def env td =
-  no_duplicates "type parameters" td.type_params;
+  no_duplicates env "type parameters" td.type_params;
   let params = List.map (fun (p : ident) -> p.name) td.type_params in
   let check_fields fs =
-    no_duplicates "fields" (List.map (fun f -> f.field_name) fs);
-    List.iter (fun f -> check_ty env ~params f.field_ty) fs
+    no_duplicates env "fields" (List.map (fun f -> f.field_name) fs);
+    List.iter
+      (fun f -> guard env (fun () -> check_ty env ~params f.field_ty))
+      fs
   in
   match td.type_body with
   | Fields fs -> check_fields fs
@@ -138,7 +150,7 @@ let check_con env loc (c : ident) args =
 let sorted_names names = List.sort String.compare names
 
 let check_record env loc (name : ident option) (fields : (ident * expr) list) =
-  no_duplicates "fields" (List.map fst fields);
+  no_duplicates env "fields" (List.map fst fields);
   let given = sorted_names (List.map (fun ((f : ident), _) -> f.name) fields) in
   match name with
   | Some tn -> (
@@ -394,8 +406,11 @@ let check_match env (e : expr) arms =
 (* ---- walking the program ---- *)
 
 let check_params env ~params (ps : param list) =
-  no_duplicates "parameters" (List.map (fun p -> p.pname) ps);
-  List.iter (fun p -> Option.iter (check_ty env ~params) p.pty) ps
+  no_duplicates env "parameters" (List.map (fun p -> p.pname) ps);
+  List.iter
+    (fun p ->
+      Option.iter (fun t -> guard env (fun () -> check_ty env ~params t)) p.pty)
+    ps
 
 (* [params] are the type parameters of the enclosing function, which its
    lambdas and `let` annotations can mention too. *)
@@ -419,51 +434,55 @@ let rec check_expr env ~params (e : expr) =
       List.iter
         (function
           | Let { ty; value; _ } ->
-              Option.iter (check_ty env ~params) ty;
+              Option.iter
+                (fun t -> guard env (fun () -> check_ty env ~params t))
+                ty;
               check_expr env value
           | Expr e -> check_expr env e)
         stmts;
       check_expr env last
   | Con (c, args) ->
-      check_con env e.loc c args;
+      guard env (fun () -> check_con env e.loc c args);
       List.iter (fun (_, a) -> check_expr env a) args
   | Record (name, fields) ->
-      check_record env e.loc name fields;
+      guard env (fun () -> check_record env e.loc name fields);
       List.iter (fun (_, v) -> check_expr env v) fields
   | Match (subject, arms) ->
       check_expr env subject;
-      check_match env e arms;
+      guard env (fun () -> check_match env e arms);
       List.iter
         (fun a ->
           Option.iter (check_expr env) a.arm_guard;
           check_expr env a.arm_body)
         arms
 
-let program (prog : program) =
-  let env = { types = Hashtbl.create 16; ctors = Hashtbl.create 16 } in
+let program sink (prog : program) =
+  let env = { types = Hashtbl.create 16; ctors = Hashtbl.create 16; sink } in
   let types =
     List.filter_map (function Type t -> Some t | Fn _ -> None) prog
   in
   let fns = List.filter_map (function Fn f -> Some f | Type _ -> None) prog in
   (* Declare every type before checking any, so types can refer to types
      declared further down the file. *)
-  List.iter (declare env) types;
+  List.iter (fun td -> guard env (fun () -> declare env td)) types;
   List.iter (check_type_def env) types;
-  no_duplicates "functions" (List.map (fun f -> f.name) fns);
+  no_duplicates env "functions" (List.map (fun f -> f.name) fns);
   List.iter
     (fun f ->
       if Prelude.is_fn f.name.name then
-        Diag.error f.name.loc ~help:"choose another name"
-          (sprintf "`%s` is a built-in function" f.name.name);
-      no_duplicates "type parameters" f.tparams;
+        Diag.report sink
+          (Diag.make f.name.loc ~help:"choose another name"
+             (sprintf "`%s` is a built-in function" f.name.name));
+      no_duplicates env "type parameters" f.tparams;
       List.iter
         (fun (t : ident) ->
           if Prelude.is_type t.name || Hashtbl.mem env.types t.name then
-            Diag.error t.loc ~help:"choose another name"
-              (sprintf "`%s` is already the name of a type" t.name))
+            Diag.report sink
+              (Diag.make t.loc ~help:"choose another name"
+                 (sprintf "`%s` is already the name of a type" t.name)))
         f.tparams;
       let params = List.map (fun (t : ident) -> t.name) f.tparams in
       check_params env ~params f.params;
-      Option.iter (check_ty env ~params) f.ret;
+      Option.iter (fun t -> guard env (fun () -> check_ty env ~params t)) f.ret;
       check_expr env ~params f.body)
     fns

@@ -14,7 +14,10 @@
 
    Together these make sure no two names ever see the same mutable value,
    which is what lets the interpreter (and later the compiler) treat every
-   `inout` as a copy in and a copy out. *)
+   `inout` as a copy in and a copy out.
+
+   Each problem is reported to the sink (diag.ml), and checking carries on
+   with the rest of the function. *)
 
 open Ast
 module Env = Map.Make (String)
@@ -48,7 +51,11 @@ type ctx = {
   locks : lock list;
   fns : string list;  (** top-level and built-in functions *)
   ids : ids;
+  sink : Diag.sink;
 }
+
+(* Run a check; if it finds a problem, report it and carry on. *)
+let guard cx f = Diag.recover cx.sink ~default:() f
 
 let bind cx (name : ident) kind =
   cx.ids.last <- cx.ids.last + 1;
@@ -146,7 +153,7 @@ let rec walk cx (e : expr) =
   | Var _ | Field _ | Index _ -> (
       match place_of e with
       | Some p ->
-          check_locks cx p;
+          guard cx (fun () -> check_locks cx p);
           walk_indices cx e
       | None -> (
           match e.kind with
@@ -156,13 +163,14 @@ let rec walk cx (e : expr) =
               walk cx i
           | _ -> ()))
   | Ref _ ->
-      Diag.error e.loc ~help:"remove the `&`"
-        ~notes:
-          [
-            "`&` marks an argument a call changes, or the array a `for` loop \
-             changes";
-          ]
-        "`&` can't be used here"
+      Diag.report cx.sink
+        (Diag.make e.loc ~help:"remove the `&`"
+           ~notes:
+             [
+               "`&` marks an argument a call changes, or the array a `for` \
+                loop changes";
+             ]
+           "`&` can't be used here")
   | Unop (_, a) -> walk cx a
   | Binop (_, a, b) ->
       walk cx a;
@@ -174,17 +182,19 @@ let rec walk cx (e : expr) =
         (fun (a : expr) ->
           match a.kind with
           | Ref p ->
-              writable cx p ~what:"`&` needs a variable it can change";
+              guard cx (fun () ->
+                  writable cx p ~what:"`&` needs a variable it can change");
               walk_indices cx p
           | _ -> walk cx a)
         args;
-      exclusive cx args
+      guard cx (fun () -> exclusive cx args)
   | Lambda (ps, body) ->
       List.iter
         (fun (p : param) ->
           if p.pmode = Inout then
-            Diag.error p.pname.loc ~help:"use a top-level function for this"
-              "lambdas can't take `inout` parameters yet")
+            Diag.report cx.sink
+              (Diag.make p.pname.loc ~help:"use a top-level function for this"
+                 "lambdas can't take `inout` parameters yet"))
         ps;
       let cx = { cx with depth = cx.depth + 1 } in
       let cx =
@@ -211,21 +221,24 @@ let rec walk cx (e : expr) =
   | Record (_, fields) -> List.iter (fun (_, v) -> walk cx v) fields
   | Array xs -> List.iter (walk cx) xs
   | Assign { target; value; _ } ->
-      writable cx target ~what:"this can't be assigned to";
+      guard cx (fun () -> writable cx target ~what:"this can't be assigned to");
       walk_indices cx target;
       walk cx value
   | For { var; iter = { kind = Ref a; _ }; body } ->
-      writable cx a ~what:"`&` needs a variable it can change";
+      guard cx (fun () ->
+          writable cx a ~what:"`&` needs a variable it can change");
       walk_indices cx a;
-      let p = Option.get (place_of a) in
-      let b = Env.find p.root.name cx.scope in
-      let cx =
-        {
-          cx with
-          locks = { lid = b.id; lpath = p.path; elem = var.name } :: cx.locks;
-        }
+      (* lock the array, if it's a place the loop can change *)
+      let locks =
+        match place_of a with
+        | Some p -> (
+            match Env.find_opt p.root.name cx.scope with
+            | Some b ->
+                { lid = b.id; lpath = p.path; elem = var.name } :: cx.locks
+            | None -> cx.locks)
+        | None -> cx.locks
       in
-      walk (bind cx var Mutable) body
+      walk (bind { cx with locks } var Mutable) body
   | For { var; iter; body } ->
       walk cx iter;
       let help =
@@ -301,7 +314,7 @@ and exclusive cx args =
   in
   check places
 
-let program (prog : program) =
+let program sink (prog : program) =
   let fns =
     List.map (fun (f : Prelude.builtin_fn) -> f.name) Prelude.fns
     @ List.filter_map
@@ -318,6 +331,7 @@ let program (prog : program) =
               locks = [];
               fns;
               ids = { last = 0 };
+              sink;
             }
           in
           let cx =

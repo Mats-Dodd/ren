@@ -391,3 +391,43 @@ fn main() = 1
       │      ^^^^
       help: write `Plan`
     |}]
+
+let%expect_test "independent errors are all reported" =
+  run
+    (plan_types
+   ^ {|
+fn limit(p: Plan) -> Int =
+  match p
+    Free => 1
+fn main() = print(Basic)
+|}
+    );
+  [%expect
+    {|
+    error: this `match` doesn't handle every `Plan`
+      ┌─ test.ren:9:3
+    9 │   match p
+      │   ^^^^^
+      = missing: Pro(_), Enterprise(_)
+      help: add an arm for `Pro(_)`, or a `_ =>` arm for the rest
+
+    error: there's no constructor named `Basic`
+       ┌─ test.ren:11:19
+    11 │ fn main() = print(Basic)
+       │                   ^^^^^
+    |}]
+
+let%expect_test "later passes don't run once one finds errors" =
+  (* the type error in `main` would be found by inference, which never runs *)
+  run (plan_types ^ {|
+fn main() =
+  print(Basic)
+  1 + true
+|});
+  [%expect
+    {|
+    error: there's no constructor named `Basic`
+      ┌─ test.ren:9:9
+    9 │   print(Basic)
+      │         ^^^^^
+    |}]
