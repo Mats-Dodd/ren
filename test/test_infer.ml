@@ -745,7 +745,7 @@ let%expect_test "independent type errors are all reported" =
   run {|
 fn f() = 1 + true
 fn g() = if 1 then 2 else 3
-fn main() = h()
+fn main() = f() == true
 |};
   [%expect
     {|
@@ -761,10 +761,11 @@ fn main() = h()
       │             ^
       = an `if` condition has to be a `Bool`
 
-    error: there's no function named `h`
-      ┌─ test.ren:3:13
-    3 │ fn main() = h()
-      │             ^
+    error: `==` compares two values of the same type, but this is a `Bool` and the left side is an `Int`
+      ┌─ test.ren:3:20
+    3 │ fn main() = f() == true
+      │                    ^^^^
+      │             --- this is an `Int`
     |}]
 
 let%expect_test "an error isn't reported again where its value goes" =
