@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, and `var`, `inout`, `&` with value semantics over records and arrays (`push(&xs, x)` stands in for method calls for now). Most examples in this README show how Ren is intended to look, not what runs today.
+> **Status:** early. Stages 1–4 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, and `var`, `inout`, `&` with value semantics over records and arrays (`push(&xs, x)` stands in for `&xs.push(x)` until methods arrive in stage 5). Most examples in this README show how Ren is intended to look, not what runs today.
 
 ---
 
@@ -115,7 +115,7 @@ Ren has no null. Optional values are written `T?`.
 ```ren
 var scores = [3.0, 1.0, 2.0]
 let before = scores                    // a value, not a reference
-scores.push(10.0)                      // copies once: `before` still shares the buffer
+&scores.push(10.0)                     // copies once: `before` still shares the buffer
 assert before == [3.0, 1.0, 2.0]       // nothing changes out from under you
 
 var user = load(id)
@@ -142,7 +142,7 @@ Lambdas, with trailing-lambda syntax for multi-line bodies:
 ```ren
 let names = users.map(fn(u) => u.name)
 
-let summaries = par_map(users) fn(u) =>
+let summaries = async.par_map(users) fn(u) =>
   let feed = try load_feed(u.id)
   summarize(u, feed)
 ```
@@ -201,7 +201,7 @@ type BillingError = PaymentFailed(reason: Str) | CardDeclined
 pub fn checkout(cart: Cart) -> Receipt ! BillingError | NotFound
 ```
 
-A tag has one payload type everywhere it appears, so `Timeout` from `timeout` and `Timeout` from your own code are the same error. Give a tag a payload or a more specific name when the difference matters.
+Tags only have to agree where they meet. `Timeout` from `async.timeout` and `Timeout` from your own code are the same error if they have the same shape. If one error set would contain two shapes of the same tag, such as `Timeout(ms: Int)` and a plain `Timeout`, that's a compile error asking you to rename one. So adding a dependency never breaks code that doesn't touch it.
 
 Bugs aren't errors. Out-of-bounds access, a failed `assert`, or `unwrap` on `None` panics the program.
 
@@ -242,8 +242,8 @@ let frozen = Clock { now: fn() => Time.epoch, sleep: fn(_) => () }
 fn main() ! StartupError
     uses Os, Net, Alloc =
   let cfg = try Config.from_env()
-  with Sql.pool(cfg.db_url), pg_users, system_clock, Log.json in
-    Http.serve(cfg.port, routes)
+  with sql.pool(cfg.db_url), pg_users, clock.system, log.json in
+    http.serve(cfg.port, routes)
 
 test "touch updates last_seen" =
   with mem_users([alice]), frozen in
@@ -292,7 +292,7 @@ handler cached(ttl: Duration) for Users
         if u is Some(user) then cache[id] = { user, at: Clock.now() }
         u
   save(u) =>
-    cache.remove(u.id)
+    &cache.remove(u.id)
     try outer.save(u)
 ```
 
@@ -316,6 +316,7 @@ handler transaction for Sql =
 
 ```ren
 normalize(&scores)                     // visibly updates `scores`
+&scores.push(10.0)                     // a method that changes its receiver
 
 for p in &particles                    // update each element in place
   p.pos += p.vel * dt
@@ -329,9 +330,9 @@ A function body uses exactly two markers: `try` means a call can fail, and `&` m
 
 ---
 
-## Operators and equality: `ops`
+## Operators, methods, and equality: `ops`
 
-There are no traits or typeclasses. A type carries its own operations, and the compiler looks there and nowhere else.
+There are no traits or typeclasses. A type carries its own operations in its `ops` block: operators, associated values, and methods. The compiler looks there and nowhere else.
 
 ```ren
 type Vec3 = { x: f32, y: f32, z: f32 }
@@ -339,6 +340,7 @@ type Vec3 = { x: f32, y: f32, z: f32 }
     add(a, b)      => { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
     mul(a, s: f32) => { x: a.x * s,   y: a.y * s,   z: a.z * s   }
     zero           = { x: 0, y: 0, z: 0 }
+    pub length(a) -> f32 => (a.x * a.x + a.y * a.y + a.z * a.z).sqrt()
 
 type Email = opaque Str
   ops =
@@ -351,7 +353,9 @@ pub fn sum<T>(xs: Array<T>) -> T where T has add, zero =
   xs.fold(T.zero, fn(acc, x) => acc + x)
 ```
 
-`==`, `hash`, `compare`, and `show` are derived structurally for every type, except that types containing functions get no `==` or `hash`. To change what "equal" means, override `key`, so equality, hashing, and ordering always agree. Overriding `eq` alone is an error. You can't add operations to a type you don't own; wrap it in an `opaque` type instead. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
+A method is a function whose first parameter has the type, so `v.length()` means `Vec3.length(v)`. A method that changes its receiver takes it `inout`, and the call marks it: `&xs.push(x)` means `Array.push(&xs, x)`. In `ops`, an unannotated parameter has the type itself. Operators are public whenever their type is; methods and associated values are private unless marked `pub`.
+
+`==`, `hash`, `compare`, and `show` are derived structurally for every type, except that types containing functions get no `==` or `hash`. To change what "equal" means, override `key`, so equality, hashing, and ordering always agree. Overriding `eq` alone is an error. Only the module that declares a type can write its `ops`. To extend a type you don't own, write a function in your own module or wrap it in an `opaque` type. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
 
 ---
 
@@ -374,7 +378,7 @@ pub fn parse(src: Str) -> Ast ! ParseError
 
 fn handle(req: Request) -> Response
     uses Users, Alloc =
-  with arena(req.budget) in                     // everything inside freed in O(1)
+  with alloc.arena(req.budget) in               // everything inside freed in O(1)
     respond(try decode(req))                    // only the response escapes (copied out)
 ```
 
@@ -392,7 +396,7 @@ Freeing memory is also the job of `Alloc`, so real-time code without `Alloc` can
 fn audio_cb(inout synth: Synth, inout out: Buf)
     uses Reaper =
   if synth.patch_changed then
-    Reaper.send(synth.swap_patch())       // freed later, on a normal thread
+    Reaper.send(&synth.swap_patch())      // freed later, on a normal thread
   render(&synth, &out)
 ```
 
@@ -437,7 +441,7 @@ In practice, code without `Alloc` is linear: every value it owns has to be retur
 
 ### Arenas
 
-Inside `with arena(budget) in`, `Alloc` is the arena. Handlers installed further out fixed their own `Alloc` when they were installed, so their allocations never land in the arena. A value from an arena can reach longer-lived storage in exactly four places, and the compiler knows all of them:
+Inside `with alloc.arena(budget) in`, `Alloc` is the arena. Handlers installed further out fixed their own `Alloc` when they were installed, so their allocations never land in the arena. A value from an arena can reach longer-lived storage in exactly four places, and the compiler knows all of them:
 
 1. the block's return value
 2. a write into handler state
@@ -457,8 +461,8 @@ Ren has no `async` or `await` and no colored functions. Concurrency is structure
 ```ren
 pub fn dashboard(ids: List<UserId>) -> List<Summary> ! Timeout | FeedError
     uses Users, Net, Async, Alloc =
-  timeout(2.s) fn() =>
-    par_map(ids) fn(id) =>
+  async.timeout(2.s) fn() =>
+    async.par_map(ids) fn(id) =>
       summarize(id, try load_feed(id))
 ```
 
@@ -528,9 +532,9 @@ Run your system under a seeded fake scheduler, clock, network, and disk. Every f
 
 ```ren
 test sim "log survives S3 flakiness and crashes" (seed) =
-  with sim_scheduler(seed), sim_clock, sim_s3(seed, fail_rate: 5%), sim_crash(seed) in
+  with sim.scheduler(seed), sim.clock, sim.s3(seed, fail_rate: 5%), sim.crash(seed) in
     let log = DurableLog.open("bucket")
-    par_map([writer, reader]) fn(task) => task(log)
+    async.par_map([writer, reader]) fn(task) => task(log)
     assert DurableLog.recover("bucket").is_prefix_consistent()
 ```
 
@@ -570,16 +574,16 @@ OpenTelemetry is expensive because it pays before deciding whether data is neede
 fn main() ! StartupError
     uses Os, Net, Alloc =
   let cfg = try Config.from_env()
-  with Trace.flight_recorder(keep: errors_or_slower_than(500.ms), level: Replayable),
-       Trace.otlp(cfg.collector),               // works with existing backends
+  with trace.flight_recorder(keep: trace.errors_or_slower_than(500.ms), level: Replayable),
+       trace.otlp(cfg.collector),               // works with existing backends
        pg_users, stripe_billing in
-    Http.serve(cfg.port, routes)
+    http.serve(cfg.port, routes)
 ```
 
 Business code doesn't change: every dependency call is already a span. Pure work can be marked explicitly:
 
 ```ren
-let price = span("pricing.compute", seats: seats) fn() =>
+let price = trace.span("pricing.compute", seats: seats) fn() =>
   compute_price(plan, seats)
 ```
 
@@ -625,7 +629,7 @@ Performance tests are deterministic, so they're never flaky:
 
 ```ren
 test sim "dashboard has no N+1" (seed) =
-  with sim_world(seed), Profile.count in
+  with sim.world(seed), profile.count in
     dashboard(ids_100)
     assert Profile.calls(Users.get) <= 1
     assert Profile.allocs() <= 50
@@ -662,8 +666,8 @@ warning: `buf` is shared by the slice `head`, so `push` copies the buffer
    ┌─ src/frame.ren:14:1
 13 │ let head = buf[0..16]
    │            --- slice keeps `buf` shared
-14 │ buf.push(0)
-   │ ^^^^^^^^ copies
+14 │ &buf.push(0)
+   │ ^^^^^^^^^^^^ copies
    help: copy the slice instead:  let head = buf[0..16].copy()
 ```
 
@@ -698,11 +702,12 @@ Ren gives some things up on purpose:
 
 - **No shared mutable references.** Graphs, doubly linked lists, and observers use indices, generational handles, or a handler that owns the state. This is the same style serious Rust code converges on.
 - **No multi-shot continuations.** Handlers resume at most once. Generators and async still work. Backtracking search is written explicitly.
-- **Error tags are global by name.** Like OCaml's polymorphic variants, two `Timeout`s from different libraries are the same error. Use payloads or more specific names to tell them apart.
+- **Error tags are structural.** Like OCaml's polymorphic variants, two `Timeout`s with the same shape are the same error, whichever library they come from, and two with different shapes can't share an error set until one is renamed. Use payloads or more specific names to tell them apart.
+- **Values from other modules are always qualified.** You write `stripe.charge`, never a bare `charge`. Methods are found through the type (`xs.map(f)`), so everyday code stays short.
 - **Allocation-free code is linear.** Without `Alloc`, every owned value must be returned, passed on, or handed to `Reaper`.
 - **Reference counting isn't free.** Expect some overhead on pointer-heavy shared data. Arrays of plain values carry one count in total, not one per element. Expect roughly 1–1.5x of Rust on typical code (a target, not a benchmark).
 - **Safety is checked at runtime, not proven at compile time.** Ren's safety rules (uniqueness, arena escape, the no-free rule) are new combinations. They need precise specs, sanitizer-checked tests, and fuzzing before anyone can claim they match Rust.
-- **No operations on types you don't own.** Wrap them in an `opaque` type.
+- **No operations on types you don't own.** Write a function in your own module, or wrap the type in an `opaque` type.
 - **Dependencies are ambient.** Knowing which implementation answers a call depends on tooling: hover and `ren why` are first-class features.
 - **It's new.** No ecosystem, no Stack Overflow, and LLMs don't know it yet.
 
@@ -716,11 +721,11 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 - **[Roc](https://www.roc-lang.org/):** the closest relative. It shares the RC + Perceus core, a fast compiler, and lambda set specialization. Roc keeps apps pure and puts systems work in a separate "platform" host. Ren puts both in one language, with named, typed dependencies instead of a pure/effectful split.
 - **[Lean 4](https://lean-lang.org/):** borrow inference, functional-but-in-place arrays
 - **[Hylo](https://www.hylo-lang.org/) and Swift:** mutable value semantics, `inout`, reentrant actors (the model for handler state)
-- **OCaml:** polymorphic variants, the model for Ren's error tags; Rémy-style row unification underneath both errors and `uses`
+- **OCaml:** polymorphic variants, the model for Ren's error tags; Rémy-style row unification underneath both errors and `uses`; type-directed lookup of constructors and fields
 - **OxCaml:** uniqueness and locality modes
 - **[Lambda set specialization](https://www.cs.princeton.edu/~mpmilano/publication/lss/) (PLDI '23):** closures and dependency records without heap allocation or indirect calls
 - **[Zig](https://ziglang.org/):** explicit allocation, comptime, minimalism
-- **Go:** stdlib-first, one-binary tooling
+- **Go:** stdlib-first, one-binary tooling, always-qualified imports, `internal/`, one version of each dependency
 - **[Effect](https://effect.website/):** typed dependencies, layers, structured concurrency
 - **FoundationDB, TigerBeetle, Antithesis:** deterministic simulation testing
 - **NanoLog, `defmt`, `rr`:** static log extraction, record and replay
@@ -733,6 +738,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 - The compiler is written in **OCaml**.
 - The backend emits **C**: `tcc` for fast debug builds, `clang -O2` (or `zig cc`) for release builds, and Wasm through the same path.
 - Debug builds pass dependencies as dictionaries for fast compiles. Release builds specialize implementations known at compile time using lambda sets, so dependency calls become direct, inlinable calls, within a specialization budget.
+- Modules, name lookup, interface summaries, and the content-addressed build are designed in [module-build.md](module-build.md). Every compiler pass is a pure function of one module or call-graph group plus the interfaces of its imports.
 - Golden tests cover every example and every error message from day one. All generated C runs under ASan and UBSan, and the interpreter and native backend are differentially tested against each other.
 
 ---
@@ -745,19 +751,20 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 2 | records, sum types, exhaustive `match` | missing-case errors fire |
 | 3 | type inference, row unification for errors and `uses` | private functions need no annotations |
 | 4 | `var`, `inout`, `&`, value semantics | `normalize(&scores)` works |
-| 5 | `!`, `try`, `catch`, `fail`, `orelse` | error paths type-check |
-| 6 | `uses`, `with`, dependency types | tests swap implementations |
-| 7 | `handler`, `Async`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
-| 8 | `ops`, derived equality and hashing | `Map<Email, User>` works |
+| 5 | files as modules, `import`, `pub`, `ops` with methods, lookup through types, interface summaries | a two-module program with shared constructor names and `&xs.push(x)` checks |
+| 6 | `!`, `try`, `catch`, `fail`, `orelse` | error paths type-check |
+| 7 | `uses`, `with`, dependency types | tests swap implementations |
+| 8 | `handler`, `Async`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
+| 9 | operators, derived equality and hashing | `Map<Email, User>` works |
 | **↑** | **interpreted Ren** | **a small web service and its tests run** |
-| 9 | C backend | native binaries |
-| 10 | reference counting with reuse | `map` reuses memory in place |
-| 11 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
-| 12 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
-| 13 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
+| 10 | C backend, packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
+| 11 | reference counting with reuse | `map` reuses memory in place |
+| 12 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
+| 13 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
+| 14 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
 | **↑** | **Ren 1.0** | **flottning, rewritten in Ren, passes 10,000 simulation seeds** |
 
-The **effect journal** in stage 7, the record of every dependency call, is the most important design artifact after the type system. Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
+The **effect journal** in stage 8, the record of every dependency call, is the most important design artifact after the type system. Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
 
 ---
 
@@ -775,11 +782,11 @@ Once the language and its four built-in tools exist, the same knowledge-plus-con
 
 ### Wave 1
 
-**Whole-fleet simulation.** A service-to-service call is just a dependency, so `with remote(Users, url)` in production becomes `with sim_node("users")` in tests. A whole fleet of Ren services, plus databases and object storage, runs in one deterministic process, with partitions, clock skew, and crashes.
+**Whole-fleet simulation.** A service-to-service call is just a dependency, so `with remote(Users, url)` in production becomes `with sim.node("users")` in tests. A whole fleet of Ren services, plus databases and object storage, runs in one deterministic process, with partitions, clock skew, and crashes.
 
 ```ren
 test sim "checkout survives a partition" (seed) =
-  with sim_cluster(seed, nodes: [api, users, billing], partition_at: 3.s) in
+  with sim.cluster(seed, nodes: [api, users, billing], partition_at: 3.s) in
     assert eventually(all_orders_consistent)
 ```
 
@@ -798,7 +805,7 @@ $ ren test --model-check --nodes 3 --max-steps 40
 
 ```ren
 with batched(Users, max: 100) in
-  par_map(ids) fn(id) => Users.get(id)      // one query, not 100
+  async.par_map(ids) fn(id) => Users.get(id)  // one query, not 100
 ```
 
 **Read-only capabilities.** `uses Users.read` versus `uses Users.write`. The compiler then knows which functions are safe to retry, hedge, or cache, with no idempotency annotations.
@@ -826,8 +833,7 @@ $ ren replay --traces last-hour/ --against ./new-build --diff
 
 ## Open questions
 
-- Should mutating method calls on a `var` (`xs.push(x)`) need `&`?
-- How much `comptime` is needed for `Json.decode<T>`-style reflection without macros?
+- How much `comptime` is needed for `json.decode<T>`-style reflection without macros?
 - Should handler ordering be linted, and which orderings are known to be bad?
 - What exactly goes in an effect journal entry so it serves simulation, replay, and migration alike?
 - Which dependencies are traced per call by default, and which only in aggregate (`Clock`, `Alloc`)?

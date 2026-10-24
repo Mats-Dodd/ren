@@ -4,7 +4,7 @@
 
 This doc covers how Ren code is organized into files and packages, how names are found, and how `ren build` turns all of it into binaries. The two halves depend on each other. The module rules are what make the build fast and trustworthy, and the build is the reason the module rules look the way they do.
 
-> **Status:** design. Constructor sharing (`Light.Red` vs `Suit.Red`) works today. Everything else is planned; see [Roadmap](#roadmap).
+> **Status:** design. Today a program is a single file, and constructor names must be unique across it. Everything here is planned; see [Roadmap](#roadmap).
 
 ---
 
@@ -14,11 +14,26 @@ This doc covers how Ren code is organized into files and packages, how names are
  a file is a module            shop/billing/stripe.ren  →  `shop/billing/stripe`
  imports are explicit          import shop/billing/stripe      → stripe.charge(...)
  values are always qualified   you can always see where a call comes from
+ the type is the other home    Red, user.plan, a + b, &xs.push(x): found through a type
  no wildcards, no cycles       nothing found behind your back
  private unless `pub`          internal/ for package-private
- constructors belong to types  Red when it's obvious, Light.Red when it isn't
  builds are pure functions     same inputs, same outputs, cached forever
 ```
+
+---
+
+## Three rules
+
+Everything else in this doc follows from three rules.
+
+**1. What crosses a boundary is written down. What stays inside is inferred.**
+This is the first principle, *the signature is the truth*, applied to modules. Anything `pub` states its whole contract in its declaration: parameter and result types, errors, `uses`, and which function parameters are transparent. Private code can leave all of that out. Inference never crosses a module boundary, so a module can be checked knowing only its imports' declarations.
+
+**2. Every name has one home, found in one of two ways: through scope or through a type.**
+Modules, values, and types are found through scope, by importing them. Constructors, fields, operators, methods, and dependency operations are found through a type, by looking in that type's own declaration. Nothing is found any other way: no search, no wildcards, no implicit imports beyond the prelude. Error tags are the one deliberate exception: they're structural and have no home.
+
+**3. Identity is a path. A cache key is a content hash.**
+Every top-level entity is named by where it lives: `shop/billing/stripe.charge`. Every cached result is keyed by the hash of what it was computed from. Modules exist for readers, and the cache doesn't care how big they are.
 
 ---
 
@@ -41,23 +56,7 @@ shop/                       ← a package (it has ren.toml)
     json/                   ← a vendored dependency
 ```
 
-### Imports say exactly where things come from
-
-```ren
-import shop/billing/stripe              // stripe.charge(...)
-import json/decode as jd                // jd.parse(...)
-import shop/plan.{Plan, User}           // types, unqualified
-
-pub fn checkout(u: User) -> Receipt ! PaymentFailed
-    uses stripe.Client =
-  try stripe.charge(u.id, price(u.plan))
-```
-
-- **Values are always qualified.** You'll read `stripe.charge`, never a bare `charge` that could have come from anywhere.
-- **Types can be unqualified**, because `fn f(u: shop_plan.User)` would make every signature unreadable.
-- **There are no wildcard imports.** `import x.{*}` doesn't exist.
-- **Unused imports are an error**, with a fix that deletes them.
-- **The keyword is `import`, not `use`,** so it can never be confused with `uses`. One is about modules, the other is about capabilities.
+A directory is only a folder. It isn't a module, and it isn't a privacy boundary, except for `internal/`.
 
 ### No import cycles
 
@@ -69,7 +68,118 @@ error: import cycle: billing/stripe → billing/invoice → billing/stripe
    help: move what both modules need into a third module that both can import
 ```
 
-Banning cycles is what gives the compiler a dependency order. That order is what lets it check modules in parallel and skip the ones that haven't changed.
+Banning cycles gives the compiler a dependency order. That order is what lets it check modules in parallel and skip the ones that haven't changed. The price is that types that refer to each other have to live in the same file.
+
+### Found through scope: imports
+
+```ren
+import shop/billing/stripe              // stripe.charge(...)
+import json/decode as jd                // jd.parse(...)
+import shop/plan.{Plan, User}           // types, unqualified
+
+pub fn checkout(u: User) -> Receipt ! PaymentFailed
+    uses stripe.Client =
+  try stripe.charge(u.id, price(u.plan))
+```
+
+- **Values from another module are always qualified.** You'll read `stripe.charge`, never a bare `charge` that could have come from anywhere. Inside its own module, a value is written bare.
+- **Types can be imported by name**, because `fn f(u: shop_plan.User)` would make every signature unreadable. Only types can be imported by name.
+- **There are no wildcard imports.** `import x.{*}` doesn't exist.
+- **Unused imports are an error**, with a fix that deletes them.
+- **A local can't shadow an import.** Then `stripe.charge` is always the module and `user.charge` is always a field, decided by scope alone.
+- **The keyword is `import`, not `use`,** so it can never be confused with `uses`. One is about modules, the other is about capabilities.
+
+### Found through a type
+
+Constructors, record fields, operators, methods, and dependency operations all live on a type. You don't import them: once the type is known, its own declaration is the only place to look.
+
+```ren
+type Light = Red | Yellow | Green
+type Suit  = Red | Black
+
+fn next(l: Light) -> Light =
+  match l
+    Red    => Green           // the subject is a Light, and so is the result
+    Yellow => Red
+    Green  => Yellow
+
+fn main() = print(Red)        // nothing says which `Red`
+```
+
+```
+error: `Red` could be `Light.Red` or `Suit.Red`
+  ┌─ test.ren:9:19
+9 │ fn main() = print(Red)
+  │                   ^^^
+  help: write `Light.Red`, naming the type you mean
+```
+
+Every lookup through a type follows the same three steps:
+
+1. **If the expected type is already known at that point**, look there. Known means: an annotation, the declared parameter type of the function being called, the subject of a `match`, the declared result type, or an earlier argument or operand. The checker reads left to right and never waits for something it learns later.
+2. **Otherwise, if exactly one visible type has that name**, use it. A type is visible if it's declared in this module, imported by name, or in the prelude.
+3. **Otherwise, it's an error** that suggests a qualification or an annotation.
+
+```ren
+let names = users.map(fn(u) => u.name)    // `users` is checked first, so `u` is a User
+
+fn label(u) = u.name                      // fine if only one visible record has `name`;
+                                          // otherwise: "annotate `u`"
+```
+
+The result never depends on the order the checker happens to discover things in, so it's deterministic and predictable. When the type is known, step 1 goes through the type's declaration, not through scope. `Free` therefore works wherever a `billing.Plan` is expected, even if `Plan` was never imported. The full form `billing.Plan.Free` also works.
+
+Two libraries can both define `Error`, and the prelude doesn't reserve `Some` and `None` everywhere.
+
+### Methods and operators live on the type
+
+A type's `ops` block holds everything attached to it: operators, associated values, and methods. Only the module that declares the type can write its `ops`, so every lookup goes to exactly one place and orphan instances can't exist.
+
+```ren
+pub type Stack<T> = { items: Array<T> }
+  ops =
+    pub push(inout s, x: T) uses Alloc => &s.items.push(x)
+    pub peek(s) -> T? => s.items.last()
+    pub empty = { items: [] }
+```
+
+A method is an ordinary function whose first parameter has the type, and `x.m(args)` is shorthand for `Type.m(x, args)`. In `ops`, an unannotated parameter has the type itself.
+
+```ren
+var s = Stack.empty               // an associated value
+&s.push(1)                        // Stack.push(&s, 1): `&` because push changes `s`
+let top = s.peek()                // Stack.peek(s)
+```
+
+**`&` marks a changed receiver, just as it marks a changed argument.** `&s.push(1)` puts the `&` in front of the receiver, and leaving it out is an error. So a function body still uses exactly two markers: `try` for a call that can fail, `&` for a call that changes something. A `&` in front of a place (`f(&xs.items)`) passes that place `inout`. A `&` in front of a method call (`&xs.items.push(1)`) marks the receiver. A call's result is never a place, so the two can't be confused.
+
+You can't add methods to a type you don't own. Write a function in your own module (`mylib.chunks(xs)`), or wrap the type in an `opaque` type and give that type its own `ops`.
+
+Operators are public whenever their type is. Methods and associated values are private unless they're marked `pub`, like everything else.
+
+### Dependencies are types
+
+`import shop/db.{Users}` followed by `uses Users` gives you `Users.get(id)`. `Users` is found through scope, and `get` through the type. A dependency's operations are its fields, so they're found the same way record fields are.
+
+### Error tags have no home
+
+Error tags are structural, like OCaml's polymorphic variants. You don't declare or import them; you just `fail NotFound`. Two libraries can use the same tag name with different payloads:
+
+```ren
+// http                                       // mutex
+fn fetch(u: Url) -> Bytes ! Timeout(ms: Int)  fn lock() -> Lock ! Timeout
+```
+
+That only matters if one error set would contain both shapes:
+
+```
+error: `Timeout` has two shapes here
+   = from `http.fetch`:  Timeout(ms: Int)
+   = from `mutex.lock`:  Timeout
+   help: handle one and rename it:  try mutex.lock() catch Timeout => fail LockTimeout
+```
+
+Tags with the same name and the same shape are the same error, wherever they come from. Adding a dependency can never break code that doesn't touch it.
 
 ### Private unless `pub`
 
@@ -80,71 +190,17 @@ pub fn load(id: UserId) -> User ! NotFound ...   // exported
 fn helper() = ...                                // this module only
 ```
 
-There are two levels and no third keyword. For "shared inside my package but not with my users," put the module under `internal/`, the way Go does.
+There are two levels and no third keyword. For "shared inside my package but not with my users," put the module under `internal/`, the way Go does. Only the module that declares an `opaque` type can see its representation.
 
-### Constructors belong to their type
+Tests are written in the module they test (`test "..." =`), can see its private items, and never appear in its interface.
 
-Two types can use the same constructor name:
+### Naming is enforced
 
-```ren
-type Light = Red | Yellow | Green
-type Suit  = Red | Black
-```
-
-You write the bare name when it's obvious and the qualified name when it isn't:
-
-```ren
-fn next(l: Light) -> Light =
-  match l
-    Red    => Green           // obviously a Light: the other arms say so
-    Yellow => Light.Red       // an expression with no context: qualify it
-    Green  => Yellow
-```
-
-When it's ambiguous, Ren asks you rather than guessing:
-
-```
-error: `Red` could be `Light.Red` or `Suit.Red`
-  ┌─ test.ren:4:19
-4 │ fn main() = print(Red)
-  │                   ^^^
-  help: write `Light.Red`, naming the type you mean
-```
-
-The rule has three steps:
-1. Use the expected type if one is known (match arms, annotations, parameters).
-2. Otherwise, if only one visible type has that constructor, use it.
-3. Otherwise, it's an error with a suggested fix.
-
-Two libraries can both define `Error`, and the prelude doesn't reserve `Some` and `None` everywhere.
-
-### Error tags only have to agree where they meet
-
-Error tags are structural, like OCaml's polymorphic variants. You don't declare them; you just `fail NotFound`. Two libraries can use the same tag name with different payloads:
-
-```ren
-// http                                       // mutex
-fn fetch(u: Url) -> Bytes ! Timeout(ms: Int)  fn lock() -> Lock ! Timeout
-```
-
-That only becomes a problem if one function's errors would contain both shapes:
-
-```
-error: `Timeout` has two shapes here
-   = from `http.fetch`:  Timeout(ms: Int)
-   = from `mutex.lock`:  Timeout
-   help: handle one and rename it:  try mutex.lock() catch Timeout => fail LockTimeout
-```
-
-Adding a dependency can never break code that doesn't touch it.
-
-### Everything else follows the same pattern
-
-- **Dependency types are ordinary types.** `import shop/db.{Users}` followed by `uses Users` gives you `Users.get(id)`.
-- **`ops` live next to their type,** in the same module. Operator lookup goes to exactly one place, and orphan instances can't exist.
-- **Naming is enforced:** `UpperCamel` for types and constructors, `snake_case` for everything else. That's also how the parser tells `Plan.Free` (a constructor) from `user.plan` (a field) without looking anything up.
+`UpperCamel` is for types, constructors, and error tags, and `snake_case` is for everything else. That's how the parser tells `Plan.Free` (through a type) from `billing.free` (through scope) without looking anything up.
 
 ### A small, fixed prelude
+
+The prelude is an ordinary module that every module imports implicitly.
 
 | Kind | Always available |
 |---|---|
@@ -153,9 +209,28 @@ Adding a dependency can never break code that doesn't touch it.
 | Dependencies | `Io` `Net` `Alloc` `Async` `Unsafe` `Clock` `Random` |
 | Functions | `print` `dbg` `assert` |
 
+Everything else in the standard library is imported like any other module: `import std/async` gives you `async.par_map`.
+
 **`print` uses `Io`.** It's an ordinary function, so calling it from code that doesn't declare `Io` is an error. Otherwise any pure function could quietly reach the outside world, and simulation and replay would stop being trustworthy.
 
 For debugging there's **`dbg(x)`**, which works anywhere. It prints the value with its source location, is compiled out of release builds, and is rejected by `ren test --ci`, so it can't get committed.
+
+### Interface summaries
+
+For every module, the compiler generates a summary that dependents read instead of its source. You never write one by hand. The summary has two tiers:
+
+| Tier | Contains | Read by |
+|---|---|---|
+| **Interface** | `pub` types (with their representation, unless `opaque`), `pub` signatures, error sets, `uses`, transparency, `ops` signatures | type checking of dependents |
+| **Implementation** | `opaque` representations, layouts and sizes, the bodies of `pub` generic and inlinable functions, inferred borrow modes, whether the module contains `trust` | code generation of dependents |
+
+**The interface is computed from declarations alone, never from bodies.** Rule 1 makes that possible. The one fact that would otherwise need a body is transparency, so `pub` signatures state it: a function parameter without `..e` or `..d` is transparent, and the body is checked against that. The interface tier also contains no source locations, so adding a blank line at the top of a file doesn't change it.
+
+This gives you:
+
+- **Editing a function body can never change its module's interface,** so dependents never have to be re-checked for it. Early cutoff is guaranteed, not just likely.
+- **Changing an `opaque` representation** reruns code generation for dependents, but never their type checking.
+- **Dependents can start checking as soon as a module's declarations are resolved,** without waiting for its bodies to be inferred.
 
 ### Packages
 
@@ -169,7 +244,8 @@ stripe = { path = "deps/stripe", allow = ["Net", "Alloc"] }
 ```
 
 - **Dependencies are vendored source.** There's no registry and no lockfile, because a dependency is identified by the hash of its contents.
-- **`allow` lists the capabilities a dependency may use.** If an update makes `json` reach for `Net`, your build fails and tells you exactly where:
+- **A build has one version of each package.** Two dependencies that vendor different versions of `json` are an error that names both versions, the way Go does it. So a type's identity stays `json/decode.Value`, and you never see "expected `Value`, found `Value`."
+- **`allow` lists the capabilities a dependency may use.** It's checked against the dependency's interface: the `uses` of its `pub` functions, plus `Unsafe` if its implementation tier says it contains `trust`. If an update makes `json` reach for `Net`, your build fails and tells you exactly where:
 
 ```
 error: dependency `json` uses a capability it isn't allowed
@@ -178,11 +254,7 @@ error: dependency `json` uses a capability it isn't allowed
    help: pin the previous version, or add "Net" to `allow` for json
 ```
 
-### Interface summaries
-
-For every module, the compiler generates a summary of its public interface: types, signatures, error sets, `uses`, and `ops`. Modules that import it read only that summary, never its source.
-
-You never write a summary by hand, so there's no second file to keep in sync the way OCaml's `.mli` files require. Inference never crosses a module boundary, which is why private helpers can skip annotations while public functions spell out their contract.
+The `via` chain isn't stored in any summary. It's worked out from the dependency's source only when this error is reported.
 
 ---
 
@@ -196,20 +268,23 @@ Build systems can't trust compilers. Compilers keep their own private incrementa
 
 ### Ren's answer
 
-Ren owns its compiler, so every step of compilation can be **a pure function of content-hashed inputs.** Caching happens inside the compiler, at the level of modules and functions.
+Ren owns its compiler, so every step of compilation can be **a pure function of content-hashed inputs.** Caching happens inside the compiler, below the level of a module.
 
 ```
- file bytes ──parse──▶ AST ──check(import summaries)──▶ typed module + summary
-                                                               │
-                                     summary unchanged? stop here
-                                                               ▼
-                                      codegen ──▶ C ──zig cc──▶ .o ──link──▶ binary
+ file bytes ─parse─▶ AST ─┬─ declarations + imported interfaces ─▶ interface ─▶ dependents
+                          │                              unchanged? dependents stop here
+                          │
+                          └─ bodies, one call-graph group at a time ─▶ typed Core
+                                                                          │
+                                       codegen ─▶ C ─zig cc─▶ .o ─link─▶ binary
 ```
+
+Within a module, private functions are inferred one group of mutually recursive functions at a time, so the group is the unit of checking. The same early cutoff applies inside a module: if a group's inferred types don't change, the groups that call it aren't re-checked.
 
 | | Conventional | Ren |
 |---|---|---|
 | The compiler | an opaque, stateful process | pure functions over hashes |
-| What's cached | whole compiler runs | modules and functions |
+| What's cached | whole compiler runs | interfaces, call-graph groups, and functions |
 | Hermetic because | an OS sandbox | the type system (no `Net`, `Clock`, `Env`) |
 | Incremental means | diffing against the last build | looking up content |
 | A long-running daemon | a trade-off with trust | just a cache |
@@ -220,7 +295,7 @@ Ren owns its compiler, so every step of compilation can be **a pure function of 
 
 **Nothing to clean, nothing stale.** Results live in a content-addressed store keyed only by input hashes. There are no timestamps and no "last build." Every branch, worktree, CI run, and teammate shares the same results, and a fresh checkout is always correct.
 
-**Early cutoff.** If you change a function's body without changing its signature, the module's summary stays the same, so nothing that imports it gets rechecked.
+**Early cutoff.** If you change a function's body, the module's interface can't change, so nothing that imports it gets re-checked.
 
 **A cache you don't have to trust.**
 ```
@@ -235,7 +310,7 @@ $ ren build --verify 5%
 pub fn build() -> Artifacts
     uses Build =
   let schema = Build.read("api/schema.json")          // tracked input
-  let api = codegen_api(Json.parse(schema))            // pure Ren, cached per function
+  let api = codegen_api(json.parse(schema))            // pure Ren, cached per function
   let proto = Build.exec("protoc",
       inputs: Build.glob("proto/*.proto"),
       outputs: ["gen/"])                               // external tool, sandboxed
@@ -256,18 +331,31 @@ A simulation test is a pure function of the code plus a seed, so its result can 
 
 ### The fine print
 
-- **The compiler must be deterministic, forever.** No output may depend on hash-table iteration order, scheduling, timestamps, or paths.
+- **The compiler must be deterministic, forever.** No output may depend on hash-table iteration order, scheduling, timestamps, paths, or the order modules were checked in. The compiler has no global counters, and types leave the checker in a canonical form, with variables numbered by first appearance and row labels sorted.
 - **Cache keys must be complete:** compiler version, target, flags, and the pinned `zig cc` hash. A missing input is a correctness bug.
 - **Release builds are coarser.** Cross-module specialization and profile-guided optimization need whole-program information, so release links are less incremental than debug builds. They're still correct, just slower to rebuild.
+
+---
+
+## In the compiler
+
+The three rules decide how the compiler is laid out:
+
+- **Resolve** finds everything that's found through scope: locals, import aliases, qualified values, and type names. It also decides what each `.` means. **Infer** finds everything that's found through a type, using the three steps above, with one mechanism for constructors, fields, record literals, operators, and methods. No name is resolved in both.
+- **Infer is bidirectional.** It checks an expression against an expected type whenever one is known, and it never defers a question until later. Exhaustiveness checking runs after Infer, because a constructor's type is only known once Infer has found it.
+- **Every pass is a function of explicit inputs:** one module or one call-graph group, plus the interfaces of its imports. The driver runs passes in dependency order. The content-addressed store sits in front of those same functions, without rewriting them.
+- **Identities are paths, and local IDs are numbered per function,** so editing one function never renumbers another.
+- **The prelude is the first ordinary module.** Built-in types and functions are declared in it, with their implementations supplied by the compiler.
 
 ---
 
 ## How it all fits
 
 ```
- file = module ─────────────────▶ the unit of caching
+ file = module ─────────────────▶ one rule for where code lives; modules sized for readers
+ two homes: scope or type ──────▶ every lookup goes to one place; Resolve and Infer split cleanly
+ declarations are the contract ─▶ interfaces from headers alone; early cutoff by construction
  no import cycles ──────────────▶ a build graph, checked in parallel
- generated summaries ───────────▶ early cutoff
  pure compiler passes ──────────▶ a cache you can trust; the daemon is just a cache
  uses Build (no Net/Clock/Env) ──▶ hermetic build scripts, enforced by types
  deterministic simulation tests ─▶ cached test results
@@ -279,14 +367,16 @@ This is the idea behind simulation and replay at runtime, applied to the compile
 
 ## Roadmap
 
+Stage numbers match the [README roadmap](README.md#roadmap).
+
 | When | What |
 |---|---|
-| **Today** | Constructors shared between types, with `Type.Ctor` qualification. Rule: every compiler pass is a pure function of its inputs |
-| **Stage 3** | Modules, imports, visibility, interface summaries, constructor resolution by expected type |
-| **Stage 5** | Structural error tags |
-| **Stage 6** | `print` uses `Io`, `dbg` |
-| **Stage 9** | `ren build` with a local content-addressed cache and `--verify` |
-| **Stage 13** | Cached simulation-test results |
+| **Today** | Single-file programs. Every compiler pass is a pure function of its inputs |
+| **Stage 5** | Files as modules, `import`, `pub`, `ops` with methods, lookup through types (constructors shared between types), interface summaries in memory, the prelude as a module, `dbg` |
+| **Stage 6** | Structural error tags with payloads, and the "two shapes" error |
+| **Stage 7** | Dependency types imported like other types |
+| **Stage 10** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
+| **Stage 14** | Cached simulation-test results |
 | **After 1.0** | `build.ren`, sandboxed tools, remote cache and execution |
 
 ---
@@ -295,4 +385,4 @@ This is the idea behind simulation and replay at runtime, applied to the compile
 
 - Should modules be able to re-export imported types (`pub import`)? We're leaning no until a real need shows up.
 - How do vendored dependencies get updated? Probably `ren deps update json --from <git url>`.
-- Should `billing.Plan.Free` work without importing `Plan`? It's probably needed, but it's three segments long.
+- Where does the boundary between the prelude and `std` sit? `Map` and `Set` are in the prelude, but `async.par_map` isn't. The test should be what nearly every module needs.

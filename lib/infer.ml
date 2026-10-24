@@ -11,7 +11,7 @@
    pair of open rows, and every call adds the callee's rows to the caller's,
    so a function's `uses` is everything the functions it calls use. `print`
    uses `Io`, so `main` does too. Nothing can fail with an error until Stage
-   5, so error rows are always empty for now, but they're inferred the same
+   6, so error rows are always empty for now, but they're inferred the same
    way.
 
    Top-level functions are checked in dependency order: callees before

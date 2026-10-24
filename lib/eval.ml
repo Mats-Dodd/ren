@@ -8,7 +8,7 @@
    Values are never changed in place. A variable is a cell ([ref]) holding a
    value, and assigning to `user.plan` or `xs[i]` builds a new value and puts
    it in the cell, so a value some other name holds can't change under it.
-   That's value semantics, done the slow way; Stage 10 makes it cheap. *)
+   That's value semantics, done the slow way; Stage 11 makes it cheap. *)
 
 open Ast
 
@@ -50,7 +50,7 @@ let rec show_value = function
 let bug what = failwith ("bug: the type checker let through " ^ what)
 
 (* Structural equality. Functions have no meaningful equality, so comparing
-   them panics; Stage 8's `ops` will turn that into a type error. *)
+   them panics; Stage 9's operators will turn that into a type error. *)
 let rec equal loc a b =
   match (a, b) with
   | VCon x, VCon y -> x.name = y.name && List.for_all2 (equal loc) x.args y.args
