@@ -1,0 +1,6 @@
+; examples.t runs every example with `ren run` and checks what it prints.
+
+(cram
+ (deps
+  %{bin:ren}
+  (glob_files *.ren)))
