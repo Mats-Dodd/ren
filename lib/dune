@@ -1,3 +1,13 @@
+; The compiler, in one library. Its sources live in folders by stage:
+;   syntax/  source text to AST (locations, tokens, lexer, parser)
+;   sema/    the checks that run before anything does (check, mut, infer)
+;   core/    what every pass shares (the prelude's built-ins)
+;   eval/    the interpreter
+; `unqualified` means the folders only organize files: every module keeps
+; its plain name (Parser, not Syntax.Parser).
+
+(include_subdirs unqualified)
+
 (library
  (name ren)
  (preprocess
