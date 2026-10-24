@@ -13,7 +13,7 @@
        x                       x DEDENT
      fn g() = 2              NEWLINE FN g ( ) = 2 EOF
 
-   Inside parentheses, line breaks and indentation are ignored so long
+   Inside parentheses or braces, line breaks and indentation are ignored so long
    argument lists can wrap freely. Blank and comment-only lines are skipped. *)
 
 open Token
@@ -28,6 +28,8 @@ let keywords =
     ("else", ELSE);
     ("true", TRUE);
     ("false", FALSE);
+    ("type", TYPE);
+    ("match", MATCH);
   ]
 
 let is_digit c = c >= '0' && c <= '9'
@@ -117,6 +119,7 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       match (c, peek 1) with
       | '-', '>' -> advance_by 2 ARROW
       | '=', '=' -> advance_by 2 EQEQ
+      | '=', '>' -> advance_by 2 FATARROW
       | '!', '=' -> advance_by 2 NEQ
       | '<', '=' -> advance_by 2 LE
       | '>', '=' -> advance_by 2 GE
@@ -126,6 +129,14 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | ')', _ ->
           depth := max 0 (!depth - 1);
           advance_by 1 RPAREN
+      | '{', _ ->
+          incr depth;
+          advance_by 1 LBRACE
+      | '}', _ ->
+          depth := max 0 (!depth - 1);
+          advance_by 1 RBRACE
+      | '.', _ -> advance_by 1 DOT
+      | '|', _ -> advance_by 1 PIPE
       | ',', _ -> advance_by 1 COMMA
       | ':', _ -> advance_by 1 COLON
       | '=', _ -> advance_by 1 EQ

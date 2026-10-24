@@ -1,0 +1,31 @@
+// Stage 2: records, sum types and exhaustive `match`.
+// Delete the `Enterprise` arm and `ren run` refuses to start.
+
+type Plan =
+  | Free
+  | Pro(seats: Int)
+  | Enterprise(contract: Int)
+
+type User = { id: Int, plan: Plan }
+
+fn seat_limit(p: Plan) -> Int =
+  match p
+    Free          => 1
+    Pro(seats)    => seats
+    Enterprise(_) => 1_000_000
+
+fn describe(u: User) -> Option<Int> =
+  match u.plan
+    Free => None
+    Pro(n) if n > 100 => Some(n * 2)
+    Pro(n) => Some(n)
+    Enterprise(c) => Some(value: c)
+
+fn main() =
+  let alice = User { id: 1, plan: Pro(seats: 5) }
+  let bob = { id: 2, plan: Free }
+  print(seat_limit(alice.plan))
+  print(describe(alice))
+  print(describe(bob))
+  print(alice == User { plan: Pro(5), id: 1 })
+  print(bob)

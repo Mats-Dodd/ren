@@ -29,7 +29,7 @@ let () =
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))
         | "ast" ->
             List.iter
-              (fun f -> print_endline (Ast.show_fn f))
+              (fun f -> print_endline (Ast.show_item f))
               (Driver.parse ~file:path src)
         | _ ->
             prerr_endline usage;

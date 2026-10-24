@@ -33,7 +33,7 @@ let ast src =
   let src = clean src in
   report src (fun () ->
       List.iter
-        (fun f -> print_endline (Ast.show_fn f))
+        (fun f -> print_endline (Ast.show_item f))
         (Driver.parse ~file src))
 
 (* ---- running programs ---- *)

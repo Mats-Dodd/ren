@@ -9,11 +9,17 @@
        │         ^
        help: split it into two comparisons *)
 
-type t = { loc : Loc.t; msg : string; help : string option }
+type t = {
+  loc : Loc.t;
+  msg : string;
+  notes : string list;
+  help : string option;
+}
 
 exception Error of t
 
-let error ?help loc msg = raise (Error { loc; msg; help })
+(* [notes] are extra facts printed as `= ...` lines; [help] suggests a fix. *)
+let error ?help ?(notes = []) loc msg = raise (Error { loc; msg; notes; help })
 
 let line_text src n =
   match List.nth_opt (String.split_on_char '\n' src) (n - 1) with
@@ -38,5 +44,6 @@ let render ~src (d : t) =
   Printf.bprintf b "%s │ %s%s\n" pad
     (String.make (start.col - 1) ' ')
     (String.make width '^');
+  List.iter (fun n -> Printf.bprintf b "%s = %s\n" pad n) d.notes;
   Option.iter (fun h -> Printf.bprintf b "%s help: %s\n" pad h) d.help;
   Buffer.contents b

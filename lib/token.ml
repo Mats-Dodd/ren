@@ -13,10 +13,17 @@ type t =
   | ELSE
   | TRUE
   | FALSE
+  | TYPE
+  | MATCH
   (* punctuation *)
   | LPAREN
   | RPAREN
+  | LBRACE
+  | RBRACE
   | COMMA
+  | DOT
+  | PIPE
+  | FATARROW
   | COLON
   | ARROW
   | EQ
@@ -51,8 +58,15 @@ let to_string = function
   | ELSE -> "else"
   | TRUE -> "true"
   | FALSE -> "false"
+  | TYPE -> "type"
+  | MATCH -> "match"
   | LPAREN -> "("
   | RPAREN -> ")"
+  | LBRACE -> "{"
+  | RBRACE -> "}"
+  | DOT -> "."
+  | PIPE -> "|"
+  | FATARROW -> "=>"
   | COMMA -> ","
   | COLON -> ":"
   | ARROW -> "->"
