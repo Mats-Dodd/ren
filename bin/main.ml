@@ -7,6 +7,7 @@ let usage =
 
 commands:
   run     run the program's `main` function
+  check   check the program without running it
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree|}
 
@@ -25,6 +26,7 @@ let () =
             match Driver.run ~file:path src with
             | VUnit -> ()
             | v -> print_endline (Eval.show_value v))
+        | "check" -> ignore (Driver.check ~file:path src)
         | "tokens" ->
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))
         | "ast" ->
