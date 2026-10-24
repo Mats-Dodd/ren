@@ -1,0 +1,7 @@
+// Stage 1 milestone: `ren run examples/fib.ren` prints 832040.
+
+fn fib(n: Int) -> Int =
+  if n < 2 then n else fib(n - 1) + fib(n - 2)
+
+fn main() -> Int =
+  fib(30)

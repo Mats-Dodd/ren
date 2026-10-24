@@ -1,0 +1,4 @@
+(library
+ (name ren)
+ (preprocess
+  (pps ppx_deriving.show)))
