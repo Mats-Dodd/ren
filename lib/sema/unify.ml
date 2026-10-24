@@ -2,7 +2,10 @@
 
    It raises a bare exception rather than a diagnostic, because only the
    caller knows what the two types mean ("the argument", "the `then`
-   branch") and so how to explain the failure. *)
+   branch") and so how to explain the failure.
+
+   [st] is the compilation's inference state (types.ml), which supplies
+   ids for the row variables [rewrite] creates. *)
 
 open Types
 
@@ -37,7 +40,7 @@ and occurs_row id level r =
   | REmpty -> ()
   | RExtend (_, rest) -> occurs_row id level rest
 
-let rec unify a b =
+let rec unify st a b =
   match (repr a, repr b) with
   | TVar r1, TVar r2 when r1 == r2 -> ()
   | TVar ({ contents = Unbound (id, l) } as r), t
@@ -46,18 +49,18 @@ let rec unify a b =
       r := Link t
   | TCon (n1, a1), TCon (n2, a2) when n1 = n2 && List.length a1 = List.length a2
     ->
-      List.iter2 unify a1 a2
+      List.iter2 (unify st) a1 a2
   | TFun (p1, r1, e1, u1), TFun (p2, r2, e2, u2)
     when List.length p1 = List.length p2 ->
       List.iter2
         (fun a b ->
           (* `fn(inout Int)` and `fn(Int)` are different types *)
           if a.mode <> b.mode then raise Mismatch;
-          unify a.ty b.ty)
+          unify st a.ty b.ty)
         p1 p2;
-      unify r1 r2;
-      unify_row e1 e2;
-      unify_row u1 u2
+      unify st r1 r2;
+      unify_row st e1 e2;
+      unify_row st u1 u2
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 
@@ -65,7 +68,7 @@ let rec unify a b =
    `<l | rest1>` with a row, rewrite that row so it starts with `l`, then
    unify what remains. An open tail can always grow to supply a missing
    label; a closed row can't. *)
-and unify_row a b =
+and unify_row st a b =
   match (repr_row a, repr_row b) with
   | REmpty, REmpty -> ()
   | RVar c1, RVar c2 when c1 == c2 -> ()
@@ -75,26 +78,26 @@ and unify_row a b =
       cell := RLink r
   | RExtend (label, rest1), r2 ->
       let tail1 = snd (row_parts rest1) in
-      let rest2 = rewrite r2 label in
+      let rest2 = rewrite st r2 label in
       (* If supplying `label` bound rest1's own tail, the two rows share a
          tail but disagree on labels: `<Io | ρ>` and `<Clock | ρ>`. *)
       (match (tail1, snd (row_parts rest1)) with
       | Some before, after when after <> Some before -> raise Mismatch
       | _ -> ());
-      unify_row rest1 rest2
+      unify_row st rest1 rest2
   | REmpty, RExtend _ -> raise Mismatch
   | RVar { contents = RLink _ }, _ | _, RVar { contents = RLink _ } ->
       assert false
 
 (* [row] with [label] removed, extending an open tail if the label isn't
    there yet. *)
-and rewrite row label =
+and rewrite st row label =
   match repr_row row with
   | REmpty -> raise Mismatch
   | RExtend (l, rest) when l = label -> rest
-  | RExtend (l, rest) -> RExtend (l, rewrite rest label)
+  | RExtend (l, rest) -> RExtend (l, rewrite st rest label)
   | RVar ({ contents = RUnbound (_, level) } as cell) ->
-      let rest = RVar (ref (RUnbound (fresh_id (), level))) in
+      let rest = RVar (ref (RUnbound (fresh_id st, level))) in
       cell := RLink (RExtend (label, rest));
       rest
   | RVar { contents = RLink _ } -> assert false

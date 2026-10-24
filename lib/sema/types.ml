@@ -44,19 +44,30 @@ and row = REmpty | RExtend of string * row | RVar of rvar ref
 and rvar = RUnbound of int * int  (** id, level *) | RLink of row
 
 let generic_level = max_int
-let current_level = ref 1
-let enter_level () = incr current_level
-let leave_level () = decr current_level
-let counter = ref 0
 
-let fresh_id () =
-  incr counter;
-  !counter
+(* What inference changes as it goes. Each compilation makes its own and
+   passes it to everything that needs it, so there are no global counters
+   and two compilations in one process can't affect each other. *)
+type state = {
+  mutable level : int;  (** the level new variables are created at *)
+  mutable last_id : int;  (** the last id handed out to a variable *)
+  hints : (int, string) Hashtbl.t;
+      (** the names of type parameters, remembered so `ren types` can print `T`
+          for a variable that came from `fn id<T>` *)
+}
 
-let fresh_var () = TVar (ref (Unbound (fresh_id (), !current_level)))
-let fresh_row () = RVar (ref (RUnbound (fresh_id (), !current_level)))
-let generic_var () = TVar (ref (Unbound (fresh_id (), generic_level)))
-let generic_row () = RVar (ref (RUnbound (fresh_id (), generic_level)))
+let new_state () = { level = 1; last_id = 0; hints = Hashtbl.create 16 }
+let enter_level st = st.level <- st.level + 1
+let leave_level st = st.level <- st.level - 1
+
+let fresh_id st =
+  st.last_id <- st.last_id + 1;
+  st.last_id
+
+let fresh_var st = TVar (ref (Unbound (fresh_id st, st.level)))
+let fresh_row st = RVar (ref (RUnbound (fresh_id st, st.level)))
+let generic_var st = TVar (ref (Unbound (fresh_id st, generic_level)))
+let generic_row st = RVar (ref (RUnbound (fresh_id st, generic_level)))
 let int = TCon ("Int", [])
 let bool = TCon ("Bool", [])
 let unit = TCon ("Unit", [])
@@ -95,19 +106,15 @@ let row_parts r =
 
 (* ---- generalizing and instantiating ---- *)
 
-(* The names of type parameters, remembered so `ren types` can print `T` for
-   a variable that came from `fn id<T>`. *)
-let hints : (int, string) Hashtbl.t = Hashtbl.create 16
-
 (* Make generic every variable created deeper than the current level, and
    replace the function's own type parameters ([skolems], as id and name)
    with generic variables too. The result is the function's type scheme. *)
-let generalize ~skolems t =
+let generalize st ~skolems t =
   let table = Hashtbl.create 8 in
   let rec go t =
     match repr t with
     | TVar ({ contents = Unbound (id, l) } as r) as t ->
-        if l > !current_level then r := Unbound (id, generic_level);
+        if l > st.level then r := Unbound (id, generic_level);
         t
     | TVar { contents = Link _ } -> assert false
     | TSkol (id, name) as t -> (
@@ -116,10 +123,10 @@ let generalize ~skolems t =
           match Hashtbl.find_opt table id with
           | Some v -> v
           | None ->
-              let v = generic_var () in
+              let v = generic_var st in
               (match v with
               | TVar { contents = Unbound (vid, _) } ->
-                  Hashtbl.replace hints vid name
+                  Hashtbl.replace st.hints vid name
               | _ -> ());
               Hashtbl.add table id v;
               v)
@@ -129,7 +136,7 @@ let generalize ~skolems t =
   and row r =
     match repr_row r with
     | RVar ({ contents = RUnbound (id, l) } as cell) as r ->
-        if l > !current_level then cell := RUnbound (id, generic_level);
+        if l > st.level then cell := RUnbound (id, generic_level);
         r
     | RVar { contents = RLink _ } -> assert false
     | REmpty -> REmpty
@@ -139,7 +146,7 @@ let generalize ~skolems t =
 
 (* A copy of a type scheme with fresh variables in place of the generic
    ones, so each use of a function can pick its own types. *)
-let instantiate t =
+let instantiate st t =
   let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
   let rec go t =
     match repr t with
@@ -147,7 +154,7 @@ let instantiate t =
         match Hashtbl.find_opt tys id with
         | Some v -> v
         | None ->
-            let v = fresh_var () in
+            let v = fresh_var st in
             Hashtbl.add tys id v;
             v)
     | (TVar _ | TSkol _) as t -> t
@@ -160,7 +167,7 @@ let instantiate t =
         match Hashtbl.find_opt rows id with
         | Some v -> v
         | None ->
-            let v = fresh_row () in
+            let v = fresh_row st in
             Hashtbl.add rows id v;
             v)
     | (REmpty | RVar _) as r -> r
@@ -178,6 +185,7 @@ let instantiate t =
    Row tails are hidden unless [show_tail] picks them, and then print as
    `..e` (errors) or `..d` (dependencies). *)
 type printer = {
+  hints : (int, string) Hashtbl.t;  (** from the [state] *)
   names : (int, string) Hashtbl.t;
   mutable order : string list;  (** names handed out, most recent first *)
   reserved : (string, unit) Hashtbl.t;
@@ -185,8 +193,9 @@ type printer = {
   tail_names : (int, string) Hashtbl.t;
 }
 
-let printer ?(show_tail = fun _ -> false) () =
+let printer ?(show_tail = fun _ -> false) (st : state) =
   {
+    hints = st.hints;
     names = Hashtbl.create 8;
     order = [];
     reserved = Hashtbl.create 8;
@@ -205,7 +214,7 @@ let var_name pr id =
   | Some n -> n
   | None ->
       let n =
-        match Hashtbl.find_opt hints id with
+        match Hashtbl.find_opt pr.hints id with
         | Some h when not (List.mem h pr.order) -> h
         | _ -> List.find (fun n -> not (taken pr n)) auto_names
       in
@@ -220,7 +229,7 @@ let rec reserve pr t =
   | TVar { contents = Unbound (id, _) } ->
       Option.iter
         (fun h -> Hashtbl.replace pr.reserved h ())
-        (Hashtbl.find_opt hints id)
+        (Hashtbl.find_opt pr.hints id)
   | TVar { contents = Link _ } | TSkol _ -> ()
   | TCon (_, args) -> List.iter (reserve pr) args
   | TFun (ps, r, _, _) -> List.iter (reserve pr) (r :: param_tys ps)

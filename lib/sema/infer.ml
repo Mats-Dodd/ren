@@ -35,6 +35,7 @@ let article name =
   | _ -> sprintf "a `%s`" name
 
 type env = {
+  st : Types.state;
   types : (string, type_def) Hashtbl.t;
   ctors : (string, type_def * ctor) Hashtbl.t;
   globals : (string, ty) Hashtbl.t;
@@ -83,10 +84,10 @@ let rec mode_clash found expected =
 
 (* Unify [found] (what the code has) with [expected] (what it needs). [msg]
    words the error, given both types printed. *)
-let unify_at ?(notes = []) ?help ?msg loc ~found ~expected =
-  try Unify.unify found expected with
+let unify_at env ?(notes = []) ?help ?msg loc ~found ~expected =
+  try Unify.unify env.st found expected with
   | Unify.Mismatch ->
-      let pr = printer () in
+      let pr = printer env.st in
       let f = show pr found and x = show pr expected in
       let msg =
         match msg with
@@ -131,7 +132,7 @@ let unify_at ?(notes = []) ?help ?msg loc ~found ~expected =
       in
       Diag.error ?help ~notes loc msg
   | Unify.Infinite ->
-      let pr = printer () in
+      let pr = printer env.st in
       Diag.error loc
         ~notes:
           [
@@ -169,9 +170,9 @@ let closed () = REmpty
 
 (* Fresh variables for a type declaration's parameters: `Option<T>` used
    once can be an `Option<Int>`, and elsewhere an `Option<Bool>`. *)
-let instance (td : type_def) =
+let instance env (td : type_def) =
   let tvars =
-    List.map (fun (p : ident) -> (p.name, fresh_var ())) td.type_params
+    List.map (fun (p : ident) -> (p.name, fresh_var env.st)) td.type_params
   in
   (TCon (td.type_name.name, List.map snd tvars), tvars)
 
@@ -197,24 +198,24 @@ let lookup env cx loc ~what x =
   | Some t -> t
   | None -> (
       match Hashtbl.find_opt env.globals x with
-      | Some t -> instantiate t
+      | Some t -> instantiate env.st t
       | None -> Diag.error loc (sprintf "there's no %s named `%s`" what x))
 
-let want_int op (e : expr) t =
-  unify_at e.loc ~found:t ~expected:int
+let want_int env op (e : expr) t =
+  unify_at env e.loc ~found:t ~expected:int
     ~notes:[ sprintf "`%s` works on `Int`s" op ]
 
-let want_bool what (e : expr) t =
-  unify_at e.loc ~found:t ~expected:bool
+let want_bool env what (e : expr) t =
+  unify_at env e.loc ~found:t ~expected:bool
     ~notes:[ sprintf "%s has to be a `Bool`" what ]
 
 (* A call adds the callee's errors and dependencies to the caller's. *)
-let absorb cx loc errs uses =
+let absorb env cx loc errs uses =
   try
-    Unify.unify_row errs cx.errs;
-    Unify.unify_row uses cx.uses
+    Unify.unify_row env.st errs cx.errs;
+    Unify.unify_row env.st uses cx.uses
   with Unify.Mismatch | Unify.Infinite ->
-    let pr = printer () in
+    let pr = printer env.st in
     Diag.error loc
       (sprintf "this call%s, which isn't allowed here"
          (show_effects pr errs uses))
@@ -226,7 +227,7 @@ let rec infer env cx (e : expr) : ty =
   | Unit -> unit
   | Var x -> lookup env cx e.loc ~what:"variable" x
   | Unop (Neg, a) ->
-      want_int "-" a (infer env cx a);
+      want_int env "-" a (infer env cx a);
       int
   | Binop (op, a, b) -> (
       let ta = infer env cx a in
@@ -234,41 +235,41 @@ let rec infer env cx (e : expr) : ty =
       let name = binop_to_string op in
       match op with
       | Add | Sub | Mul | Div | Mod ->
-          want_int name a ta;
-          want_int name b tb;
+          want_int env name a ta;
+          want_int env name b tb;
           int
       | Lt | Le | Gt | Ge ->
-          want_int name a ta;
-          want_int name b tb;
+          want_int env name a ta;
+          want_int env name b tb;
           bool
       | Eq | Neq ->
-          unify_at b.loc ~found:tb ~expected:ta ~msg:(fun f x ->
+          unify_at env b.loc ~found:tb ~expected:ta ~msg:(fun f x ->
               sprintf
                 "`%s` compares two values of the same type, but this is %s and \
                  the left side is %s"
                 name (article f) (article x));
           bool)
   | If (c, t, Some f) ->
-      want_bool "an `if` condition" c (infer env cx c);
+      want_bool env "an `if` condition" c (infer env cx c);
       let tt = infer env cx t in
       let tf = infer env cx f in
-      unify_at (result_loc f) ~found:tf ~expected:tt
+      unify_at env (result_loc f) ~found:tf ~expected:tt
         ~msg:(fun f x ->
           sprintf "this `else` branch is %s, but the `then` branch is %s"
             (article f) (article x))
         ~notes:[ "both branches of an `if` have to produce the same type" ];
       tt
   | If (c, t, None) ->
-      want_bool "an `if` condition" c (infer env cx c);
-      unify_at (result_loc t) ~found:(infer env cx t) ~expected:unit
+      want_bool env "an `if` condition" c (infer env cx c);
+      unify_at env (result_loc t) ~found:(infer env cx t) ~expected:unit
         ~msg:(fun f _ ->
           sprintf "this `if` has no `else`, so it can't produce %s" (article f))
         ~help:"add an `else` branch for when the condition is false";
       unit
   | Call (f, args) -> infer_call env cx e f args
   | Lambda (params, body) ->
-      let ps = List.map (param_type cx) params in
-      let errs = fresh_row () and uses = fresh_row () in
+      let ps = List.map (param_type env cx) params in
+      let errs = fresh_row env.st and uses = fresh_row env.st in
       let locals = bind_params cx.locals params ps in
       let tb = infer env { cx with locals; errs; uses } body in
       TFun (ps, tb, errs, uses)
@@ -280,8 +281,11 @@ let rec infer env cx (e : expr) : ty =
                 let t = infer env cx value in
                 Option.iter
                   (fun ann ->
-                    unify_at (result_loc value) ~found:t
-                      ~expected:(convert ~tvars:cx.tparams ~row:fresh_row ann))
+                    unify_at env (result_loc value) ~found:t
+                      ~expected:
+                        (convert ~tvars:cx.tparams
+                           ~row:(fun () -> fresh_row env.st)
+                           ann))
                   ty;
                 { cx with locals = Env.add name.name t cx.locals }
             | Expr e ->
@@ -294,10 +298,10 @@ let rec infer env cx (e : expr) : ty =
       (* check.ml has confirmed the constructor exists with this many
          arguments, labelled correctly *)
       let td, ctor = Hashtbl.find env.ctors c.name in
-      let t, tvars = instance td in
+      let t, tvars = instance env td in
       List.iter2
         (fun f (_, (a : expr)) ->
-          unify_at (result_loc a) ~found:(infer env cx a)
+          unify_at env (result_loc a) ~found:(infer env cx a)
             ~expected:(field_type ~tvars f)
             ~notes:[ sprintf "`%s`'s field `%s`" c.name f.field_name.name ])
         ctor.ctor_fields args;
@@ -306,13 +310,13 @@ let rec infer env cx (e : expr) : ty =
   | Field (r, f) -> infer_field env cx e r f
   | Match (subject, arms) ->
       let ts = infer env cx subject in
-      let result = fresh_var () in
+      let result = fresh_var env.st in
       List.iteri
         (fun i a ->
           let locals = bind_pattern env cx.locals ts a.arm_pat in
           let cx = { cx with locals } in
           Option.iter
-            (fun g -> want_bool "a guard" g (infer env cx g))
+            (fun g -> want_bool env "a guard" g (infer env cx g))
             a.arm_guard;
           let tb = infer env cx a.arm_body in
           let msg =
@@ -323,11 +327,11 @@ let rec infer env cx (e : expr) : ty =
                   sprintf "this arm is %s, but the arms above it are %s"
                     (article f) (article x))
           in
-          unify_at (result_loc a.arm_body) ~found:tb ~expected:result ?msg)
+          unify_at env (result_loc a.arm_body) ~found:tb ~expected:result ?msg)
         arms;
       result
   | Array xs ->
-      let elem = fresh_var () in
+      let elem = fresh_var env.st in
       List.iteri
         (fun i (x : expr) ->
           let msg =
@@ -339,15 +343,16 @@ let rec infer env cx (e : expr) : ty =
                     "this element is %s, but the elements before it are %s"
                     (article f) (article x))
           in
-          unify_at (result_loc x) ~found:(infer env cx x) ~expected:elem ?msg)
+          unify_at env (result_loc x) ~found:(infer env cx x) ~expected:elem
+            ?msg)
         xs;
       array elem
   | Index (a, i) ->
-      let elem = fresh_var () in
-      unify_at (result_loc a) ~found:(infer env cx a) ~expected:(array elem)
+      let elem = fresh_var env.st in
+      unify_at env (result_loc a) ~found:(infer env cx a) ~expected:(array elem)
         ~msg:(fun f _ ->
           sprintf "only an `Array` can be indexed, but this is %s" (article f));
-      want_int "an index" i (infer env cx i);
+      want_int env "an index" i (infer env cx i);
       elem
   | Ref a ->
       (* mut.ml allows `&` only on call arguments and `for` loops, which
@@ -359,17 +364,18 @@ let rec infer env cx (e : expr) : ty =
       (match op with
       | Some op ->
           let name = binop_to_string op ^ "=" in
-          want_int name target tt;
-          want_int name value tv
+          want_int env name target tt;
+          want_int env name value tv
       | None ->
-          unify_at (result_loc value) ~found:tv ~expected:tt ~msg:(fun f x ->
+          unify_at env (result_loc value) ~found:tv ~expected:tt
+            ~msg:(fun f x ->
               sprintf "this is %s, but it's being assigned to %s" (article f)
                 (article x)));
       unit
   | For { var; iter; body } ->
       let iter = match iter.kind with Ref a -> a | _ -> iter in
-      let elem = fresh_var () in
-      unify_at (result_loc iter) ~found:(infer env cx iter)
+      let elem = fresh_var env.st in
+      unify_at env (result_loc iter) ~found:(infer env cx iter)
         ~expected:(array elem) ~msg:(fun f _ ->
           sprintf "a `for` loop goes over an `Array`, but this is %s"
             (article f));
@@ -377,11 +383,11 @@ let rec infer env cx (e : expr) : ty =
         (infer env { cx with locals = Env.add var.name elem cx.locals } body);
       unit
 
-and param_type cx (p : Ast.param) =
+and param_type env cx (p : Ast.param) =
   let t =
     match p.pty with
-    | Some t -> convert ~tvars:cx.tparams ~row:fresh_row t
-    | None -> fresh_var ()
+    | Some t -> convert ~tvars:cx.tparams ~row:(fun () -> fresh_row env.st) t
+    | None -> fresh_var env.st
   in
   { mode = p.pmode; ty = t }
 
@@ -410,7 +416,7 @@ and infer_call env cx (e : expr) (f : expr) args =
         (fun (p : Types.param) (a : expr) ->
           match (p.mode, a.kind) with
           | Inout, Ref place ->
-              unify_at (result_loc place) ~found:(infer env cx place)
+              unify_at env (result_loc place) ~found:(infer env cx place)
                 ~expected:p.ty
           | Inout, _ ->
               let help =
@@ -433,9 +439,9 @@ and infer_call env cx (e : expr) (f : expr) args =
                   ]
                 (sprintf "%s doesn't change this argument" name)
           | Read, _ ->
-              unify_at (result_loc a) ~found:(infer env cx a) ~expected:p.ty)
+              unify_at env (result_loc a) ~found:(infer env cx a) ~expected:p.ty)
         ps args;
-      absorb cx e.loc errs uses;
+      absorb env cx e.loc errs uses;
       ret
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
@@ -446,13 +452,13 @@ and infer_call env cx (e : expr) (f : expr) args =
         | _ -> read (infer env cx a)
       in
       let ps = List.map arg args in
-      let ret = fresh_var () in
-      unify_at f.loc ~found:tf ~expected:(TFun (ps, ret, cx.errs, cx.uses));
+      let ret = fresh_var env.st in
+      unify_at env f.loc ~found:tf ~expected:(TFun (ps, ret, cx.errs, cx.uses));
       ret
   | t ->
       Diag.error f.loc
         (sprintf "%s is %s, not a function" name
-           (article (show (printer ()) t)))
+           (article (show (printer env.st) t)))
 
 and infer_record env cx (e : expr) name fields =
   let given =
@@ -461,12 +467,12 @@ and infer_record env cx (e : expr) name fields =
   (* the record type [tn], checking each field's value against it *)
   let build tn =
     let td = Hashtbl.find env.types tn in
-    let t, tvars = instance td in
+    let t, tvars = instance env td in
     let decl = Option.get (record_fields env tn) in
     List.iter
       (fun ((f : ident), v, tv) ->
         let fd = List.find (fun d -> d.field_name.name = f.name) decl in
-        unify_at (result_loc v) ~found:tv ~expected:(field_type ~tvars fd)
+        unify_at env (result_loc v) ~found:tv ~expected:(field_type ~tvars fd)
           ~notes:[ sprintf "`%s`'s field `%s`" tn f.name ])
       given;
     t
@@ -488,15 +494,15 @@ and infer_record env cx (e : expr) name fields =
       | _ ->
           (* several types have exactly these fields: wait to see which one
              this record is used as *)
-          let t = fresh_var () in
+          let t = fresh_var env.st in
           let attempt () =
             match repr t with
             | TVar _ -> false
             | TCon (n, _) when List.mem n fits ->
-                unify_at e.loc ~found:(build n) ~expected:t;
+                unify_at env e.loc ~found:(build n) ~expected:t;
                 true
             | _ ->
-                unify_at e.loc ~found:(build (List.hd fits)) ~expected:t;
+                unify_at env e.loc ~found:(build (List.hd fits)) ~expected:t;
                 true
           in
           let fail () =
@@ -513,7 +519,7 @@ and infer_field env cx (e : expr) r (f : ident) =
   let tr = infer env cx r in
   (* the field's type, once the record's type is known *)
   let resolve () =
-    let pr = printer () in
+    let pr = printer env.st in
     match repr tr with
     | TCon (n, args) as t -> (
         match record_fields env n with
@@ -550,18 +556,18 @@ and infer_field env cx (e : expr) r (f : ident) =
           Diag.error f.loc
             (sprintf "no record type has a field named `%s`" f.name)
       | [ n ] ->
-          unify_at r.loc ~found:tr
-            ~expected:(fst (instance (Hashtbl.find env.types n)));
+          unify_at env r.loc ~found:tr
+            ~expected:(fst (instance env (Hashtbl.find env.types n)));
           resolve ()
       | candidates ->
           (* more than one record type has this field: wait until the rest
              of the code says which one this is *)
-          let result = fresh_var () in
+          let result = fresh_var env.st in
           let attempt () =
             match repr tr with
             | TVar _ -> false
             | _ ->
-                unify_at e.loc ~found:(resolve ()) ~expected:result;
+                unify_at env e.loc ~found:(resolve ()) ~expected:result;
                 true
           in
           let fail () =
@@ -590,7 +596,7 @@ and infer_field env cx (e : expr) r (f : ident) =
    variables it binds. *)
 and bind_pattern env locals t (p : pattern) =
   let check found =
-    unify_at p.ploc ~found ~expected:t ~msg:(fun f x ->
+    unify_at env p.ploc ~found ~expected:t ~msg:(fun f x ->
         sprintf "expected a pattern for `%s`, but this one is %s" x (article f))
   in
   match p.pkind with
@@ -604,7 +610,7 @@ and bind_pattern env locals t (p : pattern) =
       locals
   | PCon (c, ps) ->
       let td, ctor = Hashtbl.find env.ctors c.name in
-      let tc, tvars = instance td in
+      let tc, tvars = instance env td in
       check tc;
       List.fold_left2
         (fun locals fd sub ->
@@ -820,11 +826,11 @@ let check_transparent (f : fn_def) =
 (* How `ren types` prints a function: the signature `ren fmt --annotate`
    would write. A row tail is printed (as `..e` / `..d`) only when it reaches
    the result; otherwise the parameter is transparent and the tail implied. *)
-let signature (f : fn_def) scheme =
+let signature st (f : fn_def) scheme =
   match repr scheme with
   | TFun (ps, ret, errs, uses) ->
       let in_ret = row_vars ret in
-      let pr = printer ~show_tail:(fun id -> List.mem id in_ret) () in
+      let pr = printer ~show_tail:(fun id -> List.mem id in_ret) st in
       reserve pr scheme;
       let params =
         List.map2
@@ -851,41 +857,43 @@ let signature (f : fn_def) scheme =
 (* ---- the program ---- *)
 
 (* The built-in functions and their type schemes. *)
-let builtins () =
-  let t = generic_var () in
+let builtins st =
+  let t = generic_var st in
   [
     (* fn<T>(T) uses Io *)
     ( "print",
       TFun
-        ( [ read (generic_var ()) ],
+        ( [ read (generic_var st) ],
           unit,
-          generic_row (),
-          RExtend ("Io", generic_row ()) ) );
+          generic_row st,
+          RExtend ("Io", generic_row st) ) );
     (* fn<T>(Array<T>) -> Int *)
     ( "len",
       TFun
-        ([ read (array (generic_var ())) ], int, generic_row (), generic_row ())
+        ([ read (array (generic_var st)) ], int, generic_row st, generic_row st)
     );
     (* fn<T>(inout Array<T>, T) *)
     ( "push",
       TFun
         ( [ { mode = Inout; ty = array t }; read t ],
           unit,
-          generic_row (),
-          generic_row () ) );
+          generic_row st,
+          generic_row st ) );
   ]
 
 (* Infer every function's type, and return each function's signature. *)
 let program ~file (prog : program) =
+  let st = Types.new_state () in
   let env =
     {
+      st;
       types = Hashtbl.create 16;
       ctors = Hashtbl.create 16;
       globals = Hashtbl.create 16;
       deferred = [];
     }
   in
-  List.iter (fun (n, t) -> Hashtbl.replace env.globals n t) (builtins ());
+  List.iter (fun (n, t) -> Hashtbl.replace env.globals n t) (builtins st);
   let fns = List.filter_map (function Fn f -> Some f | Type _ -> None) prog in
   List.iter
     (function
@@ -903,29 +911,29 @@ let program ~file (prog : program) =
   let schemes = Hashtbl.create 16 in
   List.iter
     (fun group ->
-      enter_level ();
+      enter_level env.st;
       (* each function's type within the group: its own type parameters
          (as skolems), parameters, result and effects *)
       let setup (f : fn_def) =
         let skolems =
-          List.map (fun (t : ident) -> (fresh_id (), t.name)) f.tparams
+          List.map (fun (t : ident) -> (fresh_id env.st, t.name)) f.tparams
         in
         let tparams = List.map (fun (id, n) -> (n, TSkol (id, n))) skolems in
         let cx =
           {
             locals = Env.empty;
-            errs = fresh_row ();
-            uses = fresh_row ();
+            errs = fresh_row env.st;
+            uses = fresh_row env.st;
             tparams;
           }
         in
-        let ps = List.map (param_type cx) f.params in
+        let ps = List.map (param_type env cx) f.params in
         let ret =
           match f.ret with
           | Some t -> convert ~tvars:tparams ~row:closed t
           | None when f.pub ->
               unit (* a public function without `->` returns Unit *)
-          | None -> fresh_var ()
+          | None -> fresh_var env.st
         in
         Hashtbl.replace env.globals f.name.name
           (TFun (ps, ret, cx.errs, cx.uses));
@@ -936,7 +944,7 @@ let program ~file (prog : program) =
         (fun ((f : fn_def), _, cx, ps, ret) ->
           let locals = bind_params Env.empty f.params ps in
           let tb = infer env { cx with locals } f.body in
-          let pr = printer () in
+          let pr = printer env.st in
           let notes, help =
             match f.ret with
             | Some _ ->
@@ -950,10 +958,10 @@ let program ~file (prog : program) =
                   Some (sprintf "add `-> %s` to the signature" (show pr tb)) )
             | None -> ([], None)
           in
-          unify_at (result_loc f.body) ~found:tb ~expected:ret ~notes ?help)
+          unify_at env (result_loc f.body) ~found:tb ~expected:ret ~notes ?help)
         setups;
       resolve_deferred env;
-      leave_level ();
+      leave_level env.st;
       List.iter
         (fun ((f : fn_def), skolems, _, _, _) ->
           let mono = Hashtbl.find env.globals f.name.name in
@@ -983,7 +991,7 @@ let program ~file (prog : program) =
                    "`%s` would have to use `%s`, the type parameter of `%s`"
                    f.name.name t o.name.name)
           | [] -> ());
-          let scheme = generalize ~skolems mono in
+          let scheme = generalize env.st ~skolems mono in
           Hashtbl.replace env.globals f.name.name scheme;
           Hashtbl.replace schemes f.name.name scheme)
         setups;
@@ -996,7 +1004,7 @@ let program ~file (prog : program) =
                 List.iter2
                   (fun (p : Ast.param) (t : Types.param) ->
                     if p.pty = None then (
-                      let pr = printer () in
+                      let pr = printer env.st in
                       reserve pr scheme;
                       Diag.error p.pname.loc
                         ~help:
@@ -1020,4 +1028,4 @@ let program ~file (prog : program) =
       Diag.error (List.hd f.params).pname.loc ~help:"remove the parameters"
         "`main` can't take parameters"
   | Some _ -> ());
-  List.map (fun f -> signature f (Hashtbl.find schemes f.name.name)) fns
+  List.map (fun f -> signature st f (Hashtbl.find schemes f.name.name)) fns

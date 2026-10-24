@@ -37,20 +37,25 @@ type place = { root : ident; path : step list }
 (* A place a `for &` loop is changing, and the name of its element. *)
 type lock = { lid : int; lpath : step list; elem : string }
 
+(* Hands out binding ids, numbered per function. A record with a [mutable]
+   field is shared by every copy of the [ctx] that holds it, so ids stay
+   unique while the [ctx] itself is copied as scopes open. *)
+type ids = { mutable last : int }
+
 type ctx = {
   scope : binding Env.t;
   depth : int;
   locks : lock list;
   fns : string list;  (** top-level and built-in functions *)
+  ids : ids;
 }
 
-let counter = ref 0
-
 let bind cx (name : ident) kind =
-  incr counter;
+  cx.ids.last <- cx.ids.last + 1;
   {
     cx with
-    scope = Env.add name.name { id = !counter; kind; depth = cx.depth } cx.scope;
+    scope =
+      Env.add name.name { id = cx.ids.last; kind; depth = cx.depth } cx.scope;
   }
 
 let rec place_of (e : expr) =
@@ -306,7 +311,15 @@ let program (prog : program) =
   List.iter
     (function
       | Fn f ->
-          let cx = { scope = Env.empty; depth = 0; locks = []; fns } in
+          let cx =
+            {
+              scope = Env.empty;
+              depth = 0;
+              locks = [];
+              fns;
+              ids = { last = 0 };
+            }
+          in
           let cx =
             List.fold_left
               (fun cx p -> bind cx p.pname (param_kind p))

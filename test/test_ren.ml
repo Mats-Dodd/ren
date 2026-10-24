@@ -1301,17 +1301,18 @@ fn main() = 1
 
 let%expect_test "row unification" =
   let open Types in
+  let st = new_state () in
   let row labels tail =
     List.fold_right (fun l r -> RExtend (l, r)) labels tail
   in
   let show r =
-    let pr = printer ~show_tail:(fun _ -> true) () in
+    let pr = printer ~show_tail:(fun _ -> true) st in
     match show_row pr ~prefix:"" ~sep:", " ~kind:"d" r with
     | "" -> "<>"
     | s -> "<" ^ s ^ ">"
   in
   let try_unify a b =
-    match Unify.unify_row a b with
+    match Unify.unify_row st a b with
     | () -> print_endline (show a ^ " = " ^ show b)
     | exception Unify.Mismatch -> print_endline "mismatch"
     | exception Unify.Infinite -> print_endline "infinite"
@@ -1319,16 +1320,16 @@ let%expect_test "row unification" =
   (* order doesn't matter *)
   try_unify (row [ "Io"; "Clock" ] REmpty) (row [ "Clock"; "Io" ] REmpty);
   (* an open row grows to supply what's missing *)
-  let r1 = fresh_row () and r2 = fresh_row () in
+  let r1 = fresh_row st and r2 = fresh_row st in
   try_unify (row [ "Io" ] r1) (row [ "Clock" ] r2);
   (* a closed row can't *)
-  try_unify (row [ "Io" ] REmpty) (row [ "Clock" ] (fresh_row ()));
-  try_unify REmpty (row [ "Io" ] (fresh_row ()));
+  try_unify (row [ "Io" ] REmpty) (row [ "Clock" ] (fresh_row st));
+  try_unify REmpty (row [ "Io" ] (fresh_row st));
   (* the same tail with different labels can't be made equal *)
-  let r = fresh_row () in
+  let r = fresh_row st in
   try_unify (row [ "Io" ] r) (row [ "Clock" ] r);
   (* a row can't contain itself *)
-  let r = fresh_row () in
+  let r = fresh_row st in
   try_unify r (row [ "Io" ] r);
   [%expect
     {|
