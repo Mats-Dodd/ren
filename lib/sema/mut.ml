@@ -328,9 +328,12 @@ and exclusive cx args =
   in
   check places
 
-let program sink (prog : program) =
+let program sink ~imports (prog : program) =
   let fns =
-    List.map (fun (f : Prelude.builtin_fn) -> f.name) Prelude.fns
+    List.concat_map
+      (fun (iface : Iface.t) ->
+        List.map (fun (v : Iface.value) -> v.vname) iface.values)
+      imports
     @ List.filter_map
         (function Fn f -> Some f.name.name | Type _ -> None)
         prog

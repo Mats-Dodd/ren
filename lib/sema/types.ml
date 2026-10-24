@@ -19,14 +19,18 @@
    checks; when it leaves, any variable still at a deeper level belongs only
    to those functions, so it becomes generic (a "for all"). Unification keeps
    levels honest: binding a variable to a type lowers the levels inside that
-   type to the variable's own. *)
+   type to the variable's own.
+
+   These types stay inside inference. What it hands on is converted to the
+   canonical, immutable types of ty.ml ([to_scheme]), and what it reads from
+   other modules' interfaces is converted back ([of_scheme]). *)
 
 (* The same [Read | Inout] as in the AST. Writing [= Ast.mode] re-exports
    that type, so both modules' constructors are interchangeable. *)
 type mode = Ast.mode = Read | Inout
 
 type ty =
-  | TCon of string * ty list  (** [Int], [Option<Int>], [User] *)
+  | TCon of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
   | TFun of param list * ty * row * row  (** params, result, errors, uses *)
   | TVar of tvar ref
   | TSkol of int * string
@@ -72,10 +76,10 @@ let fresh_var st = TVar (ref (Unbound (fresh_id st, st.level)))
 let fresh_row st = RVar (ref (RUnbound (fresh_id st, st.level)))
 let generic_var st = TVar (ref (Unbound (fresh_id st, generic_level)))
 let generic_row st = RVar (ref (RUnbound (fresh_id st, generic_level)))
-let int = TCon ("Int", [])
-let bool = TCon ("Bool", [])
-let unit = TCon ("Unit", [])
-let array t = TCon ("Array", [ t ])
+let int = TCon (Path.prelude "Int", [])
+let bool = TCon (Path.prelude "Bool", [])
+let unit = TCon (Path.prelude "Unit", [])
+let array t = TCon (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let param_tys ps = List.map (fun p -> p.ty) ps
 
@@ -180,6 +184,103 @@ let instantiate st t =
   in
   go t
 
+(* ---- canonical types ---- *)
+
+(* A type scheme in canonical form (ty.ml): every generic variable numbered
+   by where it first appears. A variable inference never solved, outside
+   any scheme, can only come from code with an error, so it becomes
+   [Error]. *)
+let to_scheme st t : Ty.scheme =
+  let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
+  let number table id =
+    match Hashtbl.find_opt table id with
+    | Some n -> n
+    | None ->
+        let n = Hashtbl.length table in
+        Hashtbl.add table id n;
+        n
+  in
+  let names = ref [] in
+  let rec go t : Ty.ty =
+    match repr t with
+    | TVar { contents = Unbound (id, l) } when l = generic_level ->
+        let n = number tys id in
+        (match Hashtbl.find_opt st.hints id with
+        | Some h when not (List.mem_assoc n !names) -> names := (n, h) :: !names
+        | _ -> ());
+        Var n
+    | TVar _ | TSkol _ | TError -> Error
+    | TCon (p, args) -> Con (p, List.map go args)
+    | TFun (ps, r, e, u) ->
+        (* `let`s fix the order of first appearance: OCaml evaluates a
+           constructor's arguments right to left *)
+        let ps = List.map (fun p -> { Ty.mode = p.mode; ty = go p.ty }) ps in
+        let r = go r in
+        let e = row e in
+        let u = row u in
+        Fun (ps, r, e, u)
+  and row r : Ty.row =
+    (* only a generic tail stands for "and possibly more" *)
+    let rec tail r =
+      match repr_row r with
+      | RVar { contents = RUnbound (id, l) } ->
+          if l = generic_level then Some (number rows id) else None
+      | RExtend (_, rest) -> tail rest
+      | REmpty -> None
+      | RVar { contents = RLink _ } -> assert false
+    in
+    {
+      labels = List.sort_uniq String.compare (fst (row_parts r));
+      tail = tail r;
+    }
+  in
+  let ty = go t in
+  { ty; names = List.sort compare !names }
+
+(* A canonical type from an interface, with [vars] standing for its
+   variables and [tails] for its row variables. *)
+let rec of_ty ~vars ~tails (t : Ty.ty) =
+  match t with
+  | Con (p, args) -> TCon (p, List.map (of_ty ~vars ~tails) args)
+  | Fun (ps, r, e, u) ->
+      TFun
+        ( List.map
+            (fun (p : Ty.param) ->
+              { mode = p.mode; ty = of_ty ~vars ~tails p.ty })
+            ps,
+          of_ty ~vars ~tails r,
+          of_row ~tails e,
+          of_row ~tails u )
+  | Var n -> vars n
+  | Error -> TError
+
+and of_row ~tails (r : Ty.row) =
+  let tail = match r.tail with Some n -> tails n | None -> REmpty in
+  List.fold_right (fun l rest -> RExtend (l, rest)) r.labels tail
+
+(* An interface's type scheme as a scheme of this compilation: generic
+   variables of its own, which [instantiate] copies at each use. *)
+let of_scheme st (s : Ty.scheme) =
+  let memo table make n =
+    match Hashtbl.find_opt table n with
+    | Some v -> v
+    | None ->
+        let v = make n in
+        Hashtbl.add table n v;
+        v
+  in
+  let vars =
+    memo (Hashtbl.create 8) (fun n ->
+        let v = generic_var st in
+        (match (v, List.assoc_opt n s.names) with
+        | TVar { contents = Unbound (id, _) }, Some h ->
+            Hashtbl.replace st.hints id h
+        | _ -> ());
+        v)
+  in
+  let tails = memo (Hashtbl.create 8) (fun _ -> generic_row st) in
+  of_ty ~vars ~tails s.ty
+
 (* ---- printing ---- *)
 
 (* A printer names variables consistently across everything printed with it,
@@ -188,8 +289,13 @@ let instantiate st t =
    inference hasn't solved yet print as `_`.
 
    Row tails are hidden unless [show_tail] picks them, and then print as
-   `..e` (errors) or `..d` (dependencies). *)
+   `..e` (errors) or `..d` (dependencies). Type names are written as they'd
+   be written in module [home] (path.ml).
+
+   This is for error messages, while inference is still running; `ren
+   types` prints the canonical types of ty.ml instead. *)
 type printer = {
+  home : string;
   hints : (int, string) Hashtbl.t;  (** from the [state] *)
   names : (int, string) Hashtbl.t;
   mutable order : string list;  (** names handed out, most recent first *)
@@ -198,8 +304,9 @@ type printer = {
   tail_names : (int, string) Hashtbl.t;
 }
 
-let printer ?(show_tail = fun _ -> false) (st : state) =
+let printer ?(show_tail = fun _ -> false) ~home (st : state) =
   {
+    home;
     hints = st.hints;
     names = Hashtbl.create 8;
     order = [];
@@ -208,10 +315,7 @@ let printer ?(show_tail = fun _ -> false) (st : state) =
     tail_names = Hashtbl.create 4;
   }
 
-let auto_names =
-  List.init 7 (fun i -> String.make 1 "TUVWXYZ".[i])
-  @ List.init 20 (fun i -> "T" ^ string_of_int (i + 1))
-
+let auto_names = Ty.auto_names
 let taken pr n = Hashtbl.mem pr.reserved n || List.mem n pr.order
 
 let var_name pr id =
@@ -266,9 +370,11 @@ let show_row pr ~prefix ~sep ~kind r =
 
 let rec show pr t =
   match repr t with
-  | TCon (n, []) -> n
-  | TCon (n, args) ->
-      n ^ "<" ^ String.concat ", " (List.map (show pr) args) ^ ">"
+  | TCon (p, []) -> Path.show ~home:pr.home p
+  | TCon (p, args) ->
+      Path.show ~home:pr.home p ^ "<"
+      ^ String.concat ", " (List.map (show pr) args)
+      ^ ">"
   | TSkol (_, n) -> n
   | TError -> "_"
   | TVar { contents = Unbound (id, l) } ->
@@ -288,7 +394,7 @@ and show_param pr p =
    parenthesized, so it's clear whose effects they are. *)
 and show_ret pr r =
   match repr r with
-  | TCon ("Unit", []) -> ""
+  | TCon (p, []) when p = Path.prelude "Unit" -> ""
   | TFun (_, _, e, u) as f ->
       let s = show pr f in
       if show_effects pr e u = "" then " -> " ^ s else " -> (" ^ s ^ ")"
@@ -305,12 +411,3 @@ let rec skolems t =
   | TVar _ | TError -> []
   | TCon (_, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)
-
-(* The ids of every row variable inside a type. *)
-let rec row_vars t =
-  let of_row r = Option.to_list (snd (row_parts r)) in
-  match repr t with
-  | TVar _ | TSkol _ | TError -> []
-  | TCon (_, args) -> List.concat_map row_vars args
-  | TFun (ps, r, e, u) ->
-      List.concat_map row_vars (r :: param_tys ps) @ of_row e @ of_row u

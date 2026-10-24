@@ -33,26 +33,56 @@ let parse ~file src =
   let toks = tokens ~file src in
   checked "parse" (fun sink -> Parser.parse_program sink toks)
 
-(* Parsed once, the first time it's needed. [lazy] delays a computation and
-   [Lazy.force] runs it (at most once). *)
-let prelude = lazy (parse ~file:"<prelude>" (String.trim Prelude.source))
+(* Check one module against the interfaces it imports, before anything
+   runs. Returns each function's type scheme. [entry] is set for the module
+   the program starts in, which needs a `main`. *)
+let check_module ~home ~imports ?entry prog =
+  checked "check" (fun sink -> Check.program sink ~home ~imports prog);
+  checked "mut" (fun sink -> Mut.program sink ~imports prog);
+  checked "infer" (fun sink -> Infer.program sink ~home ~imports ?entry prog)
 
-(* The user's program with the prelude in front, checked and type-checked
-   before anything runs. Returns the program and each function's inferred
-   signature. *)
+(* The prelude, as a module: its source, parsed and checked against the
+   intrinsics (prelude.ml), and its whole interface. It's checked once, the
+   first time it's needed: [lazy] delays a computation and [Lazy.force] runs
+   it (at most once). It's the same for every program, so sharing it is
+   safe. *)
+let prelude =
+  lazy
+    (let home = Path.prelude_home and imports = [ Prelude.intrinsics ] in
+     let prog = parse ~file:"<prelude>" (String.trim Prelude.source) in
+     let schemes = check_module ~home ~imports prog in
+     ( prog,
+       Iface.union Prelude.intrinsics
+         (Iface.of_module ~home ~imports prog ~schemes) ))
+
+(* The user's program, checked against the prelude's interface. Returns
+   the program and each function's type scheme. *)
 let check_with_types ~file src =
-  let prog = Lazy.force prelude @ parse ~file src in
-  checked "check" (fun sink -> Check.program sink prog);
-  checked "mut" (fun sink -> Mut.program sink prog);
-  let sigs = checked "infer" (fun sink -> Infer.program sink ~file prog) in
-  (prog, sigs)
+  let _, prelude_iface = Lazy.force prelude in
+  let prog = parse ~file src in
+  let home = Path.home_of_file file in
+  (prog, check_module ~home ~imports:[ prelude_iface ] ~entry:file prog)
 
 let check ~file src = fst (check_with_types ~file src)
-let types ~file src = snd (check_with_types ~file src)
+let schemes ~file src = snd (check_with_types ~file src)
+
+let types ~file src =
+  let prog, schemes = check_with_types ~file src in
+  List.filter_map
+    (function
+      | Ast.Fn f ->
+          Some
+            (Ty.signature ~home:(Path.home_of_file file) ~pub:f.pub
+               ~name:f.name.name
+               ~params:(List.map (fun (p : Ast.param) -> p.pname.name) f.params)
+               (List.assoc f.name.name schemes))
+      | Type _ -> None)
+    prog
 
 let run ~file src =
   let prog = check ~file src in
-  pass "eval" (fun () -> Eval.run prog)
+  let prelude, _ = Lazy.force prelude in
+  pass "eval" (fun () -> Eval.run [ prelude; prog ])
 
 let dump_tokens toks =
   toks |> Array.to_list

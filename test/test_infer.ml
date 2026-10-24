@@ -551,7 +551,7 @@ let%expect_test "row unification" =
     List.fold_right (fun l r -> RExtend (l, r)) labels tail
   in
   let show r =
-    let pr = printer ~show_tail:(fun _ -> true) st in
+    let pr = printer ~show_tail:(fun _ -> true) ~home:"test" st in
     match show_row pr ~prefix:"" ~sep:", " ~kind:"d" r with
     | "" -> "<>"
     | s -> "<" ^ s ^ ">"
@@ -794,4 +794,42 @@ fn main() =
       ┌─ test.ren:2:11
     2 │   let n = missing
       │           ^^^^^^^
+    |}]
+
+let%expect_test "inferred types are canonical" =
+  (* the same program gives equal types, even after checking another
+     program in the same process: no counter carries over between
+     compilations, and variables are numbered by where they appear *)
+  let src =
+    clean
+      {|
+fn map_option(o, f) =
+  match o
+    Some(v) => Some(f(v))
+    None => None
+fn pick<A, B>(a: A, b: B) -> A = a
+fn main() = print(map_option(Some(1), fn(n) => n + 1))
+|}
+  in
+  let first = Driver.schemes ~file src in
+  ignore
+    (Driver.schemes ~file
+       (clean {|
+fn other(x, y, z) = x
+fn main() = other(1, true, ())
+|}));
+  let second = Driver.schemes ~file src in
+  print_endline (string_of_bool (first = second));
+  (* `pick` keeps the names it declared; the other variables have none *)
+  List.iter
+    (fun (name, (s : Ty.scheme)) ->
+      Printf.printf "%s: %s\n" name
+        (String.concat ", "
+           (List.map (fun (n, h) -> Printf.sprintf "%d=%s" n h) s.names)))
+    second;
+  [%expect {|
+    true
+    map_option:
+    pick: 0=A, 1=B
+    main:
     |}]

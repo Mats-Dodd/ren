@@ -3,5 +3,7 @@
 (* A running program failed: division by zero, an index out of bounds. *)
 exception Panic of Loc.t * string
 
-(* Run a checked program's `main`, returning its result. Raises [Panic]. *)
-val run : Ast.program -> Value.t
+(* Run a checked program's `main`, returning its result. The program is
+   its modules, in order: the prelude, then the user's file. Raises
+   [Panic]. *)
+val run : Ast.program list -> Value.t

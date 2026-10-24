@@ -286,7 +286,11 @@ and apply cx f args =
   | VClosure { params; body; env }, _ -> run params body env
   | _ -> bug "a call to something that isn't a function"
 
-let run (prog : program) =
+(* Run a program made of [modules] (the prelude, then the user's file).
+   Names are unique across them, since each was checked against the
+   interfaces of the ones before it. *)
+let run (modules : program list) =
+  let prog = List.concat modules in
   let cx = { fns = Hashtbl.create 16; ctor_types = Hashtbl.create 16 } in
   List.iter
     (function

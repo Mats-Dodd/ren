@@ -42,8 +42,11 @@ let article name =
 type env = {
   st : Types.state;
   sink : Diag.sink;
-  types : (string, type_def) Hashtbl.t;
-  ctors : (string, type_def * ctor) Hashtbl.t;
+  home : string;  (** the module being checked *)
+  types : (Path.t, Iface.type_decl) Hashtbl.t;
+      (** every type the module can see (iface.ml) *)
+  type_names : (string, Path.t) Hashtbl.t;  (** which type a name means *)
+  ctors : (string, Iface.type_decl * Iface.ctor) Hashtbl.t;
   globals : (string, ty) Hashtbl.t;
       (** top-level functions: a type scheme once their group is done *)
   mutable deferred : deferred list;  (** most recent first *)
@@ -63,6 +66,9 @@ type ctx = {
 }
 
 (* ---- reporting ---- *)
+
+let printer env = Types.printer ~home:env.home env.st
+let type_name env p = Path.show ~home:env.home p
 
 (* Report an error, and carry on: the code it's about has type [TError]. *)
 let fail env ?help ?notes ?labels loc msg =
@@ -101,7 +107,7 @@ let unifies env ?(notes = []) ?help ?msg ?(labels = fun _ _ -> []) loc ~found
   match Unify.unify env.st found expected with
   | () -> true
   | exception Unify.Mismatch ->
-      let pr = printer env.st in
+      let pr = printer env in
       let f = show pr found and x = show pr expected in
       let msg =
         match msg with
@@ -147,7 +153,7 @@ let unifies env ?(notes = []) ?help ?msg ?(labels = fun _ _ -> []) loc ~found
       ignore (fail env ?help ~notes ~labels:(labels f x) loc msg);
       false
   | exception Unify.Infinite ->
-      let pr = printer env.st in
+      let pr = printer env in
       ignore
         (fail env loc
            ~notes:
@@ -168,48 +174,55 @@ let unify_at env ?notes ?help ?msg ?labels loc ~found ~expected =
    types: fresh variables in parameters (a parameter `f: fn()` passes its
    dependencies through to the caller), closed in declarations and return
    types (a stored `fn()` uses nothing). *)
-let rec convert ~tvars ~row (t : Ast.ty) =
+let rec convert env ~tvars ~row (t : Ast.ty) =
+  let convert = convert env in
   match t with
   | TyName (id, []) when List.mem_assoc id.name tvars ->
       List.assoc id.name tvars
-  | TyName (id, args) -> TCon (id.name, List.map (convert ~tvars ~row) args)
+  | TyName (id, args) -> (
+      match Hashtbl.find_opt env.type_names id.name with
+      | Some p -> TCon (p, List.map (convert ~tvars ~row) args)
+      | None -> (* check.ml has reported it *) TError)
   | TyFn (ps, ret, _) ->
       let ret =
         match ret with Some r -> convert ~tvars ~row r | None -> unit
       in
-      TFun (List.map (convert_param ~tvars ~row) ps, ret, row (), row ())
+      TFun (List.map (convert_param env ~tvars ~row) ps, ret, row (), row ())
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
 
-and convert_param ~tvars ~row = function
-  | TyInout (t, _) -> { mode = Inout; ty = convert ~tvars ~row t }
-  | t -> read (convert ~tvars ~row t)
+and convert_param env ~tvars ~row = function
+  | TyInout (t, _) -> { mode = Inout; ty = convert env ~tvars ~row t }
+  | t -> read (convert env ~tvars ~row t)
 
 let closed () = REmpty
 
 (* Fresh variables for a type declaration's parameters: `Option<T>` used
    once can be an `Option<Int>`, and elsewhere an `Option<Bool>`. *)
-let instance env (td : type_def) =
-  let tvars =
-    List.map (fun (p : ident) -> (p.name, fresh_var env.st)) td.type_params
-  in
-  (TCon (td.type_name.name, List.map snd tvars), tvars)
+let instance env (td : Iface.type_decl) =
+  let tvars = List.map (fun _ -> fresh_var env.st) td.params in
+  (TCon (td.path, tvars), tvars)
 
-let field_type ~tvars (f : field) = convert ~tvars ~row:closed f.field_ty
+(* A field's type, given what the type's parameters stand for. A function
+   type written in a declaration uses and fails with nothing. *)
+let field_type ~tvars (f : Iface.field) =
+  of_ty ~vars:(List.nth tvars) ~tails:(fun _ -> REmpty) f.fty
 
-let record_fields env name =
-  match Hashtbl.find_opt env.types name with
-  | Some { type_body = Fields fs; _ } -> Some fs
+let record_fields env path =
+  match Hashtbl.find_opt env.types path with
+  | Some { body = Record fs; _ } -> Some fs
   | _ -> None
 
-(* Record types, by name, whose fields pass [keep]. *)
+let field_names (fs : Iface.field list) = List.map (fun f -> f.Iface.fname) fs
+
+(* Record types whose fields pass [keep], sorted by name. *)
 let records_where env keep =
   Hashtbl.fold
-    (fun name td acc ->
-      match td.type_body with Fields fs when keep fs -> name :: acc | _ -> acc)
+    (fun path (td : Iface.type_decl) acc ->
+      match td.body with Record fs when keep fs -> path :: acc | _ -> acc)
     env.types []
-  |> List.sort String.compare
+  |> List.sort compare
 
 (* ---- expressions ---- *)
 
@@ -235,7 +248,7 @@ let absorb env cx loc errs uses =
     Unify.unify_row env.st errs cx.errs;
     Unify.unify_row env.st uses cx.uses
   with Unify.Mismatch | Unify.Infinite ->
-    let pr = printer env.st in
+    let pr = printer env in
     ignore
       (fail env loc
          (sprintf "this call%s, which isn't allowed here"
@@ -312,7 +325,7 @@ let rec infer env cx (e : expr) : ty =
                   (fun ann ->
                     unify_at env (result_loc value) ~found:t
                       ~expected:
-                        (convert ~tvars:cx.tparams
+                        (convert env ~tvars:cx.tparams
                            ~row:(fun () -> fresh_row env.st)
                            ann))
                   ty;
@@ -329,11 +342,11 @@ let rec infer env cx (e : expr) : ty =
       let td, ctor = Hashtbl.find env.ctors c.name in
       let t, tvars = instance env td in
       List.iter2
-        (fun f (_, (a : expr)) ->
+        (fun (f : Iface.field) (_, (a : expr)) ->
           unify_at env (result_loc a) ~found:(infer env cx a)
             ~expected:(field_type ~tvars f)
-            ~notes:[ sprintf "`%s`'s field `%s`" c.name f.field_name.name ])
-        ctor.ctor_fields args;
+            ~notes:[ sprintf "`%s`'s field `%s`" c.name f.fname ])
+        ctor.cfields args;
       t
   | Record (name, fields) -> infer_record env cx e name fields
   | Field (r, f) -> infer_field env cx e r f
@@ -425,7 +438,8 @@ let rec infer env cx (e : expr) : ty =
 and param_type env cx (p : Ast.param) =
   let t =
     match p.pty with
-    | Some t -> convert ~tvars:cx.tparams ~row:(fun () -> fresh_row env.st) t
+    | Some t ->
+        convert env ~tvars:cx.tparams ~row:(fun () -> fresh_row env.st) t
     | None -> fresh_var env.st
   in
   { mode = p.pmode; ty = t }
@@ -505,7 +519,7 @@ and infer_call env cx (e : expr) (f : expr) args =
       List.iter (fun a -> ignore (infer_arg env cx a)) args;
       fail env f.loc
         (sprintf "%s is %s, not a function" name
-           (article (show (printer env.st) t)))
+           (article (show (printer env) t)))
 
 (* An argument's type, and whether it's passed with `&`. *)
 and infer_arg env cx (a : expr) =
@@ -524,14 +538,14 @@ and infer_record env cx (e : expr) name fields =
     let decl = Option.get (record_fields env tn) in
     List.iter
       (fun ((f : ident), v, tv) ->
-        let fd = List.find (fun d -> d.field_name.name = f.name) decl in
+        let fd = List.find (fun (d : Iface.field) -> d.fname = f.name) decl in
         unify_at env (result_loc v) ~found:tv ~expected:(field_type ~tvars fd)
-          ~notes:[ sprintf "`%s`'s field `%s`" tn f.name ])
+          ~notes:[ sprintf "`%s`'s field `%s`" (type_name env tn) f.name ])
       given;
     t
   in
   match name with
-  | Some tn -> build tn.name
+  | Some tn -> build (Hashtbl.find env.type_names tn.name)
   | None -> (
       let names =
         List.sort String.compare
@@ -539,8 +553,7 @@ and infer_record env cx (e : expr) name fields =
       in
       let fits =
         records_where env (fun fs ->
-            List.sort String.compare (List.map (fun f -> f.field_name.name) fs)
-            = names)
+            List.sort String.compare (field_names fs) = names)
       in
       match fits with
       | [ one ] -> build one
@@ -563,8 +576,9 @@ and infer_record env cx (e : expr) name fields =
               (fail env e.loc
                  ~help:
                    (sprintf "write the type's name first, like `%s { ... }`"
-                      (List.hd fits))
-                 (sprintf "these fields fit more than one type: %s" (quote fits)))
+                      (type_name env (List.hd fits)))
+                 (sprintf "these fields fit more than one type: %s"
+                    (quote (List.map (type_name env) fits))))
           in
           env.deferred <- { attempt; fail } :: env.deferred;
           t)
@@ -573,7 +587,7 @@ and infer_field env cx (e : expr) r (f : ident) =
   let tr = infer env cx r in
   (* the field's type, once the record's type is known *)
   let resolve () =
-    let pr = printer env.st in
+    let pr = printer env in
     match repr tr with
     | TCon (n, args) as t -> (
         match record_fields env n with
@@ -582,21 +596,15 @@ and infer_field env cx (e : expr) r (f : ident) =
               (sprintf "`.%s` needs a record, but this is %s" f.name
                  (article (show pr t)))
         | Some decl -> (
-            match List.find_opt (fun d -> d.field_name.name = f.name) decl with
-            | Some fd ->
-                let td = Hashtbl.find env.types n in
-                let tvars =
-                  List.map2
-                    (fun (p : ident) a -> (p.name, a))
-                    td.type_params args
-                in
-                field_type ~tvars fd
+            match
+              List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl
+            with
+            | Some fd -> field_type ~tvars:args fd
             | None ->
                 fail env f.loc
-                  ~help:
-                    (sprintf "its fields: %s"
-                       (quote (List.map (fun d -> d.field_name.name) decl)))
-                  (sprintf "`%s` has no field named `%s`" n f.name)))
+                  ~help:(sprintf "its fields: %s" (quote (field_names decl)))
+                  (sprintf "`%s` has no field named `%s`" (type_name env n)
+                     f.name)))
     | TError -> TError
     | t ->
         fail env f.loc
@@ -605,7 +613,7 @@ and infer_field env cx (e : expr) r (f : ident) =
   in
   match repr tr with
   | TVar _ -> (
-      let has fs = List.exists (fun d -> d.field_name.name = f.name) fs in
+      let has fs = List.mem f.name (field_names fs) in
       match records_where env has with
       | [] ->
           fail env f.loc
@@ -631,7 +639,8 @@ and infer_field env cx (e : expr) r (f : ident) =
               | Var x ->
                   ( sprintf "`%s`" x,
                     sprintf "annotate `%s` where it's defined, like `%s: %s`" x
-                      x (List.hd candidates) )
+                      x
+                      (type_name env (List.hd candidates)) )
               | _ -> ("this", "add a type annotation to say which")
             in
             ignore
@@ -640,7 +649,9 @@ and infer_field env cx (e : expr) r (f : ident) =
                    [
                      sprintf "`%s` is a field of %s" f.name
                        (String.concat " and "
-                          (List.map (sprintf "`%s`") candidates));
+                          (List.map
+                             (fun p -> sprintf "`%s`" (type_name env p))
+                             candidates));
                    ]
                  (sprintf "can't tell which record type %s is" what))
           in
@@ -671,7 +682,7 @@ and bind_pattern env locals t (p : pattern) =
       List.fold_left2
         (fun locals fd sub ->
           bind_pattern env locals (field_type ~tvars fd) sub)
-        locals ctor.ctor_fields ps
+        locals ctor.cfields ps
 
 (* Retry deferred questions until none makes progress; whatever is still
    unanswered is an error. *)
@@ -877,71 +888,48 @@ let check_transparent sink (f : fn_def) =
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
     fn_params
 
-(* ---- signatures ---- *)
-
-(* How `ren types` prints a function: the signature `ren fmt --annotate`
-   would write. A row tail is printed (as `..e` / `..d`) only when it reaches
-   the result; otherwise the parameter is transparent and the tail implied. *)
-let signature st (f : fn_def) scheme =
-  match repr scheme with
-  | TFun (ps, ret, errs, uses) ->
-      let in_ret = row_vars ret in
-      let pr = printer ~show_tail:(fun id -> List.mem id in_ret) st in
-      reserve pr scheme;
-      let params =
-        List.map2
-          (fun (p : Ast.param) (t : Types.param) ->
-            match t.mode with
-            | Inout -> "inout " ^ p.pname.name ^ ": " ^ show pr t.ty
-            | Read -> p.pname.name ^ ": " ^ show pr t.ty)
-          f.params ps
-      in
-      let ret = show_ret pr ret in
-      let effects = show_effects pr errs uses in
-      let tparams =
-        match List.rev pr.order with
-        | [] -> ""
-        | names -> "<" ^ String.concat ", " names ^ ">"
-      in
-      sprintf "%sfn %s%s(%s)%s%s"
-        (if f.pub then "pub " else "")
-        f.name.name tparams
-        (String.concat ", " params)
-        ret effects
-  | _ -> assert false
-
 (* ---- the program ---- *)
 
-(* Infer every function's type, and return each function's signature. *)
-let program sink ~file (prog : program) =
+(* Infer every function's type, and return each function's type scheme, in
+   canonical form. *)
+let program sink ~home ~imports ?entry (prog : program) =
   let st = Types.new_state () in
   let env =
     {
       st;
       sink;
+      home;
       types = Hashtbl.create 16;
+      type_names = Hashtbl.create 16;
       ctors = Hashtbl.create 16;
       globals = Hashtbl.create 16;
       deferred = [];
     }
   in
   List.iter
-    (fun (b : Prelude.builtin_fn) ->
-      Hashtbl.replace env.globals b.name (b.scheme st))
-    Prelude.fns;
+    (fun (iface : Iface.t) ->
+      List.iter
+        (fun (v : Iface.value) ->
+          Hashtbl.replace env.globals v.vname (of_scheme st v.scheme))
+        iface.values)
+    imports;
   let fns = List.filter_map (function Fn f -> Some f | Type _ -> None) prog in
+  (* a name declared twice means the first declaration (check.ml has
+     reported the second) *)
   List.iter
-    (function
-      | Type td -> (
-          Hashtbl.replace env.types td.type_name.name td;
-          match td.type_body with
-          | Ctors cs ->
-              List.iter
-                (fun c -> Hashtbl.replace env.ctors c.ctor_name.name (td, c))
-                cs
-          | Fields _ -> ())
-      | Fn _ -> ())
-    prog;
+    (fun (td : Iface.type_decl) ->
+      if not (Hashtbl.mem env.type_names td.path.name) then (
+        Hashtbl.replace env.types td.path td;
+        Hashtbl.replace env.type_names td.path.name td.path;
+        match td.body with
+        | Sum cs ->
+            List.iter
+              (fun (c : Iface.ctor) ->
+                if not (Hashtbl.mem env.ctors c.cname) then
+                  Hashtbl.replace env.ctors c.cname (td, c))
+              cs
+        | Record _ | Builtin -> ()))
+    (Iface.visible_types ~home ~imports prog);
   List.iter (check_transparent sink) fns;
   let schemes = Hashtbl.create 16 in
   List.iter
@@ -965,7 +953,7 @@ let program sink ~file (prog : program) =
         let ps = List.map (param_type env cx) f.params in
         let ret =
           match f.ret with
-          | Some t -> convert ~tvars:tparams ~row:closed t
+          | Some t -> convert env ~tvars:tparams ~row:closed t
           | None when f.pub ->
               unit (* a public function without `->` returns Unit *)
           | None -> fresh_var env.st
@@ -979,7 +967,7 @@ let program sink ~file (prog : program) =
         (fun ((f : fn_def), _, cx, ps, ret) ->
           let locals = bind_params Env.empty f.params ps in
           let tb = infer env { cx with locals } f.body in
-          let pr = printer env.st in
+          let pr = printer env in
           let notes, help =
             match f.ret with
             | Some _ ->
@@ -1045,7 +1033,7 @@ let program sink ~file (prog : program) =
                 List.iter2
                   (fun (p : Ast.param) (t : Types.param) ->
                     if p.pty = None then (
-                      let pr = printer env.st in
+                      let pr = printer env in
                       reserve pr scheme;
                       ignore
                       @@ fail env p.pname.loc
@@ -1064,15 +1052,23 @@ let program sink ~file (prog : program) =
             | _ -> assert false)
         setups)
     (components fns);
-  (match List.find_opt (fun (f : fn_def) -> f.name.name = "main") fns with
-  | None ->
+  (match
+     Option.map
+       (fun file ->
+         (file, List.find_opt (fun (f : fn_def) -> f.name.name = "main") fns))
+       entry
+   with
+  | None -> ()
+  | Some (file, None) ->
       ignore
         (fail env (Loc.point ~file 1 1)
            ~help:"add `fn main() = ...`, which is where the program starts"
            "this program has no `main` function")
-  | Some f when f.params <> [] ->
+  | Some (_, Some f) when f.params <> [] ->
       ignore
         (fail env (List.hd f.params).pname.loc ~help:"remove the parameters"
            "`main` can't take parameters")
   | Some _ -> ());
-  List.map (fun f -> signature st f (Hashtbl.find schemes f.name.name)) fns
+  List.map
+    (fun f -> (f.name.name, to_scheme st (Hashtbl.find schemes f.name.name)))
+    fns

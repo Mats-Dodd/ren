@@ -19,10 +19,12 @@ let sprintf = Printf.sprintf
 let plural n = if n = 1 then "" else "s"
 let quote names = String.concat ", " (List.map (sprintf "`%s`") names)
 
-type ctor_info = { owner : type_def; ctor : ctor }
+type ctor_info = { owner : Iface.type_decl; ctor : Iface.ctor }
 
+(* Types and constructors are looked up by name: the ones this module
+   declares, and the ones its imports' interfaces do (iface.ml). *)
 type env = {
-  types : (string, type_def) Hashtbl.t;
+  types : (string, Iface.type_decl) Hashtbl.t;
   ctors : (string, ctor_info) Hashtbl.t;
   sink : Diag.sink;
 }
@@ -49,15 +51,15 @@ let find_ctor env (c : ident) =
   | None ->
       Diag.error c.loc (sprintf "there's no constructor named `%s`" c.name)
 
-let check_arity (c : ident) loc (ctor : ctor) given =
-  let n = List.length ctor.ctor_fields in
+let field_names (fs : Iface.field list) = List.map (fun f -> f.Iface.fname) fs
+
+let check_arity (c : ident) loc (ctor : Iface.ctor) given =
+  let n = List.length ctor.cfields in
   if n <> given then
     let help =
-      match ctor.ctor_fields with
+      match ctor.cfields with
       | [] -> sprintf "write `%s` with no parentheses" c.name
-      | fs ->
-          sprintf "its field%s: %s" (plural n)
-            (quote (List.map (fun f -> f.field_name.name) fs))
+      | fs -> sprintf "its field%s: %s" (plural n) (quote (field_names fs))
     in
     Diag.error loc ~help
       (sprintf "`%s` has %d field%s but was given %d" c.name n (plural n) given)
@@ -76,13 +78,9 @@ let rec check_ty env ~params (t : ty) =
       let name = id.name in
       let arity =
         if List.mem name params then Some 0
-        else if Prelude.is_type name then
-          Option.map
-            (fun (t : Prelude.builtin_type) -> t.arity)
-            (Prelude.find_type name)
         else
           Option.map
-            (fun td -> List.length td.type_params)
+            (fun (td : Iface.type_decl) -> List.length td.params)
             (Hashtbl.find_opt env.types name)
       in
       match arity with
@@ -95,40 +93,44 @@ let rec check_ty env ~params (t : ty) =
                  (plural n) given);
           List.iter (check_ty env ~params) args)
 
-(* Record a type and its constructors, so later checks can look them up. *)
-let declare env td =
-  let name = td.type_name in
-  if Prelude.is_type name.name then
-    Diag.error name.loc ~help:"choose another name"
-      (sprintf "`%s` is a built-in type" name.name);
+(* Record a type and its constructors, so later checks can look them up.
+   [name] is where this module declares it; [None] for an imported type. *)
+let declare env ?name (td : Iface.type_decl) =
   Option.iter
-    (fun first ->
-      Diag.error name.loc ~help:"rename one of them"
-        ~labels:
-          [ (first.type_name.loc, sprintf "the first `%s` is here" name.name) ]
-        (sprintf "there are two types named `%s`" name.name))
-    (Hashtbl.find_opt env.types name.name);
-  Hashtbl.replace env.types name.name td;
-  match td.type_body with
-  | Fields _ -> ()
-  | Ctors cs ->
+    (fun (name : ident) ->
+      match Hashtbl.find_opt env.types name.name with
+      | Some { body = Builtin; _ } ->
+          Diag.error name.loc ~help:"choose another name"
+            (sprintf "`%s` is a built-in type" name.name)
+      | Some first ->
+          Diag.error name.loc ~help:"rename one of them"
+            ~labels:
+              (List.map
+                 (fun l -> (l, sprintf "the first `%s` is here" name.name))
+                 (Option.to_list first.loc))
+            (sprintf "there are two types named `%s`" name.name)
+      | None -> ())
+    name;
+  Hashtbl.replace env.types td.path.name td;
+  match td.body with
+  | Record _ | Builtin -> ()
+  | Sum cs ->
       List.iter
-        (fun c ->
+        (fun (c : Iface.ctor) ->
           guard env @@ fun () ->
           Option.iter
             (fun first ->
-              Diag.error c.ctor_name.loc
+              Diag.error c.cloc
                 ~help:"constructor names must be unique across all types"
                 ~labels:
                   [
-                    ( first.ctor.ctor_name.loc,
-                      sprintf "the first `%s` is here, in `%s`" c.ctor_name.name
-                        first.owner.type_name.name );
+                    ( first.ctor.cloc,
+                      sprintf "the first `%s` is here, in `%s`" c.cname
+                        first.owner.path.name );
                   ]
-                (sprintf "there are two constructors named `%s`"
-                   c.ctor_name.name))
-            (Hashtbl.find_opt env.ctors c.ctor_name.name);
-          Hashtbl.replace env.ctors c.ctor_name.name { owner = td; ctor = c })
+                (sprintf "there are two constructors named `%s`" c.cname))
+            (Hashtbl.find_opt env.ctors c.cname);
+          Hashtbl.replace env.ctors c.cname { owner = td; ctor = c })
         cs
 
 let check_type_def env td =
@@ -155,13 +157,12 @@ let check_con env loc (c : ident) args =
       Diag.error loc
         (sprintf "label every field of `%s`, or none of them" c.name);
     List.iter2
-      (fun (l : ident) f ->
-        if l.name <> f.field_name.name then
+      (fun (l : ident) (f : Iface.field) ->
+        if l.name <> f.fname then
           Diag.error l.loc
             ~help:"labels are written in the order the fields are declared"
-            (sprintf "expected the label `%s` here, found `%s`"
-               f.field_name.name l.name))
-      labels ctor.ctor_fields)
+            (sprintf "expected the label `%s` here, found `%s`" f.fname l.name))
+      labels ctor.cfields)
 
 let sorted_names names = List.sort String.compare names
 
@@ -172,11 +173,13 @@ let check_record env loc (name : ident option) (fields : (ident * expr) list) =
   | Some tn -> (
       match Hashtbl.find_opt env.types tn.name with
       | None -> Diag.error tn.loc (sprintf "there's no type named `%s`" tn.name)
-      | Some { type_body = Ctors _; _ } ->
+      | Some { body = Builtin; _ } ->
+          Diag.error tn.loc (sprintf "`%s` isn't a record type" tn.name)
+      | Some { body = Sum _; _ } ->
           Diag.error tn.loc ~help:"its values are made with its constructors"
             (sprintf "`%s` isn't a record type" tn.name)
-      | Some { type_body = Fields decl; _ } ->
-          let declared = List.map (fun f -> f.field_name.name) decl in
+      | Some { body = Record decl; _ } ->
+          let declared = field_names decl in
           List.iter
             (fun ((f : ident), _) ->
               if not (List.mem f.name declared) then
@@ -193,12 +196,10 @@ let check_record env loc (name : ident option) (fields : (ident * expr) list) =
   | None ->
       let matches =
         Hashtbl.fold
-          (fun _ td acc ->
-            match td.type_body with
-            | Fields decl
-              when sorted_names (List.map (fun f -> f.field_name.name) decl)
-                   = given ->
-                td.type_name.name :: acc
+          (fun _ (td : Iface.type_decl) acc ->
+            match td.body with
+            | Record decl when sorted_names (field_names decl) = given ->
+                td.path.name :: acc
             | _ -> acc)
           env.types []
       in
@@ -219,7 +220,7 @@ let pattern_type env (p : pattern) =
   | PBool _ -> Some "Bool"
   | PCon (c, _) ->
       Option.map
-        (fun i -> i.owner.type_name.name)
+        (fun i -> i.owner.path.name)
         (Hashtbl.find_opt env.ctors c.name)
   | PWild | PVar _ -> None
 
@@ -233,18 +234,17 @@ let rec check_pattern env expected (p : pattern) =
   | _ -> ());
   match p.pkind with
   | PCon (c, args) ->
-      let { owner; ctor } = find_ctor env c in
+      let { ctor; _ } = find_ctor env c in
       check_arity c p.ploc ctor (List.length args);
-      let params = List.map (fun (i : ident) -> i.name) owner.type_params in
       List.iter2
-        (fun f arg ->
+        (fun (f : Iface.field) arg ->
           let expected =
-            match f.field_ty with
-            | TyName (id, _) when not (List.mem id.name params) -> Some id.name
-            | TyName _ | TyFn _ | TyInout _ -> None
+            match f.fty with
+            | Con (path, _) -> Some path.name
+            | Var _ | Fun _ | Error -> None
           in
           check_pattern env expected arg)
-        ctor.ctor_fields args
+        ctor.cfields args
   | PWild | PVar _ | PInt _ | PBool _ -> ()
 
 (* ---- exhaustiveness ----
@@ -283,9 +283,11 @@ let siblings env c =
   if c = "true" || c = "false" then Some [ ("true", 0); ("false", 0) ]
   else
     match Hashtbl.find_opt env.ctors c with
-    | Some { owner = { type_body = Ctors cs; _ }; _ } ->
+    | Some { owner = { body = Sum cs; _ }; _ } ->
         Some
-          (List.map (fun k -> (k.ctor_name.name, List.length k.ctor_fields)) cs)
+          (List.map
+             (fun (k : Iface.ctor) -> (k.cname, List.length k.cfields))
+             cs)
     | _ -> None
 
 (* The rows that still apply once we know the first value was built with
@@ -472,7 +474,7 @@ let rec check_expr env ~params (e : expr) =
           check_expr env a.arm_body)
         arms
 
-let program sink (prog : program) =
+let program sink ~home ~imports (prog : program) =
   let env = { types = Hashtbl.create 16; ctors = Hashtbl.create 16; sink } in
   let types =
     List.filter_map (function Type t -> Some t | Fn _ -> None) prog
@@ -480,19 +482,30 @@ let program sink (prog : program) =
   let fns = List.filter_map (function Fn f -> Some f | Type _ -> None) prog in
   (* Declare every type before checking any, so types can refer to types
      declared further down the file. *)
-  List.iter (fun td -> guard env (fun () -> declare env td)) types;
+  List.iter
+    (fun (iface : Iface.t) -> List.iter (declare env) iface.types)
+    imports;
+  List.iter2
+    (fun (td : type_def) decl ->
+      guard env (fun () -> declare env ~name:td.type_name decl))
+    types
+    (Iface.own_types ~home ~imports prog);
   List.iter (check_type_def env) types;
   no_duplicates env "functions" (List.map (fun f -> f.name) fns);
   List.iter
     (fun f ->
-      if Prelude.is_fn f.name.name then
+      if
+        List.exists
+          (fun iface -> Iface.find_value iface f.name.name <> None)
+          imports
+      then
         Diag.report sink
           (Diag.make f.name.loc ~help:"choose another name"
              (sprintf "`%s` is a built-in function" f.name.name));
       no_duplicates env "type parameters" f.tparams;
       List.iter
         (fun (t : ident) ->
-          if Prelude.is_type t.name || Hashtbl.mem env.types t.name then
+          if Hashtbl.mem env.types t.name then
             Diag.report sink
               (Diag.make t.loc ~help:"choose another name"
                  (sprintf "`%s` is already the name of a type" t.name)))

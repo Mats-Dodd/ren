@@ -440,7 +440,8 @@ fn f() = 1
 fn f() = 2
 fn main() = 1
 |};
-  [%expect {|
+  [%expect
+    {|
     error: there are two functions named `f`
       ┌─ test.ren:2:4
     1 │ fn f() = 1
@@ -454,7 +455,8 @@ fn main() = 1
 type Option = { x: Int }
 fn main() = 1
 |};
-  [%expect {|
+  [%expect
+    {|
     error: there are two types named `Option`
       ┌─ test.ren:1:6
     1 │ type Option = { x: Int }

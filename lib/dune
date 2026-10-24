@@ -1,7 +1,8 @@
 ; The compiler, in one library. Its sources live in folders by stage:
 ;   syntax/  source text to AST (locations, tokens, lexer, parser)
 ;   sema/    the checks that run before anything does (check, mut, infer)
-;   core/    what every pass shares (the prelude's built-ins)
+;   core/    what every pass shares: identities (paths), canonical types,
+;            interfaces, and the prelude
 ;   eval/    the interpreter and the values it computes
 ; `unqualified` means the folders only organize files: every module keeps
 ; its plain name (Parser, not Syntax.Parser).

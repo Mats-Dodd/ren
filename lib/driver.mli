@@ -11,10 +11,13 @@ val pass : string -> (unit -> 'a) -> 'a
 val tokens : file:string -> string -> (Token.t * Loc.t) array
 val parse : file:string -> string -> Ast.program
 
-(* The program with the prelude in front, checked and type-checked. *)
+(* The program, checked and type-checked against the prelude. *)
 val check : file:string -> string -> Ast.program
 
-(* Every function's inferred signature. *)
+(* Every function's inferred type scheme, in canonical form. *)
+val schemes : file:string -> string -> (string * Ty.scheme) list
+
+(* Every function's inferred signature, as `ren types` prints it. *)
 val types : file:string -> string -> string list
 
 (* Check the program, then run it. *)

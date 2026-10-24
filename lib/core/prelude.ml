@@ -1,8 +1,9 @@
 (* The prelude: what every Ren program can use without declaring it.
 
-   It comes in two halves. [source] is written in Ren itself: the driver
-   parses it and puts it in front of the user's code. Everything else is
-   built into the compiler, because it can't be written in Ren yet, and is
+   It's a module like any other, whose interface every program is checked
+   against (driver.ml). It comes in two halves. [source] is written in Ren
+   itself, and checked like any module. Everything else is built into the
+   compiler (intrinsic), because it can't be written in Ren yet, and is
    listed in the tables below: each entry says everything every pass needs
    to know about it, so adding a built-in means adding one entry. *)
 
@@ -24,19 +25,13 @@ let types =
     { name = "Array"; arity = 1 };
   ]
 
-let find_type name =
-  List.find_opt (fun (t : builtin_type) -> t.name = name) types
-
-let is_type name = find_type name <> None
-
 (* ---- built-in functions ---- *)
 
 type builtin_fn = {
   name : string;
-  scheme : Types.state -> Types.ty;
-      (** its type scheme, built from the compilation's inference state so its
-          generic variables are that compilation's own. Each parameter's mode
-          ([inout] or not) is part of the type. *)
+  scheme : Ty.scheme;
+      (** its type scheme. Each parameter's mode ([inout] or not) is part of the
+          type. *)
   eval : Value.t list -> Value.t * Value.t list;
       (** run it: the result, and the final value of every parameter, which the
           interpreter writes back for the arguments passed with `&` *)
@@ -45,19 +40,24 @@ type builtin_fn = {
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug name = failwith ("bug: `" ^ name ^ "` was called with the wrong values")
 
+(* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
+   [n]th row variable, numbered by first appearance (ty.ml). *)
+let scheme ty : Ty.scheme = { ty; names = [] }
+let open_row n : Ty.row = { labels = []; tail = Some n }
+
 let fns =
-  let open Types in
+  let open Ty in
   [
     {
       (* fn<T>(T) uses Io *)
       name = "print";
       scheme =
-        (fun st ->
-          TFun
-            ( [ read (generic_var st) ],
-              unit,
-              generic_row st,
-              RExtend ("Io", generic_row st) ));
+        scheme
+          (Fun
+             ( [ read (Var 0) ],
+               unit,
+               open_row 0,
+               { labels = [ "Io" ]; tail = Some 1 } ));
       eval =
         (fun args ->
           List.iter (fun v -> print_endline (Value.show v)) args;
@@ -67,12 +67,7 @@ let fns =
       (* fn<T>(Array<T>) -> Int *)
       name = "len";
       scheme =
-        (fun st ->
-          TFun
-            ( [ read (array (generic_var st)) ],
-              int,
-              generic_row st,
-              generic_row st ));
+        scheme (Fun ([ read (array (Var 0)) ], int, open_row 0, open_row 1));
       eval =
         (function
         | [ Value.VArray xs ] as args -> (Value.VInt (Array.length xs), args)
@@ -82,13 +77,12 @@ let fns =
       (* fn<T>(inout Array<T>, T) *)
       name = "push";
       scheme =
-        (fun st ->
-          let t = generic_var st in
-          TFun
-            ( [ { mode = Inout; ty = array t }; read t ],
-              unit,
-              generic_row st,
-              generic_row st ));
+        scheme
+          (Fun
+             ( [ { mode = Inout; ty = array (Var 0) }; read (Var 0) ],
+               unit,
+               open_row 0,
+               open_row 1 ));
       eval =
         (function
         | [ Value.VArray xs; x ] ->
@@ -99,3 +93,20 @@ let fns =
 
 let find_fn name = List.find_opt (fun (f : builtin_fn) -> f.name = name) fns
 let is_fn name = find_fn name <> None
+
+(* The intrinsic half of the prelude's interface. *)
+let intrinsics : Iface.t =
+  {
+    home = Path.prelude_home;
+    types =
+      List.map
+        (fun (t : builtin_type) : Iface.type_decl ->
+          {
+            path = Path.prelude t.name;
+            params = List.init t.arity (fun i -> "T" ^ string_of_int i);
+            body = Builtin;
+            loc = None;
+          })
+        types;
+    values = List.map (fun f -> { Iface.vname = f.name; scheme = f.scheme }) fns;
+  }
