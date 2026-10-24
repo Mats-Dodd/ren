@@ -1,11 +1,15 @@
 (* A tree-walking interpreter: the "interpreted Ren" milestone on the roadmap.
 
-   Constructors, record fields and `match` exhaustiveness are checked before
-   the program runs (check.ml). Other mistakes, like calling an unknown
-   function or adding a Bool to an Int, are still only caught when the
-   offending code runs; Stage 3's type checker moves those earlier too. *)
+   By the time a program gets here it has been checked (check.ml) and
+   type-checked (infer.ml), so it can't add a Bool to an Int or call a
+   function that doesn't exist. The only errors left are panics, like
+   division by zero. *)
 
 open Ast
+
+(* Variables in scope: an immutable map from name to value. Map.Make is a
+   functor: a function from a module (String) to a module (Env). *)
+module Env = Map.Make (String)
 
 type value =
   | VInt of int
@@ -15,6 +19,10 @@ type value =
       (** [Pro(5)]: the type it belongs to, the constructor, its fields *)
   | VRecord of (string * value) list
       (** fields sorted by name, so structural equality ignores field order *)
+  | VClosure of { params : string list; body : expr; env : value Env.t }
+      (** a lambda, with the variables it captured when it was created *)
+  | VFn of string  (** a top-level function used as a value *)
+  | VBuiltin of string  (** [print] *)
 
 let rec show_value = function
   | VInt n -> string_of_int n
@@ -26,28 +34,29 @@ let rec show_value = function
   | VRecord fields ->
       let show_field (f, v) = f ^ ": " ^ show_value v in
       "{ " ^ String.concat ", " (List.map show_field fields) ^ " }"
+  | VClosure _ -> "<fn>"
+  | VFn name | VBuiltin name -> "<fn " ^ name ^ ">"
 
-let type_name = function
-  | VInt _ -> "Int"
-  | VBool _ -> "Bool"
-  | VUnit -> "Unit"
-  | VCon { ty; _ } -> ty
-  | VRecord _ -> "record"
+(* The type checker rules these out, so reaching one is a compiler bug. *)
+let bug what = failwith ("bug: the type checker let through " ^ what)
 
-(* Variables in scope: an immutable map from name to value. Map.Make is a
-   functor: a function from a module (String) to a module (Env). *)
-module Env = Map.Make (String)
+(* Structural equality. Functions have no meaningful equality, so comparing
+   them panics; Stage 8's `ops` will turn that into a type error. *)
+let rec equal loc a b =
+  match (a, b) with
+  | VCon x, VCon y -> x.name = y.name && List.for_all2 (equal loc) x.args y.args
+  | VRecord xs, VRecord ys ->
+      List.for_all2 (fun (_, x) (_, y) -> equal loc x y) xs ys
+  | (VClosure _ | VFn _ | VBuiltin _), _ | _, (VClosure _ | VFn _ | VBuiltin _)
+    ->
+      Diag.error loc "panic: functions can't be compared"
+  | _ -> a = b
 
 (* Everything the evaluator looks up by name. *)
 type ctx = {
   fns : (string, fn_def) Hashtbl.t;
   ctor_types : (string, string) Hashtbl.t;  (** constructor -> its type *)
 }
-
-let type_error loc expected v =
-  Diag.error loc
-    (Printf.sprintf "expected a `%s` here, but this is a `%s`" expected
-       (type_name v))
 
 let binop loc op a b =
   match (op, a, b) with
@@ -61,12 +70,9 @@ let binop loc op a b =
   | Le, VInt x, VInt y -> VBool (x <= y)
   | Gt, VInt x, VInt y -> VBool (x > y)
   | Ge, VInt x, VInt y -> VBool (x >= y)
-  | Eq, x, y when type_name x = type_name y -> VBool (x = y)
-  | Neq, x, y when type_name x = type_name y -> VBool (x <> y)
-  | _ ->
-      Diag.error loc
-        (Printf.sprintf "`%s` can't be used on `%s` and `%s`"
-           (binop_to_string op) (type_name a) (type_name b))
+  | Eq, x, y -> VBool (equal loc x y)
+  | Neq, x, y -> VBool (not (equal loc x y))
+  | _ -> bug ("`" ^ binop_to_string op ^ "` on the wrong types")
 
 (* Match a value against a pattern. On success, return the environment
    extended with the variables the pattern binds. *)
@@ -90,22 +96,29 @@ let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
   | Bool b -> VBool b
+  | Unit -> VUnit
   | Var x -> (
+      (* locals shadow top-level functions *)
       match Env.find_opt x env with
       | Some v -> v
-      | None ->
-          Diag.error e.loc (Printf.sprintf "there's no variable named `%s`" x))
+      | None when Hashtbl.mem cx.fns x -> VFn x
+      | None when x = "print" -> VBuiltin x
+      | None -> bug ("the unknown name `" ^ x ^ "`"))
   | Unop (Neg, a) -> (
       match eval cx env a with
       | VInt n -> VInt (-n)
-      | v -> type_error a.loc "Int" v)
+      | _ -> bug "`-` on a non-Int")
   | Binop (op, a, b) -> binop e.loc op (eval cx env a) (eval cx env b)
   | If (c, t, f) -> (
       match eval cx env c with
       | VBool true -> eval cx env t
       | VBool false -> eval cx env f
-      | v -> type_error c.loc "Bool" v)
-  | Call (name, args) -> call cx e.loc name (List.map (eval cx env) args)
+      | _ -> bug "a non-Bool `if` condition")
+  | Call (f, args) ->
+      let f = eval cx env f in
+      apply cx f (List.map (eval cx env) args)
+  | Lambda (params, body) ->
+      VClosure { params = List.map (fun p -> p.pname.name) params; body; env }
   | Block (stmts, last) ->
       let exec env = function
         | Let { name; value; _ } -> Env.add name.name (eval cx env value) env
@@ -133,13 +146,8 @@ let rec eval cx env (e : expr) =
       | VRecord fields -> (
           match List.assoc_opt f.name fields with
           | Some v -> v
-          | None ->
-              Diag.error f.loc
-                (Printf.sprintf "this record has no field named `%s`" f.name))
-      | v ->
-          Diag.error f.loc
-            (Printf.sprintf "`.%s` needs a record, but this is a `%s`" f.name
-               (type_name v)))
+          | None -> bug ("the missing field `" ^ f.name ^ "`"))
+      | _ -> bug "a field access on a non-record")
   | Match (subject, arms) ->
       let v = eval cx env subject in
       let guard_passes env = function
@@ -147,7 +155,7 @@ let rec eval cx env (e : expr) =
         | Some g -> (
             match eval cx env g with
             | VBool b -> b
-            | v -> type_error g.loc "Bool" v)
+            | _ -> bug "a non-Bool guard")
       in
       let rec first = function
         | [] -> Diag.error e.loc "panic: no arm of this `match` matched"
@@ -159,36 +167,25 @@ let rec eval cx env (e : expr) =
       in
       first arms
 
-and call cx loc name args =
-  match (name.name, args) with
-  | "print", [ v ] ->
-      print_endline (show_value v);
+and apply cx f args =
+  let bind env name v = Env.add name v env in
+  match f with
+  | VBuiltin "print" ->
+      List.iter (fun v -> print_endline (show_value v)) args;
       VUnit
-  | _ -> (
-      match Hashtbl.find_opt cx.fns name.name with
-      | None ->
-          Diag.error name.loc
-            (Printf.sprintf "there's no function named `%s`" name.name)
-      | Some f ->
-          let expected = List.length f.params and given = List.length args in
-          if expected <> given then
-            Diag.error loc
-              (Printf.sprintf "`%s` takes %d argument%s but was given %d"
-                 name.name expected
-                 (if expected = 1 then "" else "s")
-                 given);
-          let bind env (p : param) v = Env.add p.pname.name v env in
-          eval cx (List.fold_left2 bind Env.empty f.params args) f.body)
+  | VFn name ->
+      let f = Hashtbl.find cx.fns name in
+      let names = List.map (fun p -> p.pname.name) f.params in
+      eval cx (List.fold_left2 bind Env.empty names args) f.body
+  | VClosure { params; body; env } ->
+      eval cx (List.fold_left2 bind env params args) body
+  | _ -> bug "a call to something that isn't a function"
 
 let run ~file (prog : program) =
   let cx = { fns = Hashtbl.create 16; ctor_types = Hashtbl.create 16 } in
   List.iter
     (function
-      | Fn f ->
-          if Hashtbl.mem cx.fns f.name.name then
-            Diag.error f.name.loc
-              (Printf.sprintf "`%s` is defined more than once" f.name.name);
-          Hashtbl.replace cx.fns f.name.name f
+      | Fn f -> Hashtbl.replace cx.fns f.name.name f
       | Type { type_name; type_body = Ctors cs; _ } ->
           List.iter
             (fun c ->
@@ -201,4 +198,4 @@ let run ~file (prog : program) =
       Diag.error (Loc.point ~file 1 1)
         ~help:"add `fn main() = ...`, which is where the program starts"
         "this program has no `main` function"
-  | Some f -> eval cx Env.empty f.body
+  | Some f -> apply cx (VFn f.name.name) []

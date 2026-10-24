@@ -4,8 +4,14 @@
 
 type ident = { name : string; loc : Loc.t }
 
-(* A type as written: `Int`, `Plan`, `Option<Int>`. *)
-type ty = { ty_name : ident; ty_args : ty list }
+(* A type as written: `Int`, `Option<Int>`, `fn(Int) -> Bool`. *)
+type ty =
+  | TyName of ident * ty list  (** [Int], [Option<Int>] *)
+  | TyFn of ty list * ty option * Loc.t
+      (** [fn(Int) -> Bool]; with no [->] the function returns [Unit] *)
+
+let ty_loc = function TyName (id, _) -> id.loc | TyFn (_, _, l) -> l
+
 type binop = Add | Sub | Mul | Div | Mod | Eq | Neq | Lt | Le | Gt | Ge
 type unop = Neg
 
@@ -19,16 +25,21 @@ and pattern_kind =
   | PBool of bool
   | PCon of ident * pattern list  (** [Free], [Pro(seats)] *)
 
+(* A parameter of a function or lambda; its type may be left out. *)
+type param = { pname : ident; pty : ty option }
+
 type expr = { kind : expr_kind; loc : Loc.t }
 
 and expr_kind =
   | Int of int
   | Bool of bool
-  | Var of string
+  | Unit  (** [()] *)
+  | Var of string  (** a local variable, or a top-level function *)
   | Unop of unop * expr
   | Binop of binop * expr * expr
   | If of expr * expr * expr
-  | Call of ident * expr list
+  | Call of expr * expr list  (** [f(x)], [make()(x)], [handlers.on_click()] *)
+  | Lambda of param list * expr  (** [fn(x) => x + 1] *)
   | Block of stmt list * expr  (** statements, then the block's value *)
   | Con of ident * (ident option * expr) list
       (** a constructor: [Pro(5)] or [Pro(seats: 5)] *)
@@ -58,10 +69,10 @@ type type_def = {
   type_body : type_body;
 }
 
-type param = { pname : ident; pty : ty }
-
 type fn_def = {
+  pub : bool;
   name : ident;
+  tparams : ident list;  (** the [T] in [fn id<T>(x: T) -> T] *)
   params : param list;
   ret : ty option;
   body : expr;
@@ -90,11 +101,13 @@ let binop_to_string = function
 
 let parens words = "(" ^ String.concat " " words ^ ")"
 
-let rec show_ty t =
-  match t.ty_args with
-  | [] -> t.ty_name.name
-  | args ->
-      t.ty_name.name ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
+let rec show_ty = function
+  | TyName (name, []) -> name.name
+  | TyName (name, args) ->
+      name.name ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
+  | TyFn (params, ret, _) ->
+      let ret = match ret with Some r -> " -> " ^ show_ty r | None -> "" in
+      "fn(" ^ String.concat ", " (List.map show_ty params) ^ ")" ^ ret
 
 let rec show_pattern p =
   match p.pkind with
@@ -110,11 +123,14 @@ let rec show_expr e =
   match e.kind with
   | Int n -> string_of_int n
   | Bool b -> string_of_bool b
+  | Unit -> "()"
   | Var x -> x
   | Unop (Neg, a) -> parens [ "neg"; show_expr a ]
   | Binop (op, a, b) -> parens [ binop_to_string op; show_expr a; show_expr b ]
   | If (c, t, f) -> parens [ "if"; show_expr c; show_expr t; show_expr f ]
-  | Call (f, args) -> parens ("call" :: f.name :: List.map show_expr args)
+  | Call (f, args) -> parens ("call" :: show_expr f :: List.map show_expr args)
+  | Lambda (params, body) ->
+      parens [ "lambda"; parens (List.map show_param params); show_expr body ]
   | Block (stmts, last) ->
       parens (("block" :: List.map show_stmt stmts) @ [ show_expr last ])
   | Con (c, args) ->
@@ -136,6 +152,11 @@ and show_arm a =
     match a.arm_guard with Some g -> [ "if"; show_expr g ] | None -> []
   in
   parens ((show_pattern a.arm_pat :: guard) @ [ "=>"; show_expr a.arm_body ])
+
+and show_param p =
+  match p.pty with
+  | Some t -> p.pname.name ^ ":" ^ show_ty t
+  | None -> p.pname.name
 
 and show_stmt = function
   | Let { name; value; _ } -> parens [ "let"; name.name; show_expr value ]

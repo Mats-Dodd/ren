@@ -1,7 +1,6 @@
-(* Static checks: the first pass that runs before the program does.
-
-   It knows nothing about the types of expressions yet (that's Stage 3), but
-   it doesn't need to for what it checks here:
+(* Static checks: the first pass that runs before the program does, ahead of
+   type inference (infer.ml). It checks what can be checked without knowing
+   the types of expressions:
 
    - every type, constructor and record field mentioned exists, with the
      right number of arguments and the right labels
@@ -59,23 +58,28 @@ let check_arity (c : ident) loc (ctor : ctor) given =
 (* Check that a written type exists and has the right number of arguments.
    [params] are the type parameters in scope, like the `T` in `Option<T>`. *)
 let rec check_ty env ~params (t : ty) =
-  let name = t.ty_name.name in
-  let arity =
-    if List.mem name params || List.mem name builtin_types then Some 0
-    else
-      Option.map
-        (fun td -> List.length td.type_params)
-        (Hashtbl.find_opt env.types name)
-  in
-  match arity with
-  | None -> Diag.error t.ty_name.loc (sprintf "there's no type named `%s`" name)
-  | Some n ->
-      let given = List.length t.ty_args in
-      if n <> given then
-        Diag.error t.ty_name.loc
-          (sprintf "`%s` takes %d type argument%s but was given %d" name n
-             (plural n) given);
-      List.iter (check_ty env ~params) t.ty_args
+  match t with
+  | TyFn (ps, ret, _) ->
+      List.iter (check_ty env ~params) ps;
+      Option.iter (check_ty env ~params) ret
+  | TyName (id, args) -> (
+      let name = id.name in
+      let arity =
+        if List.mem name params || List.mem name builtin_types then Some 0
+        else
+          Option.map
+            (fun td -> List.length td.type_params)
+            (Hashtbl.find_opt env.types name)
+      in
+      match arity with
+      | None -> Diag.error id.loc (sprintf "there's no type named `%s`" name)
+      | Some n ->
+          let given = List.length args in
+          if n <> given then
+            Diag.error id.loc
+              (sprintf "`%s` takes %d type argument%s but was given %d" name n
+                 (plural n) given);
+          List.iter (check_ty env ~params) args)
 
 (* Record a type and its constructors, so later checks can look them up. *)
 let declare env td =
@@ -155,7 +159,7 @@ let check_record env loc (name : ident option) (fields : (ident * expr) list) =
           if missing <> [] then
             Diag.error loc
               (sprintf "this `%s` is missing %s" tn.name (quote missing)))
-  | None -> (
+  | None ->
       let matches =
         Hashtbl.fold
           (fun _ td acc ->
@@ -167,19 +171,13 @@ let check_record env loc (name : ident option) (fields : (ident * expr) list) =
             | _ -> acc)
           env.types []
       in
-      match sorted_names matches with
-      | [ _ ] -> ()
-      | [] ->
-          Diag.error loc
-            ~help:
-              "write the type's name before the `{` to see which fields are \
-               wrong"
-            "no record type has exactly these fields"
-      | first :: _ as many ->
-          Diag.error loc
-            ~help:
-              (sprintf "write the type's name first, like `%s { ... }`" first)
-            (sprintf "these fields fit more than one type: %s" (quote many)))
+      (* When several types fit, inference picks one from how the record is
+         used (infer.ml). *)
+      if matches = [] then
+        Diag.error loc
+          ~help:
+            "write the type's name before the `{` to see which fields are wrong"
+          "no record type has exactly these fields"
 
 (* ---- patterns ---- *)
 
@@ -209,10 +207,12 @@ let rec check_pattern env expected (p : pattern) =
       let params = List.map (fun (i : ident) -> i.name) owner.type_params in
       List.iter2
         (fun f arg ->
-          let name = f.field_ty.ty_name.name in
-          check_pattern env
-            (if List.mem name params then None else Some name)
-            arg)
+          let expected =
+            match f.field_ty with
+            | TyName (id, _) when not (List.mem id.name params) -> Some id.name
+            | TyName _ | TyFn _ -> None
+          in
+          check_pattern env expected arg)
         ctor.ctor_fields args
   | PWild | PVar _ | PInt _ | PBool _ -> ()
 
@@ -390,20 +390,30 @@ let check_match env (e : expr) arms =
 
 (* ---- walking the program ---- *)
 
-let rec check_expr env (e : expr) =
+let check_params env ~params (ps : param list) =
+  no_duplicates "parameters" (List.map (fun p -> p.pname) ps);
+  List.iter (fun p -> Option.iter (check_ty env ~params) p.pty) ps
+
+(* [params] are the type parameters of the enclosing function, which its
+   lambdas and `let` annotations can mention too. *)
+let rec check_expr env ~params (e : expr) =
+  let check_expr = check_expr ~params in
   match e.kind with
-  | Int _ | Bool _ | Var _ -> ()
+  | Int _ | Bool _ | Unit | Var _ -> ()
   | Unop (_, a) | Field (a, _) -> check_expr env a
   | Binop (_, a, b) ->
       check_expr env a;
       check_expr env b
   | If (c, t, f) -> List.iter (check_expr env) [ c; t; f ]
-  | Call (_, args) -> List.iter (check_expr env) args
+  | Call (f, args) -> List.iter (check_expr env) (f :: args)
+  | Lambda (ps, body) ->
+      check_params env ~params ps;
+      check_expr env body
   | Block (stmts, last) ->
       List.iter
         (function
           | Let { ty; value; _ } ->
-              Option.iter (check_ty env ~params:[]) ty;
+              Option.iter (check_ty env ~params) ty;
               check_expr env value
           | Expr e -> check_expr env e)
         stmts;
@@ -433,9 +443,21 @@ let program (prog : program) =
      declared further down the file. *)
   List.iter (declare env) types;
   List.iter (check_type_def env) types;
+  no_duplicates "functions" (List.map (fun f -> f.name) fns);
   List.iter
     (fun f ->
-      List.iter (fun p -> check_ty env ~params:[] p.pty) f.params;
-      Option.iter (check_ty env ~params:[]) f.ret;
-      check_expr env f.body)
+      if f.name.name = "print" then
+        Diag.error f.name.loc ~help:"choose another name"
+          "`print` is a built-in function";
+      no_duplicates "type parameters" f.tparams;
+      List.iter
+        (fun (t : ident) ->
+          if List.mem t.name builtin_types || Hashtbl.mem env.types t.name then
+            Diag.error t.loc ~help:"choose another name"
+              (sprintf "`%s` is already the name of a type" t.name))
+        f.tparams;
+      let params = List.map (fun (t : ident) -> t.name) f.tparams in
+      check_params env ~params f.params;
+      Option.iter (check_ty env ~params) f.ret;
+      check_expr env ~params f.body)
     fns

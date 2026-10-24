@@ -6,7 +6,9 @@
 
      program  := item { NEWLINE item } EOF
      item     := ["pub"] (fn_def | type_def)
-     fn_def   := "fn" IDENT "(" params ")" ["->" type] "=" body
+     fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
+                 ["->" type] "=" body
+     param    := IDENT [":" type]
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body
      type_body:= "{" field, ... "}"                       (a record)
               |  ["|"] ctor { "|" ctor }                  (a sum type; may be
@@ -14,6 +16,7 @@
      ctor     := UIDENT ["(" field, ... ")"]
      field    := IDENT ":" type
      type     := UIDENT ["<" type, ... ">"]
+              |  "fn" "(" [IDENT ":"] type, ... ")" ["->" type]
 
      body     := INDENT block | expr
      block    := stmt { NEWLINE stmt } DEDENT       (last stmt is the value)
@@ -22,13 +25,16 @@
      add      := mul { ("+" | "-") mul }
      mul      := unary { ("*" | "/" | "%") unary }
      unary    := "-" unary | postfix
-     postfix  := primary { "." IDENT }
-     primary  := INT | "true" | "false" | IDENT ["(" args ")"]
+     postfix  := primary { "." IDENT | "(" expr, ... ")" [lambda] }
+                                                    (a trailing lambda is
+                                                     the call's last argument)
+     primary  := INT | "true" | "false" | "(" ")" | IDENT | lambda
               |  UIDENT ["(" con_args ")" | "{" field_inits "}"]
               |  "{" field_inits "}" | "(" expr ")"
               |  "if" expr "then" body [NEWLINE] "else" body
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
      arm      := pattern ["if" expr] "=>" body
+     lambda   := "fn" "(" param, ... ")" "=>" body
      pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
               |  UIDENT ["(" pattern, ... ")"]
 
@@ -121,14 +127,48 @@ let cmp_op = function
 (* ---- types ---- *)
 
 let rec parse_ty p =
-  let ty_name = upper_ident p "a type name" in
-  let ty_args =
-    if peek p = LT then (
+  match peek p with
+  | FN ->
+      let start = loc p in
       advance p;
-      sep_list p ~close:GT parse_ty)
-    else []
+      expect p LPAREN;
+      let params = sep_list p ~close:RPAREN parse_fn_ty_param in
+      let ret =
+        if peek p = ARROW then (
+          advance p;
+          Some (parse_ty p))
+        else None
+      in
+      TyFn (params, ret, Loc.span start (last_loc p))
+  | _ ->
+      let name = upper_ident p "a type name" in
+      let args =
+        if peek p = LT then (
+          advance p;
+          sep_list p ~close:GT parse_ty)
+        else []
+      in
+      TyName (name, args)
+
+(* A parameter in a function type may be named for documentation, as in
+   `fn(id: UserId) -> User`. The name doesn't affect the type. *)
+and parse_fn_ty_param p =
+  (match (peek p, peek2 p) with
+  | IDENT name, COLON when not (is_upper name) ->
+      advance p;
+      advance p
+  | _ -> ());
+  parse_ty p
+
+let parse_param p =
+  let pname = ident p in
+  let pty =
+    if peek p = COLON then (
+      advance p;
+      Some (parse_ty p))
+    else None
   in
-  { ty_name; ty_args }
+  { pname; pty }
 
 let parse_field_decl p =
   let field_name = ident p in
@@ -308,15 +348,23 @@ and parse_unary p =
       mk (Unop (Neg, e)) start p
   | _ -> parse_postfix p
 
-(* Field access binds tightest: `-user.age` is `-(user.age)`. *)
+(* Field access and calls bind tightest: `-user.age` is `-(user.age)`. *)
 and parse_postfix p =
   let start = loc p in
   let rec loop e =
-    if peek p = DOT then (
-      advance p;
-      let f = ident p in
-      loop (mk (Field (e, f)) start p))
-    else e
+    match peek p with
+    | DOT ->
+        advance p;
+        let f = ident p in
+        loop (mk (Field (e, f)) start p)
+    | LPAREN ->
+        advance p;
+        let args = sep_list p ~close:RPAREN parse_expr in
+        (* `twice() fn() =>` passes the lambda as the last argument, so a
+           multi-line lambda doesn't have to sit inside the parentheses *)
+        let args = if peek p = FN then args @ [ parse_lambda p ] else args in
+        loop (mk (Call (e, args)) start p)
+    | _ -> e
   in
   loop (parse_primary p)
 
@@ -344,13 +392,13 @@ and parse_primary p =
           let fields = sep_list p ~close:RBRACE parse_field_init in
           mk (Record (Some c, fields)) start p
       | _ -> mk (Con (c, [])) start p)
-  | IDENT _ ->
-      let name = ident p in
-      if peek p = LPAREN then (
-        advance p;
-        let args = sep_list p ~close:RPAREN parse_expr in
-        mk (Call (name, args)) start p)
-      else mk (Var name.name) start p
+  | IDENT name ->
+      advance p;
+      mk (Var name) start p
+  | LPAREN when peek2 p = RPAREN ->
+      advance p;
+      advance p;
+      mk Unit start p
   | LBRACE ->
       advance p;
       let fields = sep_list p ~close:RBRACE parse_field_init in
@@ -362,7 +410,22 @@ and parse_primary p =
       e
   | IF -> parse_if p
   | MATCH -> parse_match p
+  | FN -> parse_lambda p
   | _ -> fail_expected p "an expression"
+
+and parse_lambda p =
+  let start = loc p in
+  expect p FN;
+  if peek p <> LPAREN then
+    Diag.error (loc p)
+      ~help:"functions are defined at the top level; a lambda is `fn(x) => ...`"
+      (Printf.sprintf "expected `(` to start a lambda, found %s"
+         (describe (peek p)));
+  advance p;
+  let params = sep_list p ~close:RPAREN parse_param in
+  expect p FATARROW;
+  let body = parse_body p in
+  mk (Lambda (params, body)) start p
 
 (* A constructor argument, optionally labelled: `5` or `seats: 5`. *)
 and parse_con_arg p =
@@ -436,15 +499,16 @@ and parse_arm p =
 
 (* ---- items ---- *)
 
-let parse_param p =
-  let pname = ident p in
-  expect p COLON;
-  { pname; pty = parse_ty p }
-
-let parse_fn p =
+let parse_fn p ~pub =
   let start = loc p in
   expect p FN;
   let name = ident p in
+  let tparams =
+    if peek p = LT then (
+      advance p;
+      sep_list p ~close:GT (fun p -> upper_ident p "a type parameter"))
+    else []
+  in
   expect p LPAREN;
   let params = sep_list p ~close:RPAREN parse_param in
   let ret =
@@ -455,12 +519,13 @@ let parse_fn p =
   in
   expect p EQ;
   let body = parse_body p in
-  { name; params; ret; body; loc = Loc.span start (last_loc p) }
+  { pub; name; tparams; params; ret; body; loc = Loc.span start (last_loc p) }
 
 let parse_item p =
-  if peek p = PUB then advance p;
+  let pub = peek p = PUB in
+  if pub then advance p;
   match peek p with
-  | FN -> Fn (parse_fn p)
+  | FN -> Fn (parse_fn p ~pub)
   | TYPE -> Type (parse_type p)
   | _ ->
       Diag.error (loc p)

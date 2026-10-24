@@ -1,0 +1,284 @@
+(* Types as the type checker sees them, as opposed to types as written in
+   source (Ast.ty).
+
+   A type variable is a mutable cell: [Unbound] until inference learns what
+   it is, then [Link]ed to that type. Unifying two variables links one cell
+   to the other, so everything that shares the cell learns the answer at
+   once (a union-find structure). [repr] follows links to the current
+   answer, and every function here looks at types through it.
+
+   Function types carry two rows: the errors the function can fail with and
+   the dependencies it uses. A row is a list of labels ending either in
+   [REmpty] (closed: exactly these labels) or in a row variable (open: these
+   labels and possibly more). Rows are unified the way OCaml unifies
+   polymorphic variants, after Rémy; see unify.ml.
+
+   Levels decide which variables can be generalized, without scanning the
+   environment. Every variable records the level at which it was created.
+   Inference enters a new level for each group of top-level functions it
+   checks; when it leaves, any variable still at a deeper level belongs only
+   to those functions, so it becomes generic (a "for all"). Unification keeps
+   levels honest: binding a variable to a type lowers the levels inside that
+   type to the variable's own. *)
+
+type ty =
+  | TCon of string * ty list  (** [Int], [Option<Int>], [User] *)
+  | TFun of ty list * ty * row * row  (** params, result, errors, uses *)
+  | TVar of tvar ref
+  | TSkol of int * string
+      (** a type parameter like [T], while checking the function that declares
+          it: equal only to itself, since the function has to work for every [T]
+      *)
+
+and tvar = Unbound of int * int  (** id, level *) | Link of ty
+and row = REmpty | RExtend of string * row | RVar of rvar ref
+and rvar = RUnbound of int * int  (** id, level *) | RLink of row
+
+let generic_level = max_int
+let current_level = ref 1
+let enter_level () = incr current_level
+let leave_level () = decr current_level
+let counter = ref 0
+
+let fresh_id () =
+  incr counter;
+  !counter
+
+let fresh_var () = TVar (ref (Unbound (fresh_id (), !current_level)))
+let fresh_row () = RVar (ref (RUnbound (fresh_id (), !current_level)))
+let generic_var () = TVar (ref (Unbound (fresh_id (), generic_level)))
+let generic_row () = RVar (ref (RUnbound (fresh_id (), generic_level)))
+let int = TCon ("Int", [])
+let bool = TCon ("Bool", [])
+let unit = TCon ("Unit", [])
+
+(* Follow links to the type a variable currently stands for, shortening the
+   chain as it goes so later lookups are quick. *)
+let rec repr t =
+  match t with
+  | TVar ({ contents = Link t' } as r) ->
+      let t'' = repr t' in
+      r := Link t'';
+      t''
+  | t -> t
+
+let rec repr_row r =
+  match r with
+  | RVar ({ contents = RLink r' } as cell) ->
+      let r'' = repr_row r' in
+      cell := RLink r'';
+      r''
+  | r -> r
+
+(* A row's labels and, if it's open, the id of its tail variable. *)
+let row_parts r =
+  let rec go acc r =
+    match repr_row r with
+    | REmpty -> (List.rev acc, None)
+    | RExtend (l, rest) -> go (l :: acc) rest
+    | RVar { contents = RUnbound (id, _) } -> (List.rev acc, Some id)
+    | RVar { contents = RLink _ } -> assert false (* repr_row followed it *)
+  in
+  go [] r
+
+(* ---- generalizing and instantiating ---- *)
+
+(* The names of type parameters, remembered so `ren types` can print `T` for
+   a variable that came from `fn id<T>`. *)
+let hints : (int, string) Hashtbl.t = Hashtbl.create 16
+
+(* Make generic every variable created deeper than the current level, and
+   replace the function's own type parameters ([skolems], as id and name)
+   with generic variables too. The result is the function's type scheme. *)
+let generalize ~skolems t =
+  let table = Hashtbl.create 8 in
+  let rec go t =
+    match repr t with
+    | TVar ({ contents = Unbound (id, l) } as r) as t ->
+        if l > !current_level then r := Unbound (id, generic_level);
+        t
+    | TVar { contents = Link _ } -> assert false
+    | TSkol (id, name) as t -> (
+        if not (List.mem_assoc id skolems) then t
+        else
+          match Hashtbl.find_opt table id with
+          | Some v -> v
+          | None ->
+              let v = generic_var () in
+              (match v with
+              | TVar { contents = Unbound (vid, _) } ->
+                  Hashtbl.replace hints vid name
+              | _ -> ());
+              Hashtbl.add table id v;
+              v)
+    | TCon (n, args) -> TCon (n, List.map go args)
+    | TFun (ps, r, e, u) -> TFun (List.map go ps, go r, row e, row u)
+  and row r =
+    match repr_row r with
+    | RVar ({ contents = RUnbound (id, l) } as cell) as r ->
+        if l > !current_level then cell := RUnbound (id, generic_level);
+        r
+    | RVar { contents = RLink _ } -> assert false
+    | REmpty -> REmpty
+    | RExtend (l, rest) -> RExtend (l, row rest)
+  in
+  go t
+
+(* A copy of a type scheme with fresh variables in place of the generic
+   ones, so each use of a function can pick its own types. *)
+let instantiate t =
+  let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
+  let rec go t =
+    match repr t with
+    | TVar { contents = Unbound (id, l) } when l = generic_level -> (
+        match Hashtbl.find_opt tys id with
+        | Some v -> v
+        | None ->
+            let v = fresh_var () in
+            Hashtbl.add tys id v;
+            v)
+    | (TVar _ | TSkol _) as t -> t
+    | TCon (n, args) -> TCon (n, List.map go args)
+    | TFun (ps, r, e, u) -> TFun (List.map go ps, go r, row e, row u)
+  and row r =
+    match repr_row r with
+    | RVar { contents = RUnbound (id, l) } when l = generic_level -> (
+        match Hashtbl.find_opt rows id with
+        | Some v -> v
+        | None ->
+            let v = fresh_row () in
+            Hashtbl.add rows id v;
+            v)
+    | (REmpty | RVar _) as r -> r
+    | RExtend (l, rest) -> RExtend (l, row rest)
+  in
+  go t
+
+(* ---- printing ---- *)
+
+(* A printer names variables consistently across everything printed with it,
+   so one message or signature reads `T` for the same variable throughout.
+   Generic variables get names (their hint, or T, U, V, ...); variables
+   inference hasn't solved yet print as `_`.
+
+   Row tails are hidden unless [show_tail] picks them, and then print as
+   `..e` (errors) or `..d` (dependencies). *)
+type printer = {
+  names : (int, string) Hashtbl.t;
+  mutable order : string list;  (** names handed out, most recent first *)
+  reserved : (string, unit) Hashtbl.t;
+  show_tail : int -> bool;
+  tail_names : (int, string) Hashtbl.t;
+}
+
+let printer ?(show_tail = fun _ -> false) () =
+  {
+    names = Hashtbl.create 8;
+    order = [];
+    reserved = Hashtbl.create 8;
+    show_tail;
+    tail_names = Hashtbl.create 4;
+  }
+
+let auto_names =
+  List.init 7 (fun i -> String.make 1 "TUVWXYZ".[i])
+  @ List.init 20 (fun i -> "T" ^ string_of_int (i + 1))
+
+let taken pr n = Hashtbl.mem pr.reserved n || List.mem n pr.order
+
+let var_name pr id =
+  match Hashtbl.find_opt pr.names id with
+  | Some n -> n
+  | None ->
+      let n =
+        match Hashtbl.find_opt hints id with
+        | Some h when not (List.mem h pr.order) -> h
+        | _ -> List.find (fun n -> not (taken pr n)) auto_names
+      in
+      Hashtbl.add pr.names id n;
+      pr.order <- n :: pr.order;
+      n
+
+(* Keep the hinted names of a type's variables free, so an automatic name
+   handed out first doesn't take them. *)
+let rec reserve pr t =
+  match repr t with
+  | TVar { contents = Unbound (id, _) } ->
+      Option.iter
+        (fun h -> Hashtbl.replace pr.reserved h ())
+        (Hashtbl.find_opt hints id)
+  | TVar { contents = Link _ } | TSkol _ -> ()
+  | TCon (_, args) -> List.iter (reserve pr) args
+  | TFun (ps, r, _, _) -> List.iter (reserve pr) (r :: ps)
+
+let tail_name pr id kind =
+  match Hashtbl.find_opt pr.tail_names id with
+  | Some n -> n
+  | None ->
+      let existing = Hashtbl.fold (fun _ n acc -> n :: acc) pr.tail_names [] in
+      let rec pick i =
+        let n = if i = 1 then kind else kind ^ string_of_int i in
+        if List.mem n existing then pick (i + 1) else n
+      in
+      let n = pick 1 in
+      Hashtbl.add pr.tail_names id n;
+      n
+
+let show_row pr ~prefix ~sep ~kind r =
+  let labels, tail = row_parts r in
+  let labels = List.sort_uniq String.compare labels in
+  let tail =
+    match tail with
+    | Some id when pr.show_tail id -> [ ".." ^ tail_name pr id kind ]
+    | _ -> []
+  in
+  match labels @ tail with
+  | [] -> ""
+  | parts -> prefix ^ String.concat sep parts
+
+let rec show pr t =
+  match repr t with
+  | TCon (n, []) -> n
+  | TCon (n, args) ->
+      n ^ "<" ^ String.concat ", " (List.map (show pr) args) ^ ">"
+  | TSkol (_, n) -> n
+  | TVar { contents = Unbound (id, l) } ->
+      if l = generic_level then var_name pr id else "_"
+  | TVar { contents = Link _ } -> assert false
+  | TFun (ps, r, e, u) ->
+      (* `let`s fix the order variables are named in: OCaml evaluates the
+         operands of `^` right to left *)
+      let ps = List.map (show pr) ps in
+      let r = show_ret pr r in
+      "fn(" ^ String.concat ", " ps ^ ")" ^ r ^ show_effects pr e u
+
+(* ` -> R`, or nothing for Unit. A returned function with effects is
+   parenthesized, so it's clear whose effects they are. *)
+and show_ret pr r =
+  match repr r with
+  | TCon ("Unit", []) -> ""
+  | TFun (_, _, e, u) as f ->
+      let s = show pr f in
+      if show_effects pr e u = "" then " -> " ^ s else " -> (" ^ s ^ ")"
+  | r -> " -> " ^ show pr r
+
+and show_effects pr e u =
+  show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" e
+  ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
+
+(* Does the type mention a type parameter? Error messages explain those. *)
+let rec skolems t =
+  match repr t with
+  | TSkol (id, n) -> [ (id, n) ]
+  | TVar _ -> []
+  | TCon (_, args) -> List.concat_map skolems args
+  | TFun (ps, r, _, _) -> List.concat_map skolems (r :: ps)
+
+(* The ids of every row variable inside a type. *)
+let rec row_vars t =
+  let of_row r = Option.to_list (snd (row_parts r)) in
+  match repr t with
+  | TVar _ | TSkol _ -> []
+  | TCon (_, args) -> List.concat_map row_vars args
+  | TFun (ps, r, e, u) ->
+      List.concat_map row_vars (r :: ps) @ of_row e @ of_row u
