@@ -1,0 +1,35 @@
+// Stage 3: type inference. No function here annotates its parameters;
+// `ren types examples/infer.ren` prints what the compiler worked out.
+
+type Plan =
+  | Free
+  | Pro(seats: Int)
+
+type User = { id: Int, plan: Plan }
+
+fn seats(u) =                          // u: User, the only record with `plan`
+  match u.plan
+    Free => 1
+    Pro(n) => n
+
+fn first_or(o, fallback) =             // works for any Option<T>
+  match o
+    Some(v) => v
+    None => fallback
+
+fn map_option(o, f) =
+  match o
+    Some(v) => Some(f(v))
+    None => None
+
+fn twice(f) =                          // f's dependencies become the caller's
+  f()
+  f()
+
+fn main() =                            // uses Io, because `print` does
+  let alice = { id: 1, plan: Pro(seats: 5) }
+  print(seats(alice))
+  print(first_or(map_option(Some(20), fn(n) => n + 1), 0))
+  print(first_or(None, true))
+  twice() fn() =>
+    print(alice.id)
