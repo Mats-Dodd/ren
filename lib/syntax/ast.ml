@@ -4,101 +4,193 @@
 
 type ident = { name : string; loc : Loc.t }
 
-(* A type as written: `Int`, `Option<Int>`, `fn(Int) -> Bool`. *)
-type ty =
-  | TyName of ident * ty list  (** [Int], [Option<Int>] *)
-  | TyFn of ty list * ty option * Loc.t
-      (** [fn(Int) -> Bool]; with no [->] the function returns [Unit] *)
-  | TyInout of ty * Loc.t
-      (** [inout Int], a parameter of a function type: [fn(inout Int)] *)
+(* The tree comes in two versions, built from the same type definitions:
+   the parser's, where every name is the string that was written, and
+   Resolve's (resolve.ml), where every name says what it refers to. The
+   type parameters say which: ['v] is a variable or function being used,
+   ['b] a name being bound (by a `let`, a parameter, a loop or a pattern),
+   and ['t] a type's name. [Parsed] and [Resolved] at the bottom of this
+   file name the two versions.
 
-let ty_loc = function
-  | TyName (id, _) -> id.loc
-  | TyFn (_, _, l) | TyInout (_, l) -> l
+   A type with parameters, like [('v, 'b, 't) expr], is a family of types,
+   one for each choice of them; [List] works the same way, as ['a list]. *)
+
+(* A type as written: `Int`, `Option<Int>`, `fn(Int) -> Bool`. *)
+type 't ty =
+  | TyName of 't * 't ty list  (** [Int], [Option<Int>] *)
+  | TyFn of 't ty list * 't ty option * Loc.t
+      (** [fn(Int) -> Bool]; with no [->] the function returns [Unit] *)
+  | TyInout of 't ty * Loc.t
+      (** [inout Int], a parameter of a function type: [fn(inout Int)] *)
 
 type binop = Add | Sub | Mul | Div | Mod | Eq | Neq | Lt | Le | Gt | Ge
 type unop = Neg
 
 (* Patterns, the left-hand side of a `match` arm. *)
-type pattern = { pkind : pattern_kind; ploc : Loc.t }
+type 'b pattern = { pkind : 'b pattern_kind; ploc : Loc.t }
 
-and pattern_kind =
+and 'b pattern_kind =
   | PWild  (** [_] *)
-  | PVar of string  (** a lowercase name: matches anything, binds it *)
+  | PVar of 'b  (** a lowercase name: matches anything, binds it *)
   | PInt of int
   | PBool of bool
-  | PCon of ident * pattern list  (** [Free], [Pro(seats)] *)
+  | PCon of ident * 'b pattern list  (** [Free], [Pro(seats)] *)
 
 (* How a parameter is passed: read-only (the default), or [inout], which
    updates the caller's value. *)
 type mode = Read | Inout
 
 (* A parameter of a function or lambda; its type may be left out. *)
-type param = { pname : ident; pty : ty option; pmode : mode }
+type ('b, 't) param = { pname : 'b; pty : 't ty option; pmode : mode }
 
-type expr = { kind : expr_kind; loc : Loc.t }
+(* [node] numbers the expressions of one top-level function, so later
+   passes can say things about a particular expression. *)
+type ('v, 'b, 't) expr = {
+  kind : ('v, 'b, 't) expr_kind;
+  loc : Loc.t;
+  node : int;
+}
 
-and expr_kind =
+and ('v, 'b, 't) expr_kind =
   | Int of int
   | Bool of bool
   | Unit  (** [()] *)
-  | Var of string  (** a local variable, or a top-level function *)
-  | Unop of unop * expr
-  | Binop of binop * expr * expr
-  | If of expr * expr * expr option  (** with no [else], the [if] is [Unit] *)
-  | Call of expr * expr list  (** [f(x)], [make()(x)], [handlers.on_click()] *)
-  | Lambda of param list * expr  (** [fn(x) => x + 1] *)
-  | Block of stmt list * expr  (** statements, then the block's value *)
-  | Con of ident * (ident option * expr) list
+  | Var of 'v  (** a local variable, or a top-level function *)
+  | Unop of unop * ('v, 'b, 't) expr
+  | Binop of binop * ('v, 'b, 't) expr * ('v, 'b, 't) expr
+  | If of ('v, 'b, 't) expr * ('v, 'b, 't) expr * ('v, 'b, 't) expr option
+      (** with no [else], the [if] is [Unit] *)
+  | Call of ('v, 'b, 't) expr * ('v, 'b, 't) expr list
+      (** [f(x)], [make()(x)], [handlers.on_click()] *)
+  | Lambda of ('b, 't) param list * ('v, 'b, 't) expr  (** [fn(x) => x + 1] *)
+  | Block of ('v, 'b, 't) stmt list * ('v, 'b, 't) expr
+      (** statements, then the block's value *)
+  | Con of ident * (ident option * ('v, 'b, 't) expr) list
       (** a constructor: [Pro(5)] or [Pro(seats: 5)] *)
-  | Record of ident option * (ident * expr) list
+  | Record of 't option * (ident * ('v, 'b, 't) expr) list
       (** [User { id: 1 }], or [{ id: 1 }] with the type left out *)
-  | Field of expr * ident  (** [user.plan] *)
-  | Match of expr * arm list
-  | Array of expr list  (** [[1, 2, 3]] *)
-  | Index of expr * expr  (** [xs[i]] *)
-  | Ref of expr
+  | Field of ('v, 'b, 't) expr * ident  (** [user.plan] *)
+  | Match of ('v, 'b, 't) expr * ('v, 'b, 't) arm list
+  | Array of ('v, 'b, 't) expr list  (** [[1, 2, 3]] *)
+  | Index of ('v, 'b, 't) expr * ('v, 'b, 't) expr  (** [xs[i]] *)
+  | Ref of ('v, 'b, 't) expr
       (** [&scores]: an argument the call changes, or the array a [for] loop
           changes *)
-  | Assign of { target : expr; op : binop option; value : expr }
-      (** [x = 1], [user.plan = Free], [xs[i] += 1]; the target is a place *)
-  | For of { var : ident; iter : expr; body : expr }
+  | Assign of {
+      target : ('v, 'b, 't) expr;
+      op : binop option;
+      value : ('v, 'b, 't) expr;
+    }  (** [x = 1], [user.plan = Free], [xs[i] += 1]; the target is a place *)
+  | For of { var : 'b; iter : ('v, 'b, 't) expr; body : ('v, 'b, 't) expr }
       (** [for x in xs], or [for p in &ps] to change each element *)
 
-and arm = { arm_pat : pattern; arm_guard : expr option; arm_body : expr }
+and ('v, 'b, 't) arm = {
+  arm_pat : 'b pattern;
+  arm_guard : ('v, 'b, 't) expr option;
+  arm_body : ('v, 'b, 't) expr;
+}
 
-and stmt =
-  | Let of { name : ident; ty : ty option; value : expr; mut : bool }
-      (** [let], or [var] when [mut] *)
-  | Expr of expr
+and ('v, 'b, 't) stmt =
+  | Let of {
+      name : 'b;
+      ty : 't ty option;
+      value : ('v, 'b, 't) expr;
+      mut : bool;
+    }  (** [let], or [var] when [mut] *)
+  | Expr of ('v, 'b, 't) expr
 
 (* Type declarations. *)
 
-type field = { field_name : ident; field_ty : ty }
-type ctor = { ctor_name : ident; ctor_fields : field list }
+type 't field = { field_name : ident; field_ty : 't ty }
+type 't ctor = { ctor_name : ident; ctor_fields : 't field list }
 
-type type_body =
-  | Fields of field list  (** a record: [{ id: Int, plan: Plan }] *)
-  | Ctors of ctor list  (** a sum type: [| Free | Pro(seats: Int)] *)
+type 't type_body =
+  | Fields of 't field list  (** a record: [{ id: Int, plan: Plan }] *)
+  | Ctors of 't ctor list  (** a sum type: [| Free | Pro(seats: Int)] *)
 
-type type_def = {
+type 't type_def = {
   type_name : ident;
   type_params : ident list;  (** the [T] in [Option<T>] *)
-  type_body : type_body;
+  type_body : 't type_body;
 }
 
-type fn_def = {
+type ('v, 'b, 't) fn_def = {
   pub : bool;
   name : ident;
   tparams : ident list;  (** the [T] in [fn id<T>(x: T) -> T] *)
-  params : param list;
-  ret : ty option;
-  body : expr;
+  params : ('b, 't) param list;
+  ret : 't ty option;
+  body : ('v, 'b, 't) expr;
   loc : Loc.t;
 }
 
-type item = Fn of fn_def | Type of type_def
-type program = item list
+type ('v, 'b, 't) item = Fn of ('v, 'b, 't) fn_def | Type of 't type_def
+type ('v, 'b, 't) program = ('v, 'b, 't) item list
+
+(* ---- names, once resolved ----
+
+   What Resolve (resolve.ml) finds each name refers to. *)
+
+(* A local name: a variable, a parameter, a loop variable or a name bound
+   by a pattern. [id] tells it apart from every other local of the same
+   top-level function, even one with the same name. *)
+type binder = {
+  id : int;  (** numbered per top-level function *)
+  ident : ident;  (** the name, where it's bound *)
+  bound : bound;
+  depth : int;  (** how many lambdas deep it's bound *)
+}
+
+and bound =
+  | By_let
+  | By_var
+  | By_param  (** a parameter of a top-level function *)
+  | By_inout  (** an [inout] parameter *)
+  | By_lambda  (** a lambda's parameter *)
+  | By_loop  (** [x] in [for x in xs] *)
+  | By_ref_loop  (** [p] in [for p in &ps], which changes each element *)
+  | By_pattern
+
+(* A name used as a value. *)
+type name =
+  | Local of binder
+  | Global of Path.t  (** a top-level function *)
+  | Intrinsic of string  (** a function built into the compiler: [print] *)
+
+(* A type's name: a declared type, or the [i]th type parameter in scope
+   (of the type being declared, or of the function). *)
+type tname = { tref : tref; tloc : Loc.t }
+and tref = Named of Path.t | Param of int
+
+module Parsed = struct
+  type nonrec ty = ident ty
+  type nonrec pattern = ident pattern
+  type nonrec param = (ident, ident) param
+  type nonrec expr = (string, ident, ident) expr
+  type nonrec expr_kind = (string, ident, ident) expr_kind
+  type nonrec arm = (string, ident, ident) arm
+  type nonrec stmt = (string, ident, ident) stmt
+  type nonrec field = ident field
+  type nonrec type_def = ident type_def
+  type nonrec fn_def = (string, ident, ident) fn_def
+  type nonrec item = (string, ident, ident) item
+  type nonrec program = (string, ident, ident) program
+end
+
+module Resolved = struct
+  type nonrec ty = tname ty
+  type nonrec pattern = binder pattern
+  type nonrec param = (binder, tname) param
+  type nonrec expr = (name, binder, tname) expr
+  type nonrec expr_kind = (name, binder, tname) expr_kind
+  type nonrec arm = (name, binder, tname) arm
+  type nonrec stmt = (name, binder, tname) stmt
+  type nonrec field = tname field
+  type nonrec type_def = tname type_def
+  type nonrec fn_def = (name, binder, tname) fn_def
+  type nonrec item = (name, binder, tname) item
+  type nonrec program = (name, binder, tname) program
+end
 
 let is_upper name = name <> "" && name.[0] >= 'A' && name.[0] <= 'Z'
 
@@ -119,7 +211,9 @@ let binop_to_string = function
 
 let parens words = "(" ^ String.concat " " words ^ ")"
 
-let rec show_ty = function
+open Parsed
+
+let rec show_ty : ty -> string = function
   | TyName (name, []) -> name.name
   | TyName (name, args) ->
       name.name ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
@@ -128,17 +222,17 @@ let rec show_ty = function
       let ret = match ret with Some r -> " -> " ^ show_ty r | None -> "" in
       "fn(" ^ String.concat ", " (List.map show_ty params) ^ ")" ^ ret
 
-let rec show_pattern p =
+let rec show_pattern (p : pattern) =
   match p.pkind with
   | PWild -> "_"
-  | PVar x -> x
+  | PVar x -> x.name
   | PInt n -> string_of_int n
   | PBool b -> string_of_bool b
   | PCon (c, []) -> c.name
   | PCon (c, args) ->
       c.name ^ "(" ^ String.concat ", " (List.map show_pattern args) ^ ")"
 
-let rec show_expr e =
+let rec show_expr (e : expr) =
   match e.kind with
   | Int n -> string_of_int n
   | Bool b -> string_of_bool b
@@ -177,28 +271,28 @@ let rec show_expr e =
   | For { var; iter; body } ->
       parens [ "for"; var.name; show_expr iter; show_expr body ]
 
-and show_arm a =
+and show_arm (a : arm) =
   let guard =
     match a.arm_guard with Some g -> [ "if"; show_expr g ] | None -> []
   in
   parens ((show_pattern a.arm_pat :: guard) @ [ "=>"; show_expr a.arm_body ])
 
-and show_param p =
+and show_param (p : param) =
   let name =
     match p.pmode with Inout -> "inout " ^ p.pname.name | Read -> p.pname.name
   in
   match p.pty with Some t -> name ^ ":" ^ show_ty t | None -> name
 
-and show_stmt = function
+and show_stmt : stmt -> string = function
   | Let { name; value; mut; _ } ->
       parens [ (if mut then "var" else "let"); name.name; show_expr value ]
   | Expr e -> show_expr e
 
-let show_fn f =
-  let params = List.map (fun p -> p.pname.name) f.params in
+let show_fn (f : fn_def) =
+  let params = List.map (fun (p : param) -> p.pname.name) f.params in
   parens [ "fn"; f.name.name; parens params; show_expr f.body ]
 
-let show_type_def td =
+let show_type_def (td : type_def) =
   let name =
     match td.type_params with
     | [] -> td.type_name.name
@@ -219,4 +313,6 @@ let show_type_def td =
   in
   parens ("type" :: name :: body)
 
-let show_item = function Fn f -> show_fn f | Type td -> show_type_def td
+let show_item : item -> string = function
+  | Fn f -> show_fn f
+  | Type td -> show_type_def td

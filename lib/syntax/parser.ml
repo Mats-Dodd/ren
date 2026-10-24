@@ -48,9 +48,11 @@
    are capitalized, variables and functions are not. *)
 
 open Ast
+open Ast.Parsed
 open Token
 
-type t = { toks : (Token.t * Loc.t) array; mutable i : int }
+(* [node] is the last node id handed out in the current top-level item. *)
+type t = { toks : (Token.t * Loc.t) array; mutable i : int; mutable node : int }
 
 let peek p = fst p.toks.(p.i)
 let peek2 p = fst p.toks.(min (p.i + 1) (Array.length p.toks - 1))
@@ -67,7 +69,12 @@ let last_loc p =
   in
   back (max 0 (p.i - 1))
 
-let mk kind start p = { kind; loc = Loc.span start (last_loc p) }
+(* An expression, with the next node id. *)
+let node p kind loc : expr =
+  p.node <- p.node + 1;
+  { kind; loc; node = p.node }
+
+let mk kind start p = node p kind (Loc.span start (last_loc p))
 
 let describe = function
   | INT n -> Printf.sprintf "the number `%d`" n
@@ -132,7 +139,7 @@ let cmp_op = function
 
 (* ---- types ---- *)
 
-let rec parse_ty p =
+let rec parse_ty p : ty =
   match peek p with
   | FN ->
       let start = loc p in
@@ -170,7 +177,7 @@ and parse_fn_ty_param p =
   let t = parse_ty p in
   if inout then TyInout (t, Loc.span start (last_loc p)) else t
 
-let parse_param p =
+let parse_param p : param =
   let pmode =
     if peek p = INOUT then (
       advance p;
@@ -243,7 +250,7 @@ let parse_type p =
 
 (* ---- patterns ---- *)
 
-let rec parse_pattern p =
+let rec parse_pattern p : pattern =
   let start = loc p in
   let finish pkind = { pkind; ploc = Loc.span start (last_loc p) } in
   match peek p with
@@ -259,7 +266,7 @@ let rec parse_pattern p =
       else finish (PCon (c, []))
   | IDENT name ->
       advance p;
-      finish (PVar name)
+      finish (PVar { name; loc = Loc.span start (last_loc p) })
   | INT n ->
       advance p;
       finish (PInt n)
@@ -321,7 +328,7 @@ and parse_block p =
   match stmts [] with
   | [ Expr e ] -> e
   | Expr last :: rest ->
-      { kind = Block (List.rev rest, last); loc = Loc.span start last.loc }
+      node p (Block (List.rev rest, last)) (Loc.span start last.loc)
   | Let { name; mut; _ } :: _ ->
       Diag.error name.loc
         ~help:"add the value this block should produce as its last line"
@@ -507,7 +514,7 @@ and parse_field_init p =
   if peek p = COLON then (
     advance p;
     (f, parse_expr p))
-  else (f, { kind = Var f.name; loc = f.loc })
+  else (f, node p (Var f.name) f.loc)
 
 and parse_if p =
   let start = loc p in
@@ -585,6 +592,7 @@ let parse_fn p ~pub =
   { pub; name; tparams; params; ret; body; loc = Loc.span start (last_loc p) }
 
 let parse_item p =
+  p.node <- 0;
   let pub = peek p = PUB in
   if pub then advance p;
   match peek p with
@@ -616,7 +624,7 @@ let skip_to_item p ~start =
     done)
 
 let parse_program sink toks =
-  let p = { toks; i = 0 } in
+  let p = { toks; i = 0; node = 0 } in
   let rec loop acc =
     if peek p = EOF then List.rev acc
     else

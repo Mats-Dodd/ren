@@ -742,7 +742,8 @@ fn main() =
 (* every independent error, and none that follow from one already reported *)
 
 let%expect_test "independent type errors are all reported" =
-  run {|
+  run
+    {|
 fn f() = 1 + true
 fn g() = if 1 then 2 else 3
 fn main() = f() == true

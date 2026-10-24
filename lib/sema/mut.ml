@@ -16,11 +16,15 @@
    which is what lets the interpreter (and later the compiler) treat every
    `inout` as a copy in and a copy out.
 
+   Every name has already been resolved (resolve.ml), so what a name is
+   (a `let`, a `var`, a parameter...) is on its binder, and two places
+   start from the same variable when their binders have the same id.
+
    Each problem is reported to the sink (diag.ml), and checking carries on
    with the rest of the function. *)
 
 open Ast
-module Env = Map.Make (String)
+open Ast.Resolved
 
 let sprintf = Printf.sprintf
 
@@ -29,50 +33,40 @@ type kind =
   | Fixed of string * string
       (** what the name is ("a `let`"), and how to get one that can change *)
 
-type binding = { id : int; kind : kind; depth : int  (** lambda nesting *) }
-
 (* A step of a place's path. Two indices are assumed to overlap, since
    whether `xs[i]` and `xs[j]` are the same element isn't known until the
    program runs. *)
 type step = SField of string | SIndex
-type place = { root : ident; path : step list }
+
+(* A place: the name it starts from (written at [rloc]), then a path of
+   fields and indices. *)
+type place = { root : name; rloc : Loc.t; path : step list }
 
 (* A place a `for &` loop is changing, and the name of its element. *)
 type lock = {
-  lid : int;
+  lid : int;  (** the binder of the array's variable *)
   lpath : step list;
   elem : string;
   lloc : Loc.t;  (** the loop's `&ps` *)
 }
 
-(* Hands out binding ids, numbered per function. A record with a [mutable]
-   field is shared by every copy of the [ctx] that holds it, so ids stay
-   unique while the [ctx] itself is copied as scopes open. *)
-type ids = { mutable last : int }
-
 type ctx = {
-  scope : binding Env.t;
-  depth : int;
+  depth : int;  (** how many lambdas deep *)
   locks : lock list;
-  fns : string list;  (** top-level and built-in functions *)
-  ids : ids;
   sink : Diag.sink;
 }
 
 (* Run a check; if it finds a problem, report it and carry on. *)
 let guard cx f = Diag.recover cx.sink ~default:() f
 
-let bind cx (name : ident) kind =
-  cx.ids.last <- cx.ids.last + 1;
-  {
-    cx with
-    scope =
-      Env.add name.name { id = cx.ids.last; kind; depth = cx.depth } cx.scope;
-  }
+let name_of = function
+  | Local b -> b.ident.name
+  | Global p -> p.name
+  | Intrinsic x -> x
 
 let rec place_of (e : expr) =
   match e.kind with
-  | Var x -> Some { root = { name = x; loc = e.loc }; path = [] }
+  | Var x -> Some { root = x; rloc = e.loc; path = [] }
   | Field (r, f) ->
       Option.map
         (fun p -> { p with path = p.path @ [ SField f.name ] })
@@ -90,19 +84,43 @@ let rec overlap a b =
   | _ -> false
 
 let check_locks cx (p : place) =
-  match Env.find_opt p.root.name cx.scope with
-  | None -> ()
-  | Some b ->
+  match p.root with
+  | Global _ | Intrinsic _ -> ()
+  | Local b ->
       List.iter
         (fun l ->
           if l.lid = b.id && overlap l.lpath p.path then
-            Diag.error p.root.loc
+            Diag.error p.rloc
               ~help:(sprintf "inside the loop, use `%s`" l.elem)
               ~labels:
-                [ (l.lloc, sprintf "the loop changes `%s` here" p.root.name) ]
+                [ (l.lloc, sprintf "the loop changes `%s` here" b.ident.name) ]
               (sprintf "`%s` is being changed by the `for` loop around this"
-                 p.root.name))
+                 b.ident.name))
         cx.locks
+
+(* Whether a local can change, and if not, what it is and how to get one
+   that can. *)
+let kind (b : binder) =
+  let x = b.ident.name in
+  let copy is =
+    Fixed (is, sprintf "copy it with `var %s = %s` and change the copy" x x)
+  in
+  match b.bound with
+  | By_var | By_inout | By_ref_loop -> Mutable
+  | By_let -> Fixed ("a `let`", "declare it with `var` to change it")
+  | By_param ->
+      Fixed
+        ( "a parameter",
+          sprintf
+            "mark it `inout` to change the caller's value, or copy it with \
+             `var %s = %s`"
+            x x )
+  | By_lambda -> copy "a lambda's parameter"
+  | By_pattern -> copy "bound by a pattern"
+  | By_loop ->
+      Fixed
+        ( "a loop variable",
+          sprintf "loop with `for %s in &...` to change the elements" x )
 
 (* Check that [e] is a place this code may change. [what] words the error
    when it isn't a place at all. *)
@@ -112,47 +130,24 @@ let writable cx (e : expr) ~what =
       Diag.error e.loc
         ~help:"only a variable, or a field or element of one, can be changed"
         what
-  | Some p -> (
-      let x = p.root.name in
-      match Env.find_opt x cx.scope with
-      | None when List.mem x cx.fns ->
-          Diag.error p.root.loc (sprintf "`%s` is a function, not a variable" x)
-      | None ->
-          Diag.error p.root.loc (sprintf "there's no variable named `%s`" x)
-      | Some { kind = Fixed (is, help); _ } ->
-          Diag.error p.root.loc ~help
+  | Some ({ root = Global _ | Intrinsic _; _ } as p) ->
+      Diag.error p.rloc
+        (sprintf "`%s` is a function, not a variable" (name_of p.root))
+  | Some ({ root = Local b; _ } as p) -> (
+      let x = b.ident.name in
+      match kind b with
+      | Fixed (is, help) ->
+          Diag.error p.rloc ~help
             (sprintf "`%s` is %s, so it can't be changed" x is)
-      | Some { depth; _ } when depth < cx.depth ->
-          Diag.error p.root.loc
+      | Mutable when b.depth < cx.depth ->
+          Diag.error p.rloc
             ~notes:
               [
                 "a lambda captures the values of the variables it uses when \
                  it's created, so changing them would have no effect outside";
               ]
             (sprintf "a lambda can't change `%s`, a variable from outside it" x)
-      | Some _ -> check_locks cx p)
-
-let let_kind = Fixed ("a `let`", "declare it with `var` to change it")
-
-let param_kind (p : param) =
-  match p.pmode with
-  | Inout -> Mutable
-  | Read ->
-      Fixed
-        ( "a parameter",
-          sprintf
-            "mark it `inout` to change the caller's value, or copy it with \
-             `var %s = %s`"
-            p.pname.name p.pname.name )
-
-let copy_kind is (x : string) =
-  Fixed (is, sprintf "copy it with `var %s = %s` and change the copy" x x)
-
-let rec pattern_names (p : pattern) =
-  match p.pkind with
-  | PVar x -> [ { name = x; loc = p.ploc } ]
-  | PWild | PInt _ | PBool _ -> []
-  | PCon (_, ps) -> List.concat_map pattern_names ps
+      | Mutable -> check_locks cx p)
 
 let rec walk cx (e : expr) =
   match e.kind with
@@ -194,35 +189,21 @@ let rec walk cx (e : expr) =
               walk_indices cx p
           | _ -> walk cx a)
         args;
-      guard cx (fun () -> exclusive cx args)
+      guard cx (fun () -> exclusive args)
   | Lambda (ps, body) ->
       List.iter
         (fun (p : param) ->
           if p.pmode = Inout then
             Diag.report cx.sink
-              (Diag.make p.pname.loc ~help:"use a top-level function for this"
+              (Diag.make p.pname.ident.loc
+                 ~help:"use a top-level function for this"
                  "lambdas can't take `inout` parameters yet"))
         ps;
-      let cx = { cx with depth = cx.depth + 1 } in
-      let cx =
-        List.fold_left
-          (fun cx (p : param) ->
-            bind cx p.pname (copy_kind "a lambda's parameter" p.pname.name))
-          cx ps
-      in
-      walk cx body
+      walk { cx with depth = cx.depth + 1 } body
   | Block (stmts, last) ->
-      let cx =
-        List.fold_left
-          (fun cx -> function
-            | Let { name; value; mut; _ } ->
-                walk cx value;
-                bind cx name (if mut then Mutable else let_kind)
-            | Expr e ->
-                walk cx e;
-                cx)
-          cx stmts
-      in
+      List.iter
+        (function Let { value; _ } -> walk cx value | Expr e -> walk cx e)
+        stmts;
       walk cx last
   | Con (_, args) -> List.iter (fun (_, a) -> walk cx a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> walk cx v) fields
@@ -231,38 +212,26 @@ let rec walk cx (e : expr) =
       guard cx (fun () -> writable cx target ~what:"this can't be assigned to");
       walk_indices cx target;
       walk cx value
-  | For { var; iter = { kind = Ref a; loc = iter_loc }; body } ->
+  | For { var; iter = { kind = Ref a; loc = iter_loc; _ }; body } ->
       guard cx (fun () ->
           writable cx a ~what:"`&` needs a variable it can change");
       walk_indices cx a;
       (* lock the array, if it's a place the loop can change *)
       let locks =
         match place_of a with
-        | Some p -> (
-            match Env.find_opt p.root.name cx.scope with
-            | Some b ->
-                { lid = b.id; lpath = p.path; elem = var.name; lloc = iter_loc }
-                :: cx.locks
-            | None -> cx.locks)
-        | None -> cx.locks
+        | Some { root = Local b; path; _ } ->
+            { lid = b.id; lpath = path; elem = var.ident.name; lloc = iter_loc }
+            :: cx.locks
+        | _ -> cx.locks
       in
-      walk (bind { cx with locks } var Mutable) body
-  | For { var; iter; body } ->
+      walk { cx with locks } body
+  | For { iter; body; _ } ->
       walk cx iter;
-      let help =
-        sprintf "loop with `for %s in &...` to change the elements" var.name
-      in
-      walk (bind cx var (Fixed ("a loop variable", help))) body
+      walk cx body
   | Match (subject, arms) ->
       walk cx subject;
       List.iter
-        (fun a ->
-          let cx =
-            List.fold_left
-              (fun cx (x : ident) ->
-                bind cx x (copy_kind "bound by a pattern" x.name))
-              cx (pattern_names a.arm_pat)
-          in
+        (fun (a : arm) ->
           Option.iter (walk cx) a.arm_guard;
           walk cx a.arm_body)
         arms
@@ -277,7 +246,7 @@ and walk_indices cx (e : expr) =
   | _ -> ()
 
 (* No argument passed with `&` may overlap another argument of the call. *)
-and exclusive cx args =
+and exclusive args =
   let places =
     List.filter_map
       (fun (a : expr) ->
@@ -285,20 +254,18 @@ and exclusive cx args =
           match a.kind with Ref p -> (p, true) | _ -> (a, false)
         in
         match place_of inner with
-        | Some p -> (
-            match Env.find_opt p.root.name cx.scope with
-            | Some b -> Some (a, b.id, p, changed)
-            | None -> None)
-        | None -> None)
+        | Some ({ root = Local b; _ } as p) -> Some (a, b, p, changed)
+        | _ -> None)
       args
   in
   let rec check = function
     | [] -> ()
-    | (first, id, p, changed) :: rest ->
+    | (first, (b : binder), p, changed) :: rest ->
         List.iter
-          (fun ((a : expr), id', p', changed') ->
-            if id = id' && (changed || changed') && overlap p.path p'.path then
-              let x = p.root.name in
+          (fun ((a : expr), (b' : binder), p', changed') ->
+            if b.id = b'.id && (changed || changed') && overlap p.path p'.path
+            then
+              let x = b.ident.name in
               let notes =
                 [
                   "an argument passed with `&` has to be the only way the call \
@@ -328,34 +295,8 @@ and exclusive cx args =
   in
   check places
 
-let program sink ~imports (prog : program) =
-  let fns =
-    List.concat_map
-      (fun (iface : Iface.t) ->
-        List.map (fun (v : Iface.value) -> v.vname) iface.values)
-      imports
-    @ List.filter_map
-        (function Fn f -> Some f.name.name | Type _ -> None)
-        prog
-  in
+let program sink (r : Resolve.t) =
   List.iter
     (function
-      | Fn f ->
-          let cx =
-            {
-              scope = Env.empty;
-              depth = 0;
-              locks = [];
-              fns;
-              ids = { last = 0 };
-              sink;
-            }
-          in
-          let cx =
-            List.fold_left
-              (fun cx p -> bind cx p.pname (param_kind p))
-              cx f.params
-          in
-          walk cx f.body
-      | Type _ -> ())
-    prog
+      | Fn f -> walk { depth = 0; locks = []; sink } f.body | Type _ -> ())
+    r.prog

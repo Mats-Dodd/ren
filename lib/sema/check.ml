@@ -1,9 +1,9 @@
-(* Static checks: the first pass that runs before the program does, ahead of
-   type inference (infer.ml). It checks what can be checked without knowing
-   the types of expressions:
+(* Static checks, after name resolution (resolve.ml) and ahead of type
+   inference (infer.ml). It checks what can be checked without knowing the
+   types of expressions:
 
-   - every type, constructor and record field mentioned exists, with the
-     right number of arguments and the right labels
+   - every constructor and record field mentioned exists, with the right
+     number of arguments and the right labels
    - every `match` handles every case, and has no arm that can never match
 
    The second works without type inference because constructor names are
@@ -14,6 +14,7 @@
    with the next declaration, constructor, record or `match`. *)
 
 open Ast
+open Ast.Resolved
 
 let sprintf = Printf.sprintf
 let plural n = if n = 1 then "" else "s"
@@ -21,10 +22,10 @@ let quote names = String.concat ", " (List.map (sprintf "`%s`") names)
 
 type ctor_info = { owner : Iface.type_decl; ctor : Iface.ctor }
 
-(* Types and constructors are looked up by name: the ones this module
-   declares, and the ones its imports' interfaces do (iface.ml). *)
+(* The types this module declares, and the ones its imports' interfaces do
+   (iface.ml), by path; constructors by name. *)
 type env = {
-  types : (string, Iface.type_decl) Hashtbl.t;
+  types : (Path.t, Iface.type_decl) Hashtbl.t;
   ctors : (string, ctor_info) Hashtbl.t;
   sink : Diag.sink;
 }
@@ -66,52 +67,9 @@ let check_arity (c : ident) loc (ctor : Iface.ctor) given =
 
 (* ---- type declarations ---- *)
 
-(* Check that a written type exists and has the right number of arguments.
-   [params] are the type parameters in scope, like the `T` in `Option<T>`. *)
-let rec check_ty env ~params (t : ty) =
-  match t with
-  | TyFn (ps, ret, _) ->
-      List.iter (check_ty env ~params) ps;
-      Option.iter (check_ty env ~params) ret
-  | TyInout (t, _) -> check_ty env ~params t
-  | TyName (id, args) -> (
-      let name = id.name in
-      let arity =
-        if List.mem name params then Some 0
-        else
-          Option.map
-            (fun (td : Iface.type_decl) -> List.length td.params)
-            (Hashtbl.find_opt env.types name)
-      in
-      match arity with
-      | None -> Diag.error id.loc (sprintf "there's no type named `%s`" name)
-      | Some n ->
-          let given = List.length args in
-          if n <> given then
-            Diag.error id.loc
-              (sprintf "`%s` takes %d type argument%s but was given %d" name n
-                 (plural n) given);
-          List.iter (check_ty env ~params) args)
-
-(* Record a type and its constructors, so later checks can look them up.
-   [name] is where this module declares it; [None] for an imported type. *)
-let declare env ?name (td : Iface.type_decl) =
-  Option.iter
-    (fun (name : ident) ->
-      match Hashtbl.find_opt env.types name.name with
-      | Some { body = Builtin; _ } ->
-          Diag.error name.loc ~help:"choose another name"
-            (sprintf "`%s` is a built-in type" name.name)
-      | Some first ->
-          Diag.error name.loc ~help:"rename one of them"
-            ~labels:
-              (List.map
-                 (fun l -> (l, sprintf "the first `%s` is here" name.name))
-                 (Option.to_list first.loc))
-            (sprintf "there are two types named `%s`" name.name)
-      | None -> ())
-    name;
-  Hashtbl.replace env.types td.path.name td;
+(* Record a type and its constructors, so later checks can look them up. *)
+let declare env (td : Iface.type_decl) =
+  Hashtbl.replace env.types td.path td;
   match td.body with
   | Record _ | Builtin -> ()
   | Sum cs ->
@@ -133,18 +91,14 @@ let declare env ?name (td : Iface.type_decl) =
           Hashtbl.replace env.ctors c.cname { owner = td; ctor = c })
         cs
 
-let check_type_def env td =
-  no_duplicates env "type parameters" td.type_params;
-  let params = List.map (fun (p : ident) -> p.name) td.type_params in
-  let check_fields fs =
-    no_duplicates env "fields" (List.map (fun f -> f.field_name) fs);
-    List.iter
-      (fun f -> guard env (fun () -> check_ty env ~params f.field_ty))
-      fs
+let check_type_def env (td : type_def) =
+  let check_fields (fs : field list) =
+    no_duplicates env "fields" (List.map (fun (f : field) -> f.field_name) fs)
   in
   match td.type_body with
   | Fields fs -> check_fields fs
-  | Ctors cs -> List.iter (fun c -> check_fields c.ctor_fields) cs
+  | Ctors cs ->
+      List.iter (fun (c : tname ctor) -> check_fields c.ctor_fields) cs
 
 (* ---- constructors and records ---- *)
 
@@ -166,13 +120,17 @@ let check_con env loc (c : ident) args =
 
 let sorted_names names = List.sort String.compare names
 
-let check_record env loc (name : ident option) (fields : (ident * expr) list) =
+let check_record env loc (name : tname option) (fields : (ident * expr) list) =
   no_duplicates env "fields" (List.map fst fields);
   let given = sorted_names (List.map (fun ((f : ident), _) -> f.name) fields) in
   match name with
-  | Some tn -> (
-      match Hashtbl.find_opt env.types tn.name with
-      | None -> Diag.error tn.loc (sprintf "there's no type named `%s`" tn.name)
+  | Some { tref = Param _; _ } ->
+      (* resolve.ml only resolves a record's name to a declared type *)
+      assert false
+  | Some { tref = Named path; tloc } -> (
+      let tn : ident = { name = path.name; loc = tloc } in
+      match Hashtbl.find_opt env.types path with
+      | None -> assert false (* resolve.ml found it *)
       | Some { body = Builtin; _ } ->
           Diag.error tn.loc (sprintf "`%s` isn't a record type" tn.name)
       | Some { body = Sum _; _ } ->
@@ -423,17 +381,7 @@ let check_match env (e : expr) arms =
 
 (* ---- walking the program ---- *)
 
-let check_params env ~params (ps : param list) =
-  no_duplicates env "parameters" (List.map (fun p -> p.pname) ps);
-  List.iter
-    (fun p ->
-      Option.iter (fun t -> guard env (fun () -> check_ty env ~params t)) p.pty)
-    ps
-
-(* [params] are the type parameters of the enclosing function, which its
-   lambdas and `let` annotations can mention too. *)
-let rec check_expr env ~params (e : expr) =
-  let check_expr = check_expr ~params in
+let rec check_expr env (e : expr) =
   match e.kind with
   | Int _ | Bool _ | Unit | Var _ -> ()
   | Unop (_, a) | Field (a, _) | Ref a -> check_expr env a
@@ -445,17 +393,11 @@ let rec check_expr env ~params (e : expr) =
   | Assign { target; value; _ } -> List.iter (check_expr env) [ target; value ]
   | For { iter; body; _ } -> List.iter (check_expr env) [ iter; body ]
   | Call (f, args) -> List.iter (check_expr env) (f :: args)
-  | Lambda (ps, body) ->
-      check_params env ~params ps;
-      check_expr env body
+  | Lambda (_, body) -> check_expr env body
   | Block (stmts, last) ->
       List.iter
         (function
-          | Let { ty; value; _ } ->
-              Option.iter
-                (fun t -> guard env (fun () -> check_ty env ~params t))
-                ty;
-              check_expr env value
+          | Let { value; _ } -> check_expr env value
           | Expr e -> check_expr env e)
         stmts;
       check_expr env last
@@ -469,49 +411,18 @@ let rec check_expr env ~params (e : expr) =
       check_expr env subject;
       guard env (fun () -> check_match env e arms);
       List.iter
-        (fun a ->
+        (fun (a : arm) ->
           Option.iter (check_expr env) a.arm_guard;
           check_expr env a.arm_body)
         arms
 
-let program sink ~home ~imports (prog : program) =
+let program sink ~imports (r : Resolve.t) =
   let env = { types = Hashtbl.create 16; ctors = Hashtbl.create 16; sink } in
-  let types =
-    List.filter_map (function Type t -> Some t | Fn _ -> None) prog
-  in
-  let fns = List.filter_map (function Fn f -> Some f | Type _ -> None) prog in
-  (* Declare every type before checking any, so types can refer to types
-     declared further down the file. *)
   List.iter
     (fun (iface : Iface.t) -> List.iter (declare env) iface.types)
     imports;
-  List.iter2
-    (fun (td : type_def) decl ->
-      guard env (fun () -> declare env ~name:td.type_name decl))
-    types
-    (Iface.own_types ~home ~imports prog);
-  List.iter (check_type_def env) types;
-  no_duplicates env "functions" (List.map (fun f -> f.name) fns);
+  List.iter (declare env) r.types;
   List.iter
-    (fun f ->
-      if
-        List.exists
-          (fun iface -> Iface.find_value iface f.name.name <> None)
-          imports
-      then
-        Diag.report sink
-          (Diag.make f.name.loc ~help:"choose another name"
-             (sprintf "`%s` is a built-in function" f.name.name));
-      no_duplicates env "type parameters" f.tparams;
-      List.iter
-        (fun (t : ident) ->
-          if Hashtbl.mem env.types t.name then
-            Diag.report sink
-              (Diag.make t.loc ~help:"choose another name"
-                 (sprintf "`%s` is already the name of a type" t.name)))
-        f.tparams;
-      let params = List.map (fun (t : ident) -> t.name) f.tparams in
-      check_params env ~params f.params;
-      Option.iter (fun t -> guard env (fun () -> check_ty env ~params t)) f.ret;
-      check_expr env ~params f.body)
-    fns
+    (function
+      | Type td -> check_type_def env td | Fn f -> check_expr env f.body)
+    r.prog

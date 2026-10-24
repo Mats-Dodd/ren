@@ -19,15 +19,18 @@
    connected component of the call graph). Inside one group every function
    has a single type; the group is generalized once it's done.
 
+   Every name has already been resolved (resolve.ml): a local is known by
+   its binder's id, and a top-level function by its path, so nothing here
+   looks a name up in a scope.
+
    A type error is reported to the sink (diag.ml), and inference carries
    on. The code with the error gets the type [TError], which unifies with
    everything, so the one mistake isn't reported again wherever its value
    goes. *)
 
 open Ast
+open Ast.Resolved
 open Types
-module Env = Map.Make (String)
-module Names = Set.Make (String)
 
 let sprintf = Printf.sprintf
 let plural n = if n = 1 then "" else "s"
@@ -45,9 +48,8 @@ type env = {
   home : string;  (** the module being checked *)
   types : (Path.t, Iface.type_decl) Hashtbl.t;
       (** every type the module can see (iface.ml) *)
-  type_names : (string, Path.t) Hashtbl.t;  (** which type a name means *)
   ctors : (string, Iface.type_decl * Iface.ctor) Hashtbl.t;
-  globals : (string, ty) Hashtbl.t;
+  globals : (Path.t, ty) Hashtbl.t;
       (** top-level functions: a type scheme once their group is done *)
   mutable deferred : deferred list;  (** most recent first *)
 }
@@ -59,16 +61,23 @@ and deferred = { attempt : unit -> bool; fail : unit -> unit }
 
 (* What the expression being inferred can see. *)
 type ctx = {
-  locals : ty Env.t;
+  locals : (int, ty) Hashtbl.t;
+      (** the type of each local of the top-level function, by binder id *)
   errs : row;  (** the errors of the innermost function or lambda *)
   uses : row;  (** the dependencies of the innermost function or lambda *)
-  tparams : (string * ty) list;  (** type parameters in scope *)
+  tparams : ty list;  (** what the type parameters in scope stand for *)
 }
 
 (* ---- reporting ---- *)
 
 let printer env = Types.printer ~home:env.home env.st
 let type_name env p = Path.show ~home:env.home p
+
+(* A name as it's written, for messages. *)
+let name_of = function
+  | Local b -> b.ident.name
+  | Global p -> p.name
+  | Intrinsic x -> x
 
 (* Report an error, and carry on: the code it's about has type [TError]. *)
 let fail env ?help ?notes ?labels loc msg =
@@ -169,32 +178,28 @@ let unify_at env ?notes ?help ?msg ?labels loc ~found ~expected =
 
 (* ---- types as written ---- *)
 
-(* Turn a written type into a checker type. [tvars] maps type parameter
-   names to what they stand for. [row] makes the rows of written function
-   types: fresh variables in parameters (a parameter `f: fn()` passes its
-   dependencies through to the caller), closed in declarations and return
-   types (a stored `fn()` uses nothing). *)
-let rec convert env ~tvars ~row (t : Ast.ty) =
-  let convert = convert env in
+(* Turn a written type into a checker type. [tvars] are what the type
+   parameters in scope stand for, in order. [row] makes the rows of written
+   function types: fresh variables in parameters (a parameter `f: fn()`
+   passes its dependencies through to the caller), closed in declarations
+   and return types (a stored `fn()` uses nothing). *)
+let rec convert ~tvars ~row (t : Resolved.ty) =
   match t with
-  | TyName (id, []) when List.mem_assoc id.name tvars ->
-      List.assoc id.name tvars
-  | TyName (id, args) -> (
-      match Hashtbl.find_opt env.type_names id.name with
-      | Some p -> TCon (p, List.map (convert ~tvars ~row) args)
-      | None -> (* check.ml has reported it *) TError)
+  | TyName ({ tref = Param i; _ }, _) -> List.nth tvars i
+  | TyName ({ tref = Named p; _ }, args) ->
+      TCon (p, List.map (convert ~tvars ~row) args)
   | TyFn (ps, ret, _) ->
       let ret =
         match ret with Some r -> convert ~tvars ~row r | None -> unit
       in
-      TFun (List.map (convert_param env ~tvars ~row) ps, ret, row (), row ())
+      TFun (List.map (convert_param ~tvars ~row) ps, ret, row (), row ())
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
 
-and convert_param env ~tvars ~row = function
-  | TyInout (t, _) -> { mode = Inout; ty = convert env ~tvars ~row t }
-  | t -> read (convert env ~tvars ~row t)
+and convert_param ~tvars ~row = function
+  | TyInout (t, _) -> { mode = Inout; ty = convert ~tvars ~row t }
+  | t -> read (convert ~tvars ~row t)
 
 let closed () = REmpty
 
@@ -222,17 +227,18 @@ let records_where env keep =
     (fun path (td : Iface.type_decl) acc ->
       match td.body with Record fs when keep fs -> path :: acc | _ -> acc)
     env.types []
-  |> List.sort compare
+  |> List.sort (fun (a : Path.t) (b : Path.t) ->
+      compare (a.name, a.home) (b.name, b.home))
 
 (* ---- expressions ---- *)
 
-let lookup env cx loc ~what x =
-  match Env.find_opt x cx.locals with
-  | Some t -> t
-  | None -> (
-      match Hashtbl.find_opt env.globals x with
-      | Some t -> instantiate env.st t
-      | None -> fail env loc (sprintf "there's no %s named `%s`" what x))
+(* A name's type. A top-level function's is a fresh instance of its
+   scheme, so each use can pick its own types. *)
+let lookup env cx = function
+  | Local b -> Hashtbl.find cx.locals b.id
+  | Global p -> instantiate env.st (Hashtbl.find env.globals p)
+  | Intrinsic x ->
+      instantiate env.st (Hashtbl.find env.globals (Path.prelude x))
 
 let want_int env op (e : expr) t =
   unify_at env e.loc ~found:t ~expected:int
@@ -259,7 +265,7 @@ let rec infer env cx (e : expr) : ty =
   | Int _ -> int
   | Bool _ -> bool
   | Unit -> unit
-  | Var x -> lookup env cx e.loc ~what:"variable" x
+  | Var x -> lookup env cx x
   | Unop (Neg, a) ->
       want_int env "-" a (infer env cx a);
       int
@@ -312,29 +318,25 @@ let rec infer env cx (e : expr) : ty =
   | Lambda (params, body) ->
       let ps = List.map (param_type env cx) params in
       let errs = fresh_row env.st and uses = fresh_row env.st in
-      let locals = bind_params cx.locals params ps in
-      let tb = infer env { cx with locals; errs; uses } body in
+      bind_params cx params ps;
+      let tb = infer env { cx with errs; uses } body in
       TFun (ps, tb, errs, uses)
   | Block (stmts, last) ->
-      let cx =
-        List.fold_left
-          (fun cx -> function
-            | Let { name; ty; value; _ } ->
-                let t = infer env cx value in
-                Option.iter
-                  (fun ann ->
-                    unify_at env (result_loc value) ~found:t
-                      ~expected:
-                        (convert env ~tvars:cx.tparams
-                           ~row:(fun () -> fresh_row env.st)
-                           ann))
-                  ty;
-                { cx with locals = Env.add name.name t cx.locals }
-            | Expr e ->
-                ignore (infer env cx e);
-                cx)
-          cx stmts
-      in
+      List.iter
+        (function
+          | Let { name; ty; value; _ } ->
+              let t = infer env cx value in
+              Option.iter
+                (fun ann ->
+                  unify_at env (result_loc value) ~found:t
+                    ~expected:
+                      (convert ~tvars:cx.tparams
+                         ~row:(fun () -> fresh_row env.st)
+                         ann))
+                ty;
+              Hashtbl.replace cx.locals name.id t
+          | Expr e -> ignore (infer env cx e))
+        stmts;
       infer env cx last
   | Con (c, args) ->
       (* check.ml has confirmed the constructor exists with this many
@@ -356,8 +358,7 @@ let rec infer env cx (e : expr) : ty =
       let first = result_loc (List.hd arms).arm_body in
       List.iteri
         (fun i a ->
-          let locals = bind_pattern env cx.locals ts a.arm_pat in
-          let cx = { cx with locals } in
+          bind_pattern env cx ts a.arm_pat;
           Option.iter
             (fun g -> want_bool env "a guard" g (infer env cx g))
             a.arm_guard;
@@ -430,34 +431,30 @@ let rec infer env cx (e : expr) : ty =
             sprintf "a `for` loop goes over an `Array`, but this is %s"
               (article f))
       in
-      let elem = if ok then elem else TError in
-      ignore
-        (infer env { cx with locals = Env.add var.name elem cx.locals } body);
+      Hashtbl.replace cx.locals var.id (if ok then elem else TError);
+      ignore (infer env cx body);
       unit
 
-and param_type env cx (p : Ast.param) =
+and param_type env cx (p : Resolved.param) =
   let t =
     match p.pty with
-    | Some t ->
-        convert env ~tvars:cx.tparams ~row:(fun () -> fresh_row env.st) t
+    | Some t -> convert ~tvars:cx.tparams ~row:(fun () -> fresh_row env.st) t
     | None -> fresh_var env.st
   in
   { mode = p.pmode; ty = t }
 
 (* Inside the function, an `inout` parameter is an ordinary variable. *)
-and bind_params locals params ps =
-  List.fold_left2
-    (fun locals (p : Ast.param) (t : Types.param) ->
-      Env.add p.pname.name t.ty locals)
-    locals params ps
+and bind_params cx params ps =
+  List.iter2
+    (fun (p : Resolved.param) (t : Types.param) ->
+      Hashtbl.replace cx.locals p.pname.id t.ty)
+    params ps
 
 and infer_call env cx (e : expr) (f : expr) args =
-  let tf =
-    match f.kind with
-    | Var x -> lookup env cx f.loc ~what:"function" x
-    | _ -> infer env cx f
+  let tf = infer env cx f in
+  let name =
+    match f.kind with Var x -> sprintf "`%s`" (name_of x) | _ -> "this"
   in
-  let name = match f.kind with Var x -> sprintf "`%s`" x | _ -> "this" in
   match repr tf with
   | TFun (ps, ret, errs, uses) ->
       let n = List.length ps and given = List.length args in
@@ -480,7 +477,7 @@ and infer_call env cx (e : expr) (f : expr) args =
                   | Var x
                   | Field ({ kind = Var x; _ }, _)
                   | Index ({ kind = Var x; _ }, _) ->
-                      sprintf "write `&` before it, as in `&%s`" x
+                      sprintf "write `&` before it, as in `&%s`" (name_of x)
                   | _ -> "pass a variable, marked with `&`"
                 in
                 ignore (infer env cx a);
@@ -545,7 +542,10 @@ and infer_record env cx (e : expr) name fields =
     t
   in
   match name with
-  | Some tn -> build (Hashtbl.find env.type_names tn.name)
+  | Some { tref = Named p; _ } -> build p
+  | Some { tref = Param _; _ } ->
+      (* resolve.ml only resolves a record's name to a declared type *)
+      assert false
   | None -> (
       let names =
         List.sort String.compare
@@ -637,6 +637,7 @@ and infer_field env cx (e : expr) r (f : ident) =
             let what, help =
               match r.kind with
               | Var x ->
+                  let x = name_of x in
                   ( sprintf "`%s`" x,
                     sprintf "annotate `%s` where it's defined, like `%s: %s`" x
                       x
@@ -659,30 +660,25 @@ and infer_field env cx (e : expr) r (f : ident) =
           result)
   | _ -> resolve ()
 
-(* Check a pattern against the type of the value it matches, and add the
-   variables it binds. *)
-and bind_pattern env locals t (p : pattern) =
+(* Check a pattern against the type of the value it matches, and give the
+   variables it binds their types. *)
+and bind_pattern env cx t (p : pattern) =
   let check found =
     unify_at env p.ploc ~found ~expected:t ~msg:(fun f x ->
         sprintf "expected a pattern for `%s`, but this one is %s" x (article f))
   in
   match p.pkind with
-  | PWild -> locals
-  | PVar x -> Env.add x t locals
-  | PInt _ ->
-      check int;
-      locals
-  | PBool _ ->
-      check bool;
-      locals
+  | PWild -> ()
+  | PVar b -> Hashtbl.replace cx.locals b.id t
+  | PInt _ -> check int
+  | PBool _ -> check bool
   | PCon (c, ps) ->
       let td, ctor = Hashtbl.find env.ctors c.name in
       let tc, tvars = instance env td in
       check tc;
-      List.fold_left2
-        (fun locals fd sub ->
-          bind_pattern env locals (field_type ~tvars fd) sub)
-        locals ctor.cfields ps
+      List.iter2
+        (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
+        ctor.cfields ps
 
 (* Retry deferred questions until none makes progress; whatever is still
    unanswered is an error. *)
@@ -698,75 +694,17 @@ let resolve_deferred env =
 
 (* ---- the call graph ---- *)
 
-let rec pattern_vars (p : pattern) =
-  match p.pkind with
-  | PVar x -> [ x ]
-  | PWild | PInt _ | PBool _ -> []
-  | PCon (_, ps) -> List.concat_map pattern_vars ps
-
-(* The names [e] uses that aren't bound inside it. *)
-let rec free bound (e : expr) acc =
-  match e.kind with
-  | Int _ | Bool _ | Unit -> acc
-  | Var x -> if Names.mem x bound then acc else x :: acc
-  | Unop (_, a) | Field (a, _) | Ref a -> free bound a acc
-  | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
-      free bound a (free bound b acc)
-  | If (c, t, f) ->
-      let acc = match f with Some f -> free bound f acc | None -> acc in
-      free bound c (free bound t acc)
-  | Array xs -> List.fold_left (fun acc x -> free bound x acc) acc xs
-  | For { var; iter; body } ->
-      free bound iter (free (Names.add var.name bound) body acc)
-  | Call (f, args) ->
-      List.fold_left (fun acc a -> free bound a acc) (free bound f acc) args
-  | Lambda (ps, body) ->
-      free
-        (List.fold_left
-           (fun b (p : Ast.param) -> Names.add p.pname.name b)
-           bound ps)
-        body acc
-  | Block (stmts, last) ->
-      let bound, acc =
-        List.fold_left
-          (fun (bound, acc) -> function
-            | Let { name; value; _ } ->
-                (Names.add name.name bound, free bound value acc)
-            | Expr e -> (bound, free bound e acc))
-          (bound, acc) stmts
-      in
-      free bound last acc
-  | Con (_, args) ->
-      List.fold_left (fun acc (_, a) -> free bound a acc) acc args
-  | Record (_, fields) ->
-      List.fold_left (fun acc (_, v) -> free bound v acc) acc fields
-  | Match (s, arms) ->
-      List.fold_left
-        (fun acc a ->
-          let bound =
-            List.fold_left
-              (fun b x -> Names.add x b)
-              bound (pattern_vars a.arm_pat)
-          in
-          let acc =
-            match a.arm_guard with Some g -> free bound g acc | None -> acc
-          in
-          free bound a.arm_body acc)
-        (free bound s acc) arms
-
 (* Group functions into strongly connected components of the call graph,
    callees before callers (Tarjan's algorithm, which finishes a component
-   only after every component it reaches). *)
-let components (fns : fn_def list) =
+   only after every component it reaches). [calls] lists the top-level
+   functions each function uses, which resolve.ml found. *)
+let components ~home ~calls (fns : fn_def list) =
   let by_name = Hashtbl.create 16 in
-  List.iter (fun f -> Hashtbl.replace by_name f.name.name f) fns;
+  List.iter (fun (f : fn_def) -> Hashtbl.replace by_name f.name.name f) fns;
   let callees (f : fn_def) =
-    let bound =
-      List.fold_left (fun b p -> Names.add p.pname.name b) Names.empty f.params
-    in
-    free bound f.body []
-    |> List.sort_uniq String.compare
-    |> List.filter_map (Hashtbl.find_opt by_name)
+    List.assoc f.name.name calls
+    |> List.filter_map (fun (p : Path.t) ->
+        if p.home = home then Hashtbl.find_opt by_name p.name else None)
   in
   let index = Hashtbl.create 16 and low = Hashtbl.create 16 in
   let stack = ref [] and on_stack = Hashtbl.create 16 in
@@ -816,12 +754,13 @@ let components (fns : fn_def list) =
 let check_transparent sink (f : fn_def) =
   let fn_params =
     List.filter_map
-      (fun p ->
-        match p.pty with Some (TyFn _) -> Some p.pname.name | _ -> None)
+      (fun (p : Resolved.param) ->
+        match p.pty with Some (TyFn _) -> Some p.pname | _ -> None)
       f.params
   in
   List.iter
-    (fun name ->
+    (fun (param : binder) ->
+      let name = param.ident.name in
       let fail loc what =
         Diag.error loc
           ~notes:
@@ -836,22 +775,50 @@ let check_transparent sink (f : fn_def) =
                name)
           (sprintf "`%s` %s, so it isn't transparent" name what)
       in
-      let mentions e = List.mem name (free Names.empty e []) in
+      let is_param = function Local b -> b.id = param.id | _ -> false in
+      (* does [e] use the parameter anywhere? *)
+      let rec mentions (e : expr) =
+        let any = List.exists mentions in
+        match e.kind with
+        | Var x -> is_param x
+        | Int _ | Bool _ | Unit -> false
+        | Unop (_, a) | Field (a, _) | Ref a | Lambda (_, a) -> mentions a
+        | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ }
+          ->
+            any [ a; b ]
+        | If (c, t, f) -> any (c :: t :: Option.to_list f)
+        | Array xs -> any xs
+        | For { iter; body; _ } -> any [ iter; body ]
+        | Call (f, args) -> any (f :: args)
+        | Con (_, args) -> any (List.map snd args)
+        | Record (_, fields) -> any (List.map snd fields)
+        | Block (stmts, last) ->
+            any
+              (List.map
+                 (function Let { value; _ } -> value | Expr e -> e)
+                 stmts
+              @ [ last ])
+        | Match (s, arms) ->
+            any
+              (s
+              :: List.concat_map
+                   (fun (a : arm) ->
+                     Option.to_list a.arm_guard @ [ a.arm_body ])
+                   arms)
+      in
       (* [ok]: this position may hold the bare parameter, or a lambda that
          captures it *)
       let rec walk ~ok (e : expr) =
         let walk_all = List.iter (walk ~ok:false) in
         match e.kind with
-        | Var x when x = name ->
+        | Var x when is_param x ->
             if not ok then fail e.loc "is used as a value here"
         | Int _ | Bool _ | Unit | Var _ -> ()
         | Call (callee, args) ->
             walk ~ok:true callee;
             List.iter (walk ~ok:true) args
-        | Lambda (ps, body) ->
-            if List.exists (fun (p : Ast.param) -> p.pname.name = name) ps then
-              ()
-            else if (not ok) && mentions body then
+        | Lambda (_, body) ->
+            if (not ok) && mentions body then
               fail e.loc "is captured by a lambda that outlives the call"
             else walk ~ok:false body
         | Unop (_, a) | Field (a, _) | Ref a -> walk_all [ a ]
@@ -860,29 +827,22 @@ let check_transparent sink (f : fn_def) =
             walk_all [ a; b ]
         | If (c, t, f) -> walk_all (c :: t :: Option.to_list f)
         | Array xs -> walk_all xs
-        | For { var; iter; body } ->
-            walk_all [ iter ];
-            if var.name <> name then walk ~ok:false body
+        | For { iter; body; _ } -> walk_all [ iter; body ]
         | Con (_, args) -> walk_all (List.map snd args)
         | Record (_, fields) -> walk_all (List.map snd fields)
         | Block (stmts, last) ->
-            let rec go = function
-              | [] -> walk ~ok:false last
-              | Let { name = n; value; _ } :: rest ->
-                  walk ~ok:false value;
-                  if n.name <> name then go rest
-              | Expr e :: rest ->
-                  walk ~ok:false e;
-                  go rest
-            in
-            go stmts
+            List.iter
+              (function
+                | Let { value; _ } -> walk ~ok:false value
+                | Expr e -> walk ~ok:false e)
+              stmts;
+            walk ~ok:false last
         | Match (s, arms) ->
             walk ~ok:false s;
             List.iter
-              (fun a ->
-                if not (List.mem name (pattern_vars a.arm_pat)) then (
-                  Option.iter (walk ~ok:false) a.arm_guard;
-                  walk ~ok:false a.arm_body))
+              (fun (a : arm) ->
+                Option.iter (walk ~ok:false) a.arm_guard;
+                walk ~ok:false a.arm_body)
               arms
       in
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
@@ -892,15 +852,15 @@ let check_transparent sink (f : fn_def) =
 
 (* Infer every function's type, and return each function's type scheme, in
    canonical form. *)
-let program sink ~home ~imports ?entry (prog : program) =
+let program sink ~imports ?entry (r : Resolve.t) =
   let st = Types.new_state () in
+  let home = r.home in
   let env =
     {
       st;
       sink;
       home;
       types = Hashtbl.create 16;
-      type_names = Hashtbl.create 16;
       ctors = Hashtbl.create 16;
       globals = Hashtbl.create 16;
       deferred = [];
@@ -910,26 +870,25 @@ let program sink ~home ~imports ?entry (prog : program) =
     (fun (iface : Iface.t) ->
       List.iter
         (fun (v : Iface.value) ->
-          Hashtbl.replace env.globals v.vname (of_scheme st v.scheme))
+          Hashtbl.replace env.globals
+            (Path.make iface.home v.vname)
+            (of_scheme st v.scheme))
         iface.values)
     imports;
-  let fns = List.filter_map (function Fn f -> Some f | Type _ -> None) prog in
-  (* a name declared twice means the first declaration (check.ml has
-     reported the second) *)
+  let fns =
+    List.filter_map (function Fn f -> Some f | Type _ -> None) r.prog
+  in
+  let path (f : fn_def) = Path.make home f.name.name in
   List.iter
     (fun (td : Iface.type_decl) ->
-      if not (Hashtbl.mem env.type_names td.path.name) then (
-        Hashtbl.replace env.types td.path td;
-        Hashtbl.replace env.type_names td.path.name td.path;
-        match td.body with
-        | Sum cs ->
-            List.iter
-              (fun (c : Iface.ctor) ->
-                if not (Hashtbl.mem env.ctors c.cname) then
-                  Hashtbl.replace env.ctors c.cname (td, c))
-              cs
-        | Record _ | Builtin -> ()))
-    (Iface.visible_types ~home ~imports prog);
+      Hashtbl.replace env.types td.path td;
+      match td.body with
+      | Sum cs ->
+          List.iter
+            (fun (c : Iface.ctor) -> Hashtbl.replace env.ctors c.cname (td, c))
+            cs
+      | Record _ | Builtin -> ())
+    (List.concat_map (fun (iface : Iface.t) -> iface.types) imports @ r.types);
   List.iter (check_transparent sink) fns;
   let schemes = Hashtbl.create 16 in
   List.iter
@@ -941,10 +900,10 @@ let program sink ~home ~imports ?entry (prog : program) =
         let skolems =
           List.map (fun (t : ident) -> (fresh_id env.st, t.name)) f.tparams
         in
-        let tparams = List.map (fun (id, n) -> (n, TSkol (id, n))) skolems in
+        let tparams = List.map (fun (id, n) -> TSkol (id, n)) skolems in
         let cx =
           {
-            locals = Env.empty;
+            locals = Hashtbl.create 16;
             errs = fresh_row env.st;
             uses = fresh_row env.st;
             tparams;
@@ -953,20 +912,19 @@ let program sink ~home ~imports ?entry (prog : program) =
         let ps = List.map (param_type env cx) f.params in
         let ret =
           match f.ret with
-          | Some t -> convert env ~tvars:tparams ~row:closed t
+          | Some t -> convert ~tvars:tparams ~row:closed t
           | None when f.pub ->
               unit (* a public function without `->` returns Unit *)
           | None -> fresh_var env.st
         in
-        Hashtbl.replace env.globals f.name.name
-          (TFun (ps, ret, cx.errs, cx.uses));
+        Hashtbl.replace env.globals (path f) (TFun (ps, ret, cx.errs, cx.uses));
         (f, skolems, cx, ps, ret)
       in
       let setups = List.map setup group in
       List.iter
         (fun ((f : fn_def), _, cx, ps, ret) ->
-          let locals = bind_params Env.empty f.params ps in
-          let tb = infer env { cx with locals } f.body in
+          bind_params cx f.params ps;
+          let tb = infer env cx f.body in
           let pr = printer env in
           let notes, help =
             match f.ret with
@@ -987,7 +945,7 @@ let program sink ~home ~imports ?entry (prog : program) =
       leave_level env.st;
       List.iter
         (fun ((f : fn_def), skolems, _, _, _) ->
-          let mono = Hashtbl.find env.globals f.name.name in
+          let mono = Hashtbl.find env.globals (path f) in
           (match
              List.filter
                (fun (id, _) -> not (List.mem_assoc id skolems))
@@ -1021,7 +979,7 @@ let program sink ~home ~imports ?entry (prog : program) =
                       f.name.name t o.name.name)
           | [] -> ());
           let scheme = generalize env.st ~skolems mono in
-          Hashtbl.replace env.globals f.name.name scheme;
+          Hashtbl.replace env.globals (path f) scheme;
           Hashtbl.replace schemes f.name.name scheme)
         setups;
       (* public functions spell out their full contract *)
@@ -1031,15 +989,15 @@ let program sink ~home ~imports ?entry (prog : program) =
             match Hashtbl.find schemes f.name.name with
             | TFun (ps, _, _, _) as scheme ->
                 List.iter2
-                  (fun (p : Ast.param) (t : Types.param) ->
+                  (fun (p : Resolved.param) (t : Types.param) ->
                     if p.pty = None then (
                       let pr = printer env in
                       reserve pr scheme;
+                      let name = p.pname.ident in
                       ignore
-                      @@ fail env p.pname.loc
+                      @@ fail env name.loc
                            ~help:
-                             (sprintf "write `%s: %s`" p.pname.name
-                                (show pr t.ty))
+                             (sprintf "write `%s: %s`" name.name (show pr t.ty))
                            ~notes:
                              [
                                "public functions spell out their full signature";
@@ -1047,11 +1005,11 @@ let program sink ~home ~imports ?entry (prog : program) =
                            (sprintf
                               "the parameter `%s` of the public function `%s` \
                                has no type"
-                              p.pname.name f.name.name)))
+                              name.name f.name.name)))
                   f.params ps
             | _ -> assert false)
         setups)
-    (components fns);
+    (components ~home ~calls:r.calls fns);
   (match
      Option.map
        (fun file ->
@@ -1066,8 +1024,8 @@ let program sink ~home ~imports ?entry (prog : program) =
            "this program has no `main` function")
   | Some (_, Some f) when f.params <> [] ->
       ignore
-        (fail env (List.hd f.params).pname.loc ~help:"remove the parameters"
-           "`main` can't take parameters")
+        (fail env (List.hd f.params).pname.ident.loc
+           ~help:"remove the parameters" "`main` can't take parameters")
   | Some _ -> ());
   List.map
     (fun f -> (f.name.name, to_scheme st (Hashtbl.find schemes f.name.name)))

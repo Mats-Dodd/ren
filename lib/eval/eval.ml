@@ -1,7 +1,7 @@
 (* A tree-walking interpreter: the "interpreted Ren" milestone on the roadmap.
 
-   By the time a program gets here it has been checked (check.ml, mut.ml)
-   and type-checked (infer.ml), so it can't add a Bool to an Int, call a
+   By the time a program gets here it has been resolved (resolve.ml),
+   checked (check.ml, mut.ml) and type-checked (infer.ml), so it can't add a Bool to an Int, call a
    function that doesn't exist, or change a `let`. The only errors left are
    panics, like division by zero. A panic is the running program's fault,
    not a mistake in its source, so it's an exception of its own rather than
@@ -13,6 +13,7 @@
    That's value semantics, done the slow way; Stage 11 makes it cheap. *)
 
 open Ast
+open Ast.Parsed
 open Value
 
 exception Panic of Loc.t * string
@@ -101,7 +102,7 @@ let rec set v path x =
 let rec match_pattern (p : pattern) v env =
   match (p.pkind, v) with
   | PWild, _ -> Some env
-  | PVar x, _ -> Some (Env.add x (ref v) env)
+  | PVar x, _ -> Some (Env.add x.name (ref v) env)
   | PInt n, VInt m -> if n = m then Some env else None
   | PBool b, VBool c -> if b = c then Some env else None
   | PCon (c, ps), VCon { name; args; _ } when c.name = name ->
@@ -163,9 +164,14 @@ let rec eval cx env (e : expr) =
       (* capture the variables' values now, in cells of the lambda's own:
          assigning to a variable later doesn't change what the lambda sees *)
       let env = Env.map (fun cell -> ref !cell) env in
-      VClosure { params = List.map (fun p -> p.pname.name) params; body; env }
+      VClosure
+        {
+          params = List.map (fun (p : param) -> p.pname.name) params;
+          body;
+          env;
+        }
   | Block (stmts, last) ->
-      let exec env = function
+      let exec env : stmt -> _ = function
         | Let { name; value; _ } ->
             Env.add name.name (ref (eval cx env value)) env
         | Expr e ->
@@ -203,7 +209,7 @@ let rec eval cx env (e : expr) =
       in
       cell := set !cell path v;
       VUnit
-  | For { var; iter = { kind = Ref p; loc }; body } ->
+  | For { var; iter = { kind = Ref p; loc; _ }; body } ->
       (* each element is copied into `var`, and written back after each
          pass; mut.ml makes sure the body can't change the array itself *)
       let cell, path = place cx env p in
@@ -282,7 +288,7 @@ and apply cx f args =
       | None -> bug ("the unknown built-in `" ^ name ^ "`"))
   | VFn name, _ ->
       let f = Hashtbl.find cx.fns name in
-      run (List.map (fun p -> p.pname.name) f.params) f.body Env.empty
+      run (List.map (fun (p : param) -> p.pname.name) f.params) f.body Env.empty
   | VClosure { params; body; env }, _ -> run params body env
   | _ -> bug "a call to something that isn't a function"
 

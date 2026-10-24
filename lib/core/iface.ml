@@ -43,41 +43,29 @@ let find_value iface name = List.find_opt (fun v -> v.vname = name) iface.values
 
 (* ---- from a module's declarations ---- *)
 
-(* A written type, in canonical form. [params] are the type parameters in
-   scope, in order. [resolve] finds the type a name refers to; a name it
-   doesn't know has already been reported (check.ml), so it becomes
-   [Error]. A function type written in a declaration uses and fails with
+(* A written type, once Resolve has said what its names mean, in canonical
+   form. A function type written in a declaration uses and fails with
    nothing. *)
-let rec of_ast ~params ~resolve (t : Ast.ty) : Ty.ty =
+let rec of_written (t : Ast.Resolved.ty) : Ty.ty =
   match t with
-  | TyName (id, []) when List.mem id.name params ->
-      let rec index i = function
-        | p :: rest -> if p = id.name then i else index (i + 1) rest
-        | [] -> assert false
-      in
-      Var (index 0 params)
-  | TyName (id, args) -> (
-      match resolve id.name with
-      | Some path -> Con (path, List.map (of_ast ~params ~resolve) args)
-      | None -> Error)
+  | TyName ({ tref = Param i; _ }, _) -> Var i
+  | TyName ({ tref = Named path; _ }, args) ->
+      Con (path, List.map of_written args)
   | TyFn (ps, ret, _) ->
-      let ret =
-        match ret with Some r -> of_ast ~params ~resolve r | None -> Ty.unit
-      in
-      Fun
-        (List.map (of_ast_param ~params ~resolve) ps, ret, Ty.closed, Ty.closed)
+      let ret = match ret with Some r -> of_written r | None -> Ty.unit in
+      Fun (List.map of_written_param ps, ret, Ty.closed, Ty.closed)
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
 
-and of_ast_param ~params ~resolve = function
-  | Ast.TyInout (t, _) -> { mode = Inout; ty = of_ast ~params ~resolve t }
-  | t -> Ty.read (of_ast ~params ~resolve t)
+and of_written_param = function
+  | Ast.TyInout (t, _) -> { mode = Inout; ty = of_written t }
+  | t -> Ty.read (of_written t)
 
-let of_type_def ~home ~resolve (td : Ast.type_def) =
-  let params = List.map (fun (p : Ast.ident) -> p.name) td.type_params in
-  let field (f : Ast.field) =
-    { fname = f.field_name.name; fty = of_ast ~params ~resolve f.field_ty }
+(* A type declared in module [home]. *)
+let of_type_def ~home (td : Ast.Resolved.type_def) =
+  let field (f : Ast.Resolved.field) =
+    { fname = f.field_name.name; fty = of_written f.field_ty }
   in
   let body =
     match td.type_body with
@@ -85,7 +73,7 @@ let of_type_def ~home ~resolve (td : Ast.type_def) =
     | Ctors cs ->
         Sum
           (List.map
-             (fun (c : Ast.ctor) ->
+             (fun (c : Ast.tname Ast.ctor) ->
                {
                  cname = c.ctor_name.name;
                  cfields = List.map field c.ctor_fields;
@@ -95,39 +83,17 @@ let of_type_def ~home ~resolve (td : Ast.type_def) =
   in
   {
     path = Path.make home td.type_name.name;
-    params;
+    params = List.map (fun (p : Ast.ident) -> p.name) td.type_params;
     body;
     loc = Some td.type_name.loc;
   }
 
-(* The types module [home] declares, in the order it declares them. A name
-   declared twice is an error check.ml reports; here the first declaration
-   wins wherever the name is used. *)
-let own_types ~home ~imports (prog : Ast.program) =
-  let own =
-    List.filter_map (function Ast.Type td -> Some td | Fn _ -> None) prog
-  in
-  let resolve name =
-    if List.exists (fun (td : Ast.type_def) -> td.type_name.name = name) own
-    then Some (Path.make home name)
-    else
-      List.find_map
-        (fun iface -> Option.map (fun d -> d.path) (find_type iface name))
-        imports
-  in
-  List.map (of_type_def ~home ~resolve) own
-
-(* Every type module [home] can see: its imports' types, then its own. *)
-let visible_types ~home ~imports prog =
-  List.concat_map (fun iface -> iface.types) imports
-  @ own_types ~home ~imports prog
-
-(* The interface of module [home], from its declarations and the type
-   scheme inference gave each function. *)
-let of_module ~home ~imports (prog : Ast.program) ~schemes =
+(* The interface of module [home], from the types it declares and the type
+   scheme inference gave each of its functions. *)
+let make ~home ~types ~schemes =
   {
     home;
-    types = own_types ~home ~imports prog;
+    types;
     values = List.map (fun (vname, scheme) -> { vname; scheme }) schemes;
   }
 

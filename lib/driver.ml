@@ -34,12 +34,19 @@ let parse ~file src =
   checked "parse" (fun sink -> Parser.parse_program sink toks)
 
 (* Check one module against the interfaces it imports, before anything
-   runs. Returns each function's type scheme. [entry] is set for the module
-   the program starts in, which needs a `main`. *)
+   runs: first what its names refer to, then everything else. Returns the
+   module's interface and each function's type scheme. [entry] is set for
+   the module the program starts in, which needs a `main`. *)
 let check_module ~home ~imports ?entry prog =
-  checked "check" (fun sink -> Check.program sink ~home ~imports prog);
-  checked "mut" (fun sink -> Mut.program sink ~imports prog);
-  checked "infer" (fun sink -> Infer.program sink ~home ~imports ?entry prog)
+  let r =
+    checked "resolve" (fun sink -> Resolve.program sink ~home ~imports prog)
+  in
+  checked "check" (fun sink -> Check.program sink ~imports r);
+  checked "mut" (fun sink -> Mut.program sink r);
+  let schemes =
+    checked "infer" (fun sink -> Infer.program sink ~imports ?entry r)
+  in
+  (Iface.make ~home ~types:r.types ~schemes, schemes)
 
 (* The prelude, as a module: its source, parsed and checked against the
    intrinsics (prelude.ml), and its whole interface. It's checked once, the
@@ -48,12 +55,11 @@ let check_module ~home ~imports ?entry prog =
    safe. *)
 let prelude =
   lazy
-    (let home = Path.prelude_home and imports = [ Prelude.intrinsics ] in
-     let prog = parse ~file:"<prelude>" (String.trim Prelude.source) in
-     let schemes = check_module ~home ~imports prog in
-     ( prog,
-       Iface.union Prelude.intrinsics
-         (Iface.of_module ~home ~imports prog ~schemes) ))
+    (let prog = parse ~file:"<prelude>" (String.trim Prelude.source) in
+     let iface, _ =
+       check_module ~home:Path.prelude_home ~imports:[ Prelude.intrinsics ] prog
+     in
+     (prog, Iface.union Prelude.intrinsics iface))
 
 (* The user's program, checked against the prelude's interface. Returns
    the program and each function's type scheme. *)
@@ -61,7 +67,7 @@ let check_with_types ~file src =
   let _, prelude_iface = Lazy.force prelude in
   let prog = parse ~file src in
   let home = Path.home_of_file file in
-  (prog, check_module ~home ~imports:[ prelude_iface ] ~entry:file prog)
+  (prog, snd (check_module ~home ~imports:[ prelude_iface ] ~entry:file prog))
 
 let check ~file src = fst (check_with_types ~file src)
 let schemes ~file src = snd (check_with_types ~file src)
@@ -74,7 +80,10 @@ let types ~file src =
           Some
             (Ty.signature ~home:(Path.home_of_file file) ~pub:f.pub
                ~name:f.name.name
-               ~params:(List.map (fun (p : Ast.param) -> p.pname.name) f.params)
+               ~params:
+                 (List.map
+                    (fun (p : Ast.Parsed.param) -> p.pname.name)
+                    f.params)
                (List.assoc f.name.name schemes))
       | Type _ -> None)
     prog

@@ -16,8 +16,11 @@ type t =
   | VRecord of (string * t) list
       (** fields sorted by name, so structural equality ignores field order *)
   | VArray of t array  (** never changed in place: an update copies it *)
-  | VClosure of { params : string list; body : Ast.expr; env : t ref Env.t }
-      (** a lambda, with the variables it captured when it was created *)
+  | VClosure of {
+      params : string list;
+      body : Ast.Parsed.expr;
+      env : t ref Env.t;
+    }  (** a lambda, with the variables it captured when it was created *)
   | VFn of string  (** a top-level function used as a value *)
   | VBuiltin of string  (** a function built into the prelude: [print] *)
 

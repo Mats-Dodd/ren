@@ -9,10 +9,10 @@ exception Internal_error of { pass : string; message : string }
    [pass] works for a pass that returns any type, and returns that type. *)
 val pass : string -> (unit -> 'a) -> 'a
 val tokens : file:string -> string -> (Token.t * Loc.t) array
-val parse : file:string -> string -> Ast.program
+val parse : file:string -> string -> Ast.Parsed.program
 
 (* The program, checked and type-checked against the prelude. *)
-val check : file:string -> string -> Ast.program
+val check : file:string -> string -> Ast.Parsed.program
 
 (* Every function's inferred type scheme, in canonical form. *)
 val schemes : file:string -> string -> (string * Ty.scheme) list
