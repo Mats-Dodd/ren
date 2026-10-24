@@ -30,6 +30,7 @@ Because the compiler knows every boundary a program crosses, Ren can **test, tra
 - [A tour](#a-tour)
 - [Operators and equality: `ops`](#operators-and-equality-ops)
 - [Memory without a GC](#memory-without-a-gc)
+- [Allocation model](#allocation-model)
 - [Concurrency](#concurrency)
 - [FFI and `trust`](#ffi-and-trust)
 - [Why this is possible: knowledge × control](#why-this-is-possible-knowledge--control)
@@ -73,7 +74,7 @@ These are ranked. When two of them conflict, the one higher on the list wins.
 1. **The signature is the truth.** Everything a function touches, returns, or fails with is in its type.
 2. **The world is a dependency.** Code reaches outside itself (network, disk, clock, memory) only through dependencies listed in `uses`.
 3. **Nothing is found behind your back.** There's no trait search, no overloading, and no implicit conversion. Implementations are installed or attached to a type, never searched for.
-4. **Values never change under you.** There is no shared mutable state. You can write `x.field = y`, but nobody else can observe it.
+4. **Values never change under you.** You can write `x.field = y`, but nobody else can observe it. The only state that outlives a call lives inside handlers, and a handler's state can only change between dependency calls.
 5. **Costs that matter can be pinned.** A function that doesn't list `Alloc` doesn't allocate, and the compiler proves it.
 6. **One mechanism, many uses.** Dependency injection, test fakes, allocators, middleware, simulation, and tracing all use the same `uses` / `with` mechanism.
 7. **The compiler explains itself.** Every error explains why it happened and suggests a concrete fix.
@@ -148,6 +149,22 @@ let summaries = par_map(users) fn(u) =>
 
 Public functions spell out their full contract. Private functions can infer their `uses` and their error set (`! _`). `ren fmt --annotate` writes the inferred clauses into your code.
 
+A function parameter is **transparent** when the function only calls it: it doesn't store it, return it, or hand it to something that outlives the call. A transparent parameter's errors and dependencies flow into the caller automatically, so they're never written:
+
+```ren
+pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>
+pub fn par_map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> uses Async
+pub fn timeout<T>(d: Duration, f: fn() -> T) -> T ! Timeout uses Async
+```
+
+Calling `par_map` with a lambda that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError` and use `Net`. `par_map` is still transparent even though it runs `f` on other tasks, because structured concurrency guarantees those tasks finish before it returns.
+
+A function that stores a closure names the closure's errors and dependencies with `..e` and `..d`:
+
+```ren
+type Button = { label: Str, on_click: fn() ! ..e uses ..d }
+```
+
 ### 4. Errors
 
 Errors are part of the return type, and failure points are marked where they happen.
@@ -159,7 +176,7 @@ pub fn load(id: UserId) -> User ! NotFound
 
 pub fn page(id: UserId) -> Html
     uses Users =
-  let user = load(id) catch                    // handle errors (exhaustive)
+  let user = load(id) catch                    // handle every error (exhaustive)
     NotFound => guest()
   render(user)
 
@@ -167,7 +184,24 @@ fn report(id: UserId) -> Report ! _ =
   let user  = try load(id)                     // propagate
   let stats = attempt fetch_stats(id)          // capture as a Result value
   build(user, stats)
+
+fn profile(id: UserId) -> Profile ! _ =
+  let user = try load_full(id) catch           // handle some, propagate the rest
+    NotFound => guest()
+  summarize(user)
 ```
+
+`catch` on its own must handle every error the call can produce. `try … catch` handles the listed errors and propagates the rest, so every line that can fail still starts with `try`.
+
+Error tags work like OCaml's polymorphic variants. They're structural and need no declaration: `fail NotFound` and `fail PaymentFailed(reason: "card declined")` just work. An alias groups tags for reuse:
+
+```ren
+type BillingError = PaymentFailed(reason: Str) | CardDeclined
+
+pub fn checkout(cart: Cart) -> Receipt ! BillingError | NotFound
+```
+
+A tag has one payload type everywhere it appears, so `Timeout` from `timeout` and `Timeout` from your own code are the same error. Give a tag a payload or a more specific name when the difference matters.
 
 Bugs aren't errors. Out-of-bounds access, a failed `assert`, or `unwrap` on `None` panics the program.
 
@@ -219,6 +253,24 @@ test "touch updates last_seen" =
 
 Production wiring, test fakes, allocators, simulators, and tracers all use the same mechanism. Implementations in a `with` are listed from outermost to innermost, and order matters: in `with retry(3), transaction in`, the retry wraps the transaction.
 
+`with` has one definition:
+
+```
+with a, b in body    ≡    a(fn() => b(fn() => body))
+```
+
+An item is either a **wrapper**, an ordinary function that takes the body, or an **implementation**, which is shorthand for installing it:
+
+```ren
+pub fn retry<T>(n: Int, body: fn() -> T) -> T   // a wrapper: calls body up to n times
+```
+
+`retry` calls the body again from the top. It doesn't resume anything. It also repeats any dependency calls the body made before failing, so wrap only work that's safe to repeat.
+
+Dependencies are looked up when code runs, not when it's written. A function or closure whose type says `uses Users` gets whatever `Users` is installed where it's called, and the type checker makes sure one is. Tasks inherit their parent's dependencies. A closure that outlives its `with` is still safe: it never holds on to the old implementation.
+
+The one exception is a handler's own dependencies. These are fixed once, when the handler is installed. A `cached` installed outside `with frozen in` keeps using the real clock even when it's called from inside that block. A handler can only see handlers installed further out, so handlers can't call each other in a loop.
+
 ### 7. `handler`: stateful implementations
 
 Stateless implementations are plain values, as in `frozen` above. An implementation needs a `handler` when it holds state or forwards calls to the next implementation out.
@@ -244,7 +296,21 @@ handler cached(ttl: Duration) for Users
     try outer.save(u)
 ```
 
-Handlers resume at most once, which keeps them as cheap as function calls.
+Handlers resume at most once, which keeps them as cheap as function calls. Each `with` creates a fresh handler instance with its own state. Inside a handler for `Users`, writing `Users.get` is an error; the next implementation out is always `outer`.
+
+A handler's state is exclusive between dependency calls. Two tasks are never inside the pure part of the same handler at once, so state updates can't corrupt each other. Other calls can interleave only at a dependency call, such as `outer.save` or `Clock.now()`, and cancellation happens only there too.
+
+That narrows where a race can happen without hiding it. `cached` above has one: between `cache.remove` and `outer.save`, another task's `get` can miss, read the old user, and put it back in the cache. The simulation scheduler switches tasks at exactly these points, so `ren test --sim` finds the race. The fix is to invalidate again after `outer.save` returns.
+
+A handler can also run code when its `with` block ends. `arena` frees everything it allocated, and `transaction` commits or rolls back:
+
+```ren
+handler transaction for Sql =
+  var tx = outer.begin()
+  query(q) => try tx.query(q)
+  finally(result) =>
+    if result is Ok(_) then try tx.commit() else tx.rollback()
+```
 
 ### 8. `&`: this call changes it
 
@@ -276,8 +342,7 @@ type Vec3 = { x: f32, y: f32, z: f32 }
 
 type Email = opaque Str
   ops =
-    eq(a, b) => a.lower() == b.lower()          // override derived equality
-    hash(a)  => a.lower().hash()
+    key(a) => a.lower()                         // eq, hash, and compare all use this
 
 type Meters = opaque f64
   ops = numeric                                 // f64 arithmetic, still a distinct type
@@ -286,13 +351,18 @@ pub fn sum<T>(xs: Array<T>) -> T where T has add, zero =
   xs.fold(T.zero, fn(acc, x) => acc + x)
 ```
 
-`==`, `hash`, `compare`, and `show` are derived structurally for every type. You can't add operations to a type you don't own; wrap it in an `opaque` type instead. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
+`==`, `hash`, `compare`, and `show` are derived structurally for every type, except that types containing functions get no `==` or `hash`. To change what "equal" means, override `key`, so equality, hashing, and ordering always agree. Overriding `eq` alone is an error. You can't add operations to a type you don't own; wrap it in an `opaque` type instead. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
 
 ---
 
 ## Memory without a GC
 
-Ren uses compiler-managed reference counting with in-place reuse ([Perceus](https://www.microsoft.com/en-us/research/publication/perceus-garbage-free-reference-counting-with-reuse/)). There's no garbage collector and no lifetimes. Because no mutable state is shared, the data can't form reference cycles, so reference counting never leaks.
+Ren uses compiler-managed reference counting with in-place reuse ([Perceus](https://www.microsoft.com/en-us/research/publication/perceus-garbage-free-reference-counting-with-reuse/)). There's no garbage collector and no lifetimes. Reference counting never leaks, because safe Ren can't form a cycle:
+
+- Values are immutable once shared, and `a.next = Some(a)` stores a copy of the old `a`, not `a` itself.
+- There are no recursive values (no `let rec` on data).
+- Local recursive functions are compiled as top-level functions, so a closure never captures itself.
+- Closures never capture handlers, because dependencies are looked up at the call site.
 
 In the safe subset, Ren aims for Rust-level memory safety without lifetimes. Safety comes from reference counting and value semantics at runtime rather than a borrow checker at compile time. Borrow inference, moves on last use, `unique`, and arenas eliminate most of the counting work.
 
@@ -343,6 +413,43 @@ fn step(inout ps: Array<Particle, soa>, dt: f32) =
 
 ---
 
+## Allocation model
+
+"No `Alloc`, no allocation" is only useful if you can predict allocation by reading the code. These rules make that possible.
+
+**What lives on the heap.** Scalars, records, tuples, and non-recursive enums are inline values, so `Some(i)`, `Vec3`, and `Pro(seats: 5)` never allocate. Heap values are `Array`, `Str`, `Map` and `Set`, recursive types (boxed only where they recurse), closures that are stored, and `cold` fields.
+
+**What counts as allocating.** Creating or growing a heap value, copying a shared value before changing it (copy-on-write), and freeing a value whose count reaches zero.
+
+**How it's checked.** The compiler inserts reference-count operations, copies, and frees, then checks the result. A copy or free inserted into a function without `Alloc` is a compile error that points to the line that caused it. There's no separate proof system: an inserted allocation is a dependency call like any other, checked by the same rules as `uses`.
+
+**Parameters.** Read-only parameters are borrowed and cost no reference counting. For an `inout` parameter, the caller makes the value unshared before the call, so any copy is charged to the caller. A `unique` parameter transfers ownership.
+
+**Closures.** A lambda passed to a transparent parameter is never heap-allocated. That's a language guarantee, not an optimization that might fail. A transparent parameter can't escape, so its closure can live on the stack.
+
+**Generics.** `where T has add` works like a transparent parameter. `sum<Int>` doesn't allocate; `sum<BigInt>` uses `Alloc`, because `BigInt.add` does.
+
+**Panics.** A panic in a function without `Alloc` uses a message formatted at compile time and aborts.
+
+**Growth.** `push` needs `Alloc`. Code without `Alloc` works in buffers whose capacity the caller set, using `push_within`.
+
+In practice, code without `Alloc` is linear: every value it owns has to be returned, passed on, or handed to `Reaper`. That's a deliberate tool for hot paths and real-time code, not how most Ren code is written.
+
+### Arenas
+
+Inside `with arena(budget) in`, `Alloc` is the arena. Handlers installed further out fixed their own `Alloc` when they were installed, so their allocations never land in the arena. A value from an arena can reach longer-lived storage in exactly four places, and the compiler knows all of them:
+
+1. the block's return value
+2. a write into handler state
+3. the flight recorder
+4. `Reaper.send`
+
+At each of these, a value tagged as arena memory is copied out. Nothing else pays for the check. The return value is copied with forwarding pointers, so shared structure stays shared. The arena is about to be freed, so it's safe to overwrite it.
+
+An arena also works as a per-request memory limit: a request that exceeds `req.budget` fails instead of exhausting the server.
+
+---
+
 ## Concurrency
 
 Ren has no `async` or `await` and no colored functions. Concurrency is structured: no task outlives the block that started it, and a failure in one task cancels the others.
@@ -355,7 +462,7 @@ pub fn dashboard(ids: List<UserId>) -> List<Summary> ! Timeout | FeedError
       summarize(id, try load_feed(id))
 ```
 
-Shared data is immutable and mutable data has exactly one owner, so data races can't happen. Values with a single owner move between threads for free, and only values that are actually shared pay for atomic reference counts.
+Shared data is immutable, mutable data has exactly one owner, and handler state is exclusive between dependency calls, so data races can't happen. Logic races are still possible, but only at dependency calls, which is where the simulation scheduler looks for them. Values with a single owner move between threads for free, and only values that are actually shared pay for atomic reference counts.
 
 ---
 
@@ -439,12 +546,20 @@ $ ren test --sim --seed 7731 --trace           # replays exactly, every time
 
 The compiler flags any code that can't be simulated, meaning anything with `Unsafe` or FFI in its dependencies, so a passing simulation never gives false confidence.
 
+Ren controls the other sources of nondeterminism too:
+
+- **Hashing.** Hash seeds come from the `Random` dependency, which simulation fixes from the seed. Map iteration order replays exactly.
+- **Addresses.** Safe code can't compare, hash, or order values by memory address.
+- **Floats.** Arithmetic is strict IEEE. The C backend disables fused multiply-add contraction and fast-math.
+- **Math functions.** Ren ships its own `sin`, `exp`, and the rest instead of using the platform's C library, so a trace recorded on x86 replays identically on ARM.
+- **Freeing.** When a value is freed, including by `Reaper`, is never observable.
+
 ### Observability without the overhead
 
 OpenTelemetry is expensive because it pays before deciding whether data is needed: it allocates spans, formats strings eagerly, propagates context, and serializes on hot threads. Ren avoids each of those costs:
 
 - **Static metadata, tiny events.** Span names, source locations, and argument types are extracted at compile time (the [NanoLog](https://www.usenix.org/conference/atc18/presentation/yang-stephen) technique). A runtime event is a fixed-size binary record with no strings and no maps.
-- **Deferred serialization for free.** Values never change, so an event holds a reference (one RC increment) instead of an eager copy. Formatting happens off the hot path, or never.
+- **Deferred serialization for free.** Values never change, so an event holds a reference instead of an eager copy. Formatting happens off the hot path, or never. The reference doesn't increment the count, which would make the value look shared and turn in-place updates into copies. Instead it sets a *recorded* bit in the same word as the count. The existing "is this unshared?" check already fails when the bit is set, so the fast path costs nothing extra. The slow path serializes the old value just before it's changed in place, takes ownership instead of freeing when the count reaches zero, and serializes any recorded arena values when the arena exits. Values that are already shared get an ordinary increment, since they're never updated in place anyway.
 - **Context propagation is the task tree.** Structured concurrency already says who spawned whom, so there are no thread-locals and no `ctx`.
 - **Zero cost when off.** When no recorder is installed, instrumentation isn't compiled in. When one is installed, the cost is one predictable branch per call site.
 - **Flight recorder instead of head sampling.** Everything goes into per-task ring buffers, and Ren decides at the end of the request whether to keep it (on error, or when slow). Tail sampling happens in-process.
@@ -526,7 +641,7 @@ Production profiles feed back into release builds (`ren build --release --pgo pr
 - **Semantic diffs.** `ren diff main..pr-412` shows behavior changes, such as "`checkout` now uses `Net`."
 - **Hermetic builds.** Compile-time code has no network, clock, or environment access, so builds are reproducible by construction.
 
-**Costs:** the trace recorder is the one privileged dependency, woven into call sites by the compiler. Flight-recorder buffers keep values alive until a request ends, so they need a byte budget. Generated C keeps frame pointers (about 1–2%) and emits `#line` directives, so tools point at `.ren` source. CPU time inside pure code still needs a sampler.
+**Costs:** the trace recorder is the one privileged dependency, woven into call sites by the compiler. Flight-recorder buffers keep values alive until a request ends, so they need a byte budget. Recorded values larger than a size cap keep only their length and hash when they're changed in place, and `inout` buffers are recorded that way by default at level 2. Level 3 has to store what each dependency returned, including every byte `Io.read` produced. That cost comes with exact replay itself, not with this design. Generated C keeps frame pointers (about 1–2%) and emits `#line` directives, so tools point at `.ren` source. CPU time inside pure code still needs a sampler.
 
 ---
 
@@ -583,6 +698,8 @@ Ren gives some things up on purpose:
 
 - **No shared mutable references.** Graphs, doubly linked lists, and observers use indices, generational handles, or a handler that owns the state. This is the same style serious Rust code converges on.
 - **No multi-shot continuations.** Handlers resume at most once. Generators and async still work. Backtracking search is written explicitly.
+- **Error tags are global by name.** Like OCaml's polymorphic variants, two `Timeout`s from different libraries are the same error. Use payloads or more specific names to tell them apart.
+- **Allocation-free code is linear.** Without `Alloc`, every owned value must be returned, passed on, or handed to `Reaper`.
 - **Reference counting isn't free.** Expect some overhead on pointer-heavy shared data. Arrays of plain values carry one count in total, not one per element. Expect roughly 1–1.5x of Rust on typical code (a target, not a benchmark).
 - **Safety is checked at runtime, not proven at compile time.** Ren's safety rules (uniqueness, arena escape, the no-free rule) are new combinations. They need precise specs, sanitizer-checked tests, and fuzzing before anyone can claim they match Rust.
 - **No operations on types you don't own.** Wrap them in an `opaque` type.
@@ -598,7 +715,8 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 - **[Koka](https://koka-lang.github.io/):** row-typed effects, evidence passing, Perceus reference counting, functional-but-in-place
 - **[Roc](https://www.roc-lang.org/):** the closest relative. It shares the RC + Perceus core, a fast compiler, and lambda set specialization. Roc keeps apps pure and puts systems work in a separate "platform" host. Ren puts both in one language, with named, typed dependencies instead of a pure/effectful split.
 - **[Lean 4](https://lean-lang.org/):** borrow inference, functional-but-in-place arrays
-- **[Hylo](https://www.hylo-lang.org/) and Swift:** mutable value semantics, `inout`
+- **[Hylo](https://www.hylo-lang.org/) and Swift:** mutable value semantics, `inout`, reentrant actors (the model for handler state)
+- **OCaml:** polymorphic variants, the model for Ren's error tags; Rémy-style row unification underneath both errors and `uses`
 - **OxCaml:** uniqueness and locality modes
 - **[Lambda set specialization](https://www.cs.princeton.edu/~mpmilano/publication/lss/) (PLDI '23):** closures and dependency records without heap allocation or indirect calls
 - **[Zig](https://ziglang.org/):** explicit allocation, comptime, minimalism
@@ -625,7 +743,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 |---|---|---|
 | 1 | lexer, parser, indentation, functions | `fib(30)` runs |
 | 2 | records, sum types, exhaustive `match` | missing-case errors fire |
-| 3 | type inference | private functions need no annotations |
+| 3 | type inference, row unification for errors and `uses` | private functions need no annotations |
 | 4 | `var`, `inout`, `&`, value semantics | `normalize(&scores)` works |
 | 5 | `!`, `try`, `catch`, `fail`, `orelse` | error paths type-check |
 | 6 | `uses`, `with`, dependency types | tests swap implementations |
@@ -709,7 +827,6 @@ $ ren replay --traces last-hour/ --against ./new-build --diff
 ## Open questions
 
 - Should mutating method calls on a `var` (`xs.push(x)`) need `&`?
-- Should arena results escape by copy only, or also through borrowed handler parameters?
 - How much `comptime` is needed for `Json.decode<T>`-style reflection without macros?
 - Should handler ordering be linted, and which orderings are known to be bad?
 - What exactly goes in an effect journal entry so it serves simulation, replay, and migration alike?
