@@ -169,6 +169,7 @@ fn main() =
       ┌─ test.ren:3:23
     3 │   if true then 1 else false
       │                       ^^^^^
+      │                - the `then` branch is an `Int`
       = both branches of an `if` have to produce the same type
     |}];
   run {|
@@ -192,6 +193,8 @@ fn main() =
     {|
     error: this arm is a `Bool`, but the arms above it are an `Int`
       ┌─ test.ren:4:10
+    3 │     1 => 1
+      │          - the first arm is an `Int`
     4 │     _ => false
       │          ^^^^^
     |}];
@@ -229,6 +232,7 @@ fn main() = 1 == true
       ┌─ test.ren:1:18
     1 │ fn main() = 1 == true
       │                  ^^^^
+      │             - this is an `Int`
     |}];
   run {|
 fn main() = y + 1
@@ -276,6 +280,8 @@ fn main() = 1
       ┌─ test.ren:1:4
     1 │ fn g(x) = f(x)
       │    ^
+    2 │ fn f<T>(x: T) -> T = g(x)
+      │      - `T` is declared here
       = `g` and `f` call each other, and functions that call each other are checked at a single type
       help: remove the type parameter from `f`, or break the cycle
     |}];

@@ -34,11 +34,13 @@ let no_duplicates env what (ids : ident list) =
   let seen = Hashtbl.create 8 in
   List.iter
     (fun (id : ident) ->
-      if Hashtbl.mem seen id.name then
-        Diag.report env.sink
-          (Diag.make id.loc
-             (sprintf "there are two %s named `%s`" what id.name))
-      else Hashtbl.replace seen id.name ())
+      match Hashtbl.find_opt seen id.name with
+      | Some first ->
+          Diag.report env.sink
+            (Diag.make id.loc ~help:"rename one of them"
+               ~labels:[ (first, sprintf "the first `%s` is here" id.name) ]
+               (sprintf "there are two %s named `%s`" what id.name))
+      | None -> Hashtbl.replace seen id.name id.loc)
     ids
 
 let find_ctor env (c : ident) =
@@ -99,8 +101,13 @@ let declare env td =
   if Prelude.is_type name.name then
     Diag.error name.loc ~help:"choose another name"
       (sprintf "`%s` is a built-in type" name.name);
-  if Hashtbl.mem env.types name.name then
-    Diag.error name.loc (sprintf "there are two types named `%s`" name.name);
+  Option.iter
+    (fun first ->
+      Diag.error name.loc ~help:"rename one of them"
+        ~labels:
+          [ (first.type_name.loc, sprintf "the first `%s` is here" name.name) ]
+        (sprintf "there are two types named `%s`" name.name))
+    (Hashtbl.find_opt env.types name.name);
   Hashtbl.replace env.types name.name td;
   match td.type_body with
   | Fields _ -> ()
@@ -108,10 +115,19 @@ let declare env td =
       List.iter
         (fun c ->
           guard env @@ fun () ->
-          if Hashtbl.mem env.ctors c.ctor_name.name then
-            Diag.error c.ctor_name.loc
-              ~help:"constructor names must be unique across all types"
-              (sprintf "there are two constructors named `%s`" c.ctor_name.name);
+          Option.iter
+            (fun first ->
+              Diag.error c.ctor_name.loc
+                ~help:"constructor names must be unique across all types"
+                ~labels:
+                  [
+                    ( first.ctor.ctor_name.loc,
+                      sprintf "the first `%s` is here, in `%s`" c.ctor_name.name
+                        first.owner.type_name.name );
+                  ]
+                (sprintf "there are two constructors named `%s`"
+                   c.ctor_name.name))
+            (Hashtbl.find_opt env.ctors c.ctor_name.name);
           Hashtbl.replace env.ctors c.ctor_name.name { owner = td; ctor = c })
         cs
 

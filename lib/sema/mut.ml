@@ -38,7 +38,12 @@ type step = SField of string | SIndex
 type place = { root : ident; path : step list }
 
 (* A place a `for &` loop is changing, and the name of its element. *)
-type lock = { lid : int; lpath : step list; elem : string }
+type lock = {
+  lid : int;
+  lpath : step list;
+  elem : string;
+  lloc : Loc.t;  (** the loop's `&ps` *)
+}
 
 (* Hands out binding ids, numbered per function. A record with a [mutable]
    field is shared by every copy of the [ctx] that holds it, so ids stay
@@ -93,6 +98,8 @@ let check_locks cx (p : place) =
           if l.lid = b.id && overlap l.lpath p.path then
             Diag.error p.root.loc
               ~help:(sprintf "inside the loop, use `%s`" l.elem)
+              ~labels:
+                [ (l.lloc, sprintf "the loop changes `%s` here" p.root.name) ]
               (sprintf "`%s` is being changed by the `for` loop around this"
                  p.root.name))
         cx.locks
@@ -224,7 +231,7 @@ let rec walk cx (e : expr) =
       guard cx (fun () -> writable cx target ~what:"this can't be assigned to");
       walk_indices cx target;
       walk cx value
-  | For { var; iter = { kind = Ref a; _ }; body } ->
+  | For { var; iter = { kind = Ref a; loc = iter_loc }; body } ->
       guard cx (fun () ->
           writable cx a ~what:"`&` needs a variable it can change");
       walk_indices cx a;
@@ -234,7 +241,8 @@ let rec walk cx (e : expr) =
         | Some p -> (
             match Env.find_opt p.root.name cx.scope with
             | Some b ->
-                { lid = b.id; lpath = p.path; elem = var.name } :: cx.locks
+                { lid = b.id; lpath = p.path; elem = var.name; lloc = iter_loc }
+                :: cx.locks
             | None -> cx.locks)
         | None -> cx.locks
       in
@@ -286,7 +294,7 @@ and exclusive cx args =
   in
   let rec check = function
     | [] -> ()
-    | (_, id, p, changed) :: rest ->
+    | (first, id, p, changed) :: rest ->
         List.iter
           (fun ((a : expr), id', p', changed') ->
             if id = id' && (changed || changed') && overlap p.path p'.path then
@@ -297,11 +305,17 @@ and exclusive cx args =
                    can reach that value";
                 ]
               in
+              let labels =
+                [
+                  ( (first : expr).loc,
+                    if changed then "passed with `&` here" else "used here" );
+                ]
+              in
               if changed && changed' then
-                Diag.error a.loc ~notes
+                Diag.error a.loc ~notes ~labels
                   (sprintf "`%s` is passed with `&` twice in this call" x)
               else
-                Diag.error a.loc ~notes
+                Diag.error a.loc ~notes ~labels
                   ~help:
                     (sprintf
                        "copy it with `let` first if the call should see the \

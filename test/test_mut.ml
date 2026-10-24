@@ -145,6 +145,7 @@ fn main() =
       ┌─ test.ren:7:12
     7 │   swap(&a, &a)
       │            ^^
+      │        -- passed with `&` here
       = an argument passed with `&` has to be the only way the call can reach that value
     |}]
 
@@ -163,6 +164,7 @@ fn main() =
       ┌─ test.ren:5:10
     5 │   f(&xs, xs)
       │          ^^
+      │     --- passed with `&` here
       = an argument passed with `&` has to be the only way the call can reach that value
       help: copy it with `let` first if the call should see the value `xs` had before
     |}]
@@ -209,6 +211,8 @@ fn main() =
     {|
     error: `xs` is being changed by the `for` loop around this
       ┌─ test.ren:4:11
+    3 │   for x in &xs
+      │            --- the loop changes `xs` here
     4 │     push(&xs, x)
       │           ^^
       help: inside the loop, use `x`

@@ -94,9 +94,10 @@ let rec mode_clash found expected =
   | _ -> None
 
 (* Unify [found] (what the code has) with [expected] (what it needs), and
-   say whether that worked. [msg] words the error, given both types
-   printed. *)
-let unifies env ?(notes = []) ?help ?msg loc ~found ~expected =
+   say whether that worked. [msg] words the error, and [labels] point at
+   other code, given both types printed. *)
+let unifies env ?(notes = []) ?help ?msg ?(labels = fun _ _ -> []) loc ~found
+    ~expected =
   match Unify.unify env.st found expected with
   | () -> true
   | exception Unify.Mismatch ->
@@ -143,7 +144,7 @@ let unifies env ?(notes = []) ?help ?msg loc ~found ~expected =
                or call it directly"
         | h, _ -> h
       in
-      ignore (fail env ?help ~notes loc msg);
+      ignore (fail env ?help ~notes ~labels:(labels f x) loc msg);
       false
   | exception Unify.Infinite ->
       let pr = printer env.st in
@@ -157,8 +158,8 @@ let unifies env ?(notes = []) ?help ?msg loc ~found ~expected =
            "this value's type would have to contain itself");
       false
 
-let unify_at env ?notes ?help ?msg loc ~found ~expected =
-  ignore (unifies env ?notes ?help ?msg loc ~found ~expected)
+let unify_at env ?notes ?help ?msg ?labels loc ~found ~expected =
+  ignore (unifies env ?notes ?help ?msg ?labels loc ~found ~expected)
 
 (* ---- types as written ---- *)
 
@@ -263,11 +264,13 @@ let rec infer env cx (e : expr) : ty =
           want_int env name b tb;
           bool
       | Eq | Neq ->
-          unify_at env b.loc ~found:tb ~expected:ta ~msg:(fun f x ->
+          unify_at env b.loc ~found:tb ~expected:ta
+            ~msg:(fun f x ->
               sprintf
                 "`%s` compares two values of the same type, but this is %s and \
                  the left side is %s"
-                name (article f) (article x));
+                name (article f) (article x))
+            ~labels:(fun _ x -> [ (a.loc, sprintf "this is %s" (article x)) ]);
           bool)
   | If (c, t, Some f) ->
       want_bool env "an `if` condition" c (infer env cx c);
@@ -277,6 +280,8 @@ let rec infer env cx (e : expr) : ty =
         ~msg:(fun f x ->
           sprintf "this `else` branch is %s, but the `then` branch is %s"
             (article f) (article x))
+        ~labels:(fun _ x ->
+          [ (result_loc t, sprintf "the `then` branch is %s" (article x)) ])
         ~notes:[ "both branches of an `if` have to produce the same type" ];
       tt
   | If (c, t, None) ->
@@ -335,6 +340,7 @@ let rec infer env cx (e : expr) : ty =
   | Match (subject, arms) ->
       let ts = infer env cx subject in
       let result = fresh_var env.st in
+      let first = result_loc (List.hd arms).arm_body in
       List.iteri
         (fun i a ->
           let locals = bind_pattern env cx.locals ts a.arm_pat in
@@ -351,7 +357,11 @@ let rec infer env cx (e : expr) : ty =
                   sprintf "this arm is %s, but the arms above it are %s"
                     (article f) (article x))
           in
-          unify_at env (result_loc a.arm_body) ~found:tb ~expected:result ?msg)
+          let labels _ x =
+            [ (first, sprintf "the first arm is %s" (article x)) ]
+          in
+          unify_at env (result_loc a.arm_body) ~found:tb ~expected:result ?msg
+            ~labels)
         arms;
       result
   | Array xs ->
@@ -1000,8 +1010,12 @@ let program sink ~file (prog : program) =
                 List.find (fun (_, sk, _, _, _) -> List.mem_assoc id sk) setups
               in
               let (o : fn_def), _, _, _, _ = owner in
+              let declared =
+                List.find (fun (p : ident) -> p.name = t) o.tparams
+              in
               ignore
               @@ fail env f.name.loc
+                   ~labels:[ (declared.loc, sprintf "`%s` is declared here" t) ]
                    ~notes:
                      [
                        sprintf

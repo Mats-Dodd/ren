@@ -363,6 +363,8 @@ fn main() = 1
     {|
     error: there are two constructors named `Same`
       ┌─ test.ren:2:12
+    1 │ type A = | Same
+      │            ---- the first `Same` is here, in `A`
     2 │ type B = | Same
       │            ^^^^
       help: constructor names must be unique across all types
@@ -430,4 +432,33 @@ fn main() =
       ┌─ test.ren:9:9
     9 │   print(Basic)
       │         ^^^^^
+    |}]
+
+let%expect_test "a duplicate points at the first one" =
+  run {|
+fn f() = 1
+fn f() = 2
+fn main() = 1
+|};
+  [%expect {|
+    error: there are two functions named `f`
+      ┌─ test.ren:2:4
+    1 │ fn f() = 1
+      │    - the first `f` is here
+    2 │ fn f() = 2
+      │    ^
+      help: rename one of them
+    |}];
+  (* the first one can be in the prelude, which has no source to show *)
+  run {|
+type Option = { x: Int }
+fn main() = 1
+|};
+  [%expect {|
+    error: there are two types named `Option`
+      ┌─ test.ren:1:6
+    1 │ type Option = { x: Int }
+      │      ^^^^^^
+      = the first `Option` is here: <prelude>:1:6
+      help: rename one of them
     |}]
