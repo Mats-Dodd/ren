@@ -123,17 +123,17 @@ fn main() = 1 < 2 < 3
     |}]
 
 let%expect_test "if without else" =
-  ast {|
+  run {|
 fn main() =
   if true then 1
 |};
   [%expect
     {|
-    error: this `if` has no `else`
-      ┌─ test.ren:2:3
+    error: this `if` has no `else`, so it can't produce an `Int`
+      ┌─ test.ren:2:16
     2 │   if true then 1
-      │   ^^
-      help: add an `else` branch: `if` produces a value, so both branches are needed
+      │                ^
+      help: add an `else` branch for when the condition is false
     |}]
 
 let%expect_test "block ending in let" =
@@ -1338,4 +1338,420 @@ let%expect_test "row unification" =
     mismatch
     mismatch
     infinite
+    |}]
+
+(* ---- Stage 4: var, inout, &, value semantics ---- *)
+
+let%expect_test "normalize(&scores) works" =
+  run
+    {|
+// Stage 4: `var`, `inout`, `&` and value semantics.
+
+type Point = { x: Int, y: Int }
+
+// Shift every score so the lowest is 0. `inout` updates the caller's array.
+fn normalize(inout xs: Array<Int>) =
+  var low = xs[0]
+  for x in xs
+    if x < low then low = x
+  for x in &xs
+    x -= low
+
+fn nudge(inout p: Point, dx: Int) =
+  p.x += dx
+
+fn sum(xs) =
+  var total = 0
+  for x in xs
+    total += x
+  total
+
+fn main() =
+  var scores = [13, 11, 12]
+  let before = scores                  // a value, not a reference
+  normalize(&scores)                   // `&`: this call changes `scores`
+  push(&scores, 10)
+  print(scores)
+  print(before)                        // unchanged
+  print(sum(scores))
+
+  var p = Point { x: 1, y: 2 }
+  let q = p
+  nudge(&p, 10)
+  p.y = 0
+  print(p)
+  print(q)
+
+  var n = 1
+  let get = fn() => n                  // captures n's value now
+  n = 2
+  print(get())
+|};
+  [%expect
+    {|
+    [2, 0, 1, 10]
+    [13, 11, 12]
+    13
+    { x: 11, y: 0 }
+    { x: 1, y: 2 }
+    1
+    ()
+    |}]
+
+let%expect_test "inout in signatures" =
+  types
+    {|
+fn bump(inout n) =
+  n += 1
+fn apply(f: fn(inout Int), inout x: Int) =
+  f(&x)
+fn main() =
+  var a = 1
+  apply(bump, &a)
+|};
+  [%expect
+    {|
+    fn bump(inout n: Int)
+    fn apply(f: fn(inout Int), inout x: Int)
+    fn main()
+    |}]
+
+let%expect_test "nested places and for &" =
+  run
+    {|
+type P = { x: Int, y: Int }
+fn swap(inout a: Int, inout b: Int) =
+  let t = a
+  a = b
+  b = t
+fn main() =
+  var grid = [[1, 2], [3, 4]]
+  grid[1][0] = 9
+  var ps = [P { x: 1, y: 1 }, P { x: 2, y: 2 }]
+  for p in &ps
+    p.x *= 5
+  swap(&ps[0].x, &ps[0].y)
+  print(ps)
+  grid
+|};
+  [%expect {|
+    [{ x: 1, y: 5 }, { x: 10, y: 2 }]
+    [[1, 2], [9, 4]]
+    |}]
+
+let%expect_test "assigning to a let" =
+  run {|
+fn main() =
+  let x = 1
+  x = 2
+  x
+|};
+  [%expect
+    {|
+    error: `x` is a `let`, so it can't be changed
+      ┌─ test.ren:3:3
+    3 │   x = 2
+      │   ^
+      help: declare it with `var` to change it
+    |}]
+
+let%expect_test "assigning to a parameter" =
+  run {|
+fn f(n: Int) =
+  n = 2
+fn main() = f(1)
+|};
+  [%expect
+    {|
+    error: `n` is a parameter, so it can't be changed
+      ┌─ test.ren:2:3
+    2 │   n = 2
+      │   ^
+      help: mark it `inout` to change the caller's value, or copy it with `var n = n`
+    |}]
+
+let%expect_test "assigning to a pattern variable" =
+  run {|
+fn main() =
+  match Some(1)
+    Some(n) => n = 2
+    None => ()
+|};
+  [%expect
+    {|
+    error: `n` is bound by a pattern, so it can't be changed
+      ┌─ test.ren:3:16
+    3 │     Some(n) => n = 2
+      │                ^
+      help: copy it with `var n = n` and change the copy
+    |}]
+
+let%expect_test "assigning to a loop variable" =
+  run {|
+fn main() =
+  for x in [1, 2]
+    x = 3
+|};
+  [%expect
+    {|
+    error: `x` is a loop variable, so it can't be changed
+      ┌─ test.ren:3:5
+    3 │     x = 3
+      │     ^
+      help: loop with `for x in &...` to change the elements
+    |}]
+
+let%expect_test "assigning to a function" =
+  run {|
+fn f() = 1
+fn main() =
+  f = 2
+|};
+  [%expect
+    {|
+    error: `f` is a function, not a variable
+      ┌─ test.ren:3:3
+    3 │   f = 2
+      │   ^
+    |}]
+
+let%expect_test "an inout argument needs &" =
+  run
+    {|
+fn bump(inout n: Int) =
+  n += 1
+fn main() =
+  var a = 1
+  bump(a)
+  a
+|};
+  [%expect
+    {|
+    error: `bump` changes this argument, so it needs `&`
+      ┌─ test.ren:5:8
+    5 │   bump(a)
+      │        ^
+      = `&` shows at the call that the argument is changed
+      help: write `&` before it, as in `&a`
+    |}]
+
+let%expect_test "& on a parameter that isn't inout" =
+  run {|
+fn id(n: Int) -> Int = n
+fn main() =
+  var a = 1
+  id(&a)
+|};
+  [%expect
+    {|
+    error: `id` doesn't change this argument
+      ┌─ test.ren:4:6
+    4 │   id(&a)
+      │      ^^
+      = `&` marks an argument the call changes: an `inout` parameter
+      help: remove the `&`
+    |}]
+
+let%expect_test "& on a let" =
+  run {|
+fn bump(inout n: Int) =
+  n += 1
+fn main() =
+  let a = 1
+  bump(&a)
+|};
+  [%expect
+    {|
+    error: `a` is a `let`, so it can't be changed
+      ┌─ test.ren:5:9
+    5 │   bump(&a)
+      │         ^
+      help: declare it with `var` to change it
+    |}]
+
+let%expect_test "& on something that isn't a place" =
+  run {|
+fn bump(inout n: Int) =
+  n += 1
+fn main() =
+  bump(&1)
+|};
+  [%expect
+    {|
+    error: `&` needs a variable it can change
+      ┌─ test.ren:4:9
+    4 │   bump(&1)
+      │         ^
+      help: only a variable, or a field or element of one, can be changed
+    |}]
+
+let%expect_test "& outside a call" =
+  run {|
+fn main() =
+  var a = 1
+  let b = &a
+  b
+|};
+  [%expect
+    {|
+    error: `&` can't be used here
+      ┌─ test.ren:3:11
+    3 │   let b = &a
+      │           ^^
+      = `&` marks an argument a call changes, or the array a `for` loop changes
+      help: remove the `&`
+    |}]
+
+let%expect_test "swap(&a, &a)" =
+  run
+    {|
+fn swap(inout a: Int, inout b: Int) =
+  let t = a
+  a = b
+  b = t
+fn main() =
+  var a = 1
+  swap(&a, &a)
+|};
+  [%expect
+    {|
+    error: `a` is passed with `&` twice in this call
+      ┌─ test.ren:7:12
+    7 │   swap(&a, &a)
+      │            ^^
+      = an argument passed with `&` has to be the only way the call can reach that value
+    |}]
+
+let%expect_test "an inout argument can't also be read" =
+  run
+    {|
+fn f(inout xs: Array<Int>, ys: Array<Int>) =
+  push(&xs, len(ys))
+fn main() =
+  var xs = [1]
+  f(&xs, xs)
+|};
+  [%expect
+    {|
+    error: this call changes `xs`, so no other argument can use it
+      ┌─ test.ren:5:10
+    5 │   f(&xs, xs)
+      │          ^^
+      = an argument passed with `&` has to be the only way the call can reach that value
+      help: copy it with `let` first if the call should see the value `xs` had before
+    |}]
+
+let%expect_test "a lambda can't change a captured variable" =
+  run {|
+fn main() =
+  var n = 1
+  let f = fn() => n = 2
+  f()
+|};
+  [%expect
+    {|
+    error: a lambda can't change `n`, a variable from outside it
+      ┌─ test.ren:3:19
+    3 │   let f = fn() => n = 2
+      │                   ^
+      = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+    |}]
+
+let%expect_test "lambdas can't take inout parameters" =
+  run {|
+fn main() =
+  let f = fn(inout x) => x
+  f
+|};
+  [%expect
+    {|
+    error: lambdas can't take `inout` parameters yet
+      ┌─ test.ren:2:20
+    2 │   let f = fn(inout x) => x
+      │                    ^
+      help: use a top-level function for this
+    |}]
+
+let%expect_test "a for & loop locks its array" =
+  run {|
+fn main() =
+  var xs = [1, 2]
+  for x in &xs
+    push(&xs, x)
+|};
+  [%expect
+    {|
+    error: `xs` is being changed by the `for` loop around this
+      ┌─ test.ren:4:11
+    4 │     push(&xs, x)
+      │           ^^
+      help: inside the loop, use `x`
+    |}]
+
+let%expect_test "an if without else is Unit" =
+  run {|
+fn main() -> Int =
+  if true then 1
+|};
+  [%expect
+    {|
+    error: this `if` has no `else`, so it can't produce an `Int`
+      ┌─ test.ren:2:16
+    2 │   if true then 1
+      │                ^
+      help: add an `else` branch for when the condition is false
+    |}]
+
+let%expect_test "array type errors" =
+  run {|
+fn main() = [1, true]
+|};
+  [%expect
+    {|
+    error: this element is a `Bool`, but the elements before it are an `Int`
+      ┌─ test.ren:1:17
+    1 │ fn main() = [1, true]
+      │                 ^^^^
+    |}]
+
+let%expect_test "assignment type errors" =
+  run {|
+fn main() =
+  var x = 1
+  x = true
+|};
+  [%expect
+    {|
+    error: this is a `Bool`, but it's being assigned to an `Int`
+      ┌─ test.ren:3:7
+    3 │   x = true
+      │       ^^^^
+    |}]
+
+let%expect_test "for needs an array" =
+  run {|
+fn main() =
+  for x in 3
+    print(x)
+|};
+  [%expect
+    {|
+    error: a `for` loop goes over an `Array`, but this is an `Int`
+      ┌─ test.ren:2:12
+    2 │   for x in 3
+      │            ^
+    |}]
+
+let%expect_test "index out of bounds" =
+  run {|
+fn main() =
+  let xs = [1]
+  xs[3]
+|};
+  [%expect
+    {|
+    error: panic: index 3 is out of bounds for an array of length 1
+      ┌─ test.ren:3:3
+    3 │   xs[3]
+      │   ^^^^^
     |}]

@@ -115,6 +115,7 @@ let rec convert ~tvars ~row (t : Ast.ty) =
         match ret with Some r -> convert ~tvars ~row r | None -> unit
       in
       TFun (List.map (convert ~tvars ~row) ps, ret, row (), row ())
+  | TyInout (t, _) -> TInout (convert ~tvars ~row t)
 
 let closed () = REmpty
 
@@ -199,7 +200,7 @@ let rec infer env cx (e : expr) : ty =
                  the left side is %s"
                 name (article f) (article x));
           bool)
-  | If (c, t, f) ->
+  | If (c, t, Some f) ->
       want_bool "an `if` condition" c (infer env cx c);
       let tt = infer env cx t in
       let tf = infer env cx f in
@@ -209,22 +210,25 @@ let rec infer env cx (e : expr) : ty =
             (article f) (article x))
         ~notes:[ "both branches of an `if` have to produce the same type" ];
       tt
+  | If (c, t, None) ->
+      want_bool "an `if` condition" c (infer env cx c);
+      unify_at (result_loc t) ~found:(infer env cx t) ~expected:unit
+        ~msg:(fun f _ ->
+          sprintf "this `if` has no `else`, so it can't produce %s" (article f))
+        ~help:"add an `else` branch for when the condition is false";
+      unit
   | Call (f, args) -> infer_call env cx e f args
   | Lambda (params, body) ->
       let ps = List.map (param_type cx) params in
       let errs = fresh_row () and uses = fresh_row () in
-      let locals =
-        List.fold_left2
-          (fun locals (p : param) t -> Env.add p.pname.name t locals)
-          cx.locals params ps
-      in
+      let locals = bind_params cx.locals params ps in
       let tb = infer env { cx with locals; errs; uses } body in
       TFun (ps, tb, errs, uses)
   | Block (stmts, last) ->
       let cx =
         List.fold_left
           (fun cx -> function
-            | Let { name; ty; value } ->
+            | Let { name; ty; value; _ } ->
                 let t = infer env cx value in
                 Option.iter
                   (fun ann ->
@@ -274,11 +278,72 @@ let rec infer env cx (e : expr) : ty =
           unify_at (result_loc a.arm_body) ~found:tb ~expected:result ?msg)
         arms;
       result
+  | Array xs ->
+      let elem = fresh_var () in
+      List.iteri
+        (fun i (x : expr) ->
+          let msg =
+            if i = 0 then None
+            else
+              Some
+                (fun f x ->
+                  sprintf
+                    "this element is %s, but the elements before it are %s"
+                    (article f) (article x))
+          in
+          unify_at (result_loc x) ~found:(infer env cx x) ~expected:elem ?msg)
+        xs;
+      array elem
+  | Index (a, i) ->
+      let elem = fresh_var () in
+      unify_at (result_loc a) ~found:(infer env cx a) ~expected:(array elem)
+        ~msg:(fun f _ ->
+          sprintf "only an `Array` can be indexed, but this is %s" (article f));
+      want_int "an index" i (infer env cx i);
+      elem
+  | Ref a ->
+      (* mut.ml allows `&` only on call arguments and `for` loops, which
+         handle it themselves *)
+      infer env cx a
+  | Assign { target; op; value } ->
+      let tt = infer env cx target in
+      let tv = infer env cx value in
+      (match op with
+      | Some op ->
+          let name = binop_to_string op ^ "=" in
+          want_int name target tt;
+          want_int name value tv
+      | None ->
+          unify_at (result_loc value) ~found:tv ~expected:tt ~msg:(fun f x ->
+              sprintf "this is %s, but it's being assigned to %s" (article f)
+                (article x)));
+      unit
+  | For { var; iter; body } ->
+      let iter = match iter.kind with Ref a -> a | _ -> iter in
+      let elem = fresh_var () in
+      unify_at (result_loc iter) ~found:(infer env cx iter)
+        ~expected:(array elem) ~msg:(fun f _ ->
+          sprintf "a `for` loop goes over an `Array`, but this is %s"
+            (article f));
+      ignore
+        (infer env { cx with locals = Env.add var.name elem cx.locals } body);
+      unit
 
 and param_type cx (p : param) =
-  match p.pty with
-  | Some t -> convert ~tvars:cx.tparams ~row:fresh_row t
-  | None -> fresh_var ()
+  let t =
+    match p.pty with
+    | Some t -> convert ~tvars:cx.tparams ~row:fresh_row t
+    | None -> fresh_var ()
+  in
+  match p.pmode with Inout -> TInout t | Read -> t
+
+(* Inside the function, an `inout` parameter is an ordinary variable. *)
+and bind_params locals params ps =
+  List.fold_left2
+    (fun locals (p : param) t ->
+      let t = match t with TInout t -> t | t -> t in
+      Env.add p.pname.name t locals)
+    locals params ps
 
 and infer_call env cx (e : expr) (f : expr) args =
   let tf =
@@ -296,14 +361,43 @@ and infer_call env cx (e : expr) (f : expr) args =
              given);
       List.iter2
         (fun p (a : expr) ->
-          unify_at (result_loc a) ~found:(infer env cx a) ~expected:p)
+          match (repr p, a.kind) with
+          | TInout p, Ref place ->
+              unify_at (result_loc place) ~found:(infer env cx place)
+                ~expected:p
+          | TInout _, _ ->
+              let help =
+                match a.kind with
+                | Var x
+                | Field ({ kind = Var x; _ }, _)
+                | Index ({ kind = Var x; _ }, _) ->
+                    sprintf "write `&` before it, as in `&%s`" x
+                | _ -> "pass a variable, marked with `&`"
+              in
+              Diag.error a.loc ~help
+                ~notes:[ "`&` shows at the call that the argument is changed" ]
+                (sprintf "%s changes this argument, so it needs `&`" name)
+          | _, Ref _ ->
+              Diag.error a.loc ~help:"remove the `&`"
+                ~notes:
+                  [
+                    "`&` marks an argument the call changes: an `inout` \
+                     parameter";
+                  ]
+                (sprintf "%s doesn't change this argument" name)
+          | _ -> unify_at (result_loc a) ~found:(infer env cx a) ~expected:p)
         ps args;
       absorb cx e.loc errs uses;
       ret
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
          function, and its errors and dependencies become the caller's *)
-      let ps = List.map (infer env cx) args in
+      let arg (a : expr) =
+        match a.kind with
+        | Ref place -> TInout (infer env cx place)
+        | _ -> infer env cx a
+      in
+      let ps = List.map arg args in
       let ret = fresh_var () in
       unify_at f.loc ~found:tf ~expected:(TFun (ps, ret, cx.errs, cx.uses));
       ret
@@ -494,9 +588,15 @@ let rec free bound (e : expr) acc =
   match e.kind with
   | Int _ | Bool _ | Unit -> acc
   | Var x -> if Names.mem x bound then acc else x :: acc
-  | Unop (_, a) | Field (a, _) -> free bound a acc
-  | Binop (_, a, b) -> free bound a (free bound b acc)
-  | If (c, t, f) -> free bound c (free bound t (free bound f acc))
+  | Unop (_, a) | Field (a, _) | Ref a -> free bound a acc
+  | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
+      free bound a (free bound b acc)
+  | If (c, t, f) ->
+      let acc = match f with Some f -> free bound f acc | None -> acc in
+      free bound c (free bound t acc)
+  | Array xs -> List.fold_left (fun acc x -> free bound x acc) acc xs
+  | For { var; iter; body } ->
+      free bound iter (free (Names.add var.name bound) body acc)
   | Call (f, args) ->
       List.fold_left (fun acc a -> free bound a acc) (free bound f acc) args
   | Lambda (ps, body) ->
@@ -632,9 +732,15 @@ let check_transparent (f : fn_def) =
             else if (not ok) && mentions body then
               fail e.loc "is captured by a lambda that outlives the call"
             else walk ~ok:false body
-        | Unop (_, a) | Field (a, _) -> walk_all [ a ]
-        | Binop (_, a, b) -> walk_all [ a; b ]
-        | If (c, t, f) -> walk_all [ c; t; f ]
+        | Unop (_, a) | Field (a, _) | Ref a -> walk_all [ a ]
+        | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ }
+          ->
+            walk_all [ a; b ]
+        | If (c, t, f) -> walk_all (c :: t :: Option.to_list f)
+        | Array xs -> walk_all xs
+        | For { var; iter; body } ->
+            walk_all [ iter ];
+            if var.name <> name then walk ~ok:false body
         | Con (_, args) -> walk_all (List.map snd args)
         | Record (_, fields) -> walk_all (List.map snd fields)
         | Block (stmts, last) ->
@@ -673,7 +779,10 @@ let signature (f : fn_def) scheme =
       reserve pr scheme;
       let params =
         List.map2
-          (fun (p : param) t -> p.pname.name ^ ": " ^ show pr t)
+          (fun (p : param) t ->
+            match repr t with
+            | TInout t -> "inout " ^ p.pname.name ^ ": " ^ show pr t
+            | t -> p.pname.name ^ ": " ^ show pr t)
           f.params ps
       in
       let ret = show_ret pr ret in
@@ -692,9 +801,24 @@ let signature (f : fn_def) scheme =
 
 (* ---- the program ---- *)
 
-let print_type () =
-  (* fn<T>(T) uses Io *)
-  TFun ([ generic_var () ], unit, generic_row (), RExtend ("Io", generic_row ()))
+(* The built-in functions and their type schemes. *)
+let builtins () =
+  let t = generic_var () in
+  [
+    (* fn<T>(T) uses Io *)
+    ( "print",
+      TFun
+        ( [ generic_var () ],
+          unit,
+          generic_row (),
+          RExtend ("Io", generic_row ()) ) );
+    (* fn<T>(Array<T>) -> Int *)
+    ( "len",
+      TFun ([ array (generic_var ()) ], int, generic_row (), generic_row ()) );
+    (* fn<T>(inout Array<T>, T) *)
+    ( "push",
+      TFun ([ TInout (array t); t ], unit, generic_row (), generic_row ()) );
+  ]
 
 (* Infer every function's type, and return each function's signature. *)
 let program ~file (prog : program) =
@@ -706,7 +830,7 @@ let program ~file (prog : program) =
       deferred = [];
     }
   in
-  Hashtbl.replace env.globals "print" (print_type ());
+  List.iter (fun (n, t) -> Hashtbl.replace env.globals n t) (builtins ());
   let fns = List.filter_map (function Fn f -> Some f | Type _ -> None) prog in
   List.iter
     (function
@@ -755,11 +879,7 @@ let program ~file (prog : program) =
       let setups = List.map setup group in
       List.iter
         (fun ((f : fn_def), _, cx, ps, ret) ->
-          let locals =
-            List.fold_left2
-              (fun locals (p : param) t -> Env.add p.pname.name t locals)
-              Env.empty f.params ps
-          in
+          let locals = bind_params Env.empty f.params ps in
           let tb = infer env { cx with locals } f.body in
           let pr = printer () in
           let notes, help =

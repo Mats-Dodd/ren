@@ -23,7 +23,10 @@ type env = {
   ctors : (string, ctor_info) Hashtbl.t;
 }
 
-let builtin_types = [ "Int"; "Bool"; "Unit" ]
+(* Built-in types, with how many type arguments each takes. *)
+let builtin_types = [ ("Int", 0); ("Bool", 0); ("Unit", 0); ("Array", 1) ]
+let is_builtin_type name = List.mem_assoc name builtin_types
+let builtin_fns = [ "print"; "len"; "push" ]
 
 let no_duplicates what (ids : ident list) =
   let seen = Hashtbl.create 8 in
@@ -62,10 +65,12 @@ let rec check_ty env ~params (t : ty) =
   | TyFn (ps, ret, _) ->
       List.iter (check_ty env ~params) ps;
       Option.iter (check_ty env ~params) ret
+  | TyInout (t, _) -> check_ty env ~params t
   | TyName (id, args) -> (
       let name = id.name in
       let arity =
-        if List.mem name params || List.mem name builtin_types then Some 0
+        if List.mem name params then Some 0
+        else if is_builtin_type name then List.assoc_opt name builtin_types
         else
           Option.map
             (fun td -> List.length td.type_params)
@@ -84,7 +89,7 @@ let rec check_ty env ~params (t : ty) =
 (* Record a type and its constructors, so later checks can look them up. *)
 let declare env td =
   let name = td.type_name in
-  if List.mem name.name builtin_types then
+  if is_builtin_type name.name then
     Diag.error name.loc ~help:"choose another name"
       (sprintf "`%s` is a built-in type" name.name);
   if Hashtbl.mem env.types name.name then
@@ -210,7 +215,7 @@ let rec check_pattern env expected (p : pattern) =
           let expected =
             match f.field_ty with
             | TyName (id, _) when not (List.mem id.name params) -> Some id.name
-            | TyName _ | TyFn _ -> None
+            | TyName _ | TyFn _ | TyInout _ -> None
           in
           check_pattern env expected arg)
         ctor.ctor_fields args
@@ -400,11 +405,14 @@ let rec check_expr env ~params (e : expr) =
   let check_expr = check_expr ~params in
   match e.kind with
   | Int _ | Bool _ | Unit | Var _ -> ()
-  | Unop (_, a) | Field (a, _) -> check_expr env a
-  | Binop (_, a, b) ->
+  | Unop (_, a) | Field (a, _) | Ref a -> check_expr env a
+  | Binop (_, a, b) | Index (a, b) ->
       check_expr env a;
       check_expr env b
-  | If (c, t, f) -> List.iter (check_expr env) [ c; t; f ]
+  | If (c, t, f) -> List.iter (check_expr env) (c :: t :: Option.to_list f)
+  | Array xs -> List.iter (check_expr env) xs
+  | Assign { target; value; _ } -> List.iter (check_expr env) [ target; value ]
+  | For { iter; body; _ } -> List.iter (check_expr env) [ iter; body ]
   | Call (f, args) -> List.iter (check_expr env) (f :: args)
   | Lambda (ps, body) ->
       check_params env ~params ps;
@@ -446,13 +454,13 @@ let program (prog : program) =
   no_duplicates "functions" (List.map (fun f -> f.name) fns);
   List.iter
     (fun f ->
-      if f.name.name = "print" then
+      if List.mem f.name.name builtin_fns then
         Diag.error f.name.loc ~help:"choose another name"
-          "`print` is a built-in function";
+          (sprintf "`%s` is a built-in function" f.name.name);
       no_duplicates "type parameters" f.tparams;
       List.iter
         (fun (t : ident) ->
-          if List.mem t.name builtin_types || Hashtbl.mem env.types t.name then
+          if is_builtin_type t.name || Hashtbl.mem env.types t.name then
             Diag.error t.loc ~help:"choose another name"
               (sprintf "`%s` is already the name of a type" t.name))
         f.tparams;

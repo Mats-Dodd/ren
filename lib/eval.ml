@@ -1,14 +1,20 @@
 (* A tree-walking interpreter: the "interpreted Ren" milestone on the roadmap.
 
-   By the time a program gets here it has been checked (check.ml) and
-   type-checked (infer.ml), so it can't add a Bool to an Int or call a
-   function that doesn't exist. The only errors left are panics, like
-   division by zero. *)
+   By the time a program gets here it has been checked (check.ml, mut.ml)
+   and type-checked (infer.ml), so it can't add a Bool to an Int, call a
+   function that doesn't exist, or change a `let`. The only errors left are
+   panics, like division by zero.
+
+   Values are never changed in place. A variable is a cell ([ref]) holding a
+   value, and assigning to `user.plan` or `xs[i]` builds a new value and puts
+   it in the cell, so a value some other name holds can't change under it.
+   That's value semantics, done the slow way; Stage 10 makes it cheap. *)
 
 open Ast
 
-(* Variables in scope: an immutable map from name to value. Map.Make is a
-   functor: a function from a module (String) to a module (Env). *)
+(* Variables in scope: an immutable map from name to a cell holding the
+   variable's value. Map.Make is a functor: a function from a module
+   (String) to a module (Env). *)
 module Env = Map.Make (String)
 
 type value =
@@ -19,10 +25,11 @@ type value =
       (** [Pro(5)]: the type it belongs to, the constructor, its fields *)
   | VRecord of (string * value) list
       (** fields sorted by name, so structural equality ignores field order *)
-  | VClosure of { params : string list; body : expr; env : value Env.t }
+  | VArray of value array  (** never changed in place: an update copies it *)
+  | VClosure of { params : string list; body : expr; env : value ref Env.t }
       (** a lambda, with the variables it captured when it was created *)
   | VFn of string  (** a top-level function used as a value *)
-  | VBuiltin of string  (** [print] *)
+  | VBuiltin of string  (** [print], [len], [push] *)
 
 let rec show_value = function
   | VInt n -> string_of_int n
@@ -34,6 +41,8 @@ let rec show_value = function
   | VRecord fields ->
       let show_field (f, v) = f ^ ": " ^ show_value v in
       "{ " ^ String.concat ", " (List.map show_field fields) ^ " }"
+  | VArray xs ->
+      "[" ^ String.concat ", " (Array.to_list (Array.map show_value xs)) ^ "]"
   | VClosure _ -> "<fn>"
   | VFn name | VBuiltin name -> "<fn " ^ name ^ ">"
 
@@ -47,6 +56,8 @@ let rec equal loc a b =
   | VCon x, VCon y -> x.name = y.name && List.for_all2 (equal loc) x.args y.args
   | VRecord xs, VRecord ys ->
       List.for_all2 (fun (_, x) (_, y) -> equal loc x y) xs ys
+  | VArray xs, VArray ys ->
+      Array.length xs = Array.length ys && Array.for_all2 (equal loc) xs ys
   | (VClosure _ | VFn _ | VBuiltin _), _ | _, (VClosure _ | VFn _ | VBuiltin _)
     ->
       Diag.error loc "panic: functions can't be compared"
@@ -74,12 +85,51 @@ let binop loc op a b =
   | Neq, x, y -> VBool (not (equal loc x y))
   | _ -> bug ("`" ^ binop_to_string op ^ "` on the wrong types")
 
+(* ---- places ----
+
+   A place is somewhere a value can be written: a variable's cell, then a
+   path of fields and indices into its value, like `user.plan` or
+   `grid[i][j]`. Indices are evaluated once, when the place is found. *)
+
+type step = SField of string | SIndex of int * Loc.t
+
+let element loc xs i =
+  if i < 0 || i >= Array.length xs then
+    Diag.error loc
+      (Printf.sprintf
+         "panic: index %d is out of bounds for an array of length %d" i
+         (Array.length xs))
+  else xs.(i)
+
+let rec get v path =
+  match (path, v) with
+  | [], v -> v
+  | SField f :: rest, VRecord fields -> get (List.assoc f fields) rest
+  | SIndex (i, loc) :: rest, VArray xs -> get (element loc xs i) rest
+  | _ -> bug "a place of the wrong shape"
+
+(* [v] with the value at [path] replaced by [x]: a new value, sharing
+   whatever didn't change. *)
+let rec set v path x =
+  match (path, v) with
+  | [], _ -> x
+  | SField f :: rest, VRecord fields ->
+      VRecord
+        (List.map
+           (fun (g, w) -> if g = f then (g, set w rest x) else (g, w))
+           fields)
+  | SIndex (i, loc) :: rest, VArray xs ->
+      let ys = Array.copy xs in
+      ys.(i) <- set (element loc xs i) rest x;
+      VArray ys
+  | _ -> bug "a place of the wrong shape"
+
 (* Match a value against a pattern. On success, return the environment
    extended with the variables the pattern binds. *)
 let rec match_pattern (p : pattern) v env =
   match (p.pkind, v) with
   | PWild, _ -> Some env
-  | PVar x, _ -> Some (Env.add x v env)
+  | PVar x, _ -> Some (Env.add x (ref v) env)
   | PInt n, VInt m -> if n = m then Some env else None
   | PBool b, VBool c -> if b = c then Some env else None
   | PCon (c, ps), VCon { name; args; _ } when c.name = name ->
@@ -100,9 +150,9 @@ let rec eval cx env (e : expr) =
   | Var x -> (
       (* locals shadow top-level functions *)
       match Env.find_opt x env with
-      | Some v -> v
+      | Some cell -> !cell
       | None when Hashtbl.mem cx.fns x -> VFn x
-      | None when x = "print" -> VBuiltin x
+      | None when List.mem x Check.builtin_fns -> VBuiltin x
       | None -> bug ("the unknown name `" ^ x ^ "`"))
   | Unop (Neg, a) -> (
       match eval cx env a with
@@ -110,18 +160,42 @@ let rec eval cx env (e : expr) =
       | _ -> bug "`-` on a non-Int")
   | Binop (op, a, b) -> binop e.loc op (eval cx env a) (eval cx env b)
   | If (c, t, f) -> (
-      match eval cx env c with
-      | VBool true -> eval cx env t
-      | VBool false -> eval cx env f
+      match (eval cx env c, f) with
+      | VBool true, _ -> eval cx env t
+      | VBool false, Some f -> eval cx env f
+      | VBool false, None -> VUnit
       | _ -> bug "a non-Bool `if` condition")
   | Call (f, args) ->
       let f = eval cx env f in
-      apply cx f (List.map (eval cx env) args)
+      (* an `&` argument is read from its place, and written back once the
+         call returns *)
+      let args =
+        List.map
+          (fun (a : expr) ->
+            match a.kind with
+            | Ref p ->
+                let cell, path = place cx env p in
+                (Some (cell, path), get !cell path)
+            | _ -> (None, eval cx env a))
+          args
+      in
+      let result, finals = apply cx f (List.map snd args) in
+      List.iter2
+        (fun (at, _) v ->
+          match at with
+          | Some (cell, path) -> cell := set !cell path v
+          | None -> ())
+        args finals;
+      result
   | Lambda (params, body) ->
+      (* capture the variables' values now, in cells of the lambda's own:
+         assigning to a variable later doesn't change what the lambda sees *)
+      let env = Env.map (fun cell -> ref !cell) env in
       VClosure { params = List.map (fun p -> p.pname.name) params; body; env }
   | Block (stmts, last) ->
       let exec env = function
-        | Let { name; value; _ } -> Env.add name.name (eval cx env value) env
+        | Let { name; value; _ } ->
+            Env.add name.name (ref (eval cx env value)) env
         | Expr e ->
             ignore (eval cx env e);
             env
@@ -141,13 +215,46 @@ let rec eval cx env (e : expr) =
         List.map (fun ((f : ident), v) -> (f.name, eval cx env v)) fields
       in
       VRecord (List.sort (fun (a, _) (b, _) -> String.compare a b) fields)
-  | Field (r, f) -> (
-      match eval cx env r with
-      | VRecord fields -> (
-          match List.assoc_opt f.name fields with
-          | Some v -> v
-          | None -> bug ("the missing field `" ^ f.name ^ "`"))
-      | _ -> bug "a field access on a non-record")
+  | Field (r, f) -> get (eval cx env r) [ SField f.name ]
+  | Array xs -> VArray (Array.of_list (List.map (eval cx env) xs))
+  | Index (a, i) -> (
+      let a = eval cx env a in
+      match eval cx env i with
+      | VInt n -> get a [ SIndex (n, e.loc) ]
+      | _ -> bug "a non-Int index")
+  | Ref a -> eval cx env a
+  | Assign { target; op; value } ->
+      let cell, path = place cx env target in
+      let v = eval cx env value in
+      let v =
+        match op with Some op -> binop e.loc op (get !cell path) v | None -> v
+      in
+      cell := set !cell path v;
+      VUnit
+  | For { var; iter = { kind = Ref p; loc }; body } ->
+      (* each element is copied into `var`, and written back after each
+         pass; mut.ml makes sure the body can't change the array itself *)
+      let cell, path = place cx env p in
+      let n =
+        match get !cell path with
+        | VArray xs -> Array.length xs
+        | _ -> bug "a `for` loop over a non-Array"
+      in
+      for i = 0 to n - 1 do
+        let at = path @ [ SIndex (i, loc) ] in
+        let x = ref (get !cell at) in
+        ignore (eval cx (Env.add var.name x env) body);
+        cell := set !cell at !x
+      done;
+      VUnit
+  | For { var; iter; body } -> (
+      match eval cx env iter with
+      | VArray xs ->
+          Array.iter
+            (fun x -> ignore (eval cx (Env.add var.name (ref x) env) body))
+            xs;
+          VUnit
+      | _ -> bug "a `for` loop over a non-Array")
   | Match (subject, arms) ->
       let v = eval cx env subject in
       let guard_passes env = function
@@ -167,18 +274,46 @@ let rec eval cx env (e : expr) =
       in
       first arms
 
+(* The cell and path a place expression names (mut.ml has checked it is
+   one). *)
+and place cx env (e : expr) =
+  match e.kind with
+  | Var x -> (
+      match Env.find_opt x env with
+      | Some cell -> (cell, [])
+      | None -> bug ("an assignment to `" ^ x ^ "`, which isn't a variable"))
+  | Field (r, f) ->
+      let cell, path = place cx env r in
+      (cell, path @ [ SField f.name ])
+  | Index (a, i) -> (
+      let cell, path = place cx env a in
+      match eval cx env i with
+      | VInt n -> (cell, path @ [ SIndex (n, e.loc) ])
+      | _ -> bug "a non-Int index")
+  | _ -> bug "an assignment to something that isn't a place"
+
+(* Call [f]. Returns its result and the final value of every parameter, so
+   the caller can write back the ones it passed with `&`. *)
 and apply cx f args =
-  let bind env name v = Env.add name v env in
-  match f with
-  | VBuiltin "print" ->
+  let run params body env =
+    let cells = List.map ref args in
+    let env =
+      List.fold_left2 (fun env x c -> Env.add x c env) env params cells
+    in
+    let result = eval cx env body in
+    (result, List.map ( ! ) cells)
+  in
+  match (f, args) with
+  | VBuiltin "print", _ ->
       List.iter (fun v -> print_endline (show_value v)) args;
-      VUnit
-  | VFn name ->
+      (VUnit, args)
+  | VBuiltin "len", [ VArray xs ] -> (VInt (Array.length xs), args)
+  | VBuiltin "push", [ VArray xs; x ] ->
+      (VUnit, [ VArray (Array.append xs [| x |]); x ])
+  | VFn name, _ ->
       let f = Hashtbl.find cx.fns name in
-      let names = List.map (fun p -> p.pname.name) f.params in
-      eval cx (List.fold_left2 bind Env.empty names args) f.body
-  | VClosure { params; body; env } ->
-      eval cx (List.fold_left2 bind env params args) body
+      run (List.map (fun p -> p.pname.name) f.params) f.body Env.empty
+  | VClosure { params; body; env }, _ -> run params body env
   | _ -> bug "a call to something that isn't a function"
 
 let run ~file (prog : program) =
@@ -198,4 +333,4 @@ let run ~file (prog : program) =
       Diag.error (Loc.point ~file 1 1)
         ~help:"add `fn main() = ...`, which is where the program starts"
         "this program has no `main` function"
-  | Some f -> apply cx (VFn f.name.name) []
+  | Some f -> fst (apply cx (VFn f.name.name) [])

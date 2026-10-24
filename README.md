@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–3 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, and type inference with `uses` rows. Most examples in this README show how Ren is intended to look, not what runs today.
+> **Status:** early. Stages 1–4 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, and `var`, `inout`, `&` with value semantics over records and arrays (`push(&xs, x)` stands in for method calls for now). Most examples in this README show how Ren is intended to look, not what runs today.
 
 ---
 

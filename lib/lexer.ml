@@ -13,7 +13,7 @@
        x                       x DEDENT
      fn g() = 2              NEWLINE FN g ( ) = 2 EOF
 
-   Inside parentheses or braces, line breaks and indentation are ignored so long
+   Inside parentheses, brackets or braces, line breaks and indentation are ignored so long
    argument lists can wrap freely. Blank and comment-only lines are skipped. *)
 
 open Token
@@ -23,6 +23,10 @@ let keywords =
     ("fn", FN);
     ("pub", PUB);
     ("let", LET);
+    ("var", VAR);
+    ("inout", INOUT);
+    ("for", FOR);
+    ("in", IN);
     ("if", IF);
     ("then", THEN);
     ("else", ELSE);
@@ -122,6 +126,9 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | '=', '>' -> advance_by 2 FATARROW
       | '!', '=' -> advance_by 2 NEQ
       | '<', '=' -> advance_by 2 LE
+      | '+', '=' -> advance_by 2 PLUSEQ
+      | '-', '=' -> advance_by 2 MINUSEQ
+      | '*', '=' -> advance_by 2 STAREQ
       | '>', '=' -> advance_by 2 GE
       | '(', _ ->
           incr depth;
@@ -135,6 +142,13 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | '}', _ ->
           depth := max 0 (!depth - 1);
           advance_by 1 RBRACE
+      | '[', _ ->
+          incr depth;
+          advance_by 1 LBRACKET
+      | ']', _ ->
+          depth := max 0 (!depth - 1);
+          advance_by 1 RBRACKET
+      | '&', _ -> advance_by 1 AMP
       | '.', _ -> advance_by 1 DOT
       | '|', _ -> advance_by 1 PIPE
       | ',', _ -> advance_by 1 COMMA

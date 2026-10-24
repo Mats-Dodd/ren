@@ -8,6 +8,10 @@ type t =
   | FN
   | PUB
   | LET
+  | VAR
+  | INOUT
+  | FOR
+  | IN
   | IF
   | THEN
   | ELSE
@@ -20,6 +24,8 @@ type t =
   | RPAREN
   | LBRACE
   | RBRACE
+  | LBRACKET
+  | RBRACKET
   | COMMA
   | DOT
   | PIPE
@@ -27,6 +33,10 @@ type t =
   | COLON
   | ARROW
   | EQ
+  | PLUSEQ
+  | MINUSEQ
+  | STAREQ
+  | AMP
   (* operators *)
   | PLUS
   | MINUS
@@ -53,6 +63,10 @@ let to_string = function
   | FN -> "fn"
   | PUB -> "pub"
   | LET -> "let"
+  | VAR -> "var"
+  | INOUT -> "inout"
+  | FOR -> "for"
+  | IN -> "in"
   | IF -> "if"
   | THEN -> "then"
   | ELSE -> "else"
@@ -64,6 +78,8 @@ let to_string = function
   | RPAREN -> ")"
   | LBRACE -> "{"
   | RBRACE -> "}"
+  | LBRACKET -> "["
+  | RBRACKET -> "]"
   | DOT -> "."
   | PIPE -> "|"
   | FATARROW -> "=>"
@@ -71,6 +87,10 @@ let to_string = function
   | COLON -> ":"
   | ARROW -> "->"
   | EQ -> "="
+  | PLUSEQ -> "+="
+  | MINUSEQ -> "-="
+  | STAREQ -> "*="
+  | AMP -> "&"
   | PLUS -> "+"
   | MINUS -> "-"
   | STAR -> "*"

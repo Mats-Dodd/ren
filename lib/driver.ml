@@ -13,6 +13,7 @@ let prelude = lazy (parse ~file:"<prelude>" (String.trim Prelude.source))
 let check_with_types ~file src =
   let prog = Lazy.force prelude @ parse ~file src in
   Check.program prog;
+  Mut.program prog;
   let sigs = Infer.program ~file prog in
   (prog, sigs)
 

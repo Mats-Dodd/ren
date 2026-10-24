@@ -1,0 +1,41 @@
+// Stage 4: `var`, `inout`, `&` and value semantics.
+
+type Point = { x: Int, y: Int }
+
+// Shift every score so the lowest is 0. `inout` updates the caller's array.
+fn normalize(inout xs: Array<Int>) =
+  var low = xs[0]
+  for x in xs
+    if x < low then low = x
+  for x in &xs
+    x -= low
+
+fn nudge(inout p: Point, dx: Int) =
+  p.x += dx
+
+fn sum(xs) =
+  var total = 0
+  for x in xs
+    total += x
+  total
+
+fn main() =
+  var scores = [13, 11, 12]
+  let before = scores                  // a value, not a reference
+  normalize(&scores)                   // `&`: this call changes `scores`
+  push(&scores, 10)
+  print(scores)
+  print(before)                        // unchanged
+  print(sum(scores))
+
+  var p = Point { x: 1, y: 2 }
+  let q = p
+  nudge(&p, 10)
+  p.y = 0
+  print(p)
+  print(q)
+
+  var n = 1
+  let get = fn() => n                  // captures n's value now
+  n = 2
+  print(get())

@@ -25,6 +25,7 @@ let rec occurs id level t =
       List.iter (occurs id level) (r :: ps);
       occurs_row (-1) level e;
       occurs_row (-1) level u
+  | TInout t -> occurs id level t
 
 (* The same for row variables. Type and row ids never clash, so passing -1
    as [id] just adjusts levels. *)
@@ -53,6 +54,7 @@ let rec unify a b =
       unify r1 r2;
       unify_row e1 e2;
       unify_row u1 u2
+  | TInout a, TInout b -> unify a b
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 

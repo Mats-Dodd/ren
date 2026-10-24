@@ -8,7 +8,7 @@
      item     := ["pub"] (fn_def | type_def)
      fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
                  ["->" type] "=" body
-     param    := IDENT [":" type]
+     param    := ["inout"] IDENT [":" type]
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body
      type_body:= "{" field, ... "}"                       (a record)
               |  ["|"] ctor { "|" ctor }                  (a sum type; may be
@@ -16,22 +16,28 @@
      ctor     := UIDENT ["(" field, ... ")"]
      field    := IDENT ":" type
      type     := UIDENT ["<" type, ... ">"]
-              |  "fn" "(" [IDENT ":"] type, ... ")" ["->" type]
+              |  "fn" "(" ["inout"] [IDENT ":"] type, ... ")" ["->" type]
 
-     body     := INDENT block | expr
+     body     := INDENT block | line
      block    := stmt { NEWLINE stmt } DEDENT       (last stmt is the value)
-     stmt     := "let" IDENT [":" type] "=" body | expr
+     stmt     := ("let" | "var") IDENT [":" type] "=" body
+              |  "for" IDENT "in" expr INDENT block
+              |  line
+     line     := expr [("=" | "+=" | "-=" | "*=") body]
+                                                    (an assignment's target
+                                                     must be a place, mut.ml)
      expr     := add [cmp_op add]                   (comparisons don't chain)
      add      := mul { ("+" | "-") mul }
      mul      := unary { ("*" | "/" | "%") unary }
-     unary    := "-" unary | postfix
-     postfix  := primary { "." IDENT | "(" expr, ... ")" [lambda] }
+     unary    := "-" unary | "&" unary | postfix
+     postfix  := primary { "." IDENT | "[" expr "]"
+                         | "(" expr, ... ")" [lambda] }
                                                     (a trailing lambda is
                                                      the call's last argument)
      primary  := INT | "true" | "false" | "(" ")" | IDENT | lambda
               |  UIDENT ["(" con_args ")" | "{" field_inits "}"]
-              |  "{" field_inits "}" | "(" expr ")"
-              |  "if" expr "then" body [NEWLINE] "else" body
+              |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
+              |  "if" expr "then" body [[NEWLINE] "else" body]
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
      arm      := pattern ["if" expr] "=>" body
      lambda   := "fn" "(" param, ... ")" "=>" body
@@ -153,14 +159,24 @@ let rec parse_ty p =
 (* A parameter in a function type may be named for documentation, as in
    `fn(id: UserId) -> User`. The name doesn't affect the type. *)
 and parse_fn_ty_param p =
+  let start = loc p in
+  let inout = peek p = INOUT in
+  if inout then advance p;
   (match (peek p, peek2 p) with
   | IDENT name, COLON when not (is_upper name) ->
       advance p;
       advance p
   | _ -> ());
-  parse_ty p
+  let t = parse_ty p in
+  if inout then TyInout (t, Loc.span start (last_loc p)) else t
 
 let parse_param p =
+  let pmode =
+    if peek p = INOUT then (
+      advance p;
+      Inout)
+    else Read
+  in
   let pname = ident p in
   let pty =
     if peek p = COLON then (
@@ -168,7 +184,7 @@ let parse_param p =
       Some (parse_ty p))
     else None
   in
-  { pname; pty }
+  { pname; pty; pmode }
 
 let parse_field_decl p =
   let field_name = ident p in
@@ -268,7 +284,26 @@ let rec parse_body p =
   if peek p = INDENT then (
     advance p;
     parse_block p)
-  else parse_expr p
+  else parse_line p
+
+(* An expression, or an assignment to one: `x = 1`, `xs[i] += 1`. *)
+and parse_line p =
+  let start = loc p in
+  let e = parse_expr p in
+  let op =
+    match peek p with
+    | EQ -> Some None
+    | PLUSEQ -> Some (Some Add)
+    | MINUSEQ -> Some (Some Sub)
+    | STAREQ -> Some (Some Mul)
+    | _ -> None
+  in
+  match op with
+  | None -> e
+  | Some op ->
+      advance p;
+      let value = parse_body p in
+      mk (Assign { target = e; op; value }) start p
 
 and parse_block p =
   let start = loc p in
@@ -287,15 +322,16 @@ and parse_block p =
   | [ Expr e ] -> e
   | Expr last :: rest ->
       { kind = Block (List.rev rest, last); loc = Loc.span start last.loc }
-  | Let { name; _ } :: _ ->
+  | Let { name; mut; _ } :: _ ->
       Diag.error name.loc
         ~help:"add the value this block should produce as its last line"
-        "this block ends with a `let`, so it has no value"
+        (Printf.sprintf "this block ends with a `%s`, so it has no value"
+           (if mut then "var" else "let"))
   | [] -> assert false (* parse_stmt always returns a statement *)
 
 and parse_stmt p =
   match peek p with
-  | LET ->
+  | (LET | VAR) as kw ->
       advance p;
       let name = ident p in
       let ty =
@@ -305,8 +341,23 @@ and parse_stmt p =
         else None
       in
       expect p EQ;
-      Let { name; ty; value = parse_body p }
-  | _ -> Expr (parse_expr p)
+      Let { name; ty; value = parse_body p; mut = kw = VAR }
+  | FOR -> Expr (parse_for p)
+  | _ -> Expr (parse_line p)
+
+and parse_for p =
+  let start = loc p in
+  expect p FOR;
+  let var = ident p in
+  expect p IN;
+  let iter = parse_expr p in
+  if peek p <> INDENT then
+    Diag.error (loc p) ~help:"put the loop's body on the lines below, indented"
+      (Printf.sprintf "expected the body of the `for` loop, found %s"
+         (describe (peek p)));
+  advance p;
+  let body = parse_block p in
+  mk (For { var; iter; body }) start p
 
 and parse_expr p =
   let start = loc p in
@@ -346,6 +397,11 @@ and parse_unary p =
       advance p;
       let e = parse_unary p in
       mk (Unop (Neg, e)) start p
+  | AMP ->
+      let start = loc p in
+      advance p;
+      let e = parse_unary p in
+      mk (Ref e) start p
   | _ -> parse_postfix p
 
 (* Field access and calls bind tightest: `-user.age` is `-(user.age)`. *)
@@ -357,6 +413,11 @@ and parse_postfix p =
         advance p;
         let f = ident p in
         loop (mk (Field (e, f)) start p)
+    | LBRACKET ->
+        advance p;
+        let i = parse_expr p in
+        expect p RBRACKET;
+        loop (mk (Index (e, i)) start p)
     | LPAREN ->
         advance p;
         let args = sep_list p ~close:RPAREN parse_expr in
@@ -403,6 +464,10 @@ and parse_primary p =
       advance p;
       let fields = sep_list p ~close:RBRACE parse_field_init in
       mk (Record (None, fields)) start p
+  | LBRACKET ->
+      advance p;
+      let xs = sep_list p ~close:RBRACKET parse_expr in
+      mk (Array xs) start p
   | LPAREN ->
       advance p;
       let e = parse_expr p in
@@ -452,14 +517,12 @@ and parse_if p =
   let then_ = parse_body p in
   (* `else` may start its own line after an indented `then` block *)
   if peek p = NEWLINE && peek2 p = ELSE then advance p;
-  if peek p <> ELSE then
-    Diag.error start
-      ~help:
-        "add an `else` branch: `if` produces a value, so both branches are \
-         needed"
-      "this `if` has no `else`";
-  advance p;
-  let else_ = parse_body p in
+  let else_ =
+    if peek p = ELSE then (
+      advance p;
+      Some (parse_body p))
+    else None
+  in
   mk (If (cond, then_, else_)) start p
 
 and parse_match p =

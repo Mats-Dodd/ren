@@ -24,6 +24,9 @@
 type ty =
   | TCon of string * ty list  (** [Int], [Option<Int>], [User] *)
   | TFun of ty list * ty * row * row  (** params, result, errors, uses *)
+  | TInout of ty
+      (** an [inout] parameter's type; appears only as a parameter of a [TFun],
+          never as the type of a value *)
   | TVar of tvar ref
   | TSkol of int * string
       (** a type parameter like [T], while checking the function that declares
@@ -51,6 +54,7 @@ let generic_row () = RVar (ref (RUnbound (fresh_id (), generic_level)))
 let int = TCon ("Int", [])
 let bool = TCon ("Bool", [])
 let unit = TCon ("Unit", [])
+let array t = TCon ("Array", [ t ])
 
 (* Follow links to the type a variable currently stands for, shortening the
    chain as it goes so later lookups are quick. *)
@@ -113,6 +117,7 @@ let generalize ~skolems t =
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TFun (ps, r, e, u) -> TFun (List.map go ps, go r, row e, row u)
+    | TInout t -> TInout (go t)
   and row r =
     match repr_row r with
     | RVar ({ contents = RUnbound (id, l) } as cell) as r ->
@@ -140,6 +145,7 @@ let instantiate t =
     | (TVar _ | TSkol _) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
     | TFun (ps, r, e, u) -> TFun (List.map go ps, go r, row e, row u)
+    | TInout t -> TInout (go t)
   and row r =
     match repr_row r with
     | RVar { contents = RUnbound (id, l) } when l = generic_level -> (
@@ -210,6 +216,7 @@ let rec reserve pr t =
   | TVar { contents = Link _ } | TSkol _ -> ()
   | TCon (_, args) -> List.iter (reserve pr) args
   | TFun (ps, r, _, _) -> List.iter (reserve pr) (r :: ps)
+  | TInout t -> reserve pr t
 
 let tail_name pr id kind =
   match Hashtbl.find_opt pr.tail_names id with
@@ -251,6 +258,7 @@ let rec show pr t =
       let ps = List.map (show pr) ps in
       let r = show_ret pr r in
       "fn(" ^ String.concat ", " ps ^ ")" ^ r ^ show_effects pr e u
+  | TInout t -> "inout " ^ show pr t
 
 (* ` -> R`, or nothing for Unit. A returned function with effects is
    parenthesized, so it's clear whose effects they are. *)
@@ -273,6 +281,7 @@ let rec skolems t =
   | TVar _ -> []
   | TCon (_, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _) -> List.concat_map skolems (r :: ps)
+  | TInout t -> skolems t
 
 (* The ids of every row variable inside a type. *)
 let rec row_vars t =
@@ -282,3 +291,4 @@ let rec row_vars t =
   | TCon (_, args) -> List.concat_map row_vars args
   | TFun (ps, r, e, u) ->
       List.concat_map row_vars (r :: ps) @ of_row e @ of_row u
+  | TInout t -> row_vars t
