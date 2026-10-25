@@ -6,24 +6,9 @@ import money.{Money}
 pub type AccountId = opaque Int
   pub fn of(n: Int) -> AccountId = n
 
-// Why the bank said no. Until Ren has errors (stage 6), a refusal is a value
-// like any other, and every function that can refuse says so in its type:
-// it returns an `Option<Refusal>`, which is `None` when it went through.
-pub type Refusal =
-  | Short(account: AccountId, by: Money)
-  | Frozen(account: AccountId)
-  | NoSuchAccount(account: AccountId)
-  | NotPositive(amount: Money)
-  | SameAccount
-
-  // whether asking again later could work
-  pub fn worth_retrying(self) -> Bool =
-    match self
-      Short(_, _) => true
-      Frozen(_) => true
-      NoSuchAccount(_) => false
-      NotPositive(_) => false
-      SameAccount => false
+// Why an account said no. It's a set of error tags, not a type of values:
+// `debit` can fail with either, and `credit` only with `Frozen`.
+pub type Refusal = ! Short(account: AccountId, by: Money) | Frozen(account: AccountId)
 
 // a line of a statement
 pub type Entry =
@@ -45,18 +30,14 @@ pub type Account = {
   }
 
   // money in, unless the account is frozen
-  pub fn credit(inout self, m: Money, e: Entry) -> Option<Refusal> =
-    if self.frozen then Some(Frozen(self.id))
-    else
-      self.balance = self.balance.plus(m)
-      &self.statement.push(e)
-      None
+  pub fn credit(inout self, m: Money, e: Entry) ! Frozen(account: AccountId) =
+    if self.frozen then fail Frozen(self.id)
+    self.balance = self.balance.plus(m)
+    &self.statement.push(e)
 
   // money out, unless it's frozen or there isn't enough
-  pub fn debit(inout self, m: Money, e: Entry) -> Option<Refusal> =
-    if self.frozen then Some(Frozen(self.id))
-    else if self.balance.covers(m) then
-      self.balance = self.balance.minus(m)
-      &self.statement.push(e)
-      None
-    else Some(Short(self.id, m.minus(self.balance)))
+  pub fn debit(inout self, m: Money, e: Entry) ! Refusal =
+    if self.frozen then fail Frozen(self.id)
+    if not self.balance.covers(m) then fail Short(self.id, m.minus(self.balance))
+    self.balance = self.balance.minus(m)
+    &self.statement.push(e)

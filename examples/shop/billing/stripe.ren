@@ -1,10 +1,12 @@
 // Taking payments. A `ChargeId` is opaque: only this module can make one
-// or see that it's an `Int`, so every charge id came from `charge`.
+// or see that it's an `Int`, so every charge id came from `charge`. A
+// charge over the card's limit is declined, and nothing is printed.
 
 pub type ChargeId = opaque Int
 
-pub fn charge(amount: Int) -> ChargeId
+pub fn charge(amount: Int) -> ChargeId ! Declined(amount: Int)
     uses Io =
+  if amount > 100 then fail Declined(amount)
   print(amount)
   next_id(amount)
 

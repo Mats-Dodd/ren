@@ -2,7 +2,7 @@
 // `&self.frames.push(vm)`: a copy, so the machine can keep changing and
 // what's recorded never does. That's the whole of time travel here.
 
-import machine.{Vm}
+import machine.{Fault, Vm}
 import program.{Program}
 
 pub type Timeline = { frames: Array<Vm> }
@@ -13,16 +13,17 @@ pub type Timeline = { frames: Array<Vm> }
   pub fn size(self) -> Int = self.frames.len()
 
   // the machine as it was `n` steps before the last state recorded
-  pub fn back(self, n: Int) -> Option<Vm> =
+  pub fn back(self, n: Int) -> Vm ! NotRecorded(n: Int) =
     let i = self.frames.len() - 1 - n
-    if i < 0 then None else Some(self.frames[i])
+    if i < 0 then fail NotRecorded(n)
+    self.frames[i]
 
   // Run `vm` like `Vm.run`, recording every state it passes through,
   // the last one too. Two things change, so the call has two `&`s:
-  // `&tl.run(&vm, p, fuel)`.
-  pub fn run(inout self, inout vm: Vm, p: Program, fuel: Int) =
+  // `&tl.run(&vm, p, fuel)`. If the machine fails, what was recorded up
+  // to then stays recorded.
+  pub fn run(inout self, inout vm: Vm, p: Program, fuel: Int) ! Fault =
     &self.record(vm)
     if fuel > 0 && vm.running() then
-      &vm.step(p)
-      &self.run(&vm, p, fuel - 1)
-
+      try &vm.step(p)
+      try &self.run(&vm, p, fuel - 1)

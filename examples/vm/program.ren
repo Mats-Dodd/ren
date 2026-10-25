@@ -6,12 +6,13 @@
 import op.{Op}
 
 pub type Program = opaque Array<Op>
-  // the program that does nothing
-  pub let halt: Program = [Halt]
-
-  pub fn check(ops: Array<Op>) -> Option<Program> =
+  // the instructions, as a program, or why they aren't one
+  pub fn check(ops: Array<Op>) -> Program ! Empty | NoHalt | Outside(pc: Int, to: Int) =
     let n = ops.len()
-    if n > 0 && ops[n - 1] == Halt && lands(ops) then Some(ops) else None
+    if n == 0 then fail Empty
+    if ops[n - 1] != Halt then fail NoHalt
+    try lands(ops)
+    ops
 
   // the instruction at `pc`; past the end, there's nothing left to do
   pub fn at(self, pc: Int) -> Op =
@@ -19,13 +20,13 @@ pub type Program = opaque Array<Op>
 
   pub fn size(self) -> Int = self.len()
 
-// Does every jump land inside the program?
-fn lands(ops: Array<Op>) -> Bool =
-  var ok = true
+// Fail at the first jump that lands outside the program.
+fn lands(ops: Array<Op>) =
+  var pc = 0
   for o in ops
     match o.target()
-      Some(to) => if not inside(to, ops.len()) then ok = false
+      Some(to) => if not inside(to, ops.len()) then fail Outside(pc, to)
       None => ()
-  ok
+    pc += 1
 
 fn inside(i: Int, n: Int) -> Bool = i >= 0 && i < n

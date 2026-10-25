@@ -9,11 +9,10 @@ import stack.{Stack}
 pub type Status =
   | Running
   | Halted
-  | Failed(fault: Fault)
 
-// an instruction needed a value the stack didn't have
-pub type Fault =
-  | Underflow(pc: Int)
+// What can go wrong as it runs: an instruction needed a value the stack
+// didn't have.
+pub type Fault = ! Underflow(pc: Int)
 
 pub type Vm = {
   pc: Int,
@@ -35,7 +34,7 @@ pub type Vm = {
   pub fn running(self) -> Bool = self.status == Running
 
   // Run one instruction.
-  pub fn step(inout self, p: Program) =
+  pub fn step(inout self, p: Program) ! Fault =
     self.steps += 1
     match p.at(self.pc)
       Push(n) => &self.push(n)
@@ -45,43 +44,36 @@ pub type Vm = {
         let v = self.locals[slot]
         &self.push(v)
       Store(slot) =>
-        match &self.stack.pop()
-          Some(v) =>
-            self.locals[slot] = v
-            self.pc += 1
-          None => &self.underflow()
-      Add => &self.binary(fn(a, b) => a + b)
-      Sub => &self.binary(fn(a, b) => a - b)
-      Mul => &self.binary(fn(a, b) => a * b)
+        let v = try &self.pop()
+        self.locals[slot] = v
+        self.pc += 1
+      Add => try &self.binary(fn(a, b) => a + b)
+      Sub => try &self.binary(fn(a, b) => a - b)
+      Mul => try &self.binary(fn(a, b) => a * b)
       JumpIfZero(to) =>
-        match &self.stack.pop()
-          Some(v) => self.pc = if v == 0 then to else self.pc + 1
-          None => &self.underflow()
+        let v = try &self.pop()
+        self.pc = if v == 0 then to else self.pc + 1
       Jump(to) => self.pc = to
       Emit =>
-        match &self.stack.pop()
-          Some(v) =>
-            &self.out.push(v)
-            self.pc += 1
-          None => &self.underflow()
+        let v = try &self.pop()
+        &self.out.push(v)
+        self.pc += 1
       Halt => self.status = Halted
 
   // Run until it halts or fails, or `fuel` steps have run.
-  pub fn run(inout self, p: Program, fuel: Int) =
+  pub fn run(inout self, p: Program, fuel: Int) ! Fault =
     if fuel > 0 && self.running() then
-      &self.step(p)
-      &self.run(p, fuel - 1)
+      try &self.step(p)
+      try &self.run(p, fuel - 1)
 
   fn push(inout self, n: Int) =
     &self.stack.push(n)
     self.pc += 1
 
-  fn binary(inout self, f: fn(Int, Int) -> Int) =
-    match &self.stack.pop()
-      Some(b) =>
-        match &self.stack.pop()
-          Some(a) => &self.push(try f(a, b))
-          None => &self.underflow()
-      None => &self.underflow()
+  // the top of the stack, taken off; on an empty stack the machine fails
+  fn pop(inout self) -> Int = &self.stack.pop() orelse fail Underflow(self.pc)
 
-  fn underflow(inout self) = self.status = Failed(Underflow(self.pc))
+  fn binary(inout self, f: fn(Int, Int) -> Int) =
+    let b = try &self.pop()
+    let a = try &self.pop()
+    &self.push(try f(a, b))
