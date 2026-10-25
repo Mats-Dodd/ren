@@ -36,10 +36,12 @@ QUOTED = re.compile(r"\{([a-z_]*)\|(.*?)\|\1\}", re.S)
 
 def snippets():
     """(name, source) for every Ren program the tests and examples hold."""
+    # a test of a string that isn't UTF-8 holds bytes that aren't: they're
+    # kept as they are, as the compiler reads them
     for f in sorted((ROOT / "examples").rglob("*.ren")):
-        yield str(f.relative_to(ROOT)), f.read_text()
+        yield str(f.relative_to(ROOT)), f.read_text(errors="surrogateescape")
     for f in sorted((ROOT / "test").glob("*.ml")):
-        text = f.read_text()
+        text = f.read_text(errors="surrogateescape")
         for m in QUOTED.finditer(text):
             # an expected output, `[%expect {| ... |}]`
             if "%expect" in text[max(0, m.start() - 20) : m.start()]:
@@ -79,7 +81,7 @@ def main():
         files = []
         for i, (name, src) in enumerate(snippets()):
             p = pathlib.Path(tmp) / f"{i}.ren"
-            p.write_text(src)
+            p.write_text(src, errors="surrogateescape")
             files.append((name, p, src))
 
         accepted = {str(p) for _, p, _ in files if compiler_parses(p)}
@@ -95,6 +97,7 @@ def main():
             tree = subprocess.run(
                 [TREE_SITTER, "parse", str(p)], capture_output=True, text=True, cwd=HERE
             ).stdout
+            src = src.encode(errors="surrogateescape").decode(errors="replace")
             print("\n".join("    " + l for l in src.strip("\n").splitlines()))
             for l in tree.splitlines():
                 if "ERROR" in l or "MISSING" in l:
