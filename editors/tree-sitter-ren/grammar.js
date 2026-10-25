@@ -17,7 +17,7 @@
  * Capitalization tells names apart without looking anything up, as in the
  * compiler: types and constructors are capitalized, and variables,
  * functions and modules aren't. One thing the parser leaves to Resolve is
- * decided here instead: `Stack.of` is an item of a type's `ops` block,
+ * decided here instead: `Stack.of` is one of a type's members,
  * though it could be a method of a constructor, `Admin.rank`. The first is
  * far more common, and it's only a colour.
  */
@@ -137,17 +137,20 @@ module.exports = grammar({
         optional(field('type_parameters', $.type_parameters)),
         '=',
         choice(
-          // type Cart = { ... }, with its ops block indented below
+          // type Cart = { ... }, with its members indented below
           seq(
             field('body', $._type_body),
-            optional(seq($._indent, field('ops', $.ops_block), $._dedent)),
+            optional(
+              seq($._indent, field('members', $.type_members), $._dedent),
+            ),
           ),
-          // the body indented under `type X =`, and the ops block on a
-          // line of its own after it
+          // the body indented under `type X =`, and its members on the
+          // lines after it: the first line not starting with `|` ends a
+          // sum type's variants
           seq(
             $._indent,
             field('body', $._type_body),
-            optional(seq($._newline, field('ops', $.ops_block))),
+            optional(seq($._newline, field('members', $.type_members))),
             $._dedent,
           ),
         ),
@@ -175,13 +178,13 @@ module.exports = grammar({
     field_declaration: ($) =>
       seq(field('name', $.identifier), ':', field('type', $._type)),
 
-    // ---- ops ----
+    // ---- a type's members ----
 
-    // `ops` is a keyword only here
-    ops_block: ($) =>
-      seq('ops', '=', $._indent, sep1($._op, $._newline), $._dedent),
+    // its methods, associated functions and values, and operators, one
+    // per line
+    type_members: ($) => sep1($._member, $._newline),
 
-    _op: ($) =>
+    _member: ($) =>
       choice($.function_definition, $.associated_value, $.operator_definition),
 
     // pub let empty: Stack<T> = Stack { items: [] }
@@ -431,7 +434,7 @@ module.exports = grammar({
         optional(seq(':', field('value', $._expression))),
       ),
 
-    // Stack.of, stack.Stack.empty: an item of a type's ops block
+    // Stack.of, stack.Stack.empty: one of a type's members
     item_expression: ($) =>
       seq(field('type', $.type_name), '.', field('name', $.identifier)),
 

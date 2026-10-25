@@ -1518,29 +1518,6 @@
     }
   },
   {
-    "type": "ops_block",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "associated_value",
-          "named": true
-        },
-        {
-          "type": "function_definition",
-          "named": true
-        },
-        {
-          "type": "operator_definition",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "parameter",
     "named": true,
     "fields": {
@@ -1743,22 +1720,22 @@
           }
         ]
       },
+      "members": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_members",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
         "types": [
           {
             "type": "type_identifier",
-            "named": true
-          }
-        ]
-      },
-      "ops": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "ops_block",
             "named": true
           }
         ]
@@ -1780,6 +1757,29 @@
       "types": [
         {
           "type": "visibility",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "type_members",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "associated_value",
+          "named": true
+        },
+        {
+          "type": "function_definition",
+          "named": true
+        },
+        {
+          "type": "operator_definition",
           "named": true
         }
       ]
@@ -2046,10 +2046,6 @@
   },
   {
     "type": "opaque",
-    "named": false
-  },
-  {
-    "type": "ops",
     "named": false
   },
   {

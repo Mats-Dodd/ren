@@ -1,5 +1,5 @@
 ; vim mode's text objects: `af`/`if` a function, `ac`/`ic` a type with its
-; ops block, `gc` a comment.
+; members, `gc` a comment.
 
 (function_definition
   body: (_) @function.inside) @function.around

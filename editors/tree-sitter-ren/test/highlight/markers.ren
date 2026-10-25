@@ -28,9 +28,8 @@ type Stack<T> = { items: Array<T> }
 //   ^ type
 //         ^ type
 //                ^ property
-  ops =
+  pub let empty: Stack<T> = Stack { items: [] }
 //^ keyword
-    pub let empty: Stack<T> = Stack { items: [] }
-//          ^ constant
-    fn size(self) -> Int = self.items.len()
-//          ^ variable.special
+//        ^ constant
+  fn size(self) -> Int = self.items.len()
+//        ^ variable.special

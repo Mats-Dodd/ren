@@ -84,15 +84,14 @@ fn f() = 1
     (number)))
 
 ================================================================================
-ops under a record
+members under a record
 ================================================================================
 
 pub type Stack<T> = { items: Array<T> }
-  ops =
-    pub let empty: Stack<T> = Stack { items: [] }
-    pub fn of(items: Array<T>) -> Stack<T> = Stack { items }
-    pub fn push(inout self, x: T) = &self.items.push(x)
-    fn size(self) -> Int = self.items.len()
+  pub let empty: Stack<T> = Stack { items: [] }
+  pub fn of(items: Array<T>) -> Stack<T> = Stack { items }
+  pub fn push(inout self, x: T) = &self.items.push(x)
+  fn size(self) -> Int = self.items.len()
 
 fn main() = 1
 
@@ -114,7 +113,7 @@ fn main() = 1
             (named_type
               (type_name
                 (type_identifier)))))))
-    (ops_block
+    (type_members
       (associated_value
         (visibility)
         (identifier)
@@ -196,18 +195,18 @@ fn main() = 1
     (number)))
 
 ================================================================================
-ops after an indented sum, with an operator slot
+members after an indented sum, with an operator slot
 ================================================================================
 
 type Role =
   | Admin
   | Guest(n: Int)
-  ops =
-    fn rank(self) -> Int =
-      match self
-        Admin => 10
-        Guest(n) => n
-    add(other) => other
+
+  fn rank(self) -> Int =
+    match self
+      Admin => 10
+      Guest(n) => n
+  add(other) => other
 
 --------------------------------------------------------------------------------
 
@@ -224,7 +223,7 @@ type Role =
           (named_type
             (type_name
               (type_identifier))))))
-    (ops_block
+    (type_members
       (function_definition
         (identifier)
         (parameters
@@ -253,3 +252,66 @@ type Role =
           (parameter
             (identifier)))
         (identifier)))))
+
+================================================================================
+members right after a sum's last variant, and `ops` as a name
+================================================================================
+
+pub type Light =
+  | Red
+  | Green
+  pub let first: Light = Red
+  pub fn next(self) -> Light = self
+
+fn count(ops: Array<Int>) -> Int = ops.len()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (sum_type
+      (variant
+        (type_identifier))
+      (variant
+        (type_identifier)))
+    (type_members
+      (associated_value
+        (visibility)
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (constructor_expression
+          (constructor_ref
+            (type_identifier))))
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (self)))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (self))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (method_call_expression
+      (identifier)
+      (identifier)
+      (arguments))))

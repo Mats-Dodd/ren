@@ -1,6 +1,6 @@
 # Ren for Zed
 
-Highlighting, an outline (each type's `ops` items under it), indentation,
+Highlighting, an outline (each type's members under it), indentation,
 vim text objects (`af`/`if` a function, `ac`/`ic` a type) and a ▶ beside
 `fn main` that runs the program. The grammar is
 [editors/tree-sitter-ren](../tree-sitter-ren), which mirrors the

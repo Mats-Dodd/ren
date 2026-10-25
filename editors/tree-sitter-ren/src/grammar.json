@@ -623,10 +623,10 @@
                         },
                         {
                           "type": "FIELD",
-                          "name": "ops",
+                          "name": "members",
                           "content": {
                             "type": "SYMBOL",
-                            "name": "ops_block"
+                            "name": "type_members"
                           }
                         },
                         {
@@ -669,10 +669,10 @@
                         },
                         {
                           "type": "FIELD",
-                          "name": "ops",
+                          "name": "members",
                           "content": {
                             "type": "SYMBOL",
-                            "name": "ops_block"
+                            "name": "type_members"
                           }
                         }
                       ]
@@ -947,53 +947,32 @@
         }
       ]
     },
-    "ops_block": {
+    "type_members": {
       "type": "SEQ",
       "members": [
         {
-          "type": "STRING",
-          "value": "ops"
-        },
-        {
-          "type": "STRING",
-          "value": "="
-        },
-        {
           "type": "SYMBOL",
-          "name": "_indent"
+          "name": "_member"
         },
         {
-          "type": "SEQ",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "_op"
-            },
-            {
-              "type": "REPEAT",
-              "content": {
-                "type": "SEQ",
-                "members": [
-                  {
-                    "type": "SYMBOL",
-                    "name": "_newline"
-                  },
-                  {
-                    "type": "SYMBOL",
-                    "name": "_op"
-                  }
-                ]
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "_newline"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "_member"
               }
-            }
-          ]
-        },
-        {
-          "type": "SYMBOL",
-          "name": "_dedent"
+            ]
+          }
         }
       ]
     },
-    "_op": {
+    "_member": {
       "type": "CHOICE",
       "members": [
         {

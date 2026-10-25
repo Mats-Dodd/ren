@@ -1,4 +1,4 @@
-; The outline: every function and type, and under a type its `ops` items.
+; The outline: every function and type, and under a type its members.
 
 (function_definition
   (visibility)? @context
