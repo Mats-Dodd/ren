@@ -50,7 +50,7 @@
               |  ["pub"] "let" IDENT [":" type] "=" body
               |  IDENT ["(" param, ... ")"] "=>" body
                                                    (an operator: parsed, but
-                                                    reported until stage 9)
+                                                    reported until stage 10)
      type_body:= "{" field, ... "}"                       (a record)
               |  "opaque" type                           (a type of its own)
               |  errors                                  (a named error set)
@@ -1159,7 +1159,7 @@ let no_ops_block p =
 
 (* One of the type [tname]'s members, or [None] for an operator, which is
    reported: the syntax is reserved, but what operators mean arrives in
-   stage 9. *)
+   stage 10. *)
 let parse_op ?(dep = false) p ~tname =
   no_ops_block p;
   let pub = peek p = PUB in
@@ -1217,7 +1217,7 @@ let parse_op ?(dep = false) p ~tname =
               else
                 Printf.sprintf
                   "for now, write a method: `fn %s(self, ...) = ...`" name.name)
-           (Printf.sprintf "operators like `%s` arrive in stage 9" name.name));
+           (Printf.sprintf "operators like `%s` arrive in stage 10" name.name));
       None
   | tok ->
       let what =
