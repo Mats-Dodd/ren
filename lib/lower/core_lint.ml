@@ -728,7 +728,10 @@ let value_order (prog : program) =
    up in its code. [linked] are the program's modules, [prog] among them:
    threading evidence can make a copy of another module's function, or
    have `$start` install a private implementation, which no interface
-   has. *)
+   has. A copy can be made for a dependency [prog] can't see, too (one
+   declared in the module that passes the closure), so every module's
+   dependencies are known here; their other types aren't, since another
+   module's opaque type must stay opaque. *)
 let program ~imports ~linked (prog : program) =
   let env =
     {
@@ -757,6 +760,15 @@ let program ~imports ~linked (prog : program) =
           Hashtbl.replace env.schemes (Path.make iface.home v.vname) v.scheme)
         iface.values)
     imports;
+  List.iter
+    (fun (m : program) ->
+      List.iter
+        (fun (td : Iface.type_decl) ->
+          match td.body with
+          | Dep _ -> Hashtbl.replace env.types td.path td
+          | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> ())
+        m.types)
+    linked;
   List.iter
     (fun (td : Iface.type_decl) -> Hashtbl.replace env.types td.path td)
     prog.types;

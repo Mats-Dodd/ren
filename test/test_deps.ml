@@ -750,6 +750,50 @@ pub fn twice(f: fn()) =
     1
     1
     ()
+    |}];
+  (* a copy for a dependency the copied function's module can't see: lib
+     doesn't import main, where Users is declared *)
+  let files =
+    [
+      ( "main.ren",
+        {|
+import lib
+dep Users =
+  get: fn(id: Int) -> Int
+fn look() = lib.twice(fn() => Users.get(1))
+fn main() uses Console = print(1)
+|}
+      );
+      ( "lib.ren",
+        {|
+pub fn twice(f: fn() -> Int) -> Int =
+  let _ = try f()
+  try f()
+|}
+      );
+    ]
+  in
+  core_files files;
+  [%expect
+    {|
+    -- lib
+    (fn twice (f/1) (let _/2 (call f/1) (call f/1)))
+    (fn twice[main.Users] (f/1) (uses main.Users/3)
+      (let _/2 (call f/1 (uses main.Users/3)) (call f/1 (uses main.Users/3))))
+
+    -- main
+    (fn look () (uses main.Users/1)
+      (call twice[main.Users]
+        (lambda () (captures) (uses main.Users/2)
+          (dep-call main.Users.get main.Users/2 1))
+        (uses main.Users/1)))
+    (fn main () (uses Console/1) (call print 1 (uses Console/1)))
+    (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+    |}];
+  run_files files;
+  [%expect {|
+    1
+    ()
     |}]
 
 let%expect_test "a function used as a value takes what its type there names" =
