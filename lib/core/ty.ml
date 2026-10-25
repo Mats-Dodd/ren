@@ -391,6 +391,16 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
             | _ -> [])
           ps
       in
+      (* and so is one at the end of what an implementation in the result
+         needs: `-> N` would say it needs nothing, `-> (N uses ..d)` that
+         it can be used where anything is installed *)
+      let rec needs t =
+        match t with
+        | Con (_, [ Uses u ]) -> Option.to_list u.tail
+        | Con (_, args) -> List.concat_map needs args
+        | Var _ | Error | Errors _ | Uses _ | Fun _ -> []
+      in
+      let kept = kept @ needs ret in
       let pr =
         printer ~show_tail:(fun id -> links id || List.mem id kept) ~names s
       in

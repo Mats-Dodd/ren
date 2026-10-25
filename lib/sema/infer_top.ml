@@ -82,7 +82,8 @@ let check_transparent sink (f : fn_def) =
       (fun (p : Resolved.param) ->
         match p.pty with
         | Some (TyFn _ as t) when not (names_row t) -> Some (p.pname, None)
-        | Some (TyImpl ({ tref = Named d; _ }, None, _)) ->
+        | Some (TyImpl ({ tref = Named d; _ }, None, _))
+          when p.pname.ident.name <> "self" ->
             Some (p.pname, Some d)
         | _ -> None)
       f.params
@@ -429,6 +430,17 @@ let rows_named (f : fn_def) =
 let runtime_dep (p : Path.t) =
   p.home = Path.prelude_home && List.mem p.name Prelude.runtime_deps
 
+(* Why the call [c], which brings in the dependency [dep], does: the
+   function it calls calls a closure inside a `with` of [dep] that still
+   gets it from outside (see [settle_installs]). *)
+let withheld_notes env dep (c : call option) =
+  match c with
+  | Some { callee = Some p; _ } ->
+      List.filter_map
+        (fun w -> if w.hfn = p && w.hdep = dep then Some w.hnote else None)
+        env.withheld
+  | _ -> []
+
 (* Report each dependency [f]'s body uses that it doesn't declare, at the
    first call that brings it in. [cx] is what checking [f]'s body found.
    That's the first call whose callee had the dependency itself, before
@@ -444,16 +456,7 @@ let check_uses env ~is_value ~main (f : fn_def) cx declared =
     List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(cx.calls)
   in
   (* where it's first used, and what that is *)
-  let first has =
-    List.find_map
-      (fun c ->
-        if has c then
-          Some
-            ( c.cloc,
-              if c.needs then "installing this needs" else "this call uses" )
-        else None)
-      calls
-  in
+  let first has = List.find_opt has calls in
   List.iter
     (fun dep ->
       if
@@ -463,13 +466,21 @@ let check_uses env ~is_value ~main (f : fn_def) cx declared =
       then
         let call =
           match first (fun c -> List.mem dep c.own) with
-          | Some loc -> Some loc
+          | Some c -> Some c
           | None -> first (fun c -> List.mem dep (row_names c.row))
+        in
+        let why = withheld_notes env dep call in
+        let call =
+          Option.map
+            (fun c ->
+              ( c.cloc,
+                if c.needs then "installing this needs" else "this call uses" ))
+            call
         in
         let dep = env.names (Ty.dep_path dep) in
         report env
           (if is_value f then value_uses f dep call
-           else undeclared_use f dep call))
+           else undeclared_use ~why f dep call))
     (List.sort_uniq String.compare (row_names cx.uses))
 
 (* ---- what a function fails with (errors.md) ---- *)
@@ -778,6 +789,79 @@ let as_declared env path cx declared =
 let rec row_end r =
   match repr_row r with RExtend (_, rest) -> row_end rest | r -> r
 
+(* A public function's own rows stay open, as its interface says: a caller
+   adds them to its own. A transparent parameter shares them, so if the
+   body keeps one where its type is closed, `Box<fn() -> Int>`, the
+   function's rows close with it, and the interface would be wrong about
+   what the parameter may do. That's reported at the parameter. [cx] is
+   what checking [f]'s body found. *)
+let check_open_rows env (f : fn_def) cx =
+  let closed r = row_end r = REmpty in
+  let errs_closed =
+    Option.bind f.errors (fun (es : Resolved.errors) -> es.etail) = None
+    && closed cx.errs
+  and uses_closed =
+    Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail) = None
+    && closed cx.uses
+  in
+  let blamed =
+    List.find_map
+      (fun (p : Resolved.param) ->
+        match p.pty with
+        | Some (TyFn (_, _, e, u, _) as t) when not (names_row t) -> (
+            let e = errs_closed && e = None and u = uses_closed && u = None in
+            match (e, u) with
+            | false, false -> None
+            | true, false -> Some (p, None, "fail")
+            | false, true -> Some (p, None, "use anything")
+            | true, true -> Some (p, None, "fail or use anything"))
+        | Some (TyImpl ({ tref = Named d; _ }, None, _)) when uses_closed ->
+            Some (p, Some d, "need anything")
+        | _ -> None)
+      f.params
+  in
+  match blamed with
+  | None -> ()
+  | Some (p, dep, what) ->
+      let name = p.pname.ident.name in
+      let fn = f.name.name in
+      let note, help =
+        match dep with
+        | None ->
+            ( sprintf
+                "a parameter whose type is written `fn(...)` passes what it \
+                 fails with and uses on to `%s`'s callers, but here it's \
+                 passed to something that keeps it as a function that can't %s"
+                fn what,
+              sprintf
+                "to keep it, name its rows, `%s: fn(...) ! ..e uses ..d`, and \
+                 write them where it's kept"
+                name )
+        | Some d when name = "self" ->
+            ( sprintf
+                "a dependency's `self` needs what its method uses, but here \
+                 it's kept as `%s`, which needs nothing"
+                (env.names d),
+              sprintf
+                "to keep it, name what it needs where it's kept, `(%s uses \
+                 ..d)`, and add `uses ..d` to `%s`"
+                (env.names d) fn )
+        | Some d ->
+            ( sprintf
+                "a parameter whose type is a dependency's, `%s`, needs what \
+                 its function uses, but here it's passed to something that \
+                 keeps it as an implementation that needs nothing"
+                (env.names d),
+              sprintf
+                "to keep it, name what it needs, `%s: %s uses ..d`, and write \
+                 it where it's kept"
+                name (env.names d) )
+      in
+      report env
+        (Diag.make p.pname.ident.loc ~notes:[ note ] ~help
+           (sprintf "`%s` is kept where it can't %s, so it isn't transparent"
+              name what))
+
 (* `uses Clock, ..d`, what [f] would write to use [n] as well. *)
 let uses_with env (f : fn_def) n =
   let deps =
@@ -978,6 +1062,15 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
    less. *)
 let settle_installs env =
   let ws = List.rev env.installs in
+  let dep_name w = env.names (Ty.dep_path w.wdep) in
+  (* the `with` [w] doesn't give what's called inside it [w.wdep] *)
+  let withhold w hnote =
+    (* the first reason found is the one given *)
+    if
+      not
+        (List.exists (fun h -> h.hfn = w.wself && h.hdep = w.wdep) env.withheld)
+    then env.withheld <- { hfn = w.wself; hdep = w.wdep; hnote } :: env.withheld
+  in
   (* how many bodies end in each row that's still open *)
   let tails = List.filter_map (fun w -> row_tail w.wbody) ws in
   let shared id = List.length (List.filter (( = ) id) tails) > 1 in
@@ -995,6 +1088,13 @@ let settle_installs env =
         match row_end w.wbody with
         | _ when tail <> None && tail = row_tail w.wouter ->
             (* the same row: everything it uses but [wdep] is outside too *)
+            withhold w
+              (sprintf
+                 "in `%s`, what's called inside the `with` that installs `%s` \
+                  uses what `%s` itself does: a parameter whose type is \
+                  written `fn(...)`, or a closure that's called outside the \
+                  `with` too, gets only what's installed outside it"
+                 w.wself.name (dep_name w) w.wself.name);
             let outer = row_names w.wouter in
             List.for_all (fun (l : label) -> List.mem l.name outer) rest
         | RVar _ as t
@@ -1004,7 +1104,15 @@ let settle_installs env =
             let t' = fresh_row env.st in
             Unify.unify_row env.st t (RExtend (dep w.wdep, t'));
             into (extend rest t')
-        | RVar _ as t -> into (extend rest t)
+        | RVar _ as t ->
+            if List.length rest = List.length labels then
+              withhold w
+                (sprintf
+                   "`%s` calls a closure inside more than one `with`, so the \
+                    closure gets only what's installed outside all of them, \
+                    not the `%s` one of them installs"
+                   w.wself.name (dep_name w));
+            into (extend rest t)
         | RSkol (id, n) ->
             (* a named row: what's outside ends in it too *)
             env.rows_due <-
@@ -1043,6 +1151,9 @@ let settle_installs env =
    exactly what it's found to. *)
 let settle_impls env =
   let pr = printer env in
+  let is_lambda (e : expr) =
+    match e.kind with Lambda _ -> true | _ -> false
+  in
   List.iter
     (fun o ->
       let labels, _ = row_parts o.ierrs in
@@ -1076,6 +1187,25 @@ let settle_impls env =
                   (if more then "try " else "")
                   (Option.value (env.source call) ~default:"...")
                   l.name d.name
+            | _, l :: _, ds when not (is_lambda o.ivalue) -> (
+                (* a function given by name: there's no inside to map in *)
+                let given =
+                  match env.source o.ivalue with
+                  | Some s -> sprintf "`%s`" s
+                  | None -> "it"
+                in
+                match ds with
+                | [] ->
+                    sprintf
+                      "give a lambda that calls %s and handles what it fails \
+                       with, with `match` and `fail` arms"
+                      given
+                | d :: _ ->
+                    sprintf
+                      "give a lambda that calls %s and maps what it fails \
+                       with, with `match` and `fail` arms, to what `%s` can: \
+                       `fail %s => fail %s`"
+                      given op l.name d.name)
             | _, _, [] ->
                 "handle what it fails with inside it, with `match` and `fail` \
                  arms"
@@ -1324,15 +1454,17 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
             | None -> None
           with
           | Some c ->
-              [
-                ( c.cloc,
-                  sprintf "%s `%s`"
-                    (if c.needs then "installing this needs"
-                     else "this call uses")
-                    d );
-              ]
-          | None -> []
+              ( [
+                  ( c.cloc,
+                    sprintf "%s `%s`"
+                      (if c.needs then "installing this needs"
+                       else "this call uses")
+                      d );
+                ],
+                withheld_notes env dep (Some c) )
+          | None -> ([], [])
         in
+        let needs, why = needs in
         let loc = match written with Some t -> t.tloc | None -> f.name.loc in
         let help =
           match (maker p, Hashtbl.find_opt env.types p) with
@@ -1345,7 +1477,7 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
           | None, None -> sprintf "remove it: nothing can implement `%s` yet" d
         in
         report env
-          (Diag.make loc ~labels:needs ~help
+          (Diag.make loc ~labels:needs ~notes:why ~help
              ~says:
                (sprintf "the runtime installs only %s"
                   (and_list Prelude.runtime_deps))
@@ -1408,6 +1540,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       rows_due = [];
       impl_ops = [];
       installs = [];
+      withheld = [];
       in_scope = [];
     }
   in
@@ -1652,6 +1785,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                ~main:(entry <> None && f.name.name = "main")
                f cx)
             (declared_uses ~is_value f);
+          if f.pub && not (is_value f) then check_open_rows env f cx;
           Option.iter
             (fun declared ->
               check_errors env ~is_value f cx declared;

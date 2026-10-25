@@ -400,7 +400,7 @@ let several_records_have ~names loc ?what (f : Ast.ident) paths =
 
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
    call that uses it. *)
-let undeclared_use (f : Ast.Resolved.fn_def) dep call =
+let undeclared_use ?(why = []) (f : Ast.Resolved.fn_def) dep call =
   let name = f.name.name in
   Diag.make f.name.loc
     ~labels:
@@ -408,12 +408,11 @@ let undeclared_use (f : Ast.Resolved.fn_def) dep call =
       | Some (l, what) -> [ (l, sprintf "%s `%s`" what dep) ]
       | None -> [])
     ~notes:
-      [
-        (if f.uses = None then
-           "a public function without `uses` uses nothing, and its body is \
-            checked against that"
-         else sprintf "`%s`'s body can only use what its `uses` lists" name);
-      ]
+      ((if f.uses = None then
+          "a public function without `uses` uses nothing, and its body is \
+           checked against that"
+        else sprintf "`%s`'s body can only use what its `uses` lists" name)
+      :: why)
     ~help:
       (if f.uses = None then sprintf "add `uses %s`" dep
        else sprintf "add `%s` to its `uses`" dep)

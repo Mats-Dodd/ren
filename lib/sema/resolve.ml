@@ -1302,12 +1302,19 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
   let ps =
     match (owner, self, ps) with
     | Some td, Some loc, p :: rest ->
+        let owner = Path.make env.home td.type_name.name in
         let owner_ty : Resolved.ty =
-          TyName
-            ( { tref = Named (Path.make env.home td.type_name.name); tloc = loc },
-              List.mapi
-                (fun i _ -> TyName ({ tref = Param i; tloc = loc }, []))
-                td.type_params )
+          match td.type_body with
+          | Dep _ ->
+              (* a dependency's `self` is an implementation, which needs what
+                 its method uses, as `c: Clock` does *)
+              TyImpl ({ tref = Named owner; tloc = loc }, None, loc)
+          | Fields _ | Ctors _ | Opaque _ | Errors _ ->
+              TyName
+                ( { tref = Named owner; tloc = loc },
+                  List.mapi
+                    (fun i _ -> TyName ({ tref = Param i; tloc = loc }, []))
+                    td.type_params )
         in
         note_type sc p.pname (Some owner_ty);
         { p with pty = Some owner_ty } :: rest

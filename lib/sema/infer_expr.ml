@@ -91,6 +91,9 @@ type env = {
           it's done (see [impl_op]) *)
   mutable installs : install list;
       (** the group's `with`s that install, innermost first (see [install]) *)
+  mutable withheld : withheld list;
+      (** the module's functions that call a closure in a `with` that doesn't
+          install what the closure uses (see [withheld]) *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
@@ -146,7 +149,18 @@ and impl_op = {
    the outside does, which is less than the body can. It's settled once
    the group is done (infer_top.ml), when every call of the group knows
    what it uses. *)
-and install = { wloc : Loc.t; wdep : string; wbody : row; wouter : row }
+and install = {
+  wloc : Loc.t;
+  wdep : string;
+  wbody : row;
+  wouter : row;
+  wself : Path.t;  (** the function the `with` is in *)
+}
+
+(* A dependency [hdep] that a closure [hfn] calls inside a `with` of it
+   still gets from outside, and why ([hnote]): a message that says its
+   callers have to install it explains with this (infer_top.ml). *)
+and withheld = { hfn : Path.t; hdep : string; hnote : string }
 
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their
@@ -252,7 +266,13 @@ and source =
    caller's: what the callee brings in itself. After the join the two rows
    are one, so [row] then also has everything the caller uses. [needs]
    says it's a `with`. *)
-type call = { cloc : Loc.t; own : string list; row : row; needs : bool }
+type call = {
+  cloc : Loc.t;
+  own : string list;
+  row : row;
+  needs : bool;
+  callee : Path.t option;  (** the top-level function called, if it's one *)
+}
 
 (* A dot call that turned out to call [callee], a method of the module
    not checked yet, from [caller]. Which method `s.size()` calls is found
@@ -344,6 +364,17 @@ let unifies env why loc ~found ~expected =
   | exception ((Unify.Mismatch | Unify.Two_shapes _) as failure) ->
       let pr = printer env in
       let f = show pr found and x = show pr expected in
+      (* two types that print the same differ in a row's tail, which is
+         hidden, so show every tail *)
+      let pr, f, x =
+        if f <> x then (pr, f, x)
+        else
+          let pr =
+            Types.printer ~show_tail:(fun _ -> true) ~names:env.names env.st
+          in
+          let f = show pr found in
+          (pr, f, show pr expected)
+      in
       let msg =
         match why.msg with
         | Some m -> m f x
@@ -1004,9 +1035,10 @@ let include_errors env cx ~loc add errs into =
    `with` installs needs ([needs]), to the dependencies of the function or
    lambda [cx] is in. A row that ends in a named row, `..d`, has its labels
    added now and the named row once the group is done (see [row_due]). *)
-let use_row env cx ~loc ?(needs = false) uses =
+let use_row env cx ~loc ?(needs = false) ?callee uses =
   cx.calls :=
-    { cloc = loc; own = row_names uses; row = uses; needs } :: !(cx.calls);
+    { cloc = loc; own = row_names uses; row = uses; needs; callee }
+    :: !(cx.calls);
   let what = if needs then "installing this needs" else "this call uses" in
   let joined =
     match row_skolem uses with
@@ -1045,8 +1077,8 @@ let use_row env cx ~loc ?(needs = false) uses =
    has to end up empty once the group is done (infer_top.ml). [ename] and
    [name_loc] are the callee, and [target] the function of the group it
    calls, if it does. *)
-let absorb env cx ~(call : expr) ~ename ~name_loc ?target errs uses =
-  use_row env cx ~loc:call.loc uses;
+let absorb env cx ~(call : expr) ~ename ~name_loc ?target ?callee errs uses =
+  use_row env cx ~loc:call.loc ?callee uses;
   let ewritten =
     match call.kind with
     | Call (f, _) | Ref { kind = Call (f, _); _ } ->
@@ -1627,7 +1659,7 @@ and with_ env cx (e : expr) item body lam =
       | Some (path, tm, self, tf) ->
           Hashtbl.replace cx.nodes f.node tm;
           Hashtbl.replace cx.found f.node (Method_of path);
-          unify_at env r.loc ~found:tr ~expected:self.ty;
+          unify_at env r.loc ~found:(widen env tr) ~expected:self.ty;
           if self.mode = Inout then
             report env
               (Diag.make item.loc
@@ -1644,7 +1676,7 @@ and with_ env cx (e : expr) item body lam =
                     m.name));
           wrap env cx e ~call:item ~f ~args
             ?target:(if group_call env path then Some path else None)
-            tf body lam
+            ~callee:path tf body lam
       | None ->
           let t = infer_call env cx ~tr item f args in
           Hashtbl.replace cx.nodes item.node t;
@@ -1681,7 +1713,13 @@ and install env cx (e : expr) item t body =
       let inner = { cx with uses = fresh_row env.st; calls = ref [] } in
       let tb = infer env inner body in
       env.installs <-
-        { wloc = item.loc; wdep = label; wbody = inner.uses; wouter = cx.uses }
+        {
+          wloc = item.loc;
+          wdep = label;
+          wbody = inner.uses;
+          wouter = cx.uses;
+          wself = cx.self;
+        }
         :: env.installs;
       (* the body's calls bring in what they bring in, but [d] *)
       cx.calls :=
@@ -1724,7 +1762,7 @@ and install env cx (e : expr) item t body =
    type is recorded at [lam]. The `with` passes on what the call fails
    with, as `try` would: the body marks its own calls, and the wrapper is
    written to fail with what the body does. *)
-and wrap env cx (e : expr) ~call ~f ~args ?target tf body lam =
+and wrap env cx (e : expr) ~call ~f ~args ?target ?callee tf body lam =
   match reveal env.st tf with
   | TFun (ps, ret, errs, uses) ->
       Hashtbl.replace cx.found e.node Wraps;
@@ -1732,9 +1770,12 @@ and wrap env cx (e : expr) ~call ~f ~args ?target tf body lam =
       let n = List.length args in
       let firsts = List.filteri (fun i _ -> i < n) ps in
       let last = List.nth ps n in
-      check_args env cx ~name
-        ?callee:(match f.kind with Var (Global p) -> Some p | _ -> None)
-        firsts args;
+      let callee =
+        match (callee, f.kind) with
+        | Some p, _ | None, Var (Global p) -> Some p
+        | None, _ -> None
+      in
+      check_args env cx ~name ?callee firsts args;
       outer_changes env body name;
       let berrs = fresh_row env.st and buses = fresh_row env.st in
       let bcx = lambda_cx cx [] [] ~errs:berrs ~uses:buses in
@@ -1794,7 +1835,7 @@ and wrap env cx (e : expr) ~call ~f ~args ?target tf body lam =
         { cx with markers = m :: cx.markers }
         ~call
         ~ename:(String.concat "" (String.split_on_char '`' name))
-        ~name_loc:f.loc ?target errs uses;
+        ~name_loc:f.loc ?target ?callee errs uses;
       (* the call's type, unless it's the bare function, `with twice in` *)
       if call != f then Hashtbl.replace cx.nodes call.node ret;
       ret
@@ -2050,7 +2091,9 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       Hashtbl.replace cx.found f.node (Method_of path);
       match repr tm with
       | TFun (self :: ps, ret, errs, uses) ->
-          unify_at env r.loc ~found:tr ~expected:self.ty;
+          (* a dependency's method takes an implementation that needs less
+             than its `self` allows, as an argument does *)
+          unify_at env r.loc ~found:(widen env tr) ~expected:self.ty;
           (match (self.mode, changed) with
           | Inout, None ->
               report env (needs_amp e.loc ~recv ~call:(env.source e) o.oname)
@@ -2079,7 +2122,7 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
              given))
       else (
         check_args env cx ~name ?callee ps args;
-        absorb env cx ~call:e ~ename ~name_loc:f.loc ?target errs uses;
+        absorb env cx ~call:e ~ename ~name_loc:f.loc ?target ?callee errs uses;
         ret)
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
@@ -2272,6 +2315,45 @@ and infer_record env cx (e : expr) name fields ~expected =
           with
           | Some fd ->
               let ft = field_type ~tvars fd in
+              (* a closure whose errors end in a named row, `! ..e`, could
+                 fail with anything, which an operation can't *)
+              let named_errors () =
+                match v.kind with
+                | Var (Local b) -> (
+                    match Option.map repr (Hashtbl.find_opt cx.locals b.id) with
+                    | Some (TFun (_, _, errs, _)) -> (
+                        let rec tail r =
+                          match repr_row r with
+                          | RExtend (_, rest) -> tail rest
+                          | RSkol (_, n) -> Some n
+                          | _ -> None
+                        in
+                        match (tail errs, ft) with
+                        | Some n, TFun (_, _, declared, _) ->
+                            let declared =
+                              List.map
+                                (fun (l : label) -> l.name)
+                                (fst (row_parts declared))
+                            in
+                            Some
+                              (sprintf
+                                 "`%s` can fail with anything `..%s` stands \
+                                  for%s: write %s in place of `! ..%s`"
+                                 b.ident.name n
+                                 (match declared with
+                                 | [] -> ", and the operation can't fail"
+                                 | ds ->
+                                     ", and the operation only with "
+                                     ^ and_list ds)
+                                 (match declared with
+                                 | [] -> "nothing"
+                                 | ds ->
+                                     sprintf "`! %s`" (String.concat " | " ds))
+                                 n)
+                        | _ -> None)
+                    | _ -> None)
+                | _ -> None
+              in
               let ft =
                 match (t, ft) with
                 | TCon (_, [ TUses needs ]), TFun (ps, r, errs, _) ->
@@ -2293,6 +2375,7 @@ and infer_record env cx (e : expr) name fields ~expected =
                     TFun (ps, r, open_errs, needs)
                 | _ -> ft
               in
+              let help = Option.map (fun h _ _ -> h) (named_errors ()) in
               check env cx v ft
                 ~why:
                   (explain
@@ -2301,7 +2384,7 @@ and infer_record env cx (e : expr) name fields ~expected =
                          sprintf "`%s`'s %s `%s`" (type_name env td.path) what
                            f.name;
                        ]
-                     ())
+                     ?help ())
           | None ->
               report env (no_such_field ~names:env.names ~what f td.path decl);
               unknown := true;

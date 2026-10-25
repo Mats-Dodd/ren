@@ -323,6 +323,16 @@ stage, or settled something the plan left open:
   signature names for it**, `body: fn() -> Int ! ..e uses ..d` as `body:
   fn() -> Int`, when they're only its function's own: the two are the
   same type.
+- **A dependency's `self` is transparent, but can be kept.** In `fn
+  scaled(self, k: Int) -> N`, `self` needs what the method uses, as `c:
+  N` does, and a receiver that needs less will do. Unlike `c: N`, it can
+  be returned or captured, since its type can't be written: kept where it
+  needs nothing, `-> N`, only a receiver that needs nothing is taken. A
+  public method that keeps it says so, `-> (N uses ..d) uses ..d`.
+- **A transparent parameter passed to a function that keeps it** where
+  its rows close, `pub fn f(g: fn() -> Int) -> Box<fn() -> Int> =
+  store(g)`, is an error at the parameter, whose help names its rows: no
+  syntactic check sees that `store` keeps it.
 
 ## Later
 

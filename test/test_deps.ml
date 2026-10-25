@@ -1380,7 +1380,7 @@ fn main() uses Console, Clock =
     fn run_at(f: fn() -> Int) -> Int
     fn run_inferred<T>(f: fn() -> T ! ..e uses Clock, ..d) -> T ! ..e uses ..d
     fn convert(r: Rates) -> Int
-    fn timed() -> (Rates uses Clock)
+    fn timed() -> (Rates uses Clock, ..d)
     fn local() uses Console
     fn main() uses Clock, Console
     |}];
@@ -1417,6 +1417,7 @@ fn main() uses Console =
     5 │   print(written(fn() => Clock.now()))
       │         ---------------------------- this call uses `Clock`
       = `main`'s body can only use what its `uses` lists
+      = in `written`, what's called inside the `with` that installs `Clock` uses what `written` itself does: a parameter whose type is written `fn(...)`, or a closure that's called outside the `with` too, gets only what's installed outside it
       help: add `Clock` to its `uses`
     |}];
   (* a signature that says so, called where the caller uses the same
@@ -1866,7 +1867,7 @@ fn main() = 1
     {|
     pub dep Rates
       usd_to: fn(Int) -> Int
-    fn timed() -> (Rates uses Clock)
+    fn timed() -> (Rates uses Clock, ..d)
     fn convert(r: Rates) -> Int
     fn passed(r: Rates) -> Int
     pub fn public(r: Rates) -> Int
@@ -2101,5 +2102,232 @@ fn main() uses Console =
   [%expect {|
     Err(Boom)
     7
+    ()
+    |}]
+
+let%expect_test "a dependency's self is an implementation" =
+  (* `self` needs what its method uses, as `c: N` does, and a receiver
+     that needs less will do *)
+  run
+    {|
+dep N =
+  get: fn() -> Int
+
+  fn fixed(n: Int) -> N = N { get: fn() => n }
+  fn same(self, k: Int) -> N = self
+  fn scaled(self, k: Int) -> (N uses N) = N { get: fn() => (with self in N.get()) * k }
+fn main() uses Console =
+  let b = N.fixed(7).same(3)
+  let base = N.fixed(7)
+  print(with N.fixed(1) in with base.scaled(3) in N.get())
+  print(with b in N.get())
+|};
+  [%expect {|
+    21
+    7
+    ()
+    |}];
+  (* a public one names what it needs where it's kept *)
+  run
+    {|
+pub dep N =
+  get: fn() -> Int
+
+  pub fn fixed(n: Int) -> N = N { get: fn() => n }
+  pub fn same(self, k: Int) -> (N uses ..d) uses ..d = self
+  pub fn scaled(self, k: Int) -> (N uses ..d) uses ..d = N { get: fn() => (with self in N.get()) * k }
+fn main() uses Console =
+  print(with N.fixed(7).same(1).scaled(3) in N.get())
+|};
+  [%expect {|
+    21
+    ()
+    |}];
+  types
+    {|
+pub dep N =
+  get: fn() -> Int
+
+  pub fn fixed(n: Int) -> N = N { get: fn() => n }
+  pub fn same(self, k: Int) -> N = self
+fn noisy() -> Int uses Console =
+  print(0)
+  5
+fn loud() -> (N uses Console) = N { get: fn() => noisy() }
+fn main() =
+  let b = loud().same(3)
+  1
+|};
+  [%expect
+    {|
+    error: `self` is kept where it can't need anything, so it isn't transparent
+      ┌─ test.ren:5:15
+    5 │   pub fn same(self, k: Int) -> N = self
+      │               ^^^^
+      = a dependency's `self` needs what its method uses, but here it's kept as `N`, which needs nothing
+      help: to keep it, name what it needs where it's kept, `(N uses ..d)`, and add `uses ..d` to `N.same`
+
+    error: expected `N`, found `N uses Console`
+       ┌─ test.ren:11:11
+    11 │   let b = loud().same(3)
+       │           ^^^^^^
+       = an implementation's type says what it needs, so one that needs more can't stand in for one that needs less
+       help: say what it needs where its type is written: `(N uses Console)`
+    |}]
+
+let%expect_test "a transparent parameter kept where its rows close" =
+  (* the interface says what the parameter fails with and uses is the
+     function's; kept as a plain `fn() -> Int`, it can't be *)
+  types
+    {|
+pub type Box<R> = { r: R }
+pub fn store_fn(f: fn() -> Int ! ..e uses ..d) -> Box<fn() -> Int ! ..e uses ..d> = Box { r: f }
+pub fn sneakyf(f: fn() -> Int) -> Box<fn() -> Int> = store_fn(f)
+pub dep Rates =
+  usd_to: fn(Int) -> Int
+pub fn keep(r: Rates uses ..d) -> Box<Rates uses ..d> = Box { r: r }
+pub fn sneaky(r: Rates) -> Box<Rates> = keep(r)
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `f` is kept where it can't fail or use anything, so it isn't transparent
+      ┌─ test.ren:3:16
+    3 │ pub fn sneakyf(f: fn() -> Int) -> Box<fn() -> Int> = store_fn(f)
+      │                ^
+      = a parameter whose type is written `fn(...)` passes what it fails with and uses on to `sneakyf`'s callers, but here it's passed to something that keeps it as a function that can't fail or use anything
+      help: to keep it, name its rows, `f: fn(...) ! ..e uses ..d`, and write them where it's kept
+
+    error: `r` is kept where it can't need anything, so it isn't transparent
+      ┌─ test.ren:7:15
+    7 │ pub fn sneaky(r: Rates) -> Box<Rates> = keep(r)
+      │               ^
+      = a parameter whose type is a dependency's, `Rates`, needs what its function uses, but here it's passed to something that keeps it as an implementation that needs nothing
+      help: to keep it, name what it needs, `r: Rates uses ..d`, and write it where it's kept
+    |}];
+  (* named, they're fine *)
+  types
+    {|
+pub type Box<R> = { r: R }
+pub fn store_fn(f: fn() -> Int ! ..e uses ..d) -> Box<fn() -> Int ! ..e uses ..d> = Box { r: f }
+pub fn fine(f: fn() -> Int ! ..e uses ..d) -> Box<fn() -> Int ! ..e uses ..d> = store_fn(f)
+fn main() = 1
+|};
+  [%expect
+    {|
+    pub fn store_fn(f: fn() -> Int ! ..e uses ..d) -> Box<fn() -> Int ! ..e uses ..d>
+    pub fn fine(f: fn() -> Int ! ..e uses ..d) -> Box<fn() -> Int ! ..e uses ..d>
+    fn main() -> Int
+    |}]
+
+let%expect_test "why a closure in a with still needs what it installs" =
+  types
+    {|
+dep N =
+  get: fn() -> Int
+
+fn fixed(n: Int) -> N = N { get: fn() => n }
+fn run_two(f) = (with fixed(1) in f()) + (with fixed(2) in f())
+fn main() uses Console =
+  print(run_two(fn() => N.get()))
+|};
+  [%expect
+    {|
+    error: nothing installs `N` before `main`
+      ┌─ test.ren:6:4
+    6 │ fn main() uses Console =
+      │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
+    7 │   print(run_two(fn() => N.get()))
+      │         ------------------------ this call uses `N`
+      = `run_two` calls a closure inside more than one `with`, so the closure gets only what's installed outside all of them, not the `N` one of them installs
+      help: install one inside `main`: `with fixed(...) in ...`
+    |}];
+  types
+    {|
+dep N =
+  get: fn() -> Int
+
+type A = { n: Int }
+  fn wrap(self, body: fn() -> Int) -> Int = with N { get: fn() => self.n } in try body()
+fn main() uses Console =
+  let a = A { n: 3 }
+  print(with a.wrap() in N.get())
+|};
+  [%expect
+    {|
+    error: nothing installs `N` before `main`
+      ┌─ test.ren:6:4
+    6 │ fn main() uses Console =
+      │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
+    8 │   print(with a.wrap() in N.get())
+      │              -------- this call uses `N`
+      = in `A.wrap`, what's called inside the `with` that installs `N` uses what `A.wrap` itself does: a parameter whose type is written `fn(...)`, or a closure that's called outside the `with` too, gets only what's installed outside it
+      help: install one inside `main`, with `with`: an implementation is a `N { ... }` that gives each of its operations
+    |}]
+
+let%expect_test "an operation given by name, or as a named row" =
+  types
+    {|
+dep N =
+  get: fn() -> Int ! Low
+
+fn helper() -> Int ! High =
+  fail High
+fn f3() -> N = N { get: helper }
+fn f4(g: fn() -> Int ! ..e uses ..d) -> (N uses ..d) = N { get: g }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this implementation can fail with `High`, and `N.get` can't
+      ┌─ test.ren:6:25
+    6 │ fn f3() -> N = N { get: helper }
+      │                         ^^^^^^ fails with `High`
+      = `N.get` can fail only with `Low`
+      help: give a lambda that calls `helper` and maps what it fails with, with `match` and `fail` arms, to what `N.get` can: `fail High => fail Low`
+
+    error: expected `fn() -> Int ! Low`, found `fn() -> Int ! ..e uses ..d`
+      ┌─ test.ren:7:65
+    7 │ fn f4(g: fn() -> Int ! ..e uses ..d) -> (N uses ..d) = N { get: g }
+      │                                                                 ^
+      = `N`'s operation `get`
+      help: `g` can fail with anything `..e` stands for, and the operation only with `Low`: write `! Low` in place of `! ..e`
+    |}]
+
+let%expect_test "an implementation a function makes can need anything" =
+  (* `ren types` shows its open row, which written back keeps it so *)
+  let src =
+    {|
+dep N =
+  get: fn() -> Int
+
+fn noisy() -> Int uses Console =
+  print(0)
+  5
+fn loud() -> (N uses Console) = N { get: fn() => noisy() }
+fn fixed(n: Int) = N { get: fn() => n }
+fn written(n: Int) -> (N uses ..d) = N { get: fn() => n }
+fn pick(b: Bool) -> (N uses Console) = if b then written(1) else loud()
+fn main() uses Console =
+  print(with pick(true) in N.get())
+  print(with fixed(2) in N.get())
+|}
+  in
+  types src;
+  [%expect
+    {|
+    dep N
+      get: fn() -> Int
+    fn noisy() -> Int uses Console
+    fn loud() -> (N uses Console)
+    fn fixed(n: Int) -> (N uses ..d)
+    fn written(n: Int) -> (N uses ..d)
+    fn pick(b: Bool) -> (N uses Console)
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    1
+    2
     ()
     |}]
