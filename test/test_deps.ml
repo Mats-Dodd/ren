@@ -3173,6 +3173,104 @@ fn main() -> Int = convert(both())
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
+let%expect_test "an implementation used inside the `with` that installs it" =
+  (* each place an implementation is used needs what it needs, and no
+     more: used again under another `with`, what that one installs isn't
+     needed outside it *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  var calls = 0
+  usd_to(c) =>
+    calls += 1
+    c * rate
+  count() => calls
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn nested(r: Rates) -> Int =
+  with r in
+    with RateCalls { count: fn() => 0 } in
+      run(r) + RateCalls.count()
+
+fn main() uses Console =
+  let p = Rates { usd_to: fn(c) => c }
+  with p in
+    with RateCalls { count: fn() => 0 } in
+      print(run(p))
+  let h = counting_rates(4)
+  with h in
+    print(run(h))
+    let r: Rates = h
+    print(run(r))
+    print(RateCalls.count())
+  let s = counting_rates(2)
+  with s in
+    with RateCalls { count: fn() => 7 } in
+      with s in
+        print(run(s))
+  print(nested(Rates { usd_to: fn(c) => c + 10 }))
+|}
+  in
+  types src;
+  [%expect
+    {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    pub dep RateCalls
+      count: fn() -> Int
+    handler counting_rates(rate: Int) for Rates, RateCalls
+    fn run(r: Rates) -> Int
+    fn nested(r: Rates) -> Int
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    1
+    4
+    4
+    0
+    2
+    11
+    ()
+    |}];
+  (* what it needs that's learned only once its group is done is still
+     needed where it's installed *)
+  types
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn a(n: Int) -> Int =
+  if n == 0 then 0
+  else
+    let h = Rates { usd_to: fn(c) => b(c) }
+    with h in
+      with Rates { usd_to: fn(c) => c } in
+        run(h) + Rates.usd_to(n)
+
+fn b(c: Int) -> Int = a(c - 1) + Random.int(1)
+
+fn main() uses Console, Random = print(a(2))
+|};
+  [%expect
+    {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    fn run(r: Rates) -> Int
+    fn a(n: Int) -> Int uses Random
+    fn b(c: Int) -> Int uses Random
+    fn main() uses Console, Random
+    |}]
+
 let%expect_test "taken as one, it installs only that one" =
   types
     {|

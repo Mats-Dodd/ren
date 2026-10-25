@@ -108,6 +108,9 @@ type env = {
           it's done (see [impl_op]) *)
   mutable installs : install list;
       (** the group's `with`s that install, innermost first (see [install]) *)
+  mutable copies : copy list;
+      (** the group's uses of an implementation, each with a copy of what it
+          needs (see [copy]) *)
   mutable handler_needs : handler_needs list;
       (** the group's handlers, whose needs are checked once it's done (see
           [handler_needs]) *)
@@ -178,6 +181,23 @@ and install = {
   wbody : row;
   wouter : row;
   wself : Path.t;  (** the function the `with` is in *)
+}
+
+(* A place an implementation is used: a `with` installs it, or it's passed
+   as a transparent parameter. What it needs, [ksrc], is needed there, in
+   [kdst], which starts with its labels and a tail of its own. [ksrc]
+   itself isn't joined to [kdst]: one implementation can be used in two
+   places, `with h in` and inside it `run(h)` under another `with`, and
+   joined to both, the two places would use the same row, so what the
+   inner `with` installs would be needed outside it too. The labels [ksrc]
+   learns later (from a function of the group, once it's joined) are added
+   once the group is done, at [kloc]; [kpassed] are those added so far. *)
+and copy = {
+  kloc : Loc.t;
+  ksrc : row;
+  kdst : row;
+  kwhat : string;  (** what needs it, for a message: "installing this needs" *)
+  mutable kpassed : string list;
 }
 
 (* A handler: [nrow] is what its state and arms use, and [ncalls] the
@@ -992,12 +1012,34 @@ let reopen env r =
   in
   go r
 
-(* [t], or if it's an implementation that needs exactly what it says, one
-   that may need more: where one that needs more is allowed, one that
-   needs less will do. *)
-let widen env t =
+(* What an implementation needs, [needs], copied for one place it's used
+   at [loc] (see [copy]), which [what] says: the same labels, and a tail of its own. A closed
+   row is just opened, since it learns nothing more, and a named one,
+   `..d`, is kept, since it stands for the same labels everywhere. *)
+let copy_needs env ~loc ~what needs =
+  match (row_skolem needs, row_tail needs) with
+  | Some _, _ | _, None -> reopen env needs
+  | None, Some _ ->
+      let labels = fst (row_parts needs) in
+      let copy = extend labels (fresh_row env.st) in
+      env.copies <-
+        {
+          kloc = loc;
+          ksrc = needs;
+          kdst = copy;
+          kwhat = what;
+          kpassed = List.map (fun (l : label) -> l.name) labels;
+        }
+        :: env.copies;
+      copy
+
+(* [t], used at [loc], or if it's an implementation, one that may need
+   more than it does: where one that needs more is allowed, one that needs
+   less will do. *)
+let widen env ~loc t =
   match repr t with
-  | TCon (d, [ TUses u ]) -> TCon (d, [ TUses (reopen env u) ])
+  | TCon (d, [ TUses u ]) ->
+      TCon (d, [ TUses (copy_needs env ~loc ~what:"passing this needs" u) ])
   | t -> t
 
 (* Where an error that's already in [row] came from, for a message about
@@ -1095,7 +1137,7 @@ let include_errors env cx ~loc add errs into =
    `with` installs needs ([needs]), to the dependencies of the function or
    lambda [cx] is in. A row that ends in a named row, `..d`, has its labels
    added now and the named row once the group is done (see [row_due]). *)
-let use_row env cx ~loc ?(needs = false) ?callee uses =
+let rec use_row env cx ~loc ?(needs = false) ?callee uses =
   cx.calls :=
     { cloc = loc; own = row_names uses; row = uses; needs; callee }
     :: !(cx.calls);
@@ -1109,10 +1151,16 @@ let use_row env cx ~loc ?(needs = false) ?callee uses =
         extend (fst (row_parts uses)) (fresh_row env.st)
     | None -> reopen env uses
   in
-  try Unify.unify_row env.st joined cx.uses
+  join_uses env ~loc ~what joined cx.uses
+
+(* Join [joined], what's used at [loc], to [into], what the function or
+   lambda it's in uses, or say it can't use all of that. [what] says what
+   uses it: "this call uses". *)
+and join_uses env ~loc ~what joined into =
+  try Unify.unify_row env.st joined into
   with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
     let shown =
-      match row_names uses with
+      match row_names joined with
       | [] -> "more than what it's in can"
       | ns ->
           and_list (List.map (sprintf "`%s`") ns) ^ ", which what it's in can't"
@@ -1869,7 +1917,7 @@ and with_ env cx (e : expr) item body lam =
       | Some (path, tm, self, tf) ->
           Hashtbl.replace cx.nodes f.node tm;
           Hashtbl.replace cx.found f.node (Method_of path);
-          unify_at env r.loc ~found:(widen env tr) ~expected:self.ty;
+          unify_at env r.loc ~found:(widen env ~loc:r.loc tr) ~expected:self.ty;
           if self.mode = Inout then
             report env
               (Diag.make item.loc
@@ -1958,7 +2006,8 @@ and install env cx (e : expr) item t body =
   | TCon (d, [ TUses needs ]) ->
       (* what it needs it needs here, outside: its operations run with what's
          installed where it's installed *)
-      use_row env cx ~loc:item.loc ~needs:true needs;
+      use_row env cx ~loc:item.loc ~needs:true
+        (copy_needs env ~loc:item.loc ~what:"installing this needs" needs);
       around cx (installs d)
   | TFun ([], ret, _, _) as tf
     when match reveal env.st ret with
@@ -2353,7 +2402,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       | TFun (self :: ps, ret, errs, uses) ->
           (* a dependency's method takes an implementation that needs less
              than its `self` allows, as an argument does *)
-          unify_at env r.loc ~found:(widen env tr) ~expected:self.ty;
+          unify_at env r.loc ~found:(widen env ~loc:r.loc tr) ~expected:self.ty;
           (match (self.mode, changed) with
           | Inout, None ->
               report env (needs_amp e.loc ~recv ~call:(env.source e) o.oname)
@@ -2468,7 +2517,7 @@ and check_args env cx ~name ?callee ps args =
                  dependencies, one of them the parameter's *)
               let t = taken_as env cx a (infer env cx a) p.ty in
               ignore
-                (unifies env why (result_loc a) ~found:(widen env t)
+                (unifies env why (result_loc a) ~found:(widen env ~loc:a.loc t)
                    ~expected:p.ty)
           | _ -> check env cx ~why a p.ty))
     ps args

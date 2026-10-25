@@ -1148,6 +1148,30 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
    Unless another `with` calls the same closure: then it's what's outside
    them all, more than it needs if it uses what one installs, never
    less. *)
+(* Add to each copy of what an implementation needs (see
+   [Infer_expr.copy]) the labels it has learned since, until none learns
+   any more. *)
+let settle_copies env =
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    List.iter
+      (fun (k : copy) ->
+        match
+          List.filter
+            (fun (l : label) -> not (List.mem l.name k.kpassed))
+            (fst (row_parts k.ksrc))
+        with
+        | [] -> ()
+        | fresh ->
+            changed := true;
+            k.kpassed <- k.kpassed @ List.map (fun (l : label) -> l.name) fresh;
+            Infer_expr.join_uses env ~loc:k.kloc ~what:k.kwhat
+              (extend fresh (fresh_row env.st))
+              k.kdst)
+      (List.rev env.copies)
+  done
+
 let settle_installs env =
   let ws = List.rev env.installs in
   let dep_name w = env.names (Ty.dep_path w.wdep) in
@@ -1164,6 +1188,8 @@ let settle_installs env =
   let shared id = List.length (List.filter (( = ) id) tails) > 1 in
   List.iter
     (fun w ->
+      (* what the body learns from an implementation used in it, first *)
+      settle_copies env;
       let labels, tail = row_parts w.wbody in
       let rest = List.filter (fun (l : label) -> l.name <> w.wdep) labels in
       let into r =
@@ -1231,7 +1257,15 @@ let settle_installs env =
                 (and_list
                    (List.map (fun (l : label) -> sprintf "`%s`" l.name) rest)))))
     ws;
-  env.installs <- []
+  settle_copies env;
+  (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
+     implementation needs only what it has: a transparent parameter's
+     row closes with it, which [check_open_rows] reports *)
+  List.iter
+    (fun (k : copy) -> if row_end k.kdst = REmpty then close_row k.ksrc)
+    env.copies;
+  env.installs <- [];
+  env.copies <- []
 
 (* Each operation an implementation of the group gives fails with no more
    than its dependency declares (deps.md, "Implementations"): anything more
@@ -1723,6 +1757,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       impl_ops = [];
       handler_needs = [];
       installs = [];
+      copies = [];
       withheld = [];
       cant_fail = None;
       in_scope = [];
