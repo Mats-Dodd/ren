@@ -11,7 +11,9 @@
    that each function and lambda takes evidence for exactly the
    dependencies its type uses, that each call passes the callee what it
    takes, the innermost evidence for each dependency, that a lambda never
-   captures evidence, and that each operation is called on its
+   captures evidence, that a function or associated value is never used
+   where a function in it would take other evidence than it was made to
+   (it should be a copy), and that each operation is called on its
    dependency's. Which errors code can fail with isn't checked: inference
    has, and Core has no use for them.
 
@@ -218,6 +220,47 @@ let deps_of env (r : Ty.row) =
 let uses_of = function Ty.Fun (_, _, _, u) -> u | _ -> Ty.closed
 let show_deps ps = "[" ^ String.concat ", " (List.map Path.full ps) ^ "]"
 
+(* A function inside [t], an instance of the scheme's type [s], that takes
+   evidence for other dependencies than the same function in [s] does: a
+   row variable of [s] stands for a dependency with evidence there, which
+   a copy should have been made for (evidence.ml). The function [t] itself
+   counts only when [top]: a function's own `uses` may name more, the
+   caller's. *)
+let rec unthreaded env ~top (s : Ty.ty) (t : Ty.ty) =
+  let first =
+    List.fold_left2
+      (fun found s t ->
+        match found with
+        | Some _ -> found
+        | None -> unthreaded env ~top:true s t)
+      None
+  in
+  match (s, t) with
+  | Con (p, a), Con (q, b) when p = q && List.length a = List.length b ->
+      first a b
+  | Fun (ps, r, _, u), Fun (qs, r', _, u') when List.length ps = List.length qs
+    ->
+      if top && deps_of env u <> deps_of env u' then Some (s, t)
+      else
+        first
+          (r :: List.map (fun (p : Ty.param) -> p.ty) ps)
+          (r' :: List.map (fun (p : Ty.param) -> p.ty) qs)
+  | _ -> None
+
+let threaded env loc what (s : Ty.ty) (t : Ty.ty) ~top =
+  match unthreaded env ~top s t with
+  | Some (s', t') ->
+      let where = if t' == t then "which" else sprintf "where `%s`" (show t') in
+      fail env loc
+        (sprintf
+           "%s is used at `%s`, %s takes evidence for %s, but its scheme's \
+            `%s` takes it for %s: it should be a copy"
+           what (show t) where
+           (show_deps (deps_of env (uses_of t')))
+           (show s')
+           (show_deps (deps_of env (uses_of s'))))
+  | None -> ()
+
 (* [evs] are evidence for exactly [deps], in order: the scope inside a
    function or lambda that takes them. *)
 let takes env loc what evs deps =
@@ -297,7 +340,8 @@ let rec expr ?(callee = false) env sc (e : expr) =
                p.name
                (show_deps (deps_of env (uses_of e.ty)))
                (show_deps (deps_of env (uses_of s.ty))))
-      | Some s when instance_of env s.ty e.ty -> ()
+      | Some s when instance_of env s.ty e.ty ->
+          threaded env loc ("`" ^ p.name ^ "`") s.ty e.ty ~top:false
       | Some s ->
           fail env loc
             (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
@@ -305,7 +349,10 @@ let rec expr ?(callee = false) env sc (e : expr) =
       | None -> fail env loc (sprintf "there's no function `%s`" p.name))
   | Global_value p -> (
       match Hashtbl.find_opt env.values p with
-      | Some s when instance_of env s.ty e.ty -> ()
+      | Some s when instance_of env s.ty e.ty ->
+          (* it was made once, with the evidence its own type names, which
+             is all it ever takes *)
+          threaded env loc ("`" ^ p.name ^ "`") s.ty e.ty ~top:true
       | Some s ->
           fail env loc
             (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"

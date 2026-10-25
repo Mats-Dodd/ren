@@ -838,6 +838,103 @@ fn main() uses Console =
     ()
     |}]
 
+(* An associated value is made once, at startup, so it can't be given the
+   evidence of where it's used: one whose type has a row variable gets a
+   copy made for what each use gives it, as a function does. *)
+let%expect_test "an associated value used where a dependency is gets a copy" =
+  let src =
+    {|
+type T = { n: Int }
+  let one = fn() => 1
+  let f = fn(g) => g()
+fn twice(g) = g() + g()
+fn main() uses Console =
+  print(T.one())
+  print(twice(T.one))
+  T.f(fn() => print(3))
+|}
+  in
+  core src;
+  [%expect
+    {|
+    (fn T.one () (lambda () (captures) 1))
+    (fn T.f () (lambda (g/1) (captures) (call g/1)))
+    (fn twice (g/1) (+ (call g/1) (call g/1)))
+    (fn main () (uses Console/1)
+      (seq (call print (call T.one[Console] (uses Console/1)) (uses Console/1))
+        (seq
+          (call print (call twice[Console] T.one[Console] (uses Console/1))
+            (uses Console/1))
+          (call T.f[Console]
+            (lambda () (captures) (uses Console/2)
+              (call print 3 (uses Console/2)))
+            (uses Console/1)))))
+    (fn T.one[Console] () (lambda () (captures) (uses Console/1) 1))
+    (fn twice[Console] (g/1) (uses Console/2)
+      (+ (call g/1 (uses Console/2)) (call g/1 (uses Console/2))))
+    (fn T.f[Console] ()
+      (lambda (g/1) (captures) (uses Console/2) (call g/1 (uses Console/2))))
+    (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+    |}];
+  run src;
+  [%expect {|
+    1
+    2
+    3
+    ()
+    |}];
+  (* Core Lint catches a value used at a type that takes other evidence
+     than it was made with: here a copy is made as the original was *)
+  let unthreaded name check =
+    let src = clean src in
+    report src (fun () ->
+        let open Ren in
+        let linked = Driver.linked ~file src in
+        let entry = List.nth linked (List.length linked - 1) in
+        let original =
+          List.find (fun (f : Core.fn_def) -> f.path.name = name) entry.fns
+        in
+        let entry =
+          {
+            entry with
+            fns =
+              List.map
+                (fun (g : Core.fn_def) ->
+                  if g.path.name = name ^ "[Console]" then
+                    { original with path = g.path }
+                  else g)
+                entry.fns;
+          }
+        in
+        check linked entry)
+  in
+  let lint linked entry =
+    Ren.Driver.pass "lint" (fun () ->
+        Ren.Core_lint.program ~imports:[] ~linked entry)
+  in
+  unthreaded "T.one" lint;
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:6:9: `T.one[Console]` is used at `fn() -> Int uses Console, ..d`, which takes evidence for [Console], but its scheme's `fn() -> Int ! ..e uses ..d` takes it for []: it should be a copy")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  unthreaded "T.f" lint;
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:8:3: `T.f[Console]` is used at `fn(fn() uses Console, ..d) uses Console, ..d`, which takes evidence for [Console], but its scheme's `fn(fn() -> T uses ..d) -> T ! ..e uses ..d` takes it for []: it should be a copy")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* and eval, which `ren run` doesn't lint first, says which call it was *)
+  unthreaded "T.one" (fun linked entry ->
+      ignore
+        (Ren.Driver.pass "eval" (fun () ->
+             Ren.Eval.run (List.rev (entry :: List.tl (List.rev linked))))));
+  [%expect
+    {|
+    internal compiler error in eval: Failure("bug: checking or lowering let through a call of a lambda (its body at test.ren:2) passing 1 evidence, which takes 0")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
 (* `with` arrives with its syntax in 7.3; this is the Core it lowers to.
    The closure is made where one clock is installed, and called where
    another is, which it uses. *)

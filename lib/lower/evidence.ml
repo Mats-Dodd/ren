@@ -30,7 +30,10 @@
    variable left in a type then never stands for a dependency that has
    evidence, and the evidence of any function value is exactly the
    dependencies its type names. (A row's labels are a finite set, so the
-   copies are too.) The one place a function is seen with more
+   copies are too.) An associated value is a function of no parameters
+   (core.ml), so one whose type mentions a row variable, like
+   `let one = fn() => 1`, gets copies the same way, each made at startup
+   right after it. The one place a function is seen with more
    dependencies than its own type names is a function used as a value,
    which may be given to something that uses more: there it's wrapped in a
    lambda that takes the evidence its type there names, and passes on what
@@ -54,6 +57,8 @@ type world = {
       (** the copy of each function made for each set of dependencies *)
   mutable queue : (fn_def * subst * Path.t) list;
       (** copies asked for and not made yet, the most recent first *)
+  mutable made : (Path.t * Path.t) list;
+      (** each function or value and a copy of it, the most recent first *)
 }
 
 (* What each row variable of a function's own scheme stands for in a copy:
@@ -196,6 +201,7 @@ let refer w (p : Path.t) (t : Ty.ty) =
           let c = Path.make p.home name in
           Hashtbl.replace w.copies (p, key) c;
           w.queue <- (f, s, c) :: w.queue;
+          w.made <- (p, c) :: w.made;
           c
     in
     (copy, subst s f.scheme.ty)
@@ -294,7 +300,14 @@ let rec expr cx (env : env) (e : expr) : expr =
   let here kind = mk kind ty e.loc in
   let go = expr cx env in
   match e.kind with
-  | Int _ | Bool _ | Str _ | Unit | Global_value _ -> here e.kind
+  | Int _ | Bool _ | Str _ | Unit -> here e.kind
+  | Global_value p ->
+      (* an associated value is made once, at startup, with the evidence
+         its own type names: one used at a type that gives its row
+         variables more, like `let one = fn() => 1` used where `Console`
+         is, is a copy made for that *)
+      let p', _ = refer cx.w p (Fun ([], ty, Ty.closed, Ty.closed)) in
+      here (Global_value p')
   | Local v -> here (Local (subst_var cx.s v))
   | Global p ->
       let p', scheme = refer cx.w p ty in
@@ -518,6 +531,7 @@ let program (modules : program list) =
       fns = Hashtbl.create 64;
       copies = Hashtbl.create 16;
       queue = [];
+      made = [];
     }
   in
   List.iter
@@ -553,6 +567,18 @@ let program (modules : program list) =
       let fns =
         m.fns @ List.filter (fun (f : fn_def) -> f.path.home = m.home) copies
       in
+      (* a value's copies are made right after it, so after every value
+         they use too *)
+      let values =
+        List.concat_map
+          (fun v ->
+            v
+            :: List.rev
+                 (List.filter_map
+                    (fun (o, c) -> if o = v then Some c else None)
+                    w.made))
+          m.values
+      in
       let start =
         if m.home <> entry then []
         else
@@ -564,5 +590,5 @@ let program (modules : program list) =
           | Some main -> [ start main ]
           | None -> []
       in
-      { m with fns = fns @ start })
+      { m with fns = fns @ start; values })
     threaded

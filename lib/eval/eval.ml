@@ -277,7 +277,13 @@ and call_at cx loc f args evidence =
    failed with, and the final value of every parameter, so the caller can
    write back the ones passed `inout`. *)
 and apply cx f args evidence =
-  let run params evs body env =
+  let run what params evs body env =
+    (* threading evidence wrongly is a bug Core Lint should have caught,
+       but `ren run` doesn't lint, so say which function it was *)
+    if List.length evs <> List.length evidence then
+      bug
+        (Printf.sprintf "a call of %s passing %d evidence, which takes %d" what
+           (List.length evidence) (List.length evs));
     let cells = List.map ref args in
     let env =
       List.fold_left2 (fun env id c -> Env.add id c env) env params cells
@@ -298,10 +304,15 @@ and apply cx f args evidence =
   | VFn p ->
       let f = Hashtbl.find cx.fns p in
       run
+        ("`" ^ p.name ^ "`")
         (List.map (fun (p : param) -> p.var.id) f.params)
         (List.map (fun (v : var) -> v.id) f.evidence)
         f.body Env.empty
-  | VClosure { params; evidence; body; env } -> run params evidence body env
+  | VClosure { params; evidence; body; env } ->
+      run
+        (Printf.sprintf "a lambda (its body at %s:%d)" body.loc.file
+           body.loc.start.line)
+        params evidence body env
   | _ -> bug "a call to something that isn't a function"
 
 (* Run a program made of [modules] (the prelude, then the user's files),

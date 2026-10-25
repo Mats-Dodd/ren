@@ -262,6 +262,9 @@ so it couldn't know what to pass it. Instead it has a copy for each set of
 dependencies its callers' closures use: `twice(fn() => print(1))` calls
 `twice[Console]`, in which `f` takes `Console`. So a closure's hidden
 parameters are always exactly what its type names, wherever it's called.
+An associated value holding a closure, `let one = fn() => 1`, is made once
+at startup, so it gets copies the same way: `T.one()` in a function that
+uses Console reads `T.one[Console]`, made right after `T.one`.
 The program starts in `$start`, which installs the real implementation of
 each built-in `main` uses and calls `main`. `ren core` prints all of it.
 (The copies are a choice the implementation made, and the plan didn't
