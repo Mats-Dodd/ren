@@ -33,6 +33,20 @@ fn main() = 1 < 2 < 3
       help: split it into two comparisons
     |}]
 
+let%expect_test "not on a comparison's right side" =
+  ast {|
+fn f() = true == (not false)
+fn g() = true == not false
+|};
+  [%expect
+    {|
+    error: `not` can't start the right side of a comparison
+      ┌─ test.ren:2:18
+    2 │ fn g() = true == not false
+      │                  ^^^
+      help: put it in parentheses: `a == (not b)`
+    |}]
+
 let%expect_test "&&, || and not" =
   tokens {|
 fn main() = not a && b || c != d

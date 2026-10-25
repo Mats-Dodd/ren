@@ -589,6 +589,11 @@ and parse_cmp p =
   | None -> lhs
   | Some op ->
       advance p;
+      if peek p = NOT then
+        (* `not` binds looser than a comparison: `not a == b` is
+           `not (a == b)`, so one can't start a comparison's right side *)
+        Diag.error (loc p) ~help:"put it in parentheses: `a == (not b)`"
+          "`not` can't start the right side of a comparison";
       let rhs = parse_add p in
       if cmp_op (peek p) <> None then
         Diag.error (loc p) ~help:"split it into two comparisons"
