@@ -13,7 +13,7 @@ ren test prices            # every module's tests
 
 | File | What's in it |
 |---|---|
-| `limiter.ren` | `Limiter`, a dependency with one operation, `take`, that fails with `Throttled`; `Limiter.none`; `fixed_window`, a handler that lets `limit` calls through in each window of time |
+| `limiter.ren` | `Limiter`, a dependency with one operation, `take`, that fails with `Throttled`; `Limiter.none`; `fixed_window`, a handler that lets `limit` calls through in each window of time; `token_bucket`, one that lets a burst through and then one call each time a token comes |
 | `cache.ren` | `Supplier`, where prices come from; `Prices`, what the program asks; `cached`, a handler for `Prices` that keeps answers for `ttl` and asks the supplier past the limiter; tests with a supplier that counts its calls |
 | `main.ren` | a slow supplier, the three pieces stacked with one `with`, and a test of what it prints |
 
@@ -41,9 +41,5 @@ and a new window are tested without waiting, and `main`'s own
   operation under another name.
 - **Handlers aren't imported by name,** only types are, so they're
   written `limiter.fixed_window` and `cache.cached`.
-- **`Duration` can't be compared,** and its number can't be read outside
-  the prelude, so the limiter compares `Instant`s: `now.not_before(start
-  .plus(window))`. A token bucket, which divides time by a rate, can't be
-  written yet.
 - **Checking a refusal takes a `match`** with a `_ => assert false` arm,
   as in the bank.

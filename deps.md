@@ -180,7 +180,9 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   `test_proc(exits: Array<Exit>)` keeps each `Command { cmd, args }`, and
   says it exited with the code of its `Exit { command, code }`, or 0.
 - `Time`, `Instant` and `Duration` are opaque, with methods only until
-  operators arrive (stage 10).
+  operators arrive (stage 10). A `Duration` is made with `ms`, `seconds`
+  or `minutes`, added to with `plus` and `times`, compared with `before`
+  and `after`, and read back with `in_ms`.
 - For now the real `instant` reads the same wall clock as `now`, which the
   system can set back (NTP, a manual change). A monotonic source needs a
   primitive OCaml's standard library doesn't have; it comes with the

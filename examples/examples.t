@@ -910,8 +910,10 @@ rate limiter guards (prices/README.md). Each piece is a dependency, and
     ✓ calls up to the limit go through
     ✓ one more is throttled until the window ends
     ✓ a new window lets calls through again
+    ✓ a burst goes through, and then one call each time a token comes
+    ✓ tokens build up to the burst, and no more
   
   main.ren
     ✓ main prints each price, or what stopped it
   
-  8 passed
+  10 passed

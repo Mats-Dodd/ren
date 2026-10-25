@@ -1,5 +1,5 @@
-// A rate limiter: at most `limit` calls in each `window` of time. Each
-// window starts at the first call after the last one ended.
+// Rate limiters: a fixed window, at most `limit` calls in each `window`
+// of time, and a token bucket, which spreads them out evenly.
 
 pub dep Limiter =
   // let one call through, or say when the next one can be made
@@ -8,6 +8,8 @@ pub dep Limiter =
   // a limiter that lets everything through
   pub let none: Limiter = Limiter { take: fn() => () }
 
+// at most `limit` calls in each `window` of time; each window starts at
+// the first call after the last one ended
 pub handler fixed_window(limit: Int, window: Duration) for Limiter uses Clock =
   var start = Clock.instant()
   var used = 0
@@ -18,6 +20,20 @@ pub handler fixed_window(limit: Int, window: Duration) for Limiter uses Clock =
       used = 0
     if used == limit then fail Throttled(start.plus(window))
     used += 1
+
+// up to `burst` calls at once, and then one more each time `every` goes
+// by: a token for each call, and a new one every `every`, up to `burst`
+pub handler token_bucket(burst: Int, every: Duration) for Limiter uses Clock =
+  var tokens = burst
+  // when the last token was added
+  var added = Clock.instant()
+  take() =>
+    let gained = Clock.instant().since(added).in_ms() / every.in_ms()
+    if gained > 0 then
+      tokens = if tokens + gained > burst then burst else tokens + gained
+      added = added.plus(every.times(gained))
+    if tokens == 0 then fail Throttled(added.plus(every))
+    tokens -= 1
 
 test "calls up to the limit go through" =
   with fixed_window(2, Duration.seconds(1)) in
@@ -37,3 +53,27 @@ test "a new window lets calls through again" =
     try Limiter.take()
     TestClock.advance(Duration.seconds(1))
     try Limiter.take()
+
+test "a burst goes through, and then one call each time a token comes" =
+  with token_bucket(2, Duration.ms(500)) in
+    try Limiter.take()
+    try Limiter.take()
+    match attempt Limiter.take()
+      Err(Throttled(until)) => assert until == Instant.zero.plus(Duration.ms(500))
+      _ => assert false
+    TestClock.advance(Duration.ms(500))
+    try Limiter.take()
+    match attempt Limiter.take()
+      Err(Throttled(until)) => assert until == Instant.zero.plus(Duration.seconds(1))
+      _ => assert false
+
+test "tokens build up to the burst, and no more" =
+  with token_bucket(2, Duration.ms(500)) in
+    try Limiter.take()
+    try Limiter.take()
+    TestClock.advance(Duration.seconds(10))
+    try Limiter.take()
+    try Limiter.take()
+    match attempt Limiter.take()
+      Err(Throttled(_)) => ()
+      _ => assert false
