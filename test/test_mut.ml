@@ -242,3 +242,20 @@ fn main() =
       │                   ^
       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
     |}]
+
+let%expect_test "an inout lambda parameter is reported once" =
+  (* the parameter is still bound as `inout`, so changing it isn't also
+     reported as changing a read-only parameter *)
+  run {|
+fn main() =
+  let f = fn(inout n) => n += 1
+  f
+|};
+  [%expect
+    {|
+    error: lambdas can't take `inout` parameters yet
+      ┌─ test.ren:2:20
+    2 │   let f = fn(inout n) => n += 1
+      │                    ^
+      help: use a top-level function for this
+    |}]

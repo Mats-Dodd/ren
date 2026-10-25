@@ -22,7 +22,7 @@ exception Panic of Loc.t * string
 let panic loc msg = raise (Panic (loc, msg))
 
 (* The type checker rules these out, so reaching one is a compiler bug. *)
-let bug what = failwith ("bug: the type checker let through " ^ what)
+let bug what = failwith ("bug: checking or lowering let through " ^ what)
 
 (* Structural equality. Functions have no meaningful equality, so comparing
    them panics; Stage 9's operators will turn that into a type error. *)

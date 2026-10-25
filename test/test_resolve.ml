@@ -190,3 +190,31 @@ fn main() = 1
       = the first `Option` is here: <prelude>:1:6
       help: rename one of them
     |}]
+
+let%expect_test "a prelude function's name can't be reused" =
+  run {|
+fn print(x) = x
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `print` is already a function in the prelude
+      ┌─ test.ren:1:4
+    1 │ fn print(x) = x
+      │    ^^^^^
+      help: choose another name
+    |}]
+
+let%expect_test "a file can't be named prelude.ren" =
+  (* its module would be the prelude's own *)
+  let src = "fn main() = 1\n" in
+  report src (fun () ->
+      print_endline (Ren.Value.show (Ren.Driver.run ~file:"prelude.ren" src)));
+  [%expect
+    {|
+    error: a file can't be named `prelude.ren`: that's the name of the module every program imports
+      ┌─ prelude.ren:1:1
+    1 │ fn main() = 1
+      │ ^
+      help: rename the file
+    |}]

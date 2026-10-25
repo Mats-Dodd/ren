@@ -27,7 +27,8 @@ val interface : file:string -> string -> Iface.t
 
 (* The program, checked and lowered to Core. With [lint] (off by default),
    Core Lint checks what lowering made, and a problem is an
-   [Internal_error]; the tests turn it on. *)
+   [Internal_error]; the tests turn it on. The prelude's Core is always
+   linted, once, since that costs nothing per program. *)
 val core : ?lint:bool -> file:string -> string -> Core.program
 
 (* Every function's inferred signature, as `ren types` prints it. With

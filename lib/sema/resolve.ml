@@ -210,7 +210,13 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         no_duplicates env "parameters"
           (List.map (fun (p : Parsed.param) -> p.pname) ps);
         let ps, inner =
-          params env { sc with depth = sc.depth + 1 } (fun _ -> By_lambda) ps
+          (* an `inout` lambda parameter is an error (mut.ml), but binding it
+             as one keeps its uses from being reported a second time *)
+          params env
+            { sc with depth = sc.depth + 1 }
+            (fun (p : Parsed.param) ->
+              if p.pmode = Inout then By_inout else By_lambda)
+            ps
         in
         Lambda (ps, expr env inner body)
     | Block (stmts, last) ->
@@ -428,7 +434,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
     (fun (f : Parsed.fn_def) ->
       if Hashtbl.mem env.values f.name.name then
         report env f.name.loc ~help:"choose another name"
-          (sprintf "`%s` is a built-in function" f.name.name))
+          (sprintf "`%s` is already a function in the prelude" f.name.name))
     fns;
   List.iter
     (fun (f : Parsed.fn_def) ->

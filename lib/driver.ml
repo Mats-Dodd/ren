@@ -114,6 +114,14 @@ let check_all ~file src =
   let _, prelude_iface = Lazy.force prelude in
   let prog = parse ~file src in
   let home = Path.home_of_file file in
+  if home = Path.prelude_home then
+    raise
+      (Diag.Errors
+         [
+           Diag.make (Loc.point ~file 1 1) ~help:"rename the file"
+             "a file can't be named `prelude.ren`: that's the name of the \
+              module every program imports";
+         ]);
   let imports = [ prelude_iface ] in
   let resolved, iface, inferred =
     check_module ~home ~imports ~entry:file prog
