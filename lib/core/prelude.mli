@@ -9,17 +9,9 @@ val file : string
 type builtin_fn = {
   name : string;
   scheme : Ty.scheme;  (** its type scheme *)
-  eval : Value.t list -> Value.t * Value.t list;
-      (** its result, and the final value of every parameter *)
   runtime : bool;
       (** whether it reaches the world: only the prelude's source can call it *)
 }
-
-(* Raised by a built-in function that panics, with what to say. *)
-exception Panic of string
-
-(* Raised by a built-in function that fails, with its error. *)
-exception Fail of Value.t
 
 type builtin_type = {
   name : string;
@@ -35,10 +27,6 @@ val types : builtin_type list
    [Random], [Console], [Fs], [Os] and [Proc]. Each one's real
    implementation is its private associated value [real]. *)
 val runtime_deps : string list
-
-(* What `ren run file.ren -- args` was given after the `--`: what the
-   real [Os.args] gives back. *)
-val args : string list ref
 
 (* The dependencies a `uses` can name that aren't declared yet: [Net], ... *)
 val dependencies : string list

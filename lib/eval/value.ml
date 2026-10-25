@@ -1,5 +1,5 @@
 (* Values: what a running Ren program computes. A module of its own, so the
-   prelude's built-in functions (prelude.ml) can work on values without
+   prelude's built-in functions (builtins.ml) can work on values without
    depending on the interpreter that calls them. *)
 
 (* Variables in scope: an immutable map from a local's binder id (core.ml)

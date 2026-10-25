@@ -3,10 +3,11 @@
 ;   sema/    the checks that run before anything does (resolve, mut, infer,
 ;            exhaust)
 ;   core/    what every pass shares: identities (paths), canonical types,
-;            interfaces, and the prelude
+;            interfaces, and the prelude, with its built-ins' types
 ;   lower/   Core, the typed language a checked program is lowered to, the
 ;            lowering, and Core Lint
-;   eval/    the interpreter and the values it computes
+;   eval/    the interpreter, the values it computes, and what the prelude's
+;            built-in functions do when they run
 ; `unqualified` means the folders only organize files: every module keeps
 ; its plain name (Parser, not Syntax.Parser).
 

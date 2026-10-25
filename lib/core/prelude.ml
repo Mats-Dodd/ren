@@ -4,8 +4,11 @@
    against (driver.ml). It comes in two halves. [source] is written in Ren
    itself, and checked like any module. Everything else is built into the
    compiler (intrinsic), because it can't be written in Ren yet, and is
-   listed in the tables below: each entry says everything every pass needs
-   to know about it, so adding a built-in means adding one entry. *)
+   listed in the tables below: each entry says everything the passes before
+   the interpreter need to know about it, its type above all. What each
+   one does when it runs is the interpreter's half, eval/builtins.ml, so
+   adding a built-in means adding an entry here and its implementation
+   there. *)
 
 (* The file its source is said to be in, which no message can show. *)
 let file = "<prelude>"
@@ -306,9 +309,6 @@ type builtin_fn = {
   scheme : Ty.scheme;
       (** its type scheme. Each parameter's mode ([inout] or not) is part of the
           type. *)
-  eval : Value.t list -> Value.t * Value.t list;
-      (** run it: the result, and the final value of every parameter, which the
-          interpreter writes back for the arguments passed with `&` *)
   runtime : bool;
       (** whether only the prelude's own source can call it: it reaches the
           world, which a program does only through a dependency, in the real
@@ -316,278 +316,67 @@ type builtin_fn = {
           implementations works *)
 }
 
-(* A built-in function has panicked, which the interpreter reports at the
-   call. *)
-exception Panic of string
-
-(* A built-in function has failed with this error, which the call fails
-   with. *)
-exception Fail of Value.t
-
-(* The type checker rules these out, so reaching one is a compiler bug. *)
-let bug name = failwith ("bug: `" ^ name ^ "` was called with the wrong values")
-
 (* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
    [n]th row variable, numbered by first appearance (ty.ml). *)
 let scheme ty : Ty.scheme = { ty; names = [] }
 let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])
 
-(* What the real implementations of the built-in dependencies run on: the
-   system's clock, its source of randomness, stdout and stderr. Each is a number
-   of milliseconds, as [source] represents time. [Unix.gettimeofday] is
-   the wall clock, which can be set back, so `instant` isn't yet the clock
-   that never goes back that `Instant` promises: OCaml's standard library
-   has no monotonic one (deps.md, "Built in"). *)
-let now_ms () = int_of_float (Unix.gettimeofday () *. 1000.)
-
-(* What the system said to a read or a write, as the prelude's private
-   [FsOutcome<T>], which its source turns into the value or an `FsError`. *)
-let fs_outcome name args =
-  Value.VCon { ty = Path.prelude "FsOutcome"; name; args }
-
-let fs_failed (e : Unix.error) =
-  match e with
-  | ENOENT | ENOTDIR -> fs_outcome "FsMissing" []
-  | EACCES | EPERM | EROFS -> fs_outcome "FsDenied" []
-  | EISDIR -> fs_outcome "FsFolder" []
-  | e -> fs_outcome "FsOther" [ VStr (Unix.error_message e) ]
-
-(* A file's bytes, as [FsDone], or why it couldn't be read. A folder opens,
-   but isn't a file to read. *)
-let read_file path =
-  match Unix.openfile path [ Unix.O_RDONLY ] 0 with
-  | exception Unix.Unix_error (e, _, _) -> fs_failed e
-  | fd -> (
-      match Unix.fstat fd with
-      | exception Unix.Unix_error (e, _, _) ->
-          Unix.close fd;
-          fs_failed e
-      | { st_kind = Unix.S_DIR; _ } ->
-          Unix.close fd;
-          fs_failed Unix.EISDIR
-      | _ -> (
-          let ic = Unix.in_channel_of_descr fd in
-          match In_channel.input_all ic with
-          | data ->
-              close_in ic;
-              fs_outcome "FsDone" [ VBytes data ]
-          | exception Sys_error msg ->
-              close_in_noerr ic;
-              fs_outcome "FsOther" [ VStr msg ]))
-
-(* Make the file at [path], or replace what's in it, as [FsDone ()], or say
-   why it couldn't be written. *)
-let write_file path data =
-  match
-    Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644
-  with
-  | exception Unix.Unix_error (e, _, _) -> fs_failed e
-  | fd -> (
-      let b = Bytes.unsafe_of_string data in
-      let rec go off =
-        if off < Bytes.length b then
-          go (off + Unix.write fd b off (Bytes.length b - off))
-      in
-      match go 0 with
-      | () ->
-          Unix.close fd;
-          fs_outcome "FsDone" [ VUnit ]
-      | exception Unix.Unix_error (e, _, _) ->
-          Unix.close fd;
-          fs_failed e)
-
-(* What `ren run file.ren -- args` was given after the `--`, which the
-   real `Os.args` gives back. *)
-let args : string list ref = ref []
-
-(* Where the program [cmd] is: [cmd] itself if it has a `/` in it and
-   something's there, or else the first file of that name on `PATH` that
-   can be run, as a shell looks. One that's there but can't be run is
-   found, and `Proc` fails with `CantRun` when it's run. *)
-let find_program cmd =
-  let runnable p =
-    (try not (Sys.is_directory p) with Sys_error _ -> false)
-    &&
-    try
-      Unix.access p [ Unix.X_OK ];
-      true
-    with Unix.Unix_error _ -> false
-  in
-  if String.contains cmd '/' then if Sys.file_exists cmd then Some cmd else None
-  else
-    let path = Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin" in
-    List.find_map
-      (fun dir ->
-        let p = Filename.concat (if dir = "" then "." else dir) cmd in
-        if runnable p then Some p else None)
-      (String.split_on_char ':' path)
-
-(* What became of a program, as the prelude's private [ProcOutcome]. *)
-let proc_outcome name args =
-  Value.VCon { ty = Path.prelude "ProcOutcome"; name; args }
-
-(* Run the program at [path] as [cmd], with [args], and wait for its exit
-   code. It writes to, and reads from, what this program does, so what
-   this program has written so far goes out first. A program the system
-   won't start, or one killed by a signal, is said so, for `Proc` to fail
-   with. *)
-let run_program path cmd args =
-  flush stdout;
-  flush stderr;
-  match
-    Unix.create_process path
-      (Array.of_list (cmd :: args))
-      Unix.stdin Unix.stdout Unix.stderr
-  with
-  | exception Unix.Unix_error (e, _, _) ->
-      proc_outcome "ProcNotStarted" [ VStr (Unix.error_message e) ]
-  | pid ->
-      let rec wait () =
-        match Unix.waitpid [] pid with
-        | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
-        | _, Unix.WEXITED code -> proc_outcome "ProcExited" [ VInt code ]
-        | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> proc_outcome "ProcKilled" []
-      in
-      wait ()
-
-(* `Some(args)` or `None` *)
-let option name args = Value.VCon { ty = Path.prelude "Option"; name; args }
-
-(* `Random.int`'s panic, real or not, for a [below] it can't stay below *)
-let not_above_0 below =
-  Printf.sprintf "`Random.int` needs a number above 0 to stay below, not %d"
-    below
-
 let fns =
   let open Ty in
-  let fn ?(runtime = false) name ty eval =
-    { name; scheme = scheme ty; eval; runtime }
-  in
+  let fn ?(runtime = false) name ty = { name; scheme = scheme ty; runtime } in
   [
     (* fn<T>(T) -> Str, which the interpreter runs itself, since it shows
        a value through its type (eval.ml) *)
-    fn "show"
-      (Fun ([ read (Var 0) ], str, open_row 0, open_row 1))
-      (fun _ -> failwith "bug: `show` is run by the interpreter");
+    fn "show" (Fun ([ read (Var 0) ], str, open_row 0, open_row 1));
     (* fn() -> Int, the real `Clock.now` and `Clock.instant` *)
-    fn ~runtime:true "clock_now"
-      (Fun ([], int, open_row 0, open_row 1))
-      (fun args -> (Value.VInt (now_ms ()), args));
-    fn ~runtime:true "clock_instant"
-      (Fun ([], int, open_row 0, open_row 1))
-      (fun args -> (Value.VInt (now_ms ()), args));
+    fn ~runtime:true "clock_now" (Fun ([], int, open_row 0, open_row 1));
+    fn ~runtime:true "clock_instant" (Fun ([], int, open_row 0, open_row 1));
     (* fn(Int) *)
     fn ~runtime:true "clock_sleep"
-      (Fun ([ read int ], unit, open_row 0, open_row 1))
-      (function
-        | [ Value.VInt ms ] as args ->
-            if ms > 0 then Unix.sleepf (float_of_int ms /. 1000.);
-            (Value.VUnit, args)
-        | _ -> bug "clock_sleep");
+      (Fun ([ read int ], unit, open_row 0, open_row 1));
     (* fn(Int) -> Int *)
     fn ~runtime:true "random_int"
-      (Fun ([ read int ], int, open_row 0, open_row 1))
-      (function
-        | [ Value.VInt below ] as args ->
-            if below <= 0 then raise (Panic (not_above_0 below));
-            let state = Random.State.make_self_init () in
-            (Value.VInt (Random.State.full_int state below), args)
-        | _ -> bug "random_int");
-    (* fn(Int) -> Int: the state after [state] of the test `Random`, a
-       linear congruential generator's, which never goes negative *)
+      (Fun ([ read int ], int, open_row 0, open_row 1));
+    (* fn(Int) -> Int: the state after [state] of the test `Random` *)
     fn ~runtime:true "seeded_next"
-      (Fun ([ read int ], int, open_row 0, open_row 1))
-      (function
-        | [ Value.VInt state ] as args ->
-            ( Value.VInt (((abs state * 1103515245) + 12345) land 0x7fffffff),
-              args )
-        | _ -> bug "seeded_next");
+      (Fun ([ read int ], int, open_row 0, open_row 1));
     (* fn(Int, Int) -> Int: a number from 0 below [below], from that
-       state's high bits, which vary more than its low ones *)
+       state *)
     fn ~runtime:true "seeded_int"
-      (Fun ([ read int; read int ], int, open_row 0, open_row 1))
-      (function
-        | [ Value.VInt state; Value.VInt below ] as args ->
-            if below <= 0 then raise (Panic (not_above_0 below));
-            (Value.VInt ((state lsr 16) mod below), args)
-        | _ -> bug "seeded_int");
+      (Fun ([ read int; read int ], int, open_row 0, open_row 1));
     (* fn(Str) *)
     fn ~runtime:true "console_write"
-      (Fun ([ read str ], unit, open_row 0, open_row 1))
-      (function
-        | [ Value.VStr line ] as args ->
-            print_endline line;
-            (Value.VUnit, args)
-        | _ -> bug "console_write");
+      (Fun ([ read str ], unit, open_row 0, open_row 1));
     (* fn(Str), the real `Console.error`: stderr *)
     fn ~runtime:true "console_error"
-      (Fun ([ read str ], unit, open_row 0, open_row 1))
-      (function
-        | [ Value.VStr line ] as args ->
-            prerr_endline line;
-            (Value.VUnit, args)
-        | _ -> bug "console_error");
+      (Fun ([ read str ], unit, open_row 0, open_row 1));
     (* fn(Str) -> FsOutcome<Bytes>, the real `Fs.read` *)
     fn ~runtime:true "fs_read"
       (Fun
          ( [ read str ],
            Con (Path.prelude "FsOutcome", [ bytes ]),
            open_row 0,
-           open_row 1 ))
-      (function
-        | [ Value.VStr path ] as args -> (read_file path, args)
-        | _ -> bug "fs_read");
+           open_row 1 ));
     (* fn(Str, Bytes) -> FsOutcome<Unit>, the real `Fs.write` *)
     fn ~runtime:true "fs_write"
       (Fun
          ( [ read str; read bytes ],
            Con (Path.prelude "FsOutcome", [ unit ]),
            open_row 0,
-           open_row 1 ))
-      (function
-        | [ Value.VStr path; Value.VBytes data ] as args ->
-            (write_file path data, args)
-        | _ -> bug "fs_write");
+           open_row 1 ));
     (* fn(Str) -> Bool *)
     fn ~runtime:true "fs_exists"
-      (Fun ([ read str ], bool, open_row 0, open_row 1))
-      (function
-        | [ Value.VStr path ] as args ->
-            (Value.VBool (Sys.file_exists path), args)
-        | _ -> bug "fs_exists");
+      (Fun ([ read str ], bool, open_row 0, open_row 1));
     (* fn() -> Array<Str> *)
-    fn ~runtime:true "os_args"
-      (Fun ([], array str, open_row 0, open_row 1))
-      (fun a ->
-        (* a `Str` is UTF-8, so an argument that isn't can't be one *)
-        let str i s =
-          if String.is_valid_utf_8 s then Value.VStr s
-          else
-            raise (Panic (Printf.sprintf "argument %d isn't UTF-8" (i + 1)))
-        in
-        let strs = List.mapi str !args in
-        (Value.VArray (Array.of_list strs), a));
+    fn ~runtime:true "os_args" (Fun ([], array str, open_row 0, open_row 1));
     (* fn(Str, Array<Str>) -> ProcOutcome, the real `Proc.run` *)
     fn ~runtime:true "proc_run"
       (Fun
          ( [ read str; read (array str) ],
            Con (Path.prelude "ProcOutcome", []),
            open_row 0,
-           open_row 1 ))
-      (function
-        | [ Value.VStr cmd; Value.VArray xs ] as a ->
-            let strs =
-              Array.to_list
-                (Array.map
-                   (function Value.VStr s -> s | _ -> bug "proc_run")
-                   xs)
-            in
-            ( (match find_program cmd with
-              | Some path -> run_program path cmd strs
-              | None -> proc_outcome "ProcMissing" []),
-              a )
-        | _ -> bug "proc_run");
+           open_row 1 ));
   ]
 
 (* ---- built-in types ----
@@ -612,10 +401,6 @@ let array_methods =
       name = "len";
       scheme =
         scheme (Fun ([ read (array (Var 0)) ], int, open_row 0, open_row 1));
-      eval =
-        (function
-        | [ Value.VArray xs ] as args -> (Value.VInt (Array.length xs), args)
-        | _ -> bug "len");
       runtime = false;
     };
     {
@@ -628,113 +413,43 @@ let array_methods =
                unit,
                open_row 0,
                open_row 1 ));
-      eval =
-        (function
-        | [ Value.VArray xs; x ] ->
-            (Value.VUnit, [ Value.VArray (Array.append xs [| x |]); x ])
-        | _ -> bug "push");
       runtime = false;
     };
   ]
 
-(* ---- strings and bytes ----
-
-   A `Str` is UTF-8, always, and `Bytes` are any bytes at all: the one way
-   from bytes to a string is `Str.from_utf8`, which checks them. A string's
-   indices are byte offsets, as `len` counts them, and a slice that would
-   cut a character in two panics, so that a `Str` stays UTF-8. *)
-
-(* Where [sub] first starts in [s], at [from] or after. *)
-let find_from s sub from =
-  let n = String.length s and m = String.length sub in
-  let rec go i =
-    if i + m > n then None
-    else if String.sub s i m = sub then Some i
-    else go (i + 1)
-  in
-  go from
-
-(* Whether byte [i] of [s] starts a character, or ends [s]: it isn't one
-   of the bytes after a character's first, which are 0b10xxxxxx. *)
-let boundary s i =
-  i = String.length s || Char.code s.[i] land 0xc0 <> 0x80
-
-let slice s from to_ =
-  let n = String.length s in
-  let fail fmt = Printf.ksprintf (fun msg -> raise (Panic msg)) fmt in
-  if from > to_ then fail "slice %d to %d ends before it starts" from to_;
-  if from < 0 || to_ > n then
-    fail "slice %d to %d is out of bounds for a string of length %d" from to_
-      n;
-  if not (boundary s from) then
-    fail "slice %d to %d starts inside a character" from to_;
-  if not (boundary s to_) then
-    fail "slice %d to %d ends inside a character" from to_;
-  String.sub s from (to_ - from)
-
-let split s sep =
-  if sep = "" then raise (Panic "`split` needs a separator that isn't empty");
-  let rec go from =
-    match find_from s sep from with
-    | Some i -> String.sub s from (i - from) :: go (i + String.length sep)
-    | None -> [ String.sub s from (String.length s - from) ]
-  in
-  go 0
+(* A `Str` is UTF-8, always, and `Bytes` are any bytes at all (builtins.ml,
+   "strings and bytes"). *)
 
 let str_methods =
   let open Ty in
-  let m name params ret eval =
+  let m name params ret =
     {
       name;
       scheme =
         scheme
           (Fun (List.map read (str :: params), ret, open_row 0, open_row 1));
-      eval = (fun args -> (eval args, args));
       runtime = false;
     }
   in
   [
     (* fn(self: Str) -> Int, in bytes *)
-    m "len" [] int (function
-      | [ VStr s ] -> VInt (String.length s)
-      | _ -> bug "Str.len");
+    m "len" [] int;
     (* fn(self: Str, from: Int, to: Int) -> Str: the bytes from [from] up
        to, but not including, [to] *)
-    m "slice" [ int; int ] str (function
-      | [ VStr s; VInt from; VInt to_ ] -> VStr (slice s from to_)
-      | _ -> bug "Str.slice");
+    m "slice" [ int; int ] str;
     (* fn(self: Str, s: Str) -> Option<Int>: where [s] first starts *)
-    m "find" [ str ]
-      (Con (Path.prelude "Option", [ int ]))
-      (function
-        | [ VStr s; VStr sub ] -> (
-            match find_from s sub 0 with
-            | Some i -> option "Some" [ VInt i ]
-            | None -> option "None" [])
-        | _ -> bug "Str.find");
+    m "find" [ str ] (Con (Path.prelude "Option", [ int ]));
     (* fn(self: Str, sep: Str) -> Array<Str>: the parts between each [sep] *)
-    m "split" [ str ] (array str) (function
-      | [ VStr s; VStr sep ] ->
-          VArray
-            (Array.of_list (List.map (fun p -> Value.VStr p) (split s sep)))
-      | _ -> bug "Str.split");
+    m "split" [ str ] (array str);
     (* fn(self: Str) -> Str, without the spaces, tabs and newlines at
        either end *)
-    m "trim" [] str (function
-      | [ VStr s ] -> VStr (String.trim s)
-      | _ -> bug "Str.trim");
+    m "trim" [] str;
     (* fn(self: Str, prefix: Str) -> Bool *)
-    m "starts_with" [ str ] bool (function
-      | [ VStr s; VStr prefix ] -> VBool (String.starts_with ~prefix s)
-      | _ -> bug "Str.starts_with");
+    m "starts_with" [ str ] bool;
     (* fn(self: Str, s: Str) -> Str: this, then [s] *)
-    m "concat" [ str ] str (function
-      | [ VStr a; VStr b ] -> VStr (a ^ b)
-      | _ -> bug "Str.concat");
+    m "concat" [ str ] str;
     (* fn(self: Str) -> Bytes: its UTF-8 *)
-    m "bytes" [] bytes (function
-      | [ VStr s ] -> VBytes s
-      | _ -> bug "Str.bytes");
+    m "bytes" [] bytes;
   ]
 
 let str_functions =
@@ -750,12 +465,6 @@ let str_functions =
                str,
                { labels = [ label "InvalidUtf8" ]; tail = None },
                open_row 0 ));
-      eval =
-        (function
-        | [ Value.VBytes b ] as args ->
-            if String.is_valid_utf_8 b then (Value.VStr b, args)
-            else raise (Fail (Value.VTag { name = "InvalidUtf8"; args = [] }))
-        | _ -> bug "Str.from_utf8");
       runtime = false;
     };
   ]
@@ -767,10 +476,6 @@ let bytes_methods =
       (* fn(self: Bytes) -> Int *)
       name = "len";
       scheme = scheme (Fun ([ read bytes ], int, open_row 0, open_row 1));
-      eval =
-        (function
-        | [ Value.VBytes b ] as args -> (Value.VInt (String.length b), args)
-        | _ -> bug "Bytes.len");
       runtime = false;
     };
   ]

@@ -508,12 +508,11 @@ fn main() =
 (* No program can make bytes that aren't UTF-8 yet, until `Fs` reads
    them, so this asks the built-in itself. *)
 let%expect_test "from_utf8 fails with InvalidUtf8" =
-  let from_utf8 = Option.get (Ren.Prelude.find_fn "Str.from_utf8") in
   List.iter
     (fun b ->
-      match from_utf8.eval [ Ren.Value.VBytes b ] with
+      match Ren.Builtins.run "Str.from_utf8" [ Ren.Value.VBytes b ] with
       | v, _ -> print_endline (Ren.Value.show v)
-      | exception Ren.Prelude.Fail err ->
+      | exception Ren.Builtins.Fail err ->
           print_endline ("fails: " ^ Ren.Value.show err))
     [ "caf\xc3\xa9"; "caf\xc3"; "\xff"; "\xed\xa0\x80" ];
   [%expect {|

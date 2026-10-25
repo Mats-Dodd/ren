@@ -494,7 +494,7 @@ and finish cx at step =
       let at = if t.loc.file <> Prelude.file then Some t.loc else at in
       let next =
         try enter cx ~fty:t.fty t.f t.args t.ev with
-        | Prelude.Panic msg -> panic (Option.value at ~default:t.loc) msg
+        | Builtins.Panic msg -> panic (Option.value at ~default:t.loc) msg
         | Panic (l, msg) when l.file = Prelude.file && at <> None ->
             panic (Option.get at) msg
       in
@@ -522,7 +522,7 @@ and eval_all cx env = function
 (* [apply], from a call at [loc]. *)
 and call_at cx loc ~fty f args ev =
   try apply cx ~fty f args ev with
-  | Prelude.Panic msg -> panic loc msg
+  | Builtins.Panic msg -> panic loc msg
   | Panic (l, msg) when l.file = Prelude.file && loc.file <> Prelude.file ->
       (* the prelude's source can't be shown, so a panic inside it is the
          program's call that reached it *)
@@ -606,12 +606,9 @@ and builtin cx ~fty f args =
           (Ok (VStr (Shown.shown ~own:(own_show cx) cx.types t v)), args)
       | _ -> bug "a call of `show` with the wrong number of arguments")
   | VBuiltin name -> (
-      match Prelude.find_fn name with
-      | Some b -> (
-          match b.eval args with
-          | v, finals -> (Ok v, finals)
-          | exception Prelude.Fail err -> (Error err, args))
-      | None -> bug ("the unknown built-in `" ^ name ^ "`"))
+      match Builtins.run name args with
+      | v, finals -> (Ok v, finals)
+      | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"
 
 (* [v], of type [t] in the function running, as `show` and a failed

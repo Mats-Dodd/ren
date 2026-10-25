@@ -605,7 +605,7 @@ let types ?(lint = false) ?load ~file src =
    what `main` uses and calls it. *)
 let run ?lint ?load ?(args = []) ~file src =
   let checked = check_all ?load ~file src in
-  Prelude.args := args;
+  Builtins.args := args;
   let modules = link ?lint checked in
   try pass "eval" (fun () -> Eval.run modules)
   with Eval.Assert_failed { loc; sides } ->
