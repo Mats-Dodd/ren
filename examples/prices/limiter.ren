@@ -44,9 +44,7 @@ test "one more is throttled until the window ends" =
   with fixed_window(2, Duration.seconds(1)) in
     try Limiter.take()
     try Limiter.take()
-    match attempt Limiter.take()
-      Err(Throttled(until)) => assert until == Instant.zero.plus(Duration.seconds(1))
-      _ => assert false
+    assert attempt Limiter.take() == Err(Throttled(Instant.zero.plus(Duration.seconds(1))))
 
 test "a new window lets calls through again" =
   with fixed_window(1, Duration.seconds(1)) in
@@ -58,14 +56,10 @@ test "a burst goes through, and then one call each time a token comes" =
   with token_bucket(2, Duration.ms(500)) in
     try Limiter.take()
     try Limiter.take()
-    match attempt Limiter.take()
-      Err(Throttled(until)) => assert until == Instant.zero.plus(Duration.ms(500))
-      _ => assert false
+    assert attempt Limiter.take() == Err(Throttled(Instant.zero.plus(Duration.ms(500))))
     TestClock.advance(Duration.ms(500))
     try Limiter.take()
-    match attempt Limiter.take()
-      Err(Throttled(until)) => assert until == Instant.zero.plus(Duration.seconds(1))
-      _ => assert false
+    assert attempt Limiter.take() == Err(Throttled(Instant.zero.plus(Duration.seconds(1))))
 
 test "tokens build up to the burst, and no more" =
   with token_bucket(2, Duration.ms(500)) in
@@ -74,6 +68,4 @@ test "tokens build up to the burst, and no more" =
     TestClock.advance(Duration.seconds(10))
     try Limiter.take()
     try Limiter.take()
-    match attempt Limiter.take()
-      Err(Throttled(_)) => ()
-      _ => assert false
+    assert attempt Limiter.take() == Err(Throttled(Instant.zero.plus(Duration.ms(10500))))

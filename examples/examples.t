@@ -838,9 +838,9 @@ below zero. The tests that check nothing moved show the two banks, and
   main.ren
     ✗ main prints the balances, and every refusal
   
-  ──── an overdraft is refused, and nothing moves ── bank.ren:115
+  ──── an overdraft is refused, and nothing moves ── bank.ren:114
       │
-  115 │   assert acme == before
+  114 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
       left:  Bank { accounts: [Account { ..., balance: Money(-100), ... }, ...], ... }
@@ -849,9 +849,9 @@ below zero. The tests that check nothing moved show the two banks, and
   
       seed 3529 · rerun: ren test b12 --only "an overdraft" --seed 3529
   
-  ──── a batch that fails moves nothing ── bank.ren:161
+  ──── a batch that fails moves nothing ── bank.ren:152
       │
-  161 │   assert acme == before
+  152 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
       left:  Bank { accounts: [Account { ..., balance: Money(1100), ... }, ...], ... }

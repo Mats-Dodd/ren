@@ -54,14 +54,8 @@ test "dependencies between tabs, and a comment after them" =
   assert j.recipes[0].deps == ["b", "c"]
 
 test "two recipes with one name" =
-  match attempt Justfile.parse("a:\n  echo x\nb:\na:\n  echo y\n")
-    Err(DuplicateRecipe(name)) => assert name == "a"
-    _ => assert false
+  assert attempt Justfile.parse("a:\n  echo x\nb:\na:\n  echo y\n") == Err(DuplicateRecipe("a"))
 
 test "a line that isn't a recipe or one of its lines" =
-  match attempt Justfile.parse("build:\n  make\nwhat is this\n")
-    Err(BadLine(n)) => assert n == 3
-    _ => assert false
-  match attempt Justfile.parse("  make\n")
-    Err(BadLine(n)) => assert n == 1
-    _ => assert false
+  assert attempt Justfile.parse("build:\n  make\nwhat is this\n") == Err(BadLine(3))
+  assert attempt Justfile.parse("  make\n") == Err(BadLine(1))

@@ -79,9 +79,8 @@ pub type Bank = { accounts: Array<Account>, next: Int }
 
 // The tests get the test `Clock`, stopped at `Time.epoch` until a test
 // moves it, and the test `Console`, without a `with`. Each refusal is kept
-// with `attempt`, to check it's the one expected and that nothing moved.
-// `Err(...)` can't be written, since an error isn't a value, so a test
-// looks at the `Result` with a `match`.
+// with `attempt`, to check it's the one expected and that nothing moved:
+// the error it expects is written inside `Err`, by its tag.
 
 test "a deposit is stamped with the time" =
   var acme = Bank.empty
@@ -113,41 +112,33 @@ test "an overdraft is refused, and nothing moves" =
   let before = acme
   let r = attempt &acme.transfer(Transfer { from: a, to: b, amount: Money.dollars(11) })
   assert acme == before
-  match r
-    Err(Short(id, by)) => assert id == a && by == Money.dollars(1)
-    _ => assert false
+  assert r == Err(Short(a, Money.dollars(1)))
 
 test "a frozen account takes nothing in" =
   var acme = Bank.empty
   let a = &acme.open()
   try &acme.freeze(a)
-  match attempt &acme.deposit(a, Money.dollars(10))
-    Err(Frozen(id)) => assert id == a
-    _ => assert false
+  assert attempt &acme.deposit(a, Money.dollars(10)) == Err(Frozen(a))
   assert try acme.balance(a) == Money.zero
 
 test "an account that doesn't exist is refused" =
   var acme = Bank.empty
   let a = &acme.open()
   let nobody = AccountId.of(99)
-  match attempt &acme.transfer(Transfer { from: a, to: nobody, amount: Money.dollars(1) })
-    Err(NoSuchAccount(id)) => assert id == nobody
-    _ => assert false
+  let t = Transfer { from: a, to: nobody, amount: Money.dollars(1) }
+  assert attempt &acme.transfer(t) == Err(NoSuchAccount(nobody))
 
 test "only a positive amount moves" =
   var acme = Bank.empty
   let a = &acme.open()
-  match attempt &acme.deposit(a, Money.zero)
-    Err(NotPositive(m)) => assert m == Money.zero
-    _ => assert false
+  assert attempt &acme.deposit(a, Money.zero) == Err(NotPositive(Money.zero))
 
 test "an account can't send to itself" =
   var acme = Bank.empty
   let a = &acme.open()
   try &acme.deposit(a, Money.dollars(10))
-  match attempt &acme.transfer(Transfer { from: a, to: a, amount: Money.dollars(1) })
-    Err(SameAccount) => ()
-    _ => assert false
+  let t = Transfer { from: a, to: a, amount: Money.dollars(1) }
+  assert attempt &acme.transfer(t) == Err(SameAccount)
 
 test "a batch that fails moves nothing" =
   var acme = Bank.empty
@@ -159,6 +150,4 @@ test "a batch that fails moves nothing" =
   let back = Transfer { from: b, to: a, amount: Money.dollars(6) }
   let r = attempt &acme.batch([there, back])
   assert acme == before
-  match r
-    Err(Short(id, by)) => assert id == b && by == Money.dollars(1)
-    _ => assert false
+  assert r == Err(Short(b, Money.dollars(1)))

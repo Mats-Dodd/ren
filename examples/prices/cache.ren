@@ -63,12 +63,8 @@ test "an old entry is asked for again" =
 
 test "an unknown item isn't kept" =
   with counting(), Limiter.none, cached(Duration.seconds(10)) in
-    match attempt Prices.price("plum")
-      Err(Unknown(item)) => assert item == "plum"
-      _ => assert false
-    match attempt Prices.price("plum")
-      Err(Unknown(_)) => ()
-      _ => assert false
+    assert attempt Prices.price("plum") == Err(Unknown("plum"))
+    assert attempt Prices.price("plum") == Err(Unknown("plum"))
     assert Calls.count() == 2
 
 test "a cached answer doesn't count against the limit" =
@@ -77,6 +73,4 @@ test "a cached answer doesn't count against the limit" =
       cached(Duration.seconds(10)) in
     assert try Prices.price("apple") == 3
     assert try Prices.price("apple") == 3
-    match attempt Prices.price("pear")
-      Err(Throttled(until)) => assert until == Instant.zero.plus(Duration.seconds(1))
-      _ => assert false
+    assert attempt Prices.price("pear") == Err(Throttled(Instant.zero.plus(Duration.seconds(1))))

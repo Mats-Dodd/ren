@@ -61,26 +61,18 @@ test "a recipe two others depend on runs once" =
 test "the first line to fail stops everything" =
   let fails = Exit { command: sh("echo left"), code: 3 }
   with mem_fs(files(diamond())), test_proc([fails]) in
-    match attempt main()
-      Err(RecipeFailed(name, code)) => assert name == "left" && code == 3
-      _ => assert false
+    assert attempt main() == Err(RecipeFailed("left", 3))
     assert TestProc.ran() == [sh("echo base"), sh("echo left")]
     assert TestConsole.errors() == ["echo base", "echo left"]
 
 test "a recipe that isn't there" =
   with mem_fs(files(diamond())), test_os(["deploy"]) in
-    match attempt main()
-      Err(UnknownRecipe(name)) => assert name == "deploy"
-      _ => assert false
+    assert attempt main() == Err(UnknownRecipe("deploy"))
   assert TestProc.ran() == []
 
 test "a justfile with no recipes" =
   with mem_fs(files("# nothing yet\n")) in
-    match attempt main()
-      Err(NoRecipes) => assert true
-      _ => assert false
+    assert attempt main() == Err(NoRecipes)
 
 test "no justfile" =
-  match attempt main()
-    Err(NoSuchFile(p)) => assert p == Path.of("justfile")
-    _ => assert false
+  assert attempt main() == Err(NoSuchFile(Path.of("justfile")))

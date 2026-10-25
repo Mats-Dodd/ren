@@ -252,7 +252,9 @@ test "main prints the balances, and every refusal" =
 - Any other dependency needs a `with`. Forgetting one is the missing
   implementation error, pointing at the test and the call that needs it.
 - A test that fails with an error reports it as `main` does. To check that
-  something fails, use `attempt`.
+  something fails, keep it with `attempt` and compare it with the error
+  expected, written by its tag: `assert attempt &acme.deposit(a,
+  Money.zero) == Err(NotPositive(Money.zero))`.
 
 ### Groups
 
@@ -309,9 +311,9 @@ clocks.ren
 main.ren
   ✗ main prints the balances, and every refusal
 
-──── an overdraft is refused, and nothing moves ── bank.ren:115
+──── an overdraft is refused, and nothing moves ── bank.ren:114
     │
-115 │   assert acme == before
+114 │   assert acme == before
     │          ^^^^^^^^^^^^^^
     │
     left:  Bank { accounts: [Account { ..., balance: Money(-100), ... }, ...], ... }

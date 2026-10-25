@@ -93,5 +93,3 @@ recipes print, in order, and how it fails.
 - **No `contains`, `filter` or `map` on arrays.** `has` is a loop, and
   `split(" ")` gives an empty string between two spaces, which `parse`
   drops by hand.
-- **`Err(...)` still can't be written,** so a test of a failure looks at
-  its `Result` with a `match`, whose other arm is `_ => assert false`.

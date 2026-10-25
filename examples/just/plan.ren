@@ -40,12 +40,8 @@ test "a dependency shared by two runs once" =
 
 test "a recipe that isn't there" =
   let j = try Justfile.parse("all: build\n")
-  match attempt order(j, "all")
-    Err(UnknownRecipe(name)) => assert name == "build"
-    _ => assert false
+  assert attempt order(j, "all") == Err(UnknownRecipe("build"))
 
 test "a recipe that depends on itself" =
   let j = try Justfile.parse("a: b\nb: a\n")
-  match attempt order(j, "a")
-    Err(Cycle(name)) => assert name == "a"
-    _ => assert false
+  assert attempt order(j, "a") == Err(Cycle("a"))

@@ -41,5 +41,3 @@ and a new window are tested without waiting, and `main`'s own
   operation under another name.
 - **Handlers aren't imported by name,** only types are, so they're
   written `limiter.fixed_window` and `cache.cached`.
-- **Checking a refusal takes a `match`** with a `_ => assert false` arm,
-  as in the bank.

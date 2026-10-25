@@ -77,9 +77,10 @@ test gets the test `Clock`, stopped at `Time.epoch`, and moves it with
 `TestClock.advance`, so "a deposit is stamped with the time" knows the
 time exactly. The test of `main` calls it, and checks what it printed
 with `TestConsole.output()`. A test for each refusal keeps it with
-`attempt` and checks the bank didn't move: `assert acme == before`. When
-that fails, `ren test` shows both banks, with a marker under the first
-place they differ. Nothing in the tests reads the real clock, so they
+`attempt`, compares it with the error it expects, written by its tag,
+`assert r == Err(Short(a, Money.dollars(1)))`, and checks the bank didn't
+move: `assert acme == before`. When that fails, `ren test` shows both
+banks, with a marker under the first place they differ. Nothing in the tests reads the real clock, so they
 print the same on every run.
 
 **One suite for every clock.** `clocks.ren`'s `pub group
@@ -142,14 +143,6 @@ with `try`). What's left, and what stage 6 found:
 
 What stage 7 found, writing the tests:
 
-- **`Err(...)` can't be written.** An error isn't a value, so a test
-  can't say `assert r == Err(Short(a, Money.dollars(1)))`. Each refusal
-  test looks at its `Result` with a `match`, and its other arm is
-  `_ => assert false`, whose failure shows only `assert false`, not what
-  came back.
-- **`attempt` takes the whole comparison.** `assert attempt
-  &acme.deposit(...) == x` is `attempt (&acme.deposit(...) == x)`, so the
-  `Result` goes into a `let` or a `match` first.
 - **A bank was one long line.** A failed `assert acme == before`
   printed each bank on one line, hundreds of characters wide. Now it
   leaves out what the two share, `Bank { accounts: [Account { ...,
