@@ -1,0 +1,45 @@
+# Every push and pull request: build the compiler and run its tests, then
+# the tree-sitter grammar's checks (editors/tree-sitter-ren/Makefile), on
+# Linux and macOS, since the owner works on one and CI's default is the
+# other.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.4"
+          dune-cache: true
+
+      # the libraries dune-project lists; ppx_expect pinned, since how it
+      # prints a test's output is what the tests compare
+      - run: opam install -y dune ppx_deriving ppx_expect.v0.17.3
+
+      - run: opam exec -- dune build
+      - run: opam exec -- dune runtest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # the corpus, the highlight assertions, and the differential test
+      # against the compiler's parser
+      - run: opam exec -- make check
+        working-directory: editors/tree-sitter-ren
+
+      # the generated parser is committed: it has to be what the grammar
+      # generates
+      - run: git diff --exit-code -- editors/tree-sitter-ren/src

@@ -20,5 +20,5 @@ test: generate
 
 # every program the compiler parses parses here too
 differential: generate
-	cd ../.. && dune build
+	cd ../.. && dune build --root .
 	python3 differential.py
