@@ -19,9 +19,7 @@ type t =
   | VArray of t array  (** never changed in place: an update copies it *)
   | VClosure of {
       params : int list;  (** the parameters' binder ids *)
-      evidence : int list;
-          (** its evidence's ids: the implementations it's passed where it's
-              called *)
+      ev : int;  (** its evidence's id: what it's passed where it's called *)
       body : Core.expr;
       env : t ref Env.t;
     }  (** a lambda, with the variables it captured when it was created *)
@@ -30,6 +28,13 @@ type t =
   | VTag of { name : string; args : t list }
       (** an error, [Short(2, 45000)]: its tag and its payload. A program sees
           one only inside a [Result]'s [Err] *)
+  | VEvidence of installed list
+      (** evidence (core.ml): what's installed, the innermost first. A program
+          never sees one *)
+
+(* An implementation of the dependency [dep], installed: it runs with the
+   evidence [outer], what was installed where it was. *)
+and installed = { dep : Path.t; impl : t; outer : installed list }
 
 let rec show = function
   | VInt n -> string_of_int n
@@ -47,6 +52,7 @@ let rec show = function
   | VClosure _ -> "<fn>"
   | VFn p -> "<fn " ^ p.name ^ ">"
   | VBuiltin name -> "<fn " ^ name ^ ">"
+  | VEvidence _ -> "<evidence>"
 
 (* What `show` makes of a value: a string is itself, and anything else,
    a string inside it included, is shown as it's written. *)

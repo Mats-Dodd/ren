@@ -37,40 +37,34 @@ infer.ren annotates nothing; this is what inference works out:
   fn twice<T>(f: fn() -> T) -> T
   fn main() uses Console
 
-`ren core` prints the program in Core, which it runs as: each dependency is a
-hidden parameter, and a function over closures has a copy for what they
-use (deps.md, "How it runs"):
+`ren core` prints the program in Core, which it runs as: every function and
+lambda takes the evidence of what's installed, `ev`, which every call passes
+on (deps.md, "How it runs"):
 
   $ ren core infer.ren
   -- infer
-  (fn seats (u/1) (match (. u/1 plan) (Free => 1) ((Pro n/2) => n/2)))
-  (fn first_or (o/1 fallback/2)
+  (fn seats (u/1) ev/3 (match (. u/1 plan) (Free => 1) ((Pro n/2) => n/2)))
+  (fn first_or (o/1 fallback/2) ev/4
     (match o/1 ((Some v/3) => v/3) (None => fallback/2)))
-  (fn map_option (o/1 f/2)
-    (match o/1 ((Some v/3) => (con Some (call f/2 v/3))) (None => (con None))))
-  (fn twice (f/1) (let _/2 (call f/1) (call f/1)))
-  (fn main () (uses Console/3)
-    (let alice/1 (record (id: 1) (plan: (con Pro 5)))
-      (seq (call print (call seats alice/1) (uses Console/3))
-        (seq
-          (call print
-            (call first_or
-              (call map_option[Console] (con Some 20)
-                (lambda (n/2) (captures) (uses Console/4) (+ n/2 1))
-                (uses Console/3))
-              0)
-            (uses Console/3))
-          (seq (call print (call first_or (con None) true) (uses Console/3))
-            (call twice[Console]
-              (lambda () (captures alice/1) (uses Console/5)
-                (call print (. alice/1 id) (uses Console/5)))
-              (uses Console/3)))))))
-  (fn map_option[Console] (o/1 f/2) (uses Console/4)
-    (match o/1 ((Some v/3) => (con Some (call f/2 v/3 (uses Console/4))))
+  (fn map_option (o/1 f/2) ev/4
+    (match o/1 ((Some v/3) => (con Some (call ev/4 f/2 v/3)))
       (None => (con None))))
-  (fn twice[Console] (f/1) (uses Console/3)
-    (let _/2 (call f/1 (uses Console/3)) (call f/1 (uses Console/3))))
-  (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+  (fn twice (f/1) ev/3 (let _/2 (call ev/3 f/1) (call ev/3 f/1)))
+  (fn main () ev/3
+    (let alice/1 (record (id: 1) (plan: (con Pro 5)))
+      (seq (call ev/3 print (call ev/3 seats alice/1))
+        (seq
+          (call ev/3 print
+            (call ev/3 first_or
+              (call ev/3 map_option (con Some 20)
+                (lambda (n/2) (captures) ev/4 (+ n/2 1)))
+              0))
+          (seq (call ev/3 print (call ev/3 first_or (con None) true))
+            (call ev/3 twice
+              (lambda () (captures alice/1) ev/5
+                (call ev/5 print (. alice/1 id)))))))))
+  (fn $start () ev/1
+    (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
 
 A program of several modules is a folder; its entry imports the rest:
 
@@ -85,24 +79,22 @@ A program of several modules is a folder; its entry imports the rest:
   -- main
   fn main() -> Int uses Console
 
-`ren core` prints each module, and a copy of a function over closures is
-in the module of the function it copies:
+`ren core` prints each module. A function over closures passes them the
+evidence it's given, so there's one of it, whatever its callers' closures
+use:
 
-  $ mkdir copies
-  $ printf 'pub fn twice(f: fn()) =\n  try f()\n  try f()\n' > copies/lib.ren
-  $ printf 'import lib\nfn main() uses Console = lib.twice(fn() => print(1))\n' > copies/main.ren
-  $ ren core copies/main.ren
+  $ mkdir closures
+  $ printf 'pub fn twice(f: fn()) =\n  try f()\n  try f()\n' > closures/lib.ren
+  $ printf 'import lib\nfn main() uses Console = lib.twice(fn() => print(1))\n' > closures/main.ren
+  $ ren core closures/main.ren
   -- lib
-  (fn twice (f/1) (seq (call f/1) (call f/1)))
-  (fn twice[Console] (f/1) (uses Console/2)
-    (seq (call f/1 (uses Console/2)) (call f/1 (uses Console/2))))
+  (fn twice (f/1) ev/2 (seq (call ev/2 f/1) (call ev/2 f/1)))
   
   -- main
-  (fn main () (uses Console/1)
-    (call twice[Console]
-      (lambda () (captures) (uses Console/2) (call print 1 (uses Console/2)))
-      (uses Console/1)))
-  (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+  (fn main () ev/1
+    (call ev/1 twice (lambda () (captures) ev/2 (call ev/2 print 1))))
+  (fn $start () ev/1
+    (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
 
 An error in one module can point into another, and shows that file's line:
 

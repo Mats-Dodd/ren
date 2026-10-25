@@ -5,7 +5,7 @@
 ;   core/    what every pass shares: identities (paths), canonical types,
 ;            interfaces, and the prelude
 ;   lower/   Core, the typed language a checked program is lowered to, the
-;            lowering, threading evidence through it, and Core Lint
+;            lowering, and Core Lint
 ;   eval/    the interpreter and the values it computes
 ; `unqualified` means the folders only organize files: every module keeps
 ; its plain name (Parser, not Syntax.Parser).

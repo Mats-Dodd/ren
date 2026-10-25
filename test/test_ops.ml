@@ -514,24 +514,25 @@ fn main() =
 |};
   [%expect
     {|
-    (fn Counter.bump (self/1 by/2)
+    (fn Counter.bump (self/1 by/2) ev/3
       (= self/1 (update self/1 n: (+ (. self/1 n) by/2))))
-    (fn Counter.get (self/1) (. self/1 n))
-    (fn Pair.bump_left (self/1)
-      (let $ref/2 (. self/1 left)
-        (let $result/3 (call Counter.bump &$ref/2 1)
-          (seq (= self/1 (update self/1 left: $ref/2)) $result/3))))
-    (fn Pair.zero () (record (left: (record (n: 0))) (right: (record (n: 0)))))
-    (fn main ()
+    (fn Counter.get (self/1) ev/2 (. self/1 n))
+    (fn Pair.bump_left (self/1) ev/2
+      (let $ref/3 (. self/1 left)
+        (let $result/4 (call ev/2 Counter.bump &$ref/3 1)
+          (seq (= self/1 (update self/1 left: $ref/3)) $result/4))))
+    (fn Pair.zero () ev/1
+      (record (left: (record (n: 0))) (right: (record (n: 0)))))
+    (fn main () ev/2
       (let p/1 Pair.zero
-        (seq (call Pair.bump_left &p/1)
+        (seq (call ev/2 Pair.bump_left &p/1)
           (seq
-            (let $ref/2 (. p/1 right)
-              (let $arg/3 (+ (call Counter.get (. p/1 left)) 2)
-                (let $result/4 (call Counter.bump &$ref/2 $arg/3)
-                  (seq (= p/1 (update p/1 right: $ref/2)) $result/4))))
+            (let $ref/3 (. p/1 right)
+              (let $arg/4 (+ (call ev/2 Counter.get (. p/1 left)) 2)
+                (let $result/5 (call ev/2 Counter.bump &$ref/3 $arg/4)
+                  (seq (= p/1 (update p/1 right: $ref/3)) $result/5))))
             p/1))))
-    (fn $start () (call main))
+    (fn $start () ev/1 (call ev/1 main))
     |}]
 
 let%expect_test "methods inside their own module" =
@@ -1371,14 +1372,14 @@ fn main() =
 |};
   [%expect
     {|
-    (fn main ()
+    (fn main () ev/2
       (let b/1 (record (items: (array)))
         (seq
-          (let $ref/2 (. b/1 items)
-            (let $result/3 (call Array.push &$ref/2 1)
-              (seq (= b/1 (update b/1 items: $ref/2)) $result/3)))
-          (call Array.len (. b/1 items)))))
-    (fn $start () (call main))
+          (let $ref/3 (. b/1 items)
+            (let $result/4 (call ev/2 Array.push &$ref/3 1)
+              (seq (= b/1 (update b/1 items: $ref/3)) $result/4)))
+          (call ev/2 Array.len (. b/1 items)))))
+    (fn $start () ev/1 (call ev/1 main))
     |}]
 
 let%expect_test "an array's built-in methods, called wrong" =

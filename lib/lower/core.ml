@@ -24,16 +24,15 @@
    backend that compiles to C can make each function that can fail return
    its error, and check for one after each call that can fail.
 
-   Dependencies are explicit too (deps.md, "How it runs"). Each dependency
-   a function uses is a hidden parameter of its, its evidence: the
-   implementation installed by whoever called it. A call passes the
-   caller's evidence on, a [Dep_call] calls an operation of the evidence
-   it names, and [With] installs an implementation around its body. A
+   Dependencies are explicit too (deps.md, "How it runs"). Every function
+   and lambda takes one hidden parameter, its evidence: the vector of the
+   implementations installed where it's called, pure ones too, so no two
+   places can disagree on what a function takes. Every call passes the
+   caller's evidence on, a [With] extends it with an implementation for
+   its body, and a [Dep_call] finds its dependency's implementation in it,
+   by the dependency's path, never by a name the program spells. A
    lambda's evidence is its own, passed where it's called, so it never
-   keeps the implementation that was installed where it was made. Nothing
-   is looked up by name. Lowering leaves the evidence out; evidence.ml
-   threads it through the whole program, and until then an operation is
-   a [Dep_op]. *)
+   keeps the implementation that was installed where it was made. *)
 
 type mode = Ty.mode = Read | Inout
 
@@ -74,23 +73,21 @@ and kind =
   | Intrinsic of string
       (** a function built into the compiler: [print], or a method, [Array.push]
       *)
-  | Dep_op of Path.t * string
-      (** an operation of the dependency at the path, [Clock.now], before
-          evidence.ml has threaded the evidence: then it's a [Dep_call] *)
   | Dep_call of {
       dep : Path.t;
       op : string;
       fty : Ty.ty;  (** the operation's type, at this call *)
-      impl : var;  (** the evidence: the implementation it calls *)
+      ev : var;  (** the evidence it finds [dep]'s implementation in *)
       args : expr list;
     }
-      (** [Clock.now()]: a call of an operation of the implementation [impl]
-          holds. Kept apart from other calls, so what was called, with what, can
-          be recorded (the journal, stage 9). Never with `&` *)
-  | With of { ev : var; impl : expr; body : expr }
-      (** install [impl], an implementation of the dependency that's [ev]'s
-          type, as the evidence [ev] for [body]. The runtime's installs around
-          `main` are these *)
+      (** [Clock.now()]: a call of an operation of the innermost implementation
+          of [dep] in [ev], which runs with the evidence that implementation was
+          installed with. Kept apart from other calls, so what was called, with
+          what, can be recorded (the journal, stage 9). Never with `&` *)
+  | With of { ev : var; outer : var; dep : Path.t; impl : expr; body : expr }
+      (** [body], with the evidence [ev]: [outer], the evidence here, with
+          [impl] installed for [dep] on top. [impl] keeps [outer], which its
+          operations run with. The runtime's installs around `main` are these *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)
@@ -98,18 +95,18 @@ and kind =
   | Match of expr * arm list
   | While of expr * expr  (** the condition, then the body *)
   | Seq of expr * expr  (** the first's value is dropped *)
-  | Call of expr * arg list * var list
-      (** the callee, its arguments, and the evidence it's passed: one for each
-          dependency it uses, in the order of its row's labels *)
+  | Call of expr * arg list * var
+      (** the callee, its arguments, and the evidence it's passed: always the
+          caller's own, the innermost in scope *)
   | Lambda of {
       params : param list;
-      evidence : var list;
+      ev : var;
       captures : var list;
       body : expr;
     }
       (** [captures] are the locals from outside the lambda its body uses, in
           order of id; their values are copied when the lambda is made. Its
-          [evidence] is passed where it's called, never captured *)
+          evidence [ev] is passed where it's called, never captured *)
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
@@ -159,9 +156,7 @@ and pattern_kind =
 type fn_def = {
   path : Path.t;
   params : param list;
-  evidence : var list;
-      (** its hidden parameters: an implementation of each dependency its type
-          uses, in the order of its row's labels *)
+  ev : var;  (** its evidence, the hidden parameter every function takes *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
   loc : Loc.t;  (** its name, where it's declared *)
@@ -180,6 +175,13 @@ type program = {
 (* ---- building ---- *)
 
 let mk kind ty loc = { kind; ty; loc }
+
+(* The type of evidence. Nothing in Ren source has it: its `$` keeps it
+   apart from every type a program can name. *)
+let evidence_ty = Ty.Con (Path.prelude "$Evidence", [])
+
+(* The evidence a function or lambda takes, or a [With] binds. *)
+let evidence id = { id; name = "ev"; ty = evidence_ty }
 let unit loc = mk Unit Ty.unit loc
 let local (v : var) loc = mk (Local v) v.ty loc
 
@@ -202,7 +204,7 @@ let fails (t : Ty.ty) =
 let children (e : expr) =
   match e.kind with
   | Int _ | Bool _ | Str _ | Unit | Local _ | Global _ | Global_value _
-  | Intrinsic _ | Dep_op _ ->
+  | Intrinsic _ ->
       []
   | Prim (_, es)
   | Array es
@@ -298,14 +300,19 @@ let rec sexp e =
   | Local v -> var v
   | Global p | Global_value p -> Atom p.name
   | Intrinsic x -> Atom x
-  | Dep_op (p, op) -> Atom (Path.full p ^ "." ^ op)
-  | Dep_call { dep; op; impl; args; _ } ->
+  | Dep_call { dep; op; ev; args; _ } ->
       List
-        (atom "dep-call"
+        (atom "dep-call" :: var ev
         :: Atom (Path.full dep ^ "." ^ op)
-        :: var impl :: List.map sexp args)
-  | With { ev; impl; body } ->
-      List [ atom "with"; var ev; sexp impl; sexp body ]
+        :: List.map sexp args)
+  | With { ev; outer; dep; impl; body } ->
+      List
+        [
+          atom "with";
+          var ev;
+          List [ atom "extend"; var outer; Atom (Path.full dep); sexp impl ];
+          sexp body;
+        ]
   | Prim (op, args) -> List (Atom (show_prim op) :: List.map sexp args)
   | Let (v, value, body) -> List [ atom "let"; var v; sexp value; sexp body ]
   | Assign (v, value) -> List [ atom "="; var v; sexp value ]
@@ -313,26 +320,26 @@ let rec sexp e =
   | Match (s, arms) -> List (atom "match" :: sexp s :: List.map arm_sexp arms)
   | While (c, body) -> List [ atom "while"; sexp c; sexp body ]
   | Seq (a, b) -> List [ atom "seq"; sexp a; sexp b ]
-  | Call (f, args, evidence) ->
+  | Call (f, args, ev) ->
       let arg = function
         | Value a -> sexp a
         | Ref v -> Atom ("&" ^ show_var v)
       in
-      List ((atom "call" :: sexp f :: List.map arg args) @ uses evidence)
-  | Lambda { params; evidence; captures; body } ->
+      List (atom "call" :: var ev :: sexp f :: List.map arg args)
+  | Lambda { params; ev; captures; body } ->
       let param p =
         match p.mode with
         | Inout -> Atom ("inout " ^ show_var p.var)
         | Read -> var p.var
       in
       List
-        ([
-           atom "lambda";
-           List (List.map param params);
-           List (atom "captures" :: List.map var captures);
-         ]
-        @ uses evidence
-        @ [ sexp body ])
+        [
+          atom "lambda";
+          List (List.map param params);
+          List (atom "captures" :: List.map var captures);
+          var ev;
+          sexp body;
+        ]
   | Con (_, c, args) -> List (atom "con" :: atom c :: List.map sexp args)
   | Record (_, fields) ->
       List
@@ -359,21 +366,15 @@ and arm_sexp a =
   in
   List ((pattern_sexp a.pat :: guard) @ [ atom "=>"; sexp a.body ])
 
-(* Evidence, passed or taken, after what it's passed with: nothing when
-   there's none, so code that uses no dependency prints as it always has. *)
-and uses = function
-  | [] -> []
-  | evs -> [ List (atom "uses" :: List.map var evs) ]
-
 let show e = render 0 (sexp e)
 
 let show_fn f =
   render 0
     (List
-       ([
-          atom "fn";
-          Atom f.path.name;
-          List (List.map (fun p -> var p.var) f.params);
-        ]
-       @ uses f.evidence
-       @ [ sexp f.body ]))
+       [
+         atom "fn";
+         Atom f.path.name;
+         List (List.map (fun p -> var p.var) f.params);
+         var f.ev;
+         sexp f.body;
+       ])

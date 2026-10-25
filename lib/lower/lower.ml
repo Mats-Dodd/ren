@@ -29,9 +29,10 @@
    Everything is evaluated in the order it was before: the order the
    interpreter has always used, so a program prints the same things.
 
-   Dependencies stay implicit here: a call of an operation is a call of a
-   [Dep_op], and no call passes evidence. Threading it needs the whole
-   program, which evidence.ml has. *)
+   And the evidence (core.ml) is threaded: each function and lambda takes
+   its own, each call passes the one in scope, and a call of an
+   operation, `Clock.now()`, is a [Dep_call] on it. An operation used as a
+   value, `let write = Console.write`, is a lambda that calls it. *)
 
 open Ast
 open Ast.Resolved
@@ -46,6 +47,9 @@ type cx = {
   nodes : Infer.node Infer.Nodes.t;  (** what inference found, by node id *)
   vars : (int, C.var) Hashtbl.t;  (** each local, by binder id *)
   mutable next : int;  (** the id of the next temporary *)
+  mutable ev : C.var;
+      (** the evidence in scope: the function's, or the lambda's whose body is
+          being lowered *)
 }
 
 let node cx id =
@@ -70,6 +74,12 @@ let var_of cx (b : binder) =
    variable in Ren source can, so it's easy to tell apart when printed. *)
 let temp cx name ty : C.var =
   let v : C.var = { id = cx.next; name = "$" ^ name; ty } in
+  cx.next <- cx.next + 1;
+  v
+
+(* A function's or lambda's evidence. *)
+let evidence cx : C.var =
+  let v = C.evidence cx.next in
   cx.next <- cx.next + 1;
   v
 
@@ -199,7 +209,24 @@ let rec expr cx (e : expr) : C.expr =
   | Var (Global p) -> here (Global p)
   | Var (Global_value p) -> here (Global_value p)
   | Var (Intrinsic x) -> here (Intrinsic x)
-  | Var (Dep_op (p, op)) -> here (Dep_op (p, op))
+  | Var (Dep_op (dep, op)) -> (
+      (* used as a value: a lambda that calls it, with the evidence it's
+         given where it's called *)
+      match ty () with
+      | Fun (ps, ret, _, _) as fty ->
+          let params = List.map (fun (p : Ty.param) -> temp cx "x" p.ty) ps in
+          let ev = evidence cx in
+          let args = List.map (fun v -> local v e.loc) params in
+          here
+            (Lambda
+               {
+                 params =
+                   List.map (fun var : C.param -> { mode = Read; var }) params;
+                 ev;
+                 captures = [];
+                 body = mk (Dep_call { dep; op; fty; ev; args }) ret e.loc;
+               })
+      | _ -> bug "an operation whose type isn't a function's")
   | Unop (Neg, a) -> here (Prim (Neg, [ expr cx a ]))
   | Unop (Not, a) -> here (Prim (Not, [ expr cx a ]))
   (* `a && b` is `if a then b else false`, and `a || b` is
@@ -296,12 +323,16 @@ let rec expr cx (e : expr) : C.expr =
             { mode = p.pmode; var = bind cx p.pname t.ty })
           params ps
       in
+      (* its body sees its own evidence, never the one where it's made *)
+      let ev = evidence cx and outer = cx.ev in
+      cx.ev <- ev;
       let body = expr cx body in
+      cx.ev <- outer;
       let own = List.map (fun (p : C.param) -> p.var.id) params in
       let captures =
         List.filter (fun (v : C.var) -> not (List.mem v.id own)) (free body)
       in
-      here (Lambda { params; evidence = []; captures; body })
+      here (Lambda { params; ev; captures; body })
   | Block (stmts, last) -> block cx stmts last
   | Con (_, args) -> (
       match (node cx e.node).found with
@@ -422,6 +453,17 @@ and assign cx (e : expr) target op value =
    A method call's receiver is its first argument, passed `inout` when
    [changed], `&s.push(1)`. *)
 and call cx ?(changed = false) (e : expr) f args =
+  match f.kind with
+  | Var (Dep_op (dep, op)) ->
+      (* never with `&` (mut.ml), so its arguments are values, evaluated in
+         order *)
+      let args = List.map (expr cx) args in
+      mk
+        (Dep_call { dep; op; fty = ty_of cx f.node; ev = cx.ev; args })
+        (ty_of cx e.node) e.loc
+  | _ -> plain_call cx ~changed e f args
+
+and plain_call cx ~changed (e : expr) f args =
   let inout (p : expr) ty =
     let binds, pl = place cx p in
     Inout { binds; place = pl; ty; loc = p.loc }
@@ -457,7 +499,7 @@ and call cx ?(changed = false) (e : expr) f args =
     | Inout _ -> None
   in
   if List.for_all (fun a -> direct a <> None) lowered then
-    mk (Call (f, List.filter_map direct lowered, [])) ty e.loc
+    mk (Call (f, List.filter_map direct lowered, cx.ev)) ty e.loc
   else
     let hold_f, f = hold cx "f" f in
     let binds, args, writes =
@@ -474,7 +516,7 @@ and call cx ?(changed = false) (e : expr) f args =
                 writes @ [ write r.place (local t r.loc) r.loc ] ))
         (hold_f, [], []) lowered
     in
-    let call = mk (Call (f, args, [])) ty e.loc in
+    let call = mk (Call (f, args, cx.ev)) ty e.loc in
     if C.fails f.ty then
       (* the places are written back even if it fails *)
       lets binds (mk (Finally (call, seq_all e.loc writes)) ty e.loc)
@@ -576,8 +618,7 @@ and free (e : C.expr) =
   let bind (v : C.var) = bound := v.id :: !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Bool _ | Str _ | Unit | Global _ | Global_value _ | Intrinsic _
-    | Dep_op _ ->
+    | Int _ | Bool _ | Str _ | Unit | Global _ | Global_value _ | Intrinsic _ ->
         ()
     | Local v -> use v
     | Prim (_, args)
@@ -587,6 +628,7 @@ and free (e : C.expr) =
     | Dep_call { args; _ } ->
         List.iter go args
     | With { impl; body; _ } ->
+        (* its evidence isn't a local: nothing captures it *)
         go impl;
         go body
     | Fail a -> go a
@@ -693,11 +735,13 @@ let max_binder (f : fn_def) =
 let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
   let name = f.name.name in
   let scheme = List.assoc name inferred.schemes in
+  let next = max_binder f + 1 in
   let cx =
     {
       nodes = List.assoc name inferred.nodes;
       vars = Hashtbl.create 16;
-      next = max_binder f + 1;
+      next = next + 1;
+      ev = C.evidence next;
     }
   in
   let ps =
@@ -714,7 +758,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
   {
     path = Path.make home name;
     params;
-    evidence = [];
+    ev = cx.ev;
     scheme;
     body = expr cx f.body;
     loc = f.name.loc;
@@ -726,4 +770,48 @@ let program (r : Resolve.t) (inferred : Infer.t) : C.program =
     types = r.types;
     fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog);
     values = List.map (Path.make r.home) inferred.values;
+  }
+
+(* ---- starting ---- *)
+
+let start_name = "$start"
+
+(* What the runtime runs: `$start`, which installs the real implementation
+   of each built-in dependency [main] uses, the first in its row
+   outermost, and calls it. The type checker made sure it uses no other
+   (infer_top.ml, [check_main]). It starts from no evidence at all. *)
+let start (main : C.fn_def) : C.fn_def =
+  let loc = main.loc in
+  let ret, errs, uses =
+    match main.scheme.ty with
+    | Fun (_, ret, errs, uses) -> (ret, errs, uses)
+    | _ -> bug "a `main` whose type isn't a function's"
+  in
+  let deps = List.map (fun (l : Ty.label) -> Ty.dep_path l.name) uses.labels in
+  (* each install's evidence is numbered after the one it extends *)
+  let rec install n = function
+    | [] ->
+        mk
+          (Call (mk (Global main.path) main.scheme.ty loc, [], C.evidence n))
+          ret loc
+    | (dep : Path.t) :: rest ->
+        let real = Path.make dep.home (dep.name ^ ".real") in
+        mk
+          (With
+             {
+               ev = C.evidence (n + 1);
+               outer = C.evidence n;
+               dep;
+               impl = mk (Global_value real) (Con (dep, [])) loc;
+               body = install (n + 1) rest;
+             })
+          ret loc
+  in
+  {
+    path = Path.make main.path.home start_name;
+    params = [];
+    ev = C.evidence 1;
+    scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) };
+    body = install 1 deps;
+    loc;
   }

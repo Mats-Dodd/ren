@@ -14,7 +14,7 @@ commands:
   types   print every function's inferred signature, module by module,
           and each type's members under it
   core    print every module in Core, the language it's lowered to,
-          with each dependency's implementation passed explicitly
+          with the evidence of what's installed passed explicitly
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree|}
 
@@ -52,8 +52,7 @@ let () =
                 List.iter print_endline sigs)
               (Driver.types ~load ~file:path src)
         | "core" ->
-            (* every module but the prelude, which comes first: a copy of
-               an imported function is in its module, not the entry's *)
+            (* every module but the prelude, which comes first *)
             List.iteri
               (fun i (m : Core.program) ->
                 if i > 0 then print_newline ();

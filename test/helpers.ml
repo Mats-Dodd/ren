@@ -104,7 +104,7 @@ let core src =
         (Driver.core ~lint:true ~file src).fns)
 
 (* Every module of the program in Core, but the prelude, each after its
-   name, with the program's evidence threaded through them. *)
+   name. *)
 let core_files files =
   let files, file, src, load = program files in
   report_files files (fun () ->

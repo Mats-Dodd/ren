@@ -106,15 +106,26 @@ let check_module ~home ~imports ~reachable ?entry prog =
     iface.types;
   (r, iface, inferred)
 
-(* A checked module, lowered to Core, with its evidence not threaded yet:
-   that needs the whole program (evidence.ml). *)
+(* A checked module, lowered to Core. *)
 let lower r inferred = pass "lower" (fun () -> Lower.program r inferred)
 
-(* A program's modules, lowered, the prelude first, with their evidence
-   threaded. With [lint], Core Lint checks each one; the tests turn it on
-   for every program. [imports] are the interfaces each module sees. *)
-let thread ?(lint = false) ~imports modules =
-  let linked = pass "evidence" (fun () -> Evidence.program modules) in
+(* A program's modules, lowered, the prelude first, and the entry last,
+   which gets `$start` if it has a `main`. With [lint], Core Lint checks
+   each one; the tests turn it on for every program. [imports] are the
+   interfaces each module sees. *)
+let link_lowered ?(lint = false) ~imports modules =
+  let linked =
+    match List.rev modules with
+    | [] -> []
+    | (entry : Core.program) :: rest ->
+        let main =
+          List.find_opt
+            (fun (f : Core.fn_def) -> f.path = Path.make entry.home "main")
+            entry.fns
+        in
+        let fns = entry.fns @ Option.to_list (Option.map Lower.start main) in
+        List.rev ({ entry with fns } :: rest)
+  in
   if lint then
     List.iter2
       (fun imports m ->
@@ -126,8 +137,8 @@ let thread ?(lint = false) ~imports modules =
    intrinsics (prelude.ml) and lowered, and its whole interface. It's
    checked once, the first time it's needed: [lazy] delays a computation
    and [Lazy.force] runs it (at most once). It's the same for every
-   program, so sharing it is safe. On its own, with its evidence threaded,
-   it's linted then too, since that costs nothing per program. *)
+   program, so sharing it is safe. It's linted then too, on its own, since
+   that costs nothing per program. *)
 let prelude =
   lazy
     (let prog = parse ~file:Prelude.file (String.trim Prelude.source) in
@@ -136,7 +147,7 @@ let prelude =
        check_module ~home:Path.prelude_home ~imports ~reachable:imports prog
      in
      let core = lower r inferred in
-     ignore (thread ~lint:true ~imports:[ imports ] [ core ]);
+     ignore (link_lowered ~lint:true ~imports:[ imports ] [ core ]);
      (core, Iface.union Prelude.public iface))
 
 (* ---- loading a program's modules ----
@@ -339,11 +350,10 @@ let inferred ?load ~file src = (entry_of (check_all ?load ~file src)).inferred
 let schemes ?load ~file src = (inferred ?load ~file src).schemes
 let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
 
-(* The whole program in Core, the prelude first, each module lowered and
-   its evidence threaded. *)
+(* The whole program in Core, the prelude first. *)
 let link ?lint (modules : checked list) =
   let prelude, _ = Lazy.force prelude in
-  thread ?lint
+  link_lowered ?lint
     ~imports:([ Prelude.intrinsics ] :: List.map (fun c -> c.reachable) modules)
     (prelude :: List.map (fun c -> lower c.resolved c.inferred) modules)
 
@@ -450,8 +460,7 @@ let types ?(lint = false) ?load ~file src =
           resolved.prog ))
     modules
 
-(* Check every module, lower each to Core, thread the evidence through
-   them, and run them as one program: the prelude, then each module in
+(* Check every module, lower each to Core, and run them as one program: the prelude, then each module in
    dependency order, starting from the entry's `$start`, which installs
    what `main` uses and calls it. *)
 let run ?lint ?load ~file src =
