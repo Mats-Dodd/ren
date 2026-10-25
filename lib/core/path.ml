@@ -3,8 +3,9 @@
    `Plan` in different modules are different types, because their paths
    differ. See module-build.md, "Three rules".
 
-   Today a program is one file plus the prelude, so a home is either
-   [prelude] or the name of the program's file. *)
+   A file is a module, and its home is its path from the entry's folder,
+   without the `.ren`: `billing/stripe` for billing/stripe.ren. The entry's
+   home is its file's name, `main`, and the prelude's is [prelude]. *)
 
 type t = {
   home : string;  (** the module it's declared in *)
@@ -22,5 +23,6 @@ let show ~home p =
   if p.home = home || p.home = prelude_home then p.name
   else p.home ^ "." ^ p.name
 
-(* The module a file is: its name without the folder or the `.ren`. *)
+(* The module the entry file is: its name without the folder or the
+   `.ren`. *)
 let home_of_file file = Filename.remove_extension (Filename.basename file)

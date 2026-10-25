@@ -12,7 +12,8 @@ type t = {
       (** each function, and the top-level functions its body uses *)
 }
 
-(* Resolve module [home], which sees the interfaces [imports]. Every name
+(* Resolve module [home], which sees the interfaces [imports]: the
+   prelude's, and that of every module it imports. Every name
    that doesn't exist, type with the wrong number of arguments and name
    declared twice is reported to the sink. *)
 val program :

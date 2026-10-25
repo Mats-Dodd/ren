@@ -47,10 +47,42 @@ let ast src =
         (fun f -> print_endline (Ast.show_item f))
         (Driver.parse ~file src))
 
+(* The entry module's signatures; a program of one file has no other
+   module. *)
 let types src =
   let src = clean src in
   report src (fun () ->
-      List.iter print_endline (Driver.types ~lint:true ~file src))
+      List.iter
+        (fun (_, sigs) -> List.iter print_endline sigs)
+        (Driver.types ~lint:true ~file src))
+
+(* ---- programs of several modules ----
+
+   [files] are the program's files, by name, the entry first:
+   [("main.ren", ...); ("billing/stripe.ren", ...)]. A module is loaded
+   from the list, as the CLI would load it from disk. *)
+
+let program files =
+  let files = List.map (fun (f, src) -> (f, clean src)) files in
+  let entry, src = List.hd files in
+  let load m = List.assoc_opt (Driver.module_file ~entry m) files in
+  (files, entry, src, load)
+
+let run_files files =
+  let files, file, src, load = program files in
+  report_files files (fun () ->
+      print_endline (Value.show (Driver.run ~lint:true ~load ~file src)))
+
+(* Every module's signatures, as `ren types` prints them. *)
+let types_files files =
+  let files, file, src, load = program files in
+  report_files files (fun () ->
+      List.iteri
+        (fun i (home, sigs) ->
+          if i > 0 then print_newline ();
+          print_endline ("-- " ^ home);
+          List.iter print_endline sigs)
+        (Driver.types ~lint:true ~load ~file src))
 
 let plan_types =
   {|

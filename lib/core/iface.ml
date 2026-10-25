@@ -1,8 +1,8 @@
 (* Interfaces: what one module tells the modules that use it.
 
    A module is checked against the interfaces of the modules it imports,
-   never their source. Today the only import is the prelude, which every
-   program gets without asking (driver.ml).
+   never their source: the prelude, which every module gets without
+   asking, and each module it imports (driver.ml).
 
    An interface holds a module's types, with their constructors and fields,
    and the type scheme of each of its public functions, all in canonical

@@ -1,5 +1,7 @@
 (* The compiler pipeline, one pass after another. *)
 
+let sprintf = Printf.sprintf
+
 (* Something went wrong inside the compiler itself: an exception that isn't
    a diagnostic or a panic. [pass] names the pass that was running. *)
 exception Internal_error of { pass : string; message : string }
@@ -101,18 +103,119 @@ let prelude =
      in
      (lower ~lint:true ~imports r inferred, Iface.union Prelude.intrinsics iface))
 
-(* The user's program, checked against the prelude's interface. *)
-type checked = {
-  prog : Ast.Parsed.program;
-  resolved : Resolve.t;
-  iface : Iface.t;
-  inferred : Infer.t;
-  imports : Iface.t list;
-}
+(* ---- loading a program's modules ----
 
-let check_all ~file src =
-  let _, prelude_iface = Lazy.force prelude in
-  let prog = parse ~file src in
+   A program is its entry module, every module it imports, every module
+   those import, and so on: the import graph. The driver never reads a
+   file itself. It asks a loader for each module's source, by the module's
+   path (`billing/stripe`), and the loader says where that comes from: the
+   CLI reads the files next to the entry, the tests keep them in a list. *)
+
+type loader = string -> string option
+
+(* The file module [path] is: its path from the entry's folder, with
+   `.ren` on the end. *)
+let module_file ~entry path =
+  let dir = Filename.dirname entry in
+  if dir = Filename.current_dir_name then path ^ ".ren"
+  else Filename.concat dir (path ^ ".ren")
+
+let imports_of (prog : Ast.Parsed.program) =
+  List.filter_map (function Ast.Import i -> Some i | _ -> None) prog
+
+(* A module, loaded and parsed. *)
+type source = { home : string; file : string; parsed : Ast.Parsed.program }
+
+(* Every module of the program, loaded depth-first from the entry, each
+   module's imports in the order it writes them. A module comes after
+   every module it imports, so this is the order to check them in, and it
+   depends on nothing but the program's text. The entry comes last.
+
+   No module may import itself, even by way of others: the graph has no
+   cycles, which is what gives it an order at all (module-build.md, "No
+   import cycles"). A missing module, a cycle and two imports with the
+   same alias are each reported, and the program stops once everything
+   that could be loaded has been. *)
+let load_all ~(load : loader) ~file src =
+  let entry = file in
+  let sink = Diag.sink () in
+  let report ?help ?notes ?labels loc msg =
+    Diag.report sink (Diag.make ?help ?notes ?labels loc msg)
+  in
+  (* each module once it's done, the last one first. A module that didn't
+     parse is done too, so it isn't reported again. *)
+  let loaded = ref [] in
+  let is_loaded path =
+    List.exists (fun (m : source) -> m.home = path) !loaded
+  in
+  (* [path] is the way here from the entry: each module on it, and its
+     import of the next one *)
+  let rec visit ~path home file src =
+    let parsed =
+      try parse ~file src
+      with Diag.Errors ds ->
+        List.iter (Diag.report sink) ds;
+        []
+    in
+    let imports = imports_of parsed in
+    let seen = Hashtbl.create 8 in
+    List.iter
+      (fun (i : Ast.import) ->
+        match Hashtbl.find_opt seen i.alias.name with
+        | Some (first : Ast.ident) ->
+            report i.alias.loc ~help:"import one of them `as` something else"
+              ~labels:
+                [ (first.loc, sprintf "the first `%s` is here" first.name) ]
+              (sprintf "there are two imports named `%s`" i.alias.name)
+        | None -> Hashtbl.replace seen i.alias.name i.alias)
+      imports;
+    List.iter
+      (fun (i : Ast.import) ->
+        if i.path = Path.prelude_home then
+          report i.path_loc ~help:"remove this import"
+            "`prelude` is always imported, so it can't be imported again"
+        else if is_loaded i.path then ()
+        else if i.path = home || List.mem_assoc i.path path then
+          cycle ~path home i
+        else
+          let ifile = module_file ~entry i.path in
+          match load i.path with
+          | None ->
+              report i.path_loc
+                ~help:"check the module's name, or create its file"
+                ~notes:[ sprintf "it would be the file `%s`" ifile ]
+                (sprintf "there's no module `%s`" i.path)
+          | Some isrc -> visit ~path:(path @ [ (home, i) ]) i.path ifile isrc)
+      imports;
+    loaded := { home; file; parsed } :: !loaded
+  (* [i], in module [home], imports a module on the way here: the modules
+     from that one to [home] import each other in a circle *)
+  and cycle ~path home (i : Ast.import) =
+    let rec from = function
+      | (h, _) :: _ as rest when h = i.path -> rest
+      | _ :: rest -> from rest
+      | [] -> []
+    in
+    let around = from path in
+    let modules = List.map fst around @ [ home; i.path ] in
+    report i.iloc
+      ~labels:
+        (List.map
+           (fun (h, (imp : Ast.import)) ->
+             (imp.iloc, sprintf "`%s` imports `%s` here" h imp.path))
+           around)
+      ~help:
+        (match around with
+        | [] ->
+            "remove it: a module's own names are in scope without importing it"
+        | [ _ ] ->
+            "move what both modules need into a third module that both can \
+             import"
+        | _ ->
+            "move what these modules need from each other into a module they \
+             can all import")
+      (sprintf "import cycle: %s" (String.concat " → " modules))
+  in
   let home = Path.home_of_file file in
   if home = Path.prelude_home then
     raise
@@ -122,44 +225,93 @@ let check_all ~file src =
              "a file can't be named `prelude.ren`: that's the name of the \
               module every program imports";
          ]);
-  let imports = [ prelude_iface ] in
-  let resolved, iface, inferred =
-    check_module ~home ~imports ~entry:file prog
-  in
-  { prog; resolved; iface; inferred; imports }
+  visit ~path:[] home file src;
+  if Diag.has_errors sink then raise (Diag.Errors (Diag.reported sink));
+  List.rev !loaded
 
-let check ~file src = (check_all ~file src).prog
-let inferred ~file src = (check_all ~file src).inferred
-let schemes ~file src = (inferred ~file src).schemes
-let interface ~file src = (check_all ~file src).iface
+(* ---- checking a program ---- *)
 
-let core ?lint ~file src =
-  let c = check_all ~file src in
+(* One module of the program, checked against the interfaces of the
+   prelude and of the modules it imports. *)
+type checked = {
+  home : string;
+  prog : Ast.Parsed.program;
+  resolved : Resolve.t;
+  iface : Iface.t;
+  inferred : Infer.t;
+  imports : Iface.t list;
+}
+
+(* Load the program, then check each of its modules in dependency order,
+   each against the interfaces of what it imports, never their source.
+   Returns them in that order, the entry last. A program of one file loads
+   nothing else, so the loader is optional. *)
+let check_all ?(load = fun _ -> None) ~file src =
+  let _, prelude_iface = Lazy.force prelude in
+  let sources = pass "load" (fun () -> load_all ~load ~file src) in
+  let entry = Path.home_of_file file in
+  List.rev
+    (List.fold_left
+       (fun (done_ : checked list) (m : source) ->
+         let iface_of path =
+           (List.find (fun (c : checked) -> c.home = path) done_).iface
+         in
+         let imports =
+           prelude_iface
+           :: List.map
+                (fun (i : Ast.import) -> iface_of i.path)
+                (imports_of m.parsed)
+         in
+         let resolved, iface, inferred =
+           check_module ~home:m.home ~imports
+             ?entry:(if m.home = entry then Some m.file else None)
+             m.parsed
+         in
+         { home = m.home; prog = m.parsed; resolved; iface; inferred; imports }
+         :: done_)
+       [] sources)
+
+(* The module the program starts in. *)
+let entry_of modules = List.nth modules (List.length modules - 1)
+let check ?load ~file src = (entry_of (check_all ?load ~file src)).prog
+let inferred ?load ~file src = (entry_of (check_all ?load ~file src)).inferred
+let schemes ?load ~file src = (inferred ?load ~file src).schemes
+let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
+
+let lower_module ?lint (c : checked) =
   lower ?lint ~imports:c.imports c.resolved c.inferred
 
-let types ?(lint = false) ~file src =
-  let ({ prog; inferred; _ } as c) = check_all ~file src in
-  (* the tests also check that the program lowers, and lints *)
-  if lint then ignore (lower ~lint:true ~imports:c.imports c.resolved inferred);
-  let schemes = inferred.schemes in
-  List.filter_map
-    (function
-      | Ast.Fn f ->
-          Some
-            (Ty.signature ~home:(Path.home_of_file file) ~pub:f.pub
-               ~name:f.name.name
-               ~params:
-                 (List.map
-                    (fun (p : Ast.Parsed.param) -> p.pname.name)
-                    f.params)
-               (List.assoc f.name.name schemes))
-      | Type _ | Import _ -> None)
-    prog
+let core ?lint ?load ~file src =
+  lower_module ?lint (entry_of (check_all ?load ~file src))
 
-let run ?lint ~file src =
-  let prog = core ?lint ~file src in
+let types ?(lint = false) ?load ~file src =
+  List.map
+    (fun ({ home; prog; inferred; _ } as c) ->
+      (* the tests also check that the program lowers, and lints *)
+      if lint then ignore (lower_module ~lint:true c);
+      let schemes = inferred.schemes in
+      ( home,
+        List.filter_map
+          (function
+            | Ast.Fn f ->
+                Some
+                  (Ty.signature ~home ~pub:f.pub ~name:f.name.name
+                     ~params:
+                       (List.map
+                          (fun (p : Ast.Parsed.param) -> p.pname.name)
+                          f.params)
+                     (List.assoc f.name.name schemes))
+            | Type _ | Import _ -> None)
+          prog ))
+    (check_all ?load ~file src)
+
+(* Check every module, lower each to Core, and run them as one program:
+   the prelude, then each module in dependency order, starting from the
+   entry's `main`. *)
+let run ?lint ?load ~file src =
+  let modules = List.map (lower_module ?lint) (check_all ?load ~file src) in
   let prelude, _ = Lazy.force prelude in
-  pass "eval" (fun () -> Eval.run [ prelude; prog ])
+  pass "eval" (fun () -> Eval.run (prelude :: modules))
 
 let dump_tokens toks =
   toks |> Array.to_list

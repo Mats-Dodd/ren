@@ -1,0 +1,5 @@
+// The module `util`. Only its `pub` functions can be called from others.
+
+pub fn double(n: Int) -> Int = twice(n)
+
+fn twice(n) = n + n

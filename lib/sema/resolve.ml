@@ -5,7 +5,10 @@
 
    - a variable or function used as a value is a local (a [binder], shared
      by every use of it), a top-level function (a [Path.t]), or a function
-     built into the compiler
+     built into the compiler. A function of another module is written with
+     that module's alias in front, `util.double`, and only its public
+     functions can be: Resolve sees the module's interface, not its source.
+     The prelude's functions, and the module's own, are written bare.
    - a type's name is a declared type (a [Path.t]), or one of the type
      parameters in scope
 
@@ -42,6 +45,7 @@ type env = {
   types : (string, Path.t * int) Hashtbl.t;
       (** every type in scope, with how many type arguments it takes *)
   values : (string, name) Hashtbl.t;  (** every top-level function in scope *)
+  modules : Iface.t Env.t;  (** each imported module, by its alias *)
 }
 
 (* What one expression can see. [fn] is shared by the whole top-level
@@ -133,6 +137,17 @@ let params env sc bound ps =
   (List.rev ps, sc)
 
 (* ---- expressions ---- *)
+
+(* The public function [f] of the imported module [iface], written
+   `alias.f`. A private function isn't in the interface, so it can't be
+   told apart from one that doesn't exist. *)
+let qualified env sc (iface : Iface.t) (f : ident) =
+  let p = Path.make iface.home f.name in
+  if Iface.find_value iface f.name = None then
+    report env f.loc ~help:"if it's defined there, mark it `pub`"
+      (sprintf "`%s` has no public `%s`" iface.home f.name)
+  else sc.fn.calls <- p :: sc.fn.calls;
+  Global p
 
 (* What the name [x] refers to. [what] words the error when it's nothing:
    "variable", or "function" for the name being called. *)
@@ -247,6 +262,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
             name
         in
         Record (name, List.map (fun (f, v) -> (f, go v)) fields)
+    | Field ({ kind = Var m; _ }, f) when Env.mem m env.modules ->
+        Var (qualified env sc (Env.find m env.modules) f)
     | Field (r, f) -> Field (go r, f)
     | Match (subject, arms) ->
         let subject = go subject in
@@ -367,20 +384,44 @@ let unique_ctors env imported own =
   List.iter (declare true) own
 
 let program sink ~home ~imports (prog : Parsed.program) =
-  let env =
-    { sink; home; types = Hashtbl.create 16; values = Hashtbl.create 16 }
+  (* each import, by its alias; the driver passes the interface of every
+     module the program imports *)
+  let modules =
+    List.fold_left
+      (fun acc -> function
+        | Import (i : import) ->
+            Env.add i.alias.name
+              (List.find (fun (m : Iface.t) -> m.home = i.path) imports)
+              acc
+        | Fn _ | Type _ -> acc)
+      Env.empty prog
   in
-  (* the types in scope: the imports', then this module's own, so types can
-     refer to types declared further down the file *)
+  let env =
+    {
+      sink;
+      home;
+      types = Hashtbl.create 16;
+      values = Hashtbl.create 16;
+      modules;
+    }
+  in
+  (* what's in scope bare: the prelude, which every module imports
+     without asking, and the module's own names. Another module's are
+     written with its alias. *)
+  let prelude =
+    List.filter (fun (m : Iface.t) -> m.home = Path.prelude_home) imports
+  in
+  (* the types in scope: the prelude's, then this module's own, so types
+     can refer to types declared further down the file *)
   List.iter
     (fun (iface : Iface.t) ->
       List.iter
         (fun (d : Iface.type_decl) ->
           Hashtbl.replace env.types d.path.name (d.path, List.length d.params))
         iface.types)
-    imports;
+    prelude;
   let imported_type name =
-    List.find_map (fun iface -> Iface.find_type iface name) imports
+    List.find_map (fun iface -> Iface.find_type iface name) prelude
   in
   let first_local = Hashtbl.create 16 in
   List.iter
@@ -410,7 +451,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
                 (Path.make home name.name, List.length td.type_params))
       | Fn _ | Import _ -> ())
     prog;
-  (* the functions in scope: the imports', then this module's own *)
+  (* the functions in scope: the prelude's, then this module's own *)
   List.iter
     (fun (iface : Iface.t) ->
       List.iter
@@ -422,7 +463,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
           in
           Hashtbl.replace env.values v.vname name)
         iface.values)
-    imports;
+    prelude;
   let fns =
     List.filter_map
       (function Fn (f : Parsed.fn_def) -> Some f | Type _ | Import _ -> None)

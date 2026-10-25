@@ -1,6 +1,8 @@
 ; examples.t runs every example with `ren run` and checks what it prints.
+; Each folder is a program of several modules.
 
 (cram
  (deps
   %{bin:ren}
-  (glob_files *.ren)))
+  (glob_files *.ren)
+  (glob_files two/*.ren)))

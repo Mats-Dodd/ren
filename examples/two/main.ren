@@ -1,0 +1,7 @@
+// Two modules: this one, the entry, and util.ren next to it. A function
+// from another module is written with the module's name in front.
+import util
+
+fn main() =
+  print(util.double(2))
+  util.double(util.double(5))

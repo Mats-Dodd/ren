@@ -5,10 +5,13 @@ open Ren
 let usage =
   {|usage: ren <command> <file.ren>
 
+The file is the program's entry module. A module it imports is found from
+the file's folder: `import billing/stripe` is the file billing/stripe.ren.
+
 commands:
   run     run the program's `main` function
   check   check the program without running it
-  types   print every function's inferred signature
+  types   print every function's inferred signature, module by module
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree|}
 
@@ -21,14 +24,30 @@ let () =
           prerr_endline ("error: " ^ msg);
           exit 1
       in
+      (* each module the program imports, read from its file, which is
+         next to the entry's or in a folder below it *)
+      let load m =
+        try
+          Some
+            (In_channel.with_open_bin
+               (Driver.module_file ~entry:path m)
+               In_channel.input_all)
+        with Sys_error _ -> None
+      in
       try
         match cmd with
         | "run" -> (
-            match Driver.run ~file:path src with
+            match Driver.run ~load ~file:path src with
             | VUnit -> ()
             | v -> print_endline (Value.show v))
-        | "check" -> ignore (Driver.check ~file:path src)
-        | "types" -> List.iter print_endline (Driver.types ~file:path src)
+        | "check" -> ignore (Driver.check ~load ~file:path src)
+        | "types" ->
+            List.iteri
+              (fun i (home, sigs) ->
+                if i > 0 then print_newline ();
+                print_endline ("-- " ^ home);
+                List.iter print_endline sigs)
+              (Driver.types ~load ~file:path src)
         | "tokens" ->
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))
         | "ast" ->
