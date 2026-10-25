@@ -221,4 +221,13 @@ the next starts:
 
 Where the work forced a change to the plan above:
 
-- None yet.
+- **R1, splitting the prelude.** The intrinsics' ids and names are a
+  module of their own, `core/intrinsic.ml`, rather than part of
+  `prelude.ml`, which keeps each one's type. The AST names an intrinsic
+  by its id too, and `prelude.ml` depends on the AST (through `Ty` and
+  `Iface`), so the ids can't live there without a cycle. And the
+  compiler is still one dune library, so "resolve, lower and lint no
+  longer link against runtime code" means none of them refers to it:
+  `Value`, `Unix` and `builtins.ml` appear only in `eval/` and the
+  driver. Separate libraries would make the linker enforce that, which
+  can wait until it's worth the build files.
