@@ -65,7 +65,7 @@ type Light =
       Red => Green
       Green => Red
   fn all() = [Red, Green]
-  fn show(self) uses Io = print(self)
+  fn show(self) uses Console = print(self)
 
 pub type UserId = opaque Int
   pub fn new(n: Int) -> UserId = n
@@ -78,7 +78,7 @@ fn main() = 1
     type Light
       fn next(self) -> Light
       fn all() -> Array<Light>
-      fn show(self) uses Io
+      fn show(self) uses Console
     pub type UserId
       pub fn new(n: Int) -> UserId
       pub fn raw(self) -> Int
@@ -471,7 +471,7 @@ let%expect_test "methods, associated functions and values, from another module"
       ( "main.ren",
         {|
 import stack.{Stack}
-fn main() uses Io =
+fn main() uses Console =
   var s = Stack.empty
   &s.push(1)
   &s.push(s.size() + 1)
@@ -552,7 +552,7 @@ type Light =
 type Counter = { n: Int }
   fn next(self) -> Counter = Counter { n: self.n + 1 }
 
-fn main() uses Io =
+fn main() uses Console =
   let c = Counter { n: 1 }
   print([Light.Red.after(3), Light.Red.after(4)])
   print(c.next().next())
@@ -698,7 +698,7 @@ type A = { n: Int }
 
 fn main() = mk(3).count()
 |};
-  (* nor does `pick` pick up `A.size`'s `Io` *)
+  (* nor does `pick` pick up `A.size`'s `Console` *)
   types
     {|
 type B = { m: Int }
@@ -726,7 +726,7 @@ fn main() = pure()
     type B
       fn size(self) -> Int
     type A
-      fn size(self) -> Int uses Io
+      fn size(self) -> Int uses Console
     fn mk() -> B
     fn pick<T>(x: T) -> T
     pub fn pure() -> Int
@@ -1152,13 +1152,13 @@ fn main() = Log.noisy
 |};
   [%expect
     {|
-    error: the associated value `Log.noisy` uses `Io`
+    error: the associated value `Log.noisy` uses `Console`
       ┌─ test.ren:2:7
     2 │   let noisy = Log.make()
       │       ^^^^^
-      │               ---------- this call uses `Io`
+      │               ---------- this call uses `Console`
       = an associated value is made once, when the program starts, so it can't use a dependency
-      help: make it an associated function, `fn noisy() uses Io = ...`
+      help: make it an associated function, `fn noisy() uses Console = ...`
     |}]
 
 let%expect_test "an associated value can't need itself" =

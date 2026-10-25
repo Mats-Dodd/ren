@@ -431,7 +431,7 @@ fn main() = ()
       );
       ( "lib.ren",
         {|
-pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad uses Io =
+pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad uses Console =
   if xs.len() == 0 then fail Bad
   print(1)
   for x in xs
@@ -442,10 +442,10 @@ pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad uses Io =
   [%expect
     {|
     -- lib
-    pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad uses Io
+    pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad uses Console
 
     -- main
-    fn a(xs: Array<Int>) ! Bad | Pos(Int) uses Io
+    fn a(xs: Array<Int>) ! Bad | Pos(Int) uses Console
     fn main()
     |}]
 
@@ -1749,7 +1749,7 @@ fn main() =
     pub fn transfer(inout xs: Array<Account>, from: AccountId, to: AccountId, m: Int) ! Frozen(AccountId) | NoSuchAccount(AccountId) | SameAccount | Short(AccountId, Int)
     fn outcome(inout xs: Array<Account>) -> Result<Unit, ! Frozen(AccountId) | NoSuchAccount(AccountId) | SameAccount | Short(AccountId, Int)>
     fn worth_retrying(r: Result<Unit, ! Frozen(AccountId) | NoSuchAccount(AccountId) | SameAccount | Short(AccountId, Int)>) -> Bool
-    fn main() uses Io
+    fn main() uses Console
     |}]
 
 let%expect_test "an associated value can't fail" =

@@ -35,7 +35,7 @@ infer.ren annotates nothing; this is what inference works out:
   fn first_or<T>(o: Option<T>, fallback: T) -> T
   fn map_option<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U>
   fn twice<T>(f: fn() -> T) -> T
-  fn main() uses Io
+  fn main() uses Console
 
 A program of several modules is a folder; its entry imports the rest:
 
@@ -48,7 +48,7 @@ A program of several modules is a folder; its entry imports the rest:
   fn twice(n: Int) -> Int
   
   -- main
-  fn main() -> Int uses Io
+  fn main() -> Int uses Console
 
 An error in one module can point into another, and shows that file's line:
 
@@ -116,17 +116,17 @@ it. Since stage 6 a charge over the card's limit is declined, which
   fn sum(xs: Array<Int>) -> Int
   
   -- billing/stripe
-  pub fn charge(amount: Int) -> ChargeId ! Declined(Int) uses Io
+  pub fn charge(amount: Int) -> ChargeId ! Declined(Int) uses Console
   pub fn receipt(id: ChargeId) -> Int
   fn next_id(amount: Int) -> Int
   
   -- billing/invoice
   pub fn make(p: Plan) -> Invoice
-  pub fn pay(i: Invoice) -> Option<stripe.ChargeId> ! Declined(Int) uses Io
+  pub fn pay(i: Invoice) -> Option<stripe.ChargeId> ! Declined(Int) uses Console
   
   -- main
-  fn checkout(p: Plan) -> Int uses Io
-  fn main() -> Int uses Io
+  fn checkout(p: Plan) -> Int uses Console
+  fn main() -> Int uses Console
 
 Each of these breaks the shop in one way. A private function can't be
 called from another module:
@@ -156,14 +156,14 @@ A public function has to declare what it uses:
 
   $ printf 'import plan\npub fn loud(p: plan.Plan) -> Int =\n  print(p)\n  plan.price(p)\nfn main() = loud(Free)\n' > broken/loud.ren
   $ ren check broken/loud.ren
-  error: `loud` doesn't declare `Io`
+  error: `loud` doesn't declare `Console`
     ┌─ broken/loud.ren:2:8
   2 │ pub fn loud(p: plan.Plan) -> Int =
     │        ^^^^
   3 │   print(p)
-    │   -------- this call uses `Io`
+    │   -------- this call uses `Console`
     = a public function without `uses` uses nothing, and its body is checked against that
-    help: add `uses Io`
+    help: add `uses Console`
   [1]
 
 Two modules can't import each other:
@@ -275,7 +275,7 @@ changes:
   pub fn fibonacci(n: Int) -> Array<Op>
   
   -- main
-  fn main() ! Empty | NoHalt | NotRecorded(Int) | Outside(Int, Int) | Underflow(Int) uses Io
+  fn main() ! Empty | NoHalt | NotRecorded(Int) | Outside(Int, Int) | Underflow(Int) uses Console
   fn fact(n: Int) -> Int
 
 What it says when the VM is changed in the ways a reader might try. A new
@@ -398,7 +398,7 @@ copy of the bank and keeps it only if nothing failed:
     fn find(self, id: AccountId) -> Int ! NoSuchAccount(AccountId)
   
   -- main
-  fn main() ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Io
+  fn main() ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Console
   fn send(from: AccountId, to: AccountId, dollars: Int) -> Transfer
   fn cents(b: Bank, id: AccountId) -> Int ! NoSuchAccount(AccountId)
   fn worth_retrying(r: Result<Unit, ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money)>) -> Bool

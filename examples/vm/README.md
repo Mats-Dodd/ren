@@ -51,7 +51,7 @@ not a `Program`: every `Program` passed `check`, which fails with
 `Empty`, `NoHalt` or `Outside(pc, to)` otherwise. Outside `stack.ren`
 nobody knows a `Stack` is a list.
 
-**Only `main` uses `Io`.** `ren types` shows `uses Io` on `main` and no
+**Only `main` uses `Console`.** `ren types` shows `uses Console` on `main` and no
 other dependency anywhere. The machine and the timeline are pure, and the
 compiler worked that out without being told.
 

@@ -106,7 +106,7 @@ fn main() =
     fn is_even(n: Int) -> Bool
     fn is_odd(n: Int) -> Bool
     fn limit(u: User) -> Int
-    fn main() uses Io
+    fn main() uses Console
     |}];
   run src;
   [%expect {|
@@ -326,12 +326,13 @@ fn main() = 1
       help: add `-> Int` to the signature
     |}];
   types {|
-pub fn say(x: Int) uses Io = print(x)
+pub fn say(x: Int) uses Console = print(x)
 fn main() = say(1)
 |};
-  [%expect {|
-    pub fn say(x: Int) uses Io
-    fn main() uses Io
+  [%expect
+    {|
+    pub fn say(x: Int) uses Console
+    fn main() uses Console
     |}]
 
 (* which record a field belongs to *)
@@ -859,10 +860,10 @@ fn main() = 1
   [%expect
     {|
     fn twice(f: fn())
-    fn shout() uses Io
+    fn shout() uses Console
     fn quiet()
-    fn loud() uses Io
-    fn louder() uses Io
+    fn loud() uses Console
+    fn louder() uses Console
     fn main() -> Int
     |}]
 
@@ -874,7 +875,7 @@ fn main() = Button { on_click: fn() => print(1) }
 |};
   [%expect
     {|
-    error: expected `fn()`, found `fn() uses Io`
+    error: expected `fn()`, found `fn() uses Console`
       ┌─ test.ren:2:32
     2 │ fn main() = Button { on_click: fn() => print(1) }
       │                                ^^^^^^^^^^^^^^^^
@@ -933,7 +934,7 @@ fn main() = keep(fn() => print(1))()
   [%expect
     {|
     fn keep<T>(f: fn() -> T uses ..d) -> (fn() -> T uses ..d)
-    fn main() uses Io
+    fn main() uses Console
     |}];
   (* passing it on, directly or inside a lambda, is fine *)
   types
@@ -974,23 +975,25 @@ let%expect_test "row unification" =
     | exception Unify.Infinite -> print_endline "infinite"
   in
   (* order doesn't matter *)
-  try_unify (row [ "Io"; "Clock" ] REmpty) (row [ "Clock"; "Io" ] REmpty);
+  try_unify
+    (row [ "Console"; "Clock" ] REmpty)
+    (row [ "Clock"; "Console" ] REmpty);
   (* an open row grows to supply what's missing *)
   let r1 = fresh_row st and r2 = fresh_row st in
-  try_unify (row [ "Io" ] r1) (row [ "Clock" ] r2);
+  try_unify (row [ "Console" ] r1) (row [ "Clock" ] r2);
   (* a closed row can't *)
-  try_unify (row [ "Io" ] REmpty) (row [ "Clock" ] (fresh_row st));
-  try_unify REmpty (row [ "Io" ] (fresh_row st));
+  try_unify (row [ "Console" ] REmpty) (row [ "Clock" ] (fresh_row st));
+  try_unify REmpty (row [ "Console" ] (fresh_row st));
   (* the same tail with different labels can't be made equal *)
   let r = fresh_row st in
-  try_unify (row [ "Io" ] r) (row [ "Clock" ] r);
+  try_unify (row [ "Console" ] r) (row [ "Clock" ] r);
   (* a row can't contain itself *)
   let r = fresh_row st in
-  try_unify r (row [ "Io" ] r);
+  try_unify r (row [ "Console" ] r);
   [%expect
     {|
-    <Clock, Io> = <Clock, Io>
-    <Clock, Io, ..d> = <Clock, Io, ..d>
+    <Clock, Console> = <Clock, Console>
+    <Clock, Console, ..d> = <Clock, Console, ..d>
     mismatch
     mismatch
     mismatch
@@ -1295,15 +1298,15 @@ let%expect_test "a public function's interface comes from its signature" =
      it's the same type inference finds for it. A parameter written
      `fn(...)` is transparent, so its rows are the function's; any other
      function type in a parameter is closed. A transparent parameter shares
-     the function's row, labels and all, so `logged`'s `Io` shows on both. *)
+     the function's row, labels and all, so `logged`'s `Console` shows on both. *)
   let src =
     clean
       {|
 pub fn twice(f: fn()) =
   try f()
   try f()
-pub fn say(x: Int) uses Io = print(x)
-pub fn logged(f: fn()) uses Io =
+pub fn say(x: Int) uses Console = print(x)
+pub fn logged(f: fn()) uses Console =
   try f()
   print(1)
 pub fn app(f: fn(fn() -> Int) -> Int) -> Int = try f(fn() => 1)
@@ -1328,8 +1331,8 @@ fn main() = twice(fn() => say(1))
   [%expect
     {|
     twice: fn(fn() ! ..e uses ..d) ! ..e uses ..d (as inferred)
-    say: fn(Int) ! ..e uses Io, ..d (as inferred)
-    logged: fn(fn() ! ..e uses Io, ..d) ! ..e uses Io, ..d (as inferred)
+    say: fn(Int) ! ..e uses Console, ..d (as inferred)
+    logged: fn(fn() ! ..e uses Console, ..d) ! ..e uses Console, ..d (as inferred)
     app: fn(fn(fn() -> Int) -> Int ! ..e uses ..d) -> Int ! ..e uses ..d (as inferred)
     maybe: fn(Option<fn()>) ! ..e uses ..d (as inferred)
     |}]
@@ -1348,7 +1351,7 @@ fn main() = maybe(Some(fn() => print(1)))
 |};
   [%expect
     {|
-    error: expected `Option<fn()>`, found `Option<fn() uses Io>`
+    error: expected `Option<fn()>`, found `Option<fn() uses Console>`
       ┌─ test.ren:5:19
     5 │ fn main() = maybe(Some(fn() => print(1)))
       │                   ^^^^^^^^^^^^^^^^^^^^^^
@@ -1356,7 +1359,7 @@ fn main() = maybe(Some(fn() => print(1)))
 
 let%expect_test "calling a stored closure leaves the caller open" =
   (* a closed `fn()` adds nothing to its caller's errors and dependencies,
-     so `main` can still use `Io` after calling `g` *)
+     so `main` can still use `Console` after calling `g` *)
   let src =
     {|
 type B = { f: fn() }
@@ -1370,7 +1373,7 @@ fn main() =
   run src;
   [%expect {|
     fn g(b: B)
-    fn main() uses Io
+    fn main() uses Console
     1
     ()
     |}]
@@ -1462,16 +1465,16 @@ fn main() = other(1, true, ())
 
 let%expect_test "a dependency that doesn't exist" =
   types {|
-fn f() uses Io, Disk = 1
+fn f() uses Console, Disk = 1
 fn main() = f()
 |};
   [%expect
     {|
     error: there's no dependency named `Disk`
-      ┌─ test.ren:1:17
-    1 │ fn f() uses Io, Disk = 1
-      │                 ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Io`, `Net`, `Random`, `Unsafe`
+      ┌─ test.ren:1:22
+    1 │ fn f() uses Console, Disk = 1
+      │                      ^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Net`, `Random`, `Unsafe`
       help: use one of those, or declare it with `dep`
     |}]
 
@@ -1490,14 +1493,14 @@ fn main() = load(1)
 |};
   [%expect
     {|
-    error: `load` doesn't declare `Io`
+    error: `load` doesn't declare `Console`
       ┌─ test.ren:2:8
     2 │ pub fn load(x: Int) -> Int =
       │        ^^^^
     4 │   log(y)
-      │   ------ this call uses `Io`
+      │   ------ this call uses `Console`
       = a public function without `uses` uses nothing, and its body is checked against that
-      help: add `uses Io`
+      help: add `uses Console`
     |}]
 
 let%expect_test "a public function stored as a value in its own body" =
@@ -1517,7 +1520,7 @@ fn main() = f()
     |}]
 
 let%expect_test "a pure call before the one that uses something" =
-  (* `pure` and `len` are called first, but they don't use `Io`: once
+  (* `pure` and `len` are called first, but they don't use `Console`: once
      their open rows are joined to `go`'s, those rows have what `go` uses,
      which mustn't make them the call to blame *)
   types
@@ -1532,14 +1535,14 @@ fn main() = go(1)
 |};
   [%expect
     {|
-    error: `go` doesn't declare `Io`
+    error: `go` doesn't declare `Console`
       ┌─ test.ren:2:8
     2 │ pub fn go(n: Int) -> Int =
       │        ^^
     5 │   print(a + b)
-      │   ------------ this call uses `Io`
+      │   ------------ this call uses `Console`
       = a public function without `uses` uses nothing, and its body is checked against that
-      help: add `uses Io`
+      help: add `uses Console`
     |}]
 
 let%expect_test "a private function's uses are checked if it writes them" =
@@ -1553,13 +1556,13 @@ fn main() =
 |};
   [%expect
     {|
-    error: `tick` doesn't declare `Io`
+    error: `tick` doesn't declare `Console`
       ┌─ test.ren:1:4
     1 │ fn tick() uses Clock = print(1)
       │    ^^^^
-      │                        -------- this call uses `Io`
+      │                        -------- this call uses `Console`
       = `tick`'s body can only use what its `uses` lists
-      help: add `Io` to its `uses`
+      help: add `Console` to its `uses`
     |}]
 
 let%expect_test "declaring more than the body uses is allowed" =
@@ -1567,9 +1570,9 @@ let%expect_test "declaring more than the body uses is allowed" =
      later without changing the interface *)
   types
     {|
-pub fn later() uses Io, Net = ()
+pub fn later() uses Console, Clock = ()
 pub fn now(x: Int) -> Int
-    uses Io =
+    uses Console =
   print(x)
   x
 fn main() =
@@ -1578,16 +1581,16 @@ fn main() =
 |};
   [%expect
     {|
-    pub fn later() uses Io, Net
-    pub fn now(x: Int) -> Int uses Io
-    fn main() -> Int uses Io, Net
+    pub fn later() uses Clock, Console
+    pub fn now(x: Int) -> Int uses Console
+    fn main() -> Int uses Clock, Console
     |}]
 
 let%expect_test
     "a transparent parameter's uses flow through a declared function" =
   run
     {|
-pub fn twice(f: fn()) uses Io =
+pub fn twice(f: fn()) uses Console =
   print(0)
   try f()
   try f()
@@ -1602,7 +1605,7 @@ fn main() = twice(fn() => print(1))
 
 let%expect_test "a use found when a group's functions are joined" =
   (* `ping` sees `pong` as declared until both are checked; only then is
-     it known that `pong`'s body uses `Io` *)
+     it known that `pong`'s body uses `Console` *)
   types
     {|
 pub fn ping(n: Int) -> Int uses Clock =
@@ -1614,14 +1617,14 @@ fn main() = ping(3)
 |};
   [%expect
     {|
-    error: `ping` doesn't declare `Io`
+    error: `ping` doesn't declare `Console`
       ┌─ test.ren:1:8
     1 │ pub fn ping(n: Int) -> Int uses Clock =
       │        ^^^^
     2 │   if n == 0 then 0 else pong(n - 1)
-      │                         ----------- this call uses `Io`
+      │                         ----------- this call uses `Console`
       = `ping`'s body can only use what its `uses` lists
-      help: add `Io` to its `uses`
+      help: add `Console` to its `uses`
     |}]
 
 (* ---- nothing is dropped (errors.md, "Nothing is dropped") ---- *)

@@ -209,12 +209,12 @@ The prelude is an ordinary module that every module imports implicitly.
 |---|---|
 | Types | `Int` `Bool` `Str` `Unit` `Option` `Result` `List` `Array` `Map` `Set` |
 | Constructors | `Some` `None` `Ok` `Err` |
-| Dependencies | `Io` `Net` `Alloc` `Async` `Unsafe` `Clock` `Random` |
+| Dependencies | `Clock` `Random` `Console` `Net` `Alloc` `Async` `Unsafe` |
 | Functions | `print` `dbg` `assert` |
 
 Everything else in the standard library is imported like any other module: `import std/async` gives you `async.par_map`.
 
-**`print` uses `Io`.** It's an ordinary function, so calling it from code that doesn't declare `Io` is an error. Otherwise any pure function could quietly reach the outside world, and simulation and replay would stop being trustworthy.
+**`print` uses `Console`.** It's an ordinary function, `Console.write(show(x))`, so calling it from code that doesn't declare `Console` is an error. Otherwise any pure function could quietly reach the outside world, and simulation and replay would stop being trustworthy.
 
 For debugging there's **`dbg(x)`**, which works anywhere. It prints the value with its source location, is compiled out of release builds, and is rejected by `ren test --ci`, so it can't get committed.
 
@@ -326,7 +326,7 @@ A build script only `uses Build`. It has no network, clock, or environment acces
 $ ren test
   ✓ 412 tests   (398 cached, 14 run)              0.31s
 ```
-A simulation test is a pure function of the code plus a seed, so its result can be cached. Tests that use real `Net` or `Io` can't be cached, and you can see that from their `uses`.
+A simulation test is a pure function of the code plus a seed, so its result can be cached. Tests that use real `Net` or `Fs` can't be cached, and you can see that from their `uses`.
 
 **Watch mode and the LSP for free.** They hold the same cache in memory. A persistent process is as trustworthy as a clean build, so you don't have to choose between a fast daemon and correct results.
 

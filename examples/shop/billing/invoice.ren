@@ -18,7 +18,7 @@ pub fn make(p: Plan) -> Invoice =
   { plan: p, status: if amount == 0 then Free else Due(amount) }
 
 pub fn pay(i: Invoice) -> Option<stripe.ChargeId> ! Declined(amount: Int)
-    uses Io =
+    uses Console =
   match i.status
     Free => None
     Due(amount) => Some(try stripe.charge(amount))

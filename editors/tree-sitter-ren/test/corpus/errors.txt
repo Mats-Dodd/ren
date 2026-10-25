@@ -4,7 +4,7 @@ what a function can fail with, before uses
 
 pub fn debit(inout a: Int, m: Money) ! Short(account: Int, by: Money) | Frozen(Int) = ()
 fn save(id: Int) -> Int ! Full | bank.Refusal
-    uses Io =
+    uses Console =
   id
 
 --------------------------------------------------------------------------------
@@ -74,7 +74,7 @@ an error set continuing the signature on the next line
 
 pub fn save(id: Int) -> Int
     ! Full | bank.Refusal
-    uses Io =
+    uses Console =
   id
 type Account = { id: Int }
   pub fn freeze(inout self)

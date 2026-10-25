@@ -23,7 +23,7 @@ import billing/stripe.{Client, Receipt} as pay
 a public function with type parameters, a result and uses
 ================================================================================
 
-pub fn first<T>(xs: Array<T>, d: T) -> T uses Io = d
+pub fn first<T>(xs: Array<T>, d: T) -> T uses Console = d
 
 --------------------------------------------------------------------------------
 
@@ -61,7 +61,7 @@ uses continuing the signature on the next line
 ================================================================================
 
 pub fn load(id: Int) -> User
-    uses Io, Clock =
+    uses Console, Clock =
   id
 
 fn next() = 1

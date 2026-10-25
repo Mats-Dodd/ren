@@ -10,9 +10,10 @@
    fail with and the dependencies it uses. Each function body has its own
    pair of open rows, and every call adds the callee's dependencies to the
    caller's, so a function's `uses` is everything the functions it calls
-   use. `print` uses `Io`, so `main` does too, unless it declares its
-   dependencies: a function that writes `uses`, and every public function,
-   can use only what it lists (infer_top.ml).
+   use, and calling a dependency's operation, `Console.write(s)`, adds the
+   dependency. `print` uses `Console`, so `main` does too, unless it
+   declares its dependencies: a function that writes `uses`, and every
+   public function, can use only what it lists (infer_top.ml).
 
    Errors (errors.md) are rows too, whose labels are tags with payloads,
    `Short(Int)`, but a call's errors go only where a marker says: a `try`

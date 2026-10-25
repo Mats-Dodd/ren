@@ -95,7 +95,7 @@ and unify_row st a b =
       let tail1 = snd (row_parts rest1) in
       let rest2 = rewrite st r2 label in
       (* If supplying `label` bound rest1's own tail, the two rows share a
-         tail but disagree on labels: `<Io | ρ>` and `<Clock | ρ>`. *)
+         tail but disagree on labels: `<Console | ρ>` and `<Clock | ρ>`. *)
       (match (tail1, snd (row_parts rest1)) with
       | Some before, after when after <> Some before -> raise Mismatch
       | _ -> ());

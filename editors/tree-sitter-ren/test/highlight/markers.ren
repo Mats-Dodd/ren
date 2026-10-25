@@ -3,7 +3,7 @@ import billing/stripe.{Client} as pay
 //     ^ namespace
 //                     ^ type
 
-pub fn put(inout c: Cart, p: Plan) -> Int uses Io, Clock =
+pub fn put(inout c: Cart, p: Plan) -> Int uses Console, Clock =
 // <- keyword
 //     ^ function
 //         ^ keyword.mutation

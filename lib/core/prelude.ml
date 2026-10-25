@@ -7,6 +7,9 @@
    listed in the tables below: each entry says everything every pass needs
    to know about it, so adding a built-in means adding one entry. *)
 
+(* The file its source is said to be in, which no message can show. *)
+let file = "<prelude>"
+
 let source =
   {|
 pub type Option<T> =
@@ -25,6 +28,68 @@ pub type Option<T> =
 pub type Result<T, E> =
   | Ok(value: T)
   | Err(error: E)
+
+// ---- time ----
+//
+// Opaque, with methods only, until operators arrive (stage 9). Inside the
+// prelude each is a number of milliseconds.
+
+// how long something takes
+pub type Duration = opaque Int
+  pub fn ms(n: Int) -> Duration = n
+  pub fn seconds(n: Int) -> Duration = n * 1000
+  pub fn minutes(n: Int) -> Duration = n * 60000
+  pub fn plus(self, d: Duration) -> Duration = self + d
+
+// a moment on the calendar: since the epoch, 1970-01-01 00:00 UTC
+pub type Time = opaque Int
+  pub let epoch: Time = 0
+  pub fn plus(self, d: Duration) -> Time = self + d
+  pub fn before(self, t: Time) -> Bool = self < t
+  pub fn after(self, t: Time) -> Bool = self > t
+
+// a moment for measuring how long something took, on a clock that never
+// goes back: an instant means nothing on its own, only next to another
+pub type Instant = opaque Int
+  pub let zero: Instant = 0
+  pub fn plus(self, d: Duration) -> Instant = self + d
+  pub fn since(self, earlier: Instant) -> Duration = self - earlier
+  pub fn before(self, i: Instant) -> Bool = self < i
+  pub fn not_before(self, i: Instant) -> Bool = self >= i
+
+// ---- the built-in dependencies (deps.md, "Built in") ----
+//
+// The runtime installs each one's `real` around `main`, if `main` uses
+// it. It's private: nothing else can install the world.
+
+pub dep Clock =
+  now: fn() -> Time
+  instant: fn() -> Instant
+  sleep: fn(d: Duration)
+
+  // a clock stopped at `at`, that never sleeps
+  pub fn frozen(at: Time) -> Clock =
+    Clock { now: fn() => at, instant: fn() => Instant.zero, sleep: fn(_) => () }
+  let real: Clock =
+    Clock {
+      now: fn() => clock_now(),
+      instant: fn() => clock_instant(),
+      sleep: fn(d) => clock_sleep(d),
+    }
+
+pub dep Random =
+  // a number from 0 up to, but not including, `below`
+  int: fn(below: Int) -> Int
+
+  let real: Random = Random { int: fn(below) => random_int(below) }
+
+pub dep Console =
+  write: fn(line: Str)
+
+  let real: Console = Console { write: fn(line) => console_write(line) }
+
+// what any value shows as, on a line of its own
+pub fn print<T>(x: T) uses Console = Console.write(show(x))
 |}
 
 (* ---- built-in functions ---- *)
@@ -37,7 +102,15 @@ type builtin_fn = {
   eval : Value.t list -> Value.t * Value.t list;
       (** run it: the result, and the final value of every parameter, which the
           interpreter writes back for the arguments passed with `&` *)
+  runtime : bool;
+      (** whether it reaches the world, which a program does only through a
+          dependency: then only the prelude's own source can call it, in the
+          real implementation the runtime installs *)
 }
+
+(* A built-in function has panicked, which the interpreter reports at the
+   call. *)
+exception Panic of string
 
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug name = failwith ("bug: `" ^ name ^ "` was called with the wrong values")
@@ -47,33 +120,61 @@ let bug name = failwith ("bug: `" ^ name ^ "` was called with the wrong values")
 let scheme ty : Ty.scheme = { ty; names = [] }
 let open_row n : Ty.row = { labels = []; tail = Some n }
 
+(* What the real implementations of the built-in dependencies run on: the
+   system's clock, its source of randomness, and stdout. Each is a number
+   of milliseconds, as [source] represents time. *)
+let now_ms () = int_of_float (Unix.gettimeofday () *. 1000.)
+
 let fns =
   let open Ty in
+  let fn ?(runtime = false) name ty eval =
+    { name; scheme = scheme ty; eval; runtime }
+  in
   [
-    {
-      (* fn<T>(T) uses Io *)
-      name = "print";
-      scheme =
-        scheme
-          (Fun
-             ( [ read (Var 0) ],
-               unit,
-               open_row 0,
-               { labels = [ label "Io" ]; tail = Some 1 } ));
-      eval =
-        (fun args ->
-          List.iter (fun v -> print_endline (Value.display v)) args;
-          (Value.VUnit, args));
-    };
-    {
-      (* fn<T>(T) -> Str *)
-      name = "show";
-      scheme = scheme (Fun ([ read (Var 0) ], str, open_row 0, open_row 1));
-      eval =
-        (function
+    (* fn<T>(T) -> Str *)
+    fn "show"
+      (Fun ([ read (Var 0) ], str, open_row 0, open_row 1))
+      (function
         | [ v ] as args -> (Value.VStr (Value.display v), args)
         | _ -> bug "show");
-    };
+    (* fn() -> Int, the real `Clock.now` and `Clock.instant` *)
+    fn ~runtime:true "clock_now"
+      (Fun ([], int, open_row 0, open_row 1))
+      (fun args -> (Value.VInt (now_ms ()), args));
+    fn ~runtime:true "clock_instant"
+      (Fun ([], int, open_row 0, open_row 1))
+      (fun args -> (Value.VInt (now_ms ()), args));
+    (* fn(Int) *)
+    fn ~runtime:true "clock_sleep"
+      (Fun ([ read int ], unit, open_row 0, open_row 1))
+      (function
+        | [ Value.VInt ms ] as args ->
+            if ms > 0 then Unix.sleepf (float_of_int ms /. 1000.);
+            (Value.VUnit, args)
+        | _ -> bug "clock_sleep");
+    (* fn(Int) -> Int *)
+    fn ~runtime:true "random_int"
+      (Fun ([ read int ], int, open_row 0, open_row 1))
+      (function
+        | [ Value.VInt below ] as args ->
+            if below <= 0 then
+              raise
+                (Panic
+                   (Printf.sprintf
+                      "`Random.int` needs a number above 0 to stay below, not \
+                       %d"
+                      below));
+            let state = Random.State.make_self_init () in
+            (Value.VInt (Random.State.full_int state below), args)
+        | _ -> bug "random_int");
+    (* fn(Str) *)
+    fn ~runtime:true "console_write"
+      (Fun ([ read str ], unit, open_row 0, open_row 1))
+      (function
+        | [ Value.VStr line ] as args ->
+            print_endline line;
+            (Value.VUnit, args)
+        | _ -> bug "console_write");
   ]
 
 (* ---- built-in types ----
@@ -101,6 +202,7 @@ let array_methods =
         (function
         | [ Value.VArray xs ] as args -> (Value.VInt (Array.length xs), args)
         | _ -> bug "len");
+      runtime = false;
     };
     {
       (* fn<T>(inout self: Array<T>, x: T) *)
@@ -117,6 +219,7 @@ let array_methods =
         | [ Value.VArray xs; x ] ->
             (Value.VUnit, [ Value.VArray (Array.append xs [| x |]); x ])
         | _ -> bug "push");
+      runtime = false;
     };
   ]
 
@@ -131,12 +234,14 @@ let types =
 
 (* ---- built-in dependencies ----
 
-   What a function can name in its `uses`. For now these are the only
-   dependencies there are; dependency types of a program's own come in
-   stage 7. *)
+   The dependencies the runtime installs around `main`, if it uses them:
+   each is declared in [source], with its real implementation, `real`
+   (deps.md, "`main`"). *)
+let runtime_deps = [ "Clock"; "Random"; "Console" ]
 
-let dependencies =
-  [ "Io"; "Net"; "Alloc"; "Async"; "Unsafe"; "Clock"; "Random" ]
+(* The dependencies a `uses` can name that aren't declared anywhere yet:
+   their stages give them operations. *)
+let dependencies = [ "Net"; "Alloc"; "Async"; "Unsafe" ]
 
 (* A built-in function, by the name its path has: [print], or a method
    after its type, [Array.push]. *)
@@ -150,7 +255,9 @@ let find_fn name =
         (List.find_opt (fun (t : builtin_type) -> t.name = ty) types)
         (fun t -> List.find_opt (fun (f : builtin_fn) -> f.name = m) t.methods)
 
-(* The intrinsic half of the prelude's interface. *)
+(* The intrinsic half of the prelude's interface, as the prelude's own
+   source sees it, with what reaches the world; [public] is what every
+   other module sees, without it. *)
 let intrinsics : Iface.t =
   {
     home = Path.prelude_home;
@@ -178,4 +285,18 @@ let intrinsics : Iface.t =
       List.map
         (fun (f : builtin_fn) -> { Iface.vname = f.name; scheme = f.scheme })
         fns;
+  }
+
+let public =
+  {
+    intrinsics with
+    values =
+      List.filter
+        (fun (v : Iface.value) ->
+          match
+            List.find_opt (fun (f : builtin_fn) -> f.name = v.vname) fns
+          with
+          | Some f -> not f.runtime
+          | None -> true)
+        intrinsics.values;
   }

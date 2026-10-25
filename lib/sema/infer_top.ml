@@ -800,6 +800,134 @@ type t = {
    it can meet: a field of an imported type can have a type from a module
    this one never imported. [extra] are the dot calls of methods found so
    far that the call graph needs besides [r]'s (see [program]). *)
+(* ---- what's installed around `main` ---- *)
+
+(* The runtime installs exactly the built-in dependencies `main` uses, as
+   the outermost implementations (deps.md, "`main`"), so any other one it
+   uses is reported: where its `uses` lists it, or at the first call that
+   uses it. [ty] is `main`'s type, and [cx] what checking its body found.
+   The help shows how to install one inside `main`, with a function that
+   makes an implementation if there is one: one of the module's own
+   functions, [fns], whose type [schemes] has, or a member of the
+   dependency. *)
+let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
+  (* what it lists, if it lists any: what else it uses is reported as
+     undeclared already *)
+  let uses =
+    match (declared_uses ~is_value:(fun _ -> false) f, repr ty) with
+    | Some ds, _ -> ds
+    | None, TFun (_, _, _, u) -> row_names u
+    | None, _ -> []
+  in
+  let runtime (p : Path.t) =
+    p.home = Path.prelude_home && List.mem p.name Prelude.runtime_deps
+  in
+  let makes p t =
+    match repr t with
+    | TFun (ps, ret, _, _) -> (
+        match repr ret with
+        | TCon (q, _) when q = p -> Some (List.length ps)
+        | _ -> None)
+    | _ -> None
+  in
+  let call name n = if n = 0 then name ^ "()" else name ^ "(...)" in
+  (* the module's associated values, which aren't called *)
+  let values =
+    List.concat_map
+      (function
+        | Type (td : type_def) ->
+            List.filter_map
+              (fun (o : op) ->
+                if o.op_kind = Op_value then Some o.op_fn.name.name else None)
+              td.type_ops
+        | Fn _ | Import _ -> [])
+      r.prog
+  in
+  (* a function that makes an implementation of [p] *)
+  let maker (p : Path.t) =
+    let own =
+      List.find_map
+        (fun (g : fn_def) ->
+          let is_method =
+            match g.params with
+            | q :: _ -> q.pname.ident.name = "self"
+            | [] -> false
+          in
+          if is_method || g.name.name = "main" then None
+          else
+            Option.bind (Hashtbl.find_opt schemes g.name.name) (fun t ->
+                Option.map
+                  (fun n ->
+                    let name =
+                      Resolve.value_name r (Path.make env.home g.name.name)
+                    in
+                    if List.mem g.name.name values then name else call name n)
+                  (makes p t)))
+        fns
+    in
+    let member () =
+      Option.bind (Hashtbl.find_opt env.types p) (fun (td : Iface.type_decl) ->
+          List.find_map
+            (fun (o : Iface.op) ->
+              let name = env.names p ^ "." ^ o.oname in
+              match (o.okind, o.oscheme.ty) with
+              | Value, Con (q, _) when q = p -> Some name
+              | Function, Fun (ps, Con (q, _), _, _) when q = p ->
+                  Some (call name (List.length ps))
+              | _ -> None)
+            (if p.home = env.home then [] else td.members))
+    in
+    match own with Some m -> Some m | None -> member ()
+  in
+  let pos (l : Loc.t) = (l.start.line, l.start.col) in
+  let calls =
+    List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(cx.calls)
+  in
+  List.iter
+    (fun dep ->
+      let p = Ty.dep_path dep in
+      if not (runtime p) then
+        let d = env.names p in
+        let written =
+          Option.bind f.uses
+            (List.find_opt (fun (t : tname) -> t.tref = Named p))
+        in
+        let loc, labels =
+          match written with
+          | Some t -> (t.tloc, [])
+          | None -> (
+              (* the first call that brings it in itself, as in
+                 [check_uses] *)
+              let first has = List.find_opt has calls in
+              match
+                match first (fun c -> List.mem dep c.own) with
+                | Some c -> Some c
+                | None -> first (fun c -> List.mem dep (row_names c.row))
+              with
+              | Some c ->
+                  (f.name.loc, [ (c.cloc, sprintf "this call uses `%s`" d) ])
+              | None -> (f.name.loc, []))
+        in
+        let help =
+          match (maker p, Hashtbl.find_opt env.types p) with
+          | Some m, _ -> sprintf "install one inside `main`: `with %s in ...`" m
+          | None, Some _ ->
+              sprintf
+                "install one inside `main`, with `with`: an implementation is \
+                 a `%s { ... }` that gives each of its operations"
+                d
+          | None, None -> sprintf "remove it: nothing can implement `%s` yet" d
+        in
+        report env
+          (Diag.make loc ~labels ~help
+             ~notes:
+               [
+                 sprintf "the runtime installs only %s"
+                   (and_list Prelude.runtime_deps);
+               ]
+             (sprintf "nothing installs `%s` before `main`" d)))
+    (List.sort_uniq String.compare uses)
+
 let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
   let st = Types.new_state () in
   let home = r.home in
@@ -1182,7 +1310,10 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       ignore
         (fail env (List.hd f.params).pname.ident.loc
            ~help:"remove the parameters" "`main` can't take parameters")
-  | Some _ -> ());
+  | Some (_, Some f) ->
+      check_main env r ~fns ~schemes f
+        (Hashtbl.find schemes f.name.name)
+        (Hashtbl.find tables f.name.name));
   (* Each function's scheme and node types share one numbering, so a
      variable is the same [Var n] in both. Nodes are converted in order of
      their ids, so the numbering doesn't depend on a hash table's order. *)

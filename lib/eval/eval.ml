@@ -172,7 +172,15 @@ let rec eval cx env (e : expr) =
         eval_all cx env
           (List.map (function Value a -> a | Ref v -> local v e.loc) args)
       in
-      let result, finals = apply cx f values in
+      let result, finals =
+        try apply cx f values with
+        | Prelude.Panic msg -> panic e.loc msg
+        | Panic (l, msg)
+          when l.file = Prelude.file && e.loc.file <> Prelude.file ->
+            (* the prelude's source can't be shown, so a panic inside it is
+               the program's call that reached it *)
+            panic e.loc msg
+      in
       (* written back whether the call failed or not: failing doesn't undo
          what it changed (errors.md, "Failure and `&`") *)
       List.iter2
@@ -293,6 +301,25 @@ let run (modules : program list) =
   match Hashtbl.find_opt cx.fns (Path.make entry.home "main") with
   | None -> bug "a program with no `main`"
   | Some f -> (
+      (* the runtime installs the real implementation of each built-in
+         dependency `main` uses, around it; the type checker made sure
+         it uses no other (deps.md, "`main`") *)
+      let installs () =
+        match f.scheme.ty with
+        | Fun (_, _, _, uses) ->
+            List.filter_map
+              (fun (l : Ty.label) ->
+                let p = Ty.dep_path l.name in
+                if
+                  p.home = Path.prelude_home
+                  && List.mem p.name Prelude.runtime_deps
+                then
+                  Some
+                    (p, Hashtbl.find cx.values (Path.prelude (p.name ^ ".real")))
+                else None)
+              uses.labels
+        | _ -> []
+      in
       (* OCaml's own stack runs out when a Ren function calls itself too
          deeply; that's the program's fault, so it's a panic *)
       let call p =
@@ -305,6 +332,7 @@ let run (modules : program list) =
           (fun (m : program) ->
             List.iter (fun p -> Hashtbl.replace cx.values p (call p)) m.values)
           modules;
+        cx.installed <- installs ();
         call f.path
       with Stack_overflow ->
         panic f.loc "the stack overflowed: a function called itself too deeply")

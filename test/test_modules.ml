@@ -262,20 +262,20 @@ fn main() = go()
       ( "lib.ren",
         {|
 pub fn quiet(n: Int) -> Int = n
-pub fn say(n: Int) uses Io = print(n)
+pub fn say(n: Int) uses Console = print(n)
 |}
       );
     ];
   [%expect
     {|
-    error: `go` doesn't declare `Io`
+    error: `go` doesn't declare `Console`
       ┌─ main.ren:2:8
     2 │ pub fn go() =
       │        ^^
     4 │   lib.say(a)
-      │   ---------- this call uses `Io`
+      │   ---------- this call uses `Console`
       = a public function without `uses` uses nothing, and its body is checked against that
-      help: add `uses Io`
+      help: add `uses Console`
     |}]
 
 let%expect_test "another module's function is written with its alias" =
@@ -988,7 +988,7 @@ let%expect_test "editing a body leaves the interface as it was" =
       {|
 pub type Row = { id: Int }
 pub fn load(id: Int) -> Row
-    uses Io =
+    uses Console =
   let n = helper(id)
   Row { id: n }
 fn helper(n) = n
@@ -1000,7 +1000,7 @@ fn main() = load(1)
       {|
 pub type Row = { id: Int }
 pub fn load(id: Int) -> Row
-    uses Io =
+    uses Console =
   print(id)
   Row { id: helper(id) }
 fn helper(n) = n * 2 + 1
@@ -1010,8 +1010,8 @@ fn main() = load(1)
   print_endline (if before = after then "the same" else "different");
   [%expect
     {|
-    load: fn(Int) -> test.Row uses Io
-    load: fn(Int) -> test.Row uses Io
+    load: fn(Int) -> test.Row uses Console
+    load: fn(Int) -> test.Row uses Console
     the same
     |}]
 

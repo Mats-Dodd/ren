@@ -120,12 +120,12 @@ let lower ?(lint = false) ~imports r inferred =
    every program, so sharing it is safe. *)
 let prelude =
   lazy
-    (let prog = parse ~file:"<prelude>" (String.trim Prelude.source) in
+    (let prog = parse ~file:Prelude.file (String.trim Prelude.source) in
      let imports = [ Prelude.intrinsics ] in
      let r, iface, inferred =
        check_module ~home:Path.prelude_home ~imports ~reachable:imports prog
      in
-     (lower ~lint:true ~imports r inferred, Iface.union Prelude.intrinsics iface))
+     (lower ~lint:true ~imports r inferred, Iface.union Prelude.public iface))
 
 (* ---- loading a program's modules ----
 

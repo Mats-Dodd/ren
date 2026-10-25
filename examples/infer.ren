@@ -26,7 +26,7 @@ fn twice(f) =                          // f's dependencies become the caller's
   let _ = f()
   f()
 
-fn main() =                            // uses Io, because `print` does
+fn main() =                            // uses Console, because `print` does
   let alice = { id: 1, plan: Pro(seats: 5) }
   print(seats(alice))
   print(first_or(map_option(Some(20), fn(n) => n + 1), 0))

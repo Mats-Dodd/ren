@@ -62,7 +62,7 @@ made in a unit you can see, `Money.dollars(100)`, and changes only through
 `acme.balance(alice)` doesn't. Inside, `&draft.accounts[i].debit(...)` changes
 one account in place, inside one draft, inside one call.
 
-**Only `main` uses `Io`.** Everything else is pure, and the compiler
+**Only `main` uses `Console`.** Everything else is pure, and the compiler
 worked that out.
 
 **The errors.** `examples.t` breaks the bank in ten ways:

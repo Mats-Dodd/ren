@@ -298,29 +298,29 @@ fn main() = billing.Plan
 let%expect_test "uses, on the signature's line or the next" =
   ast
     {|
-fn f() -> Int uses Io, Clock = 1
+fn f() -> Int uses Console, Clock = 1
 pub fn g(x: Int) -> Int
-    uses Io =
+    uses Console =
   x
 fn h() = 2
 |};
   [%expect
     {|
-    (fn f () (uses Io Clock) 1)
-    (fn g (x) (uses Io) x)
+    (fn f () (uses Console Clock) 1)
+    (fn g (x) (uses Console) x)
     (fn h () 2)
     |}]
 
 let%expect_test "uses on the next line has to be indented" =
   ast {|
 fn f()
-uses Io = print(1)
+uses Console = print(1)
 |};
   [%expect
     {|
     error: `uses` on a line of its own has to be indented
       ┌─ test.ren:2:1
-    2 │ uses Io = print(1)
+    2 │ uses Console = print(1)
       │ ^^^^
       help: indent it, so it continues the signature
     |}]
@@ -351,9 +351,9 @@ let%expect_test "what a function can fail with, after !" =
   ast
     {|
 pub fn debit(inout a: Int, m: Int) ! Short(account: Int, by: Int) | Frozen(Int) = ()
-fn load(id: Int) -> Int ! NotFound uses Io = id
+fn load(id: Int) -> Int ! NotFound uses Console = id
 pub fn save(id: Int) -> Int ! Full | bank.Refusal
-    uses Io =
+    uses Console =
   id
 type Account = { id: Int }
   pub fn freeze(inout self) ! Frozen(account: Int) = ()
@@ -361,8 +361,8 @@ type Account = { id: Int }
   [%expect
     {|
     (fn debit (a m) (! Short(account: Int, by: Int) | Frozen(Int)) ())
-    (fn load (id) (! NotFound) (uses Io) id)
-    (fn save (id) (! Full | bank.Refusal) (uses Io) id)
+    (fn load (id) (! NotFound) (uses Console) id)
+    (fn save (id) (! Full | bank.Refusal) (uses Console) id)
     (type Account (fields id:Int) (members (pub (fn freeze (self) (! Frozen(account: Int)) ()))))
     |}]
 
@@ -373,7 +373,7 @@ let%expect_test "an error set on the signature's next line" =
     {|
 pub fn save(id: Int) -> Int
     ! Full | bank.Refusal
-    uses Io =
+    uses Console =
   id
 type Account = { id: Int }
   pub fn freeze(inout self)
@@ -385,7 +385,7 @@ pub type Refusal =
 |};
   [%expect
     {|
-    (fn save (id) (! Full | bank.Refusal) (uses Io) id)
+    (fn save (id) (! Full | bank.Refusal) (uses Console) id)
     (type Account (fields id:Int) (members (pub (fn freeze (self) (! Frozen) (if (!= (. self id) 0) (fail Frozen))))))
     (pub type Refusal (! Short | Frozen))
     |}]

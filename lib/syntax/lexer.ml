@@ -21,7 +21,7 @@
 
      pub fn load(id: Int) -> User
          ! NotFound | Timeout
-         uses Io =
+         uses Console =
        body *)
 
 open Token

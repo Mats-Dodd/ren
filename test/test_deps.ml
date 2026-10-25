@@ -105,7 +105,7 @@ fn main() = 1
 let%expect_test "an operation and a member can't share a name" =
   types
     {|
-dep Clock =
+dep Timer =
   now: fn() -> Int
 
   pub fn now() -> Int = 0
@@ -113,19 +113,19 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: `Clock` has an operation and a member both named `now`
+    error: `Timer` has an operation and a member both named `now`
       ┌─ test.ren:4:10
     2 │   now: fn() -> Int
       │   --- the operation `now` is here
     4 │   pub fn now() -> Int = 0
       │          ^^^
-      = `Clock.now` has to mean one thing: calling the installed implementation's `now`, or this member
+      = `Timer.now` has to mean one thing: calling the installed implementation's `now`, or this member
       help: rename one of them
     |}]
 
 let%expect_test "two operations with one name" =
   types {|
-dep Clock =
+dep Timer =
   now: fn() -> Int
   now: fn() -> Bool
 fn main() = 1
@@ -143,7 +143,7 @@ fn main() = 1
 
 let%expect_test "what a dependency's declaration can't be" =
   ast {|
-dep Clock =
+dep Timer =
   now: Int
 |};
   [%expect
@@ -155,12 +155,12 @@ dep Clock =
       help: write its type as a function's, like `now: fn() -> Int`
     |}];
   ast {|
-dep Clock =
+dep Timer =
   pub fn zero() -> Int = 0
 |};
   [%expect
     {|
-    error: `Clock` has no operations: a dependency lists them first
+    error: `Timer` has no operations: a dependency lists them first
       ┌─ test.ren:2:3
     2 │   pub fn zero() -> Int = 0
       │   ^^^
@@ -168,7 +168,7 @@ dep Clock =
     |}];
   ast
     {|
-dep Clock =
+dep Timer =
   now: fn() -> Int
 
   pub fn zero() -> Int = 0
@@ -176,20 +176,20 @@ dep Clock =
 |};
   [%expect
     {|
-    error: expected `fn`, `let` or an operator, in `Clock`'s members, found `sleep`
+    error: expected `fn`, `let` or an operator, in `Timer`'s members, found `sleep`
       ┌─ test.ren:5:3
     5 │   sleep: fn(ms: Int)
       │   ^^^^^
       help: a dependency's operations come first, before its members
     |}];
   ast {|
-dep Clock = now: fn() -> Int
+dep Timer = now: fn() -> Int
 |};
   [%expect
     {|
-    error: expected the operations of `Clock`, found `now`
+    error: expected the operations of `Timer`, found `now`
       ┌─ test.ren:1:13
-    1 │ dep Clock = now: fn() -> Int
+    1 │ dep Timer = now: fn() -> Int
       │             ^^^
       help: put each of its operations on a line of its own, indented under it, like `now: fn() -> Time`
     |}];
@@ -224,104 +224,104 @@ fn main() = 1
       ┌─ test.ren:2:13
     2 │ fn g() uses Nope = 1
       │             ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Io`, `Net`, `Random`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Net`, `Random`, `Unsafe`
       help: use one of those, or declare it with `dep`
     |}]
 
 let%expect_test "an implementation is a record of its operations" =
   types
     {|
-dep Clock =
+dep Timer =
   now: fn() -> Int
   sleep: fn(ms: Int)
 
-fn frozen(at: Int) -> Clock = Clock { now: fn() => at, sleep: fn(_) => () }
+fn frozen(at: Int) -> Timer = Timer { now: fn() => at, sleep: fn(_) => () }
 fn main() = frozen(0)
 |};
   [%expect
     {|
-    dep Clock
+    dep Timer
       now: fn() -> Int
       sleep: fn(Int)
-    fn frozen(at: Int) -> Clock
-    fn main() -> Clock
+    fn frozen(at: Int) -> Timer
+    fn main() -> Timer
     |}];
   types
     {|
-dep Clock =
+dep Timer =
   now: fn() -> Int
   sleep: fn(ms: Int)
 
-fn half() = Clock { now: fn() => 1 }
-fn typo() = Clock { now: fn() => 1, slep: fn(_) => () }
-fn wrong() = Clock { now: fn() => true, sleep: fn(_) => () }
+fn half() = Timer { now: fn() => 1 }
+fn typo() = Timer { now: fn() => 1, slep: fn(_) => () }
+fn wrong() = Timer { now: fn() => true, sleep: fn(_) => () }
 fn main() = 1
 |};
   [%expect
     {|
-    error: this `Clock` is missing `sleep`
+    error: this `Timer` is missing `sleep`
       ┌─ test.ren:5:13
-    5 │ fn half() = Clock { now: fn() => 1 }
+    5 │ fn half() = Timer { now: fn() => 1 }
       │             ^^^^^^^^^^^^^^^^^^^^^^^^
       help: give it a value too, like `sleep: ...`
 
-    error: `Clock` has no operation named `slep`
+    error: `Timer` has no operation named `slep`
       ┌─ test.ren:6:37
-    6 │ fn typo() = Clock { now: fn() => 1, slep: fn(_) => () }
+    6 │ fn typo() = Timer { now: fn() => 1, slep: fn(_) => () }
       │                                     ^^^^
       help: its operations: `now`, `sleep`
 
     error: this lambda produces a `Bool`, but it has to produce an `Int`
       ┌─ test.ren:7:35
-    7 │ fn wrong() = Clock { now: fn() => true, sleep: fn(_) => () }
+    7 │ fn wrong() = Timer { now: fn() => true, sleep: fn(_) => () }
       │                                   ^^^^
-      = `Clock`'s operation `now`
+      = `Timer`'s operation `now`
     |}]
 
 let%expect_test "an operation isn't read from an implementation" =
   types
     {|
-dep Clock =
+dep Timer =
   now: fn() -> Int
 
-fn read(c: Clock) = c.now
-fn call(c: Clock) = c.now()
-fn other(c: Clock) = c.later()
+fn read(c: Timer) = c.now
+fn call(c: Timer) = c.now()
+fn other(c: Timer) = c.later()
 fn main() = 1
 |};
   [%expect
     {|
-    error: `now` is an operation of `Clock`, so it isn't read from a value
+    error: `now` is an operation of `Timer`, so it isn't read from a value
       ┌─ test.ren:4:23
-    4 │ fn read(c: Clock) = c.now
+    4 │ fn read(c: Timer) = c.now
       │                       ^^^
-      = a value of `Clock` is an implementation of it: it's used by installing it, with `with`, and then `Clock.now` calls it
-      help: call the installed one: `Clock.now(...)`
+      = a value of `Timer` is an implementation of it: it's used by installing it, with `with`, and then `Timer.now` calls it
+      help: call the installed one: `Timer.now(...)`
 
-    error: `now` is an operation of `Clock`, so it isn't read from a value
+    error: `now` is an operation of `Timer`, so it isn't read from a value
       ┌─ test.ren:5:23
-    5 │ fn call(c: Clock) = c.now()
+    5 │ fn call(c: Timer) = c.now()
       │                       ^^^
-      = a value of `Clock` is an implementation of it: it's used by installing it, with `with`, and then `Clock.now` calls it
-      help: call the installed one: `Clock.now(...)`
+      = a value of `Timer` is an implementation of it: it's used by installing it, with `with`, and then `Timer.now` calls it
+      help: call the installed one: `Timer.now(...)`
 
-    error: `Clock` has no operation named `later`
+    error: `Timer` has no operation named `later`
       ┌─ test.ren:6:24
-    6 │ fn other(c: Clock) = c.later()
+    6 │ fn other(c: Timer) = c.later()
       │                        ^^^^^
       help: its operations: `now`
     |}];
   types {|
-dep Clock =
+dep Timer =
   now: fn() -> Int
 
-fn main() = Clock.later()
+fn main() = Timer.later()
 |};
   [%expect
     {|
-    error: `Clock` has no operation or member named `later`
+    error: `Timer` has no operation or member named `later`
       ┌─ test.ren:4:19
-    4 │ fn main() = Clock.later()
+    4 │ fn main() = Timer.later()
       │                   ^^^^^
       help: its operations: `now`
     |}]
@@ -373,4 +373,175 @@ fn main() = 1
     4 │ pub fn find(id: Int) -> Option<Int> uses Users = Users.get(id)
       │                                          ^^^^^
       help: mark `Users` `pub`
+    |}]
+
+let%expect_test "the runtime installs only the built-in dependencies main uses"
+    =
+  run {|
+fn main() =
+  print(1)
+  Console.write("written")
+|};
+  [%expect {|
+    1
+    written
+    ()
+    |}];
+  types
+    {|
+pub dep Users =
+  get: fn(id: Int) -> Option<Int>
+
+  pub fn none() -> Users = Users { get: fn(_) => None }
+
+fn main() uses Users, Console =
+  print(Users.get(1))
+|};
+  [%expect
+    {|
+    error: nothing installs `Users` before `main`
+      ┌─ test.ren:6:16
+    6 │ fn main() uses Users, Console =
+      │                ^^^^^
+      = the runtime installs only `Clock`, `Random` and `Console`
+      help: install one inside `main`: `with Users.none() in ...`
+    |}];
+  types
+    {|
+pub dep Users =
+  get: fn(id: Int) -> Option<Int>
+
+fn mem_users(ids: Array<Int>) -> Users = Users { get: fn(id) => None }
+fn find(id: Int) = Users.get(id)
+
+fn main() = print(find(1))
+|};
+  [%expect
+    {|
+    error: nothing installs `Users` before `main`
+      ┌─ test.ren:7:4
+    7 │ fn main() = print(find(1))
+      │    ^^^^
+      │                   ------- this call uses `Users`
+      = the runtime installs only `Clock`, `Random` and `Console`
+      help: install one inside `main`: `with mem_users(...) in ...`
+    |}];
+  types
+    {|
+pub dep Users =
+  get: fn(id: Int) -> Option<Int>
+
+fn main() uses Net = print(Users.get(1))
+|};
+  [%expect
+    {|
+    error: `main` doesn't declare `Console`
+      ┌─ test.ren:4:4
+    4 │ fn main() uses Net = print(Users.get(1))
+      │    ^^^^
+      │                      ------------------- this call uses `Console`
+      = `main`'s body can only use what its `uses` lists
+      help: add `Console` to its `uses`
+
+    error: `main` doesn't declare `Users`
+      ┌─ test.ren:4:4
+    4 │ fn main() uses Net = print(Users.get(1))
+      │    ^^^^
+      │                            ------------ this call uses `Users`
+      = `main`'s body can only use what its `uses` lists
+      help: add `Users` to its `uses`
+
+    error: nothing installs `Net` before `main`
+      ┌─ test.ren:4:16
+    4 │ fn main() uses Net = print(Users.get(1))
+      │                ^^^
+      = the runtime installs only `Clock`, `Random` and `Console`
+      help: remove it: nothing can implement `Net` yet
+    |}]
+
+let%expect_test "an operation that fails, called with try" =
+  types
+    {|
+pub dep Users =
+  save: fn(u: Int) ! Conflict | Full
+
+fn store(u: Int) = try Users.save(u)
+fn handled(u: Int) =
+  match Users.save(u)
+    _ => true
+    fail Conflict => false
+    fail Full => false
+fn main() = 1
+|};
+  [%expect
+    {|
+    pub dep Users
+      save: fn(Int) ! Conflict | Full
+    fn store(u: Int) ! Conflict | Full uses Users
+    fn handled(u: Int) -> Bool uses Users
+    fn main() -> Int
+    |}]
+
+let%expect_test "the real Clock and Random" =
+  run
+    {|
+fn main() uses Clock, Random, Console =
+  let start = Clock.instant()
+  Clock.sleep(Duration.ms(1))
+  print(Clock.instant().not_before(start))
+  print(Clock.now().after(Time.epoch))
+  print(Random.int(10) < 10)
+  Random.int(0)
+|};
+  [%expect
+    {|
+    true
+    true
+    true
+    error: panic: `Random.int` needs a number above 0 to stay below, not 0
+      ┌─ test.ren:7:3
+    7 │   Random.int(0)
+      │   ^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "time, with methods" =
+  run
+    {|
+fn main() =
+  let t = Time.epoch.plus(Duration.minutes(5)).plus(Duration.seconds(1))
+  print(t.after(Time.epoch))
+  print(t == Time.epoch.plus(Duration.ms(301000)))
+  let i = Instant.zero.plus(Duration.ms(5))
+  print(i.since(Instant.zero) == Duration.ms(5))
+  print(Instant.zero.before(i))
+|};
+  [%expect {|
+    true
+    true
+    true
+    true
+    ()
+    |}]
+
+let%expect_test "the world is reached only through a dependency" =
+  types {|
+fn main() = clock_now()
+|};
+  [%expect
+    {|
+    error: there's no function named `clock_now`
+      ┌─ test.ren:1:13
+    1 │ fn main() = clock_now()
+      │             ^^^^^^^^^
+    |}];
+  types {|
+fn main() = Clock.real
+|};
+  [%expect
+    {|
+    error: `Clock` has no operation or member named `real`
+      ┌─ test.ren:1:19
+    1 │ fn main() = Clock.real
+      │                   ^^^^
+      help: its operations: `now`, `instant`, `sleep`; its members: `frozen`
     |}]

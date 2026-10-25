@@ -5,7 +5,7 @@
 pub type ChargeId = opaque Int
 
 pub fn charge(amount: Int) -> ChargeId ! Declined(amount: Int)
-    uses Io =
+    uses Console =
   if amount > 100 then fail Declined(amount)
   print(amount)
   next_id(amount)

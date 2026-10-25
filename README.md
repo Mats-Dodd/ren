@@ -232,7 +232,7 @@ pub fn touch(id: UserId) ! NotFound | Conflict
   try Users.save(u)
 ```
 
-The built-in dependencies are types too: `Io`, `Net`, `Alloc`, `Async`, and `Unsafe`.
+The built-in dependencies are types too: `Clock`, `Random`, `Console`, `Net`, `Alloc`, `Async`, and `Unsafe`. Even `print` goes through one: it's `Console.write(show(x))`.
 
 ```ren
 pub fn checksum(data: Bytes) -> u32 =          // no `uses`: pure, cannot allocate
@@ -329,7 +329,7 @@ normalize(&scores)                     // visibly updates `scores`
 for p in &particles                    // update each element in place
   p.pos += p.vel * dt
 
-let n = try Io.read(fd, &buf)          // the kernel gets exclusive access to buf
+let n = try Fs.read(fd, &buf)          // the kernel gets exclusive access to buf
 
 swap(&a, &a)                           // error: `a` passed as inout twice
 ```
@@ -355,7 +355,7 @@ pub type Stack<T> = { items: Array<T> }
   pub let empty: Stack<T> = Stack { items: [] }
   fn grow(inout self) = ...                     // private to this module
 
-fn main() uses Io =
+fn main() uses Console =
   var s = Stack.empty                           // an associated value
   &s.push(1)                                    // Stack.push(&s, 1)
   print(s.peek())                               // Some(1)
@@ -694,7 +694,7 @@ Production profiles feed back into release builds (`ren build --release --pgo pr
 - **Semantic diffs.** `ren diff main..pr-412` shows behavior changes, such as "`checkout` now uses `Net`."
 - **Hermetic builds.** Compile-time code has no network, clock, or environment access, so builds are reproducible by construction.
 
-**Costs:** the trace recorder is the one privileged dependency, woven into call sites by the compiler. Flight-recorder buffers keep values alive until a request ends, so they need a byte budget. Recorded values larger than a size cap keep only their length and hash when they're changed in place, and `inout` buffers are recorded that way by default at level 2. Level 3 has to store what each dependency returned, including every byte `Io.read` produced. That cost comes with exact replay itself, not with this design. Generated C keeps frame pointers (about 1–2%) and emits `#line` directives, so tools point at `.ren` source. CPU time inside pure code still needs a sampler.
+**Costs:** the trace recorder is the one privileged dependency, woven into call sites by the compiler. Flight-recorder buffers keep values alive until a request ends, so they need a byte budget. Recorded values larger than a size cap keep only their length and hash when they're changed in place, and `inout` buffers are recorded that way by default at level 2. Level 3 has to store what each dependency returned, including every byte `Fs.read` produced. That cost comes with exact replay itself, not with this design. Generated C keeps frame pointers (about 1–2%) and emits `#line` directives, so tools point at `.ren` source. CPU time inside pure code still needs a sampler.
 
 ---
 
