@@ -87,3 +87,17 @@ fn keep(f: fn() -> Int ! ..e uses ..d) -> (Clock uses Os) = with f() in 1
 //                                ^ type.dependency
 //                                                    ^ type.dependency
 //                                                           ^ keyword
+
+handler counting(rate: Int) for Rates, RateCalls uses Clock =
+// <- keyword
+//      ^ function
+//                          ^ keyword
+//                              ^ type.dependency
+  var calls = 0
+//^ keyword
+  usd_to(_) =>
+//^ function
+    calls += 1
+    rate
+  count() => calls
+//^ function

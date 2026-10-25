@@ -381,6 +381,10 @@ let rec expr cx (e : expr) : C.expr =
           let impl = expr cx item in
           let ev, outer, body = inner () in
           here (With { ev; outer; dep; impl; body })
+      | Some (Installs_handler deps) ->
+          let handler = expr cx item in
+          let ev, outer, body = inner () in
+          here (With_handler { ev; outer; handler; deps; body })
       | Some Wraps -> (
           (* `with retry(3) in body` is `retry(3, fn() => body)` *)
           let ev, _, b = inner () in
@@ -395,6 +399,122 @@ let rec expr cx (e : expr) : C.expr =
               let f = expr cx item in
               here (Call (f, [ Value lam ], cx.ev)))
       | _ -> bug "a `with` inference didn't say the kind of")
+  | Handler { deps; state; arms; _ } ->
+      (* it runs where it's installed, with the evidence there *)
+      let ev = evidence cx and outer = cx.ev in
+      cx.ev <- ev;
+      let body = handler cx e deps state arms in
+      cx.ev <- outer;
+      here (Handler { ev; captures = free body; body })
+
+(* A handler's body, which makes an instance: its state, each `var` then
+   put in a cell, and an implementation of each of [deps], a record of its
+   arms. An arm is a lambda that keeps the cells, not the `var`s: it reads
+   each `var` it uses from its cell when it starts, and writes back each
+   one it changes when it ends, even if it fails. Nothing else changes a
+   cell in between: an arm runs with what was installed outside its
+   handler's `with`, which isn't the instance it's part of, so it never
+   runs inside another arm of the same instance. *)
+and handler cx (e : expr) deps state arms =
+  let needs =
+    match ty_of cx e.node with
+    | Con (_, [ needs ]) -> needs
+    | _ -> bug "a handler whose type isn't a handler's"
+  in
+  let rec state_lets = function
+    | [] -> instance ()
+    | Let { name; value; _ } :: rest ->
+        let value = expr cx value in
+        let v = bind cx name value.ty in
+        let body = state_lets rest in
+        mk (Let (v, value, body)) body.ty value.loc
+    | Expr s :: rest -> seq (expr cx s) (state_lets rest)
+  and instance () =
+    let cells =
+      List.filter_map
+        (function
+          | Let { name; mut = true; _ } ->
+              let v = var_of cx name in
+              Some (v, temp cx v.name (C.cell_ty v.ty))
+          | Let _ | Expr _ -> None)
+        state
+    in
+    let impl (d : tname) : Path.t * C.expr =
+      let p =
+        match d.tref with
+        | Named p -> p
+        | Param _ -> bug "a type parameter after `for`"
+      in
+      let ops =
+        List.filter_map
+          (fun (a : handler_arm) ->
+            match a.arm_op with
+            | Dep_op (q, op) when q = p -> Some (op, arm_impl cx cells a)
+            | _ -> None)
+          arms
+      in
+      (p, mk (Record (p, ops)) (Con (p, [ needs ])) e.loc)
+    in
+    let made =
+      List.map
+        (fun ((v : C.var), (c : C.var)) ->
+          (c, mk (Prim (New_cell, [ local v e.loc ])) c.ty e.loc))
+        cells
+    in
+    lets made (mk (Instance (List.map impl deps)) (ty_of cx e.node) e.loc)
+  in
+  state_lets state
+
+(* An arm of a handler, which keeps [cells], the state's `var`s' cells. *)
+and arm_impl cx cells (a : handler_arm) =
+  let lam = expr cx a.arm_impl in
+  match lam.kind with
+  | Lambda { params; ev; captures; body } ->
+      let loc = a.arm_impl.loc in
+      let used =
+        List.filter
+          (fun ((v : C.var), _) ->
+            List.exists (fun (w : C.var) -> w.id = v.id) captures)
+          cells
+      in
+      let changed = assigned body in
+      let writes =
+        List.filter_map
+          (fun ((v : C.var), (c : C.var)) ->
+            if List.mem v.id changed then
+              Some
+                (mk (Prim (Set_cell, [ local c loc; local v loc ])) Ty.unit loc)
+            else None)
+          used
+      in
+      let body =
+        match writes with
+        | [] -> body
+        | ws when C.can_fail body ->
+            mk (Finally (body, seq_all loc ws)) body.ty loc
+        | ws ->
+            let r = temp cx "result" body.ty in
+            lets [ (r, body) ] (List.fold_right seq ws (local r loc))
+      in
+      let body =
+        lets
+          (List.map
+             (fun ((v : C.var), (c : C.var)) ->
+               (v, mk (Prim (Get_cell, [ local c loc ])) v.ty loc))
+             used)
+          body
+      in
+      let own = List.map (fun (p : C.param) -> p.var.id) params in
+      let captures =
+        List.filter (fun (v : C.var) -> not (List.mem v.id own)) (free body)
+      in
+      { lam with kind = Lambda { params; ev; captures; body } }
+  | _ -> bug "a handler's arm that isn't a lambda"
+
+(* The locals [e] assigns to. *)
+and assigned (e : C.expr) =
+  let own = match e.kind with Assign (v, _) -> [ v.id ] | _ -> [] in
+  own @ List.concat_map assigned (C.children e)
 
 and arm cx (a : arm) : C.arm =
   let pat = pattern cx a.arm_pat in
@@ -663,6 +783,11 @@ and free (e : C.expr) =
         (* its evidence isn't a local: nothing captures it *)
         go impl;
         go body
+    | With_handler { handler; body; _ } ->
+        go handler;
+        go body
+    | Instance impls -> List.iter (fun (_, i) -> go i) impls
+    | Handler { captures; _ } -> List.iter use captures
     | Fail a -> go a
     | Finally (a, b) ->
         go a;
@@ -757,6 +882,15 @@ let max_binder (f : fn_def) =
     | With { item; body; _ } ->
         go item;
         go body
+    | Handler { state; arms; _ } ->
+        List.iter
+          (function
+            | Let { name; value; _ } ->
+                see name;
+                go value
+            | Expr e -> go e)
+          state;
+        List.iter (fun (a : handler_arm) -> go a.arm_impl) arms
   and pat (p : pattern) =
     match p.pkind with
     | PVar b -> see b

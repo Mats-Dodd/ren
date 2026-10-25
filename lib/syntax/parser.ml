@@ -1344,6 +1344,141 @@ let parse_dep p ~pub =
     type_ops = members;
   }
 
+(* A handler (deps.md, "Implementations"): a function of its parameters
+   that describes a stateful implementation of the dependencies after
+   `for`. Its body, indented under it, is its state, `var`s and `let`s,
+   then an arm for each operation:
+
+     handler counting_rates(rate: Int) for Rates, RateCalls =
+       var calls = 0
+       usd_to(_) =>
+         calls += 1
+         rate
+       count() => calls
+
+   Each arm is kept as a lambda (ast.ml, [Handler]). *)
+let parse_handler p ~pub =
+  let start = loc p in
+  expect p HANDLER;
+  let name = ident p in
+  if peek p = LT then
+    Diag.error (loc p) ~help:"remove them"
+      "a handler can't take type parameters";
+  if peek p <> LPAREN then
+    Diag.error (loc p)
+      ~help:
+        (Printf.sprintf
+           "write its parameters, `handler %s() for ...`, even if it has none"
+           name.name)
+      (Printf.sprintf "expected `(` after the handler's name, found %s"
+         (describe (peek p)));
+  advance p;
+  let params = sep_list p ~close:RPAREN parse_param in
+  if peek p <> FOR then
+    Diag.error (loc p)
+      ~help:
+        (Printf.sprintf "say what it implements: `handler %s(...) for Clock =`"
+           name.name)
+      (Printf.sprintf
+         "expected `for` and the dependencies it implements, found %s"
+         (describe (peek p)));
+  advance p;
+  let rec deps acc =
+    let d = parse_tyname ~what:"a dependency's name" p in
+    if peek p = COMMA then (
+      advance p;
+      deps (d :: acc))
+    else List.rev (d :: acc)
+  in
+  let deps = deps [] in
+  let needs =
+    if peek p = USES then Some (parse_uses ~greedy:true p)
+    else if peek p = NEWLINE && peek2 p = USES then
+      Diag.error ~help:"indent it, so it continues the signature"
+        (snd p.toks.(p.i + 1))
+        "`uses` on a line of its own has to be indented"
+    else None
+  in
+  let body_start = loc p in
+  expect p EQ;
+  if peek p <> INDENT then
+    Diag.error (loc p)
+      ~help:
+        "put its state and its operations on lines of their own, indented \
+         under it, like `now() => Time.epoch`"
+      (Printf.sprintf "expected the body of the handler `%s`, found %s"
+         name.name
+         (describe (peek p)));
+  advance p;
+  (* its state, then its arms, each line ended by a line break or the end
+     of the block *)
+  let next_line () =
+    match peek p with
+    | NEWLINE ->
+        advance p;
+        true
+    | DEDENT ->
+        advance p;
+        false
+    | _ -> fail_expected p "the end of the line"
+  in
+  let rec state acc =
+    match peek p with
+    | LET | VAR ->
+        let s = parse_stmt p in
+        if next_line () then state (s :: acc) else (List.rev (s :: acc), false)
+    | _ -> (List.rev acc, true)
+  in
+  let state, more = state [] in
+  let arm p =
+    match (peek p, peek2 p) with
+    | IDENT _, LPAREN ->
+        let arm_start = loc p in
+        let arm_name = ident p in
+        advance p;
+        let params = sep_list p ~close:RPAREN parse_param in
+        expect p FATARROW;
+        let body = parse_body p in
+        {
+          arm_op = Bare arm_name.name;
+          arm_name;
+          arm_impl = mk (Lambda (params, body)) arm_start p;
+        }
+    | (LET | VAR), _ ->
+        Diag.error (loc p) ~help:"move it above the handler's first operation"
+          "a handler's state comes first, before its operations"
+    | IDENT n, _ ->
+        Diag.error (loc p)
+          ~help:(Printf.sprintf "write it as `%s(...) => ...`" n)
+          (Printf.sprintf
+             "expected an operation's implementation, like `%s(...) => ...`, \
+              found %s"
+             n
+             (describe (peek2 p)))
+    | _ -> fail_expected p "an operation's implementation, like `now() => ...`"
+  in
+  let rec arms acc =
+    let a = arm p in
+    if next_line () then arms (a :: acc) else List.rev (a :: acc)
+  in
+  let arms = if more then arms [] else [] in
+  let body =
+    node p
+      (Handler { deps; needs; state; arms })
+      (Loc.span body_start (last_loc p))
+  in
+  {
+    pub;
+    name;
+    tparams = [];
+    params;
+    ret = None;
+    errors = None;
+    uses = None;
+    body;
+    loc = Loc.span start (last_loc p);
+  }
+
 let parse_item p =
   p.node <- 0;
   let pub = peek p = PUB in
@@ -1352,6 +1487,7 @@ let parse_item p =
   | FN -> Fn (parse_fn p ~pub)
   | TYPE -> Type (parse_type p ~pub)
   | DEP -> Type (parse_dep p ~pub)
+  | HANDLER -> Fn (parse_handler p ~pub)
   | IMPORT when pub ->
       Diag.error (loc p)
         ~help:"remove the `pub`: a module can't pass on what it imports"
@@ -1360,9 +1496,9 @@ let parse_item p =
   | _ ->
       Diag.error (loc p)
         ~help:
-          "only imports, and function, type and dependency definitions, can \
-           appear at the top level (for now)"
-        (Printf.sprintf "expected `fn`, `type` or `dep`, found %s"
+          "only imports, and function, type, dependency and handler \
+           definitions, can appear at the top level (for now)"
+        (Printf.sprintf "expected `fn`, `type`, `dep` or `handler`, found %s"
            (describe (peek p)))
 
 (* After a syntax error, skip to where the next top-level item starts: a

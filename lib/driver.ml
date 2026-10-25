@@ -401,6 +401,22 @@ let types ?(lint = false) ?load ~file src =
       ( home,
         List.concat_map
           (function
+            | Ast.Fn ({ body = { kind = Handler { deps; _ }; _ }; _ } as f) ->
+                [
+                  Ty.handler_signature ~names ~pub:f.pub ~name:f.name.name
+                    ~params:
+                      (List.map
+                         (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
+                         f.params)
+                    ~deps:
+                      (List.filter_map
+                         (fun (d : Ast.tname) ->
+                           match d.tref with
+                           | Named p -> Some p
+                           | Param _ -> None)
+                         deps)
+                    (List.assoc f.name.name inferred.schemes);
+                ]
             | Ast.Fn f -> [ fn_ ~name:f.name.name f ]
             | Type ({ type_body = Dep _; _ } as td) ->
                 (* a dependency: its operations, each with its type, then

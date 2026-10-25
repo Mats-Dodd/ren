@@ -17,6 +17,7 @@ type found =
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
   | Installs of Path.t
+  | Installs_handler of Path.t list
       (** a `with` whose item is an implementation of this dependency *)
   | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
 

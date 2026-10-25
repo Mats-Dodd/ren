@@ -1283,6 +1283,9 @@ fn main() = print(Some(true))
           print_endline ("constructor " ^ c ^ " of " ^ path p)
       | Some (Method_of p) -> print_endline ("method " ^ path p)
       | Some (Installs p) -> print_endline ("installs " ^ path p)
+      | Some (Installs_handler ps) ->
+          print_endline
+            ("installs a handler of " ^ String.concat ", " (List.map path ps))
       | Some Wraps -> print_endline "wraps"
       | None -> ())
     (List.assoc "main" second.nodes);

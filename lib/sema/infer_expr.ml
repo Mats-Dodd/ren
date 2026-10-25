@@ -34,7 +34,24 @@ type found =
           function, [Stack.push] *)
   | Installs of Path.t
       (** a `with` whose item is an implementation of this dependency *)
+  | Installs_handler of Path.t list
+      (** a `with` whose item describes a handler of these dependencies, which
+          it makes an instance of *)
   | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
+
+(* A call that adds to a function's dependencies, or a `with` that
+   installs an implementation, which adds what it needs. [own] are the
+   labels the callee's row had just before the call joined it to the
+   caller's: what the callee brings in itself. After the join the two rows
+   are one, so [row] then also has everything the caller uses. [needs]
+   says it's a `with`. *)
+type call = {
+  cloc : Loc.t;
+  own : string list;
+  row : row;
+  needs : bool;
+  callee : Path.t option;  (** the top-level function called, if it's one *)
+}
 
 type env = {
   st : Types.state;
@@ -91,9 +108,14 @@ type env = {
           it's done (see [impl_op]) *)
   mutable installs : install list;
       (** the group's `with`s that install, innermost first (see [install]) *)
+  mutable handler_needs : handler_needs list;
+      (** the group's handlers whose needs are written (see [handler_needs]) *)
   mutable withheld : withheld list;
       (** the module's functions that call a closure in a `with` that doesn't
           install what the closure uses (see [withheld]) *)
+  mutable cant_fail : string option;
+      (** why the code being checked can't fail, if it's a handler's state, for
+          a message when something in it does *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
@@ -155,6 +177,18 @@ and install = {
   wbody : row;
   wouter : row;
   wself : Path.t;  (** the function the `with` is in *)
+}
+
+(* A handler whose needs are written, `for N uses Console`, or a public
+   one, which needs nothing if it says nothing: [nrow] is what its state
+   and arms use, which has to be no more than [ndeclared], and [ncalls]
+   the calls that add to it. It's checked once the group is done, as a
+   function's `uses` is (infer_top.ml), and then closed. *)
+and handler_needs = {
+  nself : Path.t;
+  ndeclared : string list;
+  nrow : row;
+  ncalls : call list ref;
 }
 
 (* A dependency [hdep] that a closure [hfn] calls inside a `with` of it
@@ -259,20 +293,6 @@ and source =
   | Failed of Loc.t * label
   | Unwrapped of Loc.t * row
   | Unhandled of Loc.t * row
-
-(* A call that adds to a function's dependencies, or a `with` that
-   installs an implementation, which adds what it needs. [own] are the
-   labels the callee's row had just before the call joined it to the
-   caller's: what the callee brings in itself. After the join the two rows
-   are one, so [row] then also has everything the caller uses. [needs]
-   says it's a `with`. *)
-type call = {
-  cloc : Loc.t;
-  own : string list;
-  row : row;
-  needs : bool;
-  callee : Path.t option;  (** the top-level function called, if it's one *)
-}
 
 (* A dot call that turned out to call [callee], a method of the module
    not checked yet, from [caller]. Which method `s.size()` calls is found
@@ -672,8 +692,9 @@ let instance env (td : Iface.type_decl) =
     else tvars
   in
   match td.body with
-  | Dep _ ->
-      (* an implementation, which needs whatever its operations use *)
+  | Dep _ | Handler _ ->
+      (* an implementation, or a handler, which needs whatever its
+         operations use *)
       (TCon (td.path, [ TUses (fresh_row env.st) ]), tvars)
   | Record _ | Sum _ | Builtin | Opaque _ | Errors _ ->
       (TCon (td.path, tvars), tvars)
@@ -730,7 +751,7 @@ let known_decl env t =
 let ctor_in (c : ident) (td : Iface.type_decl) =
   match td.body with
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
-  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
+  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ | Handler _ -> None
 
 (* The constructor [c], where a value of type [expected] is wanted. One
    written after its type, `Light.Red`, is looked for there and nowhere
@@ -810,7 +831,7 @@ let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
 let record_fields (td : Iface.type_decl) =
   match td.body with
   | Record fs -> Some fs
-  | Sum _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
+  | Sum _ | Builtin | Opaque _ | Errors _ | Dep _ | Handler _ -> None
 
 (* The fields a literal of [td] gives, `T { f: ... }`: a record's, or a
    dependency's operations, which an implementation gives (deps.md,
@@ -819,13 +840,13 @@ let record_fields (td : Iface.type_decl) =
 let literal_fields (td : Iface.type_decl) =
   match td.body with
   | Record fs | Dep fs -> Some fs
-  | Sum _ | Builtin | Opaque _ | Errors _ -> None
+  | Sum _ | Builtin | Opaque _ | Errors _ | Handler _ -> None
 
 (* The operation [name] of the dependency [td], if it's one. *)
 let dep_op_in name (td : Iface.type_decl) =
   match td.body with
   | Dep ops -> List.find_opt (fun (o : Iface.field) -> o.fname = name) ops
-  | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> None
+  | Record _ | Sum _ | Builtin | Opaque _ | Errors _ | Handler _ -> None
 
 let op_in name (td : Iface.type_decl) =
   List.find_opt (fun (o : Iface.op) -> o.oname = name) td.members
@@ -1011,6 +1032,13 @@ let add_errors env ~loc ~here ~sources:(sources, elsewhere) ~fix errs into =
   | exception (Unify.Mismatch | Unify.Infinite) ->
       ignore
         (fail env loc
+           ?notes:(Option.map (fun n -> [ n ]) env.cant_fail)
+           ?help:
+             (Option.map
+                (fun _ ->
+                  "handle it here, with `attempt` or a `match` with `fail` \
+                   arms, or make the value in an operation instead")
+                env.cant_fail)
            (sprintf "this can fail with %s, which isn't allowed here"
               (show_row (printer env) ~prefix:"" ~sep:" | " ~kind:"e" errs)))
 
@@ -1382,6 +1410,21 @@ and check env cx ?(why = plain) (e : expr) expected =
       let t = infer_record env cx e None fields ~expected in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
+  | Handler { state; arms; _ }, TCon (p, [ TUses declared ]) when p = cx.self ->
+      (* what it's written to need, and more, which is reported once the
+         group is done *)
+      fits ();
+      let labels = fst (row_parts declared) in
+      let needs = extend labels (fresh_row env.st) in
+      let calls = handler env cx state arms ~needs in
+      env.handler_needs <-
+        {
+          nself = cx.self;
+          ndeclared = List.map (fun (l : label) -> l.name) labels;
+          nrow = needs;
+          ncalls = calls;
+        }
+        :: env.handler_needs
   | Array xs, TCon (p, [ elem ]) when p = Path.prelude "Array" ->
       fits ();
       List.iter
@@ -1630,6 +1673,100 @@ and synth env cx (e : expr) : ty =
       in
       TCon (result_path, [ t; TErrors kept ])
   | With { item; body; lam } -> with_ env cx e item body lam
+  | Handler { state; arms; _ } ->
+      let needs = fresh_row env.st in
+      ignore (handler env cx state arms ~needs);
+      TCon (cx.self, [ TUses needs ])
+
+(* A handler's body (ast.ml, [Handler]), the body of its function,
+   [cx.self], whose result is the handler's type. Its state and its arms
+   run where it's installed, not where the function is called, so what
+   they use is what the handler needs, [needs], and the function itself
+   uses nothing. Its state is made when it's installed, which can't fail.
+   Each arm is checked as an implementation's operation is ([infer_record]):
+   it uses what the handler needs, and can fail with fewer errors than
+   its operation declares, never more. What it gives is the calls that
+   add to [needs]. *)
+and handler env cx state arms ~needs =
+  let hcx = lambda_cx cx [] [] ~errs:REmpty ~uses:needs in
+  env.cant_fail <-
+    Some
+      "a handler's state is made where a `with` installs it, which can't fail";
+  List.iter (stmt env hcx) state;
+  env.cant_fail <- None;
+  List.iter
+    (fun (a : handler_arm) ->
+      let op =
+        match a.arm_op with
+        | Dep_op (p, op) -> (
+            match dep_op_in op (Hashtbl.find env.types p) with
+            | Some fd -> (
+                match field_type ~tvars:[] fd with
+                | TFun (ps, r, errs, _) -> Some (p, op, ps, r, errs)
+                | _ -> None)
+            | None -> None)
+        | _ -> None
+      in
+      match (op, a.arm_impl.kind) with
+      | Some (p, op, ps, r, errs), Lambda (params, body)
+        when List.length params = List.length ps ->
+          let declared = fst (row_parts errs) in
+          let open_errs = extend declared (fresh_row env.st) in
+          env.impl_ops <-
+            {
+              idep = p;
+              iop = op;
+              ideclared = declared;
+              ierrs = open_errs;
+              ivalue = a.arm_impl;
+              inodes = cx.nodes;
+            }
+            :: env.impl_ops;
+          (* checked as a lambda is, against the operation, but what its
+             calls use is what the handler needs, and they're the
+             handler's calls, so a message can point at one *)
+          let why =
+            explain
+              ~notes:[ sprintf "`%s`'s operation `%s`" (type_name env p) op ]
+              ()
+          in
+          let qs =
+            List.map2
+              (fun (q : Resolved.param) eq ->
+                if q.pty = None then eq
+                else param_type env ~tparams:cx.tparams ~named:cx.named q)
+              params ps
+          in
+          bind_params hcx params qs;
+          let acx =
+            {
+              (lambda_cx hcx params qs ~errs:open_errs ~uses:needs) with
+              calls = hcx.calls;
+            }
+          in
+          check env acx body r ~why;
+          let t = TFun (qs, r, open_errs, needs) in
+          Hashtbl.replace cx.nodes a.arm_impl.node t;
+          ignore
+            (unifies env why a.arm_impl.loc ~found:t
+               ~expected:(TFun (ps, r, open_errs, needs)))
+      | Some (p, op, ps, _, _), Lambda (params, _) ->
+          let n = List.length ps in
+          report env
+            (Diag.make a.arm_name.loc
+               ~help:
+                 (sprintf "give it %d parameter%s, one for each argument" n
+                    (if n = 1 then "" else "s"))
+               (sprintf
+                  "`%s.%s` takes %d argument%s, but this has %d parameter%s"
+                  (type_name env p) op n
+                  (if n = 1 then "" else "s")
+                  (List.length params)
+                  (if List.length params = 1 then "" else "s")));
+          ignore (infer env hcx a.arm_impl)
+      | _ -> ignore (infer env hcx a.arm_impl))
+    arms;
+  hcx.calls
 
 (* `with item in body` (deps.md, "`with`"), the expression [e]. A call
    whose callee takes one more argument than it's given is a wrapper,
@@ -1701,33 +1838,48 @@ and with_ env cx (e : expr) item body lam =
    but the dependency installed, and the `with` uses what the
    implementation needs too. *)
 and install env cx (e : expr) item t body =
+  (* [body], with each of [deps] installed around it, the first outermost *)
+  let rec around cx = function
+    | [] -> infer env cx body
+    | d :: rest ->
+        let label = Ty.dep_label d in
+        (* the body's own row, which [settle_installs] relates to the outer
+           one once the group is done *)
+        let inner = { cx with uses = fresh_row env.st; calls = ref [] } in
+        let tb = around inner rest in
+        env.installs <-
+          {
+            wloc = item.loc;
+            wdep = label;
+            wbody = inner.uses;
+            wouter = cx.uses;
+            wself = cx.self;
+          }
+          :: env.installs;
+        (* the body's calls bring in what they bring in, but [d] *)
+        cx.calls :=
+          List.map
+            (fun c -> { c with own = List.filter (( <> ) label) c.own })
+            !(inner.calls)
+          @ !(cx.calls);
+        tb
+  in
   match reveal env.st t with
   | TCon (d, [ TUses needs ]) ->
-      Hashtbl.replace cx.found e.node (Installs d);
       (* what it needs it needs here, outside: its operations run with what's
          installed where it's installed *)
       use_row env cx ~loc:item.loc ~needs:true needs;
-      let label = Ty.dep_label d in
-      (* the body's own row, which [settle_installs] relates to the outer
-         one once the group is done *)
-      let inner = { cx with uses = fresh_row env.st; calls = ref [] } in
-      let tb = infer env inner body in
-      env.installs <-
-        {
-          wloc = item.loc;
-          wdep = label;
-          wbody = inner.uses;
-          wouter = cx.uses;
-          wself = cx.self;
-        }
-        :: env.installs;
-      (* the body's calls bring in what they bring in, but [d] *)
-      cx.calls :=
-        List.map
-          (fun c -> { c with own = List.filter (( <> ) label) c.own })
-          !(inner.calls)
-        @ !(cx.calls);
-      tb
+      let deps =
+        match Hashtbl.find_opt env.types d with
+        | Some { body = Handler deps; _ } ->
+            (* a handler's instance installs each of its dependencies *)
+            Hashtbl.replace cx.found e.node (Installs_handler deps);
+            deps
+        | _ ->
+            Hashtbl.replace cx.found e.node (Installs d);
+            [ d ]
+      in
+      around cx deps
   | TError ->
       ignore (infer env cx body);
       TError
@@ -1915,6 +2067,7 @@ and outer_changes env (body : expr) name =
     | Record (_, fields) -> all (List.map snd fields)
     | Array xs -> all xs
     | With { item; body; _ } -> all [ item; body ]
+    | Handler _ -> () (* only ever a handler's function's body *)
   in
   walk body
 

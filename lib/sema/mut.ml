@@ -175,6 +175,16 @@ let writable cx (e : expr) ~what
             (sprintf "a lambda can't change `%s`, a variable from outside it" x)
       | Mutable -> check_locks cx p)
 
+(* A lambda's parameters, which can't be `inout` yet. *)
+let no_inout cx (ps : param list) =
+  List.iter
+    (fun (p : param) ->
+      if p.pmode = Inout then
+        Diag.report cx.sink
+          (Diag.make p.pname.ident.loc ~help:"use a top-level function for this"
+             "lambdas can't take `inout` parameters yet"))
+    ps
+
 let rec walk cx (e : expr) =
   match e.kind with
   | Int _ | Bool _ | Str _ | Unit -> ()
@@ -256,15 +266,23 @@ let rec walk cx (e : expr) =
       List.iter (arg cx) args;
       guard cx (fun () -> exclusive args)
   | Lambda (ps, body) ->
-      List.iter
-        (fun (p : param) ->
-          if p.pmode = Inout then
-            Diag.report cx.sink
-              (Diag.make p.pname.ident.loc
-                 ~help:"use a top-level function for this"
-                 "lambdas can't take `inout` parameters yet"))
-        ps;
+      no_inout cx ps;
       walk { cx with depth = cx.depth + 1 } body
+  | Handler { state; arms; _ } ->
+      List.iter
+        (function Let { value; _ } -> walk cx value | Expr e -> walk cx e)
+        state;
+      (* an arm is a lambda that can change the handler's state: resolve.ml
+         binds the state as deep as the arms' bodies, so only a lambda inside
+         an arm is deeper *)
+      List.iter
+        (fun (a : handler_arm) ->
+          match a.arm_impl.kind with
+          | Lambda (ps, body) ->
+              no_inout cx ps;
+              walk cx body
+          | _ -> walk cx a.arm_impl)
+        arms
   | Block (stmts, last) ->
       List.iter
         (function Let { value; _ } -> walk cx value | Expr e -> walk cx e)

@@ -54,6 +54,7 @@ let keywords =
     ("attempt", ATTEMPT);
     ("orelse", ORELSE);
     ("with", WITH);
+    ("handler", HANDLER);
   ]
 
 let is_digit c = c >= '0' && c <= '9'

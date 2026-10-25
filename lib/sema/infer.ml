@@ -62,6 +62,7 @@ type found = Infer_expr.found =
   | Ctor_of of Path.t * string
   | Method_of of Path.t
   | Installs of Path.t
+  | Installs_handler of Path.t list
   | Wraps
 
 module Nodes = Infer_top.Nodes

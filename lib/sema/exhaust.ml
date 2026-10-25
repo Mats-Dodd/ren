@@ -387,6 +387,13 @@ let rec check_expr env (e : expr) =
   | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields
   | Match (subject, arms) -> check_match_expr env e subject arms
   | With { item; body; _ } -> List.iter (check_expr env) [ item; body ]
+  | Handler { state; arms; _ } ->
+      List.iter
+        (function
+          | Let { value; _ } -> check_expr env value
+          | Expr e -> check_expr env e)
+        state;
+      List.iter (fun (a : handler_arm) -> check_expr env a.arm_impl) arms
 
 and check_match_expr env ?passes_on e subject arms =
   check_expr env subject;

@@ -204,6 +204,27 @@ and ('v, 'b, 't) expr_kind =
           argument, which is [body] as a lambda: `with retry(3) in body` is
           `retry(3, fn() => body)`. [lam] numbers that lambda, as a node of its
           own. `with a, b in body` is [a] around `with b in body` *)
+  | Handler of {
+      deps : 't list;  (** the dependencies after `for`, in order *)
+      needs : 't uses option;
+          (** what it's written to need, after the `for` list's `uses` *)
+      state : ('v, 'b, 't) stmt list;  (** its `var`s and `let`s *)
+      arms : ('v, 'b, 't) handler_arm list;
+    }
+      (** a handler's body (deps.md, "Implementations"), the whole body of the
+          function a `handler` declaration is (see [is_handler]): its state,
+          then an arm for each operation of each dependency it implements.
+          Calling the function describes the handler, and each `with` that
+          installs it makes a fresh instance, running [state] then *)
+
+(* An arm of a handler, `usd_to(c) => ...`: [arm_op] is the operation, a
+   bare name as parsed and a [Dep_op] once resolved, and [arm_impl] the
+   lambda that implements it, which can change the handler's state. *)
+and ('v, 'b, 't) handler_arm = {
+  arm_op : 'v;
+  arm_name : ident;
+  arm_impl : ('v, 'b, 't) expr;
+}
 
 and ('v, 'b, 't) arm = {
   arm_pat : ('b, 't) pattern;
@@ -322,6 +343,13 @@ let functions (prog : ('v, 'b, 't) program) =
 let spelled (f : ('v, 'b, 't) fn_def) =
   f.pub && List.for_all (fun p -> p.pty <> None) f.params
 
+(* Whether [f] is a `handler` declaration: a function of its parameters
+   whose body is a [Handler], and whose result describes the handler,
+   `counting_rates(r)`. Its type is the handler's own, named after it,
+   which can't be written, since a type's name starts with a capital. *)
+let is_handler (f : ('v, 'b, 't) fn_def) =
+  match f.body.kind with Handler _ -> true | _ -> false
+
 (* Whether a function type names a row of its own, `fn() ! ..e` or
    `fn() uses ..d`: then it's a closure that can be kept, not only called,
    and what it doesn't name or list it doesn't do (deps.md,
@@ -406,6 +434,7 @@ module Parsed = struct
   type nonrec expr = (vname, ident, tyname) expr
   type nonrec expr_kind = (vname, ident, tyname) expr_kind
   type nonrec arm = (vname, ident, tyname) arm
+  type nonrec handler_arm = (vname, ident, tyname) handler_arm
   type nonrec stmt = (vname, ident, tyname) stmt
   type nonrec field = tyname field
   type nonrec ctor = tyname ctor
@@ -428,6 +457,7 @@ module Resolved = struct
   type nonrec expr = (name, binder, tname) expr
   type nonrec expr_kind = (name, binder, tname) expr_kind
   type nonrec arm = (name, binder, tname) arm
+  type nonrec handler_arm = (name, binder, tname) handler_arm
   type nonrec stmt = (name, binder, tname) stmt
   type nonrec field = tname field
   type nonrec ctor = tname ctor
@@ -581,6 +611,17 @@ let rec show_expr (e : expr) =
   | Try a -> parens [ "try"; show_expr a ]
   | Attempt a -> parens [ "attempt"; show_expr a ]
   | With { item; body; _ } -> parens [ "with"; show_expr item; show_expr body ]
+  | Handler { deps; needs; state; arms } ->
+      let needs =
+        match needs with Some u -> [ parens [ show_uses u ] ] | None -> []
+      in
+      parens
+        (("handler" :: parens ("for" :: List.map show_tyname deps) :: needs)
+        @ List.map show_stmt state
+        @ List.map
+            (fun (a : handler_arm) ->
+              parens [ a.arm_name.name; show_expr a.arm_impl ])
+            arms)
 
 and show_arm (a : arm) =
   let guard =
@@ -736,7 +777,8 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         ^ String.concat ", "
             (List.map (fun ((f : ident), v) -> f.name ^ ": " ^ go v) fields)
         ^ " }"
-    | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | With _ ->
+    | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | With _
+    | Handler _ ->
         raise Exit
   and operand n (a : Resolved.expr) =
     match a.kind with

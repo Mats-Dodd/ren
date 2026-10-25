@@ -39,6 +39,12 @@ type body =
       (** a dependency, [dep Clock = ...]: its operations, each a function type
           that fails with exactly what it's written to fail with, and uses
           nothing. A value of it is an implementation, a record of them *)
+  | Handler of Path.t list
+      (** a handler's type, named after the `handler` declaration whose function
+          gives one, [counting_rates]: a description of an implementation of
+          each of these dependencies, sharing one state, which each `with` makes
+          a fresh instance of (deps.md, "Implementations"). Like an
+          implementation, its one argument is what it needs *)
 
 (* A member of a type (ast.ml): a method, which has `self`,
    an associated function, which doesn't, or an associated value. *)
@@ -353,6 +359,25 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
     loc = Some td.type_name.loc;
   }
 
+(* The type of the handler [f] declares, if it's a `handler` (ast.ml). *)
+let of_handler ~home (f : Ast.Resolved.fn_def) =
+  match f.body.kind with
+  | Handler { deps; _ } ->
+      Some
+        {
+          path = Path.make home f.name.name;
+          params = [];
+          body =
+            Handler
+              (List.filter_map
+                 (fun (d : Ast.tname) ->
+                   match d.tref with Named p -> Some p | Param _ -> None)
+                 deps);
+          members = [];
+          loc = Some f.name.loc;
+        }
+  | _ -> None
+
 (* The interface of module [home], from its declarations alone, never its
    bodies (module-build.md, "Interface summaries"): every public type it
    declares, with its public members, and the signature of every
@@ -373,6 +398,7 @@ let of_module ~home ~sets (prog : Ast.Resolved.program) =
         (function
           | Ast.Type td when td.type_pub ->
               Some (public (of_type_def ~home ~sets td))
+          | Fn f when f.pub -> of_handler ~home f
           | Type _ | Fn _ | Import _ -> None)
         prog;
     values =

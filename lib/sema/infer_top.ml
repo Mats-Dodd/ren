@@ -155,6 +155,12 @@ let check_transparent sink (f : fn_def) =
                      Option.to_list a.arm_guard @ [ a.arm_body ])
                    arms)
         | With { item; body; _ } -> any [ item; body ]
+        | Handler { state; arms; _ } ->
+            any
+              (List.map
+                 (function Let { value; _ } -> value | Expr e -> e)
+                 state
+              @ List.map (fun (a : handler_arm) -> a.arm_impl) arms)
       in
       (* [ok]: this position may hold the bare parameter, or a lambda that
          captures it *)
@@ -204,6 +210,14 @@ let check_transparent sink (f : fn_def) =
             (* an item is installed, or called with the body *)
             walk ~ok:true item;
             walk ~ok:false body
+        | Handler { state; arms; _ } ->
+            (* its state and arms are kept by each instance *)
+            List.iter
+              (function
+                | Let { value; _ } -> walk ~ok:false value
+                | Expr e -> walk ~ok:false e)
+              state;
+            List.iter (fun (a : handler_arm) -> walk ~ok:false a.arm_impl) arms
       in
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
     params
@@ -255,14 +269,11 @@ let walk ~ty ~errors ~pattern (prog : program) =
         List.iter param ps;
         expr body
     | Block (stmts, last) ->
-        List.iter
-          (function
-            | Let { ty = t; value; _ } ->
-                Option.iter ty_ t;
-                expr value
-            | Expr e -> expr e)
-          stmts;
+        List.iter stmt stmts;
         expr last
+    | Handler { state; arms; _ } ->
+        List.iter stmt state;
+        go (List.map (fun (a : handler_arm) -> a.arm_impl) arms)
     | Con (_, args) | Fail (_, args) -> go (List.map snd args)
     | Record (_, fields) -> go (List.map snd fields)
     | Match (s, arms) ->
@@ -276,6 +287,11 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Array xs -> go xs
     | For { iter; body; _ } -> go [ iter; body ]
     | With { item; body; _ } -> go [ item; body ]
+  and stmt = function
+    | Let { ty = t; value; _ } ->
+        Option.iter ty_ t;
+        expr value
+    | Expr e -> expr e
   in
   let fn_ (f : fn_def) =
     List.iter param f.params;
@@ -482,6 +498,37 @@ let check_uses env ~is_value ~main (f : fn_def) cx declared =
           (if is_value f then value_uses f dep call
            else undeclared_use ~why f dep call))
     (List.sort_uniq String.compare (row_names cx.uses))
+
+(* What the handler [f] needs, [n], is only what its `uses` lists, as for
+   a function's own ([check_uses]); then it's closed, to be exactly that. *)
+let check_needs env (f : fn_def) n =
+  let pos (l : Loc.t) = (l.start.line, l.start.col) in
+  let calls =
+    List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(n.ncalls)
+  in
+  let written =
+    match f.body.kind with Handler { needs; _ } -> needs <> None | _ -> false
+  in
+  List.iter
+    (fun dep ->
+      if not (List.mem dep n.ndeclared) then
+        let call =
+          match List.find_opt (fun c -> List.mem dep c.own) calls with
+          | Some c -> Some c
+          | None ->
+              List.find_opt (fun c -> List.mem dep (row_names c.row)) calls
+        in
+        let call =
+          Option.map
+            (fun c ->
+              ( c.cloc,
+                if c.needs then "installing this needs" else "this call uses" ))
+            call
+        in
+        report env
+          (undeclared_need ~written f (env.names (Ty.dep_path dep)) call))
+    (List.sort_uniq String.compare (row_names n.nrow));
+  close_row n.nrow
 
 (* ---- what a function fails with (errors.md) ---- *)
 
@@ -1358,13 +1405,21 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
     @ row_names cx.uses
   in
   (* an implementation that needs [p] itself would need one installed
-     before it, so it isn't one to suggest *)
+     before it, so it isn't one to suggest; a handler of [p] is one *)
   let makes p t =
+    let implements q =
+      q = p
+      ||
+      match Hashtbl.find_opt env.types q with
+      | Some { body = Handler deps; _ } -> List.mem p deps
+      | _ -> false
+    in
     match repr t with
     | TFun (ps, ret, _, _) -> (
         match repr ret with
         | TCon (q, [ TUses needs ])
-          when q = p && not (List.mem (Ty.dep_label p) (row_names needs)) ->
+          when implements q && not (List.mem (Ty.dep_label p) (row_names needs))
+          ->
             Some (List.length ps)
         | _ -> None)
     | _ -> None
@@ -1539,8 +1594,10 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       tag_patterns = [];
       rows_due = [];
       impl_ops = [];
+      handler_needs = [];
       installs = [];
       withheld = [];
+      cant_fail = None;
       in_scope = [];
     }
   in
@@ -1786,6 +1843,9 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                f cx)
             (declared_uses ~is_value f);
           if f.pub && not (is_value f) then check_open_rows env f cx;
+          List.iter
+            (fun n -> if n.nself = path f then check_needs env f n)
+            env.handler_needs;
           Option.iter
             (fun declared ->
               check_errors env ~is_value f cx declared;
@@ -1794,6 +1854,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                ~tparams:(List.map (fun (id, n) -> TSkol (id, n)) skolems)
                f))
         setups;
+      env.handler_needs <- [];
       leave_level env.st;
       List.iter
         (fun ((f : fn_def), skolems, cx, _, _) ->

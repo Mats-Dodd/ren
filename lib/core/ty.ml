@@ -442,3 +442,28 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
 let value_signature ~names ~pub ~name (s : scheme) =
   let pr = printer ~names s in
   Printf.sprintf "%slet %s: %s" (if pub then "pub " else "") name (show pr s.ty)
+
+(* How `ren types` prints a handler (ast.ml, [is_handler]): its
+   parameters, named [params], the dependencies it implements, [deps], and
+   what it needs, from its function's scheme [s], whose result is the
+   handler's type. A row tail is printed where it links two places, a
+   closure it keeps and what it needs, say. *)
+let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
+  match s.ty with
+  | Fun (ps, (Con (_, [ Uses needs ]) as ret), _, _) ->
+      let all =
+        List.concat_map (fun (p : param) -> tails p.ty) ps @ tails ret
+      in
+      let links id = List.length (List.filter (( = ) id) all) > 1 in
+      let pr = printer ~show_tail:links ~names s in
+      reserve pr s.ty;
+      let params =
+        List.map2 (fun n (p : param) -> n ^ ": " ^ show pr p.ty) params ps
+      in
+      Printf.sprintf "%shandler %s(%s) for %s%s"
+        (if pub then "pub " else "")
+        name
+        (String.concat ", " params)
+        (String.concat ", " (List.map names deps))
+        (show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" needs)
+  | _ -> invalid_arg "Ty.handler_signature: not a handler's function"

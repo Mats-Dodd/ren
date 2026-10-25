@@ -2331,3 +2331,646 @@ fn main() uses Console =
     2
     ()
     |}]
+
+(* ---- handlers ---- *)
+
+let rates =
+  {|
+dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  var calls = 0
+  usd_to(_) =>
+    calls += 1
+    rate
+  count() => calls
+
+fn convert(n: Int) uses Rates = n * Rates.usd_to(1)
+|}
+
+let%expect_test "a handler implements several dependencies sharing one state" =
+  ast rates;
+  [%expect
+    {|
+    (dep Rates (ops usd_to:fn(Int) -> Int))
+    (dep RateCalls (ops count:fn() -> Int))
+    (fn counting_rates (rate) (handler (for Rates RateCalls) (var calls 0) (usd_to (lambda (_) (block (+= calls 1) rate))) (count (lambda () calls))))
+    (fn convert (n) (uses Rates) (* n (call (. (con Rates) usd_to) 1)))
+    |}];
+  let src =
+    rates
+    ^ {|
+fn main() uses Console =
+  with counting_rates(3) in
+    print(convert(2))
+    print(convert(5))
+    print(RateCalls.count())
+|}
+  in
+  types src;
+  [%expect
+    {|
+    dep Rates
+      usd_to: fn(Int) -> Int
+    dep RateCalls
+      count: fn() -> Int
+    handler counting_rates(rate: Int) for Rates, RateCalls
+    fn convert(n: Int) -> Int uses Rates
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    6
+    15
+    2
+    ()
+    |}]
+
+let%expect_test "each with makes a fresh instance" =
+  run
+    (rates
+   ^ {|
+fn calls() uses Rates, RateCalls =
+  let _ = convert(1)
+  RateCalls.count()
+
+fn main() uses Console =
+  let h = counting_rates(2)
+  with h in
+    print(calls())
+    print(calls())
+  with h in
+    print(calls())
+  with counting_rates(2), counting_rates(5) in
+    print(calls())
+    print(convert(1))
+|}
+    );
+  [%expect {|
+    1
+    2
+    1
+    1
+    5
+    ()
+    |}]
+
+let%expect_test "a handler is a record of closures over shared cells" =
+  core
+    (rates
+   ^ {|
+fn main() uses Console = with counting_rates(3) in print(convert(2))
+|}
+    );
+  [%expect
+    {|
+    (fn counting_rates (rate/1) ev/4
+      (handler (captures rate/1) ev/5
+        (let calls/2 0
+          (let $calls/6 (cell calls/2)
+            (instance
+              (test.Rates:
+                (record
+                  (usd_to:
+                    (lambda (_/3) (captures rate/1 $calls/6) ev/7
+                      (let calls/2 (get-cell $calls/6)
+                        (let $result/8 (seq (= calls/2 (+ calls/2 1)) rate/1)
+                          (seq (set-cell $calls/6 calls/2) $result/8)))))))
+              (test.RateCalls:
+                (record
+                  (count:
+                    (lambda () (captures $calls/6) ev/9
+                      (let calls/2 (get-cell $calls/6) calls/2))))))))))
+    (fn convert (n/1) ev/2 (* n/1 (dep-call ev/2 test.Rates.usd_to 1)))
+    (fn main () ev/1
+      (with ev/2
+        (extend ev/1 (test.Rates test.RateCalls) (call ev/1 counting_rates 3))
+        (call ev/2 print (call ev/2 convert 2))))
+    (fn $start () ev/1
+      (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
+    |}]
+
+let%expect_test "what a handler needs is fixed where it's installed" =
+  (* its state is made, and its operations run, with what's installed
+     outside its `with`: the inner `Base` doesn't change them *)
+  let src =
+    {|
+dep Base =
+  n: fn() -> Int
+
+dep N =
+  get: fn() -> Int
+
+handler offset() for N =
+  let start = Base.n()
+  var seen = 0
+  get() =>
+    seen += 1
+    start * 100 + Base.n() * 10 + seen
+
+fn base(n: Int) -> Base = Base { n: fn() => n }
+
+fn main() uses Console =
+  with base(1), offset(), base(2) in
+    print(N.get())
+    print(N.get())
+    print(Base.n())
+|}
+  in
+  types src;
+  [%expect
+    {|
+    dep Base
+      n: fn() -> Int
+    dep N
+      get: fn() -> Int
+    handler offset() for N uses Base
+    fn base(n: Int) -> Base
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    111
+    112
+    2
+    ()
+    |}]
+
+let%expect_test "what a handler needs is needed where it's installed" =
+  let src =
+    {|
+dep N =
+  get: fn() -> Int
+
+handler noisy() for N =
+  get() =>
+    print(1)
+    2
+
+fn get() = with noisy() in N.get()
+fn main() = get()
+|}
+  in
+  types src;
+  [%expect
+    {|
+    dep N
+      get: fn() -> Int
+    handler noisy() for N uses Console
+    fn get() -> Int uses Console
+    fn main() -> Int uses Console
+    |}]
+
+let%expect_test "a public handler says what it needs" =
+  types
+    {|
+pub dep N =
+  get: fn() -> Int
+
+pub handler quiet(n: Int) for N =
+  get() => n
+
+pub handler noisy(n: Int) for N
+    uses Console =
+  get() =>
+    print(n)
+    n
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    pub dep N
+      get: fn() -> Int
+    pub handler quiet(n: Int) for N
+    pub handler noisy(n: Int) for N uses Console
+    fn main() -> Int
+    |}];
+  types
+    {|
+pub dep N =
+  get: fn() -> Int
+
+pub handler forgot(n: Int) for N =
+  var last = 0
+  get() =>
+    print(n)
+    last = n
+    n
+
+handler partly() for N uses Clock =
+  let start = Random.int(10)
+  get() => start
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: the handler `forgot` doesn't declare that it needs `Console`
+      ┌─ test.ren:4:13
+    4 │ pub handler forgot(n: Int) for N =
+      │             ^^^^^^
+    7 │     print(n)
+      │     -------- this call uses `Console`
+      = a public handler without `uses` needs nothing, and its operations and state are checked against that
+      help: add `uses Console` after what it implements
+
+    error: the handler `partly` doesn't declare that it needs `Random`
+       ┌─ test.ren:11:9
+    11 │ handler partly() for N uses Clock =
+       │         ^^^^^^
+    12 │   let start = Random.int(10)
+       │               -------------- this call uses `Random`
+       = `partly`'s operations and state can only use what its `uses` lists, which is what a `with` that installs it needs
+       help: add `Random` to its `uses`
+    |}]
+
+let%expect_test "an arm fails with no more than its operation declares" =
+  types
+    {|
+dep N =
+  get: fn() -> Int ! Low
+
+fn high() -> Int ! High = fail High
+
+handler wrong() for N =
+  get() => try high()
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this implementation can fail with `High`, and `N.get` can't
+      ┌─ test.ren:7:12
+    7 │   get() => try high()
+      │            ^^^^^^^^^^ fails with `High`
+      = `N.get` can fail only with `Low`
+      help: map it: `match high()` with the arm `fail High => fail Low`
+    |}]
+
+let%expect_test "an arm takes its operation's arguments" =
+  types
+    {|
+dep B =
+  z: fn(n: Int) -> Int
+
+handler arity() for B =
+  z() => 2
+
+handler typed() for B =
+  z(n: Bool) => 2
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `B.z` takes 1 argument, but this has 0 parameters
+      ┌─ test.ren:5:3
+    5 │   z() => 2
+      │   ^
+      help: give it 1 parameter, one for each argument
+
+    error: expected `fn(Int) -> Int`, found `fn(Bool) -> Int`
+      ┌─ test.ren:8:3
+    8 │   z(n: Bool) => 2
+      │   ^^^^^^^^^^^^^^^
+      = `B`'s operation `z`
+    |}]
+
+let%expect_test "a failing arm still changes its state" =
+  run
+    {|
+dep N =
+  get: fn() -> Int ! Low
+
+handler counted() for N =
+  var calls = 0
+  get() =>
+    calls += 1
+    if calls < 3 then fail Low else calls
+
+fn main() uses Console =
+  with counted() in
+    print(attempt N.get())
+    print(attempt N.get())
+    print(attempt N.get())
+|};
+  [%expect {|
+    Err(Low)
+    Err(Low)
+    Ok(3)
+    ()
+    |}]
+
+let%expect_test "what a handler's declaration can't be" =
+  types
+    {|
+dep A =
+  x: fn() -> Int
+  y: fn() -> Int
+
+dep B =
+  x: fn() -> Int
+  z: fn(n: Int) -> Int
+
+type T = { a: Int }
+
+handler missing() for A =
+  x() => 1
+
+handler unknown() for A =
+  x() => 1
+  y() => 2
+  w() => 3
+
+handler twice() for A =
+  x() => 1
+  x() => 2
+  y() => 3
+
+handler both() for A, B =
+  x() => 1
+  y() => 2
+  z(n) => n
+
+handler not_dep() for T, A, A =
+  x() => 1
+  y() => 2
+
+handler net() for Net =
+  get() => 1
+
+handler change(inout n: Int) for A =
+  x() => n
+  y() => n
+
+handler itself() for A =
+  x() => A.y()
+  y() => 2
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: the handler `missing` doesn't implement `A.y`
+       ┌─ test.ren:11:9
+    11 │ handler missing() for A =
+       │         ^^^^^^^
+       help: add `y(...) => ...`
+
+    error: `A` has no operation named `w`
+       ┌─ test.ren:17:3
+    17 │   w() => 3
+       │   ^
+       help: the operations it implements: `A.x`, `A.y`
+
+    error: `x` is implemented twice
+       ┌─ test.ren:21:3
+    20 │   x() => 1
+       │   - the first `x` is here
+    21 │   x() => 2
+       │   ^
+       help: remove one of them
+
+    error: `A` and `B` both have an operation named `x`
+       ┌─ test.ren:25:3
+    25 │   x() => 1
+       │   ^
+       = an arm implements an operation by its name, so `x` could be either
+       help: implement them in two handlers
+
+    error: `T` is a type, not a dependency
+       ┌─ test.ren:29:23
+    29 │ handler not_dep() for T, A, A =
+       │                       ^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `A` is after `for` twice
+       ┌─ test.ren:29:29
+    29 │ handler not_dep() for T, A, A =
+       │                             ^
+       │                          - the first `A` is here
+       help: remove one of them
+
+    error: `Net` has no operations, so a handler can't implement it
+       ┌─ test.ren:33:19
+    33 │ handler net() for Net =
+       │                   ^^^
+       = `Net` is only a name so far: what it can do comes in a later stage
+       help: remove it from the `for` list
+
+    error: a handler's parameter can't be `inout`
+       ┌─ test.ren:36:22
+    36 │ handler change(inout n: Int) for A =
+       │                      ^
+       = calling a handler describes it, and each `with` that installs it keeps its parameters, so there's nothing to write back
+       help: remove the `inout`
+
+    error: a handler for `A` can't call `A.y`
+       ┌─ test.ren:41:10
+    41 │   x() => A.y()
+       │          ^^^
+       = a handler's operations run with what's installed outside its `with`, but calling the next `A` out from inside a handler for it comes with `outer` (stage 9)
+       help: call it outside the handler, or implement `A` with a record of functions instead
+    |}]
+
+let%expect_test "a lambda in an arm can't change the handler's state" =
+  types
+    {|
+dep A =
+  x: fn() -> Int
+
+handler h() for A =
+  var n = 0
+  x() =>
+    let f = fn() => n += 1
+    n += 1
+    n
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: a lambda can't change `n`, a variable from outside it
+      ┌─ test.ren:7:21
+    7 │     let f = fn() => n += 1
+      │                     ^
+      = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+    |}]
+
+let%expect_test "a handler's state comes before its arms" =
+  ast
+    {|
+dep A =
+  x: fn() -> Int
+
+handler h() for A =
+  x() => 1
+  var n = 0
+
+handler g for A =
+  x() => 1
+
+handler f() =
+  x() => 1
+|};
+  [%expect
+    {|
+    error: a handler's state comes first, before its operations
+      ┌─ test.ren:6:3
+    6 │   var n = 0
+      │   ^^^
+      help: move it above the handler's first operation
+
+    error: expected `(` after the handler's name, found `for`
+      ┌─ test.ren:8:11
+    8 │ handler g for A =
+      │           ^^^
+      help: write its parameters, `handler g() for ...`, even if it has none
+
+    error: expected `for` and the dependencies it implements, found `=`
+       ┌─ test.ren:11:13
+    11 │ handler f() =
+       │             ^
+       help: say what it implements: `handler f(...) for Clock =`
+    |}]
+
+let%expect_test "main is told a handler can install what it uses" =
+  types (rates ^ {|
+fn main() uses Rates, Console = print(convert(1))
+|});
+  [%expect
+    {|
+    error: nothing installs `Rates` before `main`
+       ┌─ test.ren:16:16
+    16 │ fn main() uses Rates, Console = print(convert(1))
+       │                ^^^^^ the runtime installs only `Clock`, `Random` and `Console`
+       │                                       ---------- this call uses `Rates`
+       help: install one inside `main`: `with counting_rates(...) in ...`
+    |}]
+
+let%expect_test "another module's handler" =
+  let files =
+    [
+      ( "main.ren",
+        {|
+import fx
+
+fn main() uses Console =
+  with fx.counting(4) in
+    print(fx.Rates.usd_to(1) + fx.Rates.usd_to(1))
+    print(fx.RateCalls.count())
+|}
+      );
+      ( "fx.ren",
+        {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+pub handler counting(rate: Int) for Rates, RateCalls =
+  var calls = 0
+  usd_to(c) =>
+    calls += 1
+    c * rate
+  count() => calls
+|}
+      );
+    ]
+  in
+  types_files files;
+  [%expect
+    {|
+    -- fx
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    pub dep RateCalls
+      count: fn() -> Int
+    pub handler counting(rate: Int) for Rates, RateCalls
+
+    -- main
+    fn main() uses Console
+    |}];
+  run_files files;
+  [%expect {|
+    8
+    2
+    ()
+    |}]
+
+let%expect_test "a handler's state is made where it's installed, and can't fail"
+    =
+  types
+    {|
+dep N =
+  get: fn() -> Int
+
+fn bad() -> Int ! Oops = fail Oops
+
+handler h() for N =
+  var n = try bad()
+  get() => n
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this can fail with Oops, which isn't allowed here
+      ┌─ test.ren:7:15
+    7 │   var n = try bad()
+      │               ^^^^^
+      = a handler's state is made where a `with` installs it, which can't fail
+      help: handle it here, with `attempt` or a `match` with `fail` arms, or make the value in an operation instead
+    |}]
+
+let%expect_test "a handler that keeps a closure names its row" =
+  let src =
+    {|
+pub dep N =
+  get: fn() -> Int
+
+handler inferred(f) for N =
+  var n = 0
+  get() =>
+    n += f()
+    n
+
+pub handler written(f: fn() -> Int uses ..d) for N uses ..d =
+  get() => f()
+
+fn loud() -> Int uses Console =
+  print(9)
+  1
+
+fn main() uses Console =
+  with inferred(fn() => 2) in
+    print(N.get())
+    print(N.get())
+  with written(loud) in
+    print(N.get())
+|}
+  in
+  types src;
+  [%expect
+    {|
+    pub dep N
+      get: fn() -> Int
+    handler inferred(f: fn() -> Int uses ..d) for N uses ..d
+    pub handler written(f: fn() -> Int uses ..d) for N uses ..d
+    fn loud() -> Int uses Console
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    2
+    4
+    9
+    1
+    ()
+    |}]

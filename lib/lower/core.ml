@@ -51,6 +51,12 @@ type prim =
   | Length  (** an array's length *)
   | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
   | Set_index  (** [xs] with element [i] replaced: a new array *)
+  | New_cell
+      (** a new cell holding a value: a `var` of a handler's state, which its
+          instance's operations share (see [Handler]). Nothing else holds a
+          cell, and a program never sees one *)
+  | Get_cell  (** what a cell holds *)
+  | Set_cell  (** change what a cell holds, to the second operand *)
 
 type param = { mode : mode; var : var }
 
@@ -88,6 +94,28 @@ and kind =
       (** [body], with the evidence [ev]: [outer], the evidence here, with
           [impl] installed for [dep] on top. [impl] keeps [outer], which its
           operations run with. The runtime's installs around `main` are these *)
+  | Handler of { ev : var; captures : var list; body : expr }
+      (** a handler, described: what calling a `handler` declaration gives. Like
+          a lambda of no parameters it keeps [captures], and its [body] runs
+          with the evidence [ev] it's given, each time a [With_handler] installs
+          it: it makes the handler's state, each `var` in a cell, and ends in an
+          [Instance]. Its type is the handler's, which needs what its operations
+          use *)
+  | Instance of (Path.t * expr) list
+      (** a handler's instance: an implementation of each of its dependencies,
+          in the order they're written, records of lambdas that share the cells
+          of one state. Of the handler's type *)
+  | With_handler of {
+      ev : var;
+      outer : var;
+      handler : expr;
+      deps : Path.t list;
+      body : expr;
+    }
+      (** [body], with the evidence [ev]: [outer] with a fresh instance of
+          [handler], made with [outer], installed on top, for each of [deps].
+          The instance's implementations all keep [outer], which their
+          operations run with *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)
@@ -182,6 +210,9 @@ let evidence_ty = Ty.Con (Path.prelude "$Evidence", [])
 
 (* The evidence a function or lambda takes, or a [With] binds. *)
 let evidence id = { id; name = "ev"; ty = evidence_ty }
+
+(* The type of a cell holding a [t] (see [New_cell]). *)
+let cell_ty t = Ty.Con (Path.prelude "$Cell", [ t ])
 let unit loc = mk Unit Ty.unit loc
 let local (v : var) loc = mk (Local v) v.ty loc
 
@@ -213,10 +244,17 @@ let children (e : expr) =
   | Dep_call { args = es; _ } ->
       es
   | With { impl; body; _ } -> [ impl; body ]
+  | With_handler { handler; body; _ } -> [ handler; body ]
+  | Instance impls -> List.map snd impls
   | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
     ->
       [ a; b ]
-  | Assign (_, a) | Field (a, _, _) | Fail a | Lambda { body = a; _ } -> [ a ]
+  | Assign (_, a)
+  | Field (a, _, _)
+  | Fail a
+  | Lambda { body = a; _ }
+  | Handler { body = a; _ } ->
+      [ a ]
   | If (c, t, f) -> [ c; t; f ]
   | Match (s, arms) ->
       s :: List.concat_map (fun a -> Option.to_list a.guard @ [ a.body ]) arms
@@ -234,7 +272,7 @@ let rec can_fail (e : expr) =
   | Call (f, _, _) when fails f.ty -> true
   | Dep_call { fty; _ } when fails fty -> true
   | Handle { on_value; on_error; _ } -> can_fail on_value || can_fail on_error
-  | Lambda _ -> false
+  | Lambda _ | Handler _ -> false
   | _ -> List.exists can_fail (children e)
 
 (* ---- printing, as s-expressions, for tests ----
@@ -275,6 +313,9 @@ let show_prim = function
   | Length -> "length"
   | Get_index -> "get"
   | Set_index -> "set"
+  | New_cell -> "cell"
+  | Get_cell -> "get-cell"
+  | Set_cell -> "set-cell"
 
 let atom a = Atom a
 let var v = Atom (show_var v)
@@ -311,6 +352,34 @@ let rec sexp e =
           atom "with";
           var ev;
           List [ atom "extend"; var outer; Atom (Path.full dep); sexp impl ];
+          sexp body;
+        ]
+  | Handler { ev; captures; body } ->
+      List
+        [
+          atom "handler";
+          List (atom "captures" :: List.map var captures);
+          var ev;
+          sexp body;
+        ]
+  | Instance impls ->
+      List
+        (atom "instance"
+        :: List.map
+             (fun (d, impl) -> List [ Atom (Path.full d ^ ":"); sexp impl ])
+             impls)
+  | With_handler { ev; outer; handler; deps; body } ->
+      List
+        [
+          atom "with";
+          var ev;
+          List
+            [
+              atom "extend";
+              var outer;
+              List (List.map (fun d -> Atom (Path.full d)) deps);
+              sexp handler;
+            ];
           sexp body;
         ]
   | Prim (op, args) -> List (Atom (show_prim op) :: List.map sexp args)

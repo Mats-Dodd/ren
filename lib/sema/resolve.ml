@@ -28,6 +28,11 @@
    - a dependency, `dep Clock = ...`, is in scope like a type. A name after
      `uses` is one, and an operation written after it, `Clock.now`, is a
      [Dep_op]: a call of it calls whatever implementation is installed.
+   - a handler, `handler h(...) for Rates = ...`, is a function whose body
+     is its state and arms. Each arm is an operation of exactly one of the
+     dependencies after `for`, and each operation has one; its type is
+     named after it, in scope so messages can name it, though no one can
+     write it.
 
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
@@ -170,6 +175,9 @@ type scope = {
   rows : named;
       (** the rows the function's signature names, `..d` (see [rows]) *)
   depth : int;  (** how many lambdas deep *)
+  handling : Path.t list;
+      (** the dependencies of the handler being resolved, whose operations it
+          can't call: the next implementation out is `outer`'s (stage 9) *)
   fn : fn_state;
 }
 
@@ -730,6 +738,24 @@ let item env sc (t : tyname) (f : ident) =
           (* `Clock.now`: an operation, which calls the implementation
              installed where it's called; resolve.ml reports one that's
              also a member's name *)
+          if List.mem p sc.handling then
+            report env
+              (Loc.span (tyname_loc t) f.loc)
+              ~notes:
+                [
+                  sprintf
+                    "a handler's operations run with what's installed outside \
+                     its `with`, but calling the next `%s` out from inside a \
+                     handler for it comes with `outer` (stage 9)"
+                    shown;
+                ]
+              ~help:
+                (sprintf
+                   "call it outside the handler, or implement `%s` with a \
+                    record of functions instead"
+                   shown)
+              (sprintf "a handler for `%s` can't call `%s.%s`" shown shown
+                 f.name);
           Dep_op (p, f.name)
       | Some _
         when p.home = Path.prelude_home && Prelude.find_fn path.name <> None ->
@@ -1020,31 +1046,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         in
         Lambda (ps, expr env inner body)
     | Block (stmts, last) ->
-        let stmts, sc =
-          List.fold_left
-            (fun (acc, sc) (s : Parsed.stmt) ->
-              match s with
-              | Let { name; ty = t; value; mut } ->
-                  if mut && name.name = "_" then
-                    report env name.loc ~help:"write `let _ = ...`"
-                      "`var _` names nothing, so nothing can change it";
-                  let value = expr env sc value in
-                  let t =
-                    ty_opt env ~params:sc.tparams ~rows:(Body sc.rows) t
-                  in
-                  let b, sc =
-                    bind env sc name (if mut then By_var else By_let)
-                  in
-                  (match (t, value.kind) with
-                  | None, Record (Some n, _) ->
-                      (* `let b = Bag { ... }` is a `Bag` *)
-                      note_type sc b (Some (TyName (n, [])))
-                  | _ -> note_type sc b t);
-                  (Let { name = b; ty = t; value; mut } :: acc, sc)
-              | Expr e -> (Expr (expr env sc e) :: acc, sc))
-            ([], sc) stmts
-        in
-        Block (List.rev stmts, expr env sc last)
+        let stmts, sc = block_stmts env sc stmts in
+        Block (stmts, expr env sc last)
     | Con (c, args) ->
         let c = ctor_ref env sc c in
         Con (c, List.map (fun (l, a) -> (l, go a)) args)
@@ -1124,8 +1127,195 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | With { item; body; lam } ->
         let item = go item in
         With { item; body = go body; lam }
+    | Handler _ ->
+        (* the parser makes one only the body of a handler, which
+           [handler_body] resolves *)
+        assert false
   in
   { kind; loc = e.loc; node = e.node }
+
+(* A block's statements, and the scope after them. *)
+and block_stmts env sc (stmts : Parsed.stmt list) =
+  let stmts, sc =
+    List.fold_left
+      (fun (acc, sc) (s : Parsed.stmt) ->
+        match s with
+        | Let { name; ty = t; value; mut } ->
+            if mut && name.name = "_" then
+              report env name.loc ~help:"write `let _ = ...`"
+                "`var _` names nothing, so nothing can change it";
+            let value = expr env sc value in
+            let t = ty_opt env ~params:sc.tparams ~rows:(Body sc.rows) t in
+            let b, sc = bind env sc name (if mut then By_var else By_let) in
+            (match (t, value.kind) with
+            | None, Record (Some n, _) ->
+                (* `let b = Bag { ... }` is a `Bag` *)
+                note_type sc b (Some (TyName (n, [])))
+            | _ -> note_type sc b t);
+            (Let { name = b; ty = t; value; mut } :: acc, sc)
+        | Expr e -> (Expr (expr env sc e) :: acc, sc))
+      ([], sc) stmts
+  in
+  (List.rev stmts, sc)
+
+(* The body of the handler [name] (ast.ml, [Handler]): the dependencies
+   after `for`, each a declared one with operations, once; its state; and
+   its arms, each the implementation of an operation of exactly one of
+   them, a [Dep_op], and every operation implemented once. The state is
+   bound as deep as the arms' bodies, so an arm can change it (mut.ml). *)
+let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
+    Resolved.expr_kind =
+  match e.kind with
+  | Handler { deps; state; arms; _ } ->
+      let seen = Hashtbl.create 4 in
+      let deps =
+        List.filter_map
+          (fun (d : tyname) ->
+            (* [uses] reports a name that isn't a dependency *)
+            match uses env [ d ] with
+            | [ ({ tref = Named p; tloc } as t) ] -> (
+                match (Hashtbl.find_opt seen p, dep_ops env p) with
+                | Some first, _ ->
+                    report env tloc ~help:"remove one of them"
+                      ~labels:
+                        [
+                          ( first,
+                            sprintf "the first `%s` is here" (show_tyname d) );
+                        ]
+                      (sprintf "`%s` is after `for` twice" (show_tyname d));
+                    None
+                | None, None ->
+                    report env tloc
+                      ~notes:
+                        [
+                          sprintf
+                            "`%s` is only a name so far: what it can do comes \
+                             in a later stage"
+                            (show_tyname d);
+                        ]
+                      ~help:"remove it from the `for` list"
+                      (sprintf
+                         "`%s` has no operations, so a handler can't implement \
+                          it"
+                         (show_tyname d));
+                    None
+                | None, Some _ ->
+                    Hashtbl.replace seen p tloc;
+                    Some (p, t))
+            | _ -> None)
+          deps
+      in
+      let sc = { sc with handling = List.map fst deps } in
+      let state, sc = block_stmts env sc state in
+      let ops (p : Path.t) = Option.value (dep_ops env p) ~default:[] in
+      let shown (p : Path.t) = sprintf "`%s`" p.name in
+      let given = Hashtbl.create 8 in
+      let arm (a : Parsed.handler_arm) : Resolved.handler_arm =
+        let op = a.arm_name.name in
+        let arm_op =
+          match
+            List.filter (fun ((p : Path.t), _) -> List.mem op (ops p)) deps
+          with
+          | [ ((p : Path.t), _) ] -> (
+              match Hashtbl.find_opt given (p, op) with
+              | Some first ->
+                  report env a.arm_name.loc ~help:"remove one of them"
+                    ~labels:[ (first, sprintf "the first `%s` is here" op) ]
+                    (sprintf "`%s` is implemented twice" op);
+                  Dep_op (p, op)
+              | None ->
+                  Hashtbl.replace given (p, op) a.arm_name.loc;
+                  Dep_op (p, op))
+          | [] when deps = [] ->
+              (* what it implements was reported already *)
+              Global (Path.make env.home op)
+          | [] ->
+              let all =
+                List.concat_map
+                  (fun ((p : Path.t), _) ->
+                    List.map (fun o -> sprintf "`%s.%s`" p.name o) (ops p))
+                  deps
+              in
+              report env a.arm_name.loc
+                ?help:
+                  (match all with
+                  | [] -> None
+                  | all ->
+                      Some
+                        (sprintf "the operations it implements: %s"
+                           (String.concat ", " all)))
+                (sprintf "%s %s no operation named `%s`"
+                   (String.concat " and "
+                      (List.map (fun (p, _) -> shown p) deps))
+                   (if List.length deps = 1 then "has" else "have")
+                   op);
+              (* the placeholder an unknown name gets (see [lookup]) *)
+              Global (Path.make env.home op)
+          | owners ->
+              (* it's none of theirs, but it's not missing from any *)
+              List.iter
+                (fun ((p : Path.t), _) ->
+                  Hashtbl.replace given (p, op) a.arm_name.loc)
+                owners;
+              report env a.arm_name.loc
+                ~notes:
+                  [
+                    sprintf
+                      "an arm implements an operation by its name, so `%s` \
+                       could be either"
+                      op;
+                  ]
+                ~help:"implement them in two handlers"
+                (sprintf "%s %s have an operation named `%s`"
+                   (String.concat " and "
+                      (List.map (fun (p, _) -> shown p) owners))
+                   (if List.length owners = 2 then "both" else "all")
+                   op);
+              Global (Path.make env.home op)
+        in
+        let arm_impl =
+          match a.arm_impl.kind with
+          | Lambda (ps, body) ->
+              no_duplicates env "parameters"
+                (List.map (fun (p : Parsed.param) -> p.pname) ps);
+              List.iter (not_self env ~help:"choose another name") ps;
+              let ps, inner =
+                params env sc
+                  (fun (p : Parsed.param) ->
+                    if p.pmode = Inout then By_inout else By_lambda)
+                  ps
+              in
+              {
+                kind = Lambda (ps, expr env inner body);
+                loc = a.arm_impl.loc;
+                node = a.arm_impl.node;
+              }
+          | _ -> (* the parser makes each arm a lambda *) assert false
+        in
+        { arm_op; arm_name = a.arm_name; arm_impl }
+      in
+      let arms = List.map arm arms in
+      (* every operation of every dependency is implemented *)
+      List.iter
+        (fun ((p : Path.t), _) ->
+          match
+            List.filter (fun o -> not (Hashtbl.mem given (p, o))) (ops p)
+          with
+          | [] -> ()
+          | missing ->
+              report env name.loc
+                ~help:
+                  (sprintf "add %s"
+                     (String.concat ", "
+                        (List.map
+                           (fun o -> sprintf "`%s(...) => ...`" o)
+                           missing)))
+                (sprintf "the handler `%s` doesn't implement %s" name.name
+                   (String.concat ", "
+                      (List.map (fun o -> sprintf "`%s.%s`" p.name o) missing))))
+        deps;
+      Handler { deps = List.map snd deps; needs; state; arms }
+  | _ -> assert false
 
 (* ---- declarations ---- *)
 
@@ -1287,6 +1477,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       tparams = List.map (fun (t : ident) -> t.name) tparams;
       rows = [];
       depth = 0;
+      handling = [];
       fn = { last_id = 0; calls = []; dots = []; typed = [] };
     }
   in
@@ -1323,7 +1514,45 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
   let ret = ty_opt env ~params:sc.tparams ~rows f.ret in
   let errs = Option.map (errors env ~params:sc.tparams ~rows) f.errors in
   let deps = Option.map (uses_of env ~rows) f.uses in
-  let body = expr env { inner with rows = !named } f.body in
+  let body, ret, deps =
+    match f.body.kind with
+    | Handler _ -> (
+        (* a handler's function uses nothing, and gives the handler's type,
+           which needs what its `uses` says; a private one's needs, if not
+           written, are inferred *)
+        List.iter
+          (fun (p : Resolved.param) ->
+            if p.pmode = Inout then
+              report env p.pname.ident.loc ~help:"remove the `inout`"
+                ~notes:
+                  [
+                    "calling a handler describes it, and each `with` that \
+                     installs it keeps its parameters, so there's nothing to \
+                     write back";
+                  ]
+                "a handler's parameter can't be `inout`")
+          ps;
+        (* what it needs is written in its signature, which can name a
+           row: `handler h(f: fn() uses ..d) for N uses ..d` *)
+        let needs =
+          match f.body.kind with
+          | Handler { needs; _ } -> Option.map (uses_of env ~rows) needs
+          | _ -> None
+        in
+        let kind =
+          handler_body env { inner with rows = !named } f.name ~needs f.body
+        in
+        let body : Resolved.expr = { f.body with kind } in
+        let none = Some { deps = []; dtail = None; uloc = f.name.loc } in
+        let own =
+          { tref = Named (Path.make env.home f.name.name); tloc = f.name.loc }
+        in
+        match kind with
+        | Handler { needs; _ } when f.pub || needs <> None ->
+            (body, Some (TyImpl (own, needs, f.name.loc)), none)
+        | _ -> (body, None, none))
+    | _ -> (expr env { inner with rows = !named } f.body, ret, deps)
+  in
   let name =
     match owner with
     | Some td -> { f.name with name = td.type_name.name ^ "." ^ f.name.name }
@@ -1577,9 +1806,24 @@ let no_leaks env ~private_ (items : Resolved.program) =
          ~inside:(sprintf "`pub let %s`'s type mentions `%s`" f.name.name))
       f.ret
   in
+  (* a public handler's interface says what it implements *)
+  let handler (f : Resolved.fn_def) =
+    match f.body.kind with
+    | Handler { deps; _ } ->
+        no_private_named env ~private_
+          (List.filter_map
+             (fun (d : tname) ->
+               match d.tref with Named p -> Some (p, d.tloc) | Param _ -> None)
+             deps)
+          ~say:(fun (p : Path.t) ->
+            sprintf "`pub handler %s` implements `%s`" f.name.name p.name)
+    | _ -> ()
+  in
   List.iter
     (function
-      | Fn (f : Resolved.fn_def) when f.pub -> fn_ f
+      | Fn (f : Resolved.fn_def) when f.pub ->
+          handler f;
+          fn_ f
       | Type (td : Resolved.type_def) when td.type_pub -> (
           (* a public type's public items are in the interface too *)
           List.iter
@@ -1853,6 +2097,15 @@ let program sink ~home ~imports (prog : Parsed.program) =
                 (Path.make home name.name, List.length td.type_params))
       | Fn _ | Import _ -> ())
     prog;
+  (* each handler's type, named after it, which is never written: a type's
+     name starts with a capital. It's in scope so that messages can name it *)
+  List.iter
+    (function
+      | Fn (f : Parsed.fn_def) when Ast.is_handler f ->
+          if not (Hashtbl.mem env.types f.name.name) then
+            Hashtbl.replace env.types f.name.name (Path.make home f.name.name, 0)
+      | Fn _ | Type _ | Import _ -> ())
+    prog;
   (* the functions in scope: the prelude's, then this module's own *)
   List.iter
     (fun (iface : Iface.t) ->
@@ -1912,7 +2165,8 @@ let program sink ~home ~imports (prog : Parsed.program) =
     List.filter_map
       (function
         | Type td -> Some (Iface.of_type_def ~home ~sets:(sets env items) td)
-        | Fn _ | Import _ -> None)
+        | Fn f -> Iface.of_handler ~home f
+        | Import _ -> None)
       items
   in
   (* [imported n] says whether the name [n] in `.{}` imported a type; one

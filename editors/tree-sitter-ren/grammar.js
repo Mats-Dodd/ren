@@ -95,6 +95,7 @@ module.exports = grammar({
         $.function_definition,
         $.type_definition,
         $.dependency_definition,
+        $.handler_definition,
       ),
 
     comment: (_) => token(seq('//', /[^\n]*/)),
@@ -286,6 +287,38 @@ module.exports = grammar({
     // now: fn() -> Time
     operation: ($) =>
       seq(field('name', $.identifier), ':', field('type', $.function_type)),
+
+    // ---- handlers ----
+
+    // handler counting_rates(rate: Int) for Rates, RateCalls = ...: its
+    // state, `var`s and `let`s, indented under it, then an arm for each
+    // operation; the compiler checks the state comes first
+    handler_definition: ($) =>
+      seq(
+        optional($.visibility),
+        'handler',
+        field('name', $.identifier),
+        field('parameters', $.parameters),
+        'for',
+        sep1(field('implements', $.dependency), ','),
+        optional(field('uses', $.uses_clause)),
+        '=',
+        $._indent,
+        sep1(
+          choice(field('state', $.let_statement), field('arm', $.handler_arm)),
+          $._newline,
+        ),
+        $._dedent,
+      ),
+
+    // usd_to(c) => ...: the implementation of an operation
+    handler_arm: ($) =>
+      seq(
+        field('name', $.identifier),
+        field('parameters', $.parameters),
+        '=>',
+        field('body', $._body),
+      ),
 
     // ---- a type's members ----
 

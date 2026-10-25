@@ -334,6 +334,25 @@ stage, or settled something the plan left open:
   store(g)`, is an error at the parameter, whose help names its rows: no
   syntactic check sees that `store` keeps it.
 
+- **A handler's state is a cell per `var`, not one cell.** Each
+  operation of an instance reads the `var`s it uses from their cells
+  when it starts and writes back the ones it changes when it ends, even
+  if it fails; only the runtime holds a cell. A `let` in the state is
+  kept as a lambda keeps a value.
+- **A handler can't call an operation of a dependency it implements,**
+  `Rates.usd_to` inside a handler for `Rates`, even though its
+  operations run with what's installed outside it: reaching the next
+  implementation out is `outer`'s (stage 9), and the README's section 7
+  already says it's an error.
+- **A handler's state is made where it's installed, and can't fail:**
+  the `with` that installs it isn't a call a `try` could mark.
+- **A handler's type can't be written.** It's named after the handler,
+  `counting_rates`, in messages and `ren types`, but a type's name
+  starts with a capital, so only inferred code can keep one, `let h =
+  counting_rates(1)`; a public function can't take or return one yet.
+  A handler that keeps a closure names its row in its own signature,
+  `handler h(f: fn() -> Int uses ..d) for N uses ..d`.
+
 ## Later
 
 - `outer` and forwarding handlers, `Async`, the journal (stage 9).

@@ -1,5 +1,5 @@
 ; vim mode's text objects: `af`/`if` a function, `ac`/`ic` a type with its
-; members (`ac` a dependency), `gc` a comment.
+; members (`ac` a dependency or a handler), `gc` a comment.
 
 (function_definition
   body: (_) @function.inside) @function.around
@@ -15,5 +15,11 @@
 
 ; a dependency, with its operations and members
 (dependency_definition) @class.around
+
+; a handler, with its state and arms; an arm is a function
+(handler_definition) @class.around
+
+(handler_arm
+  body: (_) @function.inside) @function.around
 
 (comment)+ @comment.around

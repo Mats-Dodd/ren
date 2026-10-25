@@ -1,5 +1,6 @@
-; The outline: every function, type and dependency, and under a type its
-; members, and under a dependency its operations and members.
+; The outline: every function, type, dependency and handler, and under a
+; type its members, under a dependency its operations and members, and
+; under a handler the operations it implements.
 
 (function_definition
   (visibility)? @context
@@ -17,6 +18,14 @@
   name: (type_identifier) @name) @item
 
 (operation
+  name: (identifier) @name) @item
+
+(handler_definition
+  (visibility)? @context
+  "handler" @context
+  name: (identifier) @name) @item
+
+(handler_arm
   name: (identifier) @name) @item
 
 (associated_value

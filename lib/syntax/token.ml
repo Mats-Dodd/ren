@@ -32,6 +32,7 @@ type t =
   | ATTEMPT
   | ORELSE
   | WITH
+  | HANDLER
   (* punctuation *)
   | LPAREN
   | RPAREN
@@ -119,6 +120,7 @@ let to_string = function
   | ATTEMPT -> "attempt"
   | ORELSE -> "orelse"
   | WITH -> "with"
+  | HANDLER -> "handler"
   | LPAREN -> "("
   | RPAREN -> ")"
   | LBRACE -> "{"

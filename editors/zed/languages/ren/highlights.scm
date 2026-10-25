@@ -38,6 +38,7 @@
   "opaque"
   "not"
   "with"
+  "handler"
 ] @keyword
 
 (visibility) @keyword
@@ -68,6 +69,8 @@
 (associated_value name: (identifier) @constant)
 (type_definition name: (type_identifier) @type)
 (operation name: (identifier) @function)
+(handler_definition name: (identifier) @function)
+(handler_arm name: (identifier) @function)
 (type_parameters (type_identifier) @type)
 (variant name: (type_identifier) @constructor)
 (payload name: (identifier) @property)

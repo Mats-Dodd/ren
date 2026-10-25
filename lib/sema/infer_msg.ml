@@ -233,6 +233,9 @@ let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
                "make an implementation of it with `%s { ... }`, giving each of \
                 its operations"
                t) )
+    | Handler _ ->
+        ( sprintf "`%s` is a handler, so it has no constructors" t,
+          Some (sprintf "describe one by calling it, `%s(...)`" t) )
     | Builtin ->
         ( sprintf "`%s` is built in, and has no constructors" t,
           Some "its values are written directly, like `1`, `true` or `[1, 2]`"
@@ -417,6 +420,31 @@ let undeclared_use ?(why = []) (f : Ast.Resolved.fn_def) dep call =
       (if f.uses = None then sprintf "add `uses %s`" dep
        else sprintf "add `%s` to its `uses`" dep)
     (sprintf "`%s` doesn't declare `%s`" name dep)
+
+(* A handler whose operations or state use [dep], which its `uses`
+   doesn't list ([written] says whether it has one). *)
+let undeclared_need ~written (f : Ast.Resolved.fn_def) dep call =
+  let name = f.name.name in
+  Diag.make f.name.loc
+    ~labels:
+      (match call with
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" what dep) ]
+      | None -> [])
+    ~notes:
+      [
+        (if written then
+           sprintf
+             "`%s`'s operations and state can only use what its `uses` lists, \
+              which is what a `with` that installs it needs"
+             name
+         else
+           "a public handler without `uses` needs nothing, and its operations \
+            and state are checked against that");
+      ]
+    ~help:
+      (if written then sprintf "add `%s` to its `uses`" dep
+       else sprintf "add `uses %s` after what it implements" dep)
+    (sprintf "the handler `%s` doesn't declare that it needs `%s`" name dep)
 
 (* ---- methods ----
 

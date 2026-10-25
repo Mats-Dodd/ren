@@ -57,6 +57,7 @@ let rec equal loc a b =
   | (VClosure _ | VFn _ | VBuiltin _), _ | _, (VClosure _ | VFn _ | VBuiltin _)
     ->
       panic loc "functions can't be compared"
+  | VHandler _, _ | _, VHandler _ -> panic loc "handlers can't be compared"
   | _ -> a = b
 
 (* The program's top-level functions, by path, and its associated values
@@ -102,6 +103,11 @@ let prim loc op args =
       let ys = Array.copy xs in
       ys.(i) <- x;
       VArray ys
+  | New_cell, [ v ] -> VCell (ref v)
+  | Get_cell, [ VCell c ] -> !c
+  | Set_cell, [ VCell c; v ] ->
+      c := v;
+      VUnit
   | _ -> bug ("`" ^ show_prim op ^ "` on the wrong values")
 
 let truth = function VBool b -> b | _ -> bug "a non-Bool condition"
@@ -182,6 +188,36 @@ let rec eval cx env (e : expr) =
       let outer = evidence_in env outer ("installing `" ^ dep.name ^ "`") in
       let installed = VEvidence ({ dep; impl; outer } :: outer) in
       eval cx (Env.add ev.id (ref installed) env) body
+  | Handler { ev; captures; body } ->
+      (* like a lambda, it copies what it captures now *)
+      let env =
+        List.fold_left
+          (fun inner (v : var) -> Env.add v.id (ref !(cell env v)) inner)
+          Env.empty captures
+      in
+      VHandler { ev = ev.id; body; env }
+  | Instance impls ->
+      let values = eval_all cx env (List.map snd impls) in
+      VInstance (List.combine (List.map fst impls) values)
+  | With_handler { ev; outer; handler; deps; body } -> (
+      let what = "installing a handler" in
+      let h = eval cx env handler in
+      let outer = evidence_in env outer what in
+      (* a fresh instance, made with what's installed here, which its
+         operations then run with *)
+      match h with
+      | VHandler h -> (
+          match eval cx (Env.add h.ev (ref (VEvidence outer)) h.env) h.body with
+          | VInstance impls when List.map fst impls = deps ->
+              let installed =
+                List.fold_left
+                  (fun acc (dep, impl) -> { dep; impl; outer } :: acc)
+                  outer impls
+              in
+              eval cx (Env.add ev.id (ref (VEvidence installed)) env) body
+          | _ ->
+              bug (what ^ " whose instance doesn't implement its dependencies"))
+      | _ -> bug (what ^ " with something that isn't a handler"))
   | Prim (op, args) -> prim e.loc op (eval_all cx env args)
   | Let (v, value, body) ->
       let x = eval cx env value in

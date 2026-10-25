@@ -211,13 +211,13 @@ let ctor_of env loc (td : Iface.type_decl) c =
       | Some k -> k
       | None ->
           fail env loc (sprintf "`%s` has no constructor `%s`" td.path.name c))
-  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ ->
+  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ | Handler _ ->
       fail env loc (sprintf "`%s` isn't a sum type" td.path.name)
 
 let fields_of env loc (td : Iface.type_decl) =
   match td.body with
   | Record fs | Dep fs -> fs
-  | Sum _ | Builtin | Opaque _ | Errors _ ->
+  | Sum _ | Builtin | Opaque _ | Errors _ | Handler _ ->
       fail env loc (sprintf "`%s` isn't a record" td.path.name)
 
 let field_ty env loc (td : Iface.type_decl) args f =
@@ -366,6 +366,61 @@ let rec expr env sc (e : expr) =
             (sprintf "what's installed has type `%s`, but should be a `%s`"
                (show t) (Path.full p)));
       expr { env with ev = Some ev; installed = p :: env.installed } sc body;
+      is "a `With`" body.ty
+  | Handler { ev; captures; body } -> (
+      List.iter (in_scope env sc loc) captures;
+      (* like a lambda's, its body sees only what it captures, and its own
+         evidence: what's installed where it's installed *)
+      let inner = List.fold_left (fun sc v -> add v sc) Scope.empty captures in
+      match e.ty with
+      | Con (p, [ Uses needs ]) ->
+          (match (decl env loc p).body with
+          | Handler _ -> ()
+          | _ -> fail env loc (sprintf "`%s` isn't a handler" (Path.full p)));
+          expr (inside env loc "a handler's evidence" ev needs) inner body;
+          same env body.loc "a handler's body" body.ty e.ty
+      | t -> fail env loc (sprintf "a handler has type `%s`" (show t)))
+  | Instance impls -> (
+      match e.ty with
+      | Con (p, [ Uses needs ]) -> (
+          match (decl env loc p).body with
+          | Handler deps when deps = List.map fst impls ->
+              List.iter
+                (fun (d, (i : expr)) ->
+                  expr env sc i;
+                  same env i.loc
+                    ("the implementation of `" ^ d.Path.name ^ "`")
+                    i.ty
+                    (Con (d, [ Uses needs ])))
+                impls
+          | _ ->
+              fail env loc
+                (sprintf "an instance doesn't implement what `%s` does"
+                   (Path.full p)))
+      | t -> fail env loc (sprintf "an instance has type `%s`" (show t)))
+  | With_handler { ev; outer; handler; deps; body } ->
+      let what = "installing a handler" in
+      current env loc what outer;
+      is_evidence env loc what ev;
+      expr env sc handler;
+      (* what it needs, it needs here *)
+      (match handler.ty with
+      | Con (p, [ Uses needs ]) -> (
+          match (decl env loc p).body with
+          | Handler ds when ds = deps ->
+              List.iter
+                (fun (l : Ty.label) ->
+                  available env loc what (Ty.dep_path l.name))
+                needs.labels
+          | _ ->
+              fail env loc
+                (sprintf "`%s` doesn't implement what's installed" (Path.full p))
+          )
+      | t ->
+          fail env handler.loc
+            (sprintf "what's installed has type `%s`, but should be a handler"
+               (show t)));
+      expr { env with ev = Some ev; installed = deps @ env.installed } sc body;
       is "a `With`" body.ty
   | Prim (op, args) -> prim env sc e op args
   | Let (v, value, body) ->
@@ -596,8 +651,19 @@ and prim env sc (e : expr) op args =
       int i;
       same env v.loc "a new element" v.ty (elem a);
       is "an updated array" a.ty
+  | New_cell, [ v ] -> is "a new cell" (cell_ty v.ty)
+  | Get_cell, [ c ] -> is "what a cell holds" (held env c)
+  | Set_cell, [ c; v ] ->
+      same env v.loc "what's put in a cell" v.ty (held env c);
+      is "changing a cell" Ty.unit
   | _ ->
       fail env loc ("`" ^ show_prim op ^ "` with the wrong number of operands")
+
+(* The type of what the cell [c] holds. *)
+and held env (c : expr) =
+  match c.ty with
+  | Con (p, [ t ]) when p = Path.prelude "$Cell" -> t
+  | t -> fail env c.loc (sprintf "a cell operation on a `%s`" (show t))
 
 (* Check [p] against the type [t] of what it matches; the scope it binds. *)
 and pattern env sc (p : pattern) t =
@@ -675,6 +741,9 @@ let rec globals (e : expr) =
   | Dep_call { args = es; _ } ->
       List.concat_map globals es
   | With { impl; body; _ } -> globals impl @ globals body
+  | With_handler { handler; body; _ } -> globals handler @ globals body
+  | Instance impls -> List.concat_map (fun (_, i) -> globals i) impls
+  | Handler { body; _ } -> globals body
   | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
     ->
       globals a @ globals b
@@ -766,7 +835,7 @@ let program ~imports ~linked (prog : program) =
       List.iter
         (fun (td : Iface.type_decl) ->
           match td.body with
-          | Dep _ -> Hashtbl.replace env.types td.path td
+          | Dep _ | Handler _ -> Hashtbl.replace env.types td.path td
           | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> ())
         m.types)
     linked;
