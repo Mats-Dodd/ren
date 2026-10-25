@@ -37,7 +37,7 @@ type t = {
 val type_name : t -> Path.t -> string
 
 (* How the module writes the top-level function or value [p]: bare if
-   it's its own or the prelude's, `alias.f` if not, and an ops item after
+   it's its own or the prelude's, `alias.f` if not, and a member after
    its type, as [type_name] writes that: `Stack.of`. *)
 val value_name : t -> Path.t -> string
 

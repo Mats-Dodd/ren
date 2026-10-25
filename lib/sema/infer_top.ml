@@ -367,7 +367,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             (of_scheme st v.scheme))
         iface.values)
     imports;
-  (* and the ops items of every type the module can meet, which it can
+  (* and the members of every type the module can meet, which it can
      call with a dot; an associated value is a function of no parameters,
      as in its own module (ast.ml) *)
   List.iter
@@ -382,7 +382,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             td.ops)
         iface.types)
     reachable;
-  (* the module's functions, its types' ops items included; an associated
+  (* the module's functions, its types' members included; an associated
      value is checked as a function of no parameters (ast.ml) *)
   let fns = Ast.functions r.prog in
   (* a method whose signature is written out in full has the type its

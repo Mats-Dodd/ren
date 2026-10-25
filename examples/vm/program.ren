@@ -6,21 +6,20 @@
 import op.{Op}
 
 pub type Program = opaque Array<Op>
-  ops =
-    // the program that does nothing
-    pub let halt: Program = [Halt]
+  // the program that does nothing
+  pub let halt: Program = [Halt]
 
-    pub fn check(ops: Array<Op>) -> Option<Program> =
-      if ops.len() == 0 then None
-      else if ops[ops.len() - 1] != Halt then None
-      else if lands(ops) then Some(ops)
-      else None
+  pub fn check(ops: Array<Op>) -> Option<Program> =
+    if ops.len() == 0 then None
+    else if ops[ops.len() - 1] != Halt then None
+    else if lands(ops) then Some(ops)
+    else None
 
-    // the instruction at `pc`; past the end, there's nothing left to do
-    pub fn at(self, pc: Int) -> Op =
-      if pc < self.len() then self[pc] else Halt
+  // the instruction at `pc`; past the end, there's nothing left to do
+  pub fn at(self, pc: Int) -> Op =
+    if pc < self.len() then self[pc] else Halt
 
-    pub fn size(self) -> Int = self.len()
+  pub fn size(self) -> Int = self.len()
 
 // Does every jump land inside the program?
 fn lands(ops: Array<Op>) -> Bool =

@@ -23,7 +23,7 @@ type tyname = {
 }
 
 (* A name used as a value, as the parser read it: a bare name, `x` or
-   `double`, or an item of a type's `ops` block written after its type,
+   `double`, or a member of a type written after its type,
    `Stack.of` or `stack.Stack.of`. Resolve finds the type through scope,
    and the item in its declaration. *)
 type vname = Bare of string | Item of tyname * ident
@@ -85,8 +85,8 @@ and ('v, 'b, 't) expr_kind =
   | Bool of bool
   | Unit  (** [()] *)
   | Var of 'v
-      (** a local variable, a top-level function, or an ops item written after
-          its type, [Stack.of] *)
+      (** a local variable, a top-level function, or a member written after its
+          type, [Stack.of] *)
   | Unop of unop * ('v, 'b, 't) expr
   | Binop of binop * ('v, 'b, 't) expr * ('v, 'b, 't) expr
   | If of ('v, 'b, 't) expr * ('v, 'b, 't) expr * ('v, 'b, 't) expr option
@@ -157,14 +157,13 @@ type ('v, 'b, 't) fn_def = {
   loc : Loc.t;
 }
 
-(* An item of a type's `ops` block (module-build.md, "Methods and operators
+(* A member of a type (module-build.md, "Methods and operators
    live on the type"):
 
      pub type Stack<T> = { items: Array<T> }
-       ops =
-         pub fn push(inout self, x: T) = &self.items.push(x)
-         pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
-         pub let empty: Stack<T> = Stack { items: [] }
+       pub fn push(inout self, x: T) = &self.items.push(x)
+       pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
+       pub let empty: Stack<T> = Stack { items: [] }
 
    A function whose first parameter is `self` is a method; one without is
    an associated function, `Stack.of(...)`. An associated value, `let`, is
@@ -184,7 +183,7 @@ type ('v, 'b, 't) type_def = {
   type_name : ident;
   type_params : ident list;  (** the [T] in [Option<T>] *)
   type_body : 't type_body;
-  type_ops : ('v, 'b, 't) op list;  (** its `ops` block, in source order *)
+  type_ops : ('v, 'b, 't) op list;  (** its members, in source order *)
 }
 
 (* An import, at the top of a file: `import billing/stripe`,
@@ -210,7 +209,7 @@ type ('v, 'b, 't) item =
 
 type ('v, 'b, 't) program = ('v, 'b, 't) item list
 
-(* Every function of a program, the items of its types' `ops` blocks
+(* Every function of a program, its types' members
    included, in source order. *)
 let functions (prog : ('v, 'b, 't) program) =
   List.concat_map
@@ -237,7 +236,7 @@ let changed_receiver (e : ('v, 'b, 't) expr) =
   | Ref ({ kind = Call _; _ } as call) -> Some call
   | _ -> None
 
-(* An ops item's name as it's written: `push` for `Stack.push`. *)
+(* A member's name as it's written: `push` for `Stack.push`. *)
 let short_name name =
   match String.rindex_opt name '.' with
   | Some i -> String.sub name (i + 1) (String.length name - i - 1)
@@ -271,7 +270,7 @@ and bound =
 type name =
   | Local of binder
   | Global of Path.t
-      (** a top-level function, or a function of a type's `ops` block:
+      (** a top-level function, or a function among a type's members:
           [Stack.push] *)
   | Global_value of Path.t
       (** an associated value, [Stack.empty]: made once, when the program starts
@@ -467,7 +466,7 @@ let show_type_def (td : type_def) =
   let ops =
     match td.type_ops with
     | [] -> []
-    | os -> [ parens ("ops" :: List.map show_op os) ]
+    | os -> [ parens ("members" :: List.map show_op os) ]
   in
   parens
     ((if td.type_pub then [ "pub" ] else []) @ ("type" :: name :: body) @ ops)

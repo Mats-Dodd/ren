@@ -14,7 +14,7 @@
      (`import rows.{Row}`), or one written with its module's alias,
      `rows.Row`. Or it's one of the type parameters in scope. A constructor
      written after its type, `Light.Red`, gets that type's path.
-   - each item of a type's `ops` block is resolved as a function named
+   - each member of a type is resolved as a function named
      after its type, `Stack.push`, with the type's parameters in scope and
      `self`, its first parameter if it's a method, of the type (ast.ml).
      An item written after its type, `Stack.of` or `stack.Stack.empty`, is
@@ -26,7 +26,7 @@
    wrong number of arguments, names declared twice, a local or function
    with the name of an imported module, public declarations that
    mention a private type, opaque types represented as themselves, and
-   `self` anywhere but first in a method; in an `ops` block, two items
+   `self` anywhere but first in a method; among a type's members, two
    with the same name, or an item with a field's name; and an item written
    after a type that doesn't have it, `Stack.grow`, or has it privately,
    in another module.
@@ -100,7 +100,7 @@ let type_name (r : t) (p : Path.t) =
 
 (* How module [r] writes the top-level function or value [p]: bare if it's
    its own or the prelude's; with its module's alias in front,
-   `util.double`, if not; and an ops item after its type, written as
+   `util.double`, if not; and a member after its type, written as
    [type_name] writes it, `Stack.of` or `stack.Stack.of`. *)
 let value_name (r : t) (p : Path.t) =
   match String.index_opt p.name '.' with
@@ -129,8 +129,8 @@ type env = {
   ifaces : Iface.t list;
       (** the interfaces of every module it imports, the prelude's included *)
   own_ops : (string, (string * Iface.op_kind) list * string list) Hashtbl.t;
-      (** the `ops` items of each of the module's own types, by the type's name,
-          in source order, and its fields *)
+      (** the members of each of the module's own types, by the type's name, in
+          source order, and its fields *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
   used : (string, unit) Hashtbl.t;  (** the aliases used *)
   used_types : (Path.t, unit) Hashtbl.t;
@@ -191,7 +191,7 @@ let not_an_alias env (id : ident) =
 let not_self env ~help (p : Parsed.param) =
   if p.pname.name = "self" then
     report env p.pname.loc ~help
-      "`self` is only a parameter of a method, in an `ops` block"
+      "`self` is only a parameter of a method, declared under its type"
 
 let bind env sc (id : ident) bound =
   not_an_alias env id;
@@ -341,15 +341,13 @@ let qualified env sc ((i : import), (iface : Iface.t)) (f : ident) =
   else sc.fn.calls <- p :: sc.fn.calls;
   Global p
 
-(* The ops item [f] of the type [t], written `Stack.of`, or with the type's
+(* The member [f] of the type [t], written `Stack.of`, or with the type's
    module in front, `stack.Stack.of`: the type is found through scope, and
    the item in its declaration. Another module's type lists only its public
    items, so a private one can't be told apart from one that doesn't
    exist. An associated value is a [Global_value]; the rest are functions. *)
 let item env sc (t : tyname) (f : ident) =
-  match
-    declared_type env ~params:sc.tparams ~what:"it has no `ops` items" t
-  with
+  match declared_type env ~params:sc.tparams ~what:"it has no members" t with
   | None -> Global (Path.make env.home f.name)
   | Some { tref = Param _; _ } ->
       (* [declared_type] gives only a declared type *)
@@ -399,14 +397,14 @@ let item env sc (t : tyname) (f : ident) =
                        "`%s` is a field, so it's read from a value, like `x.%s`"
                        f.name f.name)
               | [] when p.home = env.home ->
-                  Some (sprintf "declare it in `%s`'s `ops` block" shown)
+                  Some (sprintf "declare it under `type %s`" shown)
               | [] -> None
               | _ ->
                   Some
-                    (sprintf "its `ops` items: %s"
+                    (sprintf "its members: %s"
                        (String.concat ", "
                           (List.map (fun (n, _) -> sprintf "`%s`" n) items))))
-            (sprintf "`%s` has no `ops` item named `%s`" shown f.name);
+            (sprintf "`%s` has no member named `%s`" shown f.name);
           Global path)
 
 (* What the name [x] refers to. [what] words the error when it's nothing:
@@ -432,8 +430,8 @@ let lookup env sc loc ~what x =
           | [] when x = "self" ->
               report env loc
                 ~help:
-                  "make `self` the first parameter, of a function in its \
-                   type's `ops` block"
+                  "make `self` the first parameter of a function declared \
+                   under its type"
                 "there's no `self` here: only a method has one"
           | [] -> (
               (* `len(xs)`: a built-in type's method, called the old way *)
@@ -524,7 +522,7 @@ let rec pattern env sc (p : Parsed.pattern) : Resolved.pattern * scope =
   ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
 
 (* `Stack.of`, which the parser reads as the field `of` of a constructor
-   `Stack`, is an item of the type's `ops` block when `Stack` names a type.
+   `Stack`, is a member of the type when `Stack` names a type.
    Otherwise it is what it was read as: `Admin.rank`, a method of the
    constructor `Admin`. *)
 let as_item env sc (e : Parsed.expr) : Parsed.expr =
@@ -739,8 +737,8 @@ let uses env (deps : ident list) =
         | None -> Hashtbl.replace seen d.name d.loc)
     deps
 
-(* A function: a top-level one, or, with [owner], an item of that type's
-   `ops` block. An ops item has the type's parameters in scope, before its
+(* A function: a top-level one, or, with [owner], one of that type's
+   members. A member has the type's parameters in scope, before its
    own, and is named after the type, `Stack.push` (ast.ml); its first
    parameter can be `self`, which has the type, `Stack<T>`. `self` is no
    other parameter. *)
@@ -764,8 +762,8 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
         | None, _ ->
             not_self env p
               ~help:
-                "choose another name, or move the function into its type's \
-                 `ops` block to make it a method"
+                "choose another name, or move the function under its type, \
+                 indented, to make it a method"
         | Some _, 0 -> ()
         | Some _, _ ->
             report env p.pname.loc ~help:"move it to the front"
@@ -777,7 +775,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
                  td.type_name.name)
         | _ -> ()))
     f.params;
-  (* where `self` is written, if it's the first parameter of an ops item,
+  (* where `self` is written, if it's the first parameter of a member,
      and so has the type *)
   let self =
     match (owner, f.params) with
@@ -827,7 +825,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     List.sort_uniq compare sc.fn.calls,
     List.sort_uniq compare sc.fn.dots )
 
-(* A type declaration, and its ops block: each item resolved as a
+(* A type declaration, and its members: each item resolved as a
    function (see [fn_def]), with the top-level functions it uses and the
    names it calls with a dot. *)
 let type_def env (td : Parsed.type_def) :
@@ -872,7 +870,7 @@ let type_def env (td : Parsed.type_def) :
       | Some first ->
           report env id.loc ~help:"rename one of them"
             ~labels:[ (first, sprintf "the first `%s` is here" id.name) ]
-            (sprintf "`%s` has two `ops` items named `%s`" tname id.name)
+            (sprintf "`%s` has two members named `%s`" tname id.name)
       | None -> Hashtbl.replace seen id.name id.loc)
     td.type_ops;
   (match td.type_body with

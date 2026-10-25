@@ -5,7 +5,7 @@
    asking, and each module it imports (driver.ml).
 
    An interface holds a module's public types, with their constructors,
-   fields and public `ops` items, and the type scheme of each of its
+   fields and public members, and the type scheme of each of its
    public functions, all in
    canonical form (ty.ml). Nothing private is in it: a dependent can't
    tell a private name from one that doesn't exist, and changing one can't
@@ -28,7 +28,7 @@ type body =
           [Some] representation; its interface has [None], so no other module
           can make one, look inside one or use one as an [Int]. *)
 
-(* An item of a type's `ops` block (ast.ml): a method, which has `self`,
+(* A member of a type (ast.ml): a method, which has `self`,
    an associated function, which doesn't, or an associated value. *)
 type op_kind = Method | Function | Value
 
@@ -49,8 +49,8 @@ type type_decl = {
       *)
   body : body;
   ops : op list;
-      (** its `ops` block, in source order: every item in its own module's view
-          of it, only the public ones in its interface *)
+      (** its members, in source order: every item in its own module's view of
+          it, only the public ones in its interface *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
@@ -182,7 +182,7 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
 
 (* The interface of module [home], from its declarations alone, never its
    bodies (module-build.md, "Interface summaries"): every public type it
-   declares, with its public `ops` items, and the signature of every
+   declares, with its public members, and the signature of every
    public function. A public one
    never mentions a private one (resolve.ml checks), so a dependent never
    meets a type that isn't in some interface. An opaque type is listed

@@ -223,7 +223,7 @@ and show_effects pr e u =
    (as `..e` / `..d`) only when it reaches the result; otherwise the
    parameter is transparent and the tail implied.
 
-   An item of a type's `ops` block is printed under its type, so [outer]
+   A member of a type is printed under its type, so [outer]
    are the type's parameters, which aren't the function's own and aren't
    listed after its name, and `self` is printed without its type, which is
    always the type's. *)

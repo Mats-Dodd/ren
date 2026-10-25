@@ -390,9 +390,7 @@ let no_method (m : Ast.ident) ~shown ~own ~type_name methods =
     match methods with
     | _ :: _ -> Some (sprintf "its methods: %s" (quote methods))
     | [] when own ->
-        Some
-          (sprintf "declare it in `%s`'s `ops` block, with `self` first"
-             type_name)
+        Some (sprintf "declare it under `type %s`, with `self` first" type_name)
     | [] -> None
   in
   Diag.make m.loc ?help (sprintf "`%s` has no method named `%s`" shown m.name)

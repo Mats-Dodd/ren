@@ -421,7 +421,7 @@ let field_in name (td : Iface.type_decl) =
   Option.bind (record_fields td)
     (List.find_opt (fun (d : Iface.field) -> d.fname = name))
 
-(* What [name] is in the type [p], which has a field or an ops item of
+(* What [name] is in the type [p], which has a field or a member of
    that name, as an error says it: "a field", "a method", ... *)
 let member_kind env name p =
   match op_in name (Hashtbl.find env.types p) with
@@ -430,7 +430,7 @@ let member_kind env name p =
   | Some { okind = Value; _ } -> "an associated value"
   | None -> "a field"
 
-(* The ops item [name] of [t]'s type, if [t] is already known to be a
+(* The member [name] of [t]'s type, if [t] is already known to be a
    named type that has one. In its own module, an opaque type is also what
    it's represented as, so an item of that type is found too, if the
    opaque type has none of that name. *)
@@ -449,7 +449,7 @@ let rec op_of env t name =
           | None, None -> None))
   | _ -> None
 
-(* The function an ops item is: [Stack.push]. *)
+(* The function a member is: [Stack.push]. *)
 let op_path (td : Iface.type_decl) (o : Iface.op) =
   Path.make td.path.home (td.path.name ^ "." ^ o.oname)
 
@@ -862,7 +862,7 @@ and infer_call env cx ?changed (e : expr) (f : expr) args =
       in
       apply env cx e ~name f tf args
 
-(* `r.m(args)`, the call [e] of [f], where [m] is the ops item [o] of
+(* `r.m(args)`, the call [e] of [f], where [m] is the member [o] of
    [r]'s type [td]: a method is called with [r] as its `self`. [tr] is
    [r]'s type. *)
 and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
@@ -1173,7 +1173,7 @@ and field_access env cx (e : expr) r tr (f : ident) =
           | Nowhere
             when List.exists (fun td -> op_in f.name td <> None) env.visible
             -> (
-              (* not a field, but an ops item: once [r] is known to have
+              (* not a field, but a member: once [r] is known to have
                  its type, the first case says which kind, and how to use it *)
               match through_type env ~known:None ~fits:(op_in f.name) with
               | Found (td, _) ->

@@ -21,8 +21,7 @@ let sprintf = Printf.sprintf
 type env = {
   types : (Path.t, Iface.type_decl) Hashtbl.t;
   schemes : (Path.t, Ty.scheme) Hashtbl.t;
-      (** every top-level function, and every function of a type's `ops` block
-      *)
+      (** every top-level function, and every function among a type's members *)
   values : (Path.t, Ty.scheme) Hashtbl.t;
       (** every associated value's type, as a scheme *)
   fn : string;  (** the function being checked *)

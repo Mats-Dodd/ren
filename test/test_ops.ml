@@ -1,5 +1,5 @@
-(* A type's `ops` block: its methods, associated functions and associated
-   values, declared under the type, and called: `s.push(1)` through the
+(* A type's members: its methods, associated functions and associated
+   values, declared directly under the type, and called: `s.push(1)` through the
    receiver's type, `Stack.of(...)` and `Stack.empty` after the type
    (module-build.md, "Methods and operators live on the type"). *)
 
@@ -9,21 +9,20 @@ let stack =
   ( "stack.ren",
     {|
 pub type Stack<T> = { items: Array<T> }
-  ops =
-    pub fn push(inout self, x: T) = &self.items.push(x)
-    pub fn peek(self) -> Option<T> =
-      let n = self.items.len()
-      if n == 0 then None else Some(self.items[n - 1])
-    pub fn size(self) -> Int = self.items.len()
-    pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
-    pub let empty: Stack<T> = Stack { items: [] }
-    fn grow(inout self) =
-      let first = self.items[0]
-      &self.items.push(first)
+  pub fn push(inout self, x: T) = &self.items.push(x)
+  pub fn peek(self) -> Option<T> =
+    let n = self.items.len()
+    if n == 0 then None else Some(self.items[n - 1])
+  pub fn size(self) -> Int = self.items.len()
+  pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
+  pub let empty: Stack<T> = Stack { items: [] }
+  fn grow(inout self) =
+    let first = self.items[0]
+    &self.items.push(first)
 |}
   )
 
-let%expect_test "`ren types` shows a type's ops under it" =
+let%expect_test "`ren types` shows a type's members under it" =
   types_files
     [
       ("main.ren", {|
@@ -47,31 +46,30 @@ fn main() = Stack { items: [1] }
     fn main() -> Stack<Int>
     |}]
 
-let%expect_test "an ops block parses under its type" =
+let%expect_test "members parse under their type" =
   ast (snd stack);
   [%expect
-    {| (pub type Stack<T> (fields items:Array<T>) (ops (pub (fn push (self x) (& (call (. (. self items) push) x)))) (pub (fn peek (self) (block (let n (call (. (. self items) len))) (if (== n 0) (con None) (con Some (index (. self items) (- n 1))))))) (pub (fn size (self) (call (. (. self items) len)))) (pub (fn of (xs) (record Stack items=xs))) (pub let empty (record Stack items=(array))) ((fn grow (self) (block (let first (index (. self items) 0)) (& (call (. (. self items) push) first))))))) |}]
+    {| (pub type Stack<T> (fields items:Array<T>) (members (pub (fn push (self x) (& (call (. (. self items) push) x)))) (pub (fn peek (self) (block (let n (call (. (. self items) len))) (if (== n 0) (con None) (con Some (index (. self items) (- n 1))))))) (pub (fn size (self) (call (. (. self items) len)))) (pub (fn of (xs) (record Stack items=xs))) (pub let empty (record Stack items=(array))) ((fn grow (self) (block (let first (index (. self items) 0)) (& (call (. (. self items) push) first))))))) |}]
 
-let%expect_test "ops on a sum type and on an opaque type" =
+let%expect_test "members of a sum type and of an opaque type" =
   (* inside its module, an opaque type is what it's represented as, so
-     its ops can make one from an `Int` and give one back as an `Int` *)
+     its members can make one from an `Int` and give one back as an `Int` *)
   types
     {|
 type Light =
   | Red
   | Green
-  ops =
-    fn next(self) -> Light =
-      match self
-        Red => Green
-        Green => Red
-    fn all() = [Red, Green]
-    fn show(self) uses Io = print(self)
+
+  fn next(self) -> Light =
+    match self
+      Red => Green
+      Green => Red
+  fn all() = [Red, Green]
+  fn show(self) uses Io = print(self)
 
 pub type UserId = opaque Int
-  ops =
-    pub fn new(n: Int) -> UserId = n
-    pub fn raw(self) -> Int = self
+  pub fn new(n: Int) -> UserId = n
+  pub fn raw(self) -> Int = self
 
 fn main() = 1
 |};
@@ -93,11 +91,10 @@ let%expect_test "a method's own type parameters, and inferred ones" =
   types
     {|
 type Box<T> = { value: T }
-  ops =
-    fn map<U>(self, f: fn(T) -> U) -> Box<U> = Box { value: f(self.value) }
-    fn with(self, x) = Box { value: x }
-    fn first(self, x) = x
-    let none = Box { value: None }
+  fn map<U>(self, f: fn(T) -> U) -> Box<U> = Box { value: f(self.value) }
+  fn with(self, x) = Box { value: x }
+  fn first(self, x) = x
+  let none = Box { value: None }
 
 fn main() = 1
 |};
@@ -111,7 +108,7 @@ fn main() = 1
     fn main() -> Int
     |}]
 
-let%expect_test "a type's interface holds its public ops items" =
+let%expect_test "a type's interface holds its public members" =
   let src = clean (snd stack) ^ "fn main() = 1\n" in
   let i = Ren.Driver.interface ~file:"stack.ren" src in
   List.iter
@@ -140,24 +137,23 @@ let%expect_test "operators are reserved for stage 9" =
   types
     {|
 type Vec = { x: Int, y: Int }
-  ops =
-    add(a, b) => Vec { x: a.x + b.x, y: a.y + b.y }
-    zero => Vec { x: 0, y: 0 }
+  add(a, b) => Vec { x: a.x + b.x, y: a.y + b.y }
+  zero => Vec { x: 0, y: 0 }
 
 fn main() = 1
 |};
   [%expect
     {|
     error: operators like `add` arrive in stage 9
-      ┌─ test.ren:3:5
-    3 │     add(a, b) => Vec { x: a.x + b.x, y: a.y + b.y }
-      │     ^^^
+      ┌─ test.ren:2:3
+    2 │   add(a, b) => Vec { x: a.x + b.x, y: a.y + b.y }
+      │   ^^^
       help: for now, write a method: `fn add(self, ...) = ...`
 
     error: operators like `zero` arrive in stage 9
-      ┌─ test.ren:4:5
-    4 │     zero => Vec { x: 0, y: 0 }
-      │     ^^^^
+      ┌─ test.ren:3:3
+    3 │   zero => Vec { x: 0, y: 0 }
+      │   ^^^^
       help: for now, write an associated value: `let zero = ...`
     |}]
 
@@ -165,10 +161,9 @@ let%expect_test "`self` is only a method's first parameter" =
   types
     {|
 type Stack = { items: Array<Int> }
-  ops =
-    fn swap(x: Int, self) = x
-    fn typed(self: Stack) = 1
-    fn of() = self
+  fn swap(x: Int, self) = x
+  fn typed(self: Stack) = 1
+  fn of() = self
 
 fn top(self) = 1
 fn main() = fn(self) => 1
@@ -176,32 +171,32 @@ fn main() = fn(self) => 1
   [%expect
     {|
     error: `self` has to be the first parameter
-      ┌─ test.ren:3:21
-    3 │     fn swap(x: Int, self) = x
-      │                     ^^^^
+      ┌─ test.ren:2:19
+    2 │   fn swap(x: Int, self) = x
+      │                   ^^^^
       help: move it to the front
 
     error: `self` is always a `Stack`, so its type isn't written
-      ┌─ test.ren:4:20
-    4 │     fn typed(self: Stack) = 1
-      │                    ^^^^^
+      ┌─ test.ren:3:18
+    3 │   fn typed(self: Stack) = 1
+      │                  ^^^^^
       help: remove the type
 
     error: there's no `self` here: only a method has one
-      ┌─ test.ren:5:15
-    5 │     fn of() = self
-      │               ^^^^
-      help: make `self` the first parameter, of a function in its type's `ops` block
+      ┌─ test.ren:4:13
+    4 │   fn of() = self
+      │             ^^^^
+      help: make `self` the first parameter of a function declared under its type
 
-    error: `self` is only a parameter of a method, in an `ops` block
-      ┌─ test.ren:7:8
-    7 │ fn top(self) = 1
+    error: `self` is only a parameter of a method, declared under its type
+      ┌─ test.ren:6:8
+    6 │ fn top(self) = 1
       │        ^^^^
-      help: choose another name, or move the function into its type's `ops` block to make it a method
+      help: choose another name, or move the function under its type, indented, to make it a method
 
-    error: `self` is only a parameter of a method, in an `ops` block
-      ┌─ test.ren:8:16
-    8 │ fn main() = fn(self) => 1
+    error: `self` is only a parameter of a method, declared under its type
+      ┌─ test.ren:7:16
+    7 │ fn main() = fn(self) => 1
       │                ^^^^
       help: choose another name
     |}]
@@ -221,59 +216,58 @@ fn main() =
       help: choose another name
     |}]
 
-let%expect_test "an ops item has a name of its own" =
+let%expect_test "a member has a name of its own" =
   types
     {|
 type Stack = { items: Array<Int>, size: Int }
-  ops =
-    fn items(self) = self.items
-    fn top(self) = 1
-    fn top(self) = 2
-    fn size() = 3
-    let size = 4
+  fn items(self) = self.items
+  fn top(self) = 1
+  fn top(self) = 2
+  fn size() = 3
+  let size = 4
 
 fn main() = 1
 |};
   [%expect
     {|
     error: `Stack` has a field and a method both named `items`
-      ┌─ test.ren:3:8
+      ┌─ test.ren:2:6
     1 │ type Stack = { items: Array<Int>, size: Int }
       │                ----- the field `items` is here
-    3 │     fn items(self) = self.items
-      │        ^^^^^
+    2 │   fn items(self) = self.items
+      │      ^^^^^
       help: rename one of them
 
-    error: `Stack` has two `ops` items named `top`
-      ┌─ test.ren:5:8
-    4 │     fn top(self) = 1
-      │        --- the first `top` is here
-    5 │     fn top(self) = 2
-      │        ^^^
+    error: `Stack` has two members named `top`
+      ┌─ test.ren:4:6
+    3 │   fn top(self) = 1
+      │      --- the first `top` is here
+    4 │   fn top(self) = 2
+      │      ^^^
       help: rename one of them
 
     error: `Stack` has a field and an associated function both named `size`
-      ┌─ test.ren:6:8
+      ┌─ test.ren:5:6
     1 │ type Stack = { items: Array<Int>, size: Int }
       │                                   ---- the field `size` is here
-    6 │     fn size() = 3
-      │        ^^^^
+    5 │   fn size() = 3
+      │      ^^^^
       help: rename one of them
 
-    error: `Stack` has two `ops` items named `size`
-      ┌─ test.ren:7:9
-    6 │     fn size() = 3
-      │        ---- the first `size` is here
-    7 │     let size = 4
-      │         ^^^^
+    error: `Stack` has two members named `size`
+      ┌─ test.ren:6:7
+    5 │   fn size() = 3
+      │      ---- the first `size` is here
+    6 │   let size = 4
+      │       ^^^^
       help: rename one of them
 
     error: `Stack` has a field and an associated value both named `size`
-      ┌─ test.ren:7:9
+      ┌─ test.ren:6:7
     1 │ type Stack = { items: Array<Int>, size: Int }
       │                                   ---- the field `size` is here
-    7 │     let size = 4
-      │         ^^^^
+    6 │   let size = 4
+      │       ^^^^
       help: rename one of them
     |}]
 
@@ -281,19 +275,18 @@ let%expect_test "a method's type parameter can't hide its type's" =
   types
     {|
 type Box<T> = { value: T }
-  ops =
-    fn map<T>(self, f: fn(T) -> T) -> Box<T> = Box { value: f(self.value) }
+  fn map<T>(self, f: fn(T) -> T) -> Box<T> = Box { value: f(self.value) }
 
 fn main() = 1
 |};
   [%expect
     {|
     error: there are two type parameters named `T`
-      ┌─ test.ren:3:12
+      ┌─ test.ren:2:10
     1 │ type Box<T> = { value: T }
       │          - the first `T` is here
-    3 │     fn map<T>(self, f: fn(T) -> T) -> Box<T> = Box { value: f(self.value) }
-      │            ^
+    2 │   fn map<T>(self, f: fn(T) -> T) -> Box<T> = Box { value: f(self.value) }
+      │          ^
       help: rename one of them
     |}]
 
@@ -301,44 +294,42 @@ let%expect_test "a public item spells out its signature" =
   types
     {|
 pub type Stack = { items: Array<Int> }
-  ops =
-    pub fn push(inout self, x) = &self.items.push(x)
-    pub fn size(self) = self.items.len()
-    pub let empty = Stack { items: [] }
+  pub fn push(inout self, x) = &self.items.push(x)
+  pub fn size(self) = self.items.len()
+  pub let empty = Stack { items: [] }
 
 pub type Box<T> = { items: Array<T> }
-  ops =
-    pub let empty = Box { items: [] }
+  pub let empty = Box { items: [] }
 
 fn main() = 1
 |};
   [%expect
     {|
     error: the parameter `x` of the public function `Stack.push` has no type
-      ┌─ test.ren:3:29
-    3 │     pub fn push(inout self, x) = &self.items.push(x)
-      │                             ^
+      ┌─ test.ren:2:27
+    2 │   pub fn push(inout self, x) = &self.items.push(x)
+      │                           ^
       = public functions spell out their full signature
       help: write `x: Int`
 
     error: expected `Unit`, found `Int`
-      ┌─ test.ren:4:25
-    4 │     pub fn size(self) = self.items.len()
-      │                         ^^^^^^^^^^^^^^^^
+      ┌─ test.ren:3:23
+    3 │   pub fn size(self) = self.items.len()
+      │                       ^^^^^^^^^^^^^^^^
       = a public function without `->` returns `Unit`
       help: add `-> Int` to the signature
 
     error: the public value `Stack.empty` has no type
-      ┌─ test.ren:5:13
-    5 │     pub let empty = Stack { items: [] }
-      │             ^^^^^
+      ┌─ test.ren:4:11
+    4 │   pub let empty = Stack { items: [] }
+      │           ^^^^^
       = public values spell out their type
       help: write `pub let empty: Stack`
 
     error: the public value `Box.empty` has no type
-      ┌─ test.ren:9:13
-    9 │     pub let empty = Box { items: [] }
-      │             ^^^^^
+      ┌─ test.ren:7:11
+    7 │   pub let empty = Box { items: [] }
+      │           ^^^^^
       = public values spell out their type
       help: write `pub let empty: Box<T>`
     |}]
@@ -349,70 +340,122 @@ let%expect_test "a public type's public items can't mention a private type" =
 type Secret = { code: Int }
 
 pub type Vault = { size: Int }
-  ops =
-    pub fn open(self) -> Secret = Secret { code: self.size }
-    pub let hidden: Option<Secret> = None
-    fn peek(self) -> Secret = Secret { code: 0 }
+  pub fn open(self) -> Secret = Secret { code: self.size }
+  pub let hidden: Option<Secret> = None
+  fn peek(self) -> Secret = Secret { code: 0 }
 
 fn main() = 1
 |};
   [%expect
     {|
     error: `pub fn Vault.open` returns `Secret`, which is private to this module
-      ┌─ test.ren:5:26
+      ┌─ test.ren:4:24
     1 │ type Secret = { code: Int }
       │      ------ `Secret` is declared here, without `pub`
-    5 │     pub fn open(self) -> Secret = Secret { code: self.size }
-      │                          ^^^^^^
+    4 │   pub fn open(self) -> Secret = Secret { code: self.size }
+      │                        ^^^^^^
       help: mark `Secret` `pub`
 
     error: `pub let Vault.hidden`'s type mentions `Secret`, which is private to this module
-      ┌─ test.ren:6:28
+      ┌─ test.ren:5:26
     1 │ type Secret = { code: Int }
       │      ------ `Secret` is declared here, without `pub`
-    6 │     pub let hidden: Option<Secret> = None
-      │                            ^^^^^^
+    5 │   pub let hidden: Option<Secret> = None
+      │                          ^^^^^^
       help: mark `Secret` `pub`
     |}]
 
-let%expect_test "an ops block holds functions and values" =
+let%expect_test "a type's members are functions and values" =
   types {|
 type Counter = { n: Int }
-  ops =
-    var count = 0
-
-fn main() = 1
-|};
-  types
-    {|
-type Counter = { n: Int }
-  ops =
-    type Inner = { m: Int }
+  var count = 0
 
 fn main() = 1
 |};
   types {|
 type Counter = { n: Int }
-  ops = 1
+  type Inner = { m: Int }
 
 fn main() = 1
 |};
   [%expect
     {|
     error: an associated value can't be a `var`: it's made once, and never changes
-      ┌─ test.ren:3:5
-    3 │     var count = 0
-      │     ^^^
+      ┌─ test.ren:2:3
+    2 │   var count = 0
+      │   ^^^
       help: write `let`
-    error: expected `fn`, `let` or an operator, in the `ops` block, found `type`
-      ┌─ test.ren:3:5
-    3 │     type Inner = { m: Int }
-      │     ^^^^
-    error: expected the items of the `ops` block, found the number `1`
-      ┌─ test.ren:2:9
-    2 │   ops = 1
-      │         ^
-      help: put each item on its own line, indented under `ops =`
+    error: expected `fn`, `let` or an operator, in `Counter`'s members, found `type`
+      ┌─ test.ren:2:3
+    2 │   type Inner = { m: Int }
+      │   ^^^^
+    |}]
+
+let%expect_test "a sum type's variants end at its first member" =
+  (* a blank line between them is conventional, not needed *)
+  types
+    {|
+type Light =
+  | Red
+  | Green
+  fn next(self) -> Light =
+    match self
+      Red => Green
+      Green => Red
+
+fn main() = Red.next()
+|};
+  types {|
+type Light =
+  | Red
+  Green
+  fn next(self) = self
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    type Light
+      fn next(self) -> Light
+    fn main() -> Light
+    error: expected `fn`, `let` or an operator, in `Light`'s members, found `Green`
+      ┌─ test.ren:3:3
+    3 │   Green
+      │   ^^^^^
+      help: a variant starts with `|`, and the variants come first
+    |}]
+
+let%expect_test "a leftover `ops =` line says what changed" =
+  types
+    {|
+type Counter = { n: Int }
+  ops =
+    fn get(self) -> Int = self.n
+
+fn main() = 1
+|};
+  types
+    {|
+type Light =
+  | Red
+  | Green
+  ops =
+    fn next(self) = self
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `ops =` is gone: a type's methods go directly under it
+      ┌─ test.ren:2:3
+    2 │   ops =
+      │   ^^^
+      help: delete this line and indent what was under it one level less
+    error: `ops =` is gone: a type's methods go directly under it
+      ┌─ test.ren:4:3
+    4 │   ops =
+      │   ^^^
+      help: delete this line and indent what was under it one level less
     |}]
 
 (* ---- calling ----
@@ -456,14 +499,12 @@ let%expect_test "a method call is a call of the type's function" =
   core
     {|
 type Counter = { n: Int }
-  ops =
-    fn bump(inout self, by: Int) = self.n += by
-    fn get(self) -> Int = self.n
+  fn bump(inout self, by: Int) = self.n += by
+  fn get(self) -> Int = self.n
 
 type Pair = { left: Counter, right: Counter }
-  ops =
-    fn bump_left(inout self) = &self.left.bump(1)
-    let zero = Pair { left: Counter { n: 0 }, right: Counter { n: 0 } }
+  fn bump_left(inout self) = &self.left.bump(1)
+  let zero = Pair { left: Counter { n: 0 }, right: Counter { n: 0 } }
 
 fn main() =
   var p = Pair.zero
@@ -500,17 +541,16 @@ let%expect_test "methods inside their own module" =
 type Light =
   | Red
   | Green
-  ops =
-    fn next(self) -> Light =
-      match self
-        Red => Green
-        Green => Red
-    fn after(self, n: Int) -> Light =
-      if n == 0 then self else self.next().after(n - 1)
+
+  fn next(self) -> Light =
+    match self
+      Red => Green
+      Green => Red
+  fn after(self, n: Int) -> Light =
+    if n == 0 then self else self.next().after(n - 1)
 
 type Counter = { n: Int }
-  ops =
-    fn next(self) -> Counter = Counter { n: self.n + 1 }
+  fn next(self) -> Counter = Counter { n: self.n + 1 }
 
 fn main() uses Io =
   let c = Counter { n: 1 }
@@ -523,7 +563,7 @@ fn main() uses Io =
     ()
     |}]
 
-let%expect_test "an opaque type's API is its ops" =
+let%expect_test "an opaque type's API is its members" =
   run_files
     [
       ( "main.ren",
@@ -537,9 +577,8 @@ fn main() =
       ( "users.ren",
         {|
 pub type UserId = opaque Int
-  ops =
-    pub fn new(n: Int) -> UserId = n
-    pub fn raw(self) -> Int = self
+  pub fn new(n: Int) -> UserId = n
+  pub fn raw(self) -> Int = self
 |}
       );
     ];
@@ -551,11 +590,10 @@ let%expect_test "associated values are made in the order they need" =
   run
     {|
 type Box = { n: Int }
-  ops =
-    let b = Box { n: Box.a.n + 1 }
-    let c = Box.twice()
-    fn twice() -> Box = Box { n: Box.a.n * 2 }
-    let a = Box { n: 10 }
+  let b = Box { n: Box.a.n + 1 }
+  let c = Box.twice()
+  fn twice() -> Box = Box { n: Box.a.n * 2 }
+  let a = Box { n: 10 }
 
 fn main() = [Box.a.n, Box.b.n, Box.c.n]
 |};
@@ -566,8 +604,7 @@ let%expect_test "a receiver whose type isn't known yet" =
   types
     {|
 type Bag = { items: Array<Int> }
-  ops =
-    fn size(self) -> Int = self.items.len()
+  fn size(self) -> Int = self.items.len()
 
 fn count(b) = b.size()
 fn main() = count(Bag { items: [1] })
@@ -587,14 +624,12 @@ let%expect_test "methods of the same name on different types" =
   run
     {|
 type B = { m: Int }
-  ops =
-    fn size(self) -> Int = self.m
+  fn size(self) -> Int = self.m
 
 type A = { n: Int }
-  ops =
-    fn size(self) -> Int =
-      let b = B { m: 1 }
-      if pick(true, b) then pick(self.n, b) else 0
+  fn size(self) -> Int =
+    let b = B { m: 1 }
+    if pick(true, b) then pick(self.n, b) else 0
 
 fn pick(x, b: B) =
   let k = b.size()
@@ -613,16 +648,14 @@ fn pick(x, h) =
   x
 
 pub type B = { m: Int }
-  ops =
-    pub fn size(self) -> Int = self.m
+  pub fn size(self) -> Int = self.m
 
 pub type H = { b: B }
 
 pub type A = { n: Int }
-  ops =
-    pub fn size(self) -> Int =
-      let h = H { b: B { m: 1 } }
-      if pick(true, h) then pick(self.n, h) else 0
+  pub fn size(self) -> Int =
+    let h = H { b: B { m: 1 } }
+    if pick(true, h) then pick(self.n, h) else 0
 
 fn main() = A { n: 3 }.size()
 |};
@@ -638,13 +671,11 @@ let%expect_test "a dot call whose receiver's type is found by inference" =
   run
     {|
 type B = { m: Int }
-  ops =
-    fn size(self) -> Int = self.m
+  fn size(self) -> Int = self.m
 
 type A = { n: Int }
-  ops =
-    fn size(self) -> Int =
-      if pick(true) then pick(self.n) else 0
+  fn size(self) -> Int =
+    if pick(true) then pick(self.n) else 0
 
 fn mk() = B { m: 1 }
 
@@ -663,8 +694,7 @@ fn down(n) = mk(n - 1).count() + 1
 fn mk(n) = A { n: n }
 
 type A = { n: Int }
-  ops =
-    fn count(self) = if self.n == 0 then 0 else down(self.n)
+  fn count(self) = if self.n == 0 then 0 else down(self.n)
 
 fn main() = mk(3).count()
 |};
@@ -672,14 +702,12 @@ fn main() = mk(3).count()
   types
     {|
 type B = { m: Int }
-  ops =
-    fn size(self) -> Int = self.m
+  fn size(self) -> Int = self.m
 
 type A = { n: Int }
-  ops =
-    fn size(self) -> Int =
-      print(pick(self.n))
-      0
+  fn size(self) -> Int =
+    print(pick(self.n))
+    0
 
 fn mk() = B { m: 1 }
 
@@ -805,18 +833,17 @@ let%expect_test "`self` changes only with `inout self`" =
   run
     {|
 type C = { n: Int }
-  ops =
-    fn b(inout self) = self.n = 1
-    fn c(self) = &self.b()
+  fn b(inout self) = self.n = 1
+  fn c(self) = &self.b()
 
 fn main() = 1
 |};
   [%expect
     {|
     error: `self` is a parameter, so it can't be changed
-      ┌─ test.ren:4:19
-    4 │     fn c(self) = &self.b()
-      │                   ^^^^
+      ┌─ test.ren:3:17
+    3 │   fn c(self) = &self.b()
+      │                 ^^^^
       help: write `inout self` to change the caller's value, or copy it with `var s = self`
     |}]
 
@@ -824,8 +851,7 @@ let%expect_test "a changed receiver's call isn't a place" =
   run
     {|
 type C = { n: Int }
-  ops =
-    fn pop(inout self) -> Int = self.n
+  fn pop(inout self) -> Int = self.n
 
 fn take(inout x: Int) = x = 2
 
@@ -836,8 +862,8 @@ fn main() =
   [%expect
     {|
     error: `take` changes this argument, but `c.pop()` is a call's result, not something it can change
-      ┌─ test.ren:9:8
-    9 │   take(&c.pop())
+      ┌─ test.ren:8:8
+    8 │   take(&c.pop())
       │        ^^^^^^^^
       = the `&` in `&c.pop()` marks the receiver the call changes, not the argument
       help: put it in a `var` first, and pass that
@@ -847,8 +873,7 @@ let%expect_test "a changed receiver can't be another argument" =
   run
     {|
 type Bag = { items: Array<Int> }
-  ops =
-    fn add(inout self, other: Bag) = self.items = other.items
+  fn add(inout self, other: Bag) = self.items = other.items
 
 fn main() =
   var b = Bag { items: [1] }
@@ -858,8 +883,8 @@ fn main() =
   [%expect
     {|
     error: this call changes `b`, so no other argument can use it
-      ┌─ test.ren:8:10
-    8 │   &b.add(b)
+      ┌─ test.ren:7:10
+    7 │   &b.add(b)
       │          ^
       │    - passed with `&` here
       = an argument passed with `&` has to be the only way the call can reach that value
@@ -968,8 +993,7 @@ let%expect_test "a method that changes its receiver, not called" =
   run
     {|
 type C = { n: Int }
-  ops =
-    fn b(inout self) = self.n = 1
+  fn b(inout self) = self.n = 1
 
 fn main() =
   var c = C { n: 1 }
@@ -979,8 +1003,8 @@ fn main() =
   [%expect
     {|
     error: `b` is a method, so it has to be called
-      ┌─ test.ren:7:13
-    7 │   let f = c.b
+      ┌─ test.ren:6:13
+    6 │   let f = c.b
       │             ^
       help: write `&c.b()`, or use `C.b` as a function
     |}]
@@ -989,8 +1013,7 @@ let%expect_test "a type without the method" =
   run
     {|
 type Bag = { items: Array<Int> }
-  ops =
-    fn size(self) -> Int = self.items.len()
+  fn size(self) -> Int = self.items.len()
 
 type Empty = { n: Int }
 
@@ -1002,39 +1025,38 @@ fn main() =
   run
     {|
 type Bag = { items: Array<Int> }
-  ops =
-    fn size(self) -> Int = self.items.len()
+  fn size(self) -> Int = self.items.len()
 
 fn main() = [Bag.count(Bag { items: [] }), Bag.items]
 |};
   [%expect
     {|
     error: `Bag` has no method named `count`
-       ┌─ test.ren:10:6
-    10 │   [b.count(), e.count(), [1].count()]
-       │      ^^^^^
-       help: its methods: `size`
+      ┌─ test.ren:9:6
+    9 │   [b.count(), e.count(), [1].count()]
+      │      ^^^^^
+      help: its methods: `size`
 
     error: `Empty` has no method named `count`
-       ┌─ test.ren:10:17
-    10 │   [b.count(), e.count(), [1].count()]
-       │                 ^^^^^
-       help: declare it in `Empty`'s `ops` block, with `self` first
+      ┌─ test.ren:9:17
+    9 │   [b.count(), e.count(), [1].count()]
+      │                 ^^^^^
+      help: declare it under `type Empty`, with `self` first
 
     error: `Array<Int>` has no method named `count`
-       ┌─ test.ren:10:30
-    10 │   [b.count(), e.count(), [1].count()]
-       │                              ^^^^^
-       help: its methods: `len`, `push`
-    error: `Bag` has no `ops` item named `count`
-      ┌─ test.ren:5:18
-    5 │ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
+      ┌─ test.ren:9:30
+    9 │   [b.count(), e.count(), [1].count()]
+      │                              ^^^^^
+      help: its methods: `len`, `push`
+    error: `Bag` has no member named `count`
+      ┌─ test.ren:4:18
+    4 │ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
       │                  ^^^^^
-      help: its `ops` items: `size`
+      help: its members: `size`
 
-    error: `Bag` has no `ops` item named `items`
-      ┌─ test.ren:5:48
-    5 │ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
+    error: `Bag` has no member named `items`
+      ┌─ test.ren:4:48
+    4 │ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
       │                                                ^^^^^
       help: `items` is a field, so it's read from a value, like `x.items`
     |}]
@@ -1043,12 +1065,10 @@ let%expect_test "a receiver that could be several types" =
   types
     {|
 type Bag = { items: Array<Int> }
-  ops =
-    fn size(self) -> Int = self.items.len()
+  fn size(self) -> Int = self.items.len()
 
 type Box = { n: Int }
-  ops =
-    fn size(self) -> Int = 1
+  fn size(self) -> Int = 1
 
 fn count(b) = b.size()
 fn main() = count(Bag { items: [1] })
@@ -1056,8 +1076,8 @@ fn main() = count(Bag { items: [1] })
   [%expect
     {|
     error: can't tell which type `b` is
-      ┌─ test.ren:9:15
-    9 │ fn count(b) = b.size()
+      ┌─ test.ren:7:15
+    7 │ fn count(b) = b.size()
       │               ^
       = `Bag` and `Box` each have a method `size`
       = a method is found through its receiver's type, which has to be known where it's called
@@ -1092,13 +1112,11 @@ let%expect_test "a method not called, on a receiver whose type isn't known yet"
   run
     {|
 type B = { m: Int }
-  ops =
-    fn get(inout self) -> Int = self.m
+  fn get(inout self) -> Int = self.m
 
 type C = { m: Int }
-  ops =
-    fn put(self) -> Int = self.m
-    fn get(self) -> Int = self.m
+  fn put(self) -> Int = self.m
+  fn get(self) -> Int = self.m
 
 fn four(x) = x.put
 fn five(x) = x.get
@@ -1107,39 +1125,38 @@ fn main() = 1
   [%expect
     {|
     error: `put` is a method, so it has to be called
-       ┌─ test.ren:10:16
-    10 │ fn four(x) = x.put
-       │                ^^^
-       help: write `x.put()`, or use `C.put` as a function
+      ┌─ test.ren:8:16
+    8 │ fn four(x) = x.put
+      │                ^^^
+      help: write `x.put()`, or use `C.put` as a function
 
     error: can't tell which type `x` is
-       ┌─ test.ren:11:14
-    11 │ fn five(x) = x.get
-       │              ^
-       = `B` and `C` each have a method `get`
-       = a method is found through its receiver's type, which has to be known where it's called
-       help: annotate `x` where it's defined, like `x: B`
+      ┌─ test.ren:9:14
+    9 │ fn five(x) = x.get
+      │              ^
+      = `B` and `C` each have a method `get`
+      = a method is found through its receiver's type, which has to be known where it's called
+      help: annotate `x` where it's defined, like `x: B`
     |}]
 
 let%expect_test "an associated value uses nothing" =
   types
     {|
 type Log = { lines: Array<Int> }
-  ops =
-    let noisy = Log.make()
-    fn make() -> Log =
-      print(1)
-      Log { lines: [] }
+  let noisy = Log.make()
+  fn make() -> Log =
+    print(1)
+    Log { lines: [] }
 
 fn main() = Log.noisy
 |};
   [%expect
     {|
     error: the associated value `Log.noisy` uses `Io`
-      ┌─ test.ren:3:9
-    3 │     let noisy = Log.make()
-      │         ^^^^^
-      │                 ---------- this call uses `Io`
+      ┌─ test.ren:2:7
+    2 │   let noisy = Log.make()
+      │       ^^^^^
+      │               ---------- this call uses `Io`
       = an associated value is made once, when the program starts, so it can't use a dependency
       help: make it an associated function, `fn noisy() uses Io = ...`
     |}]
@@ -1148,27 +1165,26 @@ let%expect_test "an associated value can't need itself" =
   types
     {|
 type Box = { n: Int }
-  ops =
-    let a = Box { n: Box.b.n }
-    let b = Box.make()
-    fn make() -> Box = Box.a
-    let c = Box { n: Box.c.n }
+  let a = Box { n: Box.b.n }
+  let b = Box.make()
+  fn make() -> Box = Box.a
+  let c = Box { n: Box.c.n }
 
 fn main() = Box.a
 |};
   [%expect
     {|
     error: `Box.a` is made from itself: Box.a → Box.b → Box.make → Box.a
-      ┌─ test.ren:3:9
-    3 │     let a = Box { n: Box.b.n }
-      │         ^
+      ┌─ test.ren:2:7
+    2 │   let a = Box { n: Box.b.n }
+      │       ^
       = an associated value is made once, when the program starts, so it can't need itself to be made
       help: make one of them without the other
 
     error: `Box.c` is made from itself: Box.c → Box.c
-      ┌─ test.ren:6:9
-    6 │     let c = Box { n: Box.c.n }
-      │         ^
+      ┌─ test.ren:5:7
+    5 │   let c = Box { n: Box.c.n }
+      │       ^
       = an associated value is made once, when the program starts, so it can't need itself to be made
       help: make it without using itself
     |}]
@@ -1181,16 +1197,16 @@ fn main() = [Int.foo, Array.foo]
 |};
   [%expect
     {|
-    error: `Int` has no `ops` item named `foo`
+    error: `Int` has no member named `foo`
       ┌─ test.ren:1:18
     1 │ fn main() = [Int.foo, Array.foo]
       │                  ^^^
 
-    error: `Array` has no `ops` item named `foo`
+    error: `Array` has no member named `foo`
       ┌─ test.ren:1:29
     1 │ fn main() = [Int.foo, Array.foo]
       │                             ^^^
-      help: its `ops` items: `len`, `push`
+      help: its members: `len`, `push`
     |}]
 
 let%expect_test "a value of the wrong type, in a cycle of values" =
@@ -1199,25 +1215,24 @@ let%expect_test "a value of the wrong type, in a cycle of values" =
   run
     {|
 type Box = { n: Int }
-  ops =
-    let c = Box { n: 1 }.via()
-    fn via(self) -> Int = Box.c.n
+  let c = Box { n: 1 }.via()
+  fn via(self) -> Int = Box.c.n
 
 fn main() = 1
 |};
   [%expect
     {|
     error: `Box.c` is made from itself: Box.c → Box.via → Box.c
-      ┌─ test.ren:3:9
-    3 │     let c = Box { n: 1 }.via()
-      │         ^
+      ┌─ test.ren:2:7
+    2 │   let c = Box { n: 1 }.via()
+      │       ^
       = an associated value is made once, when the program starts, so it can't need itself to be made
       help: make one of them without the other
 
     error: `Box.c` is used here as `Box`, but its definition makes it `Int`
-      ┌─ test.ren:4:27
-    4 │     fn via(self) -> Int = Box.c.n
-      │                           ^^^^^
+      ┌─ test.ren:3:25
+    3 │   fn via(self) -> Int = Box.c.n
+      │                         ^^^^^
       = values and functions that need each other are checked at a single type
     |}]
 
@@ -1234,10 +1249,9 @@ let%expect_test "a call that changes its receiver is a value like any call" =
   run
     {|
 type Counter = { n: Int }
-  ops =
-    fn take(inout self) -> Int =
-      self.n += 1
-      self.n
+  fn take(inout self) -> Int =
+    self.n += 1
+    self.n
 
 fn twice(x: Int) = x * 2
 
@@ -1254,8 +1268,7 @@ let%expect_test "a field and a method of the same name, on different types" =
 type A = { f: Int }
 
 type B = { n: Int }
-  ops =
-    fn f(self) -> Int = self.n
+  fn f(self) -> Int = self.n
 
 fn g(x) = x.f()
 
@@ -1264,8 +1277,8 @@ fn main() = g(B { n: 1 })
   [%expect
     {|
     error: can't tell which type `x` is
-      ┌─ test.ren:7:11
-    7 │ fn g(x) = x.f()
+      ┌─ test.ren:6:11
+    6 │ fn g(x) = x.f()
       │           ^
       = `A` has a field `f`, and `B` has a method `f`
       = a method is found through its receiver's type, which has to be known where it's called
@@ -1275,17 +1288,16 @@ fn main() = g(B { n: 1 })
 let%expect_test "an associated value not of its declared type" =
   run {|
 type T = { n: Int }
-  ops =
-    let a: Int = true
+  let a: Int = true
 
 fn main() = T.a
 |};
   [%expect
     {|
     error: expected `Int`, found `Bool`
-      ┌─ test.ren:3:18
-    3 │     let a: Int = true
-      │                  ^^^^
+      ┌─ test.ren:2:16
+    2 │   let a: Int = true
+      │                ^^^^
       = `T.a` is declared to have the type `Int`
     |}]
 
@@ -1314,11 +1326,11 @@ let%expect_test "a method called on a constructor with no fields" =
 type Role =
   | Admin
   | Guest(n: Int)
-  ops =
-    fn rank(self) -> Int =
-      match self
-        Admin => 10
-        Guest(n) => n
+
+  fn rank(self) -> Int =
+    match self
+      Admin => 10
+      Guest(n) => n
 
 fn main() =
   print(Admin.rank())

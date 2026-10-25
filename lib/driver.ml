@@ -84,7 +84,7 @@ let check_module ~home ~imports ~reachable ?entry prog =
       let found = List.assoc v.vname inferred.schemes in
       if found <> v.scheme then mismatch v.vname v.scheme found)
     iface.values;
-  (* and so was each public ops item's, which is in its type's entry *)
+  (* and so was each public member's, which is in its type's entry *)
   List.iter
     (fun (td : Iface.type_decl) ->
       List.iter
@@ -329,7 +329,7 @@ let core ?lint ?load ~file src =
   lower_module ?lint (entry_of (check_all ?load ~file src))
 
 (* Every module's signatures, as `ren types` prints them: each function's,
-   and each type with an `ops` block, its items' indented under it. *)
+   and each type with members, its members indented under it. *)
 let types ?(lint = false) ?load ~file src =
   List.map
     (fun ({ home; inferred; resolved; _ } as c) ->

@@ -68,9 +68,9 @@ An error in one module can point into another, and shows that file's line:
 
 The shop is the milestone of stages 5a and 5b: six modules, a type imported
 by name, a constructor name two types share, opaque types, `uses` on every
-public function that needs it, and `ops`. A `Cart` has methods that change
+public function that needs it, and methods. A `Cart` has methods that change
 it (called with `&`), an associated function and an associated value, and
-the opaque `UserId` gets its whole API from its `ops`:
+the opaque `UserId` gets its whole API from the members under it:
 
   $ ren run shop/main.ren
   { plan: Free, status: Free }
@@ -270,21 +270,21 @@ instruction isn't handled until `Vm.step` has an arm for it:
   $ cp -r vm v1 && perl -0pi -e 's/(  \| Push\(n: Int\)[^\n]*\n)/$1  | Dup\n/' v1/op.ren
   $ ren check v1/main.ren
   error: this `match` doesn't handle every `op.Op`
-     ┌─ v1/machine.ren:41:7
-  41 │       match p.at(self.pc)
-     │       ^^^^^
+     ┌─ v1/machine.ren:40:5
+  40 │     match p.at(self.pc)
+     │     ^^^^^
      = missing: Dup
      help: add an arm for `Dup`, or a `_ =>` arm for the rest
   [1]
 
 A method that changes its receiver is called with `&`:
 
-  $ cp -r vm v2 && perl -0pi -e 's/      &self.stack.push\(n\)/      self.stack.push(n)/' v2/machine.ren
+  $ cp -r vm v2 && perl -0pi -e 's/    &self.stack.push\(n\)/    self.stack.push(n)/' v2/machine.ren
   $ ren check v2/main.ren
   error: `push` changes `self.stack`, so the call needs `&`
-     ┌─ v2/machine.ren:78:7
-  78 │       self.stack.push(n)
-     │       ^^^^^^^^^^^^^^^^^^
+     ┌─ v2/machine.ren:77:5
+  77 │     self.stack.push(n)
+     │     ^^^^^^^^^^^^^^^^^^
      = `&` shows at the call that `self.stack` is changed
      help: write `&self.stack.push(n)`
   [1]
@@ -318,10 +318,10 @@ A call that changes `self` can't also read part of it in an argument:
   $ cp -r vm v5 && perl -0pi -e 's/let v = self.locals\[slot\]\n *&self.push\(v\)/&self.push(self.locals[slot])/' v5/machine.ren
   $ ren check v5/main.ren
   error: this call changes `self`, so no other argument can use it
-     ┌─ v5/machine.ren:46:22
-  46 │           &self.push(self.locals[slot])
-     │                      ^^^^^^^^^^^^^^^^^
-     │            ---- passed with `&` here
+     ┌─ v5/machine.ren:45:20
+  45 │         &self.push(self.locals[slot])
+     │                    ^^^^^^^^^^^^^^^^^
+     │          ---- passed with `&` here
      = an argument passed with `&` has to be the only way the call can reach that value
      = reading part of `self` counts as using it
      help: read it into a `let` before the call, and pass that
@@ -428,9 +428,9 @@ A new kind of refusal has to be handled wherever refusals are told apart:
   $ cp -r bank b4 && perl -0pi -e 's/(  \| SameAccount\n)/$1  | Closed(account: AccountId)\n/' b4/account.ren
   $ ren check b4/main.ren
   error: this `match` doesn't handle every `Refusal`
-     ┌─ b4/account.ren:23:7
-  23 │       match self
-     │       ^^^^^
+     ┌─ b4/account.ren:22:5
+  22 │     match self
+     │     ^^^^^
      = missing: Closed(_)
      help: add an arm for `Closed(_)`, or a `_ =>` arm for the rest
   [1]
@@ -440,18 +440,18 @@ A public function can't take a type other modules can't name:
   $ cp -r bank b5 && perl -0pi -e 's/pub type Transfer/type Transfer/' b5/bank.ren
   $ ren check b5/main.ren
   error: `pub fn Bank.transfer` takes `Transfer`, which is private to this module
-     ┌─ b5/bank.ren:31:36
+     ┌─ b5/bank.ren:30:34
   12 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  31 │     pub fn transfer(inout self, t: Transfer) -> Option<Refusal> =
-     │                                    ^^^^^^^^
+  30 │   pub fn transfer(inout self, t: Transfer) -> Option<Refusal> =
+     │                                  ^^^^^^^^
      help: mark `Transfer` `pub`
   
   error: `pub fn Bank.batch`'s signature mentions `Transfer`, which is private to this module
-     ┌─ b5/bank.ren:49:40
+     ┌─ b5/bank.ren:48:38
   12 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  49 │     pub fn batch(inout self, ts: Array<Transfer>) -> Option<Refusal> =
-     │                                        ^^^^^^^^
+  48 │   pub fn batch(inout self, ts: Array<Transfer>) -> Option<Refusal> =
+     │                                      ^^^^^^^^
      help: mark `Transfer` `pub`
   [1]

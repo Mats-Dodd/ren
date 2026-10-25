@@ -13,10 +13,13 @@
                                                    (`uses` may start the
                                                     next line, indented)
      param    := ["inout"] (IDENT | "self") [":" type]
-     type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body [ops]
-     ops      := INDENT "ops" "=" INDENT op { NEWLINE op } DEDENT DEDENT
+     type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body [members]
+     members  := INDENT op { NEWLINE op } DEDENT
                                                    (or, after an indented
-                                                    body, on its last line)
+                                                    body, on the lines after
+                                                    it: the first line not
+                                                    starting with `|` ends
+                                                    a sum type's variants)
      op       := ["pub"] fn_def
               |  ["pub"] "let" IDENT [":" type] "=" body
               |  IDENT ["(" param, ... ")"] "=>" body
@@ -53,7 +56,7 @@
                                                      the call's last argument)
      primary  := INT | "true" | "false" | "(" ")" | IDENT | "self" | lambda
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
-              |  tyname "." IDENT               (an ops item: `Stack.of`)
+              |  tyname "." IDENT               (a member: `Stack.of`)
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
               |  "if" expr "then" body [[NEWLINE] "else" body]
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
@@ -520,7 +523,7 @@ and parse_primary p =
           mk (Record (Some t, fields)) start p
       | DOT when match peek2 p with IDENT n -> not (is_upper n) | _ -> false
         -> (
-          (* `stack.Stack.empty`: an item of the type's ops block. Without
+          (* `stack.Stack.empty`: a member of the type. Without
              the module, `Stack.of` could be one too, or `Admin.rank` a
              method of the constructor `Admin`: it's read as the second, and
              Resolve, which knows which names are types, decides. *)
@@ -799,12 +802,21 @@ let parse_fn p ~pub =
     loc = Loc.span start (last_loc p);
   }
 
-(* ---- types' operations ---- *)
+(* ---- types' members ---- *)
 
-(* One item of an `ops` block, or [None] for an operator, which is
+(* A line left over from when a type's members were written in an `ops`
+   block. *)
+let no_ops_block p =
+  if peek p = IDENT "ops" && peek2 p = EQ then
+    Diag.error (loc p)
+      ~help:"delete this line and indent what was under it one level less"
+      "`ops =` is gone: a type's methods go directly under it"
+
+(* One of the type [tname]'s members, or [None] for an operator, which is
    reported: the syntax is reserved, but what operators mean arrives in
    stage 9. *)
-let parse_op p =
+let parse_op p ~tname =
+  no_ops_block p;
   let pub = peek p = PUB in
   if pub then advance p;
   match peek p with
@@ -861,28 +873,29 @@ let parse_op p =
                   "for now, write a method: `fn %s(self, ...) = ...`" name.name)
            (Printf.sprintf "operators like `%s` arrive in stage 9" name.name));
       None
-  | _ -> fail_expected p "`fn`, `let` or an operator, in the `ops` block"
+  | tok ->
+      let what =
+        Printf.sprintf "`fn`, `let` or an operator, in `%s`'s members" tname
+      in
+      let help =
+        match tok with
+        | IDENT c when is_upper c ->
+            Some "a variant starts with `|`, and the variants come first"
+        | _ -> None
+      in
+      Diag.error ?help (loc p)
+        (Printf.sprintf "expected %s, found %s" what (describe tok))
 
-(* An `ops` block, starting at the word `ops`, which is a keyword only
-   here: its items, each on its own line, indented under it. *)
-let parse_ops p =
-  advance p;
-  expect p EQ;
-  if peek p <> INDENT then
-    Diag.error (loc p)
-      ~help:"put each item on its own line, indented under `ops =`"
-      (Printf.sprintf "expected the items of the `ops` block, found %s"
-         (describe (peek p)));
-  advance p;
+(* A type's members, each on its own line, up to the end of the block
+   they're in, which is left for the caller to close. *)
+let parse_members p ~tname =
   let rec items acc =
-    let acc = match parse_op p with Some o -> o :: acc | None -> acc in
+    let acc = match parse_op p ~tname with Some o -> o :: acc | None -> acc in
     match peek p with
     | NEWLINE ->
         advance p;
         items acc
-    | DEDENT ->
-        advance p;
-        List.rev acc
+    | DEDENT -> List.rev acc
     | _ -> fail_expected p "the end of the line"
   in
   items []
@@ -897,25 +910,27 @@ let parse_type p ~pub =
     else []
   in
   expect p EQ;
+  let tname = type_name.name in
   let type_body, type_ops =
     if peek p = INDENT then (
-      (* the body indented under `type X =`, and the ops block on a line
-         of its own after it *)
+      (* the body indented under `type X =`, and its members on the lines
+         after it, at the same indentation *)
       advance p;
       let b = parse_type_body p in
       let ops =
-        if peek p = NEWLINE && peek2 p = IDENT "ops" then (
+        if peek p = NEWLINE then (
           advance p;
-          parse_ops p)
+          parse_members p ~tname)
         else []
       in
       expect p DEDENT;
       (b, ops))
     else
       let b = parse_type_body p in
-      if peek p = INDENT && peek2 p = IDENT "ops" then (
+      if peek p = INDENT then (
+        (* the members indented under a one-line body *)
         advance p;
-        let ops = parse_ops p in
+        let ops = parse_members p ~tname in
         expect p DEDENT;
         (b, ops))
       else (b, [])

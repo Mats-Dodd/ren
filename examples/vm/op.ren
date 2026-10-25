@@ -13,10 +13,10 @@ pub type Op =
   | Jump(to: Int)         // go to `to`
   | Emit                  // pop, and add it to the output
   | Halt                  // stop
-  ops =
-    // where it can send the machine, if it's a jump
-    pub fn target(self) -> Option<Int> =
-      match self
-        JumpIfZero(to) => Some(to)
-        Jump(to) => Some(to)
-        _ => None
+
+  // where it can send the machine, if it's a jump
+  pub fn target(self) -> Option<Int> =
+    match self
+      JumpIfZero(to) => Some(to)
+      Jump(to) => Some(to)
+      _ => None

@@ -12,15 +12,15 @@ let source =
 pub type Option<T> =
   | Some(value: T)
   | None
-  ops =
-    pub fn is_some(self) -> Bool =
-      match self
-        Some(_) => true
-        None => false
-    pub fn unwrap_or(self, d: T) -> T =
-      match self
-        Some(x) => x
-        None => d
+
+  pub fn is_some(self) -> Bool =
+    match self
+      Some(_) => true
+      None => false
+  pub fn unwrap_or(self, d: T) -> T =
+    match self
+      Some(x) => x
+      None => d
 |}
 
 (* ---- built-in functions ---- *)
@@ -68,7 +68,7 @@ let fns =
    A built-in type's methods are built in too, and listed with it: each is
    called with a dot, its receiver its first parameter, `self`. In a
    method's scheme the type's parameters are its first variables, as in
-   any `ops` item's (iface.ml). *)
+   any member's (iface.ml). *)
 
 type builtin_type = {
   name : string;

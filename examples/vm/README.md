@@ -73,5 +73,5 @@ candidates for what comes next:
   needs a `let` (planned for stage 11, for plain values).
 - **`print` shows an opaque type's insides.** Printing a `Vm` would show
   its `Stack` as the list it is. Should debug output respect opacity?
-- **`ren types` lists a public type only if it has `ops`.** `Status`
+- **`ren types` lists a public type only if it has members.** `Status`
   and `Fault` don't appear.

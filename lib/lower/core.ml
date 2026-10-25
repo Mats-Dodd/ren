@@ -42,7 +42,7 @@ and kind =
   | Unit
   | Local of var
   | Global of Path.t
-      (** a top-level function, or an ops item's, [Stack.push]; [ty] is the type
+      (** a top-level function, or a member's, [Stack.push]; [ty] is the type
           it's used at here, an instance of its scheme. A method call,
           [s.push(1)], is a call of its function, with [s] first. *)
   | Global_value of Path.t
