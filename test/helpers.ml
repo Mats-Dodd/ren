@@ -18,12 +18,17 @@ let clean src =
     String.sub src 1 (String.length src - 1)
   else src
 
-let report src f =
+(* Run [f], printing the error it raises, if any. [files] are the sources
+   an error can show, by file name. *)
+let report_files files f =
   try f ()
   with e -> (
-    match Driver.render_error ~src e with
+    match Driver.render_error ~sources:(fun f -> List.assoc_opt f files) e with
     | Some msg -> print_string msg
     | None -> raise e)
+
+(* The same, for a program that is the one file [src]. *)
+let report src f = report_files [ (file, src) ] f
 
 let run src =
   let src = clean src in

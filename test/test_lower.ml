@@ -179,7 +179,9 @@ let%expect_test "every example lints" =
   |> List.iter (fun f ->
       let path = Filename.concat dir f in
       let src = In_channel.with_open_bin path In_channel.input_all in
-      report src (fun () ->
+      report_files
+        [ (f, src) ]
+        (fun () ->
           ignore (Ren.Driver.core ~lint:true ~file:f src);
           print_endline (f ^ ": ok")));
   [%expect

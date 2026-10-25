@@ -167,12 +167,12 @@ let dump_tokens toks =
   |> String.concat " "
 
 (* What to print for an exception a pass raised, or [None] if it isn't one
-   the compiler knows about. *)
-let render_error ~src = function
-  | Diag.Error d -> Some (Diag.render ~src d)
-  | Diag.Errors ds -> Some (Diag.render_all ~src ds)
+   the compiler knows about. [sources] is the source map (diag.ml). *)
+let render_error ~sources = function
+  | Diag.Error d -> Some (Diag.render ~sources d)
+  | Diag.Errors ds -> Some (Diag.render_all ~sources ds)
   | Eval.Panic (loc, msg) ->
-      Some (Diag.render ~src (Diag.make loc ("panic: " ^ msg)))
+      Some (Diag.render ~sources (Diag.make loc ("panic: " ^ msg)))
   | Internal_error { pass; message } ->
       Some
         (Printf.sprintf

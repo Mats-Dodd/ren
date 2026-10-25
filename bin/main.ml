@@ -39,7 +39,15 @@ let () =
             prerr_endline usage;
             exit 2
       with e -> (
-        match Driver.render_error ~src e with
+        (* the source map: the file that was read, and any other file a
+           message points into, read when it's needed *)
+        let sources file =
+          if file = path then Some src
+          else
+            try Some (In_channel.with_open_bin file In_channel.input_all)
+            with Sys_error _ -> None
+        in
+        match Driver.render_error ~sources e with
         | Some msg ->
             prerr_string msg;
             exit 1

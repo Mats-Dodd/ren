@@ -40,5 +40,6 @@ val run : ?lint:bool -> file:string -> string -> Value.t
 val dump_tokens : (Token.t * Loc.t) array -> string
 
 (* The message for an exception a pass raised: a diagnostic, a panic or an
-   internal error. [None] for any other exception. *)
-val render_error : src:string -> exn -> string option
+   internal error. [None] for any other exception. [sources] gives the text
+   of each file the message can show, by its name (diag.ml). *)
+val render_error : sources:(string -> string option) -> exn -> string option

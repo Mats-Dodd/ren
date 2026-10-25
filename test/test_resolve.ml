@@ -208,7 +208,9 @@ fn main() = 1
 let%expect_test "a file can't be named prelude.ren" =
   (* its module would be the prelude's own *)
   let src = "fn main() = 1\n" in
-  report src (fun () ->
+  report_files
+    [ ("prelude.ren", src) ]
+    (fun () ->
       print_endline (Ren.Value.show (Ren.Driver.run ~file:"prelude.ren" src)));
   [%expect
     {|

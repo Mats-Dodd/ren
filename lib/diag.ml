@@ -67,13 +67,30 @@ let line_text src n =
   | Some l -> l
   | None -> ""
 
-let render ~src (d : t) =
-  let { Loc.file; start; _ } = d.loc in
-  (* labels in another file (the prelude) can't be shown as source *)
-  let here, elsewhere =
-    List.partition (fun ((l : Loc.t), _) -> l.file = file) d.labels
+(* [sources] is the source map: the text of each file a diagnostic can
+   point into, by its name. A label in a file it doesn't have (the
+   prelude's) can't be shown as source, so it's a `= note` line instead. A
+   label in another file it does have gets a `┌─` header of its own:
+
+     error: import cycle: a → b → a
+       ┌─ b.ren:1:1
+     1 │ import a
+       │ ^^^^^^^^
+       ┌─ a.ren:1:1
+     1 │ import b
+       │ -------- `a` imports `b` here *)
+let render ~(sources : string -> string option) (d : t) =
+  let shown, elsewhere =
+    List.partition (fun ((l : Loc.t), _) -> sources l.file <> None) d.labels
   in
-  let spans = (d.loc, None) :: List.map (fun (l, s) -> (l, Some s)) here in
+  let spans = (d.loc, None) :: List.map (fun (l, s) -> (l, Some s)) shown in
+  (* the files in the order they come up, the error's own first *)
+  let files =
+    List.fold_left
+      (fun acc ((l : Loc.t), _) ->
+        if List.mem l.file acc then acc else acc @ [ l.file ])
+      [] spans
+  in
   let width =
     List.fold_left
       (fun w ((l : Loc.t), _) ->
@@ -83,38 +100,47 @@ let render ~src (d : t) =
   let pad = String.make width ' ' in
   let b = Buffer.create 256 in
   Printf.bprintf b "error: %s\n" d.msg;
-  Printf.bprintf b "%s ┌─ %s:%d:%d\n" pad file start.line start.col;
-  (* Each span in line order, the source line printed once above its
-     underlines: `^` for the error itself, `-` and the text for a label. *)
-  let by_line =
-    List.stable_sort
-      (fun ((a : Loc.t), _) ((b : Loc.t), _) ->
-        compare a.start.line b.start.line)
-      spans
-  in
-  let last = ref 0 in
   List.iter
-    (fun ((l : Loc.t), label) ->
-      let text = line_text src l.start.line in
-      if l.start.line <> !last then
-        Printf.bprintf b "%*d │ %s\n" width l.start.line text;
-      last := l.start.line;
-      (* Underline to the end of the span, or to the end of the line if the
-         span continues onto later lines. *)
-      let stop_col =
-        if l.stop.line = l.start.line then l.stop.col
-        else String.length text + 1
+    (fun file ->
+      let src = Option.value (sources file) ~default:"" in
+      (* Each span in line order, the source line printed once above its
+         underlines: `^` for the error itself, `-` and the text for a
+         label. *)
+      let by_line =
+        List.stable_sort
+          (fun ((a : Loc.t), _) ((b : Loc.t), _) ->
+            compare a.start.line b.start.line)
+          (List.filter (fun ((l : Loc.t), _) -> l.file = file) spans)
       in
-      let n = max 1 (stop_col - l.start.col) in
-      let mark, text =
-        match label with
-        | None -> (String.make n '^', "")
-        | Some s -> (String.make n '-', " " ^ s)
-      in
-      Printf.bprintf b "%s │ %s%s%s\n" pad
-        (String.make (l.start.col - 1) ' ')
-        mark text)
-    by_line;
+      (* the header points at the error itself, or, in another file, at
+         its first label *)
+      let first = if file = d.loc.file then d.loc else fst (List.hd by_line) in
+      Printf.bprintf b "%s ┌─ %s:%d:%d\n" pad file first.start.line
+        first.start.col;
+      let last = ref 0 in
+      List.iter
+        (fun ((l : Loc.t), label) ->
+          let text = line_text src l.start.line in
+          if l.start.line <> !last then
+            Printf.bprintf b "%*d │ %s\n" width l.start.line text;
+          last := l.start.line;
+          (* Underline to the end of the span, or to the end of the line if
+             the span continues onto later lines. *)
+          let stop_col =
+            if l.stop.line = l.start.line then l.stop.col
+            else String.length text + 1
+          in
+          let n = max 1 (stop_col - l.start.col) in
+          let mark, text =
+            match label with
+            | None -> (String.make n '^', "")
+            | Some s -> (String.make n '-', " " ^ s)
+          in
+          Printf.bprintf b "%s │ %s%s%s\n" pad
+            (String.make (l.start.col - 1) ' ')
+            mark text)
+        by_line)
+    files;
   List.iter
     (fun ((l : Loc.t), s) ->
       Printf.bprintf b "%s = %s: %s:%d:%d\n" pad s l.file l.start.line
@@ -125,4 +151,4 @@ let render ~src (d : t) =
   Buffer.contents b
 
 (* Several diagnostics, a blank line between each. *)
-let render_all ~src ds = String.concat "\n" (List.map (render ~src) ds)
+let render_all ~sources ds = String.concat "\n" (List.map (render ~sources) ds)
