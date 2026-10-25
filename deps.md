@@ -532,9 +532,10 @@ stage, or settled something the plan left open:
   of a refusal compares what it kept, `assert attempt &acme.transfer(t)
   == Err(Short(a, Money.dollars(1)))`, and a failure shows what came
   back. Only a tag goes inside `Err`, so an error is still never a value
-  outside a `Result`. Compared with what an `attempt` kept, or given
-  where a declared `Result` is wanted, the tag has to be one of its
-  errors, as in a pattern; anywhere else it makes a set of its own.
+  outside a `Result`. Where its `Result` meets what an `attempt` kept or
+  a declared `Result`, on either side of `==`, through a `let` or inside
+  another value, the tag has to be one of its errors, as in a pattern;
+  otherwise it makes a set of its own.
   `try Err(X)` is an error, since `fail X` is the one way to fail.
 - **`attempt` stops at a comparison,** where `try` takes everything to
   its right: `attempt f() == x` is `(attempt f()) == x`, so a test can

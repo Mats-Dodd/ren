@@ -931,18 +931,98 @@ fn main() =
     6 │   let _ = attempt load(0) == Err(NotFound(0, 1))
       │                                  ^^^^^^^^
     |}];
-  (* anything else inside `Err` would be an error on its own *)
+  (* whichever side of `==` it's on, through a `let` or inside another
+     value, so a kept set never gains a tag no call fails with *)
+  types
+    {|
+fn f(n: Int) -> Int = if n < 0 then fail Neg(n) else n
+fn p() =
+  let r = attempt f(-1)
+  if Err(Nope) == r then print("no") else print("yes")
+  r
+fn q() = assert Err(Nge(-1)) == attempt f(-1)
+fn s() =
+  let r = attempt f(-1)
+  let e = Err(Nope)
+  assert r == e
+  match r
+    Ok(_) => ()
+    Err(Neg(_)) => ()
+fn t() = Some(attempt f(-1)) == Some(Err(Nge(-1)))
+fn main() = ()
+|};
+  [%expect {|
+    error: `Nope` isn't one of the errors this can hold
+      ┌─ test.ren:4:10
+    4 │   if Err(Nope) == r then print("no") else print("yes")
+      │          ^^^^
+      = it can hold `Neg(Int)`
+      help: check the spelling: a tag that's written wrong is a different error
+
+    error: `Nge` isn't one of the errors this can hold
+      ┌─ test.ren:6:21
+    6 │ fn q() = assert Err(Nge(-1)) == attempt f(-1)
+      │                     ^^^
+      = it can hold `Neg(Int)`
+      help: did you mean `Neg`? A tag that's written wrong is a different error
+
+    error: `Nope` isn't one of the errors this can hold
+      ┌─ test.ren:9:15
+    9 │   let e = Err(Nope)
+      │               ^^^^
+      = it can hold `Neg(Int)`
+      help: check the spelling: a tag that's written wrong is a different error
+
+    error: `Nge` isn't one of the errors this can hold
+       ┌─ test.ren:14:42
+    14 │ fn t() = Some(attempt f(-1)) == Some(Err(Nge(-1)))
+       │                                          ^^^
+       = it can hold `Neg(Int)`
+       help: did you mean `Neg`? A tag that's written wrong is a different error
+    |}];
+  (* a tag that is one of them, written anywhere, is checked the same
+     way; a set of its own gets every tag written in it, which `try`
+     fails with *)
+  types
+    {|
+fn f(n: Int) -> Int = if n < 0 then fail Neg(n) else n
+fn ok() =
+  let r = attempt f(-1)
+  assert Err(Neg(-1)) == r
+  let e = Err(Neg(-1))
+  assert r == e
+fn again() -> Int =
+  let r = if true then Err(Gone(1)) else Err(Gone(2))
+  try r
+fn main() = ()
+|};
+  [%expect {|
+    fn f(n: Int) -> Int ! Neg(Int)
+    fn ok()
+    fn again() -> Int ! Gone(Int)
+    fn main()
+    |}];
+  (* anything else inside `Err` would be an error on its own, and a tag
+     among several arguments is only reported once *)
   types
     {|
 fn main() =
   let x = 3
   let _ = Err(x)
+  let _ = Err(Neg(-1), 2)
   ()
 |};
   [%expect {|
     error: `Err` holds an error, written as its tag
       ┌─ test.ren:3:11
     3 │   let _ = Err(x)
+      │           ^^^
+      = an error isn't a value on its own: `Err` holds one written as its tag, or one that `attempt` kept
+      help: write the tag inside it, `Err(NotFound(id))`, or keep what a call fails with: `attempt f()`
+
+    error: `Err` holds an error, written as its tag
+      ┌─ test.ren:4:11
+    4 │   let _ = Err(Neg(-1), 2)
       │           ^^^
       = an error isn't a value on its own: `Err` holds one written as its tag, or one that `attempt` kept
       help: write the tag inside it, `Err(NotFound(id))`, or keep what a call fails with: `attempt f()`

@@ -165,11 +165,13 @@ A test writes the error it expects inside `Err`, by its tag, and compares:
 assert attempt &acme.transfer(t) == Err(Short(a, Money.dollars(1)))
 ```
 
-Where a `Result` it's compared with or given to holds what something can
-fail with, what an `attempt` kept or a function's declared result, the tag
-has to be one of those errors, as in a pattern, so `Err(Shrot(...))` is an
-error rather than a comparison that's never true. Written anywhere else,
-it makes a set of its own: `if c then Err(Left(1)) else Err(Right)` is a
+Where the `Result` it makes meets one that holds what something can fail
+with, what an `attempt` kept or a function's declared result, the tag has
+to be one of those errors, as in a pattern, so `Err(Shrot(...))` is an
+error rather than a comparison that's never true. That's so on either side
+of `==`, through a `let` or inside another value, `Some(Err(...))`, and a
+kept set never gains a tag no call fails with. Otherwise it makes a set of
+its own: `if c then Err(Left(1)) else Err(Right)` is a
 `Result<T, ! Left(Int) | Right>`. Only a tag can go inside `Err`, so an
 error is never a value outside a `Result`, and `fail` is still the one way
 to fail with one: `try Err(X)` is an error whose help says `fail X`.

@@ -669,6 +669,39 @@ let settle_inclusions env =
   done;
   env.includes <- []
 
+(* Add each tag written as a value, `Err(Right)`, to its set if the set
+   is one of its own, not what an `attempt` kept or a parameter fails
+   with: `if c then Err(Left(1)) else Err(Right)` holds both
+   ([Infer_expr.err_row]). That's done before the inclusions are settled,
+   so a set that includes this one gets its tags. The rest are checked
+   with the tags in patterns, once the kept sets are closed. *)
+let value_tags env =
+  let kept t = List.exists (fun (k, _) -> row_tail k = Some t) env.kept in
+  env.tag_patterns <-
+    List.rev
+      (List.filter
+         (fun t ->
+           let labels, tail = row_parts t.tset in
+           match tail with
+           | Some tl
+             when t.tvalue
+                  && (not (kept tl))
+                  && (not (in_params t.tin tl))
+                  && not
+                       (List.exists
+                          (fun (l : label) -> l.name = t.ttag.name)
+                          labels) -> (
+               let l = { name = t.ttag.name; payload = t.tpayload } in
+               (* a named row can't learn a tag: it's checked below, and
+                  isn't one of the errors *)
+               try
+                 Unify.unify_row env.st t.tset (extend [ l ] (fresh_row env.st));
+                 false
+               with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
+                 true)
+           | _ -> true)
+         (List.rev env.tag_patterns))
+
 (* The rules of markers, checked once the group's functions are joined,
    when it's known what each call fails with (errors.md, "Marking"):
 
@@ -682,6 +715,7 @@ let settle_inclusions env =
       arms match something *)
 let settle_errors env =
   let pr = printer env in
+  value_tags env;
   settle_inclusions env;
   (* an `attempt` of a call of a function it was passed keeps whatever
      that function fails with: its set stays open, like the function's *)

@@ -2686,8 +2686,12 @@ and infer_arg env cx (a : expr) =
    fail with, a function's declared result or what an `attempt` kept, the
    tag has to be one of them, as in a pattern ([tag_pattern]): `attempt
    f() == Err(Shrot)` is an error, not a comparison that's always false.
-   An open set is checked when its group is done. Anywhere else, the tag
-   makes a set of its own, open to more: `if c then Err(A) else Err(B)`. *)
+   An open set is checked when its group is done. Anywhere else the
+   tag's set isn't known yet, as when the `Err` is on the left of `==`:
+   it starts with no tags, and once the group is done the tag is checked
+   against what the set turned out to be, or, if it's a set of its own,
+   added to it: `if c then Err(A) else Err(B)`. Adding it now would let a
+   kept set it's unified with later gain it. *)
 and err_row env cx (tag : ident) args ~expected =
   let payload = List.map fst args in
   let wanted =
@@ -2704,8 +2708,21 @@ and err_row env cx (tag : ident) args ~expected =
         | _ -> None)
     | _ -> None
   in
+  let later row =
+    env.tag_patterns <-
+      {
+        ttag = tag;
+        tpayload = payload;
+        tset = row;
+        tin = cx.params;
+        tarm = false;
+        tvalue = true;
+      }
+      :: env.tag_patterns;
+    row
+  in
   match wanted with
-  | None -> extend [ { name = tag.name; payload } ] (fresh_row env.st)
+  | None -> later (fresh_row env.st)
   | Some row -> (
       let labels, tail = row_parts row in
       match
@@ -2732,18 +2749,7 @@ and err_row env cx (tag : ident) args ~expected =
             (not_an_error tag
                (List.map (fun (l : label) -> (l.name, show_label pr l)) labels));
           row
-      | None, Some _ ->
-          env.tag_patterns <-
-            {
-              ttag = tag;
-              tpayload = payload;
-              tset = row;
-              tin = cx.params;
-              tarm = false;
-              tvalue = true;
-            }
-            :: env.tag_patterns;
-          row)
+      | None, Some _ -> later row)
 
 (* A constructor applied to [args], where a value of type [expected] is
    wanted. *)
@@ -2768,8 +2774,16 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
           TCon (td.path, [ fresh_var env.st; TErrors row ])
       | _ ->
           (* anything else would be an error of its own, outside the
-             `Result` *)
-          List.iter (fun (_, a) -> ignore (infer env cx a)) args;
+             `Result`. A tag among several arguments, `Err(Neg(1), 2)`,
+             is likely meant as one, so only its payload is checked, not
+             the tag as a constructor *)
+          List.iter
+            (fun (_, (a : expr)) ->
+              match a.kind with
+              | Con ({ qual = None; _ }, payload) ->
+                  List.iter (fun (_, a) -> ignore (infer env cx a)) payload
+              | _ -> ignore (infer env cx a))
+            args;
           report env (err_made c.loc);
           fst (instance env td))
   | Some (td, ctor) ->
