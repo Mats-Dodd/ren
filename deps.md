@@ -170,9 +170,12 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 - For now the real `instant` reads the same wall clock as `now`, which the
   system can set back (NTP, a manual change). A monotonic source needs a
   primitive OCaml's standard library doesn't have; it comes with the
-  runtime's own system calls (stage 8, `Os`).
-- These six are the prelude's, named in every module, so a program's own
-  `type Time` or `dep Clock` is an error: it chooses another name.
+  runtime's own system calls (stage 11).
+- These six are the prelude's, named in every module, and so are their
+  types and test implementations: `Time`, `Instant`, `Duration`, `Path`,
+  `Bytes`, `File`, `Command`, `Exit`, `TestClock`, `TestProc` and the
+  rest. A program's own `type Time`, `type Command` or `dep Clock` is an
+  error: it chooses another name.
 - `Net` comes with `Async` in stage 9 ([runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
@@ -480,27 +483,33 @@ stage, or settled something the plan left open:
 - **`split("")` panics**, since there's nothing to split on.
 - **`Path.join` takes a `Str`**, `src.join("main.ren")`, and a name that
   starts at the root, `/etc`, replaces the path, as in most languages.
-
 - **The real `Fs` panics when it can't read or write a file for any
-  reason but its not being there,** a folder that isn't there or a
-  file it may not read, since `read` fails only with `NoSuchFile` and
-  `write` with nothing.
+  reason but its not being there,** a folder, a file it may not read,
+  or a write into a folder that isn't there, since `read` fails only
+  with `NoSuchFile` and `write` with nothing.
+- **The real `Fs.exists` is true of a folder,** as the system says,
+  though `mem_fs` has only files.
+- **The real `Os.args` panics at an argument that isn't UTF-8,** since a
+  `Str` can't hold it.
 - **`mem_fs` finds a file by its path exactly as it's written,** so
   `a/b` and `a//b` are two files.
 - **`Proc` is a dependency of its own,** not part of `Os`, so a test can
   fake the programs it runs and keep the real arguments, or the other way
   round.
 - **The real `Proc` looks for a program on `PATH` itself,** so one that
-  isn't there fails with `NoSuchProgram`, never exit code 127. One that
-  can't run, or is killed by a signal, panics, since `run` says it fails
-  only that way.
+  isn't there fails with `NoSuchProgram`, never exit code 127. One that's
+  there but can't run, or is killed by a signal, panics, since `run` says
+  it fails only that way. On `PATH` it skips a file that can't be run, as
+  a shell does.
 - **A test `Proc`'s exit codes are a table,** `test_proc([Exit { command,
   code }])`, matched on the whole `Command`, since a program run through
   `sh -c` is told apart by its arguments.
-- **The just fails in three ways the slice didn't name,** besides
+- **The just fails in four more ways than stage 8 set out,** besides
   `UnknownRecipe` and `RecipeFailed`: `BadLine(number)`, a line that's
   neither a recipe nor one of its lines; `Cycle(name)`, a recipe that
-  depends on itself; and `NoRecipes`, a justfile with none to run first.
+  depends on itself; `DuplicateRecipe(name)`, a name given to two
+  recipes, as just refuses; and `NoRecipes`, a justfile with none to run
+  first.
   It doesn't print a line before it runs it, as just does, since only
   stdout can be written to.
 
@@ -512,3 +521,6 @@ stage, or settled something the plan left open:
 - Sharing one instance across a suite, for an expensive real dependency.
 - The rest of `Os`, `env` and `exit`, and capturing what a program
   prints.
+- The rest of `Str` and `Path`: `Path.parent` and `extension`, listing a
+  folder.
+- A monotonic `Clock.instant` (stage 11).

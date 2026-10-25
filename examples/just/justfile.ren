@@ -6,9 +6,10 @@ pub type Recipe = { name: Str, deps: Array<Str>, lines: Array<Str> }
 pub type Justfile = { recipes: Array<Recipe> }
   // The recipes in `text`. A line that isn't indented starts a recipe,
   // `name: deps`, and an indented one is a line of the recipe above it.
-  // Blank lines and comments, after `#`, are skipped. Indices into a
-  // string are byte offsets, so `slice` cuts where `find` found.
-  pub fn parse(text: Str) -> Justfile ! BadLine(number: Int) =
+  // Blank lines and comments, after `#`, are skipped, and two recipes
+  // can't share a name. Indices into a string are byte offsets, so
+  // `slice` cuts where `find` found.
+  pub fn parse(text: Str) -> Justfile ! BadLine(number: Int) | DuplicateRecipe(name: Str) =
     var recipes: Array<Recipe> = []
     var number = 0
     for line in text.split("\n")
@@ -22,9 +23,15 @@ pub type Justfile = { recipes: Array<Recipe> }
         let colon = t.find(":") orelse fail BadLine(number)
         let name = t.slice(0, colon).trim()
         if name == "" then fail BadLine(number)
+        for r in recipes
+          if r.name == name then fail DuplicateRecipe(name)
+        // the dependencies, up to a comment, between spaces or tabs
+        let rest = t.slice(colon + 1, t.len())
+        let end = rest.find("#").unwrap_or(rest.len())
         var deps: Array<Str> = []
-        for d in t.slice(colon + 1, t.len()).split(" ")
-          if d != "" then &deps.push(d)
+        for word in rest.slice(0, end).split(" ")
+          for d in word.split("\t")
+            if d != "" then &deps.push(d)
         &recipes.push(Recipe { name: name, deps: deps, lines: [] })
     Justfile { recipes: recipes }
 
@@ -41,6 +48,15 @@ test "a recipe has a name, dependencies and lines" =
     Recipe { name: "build", deps: ["fmt", "gen"], lines: ["cc -c a.c", "cc -o a a.o"] },
     Recipe { name: "fmt", deps: [], lines: [] },
   ]
+
+test "dependencies between tabs, and a comment after them" =
+  let j = try Justfile.parse("a:\tb  c\t# not d\n  echo a\nb:\nc:\n")
+  assert j.recipes[0].deps == ["b", "c"]
+
+test "two recipes with one name" =
+  match attempt Justfile.parse("a:\n  echo x\nb:\na:\n  echo y\n")
+    Err(DuplicateRecipe(name)) => assert name == "a"
+    _ => assert false
 
 test "a line that isn't a recipe or one of its lines" =
   match attempt Justfile.parse("build:\n  make\nwhat is this\n")

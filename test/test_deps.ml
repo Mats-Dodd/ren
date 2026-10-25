@@ -1090,6 +1090,25 @@ fn main() uses Fs =
       │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
+let%expect_test "the real Fs panics when it reads a folder" =
+  Unix.mkdir "a-folder" 0o755;
+  run
+    {|
+fn main() uses Fs, Console =
+  print(Fs.exists(Path.of("a-folder")))
+  match attempt Fs.read(Path.of("a-folder"))
+    _ => print("it read a folder")
+|};
+  Unix.rmdir "a-folder";
+  [%expect
+    {|
+    true
+    error: panic: can't read a-folder: Is a directory
+      ┌─ test.ren:3:17
+    3 │   match attempt Fs.read(Path.of("a-folder"))
+      │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |}]
+
 let%expect_test "the real Fs is reached only through Fs" =
   types {|
 fn main() uses Console =
@@ -1257,6 +1276,19 @@ fn main() uses Os, Console =
     ()
     |}]
 
+let%expect_test "the real Os panics at an argument that isn't UTF-8" =
+  run ~args:[ "ok"; "\xff\xfe" ]
+    {|
+fn main() uses Os, Console =
+  print(Os.args())
+|};
+  [%expect {|
+    error: panic: argument 2 isn't UTF-8
+      ┌─ test.ren:2:9
+    2 │   print(Os.args())
+      │         ^^^^^^^^^
+    |}]
+
 let%expect_test "the real Proc panics when a program can't run, or finish" =
   (* a file that can be run, but isn't a program *)
   let file = "not-a-program" in
@@ -1273,6 +1305,22 @@ fn main() ! NoSuchProgram(name: Str) uses Proc =
       ┌─ test.ren:2:7
     2 │   try Proc.run("./not-a-program", [])
       │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |}];
+  (* a file that's there, but may not be run *)
+  let file = "not-runnable" in
+  Out_channel.with_open_bin file (fun oc -> output_string oc "#!/bin/sh\n");
+  Unix.chmod file 0o644;
+  run
+    {|
+fn main() ! NoSuchProgram(name: Str) uses Proc =
+  try Proc.run("./not-runnable", [])
+|};
+  Sys.remove file;
+  [%expect {|
+    error: panic: can't run ./not-runnable: Permission denied
+      ┌─ test.ren:2:7
+    2 │   try Proc.run("./not-runnable", [])
+      │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}];
   run
     {|

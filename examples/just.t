@@ -38,4 +38,4 @@ Its tests run on the test implementations, with no `with` but where a test
 needs a justfile, args, or a program that fails:
 
   $ ren test just | tail -1 | sed 's/[0-9]*ms$/Nms/'
-  13 passed in Nms
+  15 passed in Nms

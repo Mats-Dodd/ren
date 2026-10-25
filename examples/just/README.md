@@ -18,7 +18,7 @@ ren test .                    # every module's tests
 
 | File | What's in it |
 |---|---|
-| `justfile.ren` | `Recipe` and `Justfile`, with `parse`, which fails with `BadLine`, and `recipe`, which fails with `UnknownRecipe` |
+| `justfile.ren` | `Recipe` and `Justfile`, with `parse`, which fails with `BadLine` or `DuplicateRecipe`, and `recipe`, which fails with `UnknownRecipe` |
 | `plan.ren` | `order`: the recipes to run, each after what it depends on, each once; it fails with `UnknownRecipe` or `Cycle` |
 | `main.ren` | `main`, which reads the justfile, picks the recipe and runs each line with `sh -c`; its tests, on the fakes |
 | `justfile` | a few recipes that `echo`, two that share `base`, and one that fails |

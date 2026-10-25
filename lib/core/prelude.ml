@@ -64,10 +64,12 @@ pub type Path = opaque Str
   pub fn of(s: Str) -> Path = s
   // `name` inside this path, or `name` itself if it starts at the root
   pub fn join(self, name: Str) -> Path =
-    let parts = self.split("/")
     if self == "" || name.starts_with("/") then name
-    else if parts[parts.len() - 1] == "" then self.concat(name)
-    else self.concat("/").concat(name)
+    else
+      // a path that ends in `/` has an empty last part
+      let parts = self.split("/")
+      if parts[parts.len() - 1] == "" then self.concat(name)
+      else self.concat("/").concat(name)
   pub fn show(self) -> Str = self
 
 // ---- the built-in dependencies (deps.md, "Built in") ----
@@ -290,14 +292,23 @@ let read_file path =
         (Panic
            (Printf.sprintf "can't read %s: %s" path (Unix.error_message e)))
   | fd -> (
-      let ic = Unix.in_channel_of_descr fd in
-      match In_channel.input_all ic with
-      | data ->
-          close_in ic;
-          Some data
-      | exception Sys_error msg ->
-          close_in_noerr ic;
-          raise (Panic (Printf.sprintf "can't read %s: %s" path msg)))
+      let panic msg =
+        Unix.close fd;
+        raise (Panic (Printf.sprintf "can't read %s: %s" path msg))
+      in
+      (* a folder opens, but isn't a file to read *)
+      match Unix.fstat fd with
+      | exception Unix.Unix_error (e, _, _) -> panic (Unix.error_message e)
+      | { st_kind = Unix.S_DIR; _ } -> panic (Unix.error_message Unix.EISDIR)
+      | _ -> (
+          let ic = Unix.in_channel_of_descr fd in
+          match In_channel.input_all ic with
+          | data ->
+              close_in ic;
+              Some data
+          | exception Sys_error msg ->
+              close_in_noerr ic;
+              raise (Panic (Printf.sprintf "can't read %s: %s" path msg))))
 
 (* [Sys_error]'s message starts with the path *)
 let write_file path data =
@@ -308,9 +319,10 @@ let write_file path data =
    real `Os.args` gives back. *)
 let args : string list ref = ref []
 
-(* Where the program [cmd] is: [cmd] itself if it has a `/` in it, or
-   else the first file of that name on `PATH`, if it's one that can be
-   run. *)
+(* Where the program [cmd] is: [cmd] itself if it has a `/` in it and
+   something's there, or else the first file of that name on `PATH` that
+   can be run, as a shell looks. One that's there but can't be run is
+   found, and panics when it's run. *)
 let find_program cmd =
   let runnable p =
     (try not (Sys.is_directory p) with Sys_error _ -> false)
@@ -320,7 +332,7 @@ let find_program cmd =
       true
     with Unix.Unix_error _ -> false
   in
-  if String.contains cmd '/' then if runnable cmd then Some cmd else None
+  if String.contains cmd '/' then if Sys.file_exists cmd then Some cmd else None
   else
     let path = Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin" in
     List.find_map
@@ -459,7 +471,13 @@ let fns =
     fn ~runtime:true "os_args"
       (Fun ([], array str, open_row 0, open_row 1))
       (fun a ->
-        let strs = List.map (fun s -> Value.VStr s) !args in
+        (* a `Str` is UTF-8, so an argument that isn't can't be one *)
+        let str i s =
+          if String.is_valid_utf_8 s then Value.VStr s
+          else
+            raise (Panic (Printf.sprintf "argument %d isn't UTF-8" (i + 1)))
+        in
+        let strs = List.mapi str !args in
         (Value.VArray (Array.of_list strs), a));
     (* fn(Str, Array<Str>) -> Option<Int>, the real `Proc.run`, which
        fails when it's [None]: there's no such program *)
