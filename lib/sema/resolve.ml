@@ -14,11 +14,16 @@
      (`import rows.{Row}`), or one written with its module's alias,
      `rows.Row`. Or it's one of the type parameters in scope. A constructor
      written after its type, `Light.Red`, gets that type's path.
+   - each item of a type's `ops` block is resolved as a function named
+     after its type, `Stack.push`, with the type's parameters in scope and
+     `self`, its first parameter if it's a method, of the type (ast.ml).
 
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
    with the name of an imported module, public declarations that
-   mention a private type, and opaque types represented as themselves.
+   mention a private type, opaque types represented as themselves, and
+   `self` anywhere but first in a method; and in an `ops` block, two items
+   with the same name, or an item with a field's name.
    Imports nothing uses are reported once inference is done
    ([unused_imports]). Later passes never look a name up: inference reads
    a binder's id, mut.ml its kind.
@@ -140,6 +145,14 @@ let not_an_alias env (id : ident) =
         (sprintf "`%s` is the name of an imported module" id.name)
   | None -> ()
 
+(* `self` is a parameter of a method, and of nothing else: the parser
+   lets it be any parameter, so that this can say why it can't. [help]
+   says what to do instead. *)
+let not_self env ~help (p : Parsed.param) =
+  if p.pname.name = "self" then
+    report env p.pname.loc ~help
+      "`self` is only a parameter of a method, in an `ops` block"
+
 let bind env sc (id : ident) bound =
   not_an_alias env id;
   sc.fn.last_id <- sc.fn.last_id + 1;
@@ -164,6 +177,11 @@ let rec index_of x i = function
 (* Where a type's name is written, its module's alias included. *)
 let tyname_loc (t : tyname) =
   match t.tmod with Some m -> Loc.span m.loc t.tid.loc | None -> t.tid.loc
+
+(* Where a type is written: where it starts, for a named one. *)
+let written_loc : Parsed.ty -> Loc.t = function
+  | TyName (t, _) -> tyname_loc t
+  | TyFn (_, _, l) | TyInout (_, l) -> l
 
 (* The type [t] names, and how many type arguments it takes: one in scope,
    or, written `alias.T`, a public type of the module imported as [alias].
@@ -285,6 +303,12 @@ let lookup env sc loc ~what x =
               env.imports
           in
           (match elsewhere with
+          | [] when x = "self" ->
+              report env loc
+                ~help:
+                  "make `self` the first parameter, of a function in its \
+                   type's `ops` block"
+                "there's no `self` here: only a method has one"
           | [] -> report env loc (sprintf "there's no %s named `%s`" what x)
           | _ ->
               (* the import isn't unused, it's used wrongly, and this says
@@ -374,6 +398,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Lambda (ps, body) ->
         no_duplicates env "parameters"
           (List.map (fun (p : Parsed.param) -> p.pname) ps);
+        List.iter (not_self env ~help:"choose another name") ps;
         let ps, inner =
           (* an `inout` lambda parameter is an error (mut.ml), but binding it
              as one keeps its uses from being reported a second time *)
@@ -454,37 +479,6 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
 
 (* ---- declarations ---- *)
 
-let type_def env (td : Parsed.type_def) : Resolved.type_def =
-  no_duplicates env "type parameters" td.type_params;
-  let no_duplicate_fields (fs : Parsed.field list) =
-    no_duplicates env "fields"
-      (List.map (fun (f : Parsed.field) -> f.field_name) fs)
-  in
-  (match td.type_body with
-  | Fields fs -> no_duplicate_fields fs
-  | Ctors cs ->
-      List.iter (fun (c : Parsed.ctor) -> no_duplicate_fields c.ctor_fields) cs
-  | Opaque _ -> ());
-  let params = List.map (fun (p : ident) -> p.name) td.type_params in
-  let field (f : Parsed.field) : Resolved.field =
-    { field_name = f.field_name; field_ty = ty env ~params f.field_ty }
-  in
-  let type_body : tname type_body =
-    match td.type_body with
-    | Fields fs -> Fields (List.map field fs)
-    | Ctors cs ->
-        Ctors
-          (List.map
-             (fun (c : Parsed.ctor) : Resolved.ctor ->
-               {
-                 ctor_name = c.ctor_name;
-                 ctor_fields = List.map field c.ctor_fields;
-               })
-             cs)
-    | Opaque t -> Opaque (ty env ~params t)
-  in
-  { td with type_body }
-
 (* An opaque type is represented as another type, which can be another of
    the module's opaque types, but following them must reach a type that
    isn't one: otherwise `type A = opaque B` and `type B = opaque A` would
@@ -559,8 +553,16 @@ let uses env (deps : ident list) =
         | None -> Hashtbl.replace seen d.name d.loc)
     deps
 
-let fn_def env (f : Parsed.fn_def) : Resolved.fn_def * Path.t list =
-  no_duplicates env "type parameters" f.tparams;
+(* A function: a top-level one, or, with [owner], an item of that type's
+   `ops` block. An ops item has the type's parameters in scope, before its
+   own, and is named after the type, `Stack.push` (ast.ml); its first
+   parameter can be `self`, which has the type, `Stack<T>`. `self` is no
+   other parameter. *)
+let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
+    Resolved.fn_def * Path.t list =
+  let outer = match owner with Some td -> td.type_params | None -> [] in
+  let tparams = outer @ f.tparams in
+  no_duplicates env "type parameters" tparams;
   List.iter
     (fun (t : ident) ->
       if Hashtbl.mem env.types t.name then
@@ -569,10 +571,37 @@ let fn_def env (f : Parsed.fn_def) : Resolved.fn_def * Path.t list =
     f.tparams;
   no_duplicates env "parameters"
     (List.map (fun (p : Parsed.param) -> p.pname) f.params);
+  List.iteri
+    (fun i (p : Parsed.param) ->
+      if p.pname.name = "self" then (
+        (match (owner, i) with
+        | None, _ ->
+            not_self env p
+              ~help:
+                "choose another name, or move the function into its type's \
+                 `ops` block to make it a method"
+        | Some _, 0 -> ()
+        | Some _, _ ->
+            report env p.pname.loc ~help:"move it to the front"
+              "`self` has to be the first parameter");
+        match (owner, p.pty) with
+        | Some td, Some t ->
+            report env (written_loc t) ~help:"remove the type"
+              (sprintf "`self` is always a `%s`, so its type isn't written"
+                 td.type_name.name)
+        | _ -> ()))
+    f.params;
+  (* where `self` is written, if it's the first parameter of an ops item,
+     and so has the type *)
+  let self =
+    match (owner, f.params) with
+    | Some _, p :: _ when p.pname.name = "self" -> Some p.pname.loc
+    | _ -> None
+  in
   let sc =
     {
       locals = Env.empty;
-      tparams = List.map (fun (t : ident) -> t.name) f.tparams;
+      tparams = List.map (fun (t : ident) -> t.name) tparams;
       depth = 0;
       fn = { last_id = 0; calls = [] };
     }
@@ -580,12 +609,118 @@ let fn_def env (f : Parsed.fn_def) : Resolved.fn_def * Path.t list =
   let ps, inner =
     params env sc
       (fun p -> match p.pmode with Inout -> By_inout | Read -> By_param)
-      f.params
+      (* `self`'s type is the owner's, never what's written *)
+      (List.map
+         (fun (p : Parsed.param) ->
+           if p.pname.name = "self" then { p with pty = None } else p)
+         f.params)
+  in
+  let ps =
+    match (owner, self, ps) with
+    | Some td, Some loc, p :: rest ->
+        let owner_ty : Resolved.ty =
+          TyName
+            ( { tref = Named (Path.make env.home td.type_name.name); tloc = loc },
+              List.mapi
+                (fun i _ -> TyName ({ tref = Param i; tloc = loc }, []))
+                td.type_params )
+        in
+        { p with pty = Some owner_ty } :: rest
+    | _ -> ps
   in
   let ret = ty_opt env ~params:sc.tparams f.ret in
   Option.iter (uses env) f.uses;
   let body = expr env inner f.body in
-  ({ f with params = ps; ret; body }, List.sort_uniq compare sc.fn.calls)
+  let name =
+    match owner with
+    | Some td -> { f.name with name = td.type_name.name ^ "." ^ f.name.name }
+    | None -> f.name
+  in
+  ( { f with name; tparams; params = ps; ret; body },
+    List.sort_uniq compare sc.fn.calls )
+
+(* A type declaration, and its ops block: each item resolved as a
+   function (see [fn_def]), with the top-level functions it uses. *)
+let type_def env (td : Parsed.type_def) :
+    Resolved.type_def * (string * Path.t list) list =
+  no_duplicates env "type parameters" td.type_params;
+  let no_duplicate_fields (fs : Parsed.field list) =
+    no_duplicates env "fields"
+      (List.map (fun (f : Parsed.field) -> f.field_name) fs)
+  in
+  (match td.type_body with
+  | Fields fs -> no_duplicate_fields fs
+  | Ctors cs ->
+      List.iter (fun (c : Parsed.ctor) -> no_duplicate_fields c.ctor_fields) cs
+  | Opaque _ -> ());
+  let params = List.map (fun (p : ident) -> p.name) td.type_params in
+  let field (f : Parsed.field) : Resolved.field =
+    { field_name = f.field_name; field_ty = ty env ~params f.field_ty }
+  in
+  let type_body : tname type_body =
+    match td.type_body with
+    | Fields fs -> Fields (List.map field fs)
+    | Ctors cs ->
+        Ctors
+          (List.map
+             (fun (c : Parsed.ctor) : Resolved.ctor ->
+               {
+                 ctor_name = c.ctor_name;
+                 ctor_fields = List.map field c.ctor_fields;
+               })
+             cs)
+    | Opaque t -> Opaque (ty env ~params t)
+  in
+  let tname = td.type_name.name in
+  (* each item has a name of its own, which isn't a field's: `s.items`
+     would be one or the other *)
+  let seen = Hashtbl.create 8 in
+  List.iter
+    (fun (o : Parsed.op) ->
+      let id = o.op_fn.name in
+      match Hashtbl.find_opt seen id.name with
+      | Some first ->
+          report env id.loc ~help:"rename one of them"
+            ~labels:[ (first, sprintf "the first `%s` is here" id.name) ]
+            (sprintf "`%s` has two `ops` items named `%s`" tname id.name)
+      | None -> Hashtbl.replace seen id.name id.loc)
+    td.type_ops;
+  (match td.type_body with
+  | Fields fs ->
+      List.iter
+        (fun (o : Parsed.op) ->
+          let id = o.op_fn.name in
+          match
+            List.find_opt
+              (fun (f : Parsed.field) -> f.field_name.name = id.name)
+              fs
+          with
+          | Some f ->
+              let what =
+                match (o.op_kind, o.op_fn.params) with
+                | Op_value, _ -> "an associated value"
+                | Op_fn, p :: _ when p.pname.name = "self" -> "a method"
+                | Op_fn, _ -> "an associated function"
+              in
+              report env id.loc ~help:"rename one of them"
+                ~labels:
+                  [
+                    (f.field_name.loc, sprintf "the field `%s` is here" id.name);
+                  ]
+                (sprintf "`%s` has a field and %s both named `%s`" tname what
+                   id.name)
+          | None -> ())
+        td.type_ops
+  | Ctors _ | Opaque _ -> ());
+  let type_ops, calls =
+    List.split
+      (List.map
+         (fun (o : Parsed.op) ->
+           let f, calls = fn_def env ~owner:td o.op_fn in
+           ({ op_kind = o.op_kind; op_fn = f }, (f.name.name, calls)))
+         td.type_ops)
+  in
+  ({ td with type_body; type_ops }, calls)
 
 (* ---- what a public declaration can mention ----
 
@@ -628,21 +763,37 @@ let no_private env ~private_ ~whole ~inside (t : Resolved.ty) =
     (named_in t)
 
 let no_leaks env ~private_ (items : Resolved.program) =
+  let fn_ (f : Resolved.fn_def) =
+    let check ~verb t =
+      no_private env ~private_ t
+        ~whole:(sprintf "`pub fn %s` %s `%s`" f.name.name verb)
+        ~inside:(sprintf "`pub fn %s`'s signature mentions `%s`" f.name.name)
+    in
+    List.iter
+      (fun (p : Resolved.param) -> Option.iter (check ~verb:"takes") p.pty)
+      f.params;
+    Option.iter (check ~verb:"returns") f.ret
+  in
+  (* an associated value is a function of no parameters (ast.ml) *)
+  let value (f : Resolved.fn_def) =
+    Option.iter
+      (no_private env ~private_
+         ~whole:(sprintf "`pub let %s` is a `%s`" f.name.name)
+         ~inside:(sprintf "`pub let %s`'s type mentions `%s`" f.name.name))
+      f.ret
+  in
   List.iter
     (function
-      | Fn (f : Resolved.fn_def) when f.pub ->
-          let check ~verb t =
-            no_private env ~private_ t
-              ~whole:(sprintf "`pub fn %s` %s `%s`" f.name.name verb)
-              ~inside:
-                (sprintf "`pub fn %s`'s signature mentions `%s`" f.name.name)
-          in
-          List.iter
-            (fun (p : Resolved.param) ->
-              Option.iter (check ~verb:"takes") p.pty)
-            f.params;
-          Option.iter (check ~verb:"returns") f.ret
+      | Fn (f : Resolved.fn_def) when f.pub -> fn_ f
       | Type (td : Resolved.type_def) when td.type_pub -> (
+          (* a public type's public items are in the interface too *)
+          List.iter
+            (fun (o : Resolved.op) ->
+              if o.op_fn.pub then
+                match o.op_kind with
+                | Op_fn -> fn_ o.op_fn
+                | Op_value -> value o.op_fn)
+            td.type_ops;
           let t = td.type_name.name in
           let field (fd : Resolved.field) =
             no_private env ~private_ fd.field_ty
@@ -839,11 +990,13 @@ let program sink ~home ~imports (prog : Parsed.program) =
     List.split
       (List.map
          (function
-           | Type td -> (Type (type_def env td), None)
+           | Type td ->
+               let td, calls = type_def env td in
+               (Type td, calls)
            | Fn f ->
                let f', calls = fn_def env f in
-               (Fn f', Some (f.name.name, calls))
-           | Import i -> (Import i, None))
+               (Fn f', [ (f.name.name, calls) ])
+           | Import i -> (Import i, []))
          prog)
   in
   let private_ = Hashtbl.create 8 in
@@ -892,7 +1045,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
     home;
     prog = items;
     types;
-    calls = List.filter_map Fun.id calls;
+    calls = List.concat calls;
     scope;
     aliases =
       List.map (fun ((i : import), _) -> (i.path, i.alias.name)) env.imports;

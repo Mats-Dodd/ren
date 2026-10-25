@@ -11,7 +11,8 @@ the file's folder: `import billing/stripe` is the file billing/stripe.ren.
 commands:
   run     run the program's `main` function
   check   check the program without running it
-  types   print every function's inferred signature, module by module
+  types   print every function's inferred signature, module by module,
+          and each type's `ops` items under it
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree|}
 

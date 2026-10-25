@@ -12,8 +12,16 @@
                  ["->" type] ["uses" UIDENT, ...] "=" body
                                                    (`uses` may start the
                                                     next line, indented)
-     param    := ["inout"] IDENT [":" type]
-     type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body
+     param    := ["inout"] (IDENT | "self") [":" type]
+     type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body [ops]
+     ops      := INDENT "ops" "=" INDENT op { NEWLINE op } DEDENT DEDENT
+                                                   (or, after an indented
+                                                    body, on its last line)
+     op       := ["pub"] fn_def
+              |  ["pub"] "let" IDENT [":" type] "=" body
+              |  IDENT ["(" param, ... ")"] "=>" body
+                                                   (an operator: parsed, but
+                                                    reported until stage 9)
      type_body:= "{" field, ... "}"                       (a record)
               |  "opaque" type                           (a type of its own)
               |  ["|"] ctor { "|" ctor }                  (a sum type; may be
@@ -43,7 +51,7 @@
                          | "(" expr, ... ")" [lambda] }
                                                     (a trailing lambda is
                                                      the call's last argument)
-     primary  := INT | "true" | "false" | "(" ")" | IDENT | lambda
+     primary  := INT | "true" | "false" | "(" ")" | IDENT | "self" | lambda
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
               |  "if" expr "then" body [[NEWLINE] "else" body]
@@ -64,8 +72,14 @@ open Ast.Parsed
 open Token
 
 (* [node] is the last node id handed out in the current top-level item, to
-   an expression or a pattern. *)
-type t = { toks : (Token.t * Loc.t) array; mutable i : int; mutable node : int }
+   an expression or a pattern. [sink] collects the errors parsing can carry
+   on after (diag.ml). *)
+type t = {
+  toks : (Token.t * Loc.t) array;
+  mutable i : int;
+  mutable node : int;
+  sink : Diag.sink;
+}
 
 let peek p = fst p.toks.(p.i)
 let peek2 p = fst p.toks.(min (p.i + 1) (Array.length p.toks - 1))
@@ -112,6 +126,9 @@ let ident p =
       let l = loc p in
       advance p;
       { name; loc = l }
+  | SELF ->
+      Diag.error (loc p) ~help:"choose another name"
+        "`self` is reserved for the first parameter of a method"
   | _ -> fail_expected p "a name"
 
 (* A name that must be capitalized: a type, type parameter or constructor. *)
@@ -232,7 +249,15 @@ let parse_param p : param =
       Inout)
     else Read
   in
-  let pname = ident p in
+  let pname =
+    match peek p with
+    | SELF ->
+        (* Resolve checks that it's a method's first parameter *)
+        let l = loc p in
+        advance p;
+        { name = "self"; loc = l }
+    | _ -> ident p
+  in
   let pty =
     if peek p = COLON then (
       advance p;
@@ -279,26 +304,6 @@ let parse_type_body p =
       advance p;
       Opaque (parse_ty p)
   | _ -> Ctors (parse_ctors p)
-
-let parse_type p ~pub =
-  expect p TYPE;
-  let type_name = upper_ident p "a type name" in
-  let type_params =
-    if peek p = LT then (
-      advance p;
-      sep_list p ~close:GT (fun p -> upper_ident p "a type parameter"))
-    else []
-  in
-  expect p EQ;
-  let type_body =
-    if peek p = INDENT then (
-      advance p;
-      let b = parse_type_body p in
-      expect p DEDENT;
-      b)
-    else parse_type_body p
-  in
-  { type_pub = pub; type_name; type_params; type_body }
 
 (* ---- patterns ---- *)
 
@@ -535,6 +540,9 @@ and parse_primary p =
   | IDENT name ->
       advance p;
       mk (Var name) start p
+  | SELF ->
+      advance p;
+      mk (Var "self") start p
   | LPAREN when peek2 p = RPAREN ->
       advance p;
       advance p;
@@ -775,6 +783,129 @@ let parse_fn p ~pub =
     loc = Loc.span start (last_loc p);
   }
 
+(* ---- types' operations ---- *)
+
+(* One item of an `ops` block, or [None] for an operator, which is
+   reported: the syntax is reserved, but what operators mean arrives in
+   stage 9. *)
+let parse_op p =
+  let pub = peek p = PUB in
+  if pub then advance p;
+  match peek p with
+  | FN -> Some { op_kind = Op_fn; op_fn = parse_fn p ~pub }
+  | LET ->
+      let start = loc p in
+      advance p;
+      let name = ident p in
+      let ret =
+        if peek p = COLON then (
+          advance p;
+          Some (parse_ty p))
+        else None
+      in
+      expect p EQ;
+      let body = parse_body p in
+      Some
+        {
+          op_kind = Op_value;
+          op_fn =
+            {
+              pub;
+              name;
+              tparams = [];
+              params = [];
+              ret;
+              uses = None;
+              body;
+              loc = Loc.span start (last_loc p);
+            };
+        }
+  | VAR ->
+      Diag.error (loc p) ~help:"write `let`"
+        "an associated value can't be a `var`: it's made once, and never \
+         changes"
+  | IDENT _ when peek2 p = LPAREN || peek2 p = FATARROW ->
+      let name = ident p in
+      let params =
+        if peek p = LPAREN then (
+          advance p;
+          sep_list p ~close:RPAREN parse_param)
+        else []
+      in
+      expect p FATARROW;
+      ignore (parse_body p);
+      Diag.report p.sink
+        (Diag.make name.loc
+           ~help:
+             (if params = [] then
+                Printf.sprintf
+                  "for now, write an associated value: `let %s = ...`" name.name
+              else
+                Printf.sprintf
+                  "for now, write a method: `fn %s(self, ...) = ...`" name.name)
+           (Printf.sprintf "operators like `%s` arrive in stage 9" name.name));
+      None
+  | _ -> fail_expected p "`fn`, `let` or an operator, in the `ops` block"
+
+(* An `ops` block, starting at the word `ops`, which is a keyword only
+   here: its items, each on its own line, indented under it. *)
+let parse_ops p =
+  advance p;
+  expect p EQ;
+  if peek p <> INDENT then
+    Diag.error (loc p)
+      ~help:"put each item on its own line, indented under `ops =`"
+      (Printf.sprintf "expected the items of the `ops` block, found %s"
+         (describe (peek p)));
+  advance p;
+  let rec items acc =
+    let acc = match parse_op p with Some o -> o :: acc | None -> acc in
+    match peek p with
+    | NEWLINE ->
+        advance p;
+        items acc
+    | DEDENT ->
+        advance p;
+        List.rev acc
+    | _ -> fail_expected p "the end of the line"
+  in
+  items []
+
+let parse_type p ~pub =
+  expect p TYPE;
+  let type_name = upper_ident p "a type name" in
+  let type_params =
+    if peek p = LT then (
+      advance p;
+      sep_list p ~close:GT (fun p -> upper_ident p "a type parameter"))
+    else []
+  in
+  expect p EQ;
+  let type_body, type_ops =
+    if peek p = INDENT then (
+      (* the body indented under `type X =`, and the ops block on a line
+         of its own after it *)
+      advance p;
+      let b = parse_type_body p in
+      let ops =
+        if peek p = NEWLINE && peek2 p = IDENT "ops" then (
+          advance p;
+          parse_ops p)
+        else []
+      in
+      expect p DEDENT;
+      (b, ops))
+    else
+      let b = parse_type_body p in
+      if peek p = INDENT && peek2 p = IDENT "ops" then (
+        advance p;
+        let ops = parse_ops p in
+        expect p DEDENT;
+        (b, ops))
+      else (b, [])
+  in
+  { type_pub = pub; type_name; type_params; type_body; type_ops }
+
 let parse_item p =
   p.node <- 0;
   let pub = peek p = PUB in
@@ -814,7 +945,7 @@ let skip_to_item p ~start =
     done)
 
 let parse_program sink toks =
-  let p = { toks; i = 0; node = 0 } in
+  let p = { toks; i = 0; node = 0; sink } in
   let rec loop acc =
     if peek p = EOF then List.rev acc
     else

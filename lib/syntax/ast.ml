@@ -135,13 +135,6 @@ type 't type_body =
       (** [opaque Int]: a type of its own, represented as the type written,
           which only its module can see *)
 
-type 't type_def = {
-  type_pub : bool;  (** [pub type ...]: other modules can use it *)
-  type_name : ident;
-  type_params : ident list;  (** the [T] in [Option<T>] *)
-  type_body : 't type_body;
-}
-
 type ('v, 'b, 't) fn_def = {
   pub : bool;
   name : ident;
@@ -153,6 +146,36 @@ type ('v, 'b, 't) fn_def = {
           [Io], are the only ones so far *)
   body : ('v, 'b, 't) expr;
   loc : Loc.t;
+}
+
+(* An item of a type's `ops` block (module-build.md, "Methods and operators
+   live on the type"):
+
+     pub type Stack<T> = { items: Array<T> }
+       ops =
+         pub fn push(inout self, x: T) = push(&self.items, x)
+         pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
+         pub let empty: Stack<T> = Stack { items: [] }
+
+   A function whose first parameter is `self` is a method; one without is
+   an associated function, `Stack.of(...)`. An associated value, `let`, is
+   kept as a function of no parameters whose body is the value, so every
+   pass checks it as one; only [op_kind] tells them apart.
+
+   The parser names each item as it's written, `push`. Resolve gives it
+   its type's name in front, `Stack.push`, its path's name in the module
+   (path.ml), so passes after it know it apart from a top-level `push`;
+   and it puts the type's parameters first in its [tparams], and gives
+   `self` its type, `Stack<T>`. *)
+type op_kind = Op_fn | Op_value
+type ('v, 'b, 't) op = { op_kind : op_kind; op_fn : ('v, 'b, 't) fn_def }
+
+type ('v, 'b, 't) type_def = {
+  type_pub : bool;  (** [pub type ...]: other modules can use it *)
+  type_name : ident;
+  type_params : ident list;  (** the [T] in [Option<T>] *)
+  type_body : 't type_body;
+  type_ops : ('v, 'b, 't) op list;  (** its `ops` block, in source order *)
 }
 
 (* An import, at the top of a file: `import billing/stripe`,
@@ -173,10 +196,26 @@ type import = {
 
 type ('v, 'b, 't) item =
   | Fn of ('v, 'b, 't) fn_def
-  | Type of 't type_def
+  | Type of ('v, 'b, 't) type_def
   | Import of import
 
 type ('v, 'b, 't) program = ('v, 'b, 't) item list
+
+(* Every function of a program, the items of its types' `ops` blocks
+   included, in source order. *)
+let functions (prog : ('v, 'b, 't) program) =
+  List.concat_map
+    (function
+      | Fn f -> [ f ]
+      | Type td -> List.map (fun o -> o.op_fn) td.type_ops
+      | Import _ -> [])
+    prog
+
+(* An ops item's name as it's written: `push` for `Stack.push`. *)
+let short_name name =
+  match String.rindex_opt name '.' with
+  | Some i -> String.sub name (i + 1) (String.length name - i - 1)
+  | None -> name
 
 (* ---- names, once resolved ----
 
@@ -224,7 +263,8 @@ module Parsed = struct
   type nonrec stmt = (string, ident, tyname) stmt
   type nonrec field = tyname field
   type nonrec ctor = tyname ctor
-  type nonrec type_def = tyname type_def
+  type nonrec op = (string, ident, tyname) op
+  type nonrec type_def = (string, ident, tyname) type_def
   type nonrec fn_def = (string, ident, tyname) fn_def
   type nonrec item = (string, ident, tyname) item
   type nonrec program = (string, ident, tyname) program
@@ -241,7 +281,8 @@ module Resolved = struct
   type nonrec stmt = (name, binder, tname) stmt
   type nonrec field = tname field
   type nonrec ctor = tname ctor
-  type nonrec type_def = tname type_def
+  type nonrec op = (name, binder, tname) op
+  type nonrec type_def = (name, binder, tname) type_def
   type nonrec fn_def = (name, binder, tname) fn_def
   type nonrec item = (name, binder, tname) item
   type nonrec program = (name, binder, tname) program
@@ -382,7 +423,20 @@ let show_type_def (td : type_def) =
           cs
     | Opaque t -> [ parens [ "opaque"; show_ty t ] ]
   in
-  parens ((if td.type_pub then [ "pub" ] else []) @ ("type" :: name :: body))
+  let show_op (o : op) =
+    let f = o.op_fn in
+    let pub = if f.pub then [ "pub" ] else [] in
+    match o.op_kind with
+    | Op_fn -> parens (pub @ [ show_fn f ])
+    | Op_value -> parens (pub @ [ "let"; f.name.name; show_expr f.body ])
+  in
+  let ops =
+    match td.type_ops with
+    | [] -> []
+    | os -> [ parens ("ops" :: List.map show_op os) ]
+  in
+  parens
+    ((if td.type_pub then [ "pub" ] else []) @ ("type" :: name :: body) @ ops)
 
 let show_import (i : import) =
   let names =

@@ -259,9 +259,7 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
     (fun (td : Iface.type_decl) -> Hashtbl.replace types td.path td)
     (List.concat_map (fun (iface : Iface.t) -> iface.types) reachable @ r.types);
   List.iter
-    (function
-      | Fn (f : fn_def) ->
-          let nodes = List.assoc f.name.name inferred.nodes in
-          check_expr { types; nodes; names = Resolve.type_name r; sink } f.body
-      | Type _ | Import _ -> ())
-    r.prog
+    (fun (f : fn_def) ->
+      let nodes = List.assoc f.name.name inferred.nodes in
+      check_expr { types; nodes; names = Resolve.type_name r; sink } f.body)
+    (Ast.functions r.prog)

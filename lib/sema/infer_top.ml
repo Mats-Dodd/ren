@@ -269,11 +269,21 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
             (of_scheme st v.scheme))
         iface.values)
     imports;
-  let fns =
-    List.filter_map
-      (function Fn f -> Some f | Type _ | Import _ -> None)
+  (* the module's functions, its types' ops items included; an associated
+     value is checked as a function of no parameters (ast.ml) *)
+  let fns = Ast.functions r.prog in
+  let values =
+    List.concat_map
+      (function
+        | Type td ->
+            List.filter_map
+              (fun (o : op) ->
+                if o.op_kind = Op_value then Some o.op_fn.name.name else None)
+              td.type_ops
+        | Fn _ | Import _ -> [])
       r.prog
   in
+  let is_value (f : fn_def) = List.mem f.name.name values in
   let path (f : fn_def) = Path.make home f.name.name in
   List.iter (check_transparent sink) fns;
   let schemes = Hashtbl.create 16 in
@@ -308,7 +318,7 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
           let ret =
             match f.ret with
             | Some t -> convert ~tvars:tparams ~row:closed t
-            | None when f.pub ->
+            | None when f.pub && not (is_value f) ->
                 unit (* a public function without `->` returns Unit *)
             | None -> fresh_var env.st
           in
@@ -360,7 +370,7 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
                         (show (printer env) ret);
                     ]
                   ()
-            | None when f.pub ->
+            | None when f.pub && not (is_value f) ->
                 explain
                   ~notes:[ "a public function without `->` returns `Unit`" ]
                   ~help:(fun found _ ->
@@ -433,10 +443,27 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
           Hashtbl.replace schemes f.name.name scheme;
           Hashtbl.replace tables f.name.name cx)
         setups;
+      (* public values spell out their type *)
+      List.iter
+        (fun ((f : fn_def), _, _, _, _) ->
+          if f.pub && is_value f && f.ret = None then
+            match Hashtbl.find schemes f.name.name with
+            | TFun (_, t, _, _) as scheme ->
+                let pr = printer env in
+                reserve pr scheme;
+                ignore
+                @@ fail env f.name.loc
+                     ~help:
+                       (sprintf "write `pub let %s: %s`"
+                          (short_name f.name.name) (show pr t))
+                     ~notes:[ "public values spell out their type" ]
+                     (sprintf "the public value `%s` has no type" f.name.name)
+            | _ -> assert false)
+        setups;
       (* public functions spell out their full contract *)
       List.iter
         (fun ((f : fn_def), _, _, _, _) ->
-          if f.pub then
+          if f.pub && not (is_value f) then
             match Hashtbl.find schemes f.name.name with
             | TFun (ps, _, _, _) as scheme ->
                 List.iter2

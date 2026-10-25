@@ -23,6 +23,7 @@ type t =
   | AS
   | USES
   | OPAQUE
+  | SELF
   (* punctuation *)
   | LPAREN
   | RPAREN
@@ -82,6 +83,7 @@ let to_string = function
   | AS -> "as"
   | USES -> "uses"
   | OPAQUE -> "opaque"
+  | SELF -> "self"
   | LPAREN -> "("
   | RPAREN -> ")"
   | LBRACE -> "{"

@@ -63,27 +63,42 @@ let check_module ~home ~imports ~reachable ?entry prog =
      modules see only the interface, so if the two ever differ, that's a
      bug in the compiler, and it's caught here rather than in whichever
      module trips over it. *)
+  let mismatch name (said : Ty.scheme) (found : Ty.scheme) =
+    let show (s : Ty.scheme) =
+      Ty.show
+        (Ty.printer ~show_tail:(fun _ -> true) ~names:(Resolve.type_name r) s)
+        s.ty
+    in
+    raise
+      (Internal_error
+         {
+           pass = "interface";
+           message =
+             Printf.sprintf
+               "the interface of `%s` says `%s`, but inference found `%s`" name
+               (show said) (show found);
+         })
+  in
   List.iter
     (fun (v : Iface.value) ->
       let found = List.assoc v.vname inferred.schemes in
-      if found <> v.scheme then
-        let show (s : Ty.scheme) =
-          Ty.show
-            (Ty.printer
-               ~show_tail:(fun _ -> true)
-               ~names:(Resolve.type_name r) s)
-            s.ty
-        in
-        raise
-          (Internal_error
-             {
-               pass = "interface";
-               message =
-                 Printf.sprintf
-                   "the interface of `%s` says `%s`, but inference found `%s`"
-                   v.vname (show v.scheme) (show found);
-             }))
+      if found <> v.scheme then mismatch v.vname v.scheme found)
     iface.values;
+  (* and so was each public ops item's, which is in its type's entry *)
+  List.iter
+    (fun (td : Iface.type_decl) ->
+      List.iter
+        (fun (o : Iface.op) ->
+          let name = td.path.name ^ "." ^ o.oname in
+          let found =
+            match (o.okind, List.assoc name inferred.schemes) with
+            | Value, { ty = Fun ([], t, _, _); names } ->
+                Ty.canonical { ty = t; names }
+            | _, s -> s
+          in
+          if found <> o.oscheme then mismatch name o.oscheme found)
+        td.ops)
+    iface.types;
   (r, iface, inferred)
 
 (* A checked module, lowered to Core. With [lint], Core Lint checks the
@@ -313,27 +328,54 @@ let lower_module ?lint (c : checked) =
 let core ?lint ?load ~file src =
   lower_module ?lint (entry_of (check_all ?load ~file src))
 
+(* Every module's signatures, as `ren types` prints them: each function's,
+   and each type with an `ops` block, its items' indented under it. *)
 let types ?(lint = false) ?load ~file src =
   List.map
-    (fun ({ home; prog; inferred; resolved; _ } as c) ->
+    (fun ({ home; inferred; resolved; _ } as c) ->
       (* the tests also check that the program lowers, and lints *)
       if lint then ignore (lower_module ~lint:true c);
-      let schemes = inferred.schemes in
+      let names = Resolve.type_name resolved in
+      let fn_ ?outer ~name (f : Ast.Resolved.fn_def) =
+        Ty.signature ?outer ~names ~pub:f.pub ~name
+          ~params:
+            (List.map
+               (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
+               f.params)
+          (List.assoc f.name.name inferred.schemes)
+      in
       ( home,
-        List.filter_map
+        List.concat_map
           (function
-            | Ast.Fn f ->
-                Some
-                  (Ty.signature
-                     ~names:(Resolve.type_name resolved)
-                     ~pub:f.pub ~name:f.name.name
-                     ~params:
-                       (List.map
-                          (fun (p : Ast.Parsed.param) -> p.pname.name)
-                          f.params)
-                     (List.assoc f.name.name schemes))
-            | Type _ | Import _ -> None)
-          prog ))
+            | Ast.Fn f -> [ fn_ ~name:f.name.name f ]
+            | Type ({ type_ops = _ :: _; _ } as td) ->
+                let outer =
+                  List.map (fun (p : Ast.ident) -> p.name) td.type_params
+                in
+                let op (o : Ast.Resolved.op) =
+                  let f = o.op_fn in
+                  let name = Ast.short_name f.name.name in
+                  match o.op_kind with
+                  | Op_fn -> fn_ ~outer ~name f
+                  | Op_value -> (
+                      (* a function of no parameters (ast.ml) *)
+                      match List.assoc f.name.name inferred.schemes with
+                      | { ty = Fun ([], t, _, _); names = tnames } ->
+                          Ty.value_signature ~names ~pub:f.pub ~name
+                            { ty = t; names = tnames }
+                      | _ -> assert false)
+                in
+                let params =
+                  match outer with
+                  | [] -> ""
+                  | ps -> "<" ^ String.concat ", " ps ^ ">"
+                in
+                sprintf "%stype %s%s"
+                  (if td.type_pub then "pub " else "")
+                  td.type_name.name params
+                :: List.map (fun o -> "  " ^ op o) td.type_ops
+            | Type _ | Import _ -> [])
+          resolved.prog ))
     (check_all ?load ~file src)
 
 (* Check every module, lower each to Core, and run them as one program:

@@ -45,6 +45,7 @@ let keywords =
     ("as", AS);
     ("uses", USES);
     ("opaque", OPAQUE);
+    ("self", SELF);
   ]
 
 let is_digit c = c >= '0' && c <= '9'

@@ -221,25 +221,40 @@ and show_effects pr e u =
 (* How `ren types` prints a function: the signature `ren fmt --annotate`
    would write. [params] are the parameters' names. A row tail is printed
    (as `..e` / `..d`) only when it reaches the result; otherwise the
-   parameter is transparent and the tail implied. *)
-let signature ~names ~pub ~name ~params (s : scheme) =
+   parameter is transparent and the tail implied.
+
+   An item of a type's `ops` block is printed under its type, so [outer]
+   are the type's parameters, which aren't the function's own and aren't
+   listed after its name, and `self` is printed without its type, which is
+   always the type's. *)
+let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
   match s.ty with
   | Fun (ps, ret, errs, uses) ->
       let in_ret = tails ret in
       let pr = printer ~show_tail:(fun id -> List.mem id in_ret) ~names s in
+      pr.reserved <- outer;
       reserve pr s.ty;
       let params =
         List.map2
           (fun name (p : param) ->
-            match p.mode with
-            | Inout -> "inout " ^ name ^ ": " ^ show pr p.ty
-            | Read -> name ^ ": " ^ show pr p.ty)
+            let mode = match p.mode with Inout -> "inout " | Read -> "" in
+            if name = "self" then mode ^ name
+            else mode ^ name ^ ": " ^ show pr p.ty)
           params ps
       in
       let ret = show_ret pr ret in
       let effects = show_effects pr errs uses in
+      (* the names of the type's own parameters, among those handed out *)
+      let outer =
+        List.filter_map
+          (fun (id, n) ->
+            if List.mem n outer then Hashtbl.find_opt pr.names id else None)
+          s.names
+      in
       let tparams =
-        match List.rev pr.order with
+        match
+          List.filter (fun n -> not (List.mem n outer)) (List.rev pr.order)
+        with
         | [] -> ""
         | names -> "<" ^ String.concat ", " names ^ ">"
       in
@@ -249,3 +264,9 @@ let signature ~names ~pub ~name ~params (s : scheme) =
         (String.concat ", " params)
         ret effects
   | _ -> invalid_arg "Ty.signature: not a function type"
+
+(* How `ren types` prints an associated value, under its type: [s] is its
+   type. *)
+let value_signature ~names ~pub ~name (s : scheme) =
+  let pr = printer ~names s in
+  Printf.sprintf "%slet %s: %s" (if pub then "pub " else "") name (show pr s.ty)

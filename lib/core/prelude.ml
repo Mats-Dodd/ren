@@ -113,6 +113,7 @@ let intrinsics : Iface.t =
             path = Path.prelude t.name;
             params = List.init t.arity (fun i -> "T" ^ string_of_int i);
             body = Builtin;
+            ops = [];
             loc = None;
           })
         types;

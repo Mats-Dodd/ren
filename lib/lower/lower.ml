@@ -512,10 +512,5 @@ let program (r : Resolve.t) (inferred : Infer.t) : C.program =
   {
     home = r.home;
     types = r.types;
-    fns =
-      List.filter_map
-        (function
-          | Fn f -> Some (fn_def ~home:r.home inferred f)
-          | Type _ | Import _ -> None)
-        r.prog;
+    fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog);
   }

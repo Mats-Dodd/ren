@@ -297,7 +297,5 @@ and exclusive args =
 
 let program sink (r : Resolve.t) =
   List.iter
-    (function
-      | Fn f -> walk { depth = 0; locks = []; sink } f.body
-      | Type _ | Import _ -> ())
-    r.prog
+    (fun (f : fn_def) -> walk { depth = 0; locks = []; sink } f.body)
+    (Ast.functions r.prog)

@@ -4,8 +4,9 @@
    never their source: the prelude, which every module gets without
    asking, and each module it imports (driver.ml).
 
-   An interface holds a module's public types, with their constructors and
-   fields, and the type scheme of each of its public functions, all in
+   An interface holds a module's public types, with their constructors,
+   fields and public `ops` items, and the type scheme of each of its
+   public functions, all in
    canonical form (ty.ml). Nothing private is in it: a dependent can't
    tell a private name from one that doesn't exist, and changing one can't
    change the interface. It's made from the module's declarations alone
@@ -27,12 +28,29 @@ type body =
           [Some] representation; its interface has [None], so no other module
           can make one, look inside one or use one as an [Int]. *)
 
+(* An item of a type's `ops` block (ast.ml): a method, which has `self`,
+   an associated function, which doesn't, or an associated value. *)
+type op_kind = Method | Function | Value
+
+type op = {
+  oname : string;  (** as it's written: [push] *)
+  opub : bool;
+  okind : op_kind;
+  oscheme : Ty.scheme;
+      (** a function's type scheme, `self` its first parameter if it's a method;
+          a value's type. The type's parameters are its first variables' names.
+      *)
+}
+
 type type_decl = {
   path : Path.t;
   params : string list;
       (** the type parameters' names; field types refer to the [i]th as [Var i]
       *)
   body : body;
+  ops : op list;
+      (** its `ops` block, in source order: every item in its own module's view
+          of it, only the public ones in its interface *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
@@ -69,33 +87,6 @@ let rec of_written (t : Ast.Resolved.ty) : Ty.ty =
 and of_written_param = function
   | Ast.TyInout (t, _) -> { mode = Inout; ty = of_written t }
   | t -> Ty.read (of_written t)
-
-(* A type declared in module [home]. *)
-let of_type_def ~home (td : Ast.Resolved.type_def) =
-  let field (f : Ast.Resolved.field) =
-    { fname = f.field_name.name; fty = of_written f.field_ty }
-  in
-  let body =
-    match td.type_body with
-    | Fields fs -> Record (List.map field fs)
-    | Ctors cs ->
-        Sum
-          (List.map
-             (fun (c : Ast.tname Ast.ctor) ->
-               {
-                 cname = c.ctor_name.name;
-                 cfields = List.map field c.ctor_fields;
-                 cloc = c.ctor_name.loc;
-               })
-             cs)
-    | Opaque t -> Opaque (Some (of_written t))
-  in
-  {
-    path = Path.make home td.type_name.name;
-    params = List.map (fun (p : Ast.ident) -> p.name) td.type_params;
-    body;
-    loc = Some td.type_name.loc;
-  }
 
 (* A public function's type scheme, from its signature alone. Its type
    parameters, parameters and result are all written; a public function
@@ -142,14 +133,63 @@ let signature (f : Ast.Resolved.fn_def) : Ty.scheme =
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
     }
 
+(* A type declared in module [home]. *)
+let of_type_def ~home (td : Ast.Resolved.type_def) =
+  let field (f : Ast.Resolved.field) =
+    { fname = f.field_name.name; fty = of_written f.field_ty }
+  in
+  let body =
+    match td.type_body with
+    | Fields fs -> Record (List.map field fs)
+    | Ctors cs ->
+        Sum
+          (List.map
+             (fun (c : Ast.tname Ast.ctor) ->
+               {
+                 cname = c.ctor_name.name;
+                 cfields = List.map field c.ctor_fields;
+                 cloc = c.ctor_name.loc;
+               })
+             cs)
+    | Opaque t -> Opaque (Some (of_written t))
+  in
+  let op (o : Ast.Resolved.op) =
+    let f = o.op_fn in
+    let okind, oscheme =
+      match (o.op_kind, f.params) with
+      | Op_value, _ when f.ret = None ->
+          (* a public one without a type is an error, which inference
+             reports with the type it finds *)
+          (Value, { Ty.ty = Error; names = [] })
+      | Op_value, _ -> (
+          (* a function of no parameters, whose result is the value *)
+          match signature f with
+          | { ty = Fun ([], t, _, _); names } ->
+              (Value, Ty.canonical { ty = t; names })
+          | _ -> assert false)
+      | Op_fn, p :: _ when p.pname.ident.name = "self" -> (Method, signature f)
+      | Op_fn, _ -> (Function, signature f)
+    in
+    { oname = Ast.short_name f.name.name; opub = f.pub; okind; oscheme }
+  in
+  {
+    path = Path.make home td.type_name.name;
+    params = List.map (fun (p : Ast.ident) -> p.name) td.type_params;
+    body;
+    ops = List.map op td.type_ops;
+    loc = Some td.type_name.loc;
+  }
+
 (* The interface of module [home], from its declarations alone, never its
    bodies (module-build.md, "Interface summaries"): every public type it
-   declares, and the signature of every public function. A public one
+   declares, with its public `ops` items, and the signature of every
+   public function. A public one
    never mentions a private one (resolve.ml checks), so a dependent never
    meets a type that isn't in some interface. An opaque type is listed
    without its representation. *)
 let of_module ~home (prog : Ast.Resolved.program) =
   let public (td : type_decl) =
+    let td = { td with ops = List.filter (fun o -> o.opub) td.ops } in
     match td.body with Opaque _ -> { td with body = Opaque None } | _ -> td
   in
   {
