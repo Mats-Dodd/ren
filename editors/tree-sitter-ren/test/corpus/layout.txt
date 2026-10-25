@@ -1,0 +1,93 @@
+================================================================================
+comments and blank lines
+================================================================================
+
+// a header
+
+fn f() =
+  // before
+  let x = 1
+
+  // between
+  x // after
+// between items
+
+fn g() = 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comment)
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (comment)
+      (let_statement
+        (identifier)
+        (number))
+      (comment)
+      (identifier)))
+  (comment)
+  (comment)
+  (function_definition
+    (identifier)
+    (parameters)
+    (number)))
+
+================================================================================
+several blocks closing at once
+================================================================================
+
+fn f(xs) =
+  for x in xs
+    if x > 0 then
+      print(x)
+fn g() = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)))
+    (block
+      (for_statement
+        (identifier)
+        (identifier)
+        (block
+          (if_expression
+            (binary_expression
+              (identifier)
+              (number))
+            (block
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier)))))))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (number)))
+
+================================================================================
+a block at the end of the file
+================================================================================
+
+fn f() =
+  match x
+    _ => 1
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (match_expression
+        (identifier)
+        (match_arm
+          (wildcard)
+          (number))))))

@@ -1,0 +1,17 @@
+name = "Ren"
+grammar = "ren"
+path_suffixes = ["ren"]
+line_comments = ["// "]
+tab_size = 2
+hard_tabs = false
+code_fence_block_name = "ren"
+autoclose_before = ";:.,=}])> \n\t"
+brackets = [
+  { start = "{", end = "}", close = true, newline = true },
+  { start = "[", end = "]", close = true, newline = true },
+  { start = "(", end = ")", close = true, newline = true },
+]
+# A line opens a block, so the next is indented, when it ends with `=`,
+# `=>`, `then` or `else` (a comment after it allowed), or starts a `match`
+# or a `for`.
+increase_indent_pattern = "((=|=>|\\bthen|\\belse)\\s*(//.*)?$)|(^\\s*for\\b.*$)|(\\bmatch\\b[^=]*$)"

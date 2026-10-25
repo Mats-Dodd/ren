@@ -1,0 +1,15 @@
+id = "ren"
+name = "Ren"
+version = "0.1.0"
+schema_version = 1
+description = "Ren: highlighting, outline, indentation, text objects and a run button for `fn main`."
+repository = "https://github.com/Mats-Dodd/ren"
+authors = ["Mats Dodd"]
+languages = ["languages/ren"]
+
+# The grammar lives in this repository, next to the compiler it mirrors.
+# `rev` has to be a commit that has it: update it after changing the grammar.
+[grammars.ren]
+repository = "file:///Users/matthewdodd/Documents/code/ren"
+rev = "HEAD"
+path = "editors/tree-sitter-ren"

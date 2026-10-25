@@ -1,0 +1,19 @@
+{
+  "grammars": [
+    {
+      "name": "ren",
+      "camelcase": "Ren",
+      "scope": "source.ren",
+      "path": ".",
+      "file-types": ["ren"],
+      "highlights": "../zed/languages/ren/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Ren grammar for tree-sitter",
+    "links": { "repository": "https://github.com/Mats-Dodd/ren" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": false, "swift": false }
+}

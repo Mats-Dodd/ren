@@ -1,0 +1,145 @@
+================================================================================
+imports
+================================================================================
+
+import util
+import billing/stripe.{Client, Receipt} as pay
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import
+    (module_path
+      (identifier)))
+  (import
+    (module_path
+      (identifier)
+      (identifier))
+    (type_identifier)
+    (type_identifier)
+    (identifier)))
+
+================================================================================
+a public function with type parameters, a result and uses
+================================================================================
+
+pub fn first<T>(xs: Array<T>, d: T) -> T uses Io = d
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (visibility)
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (identifier)))
+
+================================================================================
+uses continuing the signature on the next line
+================================================================================
+
+pub fn load(id: Int) -> User
+    uses Io, Clock =
+  id
+
+fn next() = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier))
+      (dependency
+        (type_identifier)))
+    (block
+      (identifier)))
+  (function_definition
+    (identifier)
+    (parameters)
+    (number)))
+
+================================================================================
+parameters: inout, untyped, function types
+================================================================================
+
+fn apply(inout xs: Array<Int>, f: fn(inout Array<Int>, n: Int) -> Unit, k) = f(&xs, k)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (inout)
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (parameter
+        (identifier)
+        (function_type
+          (function_type_parameter
+            (inout)
+            (named_type
+              (type_name
+                (type_identifier))
+              (type_arguments
+                (named_type
+                  (type_name
+                    (type_identifier))))))
+          (function_type_parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))))
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (parameter
+        (identifier)))
+    (call_expression
+      (identifier)
+      (arguments
+        (reference
+          (identifier))
+        (identifier)))))

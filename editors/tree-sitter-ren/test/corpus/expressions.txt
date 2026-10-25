@@ -1,0 +1,212 @@
+================================================================================
+precedence
+================================================================================
+
+fn f() = -a + b * c % 2 == d - 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (binary_expression
+      (binary_expression
+        (unary_expression
+          (identifier))
+        (binary_expression
+          (binary_expression
+            (identifier)
+            (identifier))
+          (number)))
+      (binary_expression
+        (identifier)
+        (number)))))
+
+================================================================================
+calls, methods, fields and indexes
+================================================================================
+
+fn f() = &c.plans[i].put(util.double(x), y)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (reference
+      (method_call_expression
+        (index_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (identifier))
+        (identifier)
+        (arguments
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (identifier)))
+          (identifier))))))
+
+================================================================================
+constructors, records and ops items
+================================================================================
+
+fn f() = g(Free, Pro(5), Pro(seats: 5), Plan.Free, billing.Plan.Free(1), Plan { id: 1, plan }, { x: 1 }, Stack.of, stack.Stack.empty, Admin.rank())
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (call_expression
+      (identifier)
+      (arguments
+        (constructor_expression
+          (constructor_ref
+            (type_identifier)))
+        (constructor_expression
+          (constructor_ref
+            (type_identifier))
+          (constructor_arguments
+            (number)))
+        (constructor_expression
+          (constructor_ref
+            (type_identifier))
+          (constructor_arguments
+            (labeled_argument
+              (identifier)
+              (number))))
+        (constructor_expression
+          (constructor_ref
+            (type_name
+              (type_identifier))
+            (type_identifier)))
+        (constructor_expression
+          (constructor_ref
+            (type_name
+              (identifier)
+              (type_identifier))
+            (type_identifier))
+          (constructor_arguments
+            (number)))
+        (record_expression
+          (type_name
+            (type_identifier))
+          (field_initializer
+            (identifier)
+            (number))
+          (field_initializer
+            (identifier)))
+        (record_expression
+          (field_initializer
+            (identifier)
+            (number)))
+        (item_expression
+          (type_name
+            (type_identifier))
+          (identifier))
+        (item_expression
+          (type_name
+            (identifier)
+            (type_identifier))
+          (identifier))
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments))))))
+
+================================================================================
+literals
+================================================================================
+
+fn f() = [1_000, true, false, (), (x)]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (array_expression
+      (number)
+      (boolean)
+      (boolean)
+      (unit)
+      (parenthesized_expression
+        (identifier)))))
+
+================================================================================
+lambdas, and a trailing lambda
+================================================================================
+
+fn f() =
+  let inc = fn(x) => x + 1
+  twice(inc) fn(n) =>
+    print(n)
+    n
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (lambda
+          (parameters
+            (parameter
+              (identifier)))
+          (binary_expression
+            (identifier)
+            (number))))
+      (call_expression
+        (identifier)
+        (arguments
+          (identifier))
+        (lambda
+          (parameters
+            (parameter
+              (identifier)))
+          (block
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))
+            (identifier)))))))
+
+================================================================================
+arguments wrapping over lines
+================================================================================
+
+fn f() =
+  g(
+    1,
+    2,
+  )
+  [3,
+     4]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (call_expression
+        (identifier)
+        (arguments
+          (number)
+          (number)))
+      (array_expression
+        (number)
+        (number)))))

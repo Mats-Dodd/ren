@@ -1,0 +1,18 @@
+[
+  {
+    "label": "ren run",
+    "command": "sh",
+    "args": ["-c", "if command -v ren >/dev/null 2>&1; then ren run \"$ZED_FILE\"; else dune exec --no-print-directory ren -- run \"$ZED_FILE\"; fi"],
+    "tags": ["ren-main"]
+  },
+  {
+    "label": "ren check",
+    "command": "sh",
+    "args": ["-c", "if command -v ren >/dev/null 2>&1; then ren check \"$ZED_FILE\"; else dune exec --no-print-directory ren -- check \"$ZED_FILE\"; fi"]
+  },
+  {
+    "label": "ren types",
+    "command": "sh",
+    "args": ["-c", "if command -v ren >/dev/null 2>&1; then ren types \"$ZED_FILE\"; else dune exec --no-print-directory ren -- types \"$ZED_FILE\"; fi"]
+  }
+]

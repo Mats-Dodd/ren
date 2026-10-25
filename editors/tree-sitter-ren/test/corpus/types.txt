@@ -1,0 +1,255 @@
+================================================================================
+a record, a sum on one line, and an opaque type
+================================================================================
+
+type User = { id: Int, plan: Plan }
+pub type Light = Red | Amber | Green
+pub type UserId = opaque Int
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (record_type
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))))
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (sum_type
+      (variant
+        (type_identifier))
+      (variant
+        (type_identifier))
+      (variant
+        (type_identifier))))
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (opaque_type
+      (named_type
+        (type_name
+          (type_identifier))))))
+
+================================================================================
+a sum indented under its name, with fields
+================================================================================
+
+type Plan =
+  | Free
+  | Pro(seats: Int)
+  | Enterprise(contract: Int, seats: Int)
+
+fn f() = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (sum_type
+      (variant
+        (type_identifier))
+      (variant
+        (type_identifier)
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (variant
+        (type_identifier)
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (number)))
+
+================================================================================
+ops under a record
+================================================================================
+
+pub type Stack<T> = { items: Array<T> }
+  ops =
+    pub let empty: Stack<T> = Stack { items: [] }
+    pub fn of(items: Array<T>) -> Stack<T> = Stack { items }
+    pub fn push(inout self, x: T) = &self.items.push(x)
+    fn size(self) -> Int = self.items.len()
+
+fn main() = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (type_parameters
+      (type_identifier))
+    (record_type
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (ops_block
+      (associated_value
+        (visibility)
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (record_expression
+          (type_name
+            (type_identifier))
+          (field_initializer
+            (identifier)
+            (array_expression))))
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))
+              (type_arguments
+                (named_type
+                  (type_name
+                    (type_identifier)))))))
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (record_expression
+          (type_name
+            (type_identifier))
+          (field_initializer
+            (identifier))))
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (inout)
+            (self))
+          (parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (reference
+          (method_call_expression
+            (field_expression
+              (self)
+              (identifier))
+            (identifier)
+            (arguments
+              (identifier)))))
+      (function_definition
+        (identifier)
+        (parameters
+          (parameter
+            (self)))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (method_call_expression
+          (field_expression
+            (self)
+            (identifier))
+          (identifier)
+          (arguments)))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (number)))
+
+================================================================================
+ops after an indented sum, with an operator slot
+================================================================================
+
+type Role =
+  | Admin
+  | Guest(n: Int)
+  ops =
+    fn rank(self) -> Int =
+      match self
+        Admin => 10
+        Guest(n) => n
+    add(other) => other
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (sum_type
+      (variant
+        (type_identifier))
+      (variant
+        (type_identifier)
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (ops_block
+      (function_definition
+        (identifier)
+        (parameters
+          (parameter
+            (self)))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (block
+          (match_expression
+            (self)
+            (match_arm
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier)))
+              (number))
+            (match_arm
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier))
+                (identifier))
+              (identifier)))))
+      (operator_definition
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)))
+        (identifier)))))

@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4, 5a and 5b of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), and `ops` blocks with methods, associated functions and associated values, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)). Most examples in this README show how Ren is intended to look, not what runs today.
+> **Status:** early. Stages 1–4, 5a and 5b of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), and `ops` blocks with methods, associated functions and associated values, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
 
 ---
 

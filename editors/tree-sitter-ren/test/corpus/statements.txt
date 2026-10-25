@@ -1,0 +1,178 @@
+================================================================================
+let, var, assignment and for
+================================================================================
+
+fn f() =
+  let x: Int = 1
+  var total = 0
+  for p in &ps
+    p.x += 1
+    total = total + p.x
+  total
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (number))
+      (let_statement
+        (identifier)
+        (number))
+      (for_statement
+        (identifier)
+        (reference
+          (identifier))
+        (block
+          (assignment
+            (field_expression
+              (identifier)
+              (identifier))
+            (number))
+          (assignment
+            (identifier)
+            (binary_expression
+              (identifier)
+              (field_expression
+                (identifier)
+                (identifier))))))
+      (identifier))))
+
+================================================================================
+if, on one line and over several
+================================================================================
+
+fn f(c) =
+  let a = if c then 1 else 2
+  if c then
+    1
+  else
+    2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)))
+    (block
+      (let_statement
+        (identifier)
+        (if_expression
+          (identifier)
+          (number)
+          (number)))
+      (if_expression
+        (identifier)
+        (block
+          (number))
+        (block
+          (number))))))
+
+================================================================================
+match, with guards and nested patterns
+================================================================================
+
+fn f(u) =
+  match u.plan
+    Free => 0
+    Pro(n) if n > 100 => n * 2
+    Plan.Enterprise(_) => -1
+    billing.Plan.Trial(Some(d)) => d
+    x => match x
+      _ => 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)))
+    (block
+      (match_expression
+        (field_expression
+          (identifier)
+          (identifier))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (type_identifier)))
+          (number))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (type_identifier))
+            (identifier))
+          (binary_expression
+            (identifier)
+            (number))
+          (binary_expression
+            (identifier)
+            (number)))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (type_name
+                (type_identifier))
+              (type_identifier))
+            (wildcard))
+          (unary_expression
+            (number)))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (type_name
+                (identifier)
+                (type_identifier))
+              (type_identifier))
+            (constructor_pattern
+              (constructor_ref
+                (type_identifier))
+              (identifier)))
+          (identifier))
+        (match_arm
+          (identifier)
+          (match_expression
+            (identifier)
+            (match_arm
+              (wildcard)
+              (number))))))))
+
+================================================================================
+a let whose value is a block
+================================================================================
+
+fn f() =
+  let y =
+    let z = 1
+    z + 1
+  y
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (block
+          (let_statement
+            (identifier)
+            (number))
+          (binary_expression
+            (identifier)
+            (number))))
+      (identifier))))

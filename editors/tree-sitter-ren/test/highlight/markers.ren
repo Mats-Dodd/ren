@@ -1,0 +1,36 @@
+import billing/stripe.{Client} as pay
+// <- keyword
+//     ^ namespace
+//                     ^ type
+
+pub fn put(inout c: Cart, p: Plan) -> Int uses Io, Clock =
+// <- keyword
+//     ^ function
+//         ^ keyword.mutation
+//               ^ variable.parameter
+//                  ^ type
+//                                             ^ type.dependency
+  &c.plans.push(p)
+//^ keyword.mutation
+//   ^ property
+//         ^ function.method
+  print(Stack.of(Free, Pro(seats: 5), billing.Plan.Free))
+//^ function
+//      ^ type
+//            ^ function
+//               ^ constructor
+//                         ^ property
+//                                    ^ namespace
+//                                            ^ type
+//                                                 ^ constructor
+
+type Stack<T> = { items: Array<T> }
+//   ^ type
+//         ^ type
+//                ^ property
+  ops =
+//^ keyword
+    pub let empty: Stack<T> = Stack { items: [] }
+//          ^ constant
+    fn size(self) -> Int = self.items.len()
+//          ^ variable.special

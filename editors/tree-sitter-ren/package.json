@@ -1,0 +1,16 @@
+{
+  "name": "tree-sitter-ren",
+  "version": "0.1.0",
+  "description": "Ren grammar for tree-sitter",
+  "repository": "https://github.com/Mats-Dodd/ren",
+  "license": "MIT",
+  "private": true,
+  "files": ["grammar.js", "src", "queries", "tree-sitter.json"],
+  "devDependencies": {
+    "tree-sitter-cli": "0.24.7"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test"
+  }
+}
