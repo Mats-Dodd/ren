@@ -2,11 +2,15 @@
 
 open Ren
 
+(* What `ren --version` prints. *)
+let version = "ren 0.1.0"
+
 let usage =
   {|usage: ren <command> <file.ren>
        ren run <file.ren> [-- <args>...]
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
+       ren --help | --version
 
 The file is the program's entry module. A module it imports is found from
 the file's folder: `import billing/stripe` is the file billing/stripe.ren.
@@ -31,7 +35,11 @@ commands:
   core    print every module in Core, the language it's lowered to,
           with the evidence of what's installed passed explicitly
   tokens  print the tokens the lexer produces
-  ast     print the parsed syntax tree|}
+  ast     print the parsed syntax tree
+
+options:
+  -h, --help  print this, and stop
+  --version   print which version of Ren this is|}
 
 (* Read a file, or stop with its error. *)
 let read path =
@@ -59,14 +67,19 @@ let fail ~known e =
 
 (* Whether the file [path] declares `main`: a program starts there. One
    that can't be read or parsed doesn't, here; it's reported if it's
-   loaded. *)
+   loaded. Only those two are caught: any other exception is a bug, and
+   goes on. *)
 let has_main path =
-  try
-    List.exists
-      (function
-        | Ast.Fn (f : Ast.Parsed.fn_def) -> f.name.name = "main" | _ -> false)
-      (Driver.parse ~file:path (read path))
-  with _ -> false
+  match In_channel.with_open_bin path In_channel.input_all with
+  | exception Sys_error _ -> false
+  | src -> (
+      try
+        List.exists
+          (function
+            | Ast.Fn (f : Ast.Parsed.fn_def) -> f.name.name = "main"
+            | _ -> false)
+          (Driver.parse ~file:path src)
+      with Diag.Error _ | Diag.Errors _ -> false)
 
 (* Every `.ren` file under the folder [dir], in sorted order, and the
    folders below it left out because each holds a program of its own: one
@@ -181,6 +194,10 @@ let test args =
 
 let () =
   match Sys.argv with
+  | [| _; ("--help" | "-h" | "help") |] ->
+      (* asked for, so it's the output, not an error *)
+      print_endline usage
+  | [| _; "--version" |] -> print_endline version
   | args when Array.length args >= 2 && args.(1) = "test" ->
       test (List.tl (List.tl (Array.to_list args)))
   | args

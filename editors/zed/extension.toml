@@ -8,8 +8,9 @@ authors = ["Mats Dodd"]
 languages = ["languages/ren"]
 
 # The grammar lives in this repository, next to the compiler it mirrors.
-# `rev` has to be a commit that has it: update it after changing the grammar.
+# `rev` has to be a commit on GitHub that has it: update it after changing
+# the grammar, once that commit is pushed.
 [grammars.ren]
-repository = "file:///Users/matthewdodd/Documents/code/ren"
+repository = "https://github.com/Mats-Dodd/ren"
 rev = "686e55aec4f7a8264e38f6ac6018503b857c9a1a"
 path = "editors/tree-sitter-ren"

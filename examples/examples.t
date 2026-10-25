@@ -917,3 +917,22 @@ rate limiter guards (prices/README.md). Each piece is a dependency, and
     ✓ main prints each price, or what stopped it
   
   10 passed
+
+`ren --help` is asked for, so it's printed to stdout and exits 0, and
+`--version` says which Ren this is. A folder with no tests is more likely
+the wrong folder than a pass, so `ren test` on one exits 1:
+
+  $ ren --help | head -2
+  usage: ren <command> <file.ren>
+         ren run <file.ren> [-- <args>...]
+  $ ren -h > /dev/null
+  $ ren --version
+  ren 0.1.0
+  $ mkdir -p untested
+  $ cat > untested/main.ren <<'END'
+  > fn main() = print(1)
+  > END
+  $ ren test untested
+  no tests: nothing in untested declares a `test`
+    = help: write one, `test "it works" = assert 1 + 1 == 2`, or give `ren test` the folder that has them
+  [1]
