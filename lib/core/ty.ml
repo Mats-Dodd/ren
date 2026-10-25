@@ -98,10 +98,14 @@ let canonical (s : scheme) =
 
    Row tails are hidden unless [show_tail] picks them, and then print as
    `..e` (errors) or `..d` (dependencies). Type names are written as they'd
-   be written in module [home] (path.ml). *)
+   be written in module [home] (path.ml).
+
+   Error messages print inference's types with this printer too: types.ml
+   converts each one to a [Ty.ty] as it's printed, adding to [hints] as it
+   goes, so one printer can name variables across a whole message. *)
 type printer = {
   home : string;
-  hints : (int * string) list;
+  mutable hints : (int * string) list;  (** declared names, by variable *)
   names : (int, string) Hashtbl.t;
   mutable order : string list;  (** names handed out, most recent first *)
   mutable reserved : string list;
@@ -138,6 +142,12 @@ let var_name pr id =
       Hashtbl.add pr.names id n;
       pr.order <- n :: pr.order;
       n
+
+(* Give variable [id] the name [n] up front. Unlike a name handed out by
+   [var_name], it doesn't take [n] from other variables. types.ml uses it
+   for a type parameter like `T` while its function is being checked: the
+   parameter prints as itself, whatever else is named `T`. *)
+let name pr id n = Hashtbl.replace pr.names id n
 
 (* Keep the declared names of a type's variables free, so an automatic name
    handed out first doesn't take them. *)

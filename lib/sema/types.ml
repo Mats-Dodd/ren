@@ -207,10 +207,23 @@ type canon = {
   rows : (int, int) Hashtbl.t;  (** row variable id -> its number *)
   mutable names : (int * string) list;
       (** the declared names of the numbered variables *)
+  for_message : bool;
+      (** converting for an error message, while inference is still running (see
+          [printer]) *)
+  mutable params : (int * string) list;
+      (** for a message: the type parameters numbered so far, with their names
+      *)
 }
 
 let canon st =
-  { cst = st; tys = Hashtbl.create 8; rows = Hashtbl.create 8; names = [] }
+  {
+    cst = st;
+    tys = Hashtbl.create 8;
+    rows = Hashtbl.create 8;
+    names = [];
+    for_message = false;
+    params = [];
+  }
 
 let number table id =
   match Hashtbl.find_opt table id with
@@ -226,7 +239,11 @@ let number table id =
    isn't generic is exactly its labels. Inside a function's body
    ([all = true]) a variable nothing constrained is still a variable, like
    the parameter of a lambda that's never used. A type parameter is the
-   variable it became when its function was generalized. *)
+   variable it became when its function was generalized.
+
+   For a message ([c.for_message]), a type parameter is a variable of its
+   own, which the printer names as the parameter, and every row tail is
+   kept, so the printer can choose which to show. *)
 let rec canon_ty c ~all t : Ty.ty =
   match repr t with
   | TVar { contents = Unbound (id, l) } when all || l = generic_level ->
@@ -235,6 +252,10 @@ let rec canon_ty c ~all t : Ty.ty =
       | Some h when not (List.mem_assoc n c.names) ->
           c.names <- (n, h) :: c.names
       | _ -> ());
+      Var n
+  | TSkol (id, name) when c.for_message ->
+      let n = number c.tys id in
+      if not (List.mem_assoc n c.params) then c.params <- (n, name) :: c.params;
       Var n
   | TSkol (id, _) -> (
       match Hashtbl.find_opt c.cst.skolem_vars id with
@@ -258,7 +279,9 @@ and canon_row c ~all r : Ty.row =
   let rec tail r =
     match repr_row r with
     | RVar { contents = RUnbound (id, l) } ->
-        if all || l = generic_level then Some (number c.rows id) else None
+        if all || c.for_message || l = generic_level then
+          Some (number c.rows id)
+        else None
     | RExtend (_, rest) -> tail rest
     | REmpty -> None
     | RVar { contents = RLink _ } -> assert false
@@ -321,125 +344,55 @@ let of_scheme st (s : Ty.scheme) =
 (* ---- printing ---- *)
 
 (* A printer names variables consistently across everything printed with it,
-   so one message or signature reads `T` for the same variable throughout.
-   Generic variables get names (their hint, or T, U, V, ...); variables
-   inference hasn't solved yet print as `_`.
+   so one message reads `T` for the same variable throughout. Generic
+   variables get names (their hint, or T, U, V, ...); variables inference
+   hasn't solved yet print as `_`, and type parameters as themselves.
 
-   Row tails are hidden unless [show_tail] picks them, and then print as
-   `..e` (errors) or `..d` (dependencies). Type names are written as they'd
-   be written in module [home] (path.ml).
+   Row tails are hidden unless [show_tail] picks them (by row variable id),
+   and then print as `..e` (errors) or `..d` (dependencies). Type names are
+   written as they'd be written in module [home] (path.ml).
 
-   This is for error messages, while inference is still running; `ren
-   types` prints the canonical types of ty.ml instead. *)
-type printer = {
-  home : string;
-  hints : (int, string) Hashtbl.t;  (** from the [state] *)
-  names : (int, string) Hashtbl.t;
-  mutable order : string list;  (** names handed out, most recent first *)
-  reserved : (string, unit) Hashtbl.t;
-  show_tail : int -> bool;
-  tail_names : (int, string) Hashtbl.t;
-}
+   This is for error messages, while inference is still running. Each type
+   is converted to canonical form as it's printed and printed by ty.ml's
+   printer, so types print the same way here as in `ren types`. One [canon]
+   and one [Ty.printer] serve every call, so a variable keeps its number,
+   and so its name, across the whole message. *)
+type printer = { canon : canon; ty_printer : Ty.printer }
 
 let printer ?(show_tail = fun _ -> false) ~home (st : state) =
-  {
-    home;
-    hints = st.hints;
-    names = Hashtbl.create 8;
-    order = [];
-    reserved = Hashtbl.create 8;
-    show_tail;
-    tail_names = Hashtbl.create 4;
-  }
+  let c = { (canon st) with for_message = true } in
+  (* [Ty.printer] asks about a tail by its number; find the id that has it.
+     There's only one, so the order [fold] visits them in doesn't matter. *)
+  let numbered n =
+    Hashtbl.fold
+      (fun id m found -> found || (m = n && show_tail id))
+      c.rows false
+  in
+  (* the scheme's names start empty: [to_ty] adds them as they're found *)
+  let scheme : Ty.scheme = { ty = Error; names = [] } in
+  { canon = c; ty_printer = Ty.printer ~show_tail:numbered ~home scheme }
 
-let auto_names = Ty.auto_names
-let taken pr n = Hashtbl.mem pr.reserved n || List.mem n pr.order
+(* Bring the Ty printer up to date with what conversion has learned:
+   the declared names of the variables, and the type parameters. *)
+let sync pr =
+  pr.ty_printer.hints <- pr.canon.names;
+  List.iter (fun (n, name) -> Ty.name pr.ty_printer n name) pr.canon.params
 
-let var_name pr id =
-  match Hashtbl.find_opt pr.names id with
-  | Some n -> n
-  | None ->
-      let n =
-        match Hashtbl.find_opt pr.hints id with
-        | Some h when not (List.mem h pr.order) -> h
-        | _ -> List.find (fun n -> not (taken pr n)) auto_names
-      in
-      Hashtbl.add pr.names id n;
-      pr.order <- n :: pr.order;
-      n
+let to_ty pr t =
+  let t = canon_ty pr.canon ~all:false t in
+  sync pr;
+  t
 
-(* Keep the hinted names of a type's variables free, so an automatic name
-   handed out first doesn't take them. *)
-let rec reserve pr t =
-  match repr t with
-  | TVar { contents = Unbound (id, _) } ->
-      Option.iter
-        (fun h -> Hashtbl.replace pr.reserved h ())
-        (Hashtbl.find_opt pr.hints id)
-  | TVar { contents = Link _ } | TSkol _ | TError -> ()
-  | TCon (_, args) -> List.iter (reserve pr) args
-  | TFun (ps, r, _, _) -> List.iter (reserve pr) (r :: param_tys ps)
-
-let tail_name pr id kind =
-  match Hashtbl.find_opt pr.tail_names id with
-  | Some n -> n
-  | None ->
-      let existing = Hashtbl.fold (fun _ n acc -> n :: acc) pr.tail_names [] in
-      let rec pick i =
-        let n = if i = 1 then kind else kind ^ string_of_int i in
-        if List.mem n existing then pick (i + 1) else n
-      in
-      let n = pick 1 in
-      Hashtbl.add pr.tail_names id n;
-      n
+let reserve pr t = Ty.reserve pr.ty_printer (to_ty pr t)
+let show pr t = Ty.show pr.ty_printer (to_ty pr t)
 
 let show_row pr ~prefix ~sep ~kind r =
-  let labels, tail = row_parts r in
-  let labels = List.sort_uniq String.compare labels in
-  let tail =
-    match tail with
-    | Some id when pr.show_tail id -> [ ".." ^ tail_name pr id kind ]
-    | _ -> []
-  in
-  match labels @ tail with
-  | [] -> ""
-  | parts -> prefix ^ String.concat sep parts
+  Ty.show_row pr.ty_printer ~prefix ~sep ~kind (canon_row pr.canon ~all:false r)
 
-let rec show pr t =
-  match repr t with
-  | TCon (p, []) -> Path.show ~home:pr.home p
-  | TCon (p, args) ->
-      Path.show ~home:pr.home p ^ "<"
-      ^ String.concat ", " (List.map (show pr) args)
-      ^ ">"
-  | TSkol (_, n) -> n
-  | TError -> "_"
-  | TVar { contents = Unbound (id, l) } ->
-      if l = generic_level then var_name pr id else "_"
-  | TVar { contents = Link _ } -> assert false
-  | TFun (ps, r, e, u) ->
-      (* `let`s fix the order variables are named in: OCaml evaluates the
-         operands of `^` right to left *)
-      let ps = List.map (show_param pr) ps in
-      let r = show_ret pr r in
-      "fn(" ^ String.concat ", " ps ^ ")" ^ r ^ show_effects pr e u
-
-and show_param pr p =
-  match p.mode with Inout -> "inout " ^ show pr p.ty | Read -> show pr p.ty
-
-(* ` -> R`, or nothing for Unit. A returned function with effects is
-   parenthesized, so it's clear whose effects they are. *)
-and show_ret pr r =
-  match repr r with
-  | TCon (p, []) when p = Path.prelude "Unit" -> ""
-  | TFun (_, _, e, u) as f ->
-      let s = show pr f in
-      if show_effects pr e u = "" then " -> " ^ s else " -> (" ^ s ^ ")"
-  | r -> " -> " ^ show pr r
-
-and show_effects pr e u =
-  show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" e
-  ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
+let show_effects pr e u =
+  let e = canon_row pr.canon ~all:false e in
+  let u = canon_row pr.canon ~all:false u in
+  Ty.show_effects pr.ty_printer e u
 
 (* Does the type mention a type parameter? Error messages explain those. *)
 let rec skolems t =
