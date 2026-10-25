@@ -204,6 +204,37 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
       = this is a bug in the Ren compiler, not in your program
     |}]
 
+let%expect_test "Core Lint reports an instance that is a value" =
+  (* an [Instance] anywhere but the end of a [Handler]'s body: here a
+     statement of [main], which a program could keep (compiler.md, "No
+     cycles") *)
+  let loc = Ren.Loc.point ~file 1 1 in
+  let body =
+    Ren.Core.mk
+      (Seq (Ren.Core.mk (Instance []) Ren.Ty.unit loc, Ren.Core.unit loc))
+      Ren.Ty.unit loc
+  in
+  let main : Ren.Core.fn_def =
+    {
+      path = Ren.Path.make "test" "main";
+      params = [];
+      ev = Ren.Core.evidence 2;
+      scheme =
+        { ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed); names = [] };
+      body;
+      loc;
+    }
+  in
+  report "" (fun () ->
+      Ren.Driver.pass "lint" (fun () ->
+          Ren.Core_lint.program ~imports:[] ~linked:[]
+            { home = "test"; types = []; fns = [ main ]; values = [] }));
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: an instance that isn't the end of a handler's body")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
 (* An associated value, `T.a` and `T.b`, is a function of no parameters
    in Core, named only by a [Global_value] node, and made after every
    value it uses. *)
