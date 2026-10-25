@@ -193,10 +193,15 @@ let refer w (p : Path.t) (t : Ty.ty) =
       match Hashtbl.find_opt w.copies (p, key) with
       | Some c -> c
       | None ->
+          (* each row variable's dependencies, apart by `;`, and `_` for
+             one given none: `f[Console; _]` *)
           let name =
-            p.name
-            ^ String.concat ""
-                (List.map (fun ls -> "[" ^ String.concat ", " ls ^ "]") key)
+            p.name ^ "["
+            ^ String.concat "; "
+                (List.map
+                   (function [] -> "_" | ls -> String.concat ", " ls)
+                   key)
+            ^ "]"
           in
           let c = Path.make p.home name in
           Hashtbl.replace w.copies (p, key) c;

@@ -796,6 +796,33 @@ pub fn twice(f: fn() -> Int) -> Int =
     ()
     |}]
 
+(* A copy is named for what each live row variable of its function gets,
+   apart by `;`: here `f` uses `pick`'s own row, which gets `Console`, and
+   `g` one of its own, which gets nothing. *)
+let%expect_test "a copy's name gives each row variable's dependencies" =
+  core
+    {|
+fn pick(f, g) =
+  let _ = f()
+  fn() => g()
+fn main() uses Console =
+  let _h = pick(fn() => 1, fn() => 2)
+  print(1)
+|};
+  [%expect
+    {|
+    (fn pick (f/1 g/2) (let _/3 (call f/1) (lambda () (captures g/2) (call g/2))))
+    (fn main () (uses Console/2)
+      (let _h/1
+        (call pick[Console; _] (lambda () (captures) (uses Console/3) 1)
+          (lambda () (captures) 2)
+          (uses Console/2))
+        (call print 1 (uses Console/2))))
+    (fn pick[Console; _] (f/1 g/2) (uses Console/4)
+      (let _/3 (call f/1 (uses Console/4)) (lambda () (captures g/2) (call g/2))))
+    (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+    |}]
+
 let%expect_test "a function used as a value takes what its type there names" =
   core
     {|
