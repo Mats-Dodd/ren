@@ -25,8 +25,10 @@
 
 // `not` binds below the comparisons, so `not a == b` is `not (a == b)`,
 // and above `&&`, so `not a && b` is `(not a) && b`. `orelse` binds below
-// `||`. `try` and `attempt` take everything to their right, so they bind
-// loosest of all, and so does `assert`.
+// `||`. `try` takes everything to its right, so it binds loosest of all,
+// and so does `assert`. `attempt` stops at a comparison, so `attempt f()
+// == x` is `(attempt f()) == x`, but `attempt a() + b()` is
+// `attempt (a() + b())`.
 const PREC = {
   prefix: -1,
   orelse: 0,
@@ -34,10 +36,11 @@ const PREC = {
   and: 2,
   not: 3,
   compare: 4,
-  add: 5,
-  mul: 6,
-  unary: 7,
-  postfix: 8,
+  attempt: 5,
+  add: 6,
+  mul: 7,
+  unary: 8,
+  postfix: 9,
 };
 
 // `a, b, c`, with a trailing comma allowed, and possibly empty
@@ -597,10 +600,10 @@ module.exports = grammar({
     try_expression: ($) =>
       prec.right(PREC.prefix, seq('try', field('operand', $._expression))),
 
-    // attempt f(): its outcome, as a Result
+    // attempt f(): its outcome, as a Result, up to a comparison
     attempt_expression: ($) =>
       prec.right(
-        PREC.prefix,
+        PREC.attempt,
         seq('attempt', field('operand', $._expression)),
       ),
 

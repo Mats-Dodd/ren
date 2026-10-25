@@ -517,6 +517,27 @@ fn main() = ()
     fn main()
     |}]
 
+let%expect_test "attempt stops at a comparison" =
+  (* it takes what's to its right up to a comparison, so its `Result` can
+     be compared: `attempt f() == x` is `(attempt f()) == x` *)
+  run
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn main() =
+  let ok = attempt load(4)
+  print(attempt load(4) == ok)
+  print(attempt load(4) != attempt load(5))
+  print(attempt load(1) + load(2))
+  print(attempt load(4) == ok && true)
+|};
+  [%expect {|
+    true
+    true
+    Ok(3)
+    true
+    ()
+    |}]
+
 let%expect_test "orelse turns an Option into a value or an error" =
   types
     {|

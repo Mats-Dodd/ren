@@ -272,6 +272,47 @@ fn f() =
             (type_identifier)))))))
 
 ================================================================================
+attempt stops at a comparison
+================================================================================
+
+fn f() =
+  assert attempt g() == Err(Short(1))
+  let n = attempt a() + b()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (assert_expression
+        (binary_expression
+          (attempt_expression
+            (call_expression
+              (identifier)
+              (arguments)))
+          (constructor_expression
+            (constructor_ref
+              (type_identifier))
+            (constructor_arguments
+              (constructor_expression
+                (constructor_ref
+                  (type_identifier))
+                (constructor_arguments
+                  (number)))))))
+      (let_statement
+        (identifier)
+        (attempt_expression
+          (binary_expression
+            (call_expression
+              (identifier)
+              (arguments))
+            (call_expression
+              (identifier)
+              (arguments))))))))
+
+================================================================================
 fail patterns, and try match
 ================================================================================
 

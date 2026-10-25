@@ -765,14 +765,23 @@ and parse_unary p =
       advance p;
       let e = parse_unary p in
       mk (Ref e) start p
-  | (TRY | ATTEMPT) as kw ->
+  | TRY ->
       (* `try` covers every call to its right (errors.md, "Marking"), so it
          takes the whole expression there: `try a() + b()` is
          `try (a() + b())` *)
       let start = loc p in
       advance p;
       let e = parse_expr p in
-      mk (if kw = TRY then Try e else Attempt e) start p
+      mk (Try e) start p
+  | ATTEMPT ->
+      (* `attempt` makes a value, a `Result`, which is usually compared
+         next, so it stops at a comparison: `attempt f() == Err(X)` is
+         `(attempt f()) == Err(X)`, and `attempt a() + b()` is
+         `attempt (a() + b())` *)
+      let start = loc p in
+      advance p;
+      let e = parse_add p in
+      mk (Attempt e) start p
   | ASSERT ->
       (* like `try`, it takes the whole expression to its right:
          `assert a == b` checks `a == b` *)

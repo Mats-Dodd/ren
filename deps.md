@@ -529,8 +529,11 @@ stage, or settled something the plan left open:
 - **A test of a refusal looks at it with a `match`,** since `Err(...)`
   can't be written (an error isn't a value): `match attempt
   &acme.transfer(t)` with an arm for the refusal it expects and `_ =>
-  assert false`. `attempt` takes what follows it whole, so `attempt f()
-  == x` would be `attempt (f() == x)`.
+  assert false`.
+- **`attempt` stops at a comparison,** where `try` takes everything to
+  its right: `attempt f() == x` is `(attempt f()) == x`, so a test can
+  compare what it kept. Arithmetic is still inside it, `attempt a() +
+  b()`.
 - **A string stays UTF-8.** A literal that isn't is an error, and
   `slice` panics at an offset inside a character, as well as out of
   bounds, so no `Str` can hold bytes `from_utf8` would refuse.

@@ -98,6 +98,10 @@ print(try acme.statement(bob).len())     // covers statement(); len() can't fail
 let n = try parse(read(path)) + 1        // covers read() and parse()
 ```
 
+`attempt` makes a value, a `Result`, which is usually compared next, so
+it covers the calls to its right up to a comparison: `attempt f() == x`
+is `(attempt f()) == x`, and `attempt a() + b()` is `attempt (a() + b())`.
+
 ## Handling: `match`
 
 Errors are handled with `match`. A `fail` pattern matches an error; any

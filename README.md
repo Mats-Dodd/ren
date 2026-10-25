@@ -202,7 +202,7 @@ fn profile(id: UserId) -> Profile =
   summarize(user)
 ```
 
-Handling an error is pattern matching, so it's a `match`: a `fail` pattern matches an error, and any other pattern matches the value. The `match` must handle every error the call can fail with, and `_` never matches one (`fail _` does), so a stray wildcard can't swallow a failure. `try match` handles the errors it lists and passes the rest on, so the line still starts with `try`. `try` covers every call to its right in the same expression. A call that can fail with no marker is an error, and so is a marker on a call that can't fail.
+Handling an error is pattern matching, so it's a `match`: a `fail` pattern matches an error, and any other pattern matches the value. The `match` must handle every error the call can fail with, and `_` never matches one (`fail _` does), so a stray wildcard can't swallow a failure. `try match` handles the errors it lists and passes the rest on, so the line still starts with `try`. `try` covers every call to its right in the same expression, and `attempt` the ones up to a comparison, so `attempt f() == x` compares its `Result`. A call that can fail with no marker is an error, and so is a marker on a call that can't fail.
 
 `attempt` is the one way an error becomes a value: it turns the outcome into `Ok(v)` or `Err(tag)`, for an error that has to outlive the line it happened on, such as one checked by a test or decided on later. `try r` fails with it again.
 
