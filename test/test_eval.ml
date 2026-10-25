@@ -242,7 +242,7 @@ fn main() =
   var scores = [13, 11, 12]
   let before = scores                  // a value, not a reference
   normalize(&scores)                   // `&`: this call changes `scores`
-  push(&scores, 10)
+  &scores.push(10)
   print(scores)
   print(before)                        // unchanged
   print(sum(scores))

@@ -107,9 +107,6 @@ let array_methods =
     };
   ]
 
-(* the bare `len` and `push` too, until nothing calls them that way *)
-let fns = fns @ array_methods
-
 let types =
   [
     { name = "Int"; arity = 0; methods = [] };

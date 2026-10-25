@@ -10,16 +10,16 @@ let stack =
     {|
 pub type Stack<T> = { items: Array<T> }
   ops =
-    pub fn push(inout self, x: T) = push(&self.items, x)
+    pub fn push(inout self, x: T) = &self.items.push(x)
     pub fn peek(self) -> Option<T> =
-      let n = len(self.items)
+      let n = self.items.len()
       if n == 0 then None else Some(self.items[n - 1])
-    pub fn size(self) -> Int = len(self.items)
+    pub fn size(self) -> Int = self.items.len()
     pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
     pub let empty: Stack<T> = Stack { items: [] }
     fn grow(inout self) =
       let first = self.items[0]
-      push(&self.items, first)
+      &self.items.push(first)
 |}
   )
 
@@ -50,7 +50,7 @@ fn main() = Stack { items: [1] }
 let%expect_test "an ops block parses under its type" =
   ast (snd stack);
   [%expect
-    {| (pub type Stack<T> (fields items:Array<T>) (ops (pub (fn push (self x) (call push (& (. self items)) x))) (pub (fn peek (self) (block (let n (call len (. self items))) (if (== n 0) (con None) (con Some (index (. self items) (- n 1))))))) (pub (fn size (self) (call len (. self items)))) (pub (fn of (xs) (record Stack items=xs))) (pub let empty (record Stack items=(array))) ((fn grow (self) (block (let first (index (. self items) 0)) (call push (& (. self items)) first)))))) |}]
+    {| (pub type Stack<T> (fields items:Array<T>) (ops (pub (fn push (self x) (& (call (. (. self items) push) x)))) (pub (fn peek (self) (block (let n (call (. (. self items) len))) (if (== n 0) (con None) (con Some (index (. self items) (- n 1))))))) (pub (fn size (self) (call (. (. self items) len)))) (pub (fn of (xs) (record Stack items=xs))) (pub let empty (record Stack items=(array))) ((fn grow (self) (block (let first (index (. self items) 0)) (& (call (. (. self items) push) first))))))) |}]
 
 let%expect_test "ops on a sum type and on an opaque type" =
   (* inside its module, an opaque type is what it's represented as, so
@@ -302,8 +302,8 @@ let%expect_test "a public item spells out its signature" =
     {|
 pub type Stack = { items: Array<Int> }
   ops =
-    pub fn push(inout self, x) = push(&self.items, x)
-    pub fn size(self) = len(self.items)
+    pub fn push(inout self, x) = &self.items.push(x)
+    pub fn size(self) = self.items.len()
     pub let empty = Stack { items: [] }
 
 pub type Box<T> = { items: Array<T> }
@@ -316,15 +316,15 @@ fn main() = 1
     {|
     error: the parameter `x` of the public function `Stack.push` has no type
       ┌─ test.ren:3:29
-    3 │     pub fn push(inout self, x) = push(&self.items, x)
+    3 │     pub fn push(inout self, x) = &self.items.push(x)
       │                             ^
       = public functions spell out their full signature
       help: write `x: Int`
 
     error: expected `Unit`, found `Int`
       ┌─ test.ren:4:25
-    4 │     pub fn size(self) = len(self.items)
-      │                         ^^^^^^^^^^^^^^^
+    4 │     pub fn size(self) = self.items.len()
+      │                         ^^^^^^^^^^^^^^^^
       = a public function without `->` returns `Unit`
       help: add `-> Int` to the signature
 
@@ -567,7 +567,7 @@ let%expect_test "a receiver whose type isn't known yet" =
     {|
 type Bag = { items: Array<Int> }
   ops =
-    fn size(self) -> Int = len(self.items)
+    fn size(self) -> Int = self.items.len()
 
 fn count(b) = b.size()
 fn main() = count(Bag { items: [1] })
@@ -990,7 +990,7 @@ let%expect_test "a type without the method" =
     {|
 type Bag = { items: Array<Int> }
   ops =
-    fn size(self) -> Int = len(self.items)
+    fn size(self) -> Int = self.items.len()
 
 type Empty = { n: Int }
 
@@ -1003,7 +1003,7 @@ fn main() =
     {|
 type Bag = { items: Array<Int> }
   ops =
-    fn size(self) -> Int = len(self.items)
+    fn size(self) -> Int = self.items.len()
 
 fn main() = [Bag.count(Bag { items: [] }), Bag.items]
 |};
@@ -1044,7 +1044,7 @@ let%expect_test "a receiver that could be several types" =
     {|
 type Bag = { items: Array<Int> }
   ops =
-    fn size(self) -> Int = len(self.items)
+    fn size(self) -> Int = self.items.len()
 
 type Box = { n: Int }
   ops =
@@ -1438,3 +1438,25 @@ pub fn find(xs: Array<Int>, x: Int) -> Option<Int> =
       );
     ];
   [%expect {| [true, false, true] |}]
+
+let%expect_test "an array's methods aren't functions" =
+  run {|
+fn main() =
+  var xs = [1]
+  push(&xs, 2)
+  len(xs)
+|};
+  [%expect
+    {|
+    error: there's no function named `push`
+      ┌─ test.ren:3:3
+    3 │   push(&xs, 2)
+      │   ^^^^
+      help: `push` is a method of `Array`, so it's called with a dot: `&xs.push(...)`
+
+    error: there's no function named `len`
+      ┌─ test.ren:4:3
+    4 │   len(xs)
+      │   ^^^
+      help: `len` is a method of `Array`, so it's called with a dot: `xs.len()`
+    |}]

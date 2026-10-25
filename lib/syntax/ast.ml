@@ -162,7 +162,7 @@ type ('v, 'b, 't) fn_def = {
 
      pub type Stack<T> = { items: Array<T> }
        ops =
-         pub fn push(inout self, x: T) = push(&self.items, x)
+         pub fn push(inout self, x: T) = &self.items.push(x)
          pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
          pub let empty: Stack<T> = Stack { items: [] }
 

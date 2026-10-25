@@ -1013,7 +1013,7 @@ let%expect_test "inout is part of a function's type" =
      would be lost *)
   run
     {|
-fn bump(inout xs: Array<Int>) = push(&xs, 1)
+fn bump(inout xs: Array<Int>) = &xs.push(1)
 fn ap(f, x) = f(x)
 fn main() =
   var xs = [0]
@@ -1481,7 +1481,7 @@ let%expect_test "a pure call before the one that uses something" =
 fn pure(n) = n + 1
 pub fn go(n: Int) -> Int =
   let a = pure(n)
-  let b = len([n])
+  let b = [n].len()
   print(a + b)
   a
 fn main() = go(1)

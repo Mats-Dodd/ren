@@ -435,7 +435,37 @@ let lookup env sc loc ~what x =
                   "make `self` the first parameter, of a function in its \
                    type's `ops` block"
                 "there's no `self` here: only a method has one"
-          | [] -> report env loc (sprintf "there's no %s named `%s`" what x)
+          | [] -> (
+              (* `len(xs)`: a built-in type's method, called the old way *)
+              let builtin =
+                List.find_map
+                  (fun (t : Prelude.builtin_type) ->
+                    List.find_map
+                      (fun (m : Prelude.builtin_fn) ->
+                        if m.name = x then Some (t.name, m) else None)
+                      t.methods)
+                  Prelude.types
+              in
+              match builtin with
+              | Some (t, m) ->
+                  (* `&` if it changes its receiver, `...` if it takes
+                     more than its receiver *)
+                  let amp, rest =
+                    match m.scheme.ty with
+                    | Fun (self :: ps, _, _, _) ->
+                        ( (if self.mode = Inout then "&" else ""),
+                          if ps = [] then "" else "..." )
+                    | _ -> ("", "")
+                  in
+                  report env loc
+                    ~help:
+                      (sprintf
+                         "`%s` is a method of `%s`, so it's called with a dot: \
+                          `%sxs.%s(%s)`"
+                         x t amp x rest)
+                    (sprintf "there's no %s named `%s`" what x)
+              | None ->
+                  report env loc (sprintf "there's no %s named `%s`" what x))
           | _ ->
               (* the import isn't unused, it's used wrongly, and this says
                  how to fix that *)

@@ -382,7 +382,7 @@ let%expect_test "a public function can't mention a private type" =
     {|
 type Row = { id: Int }
 pub fn load(id: Int) -> Row = Row { id: id }
-pub fn ids(rows: Array<Row>) -> Int = len(rows)
+pub fn ids(rows: Array<Row>) -> Int = rows.len()
 fn main() = load(1).id
 |};
   [%expect
@@ -399,7 +399,7 @@ fn main() = load(1).id
       ┌─ test.ren:3:24
     1 │ type Row = { id: Int }
       │      --- `Row` is declared here, without `pub`
-    3 │ pub fn ids(rows: Array<Row>) -> Int = len(rows)
+    3 │ pub fn ids(rows: Array<Row>) -> Int = rows.len()
       │                        ^^^
       help: mark `Row` `pub`
     |}]

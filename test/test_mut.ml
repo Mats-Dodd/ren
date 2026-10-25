@@ -153,7 +153,7 @@ let%expect_test "an inout argument can't also be read" =
   run
     {|
 fn f(inout xs: Array<Int>, ys: Array<Int>) =
-  push(&xs, len(ys))
+  &xs.push(ys.len())
 fn main() =
   var xs = [1]
   f(&xs, xs)
@@ -205,16 +205,16 @@ let%expect_test "a for & loop locks its array" =
 fn main() =
   var xs = [1, 2]
   for x in &xs
-    push(&xs, x)
+    &xs.push(x)
 |};
   [%expect
     {|
     error: `xs` is being changed by the `for` loop around this
-      ┌─ test.ren:4:11
+      ┌─ test.ren:4:6
     3 │   for x in &xs
       │            --- the loop changes `xs` here
-    4 │     push(&xs, x)
-      │           ^^
+    4 │     &xs.push(x)
+      │      ^^
       help: inside the loop, use `x`
     |}]
 
