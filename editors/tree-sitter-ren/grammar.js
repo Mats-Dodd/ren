@@ -22,12 +22,17 @@
  * far more common, and it's only a colour.
  */
 
+// `not` binds below the comparisons, so `not a == b` is `not (a == b)`,
+// and above `&&`, so `not a && b` is `(not a) && b`
 const PREC = {
-  compare: 1,
-  add: 2,
-  mul: 3,
-  unary: 4,
-  postfix: 5,
+  or: 1,
+  and: 2,
+  not: 3,
+  compare: 4,
+  add: 5,
+  mul: 6,
+  unary: 7,
+  postfix: 8,
 };
 
 // `a, b, c`, with a trailing comma allowed, and possibly empty
@@ -295,6 +300,8 @@ module.exports = grammar({
     binary_expression: ($) =>
       choice(
         ...[
+          [PREC.or, '||'],
+          [PREC.and, '&&'],
           [PREC.compare, choice('==', '!=', '<', '<=', '>', '>=')],
           [PREC.add, choice('+', '-')],
           [PREC.mul, choice('*', '/', '%')],
@@ -310,8 +317,12 @@ module.exports = grammar({
         ),
       ),
 
+    // -x, not b
     unary_expression: ($) =>
-      prec(PREC.unary, seq('-', field('operand', $._expression))),
+      choice(
+        prec(PREC.unary, seq('-', field('operand', $._expression))),
+        prec(PREC.not, seq('not', field('operand', $._expression))),
+      ),
 
     // &xs, &xs.push(x): the value the call changes
     reference: ($) =>

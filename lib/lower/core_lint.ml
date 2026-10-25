@@ -366,6 +366,11 @@ and prim env sc (e : expr) op args =
   | Neg, [ a ] ->
       int a;
       is "`-`" Ty.int
+  | Not, [ a ] ->
+      same env a.loc "an operand" a.ty Ty.bool;
+      is "`not`" Ty.bool
+  | Binop (And | Or), _ ->
+      fail env loc "`&&` or `||` that wasn't lowered to an `if`"
   | Binop (Eq | Neq), [ a; b ] ->
       same env loc "the right side of a comparison" b.ty a.ty;
       is "a comparison" Ty.bool

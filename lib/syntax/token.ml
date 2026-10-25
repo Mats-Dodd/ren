@@ -24,6 +24,7 @@ type t =
   | USES
   | OPAQUE
   | SELF
+  | NOT
   (* punctuation *)
   | LPAREN
   | RPAREN
@@ -54,6 +55,8 @@ type t =
   | LE
   | GT
   | GE
+  | AMPAMP
+  | PIPEPIPE
   (* layout: see lexer.ml *)
   | NEWLINE
   | INDENT
@@ -84,6 +87,7 @@ let to_string = function
   | USES -> "uses"
   | OPAQUE -> "opaque"
   | SELF -> "self"
+  | NOT -> "not"
   | LPAREN -> "("
   | RPAREN -> ")"
   | LBRACE -> "{"
@@ -112,6 +116,8 @@ let to_string = function
   | LE -> "<="
   | GT -> ">"
   | GE -> ">="
+  | AMPAMP -> "&&"
+  | PIPEPIPE -> "||"
   | NEWLINE -> "newline"
   | INDENT -> "indent"
   | DEDENT -> "dedent"

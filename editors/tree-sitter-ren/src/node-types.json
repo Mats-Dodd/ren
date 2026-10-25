@@ -296,6 +296,10 @@
             "named": false
           },
           {
+            "type": "&&",
+            "named": false
+          },
+          {
             "type": "*",
             "named": false
           },
@@ -329,6 +333,10 @@
           },
           {
             "type": ">=",
+            "named": false
+          },
+          {
+            "type": "||",
             "named": false
           }
         ]
@@ -1901,6 +1909,10 @@
     "named": false
   },
   {
+    "type": "&&",
+    "named": false
+  },
+  {
     "type": "(",
     "named": false
   },
@@ -2041,6 +2053,10 @@
     "named": false
   },
   {
+    "type": "not",
+    "named": false
+  },
+  {
     "type": "number",
     "named": true
   },
@@ -2090,6 +2106,10 @@
   },
   {
     "type": "|",
+    "named": false
+  },
+  {
+    "type": "||",
     "named": false
   },
   {

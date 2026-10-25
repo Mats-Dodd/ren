@@ -46,6 +46,7 @@ let keywords =
     ("uses", USES);
     ("opaque", OPAQUE);
     ("self", SELF);
+    ("not", NOT);
   ]
 
 let is_digit c = c >= '0' && c <= '9'
@@ -151,6 +152,8 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | '-', '=' -> advance_by 2 MINUSEQ
       | '*', '=' -> advance_by 2 STAREQ
       | '>', '=' -> advance_by 2 GE
+      | '&', '&' -> advance_by 2 AMPAMP
+      | '|', '|' -> advance_by 2 PIPEPIPE
       | '(', _ ->
           incr depth;
           advance_by 1 LPAREN

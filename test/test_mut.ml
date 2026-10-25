@@ -259,3 +259,22 @@ fn main() =
       │                    ^
       help: use a top-level function for this
     |}]
+
+let%expect_test "a help writes not and && back as they're written" =
+  run
+    {|
+fn main() =
+  var xs = [true]
+  let a = true
+  xs.push(not a && a == (not a))
+  xs.len()
+|};
+  [%expect
+    {|
+    error: `push` changes `xs`, so the call needs `&`
+      ┌─ test.ren:4:3
+    4 │   xs.push(not a && a == (not a))
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = `&` shows at the call that `xs` is changed
+      help: write `&xs.push(not a && a == (not a))`
+    |}]

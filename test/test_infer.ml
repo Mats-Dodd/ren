@@ -1103,6 +1103,43 @@ fn main() -> Int =
       help: add an `else` branch for when the condition is false
     |}]
 
+let%expect_test "&&, || and not work on Bools" =
+  types {|
+fn both(a, b) = a && not b || b
+fn main() = both(true, false)
+|};
+  [%expect
+    {|
+    fn both(a: Bool, b: Bool) -> Bool
+    fn main() -> Bool
+    |}];
+  types {|
+fn main() =
+  let a = 1 && true
+  let b = false || 2
+  not 3
+|};
+  [%expect
+    {|
+    error: expected `Bool`, found `Int`
+      ┌─ test.ren:2:11
+    2 │   let a = 1 && true
+      │           ^
+      = each side of `&&` has to be a `Bool`
+
+    error: expected `Bool`, found `Int`
+      ┌─ test.ren:3:20
+    3 │   let b = false || 2
+      │                    ^
+      = each side of `||` has to be a `Bool`
+
+    error: expected `Bool`, found `Int`
+      ┌─ test.ren:4:7
+    4 │   not 3
+      │       ^
+      = what `not` is applied to has to be a `Bool`
+    |}]
+
 let%expect_test "array type errors" =
   run {|
 fn main() = [1, true]

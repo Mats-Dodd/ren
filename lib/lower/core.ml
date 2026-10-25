@@ -25,9 +25,11 @@ type var = { id : int; name : string; ty : Ty.ty }
    the order they're evaluated. *)
 type prim =
   | Neg
+  | Not  (** on a [Bool] *)
   | Binop of Ast.binop
-      (** [==] and [!=] on any two values of the same type, the others on [Int]s
-      *)
+      (** [==] and [!=] on any two values of the same type, the others on
+          [Int]s. Never [&&] or [||]: lowering makes those [If]s, so their right
+          side is evaluated only when it's needed *)
   | Length  (** an array's length *)
   | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
   | Set_index  (** [xs] with element [i] replaced: a new array *)
@@ -147,6 +149,7 @@ let show_var (v : var) = v.name ^ "/" ^ string_of_int v.id
 
 let show_prim = function
   | Neg -> "neg"
+  | Not -> "not"
   | Binop op -> Ast.binop_to_string op
   | Length -> "length"
   | Get_index -> "get"

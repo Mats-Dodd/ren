@@ -210,3 +210,53 @@ fn f() =
       (array_expression
         (number)
         (number)))))
+
+================================================================================
+logical operators
+================================================================================
+
+fn f() = not a == b && c < d || not e && f
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (binary_expression
+      (binary_expression
+        (unary_expression
+          (binary_expression
+            (identifier)
+            (identifier)))
+        (binary_expression
+          (identifier)
+          (identifier)))
+      (binary_expression
+        (unary_expression
+          (identifier))
+        (identifier)))))
+
+================================================================================
+not under a minus and a call
+================================================================================
+
+fn f() = not -x.ok(y) && not not z
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (binary_expression
+      (unary_expression
+        (unary_expression
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (identifier)))))
+      (unary_expression
+        (unary_expression
+          (identifier))))))

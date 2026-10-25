@@ -36,8 +36,26 @@ type 't ty =
   | TyInout of 't ty * Loc.t
       (** [inout Int], a parameter of a function type: [fn(inout Int)] *)
 
-type binop = Add | Sub | Mul | Div | Mod | Eq | Neq | Lt | Le | Gt | Ge
-type unop = Neg
+(* [And] and [Or] are `&&` and `||`, which evaluate their right side only
+   when the left doesn't already decide the answer (lower.ml makes them
+   `if`s). *)
+type binop =
+  | Add
+  | Sub
+  | Mul
+  | Div
+  | Mod
+  | Eq
+  | Neq
+  | Lt
+  | Le
+  | Gt
+  | Ge
+  | And
+  | Or
+
+(* [Neg] is `-x`, [Not] is `not b`. *)
+type unop = Neg | Not
 
 (* A constructor as written: `Red` alone, or after the type it's in,
    `Light.Red`, which can have its module in front, `billing.Plan.Free`.
@@ -336,6 +354,8 @@ let binop_to_string = function
   | Le -> "<="
   | Gt -> ">"
   | Ge -> ">="
+  | And -> "&&"
+  | Or -> "||"
 
 let parens words = "(" ^ String.concat " " words ^ ")"
 
@@ -378,6 +398,7 @@ let rec show_expr (e : expr) =
   | Var (Bare x) -> x
   | Var (Item (t, f)) -> show_tyname t ^ "." ^ f.name
   | Unop (Neg, a) -> parens [ "neg"; show_expr a ]
+  | Unop (Not, a) -> parens [ "not"; show_expr a ]
   | Binop (op, a, b) -> parens [ binop_to_string op; show_expr a; show_expr b ]
   | If (c, t, Some f) -> parens [ "if"; show_expr c; show_expr t; show_expr f ]
   | If (c, t, None) -> parens [ "if"; show_expr c; show_expr t ]
@@ -497,11 +518,14 @@ let show_item : item -> string = function
    name (Resolve.type_name, Resolve.value_name). *)
 
 (* How tightly an operator binds: an operand that binds more loosely needs
-   parentheses. *)
+   parentheses. `not` binds between `&&` and the comparisons, at 3, so
+   `not a == b` is `not (a == b)`; `-` binds tightest, at 7. *)
 let precedence = function
-  | Eq | Neq | Lt | Le | Gt | Ge -> 1
-  | Add | Sub -> 2
-  | Mul | Div | Mod -> 3
+  | Or -> 1
+  | And -> 2
+  | Eq | Neq | Lt | Le | Gt | Ge -> 4
+  | Add | Sub -> 5
+  | Mul | Div | Mod -> 6
 
 let source ~type_name ~value_name (e : Resolved.expr) =
   (* [exception Exit] is raised by anything that isn't printed, and caught
@@ -514,7 +538,8 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Var (Local b) -> b.ident.name
     | Var (Global p | Global_value p) -> value_name p
     | Var (Intrinsic x) -> x
-    | Unop (Neg, a) -> "-" ^ operand 4 a
+    | Unop (Neg, a) -> "-" ^ operand 7 a
+    | Unop (Not, a) -> "not " ^ operand 3 a
     | Binop (op, a, b) ->
         let n = precedence op in
         operand n a ^ " " ^ binop_to_string op ^ " " ^ operand (n + 1) b
@@ -544,6 +569,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
   and operand n (a : Resolved.expr) =
     match a.kind with
     | Binop (op, _, _) when precedence op < n -> "(" ^ go a ^ ")"
+    | Unop (Not, _) when 3 < n -> "(" ^ go a ^ ")"
     | _ -> go a
   and list xs = String.concat ", " (List.map go xs)
   and ctor (c : Resolved.ctor_ref) =

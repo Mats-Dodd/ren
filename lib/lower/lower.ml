@@ -158,6 +158,15 @@ let rec expr cx (e : expr) : C.expr =
   | Var (Global_value p) -> here (Global_value p)
   | Var (Intrinsic x) -> here (Intrinsic x)
   | Unop (Neg, a) -> here (Prim (Neg, [ expr cx a ]))
+  | Unop (Not, a) -> here (Prim (Not, [ expr cx a ]))
+  (* `a && b` is `if a then b else false`, and `a || b` is
+     `if a then true else b`: [b] runs only when [a] doesn't decide *)
+  | Binop (And, a, b) ->
+      let a = expr cx a in
+      here (If (a, expr cx b, mk (Bool false) Ty.bool e.loc))
+  | Binop (Or, a, b) ->
+      let a = expr cx a in
+      here (If (a, mk (Bool true) Ty.bool e.loc, expr cx b))
   | Binop (op, a, b) ->
       let a = expr cx a in
       here (Prim (Binop op, [ a; expr cx b ]))

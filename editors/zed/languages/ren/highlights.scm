@@ -31,6 +31,7 @@
   "as"
   "uses"
   "opaque"
+  "not"
 ] @keyword
 
 (visibility) @keyword

@@ -1,8 +1,8 @@
 (* Parser: tokens -> AST, by recursive descent.
 
    Each grammar rule is one function. Precedence comes from which function
-   calls which: comparisons call additive, which calls multiplicative, and so
-   on down to primary expressions.
+   calls which: `||` calls `&&`, which calls `not`, which calls comparisons,
+   which call additive, and so on down to primary expressions.
 
      program  := item { NEWLINE item } EOF       (imports come first)
      item     := import | ["pub"] (fn_def | type_def)
@@ -46,7 +46,11 @@
      line     := expr [("=" | "+=" | "-=" | "*=") body]
                                                     (an assignment's target
                                                      must be a place, mut.ml)
-     expr     := add [cmp_op add]                   (comparisons don't chain)
+     expr     := and { "||" and }
+     and      := not { "&&" not }
+     not      := "not" not | cmp                    (`not a == b` is
+                                                     `not (a == b)`)
+     cmp      := add [cmp_op add]                   (comparisons don't chain)
      add      := mul { ("+" | "-") mul }
      mul      := unary { ("*" | "/" | "%") unary }
      unary    := "-" unary | "&" unary | postfix
@@ -430,7 +434,19 @@ and parse_for p =
   let body = parse_block p in
   mk (For { var; iter; body }) start p
 
-and parse_expr p =
+and parse_expr p = left_assoc [ (PIPEPIPE, Or) ] parse_and p
+and parse_and p = left_assoc [ (AMPAMP, And) ] parse_not p
+
+and parse_not p =
+  match peek p with
+  | NOT ->
+      let start = loc p in
+      advance p;
+      let e = parse_not p in
+      mk (Unop (Not, e)) start p
+  | _ -> parse_cmp p
+
+and parse_cmp p =
   let start = loc p in
   let lhs = parse_add p in
   match cmp_op (peek p) with

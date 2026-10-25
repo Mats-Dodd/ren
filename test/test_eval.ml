@@ -214,6 +214,31 @@ fn main() =
     5
     |}]
 
+let%expect_test "&& and || run their right side only when it's needed" =
+  run
+    {|
+fn loud(b: Bool) -> Bool =
+  print(b)
+  b
+
+fn main() =
+  print(loud(false) && loud(true))
+  print(loud(true) || loud(false))
+  print(loud(true) && not loud(false))
+  not (1 == 2) && 3 > 2 || false
+|};
+  [%expect
+    {|
+    false
+    false
+    true
+    true
+    true
+    false
+    true
+    true
+    |}]
+
 let%expect_test "normalize(&scores) works" =
   run
     {|

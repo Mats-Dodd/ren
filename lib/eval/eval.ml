@@ -72,6 +72,7 @@ let element loc xs i =
 let prim loc op args =
   match (op, args) with
   | Neg, [ VInt n ] -> VInt (-n)
+  | Not, [ VBool b ] -> VBool (not b)
   | Binop op, [ a; b ] -> binop loc op a b
   | Length, [ VArray xs ] -> VInt (Array.length xs)
   | Get_index, [ VArray xs; VInt i ] -> element loc xs i

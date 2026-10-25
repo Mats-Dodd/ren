@@ -273,3 +273,16 @@ fn main() =
     1
     [{ xs: [12, 3] }, { xs: [3] }]
     |}]
+
+let%expect_test "&& and || become ifs; not is a primitive" =
+  core {|
+fn main() =
+  let a = 1 < 2
+  let b = a && not a
+  b || a
+|};
+  [%expect
+    {|
+    (fn main ()
+      (let a/1 (< 1 2) (let b/2 (if a/1 (not a/1) false) (if b/2 true a/1))))
+    |}]

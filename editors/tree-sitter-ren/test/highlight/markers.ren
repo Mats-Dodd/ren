@@ -33,3 +33,8 @@ type Stack<T> = { items: Array<T> }
 //        ^ constant
   fn size(self) -> Int = self.items.len()
 //        ^ variable.special
+
+fn ok(a: Bool, b: Bool) -> Bool = not a && b || a
+//                                ^ keyword
+//                                      ^ operator
+//                                           ^ operator

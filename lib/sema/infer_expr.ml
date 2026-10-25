@@ -606,6 +606,9 @@ and synth env cx (e : expr) : ty =
   | Unop (Neg, a) ->
       want_int env "-" a (infer env cx a);
       int
+  | Unop (Not, a) ->
+      want_bool env "what `not` is applied to" a (infer env cx a);
+      bool
   | Binop (op, a, b) -> (
       let name = binop_to_string op in
       match op with
@@ -615,6 +618,11 @@ and synth env cx (e : expr) : ty =
           want_int env name a ta;
           want_int env name b tb;
           if List.mem op [ Lt; Le; Gt; Ge ] then bool else int
+      | And | Or ->
+          let what = sprintf "each side of `%s`" name in
+          want_bool env what a (infer env cx a);
+          want_bool env what b (infer env cx b);
+          bool
       | Eq | Neq ->
           (* the left side says what the right side has to be *)
           let ta = infer env cx a in

@@ -33,6 +33,33 @@ fn main() = 1 < 2 < 3
       help: split it into two comparisons
     |}]
 
+let%expect_test "&&, || and not" =
+  tokens {|
+fn main() = not a && b || c != d
+|};
+  [%expect
+    {| FN (IDENT "main") LPAREN RPAREN EQ NOT (IDENT "a") AMPAMP (IDENT "b") PIPEPIPE (IDENT "c") NEQ (IDENT "d") EOF |}];
+  (* `not` binds below the comparisons and above `&&` *)
+  ast {|
+fn main() = not a == b && c < d || not e && not not f
+|};
+  [%expect
+    {| (fn main () (|| (&& (not (== a b)) (< c d)) (&& (not e) (not (not f))))) |}]
+
+let%expect_test "not can't be a name" =
+  ast {|
+fn main() =
+  let not = 1
+  not
+|};
+  [%expect
+    {|
+    error: expected a name, found `not`
+      ┌─ test.ren:2:7
+    2 │   let not = 1
+      │       ^^^
+    |}]
+
 let%expect_test "block ending in let" =
   ast {|
 fn main() =
