@@ -79,9 +79,10 @@ time exactly. The test of `main` calls it, and checks what it printed
 with `TestConsole.output()`. A test for each refusal keeps it with
 `attempt`, compares it with the error it expects, written by its tag,
 `assert r == Err(Short(a, Money.dollars(1)))`, and checks the bank didn't
-move: `assert acme == before`. When that fails, `ren test` shows both
-banks, with a marker under the first place they differ. Nothing in the tests reads the real clock, so they
-print the same on every run.
+move: `assert acme == before`. When that fails, `ren test` shows the way
+to the first place the banks differ and what each has there, with what
+they share left out and a marker under the difference. Nothing in the
+tests reads the real clock, so they print the same on every run.
 
 **One suite for every clock.** `clocks.ren`'s `pub group
 clock_conforms(c: Clock) with c` holds what a statement needs from any

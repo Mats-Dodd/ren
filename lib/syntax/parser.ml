@@ -90,7 +90,8 @@
      add      := mul { ("+" | "-") mul }
      mul      := unary { ("*" | "/" | "%") unary }
      unary    := "-" unary | "&" unary | postfix
-              |  "try" expr | "attempt" expr        (everything to its right)
+              |  "try" expr                         (everything to its right)
+              |  "attempt" add                      (stops at a comparison)
               |  "assert" expr
      postfix  := primary { "." IDENT | "[" expr "]"
                          | "(" expr, ... ")" [lambda] }
