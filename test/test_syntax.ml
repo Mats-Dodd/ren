@@ -253,3 +253,19 @@ fn main() = billing.Plan
       │             ^^^^^^^^^^^^
       help: write one of its constructors after it, like `billing.Plan.Name`, or a record, `billing.Plan { ... }`
     |}]
+
+let%expect_test "uses, on the signature's line or the next" =
+  ast
+    {|
+fn f() -> Int uses Io, Clock = 1
+pub fn g(x: Int) -> Int
+    uses Io =
+  x
+fn h() = 2
+|};
+  [%expect
+    {|
+    (fn f () (uses Io Clock) 1)
+    (fn g (x) (uses Io) x)
+    (fn h () 2)
+    |}]

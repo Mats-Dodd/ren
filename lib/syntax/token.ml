@@ -21,6 +21,7 @@ type t =
   | MATCH
   | IMPORT
   | AS
+  | USES
   (* punctuation *)
   | LPAREN
   | RPAREN
@@ -78,6 +79,7 @@ let to_string = function
   | MATCH -> "match"
   | IMPORT -> "import"
   | AS -> "as"
+  | USES -> "uses"
   | LPAREN -> "("
   | RPAREN -> ")"
   | LBRACE -> "{"

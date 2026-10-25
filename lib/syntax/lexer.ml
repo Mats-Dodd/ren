@@ -14,7 +14,14 @@
      fn g() = 2              NEWLINE FN g ( ) = 2 EOF
 
    Inside parentheses, brackets or braces, line breaks and indentation are ignored so long
-   argument lists can wrap freely. Blank and comment-only lines are skipped. *)
+   argument lists can wrap freely. Blank and comment-only lines are skipped.
+
+   A line that starts with `uses` continues the signature above it, so it
+   gets no layout token at all:
+
+     pub fn load(id: Int) -> User
+         uses Io =
+       body *)
 
 open Token
 
@@ -36,6 +43,7 @@ let keywords =
     ("match", MATCH);
     ("import", IMPORT);
     ("as", AS);
+    ("uses", USES);
   ]
 
 let is_digit c = c >= '0' && c <= '9'
@@ -92,6 +100,14 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
         error ~help:"indent it to match the lines above it" here
           "this line's indentation doesn't line up with any enclosing block";
       emit NEWLINE here)
+  in
+
+  (* Does the line starting here continue a signature: does it start with
+     the word `uses`? *)
+  let continues () =
+    !i + 4 <= len
+    && String.sub src !i 4 = "uses"
+    && not (is_ident_char (peek 4))
   in
 
   let lex_token c start =
@@ -185,7 +201,7 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
         incr i
       done
     else (
-      if !at_line_start && !depth = 0 then layout ();
+      if !at_line_start && !depth = 0 && not (continues ()) then layout ();
       at_line_start := false;
       lex_token c start)
   done;

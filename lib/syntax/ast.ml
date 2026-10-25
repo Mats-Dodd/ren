@@ -145,6 +145,9 @@ type ('v, 'b, 't) fn_def = {
   tparams : ident list;  (** the [T] in [fn id<T>(x: T) -> T] *)
   params : ('b, 't) param list;
   ret : 't ty option;
+  uses : ident list option;
+      (** the dependencies after `uses`, if it's written: the prelude's, like
+          [Io], are the only ones so far *)
   body : ('v, 'b, 't) expr;
   loc : Loc.t;
 }
@@ -349,7 +352,12 @@ and show_stmt : stmt -> string = function
 
 let show_fn (f : fn_def) =
   let params = List.map (fun (p : param) -> p.pname.name) f.params in
-  parens [ "fn"; f.name.name; parens params; show_expr f.body ]
+  let uses =
+    match f.uses with
+    | Some ds -> [ parens ("uses" :: List.map (fun (d : ident) -> d.name) ds) ]
+    | None -> []
+  in
+  parens (([ "fn"; f.name.name; parens params ] @ uses) @ [ show_expr f.body ])
 
 let show_type_def (td : type_def) =
   let name =

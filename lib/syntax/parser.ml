@@ -9,7 +9,9 @@
      import   := "import" IDENT { "/" IDENT } ["." "{" UIDENT, ... "}"]
                  ["as" IDENT]
      fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
-                 ["->" type] "=" body
+                 ["->" type] ["uses" UIDENT, ...] "=" body
+                                                   (`uses` may start the
+                                                    next line, indented)
      param    := ["inout"] IDENT [":" type]
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body
      type_body:= "{" field, ... "}"                       (a record)
@@ -737,9 +739,31 @@ let parse_fn p ~pub =
       Some (parse_ty p))
     else None
   in
+  let uses =
+    if peek p = USES then (
+      advance p;
+      let rec deps acc =
+        let d = upper_ident p "a dependency's name" in
+        if peek p = COMMA then (
+          advance p;
+          deps (d :: acc))
+        else List.rev (d :: acc)
+      in
+      Some (deps []))
+    else None
+  in
   expect p EQ;
   let body = parse_body p in
-  { pub; name; tparams; params; ret; body; loc = Loc.span start (last_loc p) }
+  {
+    pub;
+    name;
+    tparams;
+    params;
+    ret;
+    uses;
+    body;
+    loc = Loc.span start (last_loc p);
+  }
 
 let parse_item p =
   p.node <- 0;
