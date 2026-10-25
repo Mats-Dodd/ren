@@ -16,10 +16,11 @@
    Inside parentheses, brackets or braces, line breaks and indentation are ignored so long
    argument lists can wrap freely. Blank and comment-only lines are skipped.
 
-   An indented line that starts with `uses` continues the signature above
-   it, so it gets no layout token at all:
+   An indented line that starts with `uses` or with an error set's `!`
+   continues the signature above it, so it gets no layout token at all:
 
      pub fn load(id: Int) -> User
+         ! NotFound | Timeout
          uses Io =
        body *)
 
@@ -110,12 +111,19 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
   in
 
   (* Does the line starting here continue a signature: is it indented
-     more than the block it's in, and does it start with the word `uses`? *)
+     more than the block it's in, and does it start with the word `uses` or
+     with the `!` of an error set (not `!=`)? A `!` after `=` opens a
+     block instead: a named error set written one `|` per line,
+     `type E =` then `! A` indented under it. *)
   let continues () =
-    !i - !bol > List.hd !indents
-    && !i + 4 <= len
-    && String.sub src !i 4 = "uses"
-    && not (is_ident_char (peek 4))
+    let starts_uses =
+      !i + 4 <= len
+      && String.sub src !i 4 = "uses"
+      && not (is_ident_char (peek 4))
+    in
+    let after_eq = match !toks with (EQ, _) :: _ -> true | _ -> false in
+    let starts_errors = peek 0 = '!' && peek 1 <> '=' && not after_eq in
+    !i - !bol > List.hd !indents && (starts_uses || starts_errors)
   in
 
   let lex_token c start =

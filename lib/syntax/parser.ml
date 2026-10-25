@@ -945,7 +945,15 @@ let parse_fn p ~pub =
       Some (parse_ty p))
     else None
   in
-  let errors = if peek p = BANG then Some (parse_errors p) else None in
+  let errors =
+    if peek p = BANG then Some (parse_errors p)
+    else if peek p = NEWLINE && peek2 p = BANG then
+      (* as for `uses` below: only an indented line continues *)
+      Diag.error ~help:"indent it, so it continues the signature"
+        (snd p.toks.(p.i + 1))
+        "an error set on a line of its own has to be indented"
+    else None
+  in
   let uses =
     if peek p = USES then (
       advance p;
@@ -1154,8 +1162,9 @@ let skip_to_item p ~start =
     p.i > 0
     && fst p.toks.(p.i - 1) = NEWLINE
     && (loc p).start.col = 1
-    (* a `uses` there is the rest of a signature that wasn't indented *)
-    && not (List.mem (peek p) [ NEWLINE; INDENT; DEDENT; USES ])
+    (* a `uses` or `!` there is the rest of a signature that wasn't
+       indented *)
+    && not (List.mem (peek p) [ NEWLINE; INDENT; DEDENT; USES; BANG ])
   in
   if p.i = start || not (at_item p) then (
     advance p;

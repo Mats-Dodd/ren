@@ -69,6 +69,74 @@ fn save(id: Int) -> Int ! Full | bank.Refusal
       (identifier))))
 
 ================================================================================
+an error set continuing the signature on the next line
+================================================================================
+
+pub fn save(id: Int) -> Int
+    ! Full | bank.Refusal
+    uses Io =
+  id
+type Account = { id: Int }
+  pub fn freeze(inout self)
+      ! Frozen =
+    if self.id != 0 then fail Frozen
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (error_set
+      (error_tag
+        (type_identifier))
+      (error_set_name
+        (identifier)
+        (type_identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (identifier)))
+  (type_definition
+    (type_identifier)
+    (record_type
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (type_members
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (inout)
+            (self)))
+        (error_set
+          (error_tag
+            (type_identifier)))
+        (block
+          (if_expression
+            (binary_expression
+              (field_expression
+                (self)
+                (identifier))
+              (number))
+            (fail_expression
+              (type_identifier))))))))
+
+================================================================================
 a function type's errors, and an error set as a type argument
 ================================================================================
 

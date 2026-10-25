@@ -352,6 +352,44 @@ type Account = { id: Int }
     (type Account (fields id:Int) (members (pub (fn freeze (self) (! Frozen(account: Int)) ()))))
     |}]
 
+let%expect_test "an error set on the signature's next line" =
+  (* like `uses`, an indented `!` continues the signature; `!=` doesn't
+     start one, and after `=` a `!` opens a named error set's block *)
+  ast
+    {|
+pub fn save(id: Int) -> Int
+    ! Full | bank.Refusal
+    uses Io =
+  id
+type Account = { id: Int }
+  pub fn freeze(inout self)
+      ! Frozen =
+    if self.id != 0 then fail Frozen
+pub type Refusal =
+  ! Short
+  | Frozen
+|};
+  [%expect
+    {|
+    (fn save (id) (! Full | bank.Refusal) (uses Io) id)
+    (type Account (fields id:Int) (members (pub (fn freeze (self) (! Frozen) (if (!= (. self id) 0) (fail Frozen))))))
+    (pub type Refusal (! Short | Frozen))
+    |}]
+
+let%expect_test "an error set on the next line has to be indented" =
+  ast {|
+fn f()
+! Bad = fail Bad
+|};
+  [%expect
+    {|
+    error: an error set on a line of its own has to be indented
+      ┌─ test.ren:2:1
+    2 │ ! Bad = fail Bad
+      │ ^
+      help: indent it, so it continues the signature
+    |}]
+
 let%expect_test "a function type's errors, and an error set as a type argument"
     =
   (* the `! Bad` after `fn() -> fn()` is the inner function type's *)

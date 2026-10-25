@@ -8,8 +8,9 @@
 // Inside parentheses, brackets or braces, line breaks and indentation are
 // ignored, so the scanner lexes the brackets itself to know how deep it
 // is. Blank and comment-only lines are skipped. An indented line that
-// starts with `uses` continues the signature above it, so it gets no
-// layout token at all.
+// starts with `uses`, or with an error set's `!` (not `!=`), continues the
+// signature above it, so it gets no layout token at all, unless a block
+// can open there (after `type E =`, a named error set one `|` per line).
 //
 // Each layout token is empty and sits at the end of the line before it.
 // So each call starts there again, before the line break: after a DEDENT
@@ -65,6 +66,14 @@ static bool at_uses(TSLexer *lexer) {
     advance(lexer);
   }
   return !is_ident_char(lexer->lookahead);
+}
+
+// Is the next token an error set's `!`, not `!=`? Moves past the `!`, as
+// at_uses does.
+static bool at_bang(TSLexer *lexer) {
+  if (lexer->lookahead != '!') return false;
+  advance(lexer);
+  return lexer->lookahead != '=';
 }
 
 static bool bracket(Scanner *s, TSLexer *lexer, const bool *valid) {
@@ -134,6 +143,11 @@ bool tree_sitter_ren_external_scanner_scan(void *payload, TSLexer *lexer,
     uint16_t current = current_indent(s);
 
     if (indent > current && lexer->lookahead == 'u' && at_uses(lexer))
+      return false;
+    // after `=`, where a block can open, a `!` starts a named error set
+    // written one `|` per line instead (the compiler checks for the `=`)
+    if (indent > current && !valid[INDENT] && lexer->lookahead == '!' &&
+        at_bang(lexer))
       return false;
 
     if (indent > current && valid[INDENT]) {
