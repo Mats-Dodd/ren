@@ -1732,3 +1732,50 @@ fn main() = twice() fn() => ()
     fn twice(f: fn())
     fn main()
     |}]
+
+let%expect_test "a mismatch with a dropped value made Unit points back at it" =
+  (* the caller can't see why `apply` wants a `Unit`, so the error shows
+     the statement that made it one; `let _ =` keeps it generic *)
+  types
+    {|
+fn apply(f, x) =
+  f(x)
+  ()
+fn keep(f, x) =
+  let _ = f(x)
+  ()
+fn main() =
+  keep(fn(n) => n + 1, 2)
+  apply(fn(n) => n + 1, 2)
+|};
+  [%expect
+    {|
+    error: this lambda produces an `Int`, but it has to produce a `Unit`
+      ┌─ test.ren:9:18
+    2 │   f(x)
+      │   ---- `apply` throws this value away, and its type wasn't known, so it was taken to be `Unit`
+    9 │   apply(fn(n) => n + 1, 2)
+      │                  ^^^^^
+      help: if `apply` means to drop a value of any type there, write `let _ = ...`
+    |}]
+
+let%expect_test "a and an go by the sound" =
+  types
+    {|
+type User = { id: Int }
+type Undo = { id: Int }
+fn make(f: fn() -> User, g: fn() -> Undo) = ()
+fn main() = make(fn() => 1, fn() => 2)
+|};
+  [%expect
+    {|
+    error: this lambda produces an `Int`, but it has to produce a `User`
+      ┌─ test.ren:4:26
+    4 │ fn main() = make(fn() => 1, fn() => 2)
+      │                          ^
+
+    error: this lambda produces an `Int`, but it has to produce an `Undo`
+      ┌─ test.ren:4:37
+    4 │ fn main() = make(fn() => 1, fn() => 2)
+      │                                     ^
+    |}]

@@ -8,11 +8,17 @@ let sprintf = Printf.sprintf
 let plural n = if n = 1 then "" else "s"
 let quote names = String.concat ", " (List.map (sprintf "`%s`") names)
 
-(* "a `Bool`", "an `Int`" *)
+(* "a `Bool`", "an `Int`", and by the sound: "a `Unit`", "a `User`", but
+   "an `Undo`", "an `Update`" *)
 let article name =
-  match name.[0] with
-  | 'A' | 'E' | 'I' | 'O' | 'U' -> sprintf "an `%s`" name
-  | _ -> sprintf "a `%s`" name
+  let starts p = String.starts_with ~prefix:p name in
+  let vowel =
+    match name.[0] with
+    | 'A' | 'E' | 'I' | 'O' -> true
+    | 'U' -> (starts "Un" && not (starts "Uni")) || starts "Up" || starts "Ul"
+    | _ -> false
+  in
+  if vowel then sprintf "an `%s`" name else sprintf "a `%s`" name
 
 (* Where [found] and [expected] disagree on whether a function parameter is
    `inout`, the mode [found] has there. Error messages explain that, since

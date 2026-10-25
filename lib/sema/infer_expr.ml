@@ -63,6 +63,10 @@ type env = {
   mutable joins : join list;  (** most recent first *)
   mutable drops : drop list;
       (** the values the group's statements throw away, most recent first *)
+  mutable forced : (Path.t * Loc.t) list;
+      (** each statement that threw away a value of a type still unknown, which
+          made it `Unit`, with the function it's in: a later mismatch at a call
+          of that function points back at it *)
   mutable unmarked : (ecall * row) list;
       (** the group's calls that no marker covers, each with the row its errors
           went to, which has to end up empty *)
@@ -109,8 +113,8 @@ and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
    dropped"). It's checked once the group's uses of each other are joined
    ([dropped_values]), since a call of another function of the group
    learns only then what it returns. [callee] names the function, if the
-   statement is a call. *)
-and drop = { dloc : Loc.t; dty : ty; callee : string option }
+   statement is a call, and [dself] the function the statement is in. *)
+and drop = { dloc : Loc.t; dty : ty; callee : string option; dself : Path.t }
 
 (* A call, and the errors its callee can fail with (errors.md, "Marking").
    Whether it can fail at all is known only once its group is done: a
@@ -1033,6 +1037,46 @@ let without names r =
        (fst (row_parts r)))
     REmpty
 
+(* How to explain a mismatch with [expected], the type of a parameter of
+   [callee]: when a statement of [callee] threw away a value whose type
+   wasn't known, that made it `Unit`, and a `Unit` in [expected] may well be
+   that one, which the caller can't see. So the mismatch points back at the
+   statement. *)
+let forced_why env callee expected =
+  let rec has_unit t =
+    match repr t with
+    | TCon (p, args) -> p = Path.prelude "Unit" || List.exists has_unit args
+    | TFun (ps, ret, _, _) ->
+        List.exists (fun (p : param) -> has_unit p.ty) ps || has_unit ret
+    | _ -> false
+  in
+  match callee with
+  | Some c when has_unit expected ->
+      let sites =
+        List.filter_map
+          (fun (f, loc) -> if f = c then Some loc else None)
+          env.forced
+      in
+      let label loc =
+        ( loc,
+          sprintf
+            "`%s` throws this value away, and its type wasn't known, so it was \
+             taken to be `Unit`"
+            c.name )
+      in
+      let help =
+        sprintf
+          "if `%s` means to drop a value of any type there, write `let _ = ...`"
+          c.name
+      in
+      if sites = [] then plain
+      else
+        explain
+          ~help:(fun _ _ -> help)
+          ~labels:(fun _ _ -> List.map label sites)
+          ()
+  | _ -> plain
+
 (* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
   let t = synth env cx e in
@@ -1084,7 +1128,7 @@ and check env cx ?(why = plain) (e : expr) expected =
         (lambda_cx cx params ps ~errs ~uses)
         body eret
         ~why:
-          (explain ~notes:why.notes
+          (explain ~notes:why.notes ?help:why.help ~labels:why.labels
              ~msg:(fun f x ->
                sprintf "this lambda produces %s, but it has to produce %s"
                  (article f) (article x))
@@ -1287,7 +1331,7 @@ and synth env cx (e : expr) : ty =
       Hashtbl.replace cx.locals var.id (if ok then elem else TError);
       (* each time round, the body's value is thrown away, as a
          statement's is *)
-      dropped env (result_of body) (infer env cx body);
+      dropped env cx (result_of body) (infer env cx body);
       unit
   | Fail (tag, args) ->
       (* the error joins whatever handles the code here; a field's name in
@@ -1360,11 +1404,11 @@ and stmt env cx = function
         | None -> infer env cx value
       in
       Hashtbl.replace cx.locals name.id t
-  | Expr e -> dropped env e (infer env cx e)
+  | Expr e -> dropped env cx e (infer env cx e)
 
 (* Keep [t], the type of a value [e] throws away, to be checked later
    (see [drop]). *)
-and dropped env (e : expr) t =
+and dropped env cx (e : expr) t =
   let rec call (e : expr) = match e.kind with Try a -> call a | _ -> e in
   let callee =
     match (call e).kind with
@@ -1375,7 +1419,7 @@ and dropped env (e : expr) t =
         | _ -> None)
     | _ -> None
   in
-  env.drops <- { dloc = e.loc; dty = t; callee } :: env.drops
+  env.drops <- { dloc = e.loc; dty = t; callee; dself = cx.self } :: env.drops
 
 (* A call. One with a dot, `x.m(...)`, can be a method call, found through
    [x]'s type: as a field is, by [through_type], except that a method can
@@ -1480,7 +1524,8 @@ and infer_call env cx ?changed (e : expr) (f : expr) args =
         | Var (Global p) when group_call env p -> Some p
         | _ -> None
       in
-      apply env cx e ~name ?target f tf args
+      let callee = match f.kind with Var (Global p) -> Some p | _ -> None in
+      apply env cx e ~name ?target ?callee f tf args
 
 (* `r.m(args)`, the call [e] of [f], where [m] is the member [o] of
    [r]'s type [td]: a method is called with [r] as its `self`. [tr] is
@@ -1521,15 +1566,15 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
           | Inout, Some _ | Read, None -> ());
           apply env cx e ~name:(sprintf "`%s`" o.oname)
             ?target:(if group_call env path then Some path else None)
-            f
+            ~callee:path f
             (TFun (ps, ret, errs, uses))
             args
       | _ -> nothing ())
 
 (* The call [e] of [f], a function of type [tf]; [name] says which, for
-   messages, and [target] which function of the group it is, if it's
-   one. *)
-and apply env cx (e : expr) ~name ?target (f : expr) tf args =
+   messages, [target] which function of the group it is, if it's one, and
+   [callee] which top-level function it is, if it's one. *)
+and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
   let ename = String.concat "" (String.split_on_char '`' name) in
   match reveal env.st tf with
   | TFun (ps, ret, errs, uses) ->
@@ -1596,7 +1641,7 @@ and apply env cx (e : expr) ~name ?target (f : expr) tf args =
                           parameter";
                        ]
                      (sprintf "%s doesn't change this argument" name))
-            | Read, _ -> check env cx a p.ty)
+            | Read, _ -> check env cx ~why:(forced_why env callee p.ty) a p.ty)
           ps args;
         absorb env cx ~call:e ~ename ~name_loc:f.loc ?target errs uses;
         ret)
@@ -2040,10 +2085,13 @@ and tag_pattern env cx ?(arm = false) (p : pattern) (c : ident) ps errs =
 
 (* Check every value the group threw away is `Unit` (see [drop]). One whose
    type is still unknown, like the result of calling a parameter, becomes
-   `Unit`. *)
+   `Unit`, and is kept in [forced]. *)
 let dropped_values env =
   List.iter
     (fun d ->
+      (match repr d.dty with
+      | TVar _ -> env.forced <- (d.dself, d.dloc) :: env.forced
+      | _ -> ());
       unify_at env d.dloc ~found:d.dty ~expected:unit
         ~msg:(fun f _ ->
           match d.callee with

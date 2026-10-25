@@ -832,6 +832,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       spelled = [];
       joins = [];
       drops = [];
+      forced = [];
       unmarked = [];
       all_markers = [];
       kept = [];
