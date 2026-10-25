@@ -247,6 +247,83 @@ fn helper() = 1
       help: if it's defined there, mark it `pub`
     |}]
 
+let%expect_test "another module's function is written with its alias" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing/stripe
+import util
+fn main() = charge(1) + stripe.charge(2)
+|}
+      );
+      ("billing/stripe.ren", {|
+pub fn charge(n: Int) -> Int = n
+|});
+      ("util.ren", {|
+pub fn charge(n: Int) -> Int = n
+|});
+    ];
+  [%expect
+    {|
+    error: `charge` isn't defined here
+      ┌─ main.ren:3:13
+    3 │ fn main() = charge(1) + stripe.charge(2)
+      │             ^^^^^^
+      help: write `stripe.charge` or `util.charge`
+    |}]
+
+let%expect_test "a local can't have an imported module's name" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing/stripe
+fn main() =
+  let stripe = 1
+  let f = fn(util) => util
+  stripe.charge(stripe)
+|}
+      );
+      ("billing/stripe.ren", {|
+pub fn charge(n: Int) -> Int = n
+|});
+    ];
+  [%expect
+    {|
+    error: `stripe` is the name of an imported module
+      ┌─ main.ren:3:7
+    1 │ import billing/stripe
+      │                ------ `stripe` is imported here
+    3 │   let stripe = 1
+      │       ^^^^^^
+      help: rename it, or import the module `as` something else
+    |}]
+
+let%expect_test "nor can a function" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import util as helpers
+fn helpers() = 1
+fn main() = helpers.f()
+|} );
+      ("util.ren", {|
+pub fn f() -> Int = 1
+|});
+    ];
+  [%expect
+    {|
+    error: `helpers` is the name of an imported module
+      ┌─ main.ren:2:4
+    1 │ import util as helpers
+      │                ------- `helpers` is imported here
+    2 │ fn helpers() = 1
+      │    ^^^^^^^
+      help: rename it, or import the module `as` something else
+    |}]
+
 let%expect_test "main is the entry module's" =
   run_files
     [

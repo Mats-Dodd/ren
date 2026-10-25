@@ -45,7 +45,12 @@ type env = {
   types : (string, Path.t * int) Hashtbl.t;
       (** every type in scope, with how many type arguments it takes *)
   values : (string, name) Hashtbl.t;  (** every top-level function in scope *)
-  modules : Iface.t Env.t;  (** each imported module, by its alias *)
+  imports : (import * Iface.t) list;
+      (** each module the module imports, in the order it imports them *)
+  modules : (import * Iface.t) Env.t;  (** the same, by alias *)
+  used : (string, unit) Hashtbl.t;
+      (** the aliases used, and the types imported by name that are, as
+          [alias.T]: an import nothing uses is an error *)
 }
 
 (* What one expression can see. [fn] is shared by the whole top-level
@@ -78,7 +83,20 @@ let no_duplicates env what (ids : ident list) =
       | None -> Hashtbl.replace seen id.name id.loc)
     ids
 
-let bind sc (id : ident) bound =
+(* A local or a top-level function can't have the name of an imported
+   module: then `stripe.charge` is always the module's, decided by scope
+   alone (module-build.md, "Found through scope"). *)
+let not_an_alias env (id : ident) =
+  match Env.find_opt id.name env.modules with
+  | Some (i, _) ->
+      report env id.loc
+        ~help:"rename it, or import the module `as` something else"
+        ~labels:[ (i.alias.loc, sprintf "`%s` is imported here" id.name) ]
+        (sprintf "`%s` is the name of an imported module" id.name)
+  | None -> ()
+
+let bind env sc (id : ident) bound =
+  not_an_alias env id;
   sc.fn.last_id <- sc.fn.last_id + 1;
   let b = { id = sc.fn.last_id; ident = id; bound; depth = sc.depth } in
   (b, { sc with locals = Env.add id.name b sc.locals })
@@ -123,7 +141,7 @@ let ty_opt env ~params = Option.map (ty env ~params)
 
 let param env sc bound (p : Parsed.param) : Resolved.param * scope =
   let pty = ty_opt env ~params:sc.tparams p.pty in
-  let b, sc = bind sc p.pname bound in
+  let b, sc = bind env sc p.pname bound in
   ({ pname = b; pty; pmode = p.pmode }, sc)
 
 let params env sc bound ps =
@@ -141,7 +159,8 @@ let params env sc bound ps =
 (* The public function [f] of the imported module [iface], written
    `alias.f`. A private function isn't in the interface, so it can't be
    told apart from one that doesn't exist. *)
-let qualified env sc (iface : Iface.t) (f : ident) =
+let qualified env sc ((i : import), (iface : Iface.t)) (f : ident) =
+  Hashtbl.replace env.used i.alias.name ();
   let p = Path.make iface.home f.name in
   if Iface.find_value iface f.name = None then
     report env f.loc ~help:"if it's defined there, mark it `pub`"
@@ -161,7 +180,25 @@ let lookup env sc loc ~what x =
           name
       | Some name -> name
       | None ->
-          report env loc (sprintf "there's no %s named `%s`" what x);
+          (* a public function of an imported module is written with its
+             alias, so that every call says where it goes *)
+          let elsewhere =
+            List.filter
+              (fun (_, iface) -> Iface.find_value iface x <> None)
+              env.imports
+          in
+          (match elsewhere with
+          | [] -> report env loc (sprintf "there's no %s named `%s`" what x)
+          | _ ->
+              report env loc
+                ~help:
+                  (sprintf "write %s"
+                     (String.concat " or "
+                        (List.map
+                           (fun ((i : import), _) ->
+                             sprintf "`%s.%s`" i.alias.name x)
+                           elsewhere)))
+                (sprintf "`%s` isn't defined here" x));
           Global (Path.make env.home x))
 
 (* The variables a pattern binds, left to right, so that `P(x, x)` can be
@@ -172,20 +209,20 @@ let rec pattern_vars (p : Parsed.pattern) =
   | PVar x -> [ x ]
   | PCon (_, ps) -> List.concat_map pattern_vars ps
 
-let rec pattern sc (p : Parsed.pattern) : Resolved.pattern * scope =
+let rec pattern env sc (p : Parsed.pattern) : Resolved.pattern * scope =
   let kind, sc =
     match p.pkind with
     | PWild -> (PWild, sc)
     | PInt n -> (PInt n, sc)
     | PBool b -> (PBool b, sc)
     | PVar x ->
-        let b, sc = bind sc x By_pattern in
+        let b, sc = bind env sc x By_pattern in
         (PVar b, sc)
     | PCon (c, ps) ->
         let ps, sc =
           List.fold_left
             (fun (acc, sc) p ->
-              let p, sc = pattern sc p in
+              let p, sc = pattern env sc p in
               (p :: acc, sc))
             ([], sc) ps
         in
@@ -242,7 +279,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
               | Let { name; ty = t; value; mut } ->
                   let value = expr env sc value in
                   let t = ty_opt env ~params:sc.tparams t in
-                  let b, sc = bind sc name (if mut then By_var else By_let) in
+                  let b, sc =
+                    bind env sc name (if mut then By_var else By_let)
+                  in
                   (Let { name = b; ty = t; value; mut } :: acc, sc)
               | Expr e -> (Expr (expr env sc e) :: acc, sc))
             ([], sc) stmts
@@ -272,7 +311,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
             List.map
               (fun (a : Parsed.arm) : Resolved.arm ->
                 no_duplicates env "pattern variables" (pattern_vars a.arm_pat);
-                let arm_pat, sc = pattern sc a.arm_pat in
+                let arm_pat, sc = pattern env sc a.arm_pat in
                 let arm_guard = Option.map (expr env sc) a.arm_guard in
                 { arm_pat; arm_guard; arm_body = expr env sc a.arm_body })
               arms )
@@ -289,7 +328,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
           match iter.kind with Ref _ -> By_ref_loop | _ -> By_loop
         in
         let iter = go iter in
-        let b, inner = bind sc var bound in
+        let b, inner = bind env sc var bound in
         For { var = b; iter; body = expr env inner body }
   in
   { kind; loc = e.loc; node = e.node }
@@ -462,17 +501,15 @@ let unique_ctors env imported own =
   List.iter (declare true) own
 
 let program sink ~home ~imports (prog : Parsed.program) =
-  (* each import, by its alias; the driver passes the interface of every
-     module the program imports *)
-  let modules =
-    List.fold_left
-      (fun acc -> function
+  (* each import, with the interface of the module it imports; the driver
+     passes the interface of every module the program imports *)
+  let imported =
+    List.filter_map
+      (function
         | Import (i : import) ->
-            Env.add i.alias.name
-              (List.find (fun (m : Iface.t) -> m.home = i.path) imports)
-              acc
-        | Fn _ | Type _ -> acc)
-      Env.empty prog
+            Some (i, List.find (fun (m : Iface.t) -> m.home = i.path) imports)
+        | Fn _ | Type _ -> None)
+      prog
   in
   let env =
     {
@@ -480,7 +517,12 @@ let program sink ~home ~imports (prog : Parsed.program) =
       home;
       types = Hashtbl.create 16;
       values = Hashtbl.create 16;
-      modules;
+      imports = imported;
+      modules =
+        List.fold_left
+          (fun acc ((i : import), iface) -> Env.add i.alias.name (i, iface) acc)
+          Env.empty imported;
+      used = Hashtbl.create 8;
     }
   in
   (* what's in scope bare: the prelude, which every module imports
@@ -553,7 +595,8 @@ let program sink ~home ~imports (prog : Parsed.program) =
     (fun (f : Parsed.fn_def) ->
       if Hashtbl.mem env.values f.name.name then
         report env f.name.loc ~help:"choose another name"
-          (sprintf "`%s` is already a function in the prelude" f.name.name))
+          (sprintf "`%s` is already a function in the prelude" f.name.name);
+      not_an_alias env f.name)
     fns;
   List.iter
     (fun (f : Parsed.fn_def) ->
