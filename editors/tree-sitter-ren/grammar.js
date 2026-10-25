@@ -23,8 +23,12 @@
  */
 
 // `not` binds below the comparisons, so `not a == b` is `not (a == b)`,
-// and above `&&`, so `not a && b` is `(not a) && b`
+// and above `&&`, so `not a && b` is `(not a) && b`. `orelse` binds below
+// `||`. `try` and `attempt` take everything to their right, so they bind
+// loosest of all.
 const PREC = {
+  prefix: -1,
+  orelse: 0,
   or: 1,
   and: 2,
   not: 3,
@@ -71,6 +75,8 @@ module.exports = grammar({
     // so may the next line after an `if`'s indented `then` block, with
     // `else`: the token after the line break decides
     [$.if_expression],
+    // and the next line of a named error set indented under its name
+    [$._error_set_body],
   ],
 
   supertypes: ($) => [$._expression, $._pattern, $._type],
@@ -107,6 +113,7 @@ module.exports = grammar({
         optional(field('type_parameters', $.type_parameters)),
         field('parameters', $.parameters),
         optional(seq('->', field('return_type', $._type))),
+        optional(field('errors', $.error_set)),
         optional(field('uses', $.uses_clause)),
         '=',
         field('body', $._body),
@@ -131,6 +138,35 @@ module.exports = grammar({
     uses_clause: ($) => seq('uses', commaSep1Strict($.dependency)),
 
     dependency: ($) => $.type_identifier,
+
+    // ! Short(account: AccountId, by: Money) | Frozen | bank.Refusal: what
+    // a function can fail with. A bare name may be a tag or a named error
+    // set, which only the compiler can tell apart; it's read as a tag
+    error_set: ($) => seq('!', sep1($._error, '|')),
+
+    // in a named error set's body, indented under `type X =`, each `|` may
+    // start a line
+    _error_set_body: ($) =>
+      seq('!', sep1($._error, seq(optional($._newline), '|'))),
+
+    _error: ($) => choice($.error_tag, $.error_set_name),
+
+    error_tag: ($) =>
+      seq(
+        field('name', $.type_identifier),
+        optional(seq('(', commaSep1($.payload), ')')),
+      ),
+
+    // a payload's field, its name only documentation: `by: Money`, `Money`
+    payload: ($) =>
+      seq(
+        optional(seq(field('name', $.identifier), ':')),
+        field('type', $._type),
+      ),
+
+    // bank.Refusal: another module's named error set
+    error_set_name: ($) =>
+      seq(field('module', $.identifier), '.', field('name', $.type_identifier)),
 
     // ---- types ----
 
@@ -161,7 +197,13 @@ module.exports = grammar({
         ),
       ),
 
-    _type_body: ($) => choice($.record_type, $.opaque_type, $.sum_type),
+    _type_body: ($) =>
+      choice(
+        $.record_type,
+        $.opaque_type,
+        $.sum_type,
+        alias($._error_set_body, $.error_set),
+      ),
 
     record_type: ($) => seq('{', commaSep($.field_declaration), '}'),
 
@@ -214,7 +256,9 @@ module.exports = grammar({
 
     // ---- written types ----
 
-    _type: ($) => choice($.named_type, $.function_type),
+    // an error set is a type only as `Result`'s second argument, which the
+    // compiler checks
+    _type: ($) => choice($.named_type, $.function_type, $.error_set),
 
     // Int, Option<Int>, stripe.Client
     named_type: ($) =>
@@ -225,14 +269,18 @@ module.exports = grammar({
 
     type_arguments: ($) => seq('<', commaSep($._type), '>'),
 
-    // fn(inout Array<Int>, id: UserId) -> User
+    // fn(inout Array<Int>, id: UserId) -> User ! NotFound. The `! ...`
+    // belongs to the innermost function type that can take it
     function_type: ($) =>
-      seq(
-        'fn',
-        '(',
-        commaSep($.function_type_parameter),
-        ')',
-        optional(seq('->', field('return_type', $._type))),
+      prec.right(
+        seq(
+          'fn',
+          '(',
+          commaSep($.function_type_parameter),
+          ')',
+          optional(seq('->', field('return_type', $._type))),
+          optional(field('errors', $.error_set)),
+        ),
       ),
 
     function_type_parameter: ($) =>
@@ -292,8 +340,11 @@ module.exports = grammar({
     _expression: ($) =>
       choice(
         $.binary_expression,
+        $.orelse_expression,
         $.unary_expression,
         $.reference,
+        $.try_expression,
+        $.attempt_expression,
         $._postfix,
       ),
 
@@ -315,6 +366,30 @@ module.exports = grammar({
             ),
           ),
         ),
+      ),
+
+    // x orelse fail Missing: the value in an Option, or else the right
+    // side. `a orelse b orelse c` is `a orelse (b orelse c)`
+    orelse_expression: ($) =>
+      prec.right(
+        PREC.orelse,
+        seq(
+          field('left', $._expression),
+          'orelse',
+          field('right', $._expression),
+        ),
+      ),
+
+    // try f(), and try match f(): passes on the errors of every call to its
+    // right
+    try_expression: ($) =>
+      prec.right(PREC.prefix, seq('try', field('operand', $._expression))),
+
+    // attempt f(): its outcome, as a Result
+    attempt_expression: ($) =>
+      prec.right(
+        PREC.prefix,
+        seq('attempt', field('operand', $._expression)),
       ),
 
     // -x, not b
@@ -391,6 +466,7 @@ module.exports = grammar({
         $.parenthesized_expression,
         $.if_expression,
         $.match_expression,
+        $.fail_expression,
       ),
 
     number: (_) => /[0-9][0-9_]*/,
@@ -425,6 +501,16 @@ module.exports = grammar({
 
     constructor_arguments: ($) =>
       seq('(', commaSep(choice($.labeled_argument, $._expression)), ')'),
+
+    // fail Short(self.id, by: m): stop with that error
+    fail_expression: ($) =>
+      prec.right(
+        seq(
+          'fail',
+          field('tag', $.type_identifier),
+          optional(field('arguments', $.constructor_arguments)),
+        ),
+      ),
 
     labeled_argument: ($) =>
       seq(field('label', $.identifier), ':', field('value', $._expression)),
@@ -480,7 +566,7 @@ module.exports = grammar({
 
     match_arm: ($) =>
       seq(
-        field('pattern', $._pattern),
+        field('pattern', choice($._pattern, $.fail_pattern, $.or_pattern)),
         optional(seq('if', field('guard', $._expression))),
         '=>',
         field('body', $._body),
@@ -499,6 +585,22 @@ module.exports = grammar({
       ),
 
     wildcard: (_) => '_',
+
+    // fail Short(_, by), fail _: an error, which only a whole arm matches
+    fail_pattern: ($) =>
+      seq(
+        'fail',
+        choice(
+          $.wildcard,
+          seq(
+            field('tag', $.type_identifier),
+            optional(seq('(', commaSep($._pattern), ')')),
+          ),
+        ),
+      ),
+
+    // fail NoSuchAccount(_) | fail SameAccount: so far, only of fail patterns
+    or_pattern: ($) => seq($.fail_pattern, repeat1(seq('|', $.fail_pattern))),
 
     negative_number: ($) => seq('-', $.number),
 

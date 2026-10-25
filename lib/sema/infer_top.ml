@@ -100,7 +100,10 @@ let check_transparent sink (f : fn_def) =
         match e.kind with
         | Var x -> is_param x
         | Int _ | Bool _ | Unit -> false
-        | Unop (_, a) | Field (a, _) | Ref a | Lambda (_, a) -> mentions a
+        | Unop (_, a) | Field (a, _) | Ref a | Lambda (_, a) | Try a | Attempt a
+          ->
+            mentions a
+        | Fail (_, args) -> any (List.map snd args)
         | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ }
           ->
             any [ a; b ]
@@ -139,7 +142,9 @@ let check_transparent sink (f : fn_def) =
             if (not ok) && mentions body then
               fail e.loc "is captured by a lambda that outlives the call"
             else walk ~ok:false body
-        | Unop (_, a) | Field (a, _) | Ref a -> walk_all [ a ]
+        | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a ->
+            walk_all [ a ]
+        | Fail (_, args) -> walk_all (List.map snd args)
         | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ }
           ->
             walk_all [ a; b ]
@@ -165,6 +170,109 @@ let check_transparent sink (f : fn_def) =
       in
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
     fn_params
+
+(* ---- what isn't checked yet ----
+
+   Error handling (errors.md) is parsed and resolved, but checked only from
+   stage 6.3. Until then each place that uses it is reported here, and
+   inference doesn't run. Declaring a named error set is fine: it does
+   nothing until a function fails with it. *)
+
+let not_yet sink (prog : program) =
+  let later loc what =
+    Diag.report sink
+      (Diag.make loc
+         ~help:"for now, return an `Option` to say that something didn't work"
+         (sprintf "%s later in stage 6" what))
+  in
+  let errors (es : Resolved.errors) =
+    later es.eloc "a function's errors, after `!`, arrive"
+  in
+  let rec ty (t : Resolved.ty) =
+    match t with
+    | TyName (_, args) -> List.iter ty args
+    | TyFn (ps, ret, errs, _) ->
+        List.iter ty ps;
+        Option.iter ty ret;
+        Option.iter errors errs
+    | TyInout (t, _) -> ty t
+    | TyErrors es -> later es.eloc "an error set as a type argument arrives"
+  in
+  let param (p : Resolved.param) = Option.iter ty p.pty in
+  let rec pattern (p : pattern) =
+    match p.pkind with
+    | PWild | PVar _ | PInt _ | PBool _ -> ()
+    | PCon (_, ps) -> List.iter pattern ps
+    | PFail _ | PFail_any | POr _ -> later p.ploc "`fail` patterns arrive"
+  in
+  let rec expr (e : expr) =
+    let go = List.iter expr in
+    match e.kind with
+    | Int _ | Bool _ | Unit | Var _ -> ()
+    | Unop (_, a) | Field (a, _) | Ref a -> expr a
+    | Binop (Orelse, a, b) ->
+        later e.loc "`orelse` arrives";
+        go [ a; b ]
+    | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
+        go [ a; b ]
+    | If (c, t, f) -> go (c :: t :: Option.to_list f)
+    | Call (f, args) -> go (f :: args)
+    | Lambda (ps, body) ->
+        List.iter param ps;
+        expr body
+    | Block (stmts, last) ->
+        List.iter
+          (function
+            | Let { ty = t; value; _ } ->
+                Option.iter ty t;
+                expr value
+            | Expr e -> expr e)
+          stmts;
+        expr last
+    | Con (_, args) -> go (List.map snd args)
+    | Fail (_, args) ->
+        later e.loc "`fail` arrives";
+        go (List.map snd args)
+    | Record (_, fields) -> go (List.map snd fields)
+    | Match (s, arms) ->
+        expr s;
+        List.iter
+          (fun (a : arm) ->
+            pattern a.arm_pat;
+            Option.iter expr a.arm_guard;
+            expr a.arm_body)
+          arms
+    | Array xs -> go xs
+    | For { iter; body; _ } -> go [ iter; body ]
+    | Try a ->
+        later e.loc "`try` arrives";
+        expr a
+    | Attempt a ->
+        later e.loc "`attempt` arrives";
+        expr a
+  in
+  let fn_ (f : fn_def) =
+    List.iter param f.params;
+    Option.iter ty f.ret;
+    Option.iter errors f.errors;
+    expr f.body
+  in
+  List.iter
+    (function
+      | Fn f -> fn_ f
+      | Type td ->
+          let field (fd : Resolved.field) = ty fd.field_ty in
+          (match td.type_body with
+          | Fields fs -> List.iter field fs
+          | Ctors cs -> List.iter (fun c -> List.iter field c.ctor_fields) cs
+          | Opaque t -> ty t
+          | Errors _ ->
+              (* a named error set means nothing until it's used, and
+                 resolve.ml has checked its names *)
+              ());
+          List.iter (fun (o : op) -> fn_ o.op_fn) td.type_ops
+      | Import _ -> ())
+    prog
 
 (* ---- what a function declares it uses ---- *)
 
@@ -697,6 +805,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
 
    A try reports to its own sink, and only the last try's errors are kept. *)
 let program sink ~imports ~reachable ?entry (r : Resolve.t) =
+  not_yet sink r.prog;
   let rec go extra =
     let tried = Diag.sink () in
     let keep () = List.iter (Diag.report sink) (List.rev tried.reported) in
@@ -710,4 +819,6 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
         keep ();
         raise e
   in
-  go []
+  if Diag.has_errors sink then
+    { schemes = []; values = []; nodes = []; in_scope = [] }
+  else go []

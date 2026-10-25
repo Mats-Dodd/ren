@@ -1071,7 +1071,8 @@ let%expect_test "an opaque type's interface hides its representation" =
         | Opaque (Some _) -> "opaque, with its representation"
         | Record _ -> "a record"
         | Sum _ -> "a sum type"
-        | Builtin -> "built in"))
+        | Builtin -> "built in"
+        | Errors _ -> "an error set"))
     i.types;
   [%expect {|
     UserId: opaque

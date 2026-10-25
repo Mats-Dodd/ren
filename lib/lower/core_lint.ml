@@ -163,13 +163,13 @@ let ctor_of env loc (td : Iface.type_decl) c =
       | Some k -> k
       | None ->
           fail env loc (sprintf "`%s` has no constructor `%s`" td.path.name c))
-  | Record _ | Builtin | Opaque _ ->
+  | Record _ | Builtin | Opaque _ | Errors _ ->
       fail env loc (sprintf "`%s` isn't a sum type" td.path.name)
 
 let fields_of env loc (td : Iface.type_decl) =
   match td.body with
   | Record fs -> fs
-  | Sum _ | Builtin | Opaque _ ->
+  | Sum _ | Builtin | Opaque _ | Errors _ ->
       fail env loc (sprintf "`%s` isn't a record" td.path.name)
 
 let field_ty env loc (td : Iface.type_decl) args f =
@@ -371,6 +371,7 @@ and prim env sc (e : expr) op args =
       is "`not`" Ty.bool
   | Binop (And | Or), _ ->
       fail env loc "`&&` or `||` that wasn't lowered to an `if`"
+  | Binop Orelse, _ -> fail env loc "an `orelse` that wasn't lowered"
   | Binop (Eq | Neq), [ a; b ] ->
       same env loc "the right side of a comparison" b.ty a.ty;
       is "a comparison" Ty.bool

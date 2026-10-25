@@ -1,0 +1,249 @@
+================================================================================
+what a function can fail with, before uses
+================================================================================
+
+pub fn debit(inout a: Int, m: Money) ! Short(account: Int, by: Money) | Frozen(Int) = ()
+fn save(id: Int) -> Int ! Full | bank.Refusal
+    uses Io =
+  id
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (inout)
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (error_set
+      (error_tag
+        (type_identifier)
+        (payload
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))
+        (payload
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (error_tag
+        (type_identifier)
+        (payload
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (unit))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (error_set
+      (error_tag
+        (type_identifier))
+      (error_set_name
+        (identifier)
+        (type_identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (identifier))))
+
+================================================================================
+a function type's errors, and an error set as a type argument
+================================================================================
+
+type Hooks = {
+  make: fn() -> fn() ! Bad,
+  last: Result<Int, ! Short(Int) | Frozen>,
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (record_type
+      (field_declaration
+        (identifier)
+        (function_type
+          (function_type
+            (error_set
+              (error_tag
+                (type_identifier))))))
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))
+            (error_set
+              (error_tag
+                (type_identifier)
+                (payload
+                  (named_type
+                    (type_name
+                      (type_identifier)))))
+              (error_tag
+                (type_identifier)))))))))
+
+================================================================================
+named error sets, on one line and indented
+================================================================================
+
+pub type Refusal = ! Short(by: Int) | Frozen
+type TransferError =
+  ! Refusal
+  | SameAccount
+
+fn f() = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (error_set
+      (error_tag
+        (type_identifier)
+        (payload
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (error_tag
+        (type_identifier))))
+  (type_definition
+    (type_identifier)
+    (error_set
+      (error_tag
+        (type_identifier))
+      (error_tag
+        (type_identifier))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (number)))
+
+================================================================================
+fail, try, attempt and orelse
+================================================================================
+
+fn f() =
+  if bad() then fail Short(1, by: 2)
+  let n = try parse(p) + 1
+  let r = attempt &acme.transfer(t)
+  a || b orelse c orelse fail Missing
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (if_expression
+        (call_expression
+          (identifier)
+          (arguments))
+        (fail_expression
+          (type_identifier)
+          (constructor_arguments
+            (number)
+            (labeled_argument
+              (identifier)
+              (number)))))
+      (let_statement
+        (identifier)
+        (try_expression
+          (binary_expression
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))
+            (number))))
+      (let_statement
+        (identifier)
+        (attempt_expression
+          (reference
+            (method_call_expression
+              (identifier)
+              (identifier)
+              (arguments
+                (identifier))))))
+      (orelse_expression
+        (binary_expression
+          (identifier)
+          (identifier))
+        (orelse_expression
+          (identifier)
+          (fail_expression
+            (type_identifier)))))))
+
+================================================================================
+fail patterns, and try match
+================================================================================
+
+fn f() =
+  try match transfer(t)
+    _ => 0
+    fail Short(_, by) => by
+    fail Gone | fail SameAccount => 1
+    fail _ => 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (try_expression
+        (match_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))
+          (match_arm
+            (wildcard)
+            (number))
+          (match_arm
+            (fail_pattern
+              (type_identifier)
+              (wildcard)
+              (identifier))
+            (identifier))
+          (match_arm
+            (or_pattern
+              (fail_pattern
+                (type_identifier))
+              (fail_pattern
+                (type_identifier)))
+            (number))
+          (match_arm
+            (fail_pattern
+              (wildcard))
+            (number)))))))

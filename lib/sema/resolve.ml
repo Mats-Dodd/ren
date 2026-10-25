@@ -14,6 +14,10 @@
      (`import rows.{Row}`), or one written with its module's alias,
      `rows.Row`. Or it's one of the type parameters in scope. A constructor
      written after its type, `Light.Red`, gets that type's path.
+   - a named error set, `type Refusal = ! ...`, is in scope like a type,
+     and only ever written after `!` (or in `Result<T, ! ...>`). A name
+     after `!` is the set, if one of that name is in scope, and otherwise
+     a tag: tags are structural, so they resolve to nothing (ast.ml).
    - each member of a type is resolved as a function named
      after its type, `Stack.push`, with the type's parameters in scope and
      `self`, its first parameter if it's a method, of the type (ast.ml).
@@ -26,7 +30,10 @@
    wrong number of arguments, names declared twice, a local or function
    with the name of an imported module, public declarations that
    mention a private type, opaque types represented as themselves, and
-   `self` anywhere but first in a method; among a type's members, two
+   `self` anywhere but first in a method; an error set used as a type, a
+  type used as an error set, an error written twice in one set, named
+  error sets that include themselves, and alternatives of a pattern that
+  bind different names; among a type's members, two
    with the same name, or an item with a field's name; and an item written
    after a type that doesn't have it, `Stack.grow`, or has it privately,
    in another module.
@@ -131,6 +138,8 @@ type env = {
   own_ops : (string, (string * Iface.op_kind) list * string list) Hashtbl.t;
       (** the members of each of the module's own types, by the type's name, in
           source order, and its fields *)
+  own_sets : (string, unit) Hashtbl.t;
+      (** the module's own named error sets, by name *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
   used : (string, unit) Hashtbl.t;  (** the aliases used *)
   used_types : (Path.t, unit) Hashtbl.t;
@@ -203,6 +212,19 @@ let bind env sc (id : ident) bound =
 
 (* ---- types ---- *)
 
+(* Whether [p] is a named error set, `type Refusal = ! ...`, rather than a
+   type of values: one of the module's own, or another module's, which its
+   interface says. *)
+let is_set env (p : Path.t) =
+  if p.home = env.home then Hashtbl.mem env.own_sets p.name
+  else
+    match List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces with
+    | Some iface -> (
+        match Iface.find_type iface p.name with
+        | Some { body = Errors _; _ } -> true
+        | _ -> false)
+    | None -> false
+
 (* The type named [name] in scope, and how many type arguments it takes. *)
 let find_type env name =
   let found = Hashtbl.find_opt env.types name in
@@ -223,7 +245,14 @@ let tyname_loc (t : tyname) =
 (* Where a type is written: where it starts, for a named one. *)
 let written_loc : Parsed.ty -> Loc.t = function
   | TyName (t, _) -> tyname_loc t
-  | TyFn (_, _, l) | TyInout (_, l) -> l
+  | TyFn (_, _, _, l) | TyInout (_, l) -> l
+  | TyErrors es -> es.eloc
+
+(* An error set's name, `Refusal`, written where only a type of values
+   makes sense. [what] says what it was used as. *)
+let not_a_type env loc ~what (t : tyname) =
+  report env loc ~help:"an error set is only written after `!`"
+    (sprintf "`%s` is an error set, so %s" (show_tyname t) what)
 
 (* The type [t] names, and how many type arguments it takes: one in scope,
    or, written `alias.T`, a public type of the module imported as [alias].
@@ -266,6 +295,9 @@ let find_named env ~params (t : tyname) =
    says what a type parameter can't be used as. *)
 let declared_type env ~params ~what (t : tyname) =
   match find_named env ~params t with
+  | Some (Named p, _) when is_set env p ->
+      not_a_type env (tyname_loc t) ~what t;
+      None
   | Some (Named p, _) -> Some { tref = Named p; tloc = tyname_loc t }
   | Some (Param _, _) ->
       report env (tyname_loc t)
@@ -276,23 +308,98 @@ let declared_type env ~params ~what (t : tyname) =
 
 (* A written type, with its names resolved. [params] are the type
    parameters in scope, like the `T` in `Option<T>`. A type with an error
-   is reported once, and its arguments aren't looked at. *)
-let rec ty env ~params (t : Parsed.ty) : Resolved.ty =
+   is reported once, and its arguments aren't looked at. [arg] says it's a
+   type argument, the one place an error set can be written as a type:
+   `Result<T, ! Short | Frozen>`. Which type takes one is for inference to
+   say. *)
+let rec ty env ~params ?(arg = false) (t : Parsed.ty) : Resolved.ty =
   match t with
-  | TyFn (ps, ret, l) ->
-      TyFn (List.map (ty env ~params) ps, Option.map (ty env ~params) ret, l)
+  | TyFn (ps, ret, errs, l) ->
+      let ps = List.map (ty env ~params) ps in
+      let ret = Option.map (ty env ~params) ret in
+      TyFn (ps, ret, Option.map (errors env ~params) errs, l)
   | TyInout (t, l) -> TyInout (ty env ~params t, l)
+  | TyErrors es ->
+      if not arg then
+        report env es.eloc
+          ~help:
+            "an error set goes after `!` in a signature or a function type; \
+             the one type that holds one is `Result<T, ! ...>`"
+          "an error set isn't a type of values";
+      TyErrors (errors env ~params es)
   | TyName (t, args) -> (
       let named tref = { tref; tloc = tyname_loc t } in
       let given = List.length args in
       match find_named env ~params t with
       | None -> TyName (named (Named (Path.make env.home t.tid.name)), [])
+      | Some (Named p, _) when is_set env p ->
+          not_a_type env (tyname_loc t) ~what:"it isn't a type of values" t;
+          TyName (named (Named p), [])
       | Some (tref, n) when n <> given ->
           report env (tyname_loc t)
             (sprintf "`%s` takes %d type argument%s but was given %d"
                (show_tyname t) n (plural n) given);
           TyName (named tref, [])
-      | Some (tref, _) -> TyName (named tref, List.map (ty env ~params) args))
+      | Some (tref, _) ->
+          TyName (named tref, List.map (ty env ~params ~arg:true) args))
+
+(* An error set as written, after `!`, with its names resolved. A bare
+   name with no payload is the named error set of that name, if one is in
+   scope (a type parameter's name is never one), and otherwise a tag; a
+   name after a module, `bank.Refusal`, has to be a set. Each error is
+   written once. *)
+and errors env ~params (es : Parsed.errors) : Resolved.errors =
+  let set_in_scope (t : ident) =
+    if List.mem t.name params then None
+    else
+      match Hashtbl.find_opt env.types t.name with
+      | Some (p, _) when is_set env p ->
+          (* noted as used, as any type found in scope is *)
+          ignore (find_type env t.name);
+          Some p
+      | _ -> None
+  in
+  let error : Parsed.error -> Resolved.error = function
+    | Tag (t, []) when set_in_scope t <> None ->
+        Set { tref = Named (Option.get (set_in_scope t)); tloc = t.loc }
+    | Tag (t, ps) ->
+        Tag
+          ( t,
+            List.map
+              (fun (p : tyname payload) ->
+                { p with payload_ty = ty env ~params p.payload_ty })
+              ps )
+    | Set n -> (
+        match find_named env ~params n with
+        | Some (Named p, _) when is_set env p ->
+            Set { tref = Named p; tloc = tyname_loc n }
+        | Some _ ->
+            report env (tyname_loc n)
+              ~help:
+                (sprintf
+                   "name an error set, declared with `type X = ! ...`; a tag \
+                    is written bare, `%s`"
+                   n.tid.name)
+              (sprintf "`%s` is a type, not an error set" (show_tyname n));
+            Tag (n.tid, [])
+        | None -> Tag (n.tid, []))
+  in
+  let name : Parsed.error -> ident = function
+    | Tag (t, _) -> t
+    | Set n -> { name = show_tyname n; loc = tyname_loc n }
+  in
+  let seen = Hashtbl.create 8 in
+  List.iter
+    (fun e ->
+      let id = name e in
+      match Hashtbl.find_opt seen id.name with
+      | Some first ->
+          report env id.loc ~help:"remove one of them"
+            ~labels:[ (first, sprintf "the first `%s` is here" id.name) ]
+            (sprintf "`%s` is in this error set twice" id.name)
+      | None -> Hashtbl.replace seen id.name id.loc)
+    es.errs;
+  { errs = List.map error es.errs; eloc = es.eloc }
 
 let ty_opt env ~params = Option.map (ty env ~params)
 
@@ -492,9 +599,12 @@ let lookup env sc loc ~what x =
    reported: otherwise the second `x` would quietly hide the first. *)
 let rec pattern_vars (p : Parsed.pattern) =
   match p.pkind with
-  | PWild | PInt _ | PBool _ -> []
+  | PWild | PInt _ | PBool _ | PFail_any -> []
   | PVar x -> [ x ]
-  | PCon (_, ps) -> List.concat_map pattern_vars ps
+  | PCon (_, ps) | PFail (_, ps) -> List.concat_map pattern_vars ps
+  | POr ps ->
+      (* each alternative binds the same names (see [pattern]) *)
+      Option.fold ~none:[] ~some:pattern_vars (List.nth_opt ps 0)
 
 (* A constructor: the type it's written after, if any, resolved. A bare one
    is found through a type by inference. *)
@@ -506,24 +616,78 @@ let ctor_ref env sc (c : Parsed.ctor_ref) : Resolved.ctor_ref =
     name = c.name;
   }
 
-let rec pattern env sc (p : Parsed.pattern) : Resolved.pattern * scope =
+(* A pattern, and the scope its names are bound in. [same] are the
+   binders the first alternative of an or-pattern bound, which the names
+   of the others are: `fail Short(_, by) | fail Late(by)` binds one `by`. *)
+let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
+    Resolved.pattern * scope =
+  let patterns sc ps =
+    let ps, sc =
+      List.fold_left
+        (fun (acc, sc) p ->
+          let p, sc = pattern env ~same sc p in
+          (p :: acc, sc))
+        ([], sc) ps
+    in
+    (List.rev ps, sc)
+  in
   let kind, sc =
     match p.pkind with
     | PWild -> (PWild, sc)
     | PInt n -> (PInt n, sc)
     | PBool b -> (PBool b, sc)
-    | PVar x ->
-        let b, sc = bind env sc x By_pattern in
-        (PVar b, sc)
+    | PFail_any -> (PFail_any, sc)
+    | PVar x -> (
+        match Env.find_opt x.name same with
+        | Some b -> (PVar b, { sc with locals = Env.add x.name b sc.locals })
+        | None ->
+            let b, sc = bind env sc x By_pattern in
+            (PVar b, sc))
     | PCon (c, ps) ->
-        let ps, sc =
-          List.fold_left
-            (fun (acc, sc) p ->
-              let p, sc = pattern env sc p in
-              (p :: acc, sc))
-            ([], sc) ps
+        let ps, sc = patterns sc ps in
+        (PCon (ctor_ref env sc c, ps), sc)
+    | PFail (t, ps) ->
+        let ps, sc = patterns sc ps in
+        (PFail (t, ps), sc)
+    | POr [] -> assert false (* the parser makes one of two or more *)
+    | POr (first :: rest) ->
+        let first', inner = pattern env sc first in
+        let bound = pattern_vars first in
+        let has (vars : ident list) (x : ident) =
+          List.exists (fun (y : ident) -> y.name = x.name) vars
         in
-        (PCon (ctor_ref env sc c, List.rev ps), sc)
+        let help = "bind the same names in every alternative" in
+        (* a name only some alternatives bind is reported, and bound
+           anyway, so its uses aren't reported too *)
+        let rest, inner =
+          List.fold_left
+            (fun (acc, inner) (alt : Parsed.pattern) ->
+              let vars = pattern_vars alt in
+              no_duplicates env "pattern variables" vars;
+              List.iter
+                (fun (x : ident) ->
+                  if not (has bound x) then
+                    report env x.loc ~help
+                      (sprintf
+                         "`%s` is bound by this alternative, but not by the \
+                          first one"
+                         x.name))
+                vars;
+              List.iter
+                (fun (y : ident) ->
+                  if not (has vars y) then
+                    report env alt.ploc ~help
+                      ~labels:[ (y.loc, sprintf "`%s` is bound here" y.name) ]
+                      (sprintf
+                         "this alternative doesn't bind `%s`, which the first \
+                          one does"
+                         y.name))
+                bound;
+              let alt, inner = pattern env ~same:inner.locals inner alt in
+              (alt :: acc, inner))
+            ([], inner) rest
+        in
+        (POr (first' :: List.rev rest), inner)
   in
   ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
 
@@ -664,6 +828,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let iter = go iter in
         let b, inner = bind env sc var bound in
         For { var = b; iter; body = expr env inner body }
+    | Fail (t, args) -> Fail (t, List.map (fun (l, a) -> (l, go a)) args)
+    | Try a -> Try (go a)
+    | Attempt a -> Attempt (go a)
   in
   { kind; loc = e.loc; node = e.node }
 
@@ -714,6 +881,62 @@ let no_opaque_cycles env (items : Resolved.program) =
             | None -> ()
           in
           follow [ start.name ] t
+      | Fn _ | Type _ | Import _ -> ())
+    items
+
+(* A named error set can include others, but never itself, by way of
+   others or not: `type A = ! B | X` and `type B = ! A` would leave no tag
+   either is made of. Sets of other modules can't include this module's,
+   which imports them, so a cycle is always among the module's own. *)
+let no_set_cycles env (items : Resolved.program) =
+  let sets = Hashtbl.create 8 in
+  List.iter
+    (function
+      | Type ({ type_body = Errors es; _ } as td) ->
+          Hashtbl.replace sets td.type_name.name es
+      | Fn _ | Type _ | Import _ -> ())
+    items;
+  (* the module's own sets [n] includes directly, in the order written *)
+  let includes n =
+    match Hashtbl.find_opt sets n with
+    | Some (es : Resolved.errors) ->
+        List.filter_map
+          (function
+            | Set { tref = Named p; _ } when p.home = env.home -> Some p.name
+            | _ -> None)
+          es.errs
+    | None -> []
+  in
+  (* a way from [n] back to [goal], if there is one: the sets on it,
+     ending with [goal] *)
+  let rec back ~seen goal n =
+    List.find_map
+      (fun m ->
+        if m = goal then Some [ m ]
+        else if Hashtbl.mem seen m then None
+        else (
+          Hashtbl.replace seen m ();
+          Option.map (fun way -> m :: way) (back ~seen goal m)))
+      (includes n)
+  in
+  (* the sets of a cycle already reported, so a cycle is reported once,
+     from whichever of its sets comes first *)
+  let reported = ref [] in
+  List.iter
+    (function
+      | Type ({ type_body = Errors _; _ } as td)
+        when not (List.mem td.type_name.name !reported) -> (
+          let n = td.type_name.name in
+          match back ~seen:(Hashtbl.create 8) n n with
+          | Some way ->
+              reported := way @ !reported;
+              report env td.type_name.loc
+                ~help:
+                  (if way = [ n ] then "remove it from its own list"
+                   else "remove one of these sets from the one that includes it")
+                (sprintf "`%s` includes itself: %s" n
+                   (String.concat " → " (n :: way)))
+          | None -> ())
       | Fn _ | Type _ | Import _ -> ())
     items
 
@@ -820,6 +1043,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     | _ -> ps
   in
   let ret = ty_opt env ~params:sc.tparams f.ret in
+  let errs = Option.map (errors env ~params:sc.tparams) f.errors in
   Option.iter (uses env) f.uses;
   let body = expr env inner f.body in
   let name =
@@ -827,7 +1051,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     | Some td -> { f.name with name = td.type_name.name ^ "." ^ f.name.name }
     | None -> f.name
   in
-  ( { f with name; tparams; params = ps; ret; body },
+  ( { f with name; tparams; params = ps; ret; errors = errs; body },
     List.sort_uniq compare sc.fn.calls,
     List.sort_uniq compare sc.fn.dots )
 
@@ -846,7 +1070,7 @@ let type_def env (td : Parsed.type_def) :
   | Fields fs -> no_duplicate_fields fs
   | Ctors cs ->
       List.iter (fun (c : Parsed.ctor) -> no_duplicate_fields c.ctor_fields) cs
-  | Opaque _ -> ());
+  | Opaque _ | Errors _ -> ());
   let params = List.map (fun (p : ident) -> p.name) td.type_params in
   let field (f : Parsed.field) : Resolved.field =
     { field_name = f.field_name; field_ty = ty env ~params f.field_ty }
@@ -864,6 +1088,7 @@ let type_def env (td : Parsed.type_def) :
                })
              cs)
     | Opaque t -> Opaque (ty env ~params t)
+    | Errors es -> Errors (errors env ~params es)
   in
   let tname = td.type_name.name in
   (* each item has a name of its own, which isn't a field's: `s.items`
@@ -905,7 +1130,7 @@ let type_def env (td : Parsed.type_def) :
                    id.name)
           | None -> ())
         td.type_ops
-  | Ctors _ | Opaque _ -> ());
+  | Ctors _ | Opaque _ | Errors _ -> ());
   let type_ops, calls =
     List.split
       (List.map
@@ -930,16 +1155,29 @@ let rec named_in (t : Resolved.ty) =
   | TyName ({ tref = Named p; tloc }, args) ->
       (p, tloc) :: List.concat_map named_in args
   | TyName ({ tref = Param _; _ }, args) -> List.concat_map named_in args
-  | TyFn (ps, ret, _) ->
-      List.concat_map named_in ps @ Option.fold ~none:[] ~some:named_in ret
+  | TyFn (ps, ret, errs, _) ->
+      List.concat_map named_in ps
+      @ Option.fold ~none:[] ~some:named_in ret
+      @ Option.fold ~none:[] ~some:named_in_errors errs
   | TyInout (t, _) -> named_in t
+  | TyErrors es -> named_in_errors es
 
-(* Report each private type in [t]. [whole] words the error when [t] is
-   that type, [inside] when it's somewhere in [t]. *)
-let no_private env ~private_ ~whole ~inside (t : Resolved.ty) =
-  let is_whole p =
-    match t with TyName ({ tref = Named q; _ }, _) -> p = q | _ -> false
-  in
+(* The same, in an error set: the named sets it includes, and the types in
+   its tags' payloads. *)
+and named_in_errors (es : Resolved.errors) =
+  List.concat_map
+    (function
+      | Tag (_, ps) ->
+          List.concat_map
+            (fun (p : Resolved.payload) -> named_in p.payload_ty)
+            ps
+      | Set { tref = Named p; tloc } -> [ (p, tloc) ]
+      | Set { tref = Param _; _ } -> [])
+    es.errs
+
+(* Report each private type of [named], the types named somewhere and
+   where. [say] words the error for each one. *)
+let no_private_named env ~private_ ~say named =
   List.iter
     (fun ((p : Path.t), loc) ->
       if p.home = env.home then
@@ -951,10 +1189,36 @@ let no_private env ~private_ ~whole ~inside (t : Resolved.ty) =
                 [
                   (decl, sprintf "`%s` is declared here, without `pub`" p.name);
                 ]
-              (sprintf "%s, which is private to this module"
-                 (if is_whole p then whole p.name else inside p.name))
+              (sprintf "%s, which is private to this module" (say p))
         | None -> ())
-    (named_in t)
+    named
+
+(* Report each private type in [t]. [whole] words the error when [t] is
+   that type, [inside] when it's somewhere in [t]. *)
+let no_private env ~private_ ~whole ~inside (t : Resolved.ty) =
+  let is_whole p =
+    match t with TyName ({ tref = Named q; _ }, _) -> p = q | _ -> false
+  in
+  no_private_named env ~private_ (named_in t) ~say:(fun (p : Path.t) ->
+      if is_whole p then whole p.name else inside p.name)
+
+(* Report each private type in the error set [es]: a set it includes, which
+   [set] words, or a type in a tag's payload, which [tag] words, given the
+   tag's name. *)
+let no_private_errors env ~private_ ~set ~tag (es : Resolved.errors) =
+  List.iter
+    (function
+      | Tag ((t : ident), ps) ->
+          List.iter
+            (fun (p : Resolved.payload) ->
+              no_private_named env ~private_ (named_in p.payload_ty)
+                ~say:(fun (q : Path.t) -> tag t.name q.name))
+            ps
+      | Set _ as e ->
+          no_private_named env ~private_
+            (named_in_errors { es with errs = [ e ] })
+            ~say:(fun (q : Path.t) -> set q.name))
+    es.errs
 
 let no_leaks env ~private_ (items : Resolved.program) =
   let fn_ (f : Resolved.fn_def) =
@@ -966,7 +1230,12 @@ let no_leaks env ~private_ (items : Resolved.program) =
     List.iter
       (fun (p : Resolved.param) -> Option.iter (check ~verb:"takes") p.pty)
       f.params;
-    Option.iter (check ~verb:"returns") f.ret
+    Option.iter (check ~verb:"returns") f.ret;
+    Option.iter
+      (no_private_errors env ~private_
+         ~set:(sprintf "`pub fn %s` can fail with `%s`" f.name.name)
+         ~tag:(sprintf "`pub fn %s`'s error `%s` mentions `%s`" f.name.name))
+      f.errors
   in
   (* an associated value is a function of no parameters (ast.ml) *)
   let value (f : Resolved.fn_def) =
@@ -1009,7 +1278,11 @@ let no_leaks env ~private_ (items : Resolved.program) =
           | Opaque _ ->
               (* its representation isn't in the interface, so it can be a
                  private type *)
-              ())
+              ()
+          | Errors es ->
+              no_private_errors env ~private_ es
+                ~set:(sprintf "`pub type %s` includes `%s`" t)
+                ~tag:(sprintf "`pub type %s`'s error `%s` mentions `%s`" t))
       | Fn _ | Type _ | Import _ -> ())
     items
 
@@ -1108,6 +1381,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
       imports = imported;
       ifaces = imports;
       own_ops = Hashtbl.create 8;
+      own_sets = Hashtbl.create 8;
       modules =
         List.fold_left
           (fun acc ((i : import), iface) -> Env.add i.alias.name (i, iface) acc)
@@ -1170,8 +1444,11 @@ let program sink ~home ~imports (prog : Parsed.program) =
             match td.type_body with
             | Fields fs ->
                 List.map (fun (f : Parsed.field) -> f.field_name.name) fs
-            | Ctors _ | Opaque _ -> []
+            | Ctors _ | Opaque _ | Errors _ -> []
           in
+          (match td.type_body with
+          | Errors _ -> Hashtbl.replace env.own_sets td.type_name.name ()
+          | Fields _ | Ctors _ | Opaque _ -> ());
           if not (Hashtbl.mem env.own_ops td.type_name.name) then
             Hashtbl.replace env.own_ops td.type_name.name
               ( List.map
@@ -1270,6 +1547,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
     items;
   no_leaks env ~private_ items;
   no_opaque_cycles env items;
+  no_set_cycles env items;
   let types =
     List.filter_map
       (function

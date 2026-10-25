@@ -197,6 +197,10 @@ let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
           Some
             (sprintf "here %s is %s, so write one of those instead" (article t)
                (article (representation ~names td))) )
+    | Errors _ ->
+        (* resolve.ml reports a set written as a type; this is for safety *)
+        ( sprintf "`%s` is an error set, so it has no constructors" t,
+          Some "a tag is written bare, after `fail`" )
   in
   Diag.make (Loc.span loc c.loc) ~notes ?help msg
 

@@ -16,6 +16,11 @@
    cached (stage 10). *)
 
 type field = { fname : string; fty : Ty.ty }
+
+(* One of a named error set's errors, as it's declared: a tag, with its
+   payload's types, or another named set, which stands for all of its own.
+   Only the payload's types are the tag's: its fields' names document it. *)
+type error = Tag of string * Ty.ty list | Set of Path.t
 type ctor = { cname : string; cfields : field list; cloc : Loc.t }
 
 type body =
@@ -27,6 +32,9 @@ type body =
           ([Int]), which only its own module sees. That module's view of it has
           [Some] representation; its interface has [None], so no other module
           can make one, look inside one or use one as an [Int]. *)
+  | Errors of error list
+      (** a named error set, [type Refusal = ! Short(by: Money) | Frozen], which
+          is no type of values *)
 
 (* A member of a type (ast.ml): a method, which has `self`,
    an associated function, which doesn't, or an associated value. *)
@@ -77,12 +85,18 @@ let rec of_written (t : Ast.Resolved.ty) : Ty.ty =
   | TyName ({ tref = Param i; _ }, _) -> Var i
   | TyName ({ tref = Named path; _ }, args) ->
       Con (path, List.map of_written args)
-  | TyFn (ps, ret, _) ->
+  | TyFn (ps, ret, _, _) ->
+      (* what it's written to fail with, after `!`, is checked from stage
+         6.3; until then inference reports it *)
       let ret = match ret with Some r -> of_written r | None -> Ty.unit in
       Fun (List.map of_written_param ps, ret, Ty.closed, Ty.closed)
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
+  | TyErrors _ ->
+      (* an error set as a type argument, which inference reports until
+         stage 6.3 *)
+      Error
 
 and of_written_param = function
   | Ast.TyInout (t, _) -> { mode = Inout; ty = of_written t }
@@ -104,7 +118,9 @@ and of_written_param = function
    that the two agree.
 
    Its dependencies are the ones its `uses` lists, none if it has no
-   `uses`; inference checks that its body uses nothing else. *)
+   `uses`; inference checks that its body uses nothing else. What it's
+   written to fail with, after `!`, is left out until stage 6.3 checks it
+   (inference reports it until then). *)
 let signature (f : Ast.Resolved.fn_def) : Ty.scheme =
   (* row variables: 0 for the errors, 1 for the dependencies *)
   let errs : Ty.row = { labels = []; tail = Some 0 } in
@@ -152,6 +168,22 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
                })
              cs)
     | Opaque t -> Opaque (Some (of_written t))
+    | Errors es ->
+        Errors
+          (List.map
+             (function
+               | Ast.Tag (t, ps) ->
+                   Tag
+                     ( t.name,
+                       List.map
+                         (fun (p : Ast.tname Ast.payload) ->
+                           of_written p.payload_ty)
+                         ps )
+               | Set { Ast.tref = Named p; _ } -> Set p
+               | Set { tref = Param _; _ } ->
+                   (* resolve.ml only makes a declared set a [Set] *)
+                   assert false)
+             es.errs)
   in
   let op (o : Ast.Resolved.op) =
     let f = o.op_fn in

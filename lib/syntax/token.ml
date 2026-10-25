@@ -25,6 +25,10 @@ type t =
   | OPAQUE
   | SELF
   | NOT
+  | FAIL
+  | TRY
+  | ATTEMPT
+  | ORELSE
   (* punctuation *)
   | LPAREN
   | RPAREN
@@ -43,6 +47,7 @@ type t =
   | MINUSEQ
   | STAREQ
   | AMP
+  | BANG
   (* operators *)
   | PLUS
   | MINUS
@@ -88,6 +93,10 @@ let to_string = function
   | OPAQUE -> "opaque"
   | SELF -> "self"
   | NOT -> "not"
+  | FAIL -> "fail"
+  | TRY -> "try"
+  | ATTEMPT -> "attempt"
+  | ORELSE -> "orelse"
   | LPAREN -> "("
   | RPAREN -> ")"
   | LBRACE -> "{"
@@ -105,6 +114,7 @@ let to_string = function
   | MINUSEQ -> "-="
   | STAREQ -> "*="
   | AMP -> "&"
+  | BANG -> "!"
   | PLUS -> "+"
   | MINUS -> "-"
   | STAR -> "*"

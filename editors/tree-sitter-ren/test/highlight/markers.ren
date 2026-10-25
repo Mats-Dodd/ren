@@ -38,3 +38,26 @@ fn ok(a: Bool, b: Bool) -> Bool = not a && b || a
 //                                ^ keyword
 //                                      ^ operator
 //                                           ^ operator
+
+pub type Refusal = ! Short(by: Int) | Frozen
+//                 ^ keyword.failure
+//                   ^ constructor
+//                         ^ property
+
+fn pay(t: Int) -> Int ! Refusal | bank.Late =
+//                    ^ keyword.failure
+//                                ^ namespace
+//                                     ^ type
+  if t < 0 then fail Short(t)
+//              ^ keyword.failure
+//                   ^ constructor
+  let r = attempt send(t)
+//        ^ keyword.failure
+  let n = find(t) orelse fail Frozen
+//                ^ keyword.failure
+  try match send(t)
+//^ keyword.failure
+    _ => n
+    fail Short(by) => by
+//  ^ keyword.failure
+//       ^ constructor

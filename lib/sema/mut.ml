@@ -217,7 +217,8 @@ let rec walk cx (e : expr) =
                 loop changes";
              ]
            "`&` can't be used here")
-  | Unop (_, a) -> walk cx a
+  | Unop (_, a) | Try a | Attempt a -> walk cx a
+  | Fail (_, args) -> List.iter (fun (_, a) -> walk cx a) args
   | Binop (_, a, b) ->
       walk cx a;
       walk cx b

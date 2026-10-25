@@ -31,14 +31,41 @@ type vname = Bare of string | Item of tyname * ident
 (* A type as written: `Int`, `Option<Int>`, `fn(Int) -> Bool`. *)
 type 't ty =
   | TyName of 't * 't ty list  (** [Int], [Option<Int>] *)
-  | TyFn of 't ty list * 't ty option * Loc.t
-      (** [fn(Int) -> Bool]; with no [->] the function returns [Unit] *)
+  | TyFn of 't ty list * 't ty option * 't errors option * Loc.t
+      (** [fn(Int) -> Bool], and what it can fail with, [fn(Int) -> Bool ! Bad];
+          with no [->] the function returns [Unit] *)
   | TyInout of 't ty * Loc.t
       (** [inout Int], a parameter of a function type: [fn(inout Int)] *)
+  | TyErrors of 't errors
+      (** [! Short | Frozen], an error set as a type argument, which only
+          [Result<T, ! ...>] takes (errors.md, "Keeping an error") *)
+
+(* What a function can fail with, written after `!` (errors.md):
+
+     ! Short(account: AccountId, by: Money) | Frozen(AccountId) | Refusal
+
+   Each error is a tag, with an optional payload, or a named error set,
+   `type Refusal = ! ...`, which stands for all of its tags. Tags are
+   structural: they aren't declared anywhere, so a tag resolves to nothing,
+   only the types in its payload do. The parser reads a bare name, like
+   `Refusal` or `Frozen`, as a tag; Resolve makes it the set when a named
+   error set of that name is in scope. A name written after a module,
+   `bank.Refusal`, is always a set. *)
+and 't errors = { errs : 't error list; eloc : Loc.t }
+
+and 't error =
+  | Tag of ident * 't payload list
+      (** [Short(account: AccountId, by: Money)]; [Frozen] has no payload *)
+  | Set of 't  (** a named error set: [Refusal], [bank.Refusal] *)
+
+(* A payload's field: its name is optional, and only documents it. A tag is
+   its name and its payload's types, in order. *)
+and 't payload = { payload_name : ident option; payload_ty : 't ty }
 
 (* [And] and [Or] are `&&` and `||`, which evaluate their right side only
    when the left doesn't already decide the answer (lower.ml makes them
-   `if`s). *)
+   `if`s). [Orelse] is `x orelse e`: the value in the `Option` [x], or else
+   [e], which is evaluated only if [x] is `None`, and is usually a `fail`. *)
 type binop =
   | Add
   | Sub
@@ -53,6 +80,7 @@ type binop =
   | Ge
   | And
   | Or
+  | Orelse
 
 (* [Neg] is `-x`, [Not] is `not b`. *)
 type unop = Neg | Not
@@ -82,6 +110,13 @@ and ('b, 't) pattern_kind =
   | PBool of bool
   | PCon of 't ctor_ref * ('b, 't) pattern list
       (** [Free], [Pro(seats)], [Plan.Free] *)
+  | PFail of ident * ('b, 't) pattern list
+      (** [fail Short(_, by)]: an error, destructured. A `fail` pattern is a
+          whole arm's, never part of another pattern *)
+  | PFail_any  (** [fail _]: any error *)
+  | POr of ('b, 't) pattern list
+      (** [fail Short(_, _) | fail Frozen(_)]: any of them. So far only `fail`
+          patterns are combined, and each binds the same names *)
 
 (* How a parameter is passed: read-only (the default), or [inout], which
    updates the caller's value. *)
@@ -134,6 +169,13 @@ and ('v, 'b, 't) expr_kind =
     }  (** [x = 1], [user.plan = Free], [xs[i] += 1]; the target is a place *)
   | For of { var : 'b; iter : ('v, 'b, 't) expr; body : ('v, 'b, 't) expr }
       (** [for x in xs], or [for p in &ps] to change each element *)
+  | Fail of ident * (ident option * ('v, 'b, 't) expr) list
+      (** [fail Short(self.id, by)]: stop with that error. A tag isn't a value,
+          so it's only ever written here, after `!` and in a pattern *)
+  | Try of ('v, 'b, 't) expr
+      (** [try e]: pass on the errors of every call in [e]. [try match] is a
+          [Try] of a [Match] *)
+  | Attempt of ('v, 'b, 't) expr  (** [attempt e]: its outcome, as a [Result] *)
 
 and ('v, 'b, 't) arm = {
   arm_pat : ('b, 't) pattern;
@@ -161,6 +203,9 @@ type 't type_body =
   | Opaque of 't ty
       (** [opaque Int]: a type of its own, represented as the type written,
           which only its module can see *)
+  | Errors of 't errors
+      (** [! Short(by: Money) | Frozen]: a named error set. It isn't a type of
+          values: it's only written after `!` *)
 
 type ('v, 'b, 't) fn_def = {
   pub : bool;
@@ -168,6 +213,7 @@ type ('v, 'b, 't) fn_def = {
   tparams : ident list;  (** the [T] in [fn id<T>(x: T) -> T] *)
   params : ('b, 't) param list;
   ret : 't ty option;
+  errors : 't errors option;  (** what it can fail with, after `!` *)
   uses : ident list option;
       (** the dependencies after `uses`, if it's written: the prelude's, like
           [Io], are the only ones so far *)
@@ -304,6 +350,9 @@ and tref = Named of Path.t | Param of int
 
 module Parsed = struct
   type nonrec ty = tyname ty
+  type nonrec errors = tyname errors
+  type nonrec error = tyname error
+  type nonrec payload = tyname payload
   type nonrec ctor_ref = tyname ctor_ref
   type nonrec pattern = (ident, tyname) pattern
   type nonrec param = (ident, tyname) param
@@ -322,6 +371,9 @@ end
 
 module Resolved = struct
   type nonrec ty = tname ty
+  type nonrec errors = tname errors
+  type nonrec error = tname error
+  type nonrec payload = tname payload
   type nonrec ctor_ref = tname ctor_ref
   type nonrec pattern = (binder, tname) pattern
   type nonrec param = (binder, tname) param
@@ -356,6 +408,7 @@ let binop_to_string = function
   | Ge -> ">="
   | And -> "&&"
   | Or -> "||"
+  | Orelse -> "orelse"
 
 let parens words = "(" ^ String.concat " " words ^ ")"
 
@@ -374,9 +427,28 @@ let rec show_ty : ty -> string = function
   | TyName (name, args) ->
       show_tyname name ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
   | TyInout (t, _) -> "inout " ^ show_ty t
-  | TyFn (params, ret, _) ->
+  | TyFn (params, ret, errs, _) ->
       let ret = match ret with Some r -> " -> " ^ show_ty r | None -> "" in
-      "fn(" ^ String.concat ", " (List.map show_ty params) ^ ")" ^ ret
+      let errs =
+        match errs with Some es -> " " ^ show_errors es | None -> ""
+      in
+      "fn(" ^ String.concat ", " (List.map show_ty params) ^ ")" ^ ret ^ errs
+  | TyErrors es -> show_errors es
+
+(* An error set as it's written: `! Short(by: Money) | Frozen`. *)
+and show_errors (es : errors) =
+  let payload p =
+    match p.payload_name with
+    | Some n -> n.name ^ ": " ^ show_ty p.payload_ty
+    | None -> show_ty p.payload_ty
+  in
+  let error = function
+    | Tag (t, []) -> t.name
+    | Tag (t, ps) ->
+        t.name ^ "(" ^ String.concat ", " (List.map payload ps) ^ ")"
+    | Set s -> show_tyname s
+  in
+  "! " ^ String.concat " | " (List.map error es.errs)
 
 let rec show_pattern (p : pattern) =
   match p.pkind with
@@ -389,6 +461,13 @@ let rec show_pattern (p : pattern) =
       show_ctor_ref c ^ "("
       ^ String.concat ", " (List.map show_pattern args)
       ^ ")"
+  | PFail (t, []) -> "fail " ^ t.name
+  | PFail (t, args) ->
+      "fail " ^ t.name ^ "("
+      ^ String.concat ", " (List.map show_pattern args)
+      ^ ")"
+  | PFail_any -> "fail _"
+  | POr ps -> String.concat " | " (List.map show_pattern ps)
 
 let rec show_expr (e : expr) =
   match e.kind with
@@ -430,6 +509,14 @@ let rec show_expr (e : expr) =
       parens [ op; show_expr target; show_expr value ]
   | For { var; iter; body } ->
       parens [ "for"; var.name; show_expr iter; show_expr body ]
+  | Fail (t, args) ->
+      let show_arg = function
+        | Some (l : ident), a -> l.name ^ "=" ^ show_expr a
+        | None, a -> show_expr a
+      in
+      parens ("fail" :: t.name :: List.map show_arg args)
+  | Try a -> parens [ "try"; show_expr a ]
+  | Attempt a -> parens [ "attempt"; show_expr a ]
 
 and show_arm (a : arm) =
   let guard =
@@ -450,12 +537,17 @@ and show_stmt : stmt -> string = function
 
 let show_fn (f : fn_def) =
   let params = List.map (fun (p : param) -> p.pname.name) f.params in
+  let errors =
+    match f.errors with Some es -> [ parens [ show_errors es ] ] | None -> []
+  in
   let uses =
     match f.uses with
     | Some ds -> [ parens ("uses" :: List.map (fun (d : ident) -> d.name) ds) ]
     | None -> []
   in
-  parens (([ "fn"; f.name.name; parens params ] @ uses) @ [ show_expr f.body ])
+  parens
+    (([ "fn"; f.name.name; parens params ] @ errors @ uses)
+    @ [ show_expr f.body ])
 
 let show_type_def (td : type_def) =
   let name =
@@ -476,6 +568,7 @@ let show_type_def (td : type_def) =
             parens (c.ctor_name.name :: List.map show_field c.ctor_fields))
           cs
     | Opaque t -> [ parens [ "opaque"; show_ty t ] ]
+    | Errors es -> [ parens [ show_errors es ] ]
   in
   let show_op (o : op) =
     let f = o.op_fn in
@@ -518,9 +611,13 @@ let show_item : item -> string = function
    name (Resolve.type_name, Resolve.value_name). *)
 
 (* How tightly an operator binds: an operand that binds more loosely needs
-   parentheses. `not` binds between `&&` and the comparisons, at 3, so
-   `not a == b` is `not (a == b)`; `-` binds tightest, at 7. *)
+   parentheses. `orelse` binds loosest, at 0, so `a || b orelse c` is
+   `(a || b) orelse c`. `not` binds between `&&` and the comparisons, at 3,
+   so `not a == b` is `not (a == b)`; `-` binds tightest, at 7. `try`,
+   `attempt` and `fail` take everything to their right, so they need
+   parentheses only on an operator's left. *)
 let precedence = function
+  | Orelse -> 0
   | Or -> 1
   | And -> 2
   | Eq | Neq | Lt | Le | Gt | Ge -> 4
@@ -540,21 +637,23 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Var (Intrinsic x) -> x
     | Unop (Neg, a) -> "-" ^ operand 7 a
     | Unop (Not, a) -> "not " ^ operand 3 a
+    | Binop (Orelse, a, b) ->
+        (* it groups to the right: `a orelse b orelse c` tries `a`, then `b` *)
+        left 1 a ^ " orelse " ^ operand 0 b
     | Binop (op, a, b) ->
         let n = precedence op in
-        operand n a ^ " " ^ binop_to_string op ^ " " ^ operand (n + 1) b
-    | Call (f, args) -> go f ^ "(" ^ list args ^ ")"
-    | Field (r, f) -> go r ^ "." ^ f.name
-    | Index (a, i) -> go a ^ "[" ^ go i ^ "]"
+        left n a ^ " " ^ binop_to_string op ^ " " ^ operand (n + 1) b
+    | Try a -> "try " ^ go a
+    | Attempt a -> "attempt " ^ go a
+    | Fail (t, []) -> "fail " ^ t.name
+    | Fail (t, args) -> "fail " ^ t.name ^ "(" ^ con_args args ^ ")"
+    | Call (f, args) -> left 8 f ^ "(" ^ list args ^ ")"
+    | Field (r, f) -> left 8 r ^ "." ^ f.name
+    | Index (a, i) -> left 8 a ^ "[" ^ go i ^ "]"
     | Array xs -> "[" ^ list xs ^ "]"
     | Ref a -> "&" ^ go a
     | Con (c, []) -> ctor c
-    | Con (c, args) ->
-        let arg = function
-          | Some (l : ident), a -> l.name ^ ": " ^ go a
-          | None, a -> go a
-        in
-        ctor c ^ "(" ^ String.concat ", " (List.map arg args) ^ ")"
+    | Con (c, args) -> ctor c ^ "(" ^ con_args args ^ ")"
     | Record (t, fields) ->
         let t =
           match t with
@@ -571,7 +670,18 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Binop (op, _, _) when precedence op < n -> "(" ^ go a ^ ")"
     | Unop (Not, _) when 3 < n -> "(" ^ go a ^ ")"
     | _ -> go a
+  (* an operator's left operand, or what a call, field or index is of
+     (at 8, tighter than any operator): `try` would otherwise take
+     everything after it in *)
+  and left n (a : Resolved.expr) =
+    match a.kind with Try _ | Attempt _ -> "(" ^ go a ^ ")" | _ -> operand n a
   and list xs = String.concat ", " (List.map go xs)
+  and con_args args =
+    let arg = function
+      | Some (l : ident), a -> l.name ^ ": " ^ go a
+      | None, a -> go a
+    in
+    String.concat ", " (List.map arg args)
   and ctor (c : Resolved.ctor_ref) =
     match c.qual with
     | Some { tref = Named p; _ } -> type_name p ^ "." ^ c.name.name

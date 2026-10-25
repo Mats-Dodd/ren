@@ -249,7 +249,9 @@ let rec convert ~tvars ~row (t : Resolved.ty) =
   | TyName ({ tref = Param i; _ }, _) -> List.nth tvars i
   | TyName ({ tref = Named p; _ }, args) ->
       TCon (p, List.map (convert ~tvars ~row) args)
-  | TyFn (ps, ret, _) ->
+  | TyFn (ps, ret, _, _) ->
+      (* what it's written to fail with is checked from stage 6.3; until
+         then, [not_yet] (infer_top.ml) reports it *)
       let ret =
         match ret with Some r -> convert ~tvars ~row r | None -> unit
       in
@@ -257,6 +259,7 @@ let rec convert ~tvars ~row (t : Resolved.ty) =
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
+  | TyErrors _ -> TError
 
 and convert_param ~tvars ~row = function
   | TyInout (t, _) -> { mode = Inout; ty = convert ~tvars ~row t }
@@ -347,7 +350,7 @@ let known_decl env t =
 let ctor_in (c : ident) (td : Iface.type_decl) =
   match td.body with
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
-  | Record _ | Builtin | Opaque _ -> None
+  | Record _ | Builtin | Opaque _ | Errors _ -> None
 
 (* The constructor [c], where a value of type [expected] is wanted. One
    written after its type, `Light.Red`, is looked for there and nowhere
@@ -424,7 +427,9 @@ let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
         true named ctor.cfields
 
 let record_fields (td : Iface.type_decl) =
-  match td.body with Record fs -> Some fs | Sum _ | Builtin | Opaque _ -> None
+  match td.body with
+  | Record fs -> Some fs
+  | Sum _ | Builtin | Opaque _ | Errors _ -> None
 
 let op_in name (td : Iface.type_decl) =
   List.find_opt (fun (o : Iface.op) -> o.oname = name) td.members
@@ -635,6 +640,11 @@ and synth env cx (e : expr) : ty =
           want_bool env what a (infer env cx a);
           want_bool env what b (infer env cx b);
           bool
+      | Orelse ->
+          (* reported by [not_yet] (infer_top.ml) until stage 6.3 *)
+          ignore (infer env cx a);
+          ignore (infer env cx b);
+          TError
       | Eq | Neq ->
           (* the left side says what the right side has to be *)
           let ta = infer env cx a in
@@ -768,6 +778,15 @@ and synth env cx (e : expr) : ty =
          statement's is *)
       dropped env (result_of body) (infer env cx body);
       unit
+  (* error handling is reported by [not_yet] (infer_top.ml) until stage
+     6.3 checks it *)
+  | Fail (_, args) ->
+      List.iter (fun (_, a) -> ignore (infer env cx a)) args;
+      fresh_var env.st
+  | Try a -> infer env cx a
+  | Attempt a ->
+      ignore (infer env cx a);
+      TError
 
 and stmt env cx = function
   | Let { name; ty; value; _ } ->
@@ -1303,6 +1322,10 @@ and bind_pattern env cx t (p : pattern) =
               (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
               ctor.cfields ps
           else unknown ())
+  | PFail (_, ps) | POr ps ->
+      (* reported by [not_yet] (infer_top.ml) until stage 6.4 *)
+      List.iter (bind_pattern env cx TError) ps
+  | PFail_any -> ()
 
 (* Check every value the group threw away is `Unit` (see [drop]). One whose
    type is still unknown, like the result of calling a parameter, becomes

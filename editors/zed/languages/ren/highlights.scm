@@ -1,7 +1,9 @@
 ; Ren's highlighting.
 ;
 ; What Ren wants seen at a glance gets a colour of its own: `&` and `inout`
-; share `keyword.mutation`, since both say something changes here, and a
+; share `keyword.mutation`, since both say something changes here; `try`,
+; `fail`, `attempt`, `orelse` and the `!` of an error set share
+; `keyword.failure`, since they say something can fail here; and a
 ; dependency named in `uses` is `type.dependency`. A theme without them
 ; falls back to `keyword` and `type`; editors/zed/README.md shows how to
 ; give them their own.
@@ -40,6 +42,10 @@
 (reference "&" @keyword.mutation)
 (inout) @keyword.mutation
 
+; something can fail here
+["try" "fail" "attempt" "orelse"] @keyword.failure
+(error_set "!" @keyword.failure)
+
 ; a boundary the program crosses
 (dependency (type_identifier) @type.dependency)
 
@@ -51,6 +57,7 @@
 (type_definition name: (type_identifier) @type)
 (type_parameters (type_identifier) @type)
 (variant name: (type_identifier) @constructor)
+(payload name: (identifier) @property)
 (field_declaration name: (identifier) @property)
 (parameter name: (identifier) @variable.parameter)
 (function_type_parameter name: (identifier) @variable.parameter)
@@ -66,6 +73,16 @@
 
 (type_name name: (type_identifier) @type)
 (constructor_ref name: (type_identifier) @constructor)
+
+; ---- errors ----
+
+; a tag is written like a constructor. A bare name after `!` can also be a
+; named error set, which only the compiler can tell
+(error_tag name: (type_identifier) @constructor)
+(fail_expression tag: (type_identifier) @constructor)
+(fail_pattern tag: (type_identifier) @constructor)
+(error_set_name module: (identifier) @namespace)
+(error_set_name name: (type_identifier) @type)
 
 ; ---- uses ----
 

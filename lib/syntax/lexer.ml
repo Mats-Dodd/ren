@@ -47,6 +47,10 @@ let keywords =
     ("opaque", OPAQUE);
     ("self", SELF);
     ("not", NOT);
+    ("fail", FAIL);
+    ("try", TRY);
+    ("attempt", ATTEMPT);
+    ("orelse", ORELSE);
   ]
 
 let is_digit c = c >= '0' && c <= '9'
@@ -173,6 +177,7 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
           depth := max 0 (!depth - 1);
           advance_by 1 RBRACKET
       | '&', _ -> advance_by 1 AMP
+      | '!', _ -> advance_by 1 BANG
       | '.', _ -> advance_by 1 DOT
       | '|', _ -> advance_by 1 PIPE
       | ',', _ -> advance_by 1 COMMA

@@ -205,3 +205,299 @@ let%expect_test "a file can't be named prelude.ren" =
       │ ^
       help: rename the file
     |}]
+
+(* ---- error sets (errors.md) ---- *)
+
+let%expect_test "until stage 6.3, error handling is reported where it's used" =
+  (* declaring a named error set is fine: it does nothing until it's used *)
+  run
+    {|
+type Refusal = ! Short(account: Int, by: Int) | Frozen(account: Int)
+fn debit(inout a: Int, m: Int) ! Refusal =
+  if a < m then fail Short(a, m - a)
+  a = a - m
+fn first(xs: Array<Int>, f: fn(Int) -> Bool ! Bad, r: Option<! Bad>) -> Int =
+  let ok = try f(1)
+  let r = attempt f(2)
+  match f(3)
+    _ => ()
+    fail _ => ()
+  xs.first() orelse 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: a function's errors, after `!`, arrive later in stage 6
+      ┌─ test.ren:2:32
+    2 │ fn debit(inout a: Int, m: Int) ! Refusal =
+      │                                ^^^^^^^^^
+      help: for now, return an `Option` to say that something didn't work
+
+    error: `fail` arrives later in stage 6
+      ┌─ test.ren:3:17
+    3 │   if a < m then fail Short(a, m - a)
+      │                 ^^^^^^^^^^^^^^^^^^^^
+      help: for now, return an `Option` to say that something didn't work
+
+    error: a function's errors, after `!`, arrive later in stage 6
+      ┌─ test.ren:5:45
+    5 │ fn first(xs: Array<Int>, f: fn(Int) -> Bool ! Bad, r: Option<! Bad>) -> Int =
+      │                                             ^^^^^
+      help: for now, return an `Option` to say that something didn't work
+
+    error: an error set as a type argument arrives later in stage 6
+      ┌─ test.ren:5:62
+    5 │ fn first(xs: Array<Int>, f: fn(Int) -> Bool ! Bad, r: Option<! Bad>) -> Int =
+      │                                                              ^^^^^
+      help: for now, return an `Option` to say that something didn't work
+
+    error: `try` arrives later in stage 6
+      ┌─ test.ren:6:12
+    6 │   let ok = try f(1)
+      │            ^^^^^^^^
+      help: for now, return an `Option` to say that something didn't work
+
+    error: `attempt` arrives later in stage 6
+      ┌─ test.ren:7:11
+    7 │   let r = attempt f(2)
+      │           ^^^^^^^^^^^^
+      help: for now, return an `Option` to say that something didn't work
+
+    error: `fail` patterns arrive later in stage 6
+       ┌─ test.ren:10:5
+    10 │     fail _ => ()
+       │     ^^^^^^
+       help: for now, return an `Option` to say that something didn't work
+
+    error: `orelse` arrives later in stage 6
+       ┌─ test.ren:11:3
+    11 │   xs.first() orelse 0
+       │   ^^^^^^^^^^^^^^^^^^^
+       help: for now, return an `Option` to say that something didn't work
+    |}]
+
+let%expect_test "a named error set is found through scope, and tags aren't" =
+  (* `Refusal` is the set, and `Late` and `Frozen` are tags: nothing
+     declares them *)
+  run
+    {|
+type Refusal = ! Short(by: Int) | Frozen
+type Late = { days: Int }
+type TransferError = ! Refusal | Late | SameAccount(Late)
+fn main() = ()
+|};
+  [%expect {| () |}]
+
+let%expect_test "another module's named error sets" =
+  (* imported by name, or written after the module: either way the import
+     is used *)
+  let bank =
+    ( "bank.ren",
+      {|
+pub type Refusal = ! Short(by: Int) | Frozen
+pub type TransferError = ! Refusal | SameAccount
+type Secret = ! Hidden
+|}
+    )
+  in
+  run_files
+    [
+      ( "main.ren",
+        {|
+import bank.{Refusal}
+import bank as b
+type Mine = ! Refusal | b.TransferError
+fn main() = ()
+|}
+      );
+      bank;
+    ];
+  [%expect {| () |}];
+  (* a private one can't be told apart from one that doesn't exist *)
+  run_files
+    [
+      ("main.ren", {|
+import bank
+type Mine = ! bank.Secret
+fn main() = ()
+|});
+      bank;
+    ];
+  [%expect
+    {|
+    error: `bank` has no public type `Secret`
+      ┌─ main.ren:2:20
+    2 │ type Mine = ! bank.Secret
+      │                    ^^^^^^
+      help: if it's defined there, mark it `pub`
+    |}]
+
+let%expect_test "an error set isn't a type of values" =
+  run
+    {|
+type Refusal = ! Short(by: Int) | Frozen
+type Hold = { why: Refusal, also: ! Frozen }
+fn main() =
+  let r = Refusal.Short(1)
+  ()
+|};
+  [%expect
+    {|
+    error: `Refusal` is an error set, so it isn't a type of values
+      ┌─ test.ren:2:20
+    2 │ type Hold = { why: Refusal, also: ! Frozen }
+      │                    ^^^^^^^
+      help: an error set is only written after `!`
+
+    error: an error set isn't a type of values
+      ┌─ test.ren:2:35
+    2 │ type Hold = { why: Refusal, also: ! Frozen }
+      │                                   ^^^^^^^^
+      help: an error set goes after `!` in a signature or a function type; the one type that holds one is `Result<T, ! ...>`
+
+    error: `Refusal` is an error set, so it has no constructors
+      ┌─ test.ren:4:11
+    4 │   let r = Refusal.Short(1)
+      │           ^^^^^^^
+      help: an error set is only written after `!`
+    |}]
+
+let%expect_test "a type of values isn't an error set" =
+  run_files
+    [
+      ("main.ren", {|
+import bank
+fn f() ! bank.Account = ()
+fn main() = ()
+|});
+      ("bank.ren", {|
+pub type Account = { id: Int }
+|});
+    ];
+  [%expect
+    {|
+    error: `bank.Account` is a type, not an error set
+      ┌─ main.ren:2:10
+    2 │ fn f() ! bank.Account = ()
+      │          ^^^^^^^^^^^^
+      help: name an error set, declared with `type X = ! ...`; a tag is written bare, `Account`
+    |}]
+
+let%expect_test "an error is written once in a set" =
+  run
+    {|
+type Refusal = ! Short(by: Int) | Frozen
+type Twice = ! Refusal | Frozen | Refusal | Frozen(Int)
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Refusal` is in this error set twice
+      ┌─ test.ren:2:35
+    2 │ type Twice = ! Refusal | Frozen | Refusal | Frozen(Int)
+      │                                   ^^^^^^^
+      │                ------- the first `Refusal` is here
+      help: remove one of them
+
+    error: `Frozen` is in this error set twice
+      ┌─ test.ren:2:45
+    2 │ type Twice = ! Refusal | Frozen | Refusal | Frozen(Int)
+      │                                             ^^^^^^
+      │                          ------ the first `Frozen` is here
+      help: remove one of them
+    |}]
+
+let%expect_test "a named error set can't include itself" =
+  run
+    {|
+type A = ! B | Oops
+type B = ! Fine | C
+type C = ! A
+type D = ! D
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `A` includes itself: A → B → C → A
+      ┌─ test.ren:1:6
+    1 │ type A = ! B | Oops
+      │      ^
+      help: remove one of these sets from the one that includes it
+
+    error: `D` includes itself: D → D
+      ┌─ test.ren:4:6
+    4 │ type D = ! D
+      │      ^
+      help: remove it from its own list
+    |}]
+
+let%expect_test "a public signature names no private error set" =
+  run
+    {|
+type Money = opaque Int
+type Refusal = ! Short(by: Int) | Frozen
+pub type TransferError = ! Refusal | Late(Money)
+pub fn debit(m: Int) ! Refusal | Short(by: Money) = ()
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `pub type TransferError` includes `Refusal`, which is private to this module
+      ┌─ test.ren:3:28
+    2 │ type Refusal = ! Short(by: Int) | Frozen
+      │      ------- `Refusal` is declared here, without `pub`
+    3 │ pub type TransferError = ! Refusal | Late(Money)
+      │                            ^^^^^^^
+      help: mark `Refusal` `pub`
+
+    error: `pub type TransferError`'s error `Late` mentions `Money`, which is private to this module
+      ┌─ test.ren:3:43
+    1 │ type Money = opaque Int
+      │      ----- `Money` is declared here, without `pub`
+    3 │ pub type TransferError = ! Refusal | Late(Money)
+      │                                           ^^^^^
+      help: mark `Money` `pub`
+
+    error: `pub fn debit` can fail with `Refusal`, which is private to this module
+      ┌─ test.ren:4:24
+    2 │ type Refusal = ! Short(by: Int) | Frozen
+      │      ------- `Refusal` is declared here, without `pub`
+    4 │ pub fn debit(m: Int) ! Refusal | Short(by: Money) = ()
+      │                        ^^^^^^^
+      help: mark `Refusal` `pub`
+
+    error: `pub fn debit`'s error `Short` mentions `Money`, which is private to this module
+      ┌─ test.ren:4:44
+    1 │ type Money = opaque Int
+      │      ----- `Money` is declared here, without `pub`
+    4 │ pub fn debit(m: Int) ! Refusal | Short(by: Money) = ()
+      │                                            ^^^^^
+      help: mark `Money` `pub`
+    |}]
+
+let%expect_test "each alternative of a fail pattern binds the same names" =
+  run
+    {|
+fn g() = 1
+fn main() =
+  match g()
+    _ => 0
+    fail Short(_, by) | fail Late(by) => by
+    fail Frozen(id) | fail Gone => id
+    fail Odd | fail Even(n) => n
+|};
+  [%expect
+    {|
+    error: this alternative doesn't bind `id`, which the first one does
+      ┌─ test.ren:6:23
+    6 │     fail Frozen(id) | fail Gone => id
+      │                       ^^^^^^^^^
+      │                 -- `id` is bound here
+      help: bind the same names in every alternative
+
+    error: `n` is bound by this alternative, but not by the first one
+      ┌─ test.ren:7:26
+    7 │     fail Odd | fail Even(n) => n
+      │                          ^
+      help: bind the same names in every alternative
+    |}]

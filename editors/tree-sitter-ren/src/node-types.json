@@ -8,6 +8,10 @@
         "named": true
       },
       {
+        "type": "attempt_expression",
+        "named": true
+      },
+      {
         "type": "binary_expression",
         "named": true
       },
@@ -21,6 +25,10 @@
       },
       {
         "type": "constructor_expression",
+        "named": true
+      },
+      {
+        "type": "fail_expression",
         "named": true
       },
       {
@@ -60,6 +68,10 @@
         "named": true
       },
       {
+        "type": "orelse_expression",
+        "named": true
+      },
+      {
         "type": "parenthesized_expression",
         "named": true
       },
@@ -73,6 +85,10 @@
       },
       {
         "type": "self",
+        "named": true
+      },
+      {
+        "type": "try_expression",
         "named": true
       },
       {
@@ -119,6 +135,10 @@
     "type": "_type",
     "named": true,
     "subtypes": [
+      {
+        "type": "error_set",
+        "named": true
+      },
       {
         "type": "function_type",
         "named": true
@@ -270,6 +290,22 @@
     }
   },
   {
+    "type": "attempt_expression",
+    "named": true,
+    "fields": {
+      "operand": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "binary_expression",
     "named": true,
     "fields": {
@@ -417,6 +453,10 @@
           },
           {
             "type": "constructor_expression",
+            "named": true
+          },
+          {
+            "type": "fail_expression",
             "named": true
           },
           {
@@ -598,6 +638,129 @@
     }
   },
   {
+    "type": "error_set",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "error_set_name",
+          "named": true
+        },
+        {
+          "type": "error_tag",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "error_set_name",
+    "named": true,
+    "fields": {
+      "module": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "error_tag",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "payload",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "fail_expression",
+    "named": true,
+    "fields": {
+      "arguments": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "constructor_arguments",
+            "named": true
+          }
+        ]
+      },
+      "tag": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "fail_pattern",
+    "named": true,
+    "fields": {
+      "tag": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "_pattern",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "field_declaration",
     "named": true,
     "fields": {
@@ -655,6 +818,10 @@
           },
           {
             "type": "constructor_expression",
+            "named": true
+          },
+          {
+            "type": "fail_expression",
             "named": true
           },
           {
@@ -797,6 +964,16 @@
           }
         ]
       },
+      "errors": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "error_set",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
@@ -863,6 +1040,16 @@
     "type": "function_type",
     "named": true,
     "fields": {
+      "errors": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "error_set",
+            "named": true
+          }
+        ]
+      },
       "return_type": {
         "multiple": false,
         "required": false,
@@ -1041,6 +1228,10 @@
           },
           {
             "type": "constructor_expression",
+            "named": true
+          },
+          {
+            "type": "fail_expression",
             "named": true
           },
           {
@@ -1268,6 +1459,14 @@
           {
             "type": "_pattern",
             "named": true
+          },
+          {
+            "type": "fail_pattern",
+            "named": true
+          },
+          {
+            "type": "or_pattern",
+            "named": true
           }
         ]
       }
@@ -1341,6 +1540,10 @@
           },
           {
             "type": "constructor_expression",
+            "named": true
+          },
+          {
+            "type": "fail_expression",
             "named": true
           },
           {
@@ -1526,6 +1729,47 @@
     }
   },
   {
+    "type": "or_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "fail_pattern",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "orelse_expression",
+    "named": true,
+    "fields": {
+      "left": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "right": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "parameter",
     "named": true,
     "fields": {
@@ -1593,6 +1837,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "payload",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_type",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1692,6 +1962,22 @@
     }
   },
   {
+    "type": "try_expression",
+    "named": true,
+    "fields": {
+      "operand": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "type_arguments",
     "named": true,
     "fields": {},
@@ -1714,6 +2000,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "error_set",
+            "named": true
+          },
           {
             "type": "opaque_type",
             "named": true
@@ -1897,6 +2187,10 @@
     }
   },
   {
+    "type": "!",
+    "named": false
+  },
+  {
     "type": "!=",
     "named": false
   },
@@ -2005,11 +2299,19 @@
     "named": false
   },
   {
+    "type": "attempt",
+    "named": false
+  },
+  {
     "type": "comment",
     "named": true
   },
   {
     "type": "else",
+    "named": false
+  },
+  {
+    "type": "fail",
     "named": false
   },
   {
@@ -2065,6 +2367,10 @@
     "named": false
   },
   {
+    "type": "orelse",
+    "named": false
+  },
+  {
     "type": "self",
     "named": true
   },
@@ -2074,6 +2380,10 @@
   },
   {
     "type": "true",
+    "named": false
+  },
+  {
+    "type": "try",
     "named": false
   },
   {

@@ -321,3 +321,214 @@ type Ids<T> = opaque Array<T>
     (pub type UserId (opaque Int))
     (type Ids<T> (opaque Array<T>))
     |}]
+
+(* ---- errors (errors.md) ---- *)
+
+let%expect_test "! is its own token, and != is still one" =
+  tokens {|
+fn f(a: Int) ! Bad = if a != 1 then fail Bad
+|};
+  [%expect
+    {| FN (IDENT "f") LPAREN (IDENT "a") COLON (IDENT "Int") RPAREN BANG (IDENT "Bad") EQ IF (IDENT "a") NEQ (INT 1) THEN FAIL (IDENT "Bad") EOF |}]
+
+let%expect_test "what a function can fail with, after !" =
+  (* after the result, before `uses`, which can still start the next
+     line; a payload's fields may be named or not *)
+  ast
+    {|
+pub fn debit(inout a: Int, m: Int) ! Short(account: Int, by: Int) | Frozen(Int) = ()
+fn load(id: Int) -> Int ! NotFound uses Io = id
+pub fn save(id: Int) -> Int ! Full | bank.Refusal
+    uses Io =
+  id
+type Account = { id: Int }
+  pub fn freeze(inout self) ! Frozen(account: Int) = ()
+|};
+  [%expect
+    {|
+    (fn debit (a m) (! Short(account: Int, by: Int) | Frozen(Int)) ())
+    (fn load (id) (! NotFound) (uses Io) id)
+    (fn save (id) (! Full | bank.Refusal) (uses Io) id)
+    (type Account (fields id:Int) (members (pub (fn freeze (self) (! Frozen(account: Int)) ()))))
+    |}]
+
+let%expect_test "a function type's errors, and an error set as a type argument"
+    =
+  (* the `! Bad` after `fn() -> fn()` is the inner function type's *)
+  ast
+    {|
+type Hooks = {
+  check: fn(Int) -> Bool ! Bad(Int) | Worse,
+  make: fn() -> fn() ! Bad,
+  last: Result<Int, ! Short(Int) | Frozen>,
+}
+|};
+  [%expect
+    {| (type Hooks (fields check:fn(Int) -> Bool ! Bad(Int) | Worse make:fn() -> fn() ! Bad last:Result<Int, ! Short(Int) | Frozen>)) |}]
+
+let%expect_test "a named error set" =
+  (* on one line, or indented under `type X =`, one `|` per line *)
+  ast
+    {|
+pub type Refusal = ! Short(account: Int, by: Int) | Frozen(account: Int)
+pub type TransferError =
+  ! Refusal
+  | NoSuchAccount(account: Int)
+  | SameAccount
+fn main() = ()
+|};
+  [%expect
+    {|
+    (pub type Refusal (! Short(account: Int, by: Int) | Frozen(account: Int)))
+    (pub type TransferError (! Refusal | NoSuchAccount(account: Int) | SameAccount))
+    (fn main () ())
+    |}]
+
+let%expect_test "fail, try, attempt and orelse" =
+  (* `try` and `attempt` take everything to their right; `orelse` binds
+     below `||`, and groups to the right *)
+  ast
+    {|
+fn f() =
+  if bad() then fail Short(1, by: 2)
+  let n = try parse(read(p)) + 1
+  let r = attempt &acme.transfer(t)
+  let x = a || b orelse c orelse fail Missing
+  print(not try ok() && done())
+  try r
+|};
+  [%expect
+    {| (fn f () (block (if (call bad) (fail Short 1 by=2)) (let n (try (+ (call parse (call read p)) 1))) (let r (attempt (& (call (. acme transfer) t)))) (let x (orelse (|| a b) (orelse c (fail Missing)))) (call print (not (try (&& (call ok) (call done))))) (try r))) |}]
+
+let%expect_test "fail patterns, and try match" =
+  ast
+    {|
+fn f() =
+  match transfer(t)
+    _ => 0
+    fail Short(_, by) => by
+    fail NoSuchAccount(_) | fail SameAccount => 1
+    fail _ => 2
+  try match load(id)
+    u => u
+    fail NotFound => guest()
+|};
+  [%expect
+    {| (fn f () (block (match (call transfer t) (_ => 0) (fail Short(_, by) => by) (fail NoSuchAccount(_) | fail SameAccount => 1) (fail _ => 2)) (try (match (call load id) (u => u) (fail NotFound => (call guest)))))) |}]
+
+let%expect_test "a fail pattern can't bind the whole error" =
+  ast {|
+fn f() =
+  match g()
+    x => x
+    fail e => 0
+|};
+  [%expect
+    {|
+    error: a `fail` pattern can't bind the whole error to a name
+      ┌─ test.ren:4:10
+    4 │     fail e => 0
+      │          ^
+      help: match each tag, like `fail NotFound`, or keep the whole outcome as a value with `attempt`, and match `Err(e)`
+    |}]
+
+let%expect_test "fail patterns are whole arms, combined only with each other" =
+  ast {|
+fn f() =
+  match g()
+    Some(fail Bad) => 0
+|};
+  [%expect
+    {|
+    error: a `fail` pattern can't be inside another pattern
+      ┌─ test.ren:3:10
+    3 │     Some(fail Bad) => 0
+      │          ^^^^
+      help: match the error in an arm of its own, `fail Tag(...) => ...`
+    |}];
+  ast {|
+fn f() =
+  match g()
+    fail Bad | None => 0
+|};
+  [%expect
+    {|
+    error: this pattern is combined with `fail` patterns, so it has to be one, but it's `None`
+      ┌─ test.ren:3:16
+    3 │     fail Bad | None => 0
+      │                ^^^^
+      help: start it with `fail` too, or give it an arm of its own
+    |}]
+
+let%expect_test "fail takes a tag" =
+  ast {|
+fn f(r: Int) = fail r
+|};
+  [%expect
+    {|
+    error: `fail` takes an error tag, which starts with a capital letter
+      ┌─ test.ren:1:21
+    1 │ fn f(r: Int) = fail r
+      │                     ^
+      help: write a tag, like `fail NotFound`; to fail with the error a `Result` holds, write `try` before it
+    |}];
+  ast {|
+fn f() ! Bad() = ()
+|};
+  [%expect
+    {|
+    error: a tag without a payload is written without parentheses
+      ┌─ test.ren:1:13
+    1 │ fn f() ! Bad() = ()
+      │             ^^
+      help: write `Bad`
+    |}];
+  ast {|
+fn f() ! = ()
+|};
+  [%expect
+    {|
+    error: expected an error tag, found `=`
+      ┌─ test.ren:1:10
+    1 │ fn f() ! = ()
+      │          ^
+    |}]
+
+let%expect_test "a named error set has no type parameters or members" =
+  ast {|
+type Bad<T> = ! Oops(T)
+|};
+  [%expect
+    {|
+    error: a named error set can't take type parameters
+      ┌─ test.ren:1:10
+    1 │ type Bad<T> = ! Oops(T)
+      │          ^
+      help: remove the type parameters
+    |}];
+  ast {|
+type Bad = ! Oops
+  fn size(self) -> Int = 0
+|};
+  [%expect
+    {|
+    error: `Bad` is an error set, not a type of values, so it has no members
+      ┌─ test.ren:2:6
+    2 │   fn size(self) -> Int = 0
+      │      ^^^^
+      help: move it under a type, or to the top level
+    |}]
+
+let%expect_test "try, fail, attempt and orelse can't be names" =
+  ast {|
+fn main() =
+  let try = 1
+  try
+|};
+  [%expect
+    {|
+    error: expected a name, found `try`
+      ┌─ test.ren:2:7
+    2 │   let try = 1
+      │       ^^^
+    |}]

@@ -167,6 +167,9 @@ let rec expr cx (e : expr) : C.expr =
   | Binop (Or, a, b) ->
       let a = expr cx a in
       here (If (a, mk (Bool true) Ty.bool e.loc, expr cx b))
+  | Binop (Orelse, _, _) | Fail _ | Try _ | Attempt _ ->
+      (* inference reports error handling until stage 6.3 checks it *)
+      bug "error handling, which inference doesn't check yet"
   | Binop (op, a, b) ->
       let a = expr cx a in
       here (Prim (Binop op, [ a; expr cx b ]))
@@ -408,6 +411,8 @@ and pattern cx (p : pattern) : C.pattern =
         match (node cx p.pnode).found with
         | Some (Ctor_of (path, c)) -> PCon (path, c, List.map (pattern cx) ps)
         | _ -> bug "a constructor pattern inference didn't find")
+    | PFail _ | PFail_any | POr _ ->
+        bug "a `fail` pattern, which inference doesn't check yet"
   in
   { pkind; pty; ploc = p.ploc }
 
@@ -470,10 +475,11 @@ let max_binder (f : fn_def) =
   let rec go (e : expr) =
     match e.kind with
     | Int _ | Bool _ | Unit | Var _ -> ()
-    | Unop (_, a) | Field (a, _) | Ref a -> go a
+    | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> go a
     | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go a;
         go b
+    | Fail (_, args) -> List.iter (fun (_, a) -> go a) args
     | If (c, t, f) -> List.iter go (c :: t :: Option.to_list f)
     | Call (f, args) -> List.iter go (f :: args)
     | Lambda (ps, body) ->
@@ -506,8 +512,8 @@ let max_binder (f : fn_def) =
   and pat (p : pattern) =
     match p.pkind with
     | PVar b -> see b
-    | PCon (_, ps) -> List.iter pat ps
-    | PWild | PInt _ | PBool _ -> ()
+    | PCon (_, ps) | PFail (_, ps) | POr ps -> List.iter pat ps
+    | PWild | PInt _ | PBool _ | PFail_any -> ()
   in
   List.iter (fun (p : Resolved.param) -> see p.pname) f.params;
   go f.body;

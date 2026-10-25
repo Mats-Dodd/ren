@@ -18,9 +18,11 @@ it's on your `PATH`, and `dune exec ren` from the project otherwise.
 
 ## Colours of Ren's own
 
-Two captures say what Ren wants seen at a glance:
+Three captures say what Ren wants seen at a glance:
 
 - `keyword.mutation`: `&` and `inout`, where something changes
+- `keyword.failure`: `try`, `fail`, `attempt`, `orelse` and the `!` of an
+  error set, where something can fail
 - `type.dependency`: a dependency named in `uses`, like `Io`
 
 A theme that doesn't know them shows them as `keyword` and `type`. To give
@@ -30,6 +32,7 @@ them their own colours, add this to your Zed `settings.json`:
 "experimental.theme_overrides": {
   "syntax": {
     "keyword.mutation": { "color": "#f0a04b", "font_weight": 700 },
+    "keyword.failure": { "color": "#e06c75", "font_weight": 700 },
     "type.dependency": { "color": "#4fc1a6", "font_style": "italic" }
   }
 }

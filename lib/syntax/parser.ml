@@ -1,17 +1,23 @@
 (* Parser: tokens -> AST, by recursive descent.
 
    Each grammar rule is one function. Precedence comes from which function
-   calls which: `||` calls `&&`, which calls `not`, which calls comparisons,
-   which call additive, and so on down to primary expressions.
+   calls which: `orelse` calls `||`, which calls `&&`, which calls `not`,
+   which calls comparisons, which call additive, and so on down to primary
+   expressions.
 
      program  := item { NEWLINE item } EOF       (imports come first)
      item     := import | ["pub"] (fn_def | type_def)
      import   := "import" IDENT { "/" IDENT } ["." "{" UIDENT, ... "}"]
                  ["as" IDENT]
      fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
-                 ["->" type] ["uses" UIDENT, ...] "=" body
+                 ["->" type] [errors] ["uses" UIDENT, ...] "=" body
                                                    (`uses` may start the
                                                     next line, indented)
+     errors   := "!" error { "|" error }          (in a type's body, each
+                                                    `|` may start a line)
+     error    := UIDENT ["(" payload, ... ")"]      (a tag)
+              |  [IDENT "."] UIDENT                (a named error set)
+     payload  := [IDENT ":"] type
      param    := ["inout"] (IDENT | "self") [":" type]
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body [members]
      members  := INDENT op { NEWLINE op } DEDENT
@@ -27,12 +33,16 @@
                                                     reported until stage 9)
      type_body:= "{" field, ... "}"                       (a record)
               |  "opaque" type                           (a type of its own)
+              |  errors                                  (a named error set)
               |  ["|"] ctor { "|" ctor }                  (a sum type; may be
                                                             indented, one per line)
      ctor     := UIDENT ["(" field, ... ")"]
      field    := IDENT ":" type
      type     := tyname ["<" type, ... ">"]
               |  "fn" "(" ["inout"] [IDENT ":"] type, ... ")" ["->" type]
+                 [errors]
+              |  errors                     (an error set: only `Result`'s
+                                             second type argument, resolve.ml)
      tyname   := [IDENT "."] UIDENT                (`stripe.Client`: another
                                                     module's, after its alias)
      ctor_ref := [tyname "."] UIDENT               (`Red`, `Light.Red`,
@@ -46,7 +56,9 @@
      line     := expr [("=" | "+=" | "-=" | "*=") body]
                                                     (an assignment's target
                                                      must be a place, mut.ml)
-     expr     := and { "||" and }
+     expr     := or ["orelse" expr]                 (`a orelse b orelse c`
+                                                     is `a orelse (b orelse c)`)
+     or       := and { "||" and }
      and      := not { "&&" not }
      not      := "not" not | cmp                    (`not a == b` is
                                                      `not (a == b)`)
@@ -54,6 +66,7 @@
      add      := mul { ("+" | "-") mul }
      mul      := unary { ("*" | "/" | "%") unary }
      unary    := "-" unary | "&" unary | postfix
+              |  "try" expr | "attempt" expr        (everything to its right)
      postfix  := primary { "." IDENT | "[" expr "]"
                          | "(" expr, ... ")" [lambda] }
                                                     (a trailing lambda is
@@ -64,7 +77,10 @@
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
               |  "if" expr "then" body [[NEWLINE] "else" body]
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
-     arm      := pattern ["if" expr] "=>" body
+              |  "fail" UIDENT ["(" con_args ")"]
+     arm      := (pattern | fails) ["if" expr] "=>" body
+     fails    := fail_pat { "|" fail_pat }
+     fail_pat := "fail" "_" | "fail" UIDENT ["(" pattern, ... ")"]
      lambda   := "fn" "(" param, ... ")" "=>" body
      pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
               |  ctor_ref ["(" pattern, ... ")"]
@@ -212,6 +228,8 @@ let parse_ctor_ref p : ctor_ref =
       })
     else { qual = None; name = first }
 
+(* A function type's `! ...` belongs to the innermost function type it
+   can: in `fn f() -> fn() ! Bad`, the `fn()` returned can fail with `Bad`. *)
 let rec parse_ty p : ty =
   match peek p with
   | FN ->
@@ -225,7 +243,9 @@ let rec parse_ty p : ty =
           Some (parse_ty p))
         else None
       in
-      TyFn (params, ret, Loc.span start (last_loc p))
+      let errs = if peek p = BANG then Some (parse_errors p) else None in
+      TyFn (params, ret, errs, Loc.span start (last_loc p))
+  | BANG -> TyErrors (parse_errors p)
   | _ ->
       let name = parse_tyname p in
       let args =
@@ -249,6 +269,51 @@ and parse_fn_ty_param p =
   | _ -> ());
   let t = parse_ty p in
   if inout then TyInout (t, Loc.span start (last_loc p)) else t
+
+(* An error set, `! Short(by: Money) | Frozen | Refusal`. With [lines], as
+   in a named set's body indented under `type X =`, each `|` may start
+   its own line, like a sum type's. *)
+and parse_errors ?(lines = false) p : errors =
+  let start = loc p in
+  expect p BANG;
+  let error p =
+    match peek p with
+    | IDENT _ when at_module_type p -> Set (parse_tyname p)
+    | IDENT _ ->
+        let tag = upper_ident p "an error tag" in
+        if peek p = LPAREN then (
+          let paren = loc p in
+          advance p;
+          let payload = sep_list p ~close:RPAREN parse_payload in
+          if payload = [] then
+            Diag.error
+              (Loc.span paren (last_loc p))
+              ~help:(Printf.sprintf "write `%s`" tag.name)
+              "a tag without a payload is written without parentheses";
+          Tag (tag, payload))
+        else Tag (tag, [])
+    | _ -> fail_expected p "an error tag"
+  in
+  let rec loop acc =
+    let e = error p in
+    if lines && peek p = NEWLINE && peek2 p = PIPE then advance p;
+    if peek p = PIPE then (
+      advance p;
+      loop (e :: acc))
+    else List.rev (e :: acc)
+  in
+  let errs = loop [] in
+  { errs; eloc = Loc.span start (last_loc p) }
+
+(* A payload's field, named for documentation or not: `by: Money`, or
+   `Money`. *)
+and parse_payload p =
+  match (peek p, peek2 p) with
+  | IDENT name, COLON when not (is_upper name) ->
+      let n = ident p in
+      advance p;
+      { payload_name = Some n; payload_ty = parse_ty p }
+  | _ -> { payload_name = None; payload_ty = parse_ty p }
 
 let parse_param p : param =
   let pmode =
@@ -311,16 +376,19 @@ let parse_type_body p =
   | OPAQUE ->
       advance p;
       Opaque (parse_ty p)
+  | BANG -> Errors (parse_errors ~lines:true p)
   | _ -> Ctors (parse_ctors p)
 
 (* ---- patterns ---- *)
 
+(* A pattern that started at [start], with the next node id. *)
+let mk_pattern p start pkind =
+  p.node <- p.node + 1;
+  { pkind; ploc = Loc.span start (last_loc p); pnode = p.node }
+
 let rec parse_pattern p : pattern =
   let start = loc p in
-  let finish pkind =
-    p.node <- p.node + 1;
-    { pkind; ploc = Loc.span start (last_loc p); pnode = p.node }
-  in
+  let finish = mk_pattern p start in
   match peek p with
   | IDENT "_" ->
       advance p;
@@ -351,7 +419,61 @@ let rec parse_pattern p : pattern =
   | FALSE ->
       advance p;
       finish (PBool false)
+  | FAIL ->
+      Diag.error (loc p)
+        ~help:"match the error in an arm of its own, `fail Tag(...) => ...`"
+        "a `fail` pattern can't be inside another pattern"
   | _ -> fail_expected p "a pattern"
+
+(* An arm's pattern: an ordinary one, or `fail` patterns, which match an
+   error (errors.md, "Handling: `match`"), one or several combined with
+   `|`. *)
+let parse_arm_pattern p : pattern =
+  let start = loc p in
+  let fail_pattern p =
+    let finish = mk_pattern p (loc p) in
+    expect p FAIL;
+    match peek p with
+    | IDENT "_" ->
+        advance p;
+        finish PFail_any
+    | IDENT name when is_upper name ->
+        let tag = ident p in
+        if peek p = LPAREN then (
+          advance p;
+          let args = sep_list p ~close:RPAREN parse_pattern in
+          finish (PFail (tag, args)))
+        else finish (PFail (tag, []))
+    | IDENT name ->
+        (* an error is never a value (errors.md, "Keeping an error") *)
+        Diag.error (loc p)
+          ~help:
+            (Printf.sprintf
+               "match each tag, like `fail NotFound`, or keep the whole \
+                outcome as a value with `attempt`, and match `Err(%s)`"
+               name)
+          "a `fail` pattern can't bind the whole error to a name"
+    | _ -> fail_expected p "an error tag, or `_`"
+  in
+  if peek p <> FAIL then parse_pattern p
+  else
+    let first = fail_pattern p in
+    let rec rest acc =
+      if peek p = PIPE then (
+        advance p;
+        if peek p <> FAIL then
+          Diag.error (loc p)
+            ~help:"start it with `fail` too, or give it an arm of its own"
+            (Printf.sprintf
+               "this pattern is combined with `fail` patterns, so it has to be \
+                one, but it's %s"
+               (describe (peek p)));
+        rest (fail_pattern p :: acc))
+      else List.rev acc
+    in
+    match rest [ first ] with
+    | [ only ] -> only
+    | alternatives -> mk_pattern p start (POr alternatives)
 
 (* ---- expressions ---- *)
 
@@ -434,7 +556,16 @@ and parse_for p =
   let body = parse_block p in
   mk (For { var; iter; body }) start p
 
-and parse_expr p = left_assoc [ (PIPEPIPE, Or) ] parse_and p
+and parse_expr p =
+  let start = loc p in
+  let lhs = parse_or p in
+  if peek p = ORELSE then (
+    advance p;
+    let rhs = parse_expr p in
+    mk (Binop (Orelse, lhs, rhs)) start p)
+  else lhs
+
+and parse_or p = left_assoc [ (PIPEPIPE, Or) ] parse_and p
 and parse_and p = left_assoc [ (AMPAMP, And) ] parse_not p
 
 and parse_not p =
@@ -489,6 +620,14 @@ and parse_unary p =
       advance p;
       let e = parse_unary p in
       mk (Ref e) start p
+  | (TRY | ATTEMPT) as kw ->
+      (* `try` covers every call to its right (errors.md, "Marking"), so it
+         takes the whole expression there: `try a() + b()` is
+         `try (a() + b())` *)
+      let start = loc p in
+      advance p;
+      let e = parse_expr p in
+      mk (if kw = TRY then Try e else Attempt e) start p
   | _ -> parse_postfix p
 
 (* Field access and calls bind tightest: `-user.age` is `-(user.age)`. *)
@@ -598,6 +737,25 @@ and parse_primary p =
   | IF -> parse_if p
   | MATCH -> parse_match p
   | FN -> parse_lambda p
+  | FAIL -> (
+      advance p;
+      match peek p with
+      | IDENT name when is_upper name ->
+          let tag = ident p in
+          let args =
+            if peek p = LPAREN then (
+              advance p;
+              sep_list p ~close:RPAREN parse_con_arg)
+            else []
+          in
+          mk (Fail (tag, args)) start p
+      | IDENT _ ->
+          Diag.error (loc p)
+            ~help:
+              "write a tag, like `fail NotFound`; to fail with the error a \
+               `Result` holds, write `try` before it"
+            "`fail` takes an error tag, which starts with a capital letter"
+      | _ -> fail_expected p "an error tag")
   | _ -> fail_expected p "an expression"
 
 and parse_lambda p =
@@ -678,7 +836,7 @@ and parse_match p =
   mk (Match (subject, arms)) start p
 
 and parse_arm p =
-  let arm_pat = parse_pattern p in
+  let arm_pat = parse_arm_pattern p in
   let arm_guard =
     if peek p = IF then (
       advance p;
@@ -787,6 +945,7 @@ let parse_fn p ~pub =
       Some (parse_ty p))
     else None
   in
+  let errors = if peek p = BANG then Some (parse_errors p) else None in
   let uses =
     if peek p = USES then (
       advance p;
@@ -813,6 +972,7 @@ let parse_fn p ~pub =
     tparams;
     params;
     ret;
+    errors;
     uses;
     body;
     loc = Loc.span start (last_loc p);
@@ -859,6 +1019,7 @@ let parse_op p ~tname =
               tparams = [];
               params = [];
               ret;
+              errors = None;
               uses = None;
               body;
               loc = Loc.span start (last_loc p);
@@ -951,6 +1112,17 @@ let parse_type p ~pub =
         (b, members))
       else (b, [])
   in
+  (match (type_body, type_params, type_ops) with
+  | Errors _, t :: _, _ ->
+      Diag.error t.loc ~help:"remove the type parameters"
+        "a named error set can't take type parameters"
+  | Errors _, [], o :: _ ->
+      Diag.error o.op_fn.name.loc
+        ~help:"move it under a type, or to the top level"
+        (Printf.sprintf
+           "`%s` is an error set, not a type of values, so it has no members"
+           tname)
+  | _ -> ());
   { type_pub = pub; type_name; type_params; type_body; type_ops }
 
 let parse_item p =

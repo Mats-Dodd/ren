@@ -54,6 +54,9 @@ let rec simplify env (p : pattern) =
       in
       Ctor
         ({ name = c.name.name; owner = Some owner }, List.map (simplify env) ps)
+  | PFail _ | PFail_any | POr _ ->
+      (* inference reports `fail` patterns until stage 6.4 checks them *)
+      invalid_arg "Exhaust.simplify: a `fail` pattern"
 
 let rec show_space = function
   | Any -> "_"
@@ -223,7 +226,8 @@ let guard env f = Diag.recover env.sink ~default:() f
 let rec check_expr env (e : expr) =
   match e.kind with
   | Int _ | Bool _ | Unit | Var _ -> ()
-  | Unop (_, a) | Field (a, _) | Ref a -> check_expr env a
+  | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> check_expr env a
+  | Fail (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Binop (_, a, b) | Index (a, b) ->
       check_expr env a;
       check_expr env b
