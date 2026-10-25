@@ -61,7 +61,7 @@ inference every body a value goes through.
 | AST, parsed | parser.ml | the program as written | the tree-sitter grammar's differential test | yes |
 | AST, resolved | resolve.ml | every name found through scope, by its binder's id or its path | inference, which only reads it | yes |
 | inferred | infer.ml | each function's scheme and each node's type and lookup | the driver: a public function's inferred scheme is the one its interface states | yes |
-| Core | lower.ml | the program with one way to change something, every node typed, evidence explicit | Core Lint | yes |
+| Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments and requirement dictionaries from stage 10.0 | Core Lint, which the tests run on every program | yes |
 | specialized Core | the specializer | Core with type arguments, requirements and lambda sets chosen | Core Lint | the memory stage |
 | Mem IR | memory lowering | A-normal form, layouts, closures as tagged unions | its own lint | the memory stage |
 | Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | the memory stage |
@@ -130,8 +130,8 @@ each pass keeps it so:
 3. **An installed handler instance is never a value.** A `with` installs
    it, and no expression yields it; its own dependencies are captured
    from further out. So a handler's `var`s can't reach their own
-   instance. Core Lint checks this: an `Instance` appears only as the end
-   of a handler's body.
+   instance. Core Lint checks this: an `Instance` appears only at the end
+   of a `Handler`'s body, after the `let`s that make its state.
 
 And one rule for the stages after this: **a handler's state can never
 hold a suspended continuation.** A fiber belongs to the scope of
@@ -154,11 +154,15 @@ called:
   debug build does.
 
 Both mean the same: specialization only makes code faster (rule 1). The
-interpreter runs the debug strategy.
+interpreter runs the debug strategy. Evidence is passed this way today
+(deps.md, "How it runs"); dictionaries come with requirements, in R4,
+where `eq` is the first.
 
 ## Stage 10.0
 
-Five steps, each a branch of small commits that keep every test green:
+Five steps, R0 to R4, done in order on one branch, in small commits
+that each keep every test green. Each step is reviewed on its own before
+the next starts:
 
 - **R0, foundations and safety nets.** This document; CI on Linux and
   macOS; benchmarks, and the interpreter's tail calls made a loop, so a
