@@ -13,7 +13,7 @@
    value, and lowering has turned `user.plan = Free` or `xs[i] = v` into
    building a new value and assigning it to the variable, so a value some
    other name holds can't change under it. That's value semantics, done the
-   slow way; Stage 12 makes it cheap.
+   slow way; stage 11 makes it cheap.
 
    A [Fail] raises [Failed], an OCaml exception, which the nearest [Handle]
    catches. It never leaves the interpreter: a call returns what its
@@ -49,7 +49,7 @@ exception Failed of Value.t
 let bug what = failwith ("bug: checking or lowering let through " ^ what)
 
 (* Structural equality. Functions have no meaningful equality, so comparing
-   them panics; Stage 10's operators will turn that into a type error. *)
+   them panics; stage 9's operators will turn that into a type error. *)
 let rec equal loc a b =
   match (a, b) with
   | VCon x, VCon y ->

@@ -36,7 +36,7 @@ and a new window are tested without waiting, and `main`'s own
 ## What it ran into
 
 - **The cache can't sit in front of another `Prices`.** A handler can't
-  call the dependency it implements until `outer` (stage 9), so the
+  call the dependency it implements until `outer` (stage 10), so the
   backend has to be a dependency of its own, `Supplier`, with the same
   operation under another name.
 - **Handlers aren't imported by name,** only types are, so they're

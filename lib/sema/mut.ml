@@ -393,7 +393,7 @@ and exclusive args =
               else
                 (* the one that isn't changed reads part of it, `xs[0]`: a
                    plain value read like that will be allowed once RC can
-                   tell plain values apart (stage 12) *)
+                   tell plain values apart (stage 11) *)
                 let part = if changed then p'.path <> [] else p.path <> [] in
                 Diag.error a.loc ~labels
                   ~notes:

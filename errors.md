@@ -206,7 +206,7 @@ pub fn transfer(inout self, t: Transfer) ! TransferError =
 
 The copy is visible, and you choose to pay for it. A `with transaction`
 handler can do the same for you later, once a handler can reach the
-implementation installed outside it, `outer` (stage 9).
+implementation installed outside it, `outer` (stage 10).
 
 ## Nothing is dropped
 
@@ -229,4 +229,4 @@ error: Frozen(AccountId(3))
   ([deps.md](deps.md)). A closure passed to a transparent parameter
   passes its errors to the call: `try ts.map(fn(t) => try validate(t))`.
 - ~~`with` and handlers~~ came in stage 7 too. A handler forwarding to
-  the next implementation out, `outer`, comes in stage 9.
+  the next implementation out, `outer`, comes in stage 10.

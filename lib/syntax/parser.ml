@@ -51,7 +51,7 @@
               |  ["pub"] "let" IDENT [":" type] "=" body
               |  IDENT ["(" param, ... ")"] "=>" body
                                                    (an operator: parsed, but
-                                                    reported until stage 10)
+                                                    reported until stage 9)
      type_body:= "{" field, ... "}"                       (a record)
               |  "opaque" type                           (a type of its own)
               |  errors                                  (a named error set)
@@ -1252,7 +1252,7 @@ let parse_op ?(dep = false) p ~tname =
               else
                 Printf.sprintf
                   "for now, write a method: `fn %s(self, ...) = ...`" name.name)
-           (Printf.sprintf "operators like `%s` arrive in stage 10" name.name));
+           (Printf.sprintf "operators like `%s` arrive in stage 9" name.name));
       None
   | tok ->
       let what =

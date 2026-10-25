@@ -5146,7 +5146,7 @@ fn main() = 1
       │         ------- `through` implements `N`
     7 │   next() => via()
       │             ^^^^^ this call uses `N`
-      = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+      = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
       help: call it outside the handler, install an implementation of `N` around the call with `with`, or implement `N` with a record of functions instead
 
     error: a handler for `N` can't use `N`
@@ -5155,14 +5155,14 @@ fn main() = 1
        │         ------ `direct` implements `N`
     10 │   next() => N.next()
        │             ^^^^^^^^ this call uses `N`
-       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
        help: call it outside the handler, install an implementation of `N` around the call with `with`, or implement `N` with a record of functions instead
 
     error: a handler for `N` can't use `N`
        ┌─ test.ren:12:9
     12 │ handler declared() for N uses N =
        │         ^^^^^^^^
-       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
        help: remove `N` from its `uses`
     |}]
 

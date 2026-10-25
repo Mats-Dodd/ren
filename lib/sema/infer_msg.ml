@@ -462,7 +462,7 @@ let handler_uses_itself (f : Ast.Resolved.fn_def) dep call =
         sprintf
           "a handler's operations run with what's installed outside its \
            `with`, so `%s` here would be the next `%s` out, which comes with \
-           `outer` (stage 9)"
+           `outer` (stage 10)"
           dep dep;
       ]
     ~help:

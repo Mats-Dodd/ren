@@ -204,7 +204,7 @@ and copy = {
 
 (* A handler: [nrow] is what its state and arms use, and [ncalls] the
    calls that add to it. That can't be a dependency it implements itself
-   (the next one out is `outer`'s, stage 9). If its needs are written,
+   (the next one out is `outer`'s, stage 10). If its needs are written,
    `for N uses Console`, or it's public, which needs nothing if it says
    nothing, they're [ndeclared], and [nrow] has to be no more than that.
    It's checked once the group is done, as a function's `uses` is

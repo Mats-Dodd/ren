@@ -133,7 +133,7 @@ let%expect_test "a type's interface holds its public members" =
 
 (* ---- errors ---- *)
 
-let%expect_test "operators are reserved for stage 10" =
+let%expect_test "operators are reserved for stage 9" =
   types
     {|
 type Vec = { x: Int, y: Int }
@@ -144,13 +144,13 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: operators like `add` arrive in stage 10
+    error: operators like `add` arrive in stage 9
       ┌─ test.ren:2:3
     2 │   add(a, b) => Vec { x: a.x + b.x, y: a.y + b.y }
       │   ^^^
       help: for now, write a method: `fn add(self, ...) = ...`
 
-    error: operators like `zero` arrive in stage 10
+    error: operators like `zero` arrive in stage 9
       ┌─ test.ren:3:3
     3 │   zero => Vec { x: 0, y: 0 }
       │   ^^^^

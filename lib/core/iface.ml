@@ -13,7 +13,7 @@
    ([of_module]), never from its bodies. The one thing it holds that a cached interface shouldn't is
    where each type and constructor was declared, so an error can point at
    the declaration it clashes with; those move out when interfaces are
-   cached (stage 11). *)
+   cached (stage 13). *)
 
 type field = { fname : string; fty : Ty.ty }
 

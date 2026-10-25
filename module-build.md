@@ -158,7 +158,7 @@ let t = Stack.of([7, 8, 9])       // an associated function
 
 You can't add methods to a type you don't own. Write a function in your own module (`mylib.chunks(xs)`), or wrap the type in an `opaque` type and give that type its own methods.
 
-Operators (written `add(a, b) => ...`, arriving in stage 10) are public whenever their type is. Methods, associated functions and associated values are private unless they're marked `pub`, like everything else, and the `pub` ones are listed under their type in the module's interface.
+Operators (written `add(a, b) => ...`, arriving in stage 9) are public whenever their type is. Methods, associated functions and associated values are private unless they're marked `pub`, like everything else, and the `pub` ones are listed under their type in the module's interface.
 
 ### Dependencies are types
 
@@ -376,8 +376,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 |---|---|
 | **Today** (stages 5a, 5b, 6, 7) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, the "two shapes" error, dependency types imported like other types, and public groups imported to run their tests. Every compiler pass is a pure function of its inputs |
 | **Stage 5b, left over** | `dbg` |
-| **Stage 11** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
-| **Stage 15** | Cached simulation-test results |
+| **Stage 13** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
+| **Stage 16** | Cached simulation-test results |
 | **After 1.0** | `build.ren`, sandboxed tools, remote cache and execution |
 
 ---

@@ -129,7 +129,7 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   takes it as a type parameter, `type Button<F> = { on_click: F }`, and a
   signature writes `Button<fn() ! ..e uses ..d>`.
 - A handler forwarding to the next implementation out, `outer`, comes
-  later (stage 9).
+  later (stage 10).
 
 ## `with`
 
@@ -187,19 +187,19 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   `test_proc(exits: Array<Exit>)` keeps each `Command { cmd, args }`, and
   says it exited with the code of its `Exit { command, code }`, or 0.
 - `Time`, `Instant` and `Duration` are opaque, with methods only until
-  operators arrive (stage 10). A `Duration` is made with `ms`, `seconds`
+  operators arrive (stage 9). A `Duration` is made with `ms`, `seconds`
   or `minutes`, added to with `plus` and `times`, compared with `before`
   and `after`, and read back with `in_ms`.
 - For now the real `instant` reads the same wall clock as `now`, which the
   system can set back (NTP, a manual change). A monotonic source needs a
   primitive OCaml's standard library doesn't have; it comes with the
-  runtime's own system calls (stage 11).
+  runtime's own system calls (stage 13).
 - These six are the prelude's, named in every module, and so are their
   types and test implementations: `Time`, `Instant`, `Duration`, `Path`,
   `Bytes`, `File`, `Command`, `Exit`, `TestClock`, `TestProc` and the
   rest. A program's own `type Time`, `type Command` or `dep Clock` is an
   error: it chooses another name.
-- `Net` comes with `Async` in stage 9 ([runtime-io.md](runtime-io.md)).
+- `Net` comes with `Async` in stage 12 ([runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.
@@ -352,7 +352,7 @@ its implementation in the vector by the dependency's identity, never by
 a name at runtime; for now that's a short search, and when the row is
 closed the compiler can make it a fixed index (rule 6). Each call keeps
 its shape, dependency, operation and arguments, which is what the effect
-journal (stage 9) will record.
+journal (stage 10) will record.
 
 A closure gets the evidence of whoever calls it, not of where it was
 made, so one that outlives its `with` uses what's installed where it's
@@ -585,7 +585,8 @@ stage, or settled something the plan left open:
 
 ## Later
 
-- `outer` and forwarding handlers, `Async`, `Net`, the journal (stage 9).
+- `outer` and forwarding handlers, and the journal (stage 10).
+- `Async` and `Net` (stage 12).
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.
@@ -593,4 +594,4 @@ stage, or settled something the plan left open:
   prints.
 - The rest of `Str` and `Path`: `Path.parent` and `extension`, listing a
   folder.
-- A monotonic `Clock.instant` (stage 11).
+- A monotonic `Clock.instant` (stage 13).

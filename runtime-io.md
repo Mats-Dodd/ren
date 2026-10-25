@@ -56,7 +56,7 @@ for chunk in Net.chunks(conn)              // chunk: Bytes from the pool
 // last reference dropped → the buffer goes back to the pool
 ```
 
-Ten thousand idle connections each holding a 64 KB receive buffer waste 640 MB. With io_uring's provided buffers, the kernel takes a buffer from the shared pool only when data actually arrives. Reference counting returns it with no lease protocol to get wrong: when the count reaches zero, the buffer goes back to the ring. Before stage 12, leased buffers are copied into ordinary `Bytes`.
+Ten thousand idle connections each holding a 64 KB receive buffer waste 640 MB. With io_uring's provided buffers, the kernel takes a buffer from the shared pool only when data actually arrives. Reference counting returns it with no lease protocol to get wrong: when the count reaches zero, the buffer goes back to the ring. Before stage 11, leased buffers are copied into ordinary `Bytes`.
 
 Registered buffers, pinned once so each call skips setup, fit code without `Alloc`. A hot path that uses only pooled buffers needs neither `Alloc` nor per-call kernel work.
 
@@ -64,7 +64,7 @@ Registered buffers, pinned once so each call skips setup, fit code without `Allo
 
 Rust's async I/O lends out `&mut buf`, and dropping a future cancels it at once. With a completion API the kernel may still be writing into a buffer that has been freed, which is why tokio-uring needs a different, owned-buffer API.
 
-Ren avoids the problem by rule (*proposed*, stage 9):
+Ren avoids the problem by rule (*proposed*, stage 12):
 
 > A call cancelled while the kernel holds its buffer returns only after the kernel confirms it has let go.
 
@@ -125,7 +125,7 @@ Why not one capability? io_uring itself shows the cost. It had a run of kernel v
 
 ### Journal entries
 
-A journal entry has the shape of a submission and its completion (*proposed*, stage 9):
+A journal entry has the shape of a submission and its completion (*proposed*, stage 10):
 
 ```
 { task: 17, seq: 412, dep: Fs,  op: read,   args: (file: 7, len: 4096), result: Ok(4096 bytes) }
@@ -157,8 +157,8 @@ This is the format question from the README's roadmap. Taking the shape from the
 
 The standard library is written in Ren on top of a small set of primitives: submit an operation (read, write, open, accept, connect, timer, cancel), wait for completions, get random bytes, plus the basics of `Str` and `Bytes`.
 
-- **To stage 10,** the primitives are OCaml, built on Eio, so the interpreter already uses the right model.
-- **From stage 11,** the primitives and the rest of the runtime (fibers, the scheduler, reference counting, the allocator, the journal) are C, emitted alongside the compiler's output.
+- **To stage 12,** the primitives are OCaml, built on Eio, so the interpreter already uses the right model.
+- **From stage 13,** the primitives and the rest of the runtime (fibers, the scheduler, reference counting, the allocator, the journal) are C, emitted alongside the compiler's output.
 
 Everything above the primitives carries over unchanged from the interpreter to native code. Only the primitives are rewritten.
 
@@ -178,11 +178,11 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 |---|---|
 | **Stage 7** | `Clock`, `Random` and `Console` as dependency types, with real implementations and test ones (done) |
 | **Stage 8** | `Fs`, `Os` and `Proc` as dependency types, with real implementations and in-memory ones: `Fs` on `Unix` and `mem_fs`, `Os.args` and `test_os`, `Proc.run` and `test_proc` (done) |
-| **Stage 9** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; the journal entry format; linked operations |
-| **Stage 11** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls; a monotonic `Clock.instant` |
-| **Stage 12** | leased buffers returned to the pool when their count reaches zero |
-| **Stage 13** | registered buffers for code without `Alloc` |
-| **Stage 15** | the ring replaced wholesale by the simulator; replay from journal entries |
+| **Stage 10** | the journal entry format |
+| **Stage 12** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; linked operations; leased buffers returned to the pool when their count reaches zero |
+| **Stage 13** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls; a monotonic `Clock.instant` |
+| **Stage 14** | registered buffers for code without `Alloc` |
+| **Stage 16** | the ring replaced wholesale by the simulator; replay from journal entries |
 | **After 1.0** | kTLS; finer capabilities; WASI |
 
 ---

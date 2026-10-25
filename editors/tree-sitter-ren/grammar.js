@@ -390,7 +390,7 @@ module.exports = grammar({
         field('value', $._body),
       ),
 
-    // add(other) => ...: parsed by the compiler, but reported until stage 10
+    // add(other) => ...: parsed by the compiler, but reported until stage 9
     operator_definition: ($) =>
       seq(
         field('name', $.identifier),

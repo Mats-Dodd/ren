@@ -31,7 +31,7 @@ pub type Result<T, E> =
 
 // ---- time ----
 //
-// Opaque, with methods only, until operators arrive (stage 10). Inside the
+// Opaque, with methods only, until operators arrive (stage 9). Inside the
 // prelude each is a number of milliseconds.
 
 // how long something takes

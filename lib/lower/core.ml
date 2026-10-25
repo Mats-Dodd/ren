@@ -89,7 +89,7 @@ and kind =
       (** [Clock.now()]: a call of an operation of the innermost implementation
           of [dep] in [ev], which runs with the evidence that implementation was
           installed with. Kept apart from other calls, so what was called, with
-          what, can be recorded (the journal, stage 9). Never with `&` *)
+          what, can be recorded (the journal, stage 10). Never with `&` *)
   | With of { ev : var; outer : var; dep : Path.t; impl : expr; body : expr }
       (** [body], with the evidence [ev]: [outer], the evidence here, with
           [impl] installed for [dep] on top. [impl] is a value of [dep]'s type:
