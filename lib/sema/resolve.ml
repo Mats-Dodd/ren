@@ -71,9 +71,12 @@ type t = {
           items written after their type included *)
   methods : (string * Path.t list) list;
       (** each function, and the methods of the module's own types it may call
-          with a dot: for `s.push(1)`, every one named `push`. Which one it is
-          is found through `s`'s type, by inference, which needs to have checked
-          the method first. *)
+          with a dot, which inference needs to have checked first: for
+          `s.push(1)`, `Stack.push` if it can tell here that `s` is a `Stack`,
+          and otherwise every one named `push`, since which it is is found
+          through `s`'s type, by inference. A method whose signature is written
+          out in full ([Ast.spelled]) isn't one: its declaration is its type,
+          before it's checked. *)
   scope : (string * Path.t) list;
       (** the types written bare here, by name, sorted: the prelude's, those
           imported by name and the module's own *)
@@ -148,7 +151,11 @@ type scope = {
 and fn_state = {
   mutable last_id : int;  (** the last binder id handed out *)
   mutable calls : Path.t list;
-  mutable dots : string list;  (** the names called with a dot, `s.push(1)` *)
+  mutable dots : (string * Path.t option) list;
+      (** the names called with a dot, `s.push(1)`, each with its receiver's
+          type, if it's written (see [receiver_type]) *)
+  mutable typed : (int * Path.t) list;
+      (** the locals whose type is written, by binder id, with that type *)
 }
 
 let report env ?help ?labels loc msg =
@@ -287,10 +294,28 @@ let rec ty env ~params (t : Parsed.ty) : Resolved.ty =
 
 let ty_opt env ~params = Option.map (ty env ~params)
 
+(* The named type [t] is, if it's written, `b: Bag`: then a method called
+   on [b] can only be one of [Bag]'s (see [receiver_type]). *)
+let note_type sc (b : binder) (t : Resolved.ty option) =
+  match t with
+  | Some (TyName ({ tref = Named p; _ }, _)) ->
+      sc.fn.typed <- (b.id, p) :: sc.fn.typed
+  | _ -> ()
+
 let param env sc bound (p : Parsed.param) : Resolved.param * scope =
   let pty = ty_opt env ~params:sc.tparams p.pty in
   let b, sc = bind env sc p.pname bound in
+  note_type sc b pty;
   ({ pname = b; pty; pmode = p.pmode }, sc)
+
+(* The type of [r], the receiver of a dot call, if it's written where [r]
+   is: a local whose type is written, `self` included, or a record
+   literal, `Bag { ... }.size()`. *)
+let receiver_type sc (r : Resolved.expr) =
+  match r.kind with
+  | Var (Local b) -> List.assoc_opt b.id sc.fn.typed
+  | Record (Some { tref = Named p; _ }, _) -> Some p
+  | _ -> None
 
 let params env sc bound ps =
   let ps, sc =
@@ -352,24 +377,30 @@ let item env sc (t : tyname) (f : ident) =
       | Some kind ->
           sc.fn.calls <- path :: sc.fn.calls;
           if kind = Value then Global_value path else Global path
-      | None when p.home <> env.home ->
+      | None when p.home <> env.home && p.home <> Path.prelude_home ->
           report env f.loc
             ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
             (sprintf "`%s` has no public `%s`" shown f.name);
           Global path
       | None ->
+          (* the module's own type, or a built-in one, which has every item
+             it will ever have *)
           report env f.loc
-            ~help:
+            ?help:
               (match items with
               | _ when List.mem f.name fields ->
-                  sprintf
-                    "`%s` is a field, so it's read from a value, like `x.%s`"
-                    f.name f.name
-              | [] -> sprintf "declare it in `%s`'s `ops` block" shown
+                  Some
+                    (sprintf
+                       "`%s` is a field, so it's read from a value, like `x.%s`"
+                       f.name f.name)
+              | [] when p.home = env.home ->
+                  Some (sprintf "declare it in `%s`'s `ops` block" shown)
+              | [] -> None
               | _ ->
-                  sprintf "its `ops` items: %s"
-                    (String.concat ", "
-                       (List.map (fun (n, _) -> sprintf "`%s`" n) items)))
+                  Some
+                    (sprintf "its `ops` items: %s"
+                       (String.concat ", "
+                          (List.map (fun (n, _) -> sprintf "`%s`" n) items))))
             (sprintf "`%s` has no `ops` item named `%s`" shown f.name);
           Global path)
 
@@ -485,10 +516,14 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
               }
           | Field ({ kind = Var (Bare m); _ }, _) when Env.mem m env.modules ->
               go f
-          | Field (_, m) ->
+          | Field (_, m) -> (
               (* `s.push(1)`: which type's `push` is found by inference *)
-              sc.fn.dots <- m.name :: sc.fn.dots;
-              go f
+              let f = go f in
+              match f.kind with
+              | Field (r, _) ->
+                  sc.fn.dots <- (m.name, receiver_type sc r) :: sc.fn.dots;
+                  f
+              | _ -> f)
           | _ -> go f
         in
         Call (f, List.map go args)
@@ -517,6 +552,11 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
                   let b, sc =
                     bind env sc name (if mut then By_var else By_let)
                   in
+                  (match (t, value.kind) with
+                  | None, Record (Some n, _) ->
+                      (* `let b = Bag { ... }` is a `Bag` *)
+                      note_type sc b (Some (TyName (n, [])))
+                  | _ -> note_type sc b t);
                   (Let { name = b; ty = t; value; mut } :: acc, sc)
               | Expr e -> (Expr (expr env sc e) :: acc, sc))
             ([], sc) stmts
@@ -656,7 +696,7 @@ let uses env (deps : ident list) =
    parameter can be `self`, which has the type, `Stack<T>`. `self` is no
    other parameter. *)
 let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
-    Resolved.fn_def * Path.t list * string list =
+    Resolved.fn_def * Path.t list * (string * Path.t option) list =
   let outer = match owner with Some td -> td.type_params | None -> [] in
   let tparams = outer @ f.tparams in
   no_duplicates env "type parameters" tparams;
@@ -700,7 +740,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       locals = Env.empty;
       tparams = List.map (fun (t : ident) -> t.name) tparams;
       depth = 0;
-      fn = { last_id = 0; calls = []; dots = [] };
+      fn = { last_id = 0; calls = []; dots = []; typed = [] };
     }
   in
   let ps, inner =
@@ -722,6 +762,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
                 (fun i _ -> TyName ({ tref = Param i; tloc = loc }, []))
                 td.type_params )
         in
+        note_type sc p.pname (Some owner_ty);
         { p with pty = Some owner_ty } :: rest
     | _ -> ps
   in
@@ -741,7 +782,8 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
    function (see [fn_def]), with the top-level functions it uses and the
    names it calls with a dot. *)
 let type_def env (td : Parsed.type_def) :
-    Resolved.type_def * (string * Path.t list * string list) list =
+    Resolved.type_def
+    * (string * Path.t list * (string * Path.t option) list) list =
   no_duplicates env "type parameters" td.type_params;
   let no_duplicate_fields (fs : Parsed.field list) =
     no_duplicates env "fields"
@@ -949,6 +991,49 @@ let unused_imports sink (r : t) ~found =
             ~help:(sprintf "remove the `as %s`" i.alias.name)
             (sprintf "`%s` is never used" i.alias.name)))
     r.import_uses
+
+(* The methods of the module's own types, declared in [items], that a dot
+   call of [m] may call (see [t.methods]), given its receiver's type
+   [known], if it's written. A receiver of another module's type calls
+   none of them. Inside its module an opaque type is also what it's
+   represented as, so a receiver of one that has no [m] itself may call
+   any of them. *)
+let dot_callees ~home (items : Resolved.program) (m, known) =
+  let types =
+    List.filter_map
+      (function
+        | Type (td : Resolved.type_def) -> Some td | Fn _ | Import _ -> None)
+      items
+  in
+  let method_ (td : Resolved.type_def) =
+    List.find_opt
+      (fun (o : Resolved.op) ->
+        Ast.short_name o.op_fn.name.name = m
+        &&
+        match (o.op_kind, o.op_fn.params) with
+        | Op_fn, p :: _ -> p.pname.ident.name = "self"
+        | _ -> false)
+      td.type_ops
+  in
+  let callees (td : Resolved.type_def) =
+    match method_ td with
+    | Some o when not (Ast.spelled o.op_fn) ->
+        [ Path.make home o.op_fn.name.name ]
+    | Some _ | None -> []
+  in
+  let own (p : Path.t) =
+    List.find_opt
+      (fun (td : Resolved.type_def) ->
+        p.home = home && td.type_name.name = p.name)
+      types
+  in
+  match Option.map own known with
+  | Some (Some td) -> (
+      match (method_ td, td.type_body) with
+      | None, Opaque _ -> List.concat_map callees types
+      | _ -> callees td)
+  | Some None -> []
+  | None -> List.concat_map callees types
 
 let program sink ~home ~imports (prog : Parsed.program) =
   (* each import, with the interface of the module it imports; the driver
@@ -1174,16 +1259,8 @@ let program sink ~home ~imports (prog : Parsed.program) =
       List.map
         (fun (f, _, dots) ->
           ( f,
-            List.concat_map
-              (fun m ->
-                Hashtbl.fold
-                  (fun t (items, _) acc ->
-                    if List.mem_assoc m items then
-                      Path.make home (t ^ "." ^ m) :: acc
-                    else acc)
-                  env.own_ops []
-                |> List.sort compare)
-              dots ))
+            List.sort_uniq compare
+              (List.concat_map (dot_callees ~home items) dots) ))
         (List.concat calls);
     scope;
     aliases =

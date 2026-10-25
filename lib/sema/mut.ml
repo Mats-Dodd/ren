@@ -113,6 +113,13 @@ let kind (b : binder) =
   match b.bound with
   | By_var | By_inout | By_ref_loop -> Mutable
   | By_let -> Fixed ("a `let`", "declare it with `var` to change it")
+  | By_param when x = "self" ->
+      (* `self` is a reserved word, so it can't be copied into a `var` of
+         its own name *)
+      Fixed
+        ( "a parameter",
+          "write `inout self` to change the caller's value, or copy it with \
+           `var s = self`" )
   | By_param ->
       Fixed
         ( "a parameter",

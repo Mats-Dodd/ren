@@ -407,11 +407,13 @@ let not_a_method (m : Ast.ident) (kind : Iface.op_kind) ~fix =
         sprintf "`%s` isn't a method (it has no `self`)" m.name)
 
 (* `s.peek`, where `peek` is a method, and isn't called. [item] is how to
-   write it as a function, `Stack.peek`. *)
-let method_not_called (m : Ast.ident) ~recv ~item =
+   write it as a function, `Stack.peek`, and [changes] says whether it has
+   `inout self`, so that the call is written with `&`. *)
+let method_not_called (m : Ast.ident) ~recv ~item ~changes =
   Diag.make m.loc
     ~help:
-      (sprintf "write `%s.%s()`, or use `%s` as a function"
+      (sprintf "write `%s%s.%s()`, or use `%s` as a function"
+         (if changes then "&" else "")
          (Option.value recv ~default:"x")
          m.name item)
     (sprintf "`%s` is a method, so it has to be called" m.name)
@@ -443,6 +445,23 @@ let several_have_member ~names loc ?what (m : Ast.ident) paths =
        ]
       @ extra)
     (sprintf "can't tell which type %s is" what)
+
+(* `x.size()`, where `x`'s type isn't known yet and no type the module
+   can name bare has a `size`. [elsewhere] are those that have a method
+   named `size`, which step 2 of the lookup doesn't look in. *)
+let no_type_has_method ~names ~can_name ?what (m : Ast.ident) elsewhere =
+  let _, help, extra = say_which ~names ~can_name ?what (List.hd elsewhere) in
+  Diag.make m.loc ~help
+    ~notes:
+      ([
+         sprintf "`%s` is a method of %s" m.name
+           (String.concat " and "
+              (List.map (fun p -> sprintf "`%s`" (names p)) elsewhere));
+         "a method is found through its receiver's type, which has to be known \
+          where it's called";
+       ]
+      @ extra)
+    (sprintf "no type in scope here has a method named `%s`" m.name)
 
 (* ---- associated values ---- *)
 

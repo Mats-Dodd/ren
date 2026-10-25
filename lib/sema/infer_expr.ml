@@ -811,6 +811,32 @@ and infer_call env cx ?changed (e : expr) (f : expr) args =
               report env
                 (several_have_member ~names:env.names r.loc ?what m paths);
               nothing ())
+      | None, TVar _
+        when not
+               (List.exists (fun td -> field_in m.name td <> None) env.visible)
+        -> (
+          (* it may be a method of a type the module can't name bare *)
+          let elsewhere =
+            Hashtbl.fold
+              (fun p td acc ->
+                match op_in m.name td with
+                | Some { okind = Method; _ } -> p :: acc
+                | _ -> acc)
+              env.types []
+            |> List.sort compare
+          in
+          match elsewhere with
+          | [] -> field_call ()
+          | _ ->
+              let what =
+                match r.kind with
+                | Var x -> Some (Infer_msg.Named (name_of x))
+                | _ -> None
+              in
+              report env
+                (no_type_has_method ~names:env.names ~can_name:env.can_name
+                   ?what m elsewhere);
+              nothing ())
       | None, _ -> field_call ())
   | _ ->
       let tf = infer env cx f in
@@ -882,6 +908,26 @@ and apply env cx (e : expr) ~name (f : expr) tf args =
             | Inout, Ref place when passed ->
                 Hashtbl.replace cx.nodes a.node p.ty;
                 check env cx place p.ty
+            | Inout, Ref call ->
+                (* `take(&c.pop())`: the `&` is `c`'s, and the argument is
+                   what the call returns *)
+                ignore (infer env cx a);
+                ignore
+                  (fail env a.loc ~help:"put it in a `var` first, and pass that"
+                     ~notes:
+                       [
+                         sprintf
+                           "the `&` in `%s` marks the receiver the call \
+                            changes, not the argument"
+                           (Option.value (env.source a) ~default:"&x.m()");
+                       ]
+                     (sprintf
+                        "%s changes this argument, but %s is a call's result, \
+                         not something it can change"
+                        name
+                        (match env.source call with
+                        | Some c -> sprintf "`%s`" c
+                        | None -> "it")))
             | Inout, _ ->
                 let help =
                   match a.kind with
@@ -1059,7 +1105,13 @@ and field_access env cx (e : expr) r tr (f : ident) =
       let item = type_name env td.path ^ "." ^ o.oname in
       report env
         (match o.okind with
-        | Method -> method_not_called f ~recv:(env.source r) ~item
+        | Method ->
+            let changes =
+              match o.oscheme.ty with
+              | Fun ({ mode = Inout; _ } :: _, _, _, _) -> true
+              | _ -> false
+            in
+            method_not_called f ~recv:(env.source r) ~item ~changes
         | Function | Value -> item_not_field f o.okind ~item);
       TError
   | None -> (
@@ -1099,6 +1151,21 @@ and field_access env cx (e : expr) r tr (f : ident) =
               let t, tvars = instance env td in
               unify_at env r.loc ~found:tr ~expected:t;
               found td fd tvars
+          | Nowhere
+            when List.exists (fun td -> op_in f.name td <> None) env.visible
+            -> (
+              (* not a field, but an ops item: once [r] is known to have
+                 its type, the first case says which kind, and how to use it *)
+              match through_type env ~known:None ~fits:(op_in f.name) with
+              | Found (td, _) ->
+                  let t, _ = instance env td in
+                  unify_at env r.loc ~found:tr ~expected:t;
+                  field_access env cx e r tr f
+              | Nowhere -> TError
+              | Several paths ->
+                  report env
+                    (several_have_member ~names:env.names r.loc ?what f paths);
+                  TError)
           | Nowhere ->
               (* it may be in a record type the module can't name bare *)
               let elsewhere =

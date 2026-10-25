@@ -580,6 +580,57 @@ fn main() = count(Bag { items: [1] })
     fn main() -> Int
     |}]
 
+let%expect_test "methods of the same name on different types" =
+  (* `b.size()` calls `B.size`, since `b`'s type is written, and so
+     `pick` and `A.size` aren't checked together as if they called each
+     other: each use of `pick` can have its own types *)
+  run
+    {|
+type B = { m: Int }
+  ops =
+    fn size(self) -> Int = self.m
+
+type A = { n: Int }
+  ops =
+    fn size(self) -> Int =
+      let b = B { m: 1 }
+      if pick(true, b) then pick(self.n, b) else 0
+
+fn pick(x, b: B) =
+  let k = b.size()
+  x
+
+fn main() = A { n: 3 }.size()
+|};
+  (* `h.b`'s type isn't known until it's checked, but `B.size` and
+     `A.size` are written out in full, so a dot call of either needn't
+     wait for it to be checked: `pick`, checked first, sees `B.size`'s
+     declaration *)
+  run
+    {|
+fn pick(x, h) =
+  let k = h.b.size()
+  x
+
+pub type B = { m: Int }
+  ops =
+    pub fn size(self) -> Int = self.m
+
+pub type H = { b: B }
+
+pub type A = { n: Int }
+  ops =
+    pub fn size(self) -> Int =
+      let h = H { b: B { m: 1 } }
+      if pick(true, h) then pick(self.n, h) else 0
+
+fn main() = A { n: 3 }.size()
+|};
+  [%expect {|
+    3
+    3
+    |}]
+
 (* ---- calling: errors ---- *)
 
 let%expect_test "a method that changes its receiver needs `&`" =
@@ -674,6 +725,48 @@ fn main() = &Stack.empty.push(2)
       │              ^^^^^^^^^^^
       = an associated value is made once, and never changes
       help: copy it into a `var`, and change the copy
+    |}]
+
+let%expect_test "`self` changes only with `inout self`" =
+  run
+    {|
+type C = { n: Int }
+  ops =
+    fn b(inout self) = self.n = 1
+    fn c(self) = &self.b()
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `self` is a parameter, so it can't be changed
+      ┌─ test.ren:4:19
+    4 │     fn c(self) = &self.b()
+      │                   ^^^^
+      help: write `inout self` to change the caller's value, or copy it with `var s = self`
+    |}]
+
+let%expect_test "a changed receiver's call isn't a place" =
+  run
+    {|
+type C = { n: Int }
+  ops =
+    fn pop(inout self) -> Int = self.n
+
+fn take(inout x: Int) = x = 2
+
+fn main() =
+  var c = C { n: 1 }
+  take(&c.pop())
+|};
+  [%expect
+    {|
+    error: `take` changes this argument, but `c.pop()` is a call's result, not something it can change
+      ┌─ test.ren:9:8
+    9 │   take(&c.pop())
+      │        ^^^^^^^^
+      = the `&` in `&c.pop()` marks the receiver the call changes, not the argument
+      help: put it in a `var` first, and pass that
     |}]
 
 let%expect_test "a changed receiver can't be another argument" =
@@ -797,6 +890,27 @@ fn main() =
       help: write `Stack.of`
     |}]
 
+let%expect_test "a method that changes its receiver, not called" =
+  run
+    {|
+type C = { n: Int }
+  ops =
+    fn b(inout self) = self.n = 1
+
+fn main() =
+  var c = C { n: 1 }
+  let f = c.b
+  1
+|};
+  [%expect
+    {|
+    error: `b` is a method, so it has to be called
+      ┌─ test.ren:7:13
+    7 │   let f = c.b
+      │             ^
+      help: write `&c.b()`, or use `C.b` as a function
+    |}]
+
 let%expect_test "a type without the method" =
   run
     {|
@@ -875,6 +989,63 @@ fn main() = count(Bag { items: [1] })
       help: annotate `b` where it's defined, like `b: Bag`
     |}]
 
+let%expect_test "a method of a type that isn't in scope" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack
+fn sz(x) = x.size()
+fn main() = sz(stack.Stack.of([1]))
+|}
+      );
+      stack;
+    ];
+  [%expect
+    {|
+    error: no type in scope here has a method named `size`
+      ┌─ main.ren:2:14
+    2 │ fn sz(x) = x.size()
+      │              ^^^^
+      = `size` is a method of `stack.Stack`
+      = a method is found through its receiver's type, which has to be known where it's called
+      help: annotate `x` where it's defined, like `x: stack.Stack`
+    |}]
+
+let%expect_test "a method not called, on a receiver whose type isn't known yet"
+    =
+  run
+    {|
+type B = { m: Int }
+  ops =
+    fn get(inout self) -> Int = self.m
+
+type C = { m: Int }
+  ops =
+    fn put(self) -> Int = self.m
+    fn get(self) -> Int = self.m
+
+fn four(x) = x.put
+fn five(x) = x.get
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `put` is a method, so it has to be called
+       ┌─ test.ren:10:16
+    10 │ fn four(x) = x.put
+       │                ^^^
+       help: write `x.put()`, or use `C.put` as a function
+
+    error: can't tell which type `x` is
+       ┌─ test.ren:11:14
+    11 │ fn five(x) = x.get
+       │              ^
+       = `B` and `C` each have a `get`
+       = a method is found through its receiver's type, which has to be known where it's called
+       help: annotate `x` where it's defined, like `x: B`
+    |}]
+
 let%expect_test "an associated value uses nothing" =
   types
     {|
@@ -925,6 +1096,53 @@ fn main() = Box.a
       │         ^
       = an associated value is made once, when the program starts, so it can't need itself to be made
       help: make it without using itself
+    |}]
+
+let%expect_test "a built-in type's items" =
+  (* no help to mark it `pub`: the prelude's types have every item they
+     will ever have *)
+  run {|
+fn main() = [Int.foo, Array.foo]
+|};
+  [%expect
+    {|
+    error: `Int` has no `ops` item named `foo`
+      ┌─ test.ren:1:18
+    1 │ fn main() = [Int.foo, Array.foo]
+      │                  ^^^
+
+    error: `Array` has no `ops` item named `foo`
+      ┌─ test.ren:1:29
+    1 │ fn main() = [Int.foo, Array.foo]
+      │                             ^^^
+    |}]
+
+let%expect_test "a value of the wrong type, in a cycle of values" =
+  (* `Box.c` is shown as the value it is, not the function of no
+     parameters it's checked as *)
+  run
+    {|
+type Box = { n: Int }
+  ops =
+    let c = Box { n: 1 }.via()
+    fn via(self) -> Int = Box.c.n
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `Box.c` is made from itself: Box.c → Box.via → Box.c
+      ┌─ test.ren:3:9
+    3 │     let c = Box { n: 1 }.via()
+      │         ^
+      = an associated value is made once, when the program starts, so it can't need itself to be made
+      help: make one of them without the other
+
+    error: `Box.c` is used here as `Box`, but its definition makes it `Int`
+      ┌─ test.ren:4:27
+    4 │     fn via(self) -> Int = Box.c.n
+      │                           ^^^^^
+      = values and functions that need each other are checked at a single type
     |}]
 
 let%expect_test "an item written after its type parses as one name" =

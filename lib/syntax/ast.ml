@@ -220,6 +220,13 @@ let functions (prog : ('v, 'b, 't) program) =
       | Import _ -> [])
     prog
 
+(* Whether [f]'s signature is written out in full, so that its declaration
+   says everything about its type: it's public, so no `->` means Unit and
+   no `uses` means none, and every parameter has a type (once resolved, a
+   method's `self` has its type's). *)
+let spelled (f : ('v, 'b, 't) fn_def) =
+  f.pub && List.for_all (fun p -> p.pty <> None) f.params
+
 (* `&s.push(1)`: a method call whose `&` marks the receiver it changes,
    as opposed to `&xs`, a place passed `inout`. A call's result is never a
    place, so the two can't be confused (module-build.md, "Methods and

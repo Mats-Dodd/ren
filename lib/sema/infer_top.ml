@@ -385,6 +385,18 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
   (* the module's functions, its types' ops items included; an associated
      value is checked as a function of no parameters (ast.ml) *)
   let fns = Ast.functions r.prog in
+  (* a method whose signature is written out in full has the type its
+     declaration gives it, as it does in its interface, even before it's
+     checked: a dot call of it needn't come after it (Resolve.t.methods) *)
+  List.iter
+    (fun (f : fn_def) ->
+      match f.params with
+      | p :: _ when p.pname.ident.name = "self" && Ast.spelled f ->
+          Hashtbl.replace env.globals
+            (Path.make home f.name.name)
+            (of_scheme st (Iface.signature f))
+      | _ -> ())
+    fns;
   let values =
     List.concat_map
       (function
@@ -461,14 +473,7 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
       env.group <- declared;
       env.spelled <-
         List.filter_map
-          (fun (f : fn_def) ->
-            if
-              f.pub
-              && List.for_all
-                   (fun (p : Resolved.param) -> p.pty <> None)
-                   f.params
-            then Some (path f)
-            else None)
+          (fun (f : fn_def) -> if Ast.spelled f then Some (path f) else None)
           group;
       List.iter
         (fun ((f : fn_def), _, cx, ps, ret) ->
@@ -497,14 +502,30 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
          type its own body gave it *)
       List.iter
         (fun j ->
-          unify_at env j.jloc ~found:j.used
-            ~expected:(Hashtbl.find env.globals j.target)
-            ~msg:(fun f x ->
-              sprintf
-                "`%s` is used here as `%s`, but its definition makes it `%s`"
-                j.jname f x)
-            ~notes:
-              [ "functions that call each other are checked at a single type" ])
+          let msg f x =
+            sprintf
+              "`%s` is used here as `%s`, but its definition makes it `%s`"
+              j.jname f x
+          in
+          let expected = Hashtbl.find env.globals j.target in
+          match (repr j.used, repr expected) with
+          | TFun ([], used, _, _), TFun ([], made, _, _)
+            when List.exists (fun f -> is_value f && path f = j.target) fns ->
+              (* an associated value, a function of no parameters (ast.ml),
+                 is used as its result, which is what's shown *)
+              unify_at env j.jloc ~found:used ~expected:made ~msg
+                ~notes:
+                  [
+                    "values and functions that need each other are checked at \
+                     a single type";
+                  ]
+          | _ ->
+              unify_at env j.jloc ~found:j.used ~expected ~msg
+                ~notes:
+                  [
+                    "functions that call each other are checked at a single \
+                     type";
+                  ])
         (List.rev env.joins);
       env.joins <- [];
       env.group <- [];
