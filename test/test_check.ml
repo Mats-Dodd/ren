@@ -329,6 +329,17 @@ fn main() = print(Plan { seats: 1 })
     8 │ fn main() = print(Plan { seats: 1 })
       │                   ^^^^
       help: its values are made with its constructors
+    |}];
+  run {|
+fn main() = print(Int { })
+|};
+  [%expect
+    {|
+    error: `Int` isn't a record type
+      ┌─ test.ren:1:19
+    1 │ fn main() = print(Int { })
+      │                   ^^^
+      help: it's built in; only a type declared with fields, like `type Point = { x: Int }`, is made with `Point { ... }`
     |}]
 
 let%expect_test "type declaration errors" =

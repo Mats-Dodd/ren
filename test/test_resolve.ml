@@ -63,3 +63,37 @@ fn main() = call(fn() => ())
     fn call(f: fn())
     fn main()
     |}]
+
+let%expect_test "a lambda can't have two parameters with the same name" =
+  run {|
+fn main() =
+  let f = fn(x, x) => x
+  print(f(1, 2))
+|};
+  [%expect
+    {|
+    error: there are two parameters named `x`
+      ┌─ test.ren:2:17
+    2 │   let f = fn(x, x) => x
+      │                 ^
+      │              - the first `x` is here
+      help: rename one of them
+    |}]
+
+let%expect_test "a pattern can't bind the same name twice" =
+  run
+    {|
+type Pair = P(a: Int, b: Int)
+fn main() =
+  match P(1, 2)
+    P(x, x) => print(x)
+|};
+  [%expect
+    {|
+    error: there are two pattern variables named `x`
+      ┌─ test.ren:4:10
+    4 │     P(x, x) => print(x)
+      │          ^
+      │       - the first `x` is here
+      help: rename one of them
+    |}]

@@ -148,6 +148,14 @@ let lookup env sc loc ~what x =
           report env loc (sprintf "there's no %s named `%s`" what x);
           Global (Path.make env.home x))
 
+(* The variables a pattern binds, left to right, so that `P(x, x)` can be
+   reported: otherwise the second `x` would quietly hide the first. *)
+let rec pattern_vars (p : Parsed.pattern) =
+  match p.pkind with
+  | PWild | PInt _ | PBool _ -> []
+  | PVar x -> [ x ]
+  | PCon (_, ps) -> List.concat_map pattern_vars ps
+
 let rec pattern sc (p : Parsed.pattern) : Resolved.pattern * scope =
   let kind, sc =
     match p.pkind with
@@ -198,6 +206,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         in
         Call (f, List.map go args)
     | Lambda (ps, body) ->
+        no_duplicates env "parameters"
+          (List.map (fun (p : Parsed.param) -> p.pname) ps);
         let ps, inner =
           params env { sc with depth = sc.depth + 1 } (fun _ -> By_lambda) ps
         in
@@ -237,6 +247,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
           ( subject,
             List.map
               (fun (a : Parsed.arm) : Resolved.arm ->
+                no_duplicates env "pattern variables" (pattern_vars a.arm_pat);
                 let arm_pat, sc = pattern sc a.arm_pat in
                 let arm_guard = Option.map (expr env sc) a.arm_guard in
                 { arm_pat; arm_guard; arm_body = expr env sc a.arm_body })

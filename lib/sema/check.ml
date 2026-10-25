@@ -132,7 +132,11 @@ let check_record env loc (name : tname option) (fields : (ident * expr) list) =
       match Hashtbl.find_opt env.types path with
       | None -> assert false (* resolve.ml found it *)
       | Some { body = Builtin; _ } ->
-          Diag.error tn.loc (sprintf "`%s` isn't a record type" tn.name)
+          Diag.error tn.loc
+            ~help:
+              "it's built in; only a type declared with fields, like `type \
+               Point = { x: Int }`, is made with `Point { ... }`"
+            (sprintf "`%s` isn't a record type" tn.name)
       | Some { body = Sum _; _ } ->
           Diag.error tn.loc ~help:"its values are made with its constructors"
             (sprintf "`%s` isn't a record type" tn.name)
