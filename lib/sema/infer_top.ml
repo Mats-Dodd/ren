@@ -226,6 +226,13 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
   List.iter
     (fun (td : Iface.type_decl) -> Hashtbl.replace types td.path td)
     (List.concat_map (fun (iface : Iface.t) -> iface.types) reachable @ r.types);
+  (* this module's opaque types are what they're represented as, here *)
+  List.iter
+    (fun (td : Iface.type_decl) ->
+      match td.body with
+      | Opaque (Some rep) -> Hashtbl.replace st.reps td.path rep
+      | _ -> ())
+    r.types;
   (* the types step 2 of a lookup through a type looks in: those the
      module can name bare. [r.scope] is sorted by name, and two of its
      types never share one. *)

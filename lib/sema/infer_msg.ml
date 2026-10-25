@@ -132,6 +132,40 @@ let ambiguous_ctor ~names (c : Ast.ident) owners =
     (sprintf "`%s` could be %s" c.name
        (String.concat " or " (List.map full owners)))
 
+(* ---- opaque types ---- *)
+
+(* Another module's opaque type [p], looked inside: made, read, or used as
+   what it's represented as, none of which this module can see. *)
+let representation_private (p : Path.t) =
+  ( sprintf "`%s`'s representation is private to `%s`" p.name p.home,
+    sprintf "use a function from `%s` to make or read one" p.home )
+
+let opaque_private loc (td : Iface.type_decl) =
+  let msg, help = representation_private td.path in
+  Diag.make loc ~help msg
+
+(* What the module's own opaque type [td] is represented as, as the module
+   writes it. *)
+let representation ~names (td : Iface.type_decl) =
+  match td.body with
+  | Opaque (Some rep) ->
+      let s : Ty.scheme =
+        { ty = rep; names = List.mapi (fun i n -> (i, n)) td.params }
+      in
+      Ty.show (Ty.printer ~names s) rep
+  | _ -> invalid_arg "Infer_msg.representation: not an opaque type"
+
+(* The module's own opaque type [td], written where only a record or a sum
+   type makes sense: it's its representation, which has to be written
+   instead. [what] says what it was used as. *)
+let opaque_own ~names loc (td : Iface.type_decl) what =
+  let rep = representation ~names td in
+  Diag.make loc
+    ~help:
+      (sprintf "here a `%s` is a `%s`, so write one of those instead"
+         (names td.path) rep)
+    (sprintf "`%s` is opaque, so it %s of its own" (names td.path) what)
+
 (* `Light.Purple`, where `Light` has no `Purple`. With [expected], it's a
    bare `Purple` where a `Light` is expected. *)
 let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
@@ -154,6 +188,14 @@ let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
         ( sprintf "`%s` is built in, and has no constructors" t,
           Some "its values are written directly, like `1`, `true` or `[1, 2]`"
         )
+    | Opaque None ->
+        let msg, help = representation_private td.path in
+        (msg, Some help)
+    | Opaque (Some _) ->
+        ( sprintf "`%s` is opaque, so it has no constructors of its own" t,
+          Some
+            (sprintf "here a `%s` is a `%s`, so write one of those instead" t
+               (representation ~names td)) )
   in
   Diag.make (Loc.span loc c.loc) ~notes ?help msg
 
@@ -177,14 +219,18 @@ let wrong_label (l : Ast.ident) (f : Iface.field) =
 
 (* `Plan { ... }`, where `Plan` isn't a record *)
 let not_a_record ~names loc (td : Iface.type_decl) =
-  let help =
-    match td.body with
-    | Builtin ->
-        "it's built in; only a type declared with fields, like `type Point = { \
-         x: Int }`, is made with `Point { ... }`"
-    | _ -> "its values are made with its constructors"
-  in
-  Diag.make loc ~help (sprintf "`%s` isn't a record type" (names td.path))
+  match td.body with
+  | Opaque None -> opaque_private loc td
+  | Opaque (Some _) -> opaque_own ~names loc td "has no fields"
+  | _ ->
+      let help =
+        match td.body with
+        | Builtin ->
+            "it's built in; only a type declared with fields, like `type Point \
+             = { x: Int }`, is made with `Point { ... }`"
+        | _ -> "its values are made with its constructors"
+      in
+      Diag.make loc ~help (sprintf "`%s` isn't a record type" (names td.path))
 
 let no_record_fits loc =
   Diag.make loc

@@ -131,6 +131,9 @@ type 't ctor = { ctor_name : ident; ctor_fields : 't field list }
 type 't type_body =
   | Fields of 't field list  (** a record: [{ id: Int, plan: Plan }] *)
   | Ctors of 't ctor list  (** a sum type: [| Free | Pro(seats: Int)] *)
+  | Opaque of 't ty
+      (** [opaque Int]: a type of its own, represented as the type written,
+          which only its module can see *)
 
 type 't type_def = {
   type_pub : bool;  (** [pub type ...]: other modules can use it *)
@@ -377,6 +380,7 @@ let show_type_def (td : type_def) =
           (fun c ->
             parens (c.ctor_name.name :: List.map show_field c.ctor_fields))
           cs
+    | Opaque t -> [ parens [ "opaque"; show_ty t ] ]
   in
   parens ((if td.type_pub then [ "pub" ] else []) @ ("type" :: name :: body))
 

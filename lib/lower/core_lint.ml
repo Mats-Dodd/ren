@@ -44,12 +44,6 @@ let rec has_error (t : Ty.ty) =
   | Fun (ps, r, _, _) ->
       List.exists (fun (p : Ty.param) -> has_error p.ty) ps || has_error r
 
-let same env loc what (found : Ty.ty) (expected : Ty.ty) =
-  if found <> expected then
-    fail env loc
-      (sprintf "%s has type `%s`, but should have `%s`" what (show found)
-         (show expected))
-
 (* A declaration's field type, given what its type parameters stand for. *)
 let rec subst args (t : Ty.ty) : Ty.ty =
   match t with
@@ -63,37 +57,81 @@ let rec subst args (t : Ty.ty) : Ty.ty =
           e,
           u )
 
+(* In its own module, an opaque type is its representation (iface.ml), so
+   `UserId` and `Int` are the same type there. [reveal] replaces an opaque
+   type of the module being linted with what it's represented as, until
+   [t] is some other type; resolve.ml makes sure that ends. Another
+   module's opaque type has no representation here, and stays as it is,
+   and so does any other type: physically the same value, which [==]
+   tests. *)
+let rec reveal env (t : Ty.ty) : Ty.ty =
+  match t with
+  | Con (p, args) -> (
+      match Hashtbl.find_opt env.types p with
+      | Some { Iface.body = Opaque (Some rep); _ } ->
+          reveal env (subst args rep)
+      | _ -> t)
+  | Fun _ | Var _ | Error -> t
+
+(* Are [a] and [b] the same type, once opaque types are revealed where they
+   differ? *)
+let rec equal env (a : Ty.ty) (b : Ty.ty) =
+  match (a, b) with
+  | Con (p, xs), Con (q, ys)
+    when p = q
+         && List.length xs = List.length ys
+         && List.for_all2 (equal env) xs ys ->
+      true
+  | Fun (ps, r, e, u), Fun (qs, r', e', u') when List.length ps = List.length qs
+    ->
+      List.for_all2
+        (fun (p : Ty.param) (q : Ty.param) ->
+          p.mode = q.mode && equal env p.ty q.ty)
+        ps qs
+      && equal env r r' && e = e' && u = u'
+  | _ ->
+      let a' = reveal env a and b' = reveal env b in
+      if a' == a && b' == b then a = b else equal env a' b'
+
+let same env loc what (found : Ty.ty) (expected : Ty.ty) =
+  if not (equal env found expected) then
+    fail env loc
+      (sprintf "%s has type `%s`, but should have `%s`" what (show found)
+         (show expected))
+
 (* Is [t] what [s] (a scheme's type) becomes for some choice of its type
    and row variables? A row variable can stand for more labels, and a tail. *)
-let instance_of (s : Ty.ty) (t : Ty.ty) =
+let instance_of env (s : Ty.ty) (t : Ty.ty) =
   let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
-  let bound table n x =
+  let bound table same n x =
     match Hashtbl.find_opt table n with
-    | Some y -> x = y
+    | Some y -> same x y
     | None ->
         Hashtbl.add table n x;
         true
   in
   let rec go (s : Ty.ty) (t : Ty.ty) =
     match (s, t) with
-    | Var n, _ -> bound tys n t
-    | Con (p, a), Con (q, b) ->
-        p = q && List.length a = List.length b && List.for_all2 go a b
-    | Fun (ps, r, e, u), Fun (qs, r', e', u') ->
-        List.length ps = List.length qs
-        && List.for_all2
-             (fun (p : Ty.param) (q : Ty.param) ->
-               p.mode = q.mode && go p.ty q.ty)
-             ps qs
+    | Var n, _ -> bound tys (equal env) n t
+    | Con (p, a), Con (q, b)
+      when p = q && List.length a = List.length b && List.for_all2 go a b ->
+        true
+    | Fun (ps, r, e, u), Fun (qs, r', e', u')
+      when List.length ps = List.length qs ->
+        List.for_all2
+          (fun (p : Ty.param) (q : Ty.param) -> p.mode = q.mode && go p.ty q.ty)
+          ps qs
         && go r r' && row e e' && row u u'
-    | _ -> false
+    | _ ->
+        let s' = reveal env s and t' = reveal env t in
+        if s' == s && t' == t then false else go s' t'
   and row (s : Ty.row) (t : Ty.row) =
     let extra = List.filter (fun l -> not (List.mem l s.labels)) t.labels in
     List.for_all (fun l -> List.mem l t.labels) s.labels
     &&
     match s.tail with
     | None -> extra = [] && t.tail = None
-    | Some n -> bound rows n (extra, t.tail)
+    | Some n -> bound rows ( = ) n (extra, t.tail)
   in
   go s t
 
@@ -104,7 +142,7 @@ let decl env loc p =
 
 (* [t] as an instance of the type declared at [p]: its type arguments. *)
 let args_of env loc what p (t : Ty.ty) =
-  match t with
+  match reveal env t with
   | Con (q, args) when q = p ->
       let td = decl env loc p in
       if List.length args <> List.length td.params then
@@ -122,13 +160,14 @@ let ctor_of env loc (td : Iface.type_decl) c =
       | Some k -> k
       | None ->
           fail env loc (sprintf "`%s` has no constructor `%s`" td.path.name c))
-  | Record _ | Builtin ->
+  | Record _ | Builtin | Opaque _ ->
       fail env loc (sprintf "`%s` isn't a sum type" td.path.name)
 
 let fields_of env loc (td : Iface.type_decl) =
   match td.body with
   | Record fs -> fs
-  | Sum _ | Builtin -> fail env loc (sprintf "`%s` isn't a record" td.path.name)
+  | Sum _ | Builtin | Opaque _ ->
+      fail env loc (sprintf "`%s` isn't a record" td.path.name)
 
 let field_ty env loc (td : Iface.type_decl) args f =
   match
@@ -162,7 +201,7 @@ let rec expr env sc (e : expr) =
       is ("`" ^ v.name ^ "`") v.ty
   | Global p -> (
       match Hashtbl.find_opt env.schemes p with
-      | Some s when instance_of s.ty e.ty -> ()
+      | Some s when instance_of env s.ty e.ty -> ()
       | Some s ->
           fail env loc
             (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
@@ -170,7 +209,7 @@ let rec expr env sc (e : expr) =
       | None -> fail env loc (sprintf "there's no function `%s`" p.name))
   | Intrinsic x -> (
       match Prelude.find_fn x with
-      | Some b when instance_of b.scheme.ty e.ty -> ()
+      | Some b when instance_of env b.scheme.ty e.ty -> ()
       | Some _ -> fail env loc (sprintf "`%s` is used at the wrong type" x)
       | None -> fail env loc (sprintf "there's no built-in `%s`" x))
   | Prim (op, args) -> prim env sc e op args
@@ -213,7 +252,7 @@ let rec expr env sc (e : expr) =
       is "a sequence" b.ty
   | Call (f, args) -> (
       expr env sc f;
-      match f.ty with
+      match reveal env f.ty with
       | Fun (ps, ret, _, _) ->
           if List.length ps <> List.length args then
             fail env loc "a call has the wrong number of arguments";
@@ -243,7 +282,7 @@ let rec expr env sc (e : expr) =
           params
       in
       expr env inner body;
-      match e.ty with
+      match reveal env e.ty with
       | Fun (ps, ret, _, _) when List.length ps = List.length params ->
           List.iter2
             (fun (p : Ty.param) (q : param) ->
@@ -286,7 +325,7 @@ let rec expr env sc (e : expr) =
   | Update (r, f, v) -> (
       expr env sc r;
       expr env sc v;
-      match r.ty with
+      match reveal env r.ty with
       | Con (p, _) ->
           let td, targs = args_of env loc "an updated record" p r.ty in
           same env loc
@@ -297,7 +336,7 @@ let rec expr env sc (e : expr) =
       | t -> fail env loc (sprintf "an update of a `%s`" (show t)))
   | Array xs -> (
       List.iter (expr env sc) xs;
-      match e.ty with
+      match reveal env e.ty with
       | Con (p, [ elem ]) when p = Path.prelude "Array" ->
           List.iter (fun (x : expr) -> same env x.loc "an element" x.ty elem) xs
       | t -> fail env loc (sprintf "an array literal has type `%s`" (show t)))
@@ -308,7 +347,7 @@ and prim env sc (e : expr) op args =
   let is what t = same env loc what e.ty t in
   let int (a : expr) = same env a.loc "an operand" a.ty Ty.int in
   let elem (a : expr) =
-    match a.ty with
+    match reveal env a.ty with
     | Con (p, [ t ]) when p = Path.prelude "Array" -> t
     | t -> fail env loc (sprintf "an array operation on a `%s`" (show t))
   in

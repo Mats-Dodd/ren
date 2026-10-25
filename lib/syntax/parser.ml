@@ -15,6 +15,7 @@
      param    := ["inout"] IDENT [":" type]
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body
      type_body:= "{" field, ... "}"                       (a record)
+              |  "opaque" type                           (a type of its own)
               |  ["|"] ctor { "|" ctor }                  (a sum type; may be
                                                             indented, one per line)
      ctor     := UIDENT ["(" field, ... ")"]
@@ -270,10 +271,14 @@ let parse_ctors p =
   loop []
 
 let parse_type_body p =
-  if peek p = LBRACE then (
-    advance p;
-    Fields (sep_list p ~close:RBRACE parse_field_decl))
-  else Ctors (parse_ctors p)
+  match peek p with
+  | LBRACE ->
+      advance p;
+      Fields (sep_list p ~close:RBRACE parse_field_decl)
+  | OPAQUE ->
+      advance p;
+      Opaque (parse_ty p)
+  | _ -> Ctors (parse_ctors p)
 
 let parse_type p ~pub =
   expect p TYPE;

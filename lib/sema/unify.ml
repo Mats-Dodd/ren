@@ -53,6 +53,9 @@ let rec unify st a b =
   | TCon (n1, a1), TCon (n2, a2) when n1 = n2 && List.length a1 = List.length a2
     ->
       List.iter2 (unify st) a1 a2
+  (* in its own module, an opaque type is what it's represented as *)
+  | (TCon (p, _) as t), u when Hashtbl.mem st.reps p -> unify st (reveal st t) u
+  | t, (TCon (p, _) as u) when Hashtbl.mem st.reps p -> unify st t (reveal st u)
   | TFun (p1, r1, e1, u1), TFun (p2, r2, e2, u2)
     when List.length p1 = List.length p2 ->
       List.iter2

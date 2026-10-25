@@ -17,8 +17,8 @@
 
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
-   with the name of an imported module, and public declarations that
-   mention a private type. Imports nothing uses are reported once
+   with the name of an imported module, public declarations that
+   mention a private type, and opaque types represented as themselves. Imports nothing uses are reported once
    inference is done ([unused_imports]). Later passes never
    look a name up: inference reads a binder's id, mut.ml its kind.
 
@@ -462,7 +462,8 @@ let type_def env (td : Parsed.type_def) : Resolved.type_def =
   (match td.type_body with
   | Fields fs -> no_duplicate_fields fs
   | Ctors cs ->
-      List.iter (fun (c : Parsed.ctor) -> no_duplicate_fields c.ctor_fields) cs);
+      List.iter (fun (c : Parsed.ctor) -> no_duplicate_fields c.ctor_fields) cs
+  | Opaque _ -> ());
   let params = List.map (fun (p : ident) -> p.name) td.type_params in
   let field (f : Parsed.field) : Resolved.field =
     { field_name = f.field_name; field_ty = ty env ~params f.field_ty }
@@ -479,8 +480,50 @@ let type_def env (td : Parsed.type_def) : Resolved.type_def =
                  ctor_fields = List.map field c.ctor_fields;
                })
              cs)
+    | Opaque t -> Opaque (ty env ~params t)
   in
   { td with type_body }
+
+(* An opaque type is represented as another type, which can be another of
+   the module's opaque types, but following them must reach a type that
+   isn't one: otherwise `type A = opaque B` and `type B = opaque A` would
+   say nothing about what either is. *)
+let no_opaque_cycles env (items : Resolved.program) =
+  let reps = Hashtbl.create 8 in
+  List.iter
+    (function
+      | Type ({ type_body = Opaque t; _ } as td) ->
+          Hashtbl.replace reps td.type_name.name t
+      | Fn _ | Type _ | Import _ -> ())
+    items;
+  (* the opaque type of this module that [t] is, if it's one *)
+  let opaque (t : Resolved.ty) =
+    match t with
+    | TyName ({ tref = Named p; _ }, _) when p.home = env.home ->
+        Option.map (fun rep -> (p.name, rep)) (Hashtbl.find_opt reps p.name)
+    | _ -> None
+  in
+  List.iter
+    (function
+      | Type ({ type_body = Opaque t; _ } as td) ->
+          let start = td.type_name in
+          (* [seen]: the opaque types followed so far, the last one first *)
+          let rec follow seen t =
+            match opaque t with
+            | Some (n, _) when n = start.name ->
+                let chain = List.rev (n :: seen) in
+                report env start.loc
+                  ~help:"represent one of them as a type that isn't opaque"
+                  (sprintf "`%s` is represented as itself: %s" n
+                     (String.concat " → " chain))
+            | Some (n, _) when List.mem n seen ->
+                () (* a cycle `start` leads to, reported from its own types *)
+            | Some (n, rep) -> follow (n :: seen) rep
+            | None -> ()
+          in
+          follow [ start.name ] t
+      | Fn _ | Type _ | Import _ -> ())
+    items
 
 (* The dependencies after a function's `uses`: each one is a dependency
    the prelude declares, written once. *)
@@ -610,7 +653,10 @@ let no_leaks env ~private_ (items : Resolved.program) =
           match td.type_body with
           | Fields fs -> List.iter field fs
           | Ctors cs -> List.iter (fun c -> List.iter (ctor c) c.ctor_fields) cs
-          )
+          | Opaque _ ->
+              (* its representation isn't in the interface, so it can be a
+                 private type *)
+              ())
       | Fn _ | Type _ | Import _ -> ())
     items
 
@@ -800,6 +846,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
       | Fn _ | Type _ | Import _ -> ())
     items;
   no_leaks env ~private_ items;
+  no_opaque_cycles env items;
   let types =
     List.filter_map
       (function

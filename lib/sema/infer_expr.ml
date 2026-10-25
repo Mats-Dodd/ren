@@ -136,6 +136,25 @@ let unifies env why loc ~found ~expected =
       in
       let help = Option.map (fun h -> h f x) why.help in
       let more, help = mismatch_notes ?help ~found ~expected () in
+      (* another module's opaque type can't stand in for what it's
+         represented as, or the other way round *)
+      let more, help =
+        match
+          List.find_map
+            (fun t ->
+              match repr t with
+              | TCon (p, _) -> (
+                  match Hashtbl.find_opt env.types p with
+                  | Some { body = Opaque None; _ } -> Some p
+                  | _ -> None)
+              | _ -> None)
+            [ found; expected ]
+        with
+        | Some p ->
+            let note, h = representation_private p in
+            (more @ [ note ], Some (Option.value help ~default:h))
+        | None -> (more, help)
+      in
       ignore
         (fail env ?help ~notes:(why.notes @ more) ~labels:(why.labels f x) loc
            msg);
@@ -258,14 +277,16 @@ let through_type env ~known ~fits =
             (List.map (fun ((td : Iface.type_decl), _) -> td.path) several))
 
 (* The declaration of [t]'s type, if [t] is already known to be a named
-   type. *)
+   type. In its own module, an opaque type's is its representation's. *)
 let known_decl env t =
-  match repr t with TCon (p, _) -> Hashtbl.find_opt env.types p | _ -> None
+  match reveal env.st t with
+  | TCon (p, _) -> Hashtbl.find_opt env.types p
+  | _ -> None
 
 let ctor_in (c : ident) (td : Iface.type_decl) =
   match td.body with
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
-  | Record _ | Builtin -> None
+  | Record _ | Builtin | Opaque _ -> None
 
 (* The constructor [c], where a value of type [expected] is wanted. One
    written after its type, `Light.Red`, is looked for there and nowhere
@@ -286,6 +307,10 @@ let find_ctor env (c : ctor_ref) ~expected =
   | None -> (
       let c = c.name in
       match known_decl env expected with
+      | Some ({ body = Opaque None; _ } as td) ->
+          (* another module's opaque type has no constructors here *)
+          report env (opaque_private c.loc td);
+          None
       | Some ({ body = Sum _; _ } as td) when ctor_in c td = None ->
           (* a sum type is expected, so no other type's constructor would
              do *)
@@ -338,7 +363,7 @@ let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
         true named ctor.cfields
 
 let record_fields (td : Iface.type_decl) =
-  match td.body with Record fs -> Some fs | Sum _ | Builtin -> None
+  match td.body with Record fs -> Some fs | Sum _ | Builtin | Opaque _ -> None
 
 let sorted names = List.sort String.compare names
 
@@ -413,7 +438,7 @@ and check env cx ?(why = plain) (e : expr) expected =
     ignore (unifies env why (result_loc e) ~found:t ~expected)
   in
   let fits () = Hashtbl.replace cx.nodes e.node expected in
-  match (e.kind, repr expected) with
+  match (e.kind, reveal env.st expected) with
   | _, TVar _ -> leaf ()
   | Block (stmts, last), _ ->
       fits ();
@@ -637,7 +662,7 @@ and infer_call env cx (e : expr) (f : expr) args =
   let name =
     match f.kind with Var x -> sprintf "`%s`" (name_of x) | _ -> "this"
   in
-  match repr tf with
+  match reveal env.st tf with
   | TFun (ps, ret, errs, uses) ->
       let n = List.length ps and given = List.length args in
       if n <> given then (
@@ -832,7 +857,7 @@ and infer_field env cx (e : expr) r (f : ident) =
     report env (needs_record f (show (printer env) t));
     TError
   in
-  match repr tr with
+  match reveal env.st tr with
   | TError -> TError
   | TCon (p, args) as t -> (
       let td = Hashtbl.find env.types p in
@@ -840,6 +865,9 @@ and infer_field env cx (e : expr) r (f : ident) =
       | _, Some fd -> found td fd args
       | Some decl, None ->
           report env (no_such_field ~names:env.names f p decl);
+          TError
+      | None, None when td.body = Opaque None ->
+          report env (opaque_private f.loc td);
           TError
       | None, None -> needs_record t)
   | TVar _ -> (

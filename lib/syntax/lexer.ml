@@ -44,6 +44,7 @@ let keywords =
     ("import", IMPORT);
     ("as", AS);
     ("uses", USES);
+    ("opaque", OPAQUE);
   ]
 
 let is_digit c = c >= '0' && c <= '9'

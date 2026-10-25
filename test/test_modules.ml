@@ -983,3 +983,185 @@ fn main() = load(1)
     load: fn(Int) -> test.Row uses Io
     the same
     |}]
+
+(* ---- opaque types ---- *)
+
+let users =
+  ( "users.ren",
+    {|
+pub type UserId = opaque Int
+pub fn make(n: Int) -> UserId = n
+pub fn next(id: UserId) -> UserId = id + 1
+pub fn raw(id: UserId) -> Int = id
+type Secret = { code: Int }
+pub type Token = opaque Secret
+pub fn token(n: Int) -> Token = { code: n }
+pub fn code(t: Token) -> Int = t.code
+type Mode = On | Off
+pub type Switch = opaque Mode
+pub fn on() -> Switch = On
+pub fn is_on(s: Switch) -> Bool =
+  match s
+    On => true
+    Off => false
+|}
+  )
+
+let%expect_test "inside its module, an opaque type is its representation" =
+  (* at run time a `UserId` is just the `Int` *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import users
+fn main() =
+  let id = users.next(users.make(41))
+  print(users.raw(id))
+  print(users.code(users.token(7)))
+  users.is_on(users.on())
+|}
+      );
+      users;
+    ];
+  [%expect {|
+    42
+    7
+    true
+    |}]
+
+let%expect_test "an opaque type's interface hides its representation" =
+  let src = clean (snd users) ^ "fn main() = 1\n" in
+  let i = Ren.Driver.interface ~file:"users.ren" src in
+  List.iter
+    (fun (td : Ren.Iface.type_decl) ->
+      Printf.printf "%s: %s\n" td.path.name
+        (match td.body with
+        | Opaque None -> "opaque"
+        | Opaque (Some _) -> "opaque, with its representation"
+        | Record _ -> "a record"
+        | Sum _ -> "a sum type"
+        | Builtin -> "built in"))
+    i.types;
+  [%expect {|
+    UserId: opaque
+    Token: opaque
+    Switch: opaque
+    |}]
+
+let%expect_test "outside its module, an opaque type can't be looked inside" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import users
+fn main() =
+  let n: Int = users.make(1)
+  let m = users.make(1) + 1
+  let x: users.UserId = 5
+  let c = users.token(1).code
+  let t = users.Token { code: 1 }
+  let s = users.Switch.On
+  match users.on()
+    On => 1
+    _ => 0
+|}
+      );
+      users;
+    ];
+  [%expect
+    {|
+    error: expected `Int`, found `users.UserId`
+      ┌─ main.ren:3:16
+    3 │   let n: Int = users.make(1)
+      │                ^^^^^^^^^^^^^
+      = `UserId`'s representation is private to `users`
+      help: use a function from `users` to make or read one
+
+    error: expected `Int`, found `users.UserId`
+      ┌─ main.ren:4:11
+    4 │   let m = users.make(1) + 1
+      │           ^^^^^^^^^^^^^
+      = `+` works on `Int`s
+      = `UserId`'s representation is private to `users`
+      help: use a function from `users` to make or read one
+
+    error: expected `users.UserId`, found `Int`
+      ┌─ main.ren:5:25
+    5 │   let x: users.UserId = 5
+      │                         ^
+      = `UserId`'s representation is private to `users`
+      help: use a function from `users` to make or read one
+
+    error: `Token`'s representation is private to `users`
+      ┌─ main.ren:6:26
+    6 │   let c = users.token(1).code
+      │                          ^^^^
+      help: use a function from `users` to make or read one
+
+    error: `Token`'s representation is private to `users`
+      ┌─ main.ren:7:11
+    7 │   let t = users.Token { code: 1 }
+      │           ^^^^^^^^^^^
+      help: use a function from `users` to make or read one
+
+    error: `Switch`'s representation is private to `users`
+      ┌─ main.ren:8:11
+    8 │   let s = users.Switch.On
+      │           ^^^^^^^^^^^^^^^
+      help: use a function from `users` to make or read one
+
+    error: `Switch`'s representation is private to `users`
+       ┌─ main.ren:10:5
+    10 │     On => 1
+       │     ^^
+       help: use a function from `users` to make or read one
+    |}]
+
+let%expect_test "an opaque type isn't a record or a sum type, even inside" =
+  run
+    {|
+type Secret = { code: Int }
+type Token = opaque Secret
+type Mode = On | Off
+type Switch = opaque Mode
+fn main() =
+  let t = Token { code: 1 }
+  Switch.On
+|};
+  [%expect
+    {|
+    error: `Token` is opaque, so it has no fields of its own
+      ┌─ test.ren:6:11
+    6 │   let t = Token { code: 1 }
+      │           ^^^^^
+      help: here a `Token` is a `Secret`, so write one of those instead
+
+    error: `Switch` is opaque, so it has no constructors of its own
+      ┌─ test.ren:7:3
+    7 │   Switch.On
+      │   ^^^^^^^^^
+      help: here a `Switch` is a `Mode`, so write one of those instead
+    |}]
+
+let%expect_test "an opaque type can't be represented as itself" =
+  run
+    {|
+type A = opaque B
+type B = opaque A
+type C = opaque Option<C>
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `A` is represented as itself: A → B → A
+      ┌─ test.ren:1:6
+    1 │ type A = opaque B
+      │      ^
+      help: represent one of them as a type that isn't opaque
+
+    error: `B` is represented as itself: B → A → B
+      ┌─ test.ren:2:6
+    2 │ type B = opaque A
+      │      ^
+      help: represent one of them as a type that isn't opaque
+    |}]

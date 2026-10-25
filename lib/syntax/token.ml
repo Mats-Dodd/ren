@@ -22,6 +22,7 @@ type t =
   | IMPORT
   | AS
   | USES
+  | OPAQUE
   (* punctuation *)
   | LPAREN
   | RPAREN
@@ -80,6 +81,7 @@ let to_string = function
   | IMPORT -> "import"
   | AS -> "as"
   | USES -> "uses"
+  | OPAQUE -> "opaque"
   | LPAREN -> "("
   | RPAREN -> ")"
   | LBRACE -> "{"

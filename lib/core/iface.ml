@@ -21,6 +21,11 @@ type body =
   | Builtin  (** built into the compiler, like [Int] *)
   | Record of field list
   | Sum of ctor list
+  | Opaque of Ty.ty option
+      (** an opaque type, [type UserId = opaque Int]: what it's represented as
+          ([Int]), which only its own module sees. That module's view of it has
+          [Some] representation; its interface has [None], so no other module
+          can make one, look inside one or use one as an [Int]. *)
 
 type type_decl = {
   path : Path.t;
@@ -83,6 +88,7 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
                  cloc = c.ctor_name.loc;
                })
              cs)
+    | Opaque t -> Opaque (Some (of_written t))
   in
   {
     path = Path.make home td.type_name.name;
@@ -140,14 +146,18 @@ let signature (f : Ast.Resolved.fn_def) : Ty.scheme =
    bodies (module-build.md, "Interface summaries"): every public type it
    declares, and the signature of every public function. A public one
    never mentions a private one (resolve.ml checks), so a dependent never
-   meets a type that isn't in some interface. *)
+   meets a type that isn't in some interface. An opaque type is listed
+   without its representation. *)
 let of_module ~home (prog : Ast.Resolved.program) =
+  let public (td : type_decl) =
+    match td.body with Opaque _ -> { td with body = Opaque None } | _ -> td
+  in
   {
     home;
     types =
       List.filter_map
         (function
-          | Ast.Type td when td.type_pub -> Some (of_type_def ~home td)
+          | Ast.Type td when td.type_pub -> Some (public (of_type_def ~home td))
           | Type _ | Fn _ | Import _ -> None)
         prog;
     values =

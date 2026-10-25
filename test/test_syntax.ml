@@ -269,3 +269,14 @@ fn h() = 2
     (fn g (x) (uses Io) x)
     (fn h () 2)
     |}]
+
+let%expect_test "an opaque type" =
+  ast {|
+pub type UserId = opaque Int
+type Ids<T> = opaque Array<T>
+|};
+  [%expect
+    {|
+    (pub type UserId (opaque Int))
+    (type Ids<T> (opaque Array<T>))
+    |}]

@@ -65,6 +65,10 @@ type state = {
   skolem_vars : (int, ty) Hashtbl.t;
       (** the generic variable each type parameter became when its function was
           generalized, by the parameter's id *)
+  reps : (Path.t, Ty.ty) Hashtbl.t;
+      (** what each opaque type of the module being checked is represented as:
+          in its own module, an opaque type is its representation (see [reveal])
+      *)
 }
 
 let new_state () =
@@ -73,6 +77,7 @@ let new_state () =
     last_id = 0;
     hints = Hashtbl.create 16;
     skolem_vars = Hashtbl.create 16;
+    reps = Hashtbl.create 4;
   }
 
 let enter_level st = st.level <- st.level + 1
@@ -317,6 +322,20 @@ let rec of_ty ~vars ~tails (t : Ty.ty) =
 and of_row ~tails (r : Ty.row) =
   let tail = match r.tail with Some n -> tails n | None -> REmpty in
   List.fold_right (fun l rest -> RExtend (l, rest)) r.labels tail
+
+(* [t], or if it's one of the module's own opaque types, what that's
+   represented as, and so on until it's some other type (resolve.ml makes
+   sure that ends). In its own module `type UserId = opaque Int` makes a
+   `UserId` an `Int`, so wherever inference needs to know what kind of type
+   something is (a record, a function, ...), it looks through [reveal]. *)
+let rec reveal st t =
+  match repr t with
+  | TCon (p, args) as t -> (
+      match Hashtbl.find_opt st.reps p with
+      | Some rep ->
+          reveal st (of_ty ~vars:(List.nth args) ~tails:(fun _ -> REmpty) rep)
+      | None -> t)
+  | t -> t
 
 (* An interface's type scheme as a scheme of this compilation: generic
    variables of its own, which [instantiate] copies at each use. *)
