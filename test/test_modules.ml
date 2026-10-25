@@ -247,6 +247,37 @@ fn helper() = 1
       help: if it's defined there, mark it `pub`
     |}]
 
+let%expect_test "a missing use is blamed on the call that has it" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import lib
+pub fn go() =
+  let a = lib.quiet(1)
+  lib.say(a)
+fn main() = go()
+|}
+      );
+      ( "lib.ren",
+        {|
+pub fn quiet(n: Int) -> Int = n
+pub fn say(n: Int) uses Io = print(n)
+|}
+      );
+    ];
+  [%expect
+    {|
+    error: `go` doesn't declare `Io`
+      ┌─ main.ren:2:8
+    2 │ pub fn go() =
+      │        ^^
+    4 │   lib.say(a)
+      │   ---------- this call uses `Io`
+      = a public function without `uses` uses nothing, and its body is checked against that
+      help: add `uses Io`
+    |}]
+
 let%expect_test "another module's function is written with its alias" =
   run_files
     [

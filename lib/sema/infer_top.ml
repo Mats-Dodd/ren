@@ -180,20 +180,27 @@ let declared_uses (f : fn_def) =
   | None -> None
 
 (* Report each dependency [f]'s body uses that it doesn't declare, at the
-   first call that brings it in. [cx] is what checking [f]'s body found. *)
+   first call that brings it in. [cx] is what checking [f]'s body found.
+   That's the first call whose callee had the dependency itself, before
+   joining the caller's row; once joined, every open row has everything
+   the caller uses. Only if there's none, which happens when the callee is
+   in [f]'s group and its uses were found at the join, is it the first
+   call whose row has it now. *)
 let check_uses env (f : fn_def) cx declared =
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let calls =
-    List.sort (fun (a, _) (b, _) -> compare (pos a) (pos b)) !(cx.calls)
+    List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(cx.calls)
+  in
+  let first has =
+    List.find_map (fun c -> if has c then Some c.cloc else None) calls
   in
   List.iter
     (fun dep ->
       if not (List.mem dep declared) then
         let call =
-          List.find_map
-            (fun (loc, uses) ->
-              if List.mem dep (fst (row_parts uses)) then Some loc else None)
-            calls
+          match first (fun c -> List.mem dep c.own) with
+          | Some loc -> Some loc
+          | None -> first (fun c -> List.mem dep (fst (row_parts c.row)))
         in
         report env (undeclared_use f dep call))
     (List.sort_uniq String.compare (fst (row_parts cx.uses)))

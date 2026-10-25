@@ -1455,6 +1455,32 @@ fn main() = load(1)
       help: add `uses Io`
     |}]
 
+let%expect_test "a pure call before the one that uses something" =
+  (* `pure` and `len` are called first, but they don't use `Io`: once
+     their open rows are joined to `go`'s, those rows have what `go` uses,
+     which mustn't make them the call to blame *)
+  types
+    {|
+fn pure(n) = n + 1
+pub fn go(n: Int) -> Int =
+  let a = pure(n)
+  let b = len([n])
+  print(a + b)
+  a
+fn main() = go(1)
+|};
+  [%expect
+    {|
+    error: `go` doesn't declare `Io`
+      ┌─ test.ren:2:8
+    2 │ pub fn go(n: Int) -> Int =
+      │        ^^
+    5 │   print(a + b)
+      │   ------------ this call uses `Io`
+      = a public function without `uses` uses nothing, and its body is checked against that
+      help: add `uses Io`
+    |}]
+
 let%expect_test "a private function's uses are checked if it writes them" =
   types
     {|

@@ -66,6 +66,12 @@ type env = {
 and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
 
 (* What the expression being inferred can see. *)
+(* A call that adds to a function's dependencies. [own] are the labels the
+   callee's row had just before the call joined it to the caller's: what
+   the callee brings in itself. After the join the two rows are one, so
+   [row] then also has everything the caller uses. *)
+type call = { cloc : Loc.t; own : string list; row : row }
+
 type ctx = {
   self : Path.t;  (** the top-level function being checked *)
   locals : (int, ty) Hashtbl.t;
@@ -75,10 +81,10 @@ type ctx = {
   found : (int, found) Hashtbl.t;  (** what each lookup found, by node id *)
   errs : row;  (** the errors of the innermost function or lambda *)
   uses : row;  (** the dependencies of the innermost function or lambda *)
-  calls : (Loc.t * row) list ref;
-      (** each call that adds to [uses], with the callee's dependencies, most
-          recent first. A [ref] is a mutable cell, here shared by every copy of
-          the [ctx] for the same function or lambda. *)
+  calls : call list ref;
+      (** each call that adds to [uses], most recent first. A [ref] is a mutable
+          cell, here shared by every copy of the [ctx] for the same function or
+          lambda. *)
   tparams : ty list;  (** what the type parameters in scope stand for *)
 }
 
@@ -404,7 +410,8 @@ let absorb env cx loc errs uses =
     | RExtend (l, rest) -> RExtend (l, reopen rest)
     | r -> r
   in
-  cx.calls := (loc, uses) :: !(cx.calls);
+  cx.calls :=
+    { cloc = loc; own = fst (row_parts uses); row = uses } :: !(cx.calls);
   try
     Unify.unify_row env.st (reopen errs) cx.errs;
     Unify.unify_row env.st (reopen uses) cx.uses
