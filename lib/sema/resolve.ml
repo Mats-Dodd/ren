@@ -488,7 +488,20 @@ let rec pattern env sc (p : Parsed.pattern) : Resolved.pattern * scope =
   in
   ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
 
+(* `Stack.of`, which the parser reads as the field `of` of a constructor
+   `Stack`, is an item of the type's `ops` block when `Stack` names a type.
+   Otherwise it is what it was read as: `Admin.rank`, a method of the
+   constructor `Admin`. *)
+let as_item env sc (e : Parsed.expr) : Parsed.expr =
+  match e.kind with
+  | Field ({ kind = Con ({ qual = None; name }, []); _ }, f)
+    when index_of name.name 0 sc.tparams <> None
+         || Hashtbl.mem env.types name.name ->
+      { e with kind = Var (Item ({ tmod = None; tid = name }, f)) }
+  | _ -> e
+
 let rec expr env sc (e : Parsed.expr) : Resolved.expr =
+  let e = as_item env sc e in
   let go = expr env sc in
   let kind : Resolved.expr_kind =
     match e.kind with
@@ -507,6 +520,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         If (c, t, Option.map go f)
     | Call (f, args) ->
         let f =
+          let f = as_item env sc f in
           match f.kind with
           | Var (Bare x) ->
               {

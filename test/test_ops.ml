@@ -1219,11 +1219,14 @@ fn main() = 1
       = values and functions that need each other are checked at a single type
     |}]
 
-let%expect_test "an item written after its type parses as one name" =
+let%expect_test
+    "an item written after its module and type parses as one name; after a \
+     bare type, as a constructor's field" =
   ast {|
 fn main() = stack.Stack.of(Stack.empty).size()
 |};
-  [%expect {| (fn main () (call (. (call stack.Stack.of Stack.empty) size))) |}]
+  [%expect
+    {| (fn main () (call (. (call stack.Stack.of (. (con Stack) empty)) size))) |}]
 
 let%expect_test "a call that changes its receiver is a value like any call" =
   run
@@ -1301,4 +1304,26 @@ fn main() =
       │            ^^^^^^^
       = `&` before a call marks a method's receiver as changed, like `&s.push(1)`, and an argument the call changes is marked inside it, like `f(&x)`
       help: remove the `&`
+    |}]
+
+let%expect_test "a method called on a constructor with no fields" =
+  run
+    {|
+type Role =
+  | Admin
+  | Guest(n: Int)
+  ops =
+    fn rank(self) -> Int =
+      match self
+        Admin => 10
+        Guest(n) => n
+
+fn main() =
+  print(Admin.rank())
+  print(Guest(4).rank())
+|};
+  [%expect {|
+    10
+    4
+    ()
     |}]

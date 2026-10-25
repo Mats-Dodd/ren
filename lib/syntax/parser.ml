@@ -518,12 +518,21 @@ and parse_primary p =
           advance p;
           let fields = sep_list p ~close:RBRACE parse_field_init in
           mk (Record (Some t, fields)) start p
-      | DOT when match peek2 p with IDENT n -> not (is_upper n) | _ -> false ->
-          (* `Stack.of` and `stack.Stack.empty`: an item of the type's ops
-             block *)
+      | DOT when match peek2 p with IDENT n -> not (is_upper n) | _ -> false
+        -> (
+          (* `stack.Stack.empty`: an item of the type's ops block. Without
+             the module, `Stack.of` could be one too, or `Admin.rank` a
+             method of the constructor `Admin`: it's read as the second, and
+             Resolve, which knows which names are types, decides. *)
           advance p;
           let f = ident p in
-          mk (Var (Item (t, f))) start p
+          match t.tmod with
+          | Some _ -> mk (Var (Item (t, f))) start p
+          | None ->
+              let c =
+                node p (Con ({ qual = None; name = t.tid }, [])) t.tid.loc
+              in
+              mk (Field (c, f)) start p)
       | DOT when match peek2 p with IDENT n -> is_upper n | _ -> false -> (
           advance p;
           let c =
