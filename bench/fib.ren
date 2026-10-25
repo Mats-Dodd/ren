@@ -1,0 +1,6 @@
+// fib(27): many short calls, none of them in tail position.
+
+fn fib(n: Int) -> Int =
+  if n < 2 then n else fib(n - 1) + fib(n - 2)
+
+fn main() -> Int = fib(27)

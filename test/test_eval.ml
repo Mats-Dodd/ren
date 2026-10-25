@@ -589,3 +589,69 @@ fn main() =
       = `Path`'s representation is private to `prelude`
       help: use a function from `prelude` to make or read one
     |}]
+
+(* ---- calls, deep and long ---- *)
+
+let%expect_test "a loop written as recursion runs in constant stack" =
+  run {|
+fn count(n: Int, acc: Int) -> Int =
+  if n == 0 then acc else count(n - 1, acc + n)
+fn main() -> Int = count(1000000, 0)
+|};
+  [%expect {| 500000500000 |}]
+
+let%expect_test "recursion with no end panics, and soon" =
+  run_error {|
+fn down(n: Int) -> Int = 1 + down(n + 1)
+fn main() -> Int = down(0)
+|};
+  [%expect {|
+    error: panic: the stack overflowed: a function called itself too deeply
+      ┌─ test.ren:2:4
+    2 │ fn main() -> Int = down(0)
+      │    ^^^^
+    |}]
+
+let%expect_test "a call that ends a function still writes back what it changed" =
+  run {|
+fn len_of(xs: Array<Int>) -> Int = xs.len()
+fn add_two(inout xs: Array<Int>) -> Int =
+  &xs.push(1)
+  &xs.push(2)
+  len_of(xs)
+fn main() =
+  var xs = [0]
+  print(add_two(&xs))
+  print(xs)
+|};
+  [%expect {|
+    3
+    [0, 1, 2]
+    ()
+    |}]
+
+let%expect_test "a panic in a built-in called last is where it's called" =
+  run_error {|
+fn cut(s: Str) -> Str = s.slice(3, 1)
+fn main() = print(cut("abc"))
+|};
+  [%expect {|
+    error: panic: slice 3 to 1 ends before it starts
+      ┌─ test.ren:1:25
+    1 │ fn cut(s: Str) -> Str = s.slice(3, 1)
+      │                         ^^^^^^^^^^^^^
+    |}]
+
+(* Overflow panics in stage 9 (operators.md, "`Int` and `Float`"); until
+   then an `Int` is OCaml's, 63 bits, and wraps. *)
+let%expect_test "an Int wraps at 63 bits, for now" =
+  run {|
+fn main() =
+  print(4611686018427387903 + 1)
+  print(0 - 4611686018427387903 - 2)
+|};
+  [%expect {|
+    -4611686018427387904
+    4611686018427387903
+    ()
+    |}]

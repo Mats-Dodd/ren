@@ -1,0 +1,22 @@
+// The VM example's workload, bigger: examples/vm's machine, which the
+// bench script copies in beside this file, running factorial and
+// Fibonacci over and over.
+
+import machine.{Vm}
+import program.{Program}
+import programs
+
+// how many numbers [n] runs of both programs emit between them
+fn runs(n: Int, fact: Program, fib: Program, total: Int) -> Int =
+  if n == 0 then total
+  else
+    var a = Vm.fresh
+    try &a.run(fact, 100000)
+    var b = Vm.fresh
+    try &b.run(fib, 100000)
+    try runs(n - 1, fact, fib, total + a.out.len() + b.out.len())
+
+fn main() -> Int =
+  let fact = try Program.check(programs.factorial(20))
+  let fib = try Program.check(programs.fibonacci(40))
+  try runs(200, fact, fib, 0)

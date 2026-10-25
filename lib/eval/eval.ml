@@ -73,14 +73,43 @@ let rec equal loc a b =
    installed is evidence (core.ml), held in a variable like any value.
    [tys] is what the type variables of the function running stand for, by
    number, as far as its caller knew, and [showing] the types whose own
-   `show` method it's inside. *)
+   `show` method it's inside. [depth] is how many calls deep the program
+   is, not counting tail calls: one cell, shared by every copy of the
+   [ctx] made with [{ cx with ... }]. *)
 type ctx = {
   fns : (Path.t, fn_def) Hashtbl.t;
   values : (Path.t, Value.t) Hashtbl.t;
   types : Shown.types;
   tys : Ty.ty Env.t;
   showing : Path.t list;
+  depth : int ref;
 }
+
+(* How many calls deep a program can go before it's stopped with a panic.
+   OCaml's own stack would run out somewhere past this, but only after
+   growing so large that every garbage collection on the way there scans
+   all of it, which took minutes; a limit of our own is reached in a
+   fraction of a second. *)
+let max_depth = 100_000
+
+(* The program went [max_depth] calls deep: [run] and [run_test] report it
+   as a panic at the function they started. *)
+exception Too_deep
+
+(* What evaluating a function's body in tail position gives: its value,
+   or the call it ends in, still to be made. That call is made by the loop
+   in [finish], after the body that made it has returned, so a function
+   that calls itself last, as a loop written as recursion does, runs in
+   constant stack however many times it goes round. *)
+type step =
+  | Done of Value.t
+  | Tail of {
+      loc : Loc.t;  (** where the call is *)
+      fty : Ty.ty;  (** the callee's type at the call, resolved *)
+      f : Value.t;
+      args : Value.t list;
+      ev : Value.t;  (** the evidence it's passed *)
+    }
 
 (* [t], with each type variable [tys] knows replaced by what it stands for.
    One it doesn't know stays a variable: a value of that type is shown by
@@ -417,6 +446,65 @@ let rec eval cx env (e : expr) =
           ignore (eval cx env after);
           raise (Failed err))
 
+(* [e], the body of a function or a part of one in tail position: a
+   [Call] there with no `inout` argument, which would have to be written
+   back once it returns, is returned for [finish] to make, and anything
+   else is evaluated. Each part is evaluated in the order [eval] evaluates
+   it. *)
+and tail cx env (e : expr) =
+  match e.kind with
+  | If (c, t, f) ->
+      if truth (eval cx env c) then tail cx env t else tail cx env f
+  | Let (v, value, body) ->
+      let x = eval cx env value in
+      tail cx (Env.add v.id (ref x) env) body
+  | Seq (a, b) ->
+      ignore (eval cx env a);
+      tail cx env b
+  | Match (subject, arms) ->
+      let v = eval cx env subject in
+      let guard_passes env = function
+        | None -> true
+        | Some g -> truth (eval cx env g)
+      in
+      let rec first = function
+        | [] -> panic e.loc "no arm of this `match` matched"
+        | a :: rest -> (
+            match match_pattern a.pat v env with
+            | Some env when guard_passes env a.guard -> tail cx env a.body
+            | _ -> first rest)
+      in
+      first arms
+  | Call (f, args, ev)
+    when List.for_all (function Value _ -> true | Ref _ -> false) args ->
+      let fty = resolve cx.tys f.ty in
+      let f = eval cx env f in
+      let args =
+        eval_all cx env
+          (List.filter_map (function Value a -> Some a | Ref _ -> None) args)
+      in
+      let ev = evidence_in env ev ("a call of " ^ describe f) in
+      Tail { loc = e.loc; fty; f; args; ev = VEvidence ev }
+  | _ -> Done (eval cx env e)
+
+(* Make the call [step] ends in, then the one that ends in, and so on,
+   until one gives a value. A panic is said to be where the call that
+   reached it is, as [call_at] says: [at] is the last of these calls made
+   from the program's own code rather than the prelude's, which a panic
+   inside the prelude is said to be at. *)
+and finish cx at step =
+  match step with
+  | Done v -> v
+  | Tail t ->
+      let at = if t.loc.file <> Prelude.file then Some t.loc else at in
+      let next =
+        try enter cx ~fty:t.fty t.f t.args t.ev with
+        | Prelude.Panic msg -> panic (Option.value at ~default:t.loc) msg
+        | Panic (l, msg) when l.file = Prelude.file && at <> None ->
+            panic (Option.get at) msg
+      in
+      finish cx at next
+
 (* What a call returned, or else fail with its error. *)
 and ok = function Ok v -> v | Error err -> raise (Failed err)
 
@@ -450,20 +538,68 @@ and call_at cx loc ~fty f args ev =
    every parameter, so the caller can write back the ones passed `inout`.
    A call that doesn't know [f]'s type passes [Ty.Error]. *)
 and apply cx ~fty f args ev =
+  match f with
+  | VBuiltin _ -> builtin cx ~fty f args
+  | _ ->
+      (* the function's parameters are cells, whose final values are
+         returned, to be written back to the arguments passed `inout`. The
+         calls it ends in are made by [finish], here, once its body has
+         returned; none passes anything `inout`, so these cells are still
+         the ones to return *)
+      let cells = List.map ref args in
+      if !(cx.depth) >= max_depth then raise Too_deep;
+      incr cx.depth;
+      let result =
+        match finish cx None (start cx ~fty f cells ev) with
+        | v -> Ok v
+        | exception Failed err -> Error err
+        | exception e ->
+            decr cx.depth;
+            raise e
+      in
+      decr cx.depth;
+      (result, List.map ( ! ) cells)
+
+(* Begin a call of [f], a function of the program, whose parameters are
+   [cells]: evaluate its body as far as the call it ends in, if it ends in
+   one. *)
+and start cx ~fty f cells ev =
   let run cx params ev_id body env =
     (match ev with
     | VEvidence _ -> ()
     | _ -> bug ("a call of " ^ describe f ^ " passing something not evidence"));
-    if List.length params <> List.length args then
+    if List.length params <> List.length cells then
       bug ("a call of " ^ describe f ^ " with the wrong number of arguments");
-    let cells = List.map ref args in
     let env =
       List.fold_left2 (fun env id c -> Env.add id c env) env params cells
     in
     let env = Env.add ev_id (ref ev) env in
-    let result = try Ok (eval cx env body) with Failed err -> Error err in
-    (result, List.map ( ! ) cells)
+    tail cx env body
   in
+  match f with
+  | VFn p ->
+      let f =
+        match Hashtbl.find_opt cx.fns p with
+        | Some f -> f
+        | None -> bug ("a call of `" ^ p.name ^ "`, which doesn't exist")
+      in
+      let tys = bind Env.empty f.scheme.ty fty in
+      run { cx with tys }
+        (List.map (fun (p : param) -> p.var.id) f.params)
+        f.ev.id f.body Env.empty
+  | VClosure { params; ev; body; env; tys } ->
+      run { cx with tys } params ev body env
+  | _ -> bug "a call to something that isn't a function"
+
+(* A call in tail position, which [finish] makes: a built-in's value, or
+   its error, or the callee's body as far as the call it ends in. *)
+and enter cx ~fty f args ev =
+  match f with
+  | VBuiltin _ -> Done (ok (fst (builtin cx ~fty f args)))
+  | _ -> start cx ~fty f (List.map ref args) ev
+
+(* A call of a built-in function, which [apply] returns. *)
+and builtin cx ~fty f args =
   match f with
   | VBuiltin "show" -> (
       (* the one built-in that needs its argument's type *)
@@ -481,19 +617,7 @@ and apply cx ~fty f args ev =
           | v, finals -> (Ok v, finals)
           | exception Prelude.Fail err -> (Error err, args))
       | None -> bug ("the unknown built-in `" ^ name ^ "`"))
-  | VFn p ->
-      let f =
-        match Hashtbl.find_opt cx.fns p with
-        | Some f -> f
-        | None -> bug ("a call of `" ^ p.name ^ "`, which doesn't exist")
-      in
-      let tys = bind Env.empty f.scheme.ty fty in
-      run { cx with tys }
-        (List.map (fun (p : param) -> p.var.id) f.params)
-        f.ev.id f.body Env.empty
-  | VClosure { params; ev; body; env; tys } ->
-      run { cx with tys } params ev body env
-  | _ -> bug "a call to something that isn't a function"
+  | _ -> bug "a call of a built-in that isn't one"
 
 (* [v], of type [t] in the function running, as `show` and a failed
    `assert` show it (shown.ml). *)
@@ -552,6 +676,7 @@ let load (modules : program list) =
         Shown.types (List.concat_map (fun (m : program) -> m.types) modules);
       tys = Env.empty;
       showing = [];
+      depth = ref 0;
     }
   in
   List.iter
@@ -576,8 +701,8 @@ let load (modules : program list) =
 let run (modules : program list) =
   let entry = List.nth modules (List.length modules - 1) in
   let start = Path.make entry.home Lower.start_name in
-  (* OCaml's own stack runs out when a Ren function calls itself too
-     deeply; that's the program's fault, so it's a panic *)
+  (* a program that calls too deeply, past [max_depth] or past OCaml's
+     own stack, has a bug, so it's a panic *)
   let overflow () =
     match List.find_opt (fun (f : fn_def) -> f.path = start) entry.fns with
     | Some f ->
@@ -590,7 +715,7 @@ let run (modules : program list) =
     match fst (apply cx ~fty:Ty.Error (VFn start) [] (VEvidence [])) with
     | Ok v -> v
     | Error err -> raise (Uncaught (error_of cx start err))
-  with Stack_overflow -> overflow ()
+  with Stack_overflow | Too_deep -> overflow ()
 
 (* ---- tests ---- *)
 
@@ -653,7 +778,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
       | Error err -> Failed (error_of cx fn err)
     with
     | (Panic _ | Assert_failed _) as e -> Panicked e
-    | Stack_overflow ->
+    | Stack_overflow | Too_deep ->
         let loc =
           match Hashtbl.find_opt cx.fns fn with
           | Some f -> f.loc
