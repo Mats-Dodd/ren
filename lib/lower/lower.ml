@@ -511,9 +511,16 @@ and arm_impl cx cells (a : handler_arm) =
       { lam with kind = Lambda { params; ev; captures; body } }
   | _ -> bug "a handler's arm that isn't a lambda"
 
-(* The locals [e] assigns to. *)
+(* The locals [e] changes: those it assigns to, and those it passes to a
+   call with `&`, which the call writes back to. *)
 and assigned (e : C.expr) =
-  let own = match e.kind with Assign (v, _) -> [ v.id ] | _ -> [] in
+  let own =
+    match e.kind with
+    | Assign (v, _) -> [ v.id ]
+    | Call (_, args, _) ->
+        List.filter_map (function C.Ref v -> Some v.id | Value _ -> None) args
+    | _ -> []
+  in
   own @ List.concat_map assigned (C.children e)
 
 and arm cx (a : arm) : C.arm =

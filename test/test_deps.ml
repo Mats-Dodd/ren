@@ -2666,6 +2666,42 @@ fn main() uses Console =
     ()
     |}]
 
+let%expect_test "an arm changes its state through `&` too" =
+  (* a method or function that takes the `var` with `&` writes it back, and
+     so does the arm, even when it fails afterwards *)
+  run
+    {|
+dep N =
+  next: fn() -> Int ! Low
+
+type C = { v: Int }
+  fn inc(inout self) = self.v += 1
+
+fn bump(inout x: Int) = x += 1
+
+handler h() for N =
+  var arr = [0]
+  var n = 0
+  var c = C { v: 0 }
+  next() =>
+    &arr.push(1)
+    bump(&n)
+    &c.inc()
+    if n == 2 then fail Low else arr.len() * 100 + n * 10 + c.v
+
+fn main() uses Console =
+  with h() in
+    print(attempt N.next())
+    print(attempt N.next())
+    print(attempt N.next())
+|};
+  [%expect {|
+    Ok(211)
+    Err(Low)
+    Ok(433)
+    ()
+    |}]
+
 let%expect_test "what a handler's declaration can't be" =
   types
     {|
