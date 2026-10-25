@@ -8,7 +8,7 @@
    to know about it, so adding a built-in means adding one entry. *)
 
 let source = {|
-type Option<T> =
+pub type Option<T> =
   | Some(value: T)
   | None
 |}

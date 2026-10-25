@@ -323,7 +323,7 @@ let type_def env (td : Parsed.type_def) : Resolved.type_def =
                })
              cs)
   in
-  { type_name = td.type_name; type_params = td.type_params; type_body }
+  { td with type_body }
 
 let fn_def env (f : Parsed.fn_def) : Resolved.fn_def * Path.t list =
   no_duplicates env "type parameters" f.tparams;

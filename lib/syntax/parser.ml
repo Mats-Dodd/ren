@@ -231,7 +231,7 @@ let parse_type_body p =
     Fields (sep_list p ~close:RBRACE parse_field_decl))
   else Ctors (parse_ctors p)
 
-let parse_type p =
+let parse_type p ~pub =
   expect p TYPE;
   let type_name = upper_ident p "a type name" in
   let type_params =
@@ -249,7 +249,7 @@ let parse_type p =
       b)
     else parse_type_body p
   in
-  { type_name; type_params; type_body }
+  { type_pub = pub; type_name; type_params; type_body }
 
 (* ---- patterns ---- *)
 
@@ -682,7 +682,7 @@ let parse_item p =
   if pub then advance p;
   match peek p with
   | FN -> Fn (parse_fn p ~pub)
-  | TYPE -> Type (parse_type p)
+  | TYPE -> Type (parse_type p ~pub)
   | IMPORT when pub ->
       Diag.error (loc p)
         ~help:"remove the `pub`: a module can't pass on what it imports"

@@ -4,9 +4,11 @@
    never their source: the prelude, which every module gets without
    asking, and each module it imports (driver.ml).
 
-   An interface holds a module's types, with their constructors and fields,
-   and the type scheme of each of its public functions, all in canonical
-   form (ty.ml). It's made from the module's declarations alone
+   An interface holds a module's public types, with their constructors and
+   fields, and the type scheme of each of its public functions, all in
+   canonical form (ty.ml). Nothing private is in it: a dependent can't
+   tell a private name from one that doesn't exist, and changing one can't
+   change the interface. It's made from the module's declarations alone
    ([of_module]), never from its bodies. The one thing it holds that a cached interface shouldn't is
    where each type and constructor was declared, so an error can point at
    the declaration it clashes with; those move out when interfaces are
@@ -132,8 +134,10 @@ let signature ~uses (f : Ast.Resolved.fn_def) : Ty.scheme =
     }
 
 (* The interface of module [home], from its declarations alone, never its
-   bodies (module-build.md, "Interface summaries"): every type it declares,
-   and the signature of every public function. [uses] gives the
+   bodies (module-build.md, "Interface summaries"): every public type it
+   declares, and the signature of every public function. A public one
+   never mentions a private one (resolve.ml checks), so a dependent never
+   meets a type that isn't in some interface. [uses] gives the
    dependencies of each public function, which can't be written yet. *)
 let of_module ~home ~uses (prog : Ast.Resolved.program) =
   {
@@ -141,7 +145,8 @@ let of_module ~home ~uses (prog : Ast.Resolved.program) =
     types =
       List.filter_map
         (function
-          | Ast.Type td -> Some (of_type_def ~home td) | Fn _ | Import _ -> None)
+          | Ast.Type td when td.type_pub -> Some (of_type_def ~home td)
+          | Type _ | Fn _ | Import _ -> None)
         prog;
     values =
       List.filter_map

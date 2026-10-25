@@ -187,7 +187,7 @@ fn main() = 1
       ┌─ test.ren:1:6
     1 │ type Option = { x: Int }
       │      ^^^^^^
-      = the first `Option` is here: <prelude>:1:6
+      = the first `Option` is here: <prelude>:1:10
       help: rename one of them
     |}]
 

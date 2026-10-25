@@ -110,6 +110,7 @@ type 't type_body =
   | Ctors of 't ctor list  (** a sum type: [| Free | Pro(seats: Int)] *)
 
 type 't type_def = {
+  type_pub : bool;  (** [pub type ...]: other modules can use it *)
   type_name : ident;
   type_params : ident list;  (** the [T] in [Option<T>] *)
   type_body : 't type_body;
@@ -332,7 +333,7 @@ let show_type_def (td : type_def) =
             parens (c.ctor_name.name :: List.map show_field c.ctor_fields))
           cs
   in
-  parens ("type" :: name :: body)
+  parens ((if td.type_pub then [ "pub" ] else []) @ ("type" :: name :: body))
 
 let show_import (i : import) =
   let names =
