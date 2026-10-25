@@ -31,7 +31,7 @@ machine is marked with `&`: `&self.stack.push(n)`, `let v = try
 **Recording is a copy.** `Timeline.record` is one line,
 `&self.frames.push(vm)`. In `main.ren`, the machine keeps running after
 each state is recorded, the fork changes a local and runs on, and
-`ftl.back(...) == Some(early)` still holds: the timeline never changed.
+`try ftl.back(...) == early` still holds: the timeline never changed.
 
 **The compiler finds constructors through types.** `machine.ren` never
 imports `Op`, yet `match p.at(self.pc)` names `Push`, `Load` and the rest.
