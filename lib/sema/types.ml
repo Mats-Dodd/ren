@@ -36,6 +36,9 @@ type ty =
   | TErrors of row
       (** an error set as a type argument, which only [Result<T, ! ...>] takes
       *)
+  | TUses of row
+      (** what an implementation needs, as its dependency type's one argument
+          (ty.ml) *)
   | TSkol of int * string
       (** a type parameter like [T], while checking the function that declares
           it: equal only to itself, since the function has to work for every [T]
@@ -51,7 +54,16 @@ type ty =
    wouldn't write `&`, and the change would be lost. *)
 and param = { mode : mode; ty : ty }
 and tvar = Unbound of int * int  (** id, level *) | Link of ty
-and row = REmpty | RExtend of label * row | RVar of rvar ref
+
+and row =
+  | REmpty
+  | RExtend of label * row
+  | RVar of rvar ref
+  | RSkol of int * string
+      (** a row named in the signature of the function being checked, the `..d`
+          of `f: fn() uses ..d`: like a [TSkol], equal only to itself, since the
+          function has to work for whatever it stands for *)
+
 and rvar = RUnbound of int * int  (** id, level *) | RLink of row
 
 (* A row's label: an error's tag and its payload's types, or a dependency,
@@ -72,6 +84,8 @@ type state = {
   skolem_vars : (int, ty) Hashtbl.t;
       (** the generic variable each type parameter became when its function was
           generalized, by the parameter's id *)
+  skolem_rows : (int, row) Hashtbl.t;
+      (** and the generic row variable each named row became *)
   reps : (Path.t, Ty.ty) Hashtbl.t;
       (** what each opaque type of the module being checked is represented as:
           in its own module, an opaque type is its representation (see [reveal])
@@ -84,6 +98,7 @@ let new_state () =
     last_id = 0;
     hints = Hashtbl.create 16;
     skolem_vars = Hashtbl.create 16;
+    skolem_rows = Hashtbl.create 8;
     reps = Hashtbl.create 4;
   }
 
@@ -125,13 +140,16 @@ let rec repr_row r =
       r''
   | r -> r
 
-(* A row's labels and, if it's open, the id of its tail variable. *)
+(* A row's labels and, if it's open, the id of its tail: a variable, or a
+   named row, which stands for more labels too, only not ones inference
+   can add. *)
 let rec row_parts r =
   let rec go acc r =
     match repr_row r with
     | REmpty -> (List.rev acc, None)
     | RExtend (l, rest) -> go (l :: acc) rest
-    | RVar { contents = RUnbound (id, _) } -> (List.rev acc, Some id)
+    | RVar { contents = RUnbound (id, _) } | RSkol (id, _) ->
+        (List.rev acc, Some id)
     | RVar { contents = RLink _ } -> assert false (* repr_row followed it *)
   in
   go [] r
@@ -142,12 +160,20 @@ and row_names r = List.map (fun l -> l.name) (fst (row_parts r))
 (* The row variable a row ends in, if it's open. *)
 let row_tail r = snd (row_parts r)
 
-(* Close [r]: it has exactly the labels it has now. *)
+(* The named row [r] ends in, if it ends in one. *)
+let rec row_skolem r =
+  match repr_row r with
+  | RExtend (_, rest) -> row_skolem rest
+  | RSkol (id, name) -> Some (id, name)
+  | RVar _ | REmpty -> None
+
+(* Close [r]: it has exactly the labels it has now. A named row stays
+   what it is. *)
 let rec close_row r =
   match repr_row r with
   | RExtend (_, rest) -> close_row rest
   | RVar ({ contents = RUnbound _ } as cell) -> cell := RLink REmpty
-  | RVar { contents = RLink _ } | REmpty -> ()
+  | RVar { contents = RLink _ } | REmpty | RSkol _ -> ()
 
 (* A row of [labels], ending in [tail]. *)
 let extend labels tail =
@@ -158,8 +184,8 @@ let extend labels tail =
 (* Make generic every variable created deeper than the current level, and
    replace the function's own type parameters ([skolems], as id and name)
    with generic variables too. The result is the function's type scheme. *)
-let generalize st ~skolems t =
-  let table = Hashtbl.create 8 in
+let generalize st ~skolems ?(row_skolems = []) t =
+  let table = Hashtbl.create 8 and rows = Hashtbl.create 4 in
   let rec go t =
     match repr t with
     | TVar ({ contents = Unbound (id, l) } as r) as t ->
@@ -182,6 +208,7 @@ let generalize st ~skolems t =
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
+    | TUses u -> TUses (row u)
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
     | TError -> TError
   and param p = { p with ty = go p.ty }
@@ -191,6 +218,16 @@ let generalize st ~skolems t =
         if l > st.level then cell := RUnbound (id, generic_level);
         r
     | RVar { contents = RLink _ } -> assert false
+    | RSkol (id, _) as r -> (
+        if not (List.mem_assoc id row_skolems) then r
+        else
+          match Hashtbl.find_opt rows id with
+          | Some v -> v
+          | None ->
+              let v = generic_row st in
+              Hashtbl.add rows id v;
+              Hashtbl.replace st.skolem_rows id v;
+              v)
     | REmpty -> REmpty
     | RExtend (l, rest) ->
         RExtend ({ l with payload = List.map go l.payload }, row rest)
@@ -213,6 +250,7 @@ let instantiate st t =
     | (TVar _ | TSkol _ | TError) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
+    | TUses u -> TUses (row u)
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
   and param p = { p with ty = go p.ty }
   and row r =
@@ -224,7 +262,7 @@ let instantiate st t =
             let v = fresh_row st in
             Hashtbl.add rows id v;
             v)
-    | (REmpty | RVar _) as r -> r
+    | (REmpty | RVar _ | RSkol _) as r -> r
     | RExtend (l, rest) ->
         RExtend ({ l with payload = List.map go l.payload }, row rest)
   in
@@ -248,6 +286,8 @@ type canon = {
   mutable params : (int * string) list;
       (** for a message: the type parameters numbered so far, with their names
       *)
+  mutable named_rows : (int * string) list;
+      (** and the named rows, `..d` (see [RSkol]) *)
 }
 
 let canon st =
@@ -258,6 +298,7 @@ let canon st =
     names = [];
     for_message = false;
     params = [];
+    named_rows = [];
   }
 
 let number table id =
@@ -299,6 +340,7 @@ let rec canon_ty c ~all t : Ty.ty =
   | TVar _ | TError -> Error
   | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
   | TErrors e -> Errors (canon_row c ~all e)
+  | TUses u -> Uses (canon_row c ~all u)
   | TFun (ps, r, e, u) ->
       (* `let`s fix the order of first appearance: OCaml evaluates a
          constructor's arguments right to left *)
@@ -320,6 +362,16 @@ and canon_row c ~all r : Ty.row =
         if all || c.for_message || l = generic_level then
           Some (number c.rows id)
         else None
+    | RSkol (id, name) when c.for_message ->
+        let n = number c.rows id in
+        if not (List.mem_assoc n c.named_rows) then
+          c.named_rows <- (n, name) :: c.named_rows;
+        Some n
+    | RSkol (id, _) -> (
+        (* the generic variable it became, as a [TSkol] does *)
+        match Hashtbl.find_opt c.cst.skolem_rows id with
+        | Some v -> tail v
+        | None -> None)
     | RExtend (_, rest) -> tail rest
     | REmpty -> None
     | RVar { contents = RLink _ } -> assert false
@@ -352,6 +404,7 @@ let rec of_ty ~vars ~tails (t : Ty.ty) =
   match t with
   | Con (p, args) -> TCon (p, List.map (of_ty ~vars ~tails) args)
   | Errors e -> TErrors (of_row ~vars ~tails e)
+  | Uses u -> TUses (of_row ~vars ~tails u)
   | Fun (ps, r, e, u) ->
       TFun
         ( List.map
@@ -433,9 +486,10 @@ let printer ?(show_tail = fun _ -> false) ~names (st : state) =
   (* [Ty.printer] asks about a tail by its number; find the id that has it.
      There's only one, so the order [fold] visits them in doesn't matter. *)
   let numbered n =
-    Hashtbl.fold
-      (fun id m found -> found || (m = n && show_tail id))
-      c.rows false
+    List.mem_assoc n c.named_rows
+    || Hashtbl.fold
+         (fun id m found -> found || (m = n && show_tail id))
+         c.rows false
   in
   (* the scheme's names start empty: [to_ty] adds them as they're found *)
   let scheme : Ty.scheme = { ty = Error; names = [] } in
@@ -445,7 +499,10 @@ let printer ?(show_tail = fun _ -> false) ~names (st : state) =
    the declared names of the variables, and the type parameters. *)
 let sync pr =
   pr.ty_printer.hints <- pr.canon.names;
-  List.iter (fun (n, name) -> Ty.name pr.ty_printer n name) pr.canon.params
+  List.iter (fun (n, name) -> Ty.name pr.ty_printer n name) pr.canon.params;
+  List.iter
+    (fun (n, name) -> Ty.name_tail pr.ty_printer n name)
+    pr.canon.named_rows
 
 let to_ty pr t =
   let t = canon_ty pr.canon ~all:false t in
@@ -481,7 +538,7 @@ let rec row_vars t =
   match repr t with
   | TVar _ | TSkol _ | TError -> []
   | TCon (_, args) -> List.concat_map row_vars args
-  | TErrors e -> row e
+  | TErrors e | TUses e -> row e
   | TFun (ps, r, e, u) ->
       List.concat_map row_vars (r :: param_tys ps) @ row e @ row u
 
@@ -489,6 +546,6 @@ let rec row_vars t =
 let rec skolems t =
   match repr t with
   | TSkol (id, n) -> [ (id, n) ]
-  | TVar _ | TError | TErrors _ -> []
+  | TVar _ | TError | TErrors _ | TUses _ -> []
   | TCon (_, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)

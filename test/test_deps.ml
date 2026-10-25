@@ -868,10 +868,95 @@ fn main() uses Clock, Console, Random =
     ()
     |}]
 
-(* `with` arrives with its syntax in 7.3. Until then, this runs a program
-   from a `$start` written in Core, as `with` will lower to: [body] makes
-   its body from the functions of the entry ([fn_]), around the evidence
-   `$start` takes, ev/1. Core Lint checks it, then it runs. *)
+let%expect_test "a closure over another module's dependency runs" =
+  (* lib doesn't import main, where Users is declared: `twice` passes `f`
+     the evidence it's given, whatever is in it *)
+  let files =
+    [
+      ( "main.ren",
+        {|
+import lib
+dep Users =
+  get: fn(id: Int) -> Int
+fn users() -> Users = Users { get: fn(id) => id * 10 }
+fn look() = lib.twice(fn() => Users.get(1))
+fn main() uses Console = print(with users() in look())
+|}
+      );
+      ( "lib.ren",
+        {|
+pub fn twice(f: fn() -> Int) -> Int =
+  let _ = try f()
+  try f()
+|}
+      );
+    ]
+  in
+  core_files files;
+  [%expect
+    {|
+    -- lib
+    (fn twice (f/1) ev/3 (let _/2 (call ev/3 f/1) (call ev/3 f/1)))
+
+    -- main
+    (fn users () ev/2 (record (get: (lambda (id/1) (captures) ev/3 (* id/1 10)))))
+    (fn look () ev/1
+      (call ev/1 twice
+        (lambda () (captures) ev/2 (dep-call ev/2 main.Users.get 1))))
+    (fn main () ev/1
+      (call ev/1 print
+        (with ev/2 (extend ev/1 main.Users (call ev/1 users)) (call ev/2 look))))
+    (fn $start () ev/1
+      (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
+    |}];
+  run_files files;
+  [%expect {|
+    10
+    ()
+    |}]
+
+(* The closure is made where one clock is installed, and called where
+   another is, which it uses. *)
+let%expect_test "a closure uses the implementation installed where it's called"
+    =
+  let src =
+    {|
+fn later() uses Clock =
+  let _ = Clock.now()
+  fn() => Clock.now()
+fn frozen_at(minutes: Int) -> Clock =
+  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+fn main() uses Console =
+  let f = with frozen_at(0) in later()
+  print(with frozen_at(5) in f())
+|}
+  in
+  core src;
+  [%expect
+    {|
+    (fn later () ev/2
+      (let _/1 (dep-call ev/2 Clock.now)
+        (lambda () (captures) ev/3 (dep-call ev/3 Clock.now))))
+    (fn frozen_at (minutes/1) ev/2
+      (call ev/2 Clock.frozen
+        (call ev/2 Time.plus Time.epoch (call ev/2 Duration.minutes minutes/1))))
+    (fn main () ev/2
+      (let f/1
+        (with ev/3 (extend ev/2 Clock (call ev/2 frozen_at 0)) (call ev/3 later))
+        (call ev/2 print
+          (with ev/4 (extend ev/2 Clock (call ev/2 frozen_at 5)) (call ev/4 f/1)))))
+    (fn $start () ev/1
+      (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
+    |}];
+  run src;
+  [%expect {|
+    300000
+    ()
+    |}]
+
+(* A program run from a `$start` written in Core: [body] makes its body
+   from the functions of the entry ([fn_]), around the evidence `$start`
+   takes, ev/1. Core Lint checks it, then it runs. *)
 let run_start files body =
   let files, file, src, load = program files in
   report_files files (fun () ->
@@ -906,116 +991,12 @@ let run_start files body =
       print_endline
         (Value.show (Driver.pass "eval" (fun () -> Eval.run modules))))
 
-(* Core for a call of [f], of no parameters but [args], with the evidence
-   [ev], and for installing [impl] for [dep] around [body]. *)
-let call ~loc ?(args = []) (f : Ren.Core.fn_def) ev =
+(* Core for a call of [f], of no parameters, with the evidence [ev]. *)
+let call ~loc (f : Ren.Core.fn_def) ev =
   let ret = match f.scheme.ty with Fun (_, t, _, _) -> t | t -> t in
   Ren.Core.mk
-    (Call
-       ( Ren.Core.mk (Global f.path) f.scheme.ty loc,
-         List.map (fun a -> Ren.Core.Value a) args,
-         Ren.Core.evidence ev ))
+    (Call (Ren.Core.mk (Global f.path) f.scheme.ty loc, [], Ren.Core.evidence ev))
     ret loc
-
-let install ~loc dep ~impl ev (body : Ren.Core.expr) =
-  Ren.Core.mk
-    (With
-       {
-         ev = Ren.Core.evidence (ev + 1);
-         outer = Ren.Core.evidence ev;
-         dep;
-         impl;
-         body;
-       })
-    body.ty loc
-
-let%expect_test "a closure over another module's dependency runs" =
-  (* lib doesn't import main, where Users is declared: `twice` passes `f`
-     the evidence it's given, whatever is in it *)
-  run_start
-    [
-      ( "main.ren",
-        {|
-import lib
-dep Users =
-  get: fn(id: Int) -> Int
-fn users() -> Users = Users { get: fn(id) => id * 10 }
-fn look() = lib.twice(fn() => Users.get(1))
-fn main() uses Console = print(1)
-|}
-      );
-      ( "lib.ren",
-        {|
-pub fn twice(f: fn() -> Int) -> Int =
-  let _ = try f()
-  try f()
-|}
-      );
-    ]
-    (fun ~fn_ ~loc ->
-      install ~loc
-        (Ren.Path.make "main" "Users")
-        ~impl:(call ~loc (fn_ "users") 1)
-        1
-        (call ~loc (fn_ "look") 2));
-  [%expect
-    {|
-    (with ev/2 (extend ev/1 main.Users (call ev/1 users)) (call ev/2 look))
-    10
-    |}]
-
-(* The closure is made where one clock is installed, and called where
-   another is, which it uses. *)
-let%expect_test "a closure uses the implementation installed where it's called"
-    =
-  run_start
-    [
-      ( "test.ren",
-        {|
-fn later() uses Clock =
-  let _ = Clock.now()
-  fn() => Clock.now()
-fn frozen_at(minutes: Int) -> Clock =
-  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
-fn main() uses Clock =
-  let _ = later()
-  frozen_at(0)
-|}
-      );
-    ]
-    (fun ~fn_ ~loc ->
-      let open Ren in
-      let clock = Path.prelude "Clock" in
-      let frozen minutes ev =
-        call ~loc (fn_ "frozen_at")
-          ~args:[ Core.mk (Int minutes) Ty.int loc ]
-          ev
-      in
-      let later = fn_ "later" in
-      let closure_ty =
-        match later.scheme.ty with Fun (_, t, _, _) -> t | t -> t
-      in
-      let time = match closure_ty with Fun (_, t, _, _) -> t | t -> t in
-      let f : Core.var = { id = 4; name = "f"; ty = closure_ty } in
-      (* with Clock.frozen at 0 minutes, make the closure; with it at 5,
-         call it *)
-      install ~loc clock ~impl:(frozen 0 1) 1
-        (Core.mk
-           (Let
-              ( f,
-                call ~loc later 2,
-                install ~loc clock ~impl:(frozen 5 2) 2
-                  (Core.mk
-                     (Call (Core.local f loc, [], Core.evidence 3))
-                     time loc) ))
-           time loc));
-  [%expect
-    {|
-    (with ev/2 (extend ev/1 Clock (call ev/1 frozen_at 0))
-      (let f/4 (call ev/2 later)
-        (with ev/3 (extend ev/2 Clock (call ev/2 frozen_at 5)) (call ev/3 f/4))))
-    300000
-    |}]
 
 (* Evidence threaded wrongly is a bug in the compiler. Core Lint catches
    it, and `ren run`, which doesn't lint, has the interpreter say which
@@ -1185,7 +1166,7 @@ let%expect_test "Core Lint checks evidence is threaded" =
       let impl =
         Ren.Core.mk
           (Record (d, [ ("op", lambda 3 (Ren.Core.mk (Int 1) Ren.Ty.int loc)) ]))
-          (Con (d, []))
+          (Con (d, [ Uses Ren.Ty.closed ]))
           loc
       in
       Ren.Core.mk
@@ -1202,4 +1183,686 @@ let%expect_test "Core Lint checks evidence is threaded" =
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `D.op` is given `ev` (1), but the evidence in scope is `ev` (2)")
       = this is a bug in the Ren compiler, not in your program
+    |}]
+
+(* ---- `with` (deps.md, "`with`") ---- *)
+
+let%expect_test "with's syntax" =
+  ast
+    {|
+fn main() =
+  with Clock.frozen(t), counting(1) in
+    body()
+  with retry(3) in try f()
+  g(with a in 1, 2)
+|};
+  [%expect
+    {| (fn main () (block (with (call (. (con Clock) frozen) t) (with (call counting 1) (call body))) (with (call retry 3) (try (call f))) (call g (with a 1) 2))) |}];
+  ast {|
+fn main() = with a b in 1
+|};
+  [%expect
+    {|
+    error: expected `,` or `in` after what `with` installs, found `b`
+      ┌─ test.ren:1:20
+    1 │ fn main() = with a b in 1
+      │                    ^
+      help: write what it installs, then `in`, then the code it's installed around
+    |}];
+  (* what a signature writes: what an implementation needs, what a
+     function type uses, and named rows *)
+  types
+    {|
+fn f(c: Clock uses Random, ..d, g: fn(Int) -> Int ! Bad | ..e uses Clock) -> (Clock uses Random, ..d)
+    ! ..e
+    uses ..d =
+  c
+fn h(k: Option<fn() uses Clock>, m: (Int)) = 1
+fn main() = 1
+|};
+  [%expect
+    {|
+    fn f(c: Clock uses Random, ..d, g: fn(Int) -> Int ! Bad | ..e uses Clock) -> (Clock uses Random, ..d) ! ..e uses ..d
+    fn h(k: Option<fn() uses Clock>, m: Int) -> Int
+    fn main() -> Int
+    |}];
+  (* `with` is a keyword now *)
+  ast {|
+fn with() = 1
+|};
+  [%expect
+    {|
+    error: expected a name, found `with`
+      ┌─ test.ren:1:4
+    1 │ fn with() = 1
+      │    ^^^^
+    |}]
+
+let%expect_test "with installs around its body, and the innermost wins" =
+  let src =
+    {|
+fn at(minutes: Int) -> Clock =
+  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+fn stamp() = Clock.now()
+fn main() uses Console =
+  print(with at(1) in stamp())
+  print(with at(1), at(2) in stamp())
+  with at(3) in
+    print(stamp())
+    print(with at(4) in stamp())
+    print(stamp())
+|}
+  in
+  types src;
+  [%expect
+    {|
+    fn at(minutes: Int) -> Clock
+    fn stamp() -> Time uses Clock
+    fn main() uses Console
+    |}];
+  core src;
+  [%expect
+    {|
+    (fn at (minutes/1) ev/2
+      (call ev/2 Clock.frozen
+        (call ev/2 Time.plus Time.epoch (call ev/2 Duration.minutes minutes/1))))
+    (fn stamp () ev/1 (dep-call ev/1 Clock.now))
+    (fn main () ev/1
+      (seq
+        (call ev/1 print
+          (with ev/2 (extend ev/1 Clock (call ev/1 at 1)) (call ev/2 stamp)))
+        (seq
+          (call ev/1 print
+            (with ev/3 (extend ev/1 Clock (call ev/1 at 1))
+              (with ev/4 (extend ev/3 Clock (call ev/3 at 2)) (call ev/4 stamp))))
+          (with ev/5 (extend ev/1 Clock (call ev/1 at 3))
+            (seq (call ev/5 print (call ev/5 stamp))
+              (seq
+                (call ev/5 print
+                  (with ev/6 (extend ev/5 Clock (call ev/5 at 4))
+                    (call ev/6 stamp)))
+                (call ev/5 print (call ev/5 stamp))))))))
+    (fn $start () ev/1
+      (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
+    |}];
+  run src;
+  [%expect
+    {|
+    60000
+    120000
+    180000
+    240000
+    180000
+    ()
+    |}]
+
+let%expect_test "with removes what it installs from the body's uses" =
+  types
+    {|
+dep Users =
+  get: fn(id: Int) -> Int
+fn none() -> Users = Users { get: fn(_) => 0 }
+fn find() = Users.get(1)
+fn found() = with none() in find()
+pub fn public() -> Int = with none() in find()
+fn main() = 1
+|};
+  [%expect
+    {|
+    dep Users
+      get: fn(Int) -> Int
+    fn none() -> Users
+    fn find() -> Int uses Users
+    fn found() -> Int
+    pub fn public() -> Int
+    fn main() -> Int
+    |}]
+
+let%expect_test "what an implementation needs is part of its type" =
+  types
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn fixed() -> Rates = Rates { usd_to: fn(c) => c }
+pub fn stored() -> Rates uses Clock = timed()
+fn convert() = with timed() in Rates.usd_to(1)
+pub fn public() -> Int = with timed() in Rates.usd_to(1)
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: expected `Rates`, found `Rates uses Clock`
+      ┌─ test.ren:5:39
+    5 │ pub fn stored() -> Rates uses Clock = timed()
+      │                                       ^^^^^^^
+      = `stored` is declared to return `Rates`
+      = an implementation's type says what it needs, so one that needs more can't stand in for one that needs less
+      help: say what it needs where its type is written: `(Rates uses Clock)`
+
+    error: `public` doesn't declare `Clock`
+      ┌─ test.ren:7:8
+    7 │ pub fn public() -> Int = with timed() in Rates.usd_to(1)
+      │        ^^^^^^
+      │                               ------- installing this needs `Clock`
+      = a public function without `uses` uses nothing, and its body is checked against that
+      help: add `uses Clock`
+    |}];
+  (* the `uses` after a type name is what an implementation needs, and in
+     a result it's parenthesized *)
+  types
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+pub fn timed() -> (Rates uses Clock) =
+  Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+pub fn convert(r: Rates uses Clock) -> Int uses Clock = 1
+fn main() = 1
+|};
+  [%expect
+    {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    pub fn timed() -> (Rates uses Clock)
+    pub fn convert(r: Rates uses Clock) -> Int uses Clock
+    fn main() -> Int
+    |}];
+  types {|
+fn f(x: Int uses Clock) = 1
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `Int` isn't a dependency, so it needs nothing
+      ┌─ test.ren:1:9
+    1 │ fn f(x: Int uses Clock) = 1
+      │         ^^^
+      help: remove the `uses`: only an implementation of a dependency needs something
+    |}]
+
+(* An implementation's operations run with what's installed where it's
+   installed: the clock at 1 minute, not the one at 0 *)
+let%expect_test "an implementation's needs are fixed where it's installed" =
+  run
+    {|
+dep Rates =
+  usd_to: fn(c: Int) -> Int
+fn at(minutes: Int) -> Clock =
+  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn main() uses Console =
+  with at(1) in
+    with timed() in
+      with at(0) in
+        print(Rates.usd_to(100))
+        print(Clock.now())
+|};
+  [%expect {|
+    100
+    0
+    ()
+    |}]
+
+let%expect_test "an operation can fail with fewer errors, never more" =
+  types
+    {|
+dep Http =
+  get_rate: fn(c: Int) -> Int ! Timeout
+dep Rates =
+  usd_to: fn(c: Int) -> Int ! RateUnavailable
+fn live() = Rates { usd_to: fn(c) => try Http.get_rate(c) }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
+      ┌─ test.ren:5:38
+    5 │ fn live() = Rates { usd_to: fn(c) => try Http.get_rate(c) }
+      │                                      ^^^^^^^^^^^^^^^^^^^^ fails with `Timeout`
+      = `Rates.usd_to` can fail only with `RateUnavailable`
+      help: map it: `match Http.get_rate(c)` with the arm `fail Timeout => fail RateUnavailable`
+    |}];
+  types
+    {|
+dep Http =
+  get_rate: fn(c: Int) -> Int ! Timeout | Gone
+dep Rates =
+  usd_to: fn(c: Int) -> Int ! RateUnavailable
+dep Plain =
+  get: fn() -> Int
+fn live() = Rates { usd_to: fn(c) => try Http.get_rate(c) }
+fn plain() = Plain { get: fn() => try Http.get_rate(1) }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this implementation can fail with `Gone` and `Timeout`, and `Rates.usd_to` can't
+      ┌─ test.ren:7:38
+    7 │ fn live() = Rates { usd_to: fn(c) => try Http.get_rate(c) }
+      │                                      ^^^^^^^^^^^^^^^^^^^^ fails with `Gone` and `Timeout`
+      = `Rates.usd_to` can fail only with `RateUnavailable`
+      help: map what it fails with inside it, with `match` and `fail` arms, to what it can: `fail RateUnavailable`
+
+    error: this implementation can fail with `Gone` and `Timeout`, and `Plain.get` can't
+      ┌─ test.ren:8:35
+    8 │ fn plain() = Plain { get: fn() => try Http.get_rate(1) }
+      │                                   ^^^^^^^^^^^^^^^^^^^^ fails with `Gone` and `Timeout`
+      = `Plain.get` can't fail
+      help: handle what it fails with inside it, with `match` and `fail` arms
+    |}];
+  (* following the help, and an operation that fails with less *)
+  run
+    {|
+dep Http =
+  get_rate: fn(c: Int) -> Int ! Timeout
+dep Rates =
+  usd_to: fn(c: Int) -> Int ! RateUnavailable
+fn http(up: Bool) -> Http =
+  Http { get_rate: fn(c) => if up then c * 2 else fail Timeout }
+fn ask(c: Int) =
+  match Http.get_rate(c)
+    fail Timeout => fail RateUnavailable
+    r => r
+fn live() = Rates { usd_to: fn(c) => try ask(c) }
+fn fixed() -> Rates = Rates { usd_to: fn(_) => 3 }
+fn main() uses Console =
+  print(attempt with http(true), live() in Rates.usd_to(5))
+  print(attempt with http(false), live() in Rates.usd_to(5))
+  print(attempt with fixed() in Rates.usd_to(5))
+|};
+  [%expect {|
+    Ok(10)
+    Err(RateUnavailable)
+    Ok(3)
+    ()
+    |}]
+
+let%expect_test "with installs an implementation or wraps its body" =
+  types {|
+fn bad() = with 3 in 1
+fn unknown(c) = with c in 1
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `with` installs an implementation, or wraps its body, but this is an `Int`
+      ┌─ test.ren:1:17
+    1 │ fn bad() = with 3 in 1
+      │                 ^
+      = `with` installs an implementation of a dependency around its body, or passes its body to a wrapper, a function whose last parameter is the body
+      help: give it an implementation, like `Clock.frozen(t)`, or a wrapper's call without its last argument, like `retry(3)`
+
+    error: `with` can't tell what this installs: its type isn't known here
+      ┌─ test.ren:2:22
+    2 │ fn unknown(c) = with c in 1
+      │                      ^
+      = `with` installs an implementation of a dependency around its body, or passes its body to a wrapper, a function whose last parameter is the body
+      help: say what it is where it's declared, like `c: Clock`
+    |}]
+
+let%expect_test "a wrapper is passed the body" =
+  let src =
+    {|
+fn flaky(n: Int) -> Int ! Boom =
+  if n < 3 then fail Boom else n
+
+fn retry(n: Int, body: fn() -> Int) -> Int =
+  let r = attempt body()
+  if n <= 1 then try r
+  else
+    match r
+      Ok(v) => v
+      Err(_) => try retry(n - 1, body)
+
+fn twice(body: fn() -> Int) -> Int = try body() + try body()
+
+pub fn safe() -> Int = with retry(3) in 1
+
+fn main() uses Console =
+  print(attempt with retry(3) in try flaky(2))
+  print(attempt with retry(3) in try flaky(4))
+  print(with twice in 21)
+|}
+  in
+  types src;
+  [%expect
+    {|
+    fn flaky(n: Int) -> Int ! Boom
+    fn retry(n: Int, body: fn() -> Int) -> Int
+    fn twice(body: fn() -> Int) -> Int
+    pub fn safe() -> Int
+    fn main() uses Console
+    |}];
+  core src;
+  [%expect
+    {|
+    (fn flaky (n/1) ev/2 (if (< n/1 3) (fail (tag Boom)) n/1))
+    (fn retry (n/1 body/2) ev/5
+      (let r/3
+        (handle (call ev/5 body/2) ($value/6 => (con Ok $value/6))
+          (fail $error/7 => (con Err $error/7)))
+        (if (<= n/1 1)
+          (match r/3 ((Ok $value/8) => $value/8)
+            ((Err $error/9) => (fail $error/9)))
+          (match r/3 ((Ok v/4) => v/4)
+            ((Err _) => (call ev/5 retry (- n/1 1) body/2))))))
+    (fn twice (body/1) ev/2 (+ (call ev/2 body/1) (call ev/2 body/1)))
+    (fn safe () ev/1 (call ev/1 retry 3 (lambda () (captures) ev/2 1)))
+    (fn main () ev/1
+      (seq
+        (call ev/1 print
+          (handle
+            (call ev/1 retry 3 (lambda () (captures) ev/2 (call ev/2 flaky 2)))
+            ($value/3 => (con Ok $value/3))
+            (fail $error/4 => (con Err $error/4))))
+        (seq
+          (call ev/1 print
+            (handle
+              (call ev/1 retry 3 (lambda () (captures) ev/5 (call ev/5 flaky 4)))
+              ($value/6 => (con Ok $value/6))
+              (fail $error/7 => (con Err $error/7))))
+          (call ev/1 print (call ev/1 twice (lambda () (captures) ev/8 21))))))
+    (fn $start () ev/1
+      (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
+    |}];
+  run src;
+  [%expect {|
+    Err(Boom)
+    Ok(4)
+    42
+    ()
+    |}]
+
+let%expect_test "what a wrapper can't be" =
+  types
+    {|
+fn grab(n: Int, inout body: fn() -> Int) -> Int = 1
+fn intish(n: Int, body: Int) -> Int = body
+fn twice(body: fn() -> Int) -> Int = try body() + try body()
+fn main() =
+  var n = 1
+  let a = with grab(1) in 2
+  let b = with intish(3) in 2
+  let c = with twice in
+    n += 1
+    n
+  a + b + c
+|};
+  [%expect
+    {|
+    error: `grab` changes its last argument, so it can't take a body
+      ┌─ test.ren:6:16
+    6 │   let a = with grab(1) in 2
+      │                ^^^^^^^
+      = `with w(a) in body` calls `w(a, fn() => body)`, and a lambda isn't a place to change
+      help: call `grab` outside the `with`, with all its arguments
+
+    error: `intish`'s last parameter is an `Int`, but a `with` passes it its body, a `fn()`
+      ┌─ test.ren:7:16
+    7 │   let b = with intish(3) in 2
+      │                ^^^^^^^^^
+      = `with w(a) in body` calls `w(a, fn() => body)`, so the wrapper's last parameter is a function of no parameters
+      help: call `intish` outside the `with`, with all its arguments
+
+    error: the body of this `with` can't change `n`, a variable from outside it
+      ┌─ test.ren:9:5
+    9 │     n += 1
+      │     ^
+      = `with` passes its body to `twice` as a lambda, `fn() => ...`, which captures the values of the variables it uses when it's made, so changing them would have no effect outside
+      help: give the body's result back as its value instead
+    |}]
+
+(* ---- parameters of a dependency's type ---- *)
+
+let%expect_test "a parameter of a dependency's type is transparent" =
+  types
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn convert(r: Rates) = with r in Rates.usd_to(1)
+fn passed(r: Rates) = convert(r)
+pub fn public(r: Rates) -> Int = with r in Rates.usd_to(1)
+fn caller() = passed(timed())
+fn main() = 1
+|};
+  [%expect
+    {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    fn timed() -> (Rates uses Clock)
+    fn convert(r: Rates) -> Int
+    fn passed(r: Rates) -> Int
+    pub fn public(r: Rates) -> Int
+    fn caller() -> Int uses Clock
+    fn main() -> Int
+    |}];
+  types
+    {|
+type Box = { c: Clock }
+fn keep(c: Clock) -> Clock = c
+fn boxed(c: Clock) = Box { c }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `c` is used as a value here, so it isn't transparent
+      ┌─ test.ren:2:30
+    2 │ fn keep(c: Clock) -> Clock = c
+      │                              ^
+      = a parameter whose type is a dependency's, `Clock`, can only be installed, with `with`, or passed straight to another function, so what it needs is what its function uses
+      help: to keep it, name what it needs: `c: Clock uses ..d`
+
+    error: `c` is used as a value here, so it isn't transparent
+      ┌─ test.ren:3:28
+    3 │ fn boxed(c: Clock) = Box { c }
+      │                            ^
+      = a parameter whose type is a dependency's, `Clock`, can only be installed, with `with`, or passed straight to another function, so what it needs is what its function uses
+      help: to keep it, name what it needs: `c: Clock uses ..d`
+    |}]
+
+let%expect_test "a dependency parameter that's kept names its row" =
+  run
+    {|
+pub fn id(c: Clock uses ..d) -> (Clock uses ..d) = c
+fn at(minutes: Int) -> Clock =
+  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+fn main() uses Console =
+  print(with id(at(2)) in Clock.now())
+|};
+  [%expect {|
+    120000
+    ()
+    |}];
+  types
+    {|
+fn install(c: Clock uses ..d) -> Time uses Console = with c in Clock.now()
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: installing this needs `..d`, which `install` doesn't declare
+      ┌─ test.ren:1:59
+    1 │ fn install(c: Clock uses ..d) -> Time uses Console = with c in Clock.now()
+      │                                                           ^
+      = `..d` stands for whatever the closure or implementation it names uses, and a function that declares its dependencies declares that too
+      help: add it to what `install` uses: `uses Console, ..d`
+    |}]
+
+(* ---- named rows ---- *)
+
+let%expect_test "a closure that's kept names its rows" =
+  let src =
+    {|
+type Button<F> = { on_click: F }
+
+fn keep(f: fn() -> Int ! ..e uses ..d) -> (fn() -> Int ! ..e uses ..d) = f
+fn mk(f: fn() -> Int ! ..e uses ..d) -> Button<fn() -> Int ! ..e uses ..d> =
+  Button { on_click: f }
+fn press(b: Button<fn() -> Int ! ..e uses ..d>) -> Int ! ..e uses ..d =
+  let f = b.on_click
+  try f()
+fn tick() -> Int ! Late uses Console =
+  print(1)
+  fail Late
+
+fn main() uses Console =
+  print(press(mk(fn() => 3)))
+  let g = keep(tick)
+  print(attempt g())
+  print(attempt press(mk(tick)))
+|}
+  in
+  types src;
+  [%expect
+    {|
+    fn keep(f: fn() -> Int ! ..e uses ..d) -> (fn() -> Int ! ..e uses ..d)
+    fn mk(f: fn() -> Int ! ..e uses ..d) -> Button<fn() -> Int ! ..e uses ..d>
+    fn press(b: Button<fn() -> Int ! ..e uses ..d>) -> Int ! ..e uses ..d
+    fn tick() -> Int ! Late uses Console
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    3
+    1
+    Err(Late)
+    1
+    Err(Late)
+    ()
+    |}]
+
+let%expect_test "what a function does with a named row, it declares" =
+  types
+    {|
+pub fn calls(f: fn() -> Int uses ..d) -> Int = f()
+pub fn fails(f: fn() -> Int ! ..e) -> Int ! Bad = try f()
+fn listed(f: fn() -> Int uses ..d) uses Console = f()
+fn other(f: fn() -> Int uses ..d, g: fn() -> Int uses ..x) uses ..d =
+  f() + g()
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this call uses `..d`, which `calls` doesn't declare
+      ┌─ test.ren:1:48
+    1 │ pub fn calls(f: fn() -> Int uses ..d) -> Int = f()
+      │                                                ^^^
+      = `..d` stands for whatever the closure or implementation it names uses, and a function that declares its dependencies declares that too
+      help: add it to what `calls` uses: `uses ..d`
+
+    error: this can fail with `..e`, which `fails` doesn't declare
+      ┌─ test.ren:2:55
+    2 │ pub fn fails(f: fn() -> Int ! ..e) -> Int ! Bad = try f()
+      │                                                       ^^^
+      = `..e` stands for whatever the closure it names fails with, and a function that declares its errors declares that too
+      help: add `..e` to what `fails` declares it fails with, after `!`
+
+    error: this call uses `..d`, which `listed` doesn't declare
+      ┌─ test.ren:3:51
+    3 │ fn listed(f: fn() -> Int uses ..d) uses Console = f()
+      │                                                   ^^^
+      = `..d` stands for whatever the closure or implementation it names uses, and a function that declares its dependencies declares that too
+      help: add it to what `listed` uses: `uses Console, ..d`
+
+    error: this call uses `..x`, which `other` doesn't declare
+      ┌─ test.ren:5:9
+    5 │   f() + g()
+      │         ^^^
+      = `..x` stands for whatever the closure or implementation it names uses, and a function that declares its dependencies declares that too
+      help: `other` names one row, `..d`, which is all it can name: name this one `..d` too, where it's written
+    |}];
+  types
+    {|
+type Button = { on_click: fn() }
+fn mk(f: fn() uses ..d) = Button { on_click: fn() => f() }
+fn both(f: fn() uses ..d, g: fn() uses ..x) =
+  f()
+  g()
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this call uses `..d`, which isn't allowed here
+      ┌─ test.ren:2:54
+    2 │ fn mk(f: fn() uses ..d) = Button { on_click: fn() => f() }
+      │                                                      ^^^
+      = `..d` stands for whatever the closure or implementation it names uses, and what this is in can't use more than it lists
+      help: use it where `..d` can go: in the function that names it, or in a lambda whose type isn't written
+
+    error: this call uses `..x`, but what this is in already uses `..d`
+      ┌─ test.ren:5:3
+    5 │   g()
+      │   ^^^
+      = a row ends in at most one named row, and what this is in already uses `..d`, so `..x` can't be added
+      help: name the two rows alike, `..d`, if they can stand for the same
+    |}]
+
+let%expect_test "only a signature names a row" =
+  types
+    {|
+type Button = { on_click: fn() uses ..d }
+fn body() =
+  let g: fn() uses ..q = fn() => ()
+  g
+fn kinds(f: fn() ! ..d, g: fn() uses ..d) = 1
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: a declaration can't name a row, `..d`
+      ┌─ test.ren:1:39
+    1 │ type Button = { on_click: fn() uses ..d }
+      │                                       ^
+      = only a function's signature names a row, for now (deps.md, "Implementations")
+      help: to keep a closure in a type, make its type a type parameter, `type Button<F> = { on_click: F }`, which a signature can write `Button<fn() uses ..d>`
+
+    error: there's no `..q` in this function's signature
+      ┌─ test.ren:3:22
+    3 │   let g: fn() uses ..q = fn() => ()
+      │                      ^
+      = a named row stands for what a closure or an implementation that comes into or out of the function does, so the signature names it
+      help: name `..q` in the function's signature
+
+    error: `..d` names what something uses here, and what something fails with elsewhere in this signature
+      ┌─ test.ren:5:40
+    5 │ fn kinds(f: fn() ! ..d, g: fn() uses ..d) = 1
+      │                                        ^
+      │                      - here it names what something fails with
+      = a row is a list of errors or a list of dependencies, never both
+      help: give the two rows two names
+    |}]
+
+(* A public wrapper can't infer its body's rows, so it names them: what
+   `attempt` keeps, and passes on with `try`, is `..e` *)
+let%expect_test "a public wrapper names its body's rows" =
+  let src =
+    {|
+fn flaky(n: Int) -> Int ! Boom =
+  if n < 3 then fail Boom else n
+pub fn retry(n: Int, body: fn() -> Int ! ..e uses ..d) -> Int ! ..e uses ..d =
+  let r = attempt body()
+  if n <= 1 then try r
+  else
+    match r
+      Ok(v) => v
+      Err(_) => try retry(n - 1, body)
+pub fn safe() -> Int ! Boom = with retry(3) in try flaky(2)
+fn main() uses Console =
+  print(attempt safe())
+  print(with retry(2) in 7)
+|}
+  in
+  types src;
+  [%expect {|
+    fn flaky(n: Int) -> Int ! Boom
+    pub fn retry(n: Int, body: fn() -> Int) -> Int
+    pub fn safe() -> Int ! Boom
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    Err(Boom)
+    7
+    ()
     |}]

@@ -37,6 +37,7 @@
   "uses"
   "opaque"
   "not"
+  "with"
 ] @keyword
 
 (visibility) @keyword
@@ -55,6 +56,10 @@
 (dependency (type_identifier) @type.dependency)
 (dependency module: (identifier) @namespace)
 (dependency_definition name: (type_identifier) @type.dependency)
+; a named row stands for whatever a closure or an implementation uses, or
+; fails with
+(uses_clause row: (named_row) @type.dependency)
+(error_set row: (named_row) @type)
 
 ; ---- declarations ----
 

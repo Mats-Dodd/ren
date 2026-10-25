@@ -72,7 +72,7 @@ let rec labels_named name t =
       row e @ List.concat_map (labels_named name) (r :: param_tys ps)
   | TCon (_, args) -> List.concat_map (labels_named name) args
   | TErrors e -> row e
-  | TVar _ | TSkol _ | TError -> []
+  | TVar _ | TSkol _ | TError | TUses _ -> []
 
 (* Notes for a mismatch between [found] and [expected] that the two types
    alone don't explain: the type parameters in them, and a parameter that's
@@ -405,7 +405,7 @@ let undeclared_use (f : Ast.Resolved.fn_def) dep call =
   Diag.make f.name.loc
     ~labels:
       (match call with
-      | Some l -> [ (l, sprintf "this call uses `%s`" dep) ]
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" what dep) ]
       | None -> [])
     ~notes:
       [
@@ -556,7 +556,7 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
   Diag.make f.name.loc
     ~labels:
       (match call with
-      | Some l -> [ (l, sprintf "this call uses `%s`" dep) ]
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" what dep) ]
       | None -> [])
     ~notes:
       [
@@ -763,18 +763,15 @@ let kept_passed_on loc ~name_loc callee ~fn ~handled =
       ]
     ~notes:
       [
-        (if handled then
-           "a public signature can't say a passed function's errors are \
-            handled yet: that arrives with `..e`, in stage 7"
-         else
-           "a public signature can't name a passed function's errors in a \
-            `Result` yet: that arrives with `..e`, in stage 7");
+        "a transparent parameter's errors are its function's own, which its \
+         signature says it passes on";
       ]
     ~help:
       (sprintf
-         "pass them on with `try`, or make `%s` private, so its type is \
-          inferred"
-         fn)
+         "to %s them, name their row where `%s`'s type is written, as in `%s: \
+          fn() ! ..e`, or pass them on with `try`"
+         (if handled then "handle" else "keep")
+         callee callee)
     (if handled then
        sprintf "`match` can't handle what `%s` fails with here" callee
      else sprintf "`attempt` can't keep what `%s` fails with here" callee)

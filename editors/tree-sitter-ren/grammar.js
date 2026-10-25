@@ -77,6 +77,9 @@ module.exports = grammar({
     [$.if_expression],
     // and the next line of a named error set indented under its name
     [$._error_set_body],
+    // in a type, `uses Clock, n: Int` ends at the comma, and
+    // `uses Clock, store.Users` doesn't: the token after the name decides
+    [$.uses_clause],
   ],
 
   supertypes: ($) => [$._expression, $._pattern, $._type],
@@ -118,7 +121,7 @@ module.exports = grammar({
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
         field('parameters', $.parameters),
-        optional(seq('->', field('return_type', $._type))),
+        optional(seq('->', field('return_type', $._return_type))),
         optional(field('errors', $.error_set)),
         optional(field('uses', $.uses_clause)),
         '=',
@@ -140,8 +143,25 @@ module.exports = grammar({
 
     inout: (_) => 'inout',
 
-    // uses Console, store.Users: the dependencies a function's body may call
-    uses_clause: ($) => seq('uses', commaSep1Strict($.dependency)),
+    // uses Console, store.Users: the dependencies a function's body may
+    // call, or a function type or an implementation uses, and last, a
+    // named row, `uses Clock, ..d`. In a type, a `,` goes on with the list
+    // only to a dependency or a row, which the token after it decides
+    uses_clause: ($) =>
+      seq(
+        'uses',
+        choice(
+          seq(
+            commaSep1Strict($.dependency),
+            optional(seq(',', field('row', $.named_row))),
+          ),
+          field('row', $.named_row),
+        ),
+      ),
+
+    // ..d: whatever the closure or implementation it's written on uses, or
+    // fails with, the same wherever the signature names it
+    named_row: ($) => seq('..', field('name', $.identifier)),
 
     dependency: ($) =>
       choice(
@@ -152,7 +172,17 @@ module.exports = grammar({
     // ! Short(account: AccountId, by: Money) | Frozen | bank.Refusal: what
     // a function can fail with. A bare name may be a tag or a named error
     // set, which only the compiler can tell apart; it's read as a tag
-    error_set: ($) => seq('!', sep1($._error, '|')),
+    error_set: ($) =>
+      seq(
+        '!',
+        choice(
+          seq(
+            sep1($._error, '|'),
+            optional(seq('|', field('row', $.named_row))),
+          ),
+          field('row', $.named_row),
+        ),
+      ),
 
     // in a named error set's body, indented under `type X =`, each `|` may
     // start a line
@@ -290,13 +320,24 @@ module.exports = grammar({
 
     // an error set is a type only as `Result`'s second argument, which the
     // compiler checks; a lone `!` is the empty set, `Result<Int, !>`
-    _type: ($) =>
+    _type: ($) => choice($._return_type, $.implementation_type),
+
+    // after `->`, a `uses` is the function's, never what an implementation
+    // it returns needs, which is written in parentheses
+    _return_type: ($) =>
       choice(
         $.named_type,
         $.function_type,
+        $.parenthesized_type,
         $.error_set,
         alias('!', $.error_set),
       ),
+
+    // Clock uses Os: an implementation of a dependency, and what it needs
+    implementation_type: ($) =>
+      seq(field('name', $.type_name), field('uses', $.uses_clause)),
+
+    parenthesized_type: ($) => seq('(', $._type, ')'),
 
     // Int, Option<Int>, stripe.Client
     named_type: ($) =>
@@ -307,8 +348,9 @@ module.exports = grammar({
 
     type_arguments: ($) => seq('<', commaSep($._type), '>'),
 
-    // fn(inout Array<Int>, id: UserId) -> User ! NotFound. The `! ...`
-    // belongs to the innermost function type that can take it
+    // fn(inout Array<Int>, id: UserId) -> User ! NotFound uses Clock. The
+    // `! ...` and `uses ...` belong to the innermost function type that can
+    // take them
     function_type: ($) =>
       prec.right(
         seq(
@@ -316,8 +358,9 @@ module.exports = grammar({
           '(',
           commaSep($.function_type_parameter),
           ')',
-          optional(seq('->', field('return_type', $._type))),
+          optional(seq('->', field('return_type', $._return_type))),
           optional(field('errors', $.error_set)),
+          optional(field('uses', $.uses_clause)),
         ),
       ),
 
@@ -506,6 +549,7 @@ module.exports = grammar({
         $.if_expression,
         $.match_expression,
         $.fail_expression,
+        $.with_expression,
       ),
 
     number: (_) => /[0-9][0-9_]*/,
@@ -602,6 +646,18 @@ module.exports = grammar({
           optional(
             seq(optional($._newline), 'else', field('alternative', $._body)),
           ),
+        ),
+      ),
+
+    // with Clock.frozen(t), retry(3) in body: each item installed, or
+    // wrapped, around the rest, the first outermost
+    with_expression: ($) =>
+      prec.right(
+        seq(
+          'with',
+          commaSep1Strict(field('item', $._expression)),
+          'in',
+          field('body', $._body),
         ),
       ),
 

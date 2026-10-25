@@ -126,32 +126,64 @@ let labels ~sets errs =
 (* ---- from a module's declarations ---- *)
 
 (* A written type, once Resolve has said what its names mean, in canonical
-   form. A function type written in a declaration uses nothing, and fails
-   with exactly what it's written to fail with, after `!`; [sets] says
-   what each named set it names stands for. *)
-let rec of_written ~sets (t : Ast.Resolved.ty) : Ty.ty =
+   form. A function type written in a declaration uses and fails with
+   exactly what it's written to, after `uses` and `!`, and so does an
+   implementation, after `uses`: nothing, if nothing's written. [sets]
+   says what each named set it names stands for, and [rows] which row
+   variable each named row is, `..d`: only a signature names one
+   (resolve.ml). *)
+let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
+  let go = of_written ~rows ~sets in
   match t with
   | TyName ({ tref = Param i; _ }, _) -> Var i
-  | TyName ({ tref = Named path; _ }, args) ->
-      Con (path, List.map (of_written ~sets) args)
-  | TyFn (ps, ret, errs, _) ->
-      let ret =
-        match ret with Some r -> of_written ~sets r | None -> Ty.unit
-      in
-      let errs =
-        match errs with
-        | Some es -> { Ty.closed with labels = of_errors ~sets es }
-        | None -> Ty.closed
-      in
-      Fun (List.map (of_written_param ~sets) ps, ret, errs, Ty.closed)
+  | TyName ({ tref = Named path; _ }, args) -> Con (path, List.map go args)
+  | TyImpl ({ tref = Named path; _ }, u, _) ->
+      Con (path, [ Uses (written_uses ~rows u) ])
+  | TyImpl ({ tref = Param _; _ }, _, _) ->
+      (* resolve.ml only makes a dependency a [TyImpl] *)
+      assert false
+  | TyFn (ps, ret, errs, u, _) ->
+      let ret = match ret with Some r -> go r | None -> Ty.unit in
+      Fun
+        ( List.map (of_written_param ~rows ~sets) ps,
+          ret,
+          written_errors ~rows ~sets errs,
+          written_uses ~rows u )
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
-  | TyErrors es -> Errors { Ty.closed with labels = of_errors ~sets es }
+  | TyErrors es -> Errors (written_errors ~rows ~sets (Some es))
 
-and of_written_param ~sets = function
-  | Ast.TyInout (t, _) -> { mode = Inout; ty = of_written ~sets t }
-  | t -> Ty.read (of_written ~sets t)
+and of_written_param ~rows ~sets = function
+  | Ast.TyInout (t, _) -> { mode = Inout; ty = of_written ~rows ~sets t }
+  | t -> Ty.read (of_written ~rows ~sets t)
+
+(* The row a written `! ...` or `uses ...` is: its labels, and the named
+   row at its end, if there is one. Nothing written is nothing. *)
+and written_errors ~rows ~sets (es : Ast.Resolved.errors option) : Ty.row =
+  match es with
+  | Some es ->
+      { labels = of_errors ~sets es; tail = Option.bind es.etail (named rows) }
+  | None -> Ty.closed
+
+and written_uses ~rows (u : Ast.Resolved.uses option) : Ty.row =
+  match u with
+  | Some u ->
+      { labels = dep_labels u.deps; tail = Option.bind u.dtail (named rows) }
+  | None -> Ty.closed
+
+and named rows (n : Ast.ident) = rows n.name
+
+(* The labels of the dependencies a `uses` lists, sorted. *)
+and dep_labels (ds : Ast.tname list) =
+  List.map Ty.label
+    (List.sort_uniq String.compare
+       (List.filter_map
+          (fun (d : Ast.tname) ->
+            match d.tref with
+            | Named p -> Some (Ty.dep_label p)
+            | Param _ -> (* resolve.ml only makes a dependency a [Named] *) None)
+          ds))
 
 (* An error set as written, as declared errors: each tag with its
    payload's types, its fields' names dropped. *)
@@ -182,10 +214,14 @@ and of_errors ~sets es = labels ~sets (declared_errors ~sets es)
    A parameter whose type is written `fn(...)`, with no `..e` or `..d`, is
    transparent: what it fails with and uses flows into the function's own
    errors and dependencies, so its rows are the function's: the same row,
-   labels and all, which is what inference finds too. Rows are open,
-   as they are in every scheme, so a caller adds them to its own. Any other
-   function type in the signature, like the `fn()` in `f: Option<fn()>`,
-   uses and fails with nothing, as in a declaration. Inference reads a
+   labels and all, which is what inference finds too. So is one whose type
+   is a dependency's, `c: Clock`, which is installed: what it needs is
+   what the function uses. Rows are open, as they are in every scheme, so
+   a caller adds them to its own. Any other function type in the
+   signature, like the `fn()` in `f: Option<fn()>`, uses and fails with
+   nothing, as in a declaration, and so does one that names a row, `f:
+   fn() uses ..d`, but for that row, which is the same wherever the
+   signature names it (deps.md, "Implementations"). Inference reads a
    signature the same way (Infer_expr.param_type), and the driver checks
    that the two agree.
 
@@ -194,44 +230,76 @@ and of_errors ~sets es = labels ~sets (declared_errors ~sets es)
    `!`, with every named set expanded; inference checks that its body
    uses and fails with exactly those. A parameter that writes what it
    fails with, `f: fn() ! Bad`, fails with just that, so its errors aren't
-   the function's own (its dependencies still are). *)
+   the function's own (its dependencies still are), and one that writes
+   what it uses, `f: fn() uses Clock`, uses just that. The function's own
+   `! ..e` or `uses ..d` names its own row. *)
 let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
-  (* row variables: 0 for the errors, 1 for the dependencies *)
-  let declared =
-    match f.errors with Some es -> of_errors ~sets es | None -> []
+  (* row variables: 0 for the errors, 1 for the dependencies, unless the
+     signature names them, and after those each named row, the same
+     wherever it's named *)
+  let own (n : Ast.ident option) number =
+    Option.map (fun (n : Ast.ident) -> (n.name, number)) n
   in
-  let errs : Ty.row = { labels = declared; tail = Some 0 } in
-  let uses =
-    List.filter_map
-      (fun (d : Ast.tname) ->
-        match d.tref with
-        | Named p -> Some (Ty.dep_label p)
-        | Param _ -> (* resolve.ml only makes a dependency a [Named] *) None)
-      (Option.value f.uses ~default:[])
+  let named =
+    ref
+      (Option.to_list
+         (own
+            (Option.bind f.errors (fun (es : Ast.Resolved.errors) -> es.etail))
+            0)
+      @ Option.to_list
+          (own (Option.bind f.uses (fun (u : Ast.Resolved.uses) -> u.dtail)) 1)
+      )
+  in
+  let rows name =
+    match List.assoc_opt name !named with
+    | Some n -> Some n
+    | None ->
+        let n = 2 + List.length !named in
+        named := !named @ [ (name, n) ];
+        Some n
+  in
+  let errs : Ty.row =
+    {
+      labels =
+        (match f.errors with Some es -> of_errors ~sets es | None -> []);
+      tail = Some 0;
+    }
   in
   let deps : Ty.row =
     {
-      labels = List.map Ty.label (List.sort_uniq String.compare uses);
+      labels =
+        (match f.uses with
+        | Some (u : Ast.Resolved.uses) -> dep_labels u.deps
+        | None -> []);
       tail = Some 1;
     }
   in
   let param (p : Ast.Resolved.param) : Ty.param =
     let ty : Ty.ty =
       match p.pty with
-      | Some (TyFn (_, _, written, _) as t) -> (
-          match of_written ~sets t with
-          | Fun (ps, r, e, _) ->
-              Fun (ps, r, (if written = None then errs else e), deps)
+      | Some (TyFn (_, _, written_e, written_u, _) as t)
+        when not (Ast.names_row t) -> (
+          match of_written ~rows ~sets t with
+          | Fun (ps, r, e, u) ->
+              Fun
+                ( ps,
+                  r,
+                  (if written_e = None then errs else e),
+                  if written_u = None then deps else u )
           | _ -> assert false)
-      | Some t -> of_written ~sets t
+      | Some (TyImpl ({ tref = Named d; _ }, None, _)) -> Con (d, [ Uses deps ])
+      | Some t -> of_written ~rows ~sets t
       | None -> Error
     in
     { mode = p.pmode; ty }
   in
-  let ret = match f.ret with Some t -> of_written ~sets t | None -> Ty.unit in
+  let ps = List.map param f.params in
+  let ret =
+    match f.ret with Some t -> of_written ~rows ~sets t | None -> Ty.unit
+  in
   Ty.canonical
     {
-      ty = Fun (List.map param f.params, ret, errs, deps);
+      ty = Fun (ps, ret, errs, deps);
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
     }
 

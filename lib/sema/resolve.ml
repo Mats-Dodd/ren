@@ -152,12 +152,23 @@ type env = {
           error *)
 }
 
+(* Where a type is written, which says what rows it can name, `..e` and
+   `..d` (ast.ml): a function's signature names them, and its body can
+   write only those, in a lambda's parameters and a `let`'s type. A type's
+   declaration can't name any yet. [Signature] collects them as they're
+   named, each with what kind of row it is and where it's first named. *)
+type row_kind = Error_row | Dep_row
+type named = (string * (row_kind * Loc.t)) list
+type rows = Signature of named ref | Body of named | Declaration
+
 (* What one expression can see. [fn] is shared by the whole top-level
    function: a record with [mutable] fields is the same record in every
    copy of the [scope] that holds it. *)
 type scope = {
   locals : binder Env.t;
   tparams : string list;  (** the type parameters in scope, in order *)
+  rows : named;
+      (** the rows the function's signature names, `..d` (see [rows]) *)
   depth : int;  (** how many lambdas deep *)
   fn : fn_state;
 }
@@ -292,7 +303,7 @@ let tyname_loc (t : tyname) =
 (* Where a type is written: where it starts, for a named one. *)
 let written_loc : Parsed.ty -> Loc.t = function
   | TyName (t, _) -> tyname_loc t
-  | TyFn (_, _, _, l) | TyInout (_, l) -> l
+  | TyFn (_, _, _, _, l) | TyImpl (_, _, l) | TyInout (_, l) -> l
   | TyErrors es -> es.eloc
 
 (* An error set's name, `Refusal`, written where only a type of values
@@ -353,19 +364,172 @@ let declared_type env ~params ~what (t : tyname) =
       None
   | None -> None
 
+(* The dependencies after a function's `uses`, resolved: each one is a
+   dependency in scope, `dep Clock = ...`, or another module's, written
+   after its alias, `store.Users`, or one the prelude only names so far,
+   like `Net`; and each is written once. One that isn't is reported, and
+   left out. *)
+let uses env (deps : tyname list) : tname list =
+  let in_scope () =
+    let declared =
+      Hashtbl.fold
+        (fun name ((p : Path.t), _) acc ->
+          if dep_ops env p <> None then name :: acc else acc)
+        env.types []
+    in
+    List.sort_uniq String.compare (declared @ Prelude.dependencies)
+  in
+  let no_such (d : tyname) =
+    Diag.report env.sink
+      (Diag.make (tyname_loc d)
+         ~notes:
+           [
+             sprintf "the dependencies in scope are: %s"
+               (String.concat ", " (List.map (sprintf "`%s`") (in_scope ())));
+           ]
+         ~help:"use one of those, or declare it with `dep`"
+         (sprintf "there's no dependency named `%s`" (show_tyname d)));
+    None
+  in
+  let not_a_dep (d : tyname) =
+    report env (tyname_loc d)
+      ~help:
+        "a dependency is declared with `dep`, and lists the operations a \
+         function can call on it"
+      (sprintf "`%s` is a type, not a dependency" (show_tyname d));
+    None
+  in
+  let resolve (d : tyname) =
+    match d.tmod with
+    | None -> (
+        match Hashtbl.find_opt env.types d.tid.name with
+        | Some (p, _) when dep_ops env p <> None ->
+            ignore (find_type env d.tid.name);
+            Some p
+        | Some _ -> not_a_dep d
+        | None when List.mem d.tid.name Prelude.dependencies ->
+            Some (Path.prelude d.tid.name)
+        | None -> no_such d)
+    | Some _ -> (
+        match find_named env ~params:[] d with
+        | Some (Named p, _) when dep_ops env p <> None -> Some p
+        | Some _ -> not_a_dep d
+        | None -> None)
+  in
+  let seen = Hashtbl.create 4 in
+  List.filter_map
+    (fun (d : tyname) ->
+      let loc = tyname_loc d in
+      match resolve d with
+      | None -> None
+      | Some p -> (
+          match Hashtbl.find_opt seen p with
+          | Some first ->
+              report env loc ~help:"remove one of them"
+                ~labels:
+                  [ (first, sprintf "the first `%s` is here" (show_tyname d)) ]
+                (sprintf "`%s` is in `uses` twice" (show_tyname d));
+              None
+          | None ->
+              Hashtbl.replace seen p loc;
+              Some { tref = Named p; tloc = loc }))
+    deps
+
+(* The named row [n], written as a row of kind [kind]. *)
+let row_name env ~rows kind (n : ident) =
+  let what = function
+    | Error_row -> "what something fails with"
+    | Dep_row -> "what something uses"
+  in
+  let clash first k =
+    report env n.loc
+      ~labels:[ (first, sprintf "here it names %s" (what k)) ]
+      ~notes:
+        [ "a row is a list of errors or a list of dependencies, never both" ]
+      ~help:"give the two rows two names"
+  in
+  match rows with
+  | Signature named -> (
+      match List.assoc_opt n.name !named with
+      | Some (k, first) when k <> kind ->
+          clash first k
+            (sprintf "`..%s` names %s here, and %s elsewhere in this signature"
+               n.name (what kind) (what k))
+      | Some _ -> ()
+      | None -> named := !named @ [ (n.name, (kind, n.loc)) ])
+  | Body named -> (
+      match List.assoc_opt n.name named with
+      | Some (k, first) when k <> kind ->
+          clash first k
+            (sprintf "`..%s` names %s in the signature, not %s" n.name (what k)
+               (what kind))
+      | Some _ -> ()
+      | None ->
+          report env n.loc
+            ~notes:
+              [
+                "a named row stands for what a closure or an implementation \
+                 that comes into or out of the function does, so the signature \
+                 names it";
+              ]
+            ~help:(sprintf "name `..%s` in the function's signature" n.name)
+            (sprintf "there's no `..%s` in this function's signature" n.name))
+  | Declaration ->
+      report env n.loc
+        ~notes:
+          [
+            "only a function's signature names a row, for now (deps.md, \
+             \"Implementations\")";
+          ]
+        ~help:
+          "to keep a closure in a type, make its type a type parameter, `type \
+           Button<F> = { on_click: F }`, which a signature can write \
+           `Button<fn() uses ..d>`"
+        (sprintf "a declaration can't name a row, `..%s`" n.name)
+
+(* A `uses` written in a type, resolved: its dependencies, and the row it
+   ends in, if it names one. *)
+let uses_of env ~rows (u : Parsed.uses) : Resolved.uses =
+  Option.iter (row_name env ~rows Dep_row) u.dtail;
+  { deps = uses env u.deps; dtail = u.dtail; uloc = u.uloc }
+
 (* A written type, with its names resolved. [params] are the type
    parameters in scope, like the `T` in `Option<T>`. A type with an error
    is reported once, and its arguments aren't looked at. [arg] says it's a
    type argument, the one place an error set can be written as a type:
    `Result<T, ! Short | Frozen>`. Which type takes one is for inference to
    say. *)
-let rec ty env ~params ?(arg = false) (t : Parsed.ty) : Resolved.ty =
+let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
+    Resolved.ty =
   match t with
-  | TyFn (ps, ret, errs, l) ->
-      let ps = List.map (ty env ~params) ps in
-      let ret = Option.map (ty env ~params) ret in
-      TyFn (ps, ret, Option.map (errors env ~params) errs, l)
-  | TyInout (t, l) -> TyInout (ty env ~params t, l)
+  | TyFn (ps, ret, errs, u, l) ->
+      let ps = List.map (ty env ~params ~rows) ps in
+      let ret = Option.map (ty env ~params ~rows) ret in
+      let errs = Option.map (errors env ~params ~rows) errs in
+      TyFn (ps, ret, errs, Option.map (uses_of env ~rows) u, l)
+  | TyInout (t, l) -> TyInout (ty env ~params ~rows t, l)
+  | TyImpl (t, u, l) -> (
+      let u = Option.map (uses_of env ~rows) u in
+      match find_named env ~params t with
+      | Some (Named p, _) when dep_ops env p <> None ->
+          TyImpl ({ tref = Named p; tloc = tyname_loc t }, u, l)
+      | found ->
+          if found <> None then
+            report env (tyname_loc t)
+              ~help:
+                "remove the `uses`: only an implementation of a dependency \
+                 needs something"
+              (sprintf "`%s` isn't a dependency, so it needs nothing"
+                 (show_tyname t));
+          TyName
+            ( {
+                tref =
+                  (match found with
+                  | Some (tref, _) -> tref
+                  | None -> Named (Path.make env.home t.tid.name));
+                tloc = tyname_loc t;
+              },
+              [] ))
   | TyErrors es ->
       if not arg then
         report env es.eloc
@@ -373,7 +537,7 @@ let rec ty env ~params ?(arg = false) (t : Parsed.ty) : Resolved.ty =
             "an error set goes after `!` in a signature or a function type; \
              the one type that holds one is `Result<T, ! ...>`"
           "an error set isn't a type of values";
-      TyErrors (errors env ~params es)
+      TyErrors (errors env ~params ~rows es)
   | TyName (t, args) -> (
       let named tref = { tref; tloc = tyname_loc t } in
       let given = List.length args in
@@ -387,15 +551,21 @@ let rec ty env ~params ?(arg = false) (t : Parsed.ty) : Resolved.ty =
             (sprintf "`%s` takes %d type argument%s but was given %d"
                (show_tyname t) n (plural n) given);
           TyName (named tref, [])
+      | Some (Named p, _) when dep_ops env p <> None ->
+          (* a dependency's type is an implementation's, which needs what
+             it's written to need: nothing, here *)
+          TyImpl (named (Named p), None, tyname_loc t)
       | Some (tref, _) ->
-          TyName (named tref, List.map (ty env ~params ~arg:true) args))
+          TyName (named tref, List.map (ty env ~params ~rows ~arg:true) args))
 
 (* An error set as written, after `!`, with its names resolved. A bare
    name with no payload is the named error set of that name, if one is in
    scope (a type parameter's name is never one), and otherwise a tag; a
    name after a module, `bank.Refusal`, has to be a set. Each error is
    written once. *)
-and errors env ~params (es : Parsed.errors) : Resolved.errors =
+and errors env ~params ?(rows = Declaration) (es : Parsed.errors) :
+    Resolved.errors =
+  Option.iter (row_name env ~rows Error_row) es.etail;
   let set_in_scope (t : ident) =
     if List.mem t.name params then None
     else
@@ -414,7 +584,7 @@ and errors env ~params (es : Parsed.errors) : Resolved.errors =
           ( t,
             List.map
               (fun (p : tyname payload) ->
-                { p with payload_ty = ty env ~params p.payload_ty })
+                { p with payload_ty = ty env ~params ~rows p.payload_ty })
               ps )
     | Set n -> (
         match find_named env ~params n with
@@ -472,9 +642,9 @@ and errors env ~params (es : Parsed.errors) : Resolved.errors =
                 (sprintf "`%s` is in this error set twice" id.name))
       | None -> Hashtbl.replace seen id.name (id.loc, shape e))
     es.errs;
-  { errs = List.map error es.errs; eloc = es.eloc }
+  { errs = List.map error es.errs; etail = es.etail; eloc = es.eloc }
 
-let ty_opt env ~params = Option.map (ty env ~params)
+let ty_opt env ~params ?rows = Option.map (ty env ~params ?rows)
 
 (* The named type [t] is, if it's written, `b: Bag`: then a method called
    on [b] can only be one of [Bag]'s (see [receiver_type]). *)
@@ -484,8 +654,9 @@ let note_type sc (b : binder) (t : Resolved.ty option) =
       sc.fn.typed <- (b.id, p) :: sc.fn.typed
   | _ -> ()
 
-let param env sc bound (p : Parsed.param) : Resolved.param * scope =
-  let pty = ty_opt env ~params:sc.tparams p.pty in
+let param env sc ?rows bound (p : Parsed.param) : Resolved.param * scope =
+  let rows = Option.value rows ~default:(Body sc.rows) in
+  let pty = ty_opt env ~params:sc.tparams ~rows p.pty in
   let b, sc = bind env sc p.pname bound in
   note_type sc b pty;
   ({ pname = b; pty; pmode = p.pmode }, sc)
@@ -499,11 +670,11 @@ let receiver_type sc (r : Resolved.expr) =
   | Record (Some { tref = Named p; _ }, _) -> Some p
   | _ -> None
 
-let params env sc bound ps =
+let params env sc ?rows bound ps =
   let ps, sc =
     List.fold_left
       (fun (acc, sc) (p : Parsed.param) ->
-        let p, sc = param env sc (bound p) p in
+        let p, sc = param env sc ?rows (bound p) p in
         (p :: acc, sc))
       ([], sc) ps
   in
@@ -858,7 +1029,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
                     report env name.loc ~help:"write `let _ = ...`"
                       "`var _` names nothing, so nothing can change it";
                   let value = expr env sc value in
-                  let t = ty_opt env ~params:sc.tparams t in
+                  let t =
+                    ty_opt env ~params:sc.tparams ~rows:(Body sc.rows) t
+                  in
                   let b, sc =
                     bind env sc name (if mut then By_var else By_let)
                   in
@@ -948,6 +1121,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         Fail (t, List.map (fun (l, a) -> (l, go a)) args)
     | Try a -> Try (go a)
     | Attempt a -> Attempt (go a)
+    | With { item; body; lam } ->
+        let item = go item in
+        With { item; body = go body; lam }
   in
   { kind; loc = e.loc; node = e.node }
 
@@ -1057,77 +1233,6 @@ let no_set_cycles env (items : Resolved.program) =
       | Fn _ | Type _ | Import _ -> ())
     items
 
-(* The dependencies after a function's `uses`, resolved: each one is a
-   dependency in scope, `dep Clock = ...`, or another module's, written
-   after its alias, `store.Users`, or one the prelude only names so far,
-   like `Net`; and each is written once. One that isn't is reported, and
-   left out. *)
-let uses env (deps : tyname list) : tname list =
-  let in_scope () =
-    let declared =
-      Hashtbl.fold
-        (fun name ((p : Path.t), _) acc ->
-          if dep_ops env p <> None then name :: acc else acc)
-        env.types []
-    in
-    List.sort_uniq String.compare (declared @ Prelude.dependencies)
-  in
-  let no_such (d : tyname) =
-    Diag.report env.sink
-      (Diag.make (tyname_loc d)
-         ~notes:
-           [
-             sprintf "the dependencies in scope are: %s"
-               (String.concat ", " (List.map (sprintf "`%s`") (in_scope ())));
-           ]
-         ~help:"use one of those, or declare it with `dep`"
-         (sprintf "there's no dependency named `%s`" (show_tyname d)));
-    None
-  in
-  let not_a_dep (d : tyname) =
-    report env (tyname_loc d)
-      ~help:
-        "a dependency is declared with `dep`, and lists the operations a \
-         function can call on it"
-      (sprintf "`%s` is a type, not a dependency" (show_tyname d));
-    None
-  in
-  let resolve (d : tyname) =
-    match d.tmod with
-    | None -> (
-        match Hashtbl.find_opt env.types d.tid.name with
-        | Some (p, _) when dep_ops env p <> None ->
-            ignore (find_type env d.tid.name);
-            Some p
-        | Some _ -> not_a_dep d
-        | None when List.mem d.tid.name Prelude.dependencies ->
-            Some (Path.prelude d.tid.name)
-        | None -> no_such d)
-    | Some _ -> (
-        match find_named env ~params:[] d with
-        | Some (Named p, _) when dep_ops env p <> None -> Some p
-        | Some _ -> not_a_dep d
-        | None -> None)
-  in
-  let seen = Hashtbl.create 4 in
-  List.filter_map
-    (fun (d : tyname) ->
-      let loc = tyname_loc d in
-      match resolve d with
-      | None -> None
-      | Some p -> (
-          match Hashtbl.find_opt seen p with
-          | Some first ->
-              report env loc ~help:"remove one of them"
-                ~labels:
-                  [ (first, sprintf "the first `%s` is here" (show_tyname d)) ]
-                (sprintf "`%s` is in `uses` twice" (show_tyname d));
-              None
-          | None ->
-              Hashtbl.replace seen p loc;
-              Some { tref = Named p; tloc = loc }))
-    deps
-
 (* A function: a top-level one, or, with [owner], one of that type's
    members. A member has the type's parameters in scope, before its
    own, and is named after the type, `Stack.push` (ast.ml); its first
@@ -1173,16 +1278,20 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     | Some _, p :: _ when p.pname.name = "self" -> Some p.pname.loc
     | _ -> None
   in
+  (* the rows the signature names, as they're named *)
+  let named = ref [] in
+  let rows = Signature named in
   let sc =
     {
       locals = Env.empty;
       tparams = List.map (fun (t : ident) -> t.name) tparams;
+      rows = [];
       depth = 0;
       fn = { last_id = 0; calls = []; dots = []; typed = [] };
     }
   in
   let ps, inner =
-    params env sc
+    params env sc ~rows
       (fun p -> match p.pmode with Inout -> By_inout | Read -> By_param)
       (* `self`'s type is the owner's, never what's written *)
       (List.map
@@ -1204,10 +1313,10 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
         { p with pty = Some owner_ty } :: rest
     | _ -> ps
   in
-  let ret = ty_opt env ~params:sc.tparams f.ret in
-  let errs = Option.map (errors env ~params:sc.tparams) f.errors in
-  let deps = Option.map (uses env) f.uses in
-  let body = expr env inner f.body in
+  let ret = ty_opt env ~params:sc.tparams ~rows f.ret in
+  let errs = Option.map (errors env ~params:sc.tparams ~rows) f.errors in
+  let deps = Option.map (uses_of env ~rows) f.uses in
+  let body = expr env { inner with rows = !named } f.body in
   let name =
     match owner with
     | Some td -> { f.name with name = td.type_name.name ^ "." ^ f.name.name }
@@ -1353,12 +1462,24 @@ let rec named_in (t : Resolved.ty) =
   | TyName ({ tref = Named p; tloc }, args) ->
       (p, tloc) :: List.concat_map named_in args
   | TyName ({ tref = Param _; _ }, args) -> List.concat_map named_in args
-  | TyFn (ps, ret, errs, _) ->
+  | TyFn (ps, ret, errs, u, _) ->
       List.concat_map named_in ps
       @ Option.fold ~none:[] ~some:named_in ret
       @ Option.fold ~none:[] ~some:named_in_errors errs
+      @ Option.fold ~none:[] ~some:named_in_uses u
+  | TyImpl ({ tref = Named p; tloc }, u, _) ->
+      (p, tloc) :: Option.fold ~none:[] ~some:named_in_uses u
+  | TyImpl ({ tref = Param _; _ }, u, _) ->
+      Option.fold ~none:[] ~some:named_in_uses u
   | TyInout (t, _) -> named_in t
   | TyErrors es -> named_in_errors es
+
+(* The dependencies a `uses` lists. *)
+and named_in_uses (u : Resolved.uses) =
+  List.filter_map
+    (fun (d : tname) ->
+      match d.tref with Named p -> Some (p, d.tloc) | Param _ -> None)
+    u.deps
 
 (* The same, in an error set: the named sets it includes, and the types in
    its tags' payloads. *)
@@ -1435,12 +1556,8 @@ let no_leaks env ~private_ (items : Resolved.program) =
          ~tag:(sprintf "`pub fn %s`'s error `%s` mentions `%s`" f.name.name))
       f.errors;
     Option.iter
-      (fun ds ->
-        no_private_named env ~private_
-          (List.filter_map
-             (fun (d : tname) ->
-               match d.tref with Named p -> Some (p, d.tloc) | Param _ -> None)
-             ds)
+      (fun u ->
+        no_private_named env ~private_ (named_in_uses u)
           ~say:(fun (p : Path.t) ->
             sprintf "`pub fn %s` uses `%s`" f.name.name p.name))
       f.uses

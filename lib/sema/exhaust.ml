@@ -226,7 +226,7 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
   let column =
     match (Infer.Nodes.find subject.node env.nodes).ty with
     | Con (p, _) -> Some (env.names p)
-    | Var _ | Fun _ | Errors _ | Error -> None
+    | Var _ | Fun _ | Errors _ | Uses _ | Error -> None
   in
   (* With `fail` arms, each row is an outcome (see [owner]), and the error
      set they match is in each `fail` pattern's type *)
@@ -386,6 +386,7 @@ let rec check_expr env (e : expr) =
   | Con (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields
   | Match (subject, arms) -> check_match_expr env e subject arms
+  | With { item; body; _ } -> List.iter (check_expr env) [ item; body ]
 
 and check_match_expr env ?passes_on e subject arms =
   check_expr env subject;

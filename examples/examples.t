@@ -33,8 +33,8 @@ infer.ren annotates nothing; this is what inference works out:
   -- infer
   fn seats(u: User) -> Int
   fn first_or<T>(o: Option<T>, fallback: T) -> T
-  fn map_option<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U>
-  fn twice<T>(f: fn() -> T) -> T
+  fn map_option<T, U>(o: Option<T>, f: fn(T) -> U uses ..d) -> Option<U> uses ..d
+  fn twice<T>(f: fn() -> T uses ..d) -> T uses ..d
   fn main() uses Console
 
 `ren core` prints the program in Core, which it runs as: every function and
@@ -306,7 +306,7 @@ changes:
     pub fn run(inout self, p: Program, fuel: Int) ! Underflow(Int)
     fn push(inout self, n: Int)
     fn pop(inout self) -> Int ! Underflow(Int)
-    fn binary(inout self, f: fn(Int, Int) -> Int) ! Underflow(Int)
+    fn binary(inout self, f: fn(Int, Int) -> Int ! ..e uses ..d) ! Underflow(Int) | ..e uses ..d
   
   -- timeline
   pub type Timeline

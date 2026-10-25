@@ -92,7 +92,7 @@ let%expect_test "a method's own type parameters, and inferred ones" =
     {|
 type Box<T> = { value: T }
   fn map<U>(self, f: fn(T) -> U) -> Box<U> = Box { value: try f(self.value) }
-  fn with(self, x) = Box { value: x }
+  fn put(self, x) = Box { value: x }
   fn first(self, x) = x
   let none = Box { value: None }
 
@@ -102,7 +102,7 @@ fn main() = 1
     {|
     type Box<T>
       fn map<U>(self, f: fn(T) -> U) -> Box<U>
-      fn with<U>(self, x: U) -> Box<U>
+      fn put<U>(self, x: U) -> Box<U>
       fn first<U>(self, x: U) -> U
       let none: Box<Option<T>>
     fn main() -> Int

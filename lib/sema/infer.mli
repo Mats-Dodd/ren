@@ -16,6 +16,9 @@ type found =
   | Method_of of Path.t
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
+  | Installs of Path.t
+      (** a `with` whose item is an implementation of this dependency *)
+  | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
 
 (* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
    that takes a module (here [Int], which says how to compare keys) and

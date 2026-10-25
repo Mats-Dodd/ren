@@ -81,3 +81,9 @@ fn at() -> Time uses store.Users = Clock.now()
 //                         ^ type.dependency
 //                                 ^ type
 //                                       ^ function
+
+fn keep(f: fn() -> Int ! ..e uses ..d) -> (Clock uses Os) = with f() in 1
+//                       ^ type
+//                                ^ type.dependency
+//                                                    ^ type.dependency
+//                                                           ^ keyword

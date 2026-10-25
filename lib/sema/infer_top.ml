@@ -69,31 +69,56 @@ let components ~home ~calls (fns : fn_def list) =
    and dependencies flow into the caller, so they're never written. That's
    only true if the function just calls it, or passes it straight on to
    another function. Storing it, returning it, or capturing it in a lambda
-   that escapes would let it outlive the call. *)
+   that escapes would let it outlive the call. One that names a row,
+   `f: fn() uses ..d`, is a closure that can be kept.
+
+   A parameter of a dependency's type, `c: Clock`, is transparent the same
+   way: what it needs flows into the caller, so it can only be installed,
+   `with c in ...`, or passed straight on (deps.md, "Implementations"). *)
 
 let check_transparent sink (f : fn_def) =
-  let fn_params =
+  let params =
     List.filter_map
       (fun (p : Resolved.param) ->
-        match p.pty with Some (TyFn _) -> Some p.pname | _ -> None)
+        match p.pty with
+        | Some (TyFn _ as t) when not (names_row t) -> Some (p.pname, None)
+        | Some (TyImpl ({ tref = Named d; _ }, None, _)) ->
+            Some (p.pname, Some d)
+        | _ -> None)
       f.params
   in
   List.iter
-    (fun (param : binder) ->
+    (fun ((param : binder), dep) ->
       let name = param.ident.name in
       let fail loc what =
-        Diag.error loc
-          ~notes:
-            [
-              "a parameter whose type is written `fn(...)` can only be called, \
-               or passed straight to another function";
-            ]
-          ~help:
-            (sprintf
-               "remove the type from `%s` and let it be inferred, so its \
-                errors and dependencies are tracked wherever it goes"
-               name)
-          (sprintf "`%s` %s, so it isn't transparent" name what)
+        match dep with
+        | None ->
+            Diag.error loc
+              ~notes:
+                [
+                  "a parameter whose type is written `fn(...)` can only be \
+                   called, or passed straight to another function";
+                ]
+              ~help:
+                (sprintf
+                   "remove the type from `%s` and let it be inferred, so its \
+                    errors and dependencies are tracked wherever it goes"
+                   name)
+              (sprintf "`%s` %s, so it isn't transparent" name what)
+        | Some (d : Path.t) ->
+            Diag.error loc
+              ~notes:
+                [
+                  sprintf
+                    "a parameter whose type is a dependency's, `%s`, can only \
+                     be installed, with `with`, or passed straight to another \
+                     function, so what it needs is what its function uses"
+                    d.name;
+                ]
+              ~help:
+                (sprintf "to keep it, name what it needs: `%s: %s uses ..d`"
+                   name d.name)
+              (sprintf "`%s` %s, so it isn't transparent" name what)
       in
       let is_param = function Local b -> b.id = param.id | _ -> false in
       (* does [e] use the parameter anywhere? *)
@@ -128,6 +153,7 @@ let check_transparent sink (f : fn_def) =
                    (fun (a : arm) ->
                      Option.to_list a.arm_guard @ [ a.arm_body ])
                    arms)
+        | With { item; body; _ } -> any [ item; body ]
       in
       (* [ok]: this position may hold the bare parameter, or a lambda that
          captures it *)
@@ -136,6 +162,10 @@ let check_transparent sink (f : fn_def) =
         match e.kind with
         | Var x when is_param x ->
             if not ok then fail e.loc "is used as a value here"
+        | Field ({ kind = Var x; _ }, _) when is_param x && dep <> None ->
+            (* `c.now()`: inference reports it isn't how an operation is
+               called *)
+            ()
         | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
         | Call (callee, args) ->
             walk ~ok:true callee;
@@ -169,9 +199,13 @@ let check_transparent sink (f : fn_def) =
                 Option.iter (walk ~ok:false) a.arm_guard;
                 walk ~ok:false a.arm_body)
               arms
+        | With { item; body; _ } ->
+            (* an item is installed, or called with the body *)
+            walk ~ok:true item;
+            walk ~ok:false body
       in
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
-    fn_params
+    params
 
 (* ---- what's written ----
 
@@ -184,10 +218,11 @@ let walk ~ty ~errors ~pattern (prog : program) =
     ty t;
     match t with
     | TyName (_, args) -> List.iter ty_ args
-    | TyFn (ps, ret, errs, _) ->
+    | TyFn (ps, ret, errs, _, _) ->
         List.iter ty_ ps;
         Option.iter ty_ ret;
         Option.iter errors_ errs
+    | TyImpl _ -> ()
     | TyInout (t, _) -> ty_ t
     | TyErrors es -> errors_ es
   and errors_ (es : Resolved.errors) =
@@ -239,6 +274,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
           arms
     | Array xs -> go xs
     | For { iter; body; _ } -> go [ iter; body ]
+    | With { item; body; _ } -> go [ item; body ]
   in
   let fn_ (f : fn_def) =
     List.iter param f.params;
@@ -267,7 +303,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
    says how it writes a type's name. *)
 let written_loc : Resolved.ty -> Loc.t = function
   | TyName ({ tloc; _ }, _) -> tloc
-  | TyFn (_, _, _, l) | TyInout (_, l) -> l
+  | TyFn (_, _, _, _, l) | TyImpl (_, _, l) | TyInout (_, l) -> l
   | TyErrors es -> es.eloc
 
 let check_written sink ~sets ~names (prog : program) =
@@ -301,7 +337,7 @@ let check_written sink ~sets ~names (prog : program) =
                      (sprintf "`%s` doesn't take an error set" (names p)))
             | _ -> ())
           args
-    | TyName _ | TyFn _ | TyInout _ | TyErrors _ -> ()
+    | TyName _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ -> ()
   in
   let pr = Ty.printer ~names { ty = Error; names = [] } in
   let errors (es : Resolved.errors) =
@@ -350,17 +386,43 @@ let check_written sink ~sets ~names (prog : program) =
 let declared_uses ~is_value (f : fn_def) =
   match f.uses with
   | _ when is_value f -> Some []
-  | Some ds ->
-      Some
-        (List.sort_uniq String.compare
-           (List.filter_map
-              (fun (d : tname) ->
-                match d.tref with
-                | Named p -> Some (Ty.dep_label p)
-                | Param _ -> None)
-              ds))
+  | Some (u : Resolved.uses) ->
+      Some (List.map (fun (l : Ty.label) -> l.name) (Iface.dep_labels u.deps))
   | None when f.pub -> Some []
   | None -> None
+
+(* The rows [f]'s signature names, `..d`, each once, in the order they're
+   first written. *)
+let rows_named (f : fn_def) =
+  let found = ref [] in
+  let name (n : ident option) =
+    Option.iter
+      (fun (n : ident) ->
+        if not (List.mem n.name !found) then found := !found @ [ n.name ])
+      n
+  in
+  let errs (es : Resolved.errors option) =
+    name (Option.bind es (fun (es : Resolved.errors) -> es.etail))
+  and uses (u : Resolved.uses option) =
+    name (Option.bind u (fun (u : Resolved.uses) -> u.dtail))
+  in
+  let rec ty (t : Resolved.ty) =
+    match t with
+    | TyName (_, args) -> List.iter ty args
+    | TyFn (ps, ret, e, u, _) ->
+        List.iter ty ps;
+        Option.iter ty ret;
+        errs e;
+        uses u
+    | TyImpl (_, u, _) -> uses u
+    | TyInout (t, _) -> ty t
+    | TyErrors es -> errs (Some es)
+  in
+  List.iter (fun (p : Resolved.param) -> Option.iter ty p.pty) f.params;
+  Option.iter ty f.ret;
+  errs f.errors;
+  uses f.uses;
+  !found
 
 (* Whether the runtime installs the dependency [p] around `main`: one of
    the prelude's built-ins (deps.md, "`main`"). *)
@@ -381,8 +443,16 @@ let check_uses env ~is_value ~main (f : fn_def) cx declared =
   let calls =
     List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(cx.calls)
   in
+  (* where it's first used, and what that is *)
   let first has =
-    List.find_map (fun c -> if has c then Some c.cloc else None) calls
+    List.find_map
+      (fun c ->
+        if has c then
+          Some
+            ( c.cloc,
+              if c.needs then "installing this needs" else "this call uses" )
+        else None)
+      calls
   in
   List.iter
     (fun dep ->
@@ -411,7 +481,9 @@ let transparent_rows (params : Resolved.param list) ps =
     (List.map2
        (fun (p : Resolved.param) (t : Types.param) ->
          match (p.pty, repr t.ty) with
-         | Some (TyFn (_, _, None, _)), TFun (_, _, e, _) -> [ e ]
+         | Some (TyFn (_, _, None, _, _) as w), TFun (_, _, e, _)
+           when not (names_row w) ->
+             [ e ]
          | _ -> [])
        params ps)
 
@@ -700,6 +772,262 @@ let as_declared env path cx declared =
           (TFun (List.map param ps, ret, errs', uses))
     | _ -> ()
 
+(* ---- named rows (deps.md, "Implementations") ---- *)
+
+(* The variable or named row [r] ends in, or [REmpty]. *)
+let rec row_end r =
+  match repr_row r with RExtend (_, rest) -> row_end rest | r -> r
+
+(* `uses Clock, ..d`, what [f] would write to use [n] as well. *)
+let uses_with env (f : fn_def) n =
+  let deps =
+    match f.uses with
+    | Some u ->
+        List.filter_map
+          (fun (d : tname) ->
+            match d.tref with Named p -> Some (env.names p) | Param _ -> None)
+          u.deps
+    | None -> []
+  in
+  "uses " ^ String.concat ", " (deps @ [ ".." ^ n ])
+
+(* Once the group is done, when every row has all its labels: each use of
+   a named row (see [row_due]) ends the row it's added to in that row, and
+   each function that names its own, `uses ..d` or `! ..e`, ends its own
+   in it. A function that declares what it uses or fails with, but not a
+   named row it does, is reported, and so is a row that can't end in one.
+   [fns] are the group's functions, each with what checking it found and
+   whether it declares what it uses and fails with. *)
+let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
+  let own_tail (es : Resolved.errors option) =
+    Option.map
+      (fun (n : ident) -> n.name)
+      (Option.bind es (fun (es : Resolved.errors) -> es.etail))
+  and own_dtail (u : Resolved.uses option) =
+    Option.map
+      (fun (n : ident) -> n.name)
+      (Option.bind u (fun (u : Resolved.uses) -> u.dtail))
+  in
+  (* the functions that declare what they use, by the variable their row
+     ends in *)
+  let declaring =
+    List.filter_map
+      (fun ((f : fn_def), cx, uses, _) ->
+        if uses then Option.map (fun t -> (t, f)) (row_tail cx.uses) else None)
+      fns
+  in
+  let bind tail (id, n) =
+    try Unify.unify_row env.st tail (RSkol (id, n))
+    with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ -> ()
+  in
+  (* a row can end in only one named row *)
+  let two d other =
+    let n = snd d.rnamed in
+    report env
+      (Diag.make d.rloc
+         ~notes:
+           [
+             sprintf
+               "a row ends in at most one named row, and what this is in \
+                already uses `..%s`, so `..%s` can't be added"
+               other n;
+           ]
+         ~help:
+           (sprintf
+              "name the two rows alike, `..%s`, if they can stand for the same"
+              other)
+         (sprintf "%s `..%s`, but what this is in already uses `..%s`" d.rwhat n
+            other))
+  in
+  (* the uses checked once every other is, ending a row that's still open:
+     ending it before would hide what the function doesn't declare *)
+  let later = ref [] in
+  List.iter
+    (fun d ->
+      let id, n = d.rnamed in
+      match row_end d.rinto with
+      | RSkol (id', _) when id' = id -> ()
+      | RSkol (_, other) -> two d other
+      | RVar _ -> (
+          match
+            Option.bind (row_tail d.rinto) (fun t -> List.assoc_opt t declaring)
+          with
+          | Some f when own_dtail f.uses <> Some n ->
+              report env
+                (Diag.make d.rloc
+                   ~notes:
+                     [
+                       sprintf
+                         "`..%s` stands for whatever the closure or \
+                          implementation it names uses, and a function that \
+                          declares its dependencies declares that too"
+                         n;
+                     ]
+                   ~help:
+                     (match own_dtail f.uses with
+                     | Some other ->
+                         sprintf
+                           "`%s` names one row, `..%s`, which is all it can \
+                            name: name this one `..%s` too, where it's written"
+                           f.name.name other other
+                     | None ->
+                         sprintf "add it to what `%s` uses: `%s`" f.name.name
+                           (uses_with env f n))
+                   (sprintf "%s `..%s`, which `%s` doesn't declare" d.rwhat n
+                      f.name.name))
+          | _ -> later := d :: !later)
+      | REmpty | RExtend _ ->
+          report env
+            (Diag.make d.rloc
+               ~notes:
+                 [
+                   sprintf
+                     "`..%s` stands for whatever the closure or implementation \
+                      it names uses, and what this is in can't use more than \
+                      it lists"
+                     n;
+                 ]
+               ~help:
+                 (sprintf
+                    "use it where `..%s` can go: in the function that names \
+                     it, or in a lambda whose type isn't written"
+                    n)
+               (sprintf "%s `..%s`, which isn't allowed here" d.rwhat n)))
+    (List.rev env.rows_due);
+  List.iter
+    (fun d ->
+      match row_end d.rinto with
+      | RSkol (id, _) when id = fst d.rnamed -> ()
+      | RSkol (_, other) -> two d other
+      | tail -> bind tail d.rnamed)
+    (List.rev !later);
+  env.rows_due <- [];
+  List.iter
+    (fun ((f : fn_def), cx, _, errors) ->
+      let named n =
+        match List.assoc_opt n cx.named with
+        | Some (RSkol (id, n)) -> Some (id, n)
+        | _ -> None
+      in
+      (match Option.bind (own_dtail f.uses) named with
+      | Some r -> (
+          match row_end cx.uses with RVar _ as t -> bind t r | _ -> ())
+      | None -> ());
+      let declared = own_tail f.errors in
+      match row_end cx.errs with
+      | RSkol (id, n) when errors && declared <> Some n ->
+          (* a call of a closure it was passed, which fails with [..n] *)
+          let from =
+            List.find_map
+              (function
+                | Passed c when row_tail c.erow = Some id -> Some c.eloc
+                | _ -> None)
+              (Option.fold ~none:[] ~some:( ! ) cx.sources)
+          in
+          report env
+            (Diag.make
+               (Option.value from ~default:f.name.loc)
+               ~notes:
+                 [
+                   sprintf
+                     "`..%s` stands for whatever the closure it names fails \
+                      with, and a function that declares its errors declares \
+                      that too"
+                     n;
+                 ]
+               ~help:
+                 (sprintf
+                    "add `..%s` to what `%s` declares it fails with, after `!`"
+                    n f.name.name)
+               (sprintf "this can fail with `..%s`, which `%s` doesn't declare"
+                  n f.name.name))
+      | _ -> ())
+    fns
+
+(* A function that names its own errors' row, `! ..e`, fails with that
+   row: its calls of itself do, and a call of a closure that fails with
+   [..e] passes on what it can. That's known before the group's markers
+   are checked, which need it, and its labels are all there by then. *)
+let own_error_rows env (fns : (fn_def * ctx) list) =
+  List.iter
+    (fun ((f : fn_def), cx) ->
+      match
+        ( Option.bind f.errors (fun (es : Resolved.errors) -> es.etail),
+          row_end cx.errs )
+      with
+      | Some (n : ident), (RVar _ as tail) -> (
+          match List.assoc_opt n.name cx.named with
+          | Some r -> (
+              try Unify.unify_row env.st tail r
+              with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ -> ())
+          | None -> ())
+      | _ -> ())
+    fns
+
+(* Each operation an implementation of the group gives fails with no more
+   than its dependency declares (deps.md, "Implementations"): anything more
+   is reported, where the operation is given, and then it fails with
+   exactly what it's found to. *)
+let settle_impls env =
+  let pr = printer env in
+  List.iter
+    (fun o ->
+      let labels, _ = row_parts o.ierrs in
+      let declared n =
+        List.exists (fun (l : label) -> l.name = n) o.ideclared
+      in
+      (match List.filter (fun (l : label) -> not (declared l.name)) labels with
+      | [] -> ()
+      | extra ->
+          let op = env.names o.idep ^ "." ^ o.iop in
+          let shown = and_list (List.map (show_label pr) extra) in
+          (* where it fails: the lambda's body, if it's a lambda *)
+          let body =
+            match o.ivalue.kind with Lambda (_, b) -> b | _ -> o.ivalue
+          in
+          let help =
+            match (body.kind, extra, o.ideclared) with
+            | Try ({ kind = Call (f, _); _ } as call), [ l ], d :: _ ->
+                (* `try match` passes on what the arms don't handle, if the
+                   call fails with more *)
+                let more =
+                  match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
+                  | Some (TFun (_, _, errs, _)) ->
+                      List.exists (fun n -> n <> l.name) (row_names errs)
+                      || row_tail errs <> None
+                  | _ -> true
+                in
+                sprintf "map it: `%smatch %s` with the arm `fail %s => fail %s`"
+                  (if more then "try " else "")
+                  (Option.value (env.source call) ~default:"...")
+                  l.name d.name
+            | _, _, [] ->
+                "handle what it fails with inside it, with `match` and `fail` \
+                 arms"
+            | _, _, d :: _ ->
+                sprintf
+                  "map what it fails with inside it, with `match` and `fail` \
+                   arms, to what it can: `fail %s`"
+                  d.name
+          in
+          report env
+            (Diag.make body.loc
+               ~says:(sprintf "fails with %s" shown)
+               ~notes:
+                 [
+                   (match o.ideclared with
+                   | [] -> sprintf "`%s` can't fail" op
+                   | ds ->
+                       sprintf "`%s` can fail only with %s" op
+                         (and_list (List.map (fun (l : label) -> l.name) ds)));
+                 ]
+               ~help
+               (sprintf "this implementation can fail with %s, and `%s` can't"
+                  shown op)));
+      close_row o.ierrs)
+    (List.rev env.impl_ops);
+  env.impl_ops <- []
+
 (* ---- associated values ----
 
    An associated value is made once, when the program starts, before
@@ -891,8 +1219,8 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
       if not (runtime_dep p) then
         let d = env.names p in
         let written =
-          Option.bind f.uses
-            (List.find_opt (fun (t : tname) -> t.tref = Named p))
+          Option.bind f.uses (fun (u : Resolved.uses) ->
+              List.find_opt (fun (t : tname) -> t.tref = Named p) u.deps)
         in
         (* the call that needs it: the first that brings it in itself, as
            in [check_uses]. Once `main`'s uses are joined every call's row
@@ -907,7 +1235,14 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
                 first (fun c -> List.mem dep (row_names c.row))
             | None -> None
           with
-          | Some c -> [ (c.cloc, sprintf "this call uses `%s`" d) ]
+          | Some c ->
+              [
+                ( c.cloc,
+                  sprintf "%s `%s`"
+                    (if c.needs then "installing this needs"
+                     else "this call uses")
+                    d );
+              ]
           | None -> []
         in
         let loc = match written with Some t -> t.tloc | None -> f.name.loc in
@@ -982,6 +1317,8 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       kept = [];
       includes = [];
       tag_patterns = [];
+      rows_due = [];
+      impl_ops = [];
       in_scope = [];
     }
   in
@@ -1053,23 +1390,40 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
           List.map (fun (t : ident) -> (fresh_id env.st, t.name)) f.tparams
         in
         let tparams = List.map (fun (id, n) -> TSkol (id, n)) skolems in
-        let signature () =
+        (* the rows its signature names, which, like its type parameters,
+           are equal only to themselves while it's checked *)
+        let row_skolems =
+          List.map (fun n -> (fresh_id env.st, n)) (rows_named f)
+        in
+        let named = List.map (fun (id, n) -> (n, RSkol (id, n))) row_skolems in
+        let signature ~seen () =
           (* a function that declares its dependencies starts with them: its
              body can add to them only through a transparent parameter, whose
              row this is too, and whatever else it adds is reported once the
-             group is done. The same goes for its errors. *)
+             group is done. The same goes for its errors. A row it names,
+             `! ..e`, is its own row's end once the group is done: [seen]
+             makes the type the group's other functions see, which ends in
+             it already. *)
+          let tail (n : ident option) =
+            match
+              Option.bind n (fun (n : ident) -> List.assoc_opt n.name named)
+            with
+            | Some r when seen -> r
+            | _ -> fresh_row env.st
+          in
           let errs =
             extend
               (Option.value
                  (declared_errors env ~is_value ~tparams f)
                  ~default:[])
-              (fresh_row env.st)
+              (tail
+                 (Option.bind f.errors (fun (es : Resolved.errors) -> es.etail)))
           in
           let uses =
             List.fold_right
               (fun d rest -> RExtend (dep d, rest))
               (Option.value (declared_uses ~is_value f) ~default:[])
-              (fresh_row env.st)
+              (tail (Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail)))
           in
           (* A public function's transparent parameter fails with exactly
              its function's errors, as its interface says. A private one's
@@ -1080,19 +1434,19 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             List.map
               (fun p ->
                 let own = if f.pub then errs else fresh_row env.st in
-                param_type env ~tparams ~own:(own, uses) p)
+                param_type env ~tparams ~named ~own:(own, uses) p)
               f.params
           in
           let ret =
             match f.ret with
-            | Some t -> convert env ~tvars:tparams ~row:closed t
+            | Some t -> convert env ~tvars:tparams ~named ~row:closed t
             | None when f.pub && not (is_value f) ->
                 unit (* a public function without `->` returns Unit *)
             | None -> fresh_var env.st
           in
           (ps, ret, errs, uses)
         in
-        let ps, ret, errs, uses = signature () in
+        let ps, ret, errs, uses = signature ~seen:false () in
         let cx =
           {
             self = path f;
@@ -1113,11 +1467,12 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             (* a transparent parameter's errors are the function's own *)
             selves = errs :: transparent_rows f.params ps;
             sources = Some (ref []);
+            named;
           }
         in
         Hashtbl.replace env.globals (path f) (TFun (ps, ret, errs, uses));
         let declared () =
-          let ps, ret, errs, uses = signature () in
+          let ps, ret, errs, uses = signature ~seen:true () in
           TFun (ps, ret, errs, uses)
         in
         ((f, skolems, cx, ps, ret), (path f, declared))
@@ -1187,7 +1542,17 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       dropped_values env;
       (* only now, with the group's uses of each other joined, is it known
          everything each function uses and fails with *)
+      own_error_rows env (List.map (fun (f, _, cx, _, _) -> (f, cx)) setups);
       settle_errors env;
+      settle_impls env;
+      settle_rows env
+        (List.map
+           (fun ((f : fn_def), _, cx, _, _) ->
+             ( f,
+               cx,
+               declared_uses ~is_value f <> None,
+               declared_errors env ~is_value ~tparams:cx.tparams f <> None ))
+           setups);
       env.group <- [];
       env.spelled <- [];
       List.iter
@@ -1241,7 +1606,12 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                       "`%s` would have to use `%s`, the type parameter of `%s`"
                       f.name.name t o.name.name)
           | [] -> ());
-          let scheme = generalize env.st ~skolems mono in
+          let row_skolems =
+            List.filter_map
+              (function _, RSkol (id, n) -> Some (id, n) | _ -> None)
+              cx.named
+          in
+          let scheme = generalize env.st ~skolems ~row_skolems mono in
           Hashtbl.replace env.globals (path f) scheme;
           Hashtbl.replace schemes f.name.name scheme;
           Hashtbl.replace tables f.name.name cx)

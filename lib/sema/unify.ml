@@ -28,7 +28,7 @@ let rec occurs id level t =
   | TVar { contents = Link _ } -> assert false
   | TSkol _ | TError -> ()
   | TCon (_, args) -> List.iter (occurs id level) args
-  | TErrors e -> occurs_row ~ty:id (-1) level e
+  | TErrors e | TUses e -> occurs_row ~ty:id (-1) level e
   | TFun (ps, r, e, u) ->
       List.iter (occurs id level) (r :: param_tys ps);
       occurs_row ~ty:id (-1) level e;
@@ -43,7 +43,7 @@ and occurs_row ?(ty = -1) id level r =
       if id = id' then raise Infinite;
       if l > level then cell := RUnbound (id', level)
   | RVar { contents = RLink _ } -> assert false
-  | REmpty -> ()
+  | REmpty | RSkol _ -> ()
   | RExtend (label, rest) ->
       List.iter (occurs ty level) label.payload;
       occurs_row ~ty id level rest
@@ -75,7 +75,7 @@ let rec unify st a b =
       unify st r1 r2;
       unify_row st e1 e2;
       unify_row st u1 u2
-  | TErrors e1, TErrors e2 -> unify_row st e1 e2
+  | TErrors e1, TErrors e2 | TUses e1, TUses e2 -> unify_row st e1 e2
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 
@@ -87,6 +87,7 @@ and unify_row st a b =
   match (repr_row a, repr_row b) with
   | REmpty, REmpty -> ()
   | RVar c1, RVar c2 when c1 == c2 -> ()
+  | RSkol (i, _), RSkol (j, _) when i = j -> ()
   | RVar ({ contents = RUnbound (id, l) } as cell), r
   | r, RVar ({ contents = RUnbound (id, l) } as cell) ->
       occurs_row id l r;
@@ -100,7 +101,9 @@ and unify_row st a b =
       | Some before, after when after <> Some before -> raise Mismatch
       | _ -> ());
       unify_row st rest1 rest2
-  | REmpty, RExtend _ -> raise Mismatch
+  (* a named row has no labels inference can see, and gets none *)
+  | RSkol _, RExtend _ -> unify_row st b a
+  | (REmpty | RSkol _), (REmpty | RSkol _) | REmpty, RExtend _ -> raise Mismatch
   | RVar { contents = RLink _ }, _ | _, RVar { contents = RLink _ } ->
       assert false
 
@@ -108,7 +111,7 @@ and unify_row st a b =
    there yet. A label of the same name has to have the same payload. *)
 and rewrite st row (label : label) =
   match repr_row row with
-  | REmpty -> raise Mismatch
+  | REmpty | RSkol _ -> raise Mismatch
   | RExtend (l, rest) when l.name = label.name ->
       (try
          if List.length l.payload <> List.length label.payload then

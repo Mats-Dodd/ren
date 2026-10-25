@@ -220,7 +220,7 @@ fn main() = ()
 |};
   [%expect
     {|
-    fn apply<T>(f: fn() -> T) -> T
+    fn apply<T>(f: fn() -> T uses ..d) -> T uses ..d
     fn passed<T>(f: fn() -> T) -> T
     fn ok() -> Int
     fn passes<T>() -> T ! Oops
@@ -601,8 +601,8 @@ fn main() = ()
 |};
   [%expect
     {|
-    fn wrap(g: fn() -> Int ! ..e) -> Result<Int, ! ..e>
-    fn w<T>(f: fn() -> T ! ..e) -> Result<T, ! ..e>
+    fn wrap(g: fn() -> Int ! ..e uses ..d) -> Result<Int, ! ..e> uses ..d
+    fn w<T>(f: fn() -> T ! ..e uses ..d) -> Result<T, ! ..e> uses ..d
     fn both(g: fn()) -> Result<Unit, ! ..e> ! ..e
     fn bad() -> Int ! B
     fn use() -> Result<Int, ! Q>
@@ -623,8 +623,8 @@ fn main() = ()
     1 │ pub fn wrap(g: fn() -> Int) -> Result<Int, ! Mine> = attempt g()
       │                                                              ^^^
       │                                                              - its type is written `fn(...)`, so what it fails with is passed on to whoever calls `wrap`
-      = a public signature can't name a passed function's errors in a `Result` yet: that arrives with `..e`, in stage 7
-      help: pass them on with `try`, or make `wrap` private, so its type is inferred
+      = a transparent parameter's errors are its function's own, which its signature says it passes on
+      help: to keep them, name their row where `g`'s type is written, as in `g: fn() ! ..e`, or pass them on with `try`
     |}]
 
 let%expect_test "attempt keeps only what its call fails with" =
@@ -657,7 +657,7 @@ fn main() = ()
   [%expect
     {|
     fn local(n: Int) -> Result<Int, ! Q> ! Other | Q
-    fn passed(g: fn() -> Int ! ..e, n: Int) -> Result<Int, ! ..e> ! Z | ..e
+    fn passed(g: fn() -> Int ! ..e uses ..d, n: Int) -> Result<Int, ! ..e> ! Z | ..e uses ..d
     fn again(g: fn() -> Int) -> Int
     fn exact(n: Int) -> Int ! Other | Q
     fn main()
@@ -1220,8 +1220,8 @@ fn main() = ()
     2 │   match g()
       │         ^^^
       │         - its type is written `fn(...)`, so what it fails with is passed on to whoever calls `each`
-      = a public signature can't say a passed function's errors are handled yet: that arrives with `..e`, in stage 7
-      help: pass them on with `try`, or make `each` private, so its type is inferred
+      = a transparent parameter's errors are its function's own, which its signature says it passes on
+      help: to handle them, name their row where `g`'s type is written, as in `g: fn() ! ..e`, or pass them on with `try`
     |}]
 
 (* ---- 6. Libraries compose ---- *)

@@ -241,6 +241,11 @@ let rec walk cx (e : expr) =
              ]
            "`&` can't be used here")
   | Unop (_, a) | Try a | Attempt a -> walk cx a
+  | With { item; body; _ } ->
+      (* a wrapper's body is a lambda, which can't change what's outside
+         it: inference, which knows which items are wrappers, says so *)
+      walk cx item;
+      walk cx body
   | Fail (_, args) -> List.iter (fun (_, a) -> walk cx a) args
   | Binop (_, a, b) ->
       walk cx a;

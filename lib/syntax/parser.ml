@@ -10,11 +10,17 @@
      import   := "import" IDENT { "/" IDENT } ["." "{" UIDENT, ... "}"]
                  ["as" IDENT]
      fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
-                 ["->" type] [errors] ["uses" tyname, ...] "=" body
-                                                   (`uses` may start the
-                                                    next line, indented)
-     errors   := "!" error { "|" error }          (in a type's body, each
+                 ["->" type] [errors] [uses] "=" body
+                                                   (`!` and `uses` may start
+                                                    the next line, indented)
+     errors   := "!" error { "|" error } ["|" row]
+              |  "!" row                          (in a type's body, each
                                                     `|` may start a line)
+     uses     := "uses" tyname { "," tyname } ["," row]
+              |  "uses" row                       (in a type, a `,` goes on
+                                                    only to a dependency or a
+                                                    row)
+     row      := ".." IDENT                       (a named row: `..e`, `..d`)
      error    := UIDENT ["(" payload, ... ")"]      (a tag)
               |  [IDENT "."] UIDENT                (a named error set)
      payload  := [IDENT ":"] type
@@ -44,8 +50,11 @@
      ctor     := UIDENT ["(" field, ... ")"]
      field    := IDENT ":" type
      type     := tyname ["<" type, ... ">"]
+              |  tyname uses               (an implementation, and what it
+                                             needs; not right after `->`)
               |  "fn" "(" ["inout"] [IDENT ":"] type, ... ")" ["->" type]
-                 [errors]
+                 [errors] [uses]           (the innermost function type's)
+              |  "(" type ")"
               |  errors                     (an error set: only `Result`'s
                                              second type argument, resolve.ml)
      tyname   := [IDENT "."] UIDENT                (`stripe.Client`: another
@@ -82,6 +91,7 @@
               |  tyname "." IDENT               (a member: `Stack.of`)
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
               |  "if" expr "then" body [[NEWLINE] "else" body]
+              |  "with" expr, ... "in" body
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
               |  "fail" UIDENT ["(" con_args ")"]
      arm      := (pattern | fails) ["if" expr] "=>" body
@@ -235,10 +245,18 @@ let parse_ctor_ref p : ctor_ref =
       })
     else { qual = None; name = first }
 
-(* A function type's `! ...` belongs to the innermost function type it
-   can: in `fn f() -> fn() ! Bad`, the `fn()` returned can fail with `Bad`. *)
-let rec parse_ty p : ty =
+(* A function type's `! ...` and `uses ...` belong to the innermost
+   function type they can: in `fn f() -> fn() ! Bad`, the `fn()` returned
+   can fail with `Bad`. After `->`, a `uses` is the function's, never what
+   an implementation it returns needs, which is written in parentheses,
+   `-> (Clock uses Os)`; [uses] says whether a type here can take one. *)
+let rec parse_ty ?(uses = true) p : ty =
   match peek p with
+  | LPAREN ->
+      advance p;
+      let t = parse_ty p in
+      expect p RPAREN;
+      t
   | FN ->
       let start = loc p in
       advance p;
@@ -247,18 +265,20 @@ let rec parse_ty p : ty =
       let ret =
         if peek p = ARROW then (
           advance p;
-          Some (parse_ty p))
+          Some (parse_ty ~uses:false p))
         else None
       in
       let errs = if peek p = BANG then Some (parse_errors p) else None in
-      TyFn (params, ret, errs, Loc.span start (last_loc p))
+      let used = if peek p = USES then Some (parse_uses p) else None in
+      TyFn (params, ret, errs, used, Loc.span start (last_loc p))
   | BANG when peek2 p = GT || peek2 p = COMMA ->
       (* `Result<Int, !>`: an empty set, a [Result] that can't be [Err] *)
       let l = loc p in
       advance p;
-      TyErrors { errs = []; eloc = l }
+      TyErrors { errs = []; etail = None; eloc = l }
   | BANG -> TyErrors (parse_errors p)
   | _ ->
+      let start = loc p in
       let name = parse_tyname p in
       let args =
         if peek p = LT then (
@@ -266,7 +286,18 @@ let rec parse_ty p : ty =
           sep_list p ~close:GT parse_ty)
         else []
       in
-      TyName (name, args)
+      if uses && peek p = USES then (
+        (* an implementation, and what it needs: `Clock uses Os` *)
+        if args <> [] then
+          Diag.error (loc p)
+            ~help:"only a dependency's type is followed by `uses`"
+            (Printf.sprintf
+               "`%s` takes type arguments, so it isn't a dependency, and needs \
+                nothing"
+               (show_tyname name));
+        let u = parse_uses p in
+        TyImpl (name, Some u, Loc.span start (last_loc p)))
+      else TyName (name, args)
 
 (* A parameter in a function type may be named for documentation, as in
    `fn(id: UserId) -> User`. The name doesn't affect the type. *)
@@ -282,9 +313,57 @@ and parse_fn_ty_param p =
   let t = parse_ty p in
   if inout then TyInout (t, Loc.span start (last_loc p)) else t
 
-(* An error set, `! Short(by: Money) | Frozen | Refusal`. With [lines], as
-   in a named set's body indented under `type X =`, each `|` may start
-   its own line, like a sum type's. *)
+(* What a function type or an implementation uses, after `uses`: `Clock,
+   store.Users`, and last, a named row, `..d`. [greedy] says a comma always
+   goes on with another dependency, as in a signature, where `=` ends the
+   list; inside a type, one goes on only if what's after the comma can be
+   one, so `fn(f: fn() uses Clock, n: Int)` has two parameters. *)
+and parse_uses ?(greedy = false) p : uses =
+  let start = loc p in
+  expect p USES;
+  let continues () =
+    match (peek2 p, peek3 p) with
+    | DOTDOT, _ -> true
+    | IDENT n, _ when is_upper n -> true
+    | IDENT _, DOT -> true
+    | _ -> false
+  in
+  let rec items acc =
+    if peek p = DOTDOT then (
+      let (tail : ident) = parse_row_name p in
+      if peek p = COMMA && continues () then
+        Diag.error (loc p) ~help:"move it to the end"
+          (Printf.sprintf "`..%s` stands for the rest, so it comes last"
+             tail.name);
+      (List.rev acc, Some tail))
+    else
+      (* `store.Users`, or bare `Users`: after a module's alias, the error
+         for a lowercase name points at the name *)
+      let d = parse_tyname ~what:"a dependency's name" p in
+      if peek p = COMMA && (greedy || continues ()) then (
+        advance p;
+        items (d :: acc))
+      else (List.rev (d :: acc), None)
+  in
+  let deps, dtail = items [] in
+  { deps; dtail; uloc = Loc.span start (last_loc p) }
+
+(* A named row, `..d`: whatever the closure or implementation it's written
+   on fails with or uses, the same wherever the signature names it. *)
+and parse_row_name p =
+  expect p DOTDOT;
+  match peek p with
+  | IDENT n when not (is_upper n) -> ident p
+  | IDENT n ->
+      Diag.error (loc p)
+        ~help:(Printf.sprintf "write `..%s`" (String.uncapitalize_ascii n))
+        "a named row's name starts with a lowercase letter"
+  | _ -> fail_expected p "a row's name, like `..d`"
+
+(* An error set, `! Short(by: Money) | Frozen | Refusal`, which can end in
+   a named row, `! Bad | ..e`. With [lines], as in a named set's body
+   indented under `type X =`, each `|` may start its own line, like a sum
+   type's. *)
 and parse_errors ?(lines = false) p : errors =
   let start = loc p in
   expect p BANG;
@@ -307,15 +386,23 @@ and parse_errors ?(lines = false) p : errors =
     | _ -> fail_expected p "an error tag"
   in
   let rec loop acc =
-    let e = error p in
-    if lines && peek p = NEWLINE && peek2 p = PIPE then advance p;
-    if peek p = PIPE then (
-      advance p;
-      loop (e :: acc))
-    else List.rev (e :: acc)
+    if peek p = DOTDOT then (
+      let (tail : ident) = parse_row_name p in
+      if peek p = PIPE then
+        Diag.error (loc p) ~help:"move it to the end"
+          (Printf.sprintf "`..%s` stands for the rest, so it comes last"
+             tail.name);
+      (List.rev acc, Some tail))
+    else
+      let e = error p in
+      if lines && peek p = NEWLINE && peek2 p = PIPE then advance p;
+      if peek p = PIPE then (
+        advance p;
+        loop (e :: acc))
+      else (List.rev (e :: acc), None)
   in
-  let errs = loop [] in
-  { errs; eloc = Loc.span start (last_loc p) }
+  let errs, etail = loop [] in
+  { errs; etail; eloc = Loc.span start (last_loc p) }
 
 (* A payload's field, named for documentation or not: `by: Money`, or
    `Money`. *)
@@ -756,6 +843,7 @@ and parse_primary p =
       e
   | IF -> parse_if p
   | MATCH -> parse_match p
+  | WITH -> parse_with p
   | FN -> parse_lambda p
   | FAIL -> (
       advance p;
@@ -830,6 +918,39 @@ and parse_if p =
     else None
   in
   mk (If (cond, then_, else_)) start p
+
+(* `with a, b in body`: [a] installed (or wrapped) around `with b in body`,
+   so the first item is the outermost. Each [With] numbers the lambda its
+   body becomes if its item is a wrapper (ast.ml). *)
+and parse_with p =
+  let start = loc p in
+  expect p WITH;
+  let rec items acc =
+    let item = parse_expr p in
+    if peek p = COMMA then (
+      advance p;
+      items (item :: acc))
+    else List.rev (item :: acc)
+  in
+  let items = items [] in
+  if peek p <> IN then
+    Diag.error (loc p)
+      ~help:
+        "write what it installs, then `in`, then the code it's installed around"
+      (Printf.sprintf
+         "expected `,` or `in` after what `with` installs, found %s"
+         (describe (peek p)));
+  advance p;
+  let body = parse_body p in
+  let rec nest ~start = function
+    | [] -> body
+    | (item : expr) :: rest ->
+        let body = nest ~start:item.loc rest in
+        p.node <- p.node + 1;
+        let lam = p.node in
+        node p (With { item; body; lam }) (Loc.span start body.loc)
+  in
+  nest ~start items
 
 and parse_match p =
   let start = loc p in
@@ -962,7 +1083,7 @@ let parse_fn p ~pub =
   let ret =
     if peek p = ARROW then (
       advance p;
-      Some (parse_ty p))
+      Some (parse_ty ~uses:false p))
     else None
   in
   let errors =
@@ -975,18 +1096,7 @@ let parse_fn p ~pub =
     else None
   in
   let uses =
-    if peek p = USES then (
-      advance p;
-      let rec deps acc =
-        (* `store.Users`, or bare `Users`: after a module's alias, the
-           error for a lowercase name points at the name *)
-        let d = parse_tyname ~what:"a dependency's name" p in
-        if peek p = COMMA then (
-          advance p;
-          deps (d :: acc))
-        else List.rev (d :: acc)
-      in
-      Some (deps []))
+    if peek p = USES then Some (parse_uses ~greedy:true p)
     else if peek p = NEWLINE && peek2 p = USES then
       (* the lexer continues the signature only on an indented line *)
       Diag.error ~help:"indent it, so it continues the signature"

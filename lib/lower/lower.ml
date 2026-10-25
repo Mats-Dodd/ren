@@ -365,6 +365,36 @@ let rec expr cx (e : expr) : C.expr =
   | Ref _ -> bug "`&` outside a call or a `for` loop"
   | Assign { target; op; value } -> assign cx e target op value
   | For { var; iter; body } -> for_loop cx e var iter body
+  | With { item; body; lam } -> (
+      (* the body sees evidence of its own: the [With]'s, which extends
+         what's installed around it, or the lambda's, which a wrapper
+         passes the evidence it's called with *)
+      let inner () =
+        let ev = evidence cx and outer = cx.ev in
+        cx.ev <- ev;
+        let body = expr cx body in
+        cx.ev <- outer;
+        (ev, outer, body)
+      in
+      match (node cx e.node).found with
+      | Some (Installs dep) ->
+          let impl = expr cx item in
+          let ev, outer, body = inner () in
+          here (With { ev; outer; dep; impl; body })
+      | Some Wraps -> (
+          (* `with retry(3) in body` is `retry(3, fn() => body)` *)
+          let ev, _, b = inner () in
+          let lam =
+            mk
+              (Lambda { params = []; ev; captures = free b; body = b })
+              (ty_of cx lam) body.loc
+          in
+          match item.kind with
+          | Call (f, args) -> plain_call cx ~changed:false ~last:lam item f args
+          | _ ->
+              let f = expr cx item in
+              here (Call (f, [ Value lam ], cx.ev)))
+      | _ -> bug "a `with` inference didn't say the kind of")
 
 and arm cx (a : arm) : C.arm =
   let pat = pattern cx a.arm_pat in
@@ -463,7 +493,7 @@ and call cx ?(changed = false) (e : expr) f args =
         (ty_of cx e.node) e.loc
   | _ -> plain_call cx ~changed e f args
 
-and plain_call cx ~changed (e : expr) f args =
+and plain_call cx ~changed ?last (e : expr) f args =
   let inout (p : expr) ty =
     let binds, pl = place cx p in
     Inout { binds; place = pl; ty; loc = p.loc }
@@ -491,6 +521,8 @@ and plain_call cx ~changed (e : expr) f args =
           | Ref p when changed_receiver a = None -> inout p (ty_of cx a.node)
           | _ -> Read (expr cx a))
         args
+    (* a wrapper's body, already lowered *)
+    @ List.map (fun l -> Read l) (Option.to_list last)
   in
   let ty = ty_of cx e.node in
   let direct = function
@@ -722,6 +754,9 @@ let max_binder (f : fn_def) =
         see var;
         go iter;
         go body
+    | With { item; body; _ } ->
+        go item;
+        go body
   and pat (p : pattern) =
     match p.pkind with
     | PVar b -> see b
@@ -802,7 +837,7 @@ let start (main : C.fn_def) : C.fn_def =
                ev = C.evidence (n + 1);
                outer = C.evidence n;
                dep;
-               impl = mk (Global_value real) (Con (dep, [])) loc;
+               impl = mk (Global_value real) (Con (dep, [ Uses Ty.closed ])) loc;
                body = install (n + 1) rest;
              })
           ret loc

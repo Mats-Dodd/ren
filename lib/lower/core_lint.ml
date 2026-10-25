@@ -52,7 +52,7 @@ let rec has_error (t : Ty.ty) =
   | Error -> true
   | Var _ -> false
   | Con (_, args) -> List.exists has_error args
-  | Errors e -> row_has_error e
+  | Errors e | Uses e -> row_has_error e
   | Fun (ps, r, e, _) ->
       List.exists (fun (p : Ty.param) -> has_error p.ty) ps
       || has_error r || row_has_error e
@@ -67,6 +67,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   | Error -> Error
   | Con (p, a) -> Con (p, List.map (subst args) a)
   | Errors e -> Errors (subst_row args e)
+  | Uses u -> Uses u
   | Fun (ps, r, e, u) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
@@ -98,10 +99,10 @@ let rec reveal env (t : Ty.ty) : Ty.ty =
       | Some { Iface.body = Opaque (Some rep); _ } ->
           reveal env (subst args rep)
       | _ -> t)
-  | Fun _ | Var _ | Errors _ | Error -> t
+  | Fun _ | Var _ | Errors _ | Uses _ | Error -> t
 
 (* Are [a] and [b] the same type, once opaque types are revealed where they
-   differ? *)
+   differ? An implementation [a] may need less than [b]. *)
 let rec equal env (a : Ty.ty) (b : Ty.ty) =
   match (a, b) with
   | Con (p, xs), Con (q, ys)
@@ -116,6 +117,11 @@ let rec equal env (a : Ty.ty) (b : Ty.ty) =
           p.mode = q.mode && equal env p.ty q.ty)
         ps qs
       && equal env r r' && e = e' && u = u'
+  | Uses a, Uses b ->
+      (* an implementation that needs less will do where one that needs
+         more is wanted (Infer_expr.widen) *)
+      List.for_all (fun l -> List.mem l b.labels) a.labels
+      && (a.tail = None || a.tail = b.tail)
   | _ ->
       let a' = reveal env a and b' = reveal env b in
       if a' == a && b' == b then a = b else equal env a' b'
@@ -149,7 +155,7 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
           (fun (p : Ty.param) (q : Ty.param) -> p.mode = q.mode && go p.ty q.ty)
           ps qs
         && go r r' && row e e' && row u u'
-    | Errors e, Errors e' -> row e e'
+    | Errors e, Errors e' | Uses e, Uses e' -> row e e'
     | _ ->
         let s' = reveal env s and t' = reveal env t in
         if s' == s && t' == t then false else go s' t'
@@ -173,7 +179,11 @@ let args_of env loc what p (t : Ty.ty) =
   match reveal env t with
   | Con (q, args) when q = p ->
       let td = decl env loc p in
-      if List.length args <> List.length td.params then
+      (* a dependency's one argument is what its implementation needs *)
+      let arity =
+        match td.body with Dep _ -> 1 | _ -> List.length td.params
+      in
+      if List.length args <> arity then
         fail env loc (sprintf "%s has the wrong number of type arguments" what);
       (td, args)
   | _ ->
@@ -332,7 +342,16 @@ let rec expr env sc (e : expr) =
       current env loc what outer;
       is_evidence env loc what ev;
       expr env sc impl;
-      same env impl.loc "what's installed" impl.ty (Con (p, []));
+      (* what it needs, it needs here *)
+      (match impl.ty with
+      | Con (q, [ Uses needs ]) when q = p ->
+          List.iter
+            (fun (l : Ty.label) -> available env loc what (Ty.dep_path l.name))
+            needs.labels
+      | t ->
+          fail env impl.loc
+            (sprintf "what's installed has type `%s`, but should be a `%s`"
+               (show t) (Path.full p)));
       expr { env with ev = Some ev; installed = p :: env.installed } sc body;
       is "a `With`" body.ty
   | Prim (op, args) -> prim env sc e op args
@@ -457,10 +476,15 @@ let rec expr env sc (e : expr) =
       List.iter
         (fun (f, (v : expr)) ->
           expr env sc v;
-          same env v.loc
-            ("the field `" ^ f ^ "`")
-            v.ty
-            (field_ty env loc td targs f))
+          let declared = field_ty env loc td targs f in
+          (* an implementation's operation uses what it needs *)
+          let expected : Ty.ty =
+            match (targs, declared, td.body) with
+            | [ Uses needs ], Fun (ps, r, errs, _), Dep _ ->
+                Fun (ps, r, errs, needs)
+            | _ -> declared
+          in
+          same env v.loc ("the field `" ^ f ^ "`") v.ty expected)
         fields
   | Field (r, p, f) ->
       expr env sc r;

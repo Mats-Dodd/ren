@@ -26,6 +26,10 @@ type ty =
   | Errors of row
       (** an error set as a type argument, [! Short(Int) | Frozen], which only
           [Result<T, ! ...>] takes (errors.md, "Keeping an error") *)
+  | Uses of row
+      (** what an implementation needs, as the one argument of its dependency's
+          type: [Clock uses Os] is [Con (Clock, [Uses Os])] (deps.md,
+          "Implementations"). Nothing else takes one *)
   | Error  (** the type of code that had an error, already reported *)
 
 and param = { mode : mode; ty : ty }
@@ -80,7 +84,7 @@ let rec tails t =
   match t with
   | Var _ | Error -> []
   | Con (_, args) -> List.concat_map tails args
-  | Errors e -> row_tails e
+  | Errors e | Uses e -> row_tails e
   | Fun (ps, r, e, u) ->
       List.concat_map (fun (p : param) -> tails p.ty) ps
       @ tails r @ row_tails e @ row_tails u
@@ -107,6 +111,7 @@ let canonical (s : scheme) =
     | Error -> Error
     | Con (p, args) -> Con (p, List.map go args)
     | Errors e -> Errors (row e)
+    | Uses u -> Uses (row u)
     | Fun (ps, r, e, u) ->
         (* `let`s fix the order of first appearance: OCaml evaluates a
            constructor's arguments right to left *)
@@ -204,11 +209,16 @@ let rec reserve pr t =
   | Error -> ()
   | Con (_, args) -> List.iter (reserve pr) args
   | Errors e -> List.iter (reserve_label pr) e.labels
+  | Uses _ -> ()
   | Fun (ps, r, e, _) ->
       List.iter (reserve pr) (r :: List.map (fun (p : param) -> p.ty) ps);
       List.iter (reserve_label pr) e.labels
 
 and reserve_label pr l = List.iter (reserve pr) l.payload
+
+(* Give tail [id] the name [n] up front, as [name] does a variable: a named
+   row prints as itself, `..d`. *)
+let name_tail pr id n = Hashtbl.replace pr.tail_names id n
 
 let tail_name pr id kind =
   match Hashtbl.find_opt pr.tail_names id with
@@ -246,34 +256,72 @@ and show_label pr l =
 
 and show pr t =
   match t with
+  | Con (p, [ Uses u ]) ->
+      (* an implementation, and what it needs *)
+      pr.type_name p ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
   | Con (p, []) -> pr.type_name p
-  | Con (p, args) ->
-      pr.type_name p ^ "<" ^ String.concat ", " (List.map (show pr) args) ^ ">"
+  | Con (p, args) -> pr.type_name p ^ "<" ^ show_list pr args ^ ">"
   | Errors e -> (
       (* an empty set, which nothing fails with, is just the `!` *)
       match show_row pr ~prefix:"! " ~sep:" | " ~kind:"e" e with
       | "" -> "!"
       | s -> s)
+  | Uses u -> show_row pr ~prefix:"uses " ~sep:", " ~kind:"d" u
   | Error -> "_"
   | Var id -> var_name pr id
   | Fun (ps, r, e, u) ->
       (* `let`s fix the order variables are named in: OCaml evaluates the
          operands of `^` right to left *)
-      let ps = List.map (show_param pr) ps in
+      let ps =
+        commas
+          (List.map
+             (fun (p : param) ->
+               let s = show_param pr p in
+               (s, ends_in_uses pr p.ty))
+             ps)
+      in
       let r = show_ret pr r in
-      "fn(" ^ String.concat ", " ps ^ ")" ^ r ^ show_effects pr e u
+      "fn(" ^ ps ^ ")" ^ r ^ show_effects pr e u
+
+(* Types separated by commas, each shown, and whether it ends in a `uses`
+   list, which a comma could go on: one that does is in parentheses
+   unless it's the last, `fn((fn() uses Clock, Random), Int)`. *)
+and commas shown =
+  let n = List.length shown in
+  String.concat ", "
+    (List.mapi
+       (fun i (s, trails) -> if trails && i < n - 1 then "(" ^ s ^ ")" else s)
+       shown)
+
+and show_list pr ts =
+  commas
+    (List.map
+       (fun t ->
+         let s = show pr t in
+         (s, ends_in_uses pr t))
+       ts)
 
 and show_param pr p =
   match p.mode with Inout -> "inout " ^ show pr p.ty | Read -> show pr p.ty
 
+(* Whether [t], shown, ends in a `uses` list. *)
+and ends_in_uses pr t =
+  match t with
+  | Con (_, [ Uses u ]) | Fun (_, _, _, u) ->
+      show_row pr ~prefix:"" ~sep:"" ~kind:"d" u <> ""
+  | _ -> false
+
 (* ` -> R`, or nothing for Unit. A returned function with effects is
-   parenthesized, so it's clear whose effects they are. *)
+   parenthesized, so it's clear whose effects they are, and so is an
+   implementation that needs something: after `->`, a `uses` would be the
+   function's own. *)
 and show_ret pr r =
   match r with
   | r when r = unit -> ""
   | Fun (_, _, e, u) as f ->
       let s = show pr f in
       if show_effects pr e u = "" then " -> " ^ s else " -> (" ^ s ^ ")"
+  | r when ends_in_uses pr r -> " -> (" ^ show pr r ^ ")"
   | r -> " -> " ^ show pr r
 
 and show_effects pr e u =
@@ -282,11 +330,12 @@ and show_effects pr e u =
 
 (* How `ren types` prints a function: the signature `ren fmt --annotate`
    would write. [params] are the parameters' names. A row tail is printed
-   (as `..e` / `..d`) only when it reaches the result and links it to
-   something else; otherwise the parameter is transparent and the tail
-   implied, and a tail found only once says nothing. A transparent
+   (as `..e` / `..d`) only when it links two places, like a closure kept in
+   the result, `-> (fn() ! ..e)`, or in a type, `Button<fn() ! ..e>`, and
+   the function's own errors; a tail found only once says nothing. A transparent
    parameter, whose row is its function's own, is printed as it's written,
-   `f: fn(Int)`: the function's `!` and `uses` already say what's in it.
+   `f: fn(Int)` or `c: Clock`: the function's `!` and `uses` already say
+   what's in it.
 
    A member of a type is printed under its type, so [outer]
    are the type's parameters, which aren't the function's own and aren't
@@ -307,16 +356,43 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
           (fun (p : param) ->
             match p.ty with
             | Fun (qs, r, e, u) ->
-                { p with ty = Fun (qs, r, own errs e, own uses u) }
+                (* one row the function's own and the other closed and
+                   empty is a closure that's kept, `f: fn() uses ..d`,
+                   which isn't written like a transparent one, *)
+                let is_own (own : row) (r : row) = r.tail <> None && r = own in
+                let e_own = is_own errs e and u_own = is_own uses u in
+                (* and so is one with a row of its own, `fn() ! ..e`, whose
+                   other row is then written too *)
+                let kept own r = r.tail <> None && r <> own in
+                if
+                  (e_own && u = closed)
+                  || (u_own && e = closed)
+                  || kept errs e || kept uses u
+                then p
+                else { p with ty = Fun (qs, r, own errs e, own uses u) }
+            | Con (d, [ Uses u ]) ->
+                { p with ty = Con (d, [ Uses (own uses u) ]) }
             | _ -> p)
           ps
       in
       let ty = Fun (ps, ret, errs, uses) in
       let s = { s with ty } in
-      let in_ret = tails ret and all = tails ty in
+      (* a tail is printed where it links two places: the function's own
+         rows, a parameter, the result. So is one at the end of a
+         parameter's function type that isn't the function's own, which
+         would read as a transparent parameter's without it *)
+      let all = tails ty in
       let links id = List.length (List.filter (( = ) id) all) > 1 in
+      let kept =
+        List.concat_map
+          (fun (p : param) ->
+            match p.ty with
+            | Fun (_, _, e, u) -> Option.to_list e.tail @ Option.to_list u.tail
+            | _ -> [])
+          ps
+      in
       let pr =
-        printer ~show_tail:(fun id -> List.mem id in_ret && links id) ~names s
+        printer ~show_tail:(fun id -> links id || List.mem id kept) ~names s
       in
       pr.reserved <- outer;
       reserve pr s.ty;

@@ -32,6 +32,9 @@ type found =
   | Method_of of Path.t
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
+  | Installs of Path.t
+      (** a `with` whose item is an implementation of this dependency *)
+  | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
 
 type env = {
   st : Types.state;
@@ -81,6 +84,11 @@ type env = {
           first, finished once the group is done (see [inclusion]) *)
   mutable tag_patterns : tag_pattern list;
       (** tags matched in an error set that was still open *)
+  mutable rows_due : row_due list;
+      (** the group's uses of a named row (see [row_due]) *)
+  mutable impl_ops : impl_op list;
+      (** the group's implementations' operations, whose errors are checked once
+          it's done (see [impl_op]) *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
@@ -98,6 +106,35 @@ and tag_pattern = {
   tset : row;
   tin : (string * ty) list;
   tarm : bool;
+}
+
+(* A call that uses a named row, `f()` for `f: fn() uses ..d`, or a `with`
+   that installs an implementation that needs one: the row [rinto] of the
+   function or lambda it's in has to end in [rnamed]. Ending a row in one
+   would stop it getting any more labels, so that's done once the group is
+   done, when it has all of them (infer_top.ml). [rwhat] says what needs
+   it, for a message: "this call uses". *)
+and row_due = {
+  rloc : Loc.t;
+  rinto : row;
+  rnamed : int * string;
+  rwhat : string;
+}
+
+(* An operation of an implementation, `usd_to: fn(c) => ...` in a `Rates
+   { ... }`: it can fail with fewer errors than its dependency declares,
+   never more (deps.md, "Implementations"). Its errors [ierrs] start as
+   [ideclared] with room for more, and once the group is done (when it's
+   known what its calls fail with), anything more is reported and the room
+   closed. [ivalue] is what's given for it, and [inodes] the types of the
+   expressions of the function it's in, for a message. *)
+and impl_op = {
+  idep : Path.t;
+  iop : string;
+  ideclared : label list;
+  ierrs : row;
+  ivalue : expr;
+  inodes : (int, ty) Hashtbl.t;
 }
 
 (* A use of another function of the group being checked. While the group's
@@ -198,11 +235,13 @@ and source =
   | Unwrapped of Loc.t * row
   | Unhandled of Loc.t * row
 
-(* A call that adds to a function's dependencies. [own] are the labels the
-   callee's row had just before the call joined it to the caller's: what
-   the callee brings in itself. After the join the two rows are one, so
-   [row] then also has everything the caller uses. *)
-type call = { cloc : Loc.t; own : string list; row : row }
+(* A call that adds to a function's dependencies, or a `with` that
+   installs an implementation, which adds what it needs. [own] are the
+   labels the callee's row had just before the call joined it to the
+   caller's: what the callee brings in itself. After the join the two rows
+   are one, so [row] then also has everything the caller uses. [needs]
+   says it's a `with`. *)
+type call = { cloc : Loc.t; own : string list; row : row; needs : bool }
 
 (* A dot call that turned out to call [callee], a method of the module
    not checked yet, from [caller]. Which method `s.size()` calls is found
@@ -240,6 +279,8 @@ type ctx = {
           cell, here shared by every copy of the [ctx] for the same function or
           lambda. *)
   tparams : ty list;  (** what the type parameters in scope stand for *)
+  named : (string * row) list;
+      (** the rows the function's signature names, `..d`, by name (ast.ml) *)
 }
 
 (* ---- reporting ---- *)
@@ -299,6 +340,23 @@ let unifies env why loc ~found ~expected =
       in
       let help = Option.map (fun h -> h f x) why.help in
       let more, help = mismatch_notes ?help ~found ~expected () in
+      (* two implementations of one dependency that need different things *)
+      let more, help =
+        match (repr found, repr expected) with
+        | TCon (p, [ TUses _ ]), TCon (q, [ TUses _ ]) when p = q ->
+            ( more
+              @ [
+                  "an implementation's type says what it needs, so one that \
+                   needs more can't stand in for one that needs less";
+                ],
+              Some
+                (Option.value help
+                   ~default:
+                     (sprintf
+                        "say what it needs where its type is written: `(%s)`" f))
+            )
+        | _ -> (more, help)
+      in
       (* what's about errors: one tag with two shapes, or a function that
          fails where nothing can *)
       let more, help =
@@ -433,37 +491,72 @@ let error_labels env ~tvars (es : Resolved.errors) =
       })
     (Iface.of_errors ~sets:env.sets es)
 
+(* The row a written `uses` lists, ending in the row it names, if it
+   names one: one of [named], the rows the signature names, as [RSkol]s. *)
+let named_row ~named (n : ident option) =
+  match n with
+  | Some n -> (
+      match List.assoc_opt n.name named with
+      | Some r -> r
+      | None -> REmpty (* resolve.ml reported it *))
+  | None -> REmpty
+
+let written_uses ~named (u : Resolved.uses) =
+  extend
+    (List.map dep
+       (List.map (fun (l : Ty.label) -> l.name) (Iface.dep_labels u.deps)))
+    (named_row ~named u.dtail)
+
 (* Turn a written type into a checker type. [tvars] are what the type
-   parameters in scope stand for, in order. [row] makes the rows of written
-   function types: fresh variables in parameters (a parameter `f: fn()`
-   passes its dependencies through to the caller), closed in declarations
-   and return types (a stored `fn()` uses nothing). A function type that
-   writes what it fails with, `fn() ! Bad`, fails with just that. *)
-let rec convert env ~tvars ~row (t : Resolved.ty) =
+   parameters in scope stand for, in order, and [named] the rows the
+   function's signature names (`..d`, ast.ml). [row] makes the rows of
+   written function types and implementations that aren't written: fresh
+   variables in parameters (a parameter `f: fn()` passes its dependencies
+   through to the caller), closed in declarations and return types (a
+   stored `fn()` uses nothing). A function type that writes what it fails
+   with or uses, `fn() ! Bad` or `fn() uses Clock`, does just that, and one
+   that names a row, `fn() uses ..d`, is a closure that's kept: what it
+   doesn't write, it doesn't do. *)
+let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
+  let go = convert env ~tvars ~named ~row in
   match t with
   | TyName ({ tref = Param i; _ }, _) -> List.nth tvars i
-  | TyName ({ tref = Named p; _ }, args) ->
-      TCon (p, List.map (convert env ~tvars ~row) args)
-  | TyFn (ps, ret, errs, _) ->
-      let ret =
-        match ret with Some r -> convert env ~tvars ~row r | None -> unit
-      in
+  | TyName ({ tref = Named p; _ }, args) -> TCon (p, List.map go args)
+  | TyImpl ({ tref = Named p; _ }, u, _) ->
+      TCon
+        ( p,
+          [
+            TUses
+              (match u with Some u -> written_uses ~named u | None -> row ());
+          ] )
+  | TyImpl ({ tref = Param _; _ }, _, _) ->
+      (* resolve.ml only makes a dependency a [TyImpl] *)
+      assert false
+  | TyFn (ps, ret, errs, u, _) ->
+      let row = if names_row t then closed else row in
+      let go = convert env ~tvars ~named ~row in
+      let ret = match ret with Some r -> go r | None -> unit in
       let errs =
         match errs with
-        | Some es -> extend (error_labels env ~tvars es) REmpty
+        | Some es ->
+            extend (error_labels env ~tvars es) (named_row ~named es.etail)
         | None -> row ()
       in
-      TFun (List.map (convert_param env ~tvars ~row) ps, ret, errs, row ())
+      let uses =
+        match u with Some u -> written_uses ~named u | None -> row ()
+      in
+      TFun (List.map (convert_param env ~tvars ~named ~row) ps, ret, errs, uses)
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
-  | TyErrors es -> TErrors (extend (error_labels env ~tvars es) REmpty)
+  | TyErrors es ->
+      TErrors (extend (error_labels env ~tvars es) (named_row ~named es.etail))
 
-and convert_param env ~tvars ~row = function
-  | TyInout (t, _) -> { mode = Inout; ty = convert env ~tvars ~row t }
-  | t -> read (convert env ~tvars ~row t)
+and convert_param env ~tvars ~named ~row = function
+  | TyInout (t, _) -> { mode = Inout; ty = convert env ~tvars ~named ~row t }
+  | t -> read (convert env ~tvars ~named ~row t)
 
-let closed () = REmpty
+and closed () = REmpty
 
 (* A parameter's type: as written, or a fresh variable. [own] are the
    rows a transparent parameter of a top-level function gets: a parameter
@@ -480,18 +573,30 @@ let closed () = REmpty
    parameters, which no interface shows, get fresh rows instead.
 
    A parameter that writes what it fails with, `f: fn() ! Bad`, fails with
-   just that, so only its dependencies are its function's. *)
-let param_type env ~tparams ?own (p : Resolved.param) =
+   just that, so only its dependencies are its function's; one that writes
+   what it uses, `f: fn() uses Clock`, uses just that; and one that names
+   a row, `f: fn() uses ..d`, is kept, not only called, so neither of its
+   rows is its function's. A parameter of a dependency's type, `c: Clock`,
+   is transparent too: what it needs is what its function uses (deps.md,
+   "Implementations"). [named] are the rows the signature names. *)
+let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
   let t =
     match (p.pty, own) with
-    | Some (TyFn (_, _, written, _) as t), Some (errs, uses) -> (
-        match convert env ~tvars:tparams ~row:closed t with
-        | TFun (ps, ret, e, _) ->
-            TFun (ps, ret, (if written = None then errs else e), uses)
+    | Some (TyFn (_, _, written_e, written_u, _) as t), Some (errs, uses)
+      when not (names_row t) -> (
+        match convert env ~tvars:tparams ~named ~row:closed t with
+        | TFun (ps, ret, e, u) ->
+            TFun
+              ( ps,
+                ret,
+                (if written_e = None then errs else e),
+                if written_u = None then uses else u )
         | _ -> assert false)
-    | Some t, Some _ -> convert env ~tvars:tparams ~row:closed t
+    | Some (TyImpl ({ tref = Named d; _ }, None, _)), Some (_, uses) ->
+        TCon (d, [ TUses uses ])
+    | Some t, Some _ -> convert env ~tvars:tparams ~named ~row:closed t
     | Some t, None ->
-        convert env ~tvars:tparams ~row:(fun () -> fresh_row env.st) t
+        convert env ~tvars:tparams ~named ~row:(fun () -> fresh_row env.st) t
     | None, _ -> fresh_var env.st
   in
   { mode = p.pmode; ty = t }
@@ -511,7 +616,12 @@ let instance env (td : Iface.type_decl) =
         tvars
     else tvars
   in
-  (TCon (td.path, tvars), tvars)
+  match td.body with
+  | Dep _ ->
+      (* an implementation, which needs whatever its operations use *)
+      (TCon (td.path, [ TUses (fresh_row env.st) ]), tvars)
+  | Record _ | Sum _ | Builtin | Opaque _ | Errors _ ->
+      (TCon (td.path, tvars), tvars)
 
 (* A field's type, given what the type's parameters stand for. A function
    type written in a declaration uses and fails with nothing. *)
@@ -755,6 +865,11 @@ let want_bool env what (e : expr) t =
   unify_at env e.loc ~found:t ~expected:bool
     ~notes:[ sprintf "%s has to be a `Bool`" what ]
 
+(* The name of the function [f] a call calls, for messages: "`print`", or
+   "this" if it's something else. *)
+let callee_name (f : expr) =
+  match f.kind with Var x -> sprintf "`%s`" (name_of x) | _ -> "this"
+
 (* An open row is unified with another as it is, which is how its tail
    picks up everything the other has. A closed one, like a stored `fn()`'s,
    says only what it has itself: unified as it is, it would close the other
@@ -768,6 +883,14 @@ let reopen env r =
     | r -> r
   in
   go r
+
+(* [t], or if it's an implementation that needs exactly what it says, one
+   that may need more: where one that needs more is allowed, one that
+   needs less will do. *)
+let widen env t =
+  match repr t with
+  | TCon (d, [ TUses u ]) -> TCon (d, [ TUses (reopen env u) ])
+  | t -> t
 
 (* Where an error that's already in [row] came from, for a message about
    another shape of it: the first of [sources] that brought it in. *)
@@ -853,6 +976,34 @@ let include_errors env cx ~loc add errs into =
     }
     :: env.includes
 
+(* Add [uses], what a call's callee uses, or what an implementation a
+   `with` installs needs ([needs]), to the dependencies of the function or
+   lambda [cx] is in. A row that ends in a named row, `..d`, has its labels
+   added now and the named row once the group is done (see [row_due]). *)
+let use_row env cx ~loc ?(needs = false) uses =
+  cx.calls :=
+    { cloc = loc; own = row_names uses; row = uses; needs } :: !(cx.calls);
+  let what = if needs then "installing this needs" else "this call uses" in
+  let joined =
+    match row_skolem uses with
+    | Some named ->
+        env.rows_due <-
+          { rloc = loc; rinto = cx.uses; rnamed = named; rwhat = what }
+          :: env.rows_due;
+        extend (fst (row_parts uses)) (fresh_row env.st)
+    | None -> reopen env uses
+  in
+  try Unify.unify_row env.st joined cx.uses
+  with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
+    let pr = printer env in
+    ignore
+      (fail env loc
+         (sprintf "%s %s, which isn't allowed here"
+            (if needs then "installing this" else "this call")
+            (show_row pr
+               ~prefix:(if needs then "needs " else "uses ")
+               ~sep:", " ~kind:"d" uses)))
+
 (* A call adds the callee's dependencies to the caller's, and its errors
    to whatever marks it (errors.md, "Marking"): the innermost marker's
    handler, the caller's own errors for a `try` or the `attempt`'s. A call
@@ -861,15 +1012,7 @@ let include_errors env cx ~loc add errs into =
    [name_loc] are the callee, and [target] the function of the group it
    calls, if it does. *)
 let absorb env cx ~(call : expr) ~ename ~name_loc ?target errs uses =
-  cx.calls :=
-    { cloc = call.loc; own = row_names uses; row = uses } :: !(cx.calls);
-  (try Unify.unify_row env.st (reopen env uses) cx.uses
-   with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
-     let pr = printer env in
-     ignore
-       (fail env call.loc
-          (sprintf "this call%s, which isn't allowed here"
-             (show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" uses))));
+  use_row env cx ~loc:call.loc uses;
   let ewritten =
     match call.kind with
     | Call (f, _) | Ref { kind = Call (f, _); _ } ->
@@ -1147,7 +1290,8 @@ and check env cx ?(why = plain) (e : expr) expected =
       let ps =
         List.map2
           (fun (p : Resolved.param) ep ->
-            if p.pty = None then ep else param_type env ~tparams:cx.tparams p)
+            if p.pty = None then ep
+            else param_type env ~tparams:cx.tparams ~named:cx.named p)
           params eps
       in
       let errs = fresh_row env.st and uses = fresh_row env.st in
@@ -1275,7 +1419,9 @@ and synth env cx (e : expr) : ty =
       if ok then unit else TError
   | Call (f, args) -> infer_call env cx e f args
   | Lambda (params, body) ->
-      let ps = List.map (param_type env ~tparams:cx.tparams) params in
+      let ps =
+        List.map (param_type env ~tparams:cx.tparams ~named:cx.named) params
+      in
       let errs = fresh_row env.st and uses = fresh_row env.st in
       bind_params cx params ps;
       let tb = infer env (lambda_cx cx params ps ~errs ~uses) body in
@@ -1417,6 +1563,238 @@ and synth env cx (e : expr) : ty =
         infer env { cx with handler = kept; markers = [ m ]; sources = None } a
       in
       TCon (result_path, [ t; TErrors kept ])
+  | With { item; body; lam } -> with_ env cx e item body lam
+
+(* `with item in body` (deps.md, "`with`"), the expression [e]. A call
+   whose callee takes one more argument than it's given is a wrapper,
+   and so is a function of one parameter; anything else is an
+   implementation, installed. Which it is is found here, from types, and
+   kept for lowering. *)
+and with_ env cx (e : expr) item body lam =
+  match item.kind with
+  | Call (f, args) when match f.kind with Field _ -> false | _ -> true -> (
+      let tf = infer env cx f in
+      match reveal env.st tf with
+      | TFun (ps, _, _, _) when List.length ps = List.length args + 1 ->
+          wrap env cx e ~call:item ~f ~args tf body lam
+      | _ ->
+          let t = call_with env cx item f tf args in
+          Hashtbl.replace cx.nodes item.node t;
+          install env cx e item t body)
+  | _ -> (
+      let t = infer env cx item in
+      match reveal env.st t with
+      | TFun ([ _ ], _, _, _) ->
+          wrap env cx e ~call:item ~f:item ~args:[] t body lam
+      | _ -> install env cx e item t body)
+
+(* Install [item], of type [t], around [body]: the body uses what it does
+   but the dependency installed, and the `with` uses what the
+   implementation needs too. *)
+and install env cx (e : expr) item t body =
+  match reveal env.st t with
+  | TCon (d, [ TUses needs ]) ->
+      Hashtbl.replace cx.found e.node (Installs d);
+      (* what it needs it needs here, outside: its operations run with what's
+         installed where it's installed *)
+      use_row env cx ~loc:item.loc ~needs:true needs;
+      let label = Ty.dep_label d in
+      let inner =
+        { cx with uses = RExtend (dep label, cx.uses); calls = ref [] }
+      in
+      let tb = infer env inner body in
+      (* the body's calls bring in what they bring in, but [d] *)
+      cx.calls :=
+        List.map
+          (fun c -> { c with own = List.filter (( <> ) label) c.own })
+          !(inner.calls)
+        @ !(cx.calls);
+      tb
+  | TError ->
+      ignore (infer env cx body);
+      TError
+  | t ->
+      ignore (infer env cx body);
+      let shown = show (printer env) t in
+      let is_var = match t with TVar _ -> true | _ -> false in
+      fail env item.loc
+        ~notes:
+          [
+            "`with` installs an implementation of a dependency around its \
+             body, or passes its body to a wrapper, a function whose last \
+             parameter is the body";
+          ]
+        ~help:
+          (if is_var then
+             sprintf "say what it is where it's declared, like `%s: Clock`"
+               (Option.value (env.source item) ~default:"c")
+           else
+             "give it an implementation, like `Clock.frozen(t)`, or a \
+              wrapper's call without its last argument, like `retry(3)`")
+        (if is_var then
+           "`with` can't tell what this installs: its type isn't known here"
+         else
+           sprintf
+             "`with` installs an implementation, or wraps its body, but this \
+              is %s"
+             (article shown))
+
+(* The wrapper call [call], `retry(3)`, of [f], of type [tf], given
+   [args]: [body] is its last argument, a lambda of no parameters, whose
+   type is recorded at [lam]. The `with` passes on what the call fails
+   with, as `try` would: the body marks its own calls, and the wrapper is
+   written to fail with what the body does. *)
+and wrap env cx (e : expr) ~call ~f ~args tf body lam =
+  match reveal env.st tf with
+  | TFun (ps, ret, errs, uses) ->
+      Hashtbl.replace cx.found e.node Wraps;
+      let name = callee_name f in
+      let n = List.length args in
+      let firsts = List.filteri (fun i _ -> i < n) ps in
+      let last = List.nth ps n in
+      check_args env cx ~name
+        ?callee:(match f.kind with Var (Global p) -> Some p | _ -> None)
+        firsts args;
+      outer_changes env body name;
+      let berrs = fresh_row env.st and buses = fresh_row env.st in
+      let bcx = lambda_cx cx [] [] ~errs:berrs ~uses:buses in
+      let tb =
+        match repr last.ty with
+        | TFun ([], r, _, _) ->
+            check env bcx body r;
+            r
+        | _ -> infer env bcx body
+      in
+      let tl = TFun ([], tb, berrs, buses) in
+      Hashtbl.replace cx.nodes lam tl;
+      if last.mode = Inout then
+        ignore
+          (fail env call.loc
+             ~notes:
+               [
+                 "`with w(a) in body` calls `w(a, fn() => body)`, and a lambda \
+                  isn't a place to change";
+               ]
+             ~help:
+               (sprintf "call %s outside the `with`, with all its arguments"
+                  name)
+             (sprintf "%s changes its last argument, so it can't take a body"
+                name))
+      else
+        unify_at env call.loc ~found:tl ~expected:last.ty
+          ~notes:
+            [
+              "`with w(a) in body` calls `w(a, fn() => body)`, so the \
+               wrapper's last parameter is a function of no parameters";
+            ]
+          ~help:
+            (sprintf "call %s outside the `with`, with all its arguments" name)
+          ~msg:(fun _ x ->
+            sprintf
+              "%s's last parameter is %s, but a `with` passes it its body, a \
+               `fn()`"
+              name (article x));
+      let m =
+        {
+          mkind = Mtry;
+          mloc = keyword e.loc 4;
+          covered = [];
+          unwrapped = [];
+          hint = None;
+          failed = false;
+        }
+      in
+      let target =
+        match f.kind with
+        | Var (Global p) when group_call env p -> Some p
+        | _ -> None
+      in
+      absorb env
+        { cx with markers = m :: cx.markers }
+        ~call
+        ~ename:(String.concat "" (String.split_on_char '`' name))
+        ~name_loc:f.loc ?target errs uses;
+      (* the call's type, unless it's the bare function, `with twice in` *)
+      if call != f then Hashtbl.replace cx.nodes call.node ret;
+      ret
+  | _ -> assert false (* [with_] makes sure it's a function *)
+
+(* A wrapper's body is a lambda, which captures the values of the
+   variables it uses when it's made: changing one from outside it would
+   change only the lambda's copy, so that's reported, as mut.ml reports it
+   in a lambda that's written. [name] is the wrapper. *)
+and outer_changes env (body : expr) name =
+  let bound = Hashtbl.create 8 in
+  let bind (b : binder) = Hashtbl.replace bound b.id () in
+  let rec root (e : expr) =
+    match e.kind with
+    | Var (Local b) -> Some (b, e.loc)
+    | Field (r, _) | Index (r, _) -> root r
+    | _ -> None
+  in
+  let changed (place : expr) =
+    match root place with
+    | Some (b, _) when not (Hashtbl.mem bound b.id) ->
+        report env
+          (Diag.make place.loc
+             ~notes:
+               [
+                 sprintf
+                   "`with` passes its body to %s as a lambda, `fn() => ...`, \
+                    which captures the values of the variables it uses when \
+                    it's made, so changing them would have no effect outside"
+                   name;
+               ]
+             ~help:"give the body's result back as its value instead"
+             (sprintf
+                "the body of this `with` can't change `%s`, a variable from \
+                 outside it"
+                b.ident.name))
+    | _ -> ()
+  in
+  let rec walk (e : expr) =
+    let all = List.iter walk in
+    match e.kind with
+    | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
+    | Lambda _ -> () (* its own changes are mut.ml's *)
+    | Assign { target; value; _ } ->
+        changed target;
+        walk value
+    | Ref { kind = Call ({ kind = Field (r, _); _ }, args); _ } ->
+        changed r;
+        all args
+    | Ref a -> changed a
+    | For { var; iter; body } ->
+        (match iter.kind with Ref a -> changed a | _ -> walk iter);
+        bind var;
+        walk body
+    | Block (stmts, last) ->
+        List.iter
+          (function
+            | Let { name; value; _ } ->
+                walk value;
+                bind name
+            | Expr e -> walk e)
+          stmts;
+        walk last
+    | Match (s, arms) ->
+        walk s;
+        List.iter
+          (fun (a : arm) ->
+            List.iter (fun (b, _) -> bind b) (binders a.arm_pat);
+            Option.iter walk a.arm_guard;
+            walk a.arm_body)
+          arms
+    | Unop (_, a) | Field (a, _) | Try a | Attempt a -> walk a
+    | Binop (_, a, b) | Index (a, b) -> all [ a; b ]
+    | If (c, t, f) -> all (c :: t :: Option.to_list f)
+    | Call (f, args) -> all (f :: args)
+    | Con (_, args) | Fail (_, args) -> all (List.map snd args)
+    | Record (_, fields) -> all (List.map snd fields)
+    | Array xs -> all xs
+    | With { item; body; _ } -> all [ item; body ]
+  in
+  walk body
 
 and stmt env cx = function
   | Let { name; ty; value; _ } ->
@@ -1424,7 +1802,7 @@ and stmt env cx = function
         match ty with
         | Some ann ->
             let t =
-              convert env ~tvars:cx.tparams
+              convert env ~tvars:cx.tparams ~named:cx.named
                 ~row:(fun () -> fresh_row env.st)
                 ann
             in
@@ -1545,18 +1923,19 @@ and infer_call env cx ?changed (e : expr) (f : expr) args =
                    ?what m elsewhere);
               nothing ())
       | None, _ -> field_call ())
-  | _ ->
-      let tf = infer env cx f in
-      let name =
-        match f.kind with Var x -> sprintf "`%s`" (name_of x) | _ -> "this"
-      in
-      let target =
-        match f.kind with
-        | Var (Global p) when group_call env p -> Some p
-        | _ -> None
-      in
-      let callee = match f.kind with Var (Global p) -> Some p | _ -> None in
-      apply env cx e ~name ?target ?callee f tf args
+  | _ -> call_with env cx e f (infer env cx f) args
+
+(* The call [e] of [f], which isn't a method, once [f]'s type [tf] is
+   known. *)
+and call_with env cx (e : expr) (f : expr) tf args =
+  let name = callee_name f in
+  let target =
+    match f.kind with
+    | Var (Global p) when group_call env p -> Some p
+    | _ -> None
+  in
+  let callee = match f.kind with Var (Global p) -> Some p | _ -> None in
+  apply env cx e ~name ?target ?callee f tf args
 
 (* `r.m(args)`, the call [e] of [f], where [m] is the member [o] of
    [r]'s type [td]: a method is called with [r] as its `self`. [tr] is
@@ -1617,63 +1996,7 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
           (sprintf "%s takes %d argument%s but was given %d" name n (plural n)
              given))
       else (
-        (* left to right, each against its parameter's type *)
-        List.iter2
-          (fun (p : Types.param) (a : expr) ->
-            (* `f(&s.pop())` passes the call's result: its `&` is the
-               receiver's *)
-            let passed = changed_receiver a = None in
-            match (p.mode, a.kind) with
-            | Inout, Ref place when passed ->
-                Hashtbl.replace cx.nodes a.node p.ty;
-                check env cx place p.ty
-            | Inout, Ref call ->
-                (* `take(&c.pop())`: the `&` is `c`'s, and the argument is
-                   what the call returns *)
-                ignore (infer env cx a);
-                ignore
-                  (fail env a.loc ~help:"put it in a `var` first, and pass that"
-                     ~notes:
-                       [
-                         sprintf
-                           "the `&` in `%s` marks the receiver the call \
-                            changes, not the argument"
-                           (Option.value (env.source a) ~default:"&x.m()");
-                       ]
-                     (sprintf
-                        "%s changes this argument, but %s is a call's result, \
-                         not something it can change"
-                        name
-                        (match env.source call with
-                        | Some c -> sprintf "`%s`" c
-                        | None -> "it")))
-            | Inout, _ ->
-                let help =
-                  match a.kind with
-                  | Var x
-                  | Field ({ kind = Var x; _ }, _)
-                  | Index ({ kind = Var x; _ }, _) ->
-                      sprintf "write `&` before it, as in `&%s`" (name_of x)
-                  | _ -> "pass a variable, marked with `&`"
-                in
-                ignore (infer env cx a);
-                ignore
-                  (fail env a.loc ~help
-                     ~notes:
-                       [ "`&` shows at the call that the argument is changed" ]
-                     (sprintf "%s changes this argument, so it needs `&`" name))
-            | Read, Ref place when passed ->
-                ignore (infer env cx place);
-                ignore
-                  (fail env a.loc ~help:"remove the `&`"
-                     ~notes:
-                       [
-                         "`&` marks an argument the call changes: an `inout` \
-                          parameter";
-                       ]
-                     (sprintf "%s doesn't change this argument" name))
-            | Read, _ -> check env cx ~why:(forced_why env callee p.ty) a p.ty)
-          ps args;
+        check_args env cx ~name ?callee ps args;
         absorb env cx ~call:e ~ename ~name_loc:f.loc ?target errs uses;
         ret)
   | TVar _ ->
@@ -1693,6 +2016,76 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
       fail env f.loc
         (sprintf "%s is %s, not a function" name
            (article (show (printer env) t)))
+
+(* A call's arguments [args], left to right, each against its parameter's
+   type, of [ps]; [name] is the callee, for messages, and [callee] the
+   top-level function it is, if it's one. *)
+and check_args env cx ~name ?callee ps args =
+  List.iter2
+    (fun (p : Types.param) (a : expr) ->
+      (* `f(&s.pop())` passes the call's result: its `&` is the
+               receiver's *)
+      let passed = changed_receiver a = None in
+      match (p.mode, a.kind) with
+      | Inout, Ref place when passed ->
+          Hashtbl.replace cx.nodes a.node p.ty;
+          check env cx place p.ty
+      | Inout, Ref call ->
+          (* `take(&c.pop())`: the `&` is `c`'s, and the argument is
+                   what the call returns *)
+          ignore (infer env cx a);
+          ignore
+            (fail env a.loc ~help:"put it in a `var` first, and pass that"
+               ~notes:
+                 [
+                   sprintf
+                     "the `&` in `%s` marks the receiver the call changes, not \
+                      the argument"
+                     (Option.value (env.source a) ~default:"&x.m()");
+                 ]
+               (sprintf
+                  "%s changes this argument, but %s is a call's result, not \
+                   something it can change"
+                  name
+                  (match env.source call with
+                  | Some c -> sprintf "`%s`" c
+                  | None -> "it")))
+      | Inout, _ ->
+          let help =
+            match a.kind with
+            | Var x
+            | Field ({ kind = Var x; _ }, _)
+            | Index ({ kind = Var x; _ }, _) ->
+                sprintf "write `&` before it, as in `&%s`" (name_of x)
+            | _ -> "pass a variable, marked with `&`"
+          in
+          ignore (infer env cx a);
+          ignore
+            (fail env a.loc ~help
+               ~notes:[ "`&` shows at the call that the argument is changed" ]
+               (sprintf "%s changes this argument, so it needs `&`" name))
+      | Read, Ref place when passed ->
+          ignore (infer env cx place);
+          ignore
+            (fail env a.loc ~help:"remove the `&`"
+               ~notes:
+                 [
+                   "`&` marks an argument the call changes: an `inout` \
+                    parameter";
+                 ]
+               (sprintf "%s doesn't change this argument" name))
+      | Read, _ -> (
+          let why = forced_why env callee p.ty in
+          match repr p.ty with
+          | TCon (_, [ TUses _ ]) ->
+              (* an implementation that needs less than the parameter
+                       allows will do *)
+              ignore
+                (unifies env why (result_loc a)
+                   ~found:(widen env (infer env cx a))
+                   ~expected:p.ty)
+          | _ -> check env cx ~why a p.ty))
+    ps args
 
 (* An argument's type, and whether it's passed with `&`. *)
 and infer_arg env cx (a : expr) =
@@ -1796,7 +2189,29 @@ and infer_record env cx (e : expr) name fields ~expected =
             List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl
           with
           | Some fd ->
-              check env cx v (field_type ~tvars fd)
+              let ft = field_type ~tvars fd in
+              let ft =
+                match (t, ft) with
+                | TCon (_, [ TUses needs ]), TFun (ps, r, errs, _) ->
+                    (* an operation uses what the implementation needs, and
+                       can fail with less than it's declared to: what more
+                       it fails with is reported once the group is done *)
+                    let declared = fst (row_parts errs) in
+                    let open_errs = extend declared (fresh_row env.st) in
+                    env.impl_ops <-
+                      {
+                        idep = td.path;
+                        iop = f.name;
+                        ideclared = declared;
+                        ierrs = open_errs;
+                        ivalue = v;
+                        inodes = cx.nodes;
+                      }
+                      :: env.impl_ops;
+                    TFun (ps, r, open_errs, needs)
+                | _ -> ft
+              in
+              check env cx v ft
                 ~why:
                   (explain
                      ~notes:

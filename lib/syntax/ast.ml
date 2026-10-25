@@ -31,9 +31,16 @@ type vname = Bare of string | Item of tyname * ident
 (* A type as written: `Int`, `Option<Int>`, `fn(Int) -> Bool`. *)
 type 't ty =
   | TyName of 't * 't ty list  (** [Int], [Option<Int>] *)
-  | TyFn of 't ty list * 't ty option * 't errors option * Loc.t
-      (** [fn(Int) -> Bool], and what it can fail with, [fn(Int) -> Bool ! Bad];
-          with no [->] the function returns [Unit] *)
+  | TyFn of
+      't ty list * 't ty option * 't errors option * 't uses option * Loc.t
+      (** [fn(Int) -> Bool], and what it can fail with and uses,
+          [fn(Int) -> Bool ! Bad uses Clock]; with no [->] the function returns
+          [Unit] *)
+  | TyImpl of 't * 't uses option * Loc.t
+      (** a dependency's type, whose values are implementations, and what one
+          needs (deps.md, "Implementations"): [Clock uses Os]. The parser reads
+          [Clock] alone as a [TyName], which Resolve makes a [TyImpl] with no
+          [uses] *)
   | TyInout of 't ty * Loc.t
       (** [inout Int], a parameter of a function type: [fn(inout Int)] *)
   | TyErrors of 't errors
@@ -51,7 +58,13 @@ type 't ty =
    `Refusal` or `Frozen`, as a tag; Resolve makes it the set when a named
    error set of that name is in scope. A name written after a module,
    `bank.Refusal`, is always a set. *)
-and 't errors = { errs : 't error list; eloc : Loc.t }
+and 't errors = {
+  errs : 't error list;
+  etail : ident option;
+      (** a named row at the end, [..e]: whatever the closure it's in fails with
+          (see [uses]) *)
+  eloc : Loc.t;
+}
 
 and 't error =
   | Tag of ident * 't payload list
@@ -61,6 +74,14 @@ and 't error =
 (* A payload's field: its name is optional, and only documents it. A tag is
    its name and its payload's types, in order. *)
 and 't payload = { payload_name : ident option; payload_ty : 't ty }
+
+(* What a function, a function type or an implementation uses, after
+   `uses`: dependencies, `Clock, store.Users`, and at the end, a named row,
+   `..d`. A signature names a row where a closure or an implementation is
+   kept rather than only called: `f: fn() uses ..d` stands for whatever
+   `f` uses, and every `..d` in the signature for the same (deps.md,
+   "Implementations"). An error set names one the same way, `! ..e`. *)
+and 't uses = { deps : 't list; dtail : ident option; uloc : Loc.t }
 
 (* [And] and [Or] are `&&` and `||`, which evaluate their right side only
    when the left doesn't already decide the answer (lower.ml makes them
@@ -177,6 +198,12 @@ and ('v, 'b, 't) expr_kind =
       (** [try e]: pass on the errors of every call in [e]. [try match] is a
           [Try] of a [Match] *)
   | Attempt of ('v, 'b, 't) expr  (** [attempt e]: its outcome, as a [Result] *)
+  | With of { item : ('v, 'b, 't) expr; body : ('v, 'b, 't) expr; lam : int }
+      (** [with item in body] (deps.md, "`with`"): [item] is an implementation,
+          installed around [body], or a wrapper, a call missing its last
+          argument, which is [body] as a lambda: `with retry(3) in body` is
+          `retry(3, fn() => body)`. [lam] numbers that lambda, as a node of its
+          own. `with a, b in body` is [a] around `with b in body` *)
 
 and ('v, 'b, 't) arm = {
   arm_pat : ('b, 't) pattern;
@@ -219,7 +246,7 @@ type ('v, 'b, 't) fn_def = {
   params : ('b, 't) param list;
   ret : 't ty option;
   errors : 't errors option;  (** what it can fail with, after `!` *)
-  uses : 't list option;
+  uses : 't uses option;
       (** the dependencies after `uses`, if it's written: [Clock], or another
           module's, [store.Users] *)
   body : ('v, 'b, 't) expr;
@@ -295,6 +322,17 @@ let functions (prog : ('v, 'b, 't) program) =
 let spelled (f : ('v, 'b, 't) fn_def) =
   f.pub && List.for_all (fun p -> p.pty <> None) f.params
 
+(* Whether a function type names a row of its own, `fn() ! ..e` or
+   `fn() uses ..d`: then it's a closure that can be kept, not only called,
+   and what it doesn't name or list it doesn't do (deps.md,
+   "Implementations"). *)
+let names_row (t : 't ty) =
+  match t with
+  | TyFn (_, _, e, u, _) ->
+      Option.bind e (fun e -> e.etail) <> None
+      || Option.bind u (fun u -> u.dtail) <> None
+  | TyName _ | TyImpl _ | TyInout _ | TyErrors _ -> false
+
 (* `&s.push(1)`: a method call whose `&` marks the receiver it changes,
    as opposed to `&xs`, a place passed `inout`. A call's result is never a
    place, so the two can't be confused (module-build.md, "Methods and
@@ -359,6 +397,7 @@ and tref = Named of Path.t | Param of int
 module Parsed = struct
   type nonrec ty = tyname ty
   type nonrec errors = tyname errors
+  type nonrec uses = tyname uses
   type nonrec error = tyname error
   type nonrec payload = tyname payload
   type nonrec ctor_ref = tyname ctor_ref
@@ -380,6 +419,7 @@ end
 module Resolved = struct
   type nonrec ty = tname ty
   type nonrec errors = tname errors
+  type nonrec uses = tname uses
   type nonrec error = tname error
   type nonrec payload = tname payload
   type nonrec ctor_ref = tname ctor_ref
@@ -438,13 +478,23 @@ let rec show_ty : ty -> string = function
   | TyName (name, args) ->
       show_tyname name ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
   | TyInout (t, _) -> "inout " ^ show_ty t
-  | TyFn (params, ret, errs, _) ->
+  | TyFn (params, ret, errs, uses, _) ->
       let ret = match ret with Some r -> " -> " ^ show_ty r | None -> "" in
       let errs =
         match errs with Some es -> " " ^ show_errors es | None -> ""
       in
-      "fn(" ^ String.concat ", " (List.map show_ty params) ^ ")" ^ ret ^ errs
+      let uses = match uses with Some u -> " " ^ show_uses u | None -> "" in
+      "fn("
+      ^ String.concat ", " (List.map show_ty params)
+      ^ ")" ^ ret ^ errs ^ uses
+  | TyImpl (name, Some u, _) -> "(" ^ show_tyname name ^ " " ^ show_uses u ^ ")"
+  | TyImpl (name, None, _) -> show_tyname name
   | TyErrors es -> show_errors es
+
+(* `uses Clock, ..d` *)
+and show_uses (u : uses) =
+  let tail = match u.dtail with Some t -> [ ".." ^ t.name ] | None -> [] in
+  "uses " ^ String.concat ", " (List.map show_tyname u.deps @ tail)
 
 (* An error set as it's written: `! Short(by: Money) | Frozen`. *)
 and show_errors (es : errors) =
@@ -459,7 +509,8 @@ and show_errors (es : errors) =
         t.name ^ "(" ^ String.concat ", " (List.map payload ps) ^ ")"
     | Set s -> show_tyname s
   in
-  "! " ^ String.concat " | " (List.map error es.errs)
+  let tail = match es.etail with Some t -> [ ".." ^ t.name ] | None -> [] in
+  "! " ^ String.concat " | " (List.map error es.errs @ tail)
 
 let rec show_pattern (p : pattern) =
   match p.pkind with
@@ -529,6 +580,7 @@ let rec show_expr (e : expr) =
       parens ("fail" :: t.name :: List.map show_arg args)
   | Try a -> parens [ "try"; show_expr a ]
   | Attempt a -> parens [ "attempt"; show_expr a ]
+  | With { item; body; _ } -> parens [ "with"; show_expr item; show_expr body ]
 
 and show_arm (a : arm) =
   let guard =
@@ -554,7 +606,11 @@ let show_fn (f : fn_def) =
   in
   let uses =
     match f.uses with
-    | Some ds -> [ parens ("uses" :: List.map show_tyname ds) ]
+    | Some u ->
+        let tail =
+          match u.dtail with Some t -> [ ".." ^ t.name ] | None -> []
+        in
+        [ parens (("uses" :: List.map show_tyname u.deps) @ tail) ]
     | None -> []
   in
   parens
@@ -680,7 +736,8 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         ^ String.concat ", "
             (List.map (fun ((f : ident), v) -> f.name ^ ": " ^ go v) fields)
         ^ " }"
-    | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ -> raise Exit
+    | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | With _ ->
+        raise Exit
   and operand n (a : Resolved.expr) =
     match a.kind with
     | Binop (op, _, _) when precedence op < n -> "(" ^ go a ^ ")"

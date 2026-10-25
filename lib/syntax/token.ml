@@ -31,6 +31,7 @@ type t =
   | TRY
   | ATTEMPT
   | ORELSE
+  | WITH
   (* punctuation *)
   | LPAREN
   | RPAREN
@@ -40,6 +41,7 @@ type t =
   | RBRACKET
   | COMMA
   | DOT
+  | DOTDOT
   | PIPE
   | FATARROW
   | COLON
@@ -116,6 +118,7 @@ let to_string = function
   | TRY -> "try"
   | ATTEMPT -> "attempt"
   | ORELSE -> "orelse"
+  | WITH -> "with"
   | LPAREN -> "("
   | RPAREN -> ")"
   | LBRACE -> "{"
@@ -123,6 +126,7 @@ let to_string = function
   | LBRACKET -> "["
   | RBRACKET -> "]"
   | DOT -> "."
+  | DOTDOT -> ".."
   | PIPE -> "|"
   | FATARROW -> "=>"
   | COMMA -> ","

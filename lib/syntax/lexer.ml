@@ -53,6 +53,7 @@ let keywords =
     ("try", TRY);
     ("attempt", ATTEMPT);
     ("orelse", ORELSE);
+    ("with", WITH);
   ]
 
 let is_digit c = c >= '0' && c <= '9'
@@ -209,6 +210,7 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | '>', '=' -> advance_by 2 GE
       | '&', '&' -> advance_by 2 AMPAMP
       | '|', '|' -> advance_by 2 PIPEPIPE
+      | '.', '.' -> advance_by 2 DOTDOT
       | '(', _ ->
           incr depth;
           advance_by 1 LPAREN

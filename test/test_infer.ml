@@ -1282,6 +1282,8 @@ fn main() = print(Some(true))
       | Some (Ctor_of (p, c)) ->
           print_endline ("constructor " ^ c ^ " of " ^ path p)
       | Some (Method_of p) -> print_endline ("method " ^ path p)
+      | Some (Installs p) -> print_endline ("installs " ^ path p)
+      | Some Wraps -> print_endline "wraps"
       | None -> ())
     (List.assoc "main" second.nodes);
   [%expect
@@ -1732,7 +1734,7 @@ fn twice(f) =
 fn main() = twice() fn() => ()
 |};
   [%expect {|
-    fn twice(f: fn())
+    fn twice(f: fn() uses ..d) uses ..d
     fn main()
     |}]
 

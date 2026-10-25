@@ -103,13 +103,26 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
    │                      ^^^^^^^^^^^^^^^^^^^^ fails with `Timeout`
    │
    = note: `Rates.usd_to` can fail only with `RateUnavailable`
-   = help: map it: `try match Http.get_rate(c)` with the arm `fail Timeout => fail RateUnavailable`
+   = help: map it: `match Http.get_rate(c)` with the arm `fail Timeout => fail RateUnavailable`
 ```
+
+  The help says `try match` instead when the call fails with more than the
+  tag it maps, which the `try` passes on.
 
 - **A parameter of a dependency type follows the closure rule.** If it's
   only installed, it's transparent, and what it needs flows to the caller.
   One that's stored names its row, `Clock uses ..d`, as a stored closure
   writes `fn() ! ..e uses ..d`.
+- `uses` after a dependency's name is what an implementation needs:
+  `c: Clock uses Os`. After `->` a `uses` is the function's own, so a
+  result writes it in parentheses: `-> (Clock uses Os)`.
+- **Only a signature names a row.** Every `..d` in one signature is the
+  same row, and the body can write it again, in a `let`'s type or a
+  lambda's parameter. A function that declares its `uses` or `!` declares
+  the rows it adds to them too: `fn press(f: fn() uses ..d) uses ..d`. A
+  type's declaration can't name one yet, so a type that keeps a closure
+  takes it as a type parameter, `type Button<F> = { on_click: F }`, and a
+  signature writes `Button<fn() ! ..e uses ..d>`.
 - A handler forwarding to the next implementation out, `outer`, comes
   later (stage 9).
 
@@ -126,6 +139,11 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   items need.
 - An item is an implementation, or a **wrapper**: a function whose last
   parameter is the body. `with retry(3) in body` is `retry(3, fn() => body)`.
+  A function of one parameter is a wrapper on its own: `with twice in body`.
+- The body of a wrapper is a lambda, so it marks its own calls, and the
+  `with` passes on what the wrapper fails with, as `try` would:
+  `attempt with retry(3) in try fetch()`. Like any lambda's, it can't
+  change a variable from outside it; it gives back a value instead.
 
 ## Built in
 
