@@ -555,30 +555,63 @@ let unifies env why loc ~found ~expected =
             (more @ [ note ], Some (Option.value help ~default:h))
         | None -> (more, help)
       in
-      (* a handler of several dependencies where one of them is wanted,
-         somewhere it wasn't known as it was made (see [as_one]) *)
-      let more, help =
-        match (repr found, repr expected) with
-        | TCon (h, _), TCon (d, _) -> (
+      (* a handler of several dependencies where an implementation is
+         wanted, at the top or inside the types (`Option<Rates>`): one of
+         its own somewhere it wasn't known as it was made (see [as_one]),
+         or another one *)
+      let rec handler_pair f x =
+        match (repr f, repr x) with
+        | TCon (h, _), TCon (d, [ TUses _ ]) when h <> d -> (
             match Hashtbl.find_opt env.types h with
-            | Some { body = Handler deps; _ } when List.mem d deps ->
-                let d = type_name env d in
-                ( more
-                  @ [
-                      sprintf
-                        "`%s` implements %s, so it's taken as just `%s` only \
-                         where `%s` is wanted as it's made"
-                        (type_name env h)
-                        (and_list (List.map (type_name env) deps))
-                        d d;
-                    ],
-                  Some
-                    (Option.value help
-                       ~default:
-                         (sprintf "say so where it's made: `let x: %s = ...`" d))
-                )
-            | _ -> (more, help))
-        | _ -> (more, help)
+            | Some { body = Handler deps; _ } -> Some (h, deps, d)
+            | _ -> None)
+        | TCon (p, fs), TCon (q, xs)
+          when p = q && List.length fs = List.length xs ->
+            List.find_map Fun.id (List.map2 handler_pair fs xs)
+        | TFun (ps, r, _, _), TFun (qs, r', _, _)
+          when List.length ps = List.length qs ->
+            List.find_map Fun.id
+              (handler_pair r r'
+              :: List.map2 (fun p q -> handler_pair p.ty q.ty) ps qs)
+        | _ -> None
+      in
+      let more, help =
+        match handler_pair found expected with
+        | Some (h, deps, d) when List.mem d deps ->
+            let d = type_name env d in
+            ( more
+              @ [
+                  sprintf
+                    "`%s` implements %s, so it's taken as just `%s` only where \
+                     `%s` is wanted as it's made"
+                    (type_name env h)
+                    (and_list (List.map (type_name env) deps))
+                    d d;
+                ],
+              Some
+                (Option.value help
+                   ~default:
+                     (sprintf "say so where it's made: `let x: %s = %s(...)`" d
+                        (type_name env h))) )
+        | Some (h, deps, d) ->
+            let d = type_name env d in
+            ( more
+              @ [
+                  sprintf
+                    "`%s` is a handler for %s, so what its call describes \
+                     implements those, not `%s`"
+                    (type_name env h)
+                    (and_list (List.map (type_name env) deps))
+                    d;
+                ],
+              Some
+                (Option.value help
+                   ~default:
+                     (sprintf
+                        "give an implementation of `%s` here: a `%s { ... }`, \
+                         or a handler for `%s`"
+                        d d d)) )
+        | None -> (more, help)
       in
       ignore
         (fail env ?help ~notes:(why.notes @ more) ~labels:(why.labels f x) loc
@@ -1453,6 +1486,26 @@ let taken_as env cx (e : expr) t expected =
       one
   | None -> t
 
+(* What the parameters [tvars] of [td], a type being made, stand for
+   where a value of type [expected] is wanted, as far as they're
+   implementations: in an `Option<Rates>`, the `T` of `Some(...)` is a
+   `Rates`, so a handler of several dependencies given there is taken as
+   that one ([as_one]). The rest is unified once the value is made, so a
+   mismatch is still reported at the whole value. *)
+let hint env (td : Iface.type_decl) tvars expected =
+  match reveal env.st expected with
+  | TCon (p, xs) when p = td.path && List.length xs = List.length tvars ->
+      List.iter2
+        (fun v x ->
+          match reveal env.st x with
+          | TCon (d, [ TUses _ ]) ->
+              (* what it needs is left to the whole value's unification
+                 too, which says where the type wanted is written *)
+              Unify.unify env.st v (TCon (d, [ TUses (fresh_row env.st) ]))
+          | _ -> ())
+        tvars xs
+  | _ -> ()
+
 (* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
   let t = synth env cx e in
@@ -1520,8 +1573,8 @@ and check env cx ?(why = plain) (e : expr) expected =
       let t = infer_con env cx e c args ~expected in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
-  | Record (None, fields), _ ->
-      let t = infer_record env cx e None fields ~expected in
+  | Record (name, fields), _ ->
+      let t = infer_record env cx e name fields ~expected in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
   | Handler { deps; state; arms; _ }, TCon (p, [ TUses declared ])
@@ -1652,21 +1705,54 @@ and synth env cx (e : expr) : ty =
   | Field (r, f) -> infer_field env cx e r f
   | Match (subject, arms) -> infer_match env cx subject arms ~want:None
   | Array xs ->
-      (* the first element says what the others have to be *)
+      (* the first element says what the others have to be. One that's a
+         handler of several dependencies waits for one that isn't, which
+         may be an implementation of one of them, `[counting_rates(1),
+         Rates { ... }]`: then it's taken as that one ([as_one]) *)
       let elem = fresh_var env.st in
-      List.iteri
-        (fun i (x : expr) ->
-          let msg =
-            if i = 0 then None
-            else
-              Some
-                (fun f x ->
-                  sprintf
-                    "this element is %s, but the elements before it are %s"
-                    (article f) (article x))
-          in
-          check env cx x elem ~why:(explain ?msg ()))
-        xs;
+      let several t =
+        match repr t with
+        | TCon (h, [ TUses _ ]) -> (
+            match Hashtbl.find_opt env.types h with
+            | Some { body = Handler _; _ } -> true
+            | _ -> false)
+        | _ -> false
+      in
+      let waiting =
+        List.fold_left
+          (fun waiting (x : expr) ->
+            match repr elem with
+            | TVar _ ->
+                let t = infer env cx x in
+                if several t then (x, t) :: waiting
+                else (
+                  ignore
+                    (unifies env plain (result_loc x) ~found:t ~expected:elem);
+                  waiting)
+            | _ ->
+                check env cx x elem
+                  ~why:
+                    (explain
+                       ~msg:(fun f x ->
+                         sprintf
+                           "this element is %s, but the elements before it are \
+                            %s"
+                           (article f) (article x))
+                       ());
+                waiting)
+          [] xs
+      in
+      List.iter
+        (fun ((x : expr), t) ->
+          ignore
+            (unifies env
+               (explain
+                  ~msg:(fun f x ->
+                    sprintf "this element is %s, but the others are %s"
+                      (article f) (article x))
+                  ())
+               (result_loc x) ~found:(taken_as env cx x t elem) ~expected:elem))
+        (List.rev waiting);
       array elem
   | Index (a, i) ->
       let elem = fresh_var env.st in
@@ -1941,7 +2027,39 @@ and with_ env cx (e : expr) item body lam =
           install env cx e item t body)
   | Call (f, args) -> (
       let tf = infer env cx f in
+      (* a handler, or a function that makes an implementation, given too
+         few arguments: what's missing isn't its body *)
+      let short ps ret =
+        List.length ps > List.length args
+        && (match reveal env.st ret with
+          | TCon (_, [ TUses _ ]) -> true
+          | _ -> false)
+        &&
+        match reveal env.st (List.nth ps (List.length ps - 1)).ty with
+        | TFun _ -> false
+        | _ -> true
+      in
       match reveal env.st tf with
+      | TFun (ps, ret, _, _) when short ps ret ->
+          let name = callee_name f in
+          let n = List.length ps in
+          report env
+            (Diag.make item.loc
+               ~notes:
+                 [
+                   sprintf
+                     "%s makes an implementation, `%s`, which `with` installs \
+                      once it's called with all its arguments"
+                     name
+                     (show (printer env) ret);
+                 ]
+               ~help:(sprintf "give %s all its arguments" name)
+               (sprintf "%s takes %d argument%s but was given %d" name n
+                  (if n = 1 then "" else "s")
+                  (List.length args)));
+          List.iter (fun a -> ignore (infer env cx a)) args;
+          Hashtbl.replace cx.nodes item.node ret;
+          install env cx e item ret body
       | TFun (ps, _, _, _) when List.length ps = List.length args + 1 ->
           wrap env cx e ~call:item ~f ~args tf body lam
       | _ ->
@@ -2546,6 +2664,7 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
   | Some (td, ctor) ->
       Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
       let t, tvars = instance env td in
+      hint env td tvars expected;
       if ctor_shape env e.loc c ctor (List.map fst args) then
         List.iter2
           (fun (f : Iface.field) (_, (a : expr)) ->
@@ -2613,6 +2732,7 @@ and infer_record env cx (e : expr) name fields ~expected =
       TError
   | Some (td, decl) ->
       let t, tvars = instance env td in
+      hint env td tvars expected;
       (* an implementation gives a dependency's operations *)
       let what = match td.body with Dep _ -> "operation" | _ -> "field" in
       (* a misspelled field is also a missing one; once it's reported, the

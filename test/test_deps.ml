@@ -3376,7 +3376,151 @@ fn main() = 1
     24 │ pub fn some() = Some(counting_rates(1))
        │                 ^^^^^^^^^^^^^^^^^^^^^^^
        = a public function without `->` returns `Unit`
-       help: the type of a handler of several dependencies can't be written, so a public function can't return `Option<counting_rates>`, which holds `counting_rates`: make `some` private, so its type is inferred
+       help: say which of its dependencies `counting_rates` gives an implementation of, `-> Option<Rates>`: the type of a handler of several can't be written
+    |}]
+
+let%expect_test "taken as one inside the type that's wanted" =
+  (* `Option<Rates>` wants a `Rates` inside it, and so does an array
+     whose other elements are `Rates`, in either order *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+pub type Box<T> = { v: T }
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+pub fn some() -> Option<Rates> = Some(counting_rates(6))
+
+fn main() uses Console =
+  let o: Option<Rates> = Some(counting_rates(2))
+  match o
+    Some(r) => print(run(r))
+    None => ()
+  let b: Box<Rates> = Box { v: counting_rates(3) }
+  print(run(b.v))
+  let xs = [counting_rates(4), Rates { usd_to: fn(c) => c }]
+  let ys = [Rates { usd_to: fn(c) => c }, counting_rates(5)]
+  print(run(xs[0]) + run(ys[1]))
+  match some()
+    Some(r) => print(run(r))
+    None => ()
+|}
+  in
+  types src;
+  [%expect
+    {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    pub dep RateCalls
+      count: fn() -> Int
+    handler counting_rates(rate: Int) for Rates, RateCalls
+    fn run(r: Rates) -> Int
+    pub fn some() -> Option<Rates>
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    2
+    3
+    9
+    6
+    ()
+    |}]
+
+let%expect_test "a handler of several where something else is wanted" =
+  (* each says what the handler's call is, and what to write instead *)
+  types
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn f() = counting_rates(1)
+
+fn main() =
+  let r: Clock = counting_rates(1)
+  let g: fn() -> Rates = f
+  let o = Some(counting_rates(1))
+  let p: Option<Rates> = o
+  let zs = [counting_rates(1), Clock.frozen(Time.epoch)]
+  ()
+|};
+  [%expect
+    {|
+    error: expected `Clock`, found `counting_rates`
+       ┌─ test.ren:14:18
+    14 │   let r: Clock = counting_rates(1)
+       │                  ^^^^^^^^^^^^^^^^^
+       = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
+       help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
+
+    error: expected `fn() -> Rates`, found `fn() -> counting_rates`
+       ┌─ test.ren:15:26
+    15 │   let g: fn() -> Rates = f
+       │                          ^
+       = `counting_rates` implements `Rates` and `RateCalls`, so it's taken as just `Rates` only where `Rates` is wanted as it's made
+       help: say so where it's made: `let x: Rates = counting_rates(...)`
+
+    error: expected `Option<Rates>`, found `Option<counting_rates>`
+       ┌─ test.ren:17:26
+    17 │   let p: Option<Rates> = o
+       │                          ^
+       = `counting_rates` implements `Rates` and `RateCalls`, so it's taken as just `Rates` only where `Rates` is wanted as it's made
+       help: say so where it's made: `let x: Rates = counting_rates(...)`
+
+    error: this element is a `counting_rates`, but the others are a `Clock`
+       ┌─ test.ren:18:13
+    18 │   let zs = [counting_rates(1), Clock.frozen(Time.epoch)]
+       │             ^^^^^^^^^^^^^^^^^
+       = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
+       help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
+    |}]
+
+let%expect_test "a handler given too few arguments in a `with`" =
+  (* what's missing is an argument, not the `with`'s body *)
+  types
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+handler one(k: Int) for Rates =
+  usd_to(c) => c * k
+
+fn make(k: Int) -> Rates = one(k)
+
+fn main() -> Int =
+  with one() in Rates.usd_to(1) + (with make() in Rates.usd_to(2))
+|};
+  [%expect
+    {|
+    error: `one` takes 1 argument but was given 0
+       ┌─ test.ren:10:8
+    10 │   with one() in Rates.usd_to(1) + (with make() in Rates.usd_to(2))
+       │        ^^^^^
+       = `one` makes an implementation, `Rates`, which `with` installs once it's called with all its arguments
+       help: give `one` all its arguments
+
+    error: `make` takes 1 argument but was given 0
+       ┌─ test.ren:10:41
+    10 │   with one() in Rates.usd_to(1) + (with make() in Rates.usd_to(2))
+       │                                         ^^^^^^
+       = `make` makes an implementation, `Rates`, which `with` installs once it's called with all its arguments
+       help: give `make` all its arguments
     |}]
 
 let%expect_test "a conformance function runs against a record and a handler" =

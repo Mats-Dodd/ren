@@ -1989,14 +1989,34 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                            implementation of, `-> %s`: the type of a handler \
                            of several can't be written"
                           (type_name env d)
-                    | Some (h, _) ->
+                    | Some (h, d :: _) ->
+                        (* [found] with [h] written as [d], where [h] is a
+                           whole word *)
+                        let n = String.length h in
+                        let b = Buffer.create (String.length found) in
+                        let rec go i =
+                          if i >= String.length found then ()
+                          else if
+                            i + n <= String.length found
+                            && String.sub found i n = h
+                            && (i = 0 || not (ident found.[i - 1]))
+                            && (i + n = String.length found
+                               || not (ident found.[i + n]))
+                          then (
+                            Buffer.add_string b (type_name env d);
+                            go (i + n))
+                          else (
+                            Buffer.add_char b found.[i];
+                            go (i + 1))
+                        in
+                        go 0;
                         sprintf
-                          "the type of a handler of several dependencies can't \
-                           be written, so a public function can't return `%s`, \
-                           which holds `%s`: make `%s` private, so its type is \
-                           inferred"
-                          found h f.name.name
-                    | None -> sprintf "add `-> %s` to the signature" found)
+                          "say which of its dependencies `%s` gives an \
+                           implementation of, `-> %s`: the type of a handler \
+                           of several can't be written"
+                          h (Buffer.contents b)
+                    | Some (_, []) | None ->
+                        sprintf "add `-> %s` to the signature" found)
                   ()
             | None -> plain
           in
