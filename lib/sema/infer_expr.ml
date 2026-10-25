@@ -173,16 +173,24 @@ let closed () = REmpty
 (* A parameter's type: as written, or a fresh variable. [own] are the
    errors and dependencies of the top-level function the parameter belongs
    to. A parameter written `fn(...)` is transparent: what it fails with and
-   uses is exactly what its function does, so that's its rows. *)
+   uses is exactly what its function does, so that's its rows.
+
+   A top-level function's signature is read exactly as its interface reads
+   it (Iface.signature), so the body is checked against the type other
+   modules will see: any other function type in its parameters, like the
+   `fn()` in `f: fn(fn()) -> Int` or in `f: Option<fn()>`, is closed, as it
+   is in a declaration. With open rows there, the body could widen them, and
+   its type would no longer be the one its signature states. A lambda's
+   parameters, which no interface shows, get fresh rows instead. *)
 let param_type env ~tparams ?own (p : Resolved.param) =
-  let row () = fresh_row env.st in
   let t =
     match (p.pty, own) with
     | Some (TyFn _ as t), Some (errs, uses) -> (
-        match convert ~tvars:tparams ~row t with
+        match convert ~tvars:tparams ~row:closed t with
         | TFun (ps, ret, _, _) -> TFun (ps, ret, errs, uses)
         | _ -> assert false)
-    | Some t, _ -> convert ~tvars:tparams ~row t
+    | Some t, Some _ -> convert ~tvars:tparams ~row:closed t
+    | Some t, None -> convert ~tvars:tparams ~row:(fun () -> fresh_row env.st) t
     | None, _ -> fresh_var env.st
   in
   { mode = p.pmode; ty = t }
@@ -308,11 +316,22 @@ let want_bool env what (e : expr) t =
   unify_at env e.loc ~found:t ~expected:bool
     ~notes:[ sprintf "%s has to be a `Bool`" what ]
 
-(* A call adds the callee's errors and dependencies to the caller's. *)
+(* A call adds the callee's errors and dependencies to the caller's. An
+   open row is unified with the caller's, which is how its tail picks up
+   everything the caller does. A closed one, like a stored `fn()`'s, says
+   only what the callee itself does: unified as it is, it would close the
+   caller's row too, and then nothing else the caller calls could fail or
+   use anything. So it's opened first, with a fresh tail. *)
 let absorb env cx loc errs uses =
+  let rec reopen r =
+    match repr_row r with
+    | REmpty -> fresh_row env.st
+    | RExtend (l, rest) -> RExtend (l, reopen rest)
+    | r -> r
+  in
   try
-    Unify.unify_row env.st errs cx.errs;
-    Unify.unify_row env.st uses cx.uses
+    Unify.unify_row env.st (reopen errs) cx.errs;
+    Unify.unify_row env.st (reopen uses) cx.uses
   with Unify.Mismatch | Unify.Infinite ->
     let pr = printer env in
     ignore
@@ -713,6 +732,9 @@ and infer_record env cx (e : expr) name fields ~expected =
       TError
   | Some (td, decl) ->
       let t, tvars = instance env td in
+      (* a misspelled field is also a missing one; once it's reported, the
+         missing ones aren't, as they're likely the same mistake *)
+      let unknown = ref false in
       List.iter
         (fun ((f : ident), v) ->
           match
@@ -730,12 +752,13 @@ and infer_record env cx (e : expr) name fields ~expected =
                      ())
           | None ->
               report env (no_such_field ~home:env.home f td.path decl);
+              unknown := true;
               ignore (infer env cx v))
         fields;
       let missing =
         List.filter (fun d -> not (List.mem d given)) (field_names decl)
       in
-      if missing <> [] then
+      if missing <> [] && not !unknown then
         report env (missing_fields ~home:env.home e.loc td.path missing);
       t
 
@@ -776,7 +799,13 @@ and infer_field env cx (e : expr) r (f : ident) =
           TError
       | Several paths ->
           let what =
-            match r.kind with Var x -> Some (name_of x) | _ -> None
+            match r.kind with
+            | Var x -> Some (Infer_msg.Named (name_of x))
+            | Call ({ kind = Var (Global p); _ }, _)
+              when p <> cx.self && List.mem_assoc p env.group ->
+                (* another function of the group, seen only as declared *)
+                Some (Group_result p.name)
+            | _ -> None
           in
           report env (several_records_have ~home:env.home r.loc ?what f paths);
           TError)

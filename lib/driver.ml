@@ -55,7 +55,30 @@ let check_module ~home ~imports ?entry prog =
     | Fun (_, _, _, u) -> u.labels
     | _ -> []
   in
-  (Iface.of_module ~home ~uses r.prog, inferred)
+  let iface = Iface.of_module ~home ~uses r.prog in
+  (* A public function's body was checked against its signature, so the
+     type inference found for it is the one its interface states. Other
+     modules see only the interface, so if the two ever differ, that's a
+     bug in the compiler, and it's caught here rather than in whichever
+     module trips over it. *)
+  List.iter
+    (fun (v : Iface.value) ->
+      let found = List.assoc v.vname inferred.schemes in
+      if found <> v.scheme then
+        let show (s : Ty.scheme) =
+          Ty.show (Ty.printer ~show_tail:(fun _ -> true) ~home s) s.ty
+        in
+        raise
+          (Internal_error
+             {
+               pass = "interface";
+               message =
+                 Printf.sprintf
+                   "the interface of `%s` says `%s`, but inference found `%s`"
+                   v.vname (show v.scheme) (show found);
+             }))
+    iface.values;
+  (iface, inferred)
 
 (* The prelude, as a module: its source, parsed and checked against the
    intrinsics (prelude.ml), and its whole interface. It's checked once, the

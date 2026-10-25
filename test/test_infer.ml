@@ -541,6 +541,7 @@ fn main() = print(Basic)
       ┌─ test.ren:8:19
     8 │ fn main() = print(Basic)
       │                   ^^^^^
+      help: check the spelling, or declare it in a type, like `type Shape = | Basic`
     |}];
   run
     (plan_types
@@ -556,6 +557,7 @@ fn main() -> Int =
        ┌─ test.ren:10:5
     10 │     Basic => 1
        │     ^^^^^
+       help: check the spelling, or declare it in a type, like `type Shape = | Basic`
     |}]
 
 let%expect_test "constructor arity and labels" =
@@ -646,6 +648,7 @@ fn main() = print(User { id: 1 })
       ┌─ test.ren:8:19
     8 │ fn main() = print(User { id: 1 })
       │                   ^^^^^^^^^^^^^^
+      help: give it a value too, like `plan: ...`
     |}];
   run (plan_types ^ {|
 fn main() = print(User { id: 1, plan: Free, name: 2 })
@@ -717,6 +720,7 @@ fn main() =
       ┌─ test.ren:9:9
     9 │   print(Basic)
       │         ^^^^^
+      help: check the spelling, or declare it in a type, like `type Shape = | Basic`
 
     error: expected `Int`, found `Bool`
        ┌─ test.ren:10:7
@@ -1133,7 +1137,8 @@ fn main() = print(Some(true))
 let%expect_test "a public function's interface comes from its signature" =
   (* the interface is built from declarations alone; for a public function
      it's the same type inference finds for it. A parameter written
-     `fn(...)` is transparent, so its rows are the function's. *)
+     `fn(...)` is transparent, so its rows are the function's; any other
+     function type in a parameter is closed. *)
   let src =
     clean
       {|
@@ -1141,6 +1146,11 @@ pub fn twice(f: fn()) =
   f()
   f()
 pub fn show(x: Int) = print(x)
+pub fn app(f: fn(fn() -> Int) -> Int) -> Int = f(fn() => 1)
+pub fn maybe(f: Option<fn()>) =
+  match f
+    Some(g) => g()
+    None => ()
 fn main() = twice(fn() => show(1))
 |}
   in
@@ -1157,6 +1167,94 @@ fn main() = twice(fn() => show(1))
     {|
     twice: fn(fn() ! ..e uses ..d) ! ..e uses ..d (as inferred)
     show: fn(Int) ! ..e uses Io, ..d (as inferred)
+    app: fn(fn(fn() -> Int) -> Int ! ..e uses ..d) -> Int ! ..e uses ..d (as inferred)
+    maybe: fn(Option<fn()>) ! ..e uses ..d (as inferred)
+    |}]
+
+let%expect_test "a function type inside a parameter is closed" =
+  (* only a parameter written `fn(...)` is transparent; any other function
+     type in a signature uses and fails with nothing, as in a declaration,
+     so the body is checked at the type the interface shows *)
+  run
+    {|
+pub fn maybe(f: Option<fn()>) =
+  match f
+    Some(g) => g()
+    None => ()
+fn main() = maybe(Some(fn() => print(1)))
+|};
+  [%expect
+    {|
+    error: expected `Option<fn()>`, found `Option<fn() uses Io>`
+      ┌─ test.ren:5:19
+    5 │ fn main() = maybe(Some(fn() => print(1)))
+      │                   ^^^^^^^^^^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "calling a stored closure leaves the caller open" =
+  (* a closed `fn()` adds nothing to its caller's errors and dependencies,
+     so `main` can still use `Io` after calling `g` *)
+  let src =
+    {|
+type B = { f: fn() }
+fn g(b: B) = b.f()
+fn main() =
+  print(1)
+  g(B { f: fn() => () })
+|}
+  in
+  types src;
+  run src;
+  [%expect {|
+    fn g(b: B)
+    fn main() uses Io
+    1
+    ()
+    |}]
+
+let%expect_test "a misspelled field is reported once" =
+  run
+    {|
+type A = { id: Int, name: Int }
+fn main() = print(A { id: 1, nam: 2 }.id)
+|};
+  [%expect
+    {|
+    error: `A` has no field named `nam`
+      ┌─ test.ren:2:30
+    2 │ fn main() = print(A { id: 1, nam: 2 }.id)
+      │                              ^^^
+      help: its fields: `id`, `name`
+    |}]
+
+let%expect_test "functions that call each other see each other as declared" =
+  (* inside `f`, `g` is only what its signature says, so its result's
+     record type isn't known there; declaring it fixes that *)
+  let src ret =
+    Printf.sprintf
+      {|
+type A = { id: Int, name: Int }
+type B = { id: Int, age: Int }
+fn f(n) = if n == 0 then 0 else g(n).id
+fn g(n)%s = if n == 0 then A { id: 1, name: 2 } else A { id: f(n - 1), name: 0 }
+fn main() = print(f(3))
+|}
+      ret
+  in
+  run (src "");
+  run (src " -> A");
+  [%expect
+    {|
+    error: can't tell which record type this is
+      ┌─ test.ren:3:33
+    3 │ fn f(n) = if n == 0 then 0 else g(n).id
+      │                                 ^^^^
+      = `id` is a field of `A` and `B`
+      = a field is found through its record's type, which has to be known where the field is used
+      = `g` and this function call each other, so here `g` is only what its signature says
+      help: declare what `g` returns, like `-> A`
+    0
+    ()
     |}]
 
 let%expect_test "inferred types are canonical" =

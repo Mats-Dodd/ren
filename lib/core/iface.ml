@@ -97,7 +97,11 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
    A parameter whose type is written `fn(...)`, with no `..e` or `..d`, is
    transparent: what it fails with and uses flows into the function's own
    errors and dependencies, so its rows are the function's. Rows are open,
-   as they are in every scheme, so a caller adds them to its own.
+   as they are in every scheme, so a caller adds them to its own. Any other
+   function type in the signature, like the `fn()` in `f: Option<fn()>`,
+   uses and fails with nothing, as in a declaration. Inference reads a
+   signature the same way (Infer_expr.param_type), and the driver checks
+   that the two agree.
 
    [uses] are the dependencies the function uses. Ren has no way to write
    them in a signature yet, so they come from inference for now. *)

@@ -213,4 +213,5 @@ fn main() = print(Basic)
        ┌─ test.ren:11:19
     11 │ fn main() = print(Basic)
        │                   ^^^^^
+       help: check the spelling, or declare it in a type, like `type Shape = | Basic`
     |}]

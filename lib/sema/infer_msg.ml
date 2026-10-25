@@ -84,7 +84,12 @@ let type_name ~home p = Path.show ~home p
 let field_names (fs : Iface.field list) = List.map (fun f -> f.Iface.fname) fs
 
 let no_ctor (c : Ast.ident) =
-  Diag.make c.loc (sprintf "there's no constructor named `%s`" c.name)
+  Diag.make c.loc
+    ~help:
+      (sprintf
+         "check the spelling, or declare it in a type, like `type Shape = | %s`"
+         c.name)
+    (sprintf "there's no constructor named `%s`" c.name)
 
 (* Today constructor names are unique (resolve.ml), so this can't happen
    yet; it's what sharing them will report. *)
@@ -150,6 +155,10 @@ let no_such_field ~home (f : Ast.ident) path decl =
 
 let missing_fields ~home loc path missing =
   Diag.make loc
+    ~help:
+      (sprintf "give %s a value too, like `%s: ...`"
+         (if List.length missing = 1 then "it" else "each")
+         (List.hd missing))
     (sprintf "this `%s` is missing %s" (type_name ~home path) (quote missing))
 
 let needs_record (f : Ast.ident) shown =
@@ -160,23 +169,39 @@ let no_record_has (f : Ast.ident) =
   Diag.make f.loc (sprintf "no record type has a field named `%s`" f.name)
 
 (* `u.id` where `u`'s type isn't known yet, and several records have an
-   `id`. [what] is the record's variable, if it is one. *)
+   `id`. [what] says what the record is, if that helps say how to fix it: a
+   variable, or the result of a function [g] that calls this one, which is
+   seen only as its declaration describes it until both are checked
+   (infer_top.ml). *)
+type what = Named of string | Group_result of string
+
 let several_records_have ~home loc ?what (f : Ast.ident) paths =
-  let what, help =
+  let first = type_name ~home (List.hd paths) in
+  let what, help, extra =
     match what with
-    | Some x ->
+    | Some (Named x) ->
         ( sprintf "`%s`" x,
-          sprintf "annotate `%s` where it's defined, like `%s: %s`" x x
-            (type_name ~home (List.hd paths)) )
-    | None -> ("this", "add a type annotation to say which")
+          sprintf "annotate `%s` where it's defined, like `%s: %s`" x x first,
+          [] )
+    | Some (Group_result g) ->
+        ( "this",
+          sprintf "declare what `%s` returns, like `-> %s`" g first,
+          [
+            sprintf
+              "`%s` and this function call each other, so here `%s` is only \
+               what its signature says"
+              g g;
+          ] )
+    | None -> ("this", "add a type annotation to say which", [])
   in
   Diag.make loc ~help
     ~notes:
-      [
-        sprintf "`%s` is a field of %s" f.name
-          (String.concat " and "
-             (List.map (fun p -> sprintf "`%s`" (type_name ~home p)) paths));
-        "a field is found through its record's type, which has to be known \
-         where the field is used";
-      ]
+      ([
+         sprintf "`%s` is a field of %s" f.name
+           (String.concat " and "
+              (List.map (fun p -> sprintf "`%s`" (type_name ~home p)) paths));
+         "a field is found through its record's type, which has to be known \
+          where the field is used";
+       ]
+      @ extra)
     (sprintf "can't tell which record type %s is" what)
