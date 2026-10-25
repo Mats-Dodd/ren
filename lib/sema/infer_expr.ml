@@ -528,6 +528,31 @@ let unifies env why loc ~found ~expected =
             (more @ [ note ], Some (Option.value help ~default:h))
         | None -> (more, help)
       in
+      (* a handler where one of its dependencies is wanted: it describes
+         an implementation, which only a `with` makes *)
+      let more, help =
+        match (repr found, repr expected) with
+        | TCon (h, _), TCon (d, _) -> (
+            match Hashtbl.find_opt env.types h with
+            | Some { body = Handler deps; _ } when List.mem d deps ->
+                let d = type_name env d in
+                ( more
+                  @ [
+                      sprintf
+                        "a handler describes an implementation of `%s`, and \
+                         each `with` that installs it makes a fresh one, so it \
+                         isn't one itself"
+                        d;
+                    ],
+                  Some
+                    (Option.value help
+                       ~default:
+                         "install it with `with` where it's made, around the \
+                          call: a function can't take a handler to install yet")
+                )
+            | _ -> (more, help))
+        | _ -> (more, help)
+      in
       ignore
         (fail env ?help ~notes:(why.notes @ more) ~labels:(why.labels f x) loc
            msg);
@@ -1864,22 +1889,46 @@ and install env cx (e : expr) item t body =
           @ !(cx.calls);
         tb
   in
+  (* what an implementation of [d] installs: a handler's instance, each
+     of its dependencies *)
+  let installs d =
+    match Hashtbl.find_opt env.types d with
+    | Some { body = Handler deps; _ } ->
+        Hashtbl.replace cx.found e.node (Installs_handler deps);
+        deps
+    | _ ->
+        Hashtbl.replace cx.found e.node (Installs d);
+        [ d ]
+  in
   match reveal env.st t with
   | TCon (d, [ TUses needs ]) ->
       (* what it needs it needs here, outside: its operations run with what's
          installed where it's installed *)
       use_row env cx ~loc:item.loc ~needs:true needs;
-      let deps =
-        match Hashtbl.find_opt env.types d with
-        | Some { body = Handler deps; _ } ->
-            (* a handler's instance installs each of its dependencies *)
-            Hashtbl.replace cx.found e.node (Installs_handler deps);
-            deps
-        | _ ->
-            Hashtbl.replace cx.found e.node (Installs d);
-            [ d ]
-      in
-      around cx deps
+      around cx (installs d)
+  | TFun ([], ret, _, _) as tf
+    when match reveal env.st ret with
+         | TCon (_, [ TUses _ ]) -> true
+         | _ -> false -> (
+      (* `with h in`, a handler or a function that makes an implementation
+         not called: the body is checked as if it were, so what it uses
+         isn't reported as missing too *)
+      let src = Option.value (env.source item) ~default:"f" in
+      report env
+        (Diag.make item.loc
+           ~notes:
+             [
+               sprintf
+                 "`with` installs an implementation, and `%s` makes one when \
+                  it's called"
+                 src;
+             ]
+           ~help:(sprintf "call it: `with %s() in ...`" src)
+           (sprintf "`with` installs an implementation, but this is %s"
+              (article (show (printer env) tf))));
+      match reveal env.st ret with
+      | TCon (d, _) -> around cx (installs d)
+      | _ -> TError)
   | TError ->
       ignore (infer env cx body);
       TError

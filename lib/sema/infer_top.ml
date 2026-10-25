@@ -1810,7 +1810,28 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                 explain
                   ~notes:[ "a public function without `->` returns `Unit`" ]
                   ~help:(fun found _ ->
-                    sprintf "add `-> %s` to the signature" found)
+                    (* a handler's type, `counting_rates uses Clock`, is
+                       named after it, and can't be written *)
+                    let head =
+                      match String.index_opt found ' ' with
+                      | Some i -> String.sub found 0 i
+                      | None -> found
+                    in
+                    let handler (td : Iface.type_decl) =
+                      match td.body with
+                      | Handler _ -> type_name env td.path = head
+                      | _ -> false
+                    in
+                    if
+                      List.exists handler
+                        (Hashtbl.to_seq_values env.types |> List.of_seq)
+                    then
+                      sprintf
+                        "a handler's type can't be written yet, so a public \
+                         function can't return `%s`: make `%s` private, so its \
+                         type is inferred"
+                        head f.name.name
+                    else sprintf "add `-> %s` to the signature" found)
                   ()
             | None -> plain
           in

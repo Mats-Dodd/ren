@@ -3033,3 +3033,47 @@ fn main() uses Console =
     1
     ()
     |}]
+
+let%expect_test "a handler is installed where it's made, and called first" =
+  types
+    {|
+dep N =
+  next: fn() -> Int
+
+handler counter() for N =
+  var n = 0
+  next() =>
+    n += 1
+    n
+
+fn run(r: N) -> Int = with r in N.next()
+
+fn passed() -> Int = run(counter())
+
+pub fn make() = counter()
+
+fn main() uses Console = with counter in print(N.next())
+|};
+  [%expect
+    {|
+    error: expected `N`, found `counter`
+       ┌─ test.ren:12:26
+    12 │ fn passed() -> Int = run(counter())
+       │                          ^^^^^^^^^
+       = a handler describes an implementation of `N`, and each `with` that installs it makes a fresh one, so it isn't one itself
+       help: install it with `with` where it's made, around the call: a function can't take a handler to install yet
+
+    error: expected `Unit`, found `counter`
+       ┌─ test.ren:14:17
+    14 │ pub fn make() = counter()
+       │                 ^^^^^^^^^
+       = a public function without `->` returns `Unit`
+       help: a handler's type can't be written yet, so a public function can't return `counter`: make `make` private, so its type is inferred
+
+    error: `with` installs an implementation, but this is a `fn() -> counter`
+       ┌─ test.ren:16:31
+    16 │ fn main() uses Console = with counter in print(N.next())
+       │                               ^^^^^^^
+       = `with` installs an implementation, and `counter` makes one when it's called
+       help: call it: `with counter() in ...`
+    |}]
