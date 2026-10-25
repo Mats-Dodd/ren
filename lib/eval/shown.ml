@@ -133,19 +133,22 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
         y :: each f rest
   in
   (* [xs] and [ys], two by two, the [i]th of type [ts]'s [i]th, written
-     around by [label i] if it isn't left out *)
-  let rec both ts label xs ys =
-    let ls, rs =
-      List.split
-        (each
-           (fun (i, t, x, y) ->
-             let l, r = go t x y in
-             let label s = if s = "..." then s else label i s in
-             (label l, label r))
-           (List.mapi
-              (fun i (t, (x, y)) -> (i, t, x, y))
-              (List.combine ts (List.combine xs ys))))
-    in
+     around by [label i] if it isn't left out: each side's parts, not yet
+     joined, so an array can add the elements only one side has before a
+     run of `...` is made one *)
+  let rec each_part ts label xs ys =
+    List.split
+      (each
+         (fun (i, t, x, y) ->
+           let l, r = go t x y in
+           let label s = if s = "..." then s else label i s in
+           (label l, label r))
+         (List.mapi
+            (fun i (t, (x, y)) -> (i, t, x, y))
+            (List.combine ts (List.combine xs ys))))
+  (* the same, joined *)
+  and both ts label xs ys =
+    let ls, rs = each_part ts label xs ys in
     (parts ls, parts rs)
   and go t x y =
     let l = value t x and r = value t y in
@@ -162,7 +165,7 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           let xs = Array.to_list xs and ys = Array.to_list ys in
           let n = min (List.length xs) (List.length ys) in
           let l, r =
-            both
+            each_part
               (List.init n (fun _ -> elem))
               (fun _ s -> s)
               (List.filteri (fun i _ -> i < n) xs)
@@ -174,7 +177,7 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           let l, r =
             if (not !shown) && n > 0 then
               let last = value elem (List.nth xs (n - 1)) in
-              let s = parts ((if n > 1 then [ "..." ] else []) @ [ last ]) in
+              let s = (if n > 1 then [ "..." ] else []) @ [ last ] in
               (s, s)
             else (l, r)
           in
@@ -189,9 +192,7 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           in
           let el = extra xs (List.length xs)
           and er = extra ys (List.length ys) in
-          let side shared extra =
-            "[" ^ parts ((if n = 0 then [] else [ shared ]) @ extra) ^ "]"
-          in
+          let side shared extra = "[" ^ parts (shared @ extra) ^ "]" in
           (side l el, side r er)
       | Con (p, args), _, _ -> (
           match own p args x with

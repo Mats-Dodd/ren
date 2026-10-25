@@ -4487,6 +4487,12 @@ test "only the first difference" =
 
 test "nothing in common" =
   assert 1 == 2
+
+test "apart first, right longer" =
+  assert [1, 2] == [9, 2, 3]
+
+test "apart first, left longer" =
+  assert [1, 2, 7, 8] == [9, 2, 3]
 |};
   [%expect {|
     test.ren
@@ -4496,6 +4502,8 @@ test "nothing in common" =
       ✗ the left side is shorter
       ✗ only the first difference
       ✗ nothing in common
+      ✗ apart first, right longer
+      ✗ apart first, left longer
 
     ──── a payload ── test.ren:5
       │
@@ -4563,7 +4571,29 @@ test "nothing in common" =
 
        seed 6226 · rerun: ren test test.ren --only "nothing in" --seed 6226
 
-    0 passed, 6 failed
+    ──── apart first, right longer ── test.ren:23
+       │
+    23 │   assert [1, 2] == [9, 2, 3]
+       │          ^^^^^^^^^^^^^^^^^^^
+       │
+       left:  [1, ...]
+       right: [9, ...]
+               ^ differs here
+
+       seed 360 · rerun: ren test test.ren --only "apart first, right" --seed 360
+
+    ──── apart first, left longer ── test.ren:26
+       │
+    26 │   assert [1, 2, 7, 8] == [9, 2, 3]
+       │          ^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  [1, ...]
+       right: [9, ...]
+               ^ differs here
+
+       seed 647 · rerun: ren test test.ren --only "apart first, left" --seed 647
+
+    0 passed, 8 failed
     [exit 1]
     |}]
 
