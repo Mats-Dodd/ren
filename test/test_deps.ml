@@ -1905,6 +1905,32 @@ fn main() uses Console =
     402
     201
     ()
+    |}];
+  (* a function calling itself inside a `with` doesn't use what the `with`
+     installs: the call uses what the function does outside it *)
+  types
+    {|
+fn count(n: Int) -> Int =
+  if n == 0 then 0
+  else
+    with Clock.frozen(Time.epoch) in
+      let _ = Clock.now()
+      count(n - 1) + 1
+fn loud(n: Int) -> Int =
+  print(n)
+  if n == 0 then 0
+  else
+    with Clock.frozen(Time.epoch) in
+      let _ = Clock.now()
+      loud(n - 1)
+fn main() uses Console =
+  print(count(3))
+  print(loud(1))
+|};
+  [%expect {|
+    fn count(n: Int) -> Int
+    fn loud(n: Int) -> Int uses Console
+    fn main() uses Console
     |}]
 
 let%expect_test "with installs an implementation or wraps its body" =

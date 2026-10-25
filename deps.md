@@ -384,6 +384,10 @@ stage, or settled something the plan left open:
   `f: fn() -> Int uses Clock, ..d` with `uses ..d`.
 - **A closure called inside two `with`s** gets only what's installed
   outside both, so the same holds for it.
+- **A function calling itself inside a `with`** uses only what it does
+  outside it, but **two functions that call each other**, one inside a
+  `with`, still need what that `with` installs: each sees the other's
+  `uses` as its own until the pair is checked.
 - **`ren types` prints a transparent parameter without the rows a
   signature names for it**, `body: fn() -> Int ! ..e uses ..d` as `body:
   fn() -> Int`, when they're only its function's own: the two are the

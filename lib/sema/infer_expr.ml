@@ -1167,10 +1167,21 @@ let include_errors env cx ~loc add errs into =
     }
     :: env.includes
 
+(* Whether [cx] is the body of the top-level function itself, and not of
+   a lambda in it: its errors are the function's own. *)
+let in_own_body env cx =
+  match Option.map repr (Hashtbl.find_opt env.globals cx.self) with
+  | Some (TFun (_, _, errs, _)) -> row_tail errs = row_tail cx.errs
+  | _ -> false
+
 (* Add [uses], what a call's callee uses, or what an implementation a
    `with` installs needs ([needs]), to the dependencies of the function or
    lambda [cx] is in. A row that ends in a named row, `..d`, has its labels
-   added now and the named row once the group is done (see [row_due]). *)
+   added now and the named row once the group is done (see [row_due]). A
+   function calling itself inside one of its `with`s gets a copy of what
+   it uses (see [copy]): joined as it is, the function's own row would be
+   the `with`'s body's, and what the `with` installs would end up in the
+   function's `uses`. *)
 let rec use_row env cx ~loc ?(needs = false) ?callee uses =
   cx.calls :=
     { cloc = loc; own = row_names uses; row = uses; needs; callee }
@@ -1183,6 +1194,12 @@ let rec use_row env cx ~loc ?(needs = false) ?callee uses =
           { rloc = loc; rinto = cx.uses; rnamed = named; rwhat = what }
           :: env.rows_due;
         extend (fst (row_parts uses)) (fresh_row env.st)
+    | None
+      when callee = Some cx.self
+           && row_tail uses <> None
+           && row_tail uses <> row_tail cx.uses
+           && in_own_body env cx ->
+        copy_needs env ~loc ~what uses
     | None -> reopen env uses
   in
   join_uses env ~loc ~what joined cx.uses

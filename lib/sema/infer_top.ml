@@ -1147,8 +1147,9 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
    `with`s are settled first, since what their bodies use is part of what
    the outer ones' do. Each body's labels but the one installed are added
    to the outer row. If the body's row is the outer one already, as for a
-   closure called both in the body and outside it, or a function of the
-   group calling itself, that's all. A row that's still open stands for
+   closure called both in the body and outside it, or another function
+   of the group that calls this one back, that's all. (A function calling
+   itself gets a copy of its own row, Infer_expr.use_row.) A row that's still open stands for
    what a closure the body calls uses, an inferred parameter's, say: it
    may use what's installed too, and the rest of it is what's outside.
    Unless another `with` calls the same closure: then it's what's outside
