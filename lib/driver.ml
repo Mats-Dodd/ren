@@ -57,7 +57,8 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
   checked "mut" (fun sink -> Mut.program sink r);
   let inferred =
     checked "infer" (fun sink ->
-        Infer.program sink ~imports ~reachable ?entry ~tests:items.tests r)
+        Infer.program sink ~imports ~reachable ?entry ~tests:items.tests
+          ~bodies:items.bodies r)
   in
   (* only now is it known whether every import is used: a type imported
      by name can be used just by writing one of its constructors bare *)

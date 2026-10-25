@@ -6,8 +6,11 @@
  (#set! tag ren-main))
 
 ; A ▶ beside a test, and beside a group's run: it runs that test, or the
-; run's tests, whose names start with its label. The name, in its quotes,
-; is in $ZED_CUSTOM_name. A test inside a group runs only in a run of it.
+; run's tests, with `ren test --only <name> --exact`, so not every test
+; whose name has it in it. The name, in its quotes and with its escapes as
+; written, is in $ZED_CUSTOM_name, which the task (tasks.json) unquotes and
+; unescapes (`\"` and `\\`; a `\n` or `\t` in a test's name isn't). A
+; test inside a group runs only in a run of it.
 
 ((source_file
    (test_definition

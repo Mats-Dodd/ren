@@ -8,7 +8,7 @@
   {
     "label": "ren test: $ZED_CUSTOM_name",
     "command": "sh",
-    "args": ["-c", "name=${ZED_CUSTOM_name#\\\"}; name=${name%\\\"}; if command -v ren >/dev/null 2>&1; then ren test \"$ZED_FILE\" --only \"$name\"; else dune exec --no-print-directory ren -- test \"$ZED_FILE\" --only \"$name\"; fi"],
+    "args": ["-c", "name=$(printf '%s' \"$ZED_CUSTOM_name\" | sed -e 's/^\"//' -e 's/\"$//' -e 's/\\\\\\(.\\)/\\1/g'); if command -v ren >/dev/null 2>&1; then ren test \"$ZED_FILE\" --only \"$name\" --exact; else dune exec --no-print-directory ren -- test \"$ZED_FILE\" --only \"$name\" --exact; fi"],
     "tags": ["ren-test"]
   },
   {

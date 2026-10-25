@@ -47,6 +47,9 @@ type group = {
 type test = {
   name : string;
   label : string option;  (** the label of the group run it's in, if any *)
+  group : (string option * string) option;
+      (** the group that run runs: the alias of the module it's in, if it's
+          another's, and its name *)
   loc : Loc.t;  (** its name, or its run's label *)
   fn : string;  (** the function that runs it, of no parameters *)
   real : string list;
@@ -59,6 +62,9 @@ type t = {
   tests : test list;  (** in source order, each group run's in its group's *)
   groups : group list;  (** the module's own groups *)
   made : string list;  (** the name of every function made here *)
+  bodies : string list;
+      (** the functions whose body is a test's, a top-level one's or a group's,
+          which has to be `Unit` *)
 }
 
 (* The built-in dependencies a test gets the test implementation of, each
@@ -67,6 +73,12 @@ let defaults =
   [
     ("Clock", "TestClock"); ("Random", "TestRandom"); ("Console", "TestConsole");
   ]
+
+(* A test's name, after its group run's label if it's in one, as
+   `--only` looks for it, its seed comes from, and the runner and errors
+   show it. *)
+let full_name (t : test) =
+  match t.label with Some l -> l ^ " / " ^ t.name | None -> t.name
 
 (* The function that runs the [i]th test (from 1) of the group [g], and
    what runs the [i]th of the [k]th group run. *)
@@ -192,7 +204,7 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
     | Call (({ kind = Var (Bare g); _ } as f), args) -> (
         match List.find_opt (fun x -> x.gname = g) groups with
         | Some grp ->
-            Some (grp, args, fun name -> { f with kind = Var (Bare name) })
+            Some (grp, args, None, fun name -> { f with kind = Var (Bare name) })
         | None ->
             Diag.report sink
               (Diag.make f.loc
@@ -208,6 +220,9 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
         | None ->
             Diag.report sink
               (Diag.make alias.loc
+                 ~help:
+                   (sprintf "import it at the top of the file, like `import %s`"
+                      m)
                  (sprintf "there's no module imported as `%s`" m));
             None
         | Some gs -> (
@@ -216,6 +231,7 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
                 Some
                   ( grp,
                     args,
+                    Some m,
                     fun name -> { f with kind = Field (alias, { g with name }) }
                   )
             | None ->
@@ -230,7 +246,7 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
         None
   in
   (* each test, group and run, numbered in source order *)
-  let tests = ref [] and made = ref [] in
+  let tests = ref [] and made = ref [] and bodies = ref [] in
   let make name item =
     made := name :: !made;
     item
@@ -246,11 +262,13 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
               {
                 name = t.test_name;
                 label = None;
+                group = None;
                 loc = t.test_loc;
                 fn;
                 real = real_of sink t;
               }
               :: !tests;
+            bodies := fn :: !bodies;
             [ make fn (fn_of ~name:fn ~loc:t.test_loc t.test_body) ]
         | Testing (Group g) ->
             (* `with a, b in body` is `a` around `with b in body`, each
@@ -271,6 +289,7 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
             List.mapi
               (fun i (t : test_def) ->
                 let name = group_fn g.group_name.name (i + 1) in
+                bodies := name :: !bodies;
                 make name
                   (fn_of ~name ~loc:t.test_loc ~params:g.group_params
                      (nest t.test_body)))
@@ -279,7 +298,7 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
             incr nruns;
             match group_of r.run_call with
             | None -> []
-            | Some (grp, args, callee) ->
+            | Some (grp, args, from, callee) ->
                 if List.length args <> grp.arity then (
                   Diag.report sink
                     (Diag.make r.run_call.loc
@@ -301,6 +320,7 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
                         {
                           name;
                           label = Some r.run_label;
+                          group = Some (from, grp.gname);
                           loc = r.run_loc;
                           fn;
                           real;
@@ -317,4 +337,10 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
         | item -> [ item ])
       prog
   in
-  { prog; tests = List.rev !tests; groups; made = List.rev !made }
+  {
+    prog;
+    tests = List.rev !tests;
+    groups;
+    made = List.rev !made;
+    bodies = List.rev !bodies;
+  }

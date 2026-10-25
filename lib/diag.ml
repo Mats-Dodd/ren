@@ -57,10 +57,21 @@ let recover sink ~default f =
     default
 
 (* Everything reported, in source order. [List.stable_sort] keeps
-   diagnostics at the same place in the order they were reported. *)
+   diagnostics at the same place in the order they were reported.
+
+   Some code is checked more than once: a group's parameters and `with`,
+   and a run's arguments, are part of the function made for each of its
+   tests (test_items.ml). The same error at the same place is shown once:
+   [=] on two diagnostics compares every field, so only an exact copy of
+   one reported earlier is dropped. *)
 let reported sink =
   let pos d = (d.loc.file, d.loc.start.line, d.loc.start.col) in
-  List.stable_sort (fun a b -> compare (pos a) (pos b)) (List.rev sink.reported)
+  let once =
+    List.fold_left
+      (fun kept d -> if List.mem d kept then kept else d :: kept)
+      [] (List.rev sink.reported)
+  in
+  List.stable_sort (fun a b -> compare (pos a) (pos b)) (List.rev once)
 
 (* ---- rendering ---- *)
 

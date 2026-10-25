@@ -732,3 +732,17 @@ Fixed, they all pass:
     ✓ the system clock has started
   
   3 passed
+
+`--only` that matches no test's name fails, since a mistyped name isn't a
+pass, and a flag without its value says what it needs:
+
+  $ ren test tested --only "a cop"
+  
+  no test's name has "a cop" in it
+  [1]
+  $ ren test tested --only
+  error: --only needs the text to look for in the tests' names, like --only "a deposit"
+  [2]
+  $ ren test tested --seed
+  error: --seed needs a number, like --seed 42
+  [2]

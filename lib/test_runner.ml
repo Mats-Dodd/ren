@@ -31,15 +31,15 @@ type options = {
   path : string;  (** what `ren test` was given, as it was written *)
   dir : string;  (** the folder the program is in: files are shown from it *)
   only : string option;  (** run only the tests whose name has this in it *)
+  exact : bool;
+      (** [only] is a whole name, or a group run's label, not part of one: what
+          an editor's button beside a test runs *)
   seed : int option;  (** every test's seed, instead of its own *)
   list : bool;  (** list the tests, without running them *)
   timings : bool;  (** say how long running them took *)
 }
 
-(* A test's name, after its group run's label if it's in one. `--only`
-   looks for its text in this, and a test's seed comes from it. *)
-let full_name (t : Test_items.test) =
-  match t.label with Some l -> l ^ " / " ^ t.name | None -> t.name
+let full_name = Test_items.full_name
 
 (* A test's own seed, from its name, so it's the same on every run and
    every machine: FNV-1a's hash of it, kept to four digits to be easy to
@@ -233,12 +233,14 @@ let details b ~opts ~sources ~types ~all f =
     List.iter (fun l -> Printf.bprintf b "%s  %s\n" pad l) f.console)
 
 (* Run [suite]'s tests, or with [opts.list], list them, printing as it
-   goes. Returns the exit status: 1 if a test failed. [sources] gives the
-   text of a file a failure points into. *)
+   goes. Returns the exit status: 1 if a test failed, or if `--only`
+   matched none, which is more likely a mistyped name than a pass.
+   [sources] gives the text of a file a failure points into. *)
 let run ~opts ~sources (suite : Driver.suite) =
   let wanted (t : Test_items.test) =
     match opts.only with
     | None -> true
+    | Some text when opts.exact -> full_name t = text || t.label = Some text
     | Some text ->
         let n = full_name t and ls = String.length text in
         let rec at i =
@@ -330,4 +332,4 @@ let run ~opts ~sources (suite : Driver.suite) =
       else ""
     in
     Printf.printf "\n%s%s\n" counts took;
-    if failed > 0 then 1 else 0
+    if failed > 0 || (opts.only <> None && !passed = 0) then 1 else 0

@@ -4,7 +4,8 @@ open Ren
 
 let usage =
   {|usage: ren <command> <file.ren>
-       ren test [<folder or file.ren>] [--only <text>] [--seed <n>] [--list]
+       ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
+                [--list]
 
 The file is the program's entry module. A module it imports is found from
 the file's folder: `import billing/stripe` is the file billing/stripe.ren.
@@ -14,6 +15,8 @@ commands:
   test    run the tests of every module in the folder (the current one if
           none is given), or of the file and what it imports:
             --only <text>  only the tests whose name has <text> in it
+            --exact        <text> is a test's whole name, or a group
+                           run's label
             --seed <n>     start every test's `Random` from <n>
             --list         list the tests, without running them, saying
                            which use a real dependency
@@ -76,6 +79,15 @@ let test args =
             prerr_endline ("error: a seed is a number from 0 up, not " ^ n);
             exit 2)
     | "--list" :: rest -> parse { opts with list = true } rest
+    | "--exact" :: rest -> parse { opts with exact = true } rest
+    | [ "--only" ] ->
+        prerr_endline
+          "error: --only needs the text to look for in the tests' names, like \
+           --only \"a deposit\"";
+        exit 2
+    | [ "--seed" ] ->
+        prerr_endline "error: --seed needs a number, like --seed 42";
+        exit 2
     | flag :: _ when String.starts_with ~prefix:"-" flag ->
         prerr_endline ("error: `ren test` has no option " ^ flag);
         prerr_endline usage;
@@ -91,6 +103,7 @@ let test args =
         path = "";
         dir = ".";
         only = None;
+        exact = false;
         seed = None;
         list = false;
         timings = Sys.getenv_opt "REN_NO_TIMINGS" = None;

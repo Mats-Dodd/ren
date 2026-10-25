@@ -4363,7 +4363,7 @@ fn half(n: Int) -> Int ! Odd(Int) =
   n / 2
 
 test "three halves" =
-  try half(3)
+  assert try half(3) == 1
 
 test "dividing by zero" =
   let zero = 0
@@ -4491,6 +4491,44 @@ test "one subtracts" =
   test ~only:"multiplies" src;
   [%expect {|
     no test's name has "multiplies" in it
+    [exit 1]
+    |}]
+
+let%expect_test
+    "`--exact` runs the test of that whole name, or that group run's tests" =
+  (* what an editor's ▶ beside a test runs: "a cup" isn't also "a cup
+     holds two" *)
+  let src =
+    {|
+test "a cup" =
+  assert true
+
+test "a cup holds two" =
+  assert true
+
+group g() =
+  test "a cup" =
+    assert true
+
+group "a cup holds" = g()
+|}
+  in
+  test ~only:"a cup" ~exact:true src;
+  [%expect {|
+    test.ren
+      ✓ a cup
+
+    1 passed
+    [exit 0]
+    |}];
+  test ~only:"a cup holds" ~exact:true src;
+  [%expect
+    {|
+    test.ren
+      a cup holds
+        ✓ a cup
+
+    1 passed
     [exit 0]
     |}]
 
@@ -4611,6 +4649,7 @@ group hidden() =
        ┌─ main.ren:10:17
     10 │ group "alias" = nowhere.g()
        │                 ^^^^^^^
+       help: import it at the top of the file, like `import nowhere`
     |}];
   test
     {|
@@ -4668,12 +4707,124 @@ group "frozen" = counts(Clock.frozen(Time.epoch))
 |};
   [%expect
     {|
-    error: nothing installs `Users` in the test "counts users"
+    error: nothing installs `Users` in the test "frozen / counts users"
        ┌─ test.ren:10:7
     10 │ group "frozen" = counts(Clock.frozen(Time.epoch))
        │       ^^^^^^^^ a test gets only the test `Clock`, `Random` and `Console`, and what controls them
        │                  -------------------------------- this call uses `Users`
-       help: install one in the group's `with`, around its tests: `with Users.none() in ...`
+       help: install one around each of its tests, in the group's `with`: `group counts(...) with Users.none() =`
+    |}]
+
+let%expect_test "a group's run needs what its tests use, from another module" =
+  test_files
+    [
+      ("main.ren", {|
+import conform
+
+group "frozen" = conform.counts()
+|});
+      ( "conform.ren",
+        {|
+pub dep Users =
+  count: fn() -> Int
+
+pub group counts() =
+  test "counts users" =
+    assert Users.count() == 0
+|}
+      );
+    ];
+  [%expect
+    {|
+    error: nothing installs `conform.Users` in the test "frozen / counts users"
+      ┌─ main.ren:3:7
+    3 │ group "frozen" = conform.counts()
+      │       ^^^^^^^^ a test gets only the test `Clock`, `Random` and `Console`, and what controls them
+      │                  ---------------- this call uses `conform.Users`
+      help: `conform.counts` is another module's group, so pass one in: give the group a parameter of type `conform.Users` that its `with` installs, and pass an implementation to it here
+    |}]
+
+let%expect_test
+    "an error in a group's header or its run's arguments is shown once" =
+  (* each of the group's tests is a function with the group's parameters
+     and `with`, and each of a run's calls it with the run's arguments *)
+  test
+    {|
+group g(x: Nope) with nothere =
+  test "a" =
+    assert true
+  test "b" =
+    assert true
+|};
+  [%expect
+    {|
+    error: there's no type named `Nope`
+      ┌─ test.ren:1:12
+    1 │ group g(x: Nope) with nothere =
+      │            ^^^^
+
+    error: there's no variable named `nothere`
+      ┌─ test.ren:1:23
+    1 │ group g(x: Nope) with nothere =
+      │                       ^^^^^^^
+    |}];
+  test
+    {|
+group g(x: Bool) =
+  test "a" =
+    assert x
+  test "b" =
+    assert x
+  test "c" =
+    assert x
+
+group "r" = g(1)
+|};
+  [%expect
+    {|
+    error: expected `Bool`, found `Int`
+      ┌─ test.ren:9:15
+    9 │ group "r" = g(1)
+      │               ^
+    |}]
+
+let%expect_test "a test's body is `Unit`" =
+  test
+    {|
+fn compute() = 3
+
+test "a forgotten assert" =
+  compute() == 3
+
+test "a number" = 1
+
+group g() =
+  test "in a group" =
+    let n = compute()
+    n
+|};
+  [%expect
+    {|
+    error: a test's body is `Unit`, but this is a `Bool`
+      ┌─ test.ren:4:3
+    4 │   compute() == 3
+      │   ^^^^^^^^^^^^^^
+      = a test passes unless it panics or fails
+      help: to check it, write `assert` before it
+
+    error: a test's body is `Unit`, but this is an `Int`
+      ┌─ test.ren:6:19
+    6 │ test "a number" = 1
+      │                   ^
+      = a test passes unless it panics or fails
+      help: check it with `assert`, or write `let _ = ...` if you mean to drop it
+
+    error: a test's body is `Unit`, but this is an `Int`
+       ┌─ test.ren:11:5
+    11 │     n
+       │     ^
+       = a test passes unless it panics or fails
+       help: check it with `assert`, or write `let _ = ...` if you mean to drop it
     |}]
 
 let%expect_test

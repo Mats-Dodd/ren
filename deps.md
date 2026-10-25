@@ -259,7 +259,8 @@ bank.ren
 
 - One line per test, then each failure: where, the two sides, the seed, the
   rerun command, and what it printed to `Console`.
-- `--only <text>` runs the tests whose name contains it. `--seed N` sets
+- `--only <text>` runs the tests whose name contains it (`--exact`: whose
+  name it is, or whose group run it labels). `--seed N` sets
   every test's seed. `--list` lists tests, and flags the ones that use a
   real dependency.
 - It exits with status 1 if anything failed.
@@ -393,6 +394,20 @@ stage, or settled something the plan left open:
   What the test printed comes after it, under `printed:`.
 - **`REN_NO_TIMINGS`, set, leaves out how long the tests took,** as the
   cram tests do.
+- **The test implementations are the prelude's too:** `TestClock`,
+  `TestRandom`, `TestConsole`, `test_clock`, `test_random` and
+  `test_console` are named in every module, as the six above are, so a
+  program can't declare its own with those names, and the dependencies
+  in scope an error lists include them.
+- **A test's body is `Unit`,** as a statement is: one that ends in a
+  value, `compute() == 3` without its `assert`, is an error whose help
+  says to `assert` it.
+- **`--only` that matches no test exits with status 1,** since a
+  mistyped name in a rerun command would otherwise look like a pass.
+  `--exact` makes `--only` match a whole name, or a group run's label,
+  which is what an editor's run button beside a test uses.
+- **A test that asks for the real `Console`** writes to stdout as it
+  runs, between the lines `ren test` prints for each test.
 
 ## Later
 

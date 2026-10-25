@@ -7,7 +7,8 @@
    given, is the file of the module the program starts in, which has to
    have a `main`. [tests] are the module's tests, each a function by now
    (test_items.ml): what the runtime installs around each is checked as it
-   is for `main`. *)
+   is for `main`. [bodies] are the functions whose body is a test's,
+   which has to be `Unit`. *)
 
 (* What a lookup through a type found. *)
 type found =
@@ -62,5 +63,6 @@ val program :
   reachable:Iface.t list ->
   ?entry:string ->
   ?tests:Test_items.test list ->
+  ?bodies:string list ->
   Resolve.t ->
   t
