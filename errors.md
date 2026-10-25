@@ -173,8 +173,12 @@ of `==`, through a `let` or inside another value, `Some(Err(...))`, and a
 kept set never gains a tag no call fails with. Otherwise it makes a set of
 its own: `if c then Err(Left(1)) else Err(Right)` is a
 `Result<T, ! Left(Int) | Right>`. Only a tag can go inside `Err`, so an
-error is never a value outside a `Result`, and `fail` is still the one way
-to fail with one: `try Err(X)` is an error whose help says `fail X`.
+error is never a value outside a `Result`. A name there is always a tag,
+as in a pattern, even where a type in scope has a constructor of that
+name. `try` passes on what such a `Result` holds as it does any
+`Result`'s, so `let r = Err(Gone(1))` then `try r` fails with `Gone(1)`;
+`fail` is the way to fail with an error written in place, and `try
+Err(X)`, written directly, is an error whose help says `fail X`.
 
 It's shorthand for `match f()` with `v => Ok(v)` and `fail e => Err(e)`, but
 that `match` can't be written: a `fail` pattern destructures a payload and

@@ -1008,13 +1008,36 @@ fn ok() =
 fn again() -> Int =
   let r = if true then Err(Gone(1)) else Err(Gone(2))
   try r
+fn made() = Err(Gone(3))
+fn passed() -> Int = try made()
+fn tagged() = Err(Some(1))
 fn main() = ()
 |};
   [%expect {|
     fn f(n: Int) -> Int ! Neg(Int)
     fn ok()
     fn again() -> Int ! Gone(Int)
+    fn made<T>() -> Result<T, ! Gone(Int)>
+    fn passed() -> Int ! Gone(Int)
+    fn tagged<T>() -> Result<T, ! Some(Int)>
     fn main()
+    |}];
+  (* `try` passes on what a `Result` made with `Err` holds, as it does any
+     `Result`'s (deps.md, "Deviations"), and a name inside `Err` is a tag
+     even where a type has a constructor of that name *)
+  run
+    {|
+type Shape = Bad(n: Int) | Good
+fn main() ! Gone(Int) =
+  print(Bad(2))
+  print(Err(Bad(1)))
+  let r = Err(Gone(1))
+  try r
+|};
+  [%expect {|
+    Bad(2)
+    Err(Bad(1))
+    error: Gone(1)
     |}];
   (* anything else inside `Err` would be an error on its own, and a tag
      among several arguments is only reported once *)
@@ -1041,7 +1064,7 @@ fn main() =
       = an error isn't a value on its own: `Err` holds one written as its tag, or one that `attempt` kept
       help: write the tag inside it, `Err(NotFound(id))`, or keep what a call fails with: `attempt f()`
     |}];
-  (* and `fail` is the one way to fail with one *)
+  (* and `fail` is the way to fail with one written in place *)
   types {|
 fn f() -> Int = try Err(Gone(1))
 fn main() = ()
@@ -1051,7 +1074,7 @@ fn main() = ()
       ┌─ test.ren:1:17
     1 │ fn f() -> Int = try Err(Gone(1))
       │                 ^^^^^^^^^^^^^^^^
-      = `fail` is the one way to fail with an error written here
+      = `try` passes on an error a `Result` already holds; `fail` is the way to fail with one written in place
       help: write `fail Gone(1)`
     |}]
 

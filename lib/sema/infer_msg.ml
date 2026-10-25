@@ -697,7 +697,11 @@ let err_made loc =
 (* `try Err(X)`, which would fail with [X]: that's `fail X`. *)
 let try_err loc tag =
   Diag.make loc
-    ~notes:[ "`fail` is the one way to fail with an error written here" ]
+    ~notes:
+      [
+        "`try` passes on an error a `Result` already holds; `fail` is the way \
+         to fail with one written in place";
+      ]
     ~help:(sprintf "write `fail %s`" tag)
     "this `try` fails with the error it's given"
 

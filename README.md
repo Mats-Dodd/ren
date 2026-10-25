@@ -206,7 +206,7 @@ Handling an error is pattern matching, so it's a `match`: a `fail` pattern match
 
 `attempt` is the one way a call's error becomes a value: it turns the outcome into `Ok(v)` or `Err(tag)`, for an error that has to outlive the line it happened on, such as one checked by a test or decided on later. `try r` fails with it again.
 
-Error tags work like OCaml's polymorphic variants. They're structural and need no declaration: `fail NotFound` and `fail PaymentFailed(reason: "card declined")` just work. Tags aren't values: they appear only after `!`, after `fail`, in `fail` patterns, and inside `Err(...)`, so a test can compare what `attempt` kept, `assert attempt f() == Err(NotFound(id))`. A name for a set of tags is declared with `!`:
+Error tags work like OCaml's polymorphic variants. They're structural and need no declaration: `fail NotFound` and `fail PaymentFailed(reason: "card declined")` just work. Tags aren't values: they appear only after `!`, after `fail`, in `fail` patterns, and inside `Err(...)`, where a name is always a tag, so a test can compare what `attempt` kept, `assert attempt f() == Err(NotFound(id))`. A name for a set of tags is declared with `!`:
 
 ```ren
 type BillingError = ! PaymentFailed(reason: Str) | CardDeclined

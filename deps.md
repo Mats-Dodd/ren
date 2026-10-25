@@ -537,8 +537,16 @@ stage, or settled something the plan left open:
   outside a `Result`. Where its `Result` meets what an `attempt` kept or
   a declared `Result`, on either side of `==`, through a `let` or inside
   another value, the tag has to be one of its errors, as in a pattern;
-  otherwise it makes a set of its own.
-  `try Err(X)` is an error, since `fail X` is the one way to fail.
+  otherwise it makes a set of its own. A name inside `Err` is always a
+  tag, as in a pattern, even where a type in scope has a constructor of
+  that name: `Err(Some(1))` holds the error `Some(Int)`.
+- **`try` passes on the error of a `Result` written with `Err`,** as it
+  does any `Result`'s: `let r = Err(Gone(1))` then `try r` fails with
+  `Gone(1)`, and so does `try made()` for a `fn made() = Err(Gone(1))`.
+  Refusing that would mean tracking where each set's tags were written,
+  through every function. Only `try Err(X)` written directly is an error,
+  whose help says `fail X`, the way to fail with an error written in
+  place.
 - **`attempt` stops at a comparison,** where `try` takes everything to
   its right: `attempt f() == x` is `(attempt f()) == x`, so a test can
   compare what it kept. Arithmetic is still inside it, `attempt a() +

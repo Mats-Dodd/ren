@@ -1861,7 +1861,9 @@ and synth env cx (e : expr) : ty =
       let t = infer env { cx with markers = m :: cx.markers } a in
       (match (a.kind, Hashtbl.find_opt cx.found a.node) with
       | Con (_, [ (_, tag) ]), Some (Ctor_of (p, "Err")) when p = result_path ->
-          (* `fail` is the one way to fail with a tag written here *)
+          (* `fail` is the way to fail with a tag written in place. A
+             `Result` made with `Err` and kept in a `let` is passed on like
+             any other (deps.md, "Deviations") *)
           report env
             (try_err e.loc (Option.value (env.source tag) ~default:"..."))
       | _ -> ());
