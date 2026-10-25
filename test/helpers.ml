@@ -95,13 +95,58 @@ type Plan =
 type User = { id: Int, plan: Plan }
 |}
 
+(* A function in Core, as [Core.show_fn] prints it, but with each binder
+   numbered by where it first appears, from 1: [p/1], [ev/2]. How lowering
+   numbers its binders is its own business, and a snapshot shouldn't
+   change when that does; which uses are of the same binder still shows.
+   They're renumbered before the lines are broken, so how they're broken
+   doesn't depend on the old numbers either. *)
+let show_fn f =
+  let ids = Hashtbl.create 16 in
+  let number id =
+    match Hashtbl.find_opt ids id with
+    | Some n -> n
+    | None ->
+        let n = Hashtbl.length ids + 1 in
+        Hashtbl.add ids id n;
+        n
+  in
+  let digit c = c >= '0' && c <= '9' in
+  (* each `/` and the id after it, in an atom: a binder is a name, a `/`
+     and its id, and can be inside an atom, as in [&x/3] *)
+  let atom s =
+    let b = Buffer.create (String.length s) in
+    let n = String.length s in
+    let i = ref 0 in
+    while !i < n do
+      if s.[!i] = '/' && !i > 0 && !i + 1 < n && digit s.[!i + 1] then (
+        let j = ref (!i + 1) in
+        while !j < n && digit s.[!j] do
+          incr j
+        done;
+        let id = int_of_string (String.sub s (!i + 1) (!j - !i - 1)) in
+        Buffer.add_string b ("/" ^ string_of_int (number id));
+        i := !j)
+      else (
+        Buffer.add_char b s.[!i];
+        incr i)
+    done;
+    Buffer.contents b
+  in
+  let rec go : Core.sexp -> Core.sexp = function
+    | Atom a when String.starts_with ~prefix:"\"" a -> Atom a (* a string *)
+    | Atom a -> Atom (atom a)
+    | List xs -> List (List.map go xs)
+  in
+  Core.render 0 (go (Core.fn_sexp f))
+
 (* The program lowered to Core (core.ml), one function per line, after
    Core Lint has checked it. *)
 let core src =
   let src = clean src in
   report src (fun () ->
       List.iter
-        (fun f -> print_endline (Core.show_fn f))
+        (fun f -> print_endline (show_fn f))
         (Driver.core ~lint:true ~file src).fns)
 
 (* Every module of the program in Core, but the prelude, each after its
@@ -113,7 +158,7 @@ let core_files files =
         (fun i (m : Core.program) ->
           if i > 0 then print_newline ();
           print_endline ("-- " ^ m.home);
-          List.iter (fun f -> print_endline (Core.show_fn f)) m.fns)
+          List.iter (fun f -> print_endline (show_fn f)) m.fns)
         (List.tl (Driver.linked ~lint:true ~load ~file src)))
 
 (* ---- tests ----

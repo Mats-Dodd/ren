@@ -1111,7 +1111,8 @@ fn main() uses Console =
   print(Fs.real)
   print(fs_read("x"))
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Fs` has no operation or member named `real`
       ┌─ test.ren:2:12
     2 │   print(Fs.real)
@@ -1139,7 +1140,8 @@ fn main() =
   print(d.after(Duration.seconds(5)))
   print(d.before(Duration.seconds(6)))
 |};
-  [%expect {|
+  [%expect
+    {|
     true
     true
     true
@@ -1285,7 +1287,8 @@ let%expect_test "the real Os panics at an argument that isn't UTF-8" =
 fn main() uses Os, Console =
   print(Os.args())
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: argument 2 isn't UTF-8
       ┌─ test.ren:2:9
     2 │   print(Os.args())
@@ -1308,7 +1311,8 @@ fn main() ! ProcError uses Proc, Console =
   try Proc.run("sh", ["-c", "kill -9 $$"])
 |};
   Sys.remove file;
-  [%expect {|
+  [%expect
+    {|
     ["./not-runnable", "Permission denied"]
     error: Killed("sh")
     |}]
@@ -1321,7 +1325,8 @@ fn main() uses Console =
   print(os_args())
   print(proc_run("sh", []))
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Proc` has no operation or member named `real`
       ┌─ test.ren:2:14
     2 │   print(Proc.real)
@@ -1340,12 +1345,14 @@ fn main() uses Console =
     |}]
 
 let%expect_test "main lists Fs to get the real one" =
-  types {|
+  types
+    {|
 fn load() -> Bool uses Fs = Fs.exists(Path.of("x"))
 
 fn main() uses Console = print(load())
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `main` doesn't declare `Fs`
       ┌─ test.ren:3:4
     3 │ fn main() uses Console = print(load())
@@ -1360,7 +1367,8 @@ test "the real file system, and the test clock" uses Fs, Clock =
   TestClock.advance(Duration.ms(1))
   assert not Fs.exists(Path.of("no/such/file.txt"))
 |};
-  [%expect {|
+  [%expect
+    {|
     error: nothing installs `TestClock` in the test "the real file system, and the test clock"
       ┌─ test.ren:1:6
     1 │ test "the real file system, and the test clock" uses Fs, Clock =
@@ -1934,7 +1942,8 @@ fn main() uses Console =
   print(count(3))
   print(loud(1))
 |};
-  [%expect {|
+  [%expect
+    {|
     fn count(n: Int) -> Int
     fn loud(n: Int) -> Int uses Console
     fn main() uses Console
@@ -2000,15 +2009,15 @@ fn main() uses Console =
   [%expect
     {|
     (fn flaky (n/1) ev/2 (if (< n/1 3) (fail (tag Boom)) n/1))
-    (fn retry (n/1 body/2) ev/5
-      (let r/3
-        (handle (call ev/5 body/2) ($value/6 => (con Ok $value/6))
-          (fail $error/7 => (con Err $error/7)))
+    (fn retry (n/1 body/2) ev/3
+      (let r/4
+        (handle (call ev/3 body/2) ($value/5 => (con Ok $value/5))
+          (fail $error/6 => (con Err $error/6)))
         (if (<= n/1 1)
-          (match r/3 ((Ok $value/8) => $value/8)
-            ((Err $error/9) => (fail $error/9)))
-          (match r/3 ((Ok v/4) => v/4)
-            ((Err _) => (call ev/5 retry (- n/1 1) body/2))))))
+          (match r/4 ((Ok $value/7) => $value/7)
+            ((Err $error/8) => (fail $error/8)))
+          (match r/4 ((Ok v/9) => v/9)
+            ((Err _) => (call ev/3 retry (- n/1 1) body/2))))))
     (fn twice (body/1) ev/2 (+ (call ev/2 body/1) (call ev/2 body/1)))
     (fn safe () ev/1 (call ev/1 retry 3 (lambda () (captures) ev/2 1)))
     (fn main () ev/1
@@ -2626,10 +2635,10 @@ fn main() -> Int = convert(both())
 |};
   [%expect
     {|
-    (fn both () ev/2
-      (handler (captures) ev/3
+    (fn both () ev/1
+      (handler (captures) ev/2
         (instance
-          (test.Rates: (record (usd_to: (lambda (c/1) (captures) ev/4 c/1))))
+          (test.Rates: (record (usd_to: (lambda (c/3) (captures) ev/4 c/3))))
           (test.RateCalls: (record (count: (lambda () (captures) ev/5 0)))))))
     (fn convert (r/1) ev/2
       (with ev/3 (extend ev/2 test.Rates r/1) (dep-call ev/3 test.Rates.usd_to 1)))
@@ -3444,7 +3453,8 @@ test "what ran, in order" =
     Command { cmd: "no-such-program", args: [] },
   ]
 |};
-  [%expect {|
+  [%expect
+    {|
     test.ren
       ✓ nothing runs
       ✓ what ran, in order
@@ -3472,7 +3482,8 @@ fn main() ! ProcError uses Console =
     print(try build())
     print(TestProc.ran())
 |};
-  [%expect {|
+  [%expect
+    {|
     2
     [Command { cmd: "make", args: ["all"] }, Command { cmd: "make", args: ["test"] }]
     0
@@ -3848,7 +3859,8 @@ test "the real file system" uses Fs =
 |}
        file);
   Sys.remove file;
-  [%expect {|
+  [%expect
+    {|
     test.ren
       ✓ the real file system
 
@@ -4494,7 +4506,8 @@ test "apart first, right longer" =
 test "apart first, left longer" =
   assert [1, 2, 7, 8] == [9, 2, 3]
 |};
-  [%expect {|
+  [%expect
+    {|
     test.ren
       ✗ a payload
       ✗ two constructors
@@ -4597,7 +4610,8 @@ test "apart first, left longer" =
     [exit 1]
     |}]
 
-let%expect_test "print shows a value through its type, as a failed assert does" =
+let%expect_test "print shows a value through its type, as a failed assert does"
+    =
   (* an opaque type as its name around what it is, unless it has a `show`
      of its own; through a generic function, a lambda and a handler too,
      and an error that ends the program. A failed `assert` uses a type's
@@ -5261,10 +5275,10 @@ fn main() uses Clock, Console =
     {|
     (fn stamp () ev/1 (dep-call ev/1 Clock.now))
     (fn double (n/1) ev/2 (* n/1 2))
-    (fn main () ev/2
-      (let t/1 (call ev/2 stamp)
-        (seq (call ev/2 print (call ev/2 Time.after t/1 Time.epoch))
-          (call ev/2 print (call ev/2 double 2)))))
+    (fn main () ev/1
+      (let t/2 (call ev/1 stamp)
+        (seq (call ev/1 print (call ev/1 Time.after t/2 Time.epoch))
+          (call ev/1 print (call ev/1 double 2)))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Clock Clock.real)
         (with ev/3 (extend ev/2 Console Console.real) (call ev/3 main))))
@@ -5282,10 +5296,10 @@ fn main() uses Clock =
 |};
   [%expect
     {|
-    (fn later () ev/2
-      (let _/1 (dep-call ev/2 Clock.now)
+    (fn later () ev/1
+      (let _/2 (dep-call ev/1 Clock.now)
         (lambda () (captures) ev/3 (dep-call ev/3 Clock.now))))
-    (fn main () ev/2 (let f/1 (call ev/2 later) (call ev/2 f/1)))
+    (fn main () ev/1 (let f/2 (call ev/1 later) (call ev/1 f/2)))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Clock Clock.real) (call ev/2 main)))
     |}]
@@ -5370,11 +5384,11 @@ fn main() uses Console =
     {|
     (fn one () ev/1 1)
     (fn apply (f/1) ev/2 (call ev/2 f/1))
-    (fn main () ev/2
-      (seq (call ev/2 print (call ev/2 apply one))
-        (let write/1
+    (fn main () ev/1
+      (seq (call ev/1 print (call ev/1 apply one))
+        (let write/2
           (lambda ($x/3) (captures) ev/4 (dep-call ev/4 Console.write $x/3))
-          (call ev/2 write/1 "written"))))
+          (call ev/1 write/2 "written"))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
     |}];
@@ -5404,7 +5418,7 @@ fn main() uses Console =
   [%expect
     {|
     (fn T.one () ev/1 (lambda () (captures) ev/2 1))
-    (fn T.f () ev/2 (lambda (g/1) (captures) ev/3 (call ev/3 g/1)))
+    (fn T.f () ev/1 (lambda (g/2) (captures) ev/3 (call ev/3 g/2)))
     (fn twice (g/1) ev/2 (+ (call ev/2 g/1) (call ev/2 g/1)))
     (fn main () ev/1
       (seq (call ev/1 print (call ev/1 T.one))
@@ -5499,10 +5513,10 @@ pub fn twice(f: fn() -> Int) -> Int =
   [%expect
     {|
     -- lib
-    (fn twice (f/1) ev/3 (let _/2 (call ev/3 f/1) (call ev/3 f/1)))
+    (fn twice (f/1) ev/2 (let _/3 (call ev/2 f/1) (call ev/2 f/1)))
 
     -- main
-    (fn users () ev/2 (record (get: (lambda (id/1) (captures) ev/3 (* id/1 10)))))
+    (fn users () ev/1 (record (get: (lambda (id/2) (captures) ev/3 (* id/2 10)))))
     (fn look () ev/1
       (call ev/1 twice
         (lambda () (captures) ev/2 (dep-call ev/2 main.Users.get 1))))
@@ -5537,17 +5551,17 @@ fn main() uses Console =
   core src;
   [%expect
     {|
-    (fn later () ev/2
-      (let _/1 (dep-call ev/2 Clock.now)
+    (fn later () ev/1
+      (let _/2 (dep-call ev/1 Clock.now)
         (lambda () (captures) ev/3 (dep-call ev/3 Clock.now))))
     (fn frozen_at (minutes/1) ev/2
       (call ev/2 Clock.frozen
         (call ev/2 Time.plus Time.epoch (call ev/2 Duration.minutes minutes/1))))
-    (fn main () ev/2
-      (let f/1
-        (with ev/3 (extend ev/2 Clock (call ev/2 frozen_at 0)) (call ev/3 later))
-        (call ev/2 print
-          (with ev/4 (extend ev/2 Clock (call ev/2 frozen_at 5)) (call ev/4 f/1)))))
+    (fn main () ev/1
+      (let f/2
+        (with ev/3 (extend ev/1 Clock (call ev/1 frozen_at 0)) (call ev/3 later))
+        (call ev/1 print
+          (with ev/4 (extend ev/1 Clock (call ev/1 frozen_at 5)) (call ev/4 f/2)))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
     |}];
@@ -5694,23 +5708,23 @@ fn main() uses Console = with counting_rates(3) in print(convert(2))
     );
   [%expect
     {|
-    (fn counting_rates (rate/1) ev/4
-      (handler (captures rate/1) ev/5
-        (let calls/2 0
-          (let $calls/6 (cell calls/2)
+    (fn counting_rates (rate/1) ev/2
+      (handler (captures rate/1) ev/3
+        (let calls/4 0
+          (let $calls/5 (cell calls/4)
             (instance
               (test.Rates:
                 (record
                   (usd_to:
-                    (lambda (_/3) (captures rate/1 $calls/6) ev/7
-                      (let calls/2 (get-cell $calls/6)
-                        (let $result/8 (seq (= calls/2 (+ calls/2 1)) rate/1)
-                          (seq (set-cell $calls/6 calls/2) $result/8)))))))
+                    (lambda (_/6) (captures rate/1 $calls/5) ev/7
+                      (let calls/4 (get-cell $calls/5)
+                        (let $result/8 (seq (= calls/4 (+ calls/4 1)) rate/1)
+                          (seq (set-cell $calls/5 calls/4) $result/8)))))))
               (test.RateCalls:
                 (record
                   (count:
-                    (lambda () (captures $calls/6) ev/9
-                      (let calls/2 (get-cell $calls/6) calls/2))))))))))
+                    (lambda () (captures $calls/5) ev/9
+                      (let calls/4 (get-cell $calls/5) calls/4))))))))))
     (fn convert (n/1) ev/2 (* n/1 (dep-call ev/2 test.Rates.usd_to 1)))
     (fn main () ev/1
       (with ev/2

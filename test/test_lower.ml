@@ -18,14 +18,14 @@ fn main() =
 |};
   [%expect
     {|
-    (fn main () ev/4
-      (let p/1 (record (x: 1) (y: 2))
-        (seq (= p/1 (update p/1 x: (+ (. p/1 x) 1)))
-          (let xs/2 (array 1 2)
-            (seq (= xs/2 (set xs/2 0 5))
-              (let grid/3 (array (array 1))
-                (let $v/5 (. p/1 y)
-                  (= grid/3 (set grid/3 0 (set (get grid/3 0) 0 $v/5))))))))))
+    (fn main () ev/1
+      (let p/2 (record (x: 1) (y: 2))
+        (seq (= p/2 (update p/2 x: (+ (. p/2 x) 1)))
+          (let xs/3 (array 1 2)
+            (seq (= xs/3 (set xs/3 0 5))
+              (let grid/4 (array (array 1))
+                (let $v/5 (. p/2 y)
+                  (= grid/4 (set grid/4 0 (set (get grid/4 0) 0 $v/5))))))))))
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
@@ -44,15 +44,15 @@ fn main() =
 |};
   [%expect
     {|
-    (fn swap (a/1 b/2) ev/4 (let t/3 a/1 (seq (= a/1 b/2) (= b/2 t/3))))
-    (fn main () ev/3
-      (let ps/1 (array (record (x: 1) (y: 2)))
-        (let n/2 3
-          (let $ref/4 (. (get ps/1 0) x)
-            (let $ref/5 n/2
-              (let $result/6 (call ev/3 swap &$ref/4 &$ref/5)
-                (seq (= ps/1 (set ps/1 0 (update (get ps/1 0) x: $ref/4)))
-                  (seq (= n/2 $ref/5) $result/6))))))))
+    (fn swap (a/1 b/2) ev/3 (let t/4 a/1 (seq (= a/1 b/2) (= b/2 t/4))))
+    (fn main () ev/1
+      (let ps/2 (array (record (x: 1) (y: 2)))
+        (let n/3 3
+          (let $ref/4 (. (get ps/2 0) x)
+            (let $ref/5 n/3
+              (let $result/6 (call ev/1 swap &$ref/4 &$ref/5)
+                (seq (= ps/2 (set ps/2 0 (update (get ps/2 0) x: $ref/4)))
+                  (seq (= n/3 $ref/5) $result/6))))))))
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
@@ -68,21 +68,21 @@ fn main() =
 |};
   [%expect
     {|
-    (fn main () ev/4
-      (let xs/1 (array 1 2)
+    (fn main () ev/1
+      (let xs/2 (array 1 2)
         (seq
-          (let $n/5 (length xs/1)
-            (let $i/6 0
-              (while (< $i/6 $n/5)
-                (let x/2 (get xs/1 $i/6)
-                  (seq (= x/2 (* x/2 2))
-                    (seq (= xs/1 (set xs/1 $i/6 x/2)) (= $i/6 (+ $i/6 1))))))))
-          (let $xs/9 xs/1
-            (let $n/7 (length $xs/9)
+          (let $n/3 (length xs/2)
+            (let $i/4 0
+              (while (< $i/4 $n/3)
+                (let x/5 (get xs/2 $i/4)
+                  (seq (= x/5 (* x/5 2))
+                    (seq (= xs/2 (set xs/2 $i/4 x/5)) (= $i/4 (+ $i/4 1))))))))
+          (let $xs/6 xs/2
+            (let $n/7 (length $xs/6)
               (let $i/8 0
                 (while (< $i/8 $n/7)
-                  (let x/3 (get $xs/9 $i/8)
-                    (seq (if (> x/3 2) (call ev/4 print x/3) ())
+                  (let x/9 (get $xs/6 $i/8)
+                    (seq (if (> x/9 2) (call ev/1 print x/9) ())
                       (= $i/8 (+ $i/8 1)))))))))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
@@ -98,11 +98,11 @@ fn main() =
 |};
   [%expect
     {|
-    (fn main () ev/5
-      (let n/1 1
-        (let m/2 2
-          (let f/4 (lambda (x/3) (captures n/1) ev/6 (+ x/3 n/1))
-            (call ev/5 f/4 m/2)))))
+    (fn main () ev/1
+      (let n/2 1
+        (let m/3 2
+          (let f/4 (lambda (x/5) (captures n/2) ev/6 (+ x/5 n/2))
+            (call ev/1 f/4 m/3)))))
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
@@ -121,28 +121,28 @@ fn main() =
   [%expect
     {|
     (fn bump (n/1) ev/2 (= n/1 (+ n/1 1)))
-    (fn main () ev/4
-      (let ps/1 (array (record (x: 1) (xs: (array 2))))
-        (let i/2 0
+    (fn main () ev/1
+      (let ps/2 (array (record (x: 1) (xs: (array 2))))
+        (let i/3 0
           (seq
-            (let $index/5 i/2
-              (let $ref/6 (. (get ps/1 $index/5) x)
-                (let $result/7 (call ev/4 bump &$ref/6)
+            (let $index/4 i/3
+              (let $ref/5 (. (get ps/2 $index/4) x)
+                (let $result/6 (call ev/1 bump &$ref/5)
                   (seq
-                    (= ps/1
-                      (set ps/1 $index/5 (update (get ps/1 $index/5) x: $ref/6)))
-                    $result/7))))
-            (let $index/10 i/2
-              (let $n/8 (length (. (get ps/1 $index/10) xs))
+                    (= ps/2
+                      (set ps/2 $index/4 (update (get ps/2 $index/4) x: $ref/5)))
+                    $result/6))))
+            (let $index/7 i/3
+              (let $n/8 (length (. (get ps/2 $index/7) xs))
                 (let $i/9 0
                   (while (< $i/9 $n/8)
-                    (let y/3 (get (. (get ps/1 $index/10) xs) $i/9)
-                      (seq (= y/3 (+ y/3 1))
+                    (let y/10 (get (. (get ps/2 $index/7) xs) $i/9)
+                      (seq (= y/10 (+ y/10 1))
                         (seq
-                          (= ps/1
-                            (set ps/1 $index/10
-                              (update (get ps/1 $index/10) xs:
-                                (set (. (get ps/1 $index/10) xs) $i/9 y/3))))
+                          (= ps/2
+                            (set ps/2 $index/7
+                              (update (get ps/2 $index/7) xs:
+                                (set (. (get ps/2 $index/7) xs) $i/9 y/10))))
                           (= $i/9 (+ $i/9 1)))))))))))))
     (fn $start () ev/1 (call ev/1 main))
     |}]
@@ -320,8 +320,8 @@ fn main() =
 |};
   [%expect
     {|
-    (fn main () ev/3
-      (let a/1 (< 1 2) (let b/2 (if a/1 (not a/1) false) (if b/2 true a/1))))
+    (fn main () ev/1
+      (let a/2 (< 1 2) (let b/3 (if a/2 (not a/2) false) (if b/3 true a/2))))
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
@@ -348,11 +348,11 @@ fn main() = ()
     (fn keep (id/1) ev/2
       (handle (call ev/2 load id/1) ($value/3 => (con Ok $value/3))
         (fail $error/4 => (con Err $error/4))))
-    (fn handled (id/1) ev/3
-      (handle (call ev/3 load id/1) ($value/4 => (match $value/4 (n/2 => n/2)))
+    (fn handled (id/1) ev/2
+      (handle (call ev/2 load id/1) ($value/3 => (match $value/3 (n/4 => n/4)))
         (fail $error/5 => (match $error/5 ((tag NotFound _) => 0)))))
-    (fn passed (id/1) ev/3
-      (handle (call ev/3 load id/1) ($value/4 => (match $value/4 (n/2 => n/2)))
+    (fn passed (id/1) ev/2
+      (handle (call ev/2 load id/1) ($value/3 => (match $value/3 (n/4 => n/4)))
         (fail $error/5 =>
           (match $error/5 ((tag NotFound 0) => 0) (_ => (fail $error/5))))))
     (fn again (r/1) ev/2
@@ -383,26 +383,26 @@ fn each(inout grid: Array<Array<Int>>) =
     (fn add (xs/1 x/2) ev/3
       (seq (call ev/3 Array.push &xs/1 x/2)
         (if (< x/2 0) (fail (tag Negative)) ())))
-    (fn main () ev/4
-      (let grid/1 (array (array 1))
-        (let _/2
+    (fn main () ev/1
+      (let grid/2 (array (array 1))
+        (let _/3
           (handle
-            (let $ref/5 (get grid/1 0)
-              (finally (call ev/4 add &$ref/5 2) (= grid/1 (set grid/1 0 $ref/5))))
-            ($value/6 => (con Ok $value/6))
-            (fail $error/7 => (con Err $error/7)))
-          (let _/3
-            (handle (call ev/4 each &grid/1) ($value/8 => (con Ok $value/8))
+            (let $ref/4 (get grid/2 0)
+              (finally (call ev/1 add &$ref/4 2) (= grid/2 (set grid/2 0 $ref/4))))
+            ($value/5 => (con Ok $value/5))
+            (fail $error/6 => (con Err $error/6)))
+          (let _/7
+            (handle (call ev/1 each &grid/2) ($value/8 => (con Ok $value/8))
               (fail $error/9 => (con Err $error/9)))
             ()))))
-    (fn each (grid/1) ev/3
-      (let $n/4 (length grid/1)
-        (let $i/5 0
-          (while (< $i/5 $n/4)
-            (let row/2 (get grid/1 $i/5)
+    (fn each (grid/1) ev/2
+      (let $n/3 (length grid/1)
+        (let $i/4 0
+          (while (< $i/4 $n/3)
+            (let row/5 (get grid/1 $i/4)
               (seq
-                (finally (call ev/3 add &row/2 (neg 1))
-                  (= grid/1 (set grid/1 $i/5 row/2)))
-                (= $i/5 (+ $i/5 1))))))))
+                (finally (call ev/2 add &row/5 (neg 1))
+                  (= grid/1 (set grid/1 $i/4 row/5)))
+                (= $i/4 (+ $i/4 1))))))))
     (fn $start () ev/1 (call ev/1 main))
     |}]

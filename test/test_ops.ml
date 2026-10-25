@@ -523,15 +523,15 @@ fn main() =
           (seq (= self/1 (update self/1 left: $ref/3)) $result/4))))
     (fn Pair.zero () ev/1
       (record (left: (record (n: 0))) (right: (record (n: 0)))))
-    (fn main () ev/2
-      (let p/1 Pair.zero
-        (seq (call ev/2 Pair.bump_left &p/1)
+    (fn main () ev/1
+      (let p/2 Pair.zero
+        (seq (call ev/1 Pair.bump_left &p/2)
           (seq
-            (let $ref/3 (. p/1 right)
-              (let $arg/4 (+ (call ev/2 Counter.get (. p/1 left)) 2)
-                (let $result/5 (call ev/2 Counter.bump &$ref/3 $arg/4)
-                  (seq (= p/1 (update p/1 right: $ref/3)) $result/5))))
-            p/1))))
+            (let $ref/3 (. p/2 right)
+              (let $arg/4 (+ (call ev/1 Counter.get (. p/2 left)) 2)
+                (let $result/5 (call ev/1 Counter.bump &$ref/3 $arg/4)
+                  (seq (= p/2 (update p/2 right: $ref/3)) $result/5))))
+            p/2))))
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
@@ -1372,13 +1372,13 @@ fn main() =
 |};
   [%expect
     {|
-    (fn main () ev/2
-      (let b/1 (record (items: (array)))
+    (fn main () ev/1
+      (let b/2 (record (items: (array)))
         (seq
-          (let $ref/3 (. b/1 items)
-            (let $result/4 (call ev/2 Array.push &$ref/3 1)
-              (seq (= b/1 (update b/1 items: $ref/3)) $result/4)))
-          (call ev/2 Array.len (. b/1 items)))))
+          (let $ref/3 (. b/2 items)
+            (let $result/4 (call ev/1 Array.push &$ref/3 1)
+              (seq (= b/2 (update b/2 items: $ref/3)) $result/4)))
+          (call ev/1 Array.len (. b/2 items)))))
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
