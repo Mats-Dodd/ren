@@ -4,7 +4,7 @@
 
 This doc covers how Ren code is organized into files and packages, how names are found, and how `ren build` turns all of it into binaries. The two halves depend on each other. The module rules are what make the build fast and trustworthy, and the build is the reason the module rules look the way they do.
 
-> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and `ops` with methods, associated functions and associated values run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Operators, error tags, dependency types, packages and the build are still planned; see [Roadmap](#roadmap).
+> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and methods, associated functions and associated values declared under their type run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Operators, error tags, dependency types, packages and the build are still planned; see [Roadmap](#roadmap).
 
 ---
 
@@ -133,20 +133,19 @@ Two libraries can both define `Error`, and the prelude doesn't reserve `Some` an
 
 ### Methods and operators live on the type
 
-A type's `ops` block holds everything attached to it: operators, associated values, and methods. Only the module that declares the type can write its `ops`, so every lookup goes to exactly one place and orphan instances can't exist.
+A type's members, indented directly under its declaration, are everything attached to it: operators, associated values, and methods. Only the module that declares the type can write them, so every lookup goes to exactly one place and orphan instances can't exist.
 
 ```ren
 pub type Stack<T> = { items: Array<T> }
-  ops =
-    pub fn push(inout self, x: T) = &self.items.push(x)
-    pub fn peek(self) -> Option<T> =
-      let n = self.items.len()
-      if n == 0 then None else Some(self.items[n - 1])
-    pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
-    pub let empty: Stack<T> = Stack { items: [] }
+  pub fn push(inout self, x: T) = &self.items.push(x)
+  pub fn peek(self) -> Option<T> =
+    let n = self.items.len()
+    if n == 0 then None else Some(self.items[n - 1])
+  pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
+  pub let empty: Stack<T> = Stack { items: [] }
 ```
 
-A method is an ordinary function whose first parameter is `self`, which has the block's type, and `x.m(args)` is shorthand for `Type.m(x, args)`. `m` is found through `x`'s type, with the same three steps as a field. Without `self` it's an associated function (`Stack.of(xs)`), and a `pub let` is an associated value, pure and made once when the program starts (`Stack.empty`).
+A method is an ordinary function whose first parameter is `self`, which has the type it's declared under, and `x.m(args)` is shorthand for `Type.m(x, args)`. `m` is found through `x`'s type, with the same three steps as a field. Without `self` it's an associated function (`Stack.of(xs)`), and a `pub let` is an associated value, pure and made once when the program starts (`Stack.empty`).
 
 ```ren
 var s = Stack.empty               // an associated value
@@ -157,7 +156,7 @@ let t = Stack.of([7, 8, 9])       // an associated function
 
 **`&` marks a changed receiver, just as it marks a changed argument.** `&s.push(1)` puts the `&` in front of the receiver, and leaving it out is an error. So a function body still uses exactly two markers: `try` for a call that can fail, `&` for a call that changes something. A `&` in front of a place (`f(&xs.items)`) passes that place `inout`. A `&` in front of a method call (`&xs.items.push(1)`) marks the receiver. A call's result is never a place, so the two can't be confused.
 
-You can't add methods to a type you don't own. Write a function in your own module (`mylib.chunks(xs)`), or wrap the type in an `opaque` type and give that type its own `ops`.
+You can't add methods to a type you don't own. Write a function in your own module (`mylib.chunks(xs)`), or wrap the type in an `opaque` type and give that type its own methods.
 
 Operators (written `add(a, b) => ...`, arriving in stage 9) are public whenever their type is. Methods, associated functions and associated values are private unless they're marked `pub`, like everything else, and the `pub` ones are listed under their type in the module's interface.
 
@@ -225,7 +224,7 @@ For every module, the compiler generates a summary that dependents read instead 
 
 | Tier | Contains | Read by |
 |---|---|---|
-| **Interface** | `pub` types (with their representation, unless `opaque`), `pub` signatures, error sets, `uses`, transparency, `ops` signatures | type checking of dependents |
+| **Interface** | `pub` types (with their representation, unless `opaque`), `pub` signatures, error sets, `uses`, transparency, the signatures of `pub` types' members | type checking of dependents |
 | **Implementation** | `opaque` representations, layouts and sizes, the bodies of `pub` generic and inlinable functions, inferred borrow modes, whether the module contains `trust` | code generation of dependents |
 
 **The interface is computed from declarations alone, never from bodies.** Rule 1 makes that possible. The one fact that would otherwise need a body is transparency, so `pub` signatures state it: a function parameter without `..e` or `..d` is transparent, and the body is checked against that. The interface tier also contains no source locations, so adding a blank line at the top of a file doesn't change it.
@@ -375,7 +374,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 | When | What |
 |---|---|
-| **Today** (stages 5a, 5b) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, `ops` with methods, associated functions and associated values. Every compiler pass is a pure function of its inputs |
+| **Today** (stages 5a, 5b) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type. Every compiler pass is a pure function of its inputs |
 | **Stage 5b, left over** | `dbg` |
 | **Stage 6** | Structural error tags with payloads, and the "two shapes" error |
 | **Stage 7** | Dependency types imported like other types |
