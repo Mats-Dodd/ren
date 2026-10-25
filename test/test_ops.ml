@@ -561,7 +561,7 @@ fn main() uses Console =
 |};
   [%expect {|
     [Green, Red]
-    { n: 3 }
+    Counter { n: 3 }
     ()
     |}]
 

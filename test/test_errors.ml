@@ -1670,7 +1670,7 @@ fn add_all(inout logs: Array<Log>, x: Int) =
     Err(Negative(-1))
     [-1]
     Err(Negative(-5))
-    [{ items: [-5] }, { items: [] }]
+    [Log { items: [-5] }, Log { items: [] }]
     ()
     |}]
 

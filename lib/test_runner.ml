@@ -176,7 +176,7 @@ type failure = {
   console : string list;
 }
 
-let details b ~opts ~sources ~types ~all f =
+let details b ~opts ~sources ~all f =
   let name = full_name f.test in
   let loc =
     match f.how with
@@ -190,15 +190,14 @@ let details b ~opts ~sources ~types ~all f =
     loc.start.line;
   let pad = snippet b ~sources loc in
   (match f.how with
-  | Panicked (Eval.Assert_failed { sides = Some (t, l, r); _ }) ->
-      let l = Shown.value types t l and r = Shown.value types t r in
+  | Panicked (Eval.Assert_failed { sides = Some (l, r); _ }) ->
       Printf.bprintf b "%sleft:  %s\n%sright: %s\n%s%s^ differs here\n" pad l
         pad r pad
         (String.make (String.length "right: " + first_difference l r) ' ')
   | Panicked (Eval.Assert_failed { sides = None; _ }) ->
       Printf.bprintf b "%sthis is false\n" pad
   | Panicked (Eval.Panic (_, msg)) -> Printf.bprintf b "%spanic: %s\n" pad msg
-  | Failed err -> Printf.bprintf b "%serror: %s\n" pad (Value.show err)
+  | Failed err -> Printf.bprintf b "%serror: %s\n" pad err
   | Panicked e -> raise e
   | Passed -> ());
   let only, exact = only_for all name in
@@ -232,7 +231,6 @@ let run ~opts ~sources (suite : Driver.suite) =
   let all =
     List.concat_map (fun (_, _, ts) -> List.map full_name ts) suite.files
   in
-  let types = Shown.types suite.types in
   (* a file's tests, each under its group run's label if it has one,
      printed by [line] *)
   let each_line ~line (file, home, tests) =
@@ -288,7 +286,7 @@ let run ~opts ~sources (suite : Driver.suite) =
             flush stdout))
       files;
     let b = Buffer.create 1024 in
-    List.iter (details b ~opts ~sources ~types ~all) (List.rev !failures);
+    List.iter (details b ~opts ~sources ~all) (List.rev !failures);
     print_string (Buffer.contents b);
     let failed = List.length !failures in
     let counts =

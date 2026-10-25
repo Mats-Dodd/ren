@@ -165,6 +165,13 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 | `Proc` | `run(cmd, args) -> Int ! ProcError` | a process, with this one's stdin, stdout and stderr | `test_proc([])`: runs nothing, exits with 0 | `TestProc.ran() -> Array<Command>` |
 
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.
+  `show` shows a value through its type, as it's written: a record after
+  its type's name, `Account { id: AccountId(1), ... }`, and an opaque
+  value as its type's name around what it is, `Money(-100)`, unless the
+  type has a `show(self) -> Str` method of its own, which is used
+  instead: `Path`'s, so `print(p)` prints `src/main.ren`. A string on its
+  own is itself. A failed `assert` and an error nothing handles show
+  their values the same way.
 - `Fs.read_str(p)` is a member of `Fs`, `read` then `Str.from_utf8`.
   `mem_fs(files: Array<File>)` keeps files in memory, each a `File {
   path, data }`, so a test that needs some installs one with `with`.
@@ -230,7 +237,7 @@ test "main prints the balances, and every refusal" =
   try main()
   assert TestConsole.output() == [
     "7000", "5000",
-    "Err(Short(2, 45000))", "5000", "true",
+    "Err(Short(AccountId(2), Money(45000)))", "5000", "true",
     ...
   ]
 ```
@@ -324,8 +331,8 @@ main.ren
   every test's seed. `--list` lists tests, and flags the ones that use a
   real dependency.
 - It exits with status 1 if anything failed.
-- Test output shows an opaque type by name around its contents,
-  `Money(-100)`.
+- Test output shows a value as `show` does, so an opaque type by name
+  around its contents, `Money(-100)`.
 
 ## How it runs
 
@@ -491,6 +498,21 @@ stage, or settled something the plan left open:
   test is.
 - **`ren run` shows a failed `assert a == b`'s sides as `ren test`
   does,** through their types, `Money(-100)`.
+- **`show` is the one built-in that knows its argument's type.** At
+  runtime an opaque value is only what it's represented as, so the
+  interpreter works out, at each call of a generic function, what its
+  type parameters are, as a compiler that copies a generic function for
+  each type would: `print<T>` shows a `Money` as one. Where nothing
+  says, `show` falls back on the value's shape, `-100`.
+- **A type's own `show` is used wherever its values are shown,** inside
+  a record, an error, and the sides of a failed `assert` too, even if it
+  hides how two values differ. Inside it, `show(self)` shows only what
+  `self` is represented as, so it doesn't call itself: `pub fn show(self)
+  -> Str = show(self).concat("c")` shows `2c`. A `show` that fails, uses
+  a dependency or takes more than `self` isn't used.
+- **An error that ends `main` or a test is shown through its tags'
+  types too,** `error: Frozen(AccountId(3))`, so a `Path` in one is
+  shown by `Path.show`, `error: NoSuchFile(justfile)`.
 - **A failure shows both sides in full,** where the settled DX elided
   what they share, `Account { ..., balance: Money(-100), ... }`. The
   `ren test` example above is the bank's real output, so its lines are

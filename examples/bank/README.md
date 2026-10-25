@@ -99,7 +99,7 @@ clock_conforms(test_clock(Time.epoch))`. Each test gets a fresh clock.
 - freezing without `try`
 - a value thrown away
 - a `fail` arm on a call that can't fail
-- `main` failing: it prints `error: Frozen(3)` and exits with status 1
+- `main` failing: it prints `error: Frozen(AccountId(3))` and exits with status 1
 - `credit` dropping `uses Clock`: the error points at `Clock.now()`
 
 and `covers` checking only that the balance isn't negative, which the
@@ -126,9 +126,9 @@ with `try`). What's left, and what stage 6 found:
   what the set means, but it's longer than what was written.
 - **Long signatures.** `deposit` fails with three of `TransferError`'s
   tags, and writes all three. That's the cost of exact signatures.
-- **Printing a tag shows an opaque payload.** `print(id)` in a `fail
-  Frozen(id)` arm, and `error: Frozen(3)`, show an `AccountId` as the
-  `Int` inside it.
+- **Printing a tag showed an opaque payload.** `print(id)` in a `fail
+  Frozen(id)` arm, and `error: Frozen(3)`, showed an `AccountId` as the
+  `Int` inside it. Now they show it through its type, `AccountId(3)`.
 - **A dropped value's error mentions opacity.** Throwing away a `Money`
   adds "`Money`'s representation is private to `money`", which has
   nothing to do with dropping it.
@@ -153,6 +153,6 @@ What stage 7 found, writing the tests:
 - **A bank is one long line.** A failed `assert acme == before` prints
   each bank on one line, hundreds of characters wide. The marker finds
   the first difference, but the rest is hard to read.
-- **Printing still shows an opaque payload.** `ren test` shows a
-  `Money` as `Money(-100)`, but `print` and `TestConsole.output()` show
-  the `Int`, so the test of `main` checks `"Err(Short(2, 45000))"`.
+- **Printing showed an opaque payload,** `"Err(Short(2, 45000))"`, where
+  `ren test` showed `Money(-100)`. Now `print` shows a value through its
+  type too, `"Err(Short(AccountId(2), Money(45000)))"`.

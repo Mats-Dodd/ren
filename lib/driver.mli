@@ -70,8 +70,6 @@ type suite = {
   files : (string * string * Test_items.test list) list;
       (** each module's file, its path (its home) and its tests, in the order
           the files' names sort in *)
-  types : Iface.type_decl list;
-      (** every type, the prelude's included, as its own module sees it *)
 }
 
 (* Every test of the program in the folder [dir] whose modules include

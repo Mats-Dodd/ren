@@ -18,13 +18,13 @@ a diff; `dune promote` accepts its output.
   Some(5)
   None
   true
-  { id: 2, plan: Free }
+  User { id: 2, plan: Free }
   == values.ren
   [2, 0, 1, 10]
   [13, 11, 12]
   13
-  { x: 11, y: 0 }
-  { x: 1, y: 2 }
+  Point { x: 11, y: 0 }
+  Point { x: 1, y: 2 }
   1
 
 infer.ren annotates nothing; this is what inference works out:
@@ -131,7 +131,7 @@ it. Since stage 6 a charge over the card's limit is declined, which
 `checkout` handles with a `fail` arm:
 
   $ ren run shop/main.ren
-  { plan: Free, status: Free }
+  Invoice { plan: Free, status: Free }
   0
   7
   2
@@ -396,12 +396,12 @@ copy of the bank and keeps it only if nothing failed:
   $ ren run bank/main.ren
   7000
   5000
-  Err(Short(2, 45000))
+  Err(Short(AccountId(2), Money(45000)))
   5000
   true
-  3
+  AccountId(3)
   7000
-  Err(Frozen(3))
+  Err(Frozen(AccountId(3)))
   true
   Ok(())
   6500
@@ -586,12 +586,12 @@ program stops there:
   $ ren run b10/main.ren 2> stderr.txt
   7000
   5000
-  Err(Short(2, 45000))
+  Err(Short(AccountId(2), Money(45000)))
   5000
   true
   [1]
   $ cat stderr.txt
-  error: Frozen(3)
+  error: Frozen(AccountId(3))
 
 Stamping an entry reads the clock, so a public signature that drops
 `uses Clock` is wrong, and the error points at the call that reads it:
@@ -875,11 +875,11 @@ below zero. The tests that check nothing moved show the two banks, and
        Ok(())
        -45000
        false
-       3
+       AccountId(3)
        7000
-       Err(Short(2, 44500))
+       Err(Short(AccountId(2), Money(44500)))
        true
-       Err(Short(2, 44500))
+       Err(Short(AccountId(2), Money(44500)))
        7000
        -45000
        true

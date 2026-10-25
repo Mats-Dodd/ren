@@ -93,7 +93,7 @@ fn main() =
     );
   [%expect
     {|
-    { id: 7, plan: Enterprise(42) }
+    User { id: 7, plan: Enterprise(42) }
     Enterprise(42)
     true
     false
@@ -289,8 +289,8 @@ fn main() =
     [2, 0, 1, 10]
     [13, 11, 12]
     13
-    { x: 11, y: 0 }
-    { x: 1, y: 2 }
+    Point { x: 11, y: 0 }
+    Point { x: 1, y: 2 }
     1
     ()
     |}]
@@ -314,7 +314,7 @@ fn main() =
   grid
 |};
   [%expect {|
-    [{ x: 1, y: 5 }, { x: 10, y: 2 }]
+    [P { x: 1, y: 5 }, P { x: 10, y: 2 }]
     [[1, 2], [9, 4]]
     |}]
 

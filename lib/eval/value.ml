@@ -23,6 +23,9 @@ type t =
       ev : int;  (** its evidence's id: what it's passed where it's called *)
       body : Core.expr;
       env : t ref Env.t;
+      tys : Ty.ty Env.t;
+          (** what the type variables of the function it's in stood for where it
+              was created, which its body's types are written in (eval.ml) *)
     }  (** a lambda, with the variables it captured when it was created *)
   | VFn of Path.t  (** a top-level function used as a value *)
   | VBuiltin of string  (** a function built into the prelude: [print] *)
@@ -42,7 +45,12 @@ type t =
 
 (* A handler's description: its body makes an instance, given the
    evidence [ev] where it's installed, with the variables it captured. *)
-and handler = { ev : int; body : Core.expr; env : t ref Env.t }
+and handler = {
+  ev : int;
+  body : Core.expr;
+  env : t ref Env.t;
+  tys : Ty.ty Env.t;  (** as a lambda's (above) *)
+}
 
 (* An implementation of the dependency [dep], installed: it runs with the
    evidence [outer], what was installed where it was. *)
@@ -72,7 +80,3 @@ let rec show = function
   | VInstance _ -> "<instance>"
   | VCell _ -> "<cell>"
   | VEvidence _ -> "<evidence>"
-
-(* What `show` makes of a value: a string is itself, and anything else,
-   a string inside it included, is shown as it's written. *)
-let display = function VStr s -> s | v -> show v

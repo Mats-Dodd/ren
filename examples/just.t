@@ -47,7 +47,7 @@ with why, so the process exits with 1:
   [1]
 
   $ cd .. && ren run just/main.ren
-  error: NoSuchFile("justfile")
+  error: NoSuchFile(justfile)
   [1]
 
 Its tests run on the test implementations, with no `with` but where a test

@@ -428,21 +428,12 @@ let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
 
 (* ---- tests ---- *)
 
-(* Every type of the program [modules], the prelude's included, each as
-   its own module sees it, which is how a failed `assert` shows a value
-   (shown.ml). *)
-let types_of modules =
-  let _, _, prelude_types = Lazy.force prelude in
-  prelude_types
-  @ List.concat_map (fun (c : checked) -> c.resolved.types) modules
-
 (* A failed `assert`, as `ren run` reports it: a panic, with the sides of
    an `assert a == b` shown through their type, as `ren test` shows them. *)
-let assert_failed ~types loc sides =
+let assert_failed loc sides =
   let notes =
     match sides with
-    | Some (t, l, r) ->
-        [ "left:  " ^ Shown.value types t l; "right: " ^ Shown.value types t r ]
+    | Some (l, r) -> [ "left:  " ^ l; "right: " ^ r ]
     | None -> []
   in
   Diag.make loc ~notes "panic: this `assert` failed"
@@ -454,9 +445,6 @@ type suite = {
   files : (string * string * Test_items.test list) list;
       (** each module's file, its path (its home) and its tests, in the order
           the files' names sort in *)
-  types : Iface.type_decl list;
-      (** every type, the prelude's included, as its own module sees it: what an
-          opaque type is is shown in a test's output (deps.md, "`ren test`") *)
 }
 
 (* Every test of the program in the folder [dir] whose modules include
@@ -491,7 +479,6 @@ let suite ?lint ?(load = fun _ -> None) ~dir roots =
     files =
       List.sort compare
         (List.map (fun c -> (c.file, c.home, c.items.tests)) modules);
-    types = types_of modules;
   }
 
 let core ?lint ?load ~file src = entry_of (linked ?lint ?load ~file src)
@@ -622,9 +609,7 @@ let run ?lint ?load ?(args = []) ~file src =
   let modules = link ?lint checked in
   try pass "eval" (fun () -> Eval.run modules)
   with Eval.Assert_failed { loc; sides } ->
-    raise
-      (Diag.Error
-         (assert_failed ~types:(Shown.types (types_of checked)) loc sides))
+    raise (Diag.Error (assert_failed loc sides))
 
 let dump_tokens toks =
   toks |> Array.to_list
@@ -640,7 +625,7 @@ let render_error ~sources = function
       Some (Diag.render ~sources (Diag.make loc ("panic: " ^ msg)))
   | Eval.Uncaught err ->
       (* `main` failed: its error, shown as a value is (errors.md, "`main`") *)
-      Some ("error: " ^ Value.show err ^ "\n")
+      Some ("error: " ^ err ^ "\n")
   | Internal_error { pass; message } ->
       Some
         (Printf.sprintf

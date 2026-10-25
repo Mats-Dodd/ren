@@ -139,7 +139,7 @@ There is no `catch`: handling an error is pattern matching, so it's a
 
 ```ren
 let r = attempt &acme.transfer(t)      // Result<Unit, ! Refusal | NoSuchAccount(account: AccountId) | SameAccount>
-print(r)                               // Err(Short(2, 45000))
+print(r)                               // Err(Short(AccountId(2), Money(45000)))
 try r                                  // fail with it again, later
 ```
 
@@ -191,7 +191,7 @@ thrown away without a word. Write `let _ = ...` to drop it on purpose.
 status 1:
 
 ```
-error: Frozen(3)
+error: Frozen(AccountId(3))
 ```
 
 ## Later

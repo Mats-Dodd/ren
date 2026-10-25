@@ -465,12 +465,11 @@ let fns =
     { name; scheme = scheme ty; eval; runtime }
   in
   [
-    (* fn<T>(T) -> Str *)
+    (* fn<T>(T) -> Str, which the interpreter runs itself, since it shows
+       a value through its type (eval.ml) *)
     fn "show"
       (Fun ([ read (Var 0) ], str, open_row 0, open_row 1))
-      (function
-        | [ v ] as args -> (Value.VStr (Value.display v), args)
-        | _ -> bug "show");
+      (fun _ -> failwith "bug: `show` is run by the interpreter");
     (* fn() -> Int, the real `Clock.now` and `Clock.instant` *)
     fn ~runtime:true "clock_now"
       (Fun ([], int, open_row 0, open_row 1))

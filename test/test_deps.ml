@@ -481,7 +481,7 @@ fn main() uses Console =
   print(with id(at(2)) in Clock.now())
 |};
   [%expect {|
-    120000
+    Time(120000)
     ()
     |}];
   types
@@ -1056,7 +1056,7 @@ fn main() ! FsError | InvalidUtf8 uses Fs, Console =
     true
     6
     again
-    error: NoSuchFile("no/such/file.txt")
+    error: NoSuchFile(no/such/file.txt)
     |}];
   (* bytes that aren't UTF-8, written by something else *)
   let file = temp_file () in
@@ -1102,7 +1102,7 @@ fn main() ! FsError uses Fs, Console =
     true
     a-folder
     not allowed
-    error: NoSuchFile("no/such/folder/file.txt")
+    error: NoSuchFile(no/such/folder/file.txt)
     |}]
 
 let%expect_test "the real Fs is reached only through Fs" =
@@ -1755,11 +1755,11 @@ fn main() uses Console =
   run src;
   [%expect
     {|
-    60000
-    120000
-    180000
-    240000
-    180000
+    Time(60000)
+    Time(120000)
+    Time(180000)
+    Time(240000)
+    Time(180000)
     ()
     |}]
 
@@ -1835,11 +1835,11 @@ fn main() uses Console, Clock =
     5
     5
     6
-    60000
+    Time(60000)
     0
-    120000
-    180000
-    180000
+    Time(120000)
+    Time(180000)
+    Time(180000)
     ()
     |}];
   (* a closure parameter called inside a `with`: an inferred one may use
@@ -1904,9 +1904,9 @@ fn main() uses Console =
 |};
   [%expect
     {|
-    420000
-    180000
-    120000
+    Time(420000)
+    Time(180000)
+    Time(120000)
     4
     403
     402
@@ -3423,7 +3423,7 @@ fn main() ! FsError | InvalidUtf8 uses Console =
     hi
     false
     2
-    error: NoSuchFile("notes.txt")
+    error: NoSuchFile(notes.txt)
     |}]
 
 let%expect_test "a test gets no args, and programs that exit with 0" =
@@ -3474,9 +3474,9 @@ fn main() ! ProcError uses Console =
 |};
   [%expect {|
     2
-    [{ args: ["all"], cmd: "make" }, { args: ["test"], cmd: "make" }]
+    [Command { cmd: "make", args: ["all"] }, Command { cmd: "make", args: ["test"] }]
     0
-    [{ args: ["all"], cmd: "make" }]
+    [Command { cmd: "make", args: ["all"] }]
     ()
     |}]
 
@@ -3828,7 +3828,7 @@ test "a missing file fails the test" =
     22 │ test "a missing file fails the test" =
        │      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
        │
-       error: NoSuchFile("gone.txt")
+       error: NoSuchFile(gone.txt)
 
        seed 9888 · rerun: ren test test.ren --only "a missing" --seed 9888
 
@@ -4462,6 +4462,71 @@ fn main() =
       = right: P { m: M(2), n: 2 }
     |}]
 
+let%expect_test "print shows a value through its type, as a failed assert does" =
+  (* an opaque type as its name around what it is, unless it has a `show`
+     of its own; through a generic function, a lambda and a handler too,
+     and an error that ends the program. A failed `assert` uses a type's
+     own `show` too. *)
+  run
+    {|
+type M = opaque Int
+  pub fn of(n: Int) -> M = n
+type Cents = opaque Int
+  pub fn of(n: Int) -> Cents = n
+  // inside it, `show(self)` shows only what it's represented as
+  pub fn show(self) -> Str = show(self).concat("c")
+type P = { m: M, c: Cents, at: Path }
+dep Out =
+  put: fn(m: M)
+handler out() for Out =
+  put(m) => print(m)
+
+fn twice<T>(x: T) uses Console =
+  let f = fn() => print(x)
+  f()
+  print([x])
+
+fn main() ! Gone(p: P) uses Console =
+  let p = P { m: M.of(1), c: Cents.of(2), at: Path.of("a/b") }
+  print(p)
+  print(show(M.of(3)).len())
+  twice(M.of(4))
+  with out() in Out.put(M.of(5))
+  print(Path.of("a/b"))
+  print(Some("a"))
+  fail Gone(p)
+|};
+  [%expect
+    {|
+    P { m: M(1), c: 2c, at: a/b }
+    4
+    M(4)
+    [M(4)]
+    M(5)
+    a/b
+    Some("a")
+    error: Gone(P { m: M(1), c: 2c, at: a/b })
+    |}];
+  run
+    {|
+type Cents = opaque Int
+  pub fn of(n: Int) -> Cents = n
+  // inside it, `show(self)` shows only what it's represented as
+  pub fn show(self) -> Str = show(self).concat("c")
+
+fn main() =
+  assert [Cents.of(1)] == [Cents.of(2)]
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:7:10
+    7 │   assert [Cents.of(1)] == [Cents.of(2)]
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = left:  [1c]
+      = right: [2c]
+    |}]
+
 (* ---- 5. interfaces are exact ----
 
    What an implementation fails with and what it needs: no more than its
@@ -4611,7 +4676,7 @@ fn main() uses Console =
 |};
   [%expect {|
     100
-    0
+    Time(0)
     ()
     |}]
 
@@ -5353,7 +5418,7 @@ fn main() uses Console =
     |}];
   run src;
   [%expect {|
-    300000
+    Time(300000)
     ()
     |}]
 
