@@ -102,22 +102,3 @@ let core src =
       List.iter
         (fun f -> print_endline (Core.show_fn f))
         (Driver.core ~lint:true ~file src).fns)
-
-(* The entry module's signatures, as `ren types` prints them, once the
-   program has lowered and passed Core Lint: the same as [types]. *)
-let checked src =
-  let src = clean src in
-  report src (fun () ->
-      List.iter
-        (fun (_, sigs) -> List.iter print_endline sigs)
-        (Driver.types ~lint:true ~file src))
-
-let checked_files files =
-  let files, file, src, load = program files in
-  report_files files (fun () ->
-      List.iteri
-        (fun i (home, sigs) ->
-          if i > 0 then print_newline ();
-          print_endline ("-- " ^ home);
-          List.iter print_endline sigs)
-        (Driver.types ~lint:true ~load ~file src))

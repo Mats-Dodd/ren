@@ -1,5 +1,5 @@
 (* Errors (errors.md), organised by the seven things error handling has to
-   do, then what running it does. [checked] prints what `ren types` would,
+   do, then what running it does. [types] prints what `ren types` would,
    once the program has also lowered and passed Core Lint. *)
 
 open Helpers
@@ -7,7 +7,7 @@ open Helpers
 (* ---- 1. You can see it ---- *)
 
 let%expect_test "a call that can fail has to be marked" =
-  checked
+  types
     {|
 type Account = { balance: Int }
   fn debit(inout self, m: Int) =
@@ -38,7 +38,7 @@ fn main() =
     |}]
 
 let%expect_test "try covers every call to its right" =
-  checked
+  types
     {|
 fn read(path: Int) -> Int = if path < 0 then fail Unreadable else path
 fn parse(n: Int) -> Int = if n > 9 then fail TooBig(n) else n
@@ -58,7 +58,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a marker that covers nothing that can fail" =
-  checked
+  types
     {|
 fn double(n: Int) -> Int = n * 2
 fn twice(n: Int) = try double(n)
@@ -95,7 +95,7 @@ let%expect_test "a call marked again can fail again" =
   (* each call adds its callee's errors to its marker's, and the callee's
      own errors stay what they were, so the second call brings them in
      too *)
-  checked
+  types
     {|
 fn twice(n: Int) -> Int =
   let h = fn() => if n > 0 then fail Q else 1
@@ -118,7 +118,7 @@ fn main() = ()
 let%expect_test "a try of a Result has to know it's a Result" =
   (* `try` fails with a `Result`'s error only once its type is known, and
      it covers everything to its right *)
-  checked
+  types
     {|
 fn unknown(r) -> Int = try r
 fn both(r: Result<Int, ! A>) -> Int = try r + try r
@@ -150,7 +150,7 @@ fn main() = ()
 let%expect_test "a lambda's body has markers of its own" =
   (* a transparent parameter passes the lambda's errors to the call, so
      both the call and the lambda's own call are marked *)
-  checked
+  types
     {|
 fn validate(x: Int) -> Int = if x < 0 then fail Negative(x) else x
 fn map(xs: Array<Int>, f: fn(Int) -> Int) -> Array<Int> =
@@ -181,7 +181,7 @@ fn main() = ()
 
 let%expect_test "calling a transparent parameter can fail" =
   (* with whatever the caller passes, so it's marked *)
-  checked
+  types
     {|
 pub fn each(xs: Array<Int>, f: fn(Int)) =
   for x in xs
@@ -210,7 +210,7 @@ fn main() = ()
     |}]
 
 let%expect_test "an inferred parameter called without a marker can't fail" =
-  checked
+  types
     {|
 fn apply(f) = f()
 fn passed(f) = try f()
@@ -226,7 +226,7 @@ fn main() = ()
     fn passes<T>() -> T ! Oops
     fn main()
     |}];
-  checked
+  types
     {|
 fn apply(f) = f()
 fn bad() = apply(fn() => fail Oops)
@@ -246,7 +246,7 @@ fn main() = ()
 (* ---- 2. You can't ignore it ---- *)
 
 let%expect_test "fail has the type of anything" =
-  checked
+  types
     {|
 fn check(n: Int) =
   if n < 0 then fail Negative(n)
@@ -267,7 +267,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a value passed on with try is still a value" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn main() =
@@ -287,7 +287,7 @@ fn main() =
 (* ---- 3. The signature is exact ---- *)
 
 let%expect_test "a public function writes its errors after !" =
-  checked
+  types
     {|
 pub type Refusal = ! Short(account: Int, by: Int) | Frozen(account: Int)
 pub type TransferError = ! Refusal | SameAccount
@@ -311,7 +311,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a public function can't fail with what it doesn't declare" =
-  checked
+  types
     {|
 pub fn debit(inout a: Int, m: Int) ! Short(Int) =
   if a < 0 then fail Frozen(a)
@@ -343,7 +343,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a public function can't declare what it can't fail with" =
-  checked
+  types
     {|
 pub type Refusal = ! Short(by: Int) | Frozen
 pub fn credit(inout a: Int, m: Int) ! Refusal =
@@ -373,7 +373,7 @@ fn main() = ()
 
 let%expect_test
     "a private function's errors are inferred, or checked if written" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn twice(id: Int) -> Int = try load(id) + load(id + 1)
@@ -400,7 +400,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a function type writes what it fails with" =
-  checked
+  types
     {|
 fn run(f: fn(Int) -> Int ! Bad, x: Int) -> Int = try f(x)
 fn ok() = try run(fn(x) => if x < 0 then fail Bad else x, 1)
@@ -420,7 +420,7 @@ fn main() = ()
 let%expect_test "a transparent parameter is printed as it's written" =
   (* its rows are its function's, so `f: fn(Int) ! Bad` would say
      something else: that `f` fails with exactly `Bad` *)
-  checked_files
+  types_files
     [
       ( "main.ren",
         {|
@@ -452,7 +452,7 @@ pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad uses Io =
 (* ---- 4. Passing it on costs one word ---- *)
 
 let%expect_test "functions that call each other share their errors" =
-  checked
+  types
     {|
 fn ping(n: Int) -> Int = if n == 0 then fail Done else try pong(n - 1)
 fn pong(n: Int) -> Int = try ping(n)
@@ -464,7 +464,7 @@ fn main() = ()
     fn pong(n: Int) -> Int ! Done
     fn main()
     |}];
-  checked
+  types
     {|
 fn ping(n: Int) -> Int = if n == 0 then fail Done else pong(n - 1)
 fn pong(n: Int) -> Int = try ping(n)
@@ -483,7 +483,7 @@ fn main() = ()
 let%expect_test "an attempt of a function that calls back keeps its errors" =
   (* `a` keeps what `b` fails with in a `Result`, so it doesn't fail with
      them, though `b` fails with what `a` does *)
-  checked
+  types
     {|
 fn a(n: Int) -> Int ! X =
   if n == 0 then fail X
@@ -518,7 +518,7 @@ fn main() = ()
     |}]
 
 let%expect_test "orelse turns an Option into a value or an error" =
-  checked
+  types
     {|
 fn find(xs: Array<Int>, x: Int) -> Option<Int> =
   if xs.len() > x then Some(x) else None
@@ -535,7 +535,7 @@ fn main() = ()
     fn chain(xs: Array<Int>) -> Int
     fn main()
     |}];
-  checked
+  types
     {|
 fn wrong(n: Int) -> Int = n orelse 0
 fn other(o: Option<Int>) -> Int = o orelse true
@@ -559,7 +559,7 @@ fn main() = ()
 (* ---- 5. Handling is precise and stays checked ---- *)
 
 let%expect_test "attempt keeps the outcome in a Result" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn big(id: Int) -> Int =
@@ -586,7 +586,7 @@ fn main() = ()
 let%expect_test "attempt keeps what a passed function fails with" =
   (* its `Result` keeps the passed function's open set, and the function
      itself doesn't fail *)
-  checked
+  types
     {|
 fn wrap(g: fn() -> Int) = attempt g()
 fn w(f) = attempt f()
@@ -611,7 +611,7 @@ fn main() = ()
     |}];
   (* a public function's transparent parameter fails with the function's
      own errors, as its signature says, so they're passed on *)
-  checked
+  types
     {|
 pub fn wrap(g: fn() -> Int) -> Result<Int, ! Mine> = attempt g()
 fn main() = ()
@@ -630,7 +630,7 @@ fn main() = ()
 let%expect_test "attempt keeps only what its call fails with" =
   (* the function's own errors aren't the callee's, so a `Result` doesn't
      hold them *)
-  checked
+  types
     {|
 fn local(n: Int) =
   let h = fn() => if n > 0 then fail Q else 1
@@ -664,7 +664,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a tag can't be matched in a passed function's errors" =
-  checked
+  types
     {|
 fn w(g: fn() -> Int) -> Int =
   match attempt g()
@@ -684,7 +684,7 @@ fn main() = ()
     |}]
 
 let%expect_test "matching a Result handles every error it can hold" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn big(id: Int) -> Int =
@@ -722,7 +722,7 @@ fn main() = ()
        help: add an arm for `Err(NotFound(_))`, or a `_ =>` arm for the rest
     |}];
   (* a misspelled tag is a different error, which the `Result` can't hold *)
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn typo(id: Int) -> Int =
@@ -755,7 +755,7 @@ fn main() = ()
     |}]
 
 let%expect_test "an error is a value only inside a Result" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn whole(id: Int) -> Int =
@@ -774,7 +774,7 @@ fn main() = ()
       help: match its tags, like `Err(NotFound(id))`, or ignore it with `Err(_)`
     |}];
   (* a `Result` made with `Ok` holds an error set too *)
-  checked
+  types
     {|
 fn ok() = Ok(1)
 fn same<T>(a: T, b: T) = ()
@@ -793,7 +793,7 @@ fn main() = ()
       = an error is a value only inside the `Result` that holds it
       help: match its tags, like `Err(NotFound(id))`, or ignore it with `Err(_)`
     |}];
-  checked {|
+  types {|
 fn ok() = Ok(1)
 fn main() = ()
 |};
@@ -801,7 +801,7 @@ fn main() = ()
     fn ok() -> Result<Int, !>
     fn main()
     |}];
-  checked {|
+  types {|
 fn made() = Err(NotFound(1))
 fn main() = ()
 |};
@@ -818,7 +818,7 @@ fn main() = ()
 let%expect_test "match handles a call's errors with fail arms" =
   (* a `fail` arm destructures a payload, and can fail with another tag,
      which is how one error becomes another *)
-  checked
+  types
     {|
 fn load(id: Int) -> Int =
   if id == 0 then fail NotFound(id)
@@ -862,7 +862,7 @@ fn main() = ()
 let%expect_test "a match handles what a function of its group fails with" =
   (* what [d] fails with is known only once the group is done, and the
      match is checked against it then *)
-  checked
+  types
     {|
 fn c(n: Int) -> Int =
   if n == 0 then fail Zero
@@ -884,7 +884,7 @@ fn main() = ()
     |}]
 
 let%expect_test "an or-pattern's names have one type" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else if id > 9 then fail Bad(id > 99) else id
 fn either(id: Int) -> Int =
@@ -902,7 +902,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a match handles every value and every error" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int =
   if id == 0 then fail NotFound(id)
@@ -961,7 +961,7 @@ fn main() = ()
        help: add an arm for `fail NotFound(_)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
     |}];
   (* an arm after `fail _` can never match an error *)
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn late(id: Int) -> Int =
@@ -981,7 +981,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a fail arm matches an error the call can fail with" =
-  checked
+  types
     {|
 fn double(n: Int) -> Int = n * 2
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
@@ -1034,7 +1034,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a fail pattern never binds a whole error" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn whole(id: Int) -> Int =
@@ -1053,7 +1053,7 @@ fn main() = ()
     |}]
 
 let%expect_test "try match passes on what no arm handles" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int =
   if id == 0 then fail NotFound(id)
@@ -1084,7 +1084,7 @@ fn main() = ()
     fn main()
     |}];
   (* with every error handled, there's nothing to pass on *)
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn all(id: Int) -> Int =
@@ -1114,7 +1114,7 @@ fn main() = ()
       help: remove the `try`
     |}];
   (* a public function declares what its `try match` passes on *)
-  checked
+  types
     {|
 fn load(id: Int) -> Int =
   if id == 0 then fail NotFound(id)
@@ -1139,7 +1139,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a call in an arm is marked like any other" =
-  checked
+  types
     {|
 fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
 fn again(id: Int) -> Int =
@@ -1164,7 +1164,7 @@ fn main() = ()
 
 let%expect_test "matching what a passed function fails with" =
   (* its errors aren't known, so only `fail _` handles them *)
-  checked
+  types
     {|
 fn each(g: fn() -> Int) -> Int =
   match g()
@@ -1185,7 +1185,7 @@ fn main() = print(each(fn() => 1))
       = this can fail with whatever the function passed as `g` fails with, which could be anything
       help: match those with `fail _`, or write the errors `g` can fail with in its type, after `!`
     |}];
-  checked
+  types
     {|
 fn guarded(g: fn() -> Int, b: Bool) -> Int =
   match g()
@@ -1205,7 +1205,7 @@ fn main() = ()
       help: add a `fail _ =>` arm, or pass the errors on with `try match`
     |}];
   (* a public function passes them on, as its signature says *)
-  checked
+  types
     {|
 pub fn each(g: fn() -> Int) -> Int =
   match g()
@@ -1227,7 +1227,7 @@ fn main() = ()
 (* ---- 6. Libraries compose ---- *)
 
 let%expect_test "the same tag from two modules is the same error" =
-  checked_files
+  types_files
     [
       ( "main.ren",
         {|
@@ -1281,7 +1281,7 @@ pub fn fetch(n: Int) ! Short(Int) | Timeout(ms: Int) =
     |}]
 
 let%expect_test "one error set can't hold two shapes of a tag" =
-  checked_files
+  types_files
     [
       ( "main.ren",
         {|
@@ -1312,7 +1312,7 @@ pub fn fetch(n: Int) ! Timeout(ms: Int) = fail Timeout(n)
       = a tag is its name and its payload's types, so these are two errors with one name
       help: rename one where it comes in: `try match mutex.lock()` with the arm `fail Timeout => fail LockTimeout`
     |}];
-  checked
+  types
     {|
 type Slow = ! Timeout(Int)
 type Late = ! Slow | Timeout
@@ -1341,7 +1341,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a function passed where its tag has another shape" =
-  checked
+  types
     {|
 pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad =
   if xs.len() == 0 then fail Bad
@@ -1361,7 +1361,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a named set is imported like a type" =
-  checked_files
+  types_files
     [
       ( "main.ren",
         {|
@@ -1396,7 +1396,7 @@ pub fn debit(inout a: Int, m: Int) ! Refusal =
 (* ---- what's written ---- *)
 
 let%expect_test "an error set is a type argument only of Result" =
-  checked
+  types
     {|
 fn first(r: Result<Int, Int>, s: Option<! Bad>) = ()
 fn main() = ()
@@ -1418,7 +1418,7 @@ fn main() = ()
     |}]
 
 let%expect_test "fail names a tag, not a set" =
-  checked
+  types
     {|
 type Refusal = ! Short(Int) | Frozen
 fn f() = fail Refusal
@@ -1675,7 +1675,7 @@ fn main() =
     |}]
 
 let%expect_test "ren types shows what a module fails with" =
-  checked
+  types
     {|
 pub type AccountId = opaque Int
 pub type Refusal = ! Short(account: AccountId, by: Int) | Frozen(account: AccountId)
