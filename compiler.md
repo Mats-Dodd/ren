@@ -8,11 +8,14 @@ module rules it builds on are in [module-build.md](module-build.md), and
 how dependencies run in [deps.md](deps.md#how-it-runs).
 
 Stage 10.0 lays these foundations before the language moves on to
-operators. It isn't a language stage: nothing a program can write
-changes, except that `==` on functions becomes a compile error. It's
-here because what comes after operators, reference counting with reuse
-and specialization, needs facts the compiler doesn't carry yet, and is
-much harder to retrofit than to plan for.
+operators. It isn't a language stage, and what a program can write
+hardly changes: `==` on functions becomes a compile error (R4), a few
+programs the old inference got wrong are accepted or rejected as they
+should be (R3), and recursion more than 100,000 calls deep that aren't
+tail calls panics (R0). It's here because what comes after operators,
+reference counting with reuse and specialization, needs facts the
+compiler doesn't carry yet, and is much harder to retrofit than to plan
+for.
 
 ## What it has to do
 
@@ -61,7 +64,7 @@ inference every body a value goes through.
 | AST, parsed | parser.ml | the program as written | the tree-sitter grammar's differential test | yes |
 | AST, resolved | resolve.ml | every name found through scope, by its binder's id or its path | inference, which only reads it | yes |
 | inferred | infer.ml | each function's scheme and each node's type and lookup | the driver: a public function's inferred scheme is the one its interface states | yes |
-| Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments and requirement dictionaries from stage 10.0 | Core Lint, which the tests run on every program | yes |
+| Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments from R2, requirement dictionaries from R4 | Core Lint, which the tests run on every program | yes |
 | specialized Core | the specializer | Core with type arguments, requirements and lambda sets chosen | Core Lint | the memory stage |
 | Mem IR | memory lowering | A-normal form, layouts, closures as tagged unions | its own lint | the memory stage |
 | Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | the memory stage |
@@ -70,22 +73,29 @@ inference every body a value goes through.
 ## The facts
 
 Each fact has one pass that computes it, and one place it's carried.
+That's what stage 10.0 builds to. Where today's compiler falls short of
+it, each fact says so, and which step fixes it.
 
 - **Types.** Inference, by Hindley–Milner with levels (types.ml,
   unify.ml). Carried by every Core node and binder, in canonical form
-  (ty.ml).
+  (ty.ml). Today a call of a generic function doesn't say which types
+  it's used at, so the interpreter works them out again as it runs
+  (eval.ml); from R2 the call carries them, as its type arguments.
 - **Effects.** What a function can fail with, its `!` row, and what it
-  uses, its `uses` row. Inference, in the same solver as types. Carried
-  in function types.
-- **Requirements.** What a generic function needs of a type parameter,
-  such as `eq` for `==`. Inference, in the same solver; never written,
-  on a public function either (operators.md, "Generic code"). Carried in
-  the scheme, the interface, and as hidden dictionary parameters in
-  Core.
-- **Lambda sets.** Which lambdas and functions a value of a function
-  type can be. Inference, in the same solver, as a hidden third row of a
-  function type beside `!` and `uses`. Carried in Core's types, and
-  checked by Core Lint; nothing reads them until specialization.
+  uses, its `uses` row. Inference, carried in function types. From R3,
+  in the same solver as types. Today it's work deferred into fourteen
+  queues during inference, each settled by a pass of its own after it, in
+  an order fixed by hand (infer_top.ml).
+- **Requirements.** From R4. What a generic function needs of a type
+  parameter, such as `eq` for `==`. Inference, in the same solver; never
+  written, on a public function either (operators.md, "Generic code").
+  Carried in the scheme, the interface, and as hidden dictionary
+  parameters in Core. Today there are none: `==` takes two values of any
+  one type, and panics at runtime on functions.
+- **Lambda sets.** From R4. Which lambdas and functions a value of a
+  function type can be. Inference, in the same solver, as a hidden third
+  row of a function type beside `!` and `uses`. Carried in Core's types,
+  and checked by Core Lint; nothing reads them until specialization.
 - **Ownership, lifetimes, reuse credits, provenance.** Later, each by
   its own pass over Mem IR, after specialization: a known callee's body
   says whether it borrows, consumes or keeps a value, which is what
@@ -97,21 +107,31 @@ specialization reads lambda sets without touching effects.
 
 ## What each IR promises
 
+As with the facts, this is what stage 10.0 builds to, and where today
+falls short it says so.
+
 - **The resolved AST** names every local by its binder's id, and every
-  top-level entity by its path (path.ml): a module and a name in it. A
-  type's member is its type's path and its name. Nothing after resolve
-  looks a name up in a scope.
+  top-level entity by its path (path.ml): a module and a name in it.
+  Nothing after resolve looks a name up in a scope. From R1, a type's
+  member is its type's path and its name. Today it's a path whose name
+  has a dot in it, `Stack.push` in `Stack`'s module, which later passes
+  split again (Ast.short_name), and the interpreter builds to find a
+  `show` method.
 - **Inference's result** gives every expression and pattern a type and,
   where something was found through a type, what (infer.mli). It decides
   every question once: which constructor, which method, whether a call
-  can fail, whether a `with` installs a handler or wraps its body. Lower
-  reads those decisions; it never makes them again.
+  can fail, whether a `with` installs a handler or wraps its body. From
+  R1, lower reads those decisions and never makes them again. Today it
+  still asks inference's own functions whether a `with` installs a
+  handler and whether a call can fail (Infer_expr.handles and is_fail).
 - **Core** has one way to change something, an assignment to a local,
   and one way each to fail, to handle an error, to install an
   implementation and to call a dependency (core.ml). Every node has its
-  type, every call of a polymorphic function its type arguments, every
-  function its evidence. Core Lint checks each of those against the
-  others, from scratch.
+  type, and every function its evidence. Core Lint checks each of those
+  against the others, from scratch. From R2, every call of a polymorphic
+  function has its type arguments too. Today it doesn't: Lint checks
+  that the type a function is used at is some instance of its scheme,
+  and the interpreter finds which one each time it calls it.
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -167,8 +187,10 @@ the next starts:
 - **R0, foundations and safety nets.** This document; CI on Linux and
   macOS; benchmarks, and the interpreter's tail calls made a loop, so a
   long loop written as recursion isn't quadratic, and deep recursion
-  reaching its panic promptly; test helpers that fail when an expected
-  error doesn't come; the roadmap renumbered.
+  reaching its panic promptly: a program more than 100,000 calls deep
+  that aren't tail calls now panics (eval.ml's `max_depth`), where before
+  it ran until OCaml's own, much deeper, stack ran out; test helpers
+  that fail when an expected error doesn't come; the roadmap renumbered.
 - **R1, restructure with no change in behaviour.** The prelude's
   runtime half moves to eval/, so resolve, lower and lint no longer link
   against it, and intrinsics are found by an id. A type's member is
