@@ -4,7 +4,7 @@
 
 This doc covers how Ren code is organized into files and packages, how names are found, and how `ren build` turns all of it into binaries. The two halves depend on each other. The module rules are what make the build fast and trustworthy, and the build is the reason the module rules look the way they do.
 
-> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and methods, associated functions and associated values declared under their type run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Operators, error tags, dependency types, packages and the build are still planned; see [Roadmap](#roadmap).
+> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and methods, associated functions and associated values declared under their type run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Structural error tags, named error sets imported like types, and the "two shapes" error run too, in stage 6; [examples/bank](examples/bank) uses them. Operators, dependency types, packages and the build are still planned; see [Roadmap](#roadmap).
 
 ---
 
@@ -374,9 +374,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 | When | What |
 |---|---|
-| **Today** (stages 5a, 5b) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type. Every compiler pass is a pure function of its inputs |
+| **Today** (stages 5a, 5b, 6) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, and the "two shapes" error. Every compiler pass is a pure function of its inputs |
 | **Stage 5b, left over** | `dbg` |
-| **Stage 6** | Structural error tags with payloads, and the "two shapes" error |
 | **Stage 7** | Dependency types imported like other types |
 | **Stage 10** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
 | **Stage 14** | Cached simulation-test results |
