@@ -150,9 +150,11 @@ What stage 7 found, writing the tests:
 - **`attempt` takes the whole comparison.** `assert attempt
   &acme.deposit(...) == x` is `attempt (&acme.deposit(...) == x)`, so the
   `Result` goes into a `let` or a `match` first.
-- **A bank is one long line.** A failed `assert acme == before` prints
-  each bank on one line, hundreds of characters wide. The marker finds
-  the first difference, but the rest is hard to read.
+- **A bank was one long line.** A failed `assert acme == before`
+  printed each bank on one line, hundreds of characters wide. Now it
+  leaves out what the two share, `Bank { accounts: [Account { ...,
+  balance: Money(-100), ... }, ...], ... }`, with the marker under the
+  first difference.
 - **Printing showed an opaque payload,** `"Err(Short(2, 45000))"`, where
   `ren test` showed `Money(-100)`. Now `print` shows a value through its
   type too, `"Err(Short(AccountId(2), Money(45000)))"`.

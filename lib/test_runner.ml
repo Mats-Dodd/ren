@@ -10,9 +10,9 @@
      14 │   assert acme == before
         │          ^^^^^^^^^^^^^^
         │
-        left:  Bank { accounts: [...], next: 3 }
-        right: Bank { accounts: [...], next: 2 }
-                                              ^ differs here
+        left:  Bank { ..., next: 3 }
+        right: Bank { ..., next: 2 }
+                                 ^ differs here
 
         seed 2871 · rerun: ren test bank/ --only "an overdraft" --seed 2871
 

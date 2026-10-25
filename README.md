@@ -322,7 +322,7 @@ group "frozen" = clock_conforms(Clock.frozen(Time.epoch))
 group "test clock" = clock_conforms(test_clock(Time.epoch))
 ```
 
-A failed `assert` is a panic: it's a bug, not an error. `assert a == b` shows both sides, with a marker under the first place they differ, and an opaque value as its type around its contents, `Money(-100)`, as `print` shows it. To check that something fails, keep it with `attempt`.
+A failed `assert` is a panic: it's a bug, not an error. `assert a == b` shows both sides, with a marker under the first place they differ and what they share left out, `Account { ..., balance: Money(-100), ... }`, and an opaque value as its type around its contents, `Money(-100)`, as `print` shows it. To check that something fails, keep it with `attempt`.
 
 `ren test` runs every module's tests in a folder: one line per test, then each failure with its source, both sides, its seed and the command that reruns it, and what it printed. `--only <text>` runs the tests whose name has it, `--seed N` sets every test's seed, `--list` lists them, saying which use a real dependency, and it exits with status 1 if any failed. [examples/bank](examples/bank) carries a suite like this.
 

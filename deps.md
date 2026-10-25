@@ -276,7 +276,10 @@ suite for the dependencies it defines ([stdlib.md](stdlib.md#three-implementatio
 ### `assert`
 
 `assert a == b` shows both sides when it fails, with a marker under the
-first place they differ. Any other `assert` shows its source. A failed
+first place they differ. What they share there is left out: each side
+shows the way to that place and what it has there, and every other
+field, element and payload is `...`, `Account { ..., balance:
+Money(-100), ... }`. Any other `assert` shows its source. A failed
 `assert` is a panic, not an error: it's a bug.
 
 ### `ren test`
@@ -311,9 +314,9 @@ main.ren
 115 │   assert acme == before
     │          ^^^^^^^^^^^^^^
     │
-    left:  Bank { accounts: [Account { id: AccountId(1), balance: Money(-100), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }, Entry { at: Time(0), what: Sent(Money(1100), AccountId(2)) }] }, Account { id: AccountId(2), balance: Money(1100), frozen: false, statement: [Entry { at: Time(0), what: Received(Money(1100), AccountId(1)) }] }], next: 3 }
-    right: Bank { accounts: [Account { id: AccountId(1), balance: Money(1000), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }] }, Account { id: AccountId(2), balance: Money(0), frozen: false, statement: [] }], next: 3 }
-                                                                        ^ differs here
+    left:  Bank { accounts: [Account { ..., balance: Money(-100), ... }, ...], ... }
+    right: Bank { accounts: [Account { ..., balance: Money(1000), ... }, ...], ... }
+                                                           ^ differs here
 
     seed 3529 · rerun: ren test bank --only "an overdraft" --seed 3529
 
@@ -513,10 +516,13 @@ stage, or settled something the plan left open:
 - **An error that ends `main` or a test is shown through its tags'
   types too,** `error: Frozen(AccountId(3))`, so a `Path` in one is
   shown by `Path.show`, `error: NoSuchFile(justfile)`.
-- **A failure shows both sides in full,** where the settled DX elided
-  what they share, `Account { ..., balance: Money(-100), ... }`. The
-  `ren test` example above is the bank's real output, so its lines are
-  long.
+- **A failure shows only the first difference.** The way to it is kept,
+  and everything else is `...`, even another place the sides differ, so
+  that the two lines stay short and the marker finds the one shown. A
+  part that can't be looked inside, an opaque value, one its type's own
+  `show` shows, two different constructors or an element only one side
+  has, is shown whole, and a value whose parts are all shown the same,
+  through a `show` that hides a difference, is shown in full.
 - **The settled test of a deposit lacked a `try`:** `acme.statement(a)`
   fails with `NoSuchAccount`, so the test reads it into a `let` with
   `try` first.

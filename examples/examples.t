@@ -843,9 +843,9 @@ below zero. The tests that check nothing moved show the two banks, and
   115 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
-      left:  Bank { accounts: [Account { id: AccountId(1), balance: Money(-100), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }, Entry { at: Time(0), what: Sent(Money(1100), AccountId(2)) }] }, Account { id: AccountId(2), balance: Money(1100), frozen: false, statement: [Entry { at: Time(0), what: Received(Money(1100), AccountId(1)) }] }], next: 3 }
-      right: Bank { accounts: [Account { id: AccountId(1), balance: Money(1000), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }] }, Account { id: AccountId(2), balance: Money(0), frozen: false, statement: [] }], next: 3 }
-                                                                          ^ differs here
+      left:  Bank { accounts: [Account { ..., balance: Money(-100), ... }, ...], ... }
+      right: Bank { accounts: [Account { ..., balance: Money(1000), ... }, ...], ... }
+                                                             ^ differs here
   
       seed 3529 · rerun: ren test b12 --only "an overdraft" --seed 3529
   
@@ -854,9 +854,9 @@ below zero. The tests that check nothing moved show the two banks, and
   161 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
-      left:  Bank { accounts: [Account { id: AccountId(1), balance: Money(1100), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }, Entry { at: Time(0), what: Sent(Money(500), AccountId(2)) }, Entry { at: Time(0), what: Received(Money(600), AccountId(2)) }] }, Account { id: AccountId(2), balance: Money(-100), frozen: false, statement: [Entry { at: Time(0), what: Received(Money(500), AccountId(1)) }, Entry { at: Time(0), what: Sent(Money(600), AccountId(1)) }] }], next: 3 }
-      right: Bank { accounts: [Account { id: AccountId(1), balance: Money(1000), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }] }, Account { id: AccountId(2), balance: Money(0), frozen: false, statement: [] }], next: 3 }
-                                                                           ^ differs here
+      left:  Bank { accounts: [Account { ..., balance: Money(1100), ... }, ...], ... }
+      right: Bank { accounts: [Account { ..., balance: Money(1000), ... }, ...], ... }
+                                                              ^ differs here
   
       seed 119 · rerun: ren test b12 --only "a batch" --seed 119
   

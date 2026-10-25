@@ -97,3 +97,150 @@ let shown ~own types (t : Ty.ty) (v : Value.t) =
   | Con (p, []), VStr s when p = Path.prelude "Str" -> s
   | (Var _ | Error), VStr s -> s
   | _ -> value ~own types t v
+
+(* The two sides of a failed `assert a == b`, [a] and [b] of type [t],
+   with what they share left out (deps.md, "`assert`"): the way to the
+   first place they differ, and what each side has there, with every
+   other field, element and payload `...`, and a run of them one `...`.
+   `Account { ..., balance: Money(-100), ... }`. Both sides leave out the
+   same things, so everything up to the difference is written the same on
+   both, and a marker can be put under it. A part is kept whole where it
+   can't be looked inside to compare: an opaque value, one its type's own
+   `show` shows, two different constructors, and an element only one side
+   has. If nothing's left to tell them apart, both are shown in full. *)
+let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
+  let value = value ~own types in
+  (* whether the difference has been shown: everything after it is `...`.
+     A [ref] is a mutable cell, here local to one call *)
+  let shown = ref false in
+  (* each side's parts, with a run of `...` made one *)
+  let parts xs =
+    let rec go = function
+      | "..." :: ("..." :: _ as rest) -> go rest
+      | x :: rest -> x :: go rest
+      | [] -> []
+    in
+    String.concat ", " (go xs)
+  in
+  (* [f] on each of [xs] in turn, left to right, since [shown] says what
+     comes after the difference *)
+  let rec each f = function
+    | [] -> []
+    | x :: rest ->
+        let y = f x in
+        y :: each f rest
+  in
+  (* [xs] and [ys], two by two, the [i]th of type [ts]'s [i]th, written
+     around by [label i] if it isn't left out *)
+  let rec both ts label xs ys =
+    let ls, rs =
+      List.split
+        (each
+           (fun (i, t, x, y) ->
+             let l, r = go t x y in
+             let label s = if s = "..." then s else label i s in
+             (label l, label r))
+           (List.mapi
+              (fun i (t, (x, y)) -> (i, t, x, y))
+              (List.combine ts (List.combine xs ys))))
+    in
+    (parts ls, parts rs)
+  and go t x y =
+    let l = value t x and r = value t y in
+    if !shown || l = r then ("...", "...")
+    else
+      let whole () =
+        shown := true;
+        (l, r)
+      in
+      match (t, x, y) with
+      | Con (p, [ elem ]), VArray xs, VArray ys when p = Path.prelude "Array" ->
+          (* the elements both have, then the first that only one side
+             has *)
+          let xs = Array.to_list xs and ys = Array.to_list ys in
+          let n = min (List.length xs) (List.length ys) in
+          let l, r =
+            both
+              (List.init n (fun _ -> elem))
+              (fun _ s -> s)
+              (List.filteri (fun i _ -> i < n) xs)
+              (List.filteri (fun i _ -> i < n) ys)
+          in
+          let extra side n_side =
+            match List.nth_opt side n with
+            | Some v when not !shown ->
+                shown := true;
+                let rest = if n_side > n + 1 then [ "..." ] else [] in
+                value elem v :: rest
+            | Some _ -> [ "..." ]
+            | None -> []
+          in
+          let el = extra xs (List.length xs)
+          and er = extra ys (List.length ys) in
+          let side shared extra =
+            "[" ^ parts ((if n = 0 then [] else [ shared ]) @ extra) ^ "]"
+          in
+          (side l el, side r er)
+      | Con (p, args), _, _ -> (
+          match own p args x with
+          | Itself _ -> whole ()
+          | _ -> (
+              match
+                ( Option.map
+                    (fun (d : Iface.type_decl) -> d.body)
+                    (Hashtbl.find_opt types p),
+                  x,
+                  y )
+              with
+              | Some (Record fields), VRecord xs, VRecord ys ->
+                  let get vs =
+                    List.map
+                      (fun (f : Iface.field) -> List.assoc f.fname vs)
+                      fields
+                  in
+                  let l, r =
+                    both
+                      (List.map
+                         (fun (f : Iface.field) -> subst args f.fty)
+                         fields)
+                      (fun i s -> (List.nth fields i).fname ^ ": " ^ s)
+                      (get xs) (get ys)
+                  in
+                  (p.name ^ " { " ^ l ^ " }", p.name ^ " { " ^ r ^ " }")
+              | Some (Sum ctors), VCon c, VCon d when c.name = d.name -> (
+                  match
+                    List.find_opt
+                      (fun (k : Iface.ctor) -> k.cname = c.name)
+                      ctors
+                  with
+                  | Some k
+                    when k.cfields <> []
+                         && List.length k.cfields = List.length c.args
+                         && List.length c.args = List.length d.args ->
+                      let l, r =
+                        both
+                          (List.map
+                             (fun (f : Iface.field) -> subst args f.fty)
+                             k.cfields)
+                          (fun _ s -> s)
+                          c.args d.args
+                      in
+                      (c.name ^ "(" ^ l ^ ")", c.name ^ "(" ^ r ^ ")")
+                  | _ -> whole ())
+              | _ -> whole ()))
+      | Errors row, VTag x, VTag y when x.name = y.name -> (
+          match
+            List.find_opt (fun (l : Ty.label) -> l.name = x.name) row.labels
+          with
+          | Some l
+            when l.payload <> []
+                 && List.length l.payload = List.length x.args
+                 && List.length x.args = List.length y.args ->
+              let l, r = both l.payload (fun _ s -> s) x.args y.args in
+              (x.name ^ "(" ^ l ^ ")", x.name ^ "(" ^ r ^ ")")
+          | _ -> whole ())
+      | _ -> whole ()
+  in
+  match go t a b with
+  | l, r when l = r -> (value t a, value t b)
+  | sides -> sides

@@ -3620,9 +3620,9 @@ test "main prints" =
     25 │   assert pay(a, Money.dollars(2)) == a
        │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
        │
-       left:  Account { id: 1, balance: Money(-100), at: Time(0) }
-       right: Account { id: 1, balance: Money(100), at: Time(0) }
-                                              ^ differs here
+       left:  Account { ..., balance: Money(-100), ... }
+       right: Account { ..., balance: Money(100), ... }
+                                            ^ differs here
 
        seed 6438 · rerun: ren test test.ren --only "paying too" --seed 6438
 
@@ -4069,9 +4069,9 @@ test "café\nprices" =
     4 │   assert P { name: "café", n: 1 } == P { name: "café", n: 2 }
       │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       │
-      left:  P { name: "café", n: 1 }
-      right: P { name: "café", n: 2 }
-                                  ^ differs here
+      left:  P { ..., n: 1 }
+      right: P { ..., n: 2 }
+                         ^ differs here
 
       seed 6167 · rerun: ren test test.ren --only "café" --seed 6167
 
@@ -4440,8 +4440,8 @@ fn main() =
       ┌─ test.ren:3:10
     3 │   assert xs == [1, 3]
       │          ^^^^^^^^^^^^
-      = left:  [1, 2]
-      = right: [1, 3]
+      = left:  [..., 2]
+      = right: [..., 3]
     |}];
   (* its sides read as `ren test` shows them, through their type *)
   run
@@ -4458,8 +4458,98 @@ fn main() =
       ┌─ test.ren:5:10
     5 │   assert P { m: 1, n: 2 } == P { m: 2, n: 2 }
       │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-      = left:  P { m: M(1), n: 2 }
-      = right: P { m: M(2), n: 2 }
+      = left:  P { m: M(1), ... }
+      = right: P { m: M(2), ... }
+    |}]
+
+let%expect_test "a failed assert leaves out what its two sides share" =
+  (* the way to the first difference and what's there; a record's other
+     fields, the other elements and an element only one side has *)
+  test
+    {|
+type Shape = Dot | Box(w: Int, h: Int)
+type P = { name: Str, at: Int, shapes: Array<Shape> }
+
+test "a payload" =
+  assert P { name: "a", at: 1, shapes: [Dot, Box(1, 2)] } == P { name: "a", at: 1, shapes: [Dot, Box(1, 3)] }
+
+test "two constructors" =
+  assert [Dot, Dot, Dot] == [Dot, Box(1, 1), Dot]
+
+test "one side is longer" =
+  assert [1, 2, 3, 4] == [1, 2]
+
+test "only the first difference" =
+  assert P { name: "a", at: 1, shapes: [] } == P { name: "b", at: 2, shapes: [Dot] }
+
+test "nothing in common" =
+  assert 1 == 2
+|};
+  [%expect {|
+    test.ren
+      ✗ a payload
+      ✗ two constructors
+      ✗ one side is longer
+      ✗ only the first difference
+      ✗ nothing in common
+
+    ──── a payload ── test.ren:5
+      │
+    5 │   assert P { name: "a", at: 1, shapes: [Dot, Box(1, 2)] } == P { name: "a", at: 1, shapes: [Dot, Box(1, 3)] }
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      │
+      left:  P { ..., shapes: [..., Box(..., 2)] }
+      right: P { ..., shapes: [..., Box(..., 3)] }
+                                             ^ differs here
+
+      seed 4626 · rerun: ren test test.ren --only "a payload" --seed 4626
+
+    ──── two constructors ── test.ren:8
+      │
+    8 │   assert [Dot, Dot, Dot] == [Dot, Box(1, 1), Dot]
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      │
+      left:  [..., Dot, ...]
+      right: [..., Box(1, 1), ...]
+                   ^ differs here
+
+      seed 446 · rerun: ren test test.ren --only "two constructors" --seed 446
+
+    ──── one side is longer ── test.ren:11
+       │
+    11 │   assert [1, 2, 3, 4] == [1, 2]
+       │          ^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  [..., 3, ...]
+       right: [...]
+                  ^ differs here
+
+       seed 3291 · rerun: ren test test.ren --only "one side" --seed 3291
+
+    ──── only the first difference ── test.ren:14
+       │
+    14 │   assert P { name: "a", at: 1, shapes: [] } == P { name: "b", at: 2, shapes: [Dot] }
+       │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  P { name: "a", ... }
+       right: P { name: "b", ... }
+                         ^ differs here
+
+       seed 9197 · rerun: ren test test.ren --only "only the" --seed 9197
+
+    ──── nothing in common ── test.ren:17
+       │
+    17 │   assert 1 == 2
+       │          ^^^^^^
+       │
+       left:  1
+       right: 2
+              ^ differs here
+
+       seed 6226 · rerun: ren test test.ren --only "nothing in" --seed 6226
+
+    0 passed, 5 failed
+    [exit 1]
     |}]
 
 let%expect_test "print shows a value through its type, as a failed assert does" =

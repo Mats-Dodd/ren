@@ -402,7 +402,10 @@ let rec eval cx env (e : expr) =
           (Assert_failed
              {
                loc = e.loc;
-               sides = Some (show_value cx a.ty x, show_value cx a.ty y);
+               sides =
+                 Some
+                   (Shown.sides ~own:(own_show cx) cx.types
+                      (resolve cx.tys a.ty) x y);
              });
       VUnit
   | Finally (body, after) -> (

@@ -8,7 +8,8 @@ exception Panic of Loc.t * string
 exception Uncaught of string
 
 (* An `assert` at [loc] failed: a panic, which shows the two sides of an
-   `assert a == b`, each through its type. *)
+   `assert a == b`, each through its type, with what they share left out
+   (shown.ml, [sides]). *)
 exception Assert_failed of { loc : Loc.t; sides : (string * string) option }
 
 (* Run a lowered program's `main`, returning its result. The program is
