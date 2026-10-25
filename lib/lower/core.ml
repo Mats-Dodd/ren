@@ -460,13 +460,14 @@ and arm_sexp a =
 
 let show e = render 0 (sexp e)
 
-let show_fn f =
-  render 0
-    (List
-       [
-         atom "fn";
-         Atom f.path.name;
-         List (List.map (fun p -> var p.var) f.params);
-         var f.ev;
-         sexp f.body;
-       ])
+let fn_sexp f =
+  List
+    [
+      atom "fn";
+      Atom f.path.name;
+      List (List.map (fun p -> var p.var) f.params);
+      var f.ev;
+      sexp f.body;
+    ]
+
+let show_fn f = render 0 (fn_sexp f)

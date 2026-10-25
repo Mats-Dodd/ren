@@ -7,7 +7,8 @@
    every local is used inside its scope with the type it was bound with,
    that a lambda captures every local it uses, and that every constructor,
    record and field is in the type it says, and that an error has the
-   payload its set says. And that the evidence is threaded (core.ml):
+   payload its set says, and that a handler's instance is only ever the
+   end of its body. And that the evidence is threaded (core.ml):
    that every call passes the evidence in scope, a lambda's own inside it
    and never one it could have kept from where it was made, and that each
    dependency an operation or a callee uses is one the function it's in
@@ -758,8 +759,29 @@ and pattern env sc (p : pattern) t =
         rest;
       first_sc
 
+(* An installed handler instance is never a value (compiler.md, "No
+   cycles"): an [Instance] is only ever the end of a [Handler]'s body,
+   after the [Let]s and statements that make its state, which is where a
+   [With] gets it from. Anywhere else, a program could hold one, and a
+   handler's state could reach its own instance. *)
+let rec instances env (e : expr) =
+  match e.kind with
+  | Handler { body; _ } -> handler_end env body
+  | Instance _ ->
+      fail env e.loc "an instance that isn't the end of a handler's body"
+  | _ -> List.iter (instances env) (children e)
+
+and handler_end env (e : expr) =
+  match e.kind with
+  | Let (_, a, b) | Seq (a, b) ->
+      instances env a;
+      handler_end env b
+  | Instance impls -> List.iter (fun (_, i) -> instances env i) impls
+  | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
+
 let fn_def env (f : fn_def) =
   let env = { env with fn = f.path.name } in
+  instances env f.body;
   match f.scheme.ty with
   | Fun (ps, ret, _, uses) when List.length ps = List.length f.params ->
       let env = inside env f.loc "the function's evidence" f.ev uses in
