@@ -1134,12 +1134,19 @@ fn main() =
   let i = Instant.zero.plus(Duration.ms(5))
   print(i.since(Instant.zero) == Duration.ms(5))
   print(Instant.zero.before(i))
+  let d = Duration.seconds(2).times(3)
+  print(d.in_ms())
+  print(d.after(Duration.seconds(5)))
+  print(d.before(Duration.seconds(6)))
 |};
   [%expect {|
     true
     true
     true
     true
+    6000
+    true
+    false
     ()
     |}]
 

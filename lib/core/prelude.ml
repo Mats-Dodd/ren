@@ -40,6 +40,12 @@ pub type Duration = opaque Int
   pub fn seconds(n: Int) -> Duration = n * 1000
   pub fn minutes(n: Int) -> Duration = n * 60000
   pub fn plus(self, d: Duration) -> Duration = self + d
+  // this, `n` times over
+  pub fn times(self, n: Int) -> Duration = self * n
+  pub fn before(self, d: Duration) -> Bool = self < d
+  pub fn after(self, d: Duration) -> Bool = self > d
+  // how many milliseconds it is
+  pub fn in_ms(self) -> Int = self
 
 // a moment on the calendar: since the epoch, 1970-01-01 00:00 UTC
 pub type Time = opaque Int
