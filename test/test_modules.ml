@@ -436,3 +436,161 @@ pub fn load(id: Int) -> Row = Row { id: id }
       );
     ];
   [%expect {| 4 |}]
+
+(* ---- imports ---- *)
+
+let rows =
+  ( "rows.ren",
+    {|
+pub type Row = { id: Int }
+pub type Table = { first: Row }
+pub fn load(id: Int) -> Row = Row { id: id }
+|}
+  )
+
+let%expect_test "a type imported by name is written bare" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import rows.{Row}
+fn id(r: Row) -> Int = r.id
+fn main() = id(Row { id: 3 }) + id(rows.load(4))
+|}
+      );
+      rows;
+    ];
+  [%expect {| 7 |}]
+
+let%expect_test "an import nothing uses" =
+  run_files
+    [ ("main.ren", {|
+import rows
+import rows as other
+fn main() = 1
+|}); rows ];
+  [%expect
+    {|
+    error: `rows` is imported but never used
+      ┌─ main.ren:1:1
+    1 │ import rows
+      │ ^^^^^^^^^^^
+      help: remove it
+
+    error: `rows` is imported but never used
+      ┌─ main.ren:2:1
+    2 │ import rows as other
+      │ ^^^^^^^^^^^^^^^^^^^^
+      help: remove it
+    |}]
+
+let%expect_test "a type imported by name that nothing uses" =
+  run_files
+    [
+      ("main.ren", {|
+import rows.{Row, Table}
+fn main() = rows.load(1).id
+|});
+      rows;
+    ];
+  [%expect
+    {|
+    error: `Row` is imported but never used
+      ┌─ main.ren:1:14
+    1 │ import rows.{Row, Table}
+      │              ^^^
+      help: remove it
+
+    error: `Table` is imported but never used
+      ┌─ main.ren:1:19
+    1 │ import rows.{Row, Table}
+      │                   ^^^^^
+      help: remove it
+    |}];
+  run_files
+    [
+      ( "main.ren",
+        {|
+import rows.{Row} as r
+fn id(x: Row) -> Int = x.id
+fn main() = id(Row { id: 1 })
+|}
+      );
+      rows;
+    ];
+  [%expect
+    {|
+    error: `r` is never used
+      ┌─ main.ren:1:22
+    1 │ import rows.{Row} as r
+      │                      ^
+      help: remove the `as r`
+    |}];
+  run_files [ ("main.ren", {|
+import rows.{Row, Table}
+fn main() = 1
+|}); rows ];
+  [%expect
+    {|
+    error: `rows` is imported but never used
+      ┌─ main.ren:1:1
+    1 │ import rows.{Row, Table}
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^
+      help: remove it
+    |}]
+
+let%expect_test "only a public type can be imported by name" =
+  run_files
+    [
+      ("main.ren", {|
+import util.{Secret}
+fn main() = util.f()
+|});
+      ("util.ren", {|
+type Secret = { x: Int }
+pub fn f() -> Int = 1
+|});
+    ];
+  [%expect
+    {|
+    error: `util` has no public type `Secret`
+      ┌─ main.ren:1:14
+    1 │ import util.{Secret}
+      │              ^^^^^^
+      help: if it's defined there, mark it `pub`
+    |}]
+
+let%expect_test "a type imported by name can't share a name" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import rows.{Row}
+import other.{Row}
+type Row = { x: Int }
+fn main(r: Row) = 1
+|}
+      );
+      rows;
+      ("other.ren", {|
+pub type Row = { y: Int }
+|});
+    ];
+  [%expect
+    {|
+    error: there are two types imported as `Row`
+      ┌─ main.ren:2:15
+    1 │ import rows.{Row}
+      │              --- the first `Row` is here
+    2 │ import other.{Row}
+      │               ^^^
+      help: import only one of them by name
+
+    error: `Row` is already the name of an imported type
+      ┌─ main.ren:3:6
+    1 │ import rows.{Row}
+      │              --- `Row` is imported here
+    3 │ type Row = { x: Int }
+      │      ^^^
+      help: rename it, or stop importing `Row` by name
+    |}]

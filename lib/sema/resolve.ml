@@ -9,11 +9,14 @@
      that module's alias in front, `util.double`, and only its public
      functions can be: Resolve sees the module's interface, not its source.
      The prelude's functions, and the module's own, are written bare.
-   - a type's name is a declared type (a [Path.t]), or one of the type
-     parameters in scope
+   - a type's name is a declared type (a [Path.t]): the module's own, the
+     prelude's, or another module's public type imported by name
+     (`import rows.{Row}`). Or it's one of the type parameters in scope.
 
    Along the way it reports every name that doesn't exist, types given the
-   wrong number of arguments, and names declared twice. Later passes never
+   wrong number of arguments, names declared twice, a local or function
+   with the name of an imported module, imports nothing uses, and public
+   declarations that mention a private type. Later passes never
    look a name up: inference reads a binder's id, mut.ml its kind.
 
    Constructors and record fields aren't found here: they're found through
@@ -48,9 +51,10 @@ type env = {
   imports : (import * Iface.t) list;
       (** each module the module imports, in the order it imports them *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
-  used : (string, unit) Hashtbl.t;
-      (** the aliases used, and the types imported by name that are, as
-          [alias.T]: an import nothing uses is an error *)
+  used : (string, unit) Hashtbl.t;  (** the aliases used *)
+  used_types : (Path.t, unit) Hashtbl.t;
+      (** the types used that are another module's: an import nothing uses is an
+          error *)
 }
 
 (* What one expression can see. [fn] is shared by the whole top-level
@@ -103,6 +107,15 @@ let bind env sc (id : ident) bound =
 
 (* ---- types ---- *)
 
+(* The type named [name] in scope, and how many type arguments it takes. *)
+let find_type env name =
+  let found = Hashtbl.find_opt env.types name in
+  Option.iter
+    (fun ((p : Path.t), _) ->
+      if p.home <> env.home then Hashtbl.replace env.used_types p ())
+    found;
+  found
+
 let rec index_of x i = function
   | y :: rest -> if x = y then Some i else index_of x (i + 1) rest
   | [] -> None
@@ -122,9 +135,7 @@ let rec ty env ~params (t : Parsed.ty) : Resolved.ty =
         match index_of id.name 0 params with
         | Some i -> Some (Param i, 0)
         | None ->
-            Option.map
-              (fun (p, n) -> (Named p, n))
-              (Hashtbl.find_opt env.types id.name)
+            Option.map (fun (p, n) -> (Named p, n)) (find_type env id.name)
       in
       match found with
       | None ->
@@ -190,6 +201,12 @@ let lookup env sc loc ~what x =
           (match elsewhere with
           | [] -> report env loc (sprintf "there's no %s named `%s`" what x)
           | _ ->
+              (* the import isn't unused, it's used wrongly, and this says
+                 how to fix that *)
+              List.iter
+                (fun ((i : import), _) ->
+                  Hashtbl.replace env.used i.alias.name ())
+                elsewhere;
               report env loc
                 ~help:
                   (sprintf "write %s"
@@ -292,7 +309,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let name =
           Option.map
             (fun (tn : ident) ->
-              match Hashtbl.find_opt env.types tn.name with
+              match find_type env tn.name with
               | Some (p, _) -> { tref = Named p; tloc = tn.loc }
               | None ->
                   report env tn.loc
@@ -500,6 +517,40 @@ let unique_ctors env imported own =
   List.iter (declare false) imported;
   List.iter (declare true) own
 
+(* Every import must be used (module-build.md, "Found through scope"): its
+   alias, or a type it imports by name. What isn't used is reported
+   once: the whole import, or one of the types it names, or the name after
+   its `as`. [imported n] says whether the name [n] in `.{}` imported a
+   type; one that didn't was reported already. *)
+let unused_imports env ~imported =
+  List.iter
+    (fun ((i : import), _) ->
+      let alias_used = Hashtbl.mem env.used i.alias.name in
+      let names = List.filter imported i.names in
+      let unused =
+        List.filter
+          (fun (n : ident) ->
+            not (Hashtbl.mem env.used_types (Path.make i.path n.name)))
+          names
+      in
+      let last = List.nth i.segments (List.length i.segments - 1) in
+      if (not alias_used) && unused = names && (names <> [] || i.names = [])
+      then
+        report env i.iloc ~help:"remove it"
+          (sprintf "`%s` is imported but never used" i.path)
+      else (
+        List.iter
+          (fun (n : ident) ->
+            report env n.loc ~help:"remove it"
+              (sprintf "`%s` is imported but never used" n.name))
+          unused;
+        (* `as x` wasn't needed: the types it imports are used by name *)
+        if (not alias_used) && i.alias.loc <> last.loc then
+          report env i.alias.loc
+            ~help:(sprintf "remove the `as %s`" i.alias.name)
+            (sprintf "`%s` is never used" i.alias.name)))
+    env.imports
+
 let program sink ~home ~imports (prog : Parsed.program) =
   (* each import, with the interface of the module it imports; the driver
      passes the interface of every module the program imports *)
@@ -523,6 +574,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
           (fun acc ((i : import), iface) -> Env.add i.alias.name (i, iface) acc)
           Env.empty imported;
       used = Hashtbl.create 8;
+      used_types = Hashtbl.create 8;
     }
   in
   (* what's in scope bare: the prelude, which every module imports
@@ -531,8 +583,9 @@ let program sink ~home ~imports (prog : Parsed.program) =
   let prelude =
     List.filter (fun (m : Iface.t) -> m.home = Path.prelude_home) imports
   in
-  (* the types in scope: the prelude's, then this module's own, so types
-     can refer to types declared further down the file *)
+  (* the types in scope: the prelude's, then those imported by name, then
+     this module's own, so types can refer to types declared further down
+     the file *)
   List.iter
     (fun (iface : Iface.t) ->
       List.iter
@@ -543,6 +596,28 @@ let program sink ~home ~imports (prog : Parsed.program) =
   let imported_type name =
     List.find_map (fun iface -> Iface.find_type iface name) prelude
   in
+  (* each type imported by name, `.{Plan}`, by its name, with where it's
+     imported *)
+  let by_name = Hashtbl.create 8 in
+  List.iter
+    (fun ((i : import), iface) ->
+      List.iter
+        (fun (n : ident) ->
+          match
+            (Iface.find_type iface n.name, Hashtbl.find_opt by_name n.name)
+          with
+          | None, _ ->
+              report env n.loc ~help:"if it's defined there, mark it `pub`"
+                (sprintf "`%s` has no public type `%s`" i.path n.name)
+          | Some _, Some ((first : ident), _) ->
+              report env n.loc ~help:"import only one of them by name"
+                ~labels:[ (first.loc, sprintf "the first `%s` is here" n.name) ]
+                (sprintf "there are two types imported as `%s`" n.name)
+          | Some d, None ->
+              Hashtbl.replace by_name n.name (n, d.path);
+              Hashtbl.replace env.types n.name (d.path, List.length d.params))
+        i.names)
+    env.imports;
   let first_local = Hashtbl.create 16 in
   List.iter
     (function
@@ -565,6 +640,14 @@ let program sink ~home ~imports (prog : Parsed.program) =
               report env name.loc ~help:"rename one of them"
                 ~labels:[ (first, sprintf "the first `%s` is here" name.name) ]
                 (sprintf "there are two types named `%s`" name.name)
+          | None, None when Hashtbl.mem by_name name.name ->
+              let (imp : ident), _ = Hashtbl.find by_name name.name in
+              report env name.loc
+                ~help:
+                  (sprintf "rename it, or stop importing `%s` by name" name.name)
+                ~labels:[ (imp.loc, sprintf "`%s` is imported here" name.name) ]
+                (sprintf "`%s` is already the name of an imported type"
+                   name.name)
           | None, None ->
               Hashtbl.replace first_local name.name name.loc;
               Hashtbl.replace env.types name.name
@@ -628,6 +711,10 @@ let program sink ~home ~imports (prog : Parsed.program) =
         | Type td -> Some (Iface.of_type_def ~home td) | Fn _ | Import _ -> None)
       items
   in
+  unused_imports env ~imported:(fun (n : ident) ->
+      match Hashtbl.find_opt by_name n.name with
+      | Some ((first : ident), _) -> first.loc = n.loc
+      | None -> false);
   unique_ctors env
     (List.concat_map (fun (i : Iface.t) -> i.types) imports)
     types;
