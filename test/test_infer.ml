@@ -1138,7 +1138,8 @@ let%expect_test "a public function's interface comes from its signature" =
   (* the interface is built from declarations alone; for a public function
      it's the same type inference finds for it. A parameter written
      `fn(...)` is transparent, so its rows are the function's; any other
-     function type in a parameter is closed. *)
+     function type in a parameter is closed. A transparent parameter shares
+     the function's row, labels and all, so `logged`'s `Io` shows on both. *)
   let src =
     clean
       {|
@@ -1146,6 +1147,9 @@ pub fn twice(f: fn()) =
   f()
   f()
 pub fn show(x: Int) = print(x)
+pub fn logged(f: fn()) =
+  f()
+  print(1)
 pub fn app(f: fn(fn() -> Int) -> Int) -> Int = f(fn() => 1)
 pub fn maybe(f: Option<fn()>) =
   match f
@@ -1167,6 +1171,7 @@ fn main() = twice(fn() => show(1))
     {|
     twice: fn(fn() ! ..e uses ..d) ! ..e uses ..d (as inferred)
     show: fn(Int) ! ..e uses Io, ..d (as inferred)
+    logged: fn(fn() ! ..e uses Io, ..d) ! ..e uses Io, ..d (as inferred)
     app: fn(fn(fn() -> Int) -> Int ! ..e uses ..d) -> Int ! ..e uses ..d (as inferred)
     maybe: fn(Option<fn()>) ! ..e uses ..d (as inferred)
     |}]

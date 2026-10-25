@@ -132,8 +132,7 @@ let core ?lint ~file src =
 let types ?(lint = false) ~file src =
   let ({ prog; inferred; _ } as c) = check_all ~file src in
   (* the tests also check that the program lowers, and lints *)
-  if lint then
-    ignore (lower ~lint:true ~imports:c.imports c.resolved inferred);
+  if lint then ignore (lower ~lint:true ~imports:c.imports c.resolved inferred);
   let schemes = inferred.schemes in
   List.filter_map
     (function

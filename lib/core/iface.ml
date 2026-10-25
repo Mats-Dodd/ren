@@ -96,7 +96,8 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
 
    A parameter whose type is written `fn(...)`, with no `..e` or `..d`, is
    transparent: what it fails with and uses flows into the function's own
-   errors and dependencies, so its rows are the function's. Rows are open,
+   errors and dependencies, so its rows are the function's: the same row,
+   labels and all, which is what inference finds too. Rows are open,
    as they are in every scheme, so a caller adds them to its own. Any other
    function type in the signature, like the `fn()` in `f: Option<fn()>`,
    uses and fails with nothing, as in a declaration. Inference reads a
@@ -108,7 +109,9 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
 let signature ~uses (f : Ast.Resolved.fn_def) : Ty.scheme =
   (* row variables: 0 for the errors, 1 for the dependencies *)
   let errs : Ty.row = { labels = []; tail = Some 0 } in
-  let deps : Ty.row = { labels = []; tail = Some 1 } in
+  let deps : Ty.row =
+    { labels = List.sort_uniq String.compare uses; tail = Some 1 }
+  in
   let param (p : Ast.Resolved.param) : Ty.param =
     let ty : Ty.ty =
       match p.pty with
@@ -124,12 +127,7 @@ let signature ~uses (f : Ast.Resolved.fn_def) : Ty.scheme =
   let ret = match f.ret with Some t -> of_written t | None -> Ty.unit in
   Ty.canonical
     {
-      ty =
-        Fun
-          ( List.map param f.params,
-            ret,
-            errs,
-            { labels = List.sort_uniq String.compare uses; tail = Some 1 } );
+      ty = Fun (List.map param f.params, ret, errs, deps);
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
     }
 
