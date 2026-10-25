@@ -90,6 +90,52 @@ pub dep Console =
 
 // what any value shows as, on a line of its own
 pub fn print<T>(x: T) uses Console = Console.write(show(x))
+
+// ---- what a test gets (deps.md, "Tests") ----
+//
+// Each test runs with a fresh instance of each of these handlers, unless
+// its `uses` asks for the real dependency instead.
+
+pub dep TestClock =
+  // move the test clock on, by `d`
+  advance: fn(d: Duration)
+
+// a clock that stands still at `at` until it's moved on: by
+// `TestClock.advance`, or by sleeping, which takes no time at all
+pub handler test_clock(at: Time) for Clock, TestClock =
+  var time = at
+  var since = Instant.zero
+  now() => time
+  instant() => since
+  sleep(d) =>
+    time = time.plus(d)
+    since = since.plus(d)
+  advance(d) =>
+    time = time.plus(d)
+    since = since.plus(d)
+
+pub dep TestRandom =
+  // the seed the test's numbers come from, which `ren test --seed`
+  // sets
+  seed: fn() -> Int
+
+// numbers that are the same on every run with the same seed
+pub handler test_random(seed: Int) for Random, TestRandom =
+  var state = seed
+  int(below) =>
+    state = seeded_next(state)
+    seeded_int(state, below)
+  seed() => seed
+
+pub dep TestConsole =
+  // every line written to `Console` so far, the first first
+  output: fn() -> Array<Str>
+
+// a console that keeps what's written to it
+pub handler test_console() for Console, TestConsole =
+  var lines: Array<Str> = []
+  write(line) => &lines.push(line)
+  output() => lines
 |}
 
 (* ---- built-in functions ---- *)
@@ -103,9 +149,10 @@ type builtin_fn = {
       (** run it: the result, and the final value of every parameter, which the
           interpreter writes back for the arguments passed with `&` *)
   runtime : bool;
-      (** whether it reaches the world, which a program does only through a
-          dependency: then only the prelude's own source can call it, in the
-          real implementation the runtime installs *)
+      (** whether only the prelude's own source can call it: it reaches the
+          world, which a program does only through a dependency, in the real
+          implementation the runtime installs, or it's how one of the test
+          implementations works *)
 }
 
 (* A built-in function has panicked, which the interpreter reports at the
@@ -127,6 +174,11 @@ let open_row n : Ty.row = { labels = []; tail = Some n }
    that never goes back that `Instant` promises: OCaml's standard library
    has no monotonic one (deps.md, "Built in"). *)
 let now_ms () = int_of_float (Unix.gettimeofday () *. 1000.)
+
+(* `Random.int`'s panic, real or not, for a [below] it can't stay below *)
+let not_above_0 below =
+  Printf.sprintf "`Random.int` needs a number above 0 to stay below, not %d"
+    below
 
 let fns =
   let open Ty in
@@ -160,16 +212,28 @@ let fns =
       (Fun ([ read int ], int, open_row 0, open_row 1))
       (function
         | [ Value.VInt below ] as args ->
-            if below <= 0 then
-              raise
-                (Panic
-                   (Printf.sprintf
-                      "`Random.int` needs a number above 0 to stay below, not \
-                       %d"
-                      below));
+            if below <= 0 then raise (Panic (not_above_0 below));
             let state = Random.State.make_self_init () in
             (Value.VInt (Random.State.full_int state below), args)
         | _ -> bug "random_int");
+    (* fn(Int) -> Int: the state after [state] of the test `Random`, a
+       linear congruential generator's, which never goes negative *)
+    fn ~runtime:true "seeded_next"
+      (Fun ([ read int ], int, open_row 0, open_row 1))
+      (function
+        | [ Value.VInt state ] as args ->
+            ( Value.VInt (((abs state * 1103515245) + 12345) land 0x7fffffff),
+              args )
+        | _ -> bug "seeded_next");
+    (* fn(Int, Int) -> Int: a number from 0 below [below], from that
+       state's high bits, which vary more than its low ones *)
+    fn ~runtime:true "seeded_int"
+      (Fun ([ read int; read int ], int, open_row 0, open_row 1))
+      (function
+        | [ Value.VInt state; Value.VInt below ] as args ->
+            if below <= 0 then raise (Panic (not_above_0 below));
+            (Value.VInt ((state lsr 16) mod below), args)
+        | _ -> bug "seeded_int");
     (* fn(Str) *)
     fn ~runtime:true "console_write"
       (Fun ([ read str ], unit, open_row 0, open_row 1))

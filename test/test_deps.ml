@@ -249,7 +249,7 @@ fn main() = 1
       ┌─ test.ren:2:13
     2 │ fn g() uses Nope = 1
       │             ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Net`, `Random`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Net`, `Random`, `TestClock`, `TestConsole`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
     |}]
 
@@ -3305,16 +3305,6 @@ fn main() uses Console =
   (* a field of a dependency's type says which too *)
   run
     {|
-dep TestClock =
-  advance: fn(d: Duration)
-
-handler test_clock(start: Time) for Clock, TestClock =
-  var now = start
-  now() => now
-  instant() => Instant.zero
-  sleep(d) => now = now.plus(d)
-  advance(d) => now = now.plus(d)
-
 type Box = { c: Clock }
 
 fn main() -> Bool =
@@ -3541,19 +3531,19 @@ fn clock_conforms(c: Clock) -> Bool =
 
 fn main() uses Console =
   print(clock_conforms(Clock.frozen(Time.epoch)))
-  print(clock_conforms(fakes.test_clock(Time.epoch)))
+  print(clock_conforms(fakes.manual_clock(Time.epoch)))
   print(clock_conforms(fakes.stopped()))
-  with fakes.test_clock(Time.epoch) in
-    fakes.TestClock.advance(Duration.minutes(1))
+  with fakes.manual_clock(Time.epoch) in
+    fakes.ManualClock.advance(Duration.minutes(1))
     print(Clock.now() == Time.epoch.plus(Duration.minutes(1)))
 |}
       );
       ( "fakes.ren",
         {|
-pub dep TestClock =
+pub dep ManualClock =
   advance: fn(d: Duration)
 
-pub handler test_clock(start: Time) for Clock, TestClock =
+pub handler manual_clock(start: Time) for Clock, ManualClock =
   var now = start
   var at = Instant.zero
   now() => now
@@ -3565,7 +3555,7 @@ pub handler test_clock(start: Time) for Clock, TestClock =
     now = now.plus(d)
     at = at.plus(d)
 
-pub fn stopped() -> Clock = test_clock(Time.epoch)
+pub fn stopped() -> Clock = manual_clock(Time.epoch)
 |}
       );
     ]
@@ -3574,9 +3564,9 @@ pub fn stopped() -> Clock = test_clock(Time.epoch)
   [%expect
     {|
     -- fakes
-    pub dep TestClock
+    pub dep ManualClock
       advance: fn(Duration)
-    pub handler test_clock(start: Time) for Clock, TestClock
+    pub handler manual_clock(start: Time) for Clock, ManualClock
     pub fn stopped() -> Clock
 
     -- main
@@ -4025,4 +4015,34 @@ handler poly<T>(x: T) for N =
       │             ^
       = a handler's operations have the types its dependencies declare, which can't take type parameters either
       help: remove them
+    |}]
+
+let%expect_test "the prelude's test implementations, installed by hand" =
+  run
+    {|
+fn main() uses Console =
+  with test_clock(Time.epoch) in
+    TestClock.advance(Duration.minutes(5))
+    Clock.sleep(Duration.seconds(1))
+    print(Clock.now() == Time.epoch.plus(Duration.ms(301000)))
+    print(Clock.instant().since(Instant.zero) == Duration.ms(301000))
+  // the same seed gives the same numbers
+  let a = with test_random(42) in [Random.int(100), Random.int(100), TestRandom.seed()]
+  let b = with test_random(42) in [Random.int(100), Random.int(100), TestRandom.seed()]
+  print(a == b)
+  print(a[2])
+  let lines = with test_console() in
+    print("kept")
+    Console.write("too")
+    TestConsole.output()
+  print(lines)
+|};
+  [%expect
+    {|
+    true
+    true
+    true
+    42
+    ["kept", "too"]
+    ()
     |}]
