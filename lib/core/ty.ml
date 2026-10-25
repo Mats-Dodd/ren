@@ -97,14 +97,16 @@ let canonical (s : scheme) =
    otherwise the next of T, U, V, ...
 
    Row tails are hidden unless [show_tail] picks them, and then print as
-   `..e` (errors) or `..d` (dependencies). Type names are written as they'd
-   be written in module [home] (path.ml).
+   `..e` (errors) or `..d` (dependencies). [names] says how to write each
+   type's name: the shortest way the module the type is shown in could
+   write it (Resolve.type_name), so a message or `ren types` shows what
+   you'd write there.
 
    Error messages print inference's types with this printer too: types.ml
    converts each one to a [Ty.ty] as it's printed, adding to [hints] as it
    goes, so one printer can name variables across a whole message. *)
 type printer = {
-  home : string;
+  type_name : Path.t -> string;
   mutable hints : (int * string) list;  (** declared names, by variable *)
   names : (int, string) Hashtbl.t;
   mutable order : string list;  (** names handed out, most recent first *)
@@ -113,9 +115,9 @@ type printer = {
   tail_names : (int, string) Hashtbl.t;
 }
 
-let printer ?(show_tail = fun _ -> false) ~home (s : scheme) =
+let printer ?(show_tail = fun _ -> false) ~names (s : scheme) =
   {
-    home;
+    type_name = names;
     hints = s.names;
     names = Hashtbl.create 8;
     order = [];
@@ -187,11 +189,9 @@ let show_row pr ~prefix ~sep ~kind r =
 
 let rec show pr t =
   match t with
-  | Con (p, []) -> Path.show ~home:pr.home p
+  | Con (p, []) -> pr.type_name p
   | Con (p, args) ->
-      Path.show ~home:pr.home p ^ "<"
-      ^ String.concat ", " (List.map (show pr) args)
-      ^ ">"
+      pr.type_name p ^ "<" ^ String.concat ", " (List.map (show pr) args) ^ ">"
   | Error -> "_"
   | Var id -> var_name pr id
   | Fun (ps, r, e, u) ->
@@ -222,11 +222,11 @@ and show_effects pr e u =
    would write. [params] are the parameters' names. A row tail is printed
    (as `..e` / `..d`) only when it reaches the result; otherwise the
    parameter is transparent and the tail implied. *)
-let signature ~home ~pub ~name ~params (s : scheme) =
+let signature ~names ~pub ~name ~params (s : scheme) =
   match s.ty with
   | Fun (ps, ret, errs, uses) ->
       let in_ret = tails ret in
-      let pr = printer ~show_tail:(fun id -> List.mem id in_ret) ~home s in
+      let pr = printer ~show_tail:(fun id -> List.mem id in_ret) ~names s in
       reserve pr s.ty;
       let params =
         List.map2

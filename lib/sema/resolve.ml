@@ -40,7 +40,24 @@ type t = {
       (** the types the module declares, in the order it declares them *)
   calls : (string * Path.t list) list;
       (** each function, and the top-level functions its body uses *)
+  scope : (string * Path.t) list;
+      (** the types written bare here, by name, sorted: the prelude's, those
+          imported by name and the module's own *)
+  aliases : (string * string) list;
+      (** each module imported, with its alias here, in import order *)
 }
+
+(* How module [r] writes the type [p]: the shortest way it can. Bare if
+   it's in scope; with its module's alias in front, `stripe.Client`, if
+   that module is imported; otherwise in full, `billing/invoice.Invoice`,
+   which can't be written there, but says exactly which type it is. A type
+   from a module that isn't imported can still turn up, through a field
+   or a function's result. *)
+let type_name (r : t) (p : Path.t) =
+  match (List.assoc_opt p.name r.scope, List.assoc_opt p.home r.aliases) with
+  | Some q, _ when q = p -> p.name
+  | _, Some alias -> alias ^ "." ^ p.name
+  | _ -> Path.full p
 
 type env = {
   sink : Diag.sink;
@@ -718,4 +735,16 @@ let program sink ~home ~imports (prog : Parsed.program) =
   unique_ctors env
     (List.concat_map (fun (i : Iface.t) -> i.types) imports)
     types;
-  { home; prog = items; types; calls = List.filter_map Fun.id calls }
+  let scope =
+    Hashtbl.fold (fun name (p, _) acc -> (name, p) :: acc) env.types []
+    |> List.sort compare
+  in
+  {
+    home;
+    prog = items;
+    types;
+    calls = List.filter_map Fun.id calls;
+    scope;
+    aliases =
+      List.map (fun ((i : import), _) -> (i.path, i.alias.name)) env.imports;
+  }

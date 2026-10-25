@@ -1,7 +1,9 @@
 (* Type inference (see infer.ml). Every type error is reported to the sink,
    and what it returns means nothing if there were any.
 
-   [imports] are the interfaces the module sees (iface.ml). [entry], when
+   [imports] are the interfaces of the modules it imports (iface.ml), the
+   prelude's included, and [reachable] those of every module reachable
+   through them, whose types it can meet. [entry], when
    given, is the file of the module the program starts in, which has to
    have a `main`. *)
 
@@ -31,4 +33,9 @@ type t = {
 }
 
 val program :
-  Diag.sink -> imports:Iface.t list -> ?entry:string -> Resolve.t -> t
+  Diag.sink ->
+  imports:Iface.t list ->
+  reachable:Iface.t list ->
+  ?entry:string ->
+  Resolve.t ->
+  t

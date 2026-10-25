@@ -844,7 +844,7 @@ let%expect_test "row unification" =
     List.fold_right (fun l r -> RExtend (l, r)) labels tail
   in
   let show r =
-    let pr = printer ~show_tail:(fun _ -> true) ~home:"test" st in
+    let pr = printer ~show_tail:(fun _ -> true) ~names:Path.full st in
     match show_row pr ~prefix:"" ~sep:", " ~kind:"d" r with
     | "" -> "<>"
     | s -> "<" ^ s ^ ">"
@@ -1162,7 +1162,9 @@ fn main() = twice(fn() => show(1))
   let schemes = Driver.schemes ~file src in
   List.iter
     (fun (v : Iface.value) ->
-      let pr = Ty.printer ~show_tail:(fun _ -> true) ~home:"test" v.scheme in
+      let pr =
+        Ty.printer ~show_tail:(fun _ -> true) ~names:Path.full v.scheme
+      in
       Printf.printf "%s: %s (%s)\n" v.vname (Ty.show pr v.scheme.ty)
         (if List.assoc v.vname schemes = v.scheme then "as inferred"
          else "differs from inference"))

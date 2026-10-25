@@ -10,7 +10,17 @@ type t = {
       (** the types the module declares, in the order it declares them *)
   calls : (string * Path.t list) list;
       (** each function, and the top-level functions its body uses *)
+  scope : (string * Path.t) list;
+      (** the types written bare in the module, by name, sorted: the prelude's,
+          those imported by name and the module's own *)
+  aliases : (string * string) list;
+      (** each module it imports, with its alias, in import order *)
 }
+
+(* How the module writes the type [p] in a message or a signature: bare if
+   it's in scope, `alias.T` if its module is imported, and otherwise in
+   full, `billing/invoice.Invoice`. *)
+val type_name : t -> Path.t -> string
 
 (* Resolve module [home], which sees the interfaces [imports]: the
    prelude's, and that of every module it imports. Every name

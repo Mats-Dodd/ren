@@ -34,11 +34,15 @@ type env = {
   st : Types.state;
   sink : Diag.sink;
   home : string;  (** the module being checked *)
+  names : Path.t -> string;
+      (** how the module writes each type's name (Resolve.type_name) *)
   types : (Path.t, Iface.type_decl) Hashtbl.t;
-      (** every type the module can see (iface.ml) *)
+      (** every type the module can meet: its own, and the public types of every
+          module reachable through its imports (iface.ml) *)
   visible : Iface.type_decl list;
-      (** the same types, sorted by name, which is the order an error lists them
-          in *)
+      (** the types it can name bare, sorted by name, which is the order an
+          error lists them in: its own, those imported by name, and the
+          prelude's *)
   globals : (Path.t, ty) Hashtbl.t;
       (** top-level functions: a type scheme once their group is done *)
   mutable group : (Path.t * (unit -> ty)) list;
@@ -70,8 +74,8 @@ type ctx = {
 
 (* ---- reporting ---- *)
 
-let printer env = Types.printer ~home:env.home env.st
-let type_name env p = Path.show ~home:env.home p
+let printer env = Types.printer ~names:env.names env.st
+let type_name env p = env.names p
 
 (* A name as it's written, for messages. *)
 let name_of = function
@@ -262,7 +266,7 @@ let find_ctor env (c : ident) ~expected =
       report env (no_ctor c);
       None
   | Several owners ->
-      report env (ambiguous_ctor ~home:env.home c owners);
+      report env (ambiguous_ctor ~names:env.names c owners);
       None
 
 (* Is [c] given as many arguments as it has fields, labelled correctly?
@@ -702,7 +706,7 @@ and infer_record env cx (e : expr) name fields ~expected =
         match record_fields td with
         | Some fs -> Some (td, fs)
         | None ->
-            report env (not_a_record ~home:env.home tloc td);
+            report env (not_a_record ~names:env.names tloc td);
             None)
     | Some { tref = Param _; _ } ->
         (* resolve.ml only resolves a record's name to a declared type *)
@@ -723,7 +727,7 @@ and infer_record env cx (e : expr) name fields ~expected =
             report env (no_record_fits e.loc);
             None
         | Several paths ->
-            report env (several_records_fit ~home:env.home e.loc paths);
+            report env (several_records_fit ~names:env.names e.loc paths);
             None)
   in
   match decl with
@@ -751,7 +755,7 @@ and infer_record env cx (e : expr) name fields ~expected =
                        ]
                      ())
           | None ->
-              report env (no_such_field ~home:env.home f td.path decl);
+              report env (no_such_field ~names:env.names f td.path decl);
               unknown := true;
               ignore (infer env cx v))
         fields;
@@ -759,7 +763,7 @@ and infer_record env cx (e : expr) name fields ~expected =
         List.filter (fun d -> not (List.mem d given)) (field_names decl)
       in
       if missing <> [] && not !unknown then
-        report env (missing_fields ~home:env.home e.loc td.path missing);
+        report env (missing_fields ~names:env.names e.loc td.path missing);
       t
 
 (* `r.f`: the field is found through [r]'s type, which has to be known by
@@ -785,7 +789,7 @@ and infer_field env cx (e : expr) r (f : ident) =
       match (record_fields td, field_of td) with
       | _, Some fd -> found td fd args
       | Some decl, None ->
-          report env (no_such_field ~home:env.home f p decl);
+          report env (no_such_field ~names:env.names f p decl);
           TError
       | None, None -> needs_record t)
   | TVar _ -> (
@@ -807,7 +811,7 @@ and infer_field env cx (e : expr) r (f : ident) =
                 Some (Group_result p.name)
             | _ -> None
           in
-          report env (several_records_have ~home:env.home r.loc ?what f paths);
+          report env (several_records_have ~names:env.names r.loc ?what f paths);
           TError)
   | t -> needs_record t
 

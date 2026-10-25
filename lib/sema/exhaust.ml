@@ -17,7 +17,7 @@ type env = {
   types : (Path.t, Iface.type_decl) Hashtbl.t;
       (** every type the module can see, by path *)
   nodes : Infer.node Infer.Nodes.t;  (** what inference found in the function *)
-  home : string;
+  names : Path.t -> string;  (** how the module writes a type's name *)
   sink : Diag.sink;
 }
 
@@ -160,7 +160,7 @@ let check_match env (e : expr) (subject : expr) arms =
   (* the type of the value being matched, for the message *)
   let column =
     match (Infer.Nodes.find subject.node env.nodes).ty with
-    | Con (p, _) -> Some (Path.show ~home:env.home p)
+    | Con (p, _) -> Some (env.names p)
     | Var _ | Fun _ | Error -> None
   in
   (* Arms with a guard might not match even when their pattern does, so they
@@ -250,16 +250,17 @@ let rec check_expr env (e : expr) =
           check_expr env a.arm_body)
         arms
 
-(* [inferred] is what inference found in the module. *)
-let program sink ~imports (r : Resolve.t) (inferred : Infer.t) =
+(* [inferred] is what inference found in the module, and [reachable] the
+   interfaces of every module reachable through its imports. *)
+let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
   let types = Hashtbl.create 16 in
   List.iter
     (fun (td : Iface.type_decl) -> Hashtbl.replace types td.path td)
-    (List.concat_map (fun (iface : Iface.t) -> iface.types) imports @ r.types);
+    (List.concat_map (fun (iface : Iface.t) -> iface.types) reachable @ r.types);
   List.iter
     (function
       | Fn (f : fn_def) ->
           let nodes = List.assoc f.name.name inferred.nodes in
-          check_expr { types; nodes; home = r.home; sink } f.body
+          check_expr { types; nodes; names = Resolve.type_name r; sink } f.body
       | Type _ | Import _ -> ())
     r.prog

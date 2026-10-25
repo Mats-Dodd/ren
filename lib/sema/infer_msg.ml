@@ -77,10 +77,8 @@ let mismatch_notes ?help ~found ~expected () =
 
 (* ---- lookups through a type ----
 
-   [home] is the module being checked, so types are named as it would
-   write them (path.ml). *)
-
-let type_name ~home p = Path.show ~home p
+   [names] says how the module being checked writes each type's name
+   (Resolve.type_name). *)
 let field_names (fs : Iface.field list) = List.map (fun f -> f.Iface.fname) fs
 
 let no_ctor (c : Ast.ident) =
@@ -93,14 +91,14 @@ let no_ctor (c : Ast.ident) =
 
 (* Today constructor names are unique (resolve.ml), so this can't happen
    yet; it's what sharing them will report. *)
-let ambiguous_ctor ~home (c : Ast.ident) owners =
-  let full p = sprintf "`%s.%s`" (type_name ~home p) c.name in
+let ambiguous_ctor ~names (c : Ast.ident) owners =
+  let full p = sprintf "`%s.%s`" (names p) c.name in
   Diag.make c.loc
     ~help:
       (sprintf
          "annotate the value with the type you mean, like `let x: %s = %s`, so \
           `%s` is found through it"
-         (type_name ~home (List.hd owners))
+         (names (List.hd owners))
          c.name c.name)
     (sprintf "`%s` could be %s" c.name
        (String.concat " or " (List.map full owners)))
@@ -124,7 +122,7 @@ let wrong_label (l : Ast.ident) (f : Iface.field) =
     (sprintf "expected the label `%s` here, found `%s`" f.fname l.name)
 
 (* `Plan { ... }`, where `Plan` isn't a record *)
-let not_a_record ~home loc (td : Iface.type_decl) =
+let not_a_record ~names loc (td : Iface.type_decl) =
   let help =
     match td.body with
     | Builtin ->
@@ -132,34 +130,33 @@ let not_a_record ~home loc (td : Iface.type_decl) =
          x: Int }`, is made with `Point { ... }`"
     | _ -> "its values are made with its constructors"
   in
-  Diag.make loc ~help
-    (sprintf "`%s` isn't a record type" (type_name ~home td.path))
+  Diag.make loc ~help (sprintf "`%s` isn't a record type" (names td.path))
 
 let no_record_fits loc =
   Diag.make loc
     ~help:"write the type's name before the `{` to see which fields are wrong"
     "no record type has exactly these fields"
 
-let several_records_fit ~home loc paths =
+let several_records_fit ~names loc paths =
   Diag.make loc
     ~help:
       (sprintf "write the type's name first, like `%s { ... }`"
-         (type_name ~home (List.hd paths)))
+         (names (List.hd paths)))
     (sprintf "these fields fit more than one type: %s"
-       (quote (List.map (type_name ~home) paths)))
+       (quote (List.map names paths)))
 
-let no_such_field ~home (f : Ast.ident) path decl =
+let no_such_field ~names (f : Ast.ident) path decl =
   Diag.make f.loc
     ~help:(sprintf "its fields: %s" (quote (field_names decl)))
-    (sprintf "`%s` has no field named `%s`" (type_name ~home path) f.name)
+    (sprintf "`%s` has no field named `%s`" (names path) f.name)
 
-let missing_fields ~home loc path missing =
+let missing_fields ~names loc path missing =
   Diag.make loc
     ~help:
       (sprintf "give %s a value too, like `%s: ...`"
          (if List.length missing = 1 then "it" else "each")
          (List.hd missing))
-    (sprintf "this `%s` is missing %s" (type_name ~home path) (quote missing))
+    (sprintf "this `%s` is missing %s" (names path) (quote missing))
 
 let needs_record (f : Ast.ident) shown =
   Diag.make f.loc
@@ -175,8 +172,8 @@ let no_record_has (f : Ast.ident) =
    (infer_top.ml). *)
 type what = Named of string | Group_result of string
 
-let several_records_have ~home loc ?what (f : Ast.ident) paths =
-  let first = type_name ~home (List.hd paths) in
+let several_records_have ~names loc ?what (f : Ast.ident) paths =
+  let first = names (List.hd paths) in
   let what, help, extra =
     match what with
     | Some (Named x) ->
@@ -199,7 +196,7 @@ let several_records_have ~home loc ?what (f : Ast.ident) paths =
       ([
          sprintf "`%s` is a field of %s" f.name
            (String.concat " and "
-              (List.map (fun p -> sprintf "`%s`" (type_name ~home p)) paths));
+              (List.map (fun p -> sprintf "`%s`" (names p)) paths));
          "a field is found through its record's type, which has to be known \
           where the field is used";
        ]

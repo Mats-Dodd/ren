@@ -19,17 +19,16 @@ module Scope = Map.Make (Int)
 let sprintf = Printf.sprintf
 
 type env = {
-  home : string;
   types : (Path.t, Iface.type_decl) Hashtbl.t;
   schemes : (Path.t, Ty.scheme) Hashtbl.t;  (** every top-level function *)
   fn : string;  (** the function being checked *)
 }
 
-let show env t =
+let show t =
   Ty.show
     (Ty.printer
        ~show_tail:(fun _ -> true)
-       ~home:env.home { ty = t; names = [] })
+       ~names:Path.full { ty = t; names = [] })
     t
 
 let fail env (loc : Loc.t) msg =
@@ -48,8 +47,8 @@ let rec has_error (t : Ty.ty) =
 let same env loc what (found : Ty.ty) (expected : Ty.ty) =
   if found <> expected then
     fail env loc
-      (sprintf "%s has type `%s`, but should have `%s`" what (show env found)
-         (show env expected))
+      (sprintf "%s has type `%s`, but should have `%s`" what (show found)
+         (show expected))
 
 (* A declaration's field type, given what its type parameters stand for. *)
 let rec subst args (t : Ty.ty) : Ty.ty =
@@ -101,8 +100,7 @@ let instance_of (s : Ty.ty) (t : Ty.ty) =
 let decl env loc p =
   match Hashtbl.find_opt env.types p with
   | Some td -> td
-  | None ->
-      fail env loc (sprintf "there's no type `%s`" (Path.show ~home:env.home p))
+  | None -> fail env loc (sprintf "there's no type `%s`" (Path.full p))
 
 (* [t] as an instance of the type declared at [p]: its type arguments. *)
 let args_of env loc what p (t : Ty.ty) =
@@ -114,8 +112,8 @@ let args_of env loc what p (t : Ty.ty) =
       (td, args)
   | _ ->
       fail env loc
-        (sprintf "%s has type `%s`, but should be a `%s`" what (show env t)
-           (Path.show ~home:env.home p))
+        (sprintf "%s has type `%s`, but should be a `%s`" what (show t)
+           (Path.full p))
 
 let ctor_of env loc (td : Iface.type_decl) c =
   match td.body with
@@ -145,7 +143,7 @@ let in_scope env sc loc (v : var) =
   | Some (w : var) ->
       fail env loc
         (sprintf "`%s` (%d) is used as `%s`, but was bound as `%s`" v.name v.id
-           (show env v.ty) (show env w.ty))
+           (show v.ty) (show w.ty))
   | None ->
       fail env loc (sprintf "`%s` (%d) is used outside its scope" v.name v.id)
 
@@ -168,7 +166,7 @@ let rec expr env sc (e : expr) =
       | Some s ->
           fail env loc
             (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
-               p.name (show env e.ty) (show env s.ty))
+               p.name (show e.ty) (show s.ty))
       | None -> fail env loc (sprintf "there's no function `%s`" p.name))
   | Intrinsic x -> (
       match Prelude.find_fn x with
@@ -234,7 +232,7 @@ let rec expr env sc (e : expr) =
                   fail env loc "an `inout` argument isn't a local")
             ps args;
           is "a call" ret
-      | t -> fail env loc (sprintf "a call to a `%s`" (show env t)))
+      | t -> fail env loc (sprintf "a call to a `%s`" (show t)))
   | Lambda { params; captures; body } -> (
       List.iter (in_scope env sc loc) captures;
       (* the body sees only what it captures, and its parameters *)
@@ -253,7 +251,7 @@ let rec expr env sc (e : expr) =
               same env loc ("the parameter `" ^ q.var.name ^ "`") q.var.ty p.ty)
             ps params;
           same env body.loc "a lambda's body" body.ty ret
-      | t -> fail env loc (sprintf "a lambda has type `%s`" (show env t)))
+      | t -> fail env loc (sprintf "a lambda has type `%s`" (show t)))
   | Con (p, c, args) ->
       let td, targs = args_of env loc "a constructor" p e.ty in
       let k = ctor_of env loc td c in
@@ -296,14 +294,13 @@ let rec expr env sc (e : expr) =
             v.ty
             (field_ty env loc td targs f);
           is "an update" r.ty
-      | t -> fail env loc (sprintf "an update of a `%s`" (show env t)))
+      | t -> fail env loc (sprintf "an update of a `%s`" (show t)))
   | Array xs -> (
       List.iter (expr env sc) xs;
       match e.ty with
       | Con (p, [ elem ]) when p = Path.prelude "Array" ->
           List.iter (fun (x : expr) -> same env x.loc "an element" x.ty elem) xs
-      | t ->
-          fail env loc (sprintf "an array literal has type `%s`" (show env t)))
+      | t -> fail env loc (sprintf "an array literal has type `%s`" (show t)))
 
 and prim env sc (e : expr) op args =
   let loc = e.loc in
@@ -313,7 +310,7 @@ and prim env sc (e : expr) op args =
   let elem (a : expr) =
     match a.ty with
     | Con (p, [ t ]) when p = Path.prelude "Array" -> t
-    | t -> fail env loc (sprintf "an array operation on a `%s`" (show env t))
+    | t -> fail env loc (sprintf "an array operation on a `%s`" (show t))
   in
   match (op, args) with
   | Neg, [ a ] ->
@@ -381,17 +378,14 @@ let fn_def env (f : fn_def) =
       in
       expr env sc f.body;
       same env f.loc "the body" f.body.ty ret
-  | t -> fail env f.loc (sprintf "a function has type `%s`" (show env t))
+  | t -> fail env f.loc (sprintf "a function has type `%s`" (show t))
 
-(* Lint module [prog], which sees the interfaces [imports]. *)
+(* Lint module [prog], which sees the interfaces [imports]: every one
+   reachable through its imports, since a type from any of them can turn
+   up in its code. *)
 let program ~imports (prog : program) =
   let env =
-    {
-      home = prog.home;
-      types = Hashtbl.create 16;
-      schemes = Hashtbl.create 16;
-      fn = "";
-    }
+    { types = Hashtbl.create 16; schemes = Hashtbl.create 16; fn = "" }
   in
   List.iter
     (fun (iface : Iface.t) ->

@@ -179,24 +179,28 @@ type t = {
 }
 
 (* Infer every function's type, and return each function's type scheme and
-   the types of its expressions, in canonical form. *)
-let program sink ~imports ?entry (r : Resolve.t) =
+   the types of its expressions, in canonical form. [imports] are the
+   interfaces of the modules it imports, whose functions it can call, and
+   [reachable] those of every module reachable through them, whose types
+   it can meet: a field of an imported type can have a type from a module
+   this one never imported. *)
+let program sink ~imports ~reachable ?entry (r : Resolve.t) =
   let st = Types.new_state () in
   let home = r.home in
   let types = Hashtbl.create 16 in
   List.iter
     (fun (td : Iface.type_decl) -> Hashtbl.replace types td.path td)
-    (List.concat_map (fun (iface : Iface.t) -> iface.types) imports @ r.types);
-  let visible =
-    Hashtbl.fold (fun _ td acc -> td :: acc) types []
-    |> List.sort (fun (a : Iface.type_decl) (b : Iface.type_decl) ->
-        compare (a.path.name, a.path.home) (b.path.name, b.path.home))
-  in
+    (List.concat_map (fun (iface : Iface.t) -> iface.types) reachable @ r.types);
+  (* the types step 2 of a lookup through a type looks in: those the
+     module can name bare. [r.scope] is sorted by name, and two of its
+     types never share one. *)
+  let visible = List.map (fun (_, p) -> Hashtbl.find types p) r.scope in
   let env =
     {
       st;
       sink;
       home;
+      names = Resolve.type_name r;
       types;
       visible;
       globals = Hashtbl.create 16;

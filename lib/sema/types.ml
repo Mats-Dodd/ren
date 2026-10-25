@@ -349,8 +349,8 @@ let of_scheme st (s : Ty.scheme) =
    hasn't solved yet print as `_`, and type parameters as themselves.
 
    Row tails are hidden unless [show_tail] picks them (by row variable id),
-   and then print as `..e` (errors) or `..d` (dependencies). Type names are
-   written as they'd be written in module [home] (path.ml).
+   and then print as `..e` (errors) or `..d` (dependencies). [names] says
+   how to write each type's name (ty.ml).
 
    This is for error messages, while inference is still running. Each type
    is converted to canonical form as it's printed and printed by ty.ml's
@@ -359,7 +359,7 @@ let of_scheme st (s : Ty.scheme) =
    and so its name, across the whole message. *)
 type printer = { canon : canon; ty_printer : Ty.printer }
 
-let printer ?(show_tail = fun _ -> false) ~home (st : state) =
+let printer ?(show_tail = fun _ -> false) ~names (st : state) =
   let c = { (canon st) with for_message = true } in
   (* [Ty.printer] asks about a tail by its number; find the id that has it.
      There's only one, so the order [fold] visits them in doesn't matter. *)
@@ -370,7 +370,7 @@ let printer ?(show_tail = fun _ -> false) ~home (st : state) =
   in
   (* the scheme's names start empty: [to_ty] adds them as they're found *)
   let scheme : Ty.scheme = { ty = Error; names = [] } in
-  { canon = c; ty_printer = Ty.printer ~show_tail:numbered ~home scheme }
+  { canon = c; ty_printer = Ty.printer ~show_tail:numbered ~names scheme }
 
 (* Bring the Ty printer up to date with what conversion has learned:
    the declared names of the variables, and the type parameters. *)

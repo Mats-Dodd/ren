@@ -16,12 +16,11 @@ let prelude_home = "prelude"
 let make home name = { home; name }
 let prelude name = { home = prelude_home; name }
 
-(* How to write [p] in code whose module is [home]: names declared there,
-   or in the prelude, are in scope as they are; anything else is written
-   with its module in front. *)
-let show ~home p =
-  if p.home = home || p.home = prelude_home then p.name
-  else p.home ^ "." ^ p.name
+(* The full way to write [p], which works in any module:
+   `billing/invoice.Invoice`. The prelude's names are in scope everywhere,
+   so they're written bare. A module writes most types more briefly; see
+   Resolve.type_name. *)
+let full p = if p.home = prelude_home then p.name else p.home ^ "." ^ p.name
 
 (* The module the entry file is: its name without the folder or the
    `.ren`. *)

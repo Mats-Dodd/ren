@@ -39,17 +39,20 @@ let parse ~file src =
    runs: first what its names refer to (found through scope), then what may
    change, then types (and what's found through them), then whether every
    `match` is exhaustive. Returns the module resolved, its interface and
-   what inference found. [entry] is set for the module the program starts
-   in, which needs a `main`. *)
-let check_module ~home ~imports ?entry prog =
+   what inference found. [imports] are the interfaces of the modules it
+   imports, and [reachable] those of every module reachable through them,
+   whose types it can meet without naming them. [entry] is set for the
+   module the program starts in, which needs a `main`. *)
+let check_module ~home ~imports ~reachable ?entry prog =
   let r =
     checked "resolve" (fun sink -> Resolve.program sink ~home ~imports prog)
   in
   checked "mut" (fun sink -> Mut.program sink r);
   let inferred =
-    checked "infer" (fun sink -> Infer.program sink ~imports ?entry r)
+    checked "infer" (fun sink ->
+        Infer.program sink ~imports ~reachable ?entry r)
   in
-  checked "exhaust" (fun sink -> Exhaust.program sink ~imports r inferred);
+  checked "exhaust" (fun sink -> Exhaust.program sink ~reachable r inferred);
   (* what a public function uses can't be written in its signature yet, so
      its interface takes that from inference *)
   let uses name =
@@ -68,7 +71,11 @@ let check_module ~home ~imports ?entry prog =
       let found = List.assoc v.vname inferred.schemes in
       if found <> v.scheme then
         let show (s : Ty.scheme) =
-          Ty.show (Ty.printer ~show_tail:(fun _ -> true) ~home s) s.ty
+          Ty.show
+            (Ty.printer
+               ~show_tail:(fun _ -> true)
+               ~names:(Resolve.type_name r) s)
+            s.ty
         in
         raise
           (Internal_error
@@ -99,7 +106,7 @@ let prelude =
     (let prog = parse ~file:"<prelude>" (String.trim Prelude.source) in
      let imports = [ Prelude.intrinsics ] in
      let r, iface, inferred =
-       check_module ~home:Path.prelude_home ~imports prog
+       check_module ~home:Path.prelude_home ~imports ~reachable:imports prog
      in
      (lower ~lint:true ~imports r inferred, Iface.union Prelude.intrinsics iface))
 
@@ -239,7 +246,9 @@ type checked = {
   resolved : Resolve.t;
   iface : Iface.t;
   inferred : Infer.t;
-  imports : Iface.t list;
+  reachable : Iface.t list;
+      (** the interfaces of every module reachable through its imports, the
+          prelude's first, each once *)
 }
 
 (* Load the program, then check each of its modules in dependency order,
@@ -253,21 +262,44 @@ let check_all ?(load = fun _ -> None) ~file src =
   List.rev
     (List.fold_left
        (fun (done_ : checked list) (m : source) ->
-         let iface_of path =
-           (List.find (fun (c : checked) -> c.home = path) done_).iface
+         let checked_ path =
+           List.find (fun (c : checked) -> c.home = path) done_
+         in
+         let direct =
+           List.map
+             (fun (i : Ast.import) -> checked_ i.path)
+             (imports_of m.parsed)
          in
          let imports =
-           prelude_iface
-           :: List.map
-                (fun (i : Ast.import) -> iface_of i.path)
-                (imports_of m.parsed)
+           prelude_iface :: List.map (fun (c : checked) -> c.iface) direct
+         in
+         (* what each import reaches, then the import itself, each module
+            once, in the order first met *)
+         let reachable =
+           List.fold_left
+             (fun acc (c : checked) ->
+               List.fold_left
+                 (fun acc (i : Iface.t) ->
+                   if List.exists (fun (j : Iface.t) -> j.home = i.home) acc
+                   then acc
+                   else acc @ [ i ])
+                 acc
+                 (c.reachable @ [ c.iface ]))
+             [ prelude_iface ] direct
          in
          let resolved, iface, inferred =
-           check_module ~home:m.home ~imports
+           check_module ~home:m.home ~imports ~reachable
              ?entry:(if m.home = entry then Some m.file else None)
              m.parsed
          in
-         { home = m.home; prog = m.parsed; resolved; iface; inferred; imports }
+         {
+           home = m.home;
+           prog = m.parsed;
+           resolved;
+           iface;
+           inferred;
+           reachable;
+         }
          :: done_)
        [] sources)
 
@@ -279,14 +311,14 @@ let schemes ?load ~file src = (inferred ?load ~file src).schemes
 let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
 
 let lower_module ?lint (c : checked) =
-  lower ?lint ~imports:c.imports c.resolved c.inferred
+  lower ?lint ~imports:c.reachable c.resolved c.inferred
 
 let core ?lint ?load ~file src =
   lower_module ?lint (entry_of (check_all ?load ~file src))
 
 let types ?(lint = false) ?load ~file src =
   List.map
-    (fun ({ home; prog; inferred; _ } as c) ->
+    (fun ({ home; prog; inferred; resolved; _ } as c) ->
       (* the tests also check that the program lowers, and lints *)
       if lint then ignore (lower_module ~lint:true c);
       let schemes = inferred.schemes in
@@ -295,7 +327,9 @@ let types ?(lint = false) ?load ~file src =
           (function
             | Ast.Fn f ->
                 Some
-                  (Ty.signature ~home ~pub:f.pub ~name:f.name.name
+                  (Ty.signature
+                     ~names:(Resolve.type_name resolved)
+                     ~pub:f.pub ~name:f.name.name
                      ~params:
                        (List.map
                           (fun (p : Ast.Parsed.param) -> p.pname.name)
