@@ -702,6 +702,20 @@ fn main() = ()
       │         ^^^
       = this holds whatever the function passed as `g` fails with, which could be anything
       help: match those with `Err(_)`, or write the errors `g` can fail with in its type, after `!`
+    |}];
+  (* nor written as a value there *)
+  types
+    {|
+fn w(g: fn() -> Int) -> Bool = attempt g() == Err(Bad)
+fn main() = ()
+|};
+  [%expect {|
+    error: `Bad` can't be written here, because the errors this holds aren't known
+      ┌─ test.ren:1:51
+    1 │ fn w(g: fn() -> Int) -> Bool = attempt g() == Err(Bad)
+      │                                                   ^^^
+      = this holds whatever the function passed as `g` fails with, which could be anything
+      help: write the errors `g` can fail with in its type, after `!`, or `match` on this with an `Err(_)` arm
     |}]
 
 let%expect_test "matching a Result handles every error it can hold" =

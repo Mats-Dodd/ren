@@ -771,10 +771,11 @@ let not_an_error (c : Ast.ident) ?(arm = false) tags =
           "check the spelling: a tag that's written wrong is a different error")
     (sprintf "`%s` isn't one of the errors this can %s" c.name holds)
 
-(* [c] matched in an error set that's open: it holds whatever the
-   function passed as [param] fails with, which no name can be checked
-   against. *)
-let tag_in_open_set (c : Ast.ident) ?(arm = false) ~param tags =
+(* [c] matched, or written as a value ([value]), in an error set that's
+   open: it holds whatever the function passed as [param] fails with,
+   which no name can be checked against. *)
+let tag_in_open_set (c : Ast.ident) ?(arm = false) ?(value = false) ~param tags
+    =
   let holds = if arm then "can fail with" else "holds" in
   Diag.make c.loc
     ~notes:
@@ -789,14 +790,21 @@ let tag_in_open_set (c : Ast.ident) ?(arm = false) ~param tags =
           param;
       ]
     ~help:
-      (sprintf
-         "match those with `%s`, or write the errors `%s` can fail with in its \
-          type, after `!`"
-         (if arm then "fail _" else "Err(_)")
-         param)
-    (sprintf
-       "`%s` can't be matched here, because the errors this %s aren't known"
-       c.name holds)
+      (if value then
+         sprintf
+           "write the errors `%s` can fail with in its type, after `!`, or \
+            `match` on this with an `Err(_)` arm"
+           param
+       else
+         sprintf
+           "match those with `%s`, or write the errors `%s` can fail with in \
+            its type, after `!`"
+           (if arm then "fail _" else "Err(_)")
+           param)
+    (sprintf "`%s` can't be %s here, because the errors this %s aren't known"
+       c.name
+       (if value then "written" else "matched")
+       holds)
 
 (* A call no marker covers, of [callee], which can fail with [tags], as
    shown; [name_loc] is where the callee is written. *)

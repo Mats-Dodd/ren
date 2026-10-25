@@ -752,7 +752,8 @@ let settle_errors env =
             Option.bind tail (fun tl ->
                 List.find_opt (fun (_, ty) -> List.mem tl (row_vars ty)) t.tin)
           with
-          | Some (param, _) -> report env (tag_in_open_set c ~arm ~param tags)
+          | Some (param, _) ->
+              report env (tag_in_open_set c ~arm ~value:t.tvalue ~param tags)
           | None -> report env (not_an_error c ~arm tags)))
     (List.rev env.tag_patterns);
   List.iter
