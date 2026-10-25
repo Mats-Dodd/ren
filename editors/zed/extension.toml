@@ -11,5 +11,5 @@ languages = ["languages/ren"]
 # `rev` has to be a commit that has it: update it after changing the grammar.
 [grammars.ren]
 repository = "file:///Users/matthewdodd/Documents/code/ren"
-rev = "ea205f5edbfbaa76f5c0268977d920a15de2ab10"
+rev = "38951e9a57134c70d0efe45530b55d8fd119dfef"
 path = "editors/tree-sitter-ren"
