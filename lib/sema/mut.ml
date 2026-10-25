@@ -329,12 +329,24 @@ and exclusive args =
                 Diag.error a.loc ~notes ~labels
                   (sprintf "`%s` is passed with `&` twice in this call" x)
               else
-                Diag.error a.loc ~notes ~labels
+                (* the one that isn't changed reads part of it, `xs[0]`: a
+                   plain value read like that will be allowed once RC can
+                   tell plain values apart (stage 11) *)
+                let part = if changed then p'.path <> [] else p.path <> [] in
+                Diag.error a.loc ~labels
+                  ~notes:
+                    (if part then
+                       notes
+                       @ [ sprintf "reading part of `%s` counts as using it" x ]
+                     else notes)
                   ~help:
-                    (sprintf
-                       "copy it with `let` first if the call should see the \
-                        value `%s` had before"
-                       x)
+                    (if part then
+                       "read it into a `let` before the call, and pass that"
+                     else
+                       sprintf
+                         "copy it with `let` first if the call should see the \
+                          value `%s` had before"
+                         x)
                   (sprintf
                      "this call changes `%s`, so no other argument can use it" x))
           rest;

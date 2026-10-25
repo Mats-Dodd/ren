@@ -1460,3 +1460,21 @@ fn main() =
       │   ^^^
       help: `len` is a method of `Array`, so it's called with a dot: `xs.len()`
     |}]
+
+let%expect_test "reading part of a receiver the call changes" =
+  run {|
+fn main() =
+  var xs = [1, 2]
+  &xs.push(xs[0])
+|};
+  [%expect
+    {|
+    error: this call changes `xs`, so no other argument can use it
+      ┌─ test.ren:3:12
+    3 │   &xs.push(xs[0])
+      │            ^^^^^
+      │    -- passed with `&` here
+      = an argument passed with `&` has to be the only way the call can reach that value
+      = reading part of `xs` counts as using it
+      help: read it into a `let` before the call, and pass that
+    |}]

@@ -326,6 +326,8 @@ let n = try Io.read(fd, &buf)          // the kernel gets exclusive access to bu
 swap(&a, &a)                           // error: `a` passed as inout twice
 ```
 
+An argument passed with `&` has to be the only way the call can reach that value, so no other argument of the call can use it: `f(&xs, xs)` is an error. If it were allowed, the read would either point into a buffer the call is changing in place, or make that buffer shared and force a hidden copy. For now that also covers reading a part of it, as in `&xs.push(xs[0])`: read it into a `let` first. Once reference counting arrives (stage 11), reading a plain value out of it, such as an `Int` element, will be allowed, because that read copies the value before the call starts. Reading something that is itself counted, like an array element or a `T`, will stay an error.
+
 A function body uses exactly two markers: `try` means a call can fail, and `&` means a call changes something.
 
 ---
@@ -790,7 +792,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 9 | operators, derived equality and hashing | `Map<Email, User>` works |
 | **↑** | **interpreted Ren** | **a small web service and its tests run** |
 | 10 | C backend, packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
-| 11 | reference counting with reuse | `map` reuses memory in place |
+| 11 | reference counting with reuse | `map` reuses memory in place; `&xs.push(xs[0])` is allowed when the element is a plain value |
 | 12 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
 | 13 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
 | 14 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
