@@ -904,13 +904,24 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Unop (Not, _) when 3 < n -> "(" ^ go a ^ ")"
     | _ -> go a
   (* an operator's left operand, or what a call, field or index is of
-     (at 8, tighter than any operator): `try` would otherwise take
-     everything after it in, and `attempt` everything up to a comparison *)
+     (at 8, tighter than any operator): a `try` it ends in would otherwise
+     take everything after it in, and an `attempt` everything up to a
+     comparison, as in `(x * attempt a()) + 1` *)
   and left n (a : Resolved.expr) =
+    if ends_open n n a then "(" ^ go a ^ ")" else operand n a
+  (* whether [a], printed as an operand where [at] binds, ends in a `try`
+     or `attempt` that would take in what comes after it, where [n] binds:
+     its last operand, unless that's in parentheses of its own *)
+  and ends_open n at (a : Resolved.expr) =
     match a.kind with
-    | Try _ -> "(" ^ go a ^ ")"
-    | Attempt _ when n > 4 -> "(" ^ go a ^ ")"
-    | _ -> operand n a
+    | Try _ -> true
+    | Attempt _ -> n > 4
+    | Binop (Orelse, _, b) when 0 >= at -> ends_open n 0 b
+    | Binop (op, _, b) when precedence op >= at ->
+        ends_open n (precedence op + 1) b
+    | Unop (Neg, b) -> ends_open n 7 b
+    | Unop (Not, b) when 3 >= at -> ends_open n 3 b
+    | _ -> false
   and list xs = String.concat ", " (List.map go xs)
   and con_args args =
     let arg = function

@@ -848,3 +848,30 @@ let%expect_test "a string that isn't UTF-8" =
       │             ^^^^^^
       help: save the file as UTF-8
     |}]
+
+let%expect_test "code printed for a message keeps a try or attempt to itself" =
+  (* trees the parser makes only from parentheses: printed without them,
+     the `try` or `attempt` on the right of `*` would take in the `+ 1` *)
+  let open Ren in
+  let at = Loc.point ~file 1 1 in
+  let e kind : Ast.Resolved.expr = { kind; loc = at; node = 0 } in
+  let x = e (Var (Intrinsic "x")) and one = e (Int 1) in
+  let a = e (Call (e (Var (Intrinsic "a")), [])) in
+  let show kind =
+    print_endline
+      (Option.get
+         (Ast.source ~type_name:(fun _ -> "") ~value_name:(fun _ -> "") (e kind)))
+  in
+  show (Binop (Add, e (Binop (Mul, x, e (Attempt a))), one));
+  show (Binop (Add, e (Binop (Mul, x, e (Try a))), one));
+  show (Binop (Add, e (Binop (Mul, x, e (Unop (Neg, e (Try a))))), one));
+  (* and a comparison doesn't end an `attempt`'s reach *)
+  show (Binop (Eq, e (Binop (Mul, x, e (Attempt a))), one));
+  show (Binop (Add, x, e (Attempt a)));
+  [%expect {|
+    (x * attempt a()) + 1
+    (x * try a()) + 1
+    (x * -try a()) + 1
+    x * attempt a() == 1
+    x + attempt a()
+    |}]
