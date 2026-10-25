@@ -181,6 +181,18 @@ let upper_ident p what =
       (Printf.sprintf "%s must start with a capital letter" what);
   id
 
+(* A name that must start with a lowercase letter: a function's or a
+   handler's, which a capital would make look like a type's. *)
+let lower_ident p what =
+  let id = ident p in
+  if is_upper id.name then
+    Diag.error id.loc
+      ~notes:
+        [ "a capitalized name is a type's, a dependency's or a constructor's" ]
+      ~help:(Printf.sprintf "write `%s`" (String.uncapitalize_ascii id.name))
+      (Printf.sprintf "%s must start with a lowercase letter" what);
+  id
+
 (* Items separated by commas, up to and including [close]. A trailing comma
    is allowed. *)
 let sep_list p ~close item =
@@ -1071,7 +1083,7 @@ let parse_import p =
 let parse_fn p ~pub =
   let start = loc p in
   expect p FN;
-  let name = ident p in
+  let name = lower_ident p "a function's name" in
   let tparams =
     if peek p = LT then (
       advance p;
@@ -1360,7 +1372,7 @@ let parse_dep p ~pub =
 let parse_handler p ~pub =
   let start = loc p in
   expect p HANDLER;
-  let name = ident p in
+  let name = lower_ident p "a handler's name" in
   if peek p = LT then
     Diag.error (loc p) ~help:"remove them"
       ~notes:

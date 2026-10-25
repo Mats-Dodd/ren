@@ -345,8 +345,10 @@ let spelled (f : ('v, 'b, 't) fn_def) =
 
 (* Whether [f] is a `handler` declaration: a function of its parameters
    whose body is a [Handler], and whose result describes the handler,
-   `counting_rates(r)`. Its type is the handler's own, named after it,
-   which can't be written, since a type's name starts with a capital. *)
+   `counting_rates(r)`. Its type is its dependency's, if it implements one;
+   one of several has a type of its own, named after it, which can't be
+   written, since a type's name starts with a capital (Iface.handler_type).
+*)
 let is_handler (f : ('v, 'b, 't) fn_def) =
   match f.body.kind with Handler _ -> true | _ -> false
 

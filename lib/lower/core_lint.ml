@@ -374,17 +374,27 @@ let rec expr env sc (e : expr) =
       let inner = List.fold_left (fun sc v -> add v sc) Scope.empty captures in
       match e.ty with
       | Con (p, [ Uses needs ]) ->
+          (* its dependency's type, or the handler's own *)
           (match (decl env loc p).body with
-          | Handler _ -> ()
-          | _ -> fail env loc (sprintf "`%s` isn't a handler" (Path.full p)));
+          | Handler _ | Dep _ -> ()
+          | _ ->
+              fail env loc
+                (sprintf "`%s` isn't a handler or a dependency" (Path.full p)));
           expr (inside env loc "a handler's evidence" ev needs) inner body;
           same env body.loc "a handler's body" body.ty e.ty
       | t -> fail env loc (sprintf "a handler has type `%s`" (show t)))
   | Instance impls -> (
       match e.ty with
       | Con (p, [ Uses needs ]) -> (
-          match (decl env loc p).body with
-          | Handler deps when deps = List.map fst impls ->
+          (* a handler of one dependency has that dependency's type *)
+          let deps =
+            match (decl env loc p).body with
+            | Handler deps -> Some deps
+            | Dep _ -> Some [ p ]
+            | _ -> None
+          in
+          match deps with
+          | Some deps when deps = List.map fst impls ->
               List.iter
                 (fun (d, (i : expr)) ->
                   expr env sc i;
@@ -398,6 +408,21 @@ let rec expr env sc (e : expr) =
                 (sprintf "an instance doesn't implement what `%s` does"
                    (Path.full p)))
       | t -> fail env loc (sprintf "an instance has type `%s`" (show t)))
+  | As_dep (d, h) -> (
+      expr env sc h;
+      match h.ty with
+      | Con (p, [ Uses needs ]) -> (
+          match (decl env loc p).body with
+          | Handler deps when List.mem d deps ->
+              is "a handler taken as one dependency's" (Con (d, [ Uses needs ]))
+          | _ ->
+              fail env loc
+                (sprintf "`%s` isn't a handler of `%s`" (Path.full p)
+                   (Path.full d)))
+      | t ->
+          fail env h.loc
+            (sprintf "a handler taken as `%s` has type `%s`" (Path.full d)
+               (show t)))
   | With_handler { ev; outer; handler; deps; body } ->
       let what = "installing a handler" in
       current env loc what outer;
@@ -747,7 +772,11 @@ let rec globals (e : expr) =
   | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
     ->
       globals a @ globals b
-  | Assign (_, a) | Field (a, _, _) | Lambda { body = a; _ } | Fail a ->
+  | Assign (_, a)
+  | Field (a, _, _)
+  | Lambda { body = a; _ }
+  | Fail a
+  | As_dep (_, a) ->
       globals a
   | Handle { body; on_value; on_error; _ } ->
       globals body @ globals on_value @ globals on_error

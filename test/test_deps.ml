@@ -3023,7 +3023,334 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "a handler is installed where it's made, and called first" =
+let%expect_test "a handler of one dependency is a value of its type" =
+  (* calling it describes it, and each `with` that installs it, wherever
+     it's been passed, makes a fresh instance *)
+  let src =
+    {|
+pub dep N =
+  next: fn() -> Int
+
+handler counter() for N =
+  var n = 0
+  next() =>
+    n += 1
+    n
+
+fn twice(r: N) -> Int = with r in N.next() * 10 + N.next()
+
+pub fn made() -> N = counter()
+
+fn fixed(k: Int) -> N = N { next: fn() => k }
+
+fn main() uses Console =
+  print(twice(counter()))
+  let c = counter()
+  print(twice(c))
+  print(twice(c))
+  print(twice(made()))
+  print(twice(fixed(4)))
+  let all = [counter(), fixed(7)]
+  print(twice(all[0]) + twice(all[1]))
+  with c in
+    print(N.next())
+|}
+  in
+  types src;
+  [%expect
+    {|
+    pub dep N
+      next: fn() -> Int
+    handler counter() for N
+    fn twice(r: N) -> Int
+    pub fn made() -> N
+    fn fixed(k: Int) -> N
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    12
+    12
+    12
+    12
+    44
+    89
+    1
+    ()
+    |}]
+
+let%expect_test "a handler of several is taken as the one that's wanted" =
+  (* where a value of one of its dependencies' types is wanted, it
+     describes an implementation of just that one: installing it installs
+     only that, and the other comes from further out *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  var calls = 0
+  usd_to(c) =>
+    calls += 1
+    c * rate
+  count() => calls
+
+fn convert(r: Rates) -> Int = with r in Rates.usd_to(1) + Rates.usd_to(2)
+
+pub fn mem() -> Rates = counting_rates(5)
+
+fn counted(r: Rates) uses RateCalls =
+  with r in Rates.usd_to(1) * 100 + RateCalls.count()
+
+fn main() uses Console =
+  print(convert(counting_rates(3)))
+  print(convert(mem()))
+  let r: Rates = counting_rates(2)
+  print(convert(r))
+  with counting_rates(7) in
+    let _ = Rates.usd_to(1)
+    print(counted(counting_rates(2)))
+  let h = counting_rates(4)
+  print(convert(h))
+  with h in
+    print(Rates.usd_to(1))
+    print(RateCalls.count())
+|}
+  in
+  types src;
+  [%expect
+    {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    pub dep RateCalls
+      count: fn() -> Int
+    handler counting_rates(rate: Int) for Rates, RateCalls
+    fn convert(r: Rates) -> Int
+    pub fn mem() -> Rates
+    fn counted(r: Rates) -> Int uses RateCalls
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    9
+    15
+    6
+    201
+    12
+    4
+    1
+    ()
+    |}];
+  core
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler both() for Rates, RateCalls =
+  usd_to(c) => c
+  count() => 0
+
+fn convert(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() -> Int = convert(both())
+|};
+  [%expect
+    {|
+    (fn both () ev/2
+      (handler (captures) ev/3
+        (instance
+          (test.Rates: (record (usd_to: (lambda (c/1) (captures) ev/4 c/1))))
+          (test.RateCalls: (record (count: (lambda () (captures) ev/5 0)))))))
+    (fn convert (r/1) ev/2
+      (with ev/3 (extend ev/2 test.Rates r/1) (dep-call ev/3 test.Rates.usd_to 1)))
+    (fn main () ev/1 (call ev/1 convert (as test.Rates (call ev/1 both))))
+    (fn $start () ev/1 (call ev/1 main))
+    |}]
+
+let%expect_test "taken as one, it installs only that one" =
+  types
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  var calls = 0
+  usd_to(c) =>
+    calls += 1
+    c * rate
+  count() => calls
+
+fn main() uses Console =
+  let r: Rates = counting_rates(2)
+  with r in
+    print(RateCalls.count())
+|};
+  [%expect
+    {|
+    error: nothing installs `RateCalls` before `main`
+       ┌─ test.ren:14:4
+    14 │ fn main() uses Console =
+       │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
+    17 │     print(RateCalls.count())
+       │           ----------------- this call uses `RateCalls`
+       help: install one inside `main`: `with counting_rates(...) in ...`
+    |}];
+  (* a field of a dependency's type says which too *)
+  run
+    {|
+dep TestClock =
+  advance: fn(d: Duration)
+
+handler test_clock(start: Time) for Clock, TestClock =
+  var now = start
+  now() => now
+  instant() => Instant.zero
+  sleep(d) => now = now.plus(d)
+  advance(d) => now = now.plus(d)
+
+type Box = { c: Clock }
+
+fn main() -> Bool =
+  let b = Box { c: test_clock(Time.epoch) }
+  with b.c in
+    Clock.sleep(Duration.ms(3))
+    Clock.now() == Time.epoch.plus(Duration.ms(3))
+|};
+  [%expect {| true |}]
+
+let%expect_test "where nothing says which, a handler of several is its own" =
+  types
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn pick(b: Bool) =
+  if b then counting_rates(1) else Rates { usd_to: fn(c) => c }
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn later() -> Int =
+  let h = Some(counting_rates(1))
+  match h
+    Some(r) => run(r)
+    None => 0
+
+pub fn make() = counting_rates(1)
+
+pub fn some() = Some(counting_rates(1))
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this `else` branch is a `Rates`, but the `then` branch is a `counting_rates`
+       ┌─ test.ren:12:36
+    12 │   if b then counting_rates(1) else Rates { usd_to: fn(c) => c }
+       │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │             ----------------- the `then` branch is a `counting_rates`
+       = both branches of an `if` have to produce the same type
+
+    error: expected `Unit`, found `counting_rates`
+       ┌─ test.ren:22:17
+    22 │ pub fn make() = counting_rates(1)
+       │                 ^^^^^^^^^^^^^^^^^
+       = a public function without `->` returns `Unit`
+       help: say which of its dependencies it gives an implementation of, `-> Rates`: the type of a handler of several can't be written
+
+    error: expected `Unit`, found `Option<counting_rates>`
+       ┌─ test.ren:24:17
+    24 │ pub fn some() = Some(counting_rates(1))
+       │                 ^^^^^^^^^^^^^^^^^^^^^^^
+       = a public function without `->` returns `Unit`
+       help: the type of a handler of several dependencies can't be written, so a public function can't return `Option<counting_rates>`, which holds `counting_rates`: make `some` private, so its type is inferred
+    |}]
+
+let%expect_test "a conformance function runs against a record and a handler" =
+  (* stage 7.5's groups are functions over implementations like this one:
+     the library's fake, a handler of two dependencies, is passed as a
+     `Clock` *)
+  let files =
+    [
+      ( "main.ren",
+        {|
+import fakes
+
+fn clock_conforms(c: Clock) -> Bool =
+  with c in
+    let a = Clock.instant()
+    Clock.sleep(Duration.ms(5))
+    Clock.instant().not_before(a)
+
+fn main() uses Console =
+  print(clock_conforms(Clock.frozen(Time.epoch)))
+  print(clock_conforms(fakes.test_clock(Time.epoch)))
+  print(clock_conforms(fakes.stopped()))
+  with fakes.test_clock(Time.epoch) in
+    fakes.TestClock.advance(Duration.minutes(1))
+    print(Clock.now() == Time.epoch.plus(Duration.minutes(1)))
+|}
+      );
+      ( "fakes.ren",
+        {|
+pub dep TestClock =
+  advance: fn(d: Duration)
+
+pub handler test_clock(start: Time) for Clock, TestClock =
+  var now = start
+  var at = Instant.zero
+  now() => now
+  instant() => at
+  sleep(d) =>
+    now = now.plus(d)
+    at = at.plus(d)
+  advance(d) =>
+    now = now.plus(d)
+    at = at.plus(d)
+
+pub fn stopped() -> Clock = test_clock(Time.epoch)
+|}
+      );
+    ]
+  in
+  types_files files;
+  [%expect
+    {|
+    -- fakes
+    pub dep TestClock
+      advance: fn(Duration)
+    pub handler test_clock(start: Time) for Clock, TestClock
+    pub fn stopped() -> Clock
+
+    -- main
+    fn clock_conforms(c: Clock) -> Bool
+    fn main() uses Console
+    |}];
+  run_files files;
+  [%expect {|
+    true
+    true
+    true
+    true
+    ()
+    |}]
+
+let%expect_test "what a handler's call can't be" =
   types
     {|
 dep N =
@@ -3035,45 +3362,158 @@ handler counter() for N =
     n += 1
     n
 
-fn run(r: N) -> Int = with r in N.next()
-
-fn passed() -> Int = run(counter())
-
 pub fn make() = counter()
 
-pub fn maybe() = Some(counter())
-
-fn main() uses Console = with counter in print(N.next())
+fn main() uses Console =
+  counter()
+  with counter in print(N.next())
 |};
   [%expect
     {|
-    error: expected `N`, found `counter`
-       ┌─ test.ren:12:26
-    12 │ fn passed() -> Int = run(counter())
-       │                          ^^^^^^^^^
-       = a handler describes an implementation of `N`, and each `with` that installs it makes a fresh one, so it isn't one itself
-       help: install it with `with` where it's made, around the call: a function can't take a handler to install yet
-
-    error: expected `Unit`, found `counter`
-       ┌─ test.ren:14:17
-    14 │ pub fn make() = counter()
+    error: expected `Unit`, found `N`
+       ┌─ test.ren:10:17
+    10 │ pub fn make() = counter()
        │                 ^^^^^^^^^
        = a public function without `->` returns `Unit`
-       help: a handler's type can't be written yet, so a public function can't return `counter`: make `make` private, so its type is inferred
+       help: add `-> N` to the signature
 
-    error: expected `Unit`, found `Option<counter>`
-       ┌─ test.ren:16:18
-    16 │ pub fn maybe() = Some(counter())
-       │                  ^^^^^^^^^^^^^^^
-       = a public function without `->` returns `Unit`
-       help: a handler's type can't be written yet, so a public function can't return `Option<counter>`, which holds `counter`: make `maybe` private, so its type is inferred
+    error: `counter` makes `N`, and this throws it away
+       ┌─ test.ren:13:3
+    13 │   counter()
+       │   ^^^^^^^^^
+       help: install it with `with`, or write `let _ = ...` if you mean to drop it
 
-    error: `with` installs an implementation, but this is a `fn() -> counter`
-       ┌─ test.ren:18:31
-    18 │ fn main() uses Console = with counter in print(N.next())
-       │                               ^^^^^^^
+    error: `with` installs an implementation, but this is a `fn() -> N`
+       ┌─ test.ren:14:8
+    14 │   with counter in print(N.next())
+       │        ^^^^^^^
        = `with` installs an implementation, and `counter` makes one when it's called
        help: call it: `with counter() in ...`
+    |}]
+
+let%expect_test "a handler's name starts with a lowercase letter" =
+  types
+    {|
+dep N =
+  next: fn() -> Int
+
+handler Counter() for N =
+  next() => 1
+|};
+  [%expect
+    {|
+    error: a handler's name must start with a lowercase letter
+      ┌─ test.ren:4:9
+    4 │ handler Counter() for N =
+      │         ^^^^^^^
+      = a capitalized name is a type's, a dependency's or a constructor's
+      help: write `counter`
+    |}];
+  types {|
+fn Double(n: Int) -> Int = n * 2
+|};
+  [%expect
+    {|
+    error: a function's name must start with a lowercase letter
+      ┌─ test.ren:1:4
+    1 │ fn Double(n: Int) -> Int = n * 2
+      │    ^^^^^^
+      = a capitalized name is a type's, a dependency's or a constructor's
+      help: write `double`
+    |}];
+  (* a handler's own type, which a handler of several dependencies has,
+     is in no scope, so it hides no type, even one spelled like it *)
+  run
+    {|
+dep N =
+  next: fn() -> Int
+
+dep M =
+  m: fn() -> Int
+
+type T = { n: Int }
+
+handler t() for N, M =
+  next() => 1
+  m() => 2
+
+fn main() -> T =
+  with t() in T { n: N.next() + M.m() }
+|};
+  [%expect {| { n: 3 } |}]
+
+let%expect_test "a handler's mistakes are said as a handler's" =
+  types
+    {|
+pub dep N =
+  next: fn() -> Int
+
+type Secret = { a: Int }
+
+pub handler keeps(k: Secret) for N =
+  next() => k.a
+
+dep Hidden =
+  n: fn() -> Int
+
+pub handler needs() for N uses Hidden =
+  next() => Hidden.n()
+|};
+  [%expect
+    {|
+    error: `pub handler keeps` takes `Secret`, which is private to this module
+      ┌─ test.ren:6:22
+    4 │ type Secret = { a: Int }
+      │      ------ `Secret` is declared here, without `pub`
+    6 │ pub handler keeps(k: Secret) for N =
+      │                      ^^^^^^
+      help: mark `Secret` `pub`
+
+    error: `pub handler needs` needs `Hidden`, which is private to this module
+       ┌─ test.ren:12:32
+     9 │ dep Hidden =
+       │     ------ `Hidden` is declared here, without `pub`
+    12 │ pub handler needs() for N uses Hidden =
+       │                                ^^^^^^
+       help: mark `Hidden` `pub`
+    |}];
+  (* an arm's result reads as a record implementation's lambda's does; a
+     `with` that can't tell what it installs doesn't pass on what its body
+     uses, which would be reported again at the call *)
+  types
+    {|
+dep N =
+  next: fn() -> Int
+
+handler wrong() for N =
+  next() => true
+
+fn r() -> N = N { next: fn() => true }
+
+fn run(r) -> Int = with r in N.next()
+
+fn main() uses Console = print(run(wrong()))
+|};
+  [%expect
+    {|
+    error: this arm produces a `Bool`, but it has to produce an `Int`
+      ┌─ test.ren:5:13
+    5 │   next() => true
+      │             ^^^^
+      = `N`'s operation `next`
+
+    error: this lambda produces a `Bool`, but it has to produce an `Int`
+      ┌─ test.ren:7:33
+    7 │ fn r() -> N = N { next: fn() => true }
+      │                                 ^^^^
+      = `N`'s operation `next`
+
+    error: `with` can't tell what this installs: its type isn't known here
+      ┌─ test.ren:9:25
+    9 │ fn run(r) -> Int = with r in N.next()
+      │                         ^
+      = `with` installs an implementation of a dependency around its body, or passes its body to a wrapper, a function whose last parameter is the body
+      help: say what it is where it's declared, like `r: Clock`
     |}]
 
 let%expect_test "a handler can be installed by its own group" =

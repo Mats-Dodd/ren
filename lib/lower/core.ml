@@ -92,19 +92,27 @@ and kind =
           what, can be recorded (the journal, stage 9). Never with `&` *)
   | With of { ev : var; outer : var; dep : Path.t; impl : expr; body : expr }
       (** [body], with the evidence [ev]: [outer], the evidence here, with
-          [impl] installed for [dep] on top. [impl] keeps [outer], which its
-          operations run with. The runtime's installs around `main` are these *)
+          [impl] installed for [dep] on top. [impl] is a value of [dep]'s type:
+          a record, installed as it is, or a handler's description, of which a
+          fresh instance is made with [outer], and its implementation of [dep]
+          installed. Either keeps [outer], which its operations run with. The
+          runtime's installs around `main` are these *)
   | Handler of { ev : var; captures : var list; body : expr }
       (** a handler, described: what calling a `handler` declaration gives. Like
           a lambda of no parameters it keeps [captures], and its [body] runs
-          with the evidence [ev] it's given, each time a [With_handler] installs
-          it: it makes the handler's state, each `var` in a cell, and ends in an
-          [Instance]. Its type is the handler's, which needs what its operations
-          use *)
+          with the evidence [ev] it's given, each time a [With] or a
+          [With_handler] installs it: it makes the handler's state, each `var`
+          in a cell, and ends in an [Instance]. Its type is its dependency's, if
+          it implements one, or else the handler's own, either needing what its
+          operations use *)
   | Instance of (Path.t * expr) list
       (** a handler's instance: an implementation of each of its dependencies,
           in the order they're written, records of lambdas that share the cells
-          of one state. Of the handler's type *)
+          of one state. Of its [Handler]'s type *)
+  | As_dep of Path.t * expr
+      (** a description of a handler of several dependencies, taken as one of
+          [dep]'s: a [With] installs only its implementation of [dep]. Of
+          [dep]'s type, needing what the handler does *)
   | With_handler of {
       ev : var;
       outer : var;
@@ -251,6 +259,7 @@ let children (e : expr) =
       [ a; b ]
   | Assign (_, a)
   | Field (a, _, _)
+  | As_dep (_, a)
   | Fail a
   | Lambda { body = a; _ }
   | Handler { body = a; _ } ->
@@ -362,6 +371,7 @@ let rec sexp e =
           var ev;
           sexp body;
         ]
+  | As_dep (d, h) -> List [ atom "as"; Atom (Path.full d); sexp h ]
   | Instance impls ->
       List
         (atom "instance"

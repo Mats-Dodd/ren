@@ -312,6 +312,10 @@ type ctx = {
   nodes : (int, ty) Hashtbl.t;
       (** the type of each expression and pattern of the function, by node id *)
   found : (int, found) Hashtbl.t;  (** what each lookup found, by node id *)
+  as_dep : (int, Path.t) Hashtbl.t;
+      (** each expression that gives a handler of several dependencies where a
+          value of one of their types is wanted, by node id, with that one (see
+          [as_one]) *)
   errs : row;  (** the errors of the innermost function or lambda *)
   uses : row;  (** the dependencies of the innermost function or lambda *)
   handler : row;
@@ -531,8 +535,8 @@ let unifies env why loc ~found ~expected =
             (more @ [ note ], Some (Option.value help ~default:h))
         | None -> (more, help)
       in
-      (* a handler where one of its dependencies is wanted: it describes
-         an implementation, which only a `with` makes *)
+      (* a handler of several dependencies where one of them is wanted,
+         somewhere it wasn't known as it was made (see [as_one]) *)
       let more, help =
         match (repr found, repr expected) with
         | TCon (h, _), TCon (d, _) -> (
@@ -542,16 +546,16 @@ let unifies env why loc ~found ~expected =
                 ( more
                   @ [
                       sprintf
-                        "a handler describes an implementation of `%s`, and \
-                         each `with` that installs it makes a fresh one, so it \
-                         isn't one itself"
-                        d;
+                        "`%s` implements %s, so it's taken as just `%s` only \
+                         where `%s` is wanted as it's made"
+                        (type_name env h)
+                        (and_list (List.map (type_name env) deps))
+                        d d;
                     ],
                   Some
                     (Option.value help
                        ~default:
-                         "install it with `with` where it's made, around the \
-                          call: a function can't take a handler to install yet")
+                         (sprintf "say so where it's made: `let x: %s = ...`" d))
                 )
             | _ -> (more, help))
         | _ -> (more, help)
@@ -1370,6 +1374,37 @@ let forced_why env callee expected =
           ()
   | _ -> plain
 
+(* The type the body of a handler of [deps] gives, the handler [cx.self]'s
+   (Iface.handler_type): the dependency's, if it implements one, or its
+   own, named after it. *)
+let handler_type cx (deps : tname list) =
+  match deps with [ { tref = Named p; _ } ] -> p | _ -> cx.self
+
+(* A value of type [t] taken as one of type [expected]: a handler of
+   several dependencies, `test_clock(t)` for `Clock, TestClock`, where a
+   value of one of their types is wanted, `Clock`, describes an
+   implementation of that one, which needs what the handler does. Its
+   type is then that dependency's, and installing it installs only that
+   one (deps.md, "Implementations"). Only where the type wanted is known
+   as the value is made: anywhere else it's the handler's own. *)
+let as_one env t expected =
+  match (repr t, reveal env.st expected) with
+  | TCon (h, [ TUses needs ]), TCon (d, [ TUses _ ]) -> (
+      match Hashtbl.find_opt env.types h with
+      | Some { body = Handler deps; _ } when List.mem d deps ->
+          Some (d, TCon (d, [ TUses needs ]))
+      | _ -> None)
+  | _ -> None
+
+(* The type [e], of type [t], has where a value of type [expected] is
+   wanted: [as_one]'s, which lowering is told, or [t]. *)
+let taken_as env cx (e : expr) t expected =
+  match as_one env t expected with
+  | Some (d, one) ->
+      Hashtbl.replace cx.as_dep e.node d;
+      one
+  | None -> t
+
 (* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
   let t = synth env cx e in
@@ -1383,7 +1418,10 @@ and check env cx ?(why = plain) (e : expr) expected =
   let leaf () =
     let t = synth env cx e in
     Hashtbl.replace cx.nodes e.node t;
-    ignore (unifies env why (result_loc e) ~found:t ~expected)
+    ignore
+      (unifies env why (result_loc e)
+         ~found:(taken_as env cx e t expected)
+         ~expected)
   in
   let fits () = Hashtbl.replace cx.nodes e.node expected in
   match (e.kind, reveal env.st expected) with
@@ -1438,7 +1476,8 @@ and check env cx ?(why = plain) (e : expr) expected =
       let t = infer_record env cx e None fields ~expected in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
-  | Handler { state; arms; _ }, TCon (p, [ TUses declared ]) when p = cx.self ->
+  | Handler { deps; state; arms; _ }, TCon (p, [ TUses declared ])
+    when p = handler_type cx deps ->
       (* what it's written to need, and more, which is reported once the
          group is done *)
       fits ();
@@ -1694,15 +1733,15 @@ and synth env cx (e : expr) : ty =
       in
       TCon (result_path, [ t; TErrors kept ])
   | With { item; body; lam } -> with_ env cx e item body lam
-  | Handler { state; arms; _ } ->
+  | Handler { deps; state; arms; _ } ->
       let needs = fresh_row env.st in
       handler env cx state arms ~needs ~declared:None;
-      TCon (cx.self, [ TUses needs ])
+      TCon (handler_type cx deps, [ TUses needs ])
 
 (* A handler's body (ast.ml, [Handler]), the body of its function,
-   [cx.self], whose result is the handler's type. Its state and its arms
-   run where it's installed, not where the function is called, so what
-   they use is what the handler needs, [needs], and the function itself
+   [cx.self], whose result is the handler's type ([handler_type]). Its
+   state and its arms run where it's installed, not where the function is
+   called, so what they use is what the handler needs, [needs], and the function itself
    uses nothing. Its state is made when it's installed, which can't fail.
    Each arm is checked as an implementation's operation is ([infer_record]):
    it uses what the handler needs, and can fail with fewer errors than
@@ -1750,9 +1789,16 @@ and handler env cx state arms ~needs ~declared =
           (* checked as a lambda is, against the operation, but what its
              calls use is what the handler needs, and they're the
              handler's calls, so a message can point at one *)
-          let why =
-            explain
-              ~notes:[ sprintf "`%s`'s operation `%s`" (type_name env p) op ]
+          let notes =
+            [ sprintf "`%s`'s operation `%s`" (type_name env p) op ]
+          in
+          let why = explain ~notes () in
+          (* its result reads as a record implementation's lambda's does *)
+          let result_why =
+            explain ~notes
+              ~msg:(fun f x ->
+                sprintf "this arm produces %s, but it has to produce %s"
+                  (article f) (article x))
               ()
           in
           let qs =
@@ -1769,7 +1815,7 @@ and handler env cx state arms ~needs ~declared =
               calls = hcx.calls;
             }
           in
-          check env acx body r ~why;
+          check env acx body r ~why:result_why;
           let t = TFun (qs, r, open_errs, needs) in
           Hashtbl.replace cx.nodes a.arm_impl.node t;
           ignore
@@ -1902,6 +1948,12 @@ and install env cx (e : expr) item t body =
         Hashtbl.replace cx.found e.node (Installs d);
         [ d ]
   in
+  (* a `with` that can't tell what it installs might have installed what
+     its body uses, so that's not passed on: it would be reported as missing
+     too, where the function is called *)
+  let unknown () =
+    ignore (infer env { cx with uses = fresh_row env.st; calls = ref [] } body)
+  in
   match reveal env.st t with
   | TCon (d, [ TUses needs ]) ->
       (* what it needs it needs here, outside: its operations run with what's
@@ -1932,10 +1984,10 @@ and install env cx (e : expr) item t body =
       | TCon (d, _) -> around cx (installs d)
       | _ -> TError)
   | TError ->
-      ignore (infer env cx body);
+      unknown ();
       TError
   | t ->
-      ignore (infer env cx body);
+      unknown ();
       let shown = show (printer env) t in
       let is_var = match t with TVar _ -> true | _ -> false in
       fail env item.loc
@@ -2412,10 +2464,11 @@ and check_args env cx ~name ?callee ps args =
           match repr p.ty with
           | TCon (_, [ TUses _ ]) ->
               (* an implementation that needs less than the parameter
-                       allows will do *)
+                 allows will do, and so will a handler of several
+                 dependencies, one of them the parameter's *)
+              let t = taken_as env cx a (infer env cx a) p.ty in
               ignore
-                (unifies env why (result_loc a)
-                   ~found:(widen env (infer env cx a))
+                (unifies env why (result_loc a) ~found:(widen env t)
                    ~expected:p.ty)
           | _ -> check env cx ~why a p.ty))
     ps args
@@ -2926,12 +2979,23 @@ let dropped_values env =
       (match repr d.dty with
       | TVar _ -> env.forced <- (d.dself, d.dloc) :: env.forced
       | _ -> ());
+      (* an implementation, or a handler's description, which a handler's
+         call makes: it's for installing *)
+      let implementation =
+        match repr d.dty with TCon (_, [ TUses _ ]) -> true | _ -> false
+      in
       unify_at env d.dloc ~found:d.dty ~expected:unit
         ~msg:(fun f _ ->
           match d.callee with
+          | Some name when implementation ->
+              sprintf "`%s` makes `%s`, and this throws it away" name f
           | Some name ->
               sprintf "`%s` returns `%s`, and this throws it away" name f
           | None -> sprintf "this is %s, and it's thrown away" (article f))
-        ~help:"use it, or write `let _ = ...` if you mean to drop it")
+        ~help:
+          (if implementation then
+             "install it with `with`, or write `let _ = ...` if you mean to \
+              drop it"
+           else "use it, or write `let _ = ...` if you mean to drop it"))
     (List.rev env.drops);
   env.drops <- []

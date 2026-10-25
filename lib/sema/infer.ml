@@ -67,7 +67,11 @@ type found = Infer_expr.found =
 
 module Nodes = Infer_top.Nodes
 
-type node = Infer_top.node = { ty : Ty.ty; found : found option }
+type node = Infer_top.node = {
+  ty : Ty.ty;
+  found : found option;
+  as_dep : Path.t option;
+}
 
 type t = Infer_top.t = {
   schemes : (string * Ty.scheme) list;

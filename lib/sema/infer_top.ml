@@ -553,9 +553,7 @@ let check_needs env (f : fn_def) n =
       call
   in
   let own =
-    match Hashtbl.find_opt env.types n.nself with
-    | Some { body = Handler deps; _ } -> List.map Ty.dep_label deps
-    | _ -> []
+    List.map Ty.dep_label (Option.value (Iface.handler_deps f) ~default:[])
   in
   let written =
     match f.body.kind with Handler { needs; _ } -> needs <> None | _ -> false
@@ -1494,7 +1492,13 @@ let value_order env (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
 (* What inference found, in canonical form (ty.ml). *)
 module Nodes = Map.Make (Int)
 
-type node = { ty : Ty.ty; found : found option }
+type node = {
+  ty : Ty.ty;
+  found : found option;
+  as_dep : Path.t option;
+      (** a handler of several dependencies, where one of them is wanted: that
+          one, which it's taken as a description of (Infer_expr.as_one) *)
+}
 
 type t = {
   schemes : (string * Ty.scheme) list;  (** each function's, in source order *)
@@ -1845,11 +1849,14 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             | None when f.pub && not (is_value f) ->
                 unit (* a public function without `->` returns Unit *)
             | None when Ast.is_handler f ->
-                (* a handler whose needs aren't written: its type is its
-                   own, needing what its body works out, which is known
-                   before its body is checked, so the group's other
-                   functions, and its own arms, can install it *)
-                TCon (path f, [ TUses (fresh_row env.st) ])
+                (* a handler whose needs aren't written: its type, its
+                   dependency's or its own (Iface.handler_type), needs
+                   what its body works out, which is known before its body
+                   is checked, so the group's other functions, and its own
+                   arms, can install it *)
+                TCon
+                  ( Option.get (Iface.handler_type ~home:env.home f),
+                    [ TUses (fresh_row env.st) ] )
             | None -> fresh_var env.st
           in
           (ps, ret, errs, uses)
@@ -1861,6 +1868,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             locals = Hashtbl.create 16;
             nodes = Hashtbl.create 64;
             found = Hashtbl.create 16;
+            as_dep = Hashtbl.create 4;
             errs;
             uses;
             calls = ref [];
@@ -1911,9 +1919,10 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                 explain
                   ~notes:[ "a public function without `->` returns `Unit`" ]
                   ~help:(fun found _ ->
-                    (* a handler's type, `counting_rates uses Clock`, is
-                       named after it, and can't be written: is one of the
-                       names in what's found a handler's? *)
+                    (* the type of a handler of several dependencies,
+                       `counting_rates uses Clock`, is named after it, and
+                       can't be written: is one of the names in what's
+                       found a handler's? *)
                     let ident c =
                       c = '_' || c = '.'
                       || (c >= 'a' && c <= 'z')
@@ -1929,9 +1938,9 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                       |> List.of_seq
                       |> List.filter_map (fun (td : Iface.type_decl) ->
                           match td.body with
-                          | Handler _
+                          | Handler deps
                             when List.mem (type_name env td.path) words ->
-                              Some (type_name env td.path)
+                              Some (type_name env td.path, deps)
                           | _ -> None)
                       |> List.sort compare
                       |> function
@@ -1939,15 +1948,19 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                       | [] -> None
                     in
                     match handler with
-                    | Some h ->
+                    | Some (h, d :: _) when List.hd words = h ->
                         sprintf
-                          "a handler's type can't be written yet, so a public \
-                           function can't return `%s`%s: make `%s` private, so \
-                           its type is inferred"
-                          found
-                          (if List.hd words = h then ""
-                           else sprintf ", which holds `%s`" h)
-                          f.name.name
+                          "say which of its dependencies it gives an \
+                           implementation of, `-> %s`: the type of a handler \
+                           of several can't be written"
+                          (type_name env d)
+                    | Some (h, _) ->
+                        sprintf
+                          "the type of a handler of several dependencies can't \
+                           be written, so a public function can't return `%s`, \
+                           which holds `%s`: make `%s` private, so its type is \
+                           inferred"
+                          found h f.name.name
                     | None -> sprintf "add `-> %s` to the signature" found)
                   ()
             | None -> plain
@@ -2168,6 +2181,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                {
                  ty = canon_ty c ~all:true (Hashtbl.find cx.nodes id);
                  found = Hashtbl.find_opt cx.found id;
+                 as_dep = Hashtbl.find_opt cx.as_dep id;
                }
                acc)
            Nodes.empty

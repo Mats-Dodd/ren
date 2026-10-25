@@ -17,8 +17,11 @@ type found =
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
   | Installs of Path.t
+      (** a `with` whose item is an implementation of this dependency, a record
+          or a handler's description *)
   | Installs_handler of Path.t list
-      (** a `with` whose item is an implementation of this dependency *)
+      (** a `with` whose item describes a handler of these dependencies, all of
+          which it installs *)
   | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
 
 (* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
@@ -28,7 +31,13 @@ type found =
 module Nodes : Map.S with type key = int
 
 (* An expression or pattern: its type, and what a lookup found there. *)
-type node = { ty : Ty.ty; found : found option }
+type node = {
+  ty : Ty.ty;
+  found : found option;
+  as_dep : Path.t option;
+      (** a handler of several dependencies where a value of one of their types
+          is wanted: that one, which it's taken as a description of *)
+}
 
 (* What inference found, in canonical form (ty.ml). A function's scheme and
    its nodes' types number their variables together. *)

@@ -446,8 +446,8 @@ let value_signature ~names ~pub ~name (s : scheme) =
 (* How `ren types` prints a handler (ast.ml, [is_handler]): its
    parameters, named [params], the dependencies it implements, [deps], and
    what it needs, from its function's scheme [s], whose result is the
-   handler's type. A row tail is printed where it links two places, a
-   closure it keeps and what it needs, say. *)
+   handler's type: its dependency's, or its own. A row tail is printed
+   where it links two places, a closure it keeps and what it needs, say. *)
 let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
   match s.ty with
   | Fun (ps, (Con (_, [ Uses needs ]) as ret), _, _) ->

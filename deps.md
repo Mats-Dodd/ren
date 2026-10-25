@@ -349,20 +349,23 @@ stage, or settled something the plan left open:
   ...`, around a call that uses one.
 - **A handler's state is made where it's installed, and can't fail:**
   the `with` that installs it isn't a call a `try` could mark.
-- **A handler's type can't be written.** It's named after the handler,
-  `counting_rates`, in messages and `ren types`, but a type's name
-  starts with a capital, so only inferred code can keep one, `let h =
-  counting_rates(1)`, and no function can take one to install: not a
-  public one, which would have to write its type, nor a private one,
-  `fn run(r) = with r in ...`, since `with` needs to know what it
-  installs where it's checked, and a parameter `r: Rates` is an
-  implementation, not a handler. A public function can't return one
-  either. So a group parameterised by an implementation (stage 7.6's
-  Clock conformance group) can be run against `Clock.frozen(t)` and
-  other record implementations, but not a handler: `test_clock` has to
-  be installed where it's made. A handler that keeps a closure names its
-  row in its own signature, `handler h(f: fn() -> Int uses ..d) for N
-  uses ..d`.
+- **A handler of several dependencies has a type of its own,** named
+  after it, `counting_rates`, which can't be written. A handler of one
+  has its dependency's type, so `pub fn mem() -> Rates = counting(1)`
+  and `fn run(r: Rates) = with r in ...` take either kind of
+  implementation. Where a value of one of a handler's several
+  dependencies' types is wanted as it's made, a parameter, an annotation,
+  a function's result or a field, it's taken as a description of an
+  implementation of just that one, and installing it makes a fresh
+  instance and installs only that: `clock_conforms(test_clock(t))` with
+  `c: Clock`. Where nothing says which, `let h = counting_rates(1)`, it
+  keeps its own type: `with h in` installs all of them, sharing one
+  state, and `run(h)` takes it as a `Rates`. So a value of a dependency's type is a record or a handler's
+  description, and `with` tells which as it runs. A handler that keeps a
+  closure names its row in its own signature, `handler h(f: fn() -> Int
+  uses ..d) for N uses ..d`.
+- **A handler's name starts with a lowercase letter,** as a function's
+  does, which is now an error for both: a capitalized name is a type's.
 - **A handler's parameters are written in parentheses even if it has
   none,** `handler transaction() for Sql =`, as a function's are:
   calling it, `transaction()`, describes it, and `with transaction in`

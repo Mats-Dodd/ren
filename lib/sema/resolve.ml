@@ -30,9 +30,9 @@
      [Dep_op]: a call of it calls whatever implementation is installed.
    - a handler, `handler h(...) for Rates = ...`, is a function whose body
      is its state and arms. Each arm is an operation of exactly one of the
-     dependencies after `for`, and each operation has one; its type is
-     named after it, in scope so messages can name it, though no one can
-     write it.
+     dependencies after `for`, and each operation has one. It gives its
+     dependency's type, or, if it implements several, a type named after
+     it, which no one can write, so it's in no scope.
 
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
@@ -110,6 +110,10 @@ type t = {
 let type_name (r : t) (p : Path.t) =
   match (List.assoc_opt p.name r.scope, List.assoc_opt p.home r.aliases) with
   | Some q, _ when q = p -> p.name
+  | None, _ when p.home = r.home ->
+      (* a handler's type, named after it, which is never written, so it's
+         in no scope: a type's name starts with a capital *)
+      p.name
   | _, Some alias -> alias ^ "." ^ p.name
   | _ -> Path.full p
 
@@ -1522,8 +1526,16 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
         in
         let body : Resolved.expr = { f.body with kind } in
         let none = Some { deps = []; dtail = None; uloc = f.name.loc } in
+        (* a handler of one dependency gives that dependency's type, and
+           one of several its own (Iface.handler_type) *)
         let own =
-          { tref = Named (Path.make env.home f.name.name); tloc = f.name.loc }
+          match kind with
+          | Handler { deps = [ d ]; _ } -> { d with tloc = f.name.loc }
+          | _ ->
+              {
+                tref = Named (Path.make env.home f.name.name);
+                tloc = f.name.loc;
+              }
         in
         match kind with
         | Handler { needs; _ } when f.pub || needs <> None ->
@@ -1755,15 +1767,26 @@ let no_private_errors env ~private_ ~set ~tag (es : Resolved.errors) =
 
 let no_leaks env ~private_ (items : Resolved.program) =
   let fn_ (f : Resolved.fn_def) =
+    let kind = if Ast.is_handler f then "handler" else "fn" in
     let check ~verb t =
       no_private env ~private_ t
-        ~whole:(sprintf "`pub fn %s` %s `%s`" f.name.name verb)
-        ~inside:(sprintf "`pub fn %s`'s signature mentions `%s`" f.name.name)
+        ~whole:(sprintf "`pub %s %s` %s `%s`" kind f.name.name verb)
+        ~inside:
+          (sprintf "`pub %s %s`'s signature mentions `%s`" kind f.name.name)
     in
     List.iter
       (fun (p : Resolved.param) -> Option.iter (check ~verb:"takes") p.pty)
       f.params;
-    Option.iter (check ~verb:"returns") f.ret;
+    (match f.ret with
+    | Some (TyImpl (_, needs, _)) when Ast.is_handler f ->
+        (* what it implements [handler] checks; what it needs is its own *)
+        Option.iter
+          (fun u ->
+            no_private_named env ~private_ (named_in_uses u)
+              ~say:(fun (p : Path.t) ->
+                sprintf "`pub handler %s` needs `%s`" f.name.name p.name))
+          needs
+    | ret -> Option.iter (check ~verb:"returns") ret);
     Option.iter
       (no_private_errors env ~private_
          ~set:(sprintf "`pub fn %s` can fail with `%s`" f.name.name)
@@ -2074,15 +2097,6 @@ let program sink ~home ~imports (prog : Parsed.program) =
               Hashtbl.replace env.types name.name
                 (Path.make home name.name, List.length td.type_params))
       | Fn _ | Import _ -> ())
-    prog;
-  (* each handler's type, named after it, which is never written: a type's
-     name starts with a capital. It's in scope so that messages can name it *)
-  List.iter
-    (function
-      | Fn (f : Parsed.fn_def) when Ast.is_handler f ->
-          if not (Hashtbl.mem env.types f.name.name) then
-            Hashtbl.replace env.types f.name.name (Path.make home f.name.name, 0)
-      | Fn _ | Type _ | Import _ -> ())
     prog;
   (* the functions in scope: the prelude's, then this module's own *)
   List.iter

@@ -28,9 +28,9 @@ type t =
   | VTag of { name : string; args : t list }
       (** an error, [Short(2, 45000)]: its tag and its payload. A program sees
           one only inside a [Result]'s [Err] *)
-  | VHandler of { ev : int; body : Core.expr; env : t ref Env.t }
-      (** a handler, described (core.ml, [Handler]): its body makes an instance,
-          given the evidence [ev] where it's installed *)
+  | VHandler of handler
+      (** a handler, described (core.ml, [Handler]): a value of its dependency's
+          type, or of the handler's own *)
   | VInstance of (Path.t * t) list
       (** a handler's instance: an implementation of each of its dependencies *)
   | VCell of t ref
@@ -38,6 +38,10 @@ type t =
   | VEvidence of installed list
       (** evidence (core.ml): what's installed, the innermost first. A program
           never sees one *)
+
+(* A handler's description: its body makes an instance, given the
+   evidence [ev] where it's installed, with the variables it captured. *)
+and handler = { ev : int; body : Core.expr; env : t ref Env.t }
 
 (* An implementation of the dependency [dep], installed: it runs with the
    evidence [outer], what was installed where it was. *)

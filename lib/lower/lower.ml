@@ -197,7 +197,16 @@ let result_args (t : Ty.ty) =
   | Con (_, [ v; errs ]) -> (v, errs)
   | _ -> bug "a `Result` without its two type arguments"
 
+(* [e], lowered: taken as one dependency's, if it's a handler of several
+   where a value of one of their types is wanted (Infer.node, [as_dep]). *)
 let rec expr cx (e : expr) : C.expr =
+  let x = expr_of cx e in
+  match ((node cx e.node).as_dep, x.ty) with
+  | Some d, Con (_, [ needs ]) -> mk (As_dep (d, x)) (Con (d, [ needs ])) e.loc
+  | Some _, _ -> bug "a handler taken as one dependency's isn't a handler"
+  | None, _ -> x
+
+and expr_of cx (e : expr) : C.expr =
   let ty () = ty_of cx e.node in
   let here kind = mk kind (ty ()) e.loc in
   match e.kind with
@@ -795,7 +804,7 @@ and free (e : C.expr) =
         go body
     | Instance impls -> List.iter (fun (_, i) -> go i) impls
     | Handler { captures; _ } -> List.iter use captures
-    | Fail a -> go a
+    | Fail a | As_dep (_, a) -> go a
     | Finally (a, b) ->
         go a;
         go b

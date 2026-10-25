@@ -184,10 +184,22 @@ let rec eval cx env (e : expr) =
       | Some _ -> bug (what ^ " on an implementation that isn't a record")
       | None -> bug (what ^ " where nothing installs `" ^ dep.name ^ "`"))
   | With { ev; outer; dep; impl; body } ->
+      let what = "installing `" ^ dep.name ^ "`" in
       let impl = eval cx env impl in
-      let outer = evidence_in env outer ("installing `" ^ dep.name ^ "`") in
+      let outer = evidence_in env outer what in
+      (* a record is installed as it is, and a handler's description as a
+         fresh instance's implementation of [dep] *)
+      let impl =
+        match impl with
+        | VHandler h -> (
+            match List.assoc_opt dep (instance cx h outer what) with
+            | Some impl -> impl
+            | None -> bug (what ^ " from a handler that doesn't implement it"))
+        | impl -> impl
+      in
       let installed = VEvidence ({ dep; impl; outer } :: outer) in
       eval cx (Env.add ev.id (ref installed) env) body
+  | As_dep (_, h) -> eval cx env h
   | Handler { ev; captures; body } ->
       (* like a lambda, it copies what it captures now *)
       let env =
@@ -203,12 +215,10 @@ let rec eval cx env (e : expr) =
       let what = "installing a handler" in
       let h = eval cx env handler in
       let outer = evidence_in env outer what in
-      (* a fresh instance, made with what's installed here, which its
-         operations then run with *)
       match h with
       | VHandler h -> (
-          match eval cx (Env.add h.ev (ref (VEvidence outer)) h.env) h.body with
-          | VInstance impls when List.map fst impls = deps ->
+          match instance cx h outer what with
+          | impls when List.map fst impls = deps ->
               let installed =
                 List.fold_left
                   (fun acc (dep, impl) -> { dep; impl; outer } :: acc)
@@ -321,6 +331,14 @@ let rec eval cx env (e : expr) =
 and ok = function Ok v -> v | Error err -> raise (Failed err)
 
 (* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
+(* A fresh instance of the handler [h], made with [outer], what's
+   installed where it's installed, which its operations then run with: its
+   implementation of each of its dependencies. *)
+and instance cx (h : handler) outer what =
+  match eval cx (Env.add h.ev (ref (VEvidence outer)) h.env) h.body with
+  | VInstance impls -> impls
+  | _ -> bug (what ^ " whose description doesn't make an instance")
+
 and eval_all cx env = function
   | [] -> []
   | e :: rest ->
