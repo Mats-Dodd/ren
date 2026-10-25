@@ -25,8 +25,9 @@ while the program runs.
 5. **Interfaces are exact.** An implementation can't fail in ways its
    interface doesn't declare, and what it needs to run is required where
    it's installed, not hidden behind the interface.
-6. **A dependency call costs a function call.** It compiles to a hidden
-   parameter, not a lookup.
+6. **A dependency call costs a function call,** plus finding the
+   implementation in the evidence vector, which the compiler can make a
+   fixed index when it knows the row.
 
 Each rule below follows from these.
 
@@ -249,33 +250,29 @@ bank.ren
 
 ## How it runs
 
-Each dependency in a function's `uses` becomes a hidden parameter in Core,
-and `with` binds it. Nothing is looked up by name at runtime (rule 6), and
-the C backend inherits it as it is. A closure gets its dependencies where
-it's called, not where it was made, so one that outlives its `with` never
-holds on to the old implementation. Each call keeps its shape, dependency,
-operation and arguments, which is what the effect journal (stage 9) will
-record.
+Every function and lambda takes one hidden parameter in Core, its
+evidence: the vector of implementations installed where it's called.
+Pure functions take it too, so every function takes the same, and
+nothing can disagree about what a call passes (the C backend can drop it
+from a function it can prove pure). Every call passes the caller's
+evidence on. `with` extends it for its body, so the innermost
+implementation of a dependency is the one found. A dependency call finds
+its implementation in the vector by the dependency's identity, never by
+a name at runtime; for now that's a short search, and when the row is
+closed the compiler can make it a fixed index (rule 6). Each call keeps
+its shape, dependency, operation and arguments, which is what the effect
+journal (stage 9) will record.
 
-A function over closures, `fn twice(f: fn())`, doesn't know what `f` uses,
-so it couldn't know what to pass it. Instead it has a copy for each set of
-dependencies its callers' closures use: `twice(fn() => print(1))` calls
-`twice[Console]`, in which `f` takes `Console`. So a closure's hidden
-parameters are always exactly what its type names, wherever it's called.
-An associated value holding a closure, `let one = fn() => 1`, is made once
-at startup, so it gets copies the same way: `T.one()` in a function that
-uses Console reads `T.one[Console]`, made right after `T.one`.
-The program starts in `$start`, which installs the real implementation of
-each built-in `main` uses and calls `main`. `ren core` prints all of it.
-(The copies are a choice the implementation made, and the plan didn't
-spell out: passing a whole row of evidence as one value would need it
-looked up by name inside.) A closure's type is inferred together with
-its caller's, so it usually names the caller's whole `uses`, not just what
-its body uses: `twice_gen(fn(x) => x + 1)` in a `main` that uses Clock,
-Console and Random calls `twice_gen[Clock, Console, Random]`. That runs
-the same, but the copies grow with callers' rows rather than with what the
-closures use; the rows on stored closures (`uses ..d`) are where to make
-them smaller.
+A closure gets the evidence of whoever calls it, not of where it was
+made, so one that outlives its `with` uses what's installed where it's
+called, and a function over closures, `fn twice(f: fn())`, just passes
+`f` its own. An implementation keeps the evidence where it's installed,
+and its operations run with that: what it needs is fixed at install
+(rule 5). An associated value is made once, at startup, with nothing
+installed, so it can't use a dependency; a closure stored in one gets its
+caller's evidence when it's called, like any other. The program starts
+in `$start`, which installs the real implementation of each built-in
+`main` uses and calls `main`. `ren core` prints all of it.
 
 ## Later
 
