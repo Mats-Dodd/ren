@@ -755,6 +755,11 @@ let parse_fn p ~pub =
         else List.rev (d :: acc)
       in
       Some (deps []))
+    else if peek p = NEWLINE && peek2 p = USES then
+      (* the lexer continues the signature only on an indented line *)
+      Diag.error ~help:"indent it, so it continues the signature"
+        (snd p.toks.(p.i + 1))
+        "`uses` on a line of its own has to be indented"
     else None
   in
   expect p EQ;
@@ -799,7 +804,8 @@ let skip_to_item p ~start =
     p.i > 0
     && fst p.toks.(p.i - 1) = NEWLINE
     && (loc p).start.col = 1
-    && not (List.mem (peek p) [ NEWLINE; INDENT; DEDENT ])
+    (* a `uses` there is the rest of a signature that wasn't indented *)
+    && not (List.mem (peek p) [ NEWLINE; INDENT; DEDENT; USES ])
   in
   if p.i = start || not (at_item p) then (
     advance p;

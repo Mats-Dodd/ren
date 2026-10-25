@@ -270,6 +270,20 @@ fn h() = 2
     (fn h () 2)
     |}]
 
+let%expect_test "uses on the next line has to be indented" =
+  ast {|
+fn f()
+uses Io = print(1)
+|};
+  [%expect
+    {|
+    error: `uses` on a line of its own has to be indented
+      ┌─ test.ren:2:1
+    2 │ uses Io = print(1)
+      │ ^^^^
+      help: indent it, so it continues the signature
+    |}]
+
 let%expect_test "an opaque type" =
   ast {|
 pub type UserId = opaque Int
