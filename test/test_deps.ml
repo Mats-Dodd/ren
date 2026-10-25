@@ -1111,8 +1111,7 @@ fn main() uses Console =
   print(Fs.real)
   print(fs_read("x"))
 |};
-  [%expect
-    {|
+  [%expect {|
     error: `Fs` has no operation or member named `real`
       ┌─ test.ren:2:12
     2 │   print(Fs.real)
@@ -1140,8 +1139,7 @@ fn main() =
   print(d.after(Duration.seconds(5)))
   print(d.before(Duration.seconds(6)))
 |};
-  [%expect
-    {|
+  [%expect {|
     true
     true
     true
@@ -1287,8 +1285,7 @@ let%expect_test "the real Os panics at an argument that isn't UTF-8" =
 fn main() uses Os, Console =
   print(Os.args())
 |};
-  [%expect
-    {|
+  [%expect {|
     error: panic: argument 2 isn't UTF-8
       ┌─ test.ren:2:9
     2 │   print(Os.args())
@@ -1311,8 +1308,7 @@ fn main() ! ProcError uses Proc, Console =
   try Proc.run("sh", ["-c", "kill -9 $$"])
 |};
   Sys.remove file;
-  [%expect
-    {|
+  [%expect {|
     ["./not-runnable", "Permission denied"]
     error: Killed("sh")
     |}]
@@ -1325,8 +1321,7 @@ fn main() uses Console =
   print(os_args())
   print(proc_run("sh", []))
 |};
-  [%expect
-    {|
+  [%expect {|
     error: `Proc` has no operation or member named `real`
       ┌─ test.ren:2:14
     2 │   print(Proc.real)
@@ -1345,14 +1340,12 @@ fn main() uses Console =
     |}]
 
 let%expect_test "main lists Fs to get the real one" =
-  types
-    {|
+  types {|
 fn load() -> Bool uses Fs = Fs.exists(Path.of("x"))
 
 fn main() uses Console = print(load())
 |};
-  [%expect
-    {|
+  [%expect {|
     error: `main` doesn't declare `Fs`
       ┌─ test.ren:3:4
     3 │ fn main() uses Console = print(load())
@@ -1367,8 +1360,7 @@ test "the real file system, and the test clock" uses Fs, Clock =
   TestClock.advance(Duration.ms(1))
   assert not Fs.exists(Path.of("no/such/file.txt"))
 |};
-  [%expect
-    {|
+  [%expect {|
     error: nothing installs `TestClock` in the test "the real file system, and the test clock"
       ┌─ test.ren:1:6
     1 │ test "the real file system, and the test clock" uses Fs, Clock =
@@ -1942,8 +1934,7 @@ fn main() uses Console =
   print(count(3))
   print(loud(1))
 |};
-  [%expect
-    {|
+  [%expect {|
     fn count(n: Int) -> Int
     fn loud(n: Int) -> Int uses Console
     fn main() uses Console
@@ -3453,8 +3444,7 @@ test "what ran, in order" =
     Command { cmd: "no-such-program", args: [] },
   ]
 |};
-  [%expect
-    {|
+  [%expect {|
     test.ren
       ✓ nothing runs
       ✓ what ran, in order
@@ -3482,8 +3472,7 @@ fn main() ! ProcError uses Console =
     print(try build())
     print(TestProc.ran())
 |};
-  [%expect
-    {|
+  [%expect {|
     2
     [Command { cmd: "make", args: ["all"] }, Command { cmd: "make", args: ["test"] }]
     0
@@ -3859,8 +3848,7 @@ test "the real file system" uses Fs =
 |}
        file);
   Sys.remove file;
-  [%expect
-    {|
+  [%expect {|
     test.ren
       ✓ the real file system
 
@@ -4506,8 +4494,7 @@ test "apart first, right longer" =
 test "apart first, left longer" =
   assert [1, 2, 7, 8] == [9, 2, 3]
 |};
-  [%expect
-    {|
+  [%expect {|
     test.ren
       ✗ a payload
       ✗ two constructors
@@ -4610,8 +4597,7 @@ test "apart first, left longer" =
     [exit 1]
     |}]
 
-let%expect_test "print shows a value through its type, as a failed assert does"
-    =
+let%expect_test "print shows a value through its type, as a failed assert does" =
   (* an opaque type as its name around what it is, unless it has a `show`
      of its own; through a generic function, a lambda and a handler too,
      and an error that ends the program. A failed `assert` uses a type's
