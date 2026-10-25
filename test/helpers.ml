@@ -30,10 +30,11 @@ let report_files files f =
 (* The same, for a program that is the one file [src]. *)
 let report src f = report_files [ (file, src) ] f
 
-let run src =
+(* [args] are what `ren run` was given after `--`. *)
+let run ?args src =
   let src = clean src in
   report src (fun () ->
-      print_endline (Value.show (Driver.run ~lint:true ~file src)))
+      print_endline (Value.show (Driver.run ~lint:true ?args ~file src)))
 
 let tokens src =
   let src = clean src in

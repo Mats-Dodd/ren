@@ -1479,7 +1479,7 @@ fn main() = f()
       ┌─ test.ren:1:22
     1 │ fn f() uses Console, Disk = 1
       │                      ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Random`, `TestClock`, `TestConsole`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
     |}]
 

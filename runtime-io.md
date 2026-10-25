@@ -4,7 +4,7 @@
 
 This doc covers how Ren code reaches the operating system: the shape of an I/O call, who owns a buffer while the kernel uses it, how cancellation finishes, how calls are batched, and how all of it sits under narrow dependencies like `Fs` and `Net`. What the standard library builds on top is in [stdlib.md](stdlib.md).
 
-> **Status:** design. The interpreter does no I/O through this model yet. `Clock`, `Random`, `Console` and `Fs` are dependencies today (stages 7 and 8, [deps.md](deps.md)), whose real implementations call OCaml's standard library and `Unix` directly. `Str`, `Bytes` and `Path` exist (stage 8), with `Str.from_utf8` the one fallible way from bytes to a string. Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
+> **Status:** design. The interpreter does no I/O through this model yet. `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` are dependencies today (stages 7 and 8, [deps.md](deps.md)), whose real implementations call OCaml's standard library and `Unix` directly. `Str`, `Bytes` and `Path` exist (stage 8), with `Str.from_utf8` the one fallible way from bytes to a string. Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
 
 ---
 
@@ -116,7 +116,8 @@ try Fs.write_then_sync(file, offset, bytes)
 | `Clock` | `now` (wall clock), `instant` (monotonic), `sleep`, timers |
 | `Random` | seeds for hashing and the cryptographic random number generator |
 | `Console` | writing a line to standard output, which `print` goes through |
-| `Os` | environment, arguments, signals, exit, spawning processes |
+| `Os` | environment, arguments, signals, exit |
+| `Proc` | running other programs |
 
 There's no single `Io`. Each is an ordinary dependency type, declared with `dep`, so `mem_fs`, `Clock.frozen` and `sim.net` implement them like any user handler would. Finer capabilities (`Fs.read` without `Fs.write`, a directory, an address) can split off later without changing this model.
 
@@ -176,7 +177,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | When | What |
 |---|---|
 | **Stage 7** | `Clock`, `Random` and `Console` as dependency types, with real implementations and test ones (done) |
-| **Stage 8** | `Fs` and `Os` as dependency types, with real implementations and in-memory ones: `Fs` on `Unix` and `mem_fs` (done); a monotonic `Clock.instant` |
+| **Stage 8** | `Fs`, `Os` and `Proc` as dependency types, with real implementations and in-memory ones: `Fs` on `Unix` and `mem_fs`, `Os.args` and `test_os`, `Proc.run` and `test_proc` (done); a monotonic `Clock.instant` |
 | **Stage 9** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; the journal entry format; linked operations |
 | **Stage 11** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls |
 | **Stage 12** | leased buffers returned to the pool when their count reaches zero |

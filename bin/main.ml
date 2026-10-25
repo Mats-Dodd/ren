@@ -4,6 +4,7 @@ open Ren
 
 let usage =
   {|usage: ren <command> <file.ren>
+       ren run <file.ren> [-- <args>...]
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
 
@@ -11,7 +12,8 @@ The file is the program's entry module. A module it imports is found from
 the file's folder: `import billing/stripe` is the file billing/stripe.ren.
 
 commands:
-  run     run the program's `main` function
+  run     run the program's `main` function, with the <args> after `--`
+          as `Os.args()`
   test    run the tests of every module in the folder (the current one if
           none is given) and the folders in it, but those holding a
           program of their own, with a `main`; or of the file and what
@@ -181,7 +183,19 @@ let () =
   match Sys.argv with
   | args when Array.length args >= 2 && args.(1) = "test" ->
       test (List.tl (List.tl (Array.to_list args)))
-  | [| _; cmd; path |] -> (
+  | args
+    when Array.length args >= 3
+         && (Array.length args = 3 || args.(3) = "--") -> (
+      let cmd = args.(1) and path = args.(2) in
+      (* what follows `--`, for `ren run` *)
+      let os_args =
+        if Array.length args > 3 then
+          Array.to_list (Array.sub args 4 (Array.length args - 4))
+        else []
+      in
+      if Array.length args > 3 && cmd <> "run" then (
+        prerr_endline usage;
+        exit 2);
       let src =
         try In_channel.with_open_bin path In_channel.input_all
         with Sys_error msg ->
@@ -201,7 +215,7 @@ let () =
       try
         match cmd with
         | "run" -> (
-            match Driver.run ~load ~file:path src with
+            match Driver.run ~load ~args:os_args ~file:path src with
             | VUnit -> ()
             | v -> print_endline (Value.show v))
         | "check" -> ignore (Driver.check ~load ~file:path src)

@@ -72,13 +72,16 @@ type t = {
 
 (* The built-in dependencies a test gets the test implementation of, each
    with the dependency that controls it, if one does: a test reads back
-   what it wrote through `Fs` itself. *)
+   what it wrote through `Fs` itself, and installs `test_os(args)` for
+   other args. *)
 let defaults =
   [
     ("Clock", Some "TestClock");
     ("Random", Some "TestRandom");
     ("Console", Some "TestConsole");
     ("Fs", None);
+    ("Os", None);
+    ("Proc", Some "TestProc");
   ]
 
 (* A test's name, after its group run's label if it's in one, as

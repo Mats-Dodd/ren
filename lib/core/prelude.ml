@@ -124,6 +124,21 @@ pub dep Fs =
       exists: fn(p) => fs_exists(p),
     }
 
+pub dep Os =
+  // what `ren run file.ren -- args` was given after the `--`
+  args: fn() -> Array<Str>
+
+  let real: Os = Os { args: fn() => os_args() }
+
+pub dep Proc =
+  // runs the program `cmd`, found on `PATH` unless it has a `/` in it,
+  // with what this program prints to and reads from, and gives back its
+  // exit code
+  run: fn(cmd: Str, args: Array<Str>) -> Int ! NoSuchProgram(name: Str)
+
+  let real: Proc =
+    Proc { run: fn(cmd, args) => proc_run(cmd, args) orelse fail NoSuchProgram(cmd) }
+
 // ---- what a test gets (deps.md, "Tests") ----
 //
 // Each test runs with a fresh instance of each of these handlers, unless
@@ -193,6 +208,33 @@ pub handler mem_fs(files: Array<File>) for Fs =
     for f in kept
       if f.path == p then found = true
     found
+
+// a system whose program was given `args`
+pub handler test_os(args: Array<Str>) for Os =
+  args() => args
+
+// a program that was run: its name, and what it was given
+pub type Command = { cmd: Str, args: Array<Str> }
+
+// what a test `Proc` says `command` exits with
+pub type Exit = { command: Command, code: Int }
+
+pub dep TestProc =
+  // every program run so far, the first first
+  ran: fn() -> Array<Command>
+
+// programs that don't run, but are kept: each exits with the code its
+// `Exit` in `exits` gives, or 0 if none does
+pub handler test_proc(exits: Array<Exit>) for Proc, TestProc =
+  var commands: Array<Command> = []
+  run(cmd, args) =>
+    let c = Command { cmd: cmd, args: args }
+    &commands.push(c)
+    var code = 0
+    for e in exits
+      if e.command == c then code = e.code
+    code
+  ran() => commands
 |}
 
 (* ---- built-in functions ---- *)
@@ -261,6 +303,57 @@ let read_file path =
 let write_file path data =
   try Out_channel.with_open_bin path (fun oc -> output_string oc data)
   with Sys_error msg -> raise (Panic ("can't write " ^ msg))
+
+(* What `ren run file.ren -- args` was given after the `--`, which the
+   real `Os.args` gives back. *)
+let args : string list ref = ref []
+
+(* Where the program [cmd] is: [cmd] itself if it has a `/` in it, or
+   else the first file of that name on `PATH`, if it's one that can be
+   run. *)
+let find_program cmd =
+  let runnable p =
+    (try not (Sys.is_directory p) with Sys_error _ -> false)
+    &&
+    try
+      Unix.access p [ Unix.X_OK ];
+      true
+    with Unix.Unix_error _ -> false
+  in
+  if String.contains cmd '/' then if runnable cmd then Some cmd else None
+  else
+    let path = Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin" in
+    List.find_map
+      (fun dir ->
+        let p = Filename.concat (if dir = "" then "." else dir) cmd in
+        if runnable p then Some p else None)
+      (String.split_on_char ':' path)
+
+(* Run the program at [path] as [cmd], with [args], and wait for its exit
+   code. It writes to, and reads from, what this program does, so what
+   this program has written so far goes out first. Anything that stops
+   it running, or finishing, panics: `Proc` doesn't say it can fail that
+   way. *)
+let run_program path cmd args =
+  let panic fmt = Printf.ksprintf (fun msg -> raise (Panic msg)) fmt in
+  flush stdout;
+  flush stderr;
+  let pid =
+    try
+      Unix.create_process path
+        (Array.of_list (cmd :: args))
+        Unix.stdin Unix.stdout Unix.stderr
+    with Unix.Unix_error (e, _, _) ->
+      panic "can't run %s: %s" cmd (Unix.error_message e)
+  in
+  let rec wait () =
+    match Unix.waitpid [] pid with
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
+    | _, Unix.WEXITED code -> code
+    | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) ->
+        panic "%s was stopped by a signal" cmd
+  in
+  wait ()
 
 (* `Some(args)` or `None` *)
 let option name args = Value.VCon { ty = Path.prelude "Option"; name; args }
@@ -362,6 +455,34 @@ let fns =
         | [ Value.VStr path ] as args ->
             (Value.VBool (Sys.file_exists path), args)
         | _ -> bug "fs_exists");
+    (* fn() -> Array<Str> *)
+    fn ~runtime:true "os_args"
+      (Fun ([], array str, open_row 0, open_row 1))
+      (fun a ->
+        let strs = List.map (fun s -> Value.VStr s) !args in
+        (Value.VArray (Array.of_list strs), a));
+    (* fn(Str, Array<Str>) -> Option<Int>, the real `Proc.run`, which
+       fails when it's [None]: there's no such program *)
+    fn ~runtime:true "proc_run"
+      (Fun
+         ( [ read str; read (array str) ],
+           Con (Path.prelude "Option", [ int ]),
+           open_row 0,
+           open_row 1 ))
+      (function
+        | [ Value.VStr cmd; Value.VArray xs ] as a ->
+            let strs =
+              Array.to_list
+                (Array.map
+                   (function Value.VStr s -> s | _ -> bug "proc_run")
+                   xs)
+            in
+            ( (match find_program cmd with
+              | Some path ->
+                  option "Some" [ VInt (run_program path cmd strs) ]
+              | None -> option "None" []),
+              a )
+        | _ -> bug "proc_run");
   ]
 
 (* ---- built-in types ----
@@ -569,7 +690,7 @@ let types =
    The dependencies the runtime installs around `main`, if it uses them:
    each is declared in [source], with its real implementation, `real`
    (deps.md, "`main`"). *)
-let runtime_deps = [ "Clock"; "Random"; "Console"; "Fs" ]
+let runtime_deps = [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
 
 (* The dependencies a `uses` can name that aren't declared anywhere yet:
    their stages give them operations. *)

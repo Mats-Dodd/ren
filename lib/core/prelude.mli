@@ -32,9 +32,13 @@ type builtin_type = {
 val types : builtin_type list
 
 (* The built-in dependencies the runtime installs around `main`: [Clock],
-   [Random] and [Console]. Each one's real implementation is its private
-   associated value [real]. *)
+   [Random], [Console], [Fs], [Os] and [Proc]. Each one's real
+   implementation is its private associated value [real]. *)
 val runtime_deps : string list
+
+(* What `ren run file.ren -- args` was given after the `--`: what the
+   real [Os.args] gives back. *)
+val args : string list ref
 
 (* The dependencies a `uses` can name that aren't declared yet: [Net], ... *)
 val dependencies : string list

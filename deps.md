@@ -154,11 +154,17 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 | `Random` | `int(below)` | the OS | seeded from the test's name | `TestRandom.seed()` |
 | `Console` | `write(line: Str)` | stdout | captured | `TestConsole.output() -> Array<Str>` |
 | `Fs` | `read(p) -> Bytes ! NoSuchFile`, `write(p, b)`, `exists(p)` | files, through `Unix` | `mem_fs([])`: no files | none: read back through `Fs` |
+| `Os` | `args() -> Array<Str>` | what follows `--` in `ren run file.ren -- args` | `test_os([])`: no args | none |
+| `Proc` | `run(cmd, args) -> Int ! NoSuchProgram` | a process, with this one's stdin, stdout and stderr | `test_proc([])`: runs nothing, exits with 0 | `TestProc.ran() -> Array<Command>` |
 
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.
 - `Fs.read_str(p)` is a member of `Fs`, `read` then `Str.from_utf8`.
   `mem_fs(files: Array<File>)` keeps files in memory, each a `File {
   path, data }`, so a test that needs some installs one with `with`.
+- `Proc.run` gives back the program's exit code, and fails only when
+  there's no such program. What it prints isn't captured.
+  `test_proc(exits: Array<Exit>)` keeps each `Command { cmd, args }`, and
+  says it exited with the code of its `Exit { command, code }`, or 0.
 - `Time`, `Instant` and `Duration` are opaque, with methods only until
   operators arrive (stage 10).
 - For now the real `instant` reads the same wall clock as `now`, which the
@@ -167,8 +173,7 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   runtime's own system calls (stage 8, `Os`).
 - These six are the prelude's, named in every module, so a program's own
   `type Time` or `dep Clock` is an error: it chooses another name.
-- `Os` and `Proc` come in stage 8 too, and `Net` with `Async` in
-  stage 9 ([runtime-io.md](runtime-io.md)).
+- `Net` comes with `Async` in stage 9 ([runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.
@@ -186,7 +191,7 @@ error: nothing installs `Users` before `main`
   ┌─ main.ren:1:16
   │
 1 │ fn main() uses Users, Console =
-  │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+  │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
   │
   = help: install one inside `main`: `with mem_users([]) in ...`
 ```
@@ -213,8 +218,8 @@ test "main prints the balances, and every refusal" =
 
 - Tests sit next to the code, so they can reach private functions. `ren run`
   ignores them.
-- **Every test gets the test `Clock`, `Random`, `Console` and `Fs`, and
-  their controls, implicitly.** No `with`, no fixtures. A test without real
+- **Every test gets the test `Clock`, `Random`, `Console`, `Fs`, `Os`
+  and `Proc`, and their controls, implicitly.** No `with`, no fixtures. A test without real
   dependencies gives the same result on every run.
 - **A test's `uses` asks for the real implementation:**
   `test "the system clock moves" uses Clock =`. Going outside is visible.
@@ -482,6 +487,16 @@ stage, or settled something the plan left open:
   `write` with nothing.
 - **`mem_fs` finds a file by its path exactly as it's written,** so
   `a/b` and `a//b` are two files.
+- **`Proc` is a dependency of its own,** not part of `Os`, so a test can
+  fake the programs it runs and keep the real arguments, or the other way
+  round.
+- **The real `Proc` looks for a program on `PATH` itself,** so one that
+  isn't there fails with `NoSuchProgram`, never exit code 127. One that
+  can't run, or is killed by a signal, panics, since `run` says it fails
+  only that way.
+- **A test `Proc`'s exit codes are a table,** `test_proc([Exit { command,
+  code }])`, matched on the whole `Command`, since a program run through
+  `sh -c` is told apart by its arguments.
 
 ## Later
 
@@ -489,4 +504,5 @@ stage, or settled something the plan left open:
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.
-- `Os` and `Proc` (stage 8).
+- The rest of `Os`, `env` and `exit`, and capturing what a program
+  prints.

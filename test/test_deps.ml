@@ -371,7 +371,7 @@ fn main() = 1
       ┌─ test.ren:2:13
     2 │ fn g() uses Nope = 1
       │             ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Random`, `TestClock`, `TestConsole`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
     |}]
 
@@ -807,7 +807,7 @@ fn main() uses Console =
     error: nothing installs `N` before `main`
       ┌─ test.ren:6:4
     6 │ fn main() uses Console =
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
     7 │   print(run_two(fn() => N.get()))
       │         ------------------------ this call uses `N`
       = `run_two` calls a closure inside more than one `with`, so the closure gets only what's installed outside all of them, not the `N` one of them installs
@@ -829,7 +829,7 @@ fn main() uses Console =
     error: nothing installs `N` before `main`
       ┌─ test.ren:6:4
     6 │ fn main() uses Console =
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
     8 │   print(with a.wrap() in N.get())
       │              -------- this call uses `N`
       = in `A.wrap`, what's called inside the `with` that installs `N` uses what `A.wrap` itself does: a parameter whose type is written `fn(...)`, or a closure that's called outside the `with` too, gets only what's installed outside it
@@ -1222,6 +1222,96 @@ fn main() = 1
    At `main`, in a test, and in a group's run, naming the dependency and
    the call that needs it. *)
 
+let%expect_test "the real Os and Proc" =
+  run ~args:[ "build"; "a b" ]
+    {|
+fn main() ! NoSuchProgram(name: Str) uses Os, Proc, Console =
+  print(Os.args())
+  // what's printed before a program runs comes out before what it prints
+  print("before")
+  print(try Proc.run("sh", ["-c", "echo $0 $1; exit 3", "x", "y z"]))
+  print(try Proc.run("true", []))
+  match attempt Proc.run("no-such-program", [])
+    Err(NoSuchProgram(name)) => print(name)
+    _ => print("it ran a program that isn't there")
+  print(try Proc.run("/bin/sh", ["-c", "exit 0"]))
+  try Proc.run("./no/such/program", [])
+|};
+  [%expect
+    {|
+    ["build", "a b"]
+    before
+    x y z
+    3
+    0
+    no-such-program
+    0
+    error: NoSuchProgram("./no/such/program")
+    |}];
+  run {|
+fn main() uses Os, Console =
+  print(Os.args())
+|};
+  [%expect {|
+    []
+    ()
+    |}]
+
+let%expect_test "the real Proc panics when a program can't run, or finish" =
+  (* a file that can be run, but isn't a program *)
+  let file = "not-a-program" in
+  Out_channel.with_open_bin file (fun oc -> output_string oc "\x00\x01");
+  Unix.chmod file 0o755;
+  run
+    {|
+fn main() ! NoSuchProgram(name: Str) uses Proc =
+  try Proc.run("./not-a-program", [])
+|};
+  Sys.remove file;
+  [%expect {|
+    error: panic: can't run ./not-a-program: Exec format error
+      ┌─ test.ren:2:7
+    2 │   try Proc.run("./not-a-program", [])
+      │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |}];
+  run
+    {|
+fn main() ! NoSuchProgram(name: Str) uses Proc =
+  try Proc.run("sh", ["-c", "kill -9 $$"])
+|};
+  [%expect {|
+    error: panic: sh was stopped by a signal
+      ┌─ test.ren:2:7
+    2 │   try Proc.run("sh", ["-c", "kill -9 $$"])
+      │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "the real Os and Proc are reached only through them" =
+  types
+    {|
+fn main() uses Console =
+  print(Proc.real)
+  print(os_args())
+  print(proc_run("sh", []))
+|};
+  [%expect {|
+    error: `Proc` has no operation or member named `real`
+      ┌─ test.ren:2:14
+    2 │   print(Proc.real)
+      │              ^^^^
+      help: its operations: `run`
+
+    error: there's no function named `os_args`
+      ┌─ test.ren:3:9
+    3 │   print(os_args())
+      │         ^^^^^^^
+
+    error: there's no function named `proc_run`
+      ┌─ test.ren:4:9
+    4 │   print(proc_run("sh", []))
+      │         ^^^^^^^^
+    |}]
+
 let%expect_test "main lists Fs to get the real one" =
   types {|
 fn load() -> Bool uses Fs = Fs.exists(Path.of("x"))
@@ -1247,7 +1337,7 @@ test "the real file system, and the test clock" uses Fs, Clock =
     error: nothing installs `TestClock` in the test "the real file system, and the test clock"
       ┌─ test.ren:1:6
     1 │ test "the real file system, and the test clock" uses Fs, Clock =
-      │      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this test gets only the real `Fs` and `Clock`, and the test `Random` and `Console`, and what controls them
+      │      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this test gets only the real `Fs` and `Clock`, and the test `Random`, `Console`, `Os` and `Proc`, and what controls them
     2 │   TestClock.advance(Duration.ms(1))
       │   --------------------------------- this call uses `TestClock`
       = the test asks for the real `Clock`, which `TestClock` can't control
@@ -1281,7 +1371,7 @@ fn main() uses Users, Console =
     error: nothing installs `Users` before `main`
       ┌─ test.ren:6:16
     6 │ fn main() uses Users, Console =
-      │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+      │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
     7 │   print(Users.get(1))
       │         ------------ this call uses `Users`
       help: install one inside `main`: `with Users.none() in ...`
@@ -1301,7 +1391,7 @@ fn main() = print(find(1))
     error: nothing installs `Users` before `main`
       ┌─ test.ren:7:4
     7 │ fn main() = print(find(1))
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
       │                   ------- this call uses `Users`
       help: install one inside `main`: `with mem_users(...) in ...`
     |}];
@@ -1325,14 +1415,14 @@ fn main() uses Net = print(Users.get(1))
     error: nothing installs `Users` before `main`
       ┌─ test.ren:4:4
     4 │ fn main() uses Net = print(Users.get(1))
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
       │                            ------------ this call uses `Users`
       help: install one inside `main`, with `with`: an implementation is a `Users { ... }` that gives each of its operations
 
     error: nothing installs `Net` before `main`
       ┌─ test.ren:4:16
     4 │ fn main() uses Net = print(Users.get(1))
-      │                ^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+      │                ^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
       help: remove it: nothing can implement `Net` yet
     |}]
 
@@ -1352,7 +1442,7 @@ fn main() uses Log =
     error: nothing installs `Log` before `main`
       ┌─ test.ren:4:16
     4 │ fn main() uses Log =
-      │                ^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+      │                ^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
     5 │   Log.put(1)
       │   ---------- this call uses `Log`
       help: install one inside `main`, with `with`: an implementation is a `Log { ... }` that gives each of its operations
@@ -1367,7 +1457,7 @@ fn main() uses Rates, Console = print(convert(1))
     error: nothing installs `Rates` before `main`
        ┌─ test.ren:16:16
     16 │ fn main() uses Rates, Console = print(convert(1))
-       │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+       │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
        │                                       ---------- this call uses `Rates`
        help: install one inside `main`: `with counting_rates(...) in ...`
     |}]
@@ -1391,7 +1481,7 @@ test "the system clock" uses Clock =
     error: nothing installs `Users` in the test "counts users"
       ┌─ test.ren:6:6
     6 │ test "counts users" =
-      │      ^^^^^^^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console` and `Fs`, and what controls them
+      │      ^^^^^^^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
     7 │   assert Users.count() == 0
       │          ------------- this call uses `Users`
       help: install one inside the test: `with Users.none() in ...`
@@ -1399,7 +1489,7 @@ test "the system clock" uses Clock =
     error: nothing installs `TestClock` in the test "the system clock"
        ┌─ test.ren:9:6
      9 │ test "the system clock" uses Clock =
-       │      ^^^^^^^^^^^^^^^^^^ this test gets only the real `Clock`, and the test `Random`, `Console` and `Fs`, and what controls them
+       │      ^^^^^^^^^^^^^^^^^^ this test gets only the real `Clock`, and the test `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
     10 │   TestClock.advance(Duration.ms(1))
        │   --------------------------------- this call uses `TestClock`
        = the test asks for the real `Clock`, which `TestClock` can't control
@@ -1415,7 +1505,7 @@ test "users" uses Users, ..d =
 |};
   [%expect
     {|
-    error: a test's `uses` asks for a real implementation, and only `Clock`, `Random`, `Console` and `Fs` have one, not `Users`
+    error: a test's `uses` asks for a real implementation, and only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` have one, not `Users`
       ┌─ test.ren:4:19
     4 │ test "users" uses Users, ..d =
       │                   ^^^^^
@@ -1448,7 +1538,7 @@ group "frozen" = counts(Clock.frozen(Time.epoch))
     error: nothing installs `Users` in the test "frozen / counts users"
        ┌─ test.ren:10:7
     10 │ group "frozen" = counts(Clock.frozen(Time.epoch))
-       │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console` and `Fs`, and what controls them
+       │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
        │                  -------------------------------- this call uses `Users`
        help: install one around each of its tests, in the group's `with`: `group counts(...) with Users.none() =`
     |}]
@@ -1477,7 +1567,7 @@ pub group counts() =
     error: nothing installs `conform.Users` in the test "frozen / counts users"
       ┌─ main.ren:3:7
     3 │ group "frozen" = conform.counts()
-      │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console` and `Fs`, and what controls them
+      │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
       │                  ---------------- this call uses `conform.Users`
       help: `conform.counts` is another module's group, so pass one in: give the group a parameter of type `conform.Users` that its `with` installs, and pass an implementation to it here
     |}]
@@ -2618,7 +2708,7 @@ fn main() uses Console =
     error: nothing installs `RateCalls` before `main`
        ┌─ test.ren:14:4
     14 │ fn main() uses Console =
-       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
     17 │     print(RateCalls.count())
        │           ----------------- this call uses `RateCalls`
        help: install one inside `main`: `with counting_rates(...) in ...`
@@ -3280,6 +3370,60 @@ fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Console =
     false
     2
     error: NoSuchFile("notes.txt")
+    |}]
+
+let%expect_test "a test gets no args, and programs that exit with 0" =
+  test
+    {|
+fn build() -> Int ! NoSuchProgram(name: Str) uses Proc =
+  try Proc.run("make", ["all"])
+
+test "nothing runs" =
+  assert Os.args() == []
+  assert TestProc.ran() == []
+
+test "what ran, in order" =
+  assert (try build()) == 0
+  assert (try Proc.run("no-such-program", [])) == 0
+  assert TestProc.ran() == [
+    Command { cmd: "make", args: ["all"] },
+    Command { cmd: "no-such-program", args: [] },
+  ]
+|};
+  [%expect {|
+    test.ren
+      ✓ nothing runs
+      ✓ what ran, in order
+
+    2 passed
+    [exit 0]
+    |}]
+
+let%expect_test "test_os and test_proc, installed by hand" =
+  run
+    {|
+fn build() -> Int ! NoSuchProgram(name: Str) uses Os, Proc =
+  var last = 0
+  for a in Os.args()
+    last = try Proc.run("make", [a])
+  last
+
+fn main() ! NoSuchProgram(name: Str) uses Console =
+  let fails = Command { cmd: "make", args: ["test"] }
+  with test_os(["all", "test"]), test_proc([Exit { command: fails, code: 2 }]) in
+    print(try build())
+    print(TestProc.ran())
+  // each instance starts with nothing run
+  with test_os(["all"]), test_proc([Exit { command: fails, code: 2 }]) in
+    print(try build())
+    print(TestProc.ran())
+|};
+  [%expect {|
+    2
+    [{ args: ["all"], cmd: "make" }, { args: ["test"], cmd: "make" }]
+    0
+    [{ args: ["all"], cmd: "make" }]
+    ()
     |}]
 
 let%expect_test "a test, a group and a group's run are items of their own" =

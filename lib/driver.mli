@@ -83,8 +83,15 @@ val suite :
   ?lint:bool -> ?load:loader -> dir:string -> (string * string) list -> suite
 
 (* Check every module, lower each one, link them into one program and run
-   its `main`, which is in the entry module. *)
-val run : ?lint:bool -> ?load:loader -> file:string -> string -> Value.t
+   its `main`, which is in the entry module, with [args] for the real
+   `Os.args`. *)
+val run :
+  ?lint:bool ->
+  ?load:loader ->
+  ?args:string list ->
+  file:string ->
+  string ->
+  Value.t
 val dump_tokens : (Token.t * Loc.t) array -> string
 
 (* The message for an exception a pass raised: a diagnostic, a panic or an

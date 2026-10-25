@@ -616,8 +616,9 @@ let types ?(lint = false) ?load ~file src =
 (* Check every module, lower each to Core, and run them as one program: the prelude, then each module in
    dependency order, starting from the entry's `$start`, which installs
    what `main` uses and calls it. *)
-let run ?lint ?load ~file src =
+let run ?lint ?load ?(args = []) ~file src =
   let checked = check_all ?load ~file src in
+  Prelude.args := args;
   let modules = link ?lint checked in
   try pass "eval" (fun () -> Eval.run modules)
   with Eval.Assert_failed { loc; sides } ->

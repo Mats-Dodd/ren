@@ -32,8 +32,8 @@ type outcome =
 
 (* Run the test whose function is [fn] (test_items.ml), with a fresh
    instance of the test implementation of each built-in dependency, or
-   the real one, for those named in [real] (`Clock`, `Random`,
-   `Console`); the test `Random` starts from [seed]. Returns how it ended,
-   and what it wrote to the test `Console`. *)
+   the real one, for those named in [real] (`Clock`, `Fs`, ...); the test
+   `Random` starts from [seed]. Returns how it ended, and what it wrote to
+   the test `Console`. *)
 val run_test :
   ctx -> fn:Path.t -> real:string list -> seed:int -> outcome * string list

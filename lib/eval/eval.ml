@@ -499,6 +499,8 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
         ("Random", "test_random", [ VInt seed ]);
         ("Console", "test_console", []);
         ("Fs", "mem_fs", [ VArray [||] ]);
+        ("Os", "test_os", [ VArray [||] ]);
+        ("Proc", "test_proc", [ VArray [||] ]);
       ]
   in
   let outcome =
