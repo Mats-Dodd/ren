@@ -1,0 +1,143 @@
+================================================================================
+test: a name, the real dependencies it asks for, and assert
+================================================================================
+
+test "a deposit is stamped" uses Clock =
+  TestClock.advance(Duration.minutes(5))
+  assert acme.statement(a)[0].at == Time.epoch
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (test_definition
+    (string)
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (call_expression
+        (item_expression
+          (type_name
+            (type_identifier))
+          (identifier))
+        (arguments
+          (call_expression
+            (item_expression
+              (type_name
+                (type_identifier))
+              (identifier))
+            (arguments
+              (number)))))
+      (assert_expression
+        (binary_expression
+          (field_expression
+            (index_expression
+              (method_call_expression
+                (identifier)
+                (identifier)
+                (arguments
+                  (identifier)))
+              (number))
+            (identifier))
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier)))))))
+
+================================================================================
+group: public, its parameters, its with, and its tests
+================================================================================
+
+pub group clock_conforms(c: Clock, n: Int) with c, retry(n) =
+  test "instant never goes backwards" =
+    let a = Clock.instant()
+    assert Clock.instant().not_before(a)
+  test "one line" = assert true
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (group_definition
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (identifier)
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)))
+    (test_definition
+      (string)
+      (block
+        (let_statement
+          (identifier)
+          (call_expression
+            (item_expression
+              (type_name
+                (type_identifier))
+              (identifier))
+            (arguments)))
+        (assert_expression
+          (method_call_expression
+            (call_expression
+              (item_expression
+                (type_name
+                  (type_identifier))
+                (identifier))
+              (arguments))
+            (identifier)
+            (arguments
+              (identifier))))))
+    (test_definition
+      (string)
+      (assert_expression
+        (boolean)))))
+
+================================================================================
+group run: a label and a call, of a group here or another module's
+================================================================================
+
+group "frozen" = clock_conforms(Clock.frozen(Time.epoch))
+group "imported" = conform.clocks(test_clock(Time.epoch))
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (group_run
+    (string)
+    (call_expression
+      (identifier)
+      (arguments
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments
+            (item_expression
+              (type_name
+                (type_identifier))
+              (identifier)))))))
+  (group_run
+    (string)
+    (method_call_expression
+      (identifier)
+      (identifier)
+      (arguments
+        (call_expression
+          (identifier)
+          (arguments
+            (item_expression
+              (type_name
+                (type_identifier))
+              (identifier))))))))

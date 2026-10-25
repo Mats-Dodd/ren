@@ -166,6 +166,12 @@ and kind =
           [on_value]; if it fails, its error is [error] (of an [Errors] type),
           and the [Handle] is [on_error]. Neither of those is handled here: what
           they fail with goes on *)
+  | Assert of expr
+      (** panic if this [Bool] is false: `assert e` (deps.md, "`assert`"). A
+          [Unit] *)
+  | Assert_equal of expr * expr
+      (** panic if these two, of the same type, differ, showing both: `assert a
+          == b`. A [Unit] *)
   | Finally of expr * expr
       (** [body], then [after], a [Unit], which runs whether [body] fails or
           not, and doesn't change what [body] did: its value, or its error,
@@ -254,10 +260,15 @@ let children (e : expr) =
   | With { impl; body; _ } -> [ impl; body ]
   | With_handler { handler; body; _ } -> [ handler; body ]
   | Instance impls -> List.map snd impls
-  | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
-    ->
+  | Let (_, a, b)
+  | While (a, b)
+  | Seq (a, b)
+  | Update (a, _, b)
+  | Finally (a, b)
+  | Assert_equal (a, b) ->
       [ a; b ]
   | Assign (_, a)
+  | Assert a
   | Field (a, _, _)
   | As_dep (_, a)
   | Fail a
@@ -438,6 +449,8 @@ let rec sexp e =
           List [ atom "fail"; var error; atom "=>"; sexp on_error ];
         ]
   | Finally (body, after) -> List [ atom "finally"; sexp body; sexp after ]
+  | Assert a -> List [ atom "assert"; sexp a ]
+  | Assert_equal (a, b) -> List [ atom "assert"; atom "=="; sexp a; sexp b ]
 
 and arm_sexp a =
   let guard =

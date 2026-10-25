@@ -39,6 +39,9 @@
   "not"
   "with"
   "handler"
+  "test"
+  "group"
+  "assert"
 ] @keyword
 
 (visibility) @keyword
@@ -71,6 +74,7 @@
 (operation name: (identifier) @function)
 (handler_definition name: (identifier) @function)
 (handler_arm name: (identifier) @function)
+(group_definition name: (identifier) @function)
 (type_parameters (type_identifier) @type)
 (variant name: (type_identifier) @constructor)
 (payload name: (identifier) @property)

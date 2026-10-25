@@ -1,5 +1,6 @@
-; vim mode's text objects: `af`/`if` a function, `ac`/`ic` a type with its
-; members (`ac` a dependency or a handler), `gc` a comment.
+; vim mode's text objects: `af`/`if` a function or a test, `ac`/`ic` a
+; type with its members (`ac` a dependency, a handler or a group), `gc` a
+; comment.
 
 (function_definition
   body: (_) @function.inside) @function.around
@@ -21,5 +22,11 @@
 
 (handler_arm
   body: (_) @function.inside) @function.around
+
+(test_definition
+  body: (_) @function.inside) @function.around
+
+; a group, with its tests
+(group_definition) @class.around
 
 (comment)+ @comment.around

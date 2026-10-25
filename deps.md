@@ -372,6 +372,28 @@ stage, or settled something the plan left open:
   calling it, `transaction()`, describes it, and `with transaction in`
   is an error whose help says to call it.
 
+- **`test`, `group` and `assert` are keywords,** so nothing else can be
+  named one.
+- **Tests are checked whenever their module is,** by `ren run` and `ren
+  check` too, which don't run them, so a broken test stops `ren run`.
+  It's what lets a module import another only to run its `pub group`.
+- **A group's parameters are written in parentheses even if it has
+  none,** `group smoke() =`, as a handler's are, and its `with` is
+  optional.
+- **A test in a group's run is named after the run's label,** `frozen /
+  instant never goes backwards`: that's the name `--only` looks in and
+  its seed comes from, and what a failure is headed with.
+- **The test `Clock` moves on when it's slept on,** as `advance` moves
+  it, so sleeping in a test takes no time.
+- **The test `Random`'s numbers come from its seed alone,** by a linear
+  congruential generator, the same on every machine. A test's own seed
+  is a hash of its name, from 0 to 9999.
+- **A failure's rerun names the shortest start of the test's name, of at
+  least two words, that no other test's name has,** or all of it.
+  What the test printed comes after it, under `printed:`.
+- **`REN_NO_TIMINGS`, set, leaves out how long the tests took,** as the
+  cram tests do.
+
 ## Later
 
 - `outer` and forwarding handlers, `Async`, the journal (stage 9).

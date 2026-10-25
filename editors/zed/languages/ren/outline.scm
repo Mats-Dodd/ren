@@ -1,6 +1,7 @@
 ; The outline: every function, type, dependency and handler, and under a
 ; type its members, under a dependency its operations and members, and
-; under a handler the operations it implements.
+; under a handler the operations it implements; and every test, group and
+; group run, with a group's tests under it.
 
 (function_definition
   (visibility)? @context
@@ -35,5 +36,18 @@
 
 (operator_definition
   name: (identifier) @name) @item
+
+(test_definition
+  "test" @context
+  name: (string) @name) @item
+
+(group_definition
+  (visibility)? @context
+  "group" @context
+  name: (identifier) @name) @item
+
+(group_run
+  "group" @context
+  label: (string) @name) @item
 
 (comment) @annotation

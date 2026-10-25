@@ -5,7 +5,9 @@
    prelude's included, and [reachable] those of every module reachable
    through them, whose types it can meet. [entry], when
    given, is the file of the module the program starts in, which has to
-   have a `main`. *)
+   have a `main`. [tests] are the module's tests, each a function by now
+   (test_items.ml): what the runtime installs around each is checked as it
+   is for `main`. *)
 
 (* What a lookup through a type found. *)
 type found =
@@ -59,5 +61,6 @@ val program :
   imports:Iface.t list ->
   reachable:Iface.t list ->
   ?entry:string ->
+  ?tests:Test_items.test list ->
   Resolve.t ->
   t

@@ -6,7 +6,8 @@
    expressions.
 
      program  := item { NEWLINE item } EOF       (imports come first)
-     item     := import | ["pub"] (fn_def | type_def | dep_def)
+     item     := import | ["pub"] (fn_def | type_def | dep_def | handler
+                                   | group) | test | run
      import   := "import" IDENT { "/" IDENT } ["." "{" UIDENT, ... "}"]
                  ["as" IDENT]
      fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
@@ -37,6 +38,14 @@
                                                    (its operations, then its
                                                     members)
      dep_op   := IDENT ":" "fn" fn_type
+     handler  := "handler" IDENT "(" param, ... ")" "for" tyname, ...
+                 [uses] "=" INDENT { stmt NEWLINE } arm_impl
+                 { NEWLINE arm_impl } DEDENT
+     arm_impl := IDENT "(" param, ... ")" "=>" body
+     test     := "test" STR [uses] "=" body
+     group    := "group" IDENT "(" param, ... ")" ["with" expr, ...] "="
+                 INDENT test { NEWLINE test } DEDENT
+     run      := "group" STR "=" expr               (a call of a group)
      op       := ["pub"] fn_def
               |  ["pub"] "let" IDENT [":" type] "=" body
               |  IDENT ["(" param, ... ")"] "=>" body
@@ -81,6 +90,7 @@
      mul      := unary { ("*" | "/" | "%") unary }
      unary    := "-" unary | "&" unary | postfix
               |  "try" expr | "attempt" expr        (everything to its right)
+              |  "assert" expr
      postfix  := primary { "." IDENT | "[" expr "]"
                          | "(" expr, ... ")" [lambda] }
                                                     (a trailing lambda is
@@ -744,6 +754,13 @@ and parse_unary p =
       advance p;
       let e = parse_expr p in
       mk (if kw = TRY then Try e else Attempt e) start p
+  | ASSERT ->
+      (* like `try`, it takes the whole expression to its right:
+         `assert a == b` checks `a == b` *)
+      let start = loc p in
+      advance p;
+      let e = parse_expr p in
+      mk (Assert e) start p
   | _ -> parse_postfix p
 
 (* Field access and calls bind tightest: `-user.age` is `-(user.age)`. *)
@@ -1496,6 +1513,148 @@ let parse_handler p ~pub =
     loc = Loc.span start (last_loc p);
   }
 
+(* ---- tests ---- *)
+
+(* A test (deps.md, "Tests"): its name, a string, and the built-in
+   dependencies whose real implementation it asks for.
+
+     test "the system clock moves" uses Clock =
+       body *)
+let parse_test p =
+  expect p TEST;
+  let test_name, test_loc =
+    match peek p with
+    | STR s ->
+        let l = loc p in
+        advance p;
+        (s, l)
+    | tok ->
+        Diag.error (loc p)
+          ~help:"name it with a string, saying what it checks: `test \"...\" =`"
+          (Printf.sprintf "expected the test's name, a string, found %s"
+             (describe tok))
+  in
+  let test_uses =
+    if peek p = USES then Some (parse_uses ~greedy:true p)
+    else if peek p = NEWLINE && peek2 p = USES then
+      Diag.error ~help:"indent it, so it continues the test's first line"
+        (snd p.toks.(p.i + 1))
+        "`uses` on a line of its own has to be indented"
+    else None
+  in
+  if peek p <> EQ then
+    Diag.error (loc p) ~help:"write `=`, then the test's body"
+      (Printf.sprintf "expected `=` after the test's name, found %s"
+         (describe (peek p)));
+  advance p;
+  let test_body = parse_body p in
+  { test_name; test_loc; test_uses; test_body }
+
+(* A group (deps.md, "Groups"): a function of its parameters, whose tests
+   each run inside its `with`,
+
+     pub group clock_conforms(c: Clock) with c =
+       test "instant never goes backwards" =
+         ...
+
+   or a run of one, with its arguments, under a label:
+
+     group "frozen" = clock_conforms(Clock.frozen(Time.epoch)) *)
+let parse_group p ~pub =
+  expect p GROUP;
+  match peek p with
+  | STR run_label ->
+      let run_loc = loc p in
+      if pub then
+        Diag.error run_loc
+          ~help:"remove the `pub`: a `pub group` is one other modules can run"
+          "a group's run can't be `pub`";
+      advance p;
+      if peek p <> EQ then
+        Diag.error (loc p)
+          ~help:"write `=`, then the group it runs: `group \"...\" = g(...)`"
+          (Printf.sprintf "expected `=` after the group's label, found %s"
+             (describe (peek p)));
+      advance p;
+      let run_call = parse_expr p in
+      (match run_call.kind with
+      | Call _ -> ()
+      | _ ->
+          Diag.error run_call.loc
+            ~help:"call the group with its arguments: `g(...)`"
+            "a group's run calls a group, with the arguments for its tests");
+      Testing (Run_group { run_label; run_loc; run_call })
+  | _ ->
+      let group_name = lower_ident p "a group's name" in
+      if peek p <> LPAREN then
+        Diag.error (loc p)
+          ~help:
+            (Printf.sprintf
+               "write its parameters, `group %s() =`, even if it has none"
+               group_name.name)
+          (Printf.sprintf "expected `(` after the group's name, found %s"
+             (describe (peek p)));
+      advance p;
+      let group_params = sep_list p ~close:RPAREN parse_param in
+      let group_with =
+        if peek p = WITH then (
+          advance p;
+          let rec items acc =
+            let item = parse_expr p in
+            if peek p = COMMA then (
+              advance p;
+              items (item :: acc))
+            else List.rev (item :: acc)
+          in
+          items [])
+        else []
+      in
+      if peek p <> EQ then
+        Diag.error (loc p)
+          ~help:
+            "write `=`, then its tests, indented under it; `with` before the \
+             `=` installs something around each one"
+          (Printf.sprintf
+             "expected `with` or `=` after the group's parameters, found %s"
+             (describe (peek p)));
+      advance p;
+      if peek p <> INDENT then
+        Diag.error (loc p)
+          ~help:"put its tests on the lines after it, indented under it"
+          (Printf.sprintf "expected the tests of the group `%s`, found %s"
+             group_name.name
+             (describe (peek p)));
+      advance p;
+      let test p =
+        if peek p <> TEST then
+          Diag.error (loc p)
+            ~help:"move it out of the group: a group holds only tests"
+            (Printf.sprintf "expected a test, `test \"...\" =`, found %s"
+               (describe (peek p)));
+        parse_test p
+      in
+      let rec tests acc =
+        let t = test p in
+        match peek p with
+        | NEWLINE ->
+            advance p;
+            tests (t :: acc)
+        | DEDENT ->
+            advance p;
+            List.rev (t :: acc)
+        | _ -> fail_expected p "the end of the line"
+      in
+      let group_tests = tests [] in
+      Testing
+        (Group
+           {
+             group_pub = pub;
+             group_name;
+             group_params;
+             group_with;
+             group_tests;
+           })
+
 let parse_item p =
   p.node <- 0;
   let pub = peek p = PUB in
@@ -1505,6 +1664,14 @@ let parse_item p =
   | TYPE -> Type (parse_type p ~pub)
   | DEP -> Type (parse_dep p ~pub)
   | HANDLER -> Fn (parse_handler p ~pub)
+  | GROUP -> parse_group p ~pub
+  | TEST when pub ->
+      Diag.error (loc p)
+        ~help:
+          "remove the `pub`: to share tests, put them in a `pub group`, which \
+           other modules can run"
+        "a test can't be `pub`"
+  | TEST -> Testing (Test (parse_test p))
   | IMPORT when pub ->
       Diag.error (loc p)
         ~help:"remove the `pub`: a module can't pass on what it imports"
@@ -1513,9 +1680,11 @@ let parse_item p =
   | _ ->
       Diag.error (loc p)
         ~help:
-          "only imports, and function, type, dependency and handler \
-           definitions, can appear at the top level (for now)"
-        (Printf.sprintf "expected `fn`, `type`, `dep` or `handler`, found %s"
+          "only imports, function, type, dependency and handler definitions, \
+           tests and groups can appear at the top level (for now)"
+        (Printf.sprintf
+           "expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found \
+            %s"
            (describe (peek p)))
 
 (* After a syntax error, skip to where the next top-level item starts: a

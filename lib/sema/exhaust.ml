@@ -365,7 +365,8 @@ let rec check_expr env (e : expr) =
   | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms
-  | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> check_expr env a
+  | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+      check_expr env a
   | Fail (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Binop (_, a, b) | Index (a, b) ->
       check_expr env a;

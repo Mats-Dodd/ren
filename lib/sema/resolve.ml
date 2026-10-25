@@ -1108,6 +1108,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         Fail (t, List.map (fun (l, a) -> (l, go a)) args)
     | Try a -> Try (go a)
     | Attempt a -> Attempt (go a)
+    | Assert a -> Assert (go a)
     | With { item; body; lam } ->
         let item = go item in
         With { item; body = go body; lam }
@@ -1312,7 +1313,7 @@ let no_opaque_cycles env (items : Resolved.program) =
     (function
       | Type ({ type_body = Opaque t; _ } as td) ->
           Hashtbl.replace reps td.type_name.name t
-      | Fn _ | Type _ | Import _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ -> ())
     items;
   (* the opaque type of this module that [t] is, if it's one *)
   let opaque (t : Resolved.ty) =
@@ -1347,7 +1348,7 @@ let no_opaque_cycles env (items : Resolved.program) =
             | None -> ()
           in
           follow [ start.name ] t
-      | Fn _ | Type _ | Import _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ -> ())
     items
 
 (* A named error set can include others, but never itself, by way of
@@ -1360,7 +1361,7 @@ let no_set_cycles env (items : Resolved.program) =
     (function
       | Type ({ type_body = Errors es; _ } as td) ->
           Hashtbl.replace sets td.type_name.name es
-      | Fn _ | Type _ | Import _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ -> ())
     items;
   (* the module's own sets [n] includes directly, in the order written *)
   let includes n =
@@ -1403,7 +1404,7 @@ let no_set_cycles env (items : Resolved.program) =
                 (sprintf "`%s` includes itself: %s" n
                    (String.concat " → " (n :: way)))
           | None -> ())
-      | Fn _ | Type _ | Import _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ -> ())
     items
 
 (* A function: a top-level one, or, with [owner], one of that type's
@@ -1871,7 +1872,7 @@ let no_leaks env ~private_ (items : Resolved.program) =
               no_private_errors env ~private_ es
                 ~set:(sprintf "`pub type %s` includes `%s`" t)
                 ~tag:(sprintf "`pub type %s`'s error `%s` mentions `%s`" t))
-      | Fn _ | Type _ | Import _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ -> ())
     items
 
 (* What isn't used is reported once: the whole import, or one of the types
@@ -1917,7 +1918,8 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
   let types =
     List.filter_map
       (function
-        | Type (td : Resolved.type_def) -> Some td | Fn _ | Import _ -> None)
+        | Type (td : Resolved.type_def) -> Some td
+        | Fn _ | Import _ | Testing _ -> None)
       items
   in
   let method_ (td : Resolved.type_def) =
@@ -1950,6 +1952,8 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
   | Some None | None -> []
 
 let program sink ~home ~imports (prog : Parsed.program) =
+  (* tests are functions by now (test_items.ml); any left are ignored *)
+  let prog = List.filter (function Testing _ -> false | _ -> true) prog in
   (* each import, with the interface of the module it imports; the driver
      passes the interface of every module the program imports *)
   let imported =
@@ -1957,7 +1961,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
       (function
         | Import (i : import) ->
             Some (i, List.find (fun (m : Iface.t) -> m.home = i.path) imports)
-        | Fn _ | Type _ -> None)
+        | Fn _ | Type _ | Testing _ -> None)
       prog
   in
   let env =
@@ -2048,7 +2052,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
                   (fun (o : Parsed.op) -> (o.op_fn.name.name, kind o))
                   td.type_ops,
                 fields )
-      | Fn _ | Import _ -> ())
+      | Fn _ | Import _ | Testing _ -> ())
     prog;
   let first_local = Hashtbl.create 16 in
   List.iter
@@ -2096,7 +2100,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
               Hashtbl.replace first_local name.name name.loc;
               Hashtbl.replace env.types name.name
                 (Path.make home name.name, List.length td.type_params))
-      | Fn _ | Import _ -> ())
+      | Fn _ | Import _ | Testing _ -> ())
     prog;
   (* the functions in scope: the prelude's, then this module's own *)
   List.iter
@@ -2113,7 +2117,9 @@ let program sink ~home ~imports (prog : Parsed.program) =
     prelude;
   let fns =
     List.filter_map
-      (function Fn (f : Parsed.fn_def) -> Some f | Type _ | Import _ -> None)
+      (function
+        | Fn (f : Parsed.fn_def) -> Some f
+        | Type _ | Import _ | Testing _ -> None)
       prog
   in
   (* a handler is a function of its parameters, so it shares their names *)
@@ -2159,7 +2165,8 @@ let program sink ~home ~imports (prog : Parsed.program) =
            | Fn f ->
                let f', calls, dots = fn_def env f in
                (Fn f', [ (f.name.name, calls, dots) ])
-           | Import i -> (Import i, []))
+           | Import i -> (Import i, [])
+           | Testing _ -> (* left out above *) assert false)
          prog)
   in
   let private_ = Hashtbl.create 8 in
@@ -2167,7 +2174,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
     (function
       | Type (td : Resolved.type_def) when not td.type_pub ->
           Hashtbl.replace private_ td.type_name.name td.type_name.loc
-      | Fn _ | Type _ | Import _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ -> ())
     items;
   no_leaks env ~private_ items;
   no_opaque_cycles env items;
@@ -2177,7 +2184,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
       (function
         | Type td -> Some (Iface.of_type_def ~home ~sets:(sets env items) td)
         | Fn f -> Iface.of_handler ~home f
-        | Import _ -> None)
+        | Import _ | Testing _ -> None)
       items
   in
   (* [imported n] says whether the name [n] in `.{}` imported a type; one

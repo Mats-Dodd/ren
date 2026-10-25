@@ -1868,6 +1868,9 @@ and synth env cx (e : expr) : ty =
       in
       TCon (result_path, [ t; TErrors kept ])
   | With { item; body; lam } -> with_ env cx e item body lam
+  | Assert a ->
+      want_bool env "what an `assert` checks" a (infer env cx a);
+      unit
   | Handler { deps; state; arms; _ } ->
       let needs = fresh_row env.st in
       handler env cx state arms ~needs ~declared:None;
@@ -2334,7 +2337,7 @@ and outer_changes env (body : expr) name =
             Option.iter walk a.arm_guard;
             walk a.arm_body)
           arms
-    | Unop (_, a) | Field (a, _) | Try a | Attempt a -> walk a
+    | Unop (_, a) | Field (a, _) | Try a | Attempt a | Assert a -> walk a
     | Binop (_, a, b) | Index (a, b) -> all [ a; b ]
     | If (c, t, f) -> all (c :: t :: Option.to_list f)
     | Call (f, args) -> all (f :: args)

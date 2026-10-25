@@ -420,7 +420,7 @@ let of_module ~home ~sets (prog : Ast.Resolved.program) =
           | Ast.Type td when td.type_pub ->
               Some (public (of_type_def ~home ~sets td))
           | Fn f when f.pub -> of_handler ~home f
-          | Type _ | Fn _ | Import _ -> None)
+          | Type _ | Fn _ | Import _ | Testing _ -> None)
         prog;
     values =
       List.filter_map

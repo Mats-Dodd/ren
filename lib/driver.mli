@@ -23,6 +23,9 @@ type loader = string -> string option
    [entry]: paths start from the entry's folder. *)
 val module_file : entry:string -> string -> string
 
+(* The same, for a program in the folder [dir]. *)
+val file_in : dir:string -> string -> string
+
 (* The entry module, checked and type-checked against the prelude and what
    it imports, once each module it imports has been. *)
 val check : ?load:loader -> file:string -> string -> Ast.Parsed.program
@@ -59,6 +62,25 @@ val types :
   file:string ->
   string ->
   (string * string list) list
+
+(* A program's tests, checked and lowered with the functions they were
+   made (test_items.ml), ready to run (test_runner.ml). *)
+type suite = {
+  core : Core.program list;  (** the program, the prelude first *)
+  files : (string * string * Test_items.test list) list;
+      (** each module's file, its path (its home) and its tests, in the order
+          the files' names sort in *)
+  types : Iface.type_decl list;
+      (** every type, the prelude's included, as its own module sees it *)
+}
+
+(* Every test of the program in the folder [dir] whose modules include
+   [roots], each a file and its source: `ren test` on a folder checks
+   every module in it, whether another imports it or not. A module that
+   has a `main` is checked as the program's entry. With [lint], each
+   module is linted too. *)
+val suite :
+  ?lint:bool -> ?load:loader -> dir:string -> (string * string) list -> suite
 
 (* Check every module, lower each one, link them into one program and run
    its `main`, which is in the entry module. *)

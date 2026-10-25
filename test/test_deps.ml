@@ -4046,3 +4046,667 @@ fn main() uses Console =
     ["kept", "too"]
     ()
     |}]
+
+(* ---- tests (deps.md, "Tests") ---- *)
+
+let%expect_test "a test, a group and a group's run are items of their own" =
+  ast
+    {|
+test "two is two" uses Clock =
+  assert 1 + 1 == 2
+
+pub group conforms(c: Clock, n: Int) with c, Clock.frozen(Time.epoch) =
+  test "it runs" =
+    assert n > 0
+  test "and again" =
+    assert true
+
+group "frozen" = conforms(Clock.frozen(Time.epoch), 1)
+|};
+  [%expect
+    {|
+    (test "two is two" (uses Clock) (assert (== (+ 1 1) 2)))
+    (pub group conforms (c:Clock n:Int) (with c (call (. (con Clock) frozen) (. (con Time) epoch))) (test "it runs" (assert (> n 0))) (test "and again" (assert true)))
+    (group "frozen" (call conforms (call (. (con Clock) frozen) (. (con Time) epoch)) 1))
+    |}]
+
+let%expect_test "what a test or a group can't be" =
+  ast {|
+test two =
+  assert true
+|};
+  [%expect
+    {|
+    error: expected the test's name, a string, found `two`
+      ┌─ test.ren:1:6
+    1 │ test two =
+      │      ^^^
+      help: name it with a string, saying what it checks: `test "..." =`
+    |}];
+  ast {|
+pub test "shared" =
+  assert true
+|};
+  [%expect
+    {|
+    error: a test can't be `pub`
+      ┌─ test.ren:1:5
+    1 │ pub test "shared" =
+      │     ^^^^
+      help: remove the `pub`: to share tests, put them in a `pub group`, which other modules can run
+    |}];
+  ast
+    {|
+group conforms with Clock.frozen(Time.epoch) =
+  test "x" =
+    assert true
+|};
+  [%expect
+    {|
+    error: expected `(` after the group's name, found `with`
+      ┌─ test.ren:1:16
+    1 │ group conforms with Clock.frozen(Time.epoch) =
+      │                ^^^^
+      help: write its parameters, `group conforms() =`, even if it has none
+    |}];
+  ast {|
+group conforms() =
+  fn helper() = 1
+|};
+  [%expect
+    {|
+    error: expected a test, `test "..." =`, found `fn`
+      ┌─ test.ren:2:3
+    2 │   fn helper() = 1
+      │   ^^
+      help: move it out of the group: a group holds only tests
+    |}];
+  ast {|
+group "frozen" = conforms
+|};
+  [%expect
+    {|
+    error: a group's run calls a group, with the arguments for its tests
+      ┌─ test.ren:1:18
+    1 │ group "frozen" = conforms
+      │                  ^^^^^^^^
+      help: call the group with its arguments: `g(...)`
+    |}];
+  ast {|
+pub group "frozen" = conforms()
+|};
+  [%expect
+    {|
+    error: a group's run can't be `pub`
+      ┌─ test.ren:1:11
+    1 │ pub group "frozen" = conforms()
+      │           ^^^^^^^^
+      help: remove the `pub`: a `pub group` is one other modules can run
+    |}]
+
+let%expect_test "a test gets the test dependencies, and shows how it failed" =
+  test
+    {|
+type Money = opaque Int
+  pub fn dollars(n: Int) -> Money = n * 100
+  pub fn minus(self, m: Money) -> Money = self - m
+
+type Account = { id: Int, balance: Money, at: Time }
+
+// private, and a test can call it
+fn pay(a: Account, m: Money) -> Account uses Clock =
+  Account { id: a.id, balance: a.balance.minus(m), at: Clock.now() }
+
+fn main() uses Clock, Console =
+  print("paying")
+  let a = pay(Account { id: 1, balance: Money.dollars(1), at: Time.epoch }, Money.dollars(1))
+  print(a.balance == Money.dollars(0))
+
+test "paying takes the money" =
+  let a = Account { id: 1, balance: Money.dollars(1), at: Time.epoch }
+  TestClock.advance(Duration.minutes(5))
+  let paid = pay(a, Money.dollars(1))
+  assert paid == Account { id: 1, balance: Money.dollars(0), at: Time.epoch.plus(Duration.minutes(5)) }
+
+test "paying too much is caught" =
+  let a = Account { id: 1, balance: Money.dollars(1), at: Time.epoch }
+  print("before")
+  assert pay(a, Money.dollars(2)) == a
+
+test "main prints" =
+  main()
+  assert TestConsole.output() == ["paying", "true"]
+|};
+  [%expect
+    {|
+    test.ren
+      ✓ paying takes the money
+      ✗ paying too much is caught
+      ✓ main prints
+
+    ──── paying too much is caught ── test.ren:25
+       │
+    25 │   assert pay(a, Money.dollars(2)) == a
+       │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  Account { id: 1, balance: Money(-100), at: Time(0) }
+       right: Account { id: 1, balance: Money(100), at: Time(0) }
+                                              ^ differs here
+
+       seed 6438 · rerun: ren test test.ren --only "paying too" --seed 6438
+
+       printed:
+         before
+
+    2 passed, 1 failed
+    [exit 1]
+    |}]
+
+let%expect_test "a test without a real dependency prints the same every time" =
+  let src =
+    {|
+fn roll() -> Int uses Random = Random.int(6) + 1
+
+test "a roll is a die's" =
+  let r = roll()
+  print(r)
+  assert r > 6
+
+test "the seed is the test's" =
+  print(TestRandom.seed())
+  assert false
+|}
+  in
+  test src;
+  [%expect
+    {|
+    test.ren
+      ✗ a roll is a die's
+      ✗ the seed is the test's
+
+    ──── a roll is a die's ── test.ren:6
+      │
+    6 │   assert r > 6
+      │          ^^^^^
+      │
+      this is false
+
+      seed 8482 · rerun: ren test test.ren --only "a roll" --seed 8482
+
+      printed:
+        5
+
+    ──── the seed is the test's ── test.ren:10
+       │
+    10 │   assert false
+       │          ^^^^^
+       │
+       this is false
+
+       seed 2770 · rerun: ren test test.ren --only "the seed" --seed 2770
+
+       printed:
+         2770
+
+    0 passed, 2 failed
+    [exit 1]
+    |}];
+  test src;
+  [%expect
+    {|
+    test.ren
+      ✗ a roll is a die's
+      ✗ the seed is the test's
+
+    ──── a roll is a die's ── test.ren:6
+      │
+    6 │   assert r > 6
+      │          ^^^^^
+      │
+      this is false
+
+      seed 8482 · rerun: ren test test.ren --only "a roll" --seed 8482
+
+      printed:
+        5
+
+    ──── the seed is the test's ── test.ren:10
+       │
+    10 │   assert false
+       │          ^^^^^
+       │
+       this is false
+
+       seed 2770 · rerun: ren test test.ren --only "the seed" --seed 2770
+
+       printed:
+         2770
+
+    0 passed, 2 failed
+    [exit 1]
+    |}];
+  (* `--seed` sets every test's *)
+  test ~seed:7 src;
+  [%expect
+    {|
+    test.ren
+      ✗ a roll is a die's
+      ✗ the seed is the test's
+
+    ──── a roll is a die's ── test.ren:6
+      │
+    6 │   assert r > 6
+      │          ^^^^^
+      │
+      this is false
+
+      seed 7 · rerun: ren test test.ren --only "a roll" --seed 7
+
+      printed:
+        5
+
+    ──── the seed is the test's ── test.ren:10
+       │
+    10 │   assert false
+       │          ^^^^^
+       │
+       this is false
+
+       seed 7 · rerun: ren test test.ren --only "the seed" --seed 7
+
+       printed:
+         7
+
+    0 passed, 2 failed
+    [exit 1]
+    |}]
+
+let%expect_test "a test's `uses` asks for the real implementation" =
+  test
+    {|
+test "the system clock is past the epoch" uses Clock =
+  assert Clock.now().after(Time.epoch)
+
+test "the test clock isn't" =
+  assert Clock.now() == Time.epoch
+|};
+  [%expect
+    {|
+    test.ren
+      ✓ the system clock is past the epoch
+      ✓ the test clock isn't
+
+    2 passed
+    [exit 0]
+    |}];
+  test ~list:true
+    {|
+test "the system clock is past the epoch" uses Clock, Random =
+  assert Clock.now().after(Time.epoch)
+
+test "the test clock isn't" =
+  assert Clock.now() == Time.epoch
+|};
+  [%expect
+    {|
+    test.ren
+      the system clock is past the epoch · uses the real `Clock` and `Random`
+      the test clock isn't
+    [exit 0]
+    |}]
+
+let%expect_test "a test that fails with an error, or panics" =
+  test
+    {|
+fn half(n: Int) -> Int ! Odd(Int) =
+  if n % 2 == 1 then fail Odd(n)
+  n / 2
+
+test "three halves" =
+  try half(3)
+
+test "dividing by zero" =
+  let zero = 0
+  assert 1 / zero == 1
+|};
+  [%expect
+    {|
+    test.ren
+      ✗ three halves
+      ✗ dividing by zero
+
+    ──── three halves ── test.ren:5
+      │
+    5 │ test "three halves" =
+      │      ^^^^^^^^^^^^^^
+      │
+      error: Odd(3)
+
+      seed 7036 · rerun: ren test test.ren --only "three halves" --seed 7036
+
+    ──── dividing by zero ── test.ren:10
+       │
+    10 │   assert 1 / zero == 1
+       │          ^^^^^^^^
+       │
+       panic: division by zero
+
+       seed 6354 · rerun: ren test test.ren --only "dividing by" --seed 6354
+
+    0 passed, 2 failed
+    [exit 1]
+    |}]
+
+let%expect_test "what a test can't use" =
+  test
+    {|
+dep Users =
+  count: fn() -> Int
+
+  pub fn none() -> Users = Users { count: fn() => 0 }
+
+test "counts users" =
+  assert Users.count() == 0
+
+test "the system clock" uses Clock =
+  TestClock.advance(Duration.ms(1))
+|};
+  [%expect
+    {|
+    error: nothing installs `Users` in the test "counts users"
+      ┌─ test.ren:6:6
+    6 │ test "counts users" =
+      │      ^^^^^^^^^^^^^^ a test gets only the test `Clock`, `Random` and `Console`, and what controls them
+    7 │   assert Users.count() == 0
+      │          ------------- this call uses `Users`
+      help: install one inside the test: `with Users.none() in ...`
+
+    error: nothing installs `TestClock` in the test "the system clock"
+       ┌─ test.ren:9:6
+     9 │ test "the system clock" uses Clock =
+       │      ^^^^^^^^^^^^^^^^^^ this test gets only the real `Clock`, and the test `Random` and `Console`, and what controls them
+    10 │   TestClock.advance(Duration.ms(1))
+       │   --------------------------------- this call uses `TestClock`
+       = the test asks for the real `Clock`, which `TestClock` can't control
+       help: remove `Clock` from the test's `uses`, to get the test one
+    |}];
+  test
+    {|
+dep Users =
+  count: fn() -> Int
+
+test "users" uses Users, ..d =
+  ()
+|};
+  [%expect
+    {|
+    error: a test's `uses` asks for a real implementation, and only `Clock`, `Random` and `Console` have one, not `Users`
+      ┌─ test.ren:4:19
+    4 │ test "users" uses Users, ..d =
+      │                   ^^^^^
+      = a test gets the test implementation of each of them unless its `uses` asks for the real one
+      help: install an implementation inside the test, with `with`, and remove it from here
+
+    error: a test can't name a row: its `uses` lists what it gets the real implementation of
+      ┌─ test.ren:4:28
+    4 │ test "users" uses Users, ..d =
+      │                            ^
+      help: remove it
+    |}]
+
+let%expect_test "`--only` runs the tests whose name has it" =
+  let src =
+    {|
+test "one adds" =
+  assert 1 + 1 == 2
+
+test "two adds" =
+  assert 2 + 2 == 5
+
+test "one subtracts" =
+  assert 1 - 1 == 0
+|}
+  in
+  test ~only:"adds" src;
+  [%expect
+    {|
+    test.ren
+      ✓ one adds
+      ✗ two adds
+
+    ──── two adds ── test.ren:5
+      │
+    5 │   assert 2 + 2 == 5
+      │          ^^^^^^^^^^
+      │
+      left:  4
+      right: 5
+             ^ differs here
+
+      seed 2999 · rerun: ren test test.ren --only "two adds" --seed 2999
+
+    1 passed, 1 failed
+    [exit 1]
+    |}];
+  test ~only:"multiplies" src;
+  [%expect {|
+    no test's name has "multiplies" in it
+    [exit 0]
+    |}]
+
+let%expect_test "a group runs its tests against each implementation" =
+  test_files
+    [
+      ( "conform.ren",
+        {|
+pub group clock_conforms(c: Clock) with c =
+  test "instant never goes backwards" =
+    let a = Clock.instant()
+    assert Clock.instant().not_before(a)
+  test "sleeping moves it on" =
+    let t = Clock.now()
+    Clock.sleep(Duration.ms(5))
+    assert Clock.now().after(t)
+|}
+      );
+      ( "main.ren",
+        {|
+import conform
+
+group "frozen" = conform.clock_conforms(Clock.frozen(Time.epoch))
+group "test clock" = conform.clock_conforms(test_clock(Time.epoch))
+|}
+      );
+    ];
+  [%expect
+    {|
+    main.ren
+      frozen
+        ✓ instant never goes backwards
+        ✗ sleeping moves it on
+      test clock
+        ✓ instant never goes backwards
+        ✓ sleeping moves it on
+
+    ──── frozen / sleeping moves it on ── conform.ren:8
+      │
+    8 │     assert Clock.now().after(t)
+      │            ^^^^^^^^^^^^^^^^^^^^
+      │
+      this is false
+
+      seed 8783 · rerun: ren test . --only "frozen / sleeping" --seed 8783
+
+    3 passed, 1 failed
+    [exit 1]
+    |}]
+
+let%expect_test "each test of a group gets a fresh instance" =
+  test
+    {|
+group stopped(c: Clock) with c =
+  test "moving it on" =
+    Clock.sleep(Duration.minutes(1))
+    assert Clock.now() == Time.epoch.plus(Duration.minutes(1))
+  test "it starts where it was made" =
+    assert Clock.now() == Time.epoch
+
+group "test clock" = stopped(test_clock(Time.epoch))
+|};
+  [%expect
+    {|
+    test.ren
+      test clock
+        ✓ moving it on
+        ✓ it starts where it was made
+
+    2 passed
+    [exit 0]
+    |}]
+
+let%expect_test "what a group's run can't be" =
+  test_files
+    [
+      ( "main.ren",
+        {|
+import conform
+
+group conforms(c: Clock) with c =
+  test "x" =
+    assert true
+
+group "none" = nothing(1)
+group "wrong" = conforms()
+group "private" = conform.hidden()
+group "alias" = nowhere.g()
+|}
+      );
+      ("conform.ren", {|
+group hidden() =
+  test "x" =
+    assert true
+|});
+    ];
+  [%expect
+    {|
+    error: there's no group named `nothing`
+      ┌─ main.ren:7:16
+    7 │ group "none" = nothing(1)
+      │                ^^^^^^^
+      help: declare it with `group name(...) =`, or run one another module declares, after its alias: `m.name(...)`
+
+    error: the group `conforms` takes 1 argument, but this gives it 0
+      ┌─ main.ren:8:17
+    8 │ group "wrong" = conforms()
+      │                 ^^^^^^^^^^
+      help: give it 1 argument
+
+    error: `conform` has no public group `hidden`
+      ┌─ main.ren:9:27
+    9 │ group "private" = conform.hidden()
+      │                           ^^^^^^
+      help: if it's declared there, mark it `pub`
+
+    error: there's no module imported as `nowhere`
+       ┌─ main.ren:10:17
+    10 │ group "alias" = nowhere.g()
+       │                 ^^^^^^^
+    |}];
+  test
+    {|
+group counts(c: Clock) with c =
+  test "two" =
+    assert true
+  test "two" =
+    assert true
+
+fn counts() = 1
+
+group "frozen" = counts(Clock.frozen(Time.epoch))
+group "frozen" = counts(Clock.frozen(Time.epoch))
+|};
+  [%expect
+    {|
+    error: there's a function named `counts` already
+      ┌─ test.ren:1:7
+    1 │ group counts(c: Clock) with c =
+      │       ^^^^^^
+    7 │ fn counts() = 1
+      │    ------ the function is here
+      help: rename one of them
+
+    error: there are two tests in this group named "two"
+      ┌─ test.ren:4:8
+    2 │   test "two" =
+      │        ----- the first is here
+    4 │   test "two" =
+      │        ^^^^^
+      help: rename one of them
+
+    error: there are two tests named "frozen"
+       ┌─ test.ren:10:7
+     9 │ group "frozen" = counts(Clock.frozen(Time.epoch))
+       │       -------- the first is here
+    10 │ group "frozen" = counts(Clock.frozen(Time.epoch))
+       │       ^^^^^^^^
+       help: rename one of them
+    |}]
+
+let%expect_test "a group's run needs what its tests use" =
+  test
+    {|
+dep Users =
+  count: fn() -> Int
+
+  pub fn none() -> Users = Users { count: fn() => 0 }
+
+group counts(c: Clock) with c =
+  test "counts users" =
+    assert Users.count() == 0
+
+group "frozen" = counts(Clock.frozen(Time.epoch))
+|};
+  [%expect
+    {|
+    error: nothing installs `Users` in the test "counts users"
+       ┌─ test.ren:10:7
+    10 │ group "frozen" = counts(Clock.frozen(Time.epoch))
+       │       ^^^^^^^^ a test gets only the test `Clock`, `Random` and `Console`, and what controls them
+       │                  -------------------------------- this call uses `Users`
+       help: install one in the group's `with`, around its tests: `with Users.none() in ...`
+    |}]
+
+let%expect_test
+    "`ren run` doesn't run the tests, and `ren types` leaves them out" =
+  let src = {|
+fn main() -> Int = 1
+
+test "broken" =
+  assert false
+|} in
+  run src;
+  [%expect {| 1 |}];
+  types src;
+  [%expect {| fn main() -> Int |}];
+  core src;
+  [%expect
+    {|
+    (fn main () ev/1 1)
+    (fn $start () ev/1 (call ev/1 main))
+    |}]
+
+let%expect_test "a failed `assert` outside a test is a panic" =
+  run {|
+fn main() =
+  let xs = [1, 2]
+  assert xs == [1, 3]
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:3:10
+    3 │   assert xs == [1, 3]
+      │          ^^^^^^^^^^^^
+      = left:  [1, 2]
+      = right: [1, 3]
+    |}]

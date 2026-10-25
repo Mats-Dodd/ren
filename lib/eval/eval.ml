@@ -32,6 +32,9 @@ open Value
 exception Panic of Loc.t * string
 exception Uncaught of Value.t
 
+exception
+  Assert_failed of { loc : Loc.t; sides : (Ty.ty * Value.t * Value.t) option }
+
 let panic loc msg = raise (Panic (loc, msg))
 
 (* An error on its way to the [Handle] that catches it. *)
@@ -318,6 +321,16 @@ let rec eval cx env (e : expr) =
       | v -> eval cx (Env.add value.id (ref v) env) on_value
       | exception Failed err ->
           eval cx (Env.add error.id (ref err) env) on_error)
+  | Assert a ->
+      if not (truth (eval cx env a)) then
+        raise (Assert_failed { loc = a.loc; sides = None });
+      VUnit
+  | Assert_equal (a, b) ->
+      let x = eval cx env a in
+      let y = eval cx env b in
+      if not (equal e.loc x y) then
+        raise (Assert_failed { loc = e.loc; sides = Some (a.ty, x, y) });
+      VUnit
   | Finally (body, after) -> (
       match eval cx env body with
       | v ->
@@ -391,36 +404,133 @@ and apply cx f args ev =
   | VClosure { params; ev; body; env } -> run params ev body env
   | _ -> bug "a call to something that isn't a function"
 
-(* Run a program made of [modules] (the prelude, then the user's files),
-   starting from the last one's `$start`, which installs what `main` uses
-   and calls it (lower.ml). First each module's associated values are
-   made, in order: a module's after those of every module it imports,
-   which come before it, and within a module in the order lowering gives,
-   each after every value it uses, with nothing installed: a value can't
-   use a dependency (infer_top.ml). If `main`, or making a value, fails,
-   nothing handles the error: [Uncaught]. *)
-let run (modules : program list) =
+(* A program's functions, by path, and its associated values, made in
+   order: a module's after those of every module it imports, which come
+   before it, and within a module in the order lowering gives, each after
+   every value it uses, with nothing installed: a value can't use a
+   dependency (infer_top.ml). If making one fails, nothing handles the
+   error: [Uncaught]. *)
+let load (modules : program list) =
   let cx = { fns = Hashtbl.create 16; values = Hashtbl.create 16 } in
   List.iter
     (fun (m : program) ->
       List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns)
     modules;
+  List.iter
+    (fun (m : program) ->
+      List.iter
+        (fun p ->
+          match fst (apply cx (VFn p) [] (VEvidence [])) with
+          | Ok v -> Hashtbl.replace cx.values p v
+          | Error err -> raise (Uncaught err))
+        m.values)
+    modules;
+  cx
+
+(* Run a program made of [modules] (the prelude, then the user's files),
+   starting from the last one's `$start`, which installs what `main` uses
+   and calls it (lower.ml). If `main`, or making a value, fails, nothing
+   handles the error: [Uncaught]. *)
+let run (modules : program list) =
   let entry = List.nth modules (List.length modules - 1) in
-  match Hashtbl.find_opt cx.fns (Path.make entry.home Lower.start_name) with
-  | None -> bug "a program with no `main`"
-  | Some f -> (
-      (* OCaml's own stack runs out when a Ren function calls itself too
-         deeply; that's the program's fault, so it's a panic *)
-      let call p =
-        match fst (apply cx (VFn p) [] (VEvidence [])) with
-        | Ok v -> v
-        | Error err -> raise (Uncaught err)
-      in
-      try
-        List.iter
-          (fun (m : program) ->
-            List.iter (fun p -> Hashtbl.replace cx.values p (call p)) m.values)
-          modules;
-        call f.path
-      with Stack_overflow ->
-        panic f.loc "the stack overflowed: a function called itself too deeply")
+  let start = Path.make entry.home Lower.start_name in
+  (* OCaml's own stack runs out when a Ren function calls itself too
+     deeply; that's the program's fault, so it's a panic *)
+  let overflow () =
+    match List.find_opt (fun (f : fn_def) -> f.path = start) entry.fns with
+    | Some f ->
+        panic f.loc "the stack overflowed: a function called itself too deeply"
+    | None -> bug "a program with no `main`"
+  in
+  try
+    let cx = load modules in
+    if not (Hashtbl.mem cx.fns start) then bug "a program with no `main`";
+    match fst (apply cx (VFn start) [] (VEvidence [])) with
+    | Ok v -> v
+    | Error err -> raise (Uncaught err)
+  with Stack_overflow -> overflow ()
+
+(* ---- tests ---- *)
+
+(* How a test ended. *)
+type outcome =
+  | Passed
+  | Failed of Value.t  (** with this error, which nothing handled *)
+  | Panicked of exn  (** a [Panic], or an [Assert_failed] *)
+
+(* Run the test whose function is [fn], in a program [load] made, with
+   the test implementation of each built-in dependency (deps.md, "Tests"),
+   a fresh instance for this test, but the real one of those in [real]:
+   `Random`'s seeded with [seed]. The runtime installs them as it does
+   `main`'s, outermost, so they run with nothing installed. Returns how
+   it ended, and every line it wrote to the test `Console`, which is kept
+   even if it panicked; with the real one, it went to stdout. *)
+let run_test cx ~(fn : Path.t) ~real ~seed =
+  let what = "installing a test's implementations" in
+  let value p =
+    match Hashtbl.find_opt cx.values p with
+    | Some v -> v
+    | None -> bug (what ^ " with `" ^ p.name ^ "` not made")
+  in
+  (* the instance of the prelude's handler [name], given [args] *)
+  let instance_of name args =
+    match apply cx (VFn (Path.prelude name)) args (VEvidence []) with
+    | Ok (VHandler h), _ -> instance cx h [] what
+    | _ -> bug (what ^ " with `" ^ name ^ "`, which isn't a handler")
+  in
+  let installed =
+    List.concat_map
+      (fun (dep, handler, args) ->
+        if List.mem dep real then
+          [
+            {
+              dep = Path.prelude dep;
+              impl = value (Path.prelude (dep ^ ".real"));
+              outer = [];
+            };
+          ]
+        else
+          List.map
+            (fun (dep, impl) -> { dep; impl; outer = [] })
+            (instance_of handler args))
+      [
+        ("Clock", "test_clock", [ value (Path.prelude "Time.epoch") ]);
+        ("Random", "test_random", [ VInt seed ]);
+        ("Console", "test_console", []);
+      ]
+  in
+  let outcome =
+    try
+      match fst (apply cx (VFn fn) [] (VEvidence installed)) with
+      | Ok _ -> Passed
+      | Error err -> Failed err
+    with
+    | (Panic _ | Assert_failed _) as e -> Panicked e
+    | Stack_overflow ->
+        let loc =
+          match Hashtbl.find_opt cx.fns fn with
+          | Some f -> f.loc
+          | None -> bug ("a test whose function `" ^ fn.name ^ "` isn't there")
+        in
+        Panicked
+          (Panic
+             (loc, "the stack overflowed: a function called itself too deeply"))
+  in
+  (* what the test `Console` kept, asked of it as the test would *)
+  let console =
+    List.find_map
+      (fun (i : installed) ->
+        match i.impl with
+        | VRecord ops when i.dep = Path.prelude "TestConsole" -> (
+            match apply cx (List.assoc "output" ops) [] (VEvidence []) with
+            | Ok (VArray lines), _ ->
+                Some
+                  (Array.to_list
+                     (Array.map
+                        (function VStr s -> s | v -> Value.show v)
+                        lines))
+            | _ -> bug "a test `Console` whose output isn't an array")
+        | _ -> None)
+      installed
+  in
+  (outcome, Option.value console ~default:[])

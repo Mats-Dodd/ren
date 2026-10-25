@@ -216,6 +216,9 @@ and ('v, 'b, 't) expr_kind =
           then an arm for each operation of each dependency it implements.
           Calling the function describes the handler, and each `with` that
           installs it makes a fresh instance, running [state] then *)
+  | Assert of ('v, 'b, 't) expr
+      (** [assert e]: a panic if [e] is false, which shows both sides of an
+          [a == b] (deps.md, "`assert`") *)
 
 (* An arm of a handler, `usd_to(c) => ...`: [arm_op] is the operation, a
    bare name as parsed and a [Dep_op] once resolved, and [arm_impl] the
@@ -319,10 +322,51 @@ type import = {
   iloc : Loc.t;  (** the whole import *)
 }
 
+(* Tests (deps.md, "Tests"), which sit next to the code they test:
+
+     test "a deposit is stamped" uses Clock =
+       body
+
+     pub group clock_conforms(c: Clock) with c =
+       test "instant never goes backwards" =
+         ...
+
+     group "frozen" = clock_conforms(Clock.frozen(Time.epoch))
+
+   A test's `uses` lists the built-in dependencies it gets the real
+   implementation of, rather than the test one. A group is a function of
+   its parameters whose tests each run inside its `with`, and a group's
+   run, `group "label" = g(args)`, runs each of them with those arguments.
+   None of them reaches Resolve: Test_items makes each into ordinary
+   functions first (test_items.ml). *)
+type ('v, 'b, 't) test_def = {
+  test_name : string;
+  test_loc : Loc.t;  (** where its name is written *)
+  test_uses : 't uses option;
+  test_body : ('v, 'b, 't) expr;
+}
+
+type ('v, 'b, 't) testing =
+  | Test of ('v, 'b, 't) test_def
+  | Group of {
+      group_pub : bool;
+      group_name : ident;
+      group_params : ('b, 't) param list;
+      group_with : ('v, 'b, 't) expr list;
+          (** installed around each test, outermost first *)
+      group_tests : ('v, 'b, 't) test_def list;
+    }
+  | Run_group of {
+      run_label : string;
+      run_loc : Loc.t;  (** where its label is written *)
+      run_call : ('v, 'b, 't) expr;  (** [g(args)] *)
+    }
+
 type ('v, 'b, 't) item =
   | Fn of ('v, 'b, 't) fn_def
   | Type of ('v, 'b, 't) type_def
   | Import of import
+  | Testing of ('v, 'b, 't) testing
 
 type ('v, 'b, 't) program = ('v, 'b, 't) item list
 
@@ -333,7 +377,7 @@ let functions (prog : ('v, 'b, 't) program) =
     (function
       | Fn f -> [ f ]
       | Type td -> List.map (fun o -> o.op_fn) td.type_ops
-      | Import _ -> [])
+      | Import _ | Testing _ -> [])
     prog
 
 (* Whether [f]'s signature is written out in full, so that its declaration
@@ -379,7 +423,13 @@ let children (e : ('v, 'b, 't) expr) =
   let stmt = function Let { value; _ } -> value | Expr e -> e in
   match e.kind with
   | Int _ | Bool _ | Str _ | Unit | Var _ -> []
-  | Unop (_, a) | Field (a, _) | Ref a | Lambda (_, a) | Try a | Attempt a ->
+  | Unop (_, a)
+  | Field (a, _)
+  | Ref a
+  | Lambda (_, a)
+  | Try a
+  | Attempt a
+  | Assert a ->
       [ a ]
   | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
       [ a; b ]
@@ -470,6 +520,8 @@ module Parsed = struct
   type nonrec type_def = (vname, ident, tyname) type_def
   type nonrec fn_def = (vname, ident, tyname) fn_def
   type nonrec item = (vname, ident, tyname) item
+  type nonrec test_def = (vname, ident, tyname) test_def
+  type nonrec testing = (vname, ident, tyname) testing
   type nonrec program = (vname, ident, tyname) program
 end
 
@@ -638,6 +690,7 @@ let rec show_expr (e : expr) =
       parens ("fail" :: t.name :: List.map show_arg args)
   | Try a -> parens [ "try"; show_expr a ]
   | Attempt a -> parens [ "attempt"; show_expr a ]
+  | Assert a -> parens [ "assert"; show_expr a ]
   | With { item; body; _ } -> parens [ "with"; show_expr item; show_expr body ]
   | Handler { deps; needs; state; arms } ->
       let needs =
@@ -733,10 +786,35 @@ let show_import (i : import) =
   in
   parens (("import" :: i.path :: names) @ [ "as"; i.alias.name ])
 
+let show_test (t : test_def) =
+  let uses =
+    match t.test_uses with Some u -> [ parens [ show_uses u ] ] | None -> []
+  in
+  parens
+    ((("test" :: [ show_str t.test_name ]) @ uses) @ [ show_expr t.test_body ])
+
 let show_item : item -> string = function
   | Fn f -> show_fn f
   | Type td -> show_type_def td
   | Import i -> show_import i
+  | Testing (Test t) -> show_test t
+  | Testing (Group g) ->
+      let with_ =
+        match g.group_with with
+        | [] -> []
+        | items -> [ parens ("with" :: List.map show_expr items) ]
+      in
+      parens
+        ((if g.group_pub then [ "pub" ] else [])
+        @ [
+            "group";
+            g.group_name.name;
+            parens (List.map show_param g.group_params);
+          ]
+        @ with_
+        @ List.map show_test g.group_tests)
+  | Testing (Run_group r) ->
+      parens [ "group"; show_str r.run_label; show_expr r.run_call ]
 
 (* ---- code as it's written, for messages ----
 
@@ -786,6 +864,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         left n a ^ " " ^ binop_to_string op ^ " " ^ operand (n + 1) b
     | Try a -> "try " ^ go a
     | Attempt a -> "attempt " ^ go a
+    | Assert a -> "assert " ^ go a
     | Fail (t, []) -> "fail " ^ t.name
     | Fail (t, args) -> "fail " ^ t.name ^ "(" ^ con_args args ^ ")"
     | Call (f, args) -> left 8 f ^ "(" ^ list args ^ ")"

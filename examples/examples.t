@@ -607,3 +607,128 @@ Stamping an entry reads the clock, so a public signature that drops
      = a public function without `uses` uses nothing, and its body is checked against that
      help: add `uses Clock`
   [1]
+
+`ren test` runs a program's tests (deps.md, "Tests"): every module's in a
+folder, each with the test `Clock`, `Random` and `Console`. A count of how
+many passed ends it, and how long that took:
+
+  $ mkdir tested
+  $ cat > tested/dice.ren <<'END'
+  > // a die, and a cup of them
+  > pub fn roll() -> Int uses Random = Random.int(6) + 1
+  > 
+  > pub fn cup(n: Int) -> Array<Int> uses Random =
+  >   var rolls = []
+  >   if n > 0 then
+  >     rolls = cup(n - 1)
+  >   &rolls.push(roll())
+  >   rolls
+  > 
+  > test "a roll is a die's" =
+  >   let r = roll()
+  >   assert r >= 1 && r <= 6
+  > 
+  > test "a cup holds as many as it's asked for" =
+  >   print(cup(3))
+  >   assert cup(3).len() == 3
+  > 
+  > test "the system clock has started" uses Clock =
+  >   assert Clock.now().after(Time.epoch)
+  > END
+  $ cat > tested/clock.ren <<'END'
+  > pub group conforms(c: Clock) with c =
+  >   test "now never goes back" =
+  >     let t = Clock.now()
+  >     Clock.sleep(Duration.seconds(1))
+  >     assert not Clock.now().before(t)
+  >   test "sleeping moves it on" =
+  >     let t = Clock.now()
+  >     Clock.sleep(Duration.seconds(1))
+  >     assert Clock.now() == t.plus(Duration.seconds(1))
+  > 
+  > group "frozen" = conforms(Clock.frozen(Time.epoch))
+  > group "test clock" = conforms(test_clock(Time.epoch))
+  > END
+  $ ren test tested | tail -1 | sed 's/[0-9]*ms$/Nms/'
+  5 passed, 2 failed in Nms
+
+Leaving out how long they took, a test that uses no real dependency
+prints the same on every run; it exits with 1 if any failed:
+
+  $ export REN_NO_TIMINGS=1
+  $ ren test tested
+  clock.ren
+    frozen
+      ✓ now never goes back
+      ✗ sleeping moves it on
+    test clock
+      ✓ now never goes back
+      ✓ sleeping moves it on
+  
+  dice.ren
+    ✓ a roll is a die's
+    ✗ a cup holds as many as it's asked for
+    ✓ the system clock has started
+  
+  ──── frozen / sleeping moves it on ── clock.ren:9
+    │
+  9 │     assert Clock.now() == t.plus(Duration.seconds(1))
+    │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    │
+    left:  Time(0)
+    right: Time(1000)
+                ^ differs here
+  
+    seed 8783 · rerun: ren test tested --only "frozen / sleeping" --seed 8783
+  
+  ──── a cup holds as many as it's asked for ── dice.ren:17
+     │
+  17 │   assert cup(3).len() == 3
+     │          ^^^^^^^^^^^^^^^^^
+     │
+     left:  4
+     right: 3
+            ^ differs here
+  
+     seed 6461 · rerun: ren test tested --only "a cup" --seed 6461
+  
+     printed:
+       [6, 2, 2, 1]
+  
+  5 passed, 2 failed
+  [1]
+
+The rerun runs just that one, with its seed:
+
+  $ ren test tested --only "a cup" --seed 6461 | head -3
+  dice.ren
+    ✗ a cup holds as many as it's asked for
+  
+
+`--list` lists the tests without running them, and says which use a real
+dependency:
+
+  $ ren test tested --list
+  clock.ren
+    frozen
+      now never goes back
+      sleeping moves it on
+    test clock
+      now never goes back
+      sleeping moves it on
+  
+  dice.ren
+    a roll is a die's
+    a cup holds as many as it's asked for
+    the system clock has started · uses the real `Clock`
+
+Fixed, they all pass:
+
+  $ perl -pi -e 's/^  &rolls/    &rolls/' tested/dice.ren
+  $ ren test tested/dice.ren
+  dice.ren
+    ✓ a roll is a die's
+    ✓ a cup holds as many as it's asked for
+    ✓ the system clock has started
+  
+  3 passed

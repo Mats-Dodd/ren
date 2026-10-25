@@ -294,6 +294,12 @@ and expr_of cx (e : expr) : C.expr =
       (* a call passes on what it fails with by itself: the `try` only says
          so, for whoever reads it *)
       expr cx a
+  | Assert ({ kind = Binop (Eq, a, b); _ } as cmp) ->
+      (* both sides, so a failure can show them, and where the comparison
+         is, which it points at *)
+      let a = expr cx a in
+      mk (Assert_equal (a, expr cx b)) Ty.unit cmp.loc
+  | Assert a -> here (Assert (expr cx a))
   | Attempt a ->
       (* `Ok` of its value, or `Err` of its error *)
       let t = ty () in
@@ -804,8 +810,8 @@ and free (e : C.expr) =
         go body
     | Instance impls -> List.iter (fun (_, i) -> go i) impls
     | Handler { captures; _ } -> List.iter use captures
-    | Fail a | As_dep (_, a) -> go a
-    | Finally (a, b) ->
+    | Fail a | As_dep (_, a) | Assert a -> go a
+    | Finally (a, b) | Assert_equal (a, b) ->
         go a;
         go b
     | Handle { body; value; on_value; error; on_error } ->
@@ -861,7 +867,7 @@ let max_binder (f : fn_def) =
   let rec go (e : expr) =
     match e.kind with
     | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
-    | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> go a
+    | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a -> go a
     | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go a;
         go b

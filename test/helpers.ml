@@ -114,3 +114,26 @@ let core_files files =
           print_endline ("-- " ^ m.home);
           List.iter (fun f -> print_endline (Core.show_fn f)) m.fns)
         (List.tl (Driver.linked ~lint:true ~load ~file src)))
+
+(* ---- tests ----
+
+   `ren test` on the program [files], every one a module whose tests run,
+   as if they were the files of a folder: what it prints, without how long
+   it took, and the status it exits with. [path] is what `ren test` was
+   given, which a rerun command repeats. *)
+let test_files ?(path = ".") ?only ?seed ?(list = false) files =
+  let files = List.map (fun (f, src) -> (f, clean src)) files in
+  let load m = List.assoc_opt (Driver.file_in ~dir:"." m) files in
+  report_files files (fun () ->
+      let suite = Driver.suite ~lint:true ~load ~dir:"." files in
+      let status =
+        Test_runner.run
+          ~opts:{ path; dir = "."; only; seed; list; timings = false }
+          ~sources:(fun f -> List.assoc_opt f files)
+          suite
+      in
+      Printf.printf "[exit %d]\n" status)
+
+(* The same, for a program that is the one file [src]. *)
+let test ?only ?seed ?list src =
+  test_files ~path:file ?only ?seed ?list [ (file, src) ]

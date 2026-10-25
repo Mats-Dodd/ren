@@ -11,8 +11,8 @@ exception Internal_error of { pass : string; message : string }
    so it can't be mistaken for a problem with the program. *)
 let pass name f =
   try f () with
-  | ( Diag.Error _ | Diag.Errors _ | Eval.Panic _ | Eval.Uncaught _
-    | Internal_error _ ) as e ->
+  | ( Diag.Error _ | Diag.Errors _ | Eval.Panic _ | Eval.Assert_failed _
+    | Eval.Uncaught _ | Internal_error _ ) as e ->
       raise e
   | e -> raise (Internal_error { pass = name; message = Printexc.to_string e })
 
@@ -43,15 +43,21 @@ let parse ~file src =
    what inference found. [imports] are the interfaces of the modules it
    imports, and [reachable] those of every module reachable through them,
    whose types it can meet without naming them. [entry] is set for the
-   module the program starts in, which needs a `main`. *)
-let check_module ~home ~imports ~reachable ?entry prog =
+   module the program starts in, which needs a `main`. Before any of it,
+   its tests are made functions (test_items.ml); [groups] are the public
+   groups of each module it imports, by its alias here. *)
+let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
+  let items =
+    checked "tests" (fun sink -> Test_items.program sink ~imported:groups prog)
+  in
   let r =
-    checked "resolve" (fun sink -> Resolve.program sink ~home ~imports prog)
+    checked "resolve" (fun sink ->
+        Resolve.program sink ~home ~imports items.prog)
   in
   checked "mut" (fun sink -> Mut.program sink r);
   let inferred =
     checked "infer" (fun sink ->
-        Infer.program sink ~imports ~reachable ?entry r)
+        Infer.program sink ~imports ~reachable ?entry ~tests:items.tests r)
   in
   (* only now is it known whether every import is used: a type imported
      by name can be used just by writing one of its constructors bare *)
@@ -104,7 +110,22 @@ let check_module ~home ~imports ~reachable ?entry prog =
           if found <> o.oscheme then mismatch name o.oscheme found)
         td.members)
     iface.types;
-  (r, iface, inferred)
+  (* Another module runs a public group's tests by calling them, so they're
+     in the interface too, with the types inference found: they have no
+     signature to declare one. *)
+  let group_tests =
+    List.concat_map
+      (fun (g : Test_items.group) ->
+        if g.gpub then
+          List.mapi
+            (fun i _ ->
+              let vname = Test_items.group_fn g.gname (i + 1) in
+              { Iface.vname; scheme = List.assoc vname inferred.schemes })
+            g.gtests
+        else [])
+      items.groups
+  in
+  (r, { iface with values = iface.values @ group_tests }, inferred, items)
 
 (* A checked module, lowered to Core. *)
 let lower r inferred = pass "lower" (fun () -> Lower.program r inferred)
@@ -143,12 +164,12 @@ let prelude =
   lazy
     (let prog = parse ~file:Prelude.file (String.trim Prelude.source) in
      let imports = [ Prelude.intrinsics ] in
-     let r, iface, inferred =
+     let r, iface, inferred, _ =
        check_module ~home:Path.prelude_home ~imports ~reachable:imports prog
      in
      let core = lower r inferred in
      ignore (link_lowered ~lint:true ~imports:[ imports ] [ core ]);
-     (core, Iface.union Prelude.public iface))
+     (core, Iface.union Prelude.public iface, r.types))
 
 (* ---- loading a program's modules ----
 
@@ -160,12 +181,15 @@ let prelude =
 
 type loader = string -> string option
 
-(* The file module [path] is: its path from the entry's folder, with
-   `.ren` on the end. *)
-let module_file ~entry path =
-  let dir = Filename.dirname entry in
+(* The file module [path] is: its path from the folder [dir] the program
+   is in, with `.ren` on the end. *)
+let file_in ~dir path =
   if dir = Filename.current_dir_name then path ^ ".ren"
   else Filename.concat dir (path ^ ".ren")
+
+(* The same, for a program whose entry is the file [entry]: its folder is
+   the program's. *)
+let module_file ~entry path = file_in ~dir:(Filename.dirname entry) path
 
 let imports_of (prog : Ast.Parsed.program) =
   List.filter_map (function Ast.Import i -> Some i | _ -> None) prog
@@ -182,9 +206,13 @@ type source = { home : string; file : string; parsed : Ast.Parsed.program }
    cycles, which is what gives it an order at all (module-build.md, "No
    import cycles"). A missing module, a cycle and two imports with the
    same alias are each reported, and the program stops once everything
-   that could be loaded has been. *)
-let load_all ~(load : loader) ~file src =
-  let entry = file in
+   that could be loaded has been.
+
+   A program's tests can be in any of its modules, so `ren test` on a
+   folder loads every module in it, whether one imports it or not: those
+   are [roots], each a module's path, file and source, loaded in order.
+   Running a program has one, its entry. *)
+let load_all ~(load : loader) ~dir roots =
   let sink = Diag.sink () in
   let report ?help ?notes ?labels loc msg =
     Diag.report sink (Diag.make ?help ?notes ?labels loc msg)
@@ -225,7 +253,7 @@ let load_all ~(load : loader) ~file src =
         else if i.path = home || List.mem_assoc i.path path then
           cycle ~path home i
         else
-          let ifile = module_file ~entry i.path in
+          let ifile = file_in ~dir i.path in
           match load i.path with
           | None ->
               report i.path_loc
@@ -263,16 +291,18 @@ let load_all ~(load : loader) ~file src =
              can all import")
       (sprintf "import cycle: %s" (String.concat " → " modules))
   in
-  let home = Path.home_of_file file in
-  if home = Path.prelude_home then
-    raise
-      (Diag.Errors
-         [
-           Diag.make (Loc.point ~file 1 1) ~help:"rename the file"
-             "a file can't be named `prelude.ren`: that's the name of the \
-              module every program imports";
-         ]);
-  visit ~path:[] home file src;
+  List.iter
+    (fun (home, file, src) ->
+      if home = Path.prelude_home then
+        raise
+          (Diag.Errors
+             [
+               Diag.make (Loc.point ~file 1 1) ~help:"rename the file"
+                 "a file can't be named `prelude.ren`: that's the name of the \
+                  module every program imports";
+             ]);
+      if not (is_loaded home) then visit ~path:[] home file src)
+    roots;
   if Diag.has_errors sink then raise (Diag.Errors (Diag.reported sink));
   List.rev !loaded
 
@@ -282,6 +312,7 @@ let load_all ~(load : loader) ~file src =
    prelude and of the modules it imports. *)
 type checked = {
   home : string;
+  file : string;
   prog : Ast.Parsed.program;
   resolved : Resolve.t;
   iface : Iface.t;
@@ -289,16 +320,17 @@ type checked = {
   reachable : Iface.t list;
       (** the interfaces of every module reachable through its imports, the
           prelude's first, each once *)
+  items : Test_items.t;  (** its tests, and the functions they were made *)
 }
 
-(* Load the program, then check each of its modules in dependency order,
-   each against the interfaces of what it imports, never their source.
-   Returns them in that order, the entry last. A program of one file loads
-   nothing else, so the loader is optional. *)
-let check_all ?(load = fun _ -> None) ~file src =
-  let _, prelude_iface = Lazy.force prelude in
-  let sources = pass "load" (fun () -> load_all ~load ~file src) in
-  let entry = Path.home_of_file file in
+(* Load the program from its [roots] (see [load_all]), then check each of
+   its modules in dependency order, each against the interfaces of what it
+   imports, never their source. Returns them in that order. [entry] says
+   whether a module is the one the program starts in, which needs a
+   `main`. *)
+let check_roots ~load ~dir ~entry roots =
+  let _, prelude_iface, _ = Lazy.force prelude in
+  let sources = pass "load" (fun () -> load_all ~load ~dir roots) in
   List.rev
     (List.fold_left
        (fun (done_ : checked list) (m : source) ->
@@ -327,21 +359,41 @@ let check_all ?(load = fun _ -> None) ~file src =
                  (c.reachable @ [ c.iface ]))
              [ prelude_iface ] direct
          in
-         let resolved, iface, inferred =
-           check_module ~home:m.home ~imports ~reachable
-             ?entry:(if m.home = entry then Some m.file else None)
+         let groups =
+           List.map
+             (fun (i : Ast.import) ->
+               ( i.alias.name,
+                 List.filter
+                   (fun (g : Test_items.group) -> g.gpub)
+                   (checked_ i.path).items.groups ))
+             (imports_of m.parsed)
+         in
+         let resolved, iface, inferred, items =
+           check_module ~home:m.home ~imports ~reachable ~groups
+             ?entry:(if entry m then Some m.file else None)
              m.parsed
          in
          {
            home = m.home;
+           file = m.file;
            prog = m.parsed;
            resolved;
            iface;
            inferred;
            reachable;
+           items;
          }
          :: done_)
        [] sources)
+
+(* The same, for the program whose entry is [file], with the source [src]:
+   it ends with the entry. A program of one file loads nothing else, so the
+   loader is optional. *)
+let check_all ?(load = fun _ -> None) ~file src =
+  let home = Path.home_of_file file in
+  check_roots ~load ~dir:(Filename.dirname file)
+    ~entry:(fun (m : source) -> m.home = home)
+    [ (home, file, src) ]
 
 (* The module the program starts in. *)
 let entry_of modules = List.nth modules (List.length modules - 1)
@@ -350,14 +402,81 @@ let inferred ?load ~file src = (entry_of (check_all ?load ~file src)).inferred
 let schemes ?load ~file src = (inferred ?load ~file src).schemes
 let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
 
-(* The whole program in Core, the prelude first. *)
-let link ?lint (modules : checked list) =
-  let prelude, _ = Lazy.force prelude in
+(* The whole program in Core, the prelude first. The functions its tests
+   were made are left out, unless it's [for_tests]: nothing else calls
+   them. *)
+let link ?lint ?(for_tests = false) (modules : checked list) =
+  let prelude, _, _ = Lazy.force prelude in
+  let lowered c =
+    let core = lower c.resolved c.inferred in
+    if for_tests then core
+    else
+      {
+        core with
+        fns =
+          List.filter
+            (fun (f : Core.fn_def) -> not (List.mem f.path.name c.items.made))
+            core.fns;
+      }
+  in
   link_lowered ?lint
     ~imports:([ Prelude.intrinsics ] :: List.map (fun c -> c.reachable) modules)
-    (prelude :: List.map (fun c -> lower c.resolved c.inferred) modules)
+    (prelude :: List.map lowered modules)
 
 let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
+
+(* ---- tests ---- *)
+
+(* A program's tests, checked and lowered with the functions they were
+   made (test_items.ml), ready to run. *)
+type suite = {
+  core : Core.program list;  (** the program, the prelude first *)
+  files : (string * string * Test_items.test list) list;
+      (** each module's file, its path (its home) and its tests, in the order
+          the files' names sort in *)
+  types : Iface.type_decl list;
+      (** every type, the prelude's included, as its own module sees it: what an
+          opaque type is is shown in a test's output (deps.md, "`ren test`") *)
+}
+
+(* Every test of the program in the folder [dir] whose modules include
+   [roots], each a file and its source (see [load_all]). A module that
+   has a `main` is checked as the program's entry. *)
+let suite ?lint ?(load = fun _ -> None) ~dir roots =
+  let home file =
+    let rel =
+      if dir = Filename.current_dir_name then file
+      else
+        let prefix = Filename.concat dir "" in
+        if String.starts_with ~prefix file then
+          String.sub file (String.length prefix)
+            (String.length file - String.length prefix)
+        else file
+    in
+    Filename.remove_extension rel
+  in
+  let has_main (m : source) =
+    List.exists
+      (function
+        | Ast.Fn (f : Ast.Parsed.fn_def) -> f.name.name = "main" | _ -> false)
+      m.parsed
+  in
+  let modules =
+    check_roots ~load ~dir ~entry:has_main
+      (List.map (fun (file, src) -> (home file, file, src)) roots)
+  in
+  let core = link ?lint ~for_tests:true modules in
+  let _, _, prelude_types = Lazy.force prelude in
+  {
+    core;
+    files =
+      List.sort compare
+        (List.map (fun c -> (c.file, c.home, c.items.tests)) modules);
+    types =
+      prelude_types
+      @ List.concat_map (fun (c : checked) -> c.resolved.types) modules;
+  }
+
 let core ?lint ?load ~file src = entry_of (linked ?lint ?load ~file src)
 
 (* Every module's signatures, as `ren types` prints them: each function's,
@@ -367,7 +486,7 @@ let types ?(lint = false) ?load ~file src =
   (* the tests also check that the program lowers, and lints *)
   if lint then ignore (link ~lint:true modules);
   List.map
-    (fun { home; inferred; resolved; _ } ->
+    (fun { home; inferred; resolved; items; _ } ->
       let names = Resolve.type_name resolved in
       let fn_ ?outer ~name (f : Ast.Resolved.fn_def) =
         Ty.signature ?outer ~names ~pub:f.pub ~name
@@ -417,6 +536,7 @@ let types ?(lint = false) ?load ~file src =
                          deps)
                     (List.assoc f.name.name inferred.schemes);
                 ]
+            | Ast.Fn f when List.mem f.name.name items.made -> []
             | Ast.Fn f -> [ fn_ ~name:f.name.name f ]
             | Type ({ type_body = Dep _; _ } as td) ->
                 (* a dependency: its operations, each with its type, then
@@ -472,7 +592,7 @@ let types ?(lint = false) ?load ~file src =
                     td.type_name.name
                     (String.concat " | " errors);
                 ]
-            | Type _ | Import _ -> [])
+            | Type _ | Import _ | Testing _ -> [])
           resolved.prog ))
     modules
 
@@ -495,6 +615,16 @@ let render_error ~sources = function
   | Diag.Errors ds -> Some (Diag.render_all ~sources ds)
   | Eval.Panic (loc, msg) ->
       Some (Diag.render ~sources (Diag.make loc ("panic: " ^ msg)))
+  | Eval.Assert_failed { loc; sides } ->
+      let notes =
+        match sides with
+        | Some (_, l, r) ->
+            [ "left:  " ^ Value.show l; "right: " ^ Value.show r ]
+        | None -> []
+      in
+      Some
+        (Diag.render ~sources
+           (Diag.make loc ~notes "panic: this `assert` failed"))
   | Eval.Uncaught err ->
       (* `main` failed: its error, shown as a value is (errors.md, "`main`") *)
       Some ("error: " ^ Value.show err ^ "\n")

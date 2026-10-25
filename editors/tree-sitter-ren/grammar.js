@@ -25,7 +25,7 @@
 // `not` binds below the comparisons, so `not a == b` is `not (a == b)`,
 // and above `&&`, so `not a && b` is `(not a) && b`. `orelse` binds below
 // `||`. `try` and `attempt` take everything to their right, so they bind
-// loosest of all.
+// loosest of all, and so does `assert`.
 const PREC = {
   prefix: -1,
   orelse: 0,
@@ -96,6 +96,9 @@ module.exports = grammar({
         $.type_definition,
         $.dependency_definition,
         $.handler_definition,
+        $.test_definition,
+        $.group_definition,
+        $.group_run,
       ),
 
     comment: (_) => token(seq('//', /[^\n]*/)),
@@ -320,6 +323,44 @@ module.exports = grammar({
         field('body', $._body),
       ),
 
+    // ---- tests ----
+
+    // test "a deposit is stamped" uses Clock = ...: its `uses` asks for
+    // the real implementation of a built-in dependency
+    test_definition: ($) =>
+      seq(
+        'test',
+        field('name', $.string),
+        optional(field('uses', $.uses_clause)),
+        '=',
+        field('body', $._body),
+      ),
+
+    // pub group clock_conforms(c: Clock) with c = ...: its tests, indented
+    // under it, each run inside its `with`
+    group_definition: ($) =>
+      seq(
+        optional($.visibility),
+        'group',
+        field('name', $.identifier),
+        field('parameters', $.parameters),
+        optional(seq('with', commaSep1Strict(field('item', $._expression)))),
+        '=',
+        $._indent,
+        sep1(field('test', $.test_definition), $._newline),
+        $._dedent,
+      ),
+
+    // group "frozen" = clock_conforms(Clock.frozen(Time.epoch)): a run of
+    // a group's tests, with these arguments; the compiler checks it's a call
+    group_run: ($) =>
+      seq(
+        'group',
+        field('label', $.string),
+        '=',
+        field('call', $._expression),
+      ),
+
     // ---- a type's members ----
 
     // its methods, associated functions and values, and operators, one
@@ -459,6 +500,7 @@ module.exports = grammar({
         $.reference,
         $.try_expression,
         $.attempt_expression,
+        $.assert_expression,
         $._postfix,
       ),
 
@@ -504,6 +546,13 @@ module.exports = grammar({
       prec.right(
         PREC.prefix,
         seq('attempt', field('operand', $._expression)),
+      ),
+
+    // assert a == b: a panic if it's false
+    assert_expression: ($) =>
+      prec.right(
+        PREC.prefix,
+        seq('assert', field('operand', $._expression)),
       ),
 
     // -x, not b

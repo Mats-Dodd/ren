@@ -1,8 +1,9 @@
 # Ren for Zed
 
-Highlighting, an outline (each type's members under it), indentation,
-vim text objects (`af`/`if` a function, `ac`/`ic` a type) and a ▶ beside
-`fn main` that runs the program. The grammar is
+Highlighting, an outline (each type's members under it, and each group's
+tests), indentation, vim text objects (`af`/`if` a function or a test,
+`ac`/`ic` a type), a ▶ beside `fn main` that runs the program, and one
+beside each test and group run that runs it. The grammar is
 [editors/tree-sitter-ren](../tree-sitter-ren), which mirrors the
 compiler's parser.
 
@@ -13,7 +14,8 @@ pick this folder, `editors/zed`. Zed builds the grammar from the commit
 `extension.toml` names. After the grammar changes, update that `rev` and
 run **zed: rebuild dev extension** (or reinstall it).
 
-The ▶ and the `ren run`, `ren check` and `ren types` tasks use `ren` if
+The ▶s and the `ren run`, `ren test`, `ren check` and `ren types` tasks
+(`ren test` runs the tests of the file's folder) use `ren` if
 it's on your `PATH`, and `dune exec ren` from the project otherwise.
 
 ## Colours of Ren's own

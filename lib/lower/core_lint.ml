@@ -627,6 +627,15 @@ let rec expr env sc (e : expr) =
       expr env sc after;
       same env after.loc "what runs after a `Finally`" after.ty Ty.unit;
       is "a `Finally`" body.ty
+  | Assert a ->
+      expr env sc a;
+      same env a.loc "what an `Assert` checks" a.ty Ty.bool;
+      is "an `Assert`" Ty.unit
+  | Assert_equal (a, b) ->
+      expr env sc a;
+      expr env sc b;
+      same env b.loc "the right side of an `Assert_equal`" b.ty a.ty;
+      is "an `Assert_equal`" Ty.unit
 
 (* The error set an error of type [t] is in. *)
 and errors_of env loc what (t : Ty.ty) =
@@ -770,14 +779,19 @@ let rec globals (e : expr) =
   | With_handler { handler; body; _ } -> globals handler @ globals body
   | Instance impls -> List.concat_map (fun (_, i) -> globals i) impls
   | Handler { body; _ } -> globals body
-  | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
-    ->
+  | Let (_, a, b)
+  | While (a, b)
+  | Seq (a, b)
+  | Update (a, _, b)
+  | Finally (a, b)
+  | Assert_equal (a, b) ->
       globals a @ globals b
   | Assign (_, a)
   | Field (a, _, _)
   | Lambda { body = a; _ }
   | Fail a
-  | As_dep (_, a) ->
+  | As_dep (_, a)
+  | Assert a ->
       globals a
   | Handle { body; on_value; on_error; _ } ->
       globals body @ globals on_value @ globals on_error

@@ -33,6 +33,9 @@ type t =
   | ORELSE
   | WITH
   | HANDLER
+  | TEST
+  | GROUP
+  | ASSERT
   (* punctuation *)
   | LPAREN
   | RPAREN
@@ -121,6 +124,9 @@ let to_string = function
   | ORELSE -> "orelse"
   | WITH -> "with"
   | HANDLER -> "handler"
+  | TEST -> "test"
+  | GROUP -> "group"
+  | ASSERT -> "assert"
   | LPAREN -> "("
   | RPAREN -> ")"
   | LBRACE -> "{"

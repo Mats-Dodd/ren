@@ -144,8 +144,13 @@ let check_transparent sink (f : fn_def) =
         match e.kind with
         | Var x -> is_param x
         | Int _ | Bool _ | Str _ | Unit -> false
-        | Unop (_, a) | Field (a, _) | Ref a | Lambda (_, a) | Try a | Attempt a
-          ->
+        | Unop (_, a)
+        | Field (a, _)
+        | Ref a
+        | Lambda (_, a)
+        | Try a
+        | Attempt a
+        | Assert a ->
             mentions a
         | Fail (_, args) -> any (List.map snd args)
         | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ }
@@ -197,7 +202,7 @@ let check_transparent sink (f : fn_def) =
             if (not ok) && mentions body then
               fail e.loc "is captured by a lambda that outlives the call"
             else walk ~ok:false body
-        | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a ->
+        | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
             walk_all [ a ]
         | Fail (_, args) -> walk_all (List.map snd args)
         | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ }
@@ -292,7 +297,8 @@ let walk ~ty ~errors ~pattern (prog : program) =
     let go = List.iter expr in
     match e.kind with
     | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
-    | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> expr a
+    | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+        expr a
     | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go [ a; b ]
     | If (c, t, f) -> go (c :: t :: Option.to_list f)
@@ -342,7 +348,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
           | Opaque t -> ty_ t
           | Errors es -> errors_ es);
           List.iter (fun (o : op) -> fn_ o.op_fn) td.type_ops
-      | Import _ -> ())
+      | Import _ | Testing _ -> ())
     prog
 
 (* The error sets and `Result`s written in the module make sense: an
@@ -1545,17 +1551,30 @@ type t = {
       (** the types step 2 of a lookup through a type found, sorted *)
 }
 
-(* ---- what's installed around `main` ---- *)
+(* ---- what's installed around `main`, and around a test ---- *)
 
-(* The runtime installs exactly the built-in dependencies `main` uses, as
-   the outermost implementations (deps.md, "`main`"), so any other one it
-   uses is reported: where its `uses` lists it, or at `main`'s name, with
-   a label at the first call that uses it. [ty] is `main`'s type, and [cx] what checking its body found.
-   The help shows how to install one inside `main`, with a function that
-   makes an implementation if there is one: one of the module's own
-   functions, [fns], whose type [schemes] has, or a member of the
-   dependency. *)
-let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
+(* What the runtime installs around a function it calls: `main`, or a
+   test. *)
+type runner = {
+  installs : Path.t -> bool;  (** whether it installs this dependency *)
+  missing : string -> string;  (** the error, for one it doesn't install *)
+  only : string;  (** what it installs, said beside the error's own `^`s *)
+  inside : string;  (** where the help installs one: "inside `main`" *)
+  why : Path.t -> string list;
+      (** notes on why it doesn't install this one, if there's more to say *)
+  fix : Path.t -> string option;
+      (** the help for this one, if installing it isn't the fix *)
+  at : Loc.t;  (** where the error points, if no `uses` lists it *)
+}
+
+(* The runtime installs exactly what [run] says around [f], so any other
+   dependency it uses is reported: where its `uses` lists it, or at
+   [run.at], with a label at the first call that uses it. [ty] is [f]'s
+   type, and [cx] what checking its body found. The help shows how to
+   install one, with a function that makes an implementation if there is
+   one: one of the module's own functions, [fns], whose type [schemes]
+   has, or a member of the dependency. *)
+let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
   (* what it lists, if it lists any, and what its body uses: [check_uses]
      leaves a dependency the runtime doesn't install to this *)
   let uses =
@@ -1595,7 +1614,7 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
               (fun (o : op) ->
                 if o.op_kind = Op_value then Some o.op_fn.name.name else None)
               td.type_ops
-        | Fn _ | Import _ -> [])
+        | Fn _ | Import _ | Testing _ -> [])
       r.prog
   in
   (* a function that makes an implementation of [p] *)
@@ -1608,7 +1627,10 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
             | q :: _ -> q.pname.ident.name = "self"
             | [] -> false
           in
-          if is_method || g.name.name = "main" then None
+          (* nor `main`, nor what a test was made *)
+          if
+            is_method || g.name.name = "main" || String.contains g.name.name '$'
+          then None
           else
             Option.bind (Hashtbl.find_opt schemes g.name.name) (fun t ->
                 Option.map
@@ -1650,7 +1672,7 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
   List.iter
     (fun dep ->
       let p = Ty.dep_path dep in
-      if not (runtime_dep p) then
+      if not (run.installs p) then
         let d = env.names p in
         let written =
           Option.bind f.uses (fun (u : Resolved.uses) ->
@@ -1681,24 +1703,117 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
           | None -> ([], [])
         in
         let needs, why = needs in
-        let loc = match written with Some t -> t.tloc | None -> f.name.loc in
+        let loc = match written with Some t -> t.tloc | None -> run.at in
         let help =
-          match (maker p, Hashtbl.find_opt env.types p) with
-          | Some m, _ -> sprintf "install one inside `main`: `with %s in ...`" m
-          | None, Some _ ->
+          match (run.fix p, maker p, Hashtbl.find_opt env.types p) with
+          | Some fix, _, _ -> fix
+          | None, Some m, _ ->
+              sprintf "install one %s: `with %s in ...`" run.inside m
+          | None, None, Some _ ->
               sprintf
-                "install one inside `main`, with `with`: an implementation is \
-                 a `%s { ... }` that gives each of its operations"
-                d
-          | None, None -> sprintf "remove it: nothing can implement `%s` yet" d
+                "install one %s, with `with`: an implementation is a `%s { ... \
+                 }` that gives each of its operations"
+                run.inside d
+          | None, None, None ->
+              sprintf "remove it: nothing can implement `%s` yet" d
         in
         report env
-          (Diag.make loc ~labels:needs ~notes:why ~help
-             ~says:
-               (sprintf "the runtime installs only %s"
-                  (and_list Prelude.runtime_deps))
-             (sprintf "nothing installs `%s` before `main`" d)))
+          (Diag.make loc ~labels:needs
+             ~notes:(run.why p @ why)
+             ~help ~says:run.only (run.missing d)))
     (List.sort_uniq String.compare uses)
+
+(* The runtime installs exactly the built-in dependencies `main` uses, as
+   the outermost implementations (deps.md, "`main`"). *)
+let check_main env r ~fns ~schemes (f : fn_def) ty cx =
+  check_installed env r ~fns ~schemes f ty cx
+    ~run:
+      {
+        installs = runtime_dep;
+        missing = sprintf "nothing installs `%s` before `main`";
+        only =
+          sprintf "the runtime installs only %s" (and_list Prelude.runtime_deps);
+        inside = "inside `main`";
+        why = (fun _ -> []);
+        fix = (fun _ -> None);
+        at = f.name.loc;
+      }
+
+(* A test gets the test implementation of each built-in dependency, and
+   the dependency that controls it, unless it gets the real one (deps.md,
+   "Tests"): [t] says which, and [f] is its function (test_items.ml). *)
+let check_test env r ~fns ~schemes (t : Test_items.test) (f : fn_def) ty cx =
+  (* the built-in dependency the prelude's [c] controls: `Clock` for
+     `TestClock` *)
+  let control c =
+    List.find_map
+      (fun (d, c') -> if c' = c then Some d else None)
+      Test_items.defaults
+  in
+  let installs (p : Path.t) =
+    p.home = Path.prelude_home
+    && (List.mem_assoc p.name Test_items.defaults
+       ||
+       match control p.name with
+       | Some d -> not (List.mem d t.real)
+       | None -> false)
+  in
+  (* the built-in [p] controls, if the test gets the real one *)
+  let real_of (p : Path.t) =
+    match control p.name with
+    | Some d when p.home = Path.prelude_home && List.mem d t.real -> Some d
+    | _ -> None
+  in
+  (* the built-ins it gets the test implementation of *)
+  let faked =
+    List.filter_map
+      (fun (d, _) -> if List.mem d t.real then None else Some d)
+      Test_items.defaults
+  in
+  check_installed env r ~fns ~schemes f ty cx
+    ~run:
+      {
+        installs;
+        missing =
+          (fun d ->
+            sprintf "nothing installs `%s` in the test %s" d
+              (Ast.show_str t.name));
+        only =
+          (match (t.real, faked) with
+          | [], _ ->
+              "a test gets only the test `Clock`, `Random` and `Console`, and \
+               what controls them"
+          | real, [] ->
+              sprintf "this test gets only the real %s" (and_list real)
+          | real, faked ->
+              sprintf
+                "this test gets only the real %s, and the test %s, and what \
+                 controls %s"
+                (and_list real) (and_list faked)
+                (if List.length faked = 1 then "it" else "them"));
+        inside =
+          (match t.label with
+          | None -> "inside the test"
+          | Some _ -> "in the group's `with`, around its tests");
+        why =
+          (fun p ->
+            match real_of p with
+            | Some d ->
+                [
+                  sprintf
+                    "the test asks for the real `%s`, which `%s` can't control"
+                    d p.name;
+                ]
+            | None -> []);
+        fix =
+          (fun p ->
+            Option.map
+              (fun d ->
+                sprintf
+                  "remove `%s` from the test's `uses`, to get the test one" d)
+              (real_of p));
+        at = t.loc;
+      }
 
 (* Infer every function's type, and return each function's type scheme and
    the types of its expressions, in canonical form. [imports] are the
@@ -1707,7 +1822,7 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
    it can meet: a field of an imported type can have a type from a module
    this one never imported. [extra] are the dot calls of methods found so
    far that the call graph needs besides [r]'s (see [program]). *)
-let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
+let check sink ~extra ~imports ~reachable ?entry ~tests (r : Resolve.t) =
   let st = Types.new_state () in
   let home = r.home in
   let types = Hashtbl.create 16 in
@@ -1811,7 +1926,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
               (fun (o : op) ->
                 if o.op_kind = Op_value then Some o.op_fn.name.name else None)
               td.type_ops
-        | Fn _ | Import _ -> [])
+        | Fn _ | Import _ | Testing _ -> [])
       r.prog
   in
   let is_value (f : fn_def) = List.mem f.name.name values in
@@ -2219,6 +2334,15 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       check_main env r ~fns ~schemes f
         (Hashtbl.find schemes f.name.name)
         (Hashtbl.find tables f.name.name));
+  List.iter
+    (fun (t : Test_items.test) ->
+      match List.find_opt (fun (f : fn_def) -> f.name.name = t.fn) fns with
+      | Some f ->
+          check_test env r ~fns ~schemes t f
+            (Hashtbl.find schemes f.name.name)
+            (Hashtbl.find tables f.name.name)
+      | None -> ())
+    tests;
   (* Each function's scheme and node types share one numbering, so a
      variable is the same [Var n] in both. Nodes are converted in order of
      their ids, so the numbering doesn't depend on a hash table's order. *)
@@ -2257,11 +2381,11 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
    one called changes nothing about the caller's type or its `uses`.
 
    A try reports to its own sink, and only the last try's errors are kept. *)
-let program sink ~imports ~reachable ?entry (r : Resolve.t) =
+let program sink ~imports ~reachable ?entry ?(tests = []) (r : Resolve.t) =
   let rec go extra =
     let tried = Diag.sink () in
     let keep () = List.iter (Diag.report sink) (List.rev tried.reported) in
-    match check tried ~extra ~imports ~reachable ?entry r with
+    match check tried ~extra ~imports ~reachable ?entry ~tests r with
     | t ->
         keep ();
         t

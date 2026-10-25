@@ -101,3 +101,23 @@ handler counting(rate: Int) for Rates, RateCalls uses Clock =
     rate
   count() => calls
 //^ function
+
+test "it counts" uses Clock =
+// <- keyword
+//   ^ string
+//               ^ keyword
+//                    ^ type.dependency
+  assert count() == 1
+//^ keyword
+
+pub group conforms(c: Clock) with c =
+//  ^ keyword
+//        ^ function
+//                           ^ keyword
+  test "it runs" = assert true
+//^ keyword
+
+group "frozen" = conforms(Clock.frozen(Time.epoch))
+// <- keyword
+//    ^ string
+//               ^ function

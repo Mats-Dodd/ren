@@ -8,6 +8,10 @@
         "named": true
       },
       {
+        "type": "assert_expression",
+        "named": true
+      },
+      {
         "type": "attempt_expression",
         "named": true
       },
@@ -193,6 +197,22 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "assert_expression",
+    "named": true,
+    "fields": {
+      "operand": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1251,6 +1271,88 @@
     }
   },
   {
+    "type": "group_definition",
+    "named": true,
+    "fields": {
+      "item": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "parameters": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "parameters",
+            "named": true
+          }
+        ]
+      },
+      "test": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "test_definition",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "visibility",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "group_run",
+    "named": true,
+    "fields": {
+      "call": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "label": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "handler_arm",
     "named": true,
     "fields": {
@@ -2301,11 +2403,23 @@
           "named": true
         },
         {
+          "type": "group_definition",
+          "named": true
+        },
+        {
+          "type": "group_run",
+          "named": true
+        },
+        {
           "type": "handler_definition",
           "named": true
         },
         {
           "type": "import",
+          "named": true
+        },
+        {
+          "type": "test_definition",
           "named": true
         },
         {
@@ -2343,6 +2457,50 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "test_definition",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "assignment",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string",
+            "named": true
+          }
+        ]
+      },
+      "uses": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "uses_clause",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -2736,6 +2894,10 @@
     "named": false
   },
   {
+    "type": "assert",
+    "named": false
+  },
+  {
     "type": "attempt",
     "named": false
   },
@@ -2769,6 +2931,10 @@
   },
   {
     "type": "for",
+    "named": false
+  },
+  {
+    "type": "group",
     "named": false
   },
   {
@@ -2822,6 +2988,10 @@
   {
     "type": "self",
     "named": true
+  },
+  {
+    "type": "test",
+    "named": false
   },
   {
     "type": "then",

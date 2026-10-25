@@ -6,6 +6,17 @@
     "tags": ["ren-main"]
   },
   {
+    "label": "ren test: $ZED_CUSTOM_name",
+    "command": "sh",
+    "args": ["-c", "name=${ZED_CUSTOM_name#\\\"}; name=${name%\\\"}; if command -v ren >/dev/null 2>&1; then ren test \"$ZED_FILE\" --only \"$name\"; else dune exec --no-print-directory ren -- test \"$ZED_FILE\" --only \"$name\"; fi"],
+    "tags": ["ren-test"]
+  },
+  {
+    "label": "ren test",
+    "command": "sh",
+    "args": ["-c", "if command -v ren >/dev/null 2>&1; then ren test \"$ZED_DIRNAME\"; else dune exec --no-print-directory ren -- test \"$ZED_DIRNAME\"; fi"]
+  },
+  {
     "label": "ren check",
     "command": "sh",
     "args": ["-c", "if command -v ren >/dev/null 2>&1; then ren check \"$ZED_FILE\"; else dune exec --no-print-directory ren -- check \"$ZED_FILE\"; fi"]

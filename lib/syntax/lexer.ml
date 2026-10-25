@@ -55,6 +55,9 @@ let keywords =
     ("orelse", ORELSE);
     ("with", WITH);
     ("handler", HANDLER);
+    ("test", TEST);
+    ("group", GROUP);
+    ("assert", ASSERT);
   ]
 
 let is_digit c = c >= '0' && c <= '9'
