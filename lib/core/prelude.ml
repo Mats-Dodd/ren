@@ -7,32 +7,21 @@
    listed in the tables below: each entry says everything every pass needs
    to know about it, so adding a built-in means adding one entry. *)
 
-let source = {|
+let source =
+  {|
 pub type Option<T> =
   | Some(value: T)
   | None
+  ops =
+    pub fn is_some(self) -> Bool =
+      match self
+        Some(_) => true
+        None => false
+    pub fn unwrap_or(self, d: T) -> T =
+      match self
+        Some(x) => x
+        None => d
 |}
-
-(* ---- built-in types ---- *)
-
-type builtin_type = { name : string; arity : int  (** type arguments *) }
-
-let types =
-  [
-    { name = "Int"; arity = 0 };
-    { name = "Bool"; arity = 0 };
-    { name = "Unit"; arity = 0 };
-    { name = "Array"; arity = 1 };
-  ]
-
-(* ---- built-in dependencies ----
-
-   What a function can name in its `uses`. For now these are the only
-   dependencies there are; dependency types of a program's own come in
-   stage 7. *)
-
-let dependencies =
-  [ "Io"; "Net"; "Alloc"; "Async"; "Unsafe"; "Clock"; "Random" ]
 
 (* ---- built-in functions ---- *)
 
@@ -72,8 +61,26 @@ let fns =
           List.iter (fun v -> print_endline (Value.show v)) args;
           (Value.VUnit, args));
     };
+  ]
+
+(* ---- built-in types ----
+
+   A built-in type's methods are built in too, and listed with it: each is
+   called with a dot, its receiver its first parameter, `self`. In a
+   method's scheme the type's parameters are its first variables, as in
+   any `ops` item's (iface.ml). *)
+
+type builtin_type = {
+  name : string;
+  arity : int;  (** type arguments *)
+  methods : builtin_fn list;
+}
+
+let array_methods =
+  let open Ty in
+  [
     {
-      (* fn<T>(Array<T>) -> Int *)
+      (* fn<T>(self: Array<T>) -> Int *)
       name = "len";
       scheme =
         scheme (Fun ([ read (array (Var 0)) ], int, open_row 0, open_row 1));
@@ -83,7 +90,7 @@ let fns =
         | _ -> bug "len");
     };
     {
-      (* fn<T>(inout Array<T>, T) *)
+      (* fn<T>(inout self: Array<T>, x: T) *)
       name = "push";
       scheme =
         scheme
@@ -100,7 +107,37 @@ let fns =
     };
   ]
 
-let find_fn name = List.find_opt (fun (f : builtin_fn) -> f.name = name) fns
+(* the bare `len` and `push` too, until nothing calls them that way *)
+let fns = fns @ array_methods
+
+let types =
+  [
+    { name = "Int"; arity = 0; methods = [] };
+    { name = "Bool"; arity = 0; methods = [] };
+    { name = "Unit"; arity = 0; methods = [] };
+    { name = "Array"; arity = 1; methods = array_methods };
+  ]
+
+(* ---- built-in dependencies ----
+
+   What a function can name in its `uses`. For now these are the only
+   dependencies there are; dependency types of a program's own come in
+   stage 7. *)
+
+let dependencies =
+  [ "Io"; "Net"; "Alloc"; "Async"; "Unsafe"; "Clock"; "Random" ]
+
+(* A built-in function, by the name its path has: [print], or a method
+   after its type, [Array.push]. *)
+let find_fn name =
+  match String.index_opt name '.' with
+  | None -> List.find_opt (fun (f : builtin_fn) -> f.name = name) fns
+  | Some i ->
+      let ty = String.sub name 0 i in
+      let m = String.sub name (i + 1) (String.length name - i - 1) in
+      Option.bind
+        (List.find_opt (fun (t : builtin_type) -> t.name = ty) types)
+        (fun t -> List.find_opt (fun (f : builtin_fn) -> f.name = m) t.methods)
 
 (* The intrinsic half of the prelude's interface. *)
 let intrinsics : Iface.t =
@@ -113,9 +150,21 @@ let intrinsics : Iface.t =
             path = Path.prelude t.name;
             params = List.init t.arity (fun i -> "T" ^ string_of_int i);
             body = Builtin;
-            ops = [];
+            ops =
+              List.map
+                (fun (f : builtin_fn) : Iface.op ->
+                  {
+                    oname = f.name;
+                    opub = true;
+                    okind = Method;
+                    oscheme = f.scheme;
+                  })
+                t.methods;
             loc = None;
           })
         types;
-    values = List.map (fun f -> { Iface.vname = f.name; scheme = f.scheme }) fns;
+    values =
+      List.map
+        (fun (f : builtin_fn) -> { Iface.vname = f.name; scheme = f.scheme })
+        fns;
   }

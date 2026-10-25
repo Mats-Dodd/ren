@@ -374,6 +374,11 @@ let item env sc (t : tyname) (f : ident) =
       in
       let path = Path.make p.home (p.name ^ "." ^ f.name) in
       match List.assoc_opt f.name items with
+      | Some _
+        when p.home = Path.prelude_home && Prelude.find_fn path.name <> None ->
+          (* a built-in method, `Array.len`: built into the compiler, not a
+             function of the program *)
+          Intrinsic path.name
       | Some kind ->
           sc.fn.calls <- path :: sc.fn.calls;
           if kind = Value then Global_value path else Global path

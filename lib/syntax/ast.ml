@@ -276,7 +276,9 @@ type name =
   | Global_value of Path.t
       (** an associated value, [Stack.empty]: made once, when the program starts
       *)
-  | Intrinsic of string  (** a function built into the compiler: [print] *)
+  | Intrinsic of string
+      (** a function built into the compiler: [print], or a method, [Array.push]
+      *)
 
 (* A type's name: a declared type, or the [i]th type parameter in scope
    (of the type being declared, or of the function). *)

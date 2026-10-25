@@ -1025,6 +1025,7 @@ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
        ┌─ test.ren:10:30
     10 │   [b.count(), e.count(), [1].count()]
        │                              ^^^^^
+       help: its methods: `len`, `push`
     error: `Bag` has no `ops` item named `count`
       ┌─ test.ren:5:18
     5 │ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
@@ -1189,6 +1190,7 @@ fn main() = [Int.foo, Array.foo]
       ┌─ test.ren:1:29
     1 │ fn main() = [Int.foo, Array.foo]
       │                             ^^^
+      help: its `ops` items: `len`, `push`
     |}]
 
 let%expect_test "a value of the wrong type, in a cycle of values" =
@@ -1327,3 +1329,112 @@ fn main() =
     4
     ()
     |}]
+
+let%expect_test "an array's built-in methods" =
+  (* `len` and `push` are built into the compiler, but called like any
+     method: a pushed field goes through a temporary, as any changed
+     receiver does *)
+  run
+    {|
+type Bag = { items: Array<Int> }
+
+fn main() =
+  var xs = [1, 2]
+  &xs.push(3)
+  var b = Bag { items: [] }
+  &b.items.push(xs.len())
+  let count = Array.len
+  [xs.len(), count(b.items), b.items[0]]
+|};
+  [%expect {| [3, 1, 3] |}];
+  core
+    {|
+type Bag = { items: Array<Int> }
+
+fn main() =
+  var b = Bag { items: [] }
+  &b.items.push(1)
+  b.items.len()
+|};
+  [%expect
+    {|
+    (fn main ()
+      (let b/1 (record (items: (array)))
+        (seq
+          (let $ref/2 (. b/1 items)
+            (let $result/3 (call Array.push &$ref/2 1)
+              (seq (= b/1 (update b/1 items: $ref/2)) $result/3)))
+          (call Array.len (. b/1 items)))))
+    |}]
+
+let%expect_test "an array's built-in methods, called wrong" =
+  run {|
+fn main() =
+  let xs = [1]
+  &xs.push(3)
+|};
+  [%expect
+    {|
+    error: `xs` is a `let`, so it can't be changed
+      ┌─ test.ren:3:4
+    3 │   &xs.push(3)
+      │    ^^
+      help: declare it with `var` to change it
+    |}];
+  run {|
+fn main() =
+  var xs = [1]
+  xs.push(2)
+  &xs.len()
+  xs.len
+|};
+  [%expect
+    {|
+    error: `push` changes `xs`, so the call needs `&`
+      ┌─ test.ren:3:3
+    3 │   xs.push(2)
+      │   ^^^^^^^^^^
+      = `&` shows at the call that `xs` is changed
+      help: write `&xs.push(2)`
+
+    error: `len` doesn't change `xs`
+      ┌─ test.ren:4:3
+    4 │   &xs.len()
+      │   ^^^^^^^^^
+      help: remove the `&`
+
+    error: `len` is a method, so it has to be called
+      ┌─ test.ren:5:6
+    5 │   xs.len
+      │      ^^^
+      help: write `xs.len()`, or use `Array.len` as a function
+    |}]
+
+let%expect_test "the prelude's methods written in Ren" =
+  (* `Option`'s `is_some` and `unwrap_or` are written in the prelude's
+     source, and called from every module like any other module's *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import lookup
+
+fn main() =
+  let found = lookup.find([3, 4], 4)
+  let none: Option<Int> = None
+  [found.is_some(), none.is_some(), Option.is_some(Some(1))]
+|}
+      );
+      ( "lookup.ren",
+        {|
+pub fn find(xs: Array<Int>, x: Int) -> Option<Int> =
+  var i = 0
+  var at = None
+  for y in xs
+    if y == x then at = Some(i) else ()
+    i += 1
+  if at.is_some() then Some(at.unwrap_or(0)) else None
+|}
+      );
+    ];
+  [%expect {| [true, false, true] |}]

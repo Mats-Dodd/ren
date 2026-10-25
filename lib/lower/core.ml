@@ -49,7 +49,9 @@ and kind =
       (** an associated value, [Stack.empty], which the program makes once when
           it starts: its function of no parameters, called then. [ty] is an
           instance of its type. *)
-  | Intrinsic of string  (** a function built into the compiler: [print] *)
+  | Intrinsic of string
+      (** a function built into the compiler: [print], or a method, [Array.push]
+      *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)

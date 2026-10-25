@@ -282,7 +282,13 @@ and call cx ?(changed = false) (e : expr) f args =
         let recv =
           if changed then inout r (ty_of cx r.node) else Read (expr cx r)
         in
-        (mk (Global p) (ty_of cx f.node) f.loc, [ recv ])
+        (* a built-in method, `xs.len()`, is built into the compiler *)
+        let callee : C.kind =
+          if p.home = Path.prelude_home && Prelude.find_fn p.name <> None then
+            Intrinsic p.name
+          else Global p
+        in
+        (mk callee (ty_of cx f.node) f.loc, [ recv ])
     | _ -> (expr cx f, [])
   in
   let lowered =
