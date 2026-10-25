@@ -11,20 +11,21 @@ pub type AccountId = opaque Int
 // `debit` can fail with either, and `credit` only with `Frozen`.
 pub type Refusal = ! Short(account: AccountId, by: Money) | Frozen(account: AccountId)
 
-// a line of a statement
-pub type Entry =
+// what moved money in or out
+pub type Movement =
   | Deposited(amount: Money)
   | Sent(amount: Money, to: AccountId)
   | Received(amount: Money, from: AccountId)
 
-// an entry and when it happened, by the clock the caller was given
-pub type Stamped = { at: Time, entry: Entry }
+// a line of a statement: a movement, and when it happened, by whichever
+// clock is installed
+pub type Entry = { at: Time, what: Movement }
 
 pub type Account = {
   id: AccountId,
   balance: Money,
   frozen: Bool,
-  statement: Array<Stamped>,
+  statement: Array<Entry>,
 }
   pub fn open(id: AccountId) -> Account = Account {
     id,
@@ -35,14 +36,14 @@ pub type Account = {
 
   // money in, unless the account is frozen. Stamping the entry reads the
   // clock, so the signature says `uses Clock`.
-  pub fn credit(inout self, m: Money, e: Entry) ! Frozen(account: AccountId) uses Clock =
+  pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) uses Clock =
     if self.frozen then fail Frozen(self.id)
     self.balance = self.balance.plus(m)
-    &self.statement.push(Stamped { at: Clock.now(), entry: e })
+    &self.statement.push(Entry { at: Clock.now(), what })
 
   // money out, unless it's frozen or there isn't enough
-  pub fn debit(inout self, m: Money, e: Entry) ! Refusal uses Clock =
+  pub fn debit(inout self, m: Money, what: Movement) ! Refusal uses Clock =
     if self.frozen then fail Frozen(self.id)
     if not self.balance.covers(m) then fail Short(self.id, m.minus(self.balance))
     self.balance = self.balance.minus(m)
-    &self.statement.push(Stamped { at: Clock.now(), entry: e })
+    &self.statement.push(Entry { at: Clock.now(), what })

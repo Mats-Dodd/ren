@@ -8,7 +8,7 @@
 // transfers: all of them, or none.
 
 import money.{Money}
-import account.{Account, AccountId, Refusal, Stamped}
+import account.{Account, AccountId, Refusal, Entry}
 
 pub type Transfer = { from: AccountId, to: AccountId, amount: Money }
 
@@ -56,7 +56,7 @@ pub type Bank = { accounts: Array<Account>, next: Int }
     let i = try self.find(id)
     self.accounts[i].balance
 
-  pub fn statement(self, id: AccountId) -> Array<Stamped> ! NoSuchAccount(account: AccountId) =
+  pub fn statement(self, id: AccountId) -> Array<Entry> ! NoSuchAccount(account: AccountId) =
     let i = try self.find(id)
     self.accounts[i].statement
 
@@ -76,3 +76,89 @@ pub type Bank = { accounts: Array<Account>, next: Int }
       if a.id == id then found = Some(i)
       i += 1
     found orelse fail NoSuchAccount(id)
+
+// The tests get the test `Clock`, stopped at `Time.epoch` until a test
+// moves it, and the test `Console`, without a `with`. Each refusal is kept
+// with `attempt`, to check it's the one expected and that nothing moved.
+// `Err(...)` can't be written, since an error isn't a value, so a test
+// looks at the `Result` with a `match`.
+
+test "a deposit is stamped with the time" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  TestClock.advance(Duration.minutes(5))
+  try &acme.deposit(a, Money.dollars(10))
+  let s = try acme.statement(a)
+  assert s[0].at == Time.epoch.plus(Duration.minutes(5))
+
+test "a transfer moves money, and stamps both sides" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  let b = &acme.open()
+  try &acme.deposit(a, Money.dollars(10))
+  TestClock.advance(Duration.seconds(1))
+  try &acme.transfer(Transfer { from: a, to: b, amount: Money.dollars(4) })
+  let now = Time.epoch.plus(Duration.seconds(1))
+  assert try acme.statement(a) == [
+    Entry { at: Time.epoch, what: Deposited(Money.dollars(10)) },
+    Entry { at: now, what: Sent(Money.dollars(4), b) },
+  ]
+  assert try acme.statement(b) == [Entry { at: now, what: Received(Money.dollars(4), a) }]
+
+test "an overdraft is refused, and nothing moves" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  let b = &acme.open()
+  try &acme.deposit(a, Money.dollars(10))
+  let before = acme
+  let r = attempt &acme.transfer(Transfer { from: a, to: b, amount: Money.dollars(11) })
+  assert acme == before
+  match r
+    Err(Short(id, by)) => assert id == a && by == Money.dollars(1)
+    _ => assert false
+
+test "a frozen account takes nothing in" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  try &acme.freeze(a)
+  match attempt &acme.deposit(a, Money.dollars(10))
+    Err(Frozen(id)) => assert id == a
+    _ => assert false
+  assert try acme.balance(a) == Money.zero
+
+test "an account that doesn't exist is refused" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  let nobody = AccountId.of(99)
+  match attempt &acme.transfer(Transfer { from: a, to: nobody, amount: Money.dollars(1) })
+    Err(NoSuchAccount(id)) => assert id == nobody
+    _ => assert false
+
+test "only a positive amount moves" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  match attempt &acme.deposit(a, Money.zero)
+    Err(NotPositive(m)) => assert m == Money.zero
+    _ => assert false
+
+test "an account can't send to itself" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  try &acme.deposit(a, Money.dollars(10))
+  match attempt &acme.transfer(Transfer { from: a, to: a, amount: Money.dollars(1) })
+    Err(SameAccount) => ()
+    _ => assert false
+
+test "a batch that fails moves nothing" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  let b = &acme.open()
+  try &acme.deposit(a, Money.dollars(10))
+  let before = acme
+  let there = Transfer { from: a, to: b, amount: Money.dollars(5) }
+  let back = Transfer { from: b, to: a, amount: Money.dollars(6) }
+  let r = attempt &acme.batch([there, back])
+  assert acme == before
+  match r
+    Err(Short(id, by)) => assert id == b && by == Money.dollars(1)
+    _ => assert false

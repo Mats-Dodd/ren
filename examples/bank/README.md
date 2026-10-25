@@ -5,18 +5,22 @@ money, a frozen account, an account that doesn't exist. A transfer changes
 two accounts and must change both or neither. A batch of transfers must
 happen whole or not at all. It's the milestone of stage 6: every way the
 bank can say no is an error tag, and every call that can fail says so.
+And of stage 7: every entry of a statement is stamped by the installed
+`Clock`, and the modules carry their tests, which need no setup.
 
 ```
 ren run bank/main.ren      # what it prints, line by line, is commented in main.ren
 ren types bank/main.ren    # every module's interface
+ren test bank              # every module's tests
 ```
 
 | File | What's in it |
 |---|---|
 | `money.ren` | `Money`, opaque cents, with `Money.dollars(5)`, `a.plus(b)` and `a.covers(b)` |
-| `account.ren` | `AccountId`, opaque; `Refusal`, the errors an account fails with; `Stamped`, an entry and its time; `Account`, with `credit` and `debit` |
-| `bank.ren` | `Bank`: `open`, `deposit`, `transfer`, `batch`, `freeze`, and reading balances; `TransferError` |
-| `main.ren` | three customers, and every way a transfer can go |
+| `account.ren` | `AccountId`, opaque; `Refusal`, the errors an account fails with; `Movement` and `Entry`, a line of a statement and its time; `Account`, with `credit` and `debit` |
+| `bank.ren` | `Bank`: `open`, `deposit`, `transfer`, `batch`, `freeze`, and reading balances; `TransferError`; a test for each way it says no |
+| `main.ren` | three customers, and every way a transfer can go; a test of what it prints |
+| `clocks.ren` | `clock_conforms`, a group of tests any `Clock` should pass, run against `Clock.frozen` and `test_clock` |
 
 ## What to look at
 
@@ -63,10 +67,26 @@ made in a unit you can see, `Money.dollars(100)`, and changes only through
 one account in place, inside one draft, inside one call.
 
 **Statements are stamped with `Clock.now()`.** `credit` and `debit` read
-the clock, so their signatures say `uses Clock`, and so do `deposit`,
-`transfer` and `batch`, which call them. `main` uses `Clock` and
-`Console`, and the runtime installs both. Everything else is pure, and the
-compiler worked that out.
+the clock into each `Entry`'s `at`, so their signatures say `uses Clock`,
+and so do `deposit`, `transfer` and `batch`, which call them. `main` uses
+`Clock` and `Console`, and the runtime installs both. Everything else is
+pure, and the compiler worked that out.
+
+**Tests need no setup.** There's no `with` anywhere in the bank. Each
+test gets the test `Clock`, stopped at `Time.epoch`, and moves it with
+`TestClock.advance`, so "a deposit is stamped with the time" knows the
+time exactly. The test of `main` calls it, and checks what it printed
+with `TestConsole.output()`. A test for each refusal keeps it with
+`attempt` and checks the bank didn't move: `assert acme == before`. When
+that fails, `ren test` shows both banks, with a marker under the first
+place they differ. Nothing in the tests reads the real clock, so they
+print the same on every run.
+
+**One suite for every clock.** `clocks.ren`'s `pub group
+clock_conforms(c: Clock) with c` holds what a statement needs from any
+clock, that it never goes back, and runs it twice: `group "frozen" =
+clock_conforms(Clock.frozen(Time.epoch))` and `group "test clock" =
+clock_conforms(test_clock(Time.epoch))`. Each test gets a fresh clock.
 
 **The errors.** `examples.t` breaks the bank in eleven ways:
 
@@ -81,6 +101,10 @@ compiler worked that out.
 - a `fail` arm on a call that can't fail
 - `main` failing: it prints `error: Frozen(3)` and exits with status 1
 - `credit` dropping `uses Clock`: the error points at `Clock.now()`
+
+and `covers` checking only that the balance isn't negative, which the
+compiler can't see: `ren test` catches it, in the overdraft and batch
+tests and the test of `main`.
 
 ## What writing it ran into
 
@@ -115,3 +139,20 @@ with `try`). What's left, and what stage 6 found:
   clash once, and then treat the name as the variable.
 - **Strings are minimal.** There are literals, `==` and `show`, but no
   joining or formatting, so `main` prints cents and counts, not a statement.
+
+What stage 7 found, writing the tests:
+
+- **`Err(...)` can't be written.** An error isn't a value, so a test
+  can't say `assert r == Err(Short(a, Money.dollars(1)))`. Each refusal
+  test looks at its `Result` with a `match`, and its other arm is
+  `_ => assert false`, whose failure shows only `assert false`, not what
+  came back.
+- **`attempt` takes the whole comparison.** `assert attempt
+  &acme.deposit(...) == x` is `attempt (&acme.deposit(...) == x)`, so the
+  `Result` goes into a `let` or a `match` first.
+- **A bank is one long line.** A failed `assert acme == before` prints
+  each bank on one line, hundreds of characters wide. The marker finds
+  the first difference, but the rest is hard to read.
+- **Printing still shows an opaque payload.** `ren test` shows a
+  `Money` as `Money(-100)`, but `print` and `TestConsole.output()` show
+  the `Int`, so the test of `main` checks `"Err(Short(2, 45000))"`.

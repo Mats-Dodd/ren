@@ -51,9 +51,9 @@ not a `Program`: every `Program` passed `check`, which fails with
 `Empty`, `NoHalt` or `Outside(pc, to)` otherwise. Outside `stack.ren`
 nobody knows a `Stack` is a list.
 
-**Only `main` uses `Console`.** `ren types` shows `uses Console` on `main` and no
-other dependency anywhere. The machine and the timeline are pure, and the
-compiler worked that out without being told.
+**Only `main` uses `Console`.** `ren types` shows `uses Console` on
+`main` and no other dependency anywhere. The machine and the timeline are
+pure, and the compiler worked that out without being told.
 
 **The errors.** `examples.t` breaks the VM in five ways a reader might,
 and shows what the compiler says for each:
@@ -76,8 +76,10 @@ candidates for what comes next:
   run instead of being a status to check.
 - **No `while`, ranges, `break` or early `return`.** `Vm.run` loops by
   recursing with a `fuel` count.
-- **No strings.** Output is bare values, so `main.ren` comments what each
-  printed line means, and jumps name instruction indexes, counted by hand.
+- **Strings are minimal.** Stage 7 brought string literals and `show`,
+  but nothing joins two strings, so output is still bare values:
+  `main.ren` comments what each printed line means, and jumps name
+  instruction indexes, counted by hand.
 - **Arguments can't read part of what a call changes.** `step`'s `Load`
   needs a `let` (planned for stage 11, for plain values).
 - **`print` shows an opaque type's insides.** Printing a `Vm` would show

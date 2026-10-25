@@ -1,0 +1,21 @@
+// What a statement needs from a clock: it never goes back, so entries
+// stamped one after another are in order. Any `Clock` the bank is run
+// with should pass, so the suite is a group over one, run here against
+// the two the prelude has that stand still until they're told to move.
+
+pub group clock_conforms(c: Clock) with c =
+  test "now never goes back" =
+    let t = Clock.now()
+    assert not Clock.now().before(t)
+
+  test "an instant never goes back" =
+    let a = Clock.instant()
+    assert not Clock.instant().before(a)
+
+  test "sleeping doesn't move it back" =
+    let t = Clock.now()
+    Clock.sleep(Duration.seconds(1))
+    assert not Clock.now().before(t)
+
+group "frozen" = clock_conforms(Clock.frozen(Time.epoch))
+group "test clock" = clock_conforms(test_clock(Time.epoch))

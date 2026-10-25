@@ -72,3 +72,15 @@ fn worth_retrying(r: Result<Unit, ! TransferError>) -> Bool =
     Err(NoSuchAccount(_)) => false
     Err(NotPositive(_)) => false
     Err(SameAccount) => false
+
+// `main` runs here with the test `Console`, which keeps what it prints
+test "main prints the balances, and every refusal" =
+  try main()
+  assert TestConsole.output() == [
+    "7000", "5000",
+    "Err(Short(2, 45000))", "5000", "true",
+    "3", "7000",
+    "Err(Frozen(3))", "true",
+    "Ok(())", "6500", "5500",
+    "true", "4", "true",
+  ]

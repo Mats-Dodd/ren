@@ -427,8 +427,8 @@ copy of the bank and keeps it only if nothing failed:
   pub type Refusal = ! Short(AccountId, Money) | Frozen(AccountId)
   pub type Account
     pub fn open(id: AccountId) -> Account
-    pub fn credit(inout self, m: Money, e: Entry) ! Frozen(AccountId) uses Clock
-    pub fn debit(inout self, m: Money, e: Entry) ! Frozen(AccountId) | Short(AccountId, Money) uses Clock
+    pub fn credit(inout self, m: Money, what: Movement) ! Frozen(AccountId) uses Clock
+    pub fn debit(inout self, m: Money, what: Movement) ! Frozen(AccountId) | Short(AccountId, Money) uses Clock
   
   -- bank
   pub type TransferError = ! Refusal | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount
@@ -440,7 +440,7 @@ copy of the bank and keeps it only if nothing failed:
     pub fn batch(inout self, ts: Array<Transfer>) ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Clock
     pub fn freeze(inout self, id: AccountId) ! NoSuchAccount(AccountId)
     pub fn balance(self, id: AccountId) -> Money ! NoSuchAccount(AccountId)
-    pub fn statement(self, id: AccountId) -> Array<Stamped> ! NoSuchAccount(AccountId)
+    pub fn statement(self, id: AccountId) -> Array<Entry> ! NoSuchAccount(AccountId)
     pub fn total(self) -> Money
     fn find(self, id: AccountId) -> Int ! NoSuchAccount(AccountId)
   
@@ -599,11 +599,11 @@ Stamping an entry reads the clock, so a public signature that drops
   $ cp -r bank b11 && perl -0pi -e 's/(pub fn credit[^\n]*) uses Clock =/$1 =/' b11/account.ren
   $ ren check b11/main.ren
   error: `Account.credit` doesn't declare `Clock`
-     ┌─ b11/account.ren:38:10
-  38 │   pub fn credit(inout self, m: Money, e: Entry) ! Frozen(account: AccountId) =
+     ┌─ b11/account.ren:39:10
+  39 │   pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) =
      │          ^^^^^^
-  41 │     &self.statement.push(Stamped { at: Clock.now(), entry: e })
-     │                                        ----------- this call uses `Clock`
+  42 │     &self.statement.push(Entry { at: Clock.now(), what })
+     │                                      ----------- this call uses `Clock`
      = a public function without `uses` uses nothing, and its body is checked against that
      help: add `uses Clock`
   [1]
@@ -776,3 +776,114 @@ its tests are left out, with a note that says how to run them:
     ✓ two
   
   1 passed
+
+The bank is the milestone of stage 7 too: its statements are stamped by
+`Clock.now()`, and its modules carry their tests. They use the test
+`Clock` and `Console` and need no `with`: one checks each way the bank
+says no, with `attempt`, one runs `main` and checks what it printed, and
+`clocks.ren` runs a conformance group against two clocks:
+
+  $ ren test bank
+  bank.ren
+    ✓ a deposit is stamped with the time
+    ✓ a transfer moves money, and stamps both sides
+    ✓ an overdraft is refused, and nothing moves
+    ✓ a frozen account takes nothing in
+    ✓ an account that doesn't exist is refused
+    ✓ only a positive amount moves
+    ✓ an account can't send to itself
+    ✓ a batch that fails moves nothing
+  
+  clocks.ren
+    frozen
+      ✓ now never goes back
+      ✓ an instant never goes back
+      ✓ sleeping doesn't move it back
+    test clock
+      ✓ now never goes back
+      ✓ an instant never goes back
+      ✓ sleeping doesn't move it back
+  
+  main.ren
+    ✓ main prints the balances, and every refusal
+  
+  15 passed
+
+If `covers` only checks the balance isn't negative, an account can go
+below zero. The tests that check nothing moved show the two banks, and
+`main`'s shows what it printed before it stopped:
+
+  $ cp -r bank b12 && perl -pi -e 's/= self >= m$/= self >= 0/' b12/money.ren
+  $ ren test b12
+  bank.ren
+    ✓ a deposit is stamped with the time
+    ✓ a transfer moves money, and stamps both sides
+    ✗ an overdraft is refused, and nothing moves
+    ✓ a frozen account takes nothing in
+    ✓ an account that doesn't exist is refused
+    ✓ only a positive amount moves
+    ✓ an account can't send to itself
+    ✗ a batch that fails moves nothing
+  
+  clocks.ren
+    frozen
+      ✓ now never goes back
+      ✓ an instant never goes back
+      ✓ sleeping doesn't move it back
+    test clock
+      ✓ now never goes back
+      ✓ an instant never goes back
+      ✓ sleeping doesn't move it back
+  
+  main.ren
+    ✗ main prints the balances, and every refusal
+  
+  ──── an overdraft is refused, and nothing moves ── bank.ren:115
+      │
+  115 │   assert acme == before
+      │          ^^^^^^^^^^^^^^
+      │
+      left:  Bank { accounts: [Account { id: AccountId(1), balance: Money(-100), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }, Entry { at: Time(0), what: Sent(Money(1100), AccountId(2)) }] }, Account { id: AccountId(2), balance: Money(1100), frozen: false, statement: [Entry { at: Time(0), what: Received(Money(1100), AccountId(1)) }] }], next: 3 }
+      right: Bank { accounts: [Account { id: AccountId(1), balance: Money(1000), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }] }, Account { id: AccountId(2), balance: Money(0), frozen: false, statement: [] }], next: 3 }
+                                                                          ^ differs here
+  
+      seed 3529 · rerun: ren test b12 --only "an overdraft" --seed 3529
+  
+  ──── a batch that fails moves nothing ── bank.ren:161
+      │
+  161 │   assert acme == before
+      │          ^^^^^^^^^^^^^^
+      │
+      left:  Bank { accounts: [Account { id: AccountId(1), balance: Money(1100), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }, Entry { at: Time(0), what: Sent(Money(500), AccountId(2)) }, Entry { at: Time(0), what: Received(Money(600), AccountId(2)) }] }, Account { id: AccountId(2), balance: Money(-100), frozen: false, statement: [Entry { at: Time(0), what: Received(Money(500), AccountId(1)) }, Entry { at: Time(0), what: Sent(Money(600), AccountId(1)) }] }], next: 3 }
+      right: Bank { accounts: [Account { id: AccountId(1), balance: Money(1000), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }] }, Account { id: AccountId(2), balance: Money(0), frozen: false, statement: [] }], next: 3 }
+                                                                           ^ differs here
+  
+      seed 119 · rerun: ren test b12 --only "a batch" --seed 119
+  
+  ──── main prints the balances, and every refusal ── main.ren:59
+     │
+  59 │   print(not s[3].at.before(s[0].at))              // true
+     │             ^^^^
+     │
+     panic: index 3 is out of bounds for an array of length 3
+  
+     seed 5578 · rerun: ren test b12 --only "main prints" --seed 5578
+  
+     printed:
+       7000
+       5000
+       Ok(())
+       -45000
+       false
+       3
+       7000
+       Err(Short(2, 44500))
+       true
+       Err(Short(2, 44500))
+       7000
+       -45000
+       true
+       3
+  
+  12 passed, 3 failed
+  [1]
