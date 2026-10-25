@@ -371,7 +371,7 @@ fn main() = 1
       ┌─ test.ren:2:13
     2 │ fn g() uses Nope = 1
       │             ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Net`, `Random`, `TestClock`, `TestConsole`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Random`, `TestClock`, `TestConsole`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
     |}]
 
@@ -807,7 +807,7 @@ fn main() uses Console =
     error: nothing installs `N` before `main`
       ┌─ test.ren:6:4
     6 │ fn main() uses Console =
-      │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
     7 │   print(run_two(fn() => N.get()))
       │         ------------------------ this call uses `N`
       = `run_two` calls a closure inside more than one `with`, so the closure gets only what's installed outside all of them, not the `N` one of them installs
@@ -829,7 +829,7 @@ fn main() uses Console =
     error: nothing installs `N` before `main`
       ┌─ test.ren:6:4
     6 │ fn main() uses Console =
-      │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
     8 │   print(with a.wrap() in N.get())
       │              -------- this call uses `N`
       = in `A.wrap`, what's called inside the `with` that installs `N` uses what `A.wrap` itself does: a parameter whose type is written `fn(...)`, or a closure that's called outside the `with` too, gets only what's installed outside it
@@ -1024,6 +1024,91 @@ fn main() uses Clock, Random, Console =
       │   ^^^^^^^^^^^^^
     |}]
 
+(* A file of its own, for the real `Fs` to write, read back and remove.
+   Each path is shown as a string, so the file is named in a Ren literal. *)
+let temp_file () = Filename.temp_file "ren" ".txt"
+
+let%expect_test "the real Fs" =
+  let file = temp_file () in
+  Sys.remove file;
+  run
+    (Printf.sprintf
+       {|
+fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Fs, Console =
+  let p = Path.of("%s")
+  print(Fs.exists(p))
+  match attempt Fs.read(p)
+    Err(NoSuchFile(q)) => print(q == p)
+    _ => print("it read a file that isn't there")
+  Fs.write(p, "héllo".bytes())
+  print(Fs.exists(p))
+  print((try Fs.read(p)).len())
+  Fs.write(p, "again".bytes())
+  print(try Fs.read_str(p))
+  try Fs.read_str(Path.of("no/such/file.txt"))
+|}
+       file);
+  Sys.remove file;
+  [%expect
+    {|
+    false
+    true
+    true
+    6
+    again
+    error: NoSuchFile("no/such/file.txt")
+    |}];
+  (* bytes that aren't UTF-8, written by something else *)
+  let file = temp_file () in
+  Out_channel.with_open_bin file (fun oc -> output_string oc "\xff");
+  run
+    (Printf.sprintf
+       {|
+fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Fs, Console =
+  let p = Path.of("%s")
+  print((try Fs.read(p)).len())
+  try Fs.read_str(p)
+|}
+       file);
+  Sys.remove file;
+  [%expect {|
+    1
+    error: InvalidUtf8
+    |}]
+
+let%expect_test "the real Fs panics when it can't write" =
+  run
+    {|
+fn main() uses Fs =
+  Fs.write(Path.of("no/such/folder/file.txt"), "x".bytes())
+|};
+  [%expect
+    {|
+    error: panic: can't write no/such/folder/file.txt: No such file or directory
+      ┌─ test.ren:2:3
+    2 │   Fs.write(Path.of("no/such/folder/file.txt"), "x".bytes())
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "the real Fs is reached only through Fs" =
+  types {|
+fn main() uses Console =
+  print(Fs.real)
+  print(fs_read("x"))
+|};
+  [%expect {|
+    error: `Fs` has no operation or member named `real`
+      ┌─ test.ren:2:12
+    2 │   print(Fs.real)
+      │            ^^^^
+      help: its operations: `read`, `write`, `exists`; its members: `read_str`
+
+    error: there's no function named `fs_read`
+      ┌─ test.ren:3:9
+    3 │   print(fs_read("x"))
+      │         ^^^^^^^
+    |}]
+
 let%expect_test "time, with methods" =
   run
     {|
@@ -1137,6 +1222,38 @@ fn main() = 1
    At `main`, in a test, and in a group's run, naming the dependency and
    the call that needs it. *)
 
+let%expect_test "main lists Fs to get the real one" =
+  types {|
+fn load() -> Bool uses Fs = Fs.exists(Path.of("x"))
+
+fn main() uses Console = print(load())
+|};
+  [%expect {|
+    error: `main` doesn't declare `Fs`
+      ┌─ test.ren:3:4
+    3 │ fn main() uses Console = print(load())
+      │    ^^^^
+      │                                ------ this call uses `Fs`
+      = `main`'s body can only use what its `uses` lists
+      help: add `Fs` to its `uses`
+    |}];
+  test
+    {|
+test "the real file system, and the test clock" uses Fs, Clock =
+  TestClock.advance(Duration.ms(1))
+  assert not Fs.exists(Path.of("no/such/file.txt"))
+|};
+  [%expect {|
+    error: nothing installs `TestClock` in the test "the real file system, and the test clock"
+      ┌─ test.ren:1:6
+    1 │ test "the real file system, and the test clock" uses Fs, Clock =
+      │      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this test gets only the real `Fs` and `Clock`, and the test `Random` and `Console`, and what controls them
+    2 │   TestClock.advance(Duration.ms(1))
+      │   --------------------------------- this call uses `TestClock`
+      = the test asks for the real `Clock`, which `TestClock` can't control
+      help: remove `Clock` from the test's `uses`, to get the test one
+    |}]
+
 let%expect_test "the runtime installs only the built-in dependencies main uses"
     =
   run {|
@@ -1164,7 +1281,7 @@ fn main() uses Users, Console =
     error: nothing installs `Users` before `main`
       ┌─ test.ren:6:16
     6 │ fn main() uses Users, Console =
-      │                ^^^^^ the runtime installs only `Clock`, `Random` and `Console`
+      │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
     7 │   print(Users.get(1))
       │         ------------ this call uses `Users`
       help: install one inside `main`: `with Users.none() in ...`
@@ -1184,7 +1301,7 @@ fn main() = print(find(1))
     error: nothing installs `Users` before `main`
       ┌─ test.ren:7:4
     7 │ fn main() = print(find(1))
-      │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
       │                   ------- this call uses `Users`
       help: install one inside `main`: `with mem_users(...) in ...`
     |}];
@@ -1208,14 +1325,14 @@ fn main() uses Net = print(Users.get(1))
     error: nothing installs `Users` before `main`
       ┌─ test.ren:4:4
     4 │ fn main() uses Net = print(Users.get(1))
-      │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
       │                            ------------ this call uses `Users`
       help: install one inside `main`, with `with`: an implementation is a `Users { ... }` that gives each of its operations
 
     error: nothing installs `Net` before `main`
       ┌─ test.ren:4:16
     4 │ fn main() uses Net = print(Users.get(1))
-      │                ^^^ the runtime installs only `Clock`, `Random` and `Console`
+      │                ^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
       help: remove it: nothing can implement `Net` yet
     |}]
 
@@ -1235,7 +1352,7 @@ fn main() uses Log =
     error: nothing installs `Log` before `main`
       ┌─ test.ren:4:16
     4 │ fn main() uses Log =
-      │                ^^^ the runtime installs only `Clock`, `Random` and `Console`
+      │                ^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
     5 │   Log.put(1)
       │   ---------- this call uses `Log`
       help: install one inside `main`, with `with`: an implementation is a `Log { ... }` that gives each of its operations
@@ -1250,7 +1367,7 @@ fn main() uses Rates, Console = print(convert(1))
     error: nothing installs `Rates` before `main`
        ┌─ test.ren:16:16
     16 │ fn main() uses Rates, Console = print(convert(1))
-       │                ^^^^^ the runtime installs only `Clock`, `Random` and `Console`
+       │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
        │                                       ---------- this call uses `Rates`
        help: install one inside `main`: `with counting_rates(...) in ...`
     |}]
@@ -1274,7 +1391,7 @@ test "the system clock" uses Clock =
     error: nothing installs `Users` in the test "counts users"
       ┌─ test.ren:6:6
     6 │ test "counts users" =
-      │      ^^^^^^^^^^^^^^ a test gets only the test `Clock`, `Random` and `Console`, and what controls them
+      │      ^^^^^^^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console` and `Fs`, and what controls them
     7 │   assert Users.count() == 0
       │          ------------- this call uses `Users`
       help: install one inside the test: `with Users.none() in ...`
@@ -1282,7 +1399,7 @@ test "the system clock" uses Clock =
     error: nothing installs `TestClock` in the test "the system clock"
        ┌─ test.ren:9:6
      9 │ test "the system clock" uses Clock =
-       │      ^^^^^^^^^^^^^^^^^^ this test gets only the real `Clock`, and the test `Random` and `Console`, and what controls them
+       │      ^^^^^^^^^^^^^^^^^^ this test gets only the real `Clock`, and the test `Random`, `Console` and `Fs`, and what controls them
     10 │   TestClock.advance(Duration.ms(1))
        │   --------------------------------- this call uses `TestClock`
        = the test asks for the real `Clock`, which `TestClock` can't control
@@ -1298,7 +1415,7 @@ test "users" uses Users, ..d =
 |};
   [%expect
     {|
-    error: a test's `uses` asks for a real implementation, and only `Clock`, `Random` and `Console` have one, not `Users`
+    error: a test's `uses` asks for a real implementation, and only `Clock`, `Random`, `Console` and `Fs` have one, not `Users`
       ┌─ test.ren:4:19
     4 │ test "users" uses Users, ..d =
       │                   ^^^^^
@@ -1331,7 +1448,7 @@ group "frozen" = counts(Clock.frozen(Time.epoch))
     error: nothing installs `Users` in the test "frozen / counts users"
        ┌─ test.ren:10:7
     10 │ group "frozen" = counts(Clock.frozen(Time.epoch))
-       │       ^^^^^^^^ a test gets only the test `Clock`, `Random` and `Console`, and what controls them
+       │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console` and `Fs`, and what controls them
        │                  -------------------------------- this call uses `Users`
        help: install one around each of its tests, in the group's `with`: `group counts(...) with Users.none() =`
     |}]
@@ -1360,7 +1477,7 @@ pub group counts() =
     error: nothing installs `conform.Users` in the test "frozen / counts users"
       ┌─ main.ren:3:7
     3 │ group "frozen" = conform.counts()
-      │       ^^^^^^^^ a test gets only the test `Clock`, `Random` and `Console`, and what controls them
+      │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console` and `Fs`, and what controls them
       │                  ---------------- this call uses `conform.Users`
       help: `conform.counts` is another module's group, so pass one in: give the group a parameter of type `conform.Users` that its `with` installs, and pass an implementation to it here
     |}]
@@ -2501,7 +2618,7 @@ fn main() uses Console =
     error: nothing installs `RateCalls` before `main`
        ┌─ test.ren:14:4
     14 │ fn main() uses Console =
-       │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
     17 │     print(RateCalls.count())
        │           ----------------- this call uses `RateCalls`
        help: install one inside `main`: `with counting_rates(...) in ...`
@@ -3131,6 +3248,40 @@ fn main() uses Console =
     ()
     |}]
 
+let%expect_test "mem_fs, installed by hand" =
+  run
+    {|
+fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Console =
+  let notes = Path.of("notes.txt")
+  let files = [File { path: notes, data: "hi".bytes() }]
+  with mem_fs(files) in
+    print(try Fs.read_str(notes))
+    print(Fs.exists(Path.of("other.txt")))
+    Fs.write(notes, "bye".bytes())
+    Fs.write(Path.of("other.txt"), "new".bytes())
+    print(try Fs.read_str(notes))
+    print(try Fs.read_str(Path.of("other.txt")))
+  // each instance starts from `files` again
+  with mem_fs(files) in
+    print(try Fs.read_str(notes))
+    print(Fs.exists(Path.of("other.txt")))
+  with mem_fs([File { path: notes, data: "é".bytes() }]) in
+    print((try Fs.read(notes)).len())
+  with mem_fs([]) in
+    try Fs.read(notes)
+|};
+  [%expect
+    {|
+    hi
+    false
+    bye
+    new
+    hi
+    false
+    2
+    error: NoSuchFile("notes.txt")
+    |}]
+
 let%expect_test "a test, a group and a group's run are items of their own" =
   ast
     {|
@@ -3434,6 +3585,76 @@ test "the test clock isn't" =
     test.ren
       the system clock is past the epoch · uses the real `Clock` and `Random`
       the test clock isn't
+    [exit 0]
+    |}]
+
+let%expect_test "a test gets an empty mem_fs, or the files its with gives" =
+  test
+    {|
+fn save(name: Str, text: Str) uses Fs =
+  Fs.write(Path.of(name), text.bytes())
+
+test "there are no files" =
+  assert not Fs.exists(Path.of("notes.txt"))
+  match attempt Fs.read(Path.of("notes.txt"))
+    Err(NoSuchFile(p)) => assert p == Path.of("notes.txt")
+    _ => assert false
+
+test "what it writes, it reads back" =
+  save("notes.txt", "hi")
+  assert try Fs.read_str(Path.of("notes.txt")) == "hi"
+
+test "nothing's left from the test before" =
+  assert not Fs.exists(Path.of("notes.txt"))
+
+test "a with gives it files" =
+  let files = [File { path: Path.of("notes.txt"), data: "seeded".bytes() }]
+  with mem_fs(files) in
+    assert try Fs.read_str(Path.of("notes.txt")) == "seeded"
+
+test "a missing file fails the test" =
+  let s = try Fs.read_str(Path.of("gone.txt"))
+  assert s == ""
+|};
+  [%expect
+    {|
+    test.ren
+      ✓ there are no files
+      ✓ what it writes, it reads back
+      ✓ nothing's left from the test before
+      ✓ a with gives it files
+      ✗ a missing file fails the test
+
+    ──── a missing file fails the test ── test.ren:22
+       │
+    22 │ test "a missing file fails the test" =
+       │      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       error: NoSuchFile("gone.txt")
+
+       seed 9888 · rerun: ren test test.ren --only "a missing" --seed 9888
+
+    4 passed, 1 failed
+    [exit 1]
+    |}]
+
+let%expect_test "a test whose uses asks for the real Fs" =
+  let file = temp_file () in
+  test
+    (Printf.sprintf
+       {|
+test "the real file system" uses Fs =
+  let p = Path.of("%s")
+  Fs.write(p, "real".bytes())
+  assert try Fs.read_str(p) == "real"
+|}
+       file);
+  Sys.remove file;
+  [%expect {|
+    test.ren
+      ✓ the real file system
+
+    1 passed
     [exit 0]
     |}]
 

@@ -153,8 +153,12 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 | `Clock` | `now`, `instant`, `sleep` | the system clock | `test_clock(Time.epoch)`: stopped until moved | `TestClock.advance(d)` |
 | `Random` | `int(below)` | the OS | seeded from the test's name | `TestRandom.seed()` |
 | `Console` | `write(line: Str)` | stdout | captured | `TestConsole.output() -> Array<Str>` |
+| `Fs` | `read(p) -> Bytes ! NoSuchFile`, `write(p, b)`, `exists(p)` | files, through `Unix` | `mem_fs([])`: no files | none: read back through `Fs` |
 
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.
+- `Fs.read_str(p)` is a member of `Fs`, `read` then `Str.from_utf8`.
+  `mem_fs(files: Array<File>)` keeps files in memory, each a `File {
+  path, data }`, so a test that needs some installs one with `with`.
 - `Time`, `Instant` and `Duration` are opaque, with methods only until
   operators arrive (stage 10).
 - For now the real `instant` reads the same wall clock as `now`, which the
@@ -163,7 +167,7 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   runtime's own system calls (stage 8, `Os`).
 - These six are the prelude's, named in every module, so a program's own
   `type Time` or `dep Clock` is an error: it chooses another name.
-- `Fs` and `Os` come in stage 8, with strings, and `Net` with `Async` in
+- `Os` and `Proc` come in stage 8 too, and `Net` with `Async` in
   stage 9 ([runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
@@ -182,7 +186,7 @@ error: nothing installs `Users` before `main`
   ┌─ main.ren:1:16
   │
 1 │ fn main() uses Users, Console =
-  │                ^^^^^ the runtime installs only `Clock`, `Random` and `Console`
+  │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console` and `Fs`
   │
   = help: install one inside `main`: `with mem_users([]) in ...`
 ```
@@ -209,8 +213,8 @@ test "main prints the balances, and every refusal" =
 
 - Tests sit next to the code, so they can reach private functions. `ren run`
   ignores them.
-- **Every test gets the test `Clock`, `Random` and `Console`, and their
-  controls, implicitly.** No `with`, no fixtures. A test without real
+- **Every test gets the test `Clock`, `Random`, `Console` and `Fs`, and
+  their controls, implicitly.** No `with`, no fixtures. A test without real
   dependencies gives the same result on every run.
 - **A test's `uses` asks for the real implementation:**
   `test "the system clock moves" uses Clock =`. Going outside is visible.
@@ -472,10 +476,17 @@ stage, or settled something the plan left open:
 - **`Path.join` takes a `Str`**, `src.join("main.ren")`, and a name that
   starts at the root, `/etc`, replaces the path, as in most languages.
 
+- **The real `Fs` panics when it can't read or write a file for any
+  reason but its not being there,** a folder that isn't there or a
+  file it may not read, since `read` fails only with `NoSuchFile` and
+  `write` with nothing.
+- **`mem_fs` finds a file by its path exactly as it's written,** so
+  `a/b` and `a//b` are two files.
+
 ## Later
 
 - `outer` and forwarding handlers, `Async`, `Net`, the journal (stage 9).
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.
-- `Fs` and `Os` (stage 8).
+- `Os` and `Proc` (stage 8).

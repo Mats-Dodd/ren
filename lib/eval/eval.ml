@@ -498,6 +498,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
         ("Clock", "test_clock", [ value (Path.prelude "Time.epoch") ]);
         ("Random", "test_random", [ VInt seed ]);
         ("Console", "test_console", []);
+        ("Fs", "mem_fs", [ VArray [||] ]);
       ]
   in
   let outcome =

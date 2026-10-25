@@ -104,6 +104,26 @@ pub dep Console =
 // what any value shows as, on a line of its own
 pub fn print<T>(x: T) uses Console = Console.write(show(x))
 
+// a file: where it is, and what's in it
+pub type File = { path: Path, data: Bytes }
+
+pub dep Fs =
+  read: fn(p: Path) -> Bytes ! NoSuchFile(path: Path)
+  // makes the file, or replaces what's in it
+  write: fn(p: Path, b: Bytes)
+  exists: fn(p: Path) -> Bool
+
+  // what's in a file, as a string
+  pub fn read_str(p: Path) -> Str ! NoSuchFile(path: Path) | InvalidUtf8 uses Fs =
+    let b = try Fs.read(p)
+    try Str.from_utf8(b)
+  let real: Fs =
+    Fs {
+      read: fn(p) => fs_read(p) orelse fail NoSuchFile(p),
+      write: fn(p, b) => fs_write(p, b),
+      exists: fn(p) => fs_exists(p),
+    }
+
 // ---- what a test gets (deps.md, "Tests") ----
 //
 // Each test runs with a fresh instance of each of these handlers, unless
@@ -149,6 +169,30 @@ pub handler test_console() for Console, TestConsole =
   var lines: Array<Str> = []
   write(line) => &lines.push(line)
   output() => lines
+
+// files kept in memory, starting with `files`. A test gets an empty one,
+// and reads back what it wrote through `Fs` itself.
+pub handler mem_fs(files: Array<File>) for Fs =
+  var kept = files
+  read(p) =>
+    var found = None
+    for f in kept
+      if f.path == p then found = Some(f.data)
+    found orelse fail NoSuchFile(p)
+  write(p, b) =>
+    var at = None
+    var i = 0
+    for f in kept
+      if f.path == p then at = Some(i)
+      i += 1
+    match at
+      Some(j) => kept[j].data = b
+      None => &kept.push(File { path: p, data: b })
+  exists(p) =>
+    var found = false
+    for f in kept
+      if f.path == p then found = true
+    found
 |}
 
 (* ---- built-in functions ---- *)
@@ -183,6 +227,7 @@ let bug name = failwith ("bug: `" ^ name ^ "` was called with the wrong values")
    [n]th row variable, numbered by first appearance (ty.ml). *)
 let scheme ty : Ty.scheme = { ty; names = [] }
 let open_row n : Ty.row = { labels = []; tail = Some n }
+let bytes = Ty.Con (Path.prelude "Bytes", [])
 
 (* What the real implementations of the built-in dependencies run on: the
    system's clock, its source of randomness, and stdout. Each is a number
@@ -191,6 +236,34 @@ let open_row n : Ty.row = { labels = []; tail = Some n }
    that never goes back that `Instant` promises: OCaml's standard library
    has no monotonic one (deps.md, "Built in"). *)
 let now_ms () = int_of_float (Unix.gettimeofday () *. 1000.)
+
+(* A file's bytes, or [None] if there's no file at [path]. Anything else
+   that stops it being read, or written, panics: `Fs` doesn't say it can
+   fail that way. *)
+let read_file path =
+  match Unix.openfile path [ Unix.O_RDONLY ] 0 with
+  | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> None
+  | exception Unix.Unix_error (e, _, _) ->
+      raise
+        (Panic
+           (Printf.sprintf "can't read %s: %s" path (Unix.error_message e)))
+  | fd -> (
+      let ic = Unix.in_channel_of_descr fd in
+      match In_channel.input_all ic with
+      | data ->
+          close_in ic;
+          Some data
+      | exception Sys_error msg ->
+          close_in_noerr ic;
+          raise (Panic (Printf.sprintf "can't read %s: %s" path msg)))
+
+(* [Sys_error]'s message starts with the path *)
+let write_file path data =
+  try Out_channel.with_open_bin path (fun oc -> output_string oc data)
+  with Sys_error msg -> raise (Panic ("can't write " ^ msg))
+
+(* `Some(args)` or `None` *)
+let option name args = Value.VCon { ty = Path.prelude "Option"; name; args }
 
 (* `Random.int`'s panic, real or not, for a [below] it can't stay below *)
 let not_above_0 below =
@@ -259,6 +332,36 @@ let fns =
             print_endline line;
             (Value.VUnit, args)
         | _ -> bug "console_write");
+    (* fn(Str) -> Option<Bytes>, the real `Fs.read`, which fails when it's
+       [None] *)
+    fn ~runtime:true "fs_read"
+      (Fun
+         ( [ read str ],
+           Con (Path.prelude "Option", [ bytes ]),
+           open_row 0,
+           open_row 1 ))
+      (function
+        | [ Value.VStr path ] as args ->
+            ( (match read_file path with
+              | Some data -> option "Some" [ VBytes data ]
+              | None -> option "None" []),
+              args )
+        | _ -> bug "fs_read");
+    (* fn(Str, Bytes) *)
+    fn ~runtime:true "fs_write"
+      (Fun ([ read str; read bytes ], unit, open_row 0, open_row 1))
+      (function
+        | [ Value.VStr path; Value.VBytes data ] as args ->
+            write_file path data;
+            (Value.VUnit, args)
+        | _ -> bug "fs_write");
+    (* fn(Str) -> Bool *)
+    fn ~runtime:true "fs_exists"
+      (Fun ([ read str ], bool, open_row 0, open_row 1))
+      (function
+        | [ Value.VStr path ] as args ->
+            (Value.VBool (Sys.file_exists path), args)
+        | _ -> bug "fs_exists");
   ]
 
 (* ---- built-in types ----
@@ -314,8 +417,6 @@ let array_methods =
    from bytes to a string is `Str.from_utf8`, which checks them. A string's
    indices are byte offsets, as `len` counts them, and a slice that would
    cut a character in two panics, so that a `Str` stays UTF-8. *)
-
-let bytes = Ty.Con (Path.prelude "Bytes", [])
 
 (* Where [sub] first starts in [s], at [from] or after. *)
 let find_from s sub from =
@@ -381,9 +482,6 @@ let str_methods =
       (Con (Path.prelude "Option", [ int ]))
       (function
         | [ VStr s; VStr sub ] -> (
-            let option name args =
-              Value.VCon { ty = Path.prelude "Option"; name; args }
-            in
             match find_from s sub 0 with
             | Some i -> option "Some" [ VInt i ]
             | None -> option "None" [])
@@ -471,7 +569,7 @@ let types =
    The dependencies the runtime installs around `main`, if it uses them:
    each is declared in [source], with its real implementation, `real`
    (deps.md, "`main`"). *)
-let runtime_deps = [ "Clock"; "Random"; "Console" ]
+let runtime_deps = [ "Clock"; "Random"; "Console"; "Fs" ]
 
 (* The dependencies a `uses` can name that aren't declared anywhere yet:
    their stages give them operations. *)

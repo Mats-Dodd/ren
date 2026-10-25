@@ -1749,7 +1749,7 @@ let check_test env r ~fns ~schemes (t : Test_items.test) (f : fn_def) ty cx =
      `TestClock` *)
   let control c =
     List.find_map
-      (fun (d, c') -> if c' = c then Some d else None)
+      (fun (d, c') -> if c' = Some c then Some d else None)
       Test_items.defaults
   in
   let installs (p : Path.t) =
@@ -1783,8 +1783,8 @@ let check_test env r ~fns ~schemes (t : Test_items.test) (f : fn_def) ty cx =
         only =
           (match (t.real, faked) with
           | [], _ ->
-              "a test gets only the test `Clock`, `Random` and `Console`, and \
-               what controls them"
+              sprintf "a test gets only the test %s, and what controls them"
+                (and_list faked)
           | real, [] ->
               sprintf "this test gets only the real %s" (and_list real)
           | real, faked ->

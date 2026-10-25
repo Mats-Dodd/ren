@@ -4,7 +4,7 @@
 
 This doc covers how Ren code reaches the operating system: the shape of an I/O call, who owns a buffer while the kernel uses it, how cancellation finishes, how calls are batched, and how all of it sits under narrow dependencies like `Fs` and `Net`. What the standard library builds on top is in [stdlib.md](stdlib.md).
 
-> **Status:** design. The interpreter does no I/O through this model yet. `Clock`, `Random` and `Console` are dependencies today (stage 7, [deps.md](deps.md)), whose real implementations call OCaml's standard library and `Unix` directly. `Str`, `Bytes` and `Path` exist (stage 8), with `Str.from_utf8` the one fallible way from bytes to a string. Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
+> **Status:** design. The interpreter does no I/O through this model yet. `Clock`, `Random`, `Console` and `Fs` are dependencies today (stages 7 and 8, [deps.md](deps.md)), whose real implementations call OCaml's standard library and `Unix` directly. `Str`, `Bytes` and `Path` exist (stage 8), with `Str.from_utf8` the one fallible way from bytes to a string. Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
 
 ---
 
@@ -176,7 +176,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | When | What |
 |---|---|
 | **Stage 7** | `Clock`, `Random` and `Console` as dependency types, with real implementations and test ones (done) |
-| **Stage 8** | `Fs` and `Os` as dependency types, with real implementations on Eio and in-memory ones; a monotonic `Clock.instant` |
+| **Stage 8** | `Fs` and `Os` as dependency types, with real implementations and in-memory ones: `Fs` on `Unix` and `mem_fs` (done); a monotonic `Clock.instant` |
 | **Stage 9** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; the journal entry format; linked operations |
 | **Stage 11** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls |
 | **Stage 12** | leased buffers returned to the pool when their count reaches zero |

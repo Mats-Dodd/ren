@@ -721,16 +721,22 @@ let item env sc (t : tyname) (f : ident) =
           (List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces)
           (fun iface -> Iface.find_type iface p.name)
       in
+      let declared () =
+        ( List.map
+            (fun (o : Iface.op) -> (o.oname, o.okind))
+            (Option.fold ~none:[]
+               ~some:(fun (d : Iface.type_decl) -> d.members)
+               decl),
+          [] )
+      in
+      (* the prelude's own source finds a built-in type's members,
+         `Str.from_utf8`, in the intrinsics *)
       let items, fields =
         if p.home = env.home then
-          Option.value ~default:([], []) (Hashtbl.find_opt env.own_ops p.name)
-        else
-          ( List.map
-              (fun (o : Iface.op) -> (o.oname, o.okind))
-              (Option.fold ~none:[]
-                 ~some:(fun (d : Iface.type_decl) -> d.members)
-                 decl),
-            [] )
+          match Hashtbl.find_opt env.own_ops p.name with
+          | Some own -> own
+          | None -> declared ()
+        else declared ()
       in
       let path = Path.make p.home (p.name ^ "." ^ f.name) in
       let ops = Option.value (dep_ops env p) ~default:[] in

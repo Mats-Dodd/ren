@@ -71,10 +71,14 @@ type t = {
 }
 
 (* The built-in dependencies a test gets the test implementation of, each
-   with the dependency that controls it. *)
+   with the dependency that controls it, if one does: a test reads back
+   what it wrote through `Fs` itself. *)
 let defaults =
   [
-    ("Clock", "TestClock"); ("Random", "TestRandom"); ("Console", "TestConsole");
+    ("Clock", Some "TestClock");
+    ("Random", Some "TestRandom");
+    ("Console", Some "TestConsole");
+    ("Fs", None);
   ]
 
 (* A test's name, after its group run's label if it's in one, as
@@ -126,7 +130,8 @@ let real_of sink (t : test_def) =
                       and remove it from here"
                    (sprintf
                       "a test's `uses` asks for a real implementation, and \
-                       only `Clock`, `Random` and `Console` have one, not `%s`"
+                       only %s have one, not `%s`"
+                      (Infer_msg.and_list (List.map fst defaults))
                       (show_tyname d)));
               None)
         u.deps
