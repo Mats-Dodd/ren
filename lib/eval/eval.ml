@@ -397,19 +397,8 @@ let rec eval cx env (e : expr) =
       | _ -> bug "an update of a non-record")
   | Array xs -> VArray (Array.of_list (eval_all cx env xs))
   | Match (subject, arms) ->
-      let v = eval cx env subject in
-      let guard_passes env = function
-        | None -> true
-        | Some g -> truth (eval cx env g)
-      in
-      let rec first = function
-        | [] -> panic e.loc "no arm of this `match` matched"
-        | a :: rest -> (
-            match match_pattern a.pat v env with
-            | Some env when guard_passes env a.guard -> eval cx env a.body
-            | _ -> first rest)
-      in
-      first arms
+      let env, body = arm_for cx env e.loc (eval cx env subject) arms in
+      eval cx env body
   | Tag (t, args) -> VTag { name = t; args = eval_all cx env args }
   | Fail a -> raise (Failed (eval cx env a))
   | Handle { body; value; on_value; error; on_error } -> (
@@ -462,19 +451,8 @@ and tail cx env (e : expr) =
       ignore (eval cx env a);
       tail cx env b
   | Match (subject, arms) ->
-      let v = eval cx env subject in
-      let guard_passes env = function
-        | None -> true
-        | Some g -> truth (eval cx env g)
-      in
-      let rec first = function
-        | [] -> panic e.loc "no arm of this `match` matched"
-        | a :: rest -> (
-            match match_pattern a.pat v env with
-            | Some env when guard_passes env a.guard -> tail cx env a.body
-            | _ -> first rest)
-      in
-      first arms
+      let env, body = arm_for cx env e.loc (eval cx env subject) arms in
+      tail cx env body
   | Call (f, args, ev)
     when List.for_all (function Value _ -> true | Ref _ -> false) args ->
       let fty = resolve cx.tys f.ty in
@@ -492,6 +470,23 @@ and tail cx env (e : expr) =
    reached it is, as [call_at] says: [at] is the last of these calls made
    from the program's own code rather than the prelude's, which a panic
    inside the prelude is said to be at. *)
+(* The first of a `match`'s [arms] whose pattern [v] matches and whose
+   guard passes: the environment its body runs in, with what the pattern
+   bound, and the body, for [eval] or [tail] to run. *)
+and arm_for cx env loc v arms =
+  let guard_passes env = function
+    | None -> true
+    | Some g -> truth (eval cx env g)
+  in
+  let rec first = function
+    | [] -> panic loc "no arm of this `match` matched"
+    | a :: rest -> (
+        match match_pattern a.pat v env with
+        | Some env when guard_passes env a.guard -> (env, a.body)
+        | _ -> first rest)
+  in
+  first arms
+
 and finish cx at step =
   match step with
   | Done v -> v
