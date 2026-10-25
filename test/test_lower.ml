@@ -169,6 +169,64 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       = this is a bug in the Ren compiler, not in your program
     |}]
 
+(* An associated value, `T.a` and `T.b`, is a function of no parameters
+   in Core, named only by a [Global_value] node, and made after every
+   value it uses. *)
+let values_program ~uses_b ~values =
+  let loc = Ren.Loc.point ~file 1 1 in
+  let path = Ren.Path.make "test" in
+  let int_fn : Ren.Ty.ty = Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed) in
+  let value name body : Ren.Core.fn_def =
+    {
+      path = path name;
+      params = [];
+      scheme = { ty = int_fn; names = [] };
+      body;
+      loc;
+    }
+  in
+  let a = value "T.a" (Ren.Core.mk uses_b Ren.Ty.int loc) in
+  let b = value "T.b" (Ren.Core.mk (Int 1) Ren.Ty.int loc) in
+  report "" (fun () ->
+      Ren.Driver.pass "lint" (fun () ->
+          Ren.Core_lint.program ~imports:[]
+            {
+              home = "test";
+              types = [];
+              fns = [ a; b ];
+              values = List.map path values;
+            }))
+
+let%expect_test "Core Lint reports a value named as a function" =
+  values_program
+    ~uses_b:
+      (Call
+         ( Ren.Core.mk
+             (Global (Ren.Path.make "test" "T.b"))
+             (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed))
+             (Ren.Loc.point ~file 1 1),
+           [] ))
+    ~values:[ "T.b"; "T.a" ];
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `T.a`, at test.ren:1:1: there's no function `T.b`")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
+let%expect_test "Core Lint reports values made out of order" =
+  values_program
+    ~uses_b:(Global_value (Ren.Path.make "test" "T.b"))
+    ~values:[ "T.a"; "T.b" ];
+  (* and is clean on them in order *)
+  values_program
+    ~uses_b:(Global_value (Ren.Path.make "test" "T.b"))
+    ~values:[ "T.b"; "T.a" ];
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: the value `T.a` is made before `T.b`, which it uses")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
 (* every example lowers, and Core Lint is clean on it *)
 
 let%expect_test "every example lints" =

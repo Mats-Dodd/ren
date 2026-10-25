@@ -431,6 +431,55 @@ let fn_def env (f : fn_def) =
       same env f.loc "the body" f.body.ty ret
   | t -> fail env f.loc (sprintf "a function has type `%s`" (show t))
 
+(* The functions and values [e] names, in the order written. *)
+let rec globals (e : expr) =
+  match e.kind with
+  | Global p | Global_value p -> [ p ]
+  | Int _ | Bool _ | Unit | Local _ | Intrinsic _ -> []
+  | Prim (_, es) | Array es | Con (_, _, es) -> List.concat_map globals es
+  | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) ->
+      globals a @ globals b
+  | Assign (_, a) | Field (a, _, _) | Lambda { body = a; _ } -> globals a
+  | If (c, t, f) -> globals c @ globals t @ globals f
+  | Match (s, arms) ->
+      globals s
+      @ List.concat_map
+          (fun a -> Option.fold ~none:[] ~some:globals a.guard @ globals a.body)
+          arms
+  | Call (f, args) ->
+      globals f
+      @ List.concat_map (function Value a -> globals a | Ref _ -> []) args
+  | Record (_, fs) -> List.concat_map (fun (_, a) -> globals a) fs
+
+(* Every value in [prog.values] comes after each of the module's values it
+   reaches, through the module's functions it calls: those are made first,
+   when the program starts. A lambda's body is followed too, as inference
+   does. *)
+let value_order (prog : program) =
+  let body p =
+    Option.map
+      (fun (f : fn_def) -> f.body)
+      (List.find_opt (fun (f : fn_def) -> f.path = p) prog.fns)
+  in
+  let rec walk ~seen ~made v p =
+    if not (Hashtbl.mem seen p) then (
+      Hashtbl.replace seen p ();
+      if p <> v && List.mem p prog.values && not (List.mem p made) then
+        failwith
+          (sprintf
+             "Core Lint: the value `%s` is made before `%s`, which it uses"
+             v.name p.name);
+      Option.iter
+        (fun b -> List.iter (walk ~seen ~made v) (globals b))
+        (if p = v || not (List.mem p prog.values) then body p else None))
+  in
+  ignore
+    (List.fold_left
+       (fun made v ->
+         walk ~seen:(Hashtbl.create 8) ~made v v;
+         v :: made)
+       [] prog.values)
+
 (* Lint module [prog], which sees the interfaces [imports]: every one
    reachable through its imports, since a type from any of them can turn
    up in its code. *)
@@ -466,12 +515,12 @@ let program ~imports (prog : program) =
     prog.types;
   List.iter
     (fun (f : fn_def) ->
-      Hashtbl.replace env.schemes f.path f.scheme;
       (* an associated value's function has no parameters, and its result
-         is the value *)
+         is the value, which is all the rest of the module sees of it *)
       match f.scheme with
       | { ty = Fun ([], t, _, _); names } when List.mem f.path prog.values ->
           Hashtbl.replace env.values f.path { ty = t; names }
-      | _ -> ())
+      | _ -> Hashtbl.replace env.schemes f.path f.scheme)
     prog.fns;
+  value_order prog;
   List.iter (fn_def env) prog.fns
