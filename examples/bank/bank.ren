@@ -8,7 +8,7 @@
 // transfers: all of them, or none.
 
 import money.{Money}
-import account.{Account, AccountId, Entry, Refusal}
+import account.{Account, AccountId, Refusal, Stamped}
 
 pub type Transfer = { from: AccountId, to: AccountId, amount: Money }
 
@@ -26,12 +26,12 @@ pub type Bank = { accounts: Array<Account>, next: Int }
 
   // A deposit can't be short, so it doesn't say it can: its signature
   // lists exactly what it fails with.
-  pub fn deposit(inout self, to: AccountId, m: Money) ! Frozen(account: AccountId) | NoSuchAccount(account: AccountId) | NotPositive(amount: Money) =
+  pub fn deposit(inout self, to: AccountId, m: Money) ! Frozen(account: AccountId) | NoSuchAccount(account: AccountId) | NotPositive(amount: Money) uses Clock =
     if not m.positive() then fail NotPositive(m)
     let i = try self.find(to)
     try &self.accounts[i].credit(m, Deposited(m))
 
-  pub fn transfer(inout self, t: Transfer) ! TransferError =
+  pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
     if t.from == t.to then fail SameAccount
     if not t.amount.positive() then fail NotPositive(t.amount)
     let i = try self.find(t.from)
@@ -42,7 +42,7 @@ pub type Bank = { accounts: Array<Account>, next: Int }
     self = draft
 
   // every transfer, or, if one fails, none of them
-  pub fn batch(inout self, ts: Array<Transfer>) ! TransferError =
+  pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
     var draft = self
     for t in ts
       try &draft.transfer(t)
@@ -56,7 +56,7 @@ pub type Bank = { accounts: Array<Account>, next: Int }
     let i = try self.find(id)
     self.accounts[i].balance
 
-  pub fn statement(self, id: AccountId) -> Array<Entry> ! NoSuchAccount(account: AccountId) =
+  pub fn statement(self, id: AccountId) -> Array<Stamped> ! NoSuchAccount(account: AccountId) =
     let i = try self.find(id)
     self.accounts[i].statement
 

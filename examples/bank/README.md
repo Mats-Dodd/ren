@@ -14,7 +14,7 @@ ren types bank/main.ren    # every module's interface
 | File | What's in it |
 |---|---|
 | `money.ren` | `Money`, opaque cents, with `Money.dollars(5)`, `a.plus(b)` and `a.covers(b)` |
-| `account.ren` | `AccountId`, opaque; `Refusal`, the errors an account fails with; `Account`, with `credit` and `debit` |
+| `account.ren` | `AccountId`, opaque; `Refusal`, the errors an account fails with; `Stamped`, an entry and its time; `Account`, with `credit` and `debit` |
 | `bank.ren` | `Bank`: `open`, `deposit`, `transfer`, `batch`, `freeze`, and reading balances; `TransferError` |
 | `main.ren` | three customers, and every way a transfer can go |
 
@@ -62,10 +62,13 @@ made in a unit you can see, `Money.dollars(100)`, and changes only through
 `acme.balance(alice)` doesn't. Inside, `&draft.accounts[i].debit(...)` changes
 one account in place, inside one draft, inside one call.
 
-**Only `main` uses `Console`.** Everything else is pure, and the compiler
-worked that out.
+**Statements are stamped with `Clock.now()`.** `credit` and `debit` read
+the clock, so their signatures say `uses Clock`, and so do `deposit`,
+`transfer` and `batch`, which call them. `main` uses `Clock` and
+`Console`, and the runtime installs both. Everything else is pure, and the
+compiler worked that out.
 
-**The errors.** `examples.t` breaks the bank in ten ways:
+**The errors.** `examples.t` breaks the bank in eleven ways:
 
 - adding an `Int` to `Money`
 - passing an `Int` as an `AccountId`
@@ -77,6 +80,7 @@ worked that out.
 - a value thrown away
 - a `fail` arm on a call that can't fail
 - `main` failing: it prints `error: Frozen(3)` and exits with status 1
+- `credit` dropping `uses Clock`: the error points at `Clock.now()`
 
 ## What writing it ran into
 
@@ -109,5 +113,5 @@ with `try`). What's left, and what stage 6 found:
   later `bank.open()` is also reported, as a missing function of the
   module: six errors that say nothing new. The compiler should report the
   clash once, and then treat the name as the variable.
-- **No strings.** A statement can't be printed as text, so `main` prints
-  cents and counts.
+- **Strings are minimal.** There are literals, `==` and `show`, but no
+  joining or formatting, so `main` prints cents and counts, not a statement.

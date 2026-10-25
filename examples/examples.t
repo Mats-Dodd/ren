@@ -362,6 +362,7 @@ copy of the bank and keeps it only if nothing failed:
   5500
   true
   4
+  true
   $ ren types bank/main.ren
   -- money
   pub type Money
@@ -380,25 +381,25 @@ copy of the bank and keeps it only if nothing failed:
   pub type Refusal = ! Short(AccountId, Money) | Frozen(AccountId)
   pub type Account
     pub fn open(id: AccountId) -> Account
-    pub fn credit(inout self, m: Money, e: Entry) ! Frozen(AccountId)
-    pub fn debit(inout self, m: Money, e: Entry) ! Frozen(AccountId) | Short(AccountId, Money)
+    pub fn credit(inout self, m: Money, e: Entry) ! Frozen(AccountId) uses Clock
+    pub fn debit(inout self, m: Money, e: Entry) ! Frozen(AccountId) | Short(AccountId, Money) uses Clock
   
   -- bank
   pub type TransferError = ! Refusal | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount
   pub type Bank
     pub let empty: Bank
     pub fn open(inout self) -> AccountId
-    pub fn deposit(inout self, to: AccountId, m: Money) ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money)
-    pub fn transfer(inout self, t: Transfer) ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money)
-    pub fn batch(inout self, ts: Array<Transfer>) ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money)
+    pub fn deposit(inout self, to: AccountId, m: Money) ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) uses Clock
+    pub fn transfer(inout self, t: Transfer) ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Clock
+    pub fn batch(inout self, ts: Array<Transfer>) ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Clock
     pub fn freeze(inout self, id: AccountId) ! NoSuchAccount(AccountId)
     pub fn balance(self, id: AccountId) -> Money ! NoSuchAccount(AccountId)
-    pub fn statement(self, id: AccountId) -> Array<Entry> ! NoSuchAccount(AccountId)
+    pub fn statement(self, id: AccountId) -> Array<Stamped> ! NoSuchAccount(AccountId)
     pub fn total(self) -> Money
     fn find(self, id: AccountId) -> Int ! NoSuchAccount(AccountId)
   
   -- main
-  fn main() ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Console
+  fn main() ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Clock, Console
   fn send(from: AccountId, to: AccountId, dollars: Int) -> Transfer
   fn cents(b: Bank, id: AccountId) -> Int ! NoSuchAccount(AccountId)
   fn worth_retrying(r: Result<Unit, ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money)>) -> Bool
@@ -452,8 +453,8 @@ to do about it:
      help: add an arm for `fail TooLarge(_)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
   
   error: this `match` doesn't handle every `Result`
-     ┌─ b4/main.ren:64:3
-  64 │   match r
+     ┌─ b4/main.ren:68:3
+  68 │   match r
      │   ^^^^^
      = missing: Err(TooLarge(_))
      help: add an arm for `Err(TooLarge(_))`, or a `_ =>` arm for the rest
@@ -467,7 +468,7 @@ A public function can't take a type other modules can't name:
      ┌─ b5/bank.ren:34:34
   13 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  34 │   pub fn transfer(inout self, t: Transfer) ! TransferError =
+  34 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
      │                                  ^^^^^^^^
      help: mark `Transfer` `pub`
   
@@ -475,7 +476,7 @@ A public function can't take a type other modules can't name:
      ┌─ b5/bank.ren:45:38
   13 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  45 │   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError =
+  45 │   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
      │                                      ^^^^^^^^
      help: mark `Transfer` `pub`
   [1]
@@ -487,7 +488,7 @@ signature lists exactly what it can fail with, so `transfer` is wrong now:
   $ ren check b6/main.ren
   error: `pub fn Bank.transfer` can fail with `TooLarge`, but its signature doesn't say so
      ┌─ b6/bank.ren:34:10
-  34 │   pub fn transfer(inout self, t: Transfer) ! TransferError =
+  34 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
      │          ^^^^^^^^
   37 │     if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)
      │                                           ----------------------- this fails with `TooLarge`
@@ -545,3 +546,18 @@ program stops there:
   [1]
   $ cat stderr.txt
   error: Frozen(3)
+
+Stamping an entry reads the clock, so a public signature that drops
+`uses Clock` is wrong, and the error points at the call that reads it:
+
+  $ cp -r bank b11 && perl -0pi -e 's/(pub fn credit[^\n]*) uses Clock =/$1 =/' b11/account.ren
+  $ ren check b11/main.ren
+  error: `Account.credit` doesn't declare `Clock`
+     ┌─ b11/account.ren:38:10
+  38 │   pub fn credit(inout self, m: Money, e: Entry) ! Frozen(account: AccountId) =
+     │          ^^^^^^
+  41 │     &self.statement.push(Stamped { at: Clock.now(), entry: e })
+     │                                        ----------- this call uses `Clock`
+     = a public function without `uses` uses nothing, and its body is checked against that
+     help: add `uses Clock`
+  [1]

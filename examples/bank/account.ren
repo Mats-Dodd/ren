@@ -1,5 +1,6 @@
 // One customer's account: its balance, whether it's frozen, and its
-// statement, every change to it in order.
+// statement, every change to it in order, each stamped with when it
+// happened.
 
 import money.{Money}
 
@@ -16,11 +17,14 @@ pub type Entry =
   | Sent(amount: Money, to: AccountId)
   | Received(amount: Money, from: AccountId)
 
+// an entry and when it happened, by the clock the caller was given
+pub type Stamped = { at: Time, entry: Entry }
+
 pub type Account = {
   id: AccountId,
   balance: Money,
   frozen: Bool,
-  statement: Array<Entry>,
+  statement: Array<Stamped>,
 }
   pub fn open(id: AccountId) -> Account = Account {
     id,
@@ -29,15 +33,16 @@ pub type Account = {
     statement: [],
   }
 
-  // money in, unless the account is frozen
-  pub fn credit(inout self, m: Money, e: Entry) ! Frozen(account: AccountId) =
+  // money in, unless the account is frozen. Stamping the entry reads the
+  // clock, so the signature says `uses Clock`.
+  pub fn credit(inout self, m: Money, e: Entry) ! Frozen(account: AccountId) uses Clock =
     if self.frozen then fail Frozen(self.id)
     self.balance = self.balance.plus(m)
-    &self.statement.push(e)
+    &self.statement.push(Stamped { at: Clock.now(), entry: e })
 
   // money out, unless it's frozen or there isn't enough
-  pub fn debit(inout self, m: Money, e: Entry) ! Refusal =
+  pub fn debit(inout self, m: Money, e: Entry) ! Refusal uses Clock =
     if self.frozen then fail Frozen(self.id)
     if not self.balance.covers(m) then fail Short(self.id, m.minus(self.balance))
     self.balance = self.balance.minus(m)
-    &self.statement.push(e)
+    &self.statement.push(Stamped { at: Clock.now(), entry: e })
