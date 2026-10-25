@@ -1,6 +1,7 @@
 (* What the prelude's built-in functions do when they run: the runtime half
    of the prelude, whose static half, each one's type, is prelude.ml's.
-   Each is run by its name, as the prelude lists it. *)
+   Each is run by its id (intrinsic.ml), with a [match], so the compiler
+   checks that every built-in can run. *)
 
 open Value
 
@@ -13,7 +14,8 @@ exception Panic of string
 exception Fail of Value.t
 
 (* The type checker rules these out, so reaching one is a compiler bug. *)
-let bug name = failwith ("bug: `" ^ name ^ "` was called with the wrong values")
+let bug x =
+  failwith ("bug: `" ^ Intrinsic.name x ^ "` was called with the wrong values")
 
 (* What the real implementations of the built-in dependencies run on: the
    system's clock, its source of randomness, stdout and stderr. Each is a number
@@ -190,65 +192,64 @@ let split s sep =
    values it was given as their final values. *)
 let pure f args = (f args, args)
 
-let run name =
-  match name with
-  | "show" -> fun _ -> failwith "bug: `show` is run by the interpreter"
+let run (x : Intrinsic.t) =
+  match x with
+  | Show -> fun _ -> failwith "bug: `show` is run by the interpreter"
   (* the real `Clock.now` and `Clock.instant` *)
-  | "clock_now" | "clock_instant" -> pure (fun _ -> VInt (now_ms ()))
-  | "clock_sleep" ->
+  | Clock_now | Clock_instant -> pure (fun _ -> VInt (now_ms ()))
+  | Clock_sleep ->
       pure (function
         | [ VInt ms ] ->
             if ms > 0 then Unix.sleepf (float_of_int ms /. 1000.);
             VUnit
-        | _ -> bug name)
-  | "random_int" ->
+        | _ -> bug x)
+  | Random_int ->
       pure (function
         | [ VInt below ] ->
             if below <= 0 then raise (Panic (not_above_0 below));
             let state = Random.State.make_self_init () in
             VInt (Random.State.full_int state below)
-        | _ -> bug name)
+        | _ -> bug x)
   (* the state after [state] of the test `Random`, a linear congruential
      generator's, which never goes negative *)
-  | "seeded_next" ->
+  | Seeded_next ->
       pure (function
         | [ VInt state ] ->
             VInt (((abs state * 1103515245) + 12345) land 0x7fffffff)
-        | _ -> bug name)
+        | _ -> bug x)
   (* a number from 0 below [below], from that state's high bits, which
      vary more than its low ones *)
-  | "seeded_int" ->
+  | Seeded_int ->
       pure (function
         | [ VInt state; VInt below ] ->
             if below <= 0 then raise (Panic (not_above_0 below));
             VInt ((state lsr 16) mod below)
-        | _ -> bug name)
-  | "console_write" ->
+        | _ -> bug x)
+  | Console_write ->
       pure (function
         | [ VStr line ] ->
             print_endline line;
             VUnit
-        | _ -> bug name)
+        | _ -> bug x)
   (* the real `Console.error`: stderr *)
-  | "console_error" ->
+  | Console_error ->
       pure (function
         | [ VStr line ] ->
             prerr_endline line;
             VUnit
-        | _ -> bug name)
+        | _ -> bug x)
   (* the real `Fs.read` *)
-  | "fs_read" ->
-      pure (function [ VStr path ] -> read_file path | _ -> bug name)
+  | Fs_read -> pure (function [ VStr path ] -> read_file path | _ -> bug x)
   (* the real `Fs.write` *)
-  | "fs_write" ->
+  | Fs_write ->
       pure (function
         | [ VStr path; VBytes data ] -> write_file path data
-        | _ -> bug name)
-  | "fs_exists" ->
+        | _ -> bug x)
+  | Fs_exists ->
       pure (function
         | [ VStr path ] -> VBool (Sys.file_exists path)
-        | _ -> bug name)
-  | "os_args" ->
+        | _ -> bug x)
+  | Os_args ->
       pure (fun _ ->
           (* a `Str` is UTF-8, so an argument that isn't can't be one *)
           let str i s =
@@ -258,64 +259,63 @@ let run name =
           in
           VArray (Array.of_list (List.mapi str !args)))
   (* the real `Proc.run` *)
-  | "proc_run" ->
+  | Proc_run ->
       pure (function
         | [ VStr cmd; VArray xs ] -> (
             let strs =
               Array.to_list
-                (Array.map (function VStr s -> s | _ -> bug name) xs)
+                (Array.map (function VStr s -> s | _ -> bug x) xs)
             in
             match find_program cmd with
             | Some path -> run_program path cmd strs
             | None -> proc_outcome "ProcMissing" [])
-        | _ -> bug name)
-  | "Array.len" ->
-      pure (function [ VArray xs ] -> VInt (Array.length xs) | _ -> bug name)
+        | _ -> bug x)
+  | Array_len ->
+      pure (function [ VArray xs ] -> VInt (Array.length xs) | _ -> bug x)
   (* the one that changes a parameter: its receiver, `inout` *)
-  | "Array.push" -> (
+  | Array_push -> (
       function
       | [ VArray xs; x ] -> (VUnit, [ VArray (Array.append xs [| x |]); x ])
-      | _ -> bug name)
+      | _ -> bug x)
   (* in bytes *)
-  | "Str.len" ->
-      pure (function [ VStr s ] -> VInt (String.length s) | _ -> bug name)
+  | Str_len ->
+      pure (function [ VStr s ] -> VInt (String.length s) | _ -> bug x)
   (* the bytes from [from] up to, but not including, [to] *)
-  | "Str.slice" ->
+  | Str_slice ->
       pure (function
         | [ VStr s; VInt from; VInt to_ ] -> VStr (slice s from to_)
-        | _ -> bug name)
+        | _ -> bug x)
   (* where [s] first starts *)
-  | "Str.find" ->
+  | Str_find ->
       pure (function
         | [ VStr s; VStr sub ] -> (
             match find_from s sub 0 with
             | Some i -> option "Some" [ VInt i ]
             | None -> option "None" [])
-        | _ -> bug name)
+        | _ -> bug x)
   (* the parts between each [sep] *)
-  | "Str.split" ->
+  | Str_split ->
       pure (function
         | [ VStr s; VStr sep ] ->
             VArray (Array.of_list (List.map (fun p -> VStr p) (split s sep)))
-        | _ -> bug name)
+        | _ -> bug x)
   (* without the spaces, tabs and newlines at either end *)
-  | "Str.trim" ->
-      pure (function [ VStr s ] -> VStr (String.trim s) | _ -> bug name)
-  | "Str.starts_with" ->
+  | Str_trim ->
+      pure (function [ VStr s ] -> VStr (String.trim s) | _ -> bug x)
+  | Str_starts_with ->
       pure (function
         | [ VStr s; VStr prefix ] -> VBool (String.starts_with ~prefix s)
-        | _ -> bug name)
+        | _ -> bug x)
   (* this, then [s] *)
-  | "Str.concat" ->
-      pure (function [ VStr a; VStr b ] -> VStr (a ^ b) | _ -> bug name)
+  | Str_concat ->
+      pure (function [ VStr a; VStr b ] -> VStr (a ^ b) | _ -> bug x)
   (* its UTF-8 *)
-  | "Str.bytes" -> pure (function [ VStr s ] -> VBytes s | _ -> bug name)
-  | "Str.from_utf8" ->
+  | Str_bytes -> pure (function [ VStr s ] -> VBytes s | _ -> bug x)
+  | Str_from_utf8 ->
       pure (function
         | [ VBytes b ] ->
             if String.is_valid_utf_8 b then VStr b
             else raise (Fail (VTag { name = "InvalidUtf8"; args = [] }))
-        | _ -> bug name)
-  | "Bytes.len" ->
-      pure (function [ VBytes b ] -> VInt (String.length b) | _ -> bug name)
-  | _ -> failwith ("bug: the unknown built-in `" ^ name ^ "`")
+        | _ -> bug x)
+  | Bytes_len ->
+      pure (function [ VBytes b ] -> VInt (String.length b) | _ -> bug x)

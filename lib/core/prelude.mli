@@ -6,18 +6,17 @@
 val source : string
 val file : string
 
-type builtin_fn = {
-  name : string;
-  scheme : Ty.scheme;  (** its type scheme *)
-  runtime : bool;
-      (** whether it reaches the world: only the prelude's source can call it *)
-}
+(* A built-in function's type scheme. *)
+val scheme : Intrinsic.t -> Ty.scheme
+
+(* Whether it reaches the world: only the prelude's source can call it. *)
+val runtime : Intrinsic.t -> bool
 
 type builtin_type = {
   name : string;
   arity : int;  (** type arguments *)
-  methods : builtin_fn list;  (** its built-in methods: [Array]'s [push] *)
-  functions : builtin_fn list;
+  methods : Intrinsic.t list;  (** its built-in methods: [Array]'s [push] *)
+  functions : Intrinsic.t list;
       (** its built-in associated functions: [Str]'s [from_utf8] *)
 }
 
@@ -30,11 +29,13 @@ val runtime_deps : string list
 
 (* The dependencies a `uses` can name that aren't declared yet: [Net], ... *)
 val dependencies : string list
-val fns : builtin_fn list
 
-(* A built-in function by the name its path has: [print], or a built-in
+(* The built-in functions that aren't a type's members. *)
+val fns : Intrinsic.t list
+
+(* A built-in function by the name its path has: [show], or a built-in
    method after its type, [Array.push]. *)
-val find_fn : string -> builtin_fn option
+val find : string -> Intrinsic.t option
 
 (* The interface of the built-in half: the built-in types and functions, as
    [source] sees them. *)

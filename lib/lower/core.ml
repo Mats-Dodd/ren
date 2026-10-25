@@ -76,8 +76,8 @@ and kind =
       (** an associated value, [Stack.empty], which the program makes once when
           it starts: its function of no parameters, called then. [ty] is an
           instance of its type. *)
-  | Intrinsic of string
-      (** a function built into the compiler: [print], or a method, [Array.push]
+  | Intrinsic of Intrinsic.t
+      (** a function built into the compiler: [show], or a method, [Array.push]
       *)
   | Dep_call of {
       dep : Path.t;
@@ -360,7 +360,7 @@ let rec sexp e =
   | Unit -> Atom "()"
   | Local v -> var v
   | Global p | Global_value p -> Atom p.name
-  | Intrinsic x -> Atom x
+  | Intrinsic x -> Atom (Intrinsic.name x)
   | Dep_call { dep; op; ev; args; _ } ->
       List
         (atom "dep-call" :: var ev

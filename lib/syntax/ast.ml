@@ -490,8 +490,8 @@ type name =
   | Global_value of Path.t
       (** an associated value, [Stack.empty]: made once, when the program starts
       *)
-  | Intrinsic of string
-      (** a function built into the compiler: [print], or a method, [Array.push]
+  | Intrinsic of Intrinsic.t
+      (** a function built into the compiler: [show], or a method, [Array.push]
       *)
   | Dep_op of Path.t * string
       (** an operation of the dependency at the path, [Clock.now]: calling it
@@ -863,7 +863,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Unit -> "()"
     | Var (Local b) -> b.ident.name
     | Var (Global p | Global_value p) -> value_name p
-    | Var (Intrinsic x) -> x
+    | Var (Intrinsic x) -> Intrinsic.name x
     | Var (Dep_op (p, op)) -> type_name p ^ "." ^ op
     | Unop (Neg, a) -> "-" ^ operand 7 a
     | Unop (Not, a) -> "not " ^ operand 3 a

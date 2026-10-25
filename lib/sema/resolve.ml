@@ -755,27 +755,28 @@ let item env sc (t : tyname) (f : ident) =
       in
       let path = Path.make p.home (p.name ^ "." ^ f.name) in
       let ops = Option.value (dep_ops env p) ~default:[] in
-      match List.assoc_opt f.name items with
+      (* a built-in method, `Array.len`: built into the compiler, not a
+         function of the program *)
+      let builtin =
+        if p.home = Path.prelude_home then Prelude.find path.name else None
+      in
+      match (List.assoc_opt f.name items, builtin) with
       | _ when List.mem f.name ops ->
           (* `Clock.now`: an operation, which calls the implementation
              installed where it's called (one a handler calls of what it
              implements is reported by infer_top.ml); resolve.ml reports
              one that's also a member's name *)
           Dep_op (p, f.name)
-      | Some _
-        when p.home = Path.prelude_home && Prelude.find_fn path.name <> None ->
-          (* a built-in method, `Array.len`: built into the compiler, not a
-             function of the program *)
-          Intrinsic path.name
-      | Some kind ->
+      | Some _, Some x -> Intrinsic x
+      | Some kind, None ->
           sc.fn.calls <- path :: sc.fn.calls;
           if kind = Value then Global_value path else Global path
-      | None when p.home <> env.home && p.home <> Path.prelude_home ->
+      | None, _ when p.home <> env.home && p.home <> Path.prelude_home ->
           report env f.loc
             ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
             (sprintf "`%s` has no public `%s`" shown f.name);
           Global path
-      | None ->
+      | None, _ ->
           (* the module's own type, or a built-in one, which has every item
              it will ever have *)
           let quoted ns = String.concat ", " (List.map (sprintf "`%s`") ns) in
@@ -843,17 +844,19 @@ let lookup env sc loc ~what x =
                 List.find_map
                   (fun (t : Prelude.builtin_type) ->
                     List.find_map
-                      (fun (m : Prelude.builtin_fn) ->
-                        if m.name = x then Some (t.name, m) else None)
+                      (fun m ->
+                        if Intrinsic.member_name m = x then
+                          Some (t.name, Prelude.scheme m)
+                        else None)
                       t.methods)
                   Prelude.types
               in
               match builtin with
-              | Some (t, m) ->
+              | Some (t, scheme) ->
                   (* `&` if it changes its receiver, `...` if it takes
                      more than its receiver *)
                   let amp, rest =
-                    match m.scheme.ty with
+                    match scheme.ty with
                     | Fun (self :: ps, _, _, _) ->
                         ( (if self.mode = Inout then "&" else ""),
                           if ps = [] then "" else "..." )
@@ -2143,9 +2146,9 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
       List.iter
         (fun (v : Iface.value) ->
           let name =
-            if iface.home = Path.prelude_home && Prelude.find_fn v.vname <> None
-            then Intrinsic v.vname
-            else Global (Path.make iface.home v.vname)
+            match Prelude.find v.vname with
+            | Some x when iface.home = Path.prelude_home -> Intrinsic x
+            | _ -> Global (Path.make iface.home v.vname)
           in
           Hashtbl.replace env.values v.vname name)
         iface.values)

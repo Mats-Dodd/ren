@@ -308,11 +308,10 @@ let rec expr env sc (e : expr) =
             (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
                p.name (show e.ty) (show s.ty))
       | None -> fail env loc (sprintf "there's no value `%s`" p.name))
-  | Intrinsic x -> (
-      match Prelude.find_fn x with
-      | Some b when instance_of env b.scheme.ty e.ty -> ()
-      | Some _ -> fail env loc (sprintf "`%s` is used at the wrong type" x)
-      | None -> fail env loc (sprintf "there's no built-in `%s`" x))
+  | Intrinsic x ->
+      if not (instance_of env (Prelude.scheme x).ty e.ty) then
+        fail env loc
+          (sprintf "`%s` is used at the wrong type" (Intrinsic.name x))
   | Dep_call { dep = p; op; fty; ev; args } -> (
       (* the operation as declared, using its dependency, and whatever the
          caller does *)

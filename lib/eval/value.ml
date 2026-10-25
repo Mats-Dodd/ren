@@ -28,7 +28,7 @@ type t =
               was created, which its body's types are written in (eval.ml) *)
     }  (** a lambda, with the variables it captured when it was created *)
   | VFn of Path.t  (** a top-level function used as a value *)
-  | VBuiltin of string  (** a function built into the prelude: [print] *)
+  | VBuiltin of Intrinsic.t  (** a function built into the prelude: [show] *)
   | VTag of { name : string; args : t list }
       (** an error, [Short(2, 45000)]: its tag and its payload. A program sees
           one only inside a [Result]'s [Err] *)
@@ -75,7 +75,7 @@ let rec show = function
       "[" ^ String.concat ", " (Array.to_list (Array.map show xs)) ^ "]"
   | VClosure _ -> "<fn>"
   | VFn p -> "<fn " ^ p.name ^ ">"
-  | VBuiltin name -> "<fn " ^ name ^ ">"
+  | VBuiltin x -> "<fn " ^ Intrinsic.name x ^ ">"
   | VHandler _ -> "<handler>"
   | VInstance _ -> "<instance>"
   | VCell _ -> "<cell>"

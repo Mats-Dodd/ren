@@ -237,7 +237,7 @@ let cell env (v : var) =
 (* What [f] is, for a bug report. *)
 let describe = function
   | VFn p -> "`" ^ p.name ^ "`"
-  | VBuiltin x -> "`" ^ x ^ "`"
+  | VBuiltin x -> "`" ^ Intrinsic.name x ^ "`"
   | VClosure { body; _ } ->
       Printf.sprintf "a lambda (its body at %s:%d)" body.loc.file
         body.loc.start.line
@@ -596,7 +596,7 @@ and enter cx ~fty f args ev =
 (* A call of a built-in function, which [apply] returns. *)
 and builtin cx ~fty f args =
   match f with
-  | VBuiltin "show" -> (
+  | VBuiltin Show -> (
       (* the one built-in that needs its argument's type *)
       match (fty, args) with
       | _, [ v ] ->
@@ -605,8 +605,8 @@ and builtin cx ~fty f args =
           in
           (Ok (VStr (Shown.shown ~own:(own_show cx) cx.types t v)), args)
       | _ -> bug "a call of `show` with the wrong number of arguments")
-  | VBuiltin name -> (
-      match Builtins.run name args with
+  | VBuiltin x -> (
+      match Builtins.run x args with
       | v, finals -> (Ok v, finals)
       | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"

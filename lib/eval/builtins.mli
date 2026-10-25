@@ -11,9 +11,8 @@ exception Fail of Value.t
    real [Os.args] gives back. *)
 val args : string list ref
 
-(* Run the built-in function of this name, as [Prelude.find_fn] finds
-   it, on its arguments: its result, and the final value of every
+(* Run the built-in function [x] on its arguments: its result, and the final value of every
    parameter, which the interpreter writes back for the arguments passed
    with `&`. `show` isn't run here: the interpreter shows a value through
    its type itself. *)
-val run : string -> Value.t list -> Value.t * Value.t list
+val run : Intrinsic.t -> Value.t list -> Value.t * Value.t list

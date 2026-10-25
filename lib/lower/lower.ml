@@ -651,9 +651,9 @@ and plain_call cx ~changed ?last (e : expr) f args =
         in
         (* a built-in method, `xs.len()`, is built into the compiler *)
         let callee : C.kind =
-          if p.home = Path.prelude_home && Prelude.find_fn p.name <> None then
-            Intrinsic p.name
-          else Global p
+          match Prelude.find p.name with
+          | Some x when p.home = Path.prelude_home -> Intrinsic x
+          | _ -> Global p
         in
         (mk callee (ty_of cx f.node) f.loc, [ recv ])
     | _ -> (expr cx f, [])

@@ -372,7 +372,7 @@ let type_name env p = env.names p
 let name_of = function
   | Local b -> b.ident.name
   | Global p | Global_value p -> p.name
-  | Intrinsic x -> x
+  | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
 
 let report env d = Diag.report env.sink d
@@ -1007,7 +1007,8 @@ let rec lookup env cx loc = function
       used
   | Global p -> instantiate env.st (Hashtbl.find env.globals p)
   | Intrinsic x ->
-      instantiate env.st (Hashtbl.find env.globals (Path.prelude x))
+      instantiate env.st
+        (Hashtbl.find env.globals (Path.prelude (Intrinsic.name x)))
   | Dep_op (p, op) -> (
       (* the operation as declared, which uses its dependency: a call
          adds it to the caller's `uses` *)

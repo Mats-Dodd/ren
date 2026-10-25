@@ -510,7 +510,7 @@ fn main() =
 let%expect_test "from_utf8 fails with InvalidUtf8" =
   List.iter
     (fun b ->
-      match Ren.Builtins.run "Str.from_utf8" [ Ren.Value.VBytes b ] with
+      match Ren.Builtins.run Ren.Intrinsic.Str_from_utf8 [ Ren.Value.VBytes b ] with
       | v, _ -> print_endline (Ren.Value.show v)
       | exception Ren.Builtins.Fail err ->
           print_endline ("fails: " ^ Ren.Value.show err))

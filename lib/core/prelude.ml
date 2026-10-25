@@ -3,12 +3,13 @@
    It's a module like any other, whose interface every program is checked
    against (driver.ml). It comes in two halves. [source] is written in Ren
    itself, and checked like any module. Everything else is built into the
-   compiler (intrinsic), because it can't be written in Ren yet, and is
-   listed in the tables below: each entry says everything the passes before
-   the interpreter need to know about it, its type above all. What each
-   one does when it runs is the interpreter's half, eval/builtins.ml, so
-   adding a built-in means adding an entry here and its implementation
-   there. *)
+   compiler (intrinsic), because it can't be written in Ren yet. Each such
+   function is named by an id (intrinsic.ml), and below are its type and
+   where it's listed: everything the passes before the interpreter need
+   to know about it. What it does when it runs is the interpreter's half,
+   eval/builtins.ml. So adding a built-in means adding its id, an entry
+   here, and its implementation there, and the compiler points out any
+   [match] that's missing it. *)
 
 (* The file its source is said to be in, which no message can show. *)
 let file = "<prelude>"
@@ -304,181 +305,132 @@ pub handler test_proc(exits: Array<Exit>) for Proc, TestProc =
 
 (* ---- built-in functions ---- *)
 
-type builtin_fn = {
-  name : string;
-  scheme : Ty.scheme;
-      (** its type scheme. Each parameter's mode ([inout] or not) is part of the
-          type. *)
-  runtime : bool;
-      (** whether only the prelude's own source can call it: it reaches the
-          world, which a program does only through a dependency, in the real
-          implementation the runtime installs, or it's how one of the test
-          implementations works *)
-}
-
 (* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
    [n]th row variable, numbered by first appearance (ty.ml). *)
-let scheme ty : Ty.scheme = { ty; names = [] }
+let scheme_of ty : Ty.scheme = { ty; names = [] }
 let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])
 
-let fns =
+(* Each built-in function's type scheme, by its id. Each parameter's mode
+   ([inout] or not) is part of the type. A built-in type's method has its
+   receiver, `self`, first, and the type's parameters are its scheme's
+   first variables, as in any member's (iface.ml). *)
+let scheme (x : Intrinsic.t) =
   let open Ty in
-  let fn ?(runtime = false) name ty = { name; scheme = scheme ty; runtime } in
+  (* most fail with nothing and use nothing: open rows, which any row
+     fits *)
+  let fn params ret = scheme_of (Fun (params, ret, open_row 0, open_row 1)) in
+  match x with
+  (* fn<T>(T) -> Str, which the interpreter runs itself, since it shows a
+     value through its type (eval.ml) *)
+  | Show -> fn [ read (Var 0) ] str
+  (* fn() -> Int, the real `Clock.now` and `Clock.instant` *)
+  | Clock_now | Clock_instant -> fn [] int
+  (* fn(Int) *)
+  | Clock_sleep -> fn [ read int ] unit
+  (* fn(Int) -> Int *)
+  | Random_int -> fn [ read int ] int
+  (* fn(Int) -> Int: the state after [state] of the test `Random` *)
+  | Seeded_next -> fn [ read int ] int
+  (* fn(Int, Int) -> Int: a number from 0 below [below], from that state *)
+  | Seeded_int -> fn [ read int; read int ] int
+  (* fn(Str) *)
+  | Console_write -> fn [ read str ] unit
+  (* fn(Str), the real `Console.error`: stderr *)
+  | Console_error -> fn [ read str ] unit
+  (* fn(Str) -> FsOutcome<Bytes>, the real `Fs.read` *)
+  | Fs_read -> fn [ read str ] (Con (Path.prelude "FsOutcome", [ bytes ]))
+  (* fn(Str, Bytes) -> FsOutcome<Unit>, the real `Fs.write` *)
+  | Fs_write ->
+      fn [ read str; read bytes ] (Con (Path.prelude "FsOutcome", [ unit ]))
+  (* fn(Str) -> Bool *)
+  | Fs_exists -> fn [ read str ] bool
+  (* fn() -> Array<Str> *)
+  | Os_args -> fn [] (array str)
+  (* fn(Str, Array<Str>) -> ProcOutcome, the real `Proc.run` *)
+  | Proc_run ->
+      fn [ read str; read (array str) ] (Con (Path.prelude "ProcOutcome", []))
+  (* fn<T>(self: Array<T>) -> Int *)
+  | Array_len -> fn [ read (array (Var 0)) ] int
+  (* fn<T>(inout self: Array<T>, x: T) *)
+  | Array_push -> fn [ { mode = Inout; ty = array (Var 0) }; read (Var 0) ] unit
+  (* A `Str` is UTF-8, always, and `Bytes` are any bytes at all
+     (builtins.ml, "strings and bytes"). *)
+  (* fn(self: Str) -> Int, in bytes *)
+  | Str_len -> fn [ read str ] int
+  (* fn(self: Str, from: Int, to: Int) -> Str: the bytes from [from] up
+     to, but not including, [to] *)
+  | Str_slice -> fn [ read str; read int; read int ] str
+  (* fn(self: Str, s: Str) -> Option<Int>: where [s] first starts *)
+  | Str_find -> fn [ read str; read str ] (Con (Path.prelude "Option", [ int ]))
+  (* fn(self: Str, sep: Str) -> Array<Str>: the parts between each [sep] *)
+  | Str_split -> fn [ read str; read str ] (array str)
+  (* fn(self: Str) -> Str, without the spaces, tabs and newlines at
+     either end *)
+  | Str_trim -> fn [ read str ] str
+  (* fn(self: Str, prefix: Str) -> Bool *)
+  | Str_starts_with -> fn [ read str; read str ] bool
+  (* fn(self: Str, s: Str) -> Str: this, then [s] *)
+  | Str_concat -> fn [ read str; read str ] str
+  (* fn(self: Str) -> Bytes: its UTF-8 *)
+  | Str_bytes -> fn [ read str ] bytes
+  (* fn(b: Bytes) -> Str ! InvalidUtf8 *)
+  | Str_from_utf8 ->
+      scheme_of
+        (Fun
+           ( [ read bytes ],
+             str,
+             { labels = [ label "InvalidUtf8" ]; tail = None },
+             open_row 0 ))
+  (* fn(self: Bytes) -> Int *)
+  | Bytes_len -> fn [ read bytes ] int
+
+(* Whether only the prelude's own source can call it: it reaches the
+   world, which a program does only through a dependency, in the real
+   implementation the runtime installs, or it's how one of the test
+   implementations works. *)
+let runtime (x : Intrinsic.t) =
+  match x with
+  | Clock_now | Clock_instant | Clock_sleep | Random_int | Seeded_next
+  | Seeded_int | Console_write | Console_error | Fs_read | Fs_write | Fs_exists
+  | Os_args | Proc_run ->
+      true
+  | Show | Array_len | Array_push | Str_len | Str_slice | Str_find | Str_split
+  | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
+  | Bytes_len ->
+      false
+
+(* The built-in functions that aren't a type's members, in the order the
+   prelude's interface lists them. *)
+let fns : Intrinsic.t list =
   [
-    (* fn<T>(T) -> Str, which the interpreter runs itself, since it shows
-       a value through its type (eval.ml) *)
-    fn "show" (Fun ([ read (Var 0) ], str, open_row 0, open_row 1));
-    (* fn() -> Int, the real `Clock.now` and `Clock.instant` *)
-    fn ~runtime:true "clock_now" (Fun ([], int, open_row 0, open_row 1));
-    fn ~runtime:true "clock_instant" (Fun ([], int, open_row 0, open_row 1));
-    (* fn(Int) *)
-    fn ~runtime:true "clock_sleep"
-      (Fun ([ read int ], unit, open_row 0, open_row 1));
-    (* fn(Int) -> Int *)
-    fn ~runtime:true "random_int"
-      (Fun ([ read int ], int, open_row 0, open_row 1));
-    (* fn(Int) -> Int: the state after [state] of the test `Random` *)
-    fn ~runtime:true "seeded_next"
-      (Fun ([ read int ], int, open_row 0, open_row 1));
-    (* fn(Int, Int) -> Int: a number from 0 below [below], from that
-       state *)
-    fn ~runtime:true "seeded_int"
-      (Fun ([ read int; read int ], int, open_row 0, open_row 1));
-    (* fn(Str) *)
-    fn ~runtime:true "console_write"
-      (Fun ([ read str ], unit, open_row 0, open_row 1));
-    (* fn(Str), the real `Console.error`: stderr *)
-    fn ~runtime:true "console_error"
-      (Fun ([ read str ], unit, open_row 0, open_row 1));
-    (* fn(Str) -> FsOutcome<Bytes>, the real `Fs.read` *)
-    fn ~runtime:true "fs_read"
-      (Fun
-         ( [ read str ],
-           Con (Path.prelude "FsOutcome", [ bytes ]),
-           open_row 0,
-           open_row 1 ));
-    (* fn(Str, Bytes) -> FsOutcome<Unit>, the real `Fs.write` *)
-    fn ~runtime:true "fs_write"
-      (Fun
-         ( [ read str; read bytes ],
-           Con (Path.prelude "FsOutcome", [ unit ]),
-           open_row 0,
-           open_row 1 ));
-    (* fn(Str) -> Bool *)
-    fn ~runtime:true "fs_exists"
-      (Fun ([ read str ], bool, open_row 0, open_row 1));
-    (* fn() -> Array<Str> *)
-    fn ~runtime:true "os_args" (Fun ([], array str, open_row 0, open_row 1));
-    (* fn(Str, Array<Str>) -> ProcOutcome, the real `Proc.run` *)
-    fn ~runtime:true "proc_run"
-      (Fun
-         ( [ read str; read (array str) ],
-           Con (Path.prelude "ProcOutcome", []),
-           open_row 0,
-           open_row 1 ));
+    Show;
+    Clock_now;
+    Clock_instant;
+    Clock_sleep;
+    Random_int;
+    Seeded_next;
+    Seeded_int;
+    Console_write;
+    Console_error;
+    Fs_read;
+    Fs_write;
+    Fs_exists;
+    Os_args;
+    Proc_run;
   ]
 
 (* ---- built-in types ----
 
    A built-in type's methods are built in too, and listed with it: each is
-   called with a dot, its receiver its first parameter, `self`. In a
-   method's scheme the type's parameters are its first variables, as in
-   any member's (iface.ml). *)
+   called with a dot, its receiver its first parameter, `self`. *)
 
 type builtin_type = {
   name : string;
   arity : int;  (** type arguments *)
-  methods : builtin_fn list;
-  functions : builtin_fn list;  (** its associated functions, without `self` *)
+  methods : Intrinsic.t list;
+  functions : Intrinsic.t list;  (** its associated functions, without `self` *)
 }
-
-let array_methods =
-  let open Ty in
-  [
-    {
-      (* fn<T>(self: Array<T>) -> Int *)
-      name = "len";
-      scheme =
-        scheme (Fun ([ read (array (Var 0)) ], int, open_row 0, open_row 1));
-      runtime = false;
-    };
-    {
-      (* fn<T>(inout self: Array<T>, x: T) *)
-      name = "push";
-      scheme =
-        scheme
-          (Fun
-             ( [ { mode = Inout; ty = array (Var 0) }; read (Var 0) ],
-               unit,
-               open_row 0,
-               open_row 1 ));
-      runtime = false;
-    };
-  ]
-
-(* A `Str` is UTF-8, always, and `Bytes` are any bytes at all (builtins.ml,
-   "strings and bytes"). *)
-
-let str_methods =
-  let open Ty in
-  let m name params ret =
-    {
-      name;
-      scheme =
-        scheme
-          (Fun (List.map read (str :: params), ret, open_row 0, open_row 1));
-      runtime = false;
-    }
-  in
-  [
-    (* fn(self: Str) -> Int, in bytes *)
-    m "len" [] int;
-    (* fn(self: Str, from: Int, to: Int) -> Str: the bytes from [from] up
-       to, but not including, [to] *)
-    m "slice" [ int; int ] str;
-    (* fn(self: Str, s: Str) -> Option<Int>: where [s] first starts *)
-    m "find" [ str ] (Con (Path.prelude "Option", [ int ]));
-    (* fn(self: Str, sep: Str) -> Array<Str>: the parts between each [sep] *)
-    m "split" [ str ] (array str);
-    (* fn(self: Str) -> Str, without the spaces, tabs and newlines at
-       either end *)
-    m "trim" [] str;
-    (* fn(self: Str, prefix: Str) -> Bool *)
-    m "starts_with" [ str ] bool;
-    (* fn(self: Str, s: Str) -> Str: this, then [s] *)
-    m "concat" [ str ] str;
-    (* fn(self: Str) -> Bytes: its UTF-8 *)
-    m "bytes" [] bytes;
-  ]
-
-let str_functions =
-  let open Ty in
-  [
-    {
-      (* fn(b: Bytes) -> Str ! InvalidUtf8 *)
-      name = "from_utf8";
-      scheme =
-        scheme
-          (Fun
-             ( [ read bytes ],
-               str,
-               { labels = [ label "InvalidUtf8" ]; tail = None },
-               open_row 0 ));
-      runtime = false;
-    };
-  ]
-
-let bytes_methods =
-  let open Ty in
-  [
-    {
-      (* fn(self: Bytes) -> Int *)
-      name = "len";
-      scheme = scheme (Fun ([ read bytes ], int, open_row 0, open_row 1));
-      runtime = false;
-    };
-  ]
 
 let types =
   let t ?(methods = []) ?(functions = []) ?(arity = 0) name =
@@ -490,9 +442,21 @@ let types =
     t "Int";
     t "Bool";
     t "Unit";
-    t "Array" ~arity:1 ~methods:array_methods;
-    t "Str" ~methods:str_methods ~functions:str_functions;
-    t "Bytes" ~methods:bytes_methods;
+    t "Array" ~arity:1 ~methods:[ Array_len; Array_push ];
+    t "Str"
+      ~methods:
+        [
+          Str_len;
+          Str_slice;
+          Str_find;
+          Str_split;
+          Str_trim;
+          Str_starts_with;
+          Str_concat;
+          Str_bytes;
+        ]
+      ~functions:[ Str_from_utf8 ];
+    t "Bytes" ~methods:[ Bytes_len ];
   ]
 
 (* ---- built-in dependencies ----
@@ -506,20 +470,16 @@ let runtime_deps = [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
    their stages give them operations. *)
 let dependencies = [ "Net"; "Alloc"; "Async"; "Unsafe" ]
 
-(* A built-in function, by the name its path has: [print], or a method
-   after its type, [Array.push]. *)
-let find_fn name =
-  match String.index_opt name '.' with
-  | None -> List.find_opt (fun (f : builtin_fn) -> f.name = name) fns
-  | Some i ->
-      let ty = String.sub name 0 i in
-      let m = String.sub name (i + 1) (String.length name - i - 1) in
-      Option.bind
-        (List.find_opt (fun (t : builtin_type) -> t.name = ty) types)
-        (fun t ->
-          List.find_opt
-            (fun (f : builtin_fn) -> f.name = m)
-            (t.methods @ t.functions))
+(* Every built-in function, by the name its path has. Map.Make is a
+   functor: a function from a module (String) to a module (Names). The map
+   is made once, when the compiler starts, and never changes. *)
+module Names = Map.Make (String)
+
+let by_name =
+  let all = fns @ List.concat_map (fun t -> t.methods @ t.functions) types in
+  List.fold_left (fun m x -> Names.add (Intrinsic.name x) x m) Names.empty all
+
+let find name = Names.find_opt name by_name
 
 (* The intrinsic half of the prelude's interface, as the prelude's own
    source sees it, with what reaches the world; [public] is what every
@@ -536,16 +496,21 @@ let intrinsics : Iface.t =
             body = Builtin;
             members =
               List.map
-                (fun (okind, (f : builtin_fn)) : Iface.op ->
-                  { oname = f.name; opub = true; okind; oscheme = f.scheme })
-                (List.map (fun f -> (Iface.Method, f)) t.methods
-                @ List.map (fun f -> (Iface.Function, f)) t.functions);
+                (fun (okind, x) : Iface.op ->
+                  {
+                    oname = Intrinsic.member_name x;
+                    opub = true;
+                    okind;
+                    oscheme = scheme x;
+                  })
+                (List.map (fun x -> (Iface.Method, x)) t.methods
+                @ List.map (fun x -> (Iface.Function, x)) t.functions);
             loc = None;
           })
         types;
     values =
       List.map
-        (fun (f : builtin_fn) -> { Iface.vname = f.name; scheme = f.scheme })
+        (fun x -> { Iface.vname = Intrinsic.name x; scheme = scheme x })
         fns;
   }
 
@@ -555,10 +520,6 @@ let public =
     values =
       List.filter
         (fun (v : Iface.value) ->
-          match
-            List.find_opt (fun (f : builtin_fn) -> f.name = v.vname) fns
-          with
-          | Some f -> not f.runtime
-          | None -> true)
+          match find v.vname with Some x -> not (runtime x) | None -> true)
         intrinsics.values;
   }
