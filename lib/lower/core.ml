@@ -63,6 +63,9 @@ and kind =
   | Intrinsic of string
       (** a function built into the compiler: [print], or a method, [Array.push]
       *)
+  | Dep_op of Path.t * string
+      (** an operation of the dependency at the path, [Clock.now]: the function
+          the implementation installed where it's called gives for it *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)
@@ -163,7 +166,7 @@ let fails (t : Ty.ty) =
 let children (e : expr) =
   match e.kind with
   | Int _ | Bool _ | Str _ | Unit | Local _ | Global _ | Global_value _
-  | Intrinsic _ ->
+  | Intrinsic _ | Dep_op _ ->
       []
   | Prim (_, es) | Array es | Con (_, _, es) | Tag (_, es) -> es
   | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
@@ -252,6 +255,7 @@ let rec sexp e =
   | Local v -> var v
   | Global p | Global_value p -> Atom p.name
   | Intrinsic x -> Atom x
+  | Dep_op (p, op) -> Atom (Path.full p ^ "." ^ op)
   | Prim (op, args) -> List (Atom (show_prim op) :: List.map sexp args)
   | Let (v, value, body) -> List [ atom "let"; var v; sexp value; sexp body ]
   | Assign (v, value) -> List [ atom "="; var v; sexp value ]

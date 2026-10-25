@@ -195,6 +195,7 @@ let rec expr cx (e : expr) : C.expr =
   | Var (Global p) -> here (Global p)
   | Var (Global_value p) -> here (Global_value p)
   | Var (Intrinsic x) -> here (Intrinsic x)
+  | Var (Dep_op (p, op)) -> here (Dep_op (p, op))
   | Unop (Neg, a) -> here (Prim (Neg, [ expr cx a ]))
   | Unop (Not, a) -> here (Prim (Not, [ expr cx a ]))
   (* `a && b` is `if a then b else false`, and `a || b` is
@@ -571,7 +572,8 @@ and free (e : C.expr) =
   let bind (v : C.var) = bound := v.id :: !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Bool _ | Str _ | Unit | Global _ | Global_value _ | Intrinsic _ ->
+    | Int _ | Bool _ | Str _ | Unit | Global _ | Global_value _ | Intrinsic _
+    | Dep_op _ ->
         ()
     | Local v -> use v
     | Prim (_, args) | Array args | Con (_, _, args) | Tag (_, args) ->

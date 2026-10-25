@@ -633,13 +633,78 @@
   {
     "type": "dependency",
     "named": true,
-    "fields": {},
+    "fields": {
+      "module": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
       "multiple": false,
       "required": true,
       "types": [
         {
           "type": "type_identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "dependency_definition",
+    "named": true,
+    "fields": {
+      "member": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "associated_value",
+            "named": true
+          },
+          {
+            "type": "function_definition",
+            "named": true
+          },
+          {
+            "type": "operator_definition",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      },
+      "operation": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "operation",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "visibility",
           "named": true
         }
       ]
@@ -1705,6 +1770,32 @@
     }
   },
   {
+    "type": "operation",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "function_type",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "operator_definition",
     "named": true,
     "fields": {
@@ -1951,6 +2042,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "dependency_definition",
+          "named": true
+        },
         {
           "type": "function_definition",
           "named": true
@@ -2344,6 +2439,10 @@
   {
     "type": "comment",
     "named": true
+  },
+  {
+    "type": "dep",
+    "named": false
   },
   {
     "type": "else",

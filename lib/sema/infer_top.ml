@@ -252,7 +252,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
       | Type td ->
           let field (fd : Resolved.field) = ty_ fd.field_ty in
           (match td.type_body with
-          | Fields fs -> List.iter field fs
+          | Fields fs | Dep fs -> List.iter field fs
           | Ctors cs -> List.iter (fun c -> List.iter field c.ctor_fields) cs
           | Opaque t -> ty_ t
           | Errors es -> errors_ es);
@@ -353,7 +353,12 @@ let declared_uses ~is_value (f : fn_def) =
   | Some ds ->
       Some
         (List.sort_uniq String.compare
-           (List.map (fun (d : ident) -> d.name) ds))
+           (List.filter_map
+              (fun (d : tname) ->
+                match d.tref with
+                | Named p -> Some (Ty.dep_label p)
+                | Param _ -> None)
+              ds))
   | None when f.pub -> Some []
   | None -> None
 
@@ -380,6 +385,7 @@ let check_uses env ~is_value (f : fn_def) cx declared =
           | Some loc -> Some loc
           | None -> first (fun c -> List.mem dep (row_names c.row))
         in
+        let dep = env.names (Ty.dep_path dep) in
         report env
           (if is_value f then value_uses f dep call
            else undeclared_use f dep call))

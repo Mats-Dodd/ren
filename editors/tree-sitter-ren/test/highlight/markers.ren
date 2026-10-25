@@ -68,3 +68,16 @@ fn pay(t: Int) -> Int ! Refusal | bank.Late =
 fn greet() = print("hi\n")
 //                 ^ string
 //                    ^ string.escape
+
+pub dep Clock =
+// <- keyword
+//  ^ keyword
+//      ^ type.dependency
+  now: fn() -> Time
+//^ function
+//     ^ keyword
+fn at() -> Time uses store.Users = Clock.now()
+//                   ^ namespace
+//                         ^ type.dependency
+//                                 ^ type
+//                                       ^ function

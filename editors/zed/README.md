@@ -23,7 +23,8 @@ Three captures say what Ren wants seen at a glance:
 - `keyword.mutation`: `&` and `inout`, where something changes
 - `keyword.failure`: `try`, `fail`, `attempt`, `orelse` and the `!` of an
   error set, where something can fail
-- `type.dependency`: a dependency named in `uses`, like `Io`
+- `type.dependency`: a dependency, declared with `dep` or named in `uses`,
+  like `Clock`
 
 A theme that doesn't know them shows them as `keyword` and `type`. To give
 them their own colours, add this to your Zed `settings.json`:

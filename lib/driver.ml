@@ -349,26 +349,54 @@ let types ?(lint = false) ?load ~file src =
                f.params)
           (List.assoc f.name.name inferred.schemes)
       in
+      (* a type's declaration, as Iface has it *)
+      let decl (td : Ast.Resolved.type_def) =
+        List.find
+          (fun (d : Iface.type_decl) -> d.path.name = td.type_name.name)
+          resolved.types
+      in
+      (* one of a type's members, under it *)
+      let member ~outer (o : Ast.Resolved.op) =
+        let f = o.op_fn in
+        let name = Ast.short_name f.name.name in
+        match o.op_kind with
+        | Op_fn -> "  " ^ fn_ ~outer ~name f
+        | Op_value -> (
+            (* a function of no parameters (ast.ml) *)
+            match List.assoc f.name.name inferred.schemes with
+            | { ty = Fun ([], t, _, _); names = tnames } ->
+                "  "
+                ^ Ty.value_signature ~names ~pub:f.pub ~name
+                    { ty = t; names = tnames }
+            | _ -> assert false)
+      in
       ( home,
         List.concat_map
           (function
             | Ast.Fn f -> [ fn_ ~name:f.name.name f ]
+            | Type ({ type_body = Dep _; _ } as td) ->
+                (* a dependency: its operations, each with its type, then
+                   its members *)
+                let ops =
+                  match (decl td).body with
+                  | Dep ops ->
+                      List.map
+                        (fun (o : Iface.field) ->
+                          let pr =
+                            Ty.printer ~names { ty = o.fty; names = [] }
+                          in
+                          sprintf "  %s: %s" o.fname (Ty.show pr o.fty))
+                        ops
+                  | _ -> []
+                in
+                sprintf "%sdep %s"
+                  (if td.type_pub then "pub " else "")
+                  td.type_name.name
+                :: ops
+                @ List.map (member ~outer:[]) td.type_ops
             | Type ({ type_ops = _ :: _; _ } as td) ->
                 let outer =
                   List.map (fun (p : Ast.ident) -> p.name) td.type_params
-                in
-                let op (o : Ast.Resolved.op) =
-                  let f = o.op_fn in
-                  let name = Ast.short_name f.name.name in
-                  match o.op_kind with
-                  | Op_fn -> fn_ ~outer ~name f
-                  | Op_value -> (
-                      (* a function of no parameters (ast.ml) *)
-                      match List.assoc f.name.name inferred.schemes with
-                      | { ty = Fun ([], t, _, _); names = tnames } ->
-                          Ty.value_signature ~names ~pub:f.pub ~name
-                            { ty = t; names = tnames }
-                      | _ -> assert false)
                 in
                 let params =
                   match outer with
@@ -378,19 +406,13 @@ let types ?(lint = false) ?load ~file src =
                 sprintf "%stype %s%s"
                   (if td.type_pub then "pub " else "")
                   td.type_name.name params
-                :: List.map (fun o -> "  " ^ op o) td.type_ops
+                :: List.map (member ~outer) td.type_ops
             | Type ({ type_body = Errors _; _ } as td) ->
                 (* a named error set, as it's declared, each tag with its
                    payload's types *)
                 let pr = Ty.printer ~names { ty = Error; names = [] } in
                 let errors =
-                  match
-                    (List.find
-                       (fun (d : Iface.type_decl) ->
-                         d.path.name = td.type_name.name)
-                       resolved.types)
-                      .body
-                  with
+                  match (decl td).body with
                   | Errors es ->
                       List.map
                         (function

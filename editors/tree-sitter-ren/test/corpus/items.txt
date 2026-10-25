@@ -143,3 +143,84 @@ fn apply(inout xs: Array<Int>, f: fn(inout Array<Int>, n: Int) -> Unit, k) = f(&
         (reference
           (identifier))
         (identifier)))))
+
+================================================================================
+a dependency: its operations, then its members
+================================================================================
+
+pub dep Clock =
+  now: fn() -> Time
+  save: fn(u: User) ! Conflict
+
+  pub fn frozen(at: Time) -> Clock = Clock { now: fn() => at, save: fn(_) => () }
+
+fn tick() -> Time uses Clock, store.Users = Clock.now()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (dependency_definition
+    (visibility)
+    (type_identifier)
+    (operation
+      (identifier)
+      (function_type
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (operation
+      (identifier)
+      (function_type
+        (function_type_parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))
+        (error_set
+          (error_tag
+            (type_identifier)))))
+    (function_definition
+      (visibility)
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (named_type
+        (type_name
+          (type_identifier)))
+      (record_expression
+        (type_name
+          (type_identifier))
+        (field_initializer
+          (identifier)
+          (lambda
+            (parameters)
+            (identifier)))
+        (field_initializer
+          (identifier)
+          (lambda
+            (parameters
+              (parameter
+                (identifier)))
+            (unit))))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (named_type
+      (type_name
+        (type_identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier))
+      (dependency
+        (identifier)
+        (type_identifier)))
+    (call_expression
+      (item_expression
+        (type_name
+          (type_identifier))
+        (identifier))
+      (arguments))))

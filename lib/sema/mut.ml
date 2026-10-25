@@ -68,6 +68,7 @@ let name_of = function
   | Local b -> b.ident.name
   | Global p | Global_value p -> p.name
   | Intrinsic x -> x
+  | Dep_op (p, op) -> p.name ^ "." ^ op
 
 let rec place_of (e : expr) =
   match e.kind with
@@ -90,7 +91,7 @@ let rec overlap a b =
 
 let check_locks cx (p : place) =
   match p.root with
-  | Global _ | Global_value _ | Intrinsic _ -> ()
+  | Global _ | Global_value _ | Intrinsic _ | Dep_op _ -> ()
   | Local b ->
       List.iter
         (fun l ->
@@ -144,6 +145,10 @@ let writable cx (e : expr) ~what
   | Some ({ root = Global _ | Intrinsic _; _ } as p) ->
       Diag.error p.rloc
         (sprintf "`%s` is a function, not a variable" (name_of p.root))
+  | Some ({ root = Dep_op _; _ } as p) ->
+      Diag.error p.rloc
+        (sprintf "`%s` is an operation of a dependency, not a variable"
+           (name_of p.root))
   | Some ({ root = Global_value _; _ } as p) ->
       Diag.error p.rloc ~help:"copy it into a `var`, and change the copy"
         ~notes:[ "an associated value is made once, and never changes" ]

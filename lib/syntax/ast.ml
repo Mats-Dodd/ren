@@ -207,6 +207,10 @@ type 't type_body =
   | Errors of 't errors
       (** [! Short(by: Money) | Frozen]: a named error set. It isn't a type of
           values: it's only written after `!` *)
+  | Dep of 't field list
+      (** a dependency's operations, [now: fn() -> Time], each a function type
+          (deps.md, "Declaring one"). A value of the type is an implementation,
+          a record of them *)
 
 type ('v, 'b, 't) fn_def = {
   pub : bool;
@@ -215,9 +219,9 @@ type ('v, 'b, 't) fn_def = {
   params : ('b, 't) param list;
   ret : 't ty option;
   errors : 't errors option;  (** what it can fail with, after `!` *)
-  uses : ident list option;
-      (** the dependencies after `uses`, if it's written: the prelude's, like
-          [Io], are the only ones so far *)
+  uses : 't list option;
+      (** the dependencies after `uses`, if it's written: [Clock], or another
+          module's, [store.Users] *)
   body : ('v, 'b, 't) expr;
   loc : Loc.t;
 }
@@ -343,6 +347,9 @@ type name =
   | Intrinsic of string
       (** a function built into the compiler: [print], or a method, [Array.push]
       *)
+  | Dep_op of Path.t * string
+      (** an operation of the dependency at the path, [Clock.now]: calling it
+          calls the implementation installed where it's called *)
 
 (* A type's name: a declared type, or the [i]th type parameter in scope
    (of the type being declared, or of the function). *)
@@ -559,7 +566,7 @@ let show_fn (f : fn_def) =
   in
   let uses =
     match f.uses with
-    | Some ds -> [ parens ("uses" :: List.map (fun (d : ident) -> d.name) ds) ]
+    | Some ds -> [ parens ("uses" :: List.map show_tyname ds) ]
     | None -> []
   in
   parens
@@ -586,6 +593,7 @@ let show_type_def (td : type_def) =
           cs
     | Opaque t -> [ parens [ "opaque"; show_ty t ] ]
     | Errors es -> [ parens [ show_errors es ] ]
+    | Dep ops -> [ parens ("ops" :: List.map show_field ops) ]
   in
   let show_op (o : op) =
     let f = o.op_fn in
@@ -599,9 +607,10 @@ let show_type_def (td : type_def) =
     | [] -> []
     | os -> [ parens ("members" :: List.map show_op os) ]
   in
+  let keyword = match td.type_body with Dep _ -> "dep" | _ -> "type" in
   parens
     ((if td.type_pub then [ "pub" ] else [])
-    @ ("type" :: name :: body) @ members)
+    @ (keyword :: name :: body) @ members)
 
 let show_import (i : import) =
   let names =
@@ -653,6 +662,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Var (Local b) -> b.ident.name
     | Var (Global p | Global_value p) -> value_name p
     | Var (Intrinsic x) -> x
+    | Var (Dep_op (p, op)) -> type_name p ^ "." ^ op
     | Unop (Neg, a) -> "-" ^ operand 7 a
     | Unop (Not, a) -> "not " ^ operand 3 a
     | Binop (Orelse, a, b) ->

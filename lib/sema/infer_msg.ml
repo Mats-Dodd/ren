@@ -226,6 +226,13 @@ let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
     | Record _ ->
         ( sprintf "`%s` is a record, so it has no constructors" t,
           Some (sprintf "make one with `%s { ... }`" t) )
+    | Dep _ ->
+        ( sprintf "`%s` is a dependency, so it has no constructors" t,
+          Some
+            (sprintf
+               "make an implementation of it with `%s { ... }`, giving each of \
+                its operations"
+               t) )
     | Builtin ->
         ( sprintf "`%s` is built in, and has no constructors" t,
           Some "its values are written directly, like `1`, `true` or `[1, 2]`"
@@ -291,10 +298,33 @@ let several_records_fit ~names loc paths =
     (sprintf "these fields fit more than one type: %s"
        (quote (List.map names paths)))
 
-let no_such_field ~names (f : Ast.ident) path decl =
+let no_such_field ~names ?(what = "field") (f : Ast.ident) path decl =
   Diag.make f.loc
-    ~help:(sprintf "its fields: %s" (quote (field_names decl)))
-    (sprintf "`%s` has no field named `%s`" (names path) f.name)
+    ~help:(sprintf "its %ss: %s" what (quote (field_names decl)))
+    (sprintf "`%s` has no %s named `%s`" (names path) what f.name)
+
+(* `c.now`, where `c` is an implementation of the dependency [dep], which
+   has the operation `now` or not: an implementation's operations are
+   called on the dependency, `Clock.now()`, once it's installed, never read
+   from it (deps.md, "Calling one"). *)
+let op_of_value ~names (f : Ast.ident) dep (ops : Iface.field list) =
+  let d = names dep in
+  if List.exists (fun (o : Iface.field) -> o.fname = f.name) ops then
+    Diag.make f.loc
+      ~notes:
+        [
+          sprintf
+            "a value of `%s` is an implementation of it: it's used by \
+             installing it, with `with`, and then `%s.%s` calls it"
+            d d f.name;
+        ]
+      ~help:(sprintf "call the installed one: `%s.%s(...)`" d f.name)
+      (sprintf "`%s` is an operation of `%s`, so it isn't read from a value"
+         f.name d)
+  else
+    Diag.make f.loc
+      ~help:(sprintf "its operations: %s" (quote (field_names ops)))
+      (sprintf "`%s` has no operation named `%s`" d f.name)
 
 let missing_fields ~names loc path missing =
   Diag.make loc

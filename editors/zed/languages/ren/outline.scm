@@ -1,4 +1,5 @@
-; The outline: every function and type, and under a type its members.
+; The outline: every function, type and dependency, and under a type its
+; members, and under a dependency its operations and members.
 
 (function_definition
   (visibility)? @context
@@ -9,6 +10,14 @@
   (visibility)? @context
   "type" @context
   name: (type_identifier) @name) @item
+
+(dependency_definition
+  (visibility)? @context
+  "dep" @context
+  name: (type_identifier) @name) @item
+
+(operation
+  name: (identifier) @name) @item
 
 (associated_value
   (visibility)? @context

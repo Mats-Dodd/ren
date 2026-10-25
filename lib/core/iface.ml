@@ -35,6 +35,10 @@ type body =
   | Errors of error list
       (** a named error set, [type Refusal = ! Short(by: Money) | Frozen], which
           is no type of values *)
+  | Dep of field list
+      (** a dependency, [dep Clock = ...]: its operations, each a function type
+          that fails with exactly what it's written to fail with, and uses
+          nothing. A value of it is an implementation, a record of them *)
 
 (* A member of a type (ast.ml): a method, which has `self`,
    an associated function, which doesn't, or an associated value. *)
@@ -198,7 +202,12 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   in
   let errs : Ty.row = { labels = declared; tail = Some 0 } in
   let uses =
-    List.map (fun (d : Ast.ident) -> d.name) (Option.value f.uses ~default:[])
+    List.filter_map
+      (fun (d : Ast.tname) ->
+        match d.tref with
+        | Named p -> Some (Ty.dep_label p)
+        | Param _ -> (* resolve.ml only makes a dependency a [Named] *) None)
+      (Option.value f.uses ~default:[])
   in
   let deps : Ty.row =
     {
@@ -246,6 +255,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
              cs)
     | Opaque t -> Opaque (Some (of_written ~sets t))
     | Errors es -> Errors (declared_errors ~sets es)
+    | Dep ops -> Dep (List.map field ops)
   in
   let op (o : Ast.Resolved.op) =
     let f = o.op_fn in

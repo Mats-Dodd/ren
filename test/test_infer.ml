@@ -1471,8 +1471,8 @@ fn main() = f()
       ┌─ test.ren:1:17
     1 │ fn f() uses Io, Disk = 1
       │                 ^^^^
-      = the dependencies there are: `Io`, `Net`, `Alloc`, `Async`, `Unsafe`, `Clock`, `Random`
-      help: use one of those, or remove it
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Io`, `Net`, `Random`, `Unsafe`
+      help: use one of those, or declare it with `dep`
     |}]
 
 let%expect_test "a public function declares what it uses" =

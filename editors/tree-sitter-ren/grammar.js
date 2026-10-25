@@ -86,7 +86,13 @@ module.exports = grammar({
     source_file: ($) =>
       optional(seq(sep1($._item, $._newline), optional($._newline))),
 
-    _item: ($) => choice($.import, $.function_definition, $.type_definition),
+    _item: ($) =>
+      choice(
+        $.import,
+        $.function_definition,
+        $.type_definition,
+        $.dependency_definition,
+      ),
 
     comment: (_) => token(seq('//', /[^\n]*/)),
 
@@ -134,10 +140,14 @@ module.exports = grammar({
 
     inout: (_) => 'inout',
 
-    // uses Io, Clock: the dependencies a function's body may call
+    // uses Console, store.Users: the dependencies a function's body may call
     uses_clause: ($) => seq('uses', commaSep1Strict($.dependency)),
 
-    dependency: ($) => $.type_identifier,
+    dependency: ($) =>
+      choice(
+        $.type_identifier,
+        seq(field('module', $.identifier), '.', $.type_identifier),
+      ),
 
     // ! Short(account: AccountId, by: Money) | Frozen | bank.Refusal: what
     // a function can fail with. A bare name may be a tag or a named error
@@ -224,6 +234,28 @@ module.exports = grammar({
 
     field_declaration: ($) =>
       seq(field('name', $.identifier), ':', field('type', $._type)),
+
+    // ---- dependencies ----
+
+    // pub dep Clock = now: fn() -> Time ..., then its members: its
+    // operations, indented under it, come first, which the compiler checks
+    dependency_definition: ($) =>
+      seq(
+        optional($.visibility),
+        'dep',
+        field('name', $.type_identifier),
+        '=',
+        $._indent,
+        sep1(
+          choice(field('operation', $.operation), field('member', $._member)),
+          $._newline,
+        ),
+        $._dedent,
+      ),
+
+    // now: fn() -> Time
+    operation: ($) =>
+      seq(field('name', $.identifier), ':', field('type', $.function_type)),
 
     // ---- a type's members ----
 

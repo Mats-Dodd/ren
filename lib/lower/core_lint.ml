@@ -182,12 +182,12 @@ let ctor_of env loc (td : Iface.type_decl) c =
       | Some k -> k
       | None ->
           fail env loc (sprintf "`%s` has no constructor `%s`" td.path.name c))
-  | Record _ | Builtin | Opaque _ | Errors _ ->
+  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ ->
       fail env loc (sprintf "`%s` isn't a sum type" td.path.name)
 
 let fields_of env loc (td : Iface.type_decl) =
   match td.body with
-  | Record fs -> fs
+  | Record fs | Dep fs -> fs
   | Sum _ | Builtin | Opaque _ | Errors _ ->
       fail env loc (sprintf "`%s` isn't a record" td.path.name)
 
@@ -243,6 +243,25 @@ let rec expr env sc (e : expr) =
       | Some b when instance_of env b.scheme.ty e.ty -> ()
       | Some _ -> fail env loc (sprintf "`%s` is used at the wrong type" x)
       | None -> fail env loc (sprintf "there's no built-in `%s`" x))
+  | Dep_op (p, op) -> (
+      (* the operation as declared, using its dependency, and whatever the
+         caller does *)
+      let declared =
+        match (decl env loc p).body with
+        | Dep ops -> List.find_opt (fun (o : Iface.field) -> o.fname = op) ops
+        | _ -> None
+      in
+      match declared with
+      | Some { fty = Fun (ps, r, errs, _); _ } ->
+          let uses : Ty.row =
+            { labels = [ Ty.label (Ty.dep_label p) ]; tail = Some 0 }
+          in
+          if not (instance_of env (Fun (ps, r, errs, uses)) e.ty) then
+            fail env loc
+              (sprintf "`%s.%s` is used at `%s`, which isn't its type, `%s`"
+                 p.name op (show e.ty)
+                 (show (Fun (ps, r, errs, uses))))
+      | _ -> fail env loc (sprintf "`%s` has no operation `%s`" p.name op))
   | Prim (op, args) -> prim env sc e op args
   | Let (v, value, body) ->
       expr env sc value;
@@ -516,7 +535,7 @@ let fn_def env (f : fn_def) =
 let rec globals (e : expr) =
   match e.kind with
   | Global p | Global_value p -> [ p ]
-  | Int _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
+  | Int _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ | Dep_op _ -> []
   | Prim (_, es) | Array es | Con (_, _, es) | Tag (_, es) ->
       List.concat_map globals es
   | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)

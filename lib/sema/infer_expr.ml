@@ -252,6 +252,7 @@ let name_of = function
   | Local b -> b.ident.name
   | Global p | Global_value p -> p.name
   | Intrinsic x -> x
+  | Dep_op (p, op) -> p.name ^ "." ^ op
 
 let report env d = Diag.report env.sink d
 
@@ -564,7 +565,7 @@ let known_decl env t =
 let ctor_in (c : ident) (td : Iface.type_decl) =
   match td.body with
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
-  | Record _ | Builtin | Opaque _ | Errors _ -> None
+  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
 
 (* The constructor [c], where a value of type [expected] is wanted. One
    written after its type, `Light.Red`, is looked for there and nowhere
@@ -640,10 +641,26 @@ let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
           else ok)
         true named ctor.cfields
 
+(* The fields a value of [td] can be read with, `r.f`: a record's. *)
 let record_fields (td : Iface.type_decl) =
   match td.body with
   | Record fs -> Some fs
+  | Sum _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
+
+(* The fields a literal of [td] gives, `T { f: ... }`: a record's, or a
+   dependency's operations, which an implementation gives (deps.md,
+   "Implementations"). An operation isn't read from one: it's called on
+   the dependency, where it's installed. *)
+let literal_fields (td : Iface.type_decl) =
+  match td.body with
+  | Record fs | Dep fs -> Some fs
   | Sum _ | Builtin | Opaque _ | Errors _ -> None
+
+(* The operation [name] of the dependency [td], if it's one. *)
+let dep_op_in name (td : Iface.type_decl) =
+  match td.body with
+  | Dep ops -> List.find_opt (fun (o : Iface.field) -> o.fname = name) ops
+  | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> None
 
 let op_in name (td : Iface.type_decl) =
   List.find_opt (fun (o : Iface.op) -> o.oname = name) td.members
@@ -718,6 +735,17 @@ let rec lookup env cx loc = function
   | Global p -> instantiate env.st (Hashtbl.find env.globals p)
   | Intrinsic x ->
       instantiate env.st (Hashtbl.find env.globals (Path.prelude x))
+  | Dep_op (p, op) -> (
+      (* the operation as declared, which uses its dependency: a call
+         adds it to the caller's `uses` *)
+      match Option.bind (Hashtbl.find_opt env.types p) (dep_op_in op) with
+      | Some o -> (
+          match field_type ~tvars:[] o with
+          | TFun (ps, ret, errs, _) ->
+              TFun
+                (ps, ret, errs, RExtend (dep (Ty.dep_label p), fresh_row env.st))
+          | _ -> TError)
+      | None -> TError)
 
 let want_int env op (e : expr) t =
   unify_at env e.loc ~found:t ~expected:int
@@ -1449,18 +1477,20 @@ and infer_call env cx ?changed (e : expr) (f : expr) args =
         when Option.bind (known_decl env t) (field_in m.name) = None ->
           let td = Hashtbl.find env.types p in
           let shown = show (printer env) tr in
-          (if p.home <> env.home && p.home <> Path.prelude_home then
-             report env (no_public_method m ~shown p)
-           else
-             let methods =
-               List.filter_map
-                 (fun (o : Iface.op) ->
-                   if o.okind = Method then Some o.oname else None)
-                 td.members
-             in
-             report env
-               (no_method m ~shown ~own:(p.home = env.home)
-                  ~type_name:(type_name env p) methods));
+          (match td.body with
+          | Dep ops -> report env (op_of_value ~names:env.names m p ops)
+          | _ when p.home <> env.home && p.home <> Path.prelude_home ->
+              report env (no_public_method m ~shown p)
+          | _ ->
+              let methods =
+                List.filter_map
+                  (fun (o : Iface.op) ->
+                    if o.okind = Method then Some o.oname else None)
+                  td.members
+              in
+              report env
+                (no_method m ~shown ~own:(p.home = env.home)
+                   ~type_name:(type_name env p) methods));
           nothing ()
       | None, TVar _
         when List.exists (fun td -> op_in m.name td <> None) env.visible -> (
@@ -1722,7 +1752,7 @@ and infer_record env cx (e : expr) name fields ~expected =
     match name with
     | Some { tref = Named p; tloc } -> (
         let td = Hashtbl.find env.types p in
-        match record_fields td with
+        match literal_fields td with
         | Some fs -> Some (td, fs)
         | None ->
             report env (not_a_record ~names:env.names tloc td);
@@ -1733,10 +1763,10 @@ and infer_record env cx (e : expr) name fields ~expected =
     | None -> (
         let known =
           Option.bind (known_decl env expected) (fun td ->
-              Option.map (fun fs -> (td, fs)) (record_fields td))
+              Option.map (fun fs -> (td, fs)) (literal_fields td))
         in
         let fits td =
-          match record_fields td with
+          match literal_fields td with
           | Some fs when sorted (field_names fs) = given -> Some fs
           | _ -> None
         in
@@ -1755,6 +1785,8 @@ and infer_record env cx (e : expr) name fields ~expected =
       TError
   | Some (td, decl) ->
       let t, tvars = instance env td in
+      (* an implementation gives a dependency's operations *)
+      let what = match td.body with Dep _ -> "operation" | _ -> "field" in
       (* a misspelled field is also a missing one; once it's reported, the
          missing ones aren't, as they're likely the same mistake *)
       let unknown = ref false in
@@ -1769,12 +1801,12 @@ and infer_record env cx (e : expr) name fields ~expected =
                   (explain
                      ~notes:
                        [
-                         sprintf "`%s`'s field `%s`" (type_name env td.path)
+                         sprintf "`%s`'s %s `%s`" (type_name env td.path) what
                            f.name;
                        ]
                      ())
           | None ->
-              report env (no_such_field ~names:env.names f td.path decl);
+              report env (no_such_field ~names:env.names ~what f td.path decl);
               unknown := true;
               ignore (infer env cx v))
         fields;
@@ -1830,7 +1862,12 @@ and field_access env cx (e : expr) r tr (f : ident) =
           | None, None when td.body = Opaque None ->
               report env (opaque_private f.loc td);
               TError
-          | None, None -> needs_record t)
+          | None, None -> (
+              match td.body with
+              | Dep ops ->
+                  report env (op_of_value ~names:env.names f p ops);
+                  TError
+              | _ -> needs_record t))
       | TVar _ -> (
           let what =
             match r.kind with

@@ -25,6 +25,9 @@
      found through scope too: the type is, and the item is in its
      declaration. A method called with a dot, `s.push(1)`, is found
      through `s`'s type, by inference.
+   - a dependency, `dep Clock = ...`, is in scope like a type. A name after
+     `uses` is one, and an operation written after it, `Clock.now`, is a
+     [Dep_op]: a call of it calls whatever implementation is installed.
 
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
@@ -140,6 +143,8 @@ type env = {
           source order, and its fields *)
   own_sets : (string, unit) Hashtbl.t;
       (** the module's own named error sets, by name *)
+  own_deps : (string, string list) Hashtbl.t;
+      (** the module's own dependencies, by name, each with its operations *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
   used : (string, unit) Hashtbl.t;  (** the aliases used *)
   used_types : (Path.t, unit) Hashtbl.t;
@@ -253,6 +258,19 @@ let is_set env (p : Path.t) =
         | Some { body = Errors _; _ } -> true
         | _ -> false)
     | None -> false
+
+(* The operations of [p], if it's a dependency, `dep Clock = ...`: one of
+   the module's own, or another module's, which its interface says. *)
+let dep_ops env (p : Path.t) =
+  if p.home = env.home then Hashtbl.find_opt env.own_deps p.name
+  else
+    match List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces with
+    | Some iface -> (
+        match Iface.find_type iface p.name with
+        | Some { body = Dep ops; _ } ->
+            Some (List.map (fun (o : Iface.field) -> o.fname) ops)
+        | _ -> None)
+    | None -> None
 
 (* The type named [name] in scope, and how many type arguments it takes. *)
 let find_type env name =
@@ -535,7 +553,13 @@ let item env sc (t : tyname) (f : ident) =
             [] )
       in
       let path = Path.make p.home (p.name ^ "." ^ f.name) in
+      let ops = Option.value (dep_ops env p) ~default:[] in
       match List.assoc_opt f.name items with
+      | _ when List.mem f.name ops ->
+          (* `Clock.now`: an operation, which calls the implementation
+             installed where it's called; resolve.ml reports one that's
+             also a member's name *)
+          Dep_op (p, f.name)
       | Some _
         when p.home = Path.prelude_home && Prelude.find_fn path.name <> None ->
           (* a built-in method, `Array.len`: built into the compiler, not a
@@ -552,9 +576,17 @@ let item env sc (t : tyname) (f : ident) =
       | None ->
           (* the module's own type, or a built-in one, which has every item
              it will ever have *)
+          let quoted ns = String.concat ", " (List.map (sprintf "`%s`") ns) in
           report env f.loc
             ?help:
               (match items with
+              | _ when ops <> [] ->
+                  Some
+                    (sprintf "its operations: %s%s" (quoted ops)
+                       (if items = [] then ""
+                        else
+                          sprintf "; its members: %s"
+                            (quoted (List.map fst items))))
               | _ when List.mem f.name fields ->
                   Some
                     (sprintf
@@ -568,7 +600,9 @@ let item env sc (t : tyname) (f : ident) =
                     (sprintf "its members: %s"
                        (String.concat ", "
                           (List.map (fun (n, _) -> sprintf "`%s`" n) items))))
-            (sprintf "`%s` has no member named `%s`" shown f.name);
+            (sprintf "`%s` has no %s named `%s`" shown
+               (if ops = [] then "member" else "operation or member")
+               f.name);
           Global path)
 
 (* What the name [x] refers to. [what] words the error when it's nothing:
@@ -1023,30 +1057,75 @@ let no_set_cycles env (items : Resolved.program) =
       | Fn _ | Type _ | Import _ -> ())
     items
 
-(* The dependencies after a function's `uses`: each one is a dependency
-   the prelude declares, written once. *)
-let uses env (deps : ident list) =
+(* The dependencies after a function's `uses`, resolved: each one is a
+   dependency in scope, `dep Clock = ...`, or another module's, written
+   after its alias, `store.Users`, or one the prelude only names so far,
+   like `Net`; and each is written once. One that isn't is reported, and
+   left out. *)
+let uses env (deps : tyname list) : tname list =
+  let in_scope () =
+    let declared =
+      Hashtbl.fold
+        (fun name ((p : Path.t), _) acc ->
+          if dep_ops env p <> None then name :: acc else acc)
+        env.types []
+    in
+    List.sort_uniq String.compare (declared @ Prelude.dependencies)
+  in
+  let no_such (d : tyname) =
+    Diag.report env.sink
+      (Diag.make (tyname_loc d)
+         ~notes:
+           [
+             sprintf "the dependencies in scope are: %s"
+               (String.concat ", " (List.map (sprintf "`%s`") (in_scope ())));
+           ]
+         ~help:"use one of those, or declare it with `dep`"
+         (sprintf "there's no dependency named `%s`" (show_tyname d)));
+    None
+  in
+  let not_a_dep (d : tyname) =
+    report env (tyname_loc d)
+      ~help:
+        "a dependency is declared with `dep`, and lists the operations a \
+         function can call on it"
+      (sprintf "`%s` is a type, not a dependency" (show_tyname d));
+    None
+  in
+  let resolve (d : tyname) =
+    match d.tmod with
+    | None -> (
+        match Hashtbl.find_opt env.types d.tid.name with
+        | Some (p, _) when dep_ops env p <> None ->
+            ignore (find_type env d.tid.name);
+            Some p
+        | Some _ -> not_a_dep d
+        | None when List.mem d.tid.name Prelude.dependencies ->
+            Some (Path.prelude d.tid.name)
+        | None -> no_such d)
+    | Some _ -> (
+        match find_named env ~params:[] d with
+        | Some (Named p, _) when dep_ops env p <> None -> Some p
+        | Some _ -> not_a_dep d
+        | None -> None)
+  in
   let seen = Hashtbl.create 4 in
-  List.iter
-    (fun (d : ident) ->
-      if not (List.mem d.name Prelude.dependencies) then
-        Diag.report env.sink
-          (Diag.make d.loc
-             ~notes:
-               [
-                 sprintf "the dependencies there are: %s"
-                   (String.concat ", "
-                      (List.map (sprintf "`%s`") Prelude.dependencies));
-               ]
-             ~help:"use one of those, or remove it"
-             (sprintf "there's no dependency named `%s`" d.name))
-      else
-        match Hashtbl.find_opt seen d.name with
-        | Some first ->
-            report env d.loc ~help:"remove one of them"
-              ~labels:[ (first, sprintf "the first `%s` is here" d.name) ]
-              (sprintf "`%s` is in `uses` twice" d.name)
-        | None -> Hashtbl.replace seen d.name d.loc)
+  List.filter_map
+    (fun (d : tyname) ->
+      let loc = tyname_loc d in
+      match resolve d with
+      | None -> None
+      | Some p -> (
+          match Hashtbl.find_opt seen p with
+          | Some first ->
+              report env loc ~help:"remove one of them"
+                ~labels:
+                  [ (first, sprintf "the first `%s` is here" (show_tyname d)) ]
+                (sprintf "`%s` is in `uses` twice" (show_tyname d));
+              None
+          | None ->
+              Hashtbl.replace seen p loc;
+              Some { tref = Named p; tloc = loc }))
     deps
 
 (* A function: a top-level one, or, with [owner], one of that type's
@@ -1127,14 +1206,14 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
   in
   let ret = ty_opt env ~params:sc.tparams f.ret in
   let errs = Option.map (errors env ~params:sc.tparams) f.errors in
-  Option.iter (uses env) f.uses;
+  let deps = Option.map (uses env) f.uses in
   let body = expr env inner f.body in
   let name =
     match owner with
     | Some td -> { f.name with name = td.type_name.name ^ "." ^ f.name.name }
     | None -> f.name
   in
-  ( { f with name; tparams; params = ps; ret; errors = errs; body },
+  ( { f with name; tparams; params = ps; ret; errors = errs; uses = deps; body },
     List.sort_uniq compare sc.fn.calls,
     List.sort_uniq compare sc.fn.dots )
 
@@ -1153,6 +1232,9 @@ let type_def env (td : Parsed.type_def) :
   | Fields fs -> no_duplicate_fields fs
   | Ctors cs ->
       List.iter (fun (c : Parsed.ctor) -> no_duplicate_fields c.ctor_fields) cs
+  | Dep ops ->
+      no_duplicates env "operations"
+        (List.map (fun (f : Parsed.field) -> f.field_name) ops)
   | Opaque _ | Errors _ -> ());
   let params = List.map (fun (p : ident) -> p.name) td.type_params in
   let field (f : Parsed.field) : Resolved.field =
@@ -1172,6 +1254,7 @@ let type_def env (td : Parsed.type_def) :
              cs)
     | Opaque t -> Opaque (ty env ~params t)
     | Errors es -> Errors (errors env ~params es)
+    | Dep ops -> Dep (List.map field ops)
   in
   let tname = td.type_name.name in
   (* each item has a name of its own, which isn't a field's: `s.items`
@@ -1187,6 +1270,38 @@ let type_def env (td : Parsed.type_def) :
             (sprintf "`%s` has two members named `%s`" tname id.name)
       | None -> Hashtbl.replace seen id.name id.loc)
     td.type_ops;
+  (* and so does a dependency's operation: `Clock.now` would be one or the
+     other *)
+  (match td.type_body with
+  | Dep ops ->
+      List.iter
+        (fun (o : Parsed.op) ->
+          let id = o.op_fn.name in
+          match
+            List.find_opt
+              (fun (f : Parsed.field) -> f.field_name.name = id.name)
+              ops
+          with
+          | Some op ->
+              Diag.report env.sink
+                (Diag.make id.loc ~help:"rename one of them"
+                   ~labels:
+                     [
+                       ( op.field_name.loc,
+                         sprintf "the operation `%s` is here" id.name );
+                     ]
+                   ~notes:
+                     [
+                       sprintf
+                         "`%s.%s` has to mean one thing: calling the installed \
+                          implementation's `%s`, or this member"
+                         tname id.name id.name;
+                     ]
+                   (sprintf "`%s` has an operation and a member both named `%s`"
+                      tname id.name))
+          | None -> ())
+        td.type_ops
+  | Fields _ | Ctors _ | Opaque _ | Errors _ -> ());
   (match td.type_body with
   | Fields fs ->
       List.iter
@@ -1213,7 +1328,7 @@ let type_def env (td : Parsed.type_def) :
                    id.name)
           | None -> ())
         td.type_ops
-  | Ctors _ | Opaque _ | Errors _ -> ());
+  | Ctors _ | Opaque _ | Errors _ | Dep _ -> ());
   let type_ops, calls =
     List.split
       (List.map
@@ -1318,7 +1433,17 @@ let no_leaks env ~private_ (items : Resolved.program) =
       (no_private_errors env ~private_
          ~set:(sprintf "`pub fn %s` can fail with `%s`" f.name.name)
          ~tag:(sprintf "`pub fn %s`'s error `%s` mentions `%s`" f.name.name))
-      f.errors
+      f.errors;
+    Option.iter
+      (fun ds ->
+        no_private_named env ~private_
+          (List.filter_map
+             (fun (d : tname) ->
+               match d.tref with Named p -> Some (p, d.tloc) | Param _ -> None)
+             ds)
+          ~say:(fun (p : Path.t) ->
+            sprintf "`pub fn %s` uses `%s`" f.name.name p.name))
+      f.uses
   in
   (* an associated value is a function of no parameters (ast.ml) *)
   let value (f : Resolved.fn_def) =
@@ -1358,6 +1483,17 @@ let no_leaks env ~private_ (items : Resolved.program) =
           match td.type_body with
           | Fields fs -> List.iter field fs
           | Ctors cs -> List.iter (fun c -> List.iter (ctor c) c.ctor_fields) cs
+          | Dep ops ->
+              List.iter
+                (fun (fd : Resolved.field) ->
+                  no_private env ~private_ fd.field_ty
+                    ~whole:
+                      (sprintf "`pub dep %s`'s operation `%s` is a `%s`" t
+                         fd.field_name.name)
+                    ~inside:
+                      (sprintf "`pub dep %s`'s operation `%s` mentions `%s`" t
+                         fd.field_name.name))
+                ops
           | Opaque _ ->
               (* its representation isn't in the interface, so it can be a
                  private type *)
@@ -1465,6 +1601,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
       ifaces = imports;
       own_ops = Hashtbl.create 8;
       own_sets = Hashtbl.create 8;
+      own_deps = Hashtbl.create 8;
       modules =
         List.fold_left
           (fun acc ((i : import), iface) -> Env.add i.alias.name (i, iface) acc)
@@ -1527,10 +1664,14 @@ let program sink ~home ~imports (prog : Parsed.program) =
             match td.type_body with
             | Fields fs ->
                 List.map (fun (f : Parsed.field) -> f.field_name.name) fs
-            | Ctors _ | Opaque _ | Errors _ -> []
+            | Ctors _ | Opaque _ | Errors _ | Dep _ -> []
           in
           (match td.type_body with
           | Errors _ -> Hashtbl.replace env.own_sets td.type_name.name ()
+          | Dep ops ->
+              if not (Hashtbl.mem env.own_deps td.type_name.name) then
+                Hashtbl.replace env.own_deps td.type_name.name
+                  (List.map (fun (f : Parsed.field) -> f.field_name.name) ops)
           | Fields _ | Ctors _ | Opaque _ -> ());
           if not (Hashtbl.mem env.own_ops td.type_name.name) then
             Hashtbl.replace env.own_ops td.type_name.name

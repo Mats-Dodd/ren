@@ -38,9 +38,11 @@ and row = {
 }
 
 (* A row's label: an error's tag and its payload's types, `Short(Int)`, or
-   a dependency, `Io`, whose payload is always empty. A tag is its name and
-   its payload's types, in order, so one row never has two labels of the
-   same name (module-build.md, "Error tags have no home"). *)
+   a dependency, whose payload is always empty. A tag is its name and its
+   payload's types, in order, so one row never has two labels of the same
+   name (module-build.md, "Error tags have no home"). A dependency is a
+   type, so its label is its path, written in full ([dep_label]): two
+   modules' `Users` are two dependencies. *)
 and label = { name : string; payload : ty list }
 
 (* A function's type, for every choice of its variables. [names] are the
@@ -57,6 +59,18 @@ let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
 let label name = { name; payload = [] }
 let label_names r = List.map (fun l -> l.name) r.labels
+
+(* The label of the dependency declared at [p]: `Clock`, the prelude's, or
+   `shop/store.Users`, another module's. [dep_path] reads it back: a
+   module's path has no `.` in it, so the last one ends it. *)
+let dep_label p = Path.full p
+
+let dep_path label =
+  match String.rindex_opt label '.' with
+  | Some i ->
+      Path.make (String.sub label 0 i)
+        (String.sub label (i + 1) (String.length label - i - 1))
+  | None -> Path.prelude label
 
 (* Labels sorted by name, as a row keeps them. *)
 let sort_labels ls = List.sort (fun a b -> String.compare a.name b.name) ls
@@ -217,7 +231,11 @@ let rec show_row pr ~prefix ~sep ~kind r =
     | Some id when pr.show_tail id -> [ ".." ^ tail_name pr id kind ]
     | _ -> []
   in
-  match List.map (show_label pr) r.labels @ tail with
+  (* a dependency is written as its type is *)
+  let label l =
+    if kind = "d" then pr.type_name (dep_path l.name) else show_label pr l
+  in
+  match List.map label r.labels @ tail with
   | [] -> ""
   | parts -> prefix ^ String.concat sep parts
 

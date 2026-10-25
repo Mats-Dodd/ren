@@ -23,6 +23,7 @@
 [
   "fn"
   "type"
+  "dep"
   "let"
   "var"
   "for"
@@ -52,6 +53,8 @@
 
 ; a boundary the program crosses
 (dependency (type_identifier) @type.dependency)
+(dependency module: (identifier) @namespace)
+(dependency_definition name: (type_identifier) @type.dependency)
 
 ; ---- declarations ----
 
@@ -59,6 +62,7 @@
 (operator_definition name: (identifier) @function)
 (associated_value name: (identifier) @constant)
 (type_definition name: (type_identifier) @type)
+(operation name: (identifier) @function)
 (type_parameters (type_identifier) @type)
 (variant name: (type_identifier) @constructor)
 (payload name: (identifier) @property)

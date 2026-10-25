@@ -6,11 +6,11 @@
    expressions.
 
      program  := item { NEWLINE item } EOF       (imports come first)
-     item     := import | ["pub"] (fn_def | type_def)
+     item     := import | ["pub"] (fn_def | type_def | dep_def)
      import   := "import" IDENT { "/" IDENT } ["." "{" UIDENT, ... "}"]
                  ["as" IDENT]
      fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
-                 ["->" type] [errors] ["uses" UIDENT, ...] "=" body
+                 ["->" type] [errors] ["uses" tyname, ...] "=" body
                                                    (`uses` may start the
                                                     next line, indented)
      errors   := "!" error { "|" error }          (in a type's body, each
@@ -26,6 +26,11 @@
                                                     it: the first line not
                                                     starting with `|` ends
                                                     a sum type's variants)
+     dep_def  := "dep" UIDENT "=" INDENT dep_op { NEWLINE dep_op }
+                 [NEWLINE op { NEWLINE op }] DEDENT
+                                                   (its operations, then its
+                                                    members)
+     dep_op   := IDENT ":" "fn" fn_type
      op       := ["pub"] fn_def
               |  ["pub"] "let" IDENT [":" type] "=" body
               |  IDENT ["(" param, ... ")"] "=>" body
@@ -973,7 +978,10 @@ let parse_fn p ~pub =
     if peek p = USES then (
       advance p;
       let rec deps acc =
-        let d = upper_ident p "a dependency's name" in
+        let d =
+          if at_module_type p then parse_tyname p
+          else { tmod = None; tid = upper_ident p "a dependency's name" }
+        in
         if peek p = COMMA then (
           advance p;
           deps (d :: acc))
@@ -1014,7 +1022,7 @@ let no_ops_block p =
 (* One of the type [tname]'s members, or [None] for an operator, which is
    reported: the syntax is reserved, but what operators mean arrives in
    stage 9. *)
-let parse_op p ~tname =
+let parse_op ?(dep = false) p ~tname =
   no_ops_block p;
   let pub = peek p = PUB in
   if pub then advance p;
@@ -1081,6 +1089,10 @@ let parse_op p ~tname =
         match tok with
         | IDENT c when is_upper c ->
             Some "a variant starts with `|`, and the variants come first"
+        | IDENT _ when peek2 p = COLON && dep ->
+            Some "a dependency's operations come first, before its members"
+        | IDENT _ when peek2 p = COLON ->
+            Some "a record's fields go in its braces, `{ ... }`"
         | _ -> None
       in
       Diag.error ?help (loc p)
@@ -1088,9 +1100,11 @@ let parse_op p ~tname =
 
 (* A type's members, each on its own line, up to the end of the block
    they're in, which is left for the caller to close. *)
-let parse_members p ~tname =
+let parse_members ?dep p ~tname =
   let rec items acc =
-    let acc = match parse_op p ~tname with Some o -> o :: acc | None -> acc in
+    let acc =
+      match parse_op ?dep p ~tname with Some o -> o :: acc | None -> acc
+    in
     match peek p with
     | NEWLINE ->
         advance p;
@@ -1148,6 +1162,79 @@ let parse_type p ~pub =
   | _ -> ());
   { type_pub = pub; type_name; type_params; type_body; type_ops }
 
+(* A dependency (deps.md, "Declaring one"): its operations, indented under
+   it, then its members, as a sum type lists its variants first.
+
+     pub dep Clock =
+       now: fn() -> Time
+       sleep: fn(d: Duration)
+
+       pub fn frozen(at: Time) -> Clock = ... *)
+let parse_dep p ~pub =
+  expect p DEP;
+  let type_name = upper_ident p "a dependency's name" in
+  let tname = type_name.name in
+  if peek p = LT then
+    Diag.error (loc p) ~help:"remove them"
+      "a dependency can't take type parameters";
+  expect p EQ;
+  if peek p <> INDENT then
+    Diag.error (loc p)
+      ~help:
+        "put each of its operations on a line of its own, indented under it, \
+         like `now: fn() -> Time`"
+      (Printf.sprintf "expected the operations of `%s`, found %s" tname
+         (describe (peek p)));
+  advance p;
+  let at_op p =
+    match (peek p, peek2 p) with IDENT _, COLON -> true | _ -> false
+  in
+  let op p =
+    let field_name = ident p in
+    expect p COLON;
+    if peek p <> FN then
+      Diag.error (loc p)
+        ~help:
+          (Printf.sprintf
+             "write its type as a function's, like `%s: fn() -> %s`"
+             field_name.name
+             (match peek p with IDENT t when is_upper t -> t | _ -> "Int"))
+        (Printf.sprintf
+           "`%s` is an operation, so its type is a function's, but this is %s"
+           field_name.name
+           (describe (peek p)));
+    { field_name; field_ty = parse_ty p }
+  in
+  if not (at_op p) then
+    Diag.error (loc p)
+      ~help:
+        "list its operations first, like `now: fn() -> Time`, then its members"
+      (Printf.sprintf "`%s` has no operations: a dependency lists them first"
+         tname);
+  let rec ops acc =
+    let acc = op p :: acc in
+    if
+      peek p = NEWLINE
+      &&
+      (advance p;
+       at_op p)
+    then ops acc
+    else List.rev acc
+  in
+  let ops = ops [] in
+  (* the loop stopped after the line break before a member, if there is one *)
+  let members =
+    if peek p = DEDENT then [] else parse_members ~dep:true p ~tname
+  in
+  expect p DEDENT;
+  {
+    type_pub = pub;
+    type_name;
+    type_params = [];
+    type_body = Dep ops;
+    type_ops = members;
+  }
+
 let parse_item p =
   p.node <- 0;
   let pub = peek p = PUB in
@@ -1155,6 +1242,7 @@ let parse_item p =
   match peek p with
   | FN -> Fn (parse_fn p ~pub)
   | TYPE -> Type (parse_type p ~pub)
+  | DEP -> Type (parse_dep p ~pub)
   | IMPORT when pub ->
       Diag.error (loc p)
         ~help:"remove the `pub`: a module can't pass on what it imports"
@@ -1163,9 +1251,10 @@ let parse_item p =
   | _ ->
       Diag.error (loc p)
         ~help:
-          "only imports, and function and type definitions, can appear at the \
-           top level (for now)"
-        (Printf.sprintf "expected `fn` or `type`, found %s" (describe (peek p)))
+          "only imports, and function, type and dependency definitions, can \
+           appear at the top level (for now)"
+        (Printf.sprintf "expected `fn`, `type` or `dep`, found %s"
+           (describe (peek p)))
 
 (* After a syntax error, skip to where the next top-level item starts: a
    line beginning in the first column. Nothing inside an item starts there,

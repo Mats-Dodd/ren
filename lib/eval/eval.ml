@@ -54,11 +54,13 @@ let rec equal loc a b =
       panic loc "functions can't be compared"
   | _ -> a = b
 
-(* The program's top-level functions, by path, and its associated values
-   once they're made. *)
+(* The program's top-level functions, by path, its associated values
+   once they're made, and the implementation of each dependency installed
+   around `main`, by the dependency's path. *)
 type ctx = {
   fns : (Path.t, fn_def) Hashtbl.t;
   values : (Path.t, Value.t) Hashtbl.t;
+  mutable installed : (Path.t * Value.t) list;
 }
 
 let binop loc (op : Ast.binop) a b =
@@ -138,6 +140,13 @@ let rec eval cx env (e : expr) =
       | Some v -> v
       | None -> bug ("the value `" ^ p.name ^ "` used before it's made"))
   | Intrinsic x -> VBuiltin x
+  | Dep_op (p, op) -> (
+      (* the operation of the implementation installed: the type checker
+         made sure there's one *)
+      match List.assoc_opt p cx.installed with
+      | Some (VRecord ops) -> List.assoc op ops
+      | _ -> bug ("a call of `" ^ p.name ^ "." ^ op ^ "` with nothing installed")
+      )
   | Prim (op, args) -> prim e.loc op (eval_all cx env args)
   | Let (v, value, body) ->
       let x = eval cx env value in
@@ -273,7 +282,9 @@ and apply cx f args =
    lowering gives, each after every value it uses. If `main`, or making a
    value, fails, nothing handles the error: [Uncaught]. *)
 let run (modules : program list) =
-  let cx = { fns = Hashtbl.create 16; values = Hashtbl.create 16 } in
+  let cx =
+    { fns = Hashtbl.create 16; values = Hashtbl.create 16; installed = [] }
+  in
   List.iter
     (fun (m : program) ->
       List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns)
