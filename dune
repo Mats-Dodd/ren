@@ -1,0 +1,3 @@
+; editors/ holds the editor support, not OCaml, and Zed clones this whole
+; repository under editors/zed/grammars to build the grammar from it.
+(dirs :standard \ editors)
