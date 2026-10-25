@@ -2600,6 +2600,15 @@ fn high() -> Int ! High = fail High
 handler wrong() for N =
   get() => try high()
 
+handler longer() for N =
+  var calls = 0
+  get() =>
+    calls += 1
+    let n = try high()
+    n + calls
+
+fn record(k: Int) -> N = N { get: fn() => if k == 1 then fail High else k }
+
 fn main() = 1
 |};
   [%expect
@@ -2610,6 +2619,20 @@ fn main() = 1
       │            ^^^^^^^^^^ fails with `High`
       = `N.get` can fail only with `Low`
       help: map it: `match high()` with the arm `fail High => fail Low`
+
+    error: this implementation can fail with `High`, and `N.get` can't
+       ┌─ test.ren:13:13
+    13 │     let n = try high()
+       │             ^^^^^^^^^^ fails with `High`
+       = `N.get` can fail only with `Low`
+       help: map it: `match high()` with the arm `fail High => fail Low`
+
+    error: this implementation can fail with `High`, and `N.get` can't
+       ┌─ test.ren:16:58
+    16 │ fn record(k: Int) -> N = N { get: fn() => if k == 1 then fail High else k }
+       │                                                          ^^^^^^^^^ fails with `High`
+       = `N.get` can fail only with `Low`
+       help: fail with what `N.get` can instead: `fail Low`
     |}]
 
 let%expect_test "an arm takes its operation's arguments" =

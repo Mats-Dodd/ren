@@ -1212,9 +1212,33 @@ let settle_impls env =
       | extra ->
           let op = env.names o.idep ^ "." ^ o.iop in
           let shown = and_list (List.map (show_label pr) extra) in
-          (* where it fails: the lambda's body, if it's a lambda *)
+          (* where it fails: the first call or `fail` in the lambda's body
+             that brings in one of [extra] (a `try`'s call with its
+             `try`), or else the whole body, or what's given if it isn't a
+             lambda *)
+          let brings (f : expr) =
+            match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
+            | Some (TFun (_, _, errs, _)) ->
+                List.exists
+                  (fun (l : label) -> List.mem l.name (row_names errs))
+                  extra
+            | _ -> false
+          in
+          let rec site (e : expr) =
+            match e.kind with
+            | Try { kind = Call (f, _); _ } when brings f -> Some e
+            | Call (f, _) when brings f -> Some e
+            | Fail (t, _)
+              when List.exists (fun (l : label) -> l.name = t.name) extra ->
+                Some e
+            (* a lambda's calls are its own, and `attempt` keeps them *)
+            | Lambda _ | Attempt _ -> None
+            | _ -> List.find_map site (Ast.children e)
+          in
           let body =
-            match o.ivalue.kind with Lambda (_, b) -> b | _ -> o.ivalue
+            match o.ivalue.kind with
+            | Lambda (_, b) -> Option.value (site b) ~default:b
+            | _ -> o.ivalue
           in
           let help =
             match (body.kind, extra, o.ideclared) with
@@ -1234,6 +1258,10 @@ let settle_impls env =
                   (if more then "try " else "")
                   (Option.value (env.source call) ~default:"...")
                   l.name d.name
+            | Fail _, _, [] ->
+                sprintf "`%s` can't fail: give a value here instead" op
+            | Fail _, _, d :: _ ->
+                sprintf "fail with what `%s` can instead: `fail %s`" op d.name
             | _, l :: _, ds when not (is_lambda o.ivalue) -> (
                 (* a function given by name: there's no inside to map in *)
                 let given =

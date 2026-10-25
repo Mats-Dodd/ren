@@ -371,6 +371,32 @@ let changed_receiver (e : ('v, 'b, 't) expr) =
   | Ref ({ kind = Call _; _ } as call) -> Some call
   | _ -> None
 
+(* The expressions directly inside [e], in source order: a statement's
+   value, a guard and an arm's body, a handler's state and arms too. *)
+let children (e : ('v, 'b, 't) expr) =
+  let stmt = function Let { value; _ } -> value | Expr e -> e in
+  match e.kind with
+  | Int _ | Bool _ | Str _ | Unit | Var _ -> []
+  | Unop (_, a) | Field (a, _) | Ref a | Lambda (_, a) | Try a | Attempt a ->
+      [ a ]
+  | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
+      [ a; b ]
+  | If (c, t, f) -> c :: t :: Option.to_list f
+  | Call (f, args) -> f :: args
+  | Array xs -> xs
+  | For { iter; body; _ } -> [ iter; body ]
+  | Con (_, args) | Fail (_, args) -> List.map snd args
+  | Record (_, fields) -> List.map snd fields
+  | Block (stmts, last) -> List.map stmt stmts @ [ last ]
+  | Match (s, arms) ->
+      s
+      :: List.concat_map
+           (fun a -> Option.to_list a.arm_guard @ [ a.arm_body ])
+           arms
+  | With { item; body; _ } -> [ item; body ]
+  | Handler { state; arms; _ } ->
+      List.map stmt state @ List.map (fun a -> a.arm_impl) arms
+
 (* A member's name as it's written: `push` for `Stack.push`. *)
 let short_name name =
   match String.rindex_opt name '.' with
