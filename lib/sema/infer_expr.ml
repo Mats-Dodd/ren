@@ -143,19 +143,47 @@ let unifies env why loc ~found ~expected =
       let help = Option.map (fun h -> h f x) why.help in
       let more, help = mismatch_notes ?help ~found ~expected () in
       (* another module's opaque type can't stand in for what it's
-         represented as, or the other way round *)
+         represented as, or the other way round. [blame] looks for one
+         where the two types differ: at the top, inside the same type
+         (`Array<UserId>` and `Array<Int>`), or behind one of this module's
+         own opaque types, which here is what it's represented as *)
+      let foreign t =
+        match t with
+        | TCon (p, _) -> (
+            match Hashtbl.find_opt env.types p with
+            | Some { body = Opaque None; _ } -> Some p
+            | _ -> None)
+        | _ -> None
+      in
+      let own t =
+        match t with
+        | TCon (p, _) when Hashtbl.mem env.st.reps p -> Some (reveal env.st t)
+        | _ -> None
+      in
+      let rec blame f x =
+        let f = repr f and x = repr x in
+        let pairs a b =
+          if List.length a = List.length b then
+            List.find_map Fun.id (List.map2 blame a b)
+          else None
+        in
+        match (f, x) with
+        | TCon (p, a), TCon (q, b) when p = q -> pairs a b
+        | _ -> (
+            match (foreign f, foreign x, own f, own x) with
+            | Some p, _, _, _ | _, Some p, _, _ -> Some p
+            | _, _, Some f, _ -> blame f x
+            | _, _, _, Some x -> blame f x
+            | None, None, None, None -> (
+                match (f, x) with
+                | TFun (ps, r, _, _), TFun (qs, s, _, _) ->
+                    pairs
+                      (r :: List.map (fun p -> p.ty) ps)
+                      (s :: List.map (fun p -> p.ty) qs)
+                | _ -> None))
+      in
       let more, help =
-        match
-          List.find_map
-            (fun t ->
-              match repr t with
-              | TCon (p, _) -> (
-                  match Hashtbl.find_opt env.types p with
-                  | Some { body = Opaque None; _ } -> Some p
-                  | _ -> None)
-              | _ -> None)
-            [ found; expected ]
-        with
+        match blame found expected with
         | Some p ->
             let note, h = representation_private p in
             (more @ [ note ], Some (Option.value help ~default:h))

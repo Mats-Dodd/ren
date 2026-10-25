@@ -1148,6 +1148,43 @@ fn main() =
        help: use a function from `users` to make or read one
     |}]
 
+let%expect_test "another module's opaque type, inside a type or behind one" =
+  (* the note is there wherever the other module's opaque type is: inside
+     an `Array`, or as what one of this module's opaque types is *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import users.{UserId}
+type Ids = opaque UserId
+fn ids(a: Array<UserId>) = a
+fn bad() -> Ids = 3
+fn main() =
+  let xs: Array<Int> = [1]
+  ids(xs)
+  bad()
+|}
+      );
+      users;
+    ];
+  [%expect
+    {|
+    error: expected `Ids`, found `Int`
+      ┌─ main.ren:4:19
+    4 │ fn bad() -> Ids = 3
+      │                   ^
+      = `bad` is declared to return `Ids`
+      = `UserId`'s representation is private to `users`
+      help: use a function from `users` to make or read one
+
+    error: expected `Array<UserId>`, found `Array<Int>`
+      ┌─ main.ren:7:7
+    7 │   ids(xs)
+      │       ^^
+      = `UserId`'s representation is private to `users`
+      help: use a function from `users` to make or read one
+    |}]
+
 let%expect_test "an opaque type isn't a record or a sum type, even inside" =
   run
     {|
