@@ -415,7 +415,7 @@ let record_fields (td : Iface.type_decl) =
   match td.body with Record fs -> Some fs | Sum _ | Builtin | Opaque _ -> None
 
 let op_in name (td : Iface.type_decl) =
-  List.find_opt (fun (o : Iface.op) -> o.oname = name) td.ops
+  List.find_opt (fun (o : Iface.op) -> o.oname = name) td.members
 
 let field_in name (td : Iface.type_decl) =
   Option.bind (record_fields td)
@@ -796,7 +796,7 @@ and infer_call env cx ?changed (e : expr) (f : expr) args =
                List.filter_map
                  (fun (o : Iface.op) ->
                    if o.okind = Method then Some o.oname else None)
-                 td.ops
+                 td.members
              in
              report env
                (no_method m ~shown ~own:(p.home = env.home)
@@ -1114,8 +1114,8 @@ and infer_record env cx (e : expr) name fields ~expected =
 and infer_field env cx (e : expr) r (f : ident) =
   field_access env cx e r (infer env cx r) f
 
-(* The same, once [r]'s type [tr] is known. An item of [r]'s type's ops
-   block isn't a field: a method has to be called, and anything else is
+(* The same, once [r]'s type [tr] is known. A member of [r]'s type
+   isn't a field: a method has to be called, and anything else is
    written after the type. *)
 and field_access env cx (e : expr) r tr (f : ident) =
   let field_of = field_in f.name in

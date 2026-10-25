@@ -48,7 +48,7 @@ type type_decl = {
       (** the type parameters' names; field types refer to the [i]th as [Var i]
       *)
   body : body;
-  ops : op list;
+  members : op list;
       (** its members, in source order: every item in its own module's view of
           it, only the public ones in its interface *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
@@ -176,7 +176,7 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
     path = Path.make home td.type_name.name;
     params = List.map (fun (p : Ast.ident) -> p.name) td.type_params;
     body;
-    ops = List.map op td.type_ops;
+    members = List.map op td.type_ops;
     loc = Some td.type_name.loc;
   }
 
@@ -189,7 +189,7 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
    without its representation. *)
 let of_module ~home (prog : Ast.Resolved.program) =
   let public (td : type_decl) =
-    let td = { td with ops = List.filter (fun o -> o.opub) td.ops } in
+    let td = { td with members = List.filter (fun o -> o.opub) td.members } in
     match td.body with Opaque _ -> { td with body = Opaque None } | _ -> td
   in
   {

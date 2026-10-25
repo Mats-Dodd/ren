@@ -14,8 +14,8 @@ type t = {
   types : Iface.type_decl list;
       (** the types the module declares, in the order it declares them *)
   calls : (string * Path.t list) list;
-      (** each function, and the top-level functions its body uses: the ops
-          items written after their type, `Stack.of`, included *)
+      (** each function, and the top-level functions its body uses: the members
+          written after their type, `Stack.of`, included *)
   methods : (string * Path.t list) list;
       (** each function, and the methods of the module's own types it may call
           with a dot, which inference checks first: for `s.push(1)`, the

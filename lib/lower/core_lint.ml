@@ -502,7 +502,7 @@ let program ~imports (prog : program) =
               Hashtbl.replace
                 (if o.okind = Value then env.values else env.schemes)
                 p o.oscheme)
-            td.ops)
+            td.members)
         iface.types;
       List.iter
         (fun (v : Iface.value) ->

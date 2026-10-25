@@ -97,7 +97,7 @@ let check_module ~home ~imports ~reachable ?entry prog =
             | _, s -> s
           in
           if found <> o.oscheme then mismatch name o.oscheme found)
-        td.ops)
+        td.members)
     iface.types;
   (r, iface, inferred)
 

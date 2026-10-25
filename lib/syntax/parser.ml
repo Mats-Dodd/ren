@@ -917,22 +917,22 @@ let parse_type p ~pub =
          after it, at the same indentation *)
       advance p;
       let b = parse_type_body p in
-      let ops =
+      let members =
         if peek p = NEWLINE then (
           advance p;
           parse_members p ~tname)
         else []
       in
       expect p DEDENT;
-      (b, ops))
+      (b, members))
     else
       let b = parse_type_body p in
       if peek p = INDENT then (
         (* the members indented under a one-line body *)
         advance p;
-        let ops = parse_members p ~tname in
+        let members = parse_members p ~tname in
         expect p DEDENT;
-        (b, ops))
+        (b, members))
       else (b, [])
   in
   { type_pub = pub; type_name; type_params; type_body; type_ops }

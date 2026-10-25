@@ -463,13 +463,14 @@ let show_type_def (td : type_def) =
     | Op_fn -> parens (pub @ [ show_fn f ])
     | Op_value -> parens (pub @ [ "let"; f.name.name; show_expr f.body ])
   in
-  let ops =
+  let members =
     match td.type_ops with
     | [] -> []
     | os -> [ parens ("members" :: List.map show_op os) ]
   in
   parens
-    ((if td.type_pub then [ "pub" ] else []) @ ("type" :: name :: body) @ ops)
+    ((if td.type_pub then [ "pub" ] else [])
+    @ ("type" :: name :: body) @ members)
 
 let show_import (i : import) =
   let names =

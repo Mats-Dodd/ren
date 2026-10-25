@@ -379,7 +379,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
               let t = of_scheme st o.oscheme in
               Hashtbl.replace env.globals (op_path td o)
                 (if o.okind = Value then TFun ([], t, REmpty, REmpty) else t))
-            td.ops)
+            td.members)
         iface.types)
     reachable;
   (* the module's functions, its types' members included; an associated

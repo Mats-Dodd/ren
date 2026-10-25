@@ -120,7 +120,7 @@ let%expect_test "a type's interface holds its public members" =
             | Method -> "a method"
             | Function -> "an associated function"
             | Value -> "an associated value"))
-        td.ops)
+        td.members)
     i.types;
   [%expect
     {|

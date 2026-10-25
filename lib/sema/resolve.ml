@@ -67,8 +67,8 @@ type t = {
   types : Iface.type_decl list;
       (** the types the module declares, in the order it declares them *)
   calls : (string * Path.t list) list;
-      (** each function, and the top-level functions its body uses: the ops
-          items written after their type included *)
+      (** each function, and the top-level functions its body uses: the members
+          written after their type included *)
   methods : (string * Path.t list) list;
       (** each function, and the methods of the module's own types it calls with
           a dot that can be told here, which inference needs to have checked
@@ -366,7 +366,7 @@ let item env sc (t : tyname) (f : ident) =
           ( List.map
               (fun (o : Iface.op) -> (o.oname, o.okind))
               (Option.fold ~none:[]
-                 ~some:(fun (d : Iface.type_decl) -> d.ops)
+                 ~some:(fun (d : Iface.type_decl) -> d.members)
                  decl),
             [] )
       in
