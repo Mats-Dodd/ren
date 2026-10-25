@@ -18,9 +18,10 @@
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
    with the name of an imported module, public declarations that
-   mention a private type, and opaque types represented as themselves. Imports nothing uses are reported once
-   inference is done ([unused_imports]). Later passes never
-   look a name up: inference reads a binder's id, mut.ml its kind.
+   mention a private type, and opaque types represented as themselves.
+   Imports nothing uses are reported once inference is done
+   ([unused_imports]). Later passes never look a name up: inference reads
+   a binder's id, mut.ml its kind.
 
    Constructors and record fields aren't found here: they're found through
    a type (infer_expr.ml), so two types can have constructors of the same
@@ -503,21 +504,28 @@ let no_opaque_cycles env (items : Resolved.program) =
         Option.map (fun rep -> (p.name, rep)) (Hashtbl.find_opt reps p.name)
     | _ -> None
   in
+  (* the types of a cycle already reported, so a cycle is reported once,
+     from whichever of its types comes first *)
+  let reported = ref [] in
   List.iter
     (function
-      | Type ({ type_body = Opaque t; _ } as td) ->
+      | Type ({ type_body = Opaque t; _ } as td)
+        when not (List.mem td.type_name.name !reported) ->
           let start = td.type_name in
           (* [seen]: the opaque types followed so far, the last one first *)
           let rec follow seen t =
             match opaque t with
             | Some (n, _) when n = start.name ->
                 let chain = List.rev (n :: seen) in
+                reported := seen @ !reported;
                 report env start.loc
                   ~help:"represent one of them as a type that isn't opaque"
                   (sprintf "`%s` is represented as itself: %s" n
                      (String.concat " → " chain))
             | Some (n, _) when List.mem n seen ->
-                () (* a cycle `start` leads to, reported from its own types *)
+                ()
+                (* a cycle `start` leads to but isn't in: reported from
+                      the cycle's own types *)
             | Some (n, rep) -> follow (n :: seen) rep
             | None -> ()
           in

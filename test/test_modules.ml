@@ -1155,21 +1155,29 @@ type Secret = { code: Int }
 type Token = opaque Secret
 type Mode = On | Off
 type Switch = opaque Mode
+type Amount = opaque Int
 fn main() =
   let t = Token { code: 1 }
+  let a = Amount { cents: 1 }
   Switch.On
 |};
   [%expect
     {|
     error: `Token` is opaque, so it has no fields of its own
-      ┌─ test.ren:6:11
-    6 │   let t = Token { code: 1 }
+      ┌─ test.ren:7:11
+    7 │   let t = Token { code: 1 }
       │           ^^^^^
       help: here a `Token` is a `Secret`, so write one of those instead
 
+    error: `Amount` is opaque, so it has no fields of its own
+      ┌─ test.ren:8:11
+    8 │   let a = Amount { cents: 1 }
+      │           ^^^^^^
+      help: here an `Amount` is an `Int`, so write one of those instead
+
     error: `Switch` is opaque, so it has no constructors of its own
-      ┌─ test.ren:7:3
-    7 │   Switch.On
+      ┌─ test.ren:9:3
+    9 │   Switch.On
       │   ^^^^^^^^^
       help: here a `Switch` is a `Mode`, so write one of those instead
     |}]
@@ -1180,6 +1188,9 @@ let%expect_test "an opaque type can't be represented as itself" =
 type A = opaque B
 type B = opaque A
 type C = opaque Option<C>
+type D = opaque E
+type E = opaque F
+type F = opaque D
 fn main() = 1
 |};
   [%expect
@@ -1190,9 +1201,9 @@ fn main() = 1
       │      ^
       help: represent one of them as a type that isn't opaque
 
-    error: `B` is represented as itself: B → A → B
-      ┌─ test.ren:2:6
-    2 │ type B = opaque A
+    error: `D` is represented as itself: D → E → F → D
+      ┌─ test.ren:4:6
+    4 │ type D = opaque E
       │      ^
       help: represent one of them as a type that isn't opaque
     |}]

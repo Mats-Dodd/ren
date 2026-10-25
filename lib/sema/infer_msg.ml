@@ -162,8 +162,9 @@ let opaque_own ~names loc (td : Iface.type_decl) what =
   let rep = representation ~names td in
   Diag.make loc
     ~help:
-      (sprintf "here a `%s` is a `%s`, so write one of those instead"
-         (names td.path) rep)
+      (sprintf "here %s is %s, so write one of those instead"
+         (article (names td.path))
+         (article rep))
     (sprintf "`%s` is opaque, so it %s of its own" (names td.path) what)
 
 (* `Light.Purple`, where `Light` has no `Purple`. With [expected], it's a
@@ -194,8 +195,8 @@ let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
     | Opaque (Some _) ->
         ( sprintf "`%s` is opaque, so it has no constructors of its own" t,
           Some
-            (sprintf "here a `%s` is a `%s`, so write one of those instead" t
-               (representation ~names td)) )
+            (sprintf "here %s is %s, so write one of those instead" (article t)
+               (article (representation ~names td))) )
   in
   Diag.make (Loc.span loc c.loc) ~notes ?help msg
 
