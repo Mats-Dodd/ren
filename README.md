@@ -851,6 +851,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 - The compiler is written in **OCaml**.
 - The backend emits **C**: `tcc` for fast debug builds, `clang -O2` (or `zig cc`) for release builds, and Wasm through the same path.
 - Every function takes the implementations installed where it's called as one hidden parameter, an evidence vector, which a dependency call searches by the dependency's identity ([deps.md](deps.md#how-it-runs)). Release builds specialize implementations known at compile time using lambda sets, so dependency calls become direct, inlinable calls, within a specialization budget.
+- How the compiler is laid out, the passes and the languages between them, what each promises and what checks it, and the rules every pass keeps, is in [compiler.md](compiler.md).
 - Modules, name lookup, interface summaries, and the content-addressed build are designed in [module-build.md](module-build.md). Every compiler pass is a pure function of one module or call-graph group plus the interfaces of its imports.
 - Golden tests cover every example and every error message from day one. All generated C runs under ASan and UBSan, and the interpreter and native backend are differentially tested against each other.
 
@@ -869,14 +870,15 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 6 | `!`, `try`, `fail`, `match` on errors, `attempt`, `orelse`; `&&`, `\|\|`, `not` ([errors.md](errors.md)) | the shop, the VM and the bank fail with errors, not values (done) |
 | 7 | `dep`, `uses`, `with`, `handler`, `Clock`, `Random` and `Console`; `test`, `group`, `assert`, `ren test` ([deps.md](deps.md)) | the bank's tests run on the test implementations, with no `with` (done) |
 | 8 | `Str` and `Bytes`, `Fs`, `Os`, `Proc`, `Path`, each with real and in-memory implementations | a small [just](https://github.com/casey/just) runs, and its tests run on `mem_fs` and a fake `Os` and `Proc` (done, as a slice: `Os` has only `args`, and `Proc.run` doesn't capture output) |
-| 9 | handler `outer`, `Async`, `Net`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
-| 10 | operators, derived equality and hashing, arithmetic for opaque number types | `Map<Email, User>` works |
+| 9 | operators, derived equality and hashing, arithmetic for opaque number types ([operators.md](operators.md)) | `Map<Email, User>` works |
+| 10 | handler `outer`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
+| 11 | memory: specialization, defunctionalization, the Mem IR, borrow inference, reference counting with reuse, run by an instrumented interpreter ([compiler.md](compiler.md)) | `map` reuses memory in place; `&xs.push(xs[0])` is allowed when the element is a plain value |
+| 12 | `Async`, `Net`, `par_map`, on the memory stage's interpreter, from a design written first | a handler can wait on the network, and `par_map` runs its calls at once |
 | **↑** | **interpreted Ren** | **a small web service and its tests run** |
-| 11 | C backend, packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
-| 12 | reference counting with reuse | `map` reuses memory in place; `&xs.push(xs[0])` is allowed when the element is a plain value |
-| 13 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
-| 14 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
-| 15 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
+| 13 | C backend, emitting the Mem IR; packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
+| 14 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
+| 15 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
+| 16 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
 | **↑** | **Ren 1.0** | **flottning, rewritten in Ren, passes 10,000 simulation seeds** |
 
 The **effect journal** in stage 10, the record of every dependency call, is the most important design artifact after the type system. Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.

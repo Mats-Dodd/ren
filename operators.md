@@ -344,7 +344,7 @@ default hides it. `xs[i]` is also a place, `xs[i] = v` and
 best-named collection vocabulary there is, so that std doesn't grow
 whatever names its first users needed. A method that changes nothing
 returns a new collection: `xs.sort()`, not a sorting `&xs`. Once memory
-is reused in place (stage 12), sorting an array nothing else holds
+is reused in place (stage 11), sorting an array nothing else holds
 doesn't copy it, so there's no second, changing version as Ruby's `sort!`
 is.
 

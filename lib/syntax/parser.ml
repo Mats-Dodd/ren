@@ -1194,7 +1194,7 @@ let no_ops_block p =
 
 (* One of the type [tname]'s members, or [None] for an operator, which is
    reported: the syntax is reserved, but what operators mean arrives in
-   stage 10. *)
+   stage 9. *)
 let parse_op ?(dep = false) p ~tname =
   no_ops_block p;
   let pub = peek p = PUB in
