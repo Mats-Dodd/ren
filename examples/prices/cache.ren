@@ -72,7 +72,9 @@ test "an unknown item isn't kept" =
     assert Calls.count() == 2
 
 test "a cached answer doesn't count against the limit" =
-  with counting(), limiter.fixed_window(1, Duration.seconds(1)), cached(Duration.seconds(10)) in
+  with counting(),
+      limiter.fixed_window(1, Duration.seconds(1)),
+      cached(Duration.seconds(10)) in
     assert try Prices.price("apple") == 3
     assert try Prices.price("apple") == 3
     match attempt Prices.price("pear")

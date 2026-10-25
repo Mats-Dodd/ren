@@ -39,9 +39,6 @@ and a new window are tested without waiting, and `main`'s own
   call the dependency it implements until `outer` (stage 9), so the
   backend has to be a dependency of its own, `Supplier`, with the same
   operation under another name.
-- **A lambda in a record literal can't have a body of several lines.**
-  `Supplier { quote: fn(item) => ... }` has to name a function instead,
-  `slowly`.
 - **Handlers aren't imported by name,** only types are, so they're
   written `limiter.fixed_window` and `cache.cached`.
 - **`Duration` can't be compared,** and its number can't be read outside

@@ -6,14 +6,13 @@ import limiter
 import cache.{Supplier, Prices}
 
 // a supplier that takes a moment to answer
-fn catalogue() = Supplier { quote: slowly }
-
-fn slowly(item: Str) -> Int ! Unknown(item: Str) uses Clock =
-  Clock.sleep(Duration.ms(20))
-  if item == "apple" then 3
-  else if item == "pear" then 5
-  else if item == "fig" then 8
-  else fail Unknown(item)
+fn catalogue() = Supplier { quote: fn(item) =>
+    Clock.sleep(Duration.ms(20))
+    if item == "apple" then 3
+    else if item == "pear" then 5
+    else if item == "fig" then 8
+    else fail Unknown(item)
+}
 
 // a price, or what stopped it
 fn show_price(item: Str) uses Prices, Console =
@@ -23,7 +22,9 @@ fn show_price(item: Str) uses Prices, Console =
     fail Throttled(_) => print("throttled")
 
 fn main() uses Clock, Console =
-  with catalogue(), limiter.fixed_window(2, Duration.seconds(1)), cache.cached(Duration.seconds(10)) in
+  with catalogue(),
+      limiter.fixed_window(2, Duration.seconds(1)),
+      cache.cached(Duration.seconds(10)) in
     show_price("apple")  // 3, from the supplier
     show_price("apple")  // 3, from the cache
     show_price("pear")   // 5, from the supplier: that's two this second
