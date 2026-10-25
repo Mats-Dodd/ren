@@ -1,0 +1,13 @@
+// Taking payments. A `ChargeId` is opaque: only this module can make one
+// or see that it's an `Int`, so every charge id came from `charge`.
+
+pub type ChargeId = opaque Int
+
+pub fn charge(amount: Int) -> ChargeId
+    uses Io =
+  print(amount)
+  next_id(amount)
+
+pub fn receipt(id: ChargeId) -> Int = id
+
+fn next_id(amount) = 1000 + amount

@@ -1,0 +1,17 @@
+// A shop of four modules: this one, plan.ren, and billing/invoice.ren and
+// billing/stripe.ren in a folder. `ren types main.ren` shows them all.
+
+import plan.{Plan}
+import billing/invoice
+import billing/stripe
+
+fn checkout(p: Plan) =
+  match invoice.pay(invoice.make(p))
+    Some(id) => stripe.receipt(id)
+    None => 0
+
+fn main() =
+  let free: Plan = Free
+  print(invoice.make(free))
+  print(checkout(free))
+  checkout(Pro(seats: 3))

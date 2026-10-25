@@ -1,0 +1,10 @@
+// The plans a customer can be on, and what each one costs.
+
+pub type Plan =
+  | Free
+  | Pro(seats: Int)
+
+pub fn price(p: Plan) -> Int =
+  match p
+    Free => 0
+    Pro(seats) => seats * 10

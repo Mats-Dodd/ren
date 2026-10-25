@@ -5,4 +5,6 @@
  (deps
   %{bin:ren}
   (glob_files *.ren)
-  (glob_files two/*.ren)))
+  (glob_files two/*.ren)
+  (glob_files shop/*.ren)
+  (glob_files shop/billing/*.ren)))
