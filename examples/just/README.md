@@ -20,7 +20,7 @@ ren test .                    # every module's tests
 |---|---|
 | `justfile.ren` | `Recipe` and `Justfile`, with `parse`, which fails with `BadLine` or `DuplicateRecipe`, and `recipe`, which fails with `UnknownRecipe` |
 | `plan.ren` | `order`: the recipes to run, each after what it depends on, each once; it fails with `UnknownRecipe` or `Cycle` |
-| `main.ren` | `main`, which reads the justfile, picks the recipe and runs each line with `sh -c`; its tests, on the fakes |
+| `main.ren` | `main`, which reads the justfile, picks the recipe and runs each line with `sh -c`, showing it on stderr first; its tests, on the fakes |
 | `justfile` | a few recipes that `echo`, two that share `base`, and one that fails |
 
 ```
@@ -34,10 +34,12 @@ build: base
 ## What to look at
 
 **The signature says what it touches.** `ren types` shows `main` `uses
-Fs, Os, Proc`, and nothing else: no `Console`, though what the recipes
-print appears, since a program that `Proc` runs prints to this one's
-stdout itself. `run` uses only `Proc`, `plan` and `justfile` use nothing,
-and the compiler worked all of that out.
+Console, Fs, Os, Proc`, and nothing else. `Console` is for the line
+`run` shows on stderr, with `Console.error`, before it runs it; what the
+recipes print appears without it, since a program that `Proc` runs
+prints to this one's stdout itself. `run` uses only `Console` and
+`Proc`, `plan` and `justfile` use nothing, and the compiler worked all
+of that out.
 
 **A string's indices are bytes.** `parse` splits the text on `"\n"`, and
 cuts a recipe's line at the offset `find(":")` gives, with `slice`. There's
@@ -65,7 +67,8 @@ cycle.
 args and a `test_proc` that runs nothing, without a `with`. A test that
 needs a justfile, args or a program that fails installs them: `with
 mem_fs(files(text)), test_os(["test"]) in try main()`. It looks at what
-would have run with `TestProc.ran()`, a list of `Command { cmd, args }`.
+would have run with `TestProc.ran()`, a list of `Command { cmd, args }`,
+and at the lines shown on stderr with `TestConsole.errors()`.
 A line that fails is a row of `test_proc`'s table, `Exit { command:
 sh("echo left"), code: 3 }`; the rest exit with 0. "No justfile" needs
 nothing installed at all: the empty `mem_fs` has no file, and `main` fails
@@ -92,5 +95,3 @@ recipes print, in order, and how it fails.
   drops by hand.
 - **`Err(...)` still can't be written,** so a test of a failure looks at
   its `Result` with a `match`, whose other arm is `_ => assert false`.
-- **A line isn't printed before it runs,** as just does on stderr, since
-  `Console` writes only to stdout.

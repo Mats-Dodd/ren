@@ -18,9 +18,11 @@ fn main() =
   for n in try plan.order(j, name)
     try run(try j.recipe(n))
 
-// Each line of `r` in a shell, until one exits with anything but 0.
-fn run(r: Recipe) ! RecipeFailed(name: Str, code: Int) | ProcError uses Proc =
+// Each line of `r` in a shell, until one exits with anything but 0. As
+// just does, each line is shown on stderr before it runs.
+fn run(r: Recipe) ! RecipeFailed(name: Str, code: Int) | ProcError uses Proc, Console =
   for line in r.lines
+    Console.error(line)
     let code = try Proc.run("sh", ["-c", line])
     if code != 0 then fail RecipeFailed(r.name, code)
 
@@ -40,6 +42,12 @@ test "no args runs the first recipe, after what it depends on" =
     try main()
   assert TestProc.ran() == [sh("fmt a.c"), sh("cc a.c"), sh("cc b.c")]
 
+test "each line is shown on stderr as it runs" =
+  with mem_fs(files(diamond())) in
+    try main()
+  assert TestConsole.errors() == ["echo base", "echo left", "echo right", "echo all"]
+  assert TestConsole.output() == []
+
 test "the recipe named in the args" =
   with mem_fs(files("build:\n  cc a.c\ntest: build\n  ./a\n")), test_os(["test"]) in
     try main()
@@ -57,6 +65,7 @@ test "the first line to fail stops everything" =
       Err(RecipeFailed(name, code)) => assert name == "left" && code == 3
       _ => assert false
     assert TestProc.ran() == [sh("echo base"), sh("echo left")]
+    assert TestConsole.errors() == ["echo base", "echo left"]
 
 test "a recipe that isn't there" =
   with mem_fs(files(diamond())), test_os(["deploy"]) in

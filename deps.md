@@ -159,7 +159,7 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 |---|---|---|---|---|
 | `Clock` | `now`, `instant`, `sleep` | the system clock | `test_clock(Time.epoch)`: stopped until moved | `TestClock.advance(d)` |
 | `Random` | `int(below)` | the OS | seeded from the test's name | `TestRandom.seed()` |
-| `Console` | `write(line: Str)` | stdout | captured | `TestConsole.output() -> Array<Str>` |
+| `Console` | `write(line: Str)`, `error(line: Str)` | stdout, and stderr for `error` | captured | `TestConsole.output() -> Array<Str>`, `TestConsole.errors() -> Array<Str>` |
 | `Fs` | `read(p) -> Bytes ! FsError`, `write(p, b) ! FsError`, `exists(p)` | files, through `Unix` | `mem_fs([])`: no files | none: read back through `Fs` |
 | `Os` | `args() -> Array<Str>` | what follows `--` in `ren run file.ren -- args` | `test_os([])`: no args | none |
 | `Proc` | `run(cmd, args) -> Int ! ProcError` | a process, with this one's stdin, stdout and stderr | `test_proc([])`: runs nothing, exits with 0 | `TestProc.ran() -> Array<Command>` |
@@ -534,8 +534,6 @@ stage, or settled something the plan left open:
   depends on itself; `DuplicateRecipe(name)`, a name given to two
   recipes, as just refuses; and `NoRecipes`, a justfile with none to run
   first.
-  It doesn't print a line before it runs it, as just does, since only
-  stdout can be written to.
 
 ## Later
 
