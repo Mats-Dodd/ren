@@ -255,6 +255,7 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
       visible;
       globals = Hashtbl.create 16;
       group = [];
+      spelled = [];
       joins = [];
       in_scope = [];
     }
@@ -335,6 +336,17 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
       in
       let setups, declared = List.split (List.map setup group) in
       env.group <- declared;
+      env.spelled <-
+        List.filter_map
+          (fun (f : fn_def) ->
+            if
+              f.pub
+              && List.for_all
+                   (fun (p : Resolved.param) -> p.pty <> None)
+                   f.params
+            then Some (path f)
+            else None)
+          group;
       List.iter
         (fun ((f : fn_def), _, cx, ps, ret) ->
           bind_params cx f.params ps;
@@ -373,6 +385,7 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
         (List.rev env.joins);
       env.joins <- [];
       env.group <- [];
+      env.spelled <- [];
       (* only now, with the group's uses of each other joined, is it known
          everything each function uses *)
       List.iter

@@ -51,6 +51,9 @@ type env = {
   mutable group : (Path.t * (unit -> ty)) list;
       (** the functions of the group being checked, each with a way to make the
           type its declaration gives it *)
+  mutable spelled : Path.t list;
+      (** those of [group] whose signature is written out in full, every
+          parameter's type included: public functions, mostly *)
   mutable joins : join list;  (** most recent first *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
@@ -65,13 +68,13 @@ type env = {
    function's own body gave it. *)
 and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
 
-(* What the expression being inferred can see. *)
 (* A call that adds to a function's dependencies. [own] are the labels the
    callee's row had just before the call joined it to the caller's: what
    the callee brings in itself. After the join the two rows are one, so
    [row] then also has everything the caller uses. *)
 type call = { cloc : Loc.t; own : string list; row : row }
 
+(* What the expression being inferred can see. *)
 type ctx = {
   self : Path.t;  (** the top-level function being checked *)
   locals : (int, ty) Hashtbl.t;
@@ -406,9 +409,15 @@ let sorted names = List.sort String.compare names
 (* A name's type. A top-level function's is a fresh instance of its
    scheme, so each use can pick its own types; another function of the
    group being checked has the type its declaration gives it, joined with
-   its real type once the group is done (see [join]). *)
+   its real type once the group is done (see [join]), unless its
+   declaration is all there is to know. *)
 let lookup env cx loc = function
   | Local b -> Hashtbl.find cx.locals b.id
+  | Global p when List.mem p env.spelled ->
+      (* its declaration says everything about it, so even in its own body
+         it's an instance of that, joined with nothing: a use that closes
+         its rows, like storing it as a `fn()`, closes only the instance's *)
+      (List.assoc p env.group) ()
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let used = (List.assoc p env.group) () in
       env.joins <- { jloc = loc; jname = p.name; used; target = p } :: env.joins;

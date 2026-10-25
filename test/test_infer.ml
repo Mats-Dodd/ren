@@ -1455,6 +1455,22 @@ fn main() = load(1)
       help: add `uses Io`
     |}]
 
+let%expect_test "a public function stored as a value in its own body" =
+  (* storing `f` as a `fn()` closes the rows of that use of it, not those
+     its declaration gives it *)
+  types
+    {|
+type H = { h: fn() }
+pub fn f() =
+  let x = H { h: f }
+  ()
+fn main() = f()
+|};
+  [%expect {|
+    pub fn f()
+    fn main()
+    |}]
+
 let%expect_test "a pure call before the one that uses something" =
   (* `pure` and `len` are called first, but they don't use `Io`: once
      their open rows are joined to `go`'s, those rows have what `go` uses,
