@@ -92,8 +92,8 @@ type ctx = {
    fraction of a second. *)
 let max_depth = 100_000
 
-(* The program went [max_depth] calls deep: [run] and [run_test] report it
-   as a panic at the function they started. *)
+(* The program went [max_depth] calls deep: [load], [run] and [run_test]
+   report it as a panic at the function they started ([overflowed]). *)
 exception Too_deep
 
 (* What evaluating a function's body in tail position gives: its value,
@@ -661,6 +661,15 @@ let error_of cx p err =
   | Some (Fun (_, _, errs, _)) -> show_value cx (Errors errs) err
   | _ -> Value.show err
 
+(* The panic, to raise, for a program that called too deeply, past
+   [max_depth] or past OCaml's own stack, from the function [p] it
+   started: it has a bug, so it's a panic, not an error. *)
+let overflowed cx (p : Path.t) =
+  match Hashtbl.find_opt cx.fns p with
+  | Some f ->
+      Panic (f.loc, "the stack overflowed: a function called itself too deeply")
+  | None -> bug ("a call too deep from `" ^ p.name ^ "`, which isn't there")
+
 (* A program's functions, by path, and its associated values, made in
    order: a module's after those of every module it imports, which come
    before it, and within a module in the order lowering gives, each after
@@ -689,7 +698,10 @@ let load (modules : program list) =
         (fun p ->
           match fst (apply cx ~fty:Ty.Error (VFn p) [] (VEvidence [])) with
           | Ok v -> Hashtbl.replace cx.values p v
-          | Error err -> raise (Uncaught (error_of cx p err)))
+          | Error err -> raise (Uncaught (error_of cx p err))
+          (* caught here, not by whoever called [load], so that `ren test`,
+             which loads outside any test, reports it as `ren run` does *)
+          | exception (Stack_overflow | Too_deep) -> raise (overflowed cx p))
         m.values)
     modules;
   cx
@@ -701,21 +713,12 @@ let load (modules : program list) =
 let run (modules : program list) =
   let entry = List.nth modules (List.length modules - 1) in
   let start = Path.make entry.home Lower.start_name in
-  (* a program that calls too deeply, past [max_depth] or past OCaml's
-     own stack, has a bug, so it's a panic *)
-  let overflow () =
-    match List.find_opt (fun (f : fn_def) -> f.path = start) entry.fns with
-    | Some f ->
-        panic f.loc "the stack overflowed: a function called itself too deeply"
-    | None -> bug "a program with no `main`"
-  in
-  try
-    let cx = load modules in
-    if not (Hashtbl.mem cx.fns start) then bug "a program with no `main`";
-    match fst (apply cx ~fty:Ty.Error (VFn start) [] (VEvidence [])) with
-    | Ok v -> v
-    | Error err -> raise (Uncaught (error_of cx start err))
-  with Stack_overflow | Too_deep -> overflow ()
+  let cx = load modules in
+  if not (Hashtbl.mem cx.fns start) then bug "a program with no `main`";
+  match fst (apply cx ~fty:Ty.Error (VFn start) [] (VEvidence [])) with
+  | Ok v -> v
+  | Error err -> raise (Uncaught (error_of cx start err))
+  | exception (Stack_overflow | Too_deep) -> raise (overflowed cx start)
 
 (* ---- tests ---- *)
 
@@ -778,15 +781,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
       | Error err -> Failed (error_of cx fn err)
     with
     | (Panic _ | Assert_failed _) as e -> Panicked e
-    | Stack_overflow | Too_deep ->
-        let loc =
-          match Hashtbl.find_opt cx.fns fn with
-          | Some f -> f.loc
-          | None -> bug ("a test whose function `" ^ fn.name ^ "` isn't there")
-        in
-        Panicked
-          (Panic
-             (loc, "the stack overflowed: a function called itself too deeply"))
+    | Stack_overflow | Too_deep -> Panicked (overflowed cx fn)
   in
   (* what the test `Console` kept, asked of it as the test would *)
   let console =
