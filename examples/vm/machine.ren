@@ -49,21 +49,21 @@ pub type Vm = {
           Some(v) =>
             self.locals[slot] = v
             self.pc += 1
-          None => &self.fail()
+          None => &self.underflow()
       Add => &self.binary(fn(a, b) => a + b)
       Sub => &self.binary(fn(a, b) => a - b)
       Mul => &self.binary(fn(a, b) => a * b)
       JumpIfZero(to) =>
         match &self.stack.pop()
           Some(v) => self.pc = if v == 0 then to else self.pc + 1
-          None => &self.fail()
+          None => &self.underflow()
       Jump(to) => self.pc = to
       Emit =>
         match &self.stack.pop()
           Some(v) =>
             &self.out.push(v)
             self.pc += 1
-          None => &self.fail()
+          None => &self.underflow()
       Halt => self.status = Halted
 
   // Run until it halts or fails, or `fuel` steps have run.
@@ -81,7 +81,7 @@ pub type Vm = {
       Some(b) =>
         match &self.stack.pop()
           Some(a) => &self.push(f(a, b))
-          None => &self.fail()
-      None => &self.fail()
+          None => &self.underflow()
+      None => &self.underflow()
 
-  fn fail(inout self) = self.status = Failed(Underflow(self.pc))
+  fn underflow(inout self) = self.status = Failed(Underflow(self.pc))

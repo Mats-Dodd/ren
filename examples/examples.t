@@ -245,7 +245,7 @@ changes:
     pub fn run(inout self, p: Program, fuel: Int)
     fn push(inout self, n: Int)
     fn binary(inout self, f: fn(Int, Int) -> Int)
-    fn fail(inout self)
+    fn underflow(inout self)
   
   -- timeline
   pub type Timeline
@@ -291,12 +291,12 @@ A method that changes its receiver is called with `&`:
 
 A private method can't be called from another module:
 
-  $ cp -r vm v3 && perl -0pi -e 's/  print\(bad.status\)[^\n]*/  &bad.fail()/' v3/main.ren
+  $ cp -r vm v3 && perl -0pi -e 's/  print\(bad.status\)[^\n]*/  &bad.underflow()/' v3/main.ren
   $ ren check v3/main.ren
-  error: `Vm` has no public `fail`
+  error: `Vm` has no public `underflow`
      ┌─ v3/main.ren:51:8
-  51 │   &bad.fail()
-     │        ^^^^
+  51 │   &bad.underflow()
+     │        ^^^^^^^^^
      help: if it's defined in `machine`, mark it `pub`
   [1]
 

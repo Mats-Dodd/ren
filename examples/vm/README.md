@@ -24,7 +24,7 @@ ren types vm/main.ren    # every module's interface
 ## What to look at
 
 **`&` shows every change.** In `machine.ren`, each line that changes the
-machine starts with `&`: `&self.stack.push(n)`, `&self.fail()`. A line
+machine starts with `&`: `&self.stack.push(n)`, `&self.underflow()`. A line
 without one doesn't change anything. `&tl.run(&vm, p, fuel)` in
 `timeline.ren` changes two things, so it has two `&`s.
 
