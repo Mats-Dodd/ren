@@ -620,13 +620,17 @@ let nearest name names =
 
 (* [c] matched in an error set that doesn't hold it; [tags] are what it
    holds, each its name and how it's shown. *)
-let not_an_error (c : Ast.ident) tags =
+let not_an_error (c : Ast.ident) ?(arm = false) tags =
+  (* a `fail` arm matches what a call fails with, a tag inside `Err(...)`
+     what a [Result] holds *)
+  let holds = if arm then "fail with" else "hold" in
   Diag.make c.loc
     ~notes:
       [
         (match tags with
+        | [] when arm -> "it can't fail at all"
         | [] -> "it holds no errors at all"
-        | tags -> sprintf "it can hold %s" (and_list (List.map snd tags)));
+        | tags -> sprintf "it can %s %s" holds (and_list (List.map snd tags)));
       ]
     ~help:
       (match nearest c.name (List.map fst tags) with
@@ -636,18 +640,20 @@ let not_an_error (c : Ast.ident) tags =
             n
       | None ->
           "check the spelling: a tag that's written wrong is a different error")
-    (sprintf "`%s` isn't one of the errors this can hold" c.name)
+    (sprintf "`%s` isn't one of the errors this can %s" c.name holds)
 
 (* [c] matched in an error set that's open: it holds whatever the
    function passed as [param] fails with, which no name can be checked
    against. *)
-let tag_in_open_set (c : Ast.ident) ~param tags =
+let tag_in_open_set (c : Ast.ident) ?(arm = false) ~param tags =
+  let holds = if arm then "can fail with" else "holds" in
   Diag.make c.loc
     ~notes:
       [
         sprintf
-          "this holds %swhatever the function passed as `%s` fails with, which \
+          "this %s %swhatever the function passed as `%s` fails with, which \
            could be anything"
+          holds
           (match tags with
           | [] -> ""
           | tags -> and_list (List.map snd tags) ^ " and ")
@@ -655,12 +661,13 @@ let tag_in_open_set (c : Ast.ident) ~param tags =
       ]
     ~help:
       (sprintf
-         "match those with `Err(_)`, or write the errors `%s` can fail with in \
-          its type, after `!`"
+         "match those with `%s`, or write the errors `%s` can fail with in its \
+          type, after `!`"
+         (if arm then "fail _" else "Err(_)")
          param)
     (sprintf
-       "`%s` can't be matched here, because the errors this holds aren't known"
-       c.name)
+       "`%s` can't be matched here, because the errors this %s aren't known"
+       c.name holds)
 
 (* A call no marker covers, of [callee], which can fail with [tags], as
    shown; [name_loc] is where the callee is written. *)
@@ -685,8 +692,9 @@ let unhandled_param loc ~name_loc callee param =
     (sprintf "`%s` can fail, and nothing handles it" callee)
 
 (* An `attempt` of a call of [callee], a transparent parameter of the
-   public function [fn], whose errors are [fn]'s own. *)
-let kept_passed_on loc ~name_loc callee ~fn =
+   public function [fn], whose errors are [fn]'s own; or a `match` with
+   `fail` arms of one, if [handled]. *)
+let kept_passed_on loc ~name_loc callee ~fn ~handled =
   Diag.make loc
     ~labels:
       [
@@ -698,15 +706,21 @@ let kept_passed_on loc ~name_loc callee ~fn =
       ]
     ~notes:
       [
-        "a public signature can't name a passed function's errors in a \
-         `Result` yet: that arrives with `..e`, in stage 7";
+        (if handled then
+           "a public signature can't say a passed function's errors are \
+            handled yet: that arrives with `..e`, in stage 7"
+         else
+           "a public signature can't name a passed function's errors in a \
+            `Result` yet: that arrives with `..e`, in stage 7");
       ]
     ~help:
       (sprintf
          "pass them on with `try`, or make `%s` private, so its type is \
           inferred"
          fn)
-    (sprintf "`attempt` can't keep what `%s` fails with here" callee)
+    (if handled then
+       sprintf "`match` can't handle what `%s` fails with here" callee
+     else sprintf "`attempt` can't keep what `%s` fails with here" callee)
 
 (* A `try` or `attempt`, at [loc], that covers nothing that can fail. *)
 let covers_nothing ?help loc keyword =
@@ -720,6 +734,13 @@ let covers_nothing ?help loc keyword =
       ]
     ~help:(Option.value help ~default:(sprintf "remove the `%s`" keyword))
     "nothing here can fail"
+
+(* A `fail` arm, at [loc], of a `match` whose subject can't fail. *)
+let cannot_fail_arm loc =
+  Diag.make loc
+    ~notes:[ "a `fail` arm matches an error of what the `match` looks at" ]
+    ~help:"remove the `fail` arms"
+    "nothing here can fail, so this `fail` arm can never match"
 
 (* How a message names the function [f]: `pub fn transfer`. *)
 let fn_named (f : Ast.Resolved.fn_def) =

@@ -208,26 +208,6 @@ let%expect_test "a file can't be named prelude.ren" =
 
 (* ---- error sets (errors.md) ---- *)
 
-let%expect_test "until stage 6.4, fail patterns are reported where they're used"
-    =
-  (* the rest of error handling is checked (test_errors.ml) *)
-  run
-    {|
-fn f() = fail Bad
-fn main() =
-  match f()
-    _ => ()
-    fail _ => ()
-|};
-  [%expect
-    {|
-    error: `fail` patterns arrive later in stage 6
-      ┌─ test.ren:5:5
-    5 │     fail _ => ()
-      │     ^^^^^^
-      help: for now, keep the outcome with `attempt` and match the `Result`: `Err(Short(_, by))`
-    |}]
-
 let%expect_test "a named error set is found through scope, and tags aren't" =
   (* `Refusal` is the set, and `Late` and `Frozen` are tags: nothing
      declares them *)

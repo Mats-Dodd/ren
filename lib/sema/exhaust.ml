@@ -37,14 +37,38 @@ type env = {
 (* A constructor of a pattern: its name, and what it belongs to: a type,
    or an error set, whose tags are like a sum type's constructors
    (errors.md, "Keeping an error"). [No_list] for an Int, which isn't one
-   of a list of constructors, and for a tag of a set that's still open. *)
+   of a list of constructors, and for a tag of a set that's still open.
+
+   A `match` with `fail` arms matches an outcome, which is a value or an
+   error: [Outcome] is its two constructors, [value] and [fail], each with
+   one field, the value or the error (errors.md, "Handling: `match`"). A
+   value pattern, `_` too, is [value] of it, so `_` never matches an
+   error; `fail _` is [fail] of anything. *)
 type head = { name : string; owner : owner }
-and owner = Of_type of Path.t | Of_set of (string * int) list | No_list
+
+and owner =
+  | Of_type of Path.t
+  | Of_set of (string * int) list
+  | No_list
+  | Outcome
 
 type space = Any | Ctor of head * space list
 
 let bool_path = Path.prelude "Bool"
 let result_path = Path.prelude "Result"
+let value = { name = "value"; owner = Outcome }
+let failed = { name = "fail"; owner = Outcome }
+
+(* The tags of [t], an error set, each with its number of payload values:
+   [None] if the set is still open. *)
+let set_of (t : Ty.ty) =
+  match t with
+  | Errors { labels; tail = None } ->
+      Some
+        (List.map
+           (fun (l : Ty.label) -> (l.name, List.length l.payload))
+           labels)
+  | _ -> None
 
 let rec simplify env (p : pattern) =
   match p.pkind with
@@ -55,23 +79,42 @@ let rec simplify env (p : pattern) =
       let node = Infer.Nodes.find p.pnode env.nodes in
       let owner =
         match (node.ty, node.found) with
-        | Errors { labels; tail = None }, _ ->
+        | (Errors _ as t), _ -> (
             (* a tag, of a set inference settled: every tag it can hold *)
-            Of_set
-              (List.map
-                 (fun (l : Ty.label) -> (l.name, List.length l.payload))
-                 labels)
-        | Errors { tail = Some _; _ }, _ -> No_list
+            match set_of t with
+            | Some tags -> Of_set tags
+            | None -> No_list)
         | _, Some (Ctor_of (path, _)) -> Of_type path
         | _ -> assert false (* inference found it, or reported an error *)
       in
       Ctor ({ name = c.name.name; owner }, List.map (simplify env) ps)
   | PFail _ | PFail_any | POr _ ->
-      (* inference reports `fail` patterns until stage 6.4 checks them *)
-      invalid_arg "Exhaust.simplify: a `fail` pattern"
+      (* a whole arm's, which [outcomes] simplifies *)
+      invalid_arg "Exhaust.simplify: a `fail` pattern inside another"
+
+(* The rows an arm's pattern adds to the matrix of a `match` with `fail`
+   arms: one per alternative of an or-pattern. *)
+let rec outcomes env (p : pattern) =
+  match p.pkind with
+  | PFail (t, ps) ->
+      let owner =
+        match set_of (Infer.Nodes.find p.pnode env.nodes).ty with
+        | Some tags -> Of_set tags
+        | None -> No_list
+      in
+      [
+        Ctor
+          ( failed,
+            [ Ctor ({ name = t.name; owner }, List.map (simplify env) ps) ] );
+      ]
+  | PFail_any -> [ Ctor (failed, [ Any ]) ]
+  | POr ps -> List.concat_map (outcomes env) ps
+  | _ -> [ Ctor (value, [ simplify env p ]) ]
 
 let rec show_space = function
   | Any -> "_"
+  | Ctor ({ owner = Outcome; name = "value" }, [ v ]) -> show_space v
+  | Ctor ({ owner = Outcome; _ }, [ e ]) -> "fail " ^ show_space e
   | Ctor (c, []) -> c.name
   | Ctor (c, args) ->
       c.name ^ "(" ^ String.concat ", " (List.map show_space args) ^ ")"
@@ -96,6 +139,7 @@ let siblings env c =
       | _ -> None)
   | Of_set tags ->
       Some (List.map (fun (t, n) -> ({ name = t; owner = c.owner }, n)) tags)
+  | Outcome -> Some [ (value, 1); (failed, 1) ]
   | No_list -> None
 
 (* The rows that still apply once we know the first value was built with
@@ -174,25 +218,45 @@ let rec missing env rows n =
             first :: w)
           (missing env (default rows) (n - 1))
 
-let check_match env (e : expr) (subject : expr) arms =
+(* Check one `match`. [passes_on] says it's a `try match`, which passes on
+   the errors its arms don't handle, so only its values have to be
+   covered. *)
+let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
   (* the type of the value being matched, for the message *)
   let column =
     match (Infer.Nodes.find subject.node env.nodes).ty with
     | Con (p, _) -> Some (env.names p)
     | Var _ | Fun _ | Errors _ | Error -> None
   in
+  (* With `fail` arms, each row is an outcome (see [owner]), and the error
+     set they match is in each `fail` pattern's type *)
+  let handles = Infer_expr.handles arms in
+  let errors =
+    match List.find_opt (fun a -> Infer_expr.is_fail a.arm_pat) arms with
+    | Some a -> Some (Infer.Nodes.find a.arm_pat.pnode env.nodes).ty
+    | None -> None
+  in
+  let rows_of (p : pattern) =
+    if handles then List.map (fun s -> [ s ]) (outcomes env p)
+    else [ [ simplify env p ] ]
+  in
   (* Arms with a guard might not match even when their pattern does, so they
-     never count toward covering a case. *)
+     never count toward covering a case. An or-pattern is a row for each
+     alternative, and can match if one of them can. *)
   let rows =
     List.fold_left
       (fun rows a ->
-        let row = [ simplify env a.arm_pat ] in
-        if not (useful env rows row) then
+        let alts = rows_of a.arm_pat in
+        if not (List.exists (useful env rows) alts) then
           Diag.error a.arm_pat.ploc
             ~help:"the arms above already match everything this one does"
             "this arm can never match";
-        if a.arm_guard = None then rows @ [ row ] else rows)
+        if a.arm_guard = None then rows @ alts else rows)
       [] arms
+  in
+  (* a `try match` passes on any error its arms don't match *)
+  let rows =
+    if passes_on && handles then rows @ [ [ Ctor (failed, [ Any ]) ] ] else rows
   in
   (* Collect up to three missing cases, adding each one as a row so the next
      search finds a different one. *)
@@ -204,38 +268,44 @@ let check_match env (e : expr) (subject : expr) arms =
       | _ -> []
   in
   (* a missing `Err(_)` of a [Result] whose set is settled is each of its
-     tags, which can be named *)
-  let tags =
+     tags, which can be named, and so is a missing `fail _` of a set that's
+     settled *)
+  let result_tags =
     match (Infer.Nodes.find subject.node env.nodes).ty with
-    | Con (p, [ _; Errors { labels; tail = None } ]) when p = result_path ->
-        labels
-    | _ -> []
+    | Con (p, [ _; t ]) when p = result_path -> set_of t
+    | _ -> None
   in
-  let owner =
-    Of_set
-      (List.map (fun (l : Ty.label) -> (l.name, List.length l.payload)) tags)
+  let fail_tags = Option.bind errors set_of in
+  let each tags wrap =
+    List.map
+      (fun (name, n) -> wrap (Ctor ({ name; owner = Of_set tags }, wilds n)))
+      tags
   in
   let expand = function
     | Ctor (({ name = "Err"; owner = Of_type p } as err), [ Any ])
-      when p = result_path && tags <> [] ->
-        List.map
-          (fun (l : Ty.label) ->
-            Ctor
-              ( err,
-                [
-                  Ctor ({ name = l.name; owner }, wilds (List.length l.payload));
-                ] ))
-          tags
+      when p = result_path && result_tags <> None && result_tags <> Some [] ->
+        each (Option.get result_tags) (fun t -> Ctor (err, [ t ]))
+    | Ctor ({ owner = Outcome; name = "fail" }, [ Any ])
+      when fail_tags <> None && fail_tags <> Some [] ->
+        each (Option.get fail_tags) (fun t -> Ctor (failed, [ t ]))
     | w -> [ w ]
   in
   let missing = List.concat_map expand (collect rows 3) in
+  let is_error = function
+    | Ctor ({ owner = Outcome; name = "fail" }, _) -> true
+    | _ -> false
+  in
   match List.filteri (fun i _ -> i < 3) missing with
   | [] -> ()
   | first :: _ as ws ->
+      let errors_missing = List.exists is_error ws in
+      let values_missing = not (List.for_all is_error ws) in
       let what =
-        match column with
-        | Some t -> sprintf "every `%s`" t
-        | None -> "every possible value"
+        match (column, errors_missing, values_missing) with
+        | _, true, true -> "every value and error"
+        | _, true, false -> "every error it can fail with"
+        | Some t, _, _ -> sprintf "every `%s`" t
+        | None, _, _ -> "every possible value"
       in
       let notes =
         ("missing: " ^ String.concat ", " (List.map show_space ws))
@@ -245,12 +315,27 @@ let check_match env (e : expr) (subject : expr) arms =
              "arms with an `if` guard don't count, since the guard may be false";
            ]
          else [])
+        @
+        if errors_missing && fail_tags = None then
+          [
+            "it can fail with whatever a function it was passed fails with, so \
+             only `fail _` matches all of it";
+          ]
+        else []
       in
       let start = e.loc.start in
       let keyword = { e.loc with stop = { start with col = start.col + 5 } } in
       let help =
         match first with
-        | Any -> "add a `_ =>` arm to cover the remaining values"
+        | Any | Ctor ({ owner = Outcome; name = "value" }, [ Any ]) ->
+            "add a `_ =>` arm to cover the remaining values"
+        | Ctor ({ owner = Outcome; name = "fail" }, [ Any ]) ->
+            "add a `fail _ =>` arm, or pass the errors on with `try match`"
+        | w when is_error w ->
+            sprintf
+              "add an arm for `%s`, or a `fail _ =>` arm for the rest, or pass \
+               them on with `try match`"
+              (show_space w)
         | w ->
             sprintf "add an arm for `%s`, or a `_ =>` arm for the rest"
               (show_space w)
@@ -278,6 +363,8 @@ let guard env f = Diag.recover env.sink ~default:() f
 let rec check_expr env (e : expr) =
   match e.kind with
   | Int _ | Bool _ | Unit | Var _ -> ()
+  | Try ({ kind = Match (subject, arms); _ } as m) ->
+      check_match_expr env ~passes_on:true m subject arms
   | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> check_expr env a
   | Fail (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Binop (_, a, b) | Index (a, b) ->
@@ -298,15 +385,17 @@ let rec check_expr env (e : expr) =
       check_expr env last
   | Con (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields
-  | Match (subject, arms) ->
-      check_expr env subject;
-      List.iter (fun (a : arm) -> no_bound_errors env a.arm_pat) arms;
-      guard env (fun () -> check_match env e subject arms);
-      List.iter
-        (fun (a : arm) ->
-          Option.iter (check_expr env) a.arm_guard;
-          check_expr env a.arm_body)
-        arms
+  | Match (subject, arms) -> check_match_expr env e subject arms
+
+and check_match_expr env ?passes_on e subject arms =
+  check_expr env subject;
+  List.iter (fun (a : arm) -> no_bound_errors env a.arm_pat) arms;
+  guard env (fun () -> check_match env ?passes_on e subject arms);
+  List.iter
+    (fun (a : arm) ->
+      Option.iter (check_expr env) a.arm_guard;
+      check_expr env a.arm_body)
+    arms
 
 (* [inferred] is what inference found in the module, and [reachable] the
    interfaces of every module reachable through its imports. *)

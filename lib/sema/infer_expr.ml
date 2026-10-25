@@ -66,20 +66,34 @@ type env = {
   mutable unmarked : (ecall * row) list;
       (** the group's calls that no marker covers, each with the row its errors
           went to, which has to end up empty *)
-  mutable all_markers : marker list;  (** the group's `try`s and `attempt`s *)
+  mutable all_markers : marker list;
+      (** the group's `try`s, `attempt`s and `match`es with `fail` arms *)
   mutable kept : (row * (string * ty) list) list;
-      (** the errors each `attempt` of the group keeps in its [Result], each
-          with the parameters of the function and lambdas it's in *)
+      (** the errors each `attempt` of the group keeps in its [Result], and each
+          `match` with `fail` arms handles, each with the parameters of the
+          function and lambdas it's in *)
   mutable includes : inclusion list;
       (** each place the group adds one row of errors to another, most recent
           first, finished once the group is done (see [inclusion]) *)
-  mutable tag_patterns : (ident * ty list * row * (string * ty) list) list;
-      (** tags matched in an error set that was still open: each tag, its
-          payload's types, the set, which has to have it once the group is done,
-          and the parameters of the function and lambdas it's in *)
+  mutable tag_patterns : tag_pattern list;
+      (** tags matched in an error set that was still open *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
+}
+
+(* A tag matched in an error set that was still open: the tag, its
+   payload's types, the set, which has to have it once the group is done,
+   and the parameters of the function and lambdas it's in. [tarm] says
+   whether it's a `fail` arm's, which matches what a call fails with,
+   rather than a tag inside `Err(...)`, which matches what a [Result]
+   holds. *)
+and tag_pattern = {
+  ttag : ident;
+  tpayload : ty list;
+  tset : row;
+  tin : (string * ty) list;
+  tarm : bool;
 }
 
 (* A use of another function of the group being checked. While the group's
@@ -127,22 +141,25 @@ and ecall = {
   eselves : row list;  (** those functions' and lambdas' own errors *)
 }
 
-(* A `try` or an `attempt`, and the calls it covers: every call to its
-   right in the same expression, except inside a lambda, whose body has
-   markers of its own. A [mutable] field can be changed in place, which
-   is how each call adds itself. *)
+(* A `try`, an `attempt` or a `match` with `fail` arms, and the calls it
+   covers: for a `try` or an `attempt`, every call to its right in the
+   same expression, and for a `match`, every call in what it matches;
+   except inside a lambda, whose body has markers of its own. A [mutable]
+   field can be changed in place, which is how each call adds itself. *)
 and marker = {
   mkind : marker_kind;
-  mloc : Loc.t;  (** the keyword *)
+  mloc : Loc.t;  (** the keyword, or a `match`'s first `fail` arm *)
   mutable covered : ecall list;
   mutable unwrapped : row list;
-      (** for `try r`: the errors of the [Result] it fails with again *)
+      (** for `try r`: the errors of the [Result] it fails with again; for `try
+          match`, the errors no arm handles *)
   mutable hint : string option;
       (** for `try`: a help that explains why it may cover nothing *)
-  mutable failed : bool;  (** for `attempt`: whether a `fail` is inside it *)
+  mutable failed : bool;
+      (** for `attempt` and `match`: whether a `fail` is inside it *)
 }
 
-and marker_kind = Mtry | Mattempt
+and marker_kind = Mtry | Mattempt | Mmatch
 
 (* One row of errors added to another: a call's to its marker's handler,
    or a [Result]'s to the handler of the `try` that fails with it again.
@@ -166,7 +183,8 @@ and inclusion = {
 }
 
 (* Something that adds to a top-level function's errors: a call its `try`
-   passes on, a `fail`, or a [Result] it fails with again. A function
+   passes on, a `fail`, a [Result] it fails with again, or the errors a
+   `try match` doesn't handle. A function
    that writes its errors is checked against them (infer_top.ml), with a
    label at the first of these that brings in an error it doesn't
    declare. *)
@@ -174,6 +192,7 @@ and source =
   | Passed of ecall
   | Failed of Loc.t * label
   | Unwrapped of Loc.t * row
+  | Unhandled of Loc.t * row
 
 (* A call that adds to a function's dependencies. [own] are the labels the
    callee's row had just before the call joined it to the caller's: what
@@ -724,19 +743,20 @@ let shape_from (sources : source list) name =
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let loc = function
     | Passed c -> c.eloc
-    | Failed (l, _) | Unwrapped (l, _) -> l
+    | Failed (l, _) | Unwrapped (l, _) | Unhandled (l, _) -> l
   in
   let has = function
     | Passed c -> List.exists (fun (l : label) -> l.name = name) c.eown
     | Failed (_, l) -> l.name = name
-    | Unwrapped (_, r) -> List.mem name (row_names r)
+    | Unwrapped (_, r) | Unhandled (_, r) -> List.mem name (row_names r)
   in
   List.find_opt has
     (List.sort (fun a b -> compare (pos (loc a)) (pos (loc b))) sources)
   |> Option.map (function
     | Passed c -> sprintf "from `%s`" c.ewritten
     | Failed (l, _) -> sprintf "from the `fail` on line %d" l.start.line
-    | Unwrapped (l, _) -> sprintf "from the `Result` on line %d" l.start.line)
+    | Unwrapped (l, _) -> sprintf "from the `Result` on line %d" l.start.line
+    | Unhandled (l, _) -> sprintf "from the `match` on line %d" l.start.line)
 
 (* What the code [cx] is in has already added to its handler, for a
    message about an error that's there: in the function itself, what adds
@@ -872,7 +892,7 @@ let absorb env cx ~(call : expr) ~ename ~name_loc ?target errs uses =
   in
   (* In a public function, a transparent parameter's errors are the
      function's own, passed on to its caller, as its signature says: an
-     `attempt` can't keep them as well *)
+     `attempt` can't keep them as well, nor a `match` handle them *)
   let passed_on =
     List.mem cx.self env.spelled
     && row_tail cx.handler <> row_tail cx.errs
@@ -880,9 +900,10 @@ let absorb env cx ~(call : expr) ~ename ~name_loc ?target errs uses =
     && List.exists (fun r -> row_tail r = row_tail errs) cx.selves
   in
   match cx.markers with
-  | m :: _ when passed_on && m.mkind = Mattempt ->
+  | m :: _ when passed_on && m.mkind <> Mtry ->
       report env
-        (kept_passed_on call.loc ~name_loc ename ~fn:(short_name cx.self.name));
+        (kept_passed_on call.loc ~name_loc ename ~fn:(short_name cx.self.name)
+           ~handled:(m.mkind = Mmatch));
       List.iter (fun m -> m.covered <- ec :: m.covered) cx.markers
   | [] ->
       (* the callee's own row, which an inferred parameter's is too: if
@@ -927,18 +948,10 @@ let lambda_cx cx (params : Resolved.param list) ps ~errs ~uses =
 let keyword (loc : Loc.t) n =
   { loc with stop = { loc.start with col = loc.start.col + n } }
 
-(* A new marker, kept for the checks at the end of the group. *)
-let marker env mkind (e : expr) =
-  let n = match mkind with Mtry -> 3 | Mattempt -> 7 in
+(* A new marker at [mloc], kept for the checks at the end of the group. *)
+let marker env mkind mloc =
   let m =
-    {
-      mkind;
-      mloc = keyword e.loc n;
-      covered = [];
-      unwrapped = [];
-      hint = None;
-      failed = false;
-    }
+    { mkind; mloc; covered = []; unwrapped = []; hint = None; failed = false }
   in
   env.all_markers <- m :: env.all_markers;
   m
@@ -973,6 +986,52 @@ let try_hint env cx (a : expr) t =
                (Option.value (env.source l) ~default:"..."))
       | _ -> None)
   | _ -> None
+
+(* A `fail` pattern, which matches an error rather than a value (errors.md,
+   "Handling: `match`"). The parser combines only `fail` patterns with
+   `|`. *)
+let is_fail (p : pattern) =
+  match p.pkind with PFail _ | PFail_any | POr _ -> true | _ -> false
+
+(* Whether a `match` handles errors: whether it has a `fail` arm. *)
+let handles arms = List.exists (fun a -> is_fail a.arm_pat) arms
+
+(* The tags a `match`'s arms handle whatever their payload: each in an arm
+   without a guard whose payload patterns match anything. [None] if an
+   arm is `fail _`, which handles every error. A tag matched only for some
+   payloads, `fail Short(_, 0)`, isn't handled: it can still happen. *)
+let handled_tags arms =
+  let any (p : pattern) =
+    match p.pkind with PWild | PVar _ -> true | _ -> false
+  in
+  let rec tags (p : pattern) =
+    match p.pkind with
+    | PFail_any -> None
+    | PFail (t, ps) -> Some (if List.for_all any ps then [ t.name ] else [])
+    | POr ps ->
+        List.fold_left
+          (fun acc p ->
+            match (acc, tags p) with
+            | Some a, Some b -> Some (a @ b)
+            | _ -> None)
+          (Some []) ps
+    | _ -> Some []
+  in
+  List.fold_left
+    (fun acc a ->
+      match (acc, a.arm_guard) with
+      | None, _ -> None
+      | acc, Some _ -> acc
+      | Some ts, None -> Option.map (( @ ) ts) (tags a.arm_pat))
+    (Some []) arms
+
+(* [r]'s labels, without the tags [names]. *)
+let without names r =
+  extend
+    (List.filter
+       (fun (l : label) -> not (List.mem l.name names))
+       (fst (row_parts r)))
+    REmpty
 
 (* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
@@ -1240,14 +1299,20 @@ and synth env cx (e : expr) : ty =
         ~fix:(fun _ -> "give one of them another name")
         (extend [ l ] REmpty) cx.handler;
       Option.iter (fun s -> s := Failed (e.loc, l) :: !s) cx.sources;
-      List.iter
-        (fun m -> if m.mkind = Mattempt then m.failed <- true)
-        cx.markers;
+      List.iter (fun m -> if m.mkind <> Mtry then m.failed <- true) cx.markers;
       (* it never produces a value, so it can stand where any type is
          wanted *)
       fresh_var env.st
+  | Try ({ kind = Match (subject, arms); _ } as a) when handles arms ->
+      (* `try match`: the errors no arm handles are passed on. The arms
+         aren't covered by the `try`: a call in one is marked like any
+         other *)
+      let m = marker env Mtry (keyword e.loc 3) in
+      let t = infer_match env cx ~passed:m subject arms ~want:None in
+      Hashtbl.replace cx.nodes a.node t;
+      t
   | Try a -> (
-      let m = marker env Mtry e in
+      let m = marker env Mtry (keyword e.loc 3) in
       let t = infer env { cx with markers = m :: cx.markers } a in
       (* `try r`, where [r] is a [Result]: what's in [r] if it's `Ok`, and
          if it's `Err`, its error again *)
@@ -1272,7 +1337,7 @@ and synth env cx (e : expr) : ty =
   | Attempt a ->
       (* the calls it covers fail into its [Result] instead, and so does a
          `fail` *)
-      let m = marker env Mattempt e in
+      let m = marker env Mattempt (keyword e.loc 7) in
       let kept = fresh_row env.st in
       env.kept <- (kept, cx.params) :: env.kept;
       let t =
@@ -1771,9 +1836,30 @@ and field_access env cx (e : expr) r tr (f : ident) =
       | t -> needs_record t)
 
 (* A `match`. With [want], every arm is checked against the type it says;
-   otherwise the first arm says what the others have to be. *)
-and infer_match env cx subject arms ~want =
-  let ts = infer env cx subject in
+   otherwise the first arm says what the others have to be.
+
+   A `match` with `fail` arms handles what its subject fails with
+   (errors.md, "Handling: `match`"), so the calls in the subject are
+   marked by the `match`, as they would be by an `attempt`: their errors,
+   and a `fail`'s, go to a row of the `match`'s own, which the `fail` arms
+   match. The arms are outside it, under the code's own handler. [passed]
+   is the `try` of a `try match`, which passes on what no arm handles. *)
+and infer_match env cx ?passed subject arms ~want =
+  let ts, errs =
+    if handles arms then (
+      let first = List.find (fun a -> is_fail a.arm_pat) arms in
+      let m = marker env Mmatch first.arm_pat.ploc in
+      let errs = fresh_row env.st in
+      env.kept <- (errs, cx.params) :: env.kept;
+      let ts =
+        infer env
+          { cx with handler = errs; markers = [ m ]; sources = None }
+          subject
+      in
+      Option.iter (fun p -> pass_on env cx p subject arms errs) passed;
+      (ts, Some errs))
+    else (infer env cx subject, None)
+  in
   let result, arm_why =
     match want with
     | Some (expected, why) -> (expected, fun _ -> why)
@@ -1796,13 +1882,84 @@ and infer_match env cx subject arms ~want =
   in
   List.iteri
     (fun i a ->
-      bind_pattern env cx ts a.arm_pat;
+      (match errs with
+      | Some errs when is_fail a.arm_pat -> bind_fail env cx errs a.arm_pat
+      | _ -> bind_pattern env cx ts a.arm_pat);
       Option.iter
         (fun g -> want_bool env "a guard" g (infer env cx g))
         a.arm_guard;
       check env cx ~why:(arm_why i) a.arm_body result)
     arms;
   result
+
+(* What the `try` [m] of a `try match` passes on: the errors [errs] of
+   [subject] that no arm handles, by inclusion, through a row of their
+   own, which [m] fails with. With a `fail _` arm, nothing is left, and
+   [m] covers nothing. *)
+and pass_on env cx m subject arms errs =
+  match handled_tags arms with
+  | None ->
+      m.hint <-
+        Some
+          "every error is handled here, so nothing is passed on: remove the \
+           `try`"
+  | Some names ->
+      let rest = fresh_row env.st in
+      env.kept <- (rest, cx.params) :: env.kept;
+      let add r into =
+        add_errors env ~loc:subject.loc ~here:"from this `match`"
+          ~sources:(sources_of cx)
+          ~fix:(fun _ -> "rename one of them where it comes in")
+          r into
+      in
+      include_errors env cx ~loc:subject.loc
+        (fun r into -> add (without names r) into)
+        errs rest;
+      include_errors env cx ~loc:subject.loc add rest cx.handler;
+      m.unwrapped <- rest :: m.unwrapped;
+      Option.iter (fun s -> s := Unhandled (subject.loc, rest) :: !s) cx.sources
+
+(* A `fail` arm's pattern, which matches an error of the set [errs]: a
+   tag, destructured, or any of them. Each alternative of `fail A(x) |
+   fail B(x)` binds the same names, which have to have one type. *)
+and bind_fail env cx errs (p : pattern) =
+  Hashtbl.replace cx.nodes p.pnode (TErrors errs);
+  match p.pkind with
+  | PFail (c, ps) -> tag_pattern env cx ~arm:true p c ps errs
+  | PFail_any -> ()
+  | POr [] -> ()
+  | POr (first :: rest) ->
+      bind_fail env cx errs first;
+      List.iter
+        (fun alt ->
+          let before =
+            List.map
+              (fun (b, loc) -> (b, loc, Hashtbl.find_opt cx.locals b.id))
+              (binders alt)
+          in
+          bind_fail env cx errs alt;
+          List.iter
+            (fun ((b : binder), loc, t) ->
+              match (t, Hashtbl.find_opt cx.locals b.id) with
+              | Some first, Some here ->
+                  unify_at env loc ~found:here ~expected:first ~msg:(fun f x ->
+                      sprintf "`%s` is %s here, but %s in the first alternative"
+                        b.ident.name (article f) (article x));
+                  Hashtbl.replace cx.locals b.id first
+              | _ -> ())
+            before)
+        rest
+  | PWild | PVar _ | PInt _ | PBool _ | PCon _ ->
+      (* the parser combines only `fail` patterns *)
+      bind_pattern env cx TError p
+
+(* The variables a pattern binds, each where it's bound. *)
+and binders (p : pattern) =
+  match p.pkind with
+  | PVar b -> [ (b, p.ploc) ]
+  | PCon (_, ps) | PFail (_, ps) -> List.concat_map binders ps
+  | POr ps -> List.concat_map binders ps
+  | PWild | PInt _ | PBool _ | PFail_any -> []
 
 (* Check a pattern against the type of the value it matches, and give the
    variables it binds their types. A constructor is found through that
@@ -1842,16 +1999,16 @@ and bind_pattern env cx t (p : pattern) =
                   (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
                   ctor.cfields ps
               else unknown ())
-      | PFail (_, ps) | POr ps ->
-          (* reported by [not_yet] (infer_top.ml) until stage 6.4 *)
-          List.iter (bind_pattern env cx TError) ps
-      | PFail_any -> ())
+      | PFail _ | PFail_any | POr _ ->
+          (* a `fail` pattern is a whole arm's (the parser says so), and
+             [infer_match] binds it with [bind_fail] *)
+          ())
 
 (* The tag [c] of the error set [errs], destructured by [ps]. A misspelled
    tag is caught here: it isn't one of the errors (errors.md, "Tags are
    structural"). While the set is open, as an `attempt`'s is until its
    group is done, a tag not in it yet is checked then. *)
-and tag_pattern env cx (p : pattern) (c : ident) ps errs =
+and tag_pattern env cx ?(arm = false) (p : pattern) (c : ident) ps errs =
   let labels, tail = row_parts errs in
   let bind payload =
     if List.length payload = List.length ps then
@@ -1865,12 +2022,20 @@ and tag_pattern env cx (p : pattern) (c : ident) ps errs =
   | None, None ->
       let pr = printer env in
       report env
-        (not_an_error c
+        (not_an_error c ~arm
            (List.map (fun (l : label) -> (l.name, show_label pr l)) labels));
       List.iter (bind_pattern env cx TError) ps
   | None, Some _ ->
       let payload = List.map (fun _ -> fresh_var env.st) ps in
-      env.tag_patterns <- (c, payload, errs, cx.params) :: env.tag_patterns;
+      env.tag_patterns <-
+        {
+          ttag = c;
+          tpayload = payload;
+          tset = errs;
+          tin = cx.params;
+          tarm = arm;
+        }
+        :: env.tag_patterns;
       bind payload
 
 (* Check every value the group threw away is `Unit` (see [drop]). One whose

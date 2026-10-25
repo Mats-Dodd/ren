@@ -260,24 +260,6 @@ let walk ~ty ~errors ~pattern (prog : program) =
       | Import _ -> ())
     prog
 
-(* `fail` patterns (errors.md, "Handling: `match`") are parsed and resolved,
-   but checked only from stage 6.4. Until then each one is reported here,
-   and inference doesn't run. *)
-let not_yet sink (prog : program) =
-  walk prog
-    ~ty:(fun _ -> ())
-    ~errors:(fun _ -> ())
-    ~pattern:(fun p ->
-      match p.pkind with
-      | PFail _ | PFail_any | POr _ ->
-          Diag.report sink
-            (Diag.make p.ploc
-               ~help:
-                 "for now, keep the outcome with `attempt` and match the \
-                  `Result`: `Err(Short(_, by))`"
-               "`fail` patterns arrive later in stage 6")
-      | _ -> ())
-
 (* The error sets and `Result`s written in the module make sense: an
    error set is a type argument only of `Result`, whose second argument
    is always one, and no set, named sets expanded, has two shapes of one
@@ -496,11 +478,14 @@ let settle_inclusions env =
 (* The rules of markers, checked once the group's functions are joined,
    when it's known what each call fails with (errors.md, "Marking"):
 
-   1. each `attempt` keeps exactly what the calls it covers fail with
-   2. each tag matched in an `attempt`'s errors is one of them
-   3. each `try r` of a [Result] fails with what [r] holds
+   1. each `attempt` keeps exactly what the calls it covers fail with, and
+      each `match` with `fail` arms handles exactly that
+   2. each tag matched in those errors is one of them
+   3. each `try r` of a [Result] fails with what [r] holds, and each
+      `try match` with what its arms don't handle
    4. a call no marker covers can't fail
-   5. every marker covers something that can fail *)
+   5. every marker covers something that can fail: a `match`'s `fail`
+      arms match something *)
 let settle_errors env =
   let pr = printer env in
   settle_inclusions env;
@@ -513,12 +498,17 @@ let settle_errors env =
       | _ -> close_row kept)
     env.kept;
   List.iter
-    (fun ((c : ident), payload, errs, params) ->
-      let labels, tail = row_parts errs in
+    (fun t ->
+      let c = t.ttag and payload = t.tpayload and arm = t.tarm in
+      let labels, tail = row_parts t.tset in
       let tags =
         List.map (fun (l : label) -> (l.name, show_label pr l)) labels
       in
       match List.find_opt (fun (l : label) -> l.name = c.name) labels with
+      | _ when arm && labels = [] && tail = None ->
+          (* a `fail` arm of a `match` whose subject can't fail, which is
+             reported once, below *)
+          ()
       | Some l when List.length l.payload = List.length payload ->
           List.iter2
             (fun found expected -> unify_at env c.loc ~found ~expected)
@@ -530,11 +520,11 @@ let settle_errors env =
           (* a set still open holds what a function it was passed fails
              with *)
           match
-            Option.bind tail (fun t ->
-                List.find_opt (fun (_, ty) -> List.mem t (row_vars ty)) params)
+            Option.bind tail (fun tl ->
+                List.find_opt (fun (_, ty) -> List.mem tl (row_vars ty)) t.tin)
           with
-          | Some (param, _) -> report env (tag_in_open_set c ~param tags)
-          | None -> report env (not_an_error c tags)))
+          | Some (param, _) -> report env (tag_in_open_set c ~arm ~param tags)
+          | None -> report env (not_an_error c ~arm tags)))
     (List.rev env.tag_patterns);
   List.iter
     (fun ((c : ecall), unhandled) ->
@@ -570,8 +560,10 @@ let settle_errors env =
                m.unwrapped)
       then
         report env
-          (covers_nothing m.mloc ?help:m.hint
-             (match m.mkind with Mtry -> "try" | Mattempt -> "attempt")))
+          (match m.mkind with
+          | Mtry -> covers_nothing m.mloc ?help:m.hint "try"
+          | Mattempt -> covers_nothing m.mloc ?help:m.hint "attempt"
+          | Mmatch -> cannot_fail_arm m.mloc))
     (List.rev env.all_markers);
   env.kept <- [];
   env.tag_patterns <- [];
@@ -587,7 +579,7 @@ let check_errors env (f : fn_def) cx declared =
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let loc = function
     | Passed c -> c.eloc
-    | Failed (l, _) | Unwrapped (l, _) -> l
+    | Failed (l, _) | Unwrapped (l, _) | Unhandled (l, _) -> l
   in
   let sources =
     List.sort
@@ -602,12 +594,13 @@ let check_errors env (f : fn_def) cx declared =
   let brings = function
     | Passed c -> if c.eself then [] else row_names c.erow
     | Failed (_, l) -> [ l.name ]
-    | Unwrapped (_, r) -> row_names r
+    | Unwrapped (_, r) | Unhandled (_, r) -> row_names r
   in
   let what = function
     | Passed _ -> "this call can fail with"
     | Failed _ -> "this fails with"
     | Unwrapped _ -> "this `Result` holds"
+    | Unhandled _ -> "no arm of this `match` handles"
   in
   List.iter
     (fun (l : label) ->
@@ -1219,7 +1212,6 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
 
    A try reports to its own sink, and only the last try's errors are kept. *)
 let program sink ~imports ~reachable ?entry (r : Resolve.t) =
-  not_yet sink r.prog;
   let rec go extra =
     let tried = Diag.sink () in
     let keep () = List.iter (Diag.report sink) (List.rev tried.reported) in
@@ -1233,6 +1225,4 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
         keep ();
         raise e
   in
-  if Diag.has_errors sink then
-    { schemes = []; values = []; nodes = []; in_scope = [] }
-  else go []
+  go []

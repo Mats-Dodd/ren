@@ -815,6 +815,415 @@ fn main() = ()
       help: write `attempt` before the call that fails, `attempt f()`, to keep what it fails with in a `Result`
     |}]
 
+let%expect_test "match handles a call's errors with fail arms" =
+  (* a `fail` arm destructures a payload, and can fail with another tag,
+     which is how one error becomes another *)
+  checked
+    {|
+fn load(id: Int) -> Int =
+  if id == 0 then fail NotFound(id)
+  if id > 9 then fail TooBig(id, 9)
+  id
+fn all(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound(_) => 0
+    fail TooBig(_, max) => max
+fn translated(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound(_) | fail TooBig(_, _) => fail Unavailable
+fn either(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound(x) | fail TooBig(x, _) => x
+fn inside(n: Int) -> Int =
+  match (if n > 0 then fail Big else n)
+    m => m
+    fail Big => 0
+fn kept(id: Int) =
+  attempt match load(id)
+    n => n
+    fail NotFound(_) => fail Gone
+    fail TooBig(_, _) => 9
+fn main() = ()
+|};
+  [%expect
+    {|
+    fn load(id: Int) -> Int ! NotFound(Int) | TooBig(Int, Int)
+    fn all(id: Int) -> Int
+    fn translated(id: Int) -> Int ! Unavailable
+    fn either(id: Int) -> Int
+    fn inside(n: Int) -> Int
+    fn kept(id: Int) -> Result<Int, ! Gone>
+    fn main()
+    |}]
+
+let%expect_test "a match handles what a function of its group fails with" =
+  (* what [d] fails with is known only once the group is done, and the
+     match is checked against it then *)
+  checked
+    {|
+fn c(n: Int) -> Int =
+  if n == 0 then fail Zero
+  if n == 1 then fail One
+  match d(n - 1)
+    m => m
+    fail Zero => 0
+fn d(n: Int) -> Int = try c(n)
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: this `match` doesn't handle every error it can fail with
+      ┌─ test.ren:4:3
+    4 │   match d(n - 1)
+      │   ^^^^^
+      = missing: fail One
+      help: add an arm for `fail One`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+    |}]
+
+let%expect_test "an or-pattern's names have one type" =
+  checked
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else if id > 9 then fail Bad(id > 99) else id
+fn either(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound(x) | fail Bad(x) => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `x` is a `Bool` here, but an `Int` in the first alternative
+      ┌─ test.ren:5:33
+    5 │     fail NotFound(x) | fail Bad(x) => 0
+      │                                 ^
+    |}]
+
+let%expect_test "a match handles every value and every error" =
+  checked
+    {|
+fn load(id: Int) -> Int =
+  if id == 0 then fail NotFound(id)
+  if id > 9 then fail TooBig(id, 9)
+  id
+fn some(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound(_) => 0
+fn wild(id: Int) -> Int =
+  match load(id)
+    _ => 0
+    fail NotFound(_) => 0
+fn no_value(id: Int) -> Int =
+  match load(id)
+    fail _ => 0
+fn partly(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound(0) => 0
+    fail TooBig(_, _) => 0
+fn any(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail _ => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: this `match` doesn't handle every error it can fail with
+      ┌─ test.ren:6:3
+    6 │   match load(id)
+      │   ^^^^^
+      = missing: fail TooBig(_, _)
+      help: add an arm for `fail TooBig(_, _)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+
+    error: this `match` doesn't handle every error it can fail with
+       ┌─ test.ren:10:3
+    10 │   match load(id)
+       │   ^^^^^
+       = missing: fail TooBig(_, _)
+       help: add an arm for `fail TooBig(_, _)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+
+    error: this `match` doesn't handle every `Int`
+       ┌─ test.ren:14:3
+    14 │   match load(id)
+       │   ^^^^^
+       = missing: _
+       help: add a `_ =>` arm to cover the remaining values
+
+    error: this `match` doesn't handle every error it can fail with
+       ┌─ test.ren:17:3
+    17 │   match load(id)
+       │   ^^^^^
+       = missing: fail NotFound(_)
+       help: add an arm for `fail NotFound(_)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+    |}];
+  (* an arm after `fail _` can never match an error *)
+  checked
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn late(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail _ => 0
+    fail NotFound(_) => 1
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: this arm can never match
+      ┌─ test.ren:6:5
+    6 │     fail NotFound(_) => 1
+      │     ^^^^^^^^^^^^^^^^
+      help: the arms above already match everything this one does
+    |}]
+
+let%expect_test "a fail arm matches an error the call can fail with" =
+  checked
+    {|
+fn double(n: Int) -> Int = n * 2
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn never(n: Int) -> Int =
+  match double(n)
+    m => m
+    fail _ => 0
+fn never_tag(n: Int) -> Int =
+  match double(n)
+    m => m
+    fail Big => 0
+fn typo(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFuond(_) => 0
+    fail _ => 1
+fn short(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: nothing here can fail, so this `fail` arm can never match
+      ┌─ test.ren:6:5
+    6 │     fail _ => 0
+      │     ^^^^^^
+      = a `fail` arm matches an error of what the `match` looks at
+      help: remove the `fail` arms
+
+    error: nothing here can fail, so this `fail` arm can never match
+       ┌─ test.ren:10:5
+    10 │     fail Big => 0
+       │     ^^^^^^^^
+       = a `fail` arm matches an error of what the `match` looks at
+       help: remove the `fail` arms
+
+    error: `NotFuond` isn't one of the errors this can fail with
+       ┌─ test.ren:14:10
+    14 │     fail NotFuond(_) => 0
+       │          ^^^^^^^^
+       = it can fail with `NotFound(Int)`
+       help: did you mean `NotFound`? A tag that's written wrong is a different error
+
+    error: `NotFound`'s payload has 1 value, but this pattern has 0
+       ┌─ test.ren:19:5
+    19 │     fail NotFound => 0
+       │     ^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "a fail pattern never binds a whole error" =
+  checked
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn whole(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail e => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: a `fail` pattern can't bind the whole error to a name
+      ┌─ test.ren:5:10
+    5 │     fail e => 0
+      │          ^
+      help: match each tag, like `fail NotFound`, or keep the whole outcome as a value with `attempt`, and match `Err(e)`
+    |}]
+
+let%expect_test "try match passes on what no arm handles" =
+  checked
+    {|
+fn load(id: Int) -> Int =
+  if id == 0 then fail NotFound(id)
+  if id > 9 then fail TooBig(id, 9)
+  id
+fn guest() -> Int = 0
+fn user(id: Int) -> Int =
+  try match load(id)
+    u => u
+    fail NotFound(_) => guest()
+fn partly(id: Int) -> Int =
+  try match load(id)
+    u => u
+    fail NotFound(0) => 0
+fn renamed(id: Int) -> Int =
+  try match load(id)
+    u => u
+    fail TooBig(_, _) => fail Big
+fn main() = ()
+|};
+  [%expect
+    {|
+    fn load(id: Int) -> Int ! NotFound(Int) | TooBig(Int, Int)
+    fn guest() -> Int
+    fn user(id: Int) -> Int ! TooBig(Int, Int)
+    fn partly(id: Int) -> Int ! NotFound(Int) | TooBig(Int, Int)
+    fn renamed(id: Int) -> Int ! Big | NotFound(Int)
+    fn main()
+    |}];
+  (* with every error handled, there's nothing to pass on *)
+  checked
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn all(id: Int) -> Int =
+  try match load(id)
+    u => u
+    fail _ => 0
+fn each(id: Int) -> Int =
+  try match load(id)
+    u => u
+    fail NotFound(_) => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: nothing here can fail
+      ┌─ test.ren:3:3
+    3 │   try match load(id)
+      │   ^^^
+      = `try` marks the calls that can fail, so a reader can see where the code can stop
+      help: every error is handled here, so nothing is passed on: remove the `try`
+
+    error: nothing here can fail
+      ┌─ test.ren:7:3
+    7 │   try match load(id)
+      │   ^^^
+      = `try` marks the calls that can fail, so a reader can see where the code can stop
+      help: remove the `try`
+    |}];
+  (* a public function declares what its `try match` passes on *)
+  checked
+    {|
+fn load(id: Int) -> Int =
+  if id == 0 then fail NotFound(id)
+  if id > 9 then fail TooBig(id, 9)
+  id
+pub fn user(id: Int) -> Int =
+  try match load(id)
+    u => u
+    fail NotFound(_) => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `pub fn user` can fail with `TooBig`, but its signature doesn't say so
+      ┌─ test.ren:5:8
+    5 │ pub fn user(id: Int) -> Int =
+      │        ^^^^
+    6 │   try match load(id)
+      │             -------- no arm of this `match` handles `TooBig`
+      = a public function without `!` can't fail, and its body is checked against that
+      help: add `! TooBig(Int, Int)` to its signature, or handle it here with `match`
+    |}]
+
+let%expect_test "a call in an arm is marked like any other" =
+  checked
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn again(id: Int) -> Int =
+  match load(id)
+    u => u
+    fail NotFound(_) => load(1)
+fn passed(id: Int) -> Int =
+  match load(id)
+    u => u
+    fail NotFound(_) => try load(1)
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `load` can fail, and nothing handles it
+      ┌─ test.ren:5:25
+    5 │     fail NotFound(_) => load(1)
+      │                         ^^^^^^^
+      │                         ---- it can fail with `NotFound(Int)`
+      help: pass the errors on with `try`, or handle them with `match`
+    |}]
+
+let%expect_test "matching what a passed function fails with" =
+  (* its errors aren't known, so only `fail _` handles them *)
+  checked
+    {|
+fn each(g: fn() -> Int) -> Int =
+  match g()
+    n => n
+    fail _ => 0
+fn named(g: fn() -> Int) -> Int =
+  match g()
+    n => n
+    fail Bad => 0
+fn main() = print(each(fn() => 1))
+|};
+  [%expect
+    {|
+    error: `Bad` can't be matched here, because the errors this can fail with aren't known
+      ┌─ test.ren:8:10
+    8 │     fail Bad => 0
+      │          ^^^
+      = this can fail with whatever the function passed as `g` fails with, which could be anything
+      help: match those with `fail _`, or write the errors `g` can fail with in its type, after `!`
+    |}];
+  checked
+    {|
+fn guarded(g: fn() -> Int, b: Bool) -> Int =
+  match g()
+    n => n
+    fail _ if b => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: this `match` doesn't handle every error it can fail with
+      ┌─ test.ren:2:3
+    2 │   match g()
+      │   ^^^^^
+      = missing: fail _
+      = arms with an `if` guard don't count, since the guard may be false
+      = it can fail with whatever a function it was passed fails with, so only `fail _` matches all of it
+      help: add a `fail _ =>` arm, or pass the errors on with `try match`
+    |}];
+  (* a public function passes them on, as its signature says *)
+  checked
+    {|
+pub fn each(g: fn() -> Int) -> Int =
+  match g()
+    n => n
+    fail _ => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `match` can't handle what `g` fails with here
+      ┌─ test.ren:2:9
+    2 │   match g()
+      │         ^^^
+      │         - its type is written `fn(...)`, so what it fails with is passed on to whoever calls `each`
+      = a public signature can't say a passed function's errors are handled yet: that arrives with `..e`, in stage 7
+      help: pass them on with `try`, or make `each` private, so its type is inferred
+    |}]
+
 (* ---- 6. Libraries compose ---- *)
 
 let%expect_test "the same tag from two modules is the same error" =

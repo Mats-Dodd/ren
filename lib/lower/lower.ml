@@ -429,8 +429,7 @@ and pattern cx (p : pattern) : C.pattern =
         | Some (Ctor_of (path, c)), _ -> PCon (path, c, List.map (pattern cx) ps)
         | None, Errors _ -> later p.ploc "matching an error's tag"
         | _ -> bug "a constructor pattern inference didn't find")
-    | PFail _ | PFail_any | POr _ ->
-        bug "a `fail` pattern, which inference doesn't check yet"
+    | PFail _ | PFail_any | POr _ -> later p.ploc "a `fail` arm"
   in
   { pkind; pty; ploc = p.ploc }
 
