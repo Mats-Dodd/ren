@@ -176,6 +176,8 @@ type t = {
   schemes : (string * Ty.scheme) list;  (** each function's, in source order *)
   nodes : (string * node Nodes.t) list;
       (** each function's expressions and patterns, by node id *)
+  in_scope : Path.t list;
+      (** the types step 2 of a lookup through a type found, sorted *)
 }
 
 (* Infer every function's type, and return each function's type scheme and
@@ -201,11 +203,13 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
       sink;
       home;
       names = Resolve.type_name r;
+      can_name = Resolve.can_name r;
       types;
       visible;
       globals = Hashtbl.create 16;
       group = [];
       joins = [];
+      in_scope = [];
     }
   in
   List.iter
@@ -421,4 +425,4 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
     ((f.name.name, scheme), (f.name.name, nodes))
   in
   let schemes, nodes = List.split (List.map canonical fns) in
-  { schemes; nodes }
+  { schemes; nodes; in_scope = List.sort compare env.in_scope }

@@ -38,7 +38,7 @@ let parse ~file src =
 (* Check one module against the interfaces it imports, before anything
    runs: first what its names refer to (found through scope), then what may
    change, then types (and what's found through them), then whether every
-   `match` is exhaustive. Returns the module resolved, its interface and
+   import is used, then whether every `match` is exhaustive. Returns the module resolved, its interface and
    what inference found. [imports] are the interfaces of the modules it
    imports, and [reachable] those of every module reachable through them,
    whose types it can meet without naming them. [entry] is set for the
@@ -52,6 +52,10 @@ let check_module ~home ~imports ~reachable ?entry prog =
     checked "infer" (fun sink ->
         Infer.program sink ~imports ~reachable ?entry r)
   in
+  (* only now is it known whether every import is used: a type imported
+     by name can be used just by writing one of its constructors bare *)
+  checked "imports" (fun sink ->
+      Resolve.unused_imports sink r ~found:inferred.in_scope);
   checked "exhaust" (fun sink -> Exhaust.program sink ~reachable r inferred);
   (* what a public function uses can't be written in its signature yet, so
      its interface takes that from inference *)

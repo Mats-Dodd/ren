@@ -30,6 +30,9 @@ type t = {
       (** each function's type scheme, in source order *)
   nodes : (string * node Nodes.t) list;
       (** each function's expressions and patterns, by node id *)
+  in_scope : Path.t list;
+      (** the types step 2 of a lookup through a type found (infer_expr.ml),
+          sorted: the import by name of each one is used *)
 }
 
 val program :

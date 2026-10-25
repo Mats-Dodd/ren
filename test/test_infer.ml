@@ -553,11 +553,12 @@ fn main() -> Int =
 |});
   [%expect
     {|
-    error: there's no constructor named `Basic`
+    error: `Plan` has no constructor named `Basic`
        ┌─ test.ren:10:5
     10 │     Basic => 1
        │     ^^^^^
-       help: check the spelling, or declare it in a type, like `type Shape = | Basic`
+       = a `Plan` is expected here
+       help: its constructors: `Free`, `Pro`, `Enterprise`
     |}]
 
 (* module-build.md, "Found through a type" *)

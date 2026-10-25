@@ -17,8 +17,9 @@
 
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
-   with the name of an imported module, imports nothing uses, and public
-   declarations that mention a private type. Later passes never
+   with the name of an imported module, and public declarations that
+   mention a private type. Imports nothing uses are reported once
+   inference is done ([unused_imports]). Later passes never
    look a name up: inference reads a binder's id, mut.ml its kind.
 
    Constructors and record fields aren't found here: they're found through
@@ -35,6 +36,19 @@ module Env = Map.Make (String)
 let sprintf = Printf.sprintf
 let plural n = if n = 1 then "" else "s"
 
+(* Every import must be used (module-build.md, "Found through scope"): its
+   alias, or a type it imports by name. Whether a type imported by name is
+   used isn't known here, though: `Red`, written bare, can be a constructor
+   of an imported `Color` that step 2 of a lookup through a type finds
+   (infer_expr.ml). So this pass records what it saw used, and
+   [unused_imports] reports the rest once inference is done. *)
+type import_use = {
+  import : import;
+  alias_used : bool;  (** whether its alias is written anywhere *)
+  names : ident list;  (** the names in its `.{}` that imported a type *)
+  unseen : ident list;  (** those of [names] that are never written *)
+}
+
 type t = {
   home : string;
   prog : Resolved.program;
@@ -47,6 +61,8 @@ type t = {
           imported by name and the module's own *)
   aliases : (string * string) list;
       (** each module imported, with its alias here, in import order *)
+  import_uses : import_use list;
+      (** what of each import the module uses, by name (see [unused_imports]) *)
 }
 
 (* How module [r] writes the type [p]: the shortest way it can. Bare if
@@ -60,6 +76,11 @@ let type_name (r : t) (p : Path.t) =
   | Some q, _ when q = p -> p.name
   | _, Some alias -> alias ^ "." ^ p.name
   | _ -> Path.full p
+
+(* Whether module [r] can write the type [p] at all: it's in scope, or its
+   module is imported. *)
+let can_name (r : t) (p : Path.t) =
+  List.assoc_opt p.name r.scope = Some p || List.mem_assoc p.home r.aliases
 
 type env = {
   sink : Diag.sink;
@@ -566,39 +587,37 @@ let no_leaks env ~private_ (items : Resolved.program) =
       | Fn _ | Type _ | Import _ -> ())
     items
 
-(* Every import must be used (module-build.md, "Found through scope"): its
-   alias, or a type it imports by name. What isn't used is reported
-   once: the whole import, or one of the types it names, or the name after
-   its `as`. [imported n] says whether the name [n] in `.{}` imported a
-   type; one that didn't was reported already. *)
-let unused_imports env ~imported =
+(* What isn't used is reported once: the whole import, or one of the types
+   it names, or the name after its `as`. [found] are the types step 2 of a
+   lookup found, so each one's import by name is used. *)
+let unused_imports sink (r : t) ~found =
+  let report ?help loc msg = Diag.report sink (Diag.make ?help loc msg) in
   List.iter
-    (fun ((i : import), _) ->
-      let alias_used = Hashtbl.mem env.used i.alias.name in
-      let names = List.filter imported i.names in
+    (fun u ->
+      let i = u.import in
       let unused =
         List.filter
-          (fun (n : ident) ->
-            not (Hashtbl.mem env.used_types (Path.make i.path n.name)))
-          names
+          (fun (n : ident) -> not (List.mem (Path.make i.path n.name) found))
+          u.unseen
       in
       let last = List.nth i.segments (List.length i.segments - 1) in
-      if (not alias_used) && unused = names && (names <> [] || i.names = [])
+      if
+        (not u.alias_used) && unused = u.names && (u.names <> [] || i.names = [])
       then
-        report env i.iloc ~help:"remove it"
+        report i.iloc ~help:"remove it"
           (sprintf "`%s` is imported but never used" i.path)
       else (
         List.iter
           (fun (n : ident) ->
-            report env n.loc ~help:"remove it"
+            report n.loc ~help:"remove it"
               (sprintf "`%s` is imported but never used" n.name))
           unused;
         (* `as x` wasn't needed: the types it imports are used by name *)
-        if (not alias_used) && i.alias.loc <> last.loc then
-          report env i.alias.loc
+        if (not u.alias_used) && i.alias.loc <> last.loc then
+          report i.alias.loc
             ~help:(sprintf "remove the `as %s`" i.alias.name)
             (sprintf "`%s` is never used" i.alias.name)))
-    env.imports
+    r.import_uses
 
 let program sink ~home ~imports (prog : Parsed.program) =
   (* each import, with the interface of the module it imports; the driver
@@ -760,10 +779,29 @@ let program sink ~home ~imports (prog : Parsed.program) =
         | Type td -> Some (Iface.of_type_def ~home td) | Fn _ | Import _ -> None)
       items
   in
-  unused_imports env ~imported:(fun (n : ident) ->
-      match Hashtbl.find_opt by_name n.name with
-      | Some ((first : ident), _) -> first.loc = n.loc
-      | None -> false);
+  (* [imported n] says whether the name [n] in `.{}` imported a type; one
+     that didn't was reported already *)
+  let imported (n : ident) =
+    match Hashtbl.find_opt by_name n.name with
+    | Some ((first : ident), _) -> first.loc = n.loc
+    | None -> false
+  in
+  let import_uses =
+    List.map
+      (fun ((i : import), _) ->
+        let names = List.filter imported i.names in
+        {
+          import = i;
+          alias_used = Hashtbl.mem env.used i.alias.name;
+          names;
+          unseen =
+            List.filter
+              (fun (n : ident) ->
+                not (Hashtbl.mem env.used_types (Path.make i.path n.name)))
+              names;
+        })
+      env.imports
+  in
   let scope =
     Hashtbl.fold (fun name (p, _) acc -> (name, p) :: acc) env.types []
     |> List.sort compare
@@ -776,4 +814,5 @@ let program sink ~home ~imports (prog : Parsed.program) =
     scope;
     aliases =
       List.map (fun ((i : import), _) -> (i.path, i.alias.name)) env.imports;
+    import_uses;
   }

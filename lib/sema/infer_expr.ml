@@ -36,6 +36,9 @@ type env = {
   home : string;  (** the module being checked *)
   names : Path.t -> string;
       (** how the module writes each type's name (Resolve.type_name) *)
+  can_name : Path.t -> bool;
+      (** whether the module can write a type's name at all (Resolve.can_name)
+      *)
   types : (Path.t, Iface.type_decl) Hashtbl.t;
       (** every type the module can meet: its own, and the public types of every
           module reachable through its imports (iface.ml) *)
@@ -49,6 +52,9 @@ type env = {
       (** the functions of the group being checked, each with a way to make the
           type its declaration gives it *)
   mutable joins : join list;  (** most recent first *)
+  mutable in_scope : Path.t list;
+      (** the types step 2 of a lookup found: a type imported by name may be
+          used only that way, so this says that its import is used *)
 }
 
 (* A use of another function of the group being checked. While the group's
@@ -238,7 +244,10 @@ let through_type env ~known ~fits =
             Option.map (fun x -> (td, x)) (fits td))
           env.visible
       with
-      | [ found ] -> Found found
+      | [ (((td : Iface.type_decl), _) as found) ] ->
+          if not (List.mem td.path env.in_scope) then
+            env.in_scope <- td.path :: env.in_scope;
+          Found found
       | [] -> Nowhere
       | several ->
           Several
@@ -272,26 +281,35 @@ let find_ctor env (c : ctor_ref) ~expected =
       assert false
   | None -> (
       let c = c.name in
-      let known =
-        Option.bind (known_decl env expected) (fun td ->
-            Option.map (fun k -> (td, k)) (ctor_in c td))
-      in
-      match through_type env ~known ~fits:(ctor_in c) with
-      | Found found -> Some found
-      | Nowhere ->
-          (* it may be in a type the module can't name bare, which is
-             only looked in when that type is expected *)
-          let elsewhere =
-            Hashtbl.fold
-              (fun p td acc -> if ctor_in c td <> None then p :: acc else acc)
-              env.types []
-            |> List.sort compare
-          in
-          report env (no_ctor ~names:env.names c elsewhere);
+      match known_decl env expected with
+      | Some ({ body = Sum _; _ } as td) when ctor_in c td = None ->
+          (* a sum type is expected, so no other type's constructor would
+             do *)
+          report env (not_in_type ~names:env.names ~expected:true c.loc c td);
           None
-      | Several owners ->
-          report env (ambiguous_ctor ~names:env.names c owners);
-          None)
+      | decl -> (
+          let known =
+            Option.bind decl (fun td ->
+                Option.map (fun k -> (td, k)) (ctor_in c td))
+          in
+          match through_type env ~known ~fits:(ctor_in c) with
+          | Found found -> Some found
+          | Nowhere ->
+              (* it may be in a type the module can't name bare, which is
+                 only looked in when that type is expected *)
+              let elsewhere =
+                Hashtbl.fold
+                  (fun p td acc ->
+                    if ctor_in c td <> None then p :: acc else acc)
+                  env.types []
+                |> List.sort compare
+              in
+              report env
+                (no_ctor ~names:env.names ~can_name:env.can_name c elsewhere);
+              None
+          | Several owners ->
+              report env (ambiguous_ctor ~names:env.names c owners);
+              None))
 
 (* Is [c] given as many arguments as it has fields, labelled correctly?
    Each problem is reported. *)
@@ -818,24 +836,33 @@ and infer_field env cx (e : expr) r (f : ident) =
           TError
       | None, None -> needs_record t)
   | TVar _ -> (
+      let what =
+        match r.kind with
+        | Var x -> Some (Infer_msg.Named (name_of x))
+        | Call ({ kind = Var (Global p); _ }, _)
+          when p <> cx.self && List.mem_assoc p env.group ->
+            (* another function of the group, seen only as declared *)
+            Some (Group_result p.name)
+        | _ -> None
+      in
       match through_type env ~known:None ~fits:field_of with
       | Found (td, fd) ->
           let t, tvars = instance env td in
           unify_at env r.loc ~found:tr ~expected:t;
           found td fd tvars
       | Nowhere ->
-          report env (no_record_has f);
+          (* it may be in a record type the module can't name bare *)
+          let elsewhere =
+            Hashtbl.fold
+              (fun p td acc -> if field_of td <> None then p :: acc else acc)
+              env.types []
+            |> List.sort compare
+          in
+          report env
+            (no_record_has ~names:env.names ~can_name:env.can_name ?what f
+               elsewhere);
           TError
       | Several paths ->
-          let what =
-            match r.kind with
-            | Var x -> Some (Infer_msg.Named (name_of x))
-            | Call ({ kind = Var (Global p); _ }, _)
-              when p <> cx.self && List.mem_assoc p env.group ->
-                (* another function of the group, seen only as declared *)
-                Some (Group_result p.name)
-            | _ -> None
-          in
           report env (several_records_have ~names:env.names r.loc ?what f paths);
           TError)
   | t -> needs_record t

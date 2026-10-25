@@ -81,9 +81,27 @@ let mismatch_notes ?help ~found ~expected () =
    (Resolve.type_name). *)
 let field_names (fs : Iface.field list) = List.map (fun f -> f.Iface.fname) fs
 
+(* How to write the type [p] here: the import that's needed first, if any,
+   and its name. A type of a module that isn't imported can't be written
+   yet; imported, its alias would be the last part of its path. *)
+let writing ~names ~can_name (p : Path.t) =
+  if can_name p then ("", names p)
+  else
+    let alias =
+      match String.rindex_opt p.home '/' with
+      | Some i -> String.sub p.home (i + 1) (String.length p.home - i - 1)
+      | None -> p.home
+    in
+    (sprintf "import `%s`, then " p.home, alias ^ "." ^ p.name)
+
+(* The way to write a constructor [c] of the type [p] in full. *)
+let write_ctor ~names ~can_name p c =
+  let first, t = writing ~names ~can_name p in
+  sprintf "%swrite `%s.%s`" first t c
+
 (* [elsewhere] are the types that have [c] but can't be named bare here,
    like a type of a module that isn't imported by name. *)
-let no_ctor ~names (c : Ast.ident) elsewhere =
+let no_ctor ~names ~can_name (c : Ast.ident) elsewhere =
   match elsewhere with
   | [] ->
       Diag.make c.loc
@@ -94,11 +112,14 @@ let no_ctor ~names (c : Ast.ident) elsewhere =
              c.name)
         (sprintf "there's no constructor named `%s`" c.name)
   | ps ->
+      (* the types it can name, if there are any, since those need no new
+         import *)
+      let ps = match List.filter can_name ps with [] -> ps | named -> named in
       Diag.make c.loc
         ~help:
-          (sprintf "write %s, naming its type"
-             (String.concat " or "
-                (List.map (fun p -> sprintf "`%s.%s`" (names p) c.name) ps)))
+          (sprintf "%s, naming its type"
+             (String.concat ", or "
+                (List.map (fun p -> write_ctor ~names ~can_name p c.name) ps)))
         (sprintf "no type in scope here has a constructor named `%s`" c.name)
 
 (* `Red`, where nothing says which type it's in, and more than one type
@@ -111,9 +132,14 @@ let ambiguous_ctor ~names (c : Ast.ident) owners =
     (sprintf "`%s` could be %s" c.name
        (String.concat " or " (List.map full owners)))
 
-(* `Light.Purple`, where `Light` has no `Purple` *)
-let not_in_type ~names loc (c : Ast.ident) (td : Iface.type_decl) =
+(* `Light.Purple`, where `Light` has no `Purple`. With [expected], it's a
+   bare `Purple` where a `Light` is expected. *)
+let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
+    (td : Iface.type_decl) =
   let t = names td.path in
+  let notes =
+    if expected then [ sprintf "%s is expected here" (article t) ] else []
+  in
   let msg, help =
     match td.body with
     | Sum cs ->
@@ -129,7 +155,7 @@ let not_in_type ~names loc (c : Ast.ident) (td : Iface.type_decl) =
           Some "its values are written directly, like `1`, `true` or `[1, 2]`"
         )
   in
-  Diag.make (Loc.span loc c.loc) ?help msg
+  Diag.make (Loc.span loc c.loc) ~notes ?help msg
 
 let ctor_arity loc (c : Ast.ident) (ctor : Iface.ctor) given =
   let n = List.length ctor.cfields in
@@ -190,43 +216,60 @@ let needs_record (f : Ast.ident) shown =
   Diag.make f.loc
     (sprintf "`.%s` needs a record, but this is %s" f.name (article shown))
 
-let no_record_has (f : Ast.ident) =
-  Diag.make f.loc (sprintf "no record type has a field named `%s`" f.name)
-
-(* `u.id` where `u`'s type isn't known yet, and several records have an
-   `id`. [what] says what the record is, if that helps say how to fix it: a
-   variable, or the result of a function [g] that calls this one, which is
-   seen only as its declaration describes it until both are checked
-   (infer_top.ml). *)
+(* `u.id` where `u`'s type isn't known yet: what `u` is, if that helps say
+   how to fix it. A variable, or the result of a function [g] that calls
+   this one, which is seen only as its declaration describes it until both
+   are checked (infer_top.ml). *)
 type what = Named of string | Group_result of string
 
+(* How to say that [what] is the record type [p]: what to call it in the
+   message, the help, and any notes. *)
+let say_which ~names ~can_name ?what p =
+  let first, t = writing ~names ~can_name p in
+  match what with
+  | Some (Named x) ->
+      ( sprintf "`%s`" x,
+        sprintf "%sannotate `%s` where it's defined, like `%s: %s`" first x x t,
+        [] )
+  | Some (Group_result g) ->
+      ( "this",
+        sprintf "%sdeclare what `%s` returns, like `-> %s`" first g t,
+        [
+          sprintf
+            "`%s` and this function call each other, so here `%s` is only what \
+             its signature says"
+            g g;
+        ] )
+  | None -> ("this", sprintf "%sadd a type annotation to say which" first, [])
+
+let field_of_types ~names (f : Ast.ident) paths =
+  [
+    sprintf "`%s` is a field of %s" f.name
+      (String.concat " and "
+         (List.map (fun p -> sprintf "`%s`" (names p)) paths));
+    "a field is found through its record's type, which has to be known where \
+     the field is used";
+  ]
+
+(* `i.plan`, where `i`'s type isn't known yet and no record type the
+   module can name bare has a `plan`. [elsewhere] are those that have one,
+   which step 2 of the lookup doesn't look in. *)
+let no_record_has ~names ~can_name ?what (f : Ast.ident) elsewhere =
+  match elsewhere with
+  | [] ->
+      Diag.make f.loc (sprintf "no record type has a field named `%s`" f.name)
+  | p :: _ ->
+      let _, help, extra = say_which ~names ~can_name ?what p in
+      Diag.make f.loc ~help
+        ~notes:(field_of_types ~names f elsewhere @ extra)
+        (sprintf "no record type in scope here has a field named `%s`" f.name)
+
+(* `u.id` where `u`'s type isn't known yet, and several records have an
+   `id`. *)
 let several_records_have ~names loc ?what (f : Ast.ident) paths =
-  let first = names (List.hd paths) in
   let what, help, extra =
-    match what with
-    | Some (Named x) ->
-        ( sprintf "`%s`" x,
-          sprintf "annotate `%s` where it's defined, like `%s: %s`" x x first,
-          [] )
-    | Some (Group_result g) ->
-        ( "this",
-          sprintf "declare what `%s` returns, like `-> %s`" g first,
-          [
-            sprintf
-              "`%s` and this function call each other, so here `%s` is only \
-               what its signature says"
-              g g;
-          ] )
-    | None -> ("this", "add a type annotation to say which", [])
+    say_which ~names ~can_name:(fun _ -> true) ?what (List.hd paths)
   in
   Diag.make loc ~help
-    ~notes:
-      ([
-         sprintf "`%s` is a field of %s" f.name
-           (String.concat " and "
-              (List.map (fun p -> sprintf "`%s`" (names p)) paths));
-         "a field is found through its record's type, which has to be known \
-          where the field is used";
-       ]
-      @ extra)
+    ~notes:(field_of_types ~names f paths @ extra)
     (sprintf "can't tell which record type %s is" what)

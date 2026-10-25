@@ -57,6 +57,7 @@ type node = Infer_top.node = { ty : Ty.ty; found : found option }
 type t = Infer_top.t = {
   schemes : (string * Ty.scheme) list;
   nodes : (string * node Nodes.t) list;
+  in_scope : Path.t list;
 }
 
 let program = Infer_top.program

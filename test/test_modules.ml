@@ -784,3 +784,156 @@ fn main() = id(rows.load(2))
       │              ^^^
       help: remove it
     |}]
+
+(* `Red`, `Free`, `{ id: ... }` and `.id` can each be found through a type
+   imported by name, in step 2 of a lookup through a type: then the import
+   is used, though its name is never written *)
+let%expect_test "a type imported by name is used through what it has" =
+  run_files
+    [
+      ("main.ren", {|
+import colors.{Color}
+fn main() = print(Red)
+|});
+      ("colors.ren", {|
+pub type Color = Red | Green
+|});
+    ];
+  [%expect {|
+    Red
+    ()
+    |}];
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing.{Plan}
+fn main() =
+  let p = Free
+  match p
+    Free => 0
+    Pro(seats) => seats
+|}
+      );
+      billing;
+    ];
+  [%expect {| 0 |}];
+  run_files
+    [
+      ( "main.ren",
+        {|
+import rows.{Row}
+fn id(r) = r.id
+fn main() = id(rows.load(2)) + { id: 3 }.id
+|}
+      );
+      rows;
+    ];
+  [%expect {| 5 |}];
+  (* found through a type that was already known, it isn't *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing.{Plan}
+type Tier = Free | Paid
+fn tier(t: Tier) -> Int = 1
+fn main() = tier(Free) + billing.price()
+|}
+      );
+      ( "billing.ren",
+        {|
+pub type Plan = Free | Pro(seats: Int)
+pub fn price() -> Int = 2
+|}
+      );
+    ];
+  [%expect
+    {|
+    error: `Plan` is imported but never used
+      ┌─ main.ren:1:17
+    1 │ import billing.{Plan}
+      │                 ^^^^
+      help: remove it
+    |}]
+
+(* a type of a module that isn't imported can't be written, so the help
+   says to import it first *)
+let%expect_test "found through a type whose module isn't imported" =
+  let main src = ("main.ren", src) :: List.tl orders in
+  run_files
+    (main
+       {|
+import orders
+fn main() =
+  let p = if true then Free else orders.latest().plan
+  1
+|});
+  [%expect
+    {|
+    error: no type in scope here has a constructor named `Free`
+      ┌─ main.ren:3:24
+    3 │   let p = if true then Free else orders.latest().plan
+      │                        ^^^^
+      help: import `billing/invoice`, then write `invoice.Plan.Free`, naming its type
+    |}];
+  run_files
+    (main
+       {|
+import orders
+fn seats(i) = i.plan
+fn main() = 1 + orders.latest().total
+|});
+  [%expect
+    {|
+    error: no record type in scope here has a field named `plan`
+      ┌─ main.ren:2:17
+    2 │ fn seats(i) = i.plan
+      │                 ^^^^
+      = `plan` is a field of `billing/invoice.Invoice`
+      = a field is found through its record's type, which has to be known where the field is used
+      help: import `billing/invoice`, then annotate `i` where it's defined, like `i: invoice.Invoice`
+    |}];
+  (* imported, it can be written with its alias *)
+  run_files
+    (main
+       {|
+import billing/invoice
+fn seats(i) = i.plan
+fn main() = invoice.make(1).total
+|});
+  [%expect
+    {|
+    error: no record type in scope here has a field named `plan`
+      ┌─ main.ren:2:17
+    2 │ fn seats(i) = i.plan
+      │                 ^^^^
+      = `plan` is a field of `invoice.Invoice`
+      = a field is found through its record's type, which has to be known where the field is used
+      help: annotate `i` where it's defined, like `i: invoice.Invoice`
+    |}]
+
+let%expect_test "a constructor the expected type doesn't have" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing
+type Plan = Gold | Silver
+fn main() =
+  let x: billing.Plan = Gold
+  let y: Plan = Silver
+  1
+|}
+      );
+      billing;
+    ];
+  [%expect
+    {|
+    error: `billing.Plan` has no constructor named `Gold`
+      ┌─ main.ren:4:25
+    4 │   let x: billing.Plan = Gold
+      │                         ^^^^
+      = a `billing.Plan` is expected here
+      help: its constructors: `Free`, `Pro`
+    |}]
