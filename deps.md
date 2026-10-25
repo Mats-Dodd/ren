@@ -140,7 +140,9 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 
 - Items are installed outermost first. The innermost implementation of a
   dependency wins. A line that ends in `,` goes on with the list on the
-  next, indented further.
+  next, indented further. That holds for any line outside brackets that
+  ends in `,`, so a signature's `uses` list wraps the same way:
+  `uses Clock,` then `    Console =` on the next line.
 - `with` removes what it installs from the body's `uses`, and adds what its
   items need.
 - An item is an implementation, or a **wrapper**: a function whose last

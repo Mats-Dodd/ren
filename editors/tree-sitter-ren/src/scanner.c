@@ -9,10 +9,10 @@
 // ignored, so the scanner lexes the brackets itself to know where it is,
 // except in a lambda's body: a lambda's `=>` that ends a line inside
 // brackets, followed by a line indented further than the block around
-// them, opens a block, which ends at a line indented less or at the
-// closing bracket. The scanner lexes that `=>` too, as ARROW_BLOCK, which
-// opens the block itself, since it's the only one to see the line break
-// after it. Blank and comment-only lines are skipped. An indented line
+// them, opens a block, which ends at a line indented less, at a `,` that
+// goes on to the next argument or field, or at the closing bracket. The
+// scanner lexes that `=>` too, as ARROW_BLOCK, which opens the block
+// itself, since it's the only one to see the line break after it. Blank and comment-only lines are skipped. An indented line
 // that starts with `uses`, or with an error set's `!` (not `!=`),
 // continues the signature above it, so it gets no layout token at all,
 // unless a block can open there (after `type E =`, a named error set one
@@ -249,6 +249,16 @@ bool tree_sitter_ren_external_scanner_scan(void *payload, TSLexer *lexer,
   // A comment is left to the grammar, so it shows up in the tree: the
   // next call starts after it.
   if (saw_comment || saw_slash) return false;
+
+  // a `,` after a lambda's block inside brackets closes it, as a closing
+  // bracket does; one in a list of `with` items or dependencies inside it
+  // can't, since no DEDENT is valid there
+  if (lexer->lookahead == ',' && valid[DEDENT] && !recovering &&
+      in_block(s) && in_bracket(s)) {
+    array_pop(&s->stack);
+    lexer->result_symbol = DEDENT;
+    return true;
+  }
 
   if (lexer->lookahead == '=' && valid[ARROW_BLOCK] && !recovering &&
       !in_block(s))

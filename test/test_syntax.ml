@@ -193,6 +193,52 @@ fn main() =
 |};
   [%expect {| (fn main () (call apply (lambda (x) (+ x 1)) 2)) |}]
 
+let%expect_test "a comma after a lambda's block inside brackets ends it" =
+  (* the block ends at the `,`, on its last line, and the brackets go on
+     with the next field or argument; a `,` in a `with`'s items inside the
+     block goes on with the items *)
+  ast
+    {|
+fn main() =
+  let r = R {
+    f: fn(x) =>
+      x + 1,
+    g: 2,
+  }
+  apply(fn(x) =>
+        x + 1,
+      9)
+  apply(fn(x) =>
+      x + 3 , 1)
+  apply(fn(x) =>
+      let y = x * 2
+      y,
+    2)
+  apply(fn(x) =>
+      with a(),
+          b() in
+        x, 1)
+|};
+  [%expect
+    {| (fn main () (block (let r (record R f=(lambda (x) (+ x 1)) g=2)) (call apply (lambda (x) (+ x 1)) 9) (call apply (lambda (x) (+ x 3)) 1) (call apply (lambda (x) (block (let y (* x 2)) y)) 2) (call apply (lambda (x) (with (call a) (with (call b) x))) 1))) |}]
+
+let%expect_test "a line of a lambda's block indented too little" =
+  ast {|
+fn main() =
+  R { f: fn(x) =>
+      let y = x + 1
+     y * 2
+  }
+|};
+  [%expect
+    {|
+    error: this line's indentation doesn't line up with the lambda's body above it
+      ┌─ test.ren:4:6
+    4 │      y * 2
+      │      ^
+      help: indent it to match the lines above it; to end the lambda there, start the line with `,` or the closing bracket
+    |}]
+
 let%expect_test "a with's items wrap after a comma" =
   ast {|
 fn main() =
@@ -216,6 +262,18 @@ fn main() =
     3 │   b() in
       │   ^
       help: indent the next item further than the line the `with` is on, and it goes on with the list
+    |}];
+  (* any line outside brackets that ends in `,` goes on, so a signature's
+     `uses` list wraps too *)
+  types
+    {|
+fn f() uses Clock,
+    Console = Console.write(show(Clock.now()))
+fn main() = ()
+|};
+  [%expect {|
+    fn f() uses Clock, Console
+    fn main()
     |}]
 
 let%expect_test "a uses list in a type argument ends at a comma" =
@@ -247,6 +305,20 @@ fn two(b: Box<fn() -> Int uses Clock, Console>) -> Int uses Clock, Console = b.f
     2 │ fn two(b: Box<fn() -> Int uses Clock, Console>) -> Int uses Clock, Console = b.f()
       │           ^^^
       help: in a type argument, a `uses` list ends at a comma: to list several dependencies, put the type in parentheses, `Box<(fn() uses Clock, Console)>`
+    |}];
+  (* a named row after a second dependency *)
+  types
+    {|
+type Box<F> = { f: F }
+fn row(b: Box<fn() -> Int uses Clock, Console, ..d>) -> Int uses Clock, Console, ..d = b.f()
+|};
+  [%expect
+    {|
+    error: a named row ends a `uses` list, but the list before it ended at a comma
+      ┌─ test.ren:2:48
+    2 │ fn row(b: Box<fn() -> Int uses Clock, Console, ..d>) -> Int uses Clock, Console, ..d = b.f()
+      │                                                ^^
+      help: in a type argument, a `uses` list ends at a comma: to list several dependencies, put the type in parentheses, `Box<(fn() uses Clock, Console, ..d)>`
     |}]
 
 (* after a syntax error, parsing picks up at the next top-level item *)

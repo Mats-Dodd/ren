@@ -172,6 +172,98 @@ fn main() =
               (number))))))))
 
 ================================================================================
+a comma after a lambda's block inside brackets ends it
+================================================================================
+
+fn main() =
+  let r = R {
+    f: fn(x) =>
+      x + 1,
+    g: 2,
+  }
+  apply(fn(x) =>
+      let y = x * 2
+      y,
+    9)
+  apply(fn(x) =>
+      x + 3 , 1)
+  apply(fn(x) =>
+      with a(),
+          b() in
+        x, 1)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (record_expression
+          (type_name
+            (type_identifier))
+          (field_initializer
+            (identifier)
+            (lambda
+              (parameters
+                (parameter
+                  (identifier)))
+              (block
+                (binary_expression
+                  (identifier)
+                  (number)))))
+          (field_initializer
+            (identifier)
+            (number))))
+      (call_expression
+        (identifier)
+        (arguments
+          (lambda
+            (parameters
+              (parameter
+                (identifier)))
+            (block
+              (let_statement
+                (identifier)
+                (binary_expression
+                  (identifier)
+                  (number)))
+              (identifier)))
+          (number)))
+      (call_expression
+        (identifier)
+        (arguments
+          (lambda
+            (parameters
+              (parameter
+                (identifier)))
+            (block
+              (binary_expression
+                (identifier)
+                (number))))
+          (number)))
+      (call_expression
+        (identifier)
+        (arguments
+          (lambda
+            (parameters
+              (parameter
+                (identifier)))
+            (block
+              (with_expression
+                (call_expression
+                  (identifier)
+                  (arguments))
+                (call_expression
+                  (identifier)
+                  (arguments))
+                (block
+                  (identifier)))))
+          (number))))))
+
+================================================================================
 a lambda's body on the next line, not indented further
 ================================================================================
 

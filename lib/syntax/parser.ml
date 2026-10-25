@@ -304,6 +304,16 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
       advance p;
       TyErrors { errs = []; etail = None; eloc = l }
   | BANG -> TyErrors (parse_errors p)
+  | DOTDOT when arg ->
+      (* `Box<fn() uses Clock, Console, ..d>`: the `uses` ended at the first
+         comma, so the row is left on its own *)
+      Diag.error (loc p)
+        ~help:
+          "in a type argument, a `uses` list ends at a comma: to list several \
+           dependencies, put the type in parentheses, `Box<(fn() uses Clock, \
+           Console, ..d)>`"
+        "a named row ends a `uses` list, but the list before it ended at a \
+         comma"
   | _ ->
       let start = loc p in
       let name = parse_tyname p in
