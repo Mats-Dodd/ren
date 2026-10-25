@@ -80,7 +80,7 @@ pub fn zero() -> Int = 0
     |}]
 
 let%expect_test "an import cycle" =
-  run_files
+  check_error_files
     [
       ("main.ren", {|
 import billing/stripe

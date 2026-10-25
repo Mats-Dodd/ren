@@ -49,7 +49,7 @@ fn main() -> Int =
   [%expect {| 6 |}]
 
 let%expect_test "division by zero panics" =
-  run {|
+  run_error {|
 fn main() = 10 / (5 - 5)
 |};
   [%expect

@@ -139,3 +139,48 @@ let test_files ?(path = ".") ?only ?(exact = false) ?seed ?(list = false) files
 (* The same, for a program that is the one file [src]. *)
 let test ?only ?exact ?seed ?list src =
   test_files ~path:file ?only ?exact ?seed ?list [ (file, src) ]
+
+(* ---- negative tests ----
+
+   A test that a program is refused prints the error in its [%expect]
+   block, and `dune promote` accepts whatever is printed. If a change made
+   the program check, the error would vanish from the block and promote
+   would accept that silently. These helpers fail the test outright
+   instead when nothing is reported, so a lost error can't be promoted
+   away: ppx_expect reports an exception the test raises, and accepting it
+   takes writing [@@expect.uncaught_exn] by hand. *)
+
+exception No_error of string
+
+(* Run [f], which should report an error, printing it; fail if it
+   doesn't. *)
+let expecting_error files f =
+  let reported = ref false in
+  (try f ()
+   with e -> (
+     match Driver.render_error ~sources:(fun f -> List.assoc_opt f files) e with
+     | Some msg ->
+         reported := true;
+         print_string msg
+     | None -> raise e));
+  if not !reported then
+    raise (No_error "expected an error, but the program checked")
+
+(* The entry module, which should be refused: what `ren check` says. *)
+let check_error src =
+  let src = clean src in
+  expecting_error [ (file, src) ] (fun () -> ignore (Driver.check ~file src))
+
+(* The same, for a program of several files, the entry first. *)
+let check_error_files files =
+  let files, file, src, load = program files in
+  expecting_error files (fun () -> ignore (Driver.check ~load ~file src))
+
+(* A program that should panic, or fail with an error nothing handles,
+   when it runs: what `ren run` says. *)
+let run_error ?args src =
+  let src = clean src in
+  expecting_error
+    [ (file, src) ]
+    (fun () ->
+      print_endline (Value.show (Driver.run ~lint:true ?args ~file src)))

@@ -7,7 +7,7 @@ open Helpers
 (* ---- 1. You can see it ---- *)
 
 let%expect_test "a call that can fail has to be marked" =
-  types
+  check_error
     {|
 type Account = { balance: Int }
   fn debit(inout self, m: Int) =
@@ -58,7 +58,7 @@ fn main() = ()
     |}]
 
 let%expect_test "a marker that covers nothing that can fail" =
-  types
+  check_error
     {|
 fn double(n: Int) -> Int = n * 2
 fn twice(n: Int) = try double(n)
