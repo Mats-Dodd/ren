@@ -106,8 +106,15 @@ pub dep Random =
 
 pub dep Console =
   write: fn(line: Str)
+  // a line apart from what the program writes: how it's going, or what
+  // went wrong
+  error: fn(line: Str)
 
-  let real: Console = Console { write: fn(line) => console_write(line) }
+  let real: Console =
+    Console {
+      write: fn(line) => console_write(line),
+      error: fn(line) => console_error(line),
+    }
 
 // what any value shows as, on a line of its own
 pub fn print<T>(x: T) uses Console = Console.write(show(x))
@@ -228,12 +235,17 @@ pub handler test_random(seed: Int) for Random, TestRandom =
 pub dep TestConsole =
   // every line written to `Console` so far, the first first
   output: fn() -> Array<Str>
+  // every line given to `Console.error` so far, the first first
+  errors: fn() -> Array<Str>
 
 // a console that keeps what's written to it
 pub handler test_console() for Console, TestConsole =
   var lines: Array<Str> = []
+  var errors: Array<Str> = []
   write(line) => &lines.push(line)
+  error(line) => &errors.push(line)
   output() => lines
+  errors() => errors
 
 // files kept in memory, starting with `files`. A test gets an empty one,
 // and reads back what it wrote through `Fs` itself.
@@ -322,7 +334,7 @@ let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])
 
 (* What the real implementations of the built-in dependencies run on: the
-   system's clock, its source of randomness, and stdout. Each is a number
+   system's clock, its source of randomness, stdout and stderr. Each is a number
    of milliseconds, as [source] represents time. [Unix.gettimeofday] is
    the wall clock, which can be set back, so `instant` isn't yet the clock
    that never goes back that `Instant` promises: OCaml's standard library
@@ -509,6 +521,14 @@ let fns =
             print_endline line;
             (Value.VUnit, args)
         | _ -> bug "console_write");
+    (* fn(Str), the real `Console.error`: stderr *)
+    fn ~runtime:true "console_error"
+      (Fun ([ read str ], unit, open_row 0, open_row 1))
+      (function
+        | [ Value.VStr line ] as args ->
+            prerr_endline line;
+            (Value.VUnit, args)
+        | _ -> bug "console_error");
     (* fn(Str) -> FsOutcome<Bytes>, the real `Fs.read` *)
     fn ~runtime:true "fs_read"
       (Fun

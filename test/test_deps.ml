@@ -3377,8 +3377,9 @@ fn main() uses Console =
   print(a[2])
   let lines = with test_console() in
     print("kept")
+    Console.error("apart")
     Console.write("too")
-    TestConsole.output()
+    [TestConsole.output(), TestConsole.errors()]
   print(lines)
 |};
   [%expect
@@ -3387,7 +3388,7 @@ fn main() uses Console =
     true
     true
     42
-    ["kept", "too"]
+    [["kept", "too"], ["apart"]]
     ()
     |}]
 
