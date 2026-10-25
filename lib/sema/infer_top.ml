@@ -15,8 +15,7 @@ open Infer_expr
    callees before callers (Tarjan's algorithm, which finishes a component
    only after every component it reaches). [calls] lists the top-level
    functions each function uses, which resolve.ml found, and the methods
-   it may call with a dot: which one `s.push(1)` calls is only found by
-   checking it, so it's after every method of the module named `push`. *)
+   it calls with a dot, as far as they're known (see [program]). *)
 let components ~home ~calls (fns : fn_def list) =
   let by_name = Hashtbl.create 16 in
   List.iter (fun (f : fn_def) -> Hashtbl.replace by_name f.name.name f) fns;
@@ -320,8 +319,9 @@ type t = {
    interfaces of the modules it imports, whose functions it can call, and
    [reachable] those of every module reachable through them, whose types
    it can meet: a field of an imported type can have a type from a module
-   this one never imported. *)
-let program sink ~imports ~reachable ?entry (r : Resolve.t) =
+   this one never imported. [extra] are the dot calls of methods found so
+   far that the call graph needs besides [r]'s (see [program]). *)
+let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
   let st = Types.new_state () in
   let home = r.home in
   let types = Hashtbl.create 16 in
@@ -626,7 +626,14 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
     (components ~home
        ~calls:
          (List.map
-            (fun (f, calls) -> (f, calls @ List.assoc f r.methods))
+            (fun (f, calls) ->
+              let found =
+                List.filter_map
+                  (fun (caller, m) ->
+                    if caller = f then Some (Path.make home m) else None)
+                  extra
+              in
+              (f, calls @ List.assoc f r.methods @ found))
             r.calls)
        fns);
   let values = value_order env r fns ~is_value ~found:tables in
@@ -672,3 +679,30 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
   in
   let schemes, nodes = List.split (List.map canonical fns) in
   { schemes; values; nodes; in_scope = List.sort compare env.in_scope }
+
+(* Which method a dot call like `s.size()` calls is found only by checking
+   the call, through `s`'s type, but the call graph puts the functions in
+   order before anything is checked. So the graph starts with the dot calls
+   resolve.ml could tell (Resolve.t.methods), and when checking finds a dot
+   call of a method that isn't checked yet, that call is added to the graph
+   and the module is checked again, from the start. Each time adds a call
+   the graph didn't have, so this ends. Only the calls a function really
+   makes join it to a group, so a method that only shares a name with the
+   one called changes nothing about the caller's type or its `uses`.
+
+   A try reports to its own sink, and only the last try's errors are kept. *)
+let program sink ~imports ~reachable ?entry (r : Resolve.t) =
+  let rec go extra =
+    let tried = Diag.sink () in
+    let keep () = List.iter (Diag.report sink) (List.rev tried.reported) in
+    match check tried ~extra ~imports ~reachable ?entry r with
+    | t ->
+        keep ();
+        t
+    | exception Infer_expr.Unchecked { caller; callee } ->
+        go ((caller, callee) :: extra)
+    | exception e ->
+        keep ();
+        raise e
+  in
+  go []

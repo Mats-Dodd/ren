@@ -79,6 +79,13 @@ and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
    [row] then also has everything the caller uses. *)
 type call = { cloc : Loc.t; own : string list; row : row }
 
+(* A dot call that turned out to call [callee], a method of the module
+   not checked yet, from [caller]. Which method `s.size()` calls is found
+   only by checking it, after the call graph has put the functions in
+   order, so the call graph was missing this edge: infer_top.ml adds it
+   and checks the module again. *)
+exception Unchecked of { caller : string; callee : string }
+
 (* What the expression being inferred can see. *)
 type ctx = {
   self : Path.t;  (** the top-level function being checked *)
@@ -869,6 +876,8 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       nothing ()
   | Method -> (
       let path = op_path td o in
+      if path.home = env.home && not (Hashtbl.mem env.globals path) then
+        raise (Unchecked { caller = cx.self.name; callee = path.name });
       let tm = lookup env cx f.loc (Global path) in
       Hashtbl.replace cx.nodes f.node tm;
       Hashtbl.replace cx.found f.node (Method_of path);

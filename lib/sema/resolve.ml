@@ -70,13 +70,13 @@ type t = {
       (** each function, and the top-level functions its body uses: the ops
           items written after their type included *)
   methods : (string * Path.t list) list;
-      (** each function, and the methods of the module's own types it may call
-          with a dot, which inference needs to have checked first: for
-          `s.push(1)`, `Stack.push` if it can tell here that `s` is a `Stack`,
-          and otherwise every one named `push`, since which it is is found
-          through `s`'s type, by inference. A method whose signature is written
-          out in full ([Ast.spelled]) isn't one: its declaration is its type,
-          before it's checked. *)
+      (** each function, and the methods of the module's own types it calls with
+          a dot that can be told here, which inference needs to have checked
+          first: for `s.push(1)`, `Stack.push` if `s` is written to be a
+          `Stack`. The others are found through `s`'s type, by inference, which
+          adds them to the call graph as it finds them (infer_top.ml). A method
+          whose signature is written out in full ([Ast.spelled]) isn't one: its
+          declaration is its type, before it's checked. *)
   scope : (string * Path.t) list;
       (** the types written bare here, by name, sorted: the prelude's, those
           imported by name and the module's own *)
@@ -992,12 +992,13 @@ let unused_imports sink (r : t) ~found =
             (sprintf "`%s` is never used" i.alias.name)))
     r.import_uses
 
-(* The methods of the module's own types, declared in [items], that a dot
-   call of [m] may call (see [t.methods]), given its receiver's type
-   [known], if it's written. A receiver of another module's type calls
-   none of them. Inside its module an opaque type is also what it's
-   represented as, so a receiver of one that has no [m] itself may call
-   any of them. *)
+(* The method of the module's own types, declared in [items], that a dot
+   call of [m] calls (see [t.methods]), if it can be told from its
+   receiver's type [known], when that's written. A receiver of another
+   module's type calls none of them. Inside its module an opaque type is
+   also what it's represented as, so a receiver of one that has no [m]
+   itself may call any of them: which one is left to inference, as it is
+   when the receiver's type isn't written. *)
 let dot_callees ~home (items : Resolved.program) (m, known) =
   let types =
     List.filter_map
@@ -1030,10 +1031,9 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
   match Option.map own known with
   | Some (Some td) -> (
       match (method_ td, td.type_body) with
-      | None, Opaque _ -> List.concat_map callees types
+      | None, Opaque _ -> []
       | _ -> callees td)
-  | Some None -> []
-  | None -> List.concat_map callees types
+  | Some None | None -> []
 
 let program sink ~home ~imports (prog : Parsed.program) =
   (* each import, with the interface of the module it imports; the driver

@@ -631,6 +631,80 @@ fn main() = A { n: 3 }.size()
     3
     |}]
 
+let%expect_test "a dot call whose receiver's type is found by inference" =
+  (* `mk().size()` calls `B.size`, found through `mk`'s result, so `pick`
+     doesn't call `A.size`, which has a `size` too: `pick` and `A.size`
+     aren't checked together, and each use of `pick` has its own types *)
+  run
+    {|
+type B = { m: Int }
+  ops =
+    fn size(self) -> Int = self.m
+
+type A = { n: Int }
+  ops =
+    fn size(self) -> Int =
+      if pick(true) then pick(self.n) else 0
+
+fn mk() = B { m: 1 }
+
+fn pick(x) =
+  let k = mk().size()
+  x
+
+fn main() = A { n: 3 }.size()
+|};
+  (* a dot call found this way that closes a cycle puts the method and its
+     caller in one group, as calling it by name would *)
+  run
+    {|
+fn down(n) = mk(n - 1).count() + 1
+
+fn mk(n) = A { n: n }
+
+type A = { n: Int }
+  ops =
+    fn count(self) = if self.n == 0 then 0 else down(self.n)
+
+fn main() = mk(3).count()
+|};
+  (* nor does `pick` pick up `A.size`'s `Io` *)
+  types
+    {|
+type B = { m: Int }
+  ops =
+    fn size(self) -> Int = self.m
+
+type A = { n: Int }
+  ops =
+    fn size(self) -> Int =
+      print(pick(self.n))
+      0
+
+fn mk() = B { m: 1 }
+
+fn pick(x) =
+  let k = mk().size()
+  x
+
+pub fn pure() -> Int = pick(1)
+
+fn main() = pure()
+|};
+  [%expect
+    {|
+    3
+    3
+    type B
+      fn size(self) -> Int
+    type A
+      fn size(self) -> Int uses Io
+    fn mk() -> B
+    fn pick<T>(x: T) -> T
+    pub fn pure() -> Int
+    fn main() -> Int
+    |}]
+
 (* ---- calling: errors ---- *)
 
 let%expect_test "a method that changes its receiver needs `&`" =
