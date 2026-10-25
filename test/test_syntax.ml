@@ -662,3 +662,15 @@ fn main() = "Ren\
       │                 ^
       help: the escapes are `\n`, `\t`, `\"` and `\\`, which writes a backslash
     |}]
+
+(* a `Str` is UTF-8, so a literal is too: this one's `é` has lost its
+   second byte *)
+let%expect_test "a string that isn't UTF-8" =
+  tokens "fn main() = \"caf\xc3\"\n";
+  [%expect {|
+    error: this string isn't UTF-8
+      ┌─ test.ren:1:13
+    1 │ fn main() = "caf�"
+      │             ^^^^^^
+      help: save the file as UTF-8
+    |}]

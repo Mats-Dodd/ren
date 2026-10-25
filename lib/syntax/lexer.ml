@@ -170,6 +170,9 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
             go ()
     in
     go ();
+    (* a `Str` is always UTF-8 *)
+    if not (String.is_valid_utf_8 (Buffer.contents b)) then
+      error ~help:"save the file as UTF-8" start "this string isn't UTF-8";
     emit (STR (Buffer.contents b)) start
   in
 

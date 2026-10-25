@@ -388,9 +388,10 @@ and apply cx f args ev =
   match f with
   | VBuiltin name -> (
       match Prelude.find_fn name with
-      | Some b ->
-          let v, finals = b.eval args in
-          (Ok v, finals)
+      | Some b -> (
+          match b.eval args with
+          | v, finals -> (Ok v, finals)
+          | exception Prelude.Fail err -> (Error err, args))
       | None -> bug ("the unknown built-in `" ^ name ^ "`"))
   | VFn p ->
       let f =

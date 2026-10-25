@@ -57,6 +57,19 @@ pub type Instant = opaque Int
   pub fn before(self, i: Instant) -> Bool = self < i
   pub fn not_before(self, i: Instant) -> Bool = self >= i
 
+// ---- paths ----
+
+// where a file is, as the system writes it: names with `/` between them
+pub type Path = opaque Str
+  pub fn of(s: Str) -> Path = s
+  // `name` inside this path, or `name` itself if it starts at the root
+  pub fn join(self, name: Str) -> Path =
+    let parts = self.split("/")
+    if self == "" || name.starts_with("/") then name
+    else if parts[parts.len() - 1] == "" then self.concat(name)
+    else self.concat("/").concat(name)
+  pub fn show(self) -> Str = self
+
 // ---- the built-in dependencies (deps.md, "Built in") ----
 //
 // The runtime installs each one's `real` around `main`, if `main` uses
@@ -159,6 +172,10 @@ type builtin_fn = {
    call. *)
 exception Panic of string
 
+(* A built-in function has failed with this error, which the call fails
+   with. *)
+exception Fail of Value.t
+
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug name = failwith ("bug: `" ^ name ^ "` was called with the wrong values")
 
@@ -255,6 +272,7 @@ type builtin_type = {
   name : string;
   arity : int;  (** type arguments *)
   methods : builtin_fn list;
+  functions : builtin_fn list;  (** its associated functions, without `self` *)
 }
 
 let array_methods =
@@ -290,13 +308,162 @@ let array_methods =
     };
   ]
 
-let types =
+(* ---- strings and bytes ----
+
+   A `Str` is UTF-8, always, and `Bytes` are any bytes at all: the one way
+   from bytes to a string is `Str.from_utf8`, which checks them. A string's
+   indices are byte offsets, as `len` counts them, and a slice that would
+   cut a character in two panics, so that a `Str` stays UTF-8. *)
+
+let bytes = Ty.Con (Path.prelude "Bytes", [])
+
+(* Where [sub] first starts in [s], at [from] or after. *)
+let find_from s sub from =
+  let n = String.length s and m = String.length sub in
+  let rec go i =
+    if i + m > n then None
+    else if String.sub s i m = sub then Some i
+    else go (i + 1)
+  in
+  go from
+
+(* Whether byte [i] of [s] starts a character, or ends [s]: it isn't one
+   of the bytes after a character's first, which are 0b10xxxxxx. *)
+let boundary s i =
+  i = String.length s || Char.code s.[i] land 0xc0 <> 0x80
+
+let slice s from to_ =
+  let n = String.length s in
+  let fail fmt = Printf.ksprintf (fun msg -> raise (Panic msg)) fmt in
+  if from > to_ then fail "slice %d to %d ends before it starts" from to_;
+  if from < 0 || to_ > n then
+    fail "slice %d to %d is out of bounds for a string of length %d" from to_
+      n;
+  if not (boundary s from) then
+    fail "slice %d to %d starts inside a character" from to_;
+  if not (boundary s to_) then
+    fail "slice %d to %d ends inside a character" from to_;
+  String.sub s from (to_ - from)
+
+let split s sep =
+  if sep = "" then raise (Panic "`split` needs a separator that isn't empty");
+  let rec go from =
+    match find_from s sep from with
+    | Some i -> String.sub s from (i - from) :: go (i + String.length sep)
+    | None -> [ String.sub s from (String.length s - from) ]
+  in
+  go 0
+
+let str_methods =
+  let open Ty in
+  let m name params ret eval =
+    {
+      name;
+      scheme =
+        scheme
+          (Fun (List.map read (str :: params), ret, open_row 0, open_row 1));
+      eval = (fun args -> (eval args, args));
+      runtime = false;
+    }
+  in
   [
-    { name = "Int"; arity = 0; methods = [] };
-    { name = "Bool"; arity = 0; methods = [] };
-    { name = "Unit"; arity = 0; methods = [] };
-    { name = "Str"; arity = 0; methods = [] };
-    { name = "Array"; arity = 1; methods = array_methods };
+    (* fn(self: Str) -> Int, in bytes *)
+    m "len" [] int (function
+      | [ VStr s ] -> VInt (String.length s)
+      | _ -> bug "Str.len");
+    (* fn(self: Str, from: Int, to: Int) -> Str: the bytes from [from] up
+       to, but not including, [to] *)
+    m "slice" [ int; int ] str (function
+      | [ VStr s; VInt from; VInt to_ ] -> VStr (slice s from to_)
+      | _ -> bug "Str.slice");
+    (* fn(self: Str, s: Str) -> Option<Int>: where [s] first starts *)
+    m "find" [ str ]
+      (Con (Path.prelude "Option", [ int ]))
+      (function
+        | [ VStr s; VStr sub ] -> (
+            let option name args =
+              Value.VCon { ty = Path.prelude "Option"; name; args }
+            in
+            match find_from s sub 0 with
+            | Some i -> option "Some" [ VInt i ]
+            | None -> option "None" [])
+        | _ -> bug "Str.find");
+    (* fn(self: Str, sep: Str) -> Array<Str>: the parts between each [sep] *)
+    m "split" [ str ] (array str) (function
+      | [ VStr s; VStr sep ] ->
+          VArray
+            (Array.of_list (List.map (fun p -> Value.VStr p) (split s sep)))
+      | _ -> bug "Str.split");
+    (* fn(self: Str) -> Str, without the spaces, tabs and newlines at
+       either end *)
+    m "trim" [] str (function
+      | [ VStr s ] -> VStr (String.trim s)
+      | _ -> bug "Str.trim");
+    (* fn(self: Str, prefix: Str) -> Bool *)
+    m "starts_with" [ str ] bool (function
+      | [ VStr s; VStr prefix ] -> VBool (String.starts_with ~prefix s)
+      | _ -> bug "Str.starts_with");
+    (* fn(self: Str, s: Str) -> Str: this, then [s] *)
+    m "concat" [ str ] str (function
+      | [ VStr a; VStr b ] -> VStr (a ^ b)
+      | _ -> bug "Str.concat");
+    (* fn(self: Str) -> Bytes: its UTF-8 *)
+    m "bytes" [] bytes (function
+      | [ VStr s ] -> VBytes s
+      | _ -> bug "Str.bytes");
+  ]
+
+let str_functions =
+  let open Ty in
+  [
+    {
+      (* fn(b: Bytes) -> Str ! InvalidUtf8 *)
+      name = "from_utf8";
+      scheme =
+        scheme
+          (Fun
+             ( [ read bytes ],
+               str,
+               { labels = [ label "InvalidUtf8" ]; tail = None },
+               open_row 0 ));
+      eval =
+        (function
+        | [ Value.VBytes b ] as args ->
+            if String.is_valid_utf_8 b then (Value.VStr b, args)
+            else raise (Fail (Value.VTag { name = "InvalidUtf8"; args = [] }))
+        | _ -> bug "Str.from_utf8");
+      runtime = false;
+    };
+  ]
+
+let bytes_methods =
+  let open Ty in
+  [
+    {
+      (* fn(self: Bytes) -> Int *)
+      name = "len";
+      scheme = scheme (Fun ([ read bytes ], int, open_row 0, open_row 1));
+      eval =
+        (function
+        | [ Value.VBytes b ] as args -> (Value.VInt (String.length b), args)
+        | _ -> bug "Bytes.len");
+      runtime = false;
+    };
+  ]
+
+let types =
+  let t ?(methods = []) ?(functions = []) ?(arity = 0) name =
+    { name; arity; methods; functions }
+  in
+  (* `Array` before `Str`, whose `len` an old-style `len(xs)` means
+     less often (resolve.ml) *)
+  [
+    t "Int";
+    t "Bool";
+    t "Unit";
+    t "Array" ~arity:1 ~methods:array_methods;
+    t "Str" ~methods:str_methods ~functions:str_functions;
+    t "Bytes" ~methods:bytes_methods;
   ]
 
 (* ---- built-in dependencies ----
@@ -320,7 +487,10 @@ let find_fn name =
       let m = String.sub name (i + 1) (String.length name - i - 1) in
       Option.bind
         (List.find_opt (fun (t : builtin_type) -> t.name = ty) types)
-        (fun t -> List.find_opt (fun (f : builtin_fn) -> f.name = m) t.methods)
+        (fun t ->
+          List.find_opt
+            (fun (f : builtin_fn) -> f.name = m)
+            (t.methods @ t.functions))
 
 (* The intrinsic half of the prelude's interface, as the prelude's own
    source sees it, with what reaches the world; [public] is what every
@@ -337,14 +507,10 @@ let intrinsics : Iface.t =
             body = Builtin;
             members =
               List.map
-                (fun (f : builtin_fn) : Iface.op ->
-                  {
-                    oname = f.name;
-                    opub = true;
-                    okind = Method;
-                    oscheme = f.scheme;
-                  })
-                t.methods;
+                (fun (okind, (f : builtin_fn)) : Iface.op ->
+                  { oname = f.name; opub = true; okind; oscheme = f.scheme })
+                (List.map (fun f -> (Iface.Method, f)) t.methods
+                @ List.map (fun f -> (Iface.Function, f)) t.functions);
             loc = None;
           })
         types;

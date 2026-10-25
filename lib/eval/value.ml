@@ -10,7 +10,8 @@ module Env = Map.Make (Int)
 type t =
   | VInt of int
   | VBool of bool
-  | VStr of string
+  | VStr of string  (** UTF-8, always *)
+  | VBytes of string  (** any bytes at all *)
   | VUnit
   | VCon of { ty : Path.t; name : string; args : t list }
       (** [Pro(5)]: the type it belongs to, the constructor, its fields *)
@@ -51,6 +52,10 @@ let rec show = function
   | VInt n -> string_of_int n
   | VBool b -> string_of_bool b
   | VStr s -> Ast.show_str s
+  | VBytes b ->
+      (* there's no way to write bytes yet, so each one in hex *)
+      let hex i = Printf.sprintf " %02x" (Char.code b.[i]) in
+      "<bytes" ^ String.concat "" (List.init (String.length b) hex) ^ ">"
   | VUnit -> "()"
   | VCon { name; args = []; _ } | VTag { name; args = [] } -> name
   | VCon { name; args; _ } | VTag { name; args } ->

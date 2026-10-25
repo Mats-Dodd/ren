@@ -168,7 +168,9 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   There is no `Io`.
 
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.
-Everything else about strings is stage 8.
+Stage 8 adds what `Fs` needs: `Str`'s methods, `Bytes` and `Path`. A
+string is UTF-8, its indices are byte offsets, and `Str.from_utf8(b) !
+InvalidUtf8` is the one way from bytes to a string.
 
 ## `main`
 
@@ -463,6 +465,12 @@ stage, or settled something the plan left open:
   &acme.transfer(t)` with an arm for the refusal it expects and `_ =>
   assert false`. `attempt` takes what follows it whole, so `attempt f()
   == x` would be `attempt (f() == x)`.
+- **A string stays UTF-8.** A literal that isn't is an error, and
+  `slice` panics at an offset inside a character, as well as out of
+  bounds, so no `Str` can hold bytes `from_utf8` would refuse.
+- **`split("")` panics**, since there's nothing to split on.
+- **`Path.join` takes a `Str`**, `src.join("main.ren")`, and a name that
+  starts at the root, `/etc`, replaces the path, as in most languages.
 
 ## Later
 
@@ -470,4 +478,4 @@ stage, or settled something the plan left open:
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.
-- `Fs`, `Os`, `Path` and full strings (stage 8).
+- `Fs` and `Os` (stage 8).

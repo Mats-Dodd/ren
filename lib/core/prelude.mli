@@ -18,10 +18,15 @@ type builtin_fn = {
 (* Raised by a built-in function that panics, with what to say. *)
 exception Panic of string
 
+(* Raised by a built-in function that fails, with its error. *)
+exception Fail of Value.t
+
 type builtin_type = {
   name : string;
   arity : int;  (** type arguments *)
   methods : builtin_fn list;  (** its built-in methods: [Array]'s [push] *)
+  functions : builtin_fn list;
+      (** its built-in associated functions: [Str]'s [from_utf8] *)
 }
 
 val types : builtin_type list

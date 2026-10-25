@@ -365,3 +365,227 @@ fn main() =
     ["x", "y\n"]
     "[1, 2]"
     |}]
+
+(* ---- strings and bytes ----
+
+   A string's indices are byte offsets: `é` and `ö` are two bytes each. *)
+
+let%expect_test "a string's length, slices and search, in bytes" =
+  run
+    {|
+fn main() =
+  let s = "héllo, wörld"
+  print(s.len())
+  print(s.slice(0, 3))
+  print(s.slice(8, 14))
+  print(s.slice(4, 4) == "")
+  print(s.find("w"))
+  print(s.find("ö"))
+  print(s.find(""))
+  s.find("z")
+|};
+  [%expect {|
+    14
+    hé
+    wörld
+    true
+    Some(8)
+    Some(9)
+    Some(0)
+    None
+    |}]
+
+let%expect_test "a slice out of bounds panics, as an index does" =
+  run {|
+fn main() = "Ren".slice(1, 4)
+|};
+  [%expect {|
+    error: panic: slice 1 to 4 is out of bounds for a string of length 3
+      ┌─ test.ren:1:13
+    1 │ fn main() = "Ren".slice(1, 4)
+      │             ^^^^^^^^^^^^^^^^^
+    |}];
+  run {|
+fn main() = "Ren".slice(-1, 2)
+|};
+  [%expect {|
+    error: panic: slice -1 to 2 is out of bounds for a string of length 3
+      ┌─ test.ren:1:13
+    1 │ fn main() = "Ren".slice(-1, 2)
+      │             ^^^^^^^^^^^^^^^^^^
+    |}];
+  run {|
+fn main() = "Ren".slice(2, 1)
+|};
+  [%expect {|
+    error: panic: slice 2 to 1 ends before it starts
+      ┌─ test.ren:1:13
+    1 │ fn main() = "Ren".slice(2, 1)
+      │             ^^^^^^^^^^^^^^^^^
+    |}]
+
+(* a slice that cut a character would make a string that isn't UTF-8 *)
+let%expect_test "a slice inside a character panics" =
+  run {|
+fn main() = "né".slice(0, 2)
+|};
+  [%expect {|
+    error: panic: slice 0 to 2 ends inside a character
+      ┌─ test.ren:1:13
+    1 │ fn main() = "né".slice(0, 2)
+      │             ^^^^^^^^^^^^^^^^^
+    |}];
+  run {|
+fn main() = "né".slice(2, 3)
+|};
+  [%expect {|
+    error: panic: slice 2 to 3 starts inside a character
+      ┌─ test.ren:1:13
+    1 │ fn main() = "né".slice(2, 3)
+      │             ^^^^^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "split, trim, starts_with and concat" =
+  run
+    {|
+fn main() =
+  print("a,b,,c".split(","))
+  print("a, b".split(", "))
+  print("abc".split(","))
+  print("".split(","))
+  print("ä→ö".split("→"))
+  print("  hi there \t\n".trim())
+  print("héllo".starts_with("hé"))
+  print("héllo".starts_with("e"))
+  print("".starts_with(""))
+  "wör".concat("ld").concat("")
+|};
+  [%expect {|
+    ["a", "b", "", "c"]
+    ["a", "b"]
+    ["abc"]
+    [""]
+    ["ä", "ö"]
+    hi there
+    true
+    false
+    true
+    "wörld"
+    |}]
+
+let%expect_test "splitting on nothing panics" =
+  run {|
+fn main() = "abc".split("")
+|};
+  [%expect {|
+    error: panic: `split` needs a separator that isn't empty
+      ┌─ test.ren:1:13
+    1 │ fn main() = "abc".split("")
+      │             ^^^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "a string's bytes, and back" =
+  run
+    {|
+fn main() =
+  let b = "hé".bytes()
+  print(b)
+  print(b.len())
+  print(b == "hé".bytes())
+  print(attempt Str.from_utf8(b))
+  match Str.from_utf8("".bytes())
+    s => s
+    fail InvalidUtf8 => "not UTF-8"
+|};
+  [%expect {|
+    <bytes 68 c3 a9>
+    3
+    true
+    Ok("hé")
+    ""
+    |}]
+
+(* No program can make bytes that aren't UTF-8 yet, until `Fs` reads
+   them, so this asks the built-in itself. *)
+let%expect_test "from_utf8 fails with InvalidUtf8" =
+  let from_utf8 = Option.get (Ren.Prelude.find_fn "Str.from_utf8") in
+  List.iter
+    (fun b ->
+      match from_utf8.eval [ Ren.Value.VBytes b ] with
+      | v, _ -> print_endline (Ren.Value.show v)
+      | exception Ren.Prelude.Fail err ->
+          print_endline ("fails: " ^ Ren.Value.show err))
+    [ "caf\xc3\xa9"; "caf\xc3"; "\xff"; "\xed\xa0\x80" ];
+  [%expect {|
+    "café"
+    fails: InvalidUtf8
+    fails: InvalidUtf8
+    fails: InvalidUtf8
+    |}]
+
+let%expect_test "from_utf8 is fallible" =
+  run {|
+fn main() = Str.from_utf8("x".bytes())
+|};
+  [%expect {|
+    error: `Str.from_utf8` can fail, and nothing handles it
+      ┌─ test.ren:1:13
+    1 │ fn main() = Str.from_utf8("x".bytes())
+      │             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+      │             ------------- it can fail with `InvalidUtf8`
+      help: pass the errors on with `try`, or handle them with `match`
+    |}];
+  types {|
+fn decode(b: Bytes) = try Str.from_utf8(b)
+fn main() = ()
+|};
+  [%expect {|
+    fn decode(b: Bytes) -> Str ! InvalidUtf8
+    fn main()
+    |}]
+
+let%expect_test "a path" =
+  run
+    {|
+fn main() =
+  let src = Path.of("src")
+  print(src.join("main.ren").show())
+  print(Path.of("src/").join("main.ren"))
+  print(src.join("lib").join("a.ren"))
+  print(src.join("/etc"))
+  print(Path.of("").join("a"))
+  src.show()
+|};
+  [%expect {|
+    src/main.ren
+    src/main.ren
+    src/lib/a.ren
+    /etc
+    a
+    "src"
+    |}]
+
+let%expect_test "a path isn't a string" =
+  run {|
+fn main() = Path.of("src").len()
+|};
+  [%expect {|
+    error: `Path` has no method named `len`
+      ┌─ test.ren:1:28
+    1 │ fn main() = Path.of("src").len()
+      │                            ^^^
+      help: its methods: `join`, `show`
+    |}];
+  run {|
+fn main() =
+  let p: Path = "src"
+  p
+|};
+  [%expect {|
+    error: expected `Path`, found `Str`
+      ┌─ test.ren:2:17
+    2 │   let p: Path = "src"
+      │                 ^^^^^
+      = `Path`'s representation is private to `prelude`
+      help: use a function from `prelude` to make or read one
+    |}]
