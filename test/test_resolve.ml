@@ -121,21 +121,6 @@ fn main() = 1
       │                     ^^^^^^
     |}];
   run {|
-type A = | Same
-type B = | Same
-fn main() = 1
-|};
-  [%expect
-    {|
-    error: there are two constructors named `Same`
-      ┌─ test.ren:2:12
-    1 │ type A = | Same
-      │            ---- the first `Same` is here, in `A`
-    2 │ type B = | Same
-      │            ^^^^
-      help: constructor names must be unique across all types
-    |}];
-  run {|
 type Int = { x: Bool }
 fn main() = 1
 |};

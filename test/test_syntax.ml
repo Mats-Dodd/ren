@@ -220,3 +220,36 @@ fn main() = 1
       │     ^^^^^^
       help: remove the `pub`: a module can't pass on what it imports
     |}]
+
+let%expect_test "a type or constructor can be qualified" =
+  (* a lowercase name before a capitalized one is a module's alias; a
+     capitalized one before another is a type *)
+  ast
+    {|
+type Order = { client: stripe.Client, plans: Array<billing.Plan> }
+fn main() =
+  let a = Light.Red
+  let b = billing.Plan.Pro(seats: 2)
+  let c = rows.Row { id: 1 }
+  match b
+    billing.Plan.Free => Plan.Free
+    Plan.Pro(n) => user.plan
+|};
+  [%expect
+    {|
+    (type Order (fields client:stripe.Client plans:Array<billing.Plan>))
+    (fn main () (block (let a (con Light.Red)) (let b (con billing.Plan.Pro seats=2)) (let c (record rows.Row id=1)) (match b (billing.Plan.Free => (con Plan.Free)) (Plan.Pro(n) => (. user plan)))))
+    |}]
+
+let%expect_test "another module's type isn't a value" =
+  ast {|
+fn main() = billing.Plan
+|};
+  [%expect
+    {|
+    error: `billing.Plan` is a type, so it can't be used as a value
+      ┌─ test.ren:1:13
+    1 │ fn main() = billing.Plan
+      │             ^^^^^^^^^^^^
+      help: write one of its constructors after it, like `billing.Plan.Name`, or a record, `billing.Plan { ... }`
+    |}]

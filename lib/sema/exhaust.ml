@@ -52,7 +52,8 @@ let rec simplify env (p : pattern) =
         | Some (Ctor_of (path, _)) -> path
         | _ -> assert false (* inference found it, or reported an error *)
       in
-      Ctor ({ name = c.name; owner = Some owner }, List.map (simplify env) ps)
+      Ctor
+        ({ name = c.name.name; owner = Some owner }, List.map (simplify env) ps)
 
 let rec show_space = function
   | Any -> "_"

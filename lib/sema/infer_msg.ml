@@ -81,27 +81,55 @@ let mismatch_notes ?help ~found ~expected () =
    (Resolve.type_name). *)
 let field_names (fs : Iface.field list) = List.map (fun f -> f.Iface.fname) fs
 
-let no_ctor (c : Ast.ident) =
-  Diag.make c.loc
-    ~help:
-      (sprintf
-         "check the spelling, or declare it in a type, like `type Shape = | %s`"
-         c.name)
-    (sprintf "there's no constructor named `%s`" c.name)
+(* [elsewhere] are the types that have [c] but can't be named bare here,
+   like a type of a module that isn't imported by name. *)
+let no_ctor ~names (c : Ast.ident) elsewhere =
+  match elsewhere with
+  | [] ->
+      Diag.make c.loc
+        ~help:
+          (sprintf
+             "check the spelling, or declare it in a type, like `type Shape = \
+              | %s`"
+             c.name)
+        (sprintf "there's no constructor named `%s`" c.name)
+  | ps ->
+      Diag.make c.loc
+        ~help:
+          (sprintf "write %s, naming its type"
+             (String.concat " or "
+                (List.map (fun p -> sprintf "`%s.%s`" (names p) c.name) ps)))
+        (sprintf "no type in scope here has a constructor named `%s`" c.name)
 
-(* Today constructor names are unique (resolve.ml), so this can't happen
-   yet; it's what sharing them will report. *)
+(* `Red`, where nothing says which type it's in, and more than one type
+   that the module can name has a `Red` (module-build.md, "Found through a
+   type"). *)
 let ambiguous_ctor ~names (c : Ast.ident) owners =
   let full p = sprintf "`%s.%s`" (names p) c.name in
   Diag.make c.loc
-    ~help:
-      (sprintf
-         "annotate the value with the type you mean, like `let x: %s = %s`, so \
-          `%s` is found through it"
-         (names (List.hd owners))
-         c.name c.name)
+    ~help:(sprintf "write %s, naming the type you mean" (full (List.hd owners)))
     (sprintf "`%s` could be %s" c.name
        (String.concat " or " (List.map full owners)))
+
+(* `Light.Purple`, where `Light` has no `Purple` *)
+let not_in_type ~names loc (c : Ast.ident) (td : Iface.type_decl) =
+  let t = names td.path in
+  let msg, help =
+    match td.body with
+    | Sum cs ->
+        ( sprintf "`%s` has no constructor named `%s`" t c.name,
+          Some
+            (sprintf "its constructors: %s"
+               (quote (List.map (fun (k : Iface.ctor) -> k.cname) cs))) )
+    | Record _ ->
+        ( sprintf "`%s` is a record, so it has no constructors" t,
+          Some (sprintf "make one with `%s { ... }`" t) )
+    | Builtin ->
+        ( sprintf "`%s` is built in, and has no constructors" t,
+          Some "its values are written directly, like `1`, `true` or `[1, 2]`"
+        )
+  in
+  Diag.make (Loc.span loc c.loc) ?help msg
 
 let ctor_arity loc (c : Ast.ident) (ctor : Iface.ctor) given =
   let n = List.length ctor.cfields in

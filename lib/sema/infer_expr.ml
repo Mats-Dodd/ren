@@ -254,20 +254,44 @@ let ctor_in (c : ident) (td : Iface.type_decl) =
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
   | Record _ | Builtin -> None
 
-(* The constructor [c], where a value of type [expected] is wanted. *)
-let find_ctor env (c : ident) ~expected =
-  let known =
-    Option.bind (known_decl env expected) (fun td ->
-        Option.map (fun k -> (td, k)) (ctor_in c td))
-  in
-  match through_type env ~known ~fits:(ctor_in c) with
-  | Found found -> Some found
-  | Nowhere ->
-      report env (no_ctor c);
-      None
-  | Several owners ->
-      report env (ambiguous_ctor ~names:env.names c owners);
-      None
+(* The constructor [c], where a value of type [expected] is wanted. One
+   written after its type, `Light.Red`, is looked for there and nowhere
+   else; that's how two types that share a constructor's name are told
+   apart when nothing else says which. *)
+let find_ctor env (c : ctor_ref) ~expected =
+  match c.qual with
+  | Some { tref = Named p; tloc } -> (
+      let td = Hashtbl.find env.types p in
+      match ctor_in c.name td with
+      | Some k -> Some (td, k)
+      | None ->
+          report env (not_in_type ~names:env.names tloc c.name td);
+          None)
+  | Some { tref = Param _; _ } ->
+      (* resolve.ml only puts a declared type before a constructor *)
+      assert false
+  | None -> (
+      let c = c.name in
+      let known =
+        Option.bind (known_decl env expected) (fun td ->
+            Option.map (fun k -> (td, k)) (ctor_in c td))
+      in
+      match through_type env ~known ~fits:(ctor_in c) with
+      | Found found -> Some found
+      | Nowhere ->
+          (* it may be in a type the module can't name bare, which is
+             only looked in when that type is expected *)
+          let elsewhere =
+            Hashtbl.fold
+              (fun p td acc -> if ctor_in c td <> None then p :: acc else acc)
+              env.types []
+            |> List.sort compare
+          in
+          report env (no_ctor ~names:env.names c elsewhere);
+          None
+      | Several owners ->
+          report env (ambiguous_ctor ~names:env.names c owners);
+          None)
 
 (* Is [c] given as many arguments as it has fields, labelled correctly?
    Each problem is reported. *)
@@ -661,8 +685,9 @@ and infer_arg env cx (a : expr) =
 
 (* A constructor applied to [args], where a value of type [expected] is
    wanted. *)
-and infer_con env cx (e : expr) (c : ident) args ~expected =
-  match find_ctor env c ~expected with
+and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
+  let c = cref.name in
+  match find_ctor env cref ~expected with
   | None ->
       List.iter (fun (_, a) -> ignore (infer env cx a)) args;
       TError
@@ -863,9 +888,10 @@ and bind_pattern env cx t (p : pattern) =
   | PVar b -> Hashtbl.replace cx.locals b.id t
   | PInt _ -> check int
   | PBool _ -> check bool
-  | PCon (c, ps) -> (
+  | PCon (cref, ps) -> (
+      let c = cref.name in
       let unknown () = List.iter (bind_pattern env cx TError) ps in
-      match find_ctor env c ~expected:t with
+      match find_ctor env cref ~expected:t with
       | None -> unknown ()
       | Some (td, ctor) ->
           Hashtbl.replace cx.found p.pnode (Ctor_of (td.path, ctor.cname));

@@ -594,3 +594,193 @@ pub type Row = { y: Int }
       │      ^^^
       help: rename it, or stop importing `Row` by name
     |}]
+
+(* ---- types across modules ---- *)
+
+let%expect_test "a type written with its module's alias" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import rows
+fn first(t: rows.Table) -> rows.Row = t.first
+fn main() = first(rows.Table { first: rows.load(5) }).id
+|}
+      );
+      rows;
+    ];
+  [%expect {| 5 |}]
+
+let%expect_test "a type written with an alias that isn't imported" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import rows
+fn f(r: rws.Row) -> rows.Secret = r
+fn main() = 1
+|} );
+      rows;
+    ];
+  [%expect
+    {|
+    error: there's no module imported as `rws`
+      ┌─ main.ren:2:9
+    2 │ fn f(r: rws.Row) -> rows.Secret = r
+      │         ^^^
+      help: import it at the top of the file, like `import rws`
+
+    error: `rows` has no public type `Secret`
+      ┌─ main.ren:2:26
+    2 │ fn f(r: rws.Row) -> rows.Secret = r
+      │                          ^^^^^^
+      help: if it's defined there, mark it `pub`
+    |}]
+
+(* a field of a type from a module main never imported is still
+   readable: the type is found through the value *)
+let orders =
+  [
+    ( "main.ren",
+      {|
+import orders
+fn latest() = orders.latest()
+fn main() = latest().total
+|}
+    );
+    ( "orders.ren",
+      {|
+import billing/invoice
+pub fn latest() -> invoice.Invoice = invoice.make(7)
+|}
+    );
+    ( "billing/invoice.ren",
+      {|
+pub type Invoice = { total: Int, plan: Plan }
+pub type Plan = Free | Pro(seats: Int)
+pub fn make(total: Int) -> Invoice = Invoice { total: total, plan: Pro(seats: 2) }
+|}
+    );
+  ]
+
+let%expect_test "a field of a type whose module isn't imported" =
+  run_files orders;
+  [%expect {| 7 |}];
+  (* each module writes a type the shortest way it can *)
+  types_files orders;
+  [%expect
+    {|
+    -- billing/invoice
+    pub fn make(total: Int) -> Invoice
+
+    -- orders
+    pub fn latest() -> invoice.Invoice
+
+    -- main
+    fn latest() -> billing/invoice.Invoice
+    fn main() -> Int
+    |}]
+
+let billing = ("billing.ren", {|
+pub type Plan = Free | Pro(seats: Int)
+|})
+
+let%expect_test "a constructor is found through the type it's expected to be" =
+  (* `Free` works wherever a `billing.Plan` is expected, though `Plan`
+     isn't imported by name; so does the full `billing.Plan.Free` *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing
+fn price(p: billing.Plan) -> Int =
+  match p
+    Free => 0
+    billing.Plan.Pro(seats) => seats * 10
+fn main() = price(Pro(seats: 3)) + price(billing.Plan.Free)
+|}
+      );
+      billing;
+    ];
+  [%expect {| 30 |}];
+  (* this module's own `Free` is the only one it can name bare *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing
+type Tier = Free | Paid
+fn tier(t: Tier) -> Int = match t
+  Free => 0
+  Paid => 1
+fn price(p: billing.Plan) -> Int = 5
+fn main() = tier(Free) + price(Free) + tier(Paid)
+|}
+      );
+      billing;
+    ];
+  [%expect {| 6 |}];
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing
+fn free() -> billing.Plan = billing.Plan.Free
+fn main() = print(Free)
+|}
+      );
+      billing;
+    ];
+  [%expect
+    {|
+    error: no type in scope here has a constructor named `Free`
+      ┌─ main.ren:3:19
+    3 │ fn main() = print(Free)
+      │                   ^^^^
+      help: write `billing.Plan.Free`, naming its type
+    |}]
+
+let%expect_test "exhaustiveness on another module's type" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import billing
+fn price(p: billing.Plan) -> Int =
+  match p
+    Free => 0
+fn main() = price(Free)
+|}
+      );
+      billing;
+    ];
+  [%expect
+    {|
+    error: this `match` doesn't handle every `billing.Plan`
+      ┌─ main.ren:3:3
+    3 │   match p
+      │   ^^^^^
+      = missing: Pro(_)
+      help: add an arm for `Pro(_)`, or a `_ =>` arm for the rest
+    |}]
+
+let%expect_test "a type written with its alias doesn't use its name" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import rows.{Row}
+fn id(r: rows.Row) -> Int = r.id
+fn main() = id(rows.load(2))
+|}
+      );
+      rows;
+    ];
+  [%expect
+    {|
+    error: `Row` is imported but never used
+      ┌─ main.ren:1:14
+    1 │ import rows.{Row}
+      │              ^^^
+      help: remove it
+    |}]

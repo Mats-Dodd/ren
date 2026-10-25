@@ -560,6 +560,116 @@ fn main() -> Int =
        help: check the spelling, or declare it in a type, like `type Shape = | Basic`
     |}]
 
+(* module-build.md, "Found through a type" *)
+let light_suit =
+  {|
+type Light = Red | Yellow | Green
+type Suit  = Red | Black
+
+fn next(l: Light) -> Light =
+  match l
+    Red    => Green           // the subject is a Light, and so is the result
+    Yellow => Red
+    Green  => Yellow
+|}
+
+let%expect_test "two types can share a constructor's name" =
+  run
+    (light_suit
+   ^ {|
+fn main() = print(Red)        // nothing says which `Red`
+|});
+  [%expect
+    {|
+    error: `Red` could be `Light.Red` or `Suit.Red`
+       ┌─ test.ren:10:19
+    10 │ fn main() = print(Red)        // nothing says which `Red`
+       │                   ^^^
+       help: write `Light.Red`, naming the type you mean
+    |}];
+  run
+    (light_suit
+   ^ {|
+fn main() =
+  let s: Suit = Red
+  print(next(Red))
+  print(Light.Red)
+  print(s == Suit.Red)
+|}
+    );
+  [%expect {|
+    Green
+    Red
+    true
+    ()
+    |}]
+
+let%expect_test "a constructor written after its type" =
+  run
+    (light_suit
+   ^ {|
+fn red(l: Light) -> Bool =
+  match l
+    Light.Red => true
+    _ => false
+fn main() = red(Light.Red)
+|}
+    );
+  [%expect {| true |}];
+  run
+    (light_suit
+   ^ {|
+fn main() =
+  print(next(Light.Purple))
+  print(next(Suit.Red))
+|});
+  [%expect
+    {|
+    error: `Light` has no constructor named `Purple`
+       ┌─ test.ren:11:14
+    11 │   print(next(Light.Purple))
+       │              ^^^^^^^^^^^^
+       help: its constructors: `Red`, `Yellow`, `Green`
+
+    error: expected `Light`, found `Suit`
+       ┌─ test.ren:12:14
+    12 │   print(next(Suit.Red))
+       │              ^^^^^^^^
+    |}];
+  run
+    {|
+type User = { id: Int }
+fn main() =
+  print(User.Some)
+  print(Int.Zero)
+|};
+  [%expect
+    {|
+    error: `User` is a record, so it has no constructors
+      ┌─ test.ren:3:9
+    3 │   print(User.Some)
+      │         ^^^^^^^^^
+      help: make one with `User { ... }`
+
+    error: `Int` is built in, and has no constructors
+      ┌─ test.ren:4:9
+    4 │   print(Int.Zero)
+      │         ^^^^^^^^
+      help: its values are written directly, like `1`, `true` or `[1, 2]`
+    |}];
+  run {|
+fn f<T>(x: T) = T.Some
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `T` is a type parameter, so it has no constructors
+      ┌─ test.ren:1:17
+    1 │ fn f<T>(x: T) = T.Some
+      │                 ^
+      help: it stands for any type at all; name a declared type instead
+    |}]
+
 let%expect_test "constructor arity and labels" =
   run (plan_types ^ {|
 fn main() = print(Pro(1, 2))

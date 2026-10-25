@@ -17,8 +17,12 @@
                                                             indented, one per line)
      ctor     := UIDENT ["(" field, ... ")"]
      field    := IDENT ":" type
-     type     := UIDENT ["<" type, ... ">"]
+     type     := tyname ["<" type, ... ">"]
               |  "fn" "(" ["inout"] [IDENT ":"] type, ... ")" ["->" type]
+     tyname   := [IDENT "."] UIDENT                (`stripe.Client`: another
+                                                    module's, after its alias)
+     ctor_ref := [tyname "."] UIDENT               (`Red`, `Light.Red`,
+                                                    `billing.Plan.Free`)
 
      body     := INDENT block | line
      block    := stmt { NEWLINE stmt } DEDENT       (last stmt is the value)
@@ -37,17 +41,20 @@
                                                     (a trailing lambda is
                                                      the call's last argument)
      primary  := INT | "true" | "false" | "(" ")" | IDENT | lambda
-              |  UIDENT ["(" con_args ")" | "{" field_inits "}"]
+              |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
               |  "if" expr "then" body [[NEWLINE] "else" body]
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
      arm      := pattern ["if" expr] "=>" body
      lambda   := "fn" "(" param, ... ")" "=>" body
      pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
-              |  UIDENT ["(" pattern, ... ")"]
+              |  ctor_ref ["(" pattern, ... ")"]
 
    UIDENT is an IDENT starting with a capital letter: types and constructors
-   are capitalized, variables and functions are not. *)
+   are capitalized, variables, functions and modules are not. That's how
+   `billing.Plan` (a module's type) is told apart from `user.plan` (a
+   field) without looking anything up (module-build.md, "Naming is
+   enforced"). *)
 
 open Ast
 open Ast.Parsed
@@ -59,6 +66,7 @@ type t = { toks : (Token.t * Loc.t) array; mutable i : int; mutable node : int }
 
 let peek p = fst p.toks.(p.i)
 let peek2 p = fst p.toks.(min (p.i + 1) (Array.length p.toks - 1))
+let peek3 p = fst p.toks.(min (p.i + 2) (Array.length p.toks - 1))
 let loc p = snd p.toks.(p.i)
 let advance p = if p.i < Array.length p.toks - 1 then p.i <- p.i + 1
 
@@ -142,6 +150,40 @@ let cmp_op = function
 
 (* ---- types ---- *)
 
+(* A type's name: `Plan`, or `stripe.Client`, with its module's alias in
+   front. *)
+let parse_tyname p =
+  match (peek p, peek2 p) with
+  | IDENT m, DOT when not (is_upper m) ->
+      let alias = ident p in
+      advance p;
+      { tmod = Some alias; tid = upper_ident p "a type name" }
+  | _ -> { tmod = None; tid = upper_ident p "a type name" }
+
+(* Is the next thing a type's name with a module in front, `billing.Plan`,
+   rather than a variable or a field? *)
+let at_module_type p =
+  match (peek p, peek2 p, peek3 p) with
+  | IDENT m, DOT, IDENT t -> (not (is_upper m)) && is_upper t
+  | _ -> false
+
+(* A constructor: `Red`, or after its type, `Light.Red` or
+   `billing.Plan.Free`. *)
+let parse_ctor_ref p : ctor_ref =
+  if at_module_type p then (
+    let t = parse_tyname p in
+    expect p DOT;
+    { qual = Some t; name = upper_ident p "a constructor name" })
+  else
+    let first = upper_ident p "a constructor name" in
+    if peek p = DOT then (
+      advance p;
+      {
+        qual = Some { tmod = None; tid = first };
+        name = upper_ident p "a constructor name";
+      })
+    else { qual = None; name = first }
+
 let rec parse_ty p : ty =
   match peek p with
   | FN ->
@@ -157,7 +199,7 @@ let rec parse_ty p : ty =
       in
       TyFn (params, ret, Loc.span start (last_loc p))
   | _ ->
-      let name = upper_ident p "a type name" in
+      let name = parse_tyname p in
       let args =
         if peek p = LT then (
           advance p;
@@ -263,8 +305,8 @@ let rec parse_pattern p : pattern =
   | IDENT "_" ->
       advance p;
       finish PWild
-  | IDENT name when is_upper name ->
-      let c = ident p in
+  | IDENT name when is_upper name || at_module_type p ->
+      let c = parse_ctor_ref p in
       if peek p = LPAREN then (
         advance p;
         let args = sep_list p ~close:RPAREN parse_pattern in
@@ -454,18 +496,35 @@ and parse_primary p =
   | FALSE ->
       advance p;
       mk (Bool false) start p
-  | IDENT name when is_upper name -> (
-      let c = ident p in
+  | IDENT name when at_module_type p || is_upper name -> (
+      (* `billing.Plan.Free` and `Plan.Free` are constructors, and
+         `rows.Row { ... }` and `Row { ... }` records *)
+      let t = parse_tyname p in
       match peek p with
-      | LPAREN ->
-          advance p;
-          let args = sep_list p ~close:RPAREN parse_con_arg in
-          mk (Con (c, args)) start p
       | LBRACE ->
           advance p;
           let fields = sep_list p ~close:RBRACE parse_field_init in
-          mk (Record (Some c, fields)) start p
-      | _ -> mk (Con (c, [])) start p)
+          mk (Record (Some t, fields)) start p
+      | DOT when match peek2 p with IDENT n -> is_upper n | _ -> false -> (
+          advance p;
+          let c =
+            { qual = Some t; name = upper_ident p "a constructor name" }
+          in
+          match peek p with
+          | LPAREN -> con_args p start c
+          | _ -> mk (Con (c, [])) start p)
+      | _ when t.tmod <> None ->
+          Diag.error
+            (Loc.span start (last_loc p))
+            ~help:
+              (Printf.sprintf
+                 "write one of its constructors after it, like `%s.Name`, or a \
+                  record, `%s { ... }`"
+                 (show_tyname t) (show_tyname t))
+            (Printf.sprintf "`%s` is a type, so it can't be used as a value"
+               (show_tyname t))
+      | LPAREN -> con_args p start { qual = None; name = t.tid }
+      | _ -> mk (Con ({ qual = None; name = t.tid }, [])) start p)
   | IDENT name ->
       advance p;
       mk (Var name) start p
@@ -504,6 +563,12 @@ and parse_lambda p =
   expect p FATARROW;
   let body = parse_body p in
   mk (Lambda (params, body)) start p
+
+(* A constructor's arguments, in parentheses. *)
+and con_args p start c =
+  expect p LPAREN;
+  let args = sep_list p ~close:RPAREN parse_con_arg in
+  mk (Con (c, args)) start p
 
 (* A constructor argument, optionally labelled: `5` or `seats: 5`. *)
 and parse_con_arg p =

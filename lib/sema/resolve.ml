@@ -10,8 +10,10 @@
      functions can be: Resolve sees the module's interface, not its source.
      The prelude's functions, and the module's own, are written bare.
    - a type's name is a declared type (a [Path.t]): the module's own, the
-     prelude's, or another module's public type imported by name
-     (`import rows.{Row}`). Or it's one of the type parameters in scope.
+     prelude's, another module's public type imported by name
+     (`import rows.{Row}`), or one written with its module's alias,
+     `rows.Row`. Or it's one of the type parameters in scope. A constructor
+     written after its type, `Light.Red`, gets that type's path.
 
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
@@ -20,8 +22,8 @@
    look a name up: inference reads a binder's id, mut.ml its kind.
 
    Constructors and record fields aren't found here: they're found through
-   a type (infer_expr.ml). For now, though, no two types can have a
-   constructor with the same name, and that's checked here.
+   a type (infer_expr.ml), so two types can have constructors of the same
+   name.
 
    Each problem is reported to the sink (diag.ml), and resolution carries
    on: a name that doesn't exist resolves to something harmless, since the
@@ -137,6 +139,59 @@ let rec index_of x i = function
   | y :: rest -> if x = y then Some i else index_of x (i + 1) rest
   | [] -> None
 
+(* Where a type's name is written, its module's alias included. *)
+let tyname_loc (t : tyname) =
+  match t.tmod with Some m -> Loc.span m.loc t.tid.loc | None -> t.tid.loc
+
+(* The type [t] names, and how many type arguments it takes: one in scope,
+   or, written `alias.T`, a public type of the module imported as [alias].
+   [params] are the type parameters in scope. A name that doesn't exist is
+   reported, and gives [None]. *)
+let find_named env ~params (t : tyname) =
+  match t.tmod with
+  | None -> (
+      match index_of t.tid.name 0 params with
+      | Some i -> Some (Param i, 0)
+      | None -> (
+          match find_type env t.tid.name with
+          | Some (p, n) -> Some (Named p, n)
+          | None ->
+              report env t.tid.loc
+                (sprintf "there's no type named `%s`" t.tid.name);
+              None))
+  | Some alias -> (
+      match Env.find_opt alias.name env.modules with
+      | None ->
+          report env alias.loc
+            ~help:
+              (sprintf "import it at the top of the file, like `import %s`"
+                 alias.name)
+            (sprintf "there's no module imported as `%s`" alias.name);
+          None
+      | Some ((i : import), iface) -> (
+          Hashtbl.replace env.used i.alias.name ();
+          match Iface.find_type iface t.tid.name with
+          | Some d -> Some (Named d.path, List.length d.params)
+          | None ->
+              (* a private type isn't in the interface, so it can't be told
+                 apart from one that doesn't exist *)
+              report env t.tid.loc ~help:"if it's defined there, mark it `pub`"
+                (sprintf "`%s` has no public type `%s`" iface.home t.tid.name);
+              None))
+
+(* The declared type [t] names, where only a declared type makes sense: a
+   record literal's, or the type a constructor is written after. [what]
+   says what a type parameter can't be used as. *)
+let declared_type env ~params ~what (t : tyname) =
+  match find_named env ~params t with
+  | Some (Named p, _) -> Some { tref = Named p; tloc = tyname_loc t }
+  | Some (Param _, _) ->
+      report env (tyname_loc t)
+        ~help:"it stands for any type at all; name a declared type instead"
+        (sprintf "`%s` is a type parameter, so %s" t.tid.name what);
+      None
+  | None -> None
+
 (* A written type, with its names resolved. [params] are the type
    parameters in scope, like the `T` in `Option<T>`. A type with an error
    is reported once, and its arguments aren't looked at. *)
@@ -145,23 +200,15 @@ let rec ty env ~params (t : Parsed.ty) : Resolved.ty =
   | TyFn (ps, ret, l) ->
       TyFn (List.map (ty env ~params) ps, Option.map (ty env ~params) ret, l)
   | TyInout (t, l) -> TyInout (ty env ~params t, l)
-  | TyName (id, args) -> (
-      let named tref = { tref; tloc = id.loc } in
+  | TyName (t, args) -> (
+      let named tref = { tref; tloc = tyname_loc t } in
       let given = List.length args in
-      let found =
-        match index_of id.name 0 params with
-        | Some i -> Some (Param i, 0)
-        | None ->
-            Option.map (fun (p, n) -> (Named p, n)) (find_type env id.name)
-      in
-      match found with
-      | None ->
-          report env id.loc (sprintf "there's no type named `%s`" id.name);
-          TyName (named (Named (Path.make env.home id.name)), [])
+      match find_named env ~params t with
+      | None -> TyName (named (Named (Path.make env.home t.tid.name)), [])
       | Some (tref, n) when n <> given ->
-          report env id.loc
-            (sprintf "`%s` takes %d type argument%s but was given %d" id.name n
-               (plural n) given);
+          report env (tyname_loc t)
+            (sprintf "`%s` takes %d type argument%s but was given %d"
+               (show_tyname t) n (plural n) given);
           TyName (named tref, [])
       | Some (tref, _) -> TyName (named tref, List.map (ty env ~params) args))
 
@@ -243,6 +290,16 @@ let rec pattern_vars (p : Parsed.pattern) =
   | PVar x -> [ x ]
   | PCon (_, ps) -> List.concat_map pattern_vars ps
 
+(* A constructor: the type it's written after, if any, resolved. A bare one
+   is found through a type by inference. *)
+let ctor_ref env sc (c : Parsed.ctor_ref) : Resolved.ctor_ref =
+  {
+    qual =
+      Option.bind c.qual
+        (declared_type env ~params:sc.tparams ~what:"it has no constructors");
+    name = c.name;
+  }
+
 let rec pattern env sc (p : Parsed.pattern) : Resolved.pattern * scope =
   let kind, sc =
     match p.pkind with
@@ -260,7 +317,7 @@ let rec pattern env sc (p : Parsed.pattern) : Resolved.pattern * scope =
               (p :: acc, sc))
             ([], sc) ps
         in
-        (PCon (c, List.rev ps), sc)
+        (PCon (ctor_ref env sc c, List.rev ps), sc)
   in
   ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
 
@@ -321,17 +378,23 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
             ([], sc) stmts
         in
         Block (List.rev stmts, expr env sc last)
-    | Con (c, args) -> Con (c, List.map (fun (l, a) -> (l, go a)) args)
+    | Con (c, args) ->
+        let c = ctor_ref env sc c in
+        Con (c, List.map (fun (l, a) -> (l, go a)) args)
     | Record (name, fields) ->
         let name =
           Option.map
-            (fun (tn : ident) ->
-              match find_type env tn.name with
-              | Some (p, _) -> { tref = Named p; tloc = tn.loc }
+            (fun (t : tyname) ->
+              match
+                declared_type env ~params:sc.tparams
+                  ~what:"it can't make a record" t
+              with
+              | Some n -> n
               | None ->
-                  report env tn.loc
-                    (sprintf "there's no type named `%s`" tn.name);
-                  { tref = Named (Path.make env.home tn.name); tloc = tn.loc })
+                  {
+                    tref = Named (Path.make env.home t.tid.name);
+                    tloc = tyname_loc t;
+                  })
             name
         in
         Record (name, List.map (fun (f, v) -> (f, go v)) fields)
@@ -378,7 +441,7 @@ let type_def env (td : Parsed.type_def) : Resolved.type_def =
   (match td.type_body with
   | Fields fs -> no_duplicate_fields fs
   | Ctors cs ->
-      List.iter (fun (c : ident ctor) -> no_duplicate_fields c.ctor_fields) cs);
+      List.iter (fun (c : Parsed.ctor) -> no_duplicate_fields c.ctor_fields) cs);
   let params = List.map (fun (p : ident) -> p.name) td.type_params in
   let field (f : Parsed.field) : Resolved.field =
     { field_name = f.field_name; field_ty = ty env ~params f.field_ty }
@@ -389,7 +452,7 @@ let type_def env (td : Parsed.type_def) : Resolved.type_def =
     | Ctors cs ->
         Ctors
           (List.map
-             (fun (c : ident ctor) : tname ctor ->
+             (fun (c : Parsed.ctor) : Resolved.ctor ->
                {
                  ctor_name = c.ctor_name;
                  ctor_fields = List.map field c.ctor_fields;
@@ -502,37 +565,6 @@ let no_leaks env ~private_ (items : Resolved.program) =
           )
       | Fn _ | Type _ | Import _ -> ())
     items
-
-(* Constructor names are unique across every type the module sees, its
-   imports' included: a constructor is found through its type
-   (infer_expr.ml), but for now it can also be found by its name alone.
-   Stage 5 lets two types share a name, and drops this check. *)
-let unique_ctors env imported own =
-  let seen = Hashtbl.create 16 in
-  let declare report_it (td : Iface.type_decl) =
-    match td.body with
-    | Record _ | Builtin -> ()
-    | Sum cs ->
-        List.iter
-          (fun (c : Iface.ctor) ->
-            match Hashtbl.find_opt seen c.cname with
-            | Some ((first : Iface.ctor), (owner : Iface.type_decl))
-              when report_it ->
-                report env c.cloc
-                  ~help:"constructor names must be unique across all types"
-                  ~labels:
-                    [
-                      ( first.cloc,
-                        sprintf "the first `%s` is here, in `%s`" c.cname
-                          owner.path.name );
-                    ]
-                  (sprintf "there are two constructors named `%s`" c.cname)
-            | Some _ -> ()
-            | None -> Hashtbl.replace seen c.cname (c, td))
-          cs
-  in
-  List.iter (declare false) imported;
-  List.iter (declare true) own
 
 (* Every import must be used (module-build.md, "Found through scope"): its
    alias, or a type it imports by name. What isn't used is reported
@@ -732,9 +764,6 @@ let program sink ~home ~imports (prog : Parsed.program) =
       match Hashtbl.find_opt by_name n.name with
       | Some ((first : ident), _) -> first.loc = n.loc
       | None -> false);
-  unique_ctors env
-    (List.concat_map (fun (i : Iface.t) -> i.types) imports)
-    types;
   let scope =
     Hashtbl.fold (fun name (p, _) acc -> (name, p) :: acc) env.types []
     |> List.sort compare

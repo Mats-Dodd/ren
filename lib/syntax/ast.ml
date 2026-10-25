@@ -15,6 +15,13 @@ type ident = { name : string; loc : Loc.t }
    A type with parameters, like [('v, 'b, 't) expr], is a family of types,
    one for each choice of them; [List] works the same way, as ['a list]. *)
 
+(* A type's name as the parser read it: `Plan`, or `stripe.Client`, a type
+   of another module, with that module's alias in front. *)
+type tyname = {
+  tmod : ident option;  (** the module's alias, if one is written *)
+  tid : ident;  (** the type's own name *)
+}
+
 (* A type as written: `Int`, `Option<Int>`, `fn(Int) -> Bool`. *)
 type 't ty =
   | TyName of 't * 't ty list  (** [Int], [Option<Int>] *)
@@ -26,16 +33,31 @@ type 't ty =
 type binop = Add | Sub | Mul | Div | Mod | Eq | Neq | Lt | Le | Gt | Ge
 type unop = Neg
 
+(* A constructor as written: `Red` alone, or after the type it's in,
+   `Light.Red`, which can have its module in front, `billing.Plan.Free`.
+   Resolve finds the type, if one is written; the constructor itself is
+   found through it, by inference (module-build.md, "Found through a
+   type"). *)
+type 't ctor_ref = {
+  qual : 't option;  (** the type, if written *)
+  name : ident;  (** the constructor's name *)
+}
+
 (* Patterns, the left-hand side of a `match` arm. [pnode] numbers it along
    with the expressions of its function (see [expr] below). *)
-type 'b pattern = { pkind : 'b pattern_kind; ploc : Loc.t; pnode : int }
+type ('b, 't) pattern = {
+  pkind : ('b, 't) pattern_kind;
+  ploc : Loc.t;
+  pnode : int;
+}
 
-and 'b pattern_kind =
+and ('b, 't) pattern_kind =
   | PWild  (** [_] *)
   | PVar of 'b  (** a lowercase name: matches anything, binds it *)
   | PInt of int
   | PBool of bool
-  | PCon of ident * 'b pattern list  (** [Free], [Pro(seats)] *)
+  | PCon of 't ctor_ref * ('b, 't) pattern list
+      (** [Free], [Pro(seats)], [Plan.Free] *)
 
 (* How a parameter is passed: read-only (the default), or [inout], which
    updates the caller's value. *)
@@ -66,10 +88,11 @@ and ('v, 'b, 't) expr_kind =
   | Lambda of ('b, 't) param list * ('v, 'b, 't) expr  (** [fn(x) => x + 1] *)
   | Block of ('v, 'b, 't) stmt list * ('v, 'b, 't) expr
       (** statements, then the block's value *)
-  | Con of ident * (ident option * ('v, 'b, 't) expr) list
-      (** a constructor: [Pro(5)] or [Pro(seats: 5)] *)
+  | Con of 't ctor_ref * (ident option * ('v, 'b, 't) expr) list
+      (** a constructor: [Pro(5)], [Pro(seats: 5)] or [Plan.Pro(5)] *)
   | Record of 't option * (ident * ('v, 'b, 't) expr) list
-      (** [User { id: 1 }], or [{ id: 1 }] with the type left out *)
+      (** [User { id: 1 }], [rows.Row { id: 1 }], or [{ id: 1 }] with the type
+          left out *)
   | Field of ('v, 'b, 't) expr * ident  (** [user.plan] *)
   | Match of ('v, 'b, 't) expr * ('v, 'b, 't) arm list
   | Array of ('v, 'b, 't) expr list  (** [[1, 2, 3]] *)
@@ -86,7 +109,7 @@ and ('v, 'b, 't) expr_kind =
       (** [for x in xs], or [for p in &ps] to change each element *)
 
 and ('v, 'b, 't) arm = {
-  arm_pat : 'b pattern;
+  arm_pat : ('b, 't) pattern;
   arm_guard : ('v, 'b, 't) expr option;
   arm_body : ('v, 'b, 't) expr;
 }
@@ -185,29 +208,33 @@ type tname = { tref : tref; tloc : Loc.t }
 and tref = Named of Path.t | Param of int
 
 module Parsed = struct
-  type nonrec ty = ident ty
-  type nonrec pattern = ident pattern
-  type nonrec param = (ident, ident) param
-  type nonrec expr = (string, ident, ident) expr
-  type nonrec expr_kind = (string, ident, ident) expr_kind
-  type nonrec arm = (string, ident, ident) arm
-  type nonrec stmt = (string, ident, ident) stmt
-  type nonrec field = ident field
-  type nonrec type_def = ident type_def
-  type nonrec fn_def = (string, ident, ident) fn_def
-  type nonrec item = (string, ident, ident) item
-  type nonrec program = (string, ident, ident) program
+  type nonrec ty = tyname ty
+  type nonrec ctor_ref = tyname ctor_ref
+  type nonrec pattern = (ident, tyname) pattern
+  type nonrec param = (ident, tyname) param
+  type nonrec expr = (string, ident, tyname) expr
+  type nonrec expr_kind = (string, ident, tyname) expr_kind
+  type nonrec arm = (string, ident, tyname) arm
+  type nonrec stmt = (string, ident, tyname) stmt
+  type nonrec field = tyname field
+  type nonrec ctor = tyname ctor
+  type nonrec type_def = tyname type_def
+  type nonrec fn_def = (string, ident, tyname) fn_def
+  type nonrec item = (string, ident, tyname) item
+  type nonrec program = (string, ident, tyname) program
 end
 
 module Resolved = struct
   type nonrec ty = tname ty
-  type nonrec pattern = binder pattern
+  type nonrec ctor_ref = tname ctor_ref
+  type nonrec pattern = (binder, tname) pattern
   type nonrec param = (binder, tname) param
   type nonrec expr = (name, binder, tname) expr
   type nonrec expr_kind = (name, binder, tname) expr_kind
   type nonrec arm = (name, binder, tname) arm
   type nonrec stmt = (name, binder, tname) stmt
   type nonrec field = tname field
+  type nonrec ctor = tname ctor
   type nonrec type_def = tname type_def
   type nonrec fn_def = (name, binder, tname) fn_def
   type nonrec item = (name, binder, tname) item
@@ -235,10 +262,18 @@ let parens words = "(" ^ String.concat " " words ^ ")"
 
 open Parsed
 
+let show_tyname (t : tyname) =
+  match t.tmod with Some m -> m.name ^ "." ^ t.tid.name | None -> t.tid.name
+
+let show_ctor_ref (c : ctor_ref) =
+  match c.qual with
+  | Some t -> show_tyname t ^ "." ^ c.name.name
+  | None -> c.name.name
+
 let rec show_ty : ty -> string = function
-  | TyName (name, []) -> name.name
+  | TyName (name, []) -> show_tyname name
   | TyName (name, args) ->
-      name.name ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
+      show_tyname name ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
   | TyInout (t, _) -> "inout " ^ show_ty t
   | TyFn (params, ret, _) ->
       let ret = match ret with Some r -> " -> " ^ show_ty r | None -> "" in
@@ -250,9 +285,11 @@ let rec show_pattern (p : pattern) =
   | PVar x -> x.name
   | PInt n -> string_of_int n
   | PBool b -> string_of_bool b
-  | PCon (c, []) -> c.name
+  | PCon (c, []) -> show_ctor_ref c
   | PCon (c, args) ->
-      c.name ^ "(" ^ String.concat ", " (List.map show_pattern args) ^ ")"
+      show_ctor_ref c ^ "("
+      ^ String.concat ", " (List.map show_pattern args)
+      ^ ")"
 
 let rec show_expr (e : expr) =
   match e.kind with
@@ -274,9 +311,9 @@ let rec show_expr (e : expr) =
         | Some (l : ident), a -> l.name ^ "=" ^ show_expr a
         | None, a -> show_expr a
       in
-      parens ("con" :: c.name :: List.map show_arg args)
+      parens ("con" :: show_ctor_ref c :: List.map show_arg args)
   | Record (name, fields) ->
-      let ty = match name with Some n -> [ n.name ] | None -> [] in
+      let ty = match name with Some n -> [ show_tyname n ] | None -> [] in
       let show_field ((f : ident), v) = f.name ^ "=" ^ show_expr v in
       parens (("record" :: ty) @ List.map show_field fields)
   | Field (r, f) -> parens [ "."; show_expr r; f.name ]
