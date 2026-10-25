@@ -1,0 +1,29 @@
+// A customer's cart: the plans they're about to buy. Everything a cart can
+// do is in its `ops`. A method that changes the cart takes `inout self`, so
+// every call to it is marked with `&`.
+
+import plan.{Plan}
+import users.{UserId}
+
+pub type Cart = { owner: UserId, plans: Array<Plan> }
+  ops =
+    pub fn of(owner: UserId) -> Cart = Cart { owner: owner, plans: [] }
+    pub let guest: Cart = Cart.of(UserId.new(0))   // made once, at start
+
+    pub fn put(inout self, p: Plan) = &self.plans.push(p)
+    pub fn clear(inout self) = self.plans = []
+    pub fn size(self) -> Int = self.plans.len()
+    pub fn total(self) -> Int = sum(self.prices())
+
+    // Private: only this module can call `cart.prices()`.
+    fn prices(self) -> Array<Int> =
+      var out = []
+      for p in self.plans
+        &out.push(plan.price(p))
+      out
+
+fn sum(xs: Array<Int>) -> Int =
+  var total = 0
+  for x in xs
+    total += x
+  total

@@ -66,18 +66,41 @@ An error in one module can point into another, and shows that file's line:
     help: move what both modules need into a third module that both can import
   [1]
 
-The shop is the stage 5a milestone: four modules, a type imported by name,
-a constructor name two types share, an opaque type, and `uses` on every
-public function that needs it:
+The shop is the milestone of stages 5a and 5b: six modules, a type imported
+by name, a constructor name two types share, opaque types, `uses` on every
+public function that needs it, and `ops`. A `Cart` has methods that change
+it (called with `&`), an associated function and an associated value, and
+the opaque `UserId` gets its whole API from its `ops`:
 
   $ ren run shop/main.ren
   { plan: Free, status: Free }
+  0
+  7
+  2
+  30
+  0
   0
   30
   1030
   $ ren types shop/main.ren
   -- plan
   pub fn price(p: Plan) -> Int
+  
+  -- users
+  pub type UserId
+    pub fn new(n: Int) -> UserId
+    pub fn raw(self) -> Int
+  
+  -- cart
+  pub type Cart
+    pub fn of(owner: UserId) -> Cart
+    pub let guest: Cart
+    pub fn put(inout self, p: Plan)
+    pub fn clear(inout self)
+    pub fn size(self) -> Int
+    pub fn total(self) -> Int
+    fn prices(self) -> Array<Int>
+  fn sum(xs: Array<Int>) -> Int
   
   -- billing/stripe
   pub fn charge(amount: Int) -> ChargeId uses Io
@@ -142,4 +165,38 @@ Two modules can't import each other:
   8 │ import billing/stripe
     │ --------------------- `billing/invoice` imports `billing/stripe` here
     help: move what both modules need into a third module that both can import
+  [1]
+
+A method that changes its receiver is called with `&`:
+
+  $ printf 'import cart.{Cart}\nimport users.{UserId}\nfn main() =\n  var c = Cart.of(UserId.new(1))\n  c.put(Free)\n' > broken/no_amp.ren
+  $ ren check broken/no_amp.ren
+  error: `put` changes `c`, so the call needs `&`
+    ┌─ broken/no_amp.ren:5:3
+  5 │   c.put(Free)
+    │   ^^^^^^^^^^^
+    = `&` shows at the call that `c` is changed
+    help: write `&c.put(Free)`
+  [1]
+
+and one that doesn't change it is called without:
+
+  $ printf 'import cart.{Cart}\nimport users.{UserId}\nfn main() =\n  var c = Cart.of(UserId.new(1))\n  &c.size()\n' > broken/extra_amp.ren
+  $ ren check broken/extra_amp.ren
+  error: `size` doesn't change `c`
+    ┌─ broken/extra_amp.ren:5:3
+  5 │   &c.size()
+    │   ^^^^^^^^^
+    help: remove the `&`
+  [1]
+
+A private method can't be called from another module:
+
+  $ printf 'import cart.{Cart}\nfn main() = Cart.guest.prices()\n' > broken/private_method.ren
+  $ ren check broken/private_method.ren
+  error: `Cart` has no public `prices`
+    ┌─ broken/private_method.ren:2:24
+  2 │ fn main() = Cart.guest.prices()
+    │                        ^^^^^^
+    help: if it's defined in `cart`, mark it `pub`
   [1]

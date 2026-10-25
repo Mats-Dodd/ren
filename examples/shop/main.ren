@@ -1,7 +1,10 @@
-// A shop of four modules: this one, plan.ren, and billing/invoice.ren and
-// billing/stripe.ren in a folder. `ren types main.ren` shows them all.
+// A shop of six modules: this one, plan.ren, cart.ren, users.ren, and
+// billing/invoice.ren and billing/stripe.ren in a folder. `ren types
+// main.ren` shows them all.
 
 import plan.{Plan}
+import cart.{Cart}
+import users.{UserId}
 import billing/invoice
 import billing/stripe
 
@@ -14,4 +17,14 @@ fn main() =
   let free: Plan = Free
   print(invoice.make(free))
   print(checkout(free))
+
+  var c = Cart.of(UserId.new(7))
+  &c.put(Free)
+  &c.put(Pro(seats: 3))
+  print(c.owner.raw())
+  print(c.size())
+  print(c.total())
+  print(Cart.guest.size())
+  &c.clear()
+  print(c.size())
   checkout(Pro(seats: 3))

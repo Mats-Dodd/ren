@@ -1,0 +1,8 @@
+// Customers. A `UserId` is opaque, so its API comes from its `ops`: other
+// modules make one with `UserId.new` and read it with `id.raw()`. Inside
+// this module a `UserId` is its `Int`, so both are written as plain `Int`s.
+
+pub type UserId = opaque Int
+  ops =
+    pub fn new(n: Int) -> UserId = n
+    pub fn raw(self) -> Int = self
