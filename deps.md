@@ -257,6 +257,17 @@ holds on to the old implementation. Each call keeps its shape, dependency,
 operation and arguments, which is what the effect journal (stage 9) will
 record.
 
+A function over closures, `fn twice(f: fn())`, doesn't know what `f` uses,
+so it couldn't know what to pass it. Instead it has a copy for each set of
+dependencies its callers' closures use: `twice(fn() => print(1))` calls
+`twice[Console]`, in which `f` takes `Console`. So a closure's hidden
+parameters are always exactly what its type names, wherever it's called.
+The program starts in `$start`, which installs the real implementation of
+each built-in `main` uses and calls `main`. `ren core` prints all of it.
+(The copies are a choice the implementation made, and the plan didn't
+spell out: passing a whole row of evidence as one value would need it
+looked up by name inside.)
+
 ## Later
 
 - `outer` and forwarding handlers, `Async`, the journal (stage 9).

@@ -13,6 +13,8 @@ commands:
   check   check the program without running it
   types   print every function's inferred signature, module by module,
           and each type's members under it
+  core    print the entry module in Core, the language it's lowered to,
+          with each dependency's implementation passed explicitly
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree|}
 
@@ -49,6 +51,10 @@ let () =
                 print_endline ("-- " ^ home);
                 List.iter print_endline sigs)
               (Driver.types ~load ~file:path src)
+        | "core" ->
+            List.iter
+              (fun f -> print_endline (Core.show_fn f))
+              (Driver.core ~load ~file:path src).fns
         | "tokens" ->
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))
         | "ast" ->

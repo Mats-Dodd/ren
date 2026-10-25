@@ -37,6 +37,40 @@ infer.ren annotates nothing; this is what inference works out:
   fn twice<T>(f: fn() -> T) -> T
   fn main() uses Console
 
+`ren core` prints a module in Core, which it runs as: each dependency is a
+hidden parameter, and a function over closures has a copy for what they
+use (deps.md, "How it runs"):
+
+  $ ren core infer.ren
+  (fn seats (u/1) (match (. u/1 plan) (Free => 1) ((Pro n/2) => n/2)))
+  (fn first_or (o/1 fallback/2)
+    (match o/1 ((Some v/3) => v/3) (None => fallback/2)))
+  (fn map_option (o/1 f/2)
+    (match o/1 ((Some v/3) => (con Some (call f/2 v/3))) (None => (con None))))
+  (fn twice (f/1) (let _/2 (call f/1) (call f/1)))
+  (fn main () (uses Console/3)
+    (let alice/1 (record (id: 1) (plan: (con Pro 5)))
+      (seq (call print (call seats alice/1) (uses Console/3))
+        (seq
+          (call print
+            (call first_or
+              (call map_option[Console] (con Some 20)
+                (lambda (n/2) (captures) (uses Console/4) (+ n/2 1))
+                (uses Console/3))
+              0)
+            (uses Console/3))
+          (seq (call print (call first_or (con None) true) (uses Console/3))
+            (call twice[Console]
+              (lambda () (captures alice/1) (uses Console/5)
+                (call print (. alice/1 id) (uses Console/5)))
+              (uses Console/3)))))))
+  (fn map_option[Console] (o/1 f/2) (uses Console/4)
+    (match o/1 ((Some v/3) => (con Some (call f/2 v/3 (uses Console/4))))
+      (None => (con None))))
+  (fn twice[Console] (f/1) (uses Console/3)
+    (let _/2 (call f/1 (uses Console/3)) (call f/1 (uses Console/3))))
+  (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+
 A program of several modules is a folder; its entry imports the rest:
 
   $ ren run two/main.ren
