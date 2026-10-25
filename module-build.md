@@ -179,7 +179,7 @@ That only matters if one error set would contain both shapes:
 error: `Timeout` has two shapes here
    = from `http.fetch`:  Timeout(ms: Int)
    = from `mutex.lock`:  Timeout
-   help: handle one and rename it:  try mutex.lock() catch Timeout => fail LockTimeout
+   help: rename one where it comes in: `try match mutex.lock()` with the arm `fail Timeout => fail LockTimeout`
 ```
 
 Tags with the same name and the same shape are the same error, wherever they come from. Adding a dependency can never break code that doesn't touch it.

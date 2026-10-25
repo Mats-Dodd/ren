@@ -15,7 +15,7 @@ pub fn upgrade(id: UserId, seats: Int) -> User ! NotFound | PaymentFailed | Conf
   user
 ```
 
-You can read that signature without opening the body. `upgrade` returns a `User`, can fail in exactly three ways, and touches exactly two dependencies. It performs no other I/O, hidden allocation, or global state access. Every line that can fail starts with `try`.
+You can read that signature without opening the body. `upgrade` returns a `User`, can fail in exactly three ways, and touches exactly two dependencies. It performs no other I/O, hidden allocation, or global state access. Every line that can fail is marked, with `try` or `fail`.
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
@@ -167,7 +167,7 @@ type Button = { label: Str, on_click: fn() ! ..e uses ..d }
 
 ### 4. Errors
 
-Errors are part of the return type, and failure points are marked where they happen.
+Errors are part of the signature, after `!`, and every place that can fail is marked where it happens.
 
 ```ren
 pub fn load(id: UserId) -> User ! NotFound
@@ -176,30 +176,38 @@ pub fn load(id: UserId) -> User ! NotFound
 
 pub fn page(id: UserId) -> Html
     uses Users =
-  let user = load(id) catch                    // handle every error (exhaustive)
-    NotFound => guest()
+  let user = match load(id)                    // handle every error (exhaustive)
+    u => u
+    fail NotFound => guest()
   render(user)
 
-fn report(id: UserId) -> Report ! _ =
-  let user  = try load(id)                     // propagate
-  let stats = attempt fetch_stats(id)          // capture as a Result value
+fn report(id: UserId) -> Report =              // private: its errors are inferred
+  let user  = try load(id)                     // pass it on
+  let stats = attempt fetch_stats(id)          // keep the outcome as a Result value
   build(user, stats)
 
-fn profile(id: UserId) -> Profile ! _ =
-  let user = try load_full(id) catch           // handle some, propagate the rest
-    NotFound => guest()
+fn profile(id: UserId) -> Profile =
+  let user = try match load_full(id)           // handle some, pass the rest on
+    u => u
+    fail NotFound => guest()
   summarize(user)
 ```
 
-`catch` on its own must handle every error the call can produce. `try … catch` handles the listed errors and propagates the rest, so every line that can fail still starts with `try`.
+Handling an error is pattern matching, so it's a `match`: a `fail` pattern matches an error, and any other pattern matches the value. The `match` must handle every error the call can fail with, and `_` never matches one (`fail _` does), so a stray wildcard can't swallow a failure. `try match` handles the errors it lists and passes the rest on, so the line still starts with `try`. `try` covers every call to its right in the same expression. A call that can fail with no marker is an error, and so is a marker on a call that can't fail.
 
-Error tags work like OCaml's polymorphic variants. They're structural and need no declaration: `fail NotFound` and `fail PaymentFailed(reason: "card declined")` just work. An alias groups tags for reuse:
+`attempt` is the one way an error becomes a value: it turns the outcome into `Ok(v)` or `Err(tag)`, for an error that has to outlive the line it happened on, such as one checked by a test or decided on later. `try r` fails with it again.
+
+Error tags work like OCaml's polymorphic variants. They're structural and need no declaration: `fail NotFound` and `fail PaymentFailed(reason: "card declined")` just work. Tags aren't values: they appear only after `!`, after `fail`, and in `fail` patterns. A name for a set of tags is declared with `!`:
 
 ```ren
-type BillingError = PaymentFailed(reason: Str) | CardDeclined
+type BillingError = ! PaymentFailed(reason: Str) | CardDeclined
 
 pub fn checkout(cart: Cart) -> Receipt ! BillingError | NotFound
 ```
+
+A public function lists its errors exactly, so a signature can get long. That's the contract: callers handle what can happen and nothing else.
+
+When a call fails, whatever it changed before failing stays changed. For all-or-nothing, change a copy and keep it only if nothing failed: `var draft = self`, then `self = draft` at the end. A statement whose value isn't `()` is an error, so a result can't be dropped without a word; `let _ = ...` drops it on purpose. The whole design, and why, is in [errors.md](errors.md).
 
 Tags only have to agree where they meet. `Timeout` from `async.timeout` and `Timeout` from your own code are the same error if they have the same shape. If one error set would contain two shapes of the same tag, such as `Timeout(ms: Int)` and a plain `Timeout`, that's a compile error asking you to rename one. So adding a dependency never breaks code that doesn't touch it.
 
@@ -794,7 +802,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 4 | `var`, `inout`, `&`, value semantics | `normalize(&scores)` works |
 | 5a | files as modules, `import`, `pub`, `opaque`, lookup through types, interface summaries, `uses` on signatures | a program of four modules with shared constructor names checks (done) |
 | 5b | methods, associated functions and values under their type; `dbg` | `&xs.push(x)` checks (done, except `dbg`) |
-| 6 | `!`, `try`, `catch`, `fail`, `orelse` | error paths type-check |
+| 6 | `!`, `try`, `fail`, `match` on errors, `attempt`, `orelse`; `&&`, `\|\|`, `not` ([errors.md](errors.md)) | the shop, the VM and the bank fail with errors, not values |
 | 7 | `uses`, `with`, dependency types | tests swap implementations |
 | 8 | `handler`, `Async`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
 | 9 | operators, derived equality and hashing, arithmetic for opaque number types | `Map<Email, User>` works |
