@@ -1751,3 +1751,31 @@ fn main() =
     fn worth_retrying(r: Result<Unit, ! Frozen(AccountId) | NoSuchAccount(AccountId) | SameAccount | Short(AccountId, Int)>) -> Bool
     fn main() uses Io
     |}]
+
+let%expect_test "an associated value can't fail" =
+  types
+    {|
+type T = { a: Int }
+  pub let one: T = fail Missing(1)
+  let two: T = T { a: try parse(2) }
+fn parse(n: Int) -> Int ! Bad = if n < 0 then fail Bad else n
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: the associated value `T.one` can fail with `Missing`
+      ┌─ test.ren:2:11
+    2 │   pub let one: T = fail Missing(1)
+      │           ^^^
+      │                    --------------- this fails with `Missing`
+      = an associated value is made once, when the program starts, so nothing could handle an error it failed with
+      help: handle it here with `match`, or make it an associated function, `fn one() ! Missing(Int) = ...`
+
+    error: the associated value `T.two` can fail with `Bad`
+      ┌─ test.ren:3:7
+    3 │   let two: T = T { a: try parse(2) }
+      │       ^^^
+      │                           -------- this call can fail with `Bad`
+      = an associated value is made once, when the program starts, so nothing could handle an error it failed with
+      help: handle it here with `match`, or make it an associated function, `fn two() ! Bad = ...`
+    |}]

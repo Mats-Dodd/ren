@@ -574,7 +574,7 @@ let settle_errors env =
    exactly those: nothing else, reported at the first place that brings
    it in, and each of them, reported where it's written. [cx] is what
    checking [f]'s body found. *)
-let check_errors env (f : fn_def) cx declared =
+let check_errors env ~is_value (f : fn_def) cx declared =
   let pr = printer env in
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let loc = function
@@ -620,7 +620,9 @@ let check_errors env (f : fn_def) cx declared =
               | None -> None)
         in
         report env
-          (undeclared_error f ~tag:l.name ~shape:(show_label pr l) from))
+          (if is_value f then
+             value_fails f ~tag:l.name ~shape:(show_label pr l) from
+           else undeclared_error f ~tag:l.name ~shape:(show_label pr l) from))
     (List.sort
        (fun (a : label) b -> String.compare a.name b.name)
        (fst (row_parts cx.errs)));
@@ -1053,7 +1055,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             (declared_uses ~is_value f);
           Option.iter
             (fun declared ->
-              check_errors env f cx declared;
+              check_errors env ~is_value f cx declared;
               as_declared env (path f) cx declared)
             (declared_errors env ~is_value
                ~tparams:(List.map (fun (id, n) -> TSkol (id, n)) skolems)

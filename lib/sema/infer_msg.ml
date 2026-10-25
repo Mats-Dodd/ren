@@ -541,6 +541,27 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
 
 (* ---- errors (errors.md) ---- *)
 
+(* The associated value [f] can fail with [tag], shown as [shape]; [from]
+   is the first place it comes from, and what it is. *)
+let value_fails (f : Ast.Resolved.fn_def) ~tag ~shape from =
+  Diag.make f.name.loc
+    ~labels:
+      (match from with
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" what tag) ]
+      | None -> [])
+    ~notes:
+      [
+        "an associated value is made once, when the program starts, so nothing \
+         could handle an error it failed with";
+      ]
+    ~help:
+      (sprintf
+         "handle it here with `match`, or make it an associated function, `fn \
+          %s() ! %s = ...`"
+         (Ast.short_name f.name.name)
+         shape)
+    (sprintf "the associated value `%s` can fail with `%s`" f.name.name tag)
+
 (* "`Short(Int)`", "`Short(Int)` and `Frozen`", "`A`, `B` and `C`" *)
 let and_list items =
   match List.rev (List.map (sprintf "`%s`") items) with
