@@ -165,7 +165,20 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
     &&
     match s.tail with
     | None -> extra = [] && t.tail = None
-    | Some n -> bound rows ( = ) n (extra, t.tail)
+    | Some n ->
+        (* a canonical row has each label once, so the row variable may
+           stand for a label [s] has too: it stands for at least [extra],
+           and at most [t]'s labels, wherever it is *)
+        let fits (extra', labels', tail') =
+          tail' = t.tail
+          && List.for_all (fun l -> List.mem l t.labels) extra'
+          && List.for_all (fun l -> List.mem l labels') extra
+        in
+        let seen = Option.value (Hashtbl.find_opt rows n) ~default:[] in
+        List.for_all fits seen
+        &&
+        (Hashtbl.replace rows n ((extra, t.labels, t.tail) :: seen);
+         true)
   in
   go s t
 

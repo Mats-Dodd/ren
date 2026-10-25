@@ -904,7 +904,7 @@ fn main() = 1
     2 │ fn mk(f: fn()) = Button { on_click: f }
       │                                     ^
       = a parameter whose type is written `fn(...)` can only be called, or passed straight to another function
-      help: remove the type from `f` and let it be inferred, so its errors and dependencies are tracked wherever it goes
+      help: to keep it, name its rows, `f: fn(...) ! ..e uses ..d`, or remove the type and let it be inferred
     |}];
   types {|
 fn keep(f: fn()) = fn() => f()
@@ -917,7 +917,7 @@ fn main() = 1
     1 │ fn keep(f: fn()) = fn() => f()
       │                    ^^^^^^^^^^^
       = a parameter whose type is written `fn(...)` can only be called, or passed straight to another function
-      help: remove the type from `f` and let it be inferred, so its errors and dependencies are tracked wherever it goes
+      help: to keep it, name its rows, `f: fn(...) ! ..e uses ..d`, or remove the type and let it be inferred
 
     error: `f` can fail, and nothing handles it
       ┌─ test.ren:1:28

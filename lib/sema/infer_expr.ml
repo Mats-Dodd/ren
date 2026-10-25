@@ -89,6 +89,8 @@ type env = {
   mutable impl_ops : impl_op list;
       (** the group's implementations' operations, whose errors are checked once
           it's done (see [impl_op]) *)
+  mutable installs : install list;
+      (** the group's `with`s that install, innermost first (see [install]) *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
@@ -136,6 +138,15 @@ and impl_op = {
   ivalue : expr;
   inodes : (int, ty) Hashtbl.t;
 }
+
+(* A `with` that installs [wdep], at [wloc]: its body uses [wbody], which
+   is what the body's calls use, and that has to be no more than [wdep]
+   and what's installed outside, [wouter]. That's an inclusion, not an
+   equality: a closure called both in the body and outside it uses what
+   the outside does, which is less than the body can. It's settled once
+   the group is done (infer_top.ml), when every call of the group knows
+   what it uses. *)
+and install = { wloc : Loc.t; wdep : string; wbody : row; wouter : row }
 
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their
@@ -340,10 +351,23 @@ let unifies env why loc ~found ~expected =
       in
       let help = Option.map (fun h -> h f x) why.help in
       let more, help = mismatch_notes ?help ~found ~expected () in
-      (* two implementations of one dependency that need different things *)
-      let more, help =
+      (* two implementations of one dependency that need different things,
+         themselves or inside the types they're part of, `Box<Rates>` *)
+      let rec impls found expected =
         match (repr found, repr expected) with
-        | TCon (p, [ TUses _ ]), TCon (q, [ TUses _ ]) when p = q ->
+        | (TCon (p, [ TUses _ ]) as t), TCon (q, [ TUses _ ]) when p = q ->
+            Some t
+        | TCon (p, fs), TCon (q, xs)
+          when p = q && List.length fs = List.length xs ->
+            List.find_map Fun.id (List.map2 impls fs xs)
+        | _ -> None
+      in
+      let more, help =
+        match impls found expected with
+        | Some t ->
+            (* `uses` after `->` is the function's, so a dependency's own
+               is parenthesized; inside `Box<...>` it needs nothing *)
+            let f = if t == repr found then sprintf "(%s)" f else f in
             ( more
               @ [
                   "an implementation's type says what it needs, so one that \
@@ -353,7 +377,7 @@ let unifies env why loc ~found ~expected =
                 (Option.value help
                    ~default:
                      (sprintf
-                        "say what it needs where its type is written: `(%s)`" f))
+                        "say what it needs where its type is written: `%s`" f))
             )
         | _ -> (more, help)
       in
@@ -995,14 +1019,24 @@ let use_row env cx ~loc ?(needs = false) uses =
   in
   try Unify.unify_row env.st joined cx.uses
   with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
-    let pr = printer env in
+    let shown =
+      match row_names uses with
+      | [] -> "more than what it's in can"
+      | ns ->
+          and_list (List.map (sprintf "`%s`") ns) ^ ", which what it's in can't"
+    in
     ignore
       (fail env loc
-         (sprintf "%s %s, which isn't allowed here"
-            (if needs then "installing this" else "this call")
-            (show_row pr
-               ~prefix:(if needs then "needs " else "uses ")
-               ~sep:", " ~kind:"d" uses)))
+         ~notes:
+           [
+             "a function or lambda uses everything its calls use, and \
+              everything the implementations its `with`s install need, and the \
+              type of what this is in says it can't use all of that";
+           ]
+         ~help:
+           "say what it uses where its type is written, with `uses`, or leave \
+            the type out and let it be inferred"
+         (sprintf "%s %s" what shown))
 
 (* A call adds the callee's dependencies to the caller's, and its errors
    to whatever marks it (errors.md, "Marking"): the innermost marker's
@@ -1572,7 +1606,50 @@ and synth env cx (e : expr) : ty =
    kept for lowering. *)
 and with_ env cx (e : expr) item body lam =
   match item.kind with
-  | Call (f, args) when match f.kind with Field _ -> false | _ -> true -> (
+  | Call (({ kind = Field (r, m); _ } as f), args) -> (
+      let tr = infer env cx r in
+      (* a method is a wrapper if it takes one more argument, besides its
+         `self`, than it's given *)
+      let wrapper =
+        match op_of env tr m.name with
+        | Some (td, ({ okind = Method; _ } as o)) -> (
+            let path = op_path td o in
+            if path.home = env.home && not (Hashtbl.mem env.globals path) then
+              raise (Unchecked { caller = cx.self.name; callee = path.name });
+            match repr (lookup env cx f.loc (Global path)) with
+            | TFun (self :: ps, ret, errs, uses) as tm
+              when List.length ps = List.length args + 1 ->
+                Some (path, tm, self, TFun (ps, ret, errs, uses))
+            | _ -> None)
+        | _ -> None
+      in
+      match wrapper with
+      | Some (path, tm, self, tf) ->
+          Hashtbl.replace cx.nodes f.node tm;
+          Hashtbl.replace cx.found f.node (Method_of path);
+          unify_at env r.loc ~found:tr ~expected:self.ty;
+          if self.mode = Inout then
+            report env
+              (Diag.make item.loc
+                 ~notes:
+                   [
+                     "`with r.w(a) in body` calls `r.w(a, fn() => body)`, and \
+                      a `with`'s item can't change what it's called on";
+                   ]
+                 ~help:
+                   (sprintf
+                      "call `%s` outside the `with`, with all its arguments"
+                      m.name)
+                 (sprintf "`%s` changes its receiver, so it can't wrap a body"
+                    m.name));
+          wrap env cx e ~call:item ~f ~args
+            ?target:(if group_call env path then Some path else None)
+            tf body lam
+      | None ->
+          let t = infer_call env cx ~tr item f args in
+          Hashtbl.replace cx.nodes item.node t;
+          install env cx e item t body)
+  | Call (f, args) -> (
       let tf = infer env cx f in
       match reveal env.st tf with
       | TFun (ps, _, _, _) when List.length ps = List.length args + 1 ->
@@ -1599,10 +1676,13 @@ and install env cx (e : expr) item t body =
          installed where it's installed *)
       use_row env cx ~loc:item.loc ~needs:true needs;
       let label = Ty.dep_label d in
-      let inner =
-        { cx with uses = RExtend (dep label, cx.uses); calls = ref [] }
-      in
+      (* the body's own row, which [settle_installs] relates to the outer
+         one once the group is done *)
+      let inner = { cx with uses = fresh_row env.st; calls = ref [] } in
       let tb = infer env inner body in
+      env.installs <-
+        { wloc = item.loc; wdep = label; wbody = inner.uses; wouter = cx.uses }
+        :: env.installs;
       (* the body's calls bring in what they bring in, but [d] *)
       cx.calls :=
         List.map
@@ -1644,7 +1724,7 @@ and install env cx (e : expr) item t body =
    type is recorded at [lam]. The `with` passes on what the call fails
    with, as `try` would: the body marks its own calls, and the wrapper is
    written to fail with what the body does. *)
-and wrap env cx (e : expr) ~call ~f ~args tf body lam =
+and wrap env cx (e : expr) ~call ~f ~args ?target tf body lam =
   match reveal env.st tf with
   | TFun (ps, ret, errs, uses) ->
       Hashtbl.replace cx.found e.node Wraps;
@@ -1705,9 +1785,10 @@ and wrap env cx (e : expr) ~call ~f ~args tf body lam =
         }
       in
       let target =
-        match f.kind with
-        | Var (Global p) when group_call env p -> Some p
-        | _ -> None
+        match (target, f.kind) with
+        | Some p, _ -> Some p
+        | None, Var (Global p) when group_call env p -> Some p
+        | None, _ -> None
       in
       absorb env
         { cx with markers = m :: cx.markers }
@@ -1832,10 +1913,11 @@ and dropped env cx (e : expr) t =
    [x]'s type: as a field is, by [through_type], except that a method can
    be in a type of any kind, not only a record. [changed] is where the `&`
    is, if it's `&x.m(...)`. *)
-and infer_call env cx ?changed (e : expr) (f : expr) args =
+and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
   match f.kind with
   | Field (r, m) -> (
-      let tr = infer env cx r in
+      (* [tr] is the receiver's type, if it's inferred already *)
+      let tr = match tr with Some t -> t | None -> infer env cx r in
       (* `r.m` is a field holding a function *)
       let field_call () =
         Option.iter

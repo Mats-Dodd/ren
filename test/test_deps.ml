@@ -482,6 +482,28 @@ fn main() uses Net = print(Users.get(1))
       help: remove it: nothing can implement `Net` yet
     |}]
 
+let%expect_test
+    "main's help suggests only an implementation that can be installed" =
+  (* one that needs what it implements would need one installed before it *)
+  types
+    {|
+dep Log =
+  put: fn(n: Int)
+fn doubling() = Log { put: fn(n) => Log.put(n * 2) }
+fn main() uses Log =
+  Log.put(1)
+|};
+  [%expect
+    {|
+    error: nothing installs `Log` before `main`
+      ┌─ test.ren:4:16
+    4 │ fn main() uses Log =
+      │                ^^^ the runtime installs only `Clock`, `Random` and `Console`
+    5 │   Log.put(1)
+      │   ---------- this call uses `Log`
+      help: install one inside `main`, with `with`: an implementation is a `Log { ... }` that gives each of its operations
+    |}]
+
 let%expect_test "an operation that fails, called with try" =
   types
     {|
@@ -1318,6 +1340,134 @@ fn main() = 1
     fn main() -> Int
     |}]
 
+let%expect_test "a with's body uses no more than what's outside it" =
+  (* a closure called both inside a `with` and outside it, a closure
+     parameter called inside one, and a dependency parameter installed
+     inside another: each uses what's outside, which is less than the
+     body can *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+fn at(minutes: Int) -> Clock =
+  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+fn run_at(f: fn() -> Int) -> Int = with at(1) in try f()
+fn run_inferred(f) = with at(1) in try f()
+fn convert(r: Rates) = with Clock.frozen(Time.epoch) in with r in Rates.usd_to(4)
+fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn local() uses Console =
+  let k = fn() => print(Clock.now())
+  with at(2) in k()
+  with at(3) in
+    k()
+    with Rates { usd_to: fn(c) => c } in k()
+fn main() uses Console, Clock =
+  let pure = fn() => 5
+  print(with at(1) in pure())
+  print(pure())
+  print(run_at(fn() => 6))
+  print(run_inferred(fn() => Clock.now()))
+  print(convert(timed()))
+  local()
+|}
+  in
+  types src;
+  [%expect
+    {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    fn at(minutes: Int) -> Clock
+    fn run_at(f: fn() -> Int) -> Int
+    fn run_inferred<T>(f: fn() -> T ! ..e uses Clock, ..d) -> T ! ..e uses ..d
+    fn convert(r: Rates) -> Int
+    fn timed() -> (Rates uses Clock)
+    fn local() uses Console
+    fn main() uses Clock, Console
+    |}];
+  run src;
+  [%expect
+    {|
+    5
+    5
+    6
+    60000
+    0
+    120000
+    180000
+    180000
+    ()
+    |}];
+  (* a closure parameter called inside a `with`: an inferred one may use
+     what it installs, and one whose type is written transparent passes
+     everything it uses on (deps.md, "Deviations") *)
+  types
+    {|
+fn inferred(f) = with Clock.frozen(Time.epoch) in try f()
+fn written(f: fn() -> Time) -> Time = with Clock.frozen(Time.epoch) in try f()
+fn main() uses Console =
+  print(inferred(fn() => Clock.now()))
+  print(written(fn() => Clock.now()))
+|};
+  [%expect
+    {|
+    error: `main` doesn't declare `Clock`
+      ┌─ test.ren:3:4
+    3 │ fn main() uses Console =
+      │    ^^^^
+    5 │   print(written(fn() => Clock.now()))
+      │         ---------------------------- this call uses `Clock`
+      = `main`'s body can only use what its `uses` lists
+      help: add `Clock` to its `uses`
+    |}];
+  (* a signature that says so, called where the caller uses the same
+     dependency itself *)
+  run
+    {|
+fn run_at(f: fn() -> Int uses Clock, ..d) -> Int uses ..d =
+  with Clock.frozen(Time.epoch) in f()
+fn main() uses Console, Clock =
+  print(run_at(fn() => if Clock.now().after(Time.epoch) then 1 else 2))
+|};
+  [%expect {|
+    2
+    ()
+    |}];
+  (* a function calling itself, or one of its group, inside a `with` *)
+  run
+    {|
+dep Log =
+  put: fn(n: Int)
+fn at(minutes: Int) -> Clock =
+  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+fn logger(base: Int) = Log { put: fn(n) => print(base + n) }
+fn walk(n: Int) =
+  if n > 0 then
+    print(Clock.now())
+    with at(n) in walk(n - 1)
+fn ping(n: Int) =
+  if n > 0 then
+    Log.put(n)
+    with logger(n * 100) in pong(n - 1)
+fn pong(n: Int) =
+  if n > 0 then
+    Log.put(n)
+    ping(n - 1)
+fn main() uses Console =
+  with at(7) in walk(3)
+  with logger(0) in ping(4)
+|};
+  [%expect
+    {|
+    420000
+    180000
+    120000
+    4
+    403
+    402
+    201
+    ()
+    |}]
+
 let%expect_test "what an implementation needs is part of its type" =
   types
     {|
@@ -1382,6 +1532,27 @@ fn main() = 1
 
 (* An implementation's operations run with what's installed where it's
    installed: the clock at 1 minute, not the one at 0 *)
+let%expect_test "an implementation that needs more, inside another type" =
+  types
+    {|
+dep Rates =
+  usd_to: fn(c: Int) -> Int
+type Box<T> = { it: T }
+fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn boxed() -> Box<Rates> = Box { it: timed() }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: expected `Box<Rates>`, found `Box<Rates uses Clock>`
+      ┌─ test.ren:5:28
+    5 │ fn boxed() -> Box<Rates> = Box { it: timed() }
+      │                            ^^^^^^^^^^^^^^^^^^^
+      = `boxed` is declared to return `Box<Rates>`
+      = an implementation's type says what it needs, so one that needs more can't stand in for one that needs less
+      help: say what it needs where its type is written: `Box<Rates uses Clock>`
+    |}]
+
 let%expect_test "an implementation's needs are fixed where it's installed" =
   run
     {|
@@ -1449,6 +1620,25 @@ fn main() = 1
       │                                   ^^^^^^^^^^^^^^^^^^^^ fails with `Gone` and `Timeout`
       = `Plain.get` can't fail
       help: handle what it fails with inside it, with `match` and `fail` arms
+    |}];
+  (* an ordinary function's call: its row is open where it's called, which
+     isn't more errors, so the help says `match` *)
+  types
+    {|
+fn get(c: Int) -> Int ! Timeout = if c > 0 then c else fail Timeout
+dep Rates =
+  usd_to: fn(c: Int) -> Int ! RateUnavailable
+fn live() = Rates { usd_to: fn(c) => try get(c) }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
+      ┌─ test.ren:4:38
+    4 │ fn live() = Rates { usd_to: fn(c) => try get(c) }
+      │                                      ^^^^^^^^^^ fails with `Timeout`
+      = `Rates.usd_to` can fail only with `RateUnavailable`
+      help: map it: `match get(c)` with the arm `fail Timeout => fail RateUnavailable`
     |}];
   (* following the help, and an operation that fails with less *)
   run
@@ -1571,6 +1761,52 @@ fn main() uses Console =
     Ok(4)
     42
     ()
+    |}]
+
+let%expect_test "a method is a wrapper too" =
+  run
+    {|
+type W = { n: Int }
+  fn wrap(self, body: fn() -> Int) -> Int = self.n * (try body())
+  fn times(n: Int, body: fn() -> Int) -> Int = n + (try body())
+fn main() uses Console =
+  let w = W { n: 3 }
+  print(with w.wrap() in 5)
+  print(with W.times(3) in 5)
+  print(with w.wrap(), w.wrap() in 2)
+  print(attempt with w.wrap() in fail Nope)
+|};
+  [%expect {|
+    15
+    8
+    18
+    Err(Nope)
+    ()
+    |}];
+  types
+    {|
+type W = { n: Int }
+  fn wrap(self, body: fn() -> Int) -> Int = self.n * (try body())
+  fn bump(inout self, body: fn() -> Int) -> Int = try body()
+fn main() uses Console =
+  var w = W { n: 3 }
+  print(with w.wrap in 5)
+  print(with w.bump() in 5)
+|};
+  [%expect
+    {|
+    error: `wrap` is a method, so it has to be called
+      ┌─ test.ren:6:16
+    6 │   print(with w.wrap in 5)
+      │                ^^^^
+      help: write `w.wrap()`, or use `W.wrap` as a function
+
+    error: `bump` changes its receiver, so it can't wrap a body
+      ┌─ test.ren:7:14
+    7 │   print(with w.bump() in 5)
+      │              ^^^^^^^^
+      = `with r.w(a) in body` calls `r.w(a, fn() => body)`, and a `with`'s item can't change what it's called on
+      help: call `bump` outside the `with`, with all its arguments
     |}]
 
 let%expect_test "what a wrapper can't be" =
@@ -1854,7 +2090,8 @@ fn main() uses Console =
 |}
   in
   types src;
-  [%expect {|
+  [%expect
+    {|
     fn flaky(n: Int) -> Int ! Boom
     pub fn retry(n: Int, body: fn() -> Int) -> Int
     pub fn safe() -> Int ! Boom

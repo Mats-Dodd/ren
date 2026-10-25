@@ -101,8 +101,8 @@ let check_transparent sink (f : fn_def) =
                 ]
               ~help:
                 (sprintf
-                   "remove the type from `%s` and let it be inferred, so its \
-                    errors and dependencies are tracked wherever it goes"
+                   "to keep it, name its rows, `%s: fn(...) ! ..e uses ..d`, \
+                    or remove the type and let it be inferred"
                    name)
               (sprintf "`%s` %s, so it isn't transparent" name what)
         | Some (d : Path.t) ->
@@ -964,6 +964,79 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
       | _ -> ())
     fns
 
+(* Each `with` of the group that installs (see [install]): its body uses
+   no more than what it installs and what's installed outside it. Inner
+   `with`s are settled first, since what their bodies use is part of what
+   the outer ones' do. Each body's labels but the one installed are added
+   to the outer row. If the body's row is the outer one already, as for a
+   closure called both in the body and outside it, or a function of the
+   group calling itself, that's all. A row that's still open stands for
+   what a closure the body calls uses, an inferred parameter's, say: it
+   may use what's installed too, and the rest of it is what's outside.
+   Unless another `with` calls the same closure: then it's what's outside
+   them all, more than it needs if it uses what one installs, never
+   less. *)
+let settle_installs env =
+  let ws = List.rev env.installs in
+  (* how many bodies end in each row that's still open *)
+  let tails = List.filter_map (fun w -> row_tail w.wbody) ws in
+  let shared id = List.length (List.filter (( = ) id) tails) > 1 in
+  List.iter
+    (fun w ->
+      let labels, tail = row_parts w.wbody in
+      let rest = List.filter (fun (l : label) -> l.name <> w.wdep) labels in
+      let into r =
+        try
+          Unify.unify_row env.st r w.wouter;
+          true
+        with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ -> false
+      in
+      let ok =
+        match row_end w.wbody with
+        | _ when tail <> None && tail = row_tail w.wouter ->
+            (* the same row: everything it uses but [wdep] is outside too *)
+            let outer = row_names w.wouter in
+            List.for_all (fun (l : label) -> List.mem l.name outer) rest
+        | RVar _ as t
+          when List.length rest = List.length labels
+               && not (shared (Option.get tail)) ->
+            (* it may use [wdep] too, as a closure the body calls may *)
+            let t' = fresh_row env.st in
+            Unify.unify_row env.st t (RExtend (dep w.wdep, t'));
+            into (extend rest t')
+        | RVar _ as t -> into (extend rest t)
+        | RSkol (id, n) ->
+            (* a named row: what's outside ends in it too *)
+            env.rows_due <-
+              {
+                rloc = w.wloc;
+                rinto = w.wouter;
+                rnamed = (id, n);
+                rwhat = "this `with`'s body uses";
+              }
+              :: env.rows_due;
+            into (extend rest (fresh_row env.st))
+        | REmpty | RExtend _ -> into (extend rest (fresh_row env.st))
+      in
+      if not ok then
+        report env
+          (Diag.make w.wloc
+             ~notes:
+               [
+                 "a closure called in a `with`'s body is called with what's \
+                  installed outside it too, and this one is called where more \
+                  is installed than outside";
+               ]
+             ~help:
+               "call the closure only inside the `with`, or install what it \
+                uses outside it too"
+             (sprintf
+                "this `with`'s body uses %s, which what's outside it can't"
+                (and_list
+                   (List.map (fun (l : label) -> sprintf "`%s`" l.name) rest)))))
+    ws;
+  env.installs <- []
+
 (* Each operation an implementation of the group gives fails with no more
    than its dependency declares (deps.md, "Implementations"): anything more
    is reported, where the operation is given, and then it fails with
@@ -989,12 +1062,14 @@ let settle_impls env =
             match (body.kind, extra, o.ideclared) with
             | Try ({ kind = Call (f, _); _ } as call), [ l ], d :: _ ->
                 (* `try match` passes on what the arms don't handle, if the
-                   call fails with more *)
+                   call fails with more. A function's row is open where it's
+                   called, room for errors it never has, so only a named row
+                   at its end, whatever a closure fails with, is more *)
                 let more =
                   match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
-                  | Some (TFun (_, _, errs, _)) ->
+                  | Some (TFun (_, _, errs, _)) -> (
                       List.exists (fun n -> n <> l.name) (row_names errs)
-                      || row_tail errs <> None
+                      || match row_end errs with RSkol _ -> true | _ -> false)
                   | _ -> true
                 in
                 sprintf "map it: `%smatch %s` with the arm `fail %s => fail %s`"
@@ -1152,11 +1227,15 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
       | None, _ -> [])
     @ row_names cx.uses
   in
+  (* an implementation that needs [p] itself would need one installed
+     before it, so it isn't one to suggest *)
   let makes p t =
     match repr t with
     | TFun (ps, ret, _, _) -> (
         match repr ret with
-        | TCon (q, _) when q = p -> Some (List.length ps)
+        | TCon (q, [ TUses needs ])
+          when q = p && not (List.mem (Ty.dep_label p) (row_names needs)) ->
+            Some (List.length ps)
         | _ -> None)
     | _ -> None
   in
@@ -1200,9 +1279,18 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
           List.find_map
             (fun (o : Iface.op) ->
               let name = env.names p ^ "." ^ o.oname in
+              let itself = function
+                | [ Ty.Uses u ] ->
+                    List.exists
+                      (fun (l : Ty.label) -> l.name = Ty.dep_label p)
+                      u.labels
+                | _ -> false
+              in
               match (o.okind, o.oscheme.ty) with
-              | Value, Con (q, _) when q = p -> Some name
-              | Function, Fun (ps, Con (q, _), _, _) when q = p ->
+              | Value, Con (q, args) when q = p && not (itself args) ->
+                  Some name
+              | Function, Fun (ps, Con (q, args), _, _)
+                when q = p && not (itself args) ->
                   Some (call name (List.length ps))
               | _ -> None)
             (if p.home = env.home then [] else td.members))
@@ -1319,6 +1407,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       tag_patterns = [];
       rows_due = [];
       impl_ops = [];
+      installs = [];
       in_scope = [];
     }
   in
@@ -1540,6 +1629,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
         (List.rev env.joins);
       env.joins <- [];
       dropped_values env;
+      settle_installs env;
       (* only now, with the group's uses of each other joined, is it known
          everything each function uses and fails with *)
       own_error_rows env (List.map (fun (f, _, cx, _, _) -> (f, cx)) setups);
