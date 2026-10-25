@@ -352,6 +352,84 @@ let fn_def env (f : Parsed.fn_def) : Resolved.fn_def * Path.t list =
   let body = expr env inner f.body in
   ({ f with params = ps; ret; body }, List.sort_uniq compare sc.fn.calls)
 
+(* ---- what a public declaration can mention ----
+
+   A public function's signature and a public type's fields are part of
+   the module's interface, and the interface holds no private types
+   (iface.ml). A dependent can't do anything with a type it can't see, so
+   neither can mention one. [private_] holds the module's private types,
+   by name, with where each is declared. *)
+
+(* Every type named in [t], with where it's named, left to right. *)
+let rec named_in (t : Resolved.ty) =
+  match t with
+  | TyName ({ tref = Named p; tloc }, args) ->
+      (p, tloc) :: List.concat_map named_in args
+  | TyName ({ tref = Param _; _ }, args) -> List.concat_map named_in args
+  | TyFn (ps, ret, _) ->
+      List.concat_map named_in ps @ Option.fold ~none:[] ~some:named_in ret
+  | TyInout (t, _) -> named_in t
+
+(* Report each private type in [t]. [whole] words the error when [t] is
+   that type, [inside] when it's somewhere in [t]. *)
+let no_private env ~private_ ~whole ~inside (t : Resolved.ty) =
+  let is_whole p =
+    match t with TyName ({ tref = Named q; _ }, _) -> p = q | _ -> false
+  in
+  List.iter
+    (fun ((p : Path.t), loc) ->
+      if p.home = env.home then
+        match Hashtbl.find_opt private_ p.name with
+        | Some decl ->
+            report env loc
+              ~help:(sprintf "mark `%s` `pub`" p.name)
+              ~labels:
+                [
+                  (decl, sprintf "`%s` is declared here, without `pub`" p.name);
+                ]
+              (sprintf "%s, which is private to this module"
+                 (if is_whole p then whole p.name else inside p.name))
+        | None -> ())
+    (named_in t)
+
+let no_leaks env ~private_ (items : Resolved.program) =
+  List.iter
+    (function
+      | Fn (f : Resolved.fn_def) when f.pub ->
+          let check ~verb t =
+            no_private env ~private_ t
+              ~whole:(sprintf "`pub fn %s` %s `%s`" f.name.name verb)
+              ~inside:
+                (sprintf "`pub fn %s`'s signature mentions `%s`" f.name.name)
+          in
+          List.iter
+            (fun (p : Resolved.param) ->
+              Option.iter (check ~verb:"takes") p.pty)
+            f.params;
+          Option.iter (check ~verb:"returns") f.ret
+      | Type (td : Resolved.type_def) when td.type_pub -> (
+          let t = td.type_name.name in
+          let field (fd : Resolved.field) =
+            no_private env ~private_ fd.field_ty
+              ~whole:(sprintf "`pub type %s` has a field of type `%s`" t)
+              ~inside:
+                (sprintf "`pub type %s`'s field `%s` mentions `%s`" t
+                   fd.field_name.name)
+          in
+          let ctor (c : tname ctor) (fd : Resolved.field) =
+            let c = c.ctor_name.name in
+            no_private env ~private_ fd.field_ty
+              ~whole:(sprintf "`pub type %s`'s constructor `%s` holds `%s`" t c)
+              ~inside:
+                (sprintf "`pub type %s`'s constructor `%s` mentions `%s`" t c)
+          in
+          match td.type_body with
+          | Fields fs -> List.iter field fs
+          | Ctors cs -> List.iter (fun c -> List.iter (ctor c) c.ctor_fields) cs
+          )
+      | Fn _ | Type _ | Import _ -> ())
+    items
+
 (* Constructor names are unique across every type the module sees, its
    imports' included: a constructor is found through its type
    (infer_expr.ml), but for now it can also be found by its name alone.
@@ -493,6 +571,14 @@ let program sink ~home ~imports (prog : Parsed.program) =
            | Import i -> (Import i, None))
          prog)
   in
+  let private_ = Hashtbl.create 8 in
+  List.iter
+    (function
+      | Type (td : Resolved.type_def) when not td.type_pub ->
+          Hashtbl.replace private_ td.type_name.name td.type_name.loc
+      | Fn _ | Type _ | Import _ -> ())
+    items;
+  no_leaks env ~private_ items;
   let types =
     List.filter_map
       (function

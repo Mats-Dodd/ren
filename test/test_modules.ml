@@ -266,3 +266,96 @@ pub fn main() -> Int = 1
       │ ^
       help: add `fn main() = ...`, which is where the program starts
     |}]
+
+(* ---- what a public declaration can mention ---- *)
+
+let%expect_test "a public function can't mention a private type" =
+  run
+    {|
+type Row = { id: Int }
+pub fn load(id: Int) -> Row = Row { id: id }
+pub fn ids(rows: Array<Row>) -> Int = len(rows)
+fn main() = load(1).id
+|};
+  [%expect
+    {|
+    error: `pub fn load` returns `Row`, which is private to this module
+      ┌─ test.ren:2:25
+    1 │ type Row = { id: Int }
+      │      --- `Row` is declared here, without `pub`
+    2 │ pub fn load(id: Int) -> Row = Row { id: id }
+      │                         ^^^
+      help: mark `Row` `pub`
+
+    error: `pub fn ids`'s signature mentions `Row`, which is private to this module
+      ┌─ test.ren:3:24
+    1 │ type Row = { id: Int }
+      │      --- `Row` is declared here, without `pub`
+    3 │ pub fn ids(rows: Array<Row>) -> Int = len(rows)
+      │                        ^^^
+      help: mark `Row` `pub`
+    |}]
+
+let%expect_test "a public type can't have a field of a private type" =
+  run
+    {|
+type Row = { id: Int }
+pub type Table = { first: Row, rest: Array<Row> }
+pub type Cell =
+  | Empty
+  | Full(row: Row)
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `pub type Table` has a field of type `Row`, which is private to this module
+      ┌─ test.ren:2:27
+    1 │ type Row = { id: Int }
+      │      --- `Row` is declared here, without `pub`
+    2 │ pub type Table = { first: Row, rest: Array<Row> }
+      │                           ^^^
+      help: mark `Row` `pub`
+
+    error: `pub type Table`'s field `rest` mentions `Row`, which is private to this module
+      ┌─ test.ren:2:44
+    1 │ type Row = { id: Int }
+      │      --- `Row` is declared here, without `pub`
+    2 │ pub type Table = { first: Row, rest: Array<Row> }
+      │                                            ^^^
+      help: mark `Row` `pub`
+
+    error: `pub type Cell`'s constructor `Full` holds `Row`, which is private to this module
+      ┌─ test.ren:5:15
+    1 │ type Row = { id: Int }
+      │      --- `Row` is declared here, without `pub`
+    5 │   | Full(row: Row)
+      │               ^^^
+      help: mark `Row` `pub`
+    |}]
+
+let%expect_test "a private declaration can mention anything" =
+  run
+    {|
+type Row = { id: Int }
+type Table = { first: Row }
+fn load(id: Int) -> Row = Row { id: id }
+pub fn count(n: Int) -> Int = n
+fn main() = Table { first: load(count(1)) }.first.id
+|};
+  [%expect {| 1 |}]
+
+let%expect_test "a public type's fields can be read in another module" =
+  run_files
+    [
+      ("main.ren", {|
+import rows
+fn main() = rows.load(4).id
+|});
+      ( "rows.ren",
+        {|
+pub type Row = { id: Int }
+pub fn load(id: Int) -> Row = Row { id: id }
+|}
+      );
+    ];
+  [%expect {| 4 |}]
