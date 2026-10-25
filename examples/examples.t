@@ -37,11 +37,12 @@ infer.ren annotates nothing; this is what inference works out:
   fn twice<T>(f: fn() -> T) -> T
   fn main() uses Console
 
-`ren core` prints a module in Core, which it runs as: each dependency is a
+`ren core` prints the program in Core, which it runs as: each dependency is a
 hidden parameter, and a function over closures has a copy for what they
 use (deps.md, "How it runs"):
 
   $ ren core infer.ren
+  -- infer
   (fn seats (u/1) (match (. u/1 plan) (Free => 1) ((Pro n/2) => n/2)))
   (fn first_or (o/1 fallback/2)
     (match o/1 ((Some v/3) => v/3) (None => fallback/2)))
@@ -83,6 +84,25 @@ A program of several modules is a folder; its entry imports the rest:
   
   -- main
   fn main() -> Int uses Console
+
+`ren core` prints each module, and a copy of a function over closures is
+in the module of the function it copies:
+
+  $ mkdir copies
+  $ printf 'pub fn twice(f: fn()) =\n  try f()\n  try f()\n' > copies/lib.ren
+  $ printf 'import lib\nfn main() uses Console = lib.twice(fn() => print(1))\n' > copies/main.ren
+  $ ren core copies/main.ren
+  -- lib
+  (fn twice (f/1) (seq (call f/1) (call f/1)))
+  (fn twice[Console] (f/1) (uses Console/2)
+    (seq (call f/1 (uses Console/2)) (call f/1 (uses Console/2))))
+  
+  -- main
+  (fn main () (uses Console/1)
+    (call twice[Console]
+      (lambda () (captures) (uses Console/2) (call print 1 (uses Console/2)))
+      (uses Console/1)))
+  (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
 
 An error in one module can point into another, and shows that file's line:
 

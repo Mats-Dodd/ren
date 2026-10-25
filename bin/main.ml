@@ -13,7 +13,7 @@ commands:
   check   check the program without running it
   types   print every function's inferred signature, module by module,
           and each type's members under it
-  core    print the entry module in Core, the language it's lowered to,
+  core    print every module in Core, the language it's lowered to,
           with each dependency's implementation passed explicitly
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree|}
@@ -52,9 +52,14 @@ let () =
                 List.iter print_endline sigs)
               (Driver.types ~load ~file:path src)
         | "core" ->
-            List.iter
-              (fun f -> print_endline (Core.show_fn f))
-              (Driver.core ~load ~file:path src).fns
+            (* every module but the prelude, which comes first: a copy of
+               an imported function is in its module, not the entry's *)
+            List.iteri
+              (fun i (m : Core.program) ->
+                if i > 0 then print_newline ();
+                print_endline ("-- " ^ m.home);
+                List.iter (fun f -> print_endline (Core.show_fn f)) m.fns)
+              (List.tl (Driver.linked ~load ~file:path src))
         | "tokens" ->
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))
         | "ast" ->
