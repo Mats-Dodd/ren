@@ -4,7 +4,7 @@
 
 This doc covers how Ren code is organized into files and packages, how names are found, and how `ren build` turns all of it into binaries. The two halves depend on each other. The module rules are what make the build fast and trustworthy, and the build is the reason the module rules look the way they do.
 
-> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors shared between types), interfaces made from declarations, and `uses` on signatures run today, in stage 5a; [examples/shop](examples/shop) uses them all. Methods and `ops`, error tags, dependency types, packages and the build are still planned; see [Roadmap](#roadmap).
+> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and `ops` with methods, associated functions and associated values run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Operators, error tags, dependency types, packages and the build are still planned; see [Roadmap](#roadmap).
 
 ---
 
@@ -138,24 +138,28 @@ A type's `ops` block holds everything attached to it: operators, associated valu
 ```ren
 pub type Stack<T> = { items: Array<T> }
   ops =
-    pub push(inout s, x: T) uses Alloc => &s.items.push(x)
-    pub peek(s) -> T? => s.items.last()
-    pub empty = { items: [] }
+    pub fn push(inout self, x: T) = &self.items.push(x)
+    pub fn peek(self) -> Option<T> =
+      let n = self.items.len()
+      if n == 0 then None else Some(self.items[n - 1])
+    pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
+    pub let empty: Stack<T> = Stack { items: [] }
 ```
 
-A method is an ordinary function whose first parameter has the type, and `x.m(args)` is shorthand for `Type.m(x, args)`. In `ops`, an unannotated parameter has the type itself.
+A method is an ordinary function whose first parameter is `self`, which has the block's type, and `x.m(args)` is shorthand for `Type.m(x, args)`. `m` is found through `x`'s type, with the same three steps as a field. Without `self` it's an associated function (`Stack.of(xs)`), and a `pub let` is an associated value, pure and made once when the program starts (`Stack.empty`).
 
 ```ren
 var s = Stack.empty               // an associated value
 &s.push(1)                        // Stack.push(&s, 1): `&` because push changes `s`
 let top = s.peek()                // Stack.peek(s)
+let t = Stack.of([7, 8, 9])       // an associated function
 ```
 
 **`&` marks a changed receiver, just as it marks a changed argument.** `&s.push(1)` puts the `&` in front of the receiver, and leaving it out is an error. So a function body still uses exactly two markers: `try` for a call that can fail, `&` for a call that changes something. A `&` in front of a place (`f(&xs.items)`) passes that place `inout`. A `&` in front of a method call (`&xs.items.push(1)`) marks the receiver. A call's result is never a place, so the two can't be confused.
 
 You can't add methods to a type you don't own. Write a function in your own module (`mylib.chunks(xs)`), or wrap the type in an `opaque` type and give that type its own `ops`.
 
-Operators are public whenever their type is. Methods and associated values are private unless they're marked `pub`, like everything else.
+Operators (written `add(a, b) => ...`, arriving in stage 9) are public whenever their type is. Methods, associated functions and associated values are private unless they're marked `pub`, like everything else, and the `pub` ones are listed under their type in the module's interface.
 
 ### Dependencies are types
 
@@ -371,8 +375,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 | When | What |
 |---|---|
-| **Today** (stage 5a) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types), interface summaries in memory, the prelude as a module, `uses` on signatures. Every compiler pass is a pure function of its inputs |
-| **Stage 5b** | `ops` with methods, `dbg` |
+| **Today** (stages 5a, 5b) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, `ops` with methods, associated functions and associated values. Every compiler pass is a pure function of its inputs |
+| **Stage 5b, left over** | `dbg` |
 | **Stage 6** | Structural error tags with payloads, and the "two shapes" error |
 | **Stage 7** | Dependency types imported like other types |
 | **Stage 10** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |

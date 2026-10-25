@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4 and 5a of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays (`push(&xs, x)` stands in for `&xs.push(x)` until methods arrive in stage 5b), and modules: files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body (see [examples/shop](examples/shop)). Most examples in this README show how Ren is intended to look, not what runs today.
+> **Status:** early. Stages 1–4, 5a and 5b of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), and `ops` blocks with methods, associated functions and associated values, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)). Most examples in this README show how Ren is intended to look, not what runs today.
 
 ---
 
@@ -28,7 +28,7 @@ Because the compiler knows every boundary a program crosses, Ren can **test, tra
 - [Why Ren](#why-ren)
 - [Principles](#principles)
 - [A tour](#a-tour)
-- [Operators and equality: `ops`](#operators-and-equality-ops)
+- [Operators, methods, and equality: `ops`](#operators-methods-and-equality-ops)
 - [Memory without a GC](#memory-without-a-gc)
 - [Allocation model](#allocation-model)
 - [Concurrency](#concurrency)
@@ -332,15 +332,48 @@ A function body uses exactly two markers: `try` means a call can fail, and `&` m
 
 ## Operators, methods, and equality: `ops`
 
-There are no traits or typeclasses. A type carries its own operations in its `ops` block: operators, associated values, and methods. The compiler looks there and nowhere else.
+There are no traits or typeclasses. A type carries its own operations in its `ops` block, indented under its declaration: methods, associated functions and values, and operators. The compiler looks there and nowhere else.
+
+```ren
+pub type Stack<T> = { items: Array<T> }
+  ops =
+    pub fn push(inout self, x: T) = &self.items.push(x)
+    pub fn peek(self) -> Option<T> =
+      let n = self.items.len()
+      if n == 0 then None else Some(self.items[n - 1])
+    pub fn size(self) -> Int = self.items.len()
+    pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
+    pub let empty: Stack<T> = Stack { items: [] }
+    fn grow(inout self) = ...                   // private to this module
+
+fn main() uses Io =
+  var s = Stack.empty                           // an associated value
+  &s.push(1)                                    // Stack.push(&s, 1)
+  print(s.peek())                               // Some(1)
+  let t = Stack.of([7, 8, 9])                   // an associated function
+  print(t.size())                               // 3
+```
+
+Everything in `ops` is written like an ordinary function or `let`, and a `pub` one spells out its signature like any public function. A first parameter named `self` makes it a method, with the block's type as its type, and `x.m(args)` means `Type.m(x, args)`. `m` is found through `x`'s type, the same way a field is. A method that changes its receiver takes `inout self`, and the call marks it: `&s.push(1)`, just as `&xs.push(x)` means `Array.push(&xs, x)`. Leaving out that `&`, or writing it before a method that doesn't change its receiver, is an error. Without `self` it's an associated function, called as `Stack.of(...)`. A `pub let` is an associated value: it's pure, and it's made once when the program starts. Everything in `ops` is private unless it's marked `pub`.
+
+An `opaque` type gets its whole API this way. Inside its module it's its representation, so its `ops` can convert in both directions:
+
+```ren
+pub type UserId = opaque Int
+  ops =
+    pub fn new(n: Int) -> UserId = n
+    pub fn raw(self) -> Int = self
+```
+
+Operators go in the same block, written with `=>`, and are public whenever their type is. They arrive in stage 9:
 
 ```ren
 type Vec3 = { x: f32, y: f32, z: f32 }
   ops =
     add(a, b)      => { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
     mul(a, s: f32) => { x: a.x * s,   y: a.y * s,   z: a.z * s   }
-    zero           = { x: 0, y: 0, z: 0 }
-    pub length(a) -> f32 => (a.x * a.x + a.y * a.y + a.z * a.z).sqrt()
+    zero           => { x: 0, y: 0, z: 0 }
+    pub fn length(self) -> f32 = (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
 
 type Email = opaque Str
   ops =
@@ -352,8 +385,6 @@ type Meters = opaque f64
 pub fn sum<T>(xs: Array<T>) -> T where T has add, zero =
   xs.fold(T.zero, fn(acc, x) => acc + x)
 ```
-
-A method is a function whose first parameter has the type, so `v.length()` means `Vec3.length(v)`. A method that changes its receiver takes it `inout`, and the call marks it: `&xs.push(x)` means `Array.push(&xs, x)`. In `ops`, an unannotated parameter has the type itself. Operators are public whenever their type is; methods and associated values are private unless marked `pub`.
 
 `==`, `hash`, `compare`, and `show` are derived structurally for every type, except that types containing functions get no `==` or `hash`. To change what "equal" means, override `key`, so equality, hashing, and ordering always agree. Overriding `eq` alone is an error. Only the module that declares a type can write its `ops`. To extend a type you don't own, write a function in your own module or wrap it in an `opaque` type. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
 
@@ -752,7 +783,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 3 | type inference, row unification for errors and `uses` | private functions need no annotations |
 | 4 | `var`, `inout`, `&`, value semantics | `normalize(&scores)` works |
 | 5a | files as modules, `import`, `pub`, `opaque`, lookup through types, interface summaries, `uses` on signatures | a program of four modules with shared constructor names checks (done) |
-| 5b | `ops` with methods, `dbg` | `&xs.push(x)` checks |
+| 5b | `ops` with methods, associated functions and values; `dbg` | `&xs.push(x)` checks (done, except `dbg`) |
 | 6 | `!`, `try`, `catch`, `fail`, `orelse` | error paths type-check |
 | 7 | `uses`, `with`, dependency types | tests swap implementations |
 | 8 | `handler`, `Async`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
