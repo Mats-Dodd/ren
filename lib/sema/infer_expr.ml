@@ -1,11 +1,34 @@
-(* Inferring the types of expressions (see infer.ml for the whole pass):
-   what each kind of expression requires of its parts, and what type it
-   has. infer_top.ml runs this over every function, a group at a time. *)
+(* Inferring the types of expressions (see infer.ml for the whole pass).
+
+   Inference is bidirectional (module-build.md, "In the compiler"). [infer]
+   works out an expression's type from the expression alone. [check] also
+   knows the type the expression is expected to have, and passes it down to
+   where it helps: into a block's last line, an `if`'s branches and a
+   `match`'s arms, to a lambda, which takes its parameters' types from it,
+   and to a constructor or record literal, which is found through it. A
+   call's arguments are checked left to right against the callee's
+   parameter types, so what one argument settles is known to the next.
+
+   Constructors, record fields and record literals without a type name are
+   all found through a type, by one lookup ([through_type]) in the three
+   steps of module-build.md. Nothing waits: a question that can't be
+   answered where it's asked is an error that says which annotation would
+   answer it, so the result never depends on the order inference happens to
+   learn things in.
+
+   As it goes, inference records every expression's and pattern's type by
+   its node id, and what each lookup found. infer_top.ml hands the table on
+   in canonical form, for the passes after it. *)
 
 open Ast
 open Ast.Resolved
 open Types
 open Infer_msg
+
+(* What a lookup through a type found. *)
+type found =
+  | Field_of of Path.t  (** a field access: the record type the field is in *)
+  | Ctor_of of Path.t * string  (** a constructor: its type, and its name *)
 
 type env = {
   st : Types.state;
@@ -13,21 +36,33 @@ type env = {
   home : string;  (** the module being checked *)
   types : (Path.t, Iface.type_decl) Hashtbl.t;
       (** every type the module can see (iface.ml) *)
-  ctors : (string, Iface.type_decl * Iface.ctor) Hashtbl.t;
+  visible : Iface.type_decl list;
+      (** the same types, sorted by name, which is the order an error lists them
+          in *)
   globals : (Path.t, ty) Hashtbl.t;
       (** top-level functions: a type scheme once their group is done *)
-  mutable deferred : deferred list;  (** most recent first *)
+  mutable group : (Path.t * (unit -> ty)) list;
+      (** the functions of the group being checked, each with a way to make the
+          type its declaration gives it *)
+  mutable joins : join list;  (** most recent first *)
 }
 
-(* A question that can't be answered yet, such as which record type has the
-   field in `u.id` when `u`'s type isn't known: retried once the rest of the
-   group has been inferred. *)
-and deferred = { attempt : unit -> bool; fail : unit -> unit }
+(* A use of another function of the group being checked. While the group's
+   bodies are being checked, each one sees the others only as their
+   declarations describe them, so no body learns anything from another
+   body of its group, and checking them in another order would find the
+   same. Once every body is checked, each use is joined with the type that
+   function's own body gave it. *)
+and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
 
 (* What the expression being inferred can see. *)
 type ctx = {
+  self : Path.t;  (** the top-level function being checked *)
   locals : (int, ty) Hashtbl.t;
       (** the type of each local of the top-level function, by binder id *)
+  nodes : (int, ty) Hashtbl.t;
+      (** the type of each expression and pattern of the function, by node id *)
+  found : (int, found) Hashtbl.t;  (** what each lookup found, by node id *)
   errs : row;  (** the errors of the innermost function or lambda *)
   uses : row;  (** the dependencies of the innermost function or lambda *)
   tparams : ty list;  (** what the type parameters in scope stand for *)
@@ -44,9 +79,11 @@ let name_of = function
   | Global p -> p.name
   | Intrinsic x -> x
 
+let report env d = Diag.report env.sink d
+
 (* Report an error, and carry on: the code it's about has type [TError]. *)
 let fail env ?help ?notes ?labels loc msg =
-  Diag.report env.sink (Diag.make ?help ?notes ?labels loc msg);
+  report env (Diag.make ?help ?notes ?labels loc msg);
   TError
 
 (* The value an expression produces is its last line, which is where to
@@ -54,23 +91,40 @@ let fail env ?help ?notes ?labels loc msg =
 let rec result_loc (e : expr) =
   match e.kind with Block (_, last) -> result_loc last | _ -> e.loc
 
+(* How to explain a mismatch with an expected type, passed down along with
+   it: [msg] words the error, [help] suggests a fix and [labels] point at
+   other code, each given both types printed (the one found, then the one
+   expected); [notes] say where the expectation comes from. *)
+type why = {
+  msg : (string -> string -> string) option;
+  notes : string list;
+  help : (string -> string -> string) option;
+  labels : string -> string -> (Loc.t * string) list;
+}
+
+let explain ?msg ?(notes = []) ?help ?(labels = fun _ _ -> []) () =
+  { msg; notes; help; labels }
+
+let plain = explain ()
+
 (* Unify [found] (what the code has) with [expected] (what it needs), and
-   say whether that worked. [msg] words the error, and [labels] point at
-   other code, given both types printed. *)
-let unifies env ?(notes = []) ?help ?msg ?(labels = fun _ _ -> []) loc ~found
-    ~expected =
+   say whether that worked. *)
+let unifies env why loc ~found ~expected =
   match Unify.unify env.st found expected with
   | () -> true
   | exception Unify.Mismatch ->
       let pr = printer env in
       let f = show pr found and x = show pr expected in
       let msg =
-        match msg with
+        match why.msg with
         | Some m -> m f x
         | None -> sprintf "expected `%s`, found `%s`" x f
       in
+      let help = Option.map (fun h -> h f x) why.help in
       let more, help = mismatch_notes ?help ~found ~expected () in
-      ignore (fail env ?help ~notes:(notes @ more) ~labels:(labels f x) loc msg);
+      ignore
+        (fail env ?help ~notes:(why.notes @ more) ~labels:(why.labels f x) loc
+           msg);
       false
   | exception Unify.Infinite ->
       let pr = printer env in
@@ -84,8 +138,10 @@ let unifies env ?(notes = []) ?help ?msg ?(labels = fun _ _ -> []) loc ~found
            "this value's type would have to contain itself");
       false
 
-let unify_at env ?notes ?help ?msg ?labels loc ~found ~expected =
-  ignore (unifies env ?notes ?help ?msg ?labels loc ~found ~expected)
+let unify_at env ?msg ?notes ?help ?labels loc ~found ~expected =
+  let help = Option.map (fun h _ _ -> h) help in
+  ignore
+    (unifies env (explain ?msg ?notes ?help ?labels ()) loc ~found ~expected)
 
 (* ---- types as written ---- *)
 
@@ -114,6 +170,23 @@ and convert_param ~tvars ~row = function
 
 let closed () = REmpty
 
+(* A parameter's type: as written, or a fresh variable. [own] are the
+   errors and dependencies of the top-level function the parameter belongs
+   to. A parameter written `fn(...)` is transparent: what it fails with and
+   uses is exactly what its function does, so that's its rows. *)
+let param_type env ~tparams ?own (p : Resolved.param) =
+  let row () = fresh_row env.st in
+  let t =
+    match (p.pty, own) with
+    | Some (TyFn _ as t), Some (errs, uses) -> (
+        match convert ~tvars:tparams ~row t with
+        | TFun (ps, ret, _, _) -> TFun (ps, ret, errs, uses)
+        | _ -> assert false)
+    | Some t, _ -> convert ~tvars:tparams ~row t
+    | None, _ -> fresh_var env.st
+  in
+  { mode = p.pmode; ty = t }
+
 (* Fresh variables for a type declaration's parameters: `Option<T>` used
    once can be an `Option<Int>`, and elsewhere an `Option<Bool>`. *)
 let instance env (td : Iface.type_decl) =
@@ -125,28 +198,104 @@ let instance env (td : Iface.type_decl) =
 let field_type ~tvars (f : Iface.field) =
   of_ty ~vars:(List.nth tvars) ~tails:(fun _ -> REmpty) f.fty
 
-let record_fields env path =
-  match Hashtbl.find_opt env.types path with
-  | Some { body = Record fs; _ } -> Some fs
-  | _ -> None
+(* ---- lookups through a type ----
 
-let field_names (fs : Iface.field list) = List.map (fun f -> f.Iface.fname) fs
+   Constructors, fields and record literals are found through a type
+   (module-build.md, "Found through a type"), in three steps:
 
-(* Record types whose fields pass [keep], sorted by name. *)
-let records_where env keep =
-  Hashtbl.fold
-    (fun path (td : Iface.type_decl) acc ->
-      match td.body with Record fs when keep fs -> path :: acc | _ -> acc)
-    env.types []
-  |> List.sort (fun (a : Path.t) (b : Path.t) ->
-      compare (a.name, a.home) (b.name, b.home))
+   1. if the type is already known at this point, look in its declaration
+   2. otherwise, if exactly one visible type has what's being looked for,
+      that's the one
+   3. otherwise it's an error, which the caller words
+
+   [known] is what step 1 found, if the type was known and has it, and
+   [fits] says what a type declaration has. For a constructor, a type that
+   is known but doesn't have it falls through to step 2, so the error can
+   name both types: `expected a pattern for `Int`, but this one is a
+   `Plan``. *)
+
+type 'a lookup = Found of 'a | Nowhere | Several of Path.t list
+
+let through_type env ~known ~fits =
+  match known with
+  | Some found -> Found found
+  | None -> (
+      match
+        List.filter_map
+          (fun (td : Iface.type_decl) ->
+            Option.map (fun x -> (td, x)) (fits td))
+          env.visible
+      with
+      | [ found ] -> Found found
+      | [] -> Nowhere
+      | several ->
+          Several
+            (List.map (fun ((td : Iface.type_decl), _) -> td.path) several))
+
+(* The declaration of [t]'s type, if [t] is already known to be a named
+   type. *)
+let known_decl env t =
+  match repr t with TCon (p, _) -> Hashtbl.find_opt env.types p | _ -> None
+
+let ctor_in (c : ident) (td : Iface.type_decl) =
+  match td.body with
+  | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
+  | Record _ | Builtin -> None
+
+(* The constructor [c], where a value of type [expected] is wanted. *)
+let find_ctor env (c : ident) ~expected =
+  let known =
+    Option.bind (known_decl env expected) (fun td ->
+        Option.map (fun k -> (td, k)) (ctor_in c td))
+  in
+  match through_type env ~known ~fits:(ctor_in c) with
+  | Found found -> Some found
+  | Nowhere ->
+      report env (no_ctor c);
+      None
+  | Several owners ->
+      report env (ambiguous_ctor ~home:env.home c owners);
+      None
+
+(* Is [c] given as many arguments as it has fields, labelled correctly?
+   Each problem is reported. *)
+let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
+  let given = List.length labels in
+  if List.length ctor.cfields <> given then (
+    report env (ctor_arity loc c ctor given);
+    false)
+  else
+    let named = List.filter_map Fun.id labels in
+    if named = [] then true
+    else if List.length named <> given then (
+      report env (some_labels loc c);
+      false)
+    else
+      List.fold_left2
+        (fun ok (l : ident) (f : Iface.field) ->
+          if l.name <> f.fname then (
+            report env (wrong_label l f);
+            false)
+          else ok)
+        true named ctor.cfields
+
+let record_fields (td : Iface.type_decl) =
+  match td.body with Record fs -> Some fs | Sum _ | Builtin -> None
+
+let sorted names = List.sort String.compare names
 
 (* ---- expressions ---- *)
 
 (* A name's type. A top-level function's is a fresh instance of its
-   scheme, so each use can pick its own types. *)
-let lookup env cx = function
+   scheme, so each use can pick its own types; another function of the
+   group being checked has the type its declaration gives it, joined with
+   its real type once the group is done (see [join]). *)
+let lookup env cx loc = function
   | Local b -> Hashtbl.find cx.locals b.id
+  | Global p when p <> cx.self && List.mem_assoc p env.group ->
+      let used = (List.assoc p env.group) () in
+      env.joins <- { jloc = loc; jname = p.name; used; target = p } :: env.joins;
+      used
   | Global p -> instantiate env.st (Hashtbl.find env.globals p)
   | Intrinsic x ->
       instantiate env.st (Hashtbl.find env.globals (Path.prelude x))
@@ -171,125 +320,165 @@ let absorb env cx loc errs uses =
          (sprintf "this call%s, which isn't allowed here"
             (show_effects pr errs uses)))
 
+(* Inside the function, an `inout` parameter is an ordinary variable. *)
+let bind_params cx params ps =
+  List.iter2
+    (fun (p : Resolved.param) (t : Types.param) ->
+      Hashtbl.replace cx.locals p.pname.id t.ty)
+    params ps
+
+(* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
+  let t = synth env cx e in
+  Hashtbl.replace cx.nodes e.node t;
+  t
+
+(* Check [e] against [expected], explaining a mismatch with [why]. When
+   nothing is known about [expected] yet, that's inferring [e] and unifying
+   the two. *)
+and check env cx ?(why = plain) (e : expr) expected =
+  let leaf () =
+    let t = synth env cx e in
+    Hashtbl.replace cx.nodes e.node t;
+    ignore (unifies env why (result_loc e) ~found:t ~expected)
+  in
+  let fits () = Hashtbl.replace cx.nodes e.node expected in
+  match (e.kind, repr expected) with
+  | _, TVar _ -> leaf ()
+  | Block (stmts, last), _ ->
+      fits ();
+      List.iter (stmt env cx) stmts;
+      check env cx ~why last expected
+  | If (c, t, Some f), _ ->
+      fits ();
+      want_bool env "an `if` condition" c (infer env cx c);
+      check env cx ~why t expected;
+      check env cx ~why f expected
+  | Match (subject, arms), _ ->
+      fits ();
+      ignore (infer_match env cx subject arms ~want:(Some (expected, why)))
+  | Lambda (params, body), TFun (eps, eret, _, _)
+    when List.length eps = List.length params
+         && List.for_all2
+              (fun (p : Resolved.param) (ep : Types.param) -> p.pmode = ep.mode)
+              params eps ->
+      (* the parameters take their types from where the lambda is going,
+         unless they're written; the whole type is unified with the expected
+         one at the end, which also checks what the body fails with and
+         uses *)
+      let ps =
+        List.map2
+          (fun (p : Resolved.param) ep ->
+            if p.pty = None then ep else param_type env ~tparams:cx.tparams p)
+          params eps
+      in
+      let errs = fresh_row env.st and uses = fresh_row env.st in
+      bind_params cx params ps;
+      check env { cx with errs; uses } body eret
+        ~why:
+          (explain ~notes:why.notes
+             ~msg:(fun f x ->
+               sprintf "this lambda produces %s, but it has to produce %s"
+                 (article f) (article x))
+             ());
+      let t = TFun (ps, eret, errs, uses) in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env why e.loc ~found:t ~expected)
+  | Con (c, args), _ ->
+      let t = infer_con env cx e c args ~expected in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env why e.loc ~found:t ~expected)
+  | Record (None, fields), _ ->
+      let t = infer_record env cx e None fields ~expected in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env why e.loc ~found:t ~expected)
+  | Array xs, TCon (p, [ elem ]) when p = Path.prelude "Array" ->
+      fits ();
+      List.iter
+        (fun x -> check env cx ~why:{ plain with notes = why.notes } x elem)
+        xs
+  | _ -> leaf ()
+
+(* The type of [e], not yet recorded. *)
+and synth env cx (e : expr) : ty =
   match e.kind with
   | Int _ -> int
   | Bool _ -> bool
   | Unit -> unit
-  | Var x -> lookup env cx x
+  | Var x -> lookup env cx e.loc x
   | Unop (Neg, a) ->
       want_int env "-" a (infer env cx a);
       int
   | Binop (op, a, b) -> (
-      let ta = infer env cx a in
-      let tb = infer env cx b in
       let name = binop_to_string op in
       match op with
-      | Add | Sub | Mul | Div | Mod ->
+      | Add | Sub | Mul | Div | Mod | Lt | Le | Gt | Ge ->
+          let ta = infer env cx a in
+          let tb = infer env cx b in
           want_int env name a ta;
           want_int env name b tb;
-          int
-      | Lt | Le | Gt | Ge ->
-          want_int env name a ta;
-          want_int env name b tb;
-          bool
+          if List.mem op [ Lt; Le; Gt; Ge ] then bool else int
       | Eq | Neq ->
-          unify_at env b.loc ~found:tb ~expected:ta
-            ~msg:(fun f x ->
-              sprintf
-                "`%s` compares two values of the same type, but this is %s and \
-                 the left side is %s"
-                name (article f) (article x))
-            ~labels:(fun _ x -> [ (a.loc, sprintf "this is %s" (article x)) ]);
+          (* the left side says what the right side has to be *)
+          let ta = infer env cx a in
+          check env cx b ta
+            ~why:
+              (explain
+                 ~msg:(fun f x ->
+                   sprintf
+                     "`%s` compares two values of the same type, but this is \
+                      %s and the left side is %s"
+                     name (article f) (article x))
+                 ~labels:(fun _ x ->
+                   [ (a.loc, sprintf "this is %s" (article x)) ])
+                 ());
           bool)
   | If (c, t, Some f) ->
       want_bool env "an `if` condition" c (infer env cx c);
       let tt = infer env cx t in
-      let tf = infer env cx f in
-      unify_at env (result_loc f) ~found:tf ~expected:tt
-        ~msg:(fun f x ->
-          sprintf "this `else` branch is %s, but the `then` branch is %s"
-            (article f) (article x))
-        ~labels:(fun _ x ->
-          [ (result_loc t, sprintf "the `then` branch is %s" (article x)) ])
-        ~notes:[ "both branches of an `if` have to produce the same type" ];
+      check env cx f tt
+        ~why:
+          (explain
+             ~msg:(fun f x ->
+               sprintf "this `else` branch is %s, but the `then` branch is %s"
+                 (article f) (article x))
+             ~labels:(fun _ x ->
+               [ (result_loc t, sprintf "the `then` branch is %s" (article x)) ])
+             ~notes:[ "both branches of an `if` have to produce the same type" ]
+             ());
       tt
   | If (c, t, None) ->
       want_bool env "an `if` condition" c (infer env cx c);
       let ok =
-        unifies env (result_loc t) ~found:(infer env cx t) ~expected:unit
-          ~msg:(fun f _ ->
-            sprintf "this `if` has no `else`, so it can't produce %s"
-              (article f))
-          ~help:"add an `else` branch for when the condition is false"
+        unifies env
+          (explain
+             ~msg:(fun f _ ->
+               sprintf "this `if` has no `else`, so it can't produce %s"
+                 (article f))
+             ~help:(fun _ _ ->
+               "add an `else` branch for when the condition is false")
+             ())
+          (result_loc t) ~found:(infer env cx t) ~expected:unit
       in
       (* if it was meant to produce a value, it isn't a `Unit` *)
       if ok then unit else TError
   | Call (f, args) -> infer_call env cx e f args
   | Lambda (params, body) ->
-      let ps = List.map (param_type env cx) params in
+      let ps = List.map (param_type env ~tparams:cx.tparams) params in
       let errs = fresh_row env.st and uses = fresh_row env.st in
       bind_params cx params ps;
       let tb = infer env { cx with errs; uses } body in
       TFun (ps, tb, errs, uses)
   | Block (stmts, last) ->
-      List.iter
-        (function
-          | Let { name; ty; value; _ } ->
-              let t = infer env cx value in
-              Option.iter
-                (fun ann ->
-                  unify_at env (result_loc value) ~found:t
-                    ~expected:
-                      (convert ~tvars:cx.tparams
-                         ~row:(fun () -> fresh_row env.st)
-                         ann))
-                ty;
-              Hashtbl.replace cx.locals name.id t
-          | Expr e -> ignore (infer env cx e))
-        stmts;
+      List.iter (stmt env cx) stmts;
       infer env cx last
-  | Con (c, args) ->
-      (* check.ml has confirmed the constructor exists with this many
-         arguments, labelled correctly *)
-      let td, ctor = Hashtbl.find env.ctors c.name in
-      let t, tvars = instance env td in
-      List.iter2
-        (fun (f : Iface.field) (_, (a : expr)) ->
-          unify_at env (result_loc a) ~found:(infer env cx a)
-            ~expected:(field_type ~tvars f)
-            ~notes:[ sprintf "`%s`'s field `%s`" c.name f.fname ])
-        ctor.cfields args;
-      t
-  | Record (name, fields) -> infer_record env cx e name fields
+  | Con (c, args) -> infer_con env cx e c args ~expected:(fresh_var env.st)
+  | Record (name, fields) ->
+      infer_record env cx e name fields ~expected:(fresh_var env.st)
   | Field (r, f) -> infer_field env cx e r f
-  | Match (subject, arms) ->
-      let ts = infer env cx subject in
-      let result = fresh_var env.st in
-      let first = result_loc (List.hd arms).arm_body in
-      List.iteri
-        (fun i a ->
-          bind_pattern env cx ts a.arm_pat;
-          Option.iter
-            (fun g -> want_bool env "a guard" g (infer env cx g))
-            a.arm_guard;
-          let tb = infer env cx a.arm_body in
-          let msg =
-            if i = 0 then None
-            else
-              Some
-                (fun f x ->
-                  sprintf "this arm is %s, but the arms above it are %s"
-                    (article f) (article x))
-          in
-          let labels _ x =
-            [ (first, sprintf "the first arm is %s" (article x)) ]
-          in
-          unify_at env (result_loc a.arm_body) ~found:tb ~expected:result ?msg
-            ~labels)
-        arms;
-      result
+  | Match (subject, arms) -> infer_match env cx subject arms ~want:None
   | Array xs ->
+      (* the first element says what the others have to be *)
       let elem = fresh_var env.st in
       List.iteri
         (fun i (x : expr) ->
@@ -302,16 +491,19 @@ let rec infer env cx (e : expr) : ty =
                     "this element is %s, but the elements before it are %s"
                     (article f) (article x))
           in
-          unify_at env (result_loc x) ~found:(infer env cx x) ~expected:elem
-            ?msg)
+          check env cx x elem ~why:(explain ?msg ()))
         xs;
       array elem
   | Index (a, i) ->
       let elem = fresh_var env.st in
       let ok =
-        unifies env (result_loc a) ~found:(infer env cx a)
-          ~expected:(array elem) ~msg:(fun f _ ->
-            sprintf "only an `Array` can be indexed, but this is %s" (article f))
+        unifies env
+          (explain
+             ~msg:(fun f _ ->
+               sprintf "only an `Array` can be indexed, but this is %s"
+                 (article f))
+             ())
+          (result_loc a) ~found:(infer env cx a) ~expected:(array elem)
       in
       want_int env "an index" i (infer env cx i);
       if ok then elem else TError
@@ -321,45 +513,52 @@ let rec infer env cx (e : expr) : ty =
       infer env cx a
   | Assign { target; op; value } ->
       let tt = infer env cx target in
-      let tv = infer env cx value in
       (match op with
       | Some op ->
           let name = binop_to_string op ^ "=" in
           want_int env name target tt;
-          want_int env name value tv
+          want_int env name value (infer env cx value)
       | None ->
-          unify_at env (result_loc value) ~found:tv ~expected:tt
-            ~msg:(fun f x ->
-              sprintf "this is %s, but it's being assigned to %s" (article f)
-                (article x)));
+          check env cx value tt
+            ~why:
+              (explain
+                 ~msg:(fun f x ->
+                   sprintf "this is %s, but it's being assigned to %s"
+                     (article f) (article x))
+                 ()));
       unit
   | For { var; iter; body } ->
-      let iter = match iter.kind with Ref a -> a | _ -> iter in
+      let array_of = match iter.kind with Ref a -> a | _ -> iter in
+      let ta = infer env cx array_of in
+      Hashtbl.replace cx.nodes iter.node ta;
       let elem = fresh_var env.st in
       let ok =
-        unifies env (result_loc iter) ~found:(infer env cx iter)
-          ~expected:(array elem) ~msg:(fun f _ ->
-            sprintf "a `for` loop goes over an `Array`, but this is %s"
-              (article f))
+        unifies env
+          (explain
+             ~msg:(fun f _ ->
+               sprintf "a `for` loop goes over an `Array`, but this is %s"
+                 (article f))
+             ())
+          (result_loc array_of) ~found:ta ~expected:(array elem)
       in
       Hashtbl.replace cx.locals var.id (if ok then elem else TError);
       ignore (infer env cx body);
       unit
 
-and param_type env cx (p : Resolved.param) =
-  let t =
-    match p.pty with
-    | Some t -> convert ~tvars:cx.tparams ~row:(fun () -> fresh_row env.st) t
-    | None -> fresh_var env.st
-  in
-  { mode = p.pmode; ty = t }
-
-(* Inside the function, an `inout` parameter is an ordinary variable. *)
-and bind_params cx params ps =
-  List.iter2
-    (fun (p : Resolved.param) (t : Types.param) ->
-      Hashtbl.replace cx.locals p.pname.id t.ty)
-    params ps
+and stmt env cx = function
+  | Let { name; ty; value; _ } ->
+      let t =
+        match ty with
+        | Some ann ->
+            let t =
+              convert ~tvars:cx.tparams ~row:(fun () -> fresh_row env.st) ann
+            in
+            check env cx value t;
+            t
+        | None -> infer env cx value
+      in
+      Hashtbl.replace cx.locals name.id t
+  | Expr e -> ignore (infer env cx e)
 
 and infer_call env cx (e : expr) (f : expr) args =
   let tf = infer env cx f in
@@ -376,12 +575,13 @@ and infer_call env cx (e : expr) (f : expr) args =
           (sprintf "%s takes %d argument%s but was given %d" name n (plural n)
              given))
       else (
+        (* left to right, each against its parameter's type *)
         List.iter2
           (fun (p : Types.param) (a : expr) ->
             match (p.mode, a.kind) with
             | Inout, Ref place ->
-                unify_at env (result_loc place) ~found:(infer env cx place)
-                  ~expected:p.ty
+                Hashtbl.replace cx.nodes a.node p.ty;
+                check env cx place p.ty
             | Inout, _ ->
                 let help =
                   match a.kind with
@@ -407,9 +607,7 @@ and infer_call env cx (e : expr) (f : expr) args =
                           parameter";
                        ]
                      (sprintf "%s doesn't change this argument" name))
-            | Read, _ ->
-                unify_at env (result_loc a) ~found:(infer env cx a)
-                  ~expected:p.ty)
+            | Read, _ -> check env cx a p.ty)
           ps args;
         absorb env cx e.loc errs uses;
         ret)
@@ -432,148 +630,197 @@ and infer_call env cx (e : expr) (f : expr) args =
 (* An argument's type, and whether it's passed with `&`. *)
 and infer_arg env cx (a : expr) =
   match a.kind with
-  | Ref place -> { mode = Inout; ty = infer env cx place }
+  | Ref place ->
+      let t = infer env cx place in
+      Hashtbl.replace cx.nodes a.node t;
+      { mode = Inout; ty = t }
   | _ -> read (infer env cx a)
 
-and infer_record env cx (e : expr) name fields =
-  let given =
-    List.map (fun ((f : ident), v) -> (f, v, infer env cx v)) fields
-  in
-  (* the record type [tn], checking each field's value against it *)
-  let build tn =
-    let td = Hashtbl.find env.types tn in
-    let t, tvars = instance env td in
-    let decl = Option.get (record_fields env tn) in
-    List.iter
-      (fun ((f : ident), v, tv) ->
-        let fd = List.find (fun (d : Iface.field) -> d.fname = f.name) decl in
-        unify_at env (result_loc v) ~found:tv ~expected:(field_type ~tvars fd)
-          ~notes:[ sprintf "`%s`'s field `%s`" (type_name env tn) f.name ])
-      given;
-    t
-  in
-  match name with
-  | Some { tref = Named p; _ } -> build p
-  | Some { tref = Param _; _ } ->
-      (* resolve.ml only resolves a record's name to a declared type *)
-      assert false
-  | None -> (
-      let names =
-        List.sort String.compare
-          (List.map (fun ((f : ident), _) -> f.name) fields)
-      in
-      let fits =
-        records_where env (fun fs ->
-            List.sort String.compare (field_names fs) = names)
-      in
-      match fits with
-      | [ one ] -> build one
-      | _ ->
-          (* several types have exactly these fields: wait to see which one
-             this record is used as *)
-          let t = fresh_var env.st in
-          let attempt () =
-            match repr t with
-            | TVar _ -> false
-            | TCon (n, _) when List.mem n fits ->
-                unify_at env e.loc ~found:(build n) ~expected:t;
-                true
-            | _ ->
-                unify_at env e.loc ~found:(build (List.hd fits)) ~expected:t;
-                true
-          in
-          let fail () =
-            ignore
-              (fail env e.loc
-                 ~help:
-                   (sprintf "write the type's name first, like `%s { ... }`"
-                      (type_name env (List.hd fits)))
-                 (sprintf "these fields fit more than one type: %s"
-                    (quote (List.map (type_name env) fits))))
-          in
-          env.deferred <- { attempt; fail } :: env.deferred;
-          t)
+(* A constructor applied to [args], where a value of type [expected] is
+   wanted. *)
+and infer_con env cx (e : expr) (c : ident) args ~expected =
+  match find_ctor env c ~expected with
+  | None ->
+      List.iter (fun (_, a) -> ignore (infer env cx a)) args;
+      TError
+  | Some (td, ctor) ->
+      Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
+      let t, tvars = instance env td in
+      if ctor_shape env e.loc c ctor (List.map fst args) then
+        List.iter2
+          (fun (f : Iface.field) (_, (a : expr)) ->
+            check env cx a (field_type ~tvars f)
+              ~why:
+                (explain
+                   ~notes:[ sprintf "`%s`'s field `%s`" c.name f.fname ]
+                   ()))
+          ctor.cfields args
+      else
+        (* still check the arguments, for errors of their own *)
+        List.iter (fun (_, a) -> ignore (infer env cx a)) args;
+      t
 
+(* A record literal: `User { ... }`, or `{ ... }` with its type found
+   through [expected], or else through its fields. *)
+and infer_record env cx (e : expr) name fields ~expected =
+  let ids = List.map fst fields in
+  let seen = Hashtbl.create 8 in
+  List.iter
+    (fun (f : ident) ->
+      match Hashtbl.find_opt seen f.name with
+      | Some first ->
+          report env
+            (Diag.make f.loc ~help:"remove one of them"
+               ~labels:[ (first, sprintf "the first `%s` is here" f.name) ]
+               (sprintf "there are two fields named `%s`" f.name))
+      | None -> Hashtbl.replace seen f.name f.loc)
+    ids;
+  let given = sorted (List.map (fun (f : ident) -> f.name) ids) in
+  let decl =
+    match name with
+    | Some { tref = Named p; tloc } -> (
+        let td = Hashtbl.find env.types p in
+        match record_fields td with
+        | Some fs -> Some (td, fs)
+        | None ->
+            report env (not_a_record ~home:env.home tloc td);
+            None)
+    | Some { tref = Param _; _ } ->
+        (* resolve.ml only resolves a record's name to a declared type *)
+        assert false
+    | None -> (
+        let known =
+          Option.bind (known_decl env expected) (fun td ->
+              Option.map (fun fs -> (td, fs)) (record_fields td))
+        in
+        let fits td =
+          match record_fields td with
+          | Some fs when sorted (field_names fs) = given -> Some fs
+          | _ -> None
+        in
+        match through_type env ~known ~fits with
+        | Found found -> Some found
+        | Nowhere ->
+            report env (no_record_fits e.loc);
+            None
+        | Several paths ->
+            report env (several_records_fit ~home:env.home e.loc paths);
+            None)
+  in
+  match decl with
+  | None ->
+      List.iter (fun (_, v) -> ignore (infer env cx v)) fields;
+      TError
+  | Some (td, decl) ->
+      let t, tvars = instance env td in
+      List.iter
+        (fun ((f : ident), v) ->
+          match
+            List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl
+          with
+          | Some fd ->
+              check env cx v (field_type ~tvars fd)
+                ~why:
+                  (explain
+                     ~notes:
+                       [
+                         sprintf "`%s`'s field `%s`" (type_name env td.path)
+                           f.name;
+                       ]
+                     ())
+          | None ->
+              report env (no_such_field ~home:env.home f td.path decl);
+              ignore (infer env cx v))
+        fields;
+      let missing =
+        List.filter (fun d -> not (List.mem d given)) (field_names decl)
+      in
+      if missing <> [] then
+        report env (missing_fields ~home:env.home e.loc td.path missing);
+      t
+
+(* `r.f`: the field is found through [r]'s type, which has to be known by
+   now, or be the one record type that has a field named [f]. *)
 and infer_field env cx (e : expr) r (f : ident) =
   let tr = infer env cx r in
-  (* the field's type, once the record's type is known *)
-  let resolve () =
-    let pr = printer env in
-    match repr tr with
-    | TCon (n, args) as t -> (
-        match record_fields env n with
-        | None ->
-            fail env f.loc
-              (sprintf "`.%s` needs a record, but this is %s" f.name
-                 (article (show pr t)))
-        | Some decl -> (
-            match
-              List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl
-            with
-            | Some fd -> field_type ~tvars:args fd
-            | None ->
-                fail env f.loc
-                  ~help:(sprintf "its fields: %s" (quote (field_names decl)))
-                  (sprintf "`%s` has no field named `%s`" (type_name env n)
-                     f.name)))
-    | TError -> TError
-    | t ->
-        fail env f.loc
-          (sprintf "`.%s` needs a record, but this is %s" f.name
-             (article (show pr t)))
+  let field_of (td : Iface.type_decl) =
+    Option.bind (record_fields td)
+      (List.find_opt (fun (d : Iface.field) -> d.fname = f.name))
+  in
+  let found (td : Iface.type_decl) fd tvars =
+    Hashtbl.replace cx.found e.node (Field_of td.path);
+    field_type ~tvars fd
+  in
+  let needs_record t =
+    report env (needs_record f (show (printer env) t));
+    TError
   in
   match repr tr with
+  | TError -> TError
+  | TCon (p, args) as t -> (
+      let td = Hashtbl.find env.types p in
+      match (record_fields td, field_of td) with
+      | _, Some fd -> found td fd args
+      | Some decl, None ->
+          report env (no_such_field ~home:env.home f p decl);
+          TError
+      | None, None -> needs_record t)
   | TVar _ -> (
-      let has fs = List.mem f.name (field_names fs) in
-      match records_where env has with
-      | [] ->
-          fail env f.loc
-            (sprintf "no record type has a field named `%s`" f.name)
-      | [ n ] ->
-          unify_at env r.loc ~found:tr
-            ~expected:(fst (instance env (Hashtbl.find env.types n)));
-          resolve ()
-      | candidates ->
-          (* more than one record type has this field: wait until the rest
-             of the code says which one this is *)
-          let result = fresh_var env.st in
-          let attempt () =
-            match repr tr with
-            | TVar _ -> false
-            | _ ->
-                unify_at env e.loc ~found:(resolve ()) ~expected:result;
-                true
+      match through_type env ~known:None ~fits:field_of with
+      | Found (td, fd) ->
+          let t, tvars = instance env td in
+          unify_at env r.loc ~found:tr ~expected:t;
+          found td fd tvars
+      | Nowhere ->
+          report env (no_record_has f);
+          TError
+      | Several paths ->
+          let what =
+            match r.kind with Var x -> Some (name_of x) | _ -> None
           in
-          let fail () =
-            let what, help =
-              match r.kind with
-              | Var x ->
-                  let x = name_of x in
-                  ( sprintf "`%s`" x,
-                    sprintf "annotate `%s` where it's defined, like `%s: %s`" x
-                      x
-                      (type_name env (List.hd candidates)) )
-              | _ -> ("this", "add a type annotation to say which")
+          report env (several_records_have ~home:env.home r.loc ?what f paths);
+          TError)
+  | t -> needs_record t
+
+(* A `match`. With [want], every arm is checked against the type it says;
+   otherwise the first arm says what the others have to be. *)
+and infer_match env cx subject arms ~want =
+  let ts = infer env cx subject in
+  let result, arm_why =
+    match want with
+    | Some (expected, why) -> (expected, fun _ -> why)
+    | None ->
+        let first = result_loc (List.hd arms).arm_body in
+        ( fresh_var env.st,
+          fun i ->
+            let msg =
+              if i = 0 then None
+              else
+                Some
+                  (fun f x ->
+                    sprintf "this arm is %s, but the arms above it are %s"
+                      (article f) (article x))
             in
-            ignore
-              (fail env r.loc ~help
-                 ~notes:
-                   [
-                     sprintf "`%s` is a field of %s" f.name
-                       (String.concat " and "
-                          (List.map
-                             (fun p -> sprintf "`%s`" (type_name env p))
-                             candidates));
-                   ]
-                 (sprintf "can't tell which record type %s is" what))
-          in
-          env.deferred <- { attempt; fail } :: env.deferred;
-          result)
-  | _ -> resolve ()
+            explain ?msg
+              ~labels:(fun _ x ->
+                [ (first, sprintf "the first arm is %s" (article x)) ])
+              () )
+  in
+  List.iteri
+    (fun i a ->
+      bind_pattern env cx ts a.arm_pat;
+      Option.iter
+        (fun g -> want_bool env "a guard" g (infer env cx g))
+        a.arm_guard;
+      check env cx ~why:(arm_why i) a.arm_body result)
+    arms;
+  result
 
 (* Check a pattern against the type of the value it matches, and give the
-   variables it binds their types. *)
+   variables it binds their types. A constructor is found through that
+   type. *)
 and bind_pattern env cx t (p : pattern) =
+  Hashtbl.replace cx.nodes p.pnode t;
   let check found =
     unify_at env p.ploc ~found ~expected:t ~msg:(fun f x ->
         sprintf "expected a pattern for `%s`, but this one is %s" x (article f))
@@ -583,22 +830,16 @@ and bind_pattern env cx t (p : pattern) =
   | PVar b -> Hashtbl.replace cx.locals b.id t
   | PInt _ -> check int
   | PBool _ -> check bool
-  | PCon (c, ps) ->
-      let td, ctor = Hashtbl.find env.ctors c.name in
-      let tc, tvars = instance env td in
-      check tc;
-      List.iter2
-        (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
-        ctor.cfields ps
-
-(* Retry deferred questions until none makes progress; whatever is still
-   unanswered is an error. *)
-let resolve_deferred env =
-  let rec loop pending =
-    let still = List.filter (fun d -> not (d.attempt ())) pending in
-    if List.length still < List.length pending then loop still
-    else List.iter (fun d -> d.fail ()) still
-  in
-  let pending = List.rev env.deferred in
-  env.deferred <- [];
-  loop pending
+  | PCon (c, ps) -> (
+      let unknown () = List.iter (bind_pattern env cx TError) ps in
+      match find_ctor env c ~expected:t with
+      | None -> unknown ()
+      | Some (td, ctor) ->
+          Hashtbl.replace cx.found p.pnode (Ctor_of (td.path, ctor.cname));
+          let tc, tvars = instance env td in
+          check tc;
+          if ctor_shape env p.ploc c ctor (List.map (fun _ -> None) ps) then
+            List.iter2
+              (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
+              ctor.cfields ps
+          else unknown ())

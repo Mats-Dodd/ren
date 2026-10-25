@@ -1,5 +1,5 @@
 (* Mutability checks: what may change, and through which name. Runs after
-   check.ml and before type inference, since none of it needs types.
+   resolve.ml and before type inference, since none of it needs types.
 
    - Only a place can be assigned to or passed with `&`: a variable, then
      any fields and indices into it (`user.plan`, `xs[i]`). Its variable has

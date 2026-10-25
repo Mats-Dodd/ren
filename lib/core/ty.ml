@@ -56,6 +56,40 @@ let rec tails t =
       List.concat_map (fun (p : param) -> tails p.ty) ps
       @ tails r @ of_row e @ of_row u
 
+(* A scheme with its variables renumbered by where they first appear,
+   reading left to right, as inference numbers them: type variables and row
+   variables separately. [names] follow their variables. *)
+let canonical (s : scheme) =
+  let number table n =
+    match List.assoc_opt n !table with
+    | Some m -> m
+    | None ->
+        let m = List.length !table in
+        table := (n, m) :: !table;
+        m
+  in
+  let tys = ref [] and rows = ref [] in
+  let rec go = function
+    | Var n -> Var (number tys n)
+    | Error -> Error
+    | Con (p, args) -> Con (p, List.map go args)
+    | Fun (ps, r, e, u) ->
+        (* `let`s fix the order of first appearance: OCaml evaluates a
+           constructor's arguments right to left *)
+        let ps = List.map (fun (p : param) -> { p with ty = go p.ty }) ps in
+        let r = go r in
+        let e = row e in
+        let u = row u in
+        Fun (ps, r, e, u)
+  and row r = { r with tail = Option.map (number rows) r.tail } in
+  let ty = go s.ty in
+  let names =
+    List.filter_map
+      (fun (n, h) -> Option.map (fun m -> (m, h)) (List.assoc_opt n !tys))
+      s.names
+  in
+  { ty; names = List.sort compare names }
+
 (* ---- printing ----
 
    A printer names variables consistently across everything printed with

@@ -1,8 +1,9 @@
 (* A tree-walking interpreter: the "interpreted Ren" milestone on the roadmap.
 
    By the time a program gets here it has been resolved (resolve.ml),
-   checked (check.ml, mut.ml) and type-checked (infer.ml), so it can't add a Bool to an Int, call a
-   function that doesn't exist, or change a `let`. The only errors left are
+   checked (mut.ml, exhaust.ml) and type-checked (infer.ml), so it can't
+   add a Bool to an Int, call a function that doesn't exist, or change a
+   `let`. The only errors left are
    panics, like division by zero. A panic is the running program's fault,
    not a mistake in its source, so it's an exception of its own rather than
    a diagnostic.
@@ -180,7 +181,7 @@ let rec eval cx env (e : expr) =
       in
       eval cx (List.fold_left exec env stmts) last
   | Con (c, args) ->
-      (* check.ml has already confirmed the constructor exists *)
+      (* inference has already confirmed the constructor exists *)
       let ty = Hashtbl.find cx.ctor_types c.name in
       VCon
         {

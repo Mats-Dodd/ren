@@ -1,5 +1,6 @@
 (* The wording of inference's errors (infer_expr.ml, infer_top.ml): what
-   explains a type mismatch beyond the two types themselves. *)
+   explains a type mismatch beyond the two types themselves, and what to
+   say when a lookup through a type finds nothing, or too much. *)
 
 open Types
 
@@ -73,3 +74,109 @@ let mismatch_notes ?help ~found ~expected () =
     | h, _ -> h
   in
   (notes, help)
+
+(* ---- lookups through a type ----
+
+   [home] is the module being checked, so types are named as it would
+   write them (path.ml). *)
+
+let type_name ~home p = Path.show ~home p
+let field_names (fs : Iface.field list) = List.map (fun f -> f.Iface.fname) fs
+
+let no_ctor (c : Ast.ident) =
+  Diag.make c.loc (sprintf "there's no constructor named `%s`" c.name)
+
+(* Today constructor names are unique (resolve.ml), so this can't happen
+   yet; it's what sharing them will report. *)
+let ambiguous_ctor ~home (c : Ast.ident) owners =
+  let full p = sprintf "`%s.%s`" (type_name ~home p) c.name in
+  Diag.make c.loc
+    ~help:
+      (sprintf
+         "annotate the value with the type you mean, like `let x: %s = %s`, so \
+          `%s` is found through it"
+         (type_name ~home (List.hd owners))
+         c.name c.name)
+    (sprintf "`%s` could be %s" c.name
+       (String.concat " or " (List.map full owners)))
+
+let ctor_arity loc (c : Ast.ident) (ctor : Iface.ctor) given =
+  let n = List.length ctor.cfields in
+  let help =
+    match ctor.cfields with
+    | [] -> sprintf "write `%s` with no parentheses" c.name
+    | fs -> sprintf "its field%s: %s" (plural n) (quote (field_names fs))
+  in
+  Diag.make loc ~help
+    (sprintf "`%s` has %d field%s but was given %d" c.name n (plural n) given)
+
+let some_labels loc (c : Ast.ident) =
+  Diag.make loc (sprintf "label every field of `%s`, or none of them" c.name)
+
+let wrong_label (l : Ast.ident) (f : Iface.field) =
+  Diag.make l.loc
+    ~help:"labels are written in the order the fields are declared"
+    (sprintf "expected the label `%s` here, found `%s`" f.fname l.name)
+
+(* `Plan { ... }`, where `Plan` isn't a record *)
+let not_a_record ~home loc (td : Iface.type_decl) =
+  let help =
+    match td.body with
+    | Builtin ->
+        "it's built in; only a type declared with fields, like `type Point = { \
+         x: Int }`, is made with `Point { ... }`"
+    | _ -> "its values are made with its constructors"
+  in
+  Diag.make loc ~help
+    (sprintf "`%s` isn't a record type" (type_name ~home td.path))
+
+let no_record_fits loc =
+  Diag.make loc
+    ~help:"write the type's name before the `{` to see which fields are wrong"
+    "no record type has exactly these fields"
+
+let several_records_fit ~home loc paths =
+  Diag.make loc
+    ~help:
+      (sprintf "write the type's name first, like `%s { ... }`"
+         (type_name ~home (List.hd paths)))
+    (sprintf "these fields fit more than one type: %s"
+       (quote (List.map (type_name ~home) paths)))
+
+let no_such_field ~home (f : Ast.ident) path decl =
+  Diag.make f.loc
+    ~help:(sprintf "its fields: %s" (quote (field_names decl)))
+    (sprintf "`%s` has no field named `%s`" (type_name ~home path) f.name)
+
+let missing_fields ~home loc path missing =
+  Diag.make loc
+    (sprintf "this `%s` is missing %s" (type_name ~home path) (quote missing))
+
+let needs_record (f : Ast.ident) shown =
+  Diag.make f.loc
+    (sprintf "`.%s` needs a record, but this is %s" f.name (article shown))
+
+let no_record_has (f : Ast.ident) =
+  Diag.make f.loc (sprintf "no record type has a field named `%s`" f.name)
+
+(* `u.id` where `u`'s type isn't known yet, and several records have an
+   `id`. [what] is the record's variable, if it is one. *)
+let several_records_have ~home loc ?what (f : Ast.ident) paths =
+  let what, help =
+    match what with
+    | Some x ->
+        ( sprintf "`%s`" x,
+          sprintf "annotate `%s` where it's defined, like `%s: %s`" x x
+            (type_name ~home (List.hd paths)) )
+    | None -> ("this", "add a type annotation to say which")
+  in
+  Diag.make loc ~help
+    ~notes:
+      [
+        sprintf "`%s` is a field of %s" f.name
+          (String.concat " and "
+             (List.map (fun p -> sprintf "`%s`" (type_name ~home p)) paths));
+        "a field is found through its record's type, which has to be known \
+         where the field is used";
+      ]
+    (sprintf "can't tell which record type %s is" what)

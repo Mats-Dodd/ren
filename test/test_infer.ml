@@ -1,5 +1,6 @@
 (* Type inference (infer.ml): inferred signatures, type errors, rows, and
-   which record a field belongs to. *)
+   what's found through a type: a field's record, a constructor, a record
+   literal's type. *)
 
 open Ren
 open Helpers
@@ -351,7 +352,9 @@ fn main() = 1
     fn main() -> Int
     |}]
 
-let%expect_test "a shared field waits for the rest of the function" =
+let%expect_test "a shared field needs its record's type known first" =
+  (* `a.level` would settle it, but it comes later: inference reads left to
+     right and never waits *)
   types
     (admin_types
    ^ {|
@@ -360,8 +363,97 @@ fn score(a) =
   a.level + x
 fn main() = 1
 |});
+  [%expect
+    {|
+    error: can't tell which record type `a` is
+      ┌─ test.ren:5:11
+    5 │   let x = a.id
+      │           ^
+      = `id` is a field of `Admin` and `User`
+      = a field is found through its record's type, which has to be known where the field is used
+      help: annotate `a` where it's defined, like `a: Admin`
+    |}]
+
+let%expect_test "a lambda takes its parameters' types from where it's going" =
+  (* `apply`'s first argument says what `T` is, so its second, a lambda, is
+     checked knowing its parameter is a `User` or an `Admin`, and `.id` is
+     found through that *)
+  run
+    (admin_types
+   ^ {|
+fn apply<T>(x: T, f: fn(T) -> Int) -> Int = f(x)
+fn main() =
+  print(apply(User { id: 1, name: 2 }, fn(u) => u.id))
+  print(apply(Admin { id: 3, level: 4 }, fn(a) => a.id + a.level))
+|}
+    );
   [%expect {|
-    fn score(a: Admin) -> Int
+    1
+    7
+    ()
+    |}];
+  (* on its own, nothing says what the lambda's parameter is *)
+  run
+    (admin_types
+   ^ {|
+fn main() =
+  let get = fn(u) => u.id
+  print(get(User { id: 1, name: 2 }))
+|}
+    );
+  [%expect
+    {|
+    error: can't tell which record type `u` is
+      ┌─ test.ren:5:22
+    5 │   let get = fn(u) => u.id
+      │                      ^
+      = `id` is a field of `Admin` and `User`
+      = a field is found through its record's type, which has to be known where the field is used
+      help: annotate `u` where it's defined, like `u: Admin`
+    |}]
+
+let%expect_test "results don't depend on the order functions are checked in" =
+  (* `f` and `g` call each other, so they're checked together, one body
+     after the other. Each body sees the other function only as its
+     declaration describes it, so whichever comes first, `u.id` can't be
+     found: nothing written says what `u` is. *)
+  let f = {|
+fn f(u, n) = if n == 0 then 0 else g(u, n - 1) + u.id|} in
+  let g = {|
+fn g(v, n) = if n == 0 then v.level else f(v, n - 1)|} in
+  types (admin_types ^ f ^ g ^ "\nfn main() = 1\n");
+  types (admin_types ^ g ^ f ^ "\nfn main() = 1\n");
+  [%expect
+    {|
+    error: can't tell which record type `u` is
+      ┌─ test.ren:4:50
+    4 │ fn f(u, n) = if n == 0 then 0 else g(u, n - 1) + u.id
+      │                                                  ^
+      = `id` is a field of `Admin` and `User`
+      = a field is found through its record's type, which has to be known where the field is used
+      help: annotate `u` where it's defined, like `u: Admin`
+    error: can't tell which record type `u` is
+      ┌─ test.ren:5:50
+    5 │ fn f(u, n) = if n == 0 then 0 else g(u, n - 1) + u.id
+      │                                                  ^
+      = `id` is a field of `Admin` and `User`
+      = a field is found through its record's type, which has to be known where the field is used
+      help: annotate `u` where it's defined, like `u: Admin`
+    |}];
+  (* an annotation on `g` is part of its declaration, so `f` sees it *)
+  let g =
+    {|
+fn g(v: Admin, n: Int) -> Int = if n == 0 then v.level else f(v, n - 1)|}
+  in
+  types (admin_types ^ f ^ g ^ "\nfn main() = 1\n");
+  types (admin_types ^ g ^ f ^ "\nfn main() = 1\n");
+  [%expect
+    {|
+    fn f(u: Admin, n: Int) -> Int
+    fn g(v: Admin, n: Int) -> Int
+    fn main() -> Int
+    fn g(v: Admin, n: Int) -> Int
+    fn f(u: Admin, n: Int) -> Int
     fn main() -> Int
     |}]
 
@@ -377,6 +469,7 @@ fn main() = 1
     4 │ fn get_id(u) = u.id
       │                ^
       = `id` is a field of `Admin` and `User`
+      = a field is found through its record's type, which has to be known where the field is used
       help: annotate `u` where it's defined, like `u: Admin`
     |}];
   types (admin_types ^ {|
@@ -435,6 +528,202 @@ fn take(a: A) -> Int = a.x + 1
 fn main() = take({ x: 1 })
 |};
   [%expect {| 2 |}]
+
+(* constructors and record literals, found through a type *)
+
+let%expect_test "unknown constructor" =
+  run (plan_types ^ {|
+fn main() = print(Basic)
+|});
+  [%expect
+    {|
+    error: there's no constructor named `Basic`
+      ┌─ test.ren:8:19
+    8 │ fn main() = print(Basic)
+      │                   ^^^^^
+    |}];
+  run
+    (plan_types
+   ^ {|
+fn main() -> Int =
+  match Free
+    Basic => 1
+    _ => 0
+|});
+  [%expect
+    {|
+    error: there's no constructor named `Basic`
+       ┌─ test.ren:10:5
+    10 │     Basic => 1
+       │     ^^^^^
+    |}]
+
+let%expect_test "constructor arity and labels" =
+  run (plan_types ^ {|
+fn main() = print(Pro(1, 2))
+|});
+  [%expect
+    {|
+    error: `Pro` has 1 field but was given 2
+      ┌─ test.ren:8:19
+    8 │ fn main() = print(Pro(1, 2))
+      │                   ^^^^^^^^^
+      help: its field: `seats`
+    |}];
+  run (plan_types ^ {|
+fn main() = print(Free(1))
+|});
+  [%expect
+    {|
+    error: `Free` has 0 fields but was given 1
+      ┌─ test.ren:8:19
+    8 │ fn main() = print(Free(1))
+      │                   ^^^^^^^
+      help: write `Free` with no parentheses
+    |}];
+  run (plan_types ^ {|
+fn main() = print(Pro(seat: 5))
+|});
+  [%expect
+    {|
+    error: expected the label `seats` here, found `seat`
+      ┌─ test.ren:8:23
+    8 │ fn main() = print(Pro(seat: 5))
+      │                       ^^^^
+      help: labels are written in the order the fields are declared
+    |}];
+  run {|
+type P = Pt(x: Int, y: Int)
+fn main() = print(Pt(x: 1, 2))
+|};
+  [%expect
+    {|
+    error: label every field of `Pt`, or none of them
+      ┌─ test.ren:2:19
+    2 │ fn main() = print(Pt(x: 1, 2))
+      │                   ^^^^^^^^^^^
+    |}]
+
+let%expect_test "pattern of the wrong type" =
+  run
+    (plan_types
+   ^ {|
+fn main() -> Int =
+  match Free
+    Free => 1
+    true => 0
+|});
+  [%expect
+    {|
+    error: expected a pattern for `Plan`, but this one is a `Bool`
+       ┌─ test.ren:11:5
+    11 │     true => 0
+       │     ^^^^
+    |}];
+  run
+    (plan_types
+   ^ {|
+fn main() -> Int =
+  match Pro(1)
+    Pro(Free) => 1
+    _ => 0
+|});
+  [%expect
+    {|
+    error: expected a pattern for `Int`, but this one is a `Plan`
+       ┌─ test.ren:10:9
+    10 │     Pro(Free) => 1
+       │         ^^^^
+    |}]
+
+let%expect_test "record literal errors" =
+  run (plan_types ^ {|
+fn main() = print(User { id: 1 })
+|});
+  [%expect
+    {|
+    error: this `User` is missing `plan`
+      ┌─ test.ren:8:19
+    8 │ fn main() = print(User { id: 1 })
+      │                   ^^^^^^^^^^^^^^
+    |}];
+  run (plan_types ^ {|
+fn main() = print(User { id: 1, plan: Free, name: 2 })
+|});
+  [%expect
+    {|
+    error: `User` has no field named `name`
+      ┌─ test.ren:8:45
+    8 │ fn main() = print(User { id: 1, plan: Free, name: 2 })
+      │                                             ^^^^
+      help: its fields: `id`, `plan`
+    |}];
+  run (plan_types ^ {|
+fn main() = print({ id: 1 })
+|});
+  [%expect
+    {|
+    error: no record type has exactly these fields
+      ┌─ test.ren:8:19
+    8 │ fn main() = print({ id: 1 })
+      │                   ^^^^^^^^^
+      help: write the type's name before the `{` to see which fields are wrong
+    |}];
+  run {|
+type A = { x: Int }
+type B = { x: Int }
+fn main() = print({ x: 1 })
+|};
+  [%expect
+    {|
+    error: these fields fit more than one type: `A`, `B`
+      ┌─ test.ren:3:19
+    3 │ fn main() = print({ x: 1 })
+      │                   ^^^^^^^^
+      help: write the type's name first, like `A { ... }`
+    |}];
+  run (plan_types ^ {|
+fn main() = print(Plan { seats: 1 })
+|});
+  [%expect
+    {|
+    error: `Plan` isn't a record type
+      ┌─ test.ren:8:19
+    8 │ fn main() = print(Plan { seats: 1 })
+      │                   ^^^^
+      help: its values are made with its constructors
+    |}];
+  run {|
+fn main() = print(Int { })
+|};
+  [%expect
+    {|
+    error: `Int` isn't a record type
+      ┌─ test.ren:1:19
+    1 │ fn main() = print(Int { })
+      │                   ^^^
+      help: it's built in; only a type declared with fields, like `type Point = { x: Int }`, is made with `Point { ... }`
+    |}]
+
+let%expect_test "every type error is reported, constructors' too" =
+  run (plan_types ^ {|
+fn main() =
+  print(Basic)
+  1 + true
+|});
+  [%expect
+    {|
+    error: there's no constructor named `Basic`
+      ┌─ test.ren:9:9
+    9 │   print(Basic)
+      │         ^^^^^
+
+    error: expected `Int`, found `Bool`
+       ┌─ test.ren:10:7
+    10 │   1 + true
+       │       ^^^^
+       = `+` works on `Int`s
+    |}]
 
 (* rows: dependencies flow through calls and transparent parameters *)
 
@@ -796,6 +1085,78 @@ fn main() =
       ┌─ test.ren:2:11
     2 │   let n = missing
       │           ^^^^^^^
+    |}]
+
+let%expect_test "inference records what it found through a type" =
+  (* for each function, every expression's type and what each lookup found,
+     by node id: the same program gives equal tables every time *)
+  let src =
+    clean
+      (admin_types
+     ^ {|
+fn main() =
+  let u = { id: 1, name: 2 }
+  match Some(u.name)
+    Some(n) => print(n)
+    None => ()
+|}
+      )
+  in
+  let first = Driver.inferred ~file src in
+  ignore (Driver.inferred ~file (clean {|
+fn main() = print(Some(true))
+|}));
+  let second = Driver.inferred ~file src in
+  print_endline
+    (string_of_bool
+       (List.equal
+          (fun (a, x) (b, y) -> a = b && Infer.Nodes.equal ( = ) x y)
+          first.nodes second.nodes));
+  let path (p : Path.t) = p.home ^ "." ^ p.name in
+  Infer.Nodes.iter
+    (fun _ (n : Infer.node) ->
+      match n.found with
+      | Some (Field_of p) -> print_endline ("field of " ^ path p)
+      | Some (Ctor_of (p, c)) ->
+          print_endline ("constructor " ^ c ^ " of " ^ path p)
+      | None -> ())
+    (List.assoc "main" second.nodes);
+  [%expect
+    {|
+    true
+    field of test.User
+    constructor Some of prelude.Option
+    constructor Some of prelude.Option
+    constructor None of prelude.Option
+    |}]
+
+let%expect_test "a public function's interface comes from its signature" =
+  (* the interface is built from declarations alone; for a public function
+     it's the same type inference finds for it. A parameter written
+     `fn(...)` is transparent, so its rows are the function's. *)
+  let src =
+    clean
+      {|
+pub fn twice(f: fn()) =
+  f()
+  f()
+pub fn show(x: Int) = print(x)
+fn main() = twice(fn() => show(1))
+|}
+  in
+  let iface = Driver.interface ~file src in
+  let schemes = Driver.schemes ~file src in
+  List.iter
+    (fun (v : Iface.value) ->
+      let pr = Ty.printer ~show_tail:(fun _ -> true) ~home:"test" v.scheme in
+      Printf.printf "%s: %s (%s)\n" v.vname (Ty.show pr v.scheme.ty)
+        (if List.assoc v.vname schemes = v.scheme then "as inferred"
+         else "differs from inference"))
+    iface.values;
+  [%expect
+    {|
+    twice: fn(fn() ! ..e uses ..d) ! ..e uses ..d (as inferred)
+    show: fn(Int) ! ..e uses Io, ..d (as inferred)
     |}]
 
 let%expect_test "inferred types are canonical" =

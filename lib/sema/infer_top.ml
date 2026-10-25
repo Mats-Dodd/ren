@@ -1,6 +1,7 @@
 (* Inference over a whole module (see infer.ml): the call graph, groups of
    functions that call each other, generalization, transparent parameters,
-   and what public functions and `main` have to spell out. *)
+   what public functions and `main` have to spell out, and the canonical
+   form of everything inference found. *)
 
 open Ast
 open Ast.Resolved
@@ -166,20 +167,41 @@ let check_transparent sink (f : fn_def) =
 
 (* ---- the program ---- *)
 
-(* Infer every function's type, and return each function's type scheme, in
-   canonical form. *)
+(* What inference found, in canonical form (ty.ml). *)
+module Nodes = Map.Make (Int)
+
+type node = { ty : Ty.ty; found : found option }
+
+type t = {
+  schemes : (string * Ty.scheme) list;  (** each function's, in source order *)
+  nodes : (string * node Nodes.t) list;
+      (** each function's expressions and patterns, by node id *)
+}
+
+(* Infer every function's type, and return each function's type scheme and
+   the types of its expressions, in canonical form. *)
 let program sink ~imports ?entry (r : Resolve.t) =
   let st = Types.new_state () in
   let home = r.home in
+  let types = Hashtbl.create 16 in
+  List.iter
+    (fun (td : Iface.type_decl) -> Hashtbl.replace types td.path td)
+    (List.concat_map (fun (iface : Iface.t) -> iface.types) imports @ r.types);
+  let visible =
+    Hashtbl.fold (fun _ td acc -> td :: acc) types []
+    |> List.sort (fun (a : Iface.type_decl) (b : Iface.type_decl) ->
+        compare (a.path.name, a.path.home) (b.path.name, b.path.home))
+  in
   let env =
     {
       st;
       sink;
       home;
-      types = Hashtbl.create 16;
-      ctors = Hashtbl.create 16;
+      types;
+      visible;
       globals = Hashtbl.create 16;
-      deferred = [];
+      group = [];
+      joins = [];
     }
   in
   List.iter
@@ -195,72 +217,97 @@ let program sink ~imports ?entry (r : Resolve.t) =
     List.filter_map (function Fn f -> Some f | Type _ -> None) r.prog
   in
   let path (f : fn_def) = Path.make home f.name.name in
-  List.iter
-    (fun (td : Iface.type_decl) ->
-      Hashtbl.replace env.types td.path td;
-      match td.body with
-      | Sum cs ->
-          List.iter
-            (fun (c : Iface.ctor) -> Hashtbl.replace env.ctors c.cname (td, c))
-            cs
-      | Record _ | Builtin -> ())
-    (List.concat_map (fun (iface : Iface.t) -> iface.types) imports @ r.types);
   List.iter (check_transparent sink) fns;
   let schemes = Hashtbl.create 16 in
+  let tables = Hashtbl.create 16 in
   List.iter
     (fun group ->
       enter_level env.st;
       (* each function's type within the group: its own type parameters
-         (as skolems), parameters, result and effects *)
+         (as skolems), parameters, result and effects. [declared] makes the
+         type its declaration gives it, which is how the group's other
+         functions see it until the group is done. *)
       let setup (f : fn_def) =
         let skolems =
           List.map (fun (t : ident) -> (fresh_id env.st, t.name)) f.tparams
         in
         let tparams = List.map (fun (id, n) -> TSkol (id, n)) skolems in
+        let signature () =
+          let errs = fresh_row env.st and uses = fresh_row env.st in
+          let ps =
+            List.map (param_type env ~tparams ~own:(errs, uses)) f.params
+          in
+          let ret =
+            match f.ret with
+            | Some t -> convert ~tvars:tparams ~row:closed t
+            | None when f.pub ->
+                unit (* a public function without `->` returns Unit *)
+            | None -> fresh_var env.st
+          in
+          (ps, ret, errs, uses)
+        in
+        let ps, ret, errs, uses = signature () in
         let cx =
           {
+            self = path f;
             locals = Hashtbl.create 16;
-            errs = fresh_row env.st;
-            uses = fresh_row env.st;
+            nodes = Hashtbl.create 64;
+            found = Hashtbl.create 16;
+            errs;
+            uses;
             tparams;
           }
         in
-        let ps = List.map (param_type env cx) f.params in
-        let ret =
-          match f.ret with
-          | Some t -> convert ~tvars:tparams ~row:closed t
-          | None when f.pub ->
-              unit (* a public function without `->` returns Unit *)
-          | None -> fresh_var env.st
+        Hashtbl.replace env.globals (path f) (TFun (ps, ret, errs, uses));
+        let declared () =
+          let ps, ret, errs, uses = signature () in
+          TFun (ps, ret, errs, uses)
         in
-        Hashtbl.replace env.globals (path f) (TFun (ps, ret, cx.errs, cx.uses));
-        (f, skolems, cx, ps, ret)
+        ((f, skolems, cx, ps, ret), (path f, declared))
       in
-      let setups = List.map setup group in
+      let setups, declared = List.split (List.map setup group) in
+      env.group <- declared;
       List.iter
         (fun ((f : fn_def), _, cx, ps, ret) ->
           bind_params cx f.params ps;
-          let tb = infer env cx f.body in
-          let pr = printer env in
-          let notes, help =
+          let why =
             match f.ret with
             | Some _ ->
-                ( [
-                    sprintf "`%s` is declared to return `%s`" f.name.name
-                      (show pr ret);
-                  ],
-                  None )
+                explain
+                  ~notes:
+                    [
+                      sprintf "`%s` is declared to return `%s`" f.name.name
+                        (show (printer env) ret);
+                    ]
+                  ()
             | None when f.pub ->
-                ( [ "a public function without `->` returns `Unit`" ],
-                  Some (sprintf "add `-> %s` to the signature" (show pr tb)) )
-            | None -> ([], None)
+                explain
+                  ~notes:[ "a public function without `->` returns `Unit`" ]
+                  ~help:(fun found _ ->
+                    sprintf "add `-> %s` to the signature" found)
+                  ()
+            | None -> plain
           in
-          unify_at env (result_loc f.body) ~found:tb ~expected:ret ~notes ?help)
+          check env cx ~why f.body ret)
         setups;
-      resolve_deferred env;
+      (* every use of a function by another of its group, joined with the
+         type its own body gave it *)
+      List.iter
+        (fun j ->
+          unify_at env j.jloc ~found:j.used
+            ~expected:(Hashtbl.find env.globals j.target)
+            ~msg:(fun f x ->
+              sprintf
+                "`%s` is used here as `%s`, but its definition makes it `%s`"
+                j.jname f x)
+            ~notes:
+              [ "functions that call each other are checked at a single type" ])
+        (List.rev env.joins);
+      env.joins <- [];
+      env.group <- [];
       leave_level env.st;
       List.iter
-        (fun ((f : fn_def), skolems, _, _, _) ->
+        (fun ((f : fn_def), skolems, cx, _, _) ->
           let mono = Hashtbl.find env.globals (path f) in
           (match
              List.filter
@@ -296,7 +343,8 @@ let program sink ~imports ?entry (r : Resolve.t) =
           | [] -> ());
           let scheme = generalize env.st ~skolems mono in
           Hashtbl.replace env.globals (path f) scheme;
-          Hashtbl.replace schemes f.name.name scheme)
+          Hashtbl.replace schemes f.name.name scheme;
+          Hashtbl.replace tables f.name.name cx)
         setups;
       (* public functions spell out their full contract *)
       List.iter
@@ -343,6 +391,28 @@ let program sink ~imports ?entry (r : Resolve.t) =
         (fail env (List.hd f.params).pname.ident.loc
            ~help:"remove the parameters" "`main` can't take parameters")
   | Some _ -> ());
-  List.map
-    (fun f -> (f.name.name, to_scheme st (Hashtbl.find schemes f.name.name)))
-    fns
+  (* Each function's scheme and node types share one numbering, so a
+     variable is the same [Var n] in both. Nodes are converted in order of
+     their ids, so the numbering doesn't depend on a hash table's order. *)
+  let canonical (f : fn_def) =
+    let c = canon st in
+    let ty = canon_ty c ~all:false (Hashtbl.find schemes f.name.name) in
+    let scheme : Ty.scheme = { ty; names = canon_names c } in
+    let cx = Hashtbl.find tables f.name.name in
+    let nodes =
+      Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes []
+      |> List.sort compare
+      |> List.fold_left
+           (fun acc id ->
+             Nodes.add id
+               {
+                 ty = canon_ty c ~all:true (Hashtbl.find cx.nodes id);
+                 found = Hashtbl.find_opt cx.found id;
+               }
+               acc)
+           Nodes.empty
+    in
+    ((f.name.name, scheme), (f.name.name, nodes))
+  in
+  let schemes, nodes = List.split (List.map canonical fns) in
+  { schemes; nodes }

@@ -17,6 +17,14 @@ val check : file:string -> string -> Ast.Parsed.program
 (* Every function's inferred type scheme, in canonical form. *)
 val schemes : file:string -> string -> (string * Ty.scheme) list
 
+(* What inference found: every function's type scheme, and the types of
+   its expressions and patterns. *)
+val inferred : file:string -> string -> Infer.t
+
+(* The program's interface (iface.ml): what it would tell a module that
+   imports it. *)
+val interface : file:string -> string -> Iface.t
+
 (* Every function's inferred signature, as `ren types` prints it. *)
 val types : file:string -> string -> string list
 

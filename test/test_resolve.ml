@@ -1,7 +1,6 @@
-(* Name resolution (resolve.ml): what each name refers to. Most of its
-   errors (unknown names and types, names declared twice) are tested with
-   the pass that used to report them, in test_check.ml and
-   test_infer.ml. *)
+(* Name resolution (resolve.ml): what each name refers to, and names
+   declared twice. Some of its errors (unknown variables and functions) are
+   tested in test_infer.ml, with the pass that used to report them. *)
 
 open Helpers
 
@@ -95,5 +94,99 @@ fn main() =
     4 │     P(x, x) => print(x)
       │          ^
       │       - the first `x` is here
+      help: rename one of them
+    |}]
+
+let%expect_test "type declaration errors" =
+  run {|
+type User = { id: UserId }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: there's no type named `UserId`
+      ┌─ test.ren:1:19
+    1 │ type User = { id: UserId }
+      │                   ^^^^^^
+    |}];
+  run {|
+type Box = { inner: Option }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `Option` takes 1 type argument but was given 0
+      ┌─ test.ren:1:21
+    1 │ type Box = { inner: Option }
+      │                     ^^^^^^
+    |}];
+  run {|
+type A = | Same
+type B = | Same
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: there are two constructors named `Same`
+      ┌─ test.ren:2:12
+    1 │ type A = | Same
+      │            ---- the first `Same` is here, in `A`
+    2 │ type B = | Same
+      │            ^^^^
+      help: constructor names must be unique across all types
+    |}];
+  run {|
+type Int = { x: Bool }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `Int` is a built-in type
+      ┌─ test.ren:1:6
+    1 │ type Int = { x: Bool }
+      │      ^^^
+      help: choose another name
+    |}];
+  run {|
+type plan = Free
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: a type name must start with a capital letter
+      ┌─ test.ren:1:6
+    1 │ type plan = Free
+      │      ^^^^
+      help: write `Plan`
+    |}]
+
+let%expect_test "a duplicate points at the first one" =
+  run {|
+fn f() = 1
+fn f() = 2
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: there are two functions named `f`
+      ┌─ test.ren:2:4
+    1 │ fn f() = 1
+      │    - the first `f` is here
+    2 │ fn f() = 2
+      │    ^
+      help: rename one of them
+    |}];
+  (* the first one can be in the prelude, which has no source to show *)
+  run {|
+type Option = { x: Int }
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: there are two types named `Option`
+      ┌─ test.ren:1:6
+    1 │ type Option = { x: Int }
+      │      ^^^^^^
+      = the first `Option` is here: <prelude>:1:6
       help: rename one of them
     |}]

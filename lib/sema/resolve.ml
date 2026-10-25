@@ -14,7 +14,8 @@
    look a name up: inference reads a binder's id, mut.ml its kind.
 
    Constructors and record fields aren't found here: they're found through
-   a type (check.ml, infer.ml).
+   a type (infer_expr.ml). For now, though, no two types can have a
+   constructor with the same name, and that's checked here.
 
    Each problem is reported to the sink (diag.ml), and resolution carries
    on: a name that doesn't exist resolves to something harmless, since the
@@ -274,6 +275,14 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
 
 let type_def env (td : Parsed.type_def) : Resolved.type_def =
   no_duplicates env "type parameters" td.type_params;
+  let no_duplicate_fields (fs : Parsed.field list) =
+    no_duplicates env "fields"
+      (List.map (fun (f : Parsed.field) -> f.field_name) fs)
+  in
+  (match td.type_body with
+  | Fields fs -> no_duplicate_fields fs
+  | Ctors cs ->
+      List.iter (fun (c : ident ctor) -> no_duplicate_fields c.ctor_fields) cs);
   let params = List.map (fun (p : ident) -> p.name) td.type_params in
   let field (f : Parsed.field) : Resolved.field =
     { field_name = f.field_name; field_ty = ty env ~params f.field_ty }
@@ -319,6 +328,37 @@ let fn_def env (f : Parsed.fn_def) : Resolved.fn_def * Path.t list =
   let ret = ty_opt env ~params:sc.tparams f.ret in
   let body = expr env inner f.body in
   ({ f with params = ps; ret; body }, List.sort_uniq compare sc.fn.calls)
+
+(* Constructor names are unique across every type the module sees, its
+   imports' included: a constructor is found through its type
+   (infer_expr.ml), but for now it can also be found by its name alone.
+   Stage 5 lets two types share a name, and drops this check. *)
+let unique_ctors env imported own =
+  let seen = Hashtbl.create 16 in
+  let declare report_it (td : Iface.type_decl) =
+    match td.body with
+    | Record _ | Builtin -> ()
+    | Sum cs ->
+        List.iter
+          (fun (c : Iface.ctor) ->
+            match Hashtbl.find_opt seen c.cname with
+            | Some ((first : Iface.ctor), (owner : Iface.type_decl))
+              when report_it ->
+                report env c.cloc
+                  ~help:"constructor names must be unique across all types"
+                  ~labels:
+                    [
+                      ( first.cloc,
+                        sprintf "the first `%s` is here, in `%s`" c.cname
+                          owner.path.name );
+                    ]
+                  (sprintf "there are two constructors named `%s`" c.cname)
+            | Some _ -> ()
+            | None -> Hashtbl.replace seen c.cname (c, td))
+          cs
+  in
+  List.iter (declare false) imported;
+  List.iter (declare true) own
 
 let program sink ~home ~imports (prog : Parsed.program) =
   let env =
@@ -410,4 +450,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
       (function Type td -> Some (Iface.of_type_def ~home td) | Fn _ -> None)
       items
   in
+  unique_ctors env
+    (List.concat_map (fun (i : Iface.t) -> i.types) imports)
+    types;
   { home; prog = items; types; calls = List.filter_map Fun.id calls }

@@ -34,19 +34,28 @@ let parse ~file src =
   checked "parse" (fun sink -> Parser.parse_program sink toks)
 
 (* Check one module against the interfaces it imports, before anything
-   runs: first what its names refer to, then everything else. Returns the
-   module's interface and each function's type scheme. [entry] is set for
-   the module the program starts in, which needs a `main`. *)
+   runs: first what its names refer to (found through scope), then what may
+   change, then types (and what's found through them), then whether every
+   `match` is exhaustive. Returns the module's interface and what inference
+   found. [entry] is set for the module the program starts in, which needs
+   a `main`. *)
 let check_module ~home ~imports ?entry prog =
   let r =
     checked "resolve" (fun sink -> Resolve.program sink ~home ~imports prog)
   in
-  checked "check" (fun sink -> Check.program sink ~imports r);
   checked "mut" (fun sink -> Mut.program sink r);
-  let schemes =
+  let inferred =
     checked "infer" (fun sink -> Infer.program sink ~imports ?entry r)
   in
-  (Iface.make ~home ~types:r.types ~schemes, schemes)
+  checked "exhaust" (fun sink -> Exhaust.program sink ~imports r inferred);
+  (* what a public function uses can't be written in its signature yet, so
+     its interface takes that from inference *)
+  let uses name =
+    match (List.assoc name inferred.schemes).ty with
+    | Fun (_, _, _, u) -> u.labels
+    | _ -> []
+  in
+  (Iface.of_module ~home ~uses r.prog, inferred)
 
 (* The prelude, as a module: its source, parsed and checked against the
    intrinsics (prelude.ml), and its whole interface. It's checked once, the
@@ -62,18 +71,33 @@ let prelude =
      (prog, Iface.union Prelude.intrinsics iface))
 
 (* The user's program, checked against the prelude's interface. Returns
-   the program and each function's type scheme. *)
-let check_with_types ~file src =
+   the program, its interface, and what inference found in it. *)
+let check_all ~file src =
   let _, prelude_iface = Lazy.force prelude in
   let prog = parse ~file src in
   let home = Path.home_of_file file in
-  (prog, snd (check_module ~home ~imports:[ prelude_iface ] ~entry:file prog))
+  let iface, inferred =
+    check_module ~home ~imports:[ prelude_iface ] ~entry:file prog
+  in
+  (prog, iface, inferred)
 
-let check ~file src = fst (check_with_types ~file src)
-let schemes ~file src = snd (check_with_types ~file src)
+let check ~file src =
+  let prog, _, _ = check_all ~file src in
+  prog
+
+let inferred ~file src =
+  let _, _, inferred = check_all ~file src in
+  inferred
+
+let schemes ~file src = (inferred ~file src).schemes
+
+let interface ~file src =
+  let _, iface, _ = check_all ~file src in
+  iface
 
 let types ~file src =
-  let prog, schemes = check_with_types ~file src in
+  let prog, _, (inferred : Infer.t) = check_all ~file src in
+  let schemes = inferred.schemes in
   List.filter_map
     (function
       | Ast.Fn f ->

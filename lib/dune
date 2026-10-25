@@ -1,7 +1,7 @@
 ; The compiler, in one library. Its sources live in folders by stage:
 ;   syntax/  source text to AST (locations, tokens, lexer, parser)
-;   sema/    the checks that run before anything does (resolve, check, mut,
-;            infer)
+;   sema/    the checks that run before anything does (resolve, mut, infer,
+;            exhaust)
 ;   core/    what every pass shares: identities (paths), canonical types,
 ;            interfaces, and the prelude
 ;   eval/    the interpreter and the values it computes

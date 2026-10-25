@@ -62,9 +62,19 @@ type state = {
   hints : (int, string) Hashtbl.t;
       (** the names of type parameters, remembered so `ren types` can print `T`
           for a variable that came from `fn id<T>` *)
+  skolem_vars : (int, ty) Hashtbl.t;
+      (** the generic variable each type parameter became when its function was
+          generalized, by the parameter's id *)
 }
 
-let new_state () = { level = 1; last_id = 0; hints = Hashtbl.create 16 }
+let new_state () =
+  {
+    level = 1;
+    last_id = 0;
+    hints = Hashtbl.create 16;
+    skolem_vars = Hashtbl.create 16;
+  }
+
 let enter_level st = st.level <- st.level + 1
 let leave_level st = st.level <- st.level - 1
 
@@ -137,6 +147,7 @@ let generalize st ~skolems t =
                   Hashtbl.replace st.hints vid name
               | _ -> ());
               Hashtbl.add table id v;
+              Hashtbl.replace st.skolem_vars id v;
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
@@ -186,56 +197,82 @@ let instantiate st t =
 
 (* ---- canonical types ---- *)
 
-(* A type scheme in canonical form (ty.ml): every generic variable numbered
-   by where it first appears. A variable inference never solved, outside
-   any scheme, can only come from code with an error, so it becomes
-   [Error]. *)
+(* Converting to canonical form (ty.ml) numbers every variable by where it
+   first appears. A [canon] holds that numbering, so everything converted
+   with one shares it: a function's scheme first, then the types of the
+   expressions in its body, so a variable is the same [Var n] in both. *)
+type canon = {
+  cst : state;
+  tys : (int, int) Hashtbl.t;  (** variable id -> its number *)
+  rows : (int, int) Hashtbl.t;  (** row variable id -> its number *)
+  mutable names : (int * string) list;
+      (** the declared names of the numbered variables *)
+}
+
+let canon st =
+  { cst = st; tys = Hashtbl.create 8; rows = Hashtbl.create 8; names = [] }
+
+let number table id =
+  match Hashtbl.find_opt table id with
+  | Some n -> n
+  | None ->
+      let n = Hashtbl.length table in
+      Hashtbl.add table id n;
+      n
+
+(* [t] in canonical form. A scheme ([all = false]) numbers only its generic
+   variables: one inference never solved, outside any scheme, can only come
+   from code with an error, so it becomes [Error], and a row whose tail
+   isn't generic is exactly its labels. Inside a function's body
+   ([all = true]) a variable nothing constrained is still a variable, like
+   the parameter of a lambda that's never used. A type parameter is the
+   variable it became when its function was generalized. *)
+let rec canon_ty c ~all t : Ty.ty =
+  match repr t with
+  | TVar { contents = Unbound (id, l) } when all || l = generic_level ->
+      let n = number c.tys id in
+      (match Hashtbl.find_opt c.cst.hints id with
+      | Some h when not (List.mem_assoc n c.names) ->
+          c.names <- (n, h) :: c.names
+      | _ -> ());
+      Var n
+  | TSkol (id, _) -> (
+      match Hashtbl.find_opt c.cst.skolem_vars id with
+      | Some v -> canon_ty c ~all v
+      | None -> Error)
+  | TVar _ | TError -> Error
+  | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
+  | TFun (ps, r, e, u) ->
+      (* `let`s fix the order of first appearance: OCaml evaluates a
+         constructor's arguments right to left *)
+      let ps =
+        List.map (fun p -> { Ty.mode = p.mode; ty = canon_ty c ~all p.ty }) ps
+      in
+      let r = canon_ty c ~all r in
+      let e = canon_row c ~all e in
+      let u = canon_row c ~all u in
+      Fun (ps, r, e, u)
+
+and canon_row c ~all r : Ty.row =
+  (* only a generic tail stands for "and possibly more", in a scheme *)
+  let rec tail r =
+    match repr_row r with
+    | RVar { contents = RUnbound (id, l) } ->
+        if all || l = generic_level then Some (number c.rows id) else None
+    | RExtend (_, rest) -> tail rest
+    | REmpty -> None
+    | RVar { contents = RLink _ } -> assert false
+  in
+  { labels = List.sort_uniq String.compare (fst (row_parts r)); tail = tail r }
+
+(* What [canon] has numbered so far, as a scheme's [names]. *)
+let canon_names c = List.sort compare c.names
+
+(* A type scheme in canonical form, numbered on its own. *)
 let to_scheme st t : Ty.scheme =
-  let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
-  let number table id =
-    match Hashtbl.find_opt table id with
-    | Some n -> n
-    | None ->
-        let n = Hashtbl.length table in
-        Hashtbl.add table id n;
-        n
-  in
-  let names = ref [] in
-  let rec go t : Ty.ty =
-    match repr t with
-    | TVar { contents = Unbound (id, l) } when l = generic_level ->
-        let n = number tys id in
-        (match Hashtbl.find_opt st.hints id with
-        | Some h when not (List.mem_assoc n !names) -> names := (n, h) :: !names
-        | _ -> ());
-        Var n
-    | TVar _ | TSkol _ | TError -> Error
-    | TCon (p, args) -> Con (p, List.map go args)
-    | TFun (ps, r, e, u) ->
-        (* `let`s fix the order of first appearance: OCaml evaluates a
-           constructor's arguments right to left *)
-        let ps = List.map (fun p -> { Ty.mode = p.mode; ty = go p.ty }) ps in
-        let r = go r in
-        let e = row e in
-        let u = row u in
-        Fun (ps, r, e, u)
-  and row r : Ty.row =
-    (* only a generic tail stands for "and possibly more" *)
-    let rec tail r =
-      match repr_row r with
-      | RVar { contents = RUnbound (id, l) } ->
-          if l = generic_level then Some (number rows id) else None
-      | RExtend (_, rest) -> tail rest
-      | REmpty -> None
-      | RVar { contents = RLink _ } -> assert false
-    in
-    {
-      labels = List.sort_uniq String.compare (fst (row_parts r));
-      tail = tail r;
-    }
-  in
-  let ty = go t in
-  { ty; names = List.sort compare !names }
+  let c = canon st in
+  let ty = canon_ty c ~all:false t in
+  { ty; names = canon_names c }
 
 (* A canonical type from an interface, with [vars] standing for its
    variables and [tails] for its row variables. *)

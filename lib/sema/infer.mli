@@ -1,13 +1,34 @@
-(* Type inference (see infer.ml). Returns each function's type scheme, in
-   canonical form (ty.ml), in source order. Every type error is reported to
-   the sink, and the schemes mean nothing if there were any.
+(* Type inference (see infer.ml). Every type error is reported to the sink,
+   and what it returns means nothing if there were any.
 
    [imports] are the interfaces the module sees (iface.ml). [entry], when
    given, is the file of the module the program starts in, which has to
    have a `main`. *)
+
+(* What a lookup through a type found. *)
+type found =
+  | Field_of of Path.t  (** a field access: the record type the field is in *)
+  | Ctor_of of Path.t * string
+      (** a constructor, in an expression or a pattern: its type, and its name
+      *)
+
+(* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
+   that takes a module (here [Int], which says how to compare keys) and
+   returns one, a map with that kind of key. Unlike a hash table, a map's
+   order is fixed by its keys. *)
+module Nodes : Map.S with type key = int
+
+(* An expression or pattern: its type, and what a lookup found there. *)
+type node = { ty : Ty.ty; found : found option }
+
+(* What inference found, in canonical form (ty.ml). A function's scheme and
+   its nodes' types number their variables together. *)
+type t = {
+  schemes : (string * Ty.scheme) list;
+      (** each function's type scheme, in source order *)
+  nodes : (string * node Nodes.t) list;
+      (** each function's expressions and patterns, by node id *)
+}
+
 val program :
-  Diag.sink ->
-  imports:Iface.t list ->
-  ?entry:string ->
-  Resolve.t ->
-  (string * Ty.scheme) list
+  Diag.sink -> imports:Iface.t list -> ?entry:string -> Resolve.t -> t
