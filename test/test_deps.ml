@@ -2767,10 +2767,6 @@ handler change(inout n: Int) for A =
   x() => n
   y() => n
 
-handler itself() for A =
-  x() => A.y()
-  y() => 2
-
 fn main() = 1
 |};
   [%expect
@@ -2828,13 +2824,6 @@ fn main() = 1
        │                      ^
        = calling a handler describes it, and each `with` that installs it keeps its parameters, so there's nothing to write back
        help: remove the `inout`
-
-    error: a handler for `A` can't call `A.y`
-       ┌─ test.ren:41:10
-    41 │   x() => A.y()
-       │          ^^^
-       = a handler's operations run with what's installed outside its `with`, but calling the next `A` out from inside a handler for it comes with `outer` (stage 9)
-       help: call it outside the handler, or implement `A` with a record of functions instead
     |}]
 
 let%expect_test "a lambda in an arm can't change the handler's state" =
@@ -3052,6 +3041,8 @@ fn passed() -> Int = run(counter())
 
 pub fn make() = counter()
 
+pub fn maybe() = Some(counter())
+
 fn main() uses Console = with counter in print(N.next())
 |};
   [%expect
@@ -3070,10 +3061,286 @@ fn main() uses Console = with counter in print(N.next())
        = a public function without `->` returns `Unit`
        help: a handler's type can't be written yet, so a public function can't return `counter`: make `make` private, so its type is inferred
 
+    error: expected `Unit`, found `Option<counter>`
+       ┌─ test.ren:16:18
+    16 │ pub fn maybe() = Some(counter())
+       │                  ^^^^^^^^^^^^^^^
+       = a public function without `->` returns `Unit`
+       help: a handler's type can't be written yet, so a public function can't return `Option<counter>`, which holds `counter`: make `maybe` private, so its type is inferred
+
     error: `with` installs an implementation, but this is a `fn() -> counter`
-       ┌─ test.ren:16:31
-    16 │ fn main() uses Console = with counter in print(N.next())
+       ┌─ test.ren:18:31
+    18 │ fn main() uses Console = with counter in print(N.next())
        │                               ^^^^^^^
        = `with` installs an implementation, and `counter` makes one when it's called
        help: call it: `with counter() in ...`
+    |}]
+
+let%expect_test "a handler can be installed by its own group" =
+  (* its type is known before its body is checked, so a function it calls,
+     or one of its own arms, can install it *)
+  let src =
+    {|
+dep N =
+  get: fn(d: Int) -> Int
+
+fn use_it(k: Int) -> Int = if k > 3 then k else with h(k) in N.get(0)
+
+handler h(k: Int) for N =
+  get(d) => use_it(k + 1)
+
+fn via(d: Int) uses N = N.get(d)
+
+handler deeper(k: Int) for N =
+  get(d) => if k > 6 then k else with deeper(k + 1) in via(d)
+
+fn main() uses Console =
+  print(use_it(0))
+  print(with deeper(0) in N.get(0))
+|}
+  in
+  types src;
+  [%expect
+    {|
+    dep N
+      get: fn(Int) -> Int
+    fn use_it(k: Int) -> Int
+    handler h(k: Int) for N
+    fn via(d: Int) -> Int uses N
+    handler deeper(k: Int) for N
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    4
+    7
+    ()
+    |}]
+
+let%expect_test
+    "a handler can't use what it implements, even through a function" =
+  types
+    {|
+dep N =
+  next: fn() -> Int
+
+fn via() uses N = N.next()
+
+handler through() for N =
+  next() => via()
+
+handler direct() for N uses Console =
+  next() => N.next()
+
+handler declared() for N uses N =
+  next() => 1
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: a handler for `N` can't use `N`
+      ┌─ test.ren:7:13
+    6 │ handler through() for N =
+      │         ------- `through` implements `N`
+    7 │   next() => via()
+      │             ^^^^^ this call uses `N`
+      = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+      help: call it outside the handler, install an implementation of `N` around the call with `with`, or implement `N` with a record of functions instead
+
+    error: a handler for `N` can't use `N`
+       ┌─ test.ren:10:13
+     9 │ handler direct() for N uses Console =
+       │         ------ `direct` implements `N`
+    10 │   next() => N.next()
+       │             ^^^^^^^^ this call uses `N`
+       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+       help: call it outside the handler, install an implementation of `N` around the call with `with`, or implement `N` with a record of functions instead
+
+    error: a handler for `N` can't use `N`
+       ┌─ test.ren:12:9
+    12 │ handler declared() for N uses N =
+       │         ^^^^^^^^
+       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+       help: remove `N` from its `uses`
+    |}]
+
+let%expect_test "an implementation passes on a parameter's errors" =
+  (* what a lambda of an implementation fails with is its own until the
+     group is done, so a parameter it passes on with `try` can fail with
+     what the operation can *)
+  let src =
+    {|
+dep N =
+  get: fn() -> Int ! Low
+
+handler h(f) for N =
+  get() => try f()
+
+fn mk(f) -> N = N { get: fn() => try f() }
+
+fn low() -> Int ! Low = fail Low
+
+fn one() -> Int = 1
+
+fn main() uses Console =
+  print(with h(low) in attempt N.get())
+  print(with mk(low) in attempt N.get())
+  print(with h(one) in attempt N.get())
+|}
+  in
+  types src;
+  [%expect
+    {|
+    dep N
+      get: fn() -> Int ! Low
+    handler h(f: fn() -> Int ! Low uses ..d) for N uses ..d
+    fn mk(f: fn() -> Int ! Low) -> N
+    fn low() -> Int ! Low
+    fn one() -> Int
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    Err(Low)
+    Err(Low)
+    Ok(1)
+    ()
+    |}];
+  types
+    {|
+dep N =
+  get: fn() -> Int ! Low(Int)
+
+fn kept(g: fn() -> Int ! ..e uses ..d) -> (N uses ..d) =
+  N { get: fn() => try g() }
+
+handler shape() for N =
+  get() => fail Low
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: this implementation can fail with anything `..e` stands for, and `N.get` can't
+      ┌─ test.ren:5:12
+    5 │   N { get: fn() => try g() }
+      │            ^^^^^^^^^^^^^^^
+      = `N.get` can fail only with `Low`
+      help: handle what it passes on inside it, with `match` and `fail` arms
+
+    error: this implementation fails with a different `Low`
+      ┌─ test.ren:8:12
+    8 │   get() => fail Low
+      │            ^^^^^^^^
+      = `N.get` declares `Low`'s payload as `Low(Int)`
+      help: fail with `Low` as the operation declares it
+    |}]
+
+let%expect_test "what a handler can't do, said as a handler's" =
+  types
+    {|
+dep N =
+  get: fn() -> Int
+
+dep M =
+  m: fn() -> Int
+
+handler bump(k: Int) for N =
+  get() =>
+    k += 1
+    k
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `k` is a handler's parameter, so it can't be changed
+      ┌─ test.ren:9:5
+    9 │     k += 1
+      │     ^
+      = each `with` that installs a handler keeps its parameters, as they were when it was called
+      help: keep a copy in its state, `var k = k`, which its arms can change
+    |}];
+  run
+    {|
+dep N =
+  get: fn() -> Int
+
+handler bump(k: Int) for N =
+  var k = k
+  get() =>
+    k += 1
+    k
+
+fn main() uses Console =
+  with bump(1) in
+    print(N.get())
+    print(N.get())
+|};
+  [%expect {|
+    2
+    3
+    ()
+    |}];
+  types
+    {|
+dep N =
+  get: fn() -> Int
+
+dep M =
+  m: fn() -> Int
+
+handler keeps(n: N) for M =
+  m() => with n in N.get()
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `n` is kept by the handler, whose operations run where a `with` installs it, so it isn't transparent
+      ┌─ test.ren:8:15
+    8 │   m() => with n in N.get()
+      │               ^
+      = a parameter whose type is a dependency's, `N`, can only be installed, with `with`, or passed straight to another function, so what it needs is what its function uses
+      help: to keep it, name what it needs, `n: N uses ..d`, and say the handler needs that: `for M uses ..d`
+    |}];
+  types
+    {|
+dep N =
+  get: fn() -> Int
+
+handler dup() for N =
+  get() => 1
+
+fn dup() = 2
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: a handler and a function are both named `dup`
+      ┌─ test.ren:7:4
+    4 │ handler dup() for N =
+      │         --- the handler `dup` is here
+    7 │ fn dup() = 2
+      │    ^^^
+      help: rename one of them
+    |}];
+  types
+    {|
+dep N =
+  get: fn() -> Int
+
+handler poly<T>(x: T) for N =
+  get() => 1
+|};
+  [%expect
+    {|
+    error: a handler can't take type parameters
+      ┌─ test.ren:4:13
+    4 │ handler poly<T>(x: T) for N =
+      │             ^
+      = a handler's operations have the types its dependencies declare, which can't take type parameters either
+      help: remove them
     |}]

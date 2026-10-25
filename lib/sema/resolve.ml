@@ -175,9 +175,6 @@ type scope = {
   rows : named;
       (** the rows the function's signature names, `..d` (see [rows]) *)
   depth : int;  (** how many lambdas deep *)
-  handling : Path.t list;
-      (** the dependencies of the handler being resolved, whose operations it
-          can't call: the next implementation out is `outer`'s (stage 9) *)
   fn : fn_state;
 }
 
@@ -736,26 +733,9 @@ let item env sc (t : tyname) (f : ident) =
       match List.assoc_opt f.name items with
       | _ when List.mem f.name ops ->
           (* `Clock.now`: an operation, which calls the implementation
-             installed where it's called; resolve.ml reports one that's
-             also a member's name *)
-          if List.mem p sc.handling then
-            report env
-              (Loc.span (tyname_loc t) f.loc)
-              ~notes:
-                [
-                  sprintf
-                    "a handler's operations run with what's installed outside \
-                     its `with`, but calling the next `%s` out from inside a \
-                     handler for it comes with `outer` (stage 9)"
-                    shown;
-                ]
-              ~help:
-                (sprintf
-                   "call it outside the handler, or implement `%s` with a \
-                    record of functions instead"
-                   shown)
-              (sprintf "a handler for `%s` can't call `%s.%s`" shown shown
-                 f.name);
+             installed where it's called (one a handler calls of what it
+             implements is reported by infer_top.ml); resolve.ml reports
+             one that's also a member's name *)
           Dep_op (p, f.name)
       | Some _
         when p.home = Path.prelude_home && Prelude.find_fn path.name <> None ->
@@ -1205,7 +1185,6 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
             | _ -> None)
           deps
       in
-      let sc = { sc with handling = List.map fst deps } in
       let state, sc = block_stmts env sc state in
       let ops (p : Path.t) = Option.value (dep_ops env p) ~default:[] in
       let shown (p : Path.t) = sprintf "`%s`" p.name in
@@ -1477,7 +1456,6 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       tparams = List.map (fun (t : ident) -> t.name) tparams;
       rows = [];
       depth = 0;
-      handling = [];
       fn = { last_id = 0; calls = []; dots = []; typed = [] };
     }
   in
@@ -2124,8 +2102,27 @@ let program sink ~home ~imports (prog : Parsed.program) =
       (function Fn (f : Parsed.fn_def) -> Some f | Type _ | Import _ -> None)
       prog
   in
-  no_duplicates env "functions"
-    (List.map (fun (f : Parsed.fn_def) -> f.name) fns);
+  (* a handler is a function of its parameters, so it shares their names *)
+  let seen = Hashtbl.create 16 in
+  let what (f : Parsed.fn_def) =
+    if Ast.is_handler f then "handler" else "function"
+  in
+  List.iter
+    (fun (f : Parsed.fn_def) ->
+      let id = f.name in
+      match Hashtbl.find_opt seen id.name with
+      | Some (first, w) ->
+          report env id.loc ~help:"rename one of them"
+            ~labels:
+              [
+                ( first,
+                  if w = what f then sprintf "the first `%s` is here" id.name
+                  else sprintf "the %s `%s` is here" w id.name );
+              ]
+            (if w = what f then sprintf "there are two %ss named `%s`" w id.name
+             else sprintf "a %s and a %s are both named `%s`" w (what f) id.name)
+      | None -> Hashtbl.replace seen id.name (id.loc, what f))
+    fns;
   List.iter
     (fun (f : Parsed.fn_def) ->
       if Hashtbl.mem env.values f.name.name then

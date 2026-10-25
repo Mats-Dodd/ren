@@ -59,6 +59,7 @@ type ctx = {
   sink : Diag.sink;
   source : expr -> string option;
       (** code as it's written, for messages (Ast.source) *)
+  in_handler : bool;  (** inside a handler's body, whose parameters it keeps *)
 }
 
 (* Run a check; if it finds a problem, report it and carry on. *)
@@ -162,6 +163,19 @@ let writable cx (e : expr) ~what
   | Some ({ root = Local b; _ } as p) -> (
       let x = b.ident.name in
       match kind b with
+      | Fixed _ when b.bound = By_param && cx.in_handler ->
+          Diag.error p.rloc
+            ~notes:
+              [
+                "each `with` that installs a handler keeps its parameters, as \
+                 they were when it was called";
+              ]
+            ~help:
+              (sprintf
+                 "keep a copy in its state, `var %s = %s`, which its arms can \
+                  change"
+                 x x)
+            (sprintf "`%s` is a handler's parameter, so it can't be changed" x)
       | Fixed (is, help) ->
           Diag.error p.rloc ~help
             (sprintf "`%s` is %s, so it can't be changed" x is)
@@ -269,6 +283,7 @@ let rec walk cx (e : expr) =
       no_inout cx ps;
       walk { cx with depth = cx.depth + 1 } body
   | Handler { state; arms; _ } ->
+      let cx = { cx with in_handler = true } in
       List.iter
         (function Let { value; _ } -> walk cx value | Expr e -> walk cx e)
         state;
@@ -407,5 +422,6 @@ let program sink (r : Resolve.t) =
       ~value_name:(Resolve.value_name r)
   in
   List.iter
-    (fun (f : fn_def) -> walk { depth = 0; locks = []; sink; source } f.body)
+    (fun (f : fn_def) ->
+      walk { depth = 0; locks = []; sink; source; in_handler = false } f.body)
     (Ast.functions r.prog)

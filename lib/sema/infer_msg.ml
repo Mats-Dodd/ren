@@ -446,6 +446,36 @@ let undeclared_need ~written (f : Ast.Resolved.fn_def) dep call =
        else sprintf "add `uses %s` after what it implements" dep)
     (sprintf "the handler `%s` doesn't declare that it needs `%s`" name dep)
 
+(* The handler [f] uses [dep], one it implements, at [call]: in its arms
+   that would be the next implementation out, which is `outer`'s. *)
+let handler_uses_itself (f : Ast.Resolved.fn_def) dep call =
+  Diag.make
+    (match call with Some (l, _) -> l | None -> f.name.loc)
+    ?says:(Option.map (fun (_, what) -> sprintf "%s `%s`" what dep) call)
+    ~labels:
+      (match call with
+      | Some _ ->
+          [ (f.name.loc, sprintf "`%s` implements `%s`" f.name.name dep) ]
+      | None -> [])
+    ~notes:
+      [
+        sprintf
+          "a handler's operations run with what's installed outside its \
+           `with`, so `%s` here would be the next `%s` out, which comes with \
+           `outer` (stage 9)"
+          dep dep;
+      ]
+    ~help:
+      (match call with
+      | Some _ ->
+          sprintf
+            "call it outside the handler, install an implementation of `%s` \
+             around the call with `with`, or implement `%s` with a record of \
+             functions instead"
+            dep dep
+      | None -> sprintf "remove `%s` from its `uses`" dep)
+    (sprintf "a handler for `%s` can't use `%s`" dep dep)
+
 (* ---- methods ----
 
    [recv] is the receiver as it's written, `s` in `s.push(1)`, if it can be

@@ -1363,6 +1363,11 @@ let parse_handler p ~pub =
   let name = ident p in
   if peek p = LT then
     Diag.error (loc p) ~help:"remove them"
+      ~notes:
+        [
+          "a handler's operations have the types its dependencies declare, \
+           which can't take type parameters either";
+        ]
       "a handler can't take type parameters";
   if peek p <> LPAREN then
     Diag.error (loc p)

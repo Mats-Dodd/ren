@@ -109,7 +109,8 @@ type env = {
   mutable installs : install list;
       (** the group's `with`s that install, innermost first (see [install]) *)
   mutable handler_needs : handler_needs list;
-      (** the group's handlers whose needs are written (see [handler_needs]) *)
+      (** the group's handlers, whose needs are checked once it's done (see
+          [handler_needs]) *)
   mutable withheld : withheld list;
       (** the module's functions that call a closure in a `with` that doesn't
           install what the closure uses (see [withheld]) *)
@@ -179,14 +180,16 @@ and install = {
   wself : Path.t;  (** the function the `with` is in *)
 }
 
-(* A handler whose needs are written, `for N uses Console`, or a public
-   one, which needs nothing if it says nothing: [nrow] is what its state
-   and arms use, which has to be no more than [ndeclared], and [ncalls]
-   the calls that add to it. It's checked once the group is done, as a
-   function's `uses` is (infer_top.ml), and then closed. *)
+(* A handler: [nrow] is what its state and arms use, and [ncalls] the
+   calls that add to it. That can't be a dependency it implements itself
+   (the next one out is `outer`'s, stage 9). If its needs are written,
+   `for N uses Console`, or it's public, which needs nothing if it says
+   nothing, they're [ndeclared], and [nrow] has to be no more than that.
+   It's checked once the group is done, as a function's `uses` is
+   (infer_top.ml), and then a written row is closed. *)
 and handler_needs = {
   nself : Path.t;
-  ndeclared : string list;
+  ndeclared : string list option;
   nrow : row;
   ncalls : call list ref;
 }
@@ -1441,15 +1444,8 @@ and check env cx ?(why = plain) (e : expr) expected =
       fits ();
       let labels = fst (row_parts declared) in
       let needs = extend labels (fresh_row env.st) in
-      let calls = handler env cx state arms ~needs in
-      env.handler_needs <-
-        {
-          nself = cx.self;
-          ndeclared = List.map (fun (l : label) -> l.name) labels;
-          nrow = needs;
-          ncalls = calls;
-        }
-        :: env.handler_needs
+      handler env cx state arms ~needs
+        ~declared:(Some (List.map (fun (l : label) -> l.name) labels))
   | Array xs, TCon (p, [ elem ]) when p = Path.prelude "Array" ->
       fits ();
       List.iter
@@ -1700,7 +1696,7 @@ and synth env cx (e : expr) : ty =
   | With { item; body; lam } -> with_ env cx e item body lam
   | Handler { state; arms; _ } ->
       let needs = fresh_row env.st in
-      ignore (handler env cx state arms ~needs);
+      handler env cx state arms ~needs ~declared:None;
       TCon (cx.self, [ TUses needs ])
 
 (* A handler's body (ast.ml, [Handler]), the body of its function,
@@ -1710,9 +1706,10 @@ and synth env cx (e : expr) : ty =
    uses nothing. Its state is made when it's installed, which can't fail.
    Each arm is checked as an implementation's operation is ([infer_record]):
    it uses what the handler needs, and can fail with fewer errors than
-   its operation declares, never more. What it gives is the calls that
-   add to [needs]. *)
-and handler env cx state arms ~needs =
+   its operation declares, never more. What it needs is checked once the
+   group is done, against what's [declared], if anything is (see
+   [handler_needs]). *)
+and handler env cx state arms ~needs ~declared =
   let hcx = lambda_cx cx [] [] ~errs:REmpty ~uses:needs in
   env.cant_fail <-
     Some
@@ -1736,7 +1733,10 @@ and handler env cx state arms ~needs =
       | Some (p, op, ps, r, errs), Lambda (params, body)
         when List.length params = List.length ps ->
           let declared = fst (row_parts errs) in
-          let open_errs = extend declared (fresh_row env.st) in
+          (* what it fails with, which is its own until the group is done:
+             one of its parameters' errors passed on with `try` ends in
+             it, and then can fail with what the operation can *)
+          let open_errs = fresh_row env.st in
           env.impl_ops <-
             {
               idep = p;
@@ -1791,7 +1791,9 @@ and handler env cx state arms ~needs =
           ignore (infer env hcx a.arm_impl)
       | _ -> ignore (infer env hcx a.arm_impl))
     arms;
-  hcx.calls
+  env.handler_needs <-
+    { nself = cx.self; ndeclared = declared; nrow = needs; ncalls = hcx.calls }
+    :: env.handler_needs
 
 (* `with item in body` (deps.md, "`with`"), the expression [e]. A call
    whose callee takes one more argument than it's given is a wrapper,
@@ -1944,12 +1946,16 @@ and install env cx (e : expr) item t body =
              parameter is the body";
           ]
         ~help:
-          (if is_var then
-             sprintf "say what it is where it's declared, like `%s: Clock`"
-               (Option.value (env.source item) ~default:"c")
-           else
-             "give it an implementation, like `Clock.frozen(t)`, or a \
-              wrapper's call without its last argument, like `retry(3)`")
+          (match item.kind with
+          | Var (Local b) when is_var ->
+              sprintf "say what it is where it's declared, like `%s: Clock`"
+                b.ident.name
+          | _ when is_var ->
+              "install something whose type is known here, like \
+               `Clock.frozen(t)`, or a handler's call"
+          | _ ->
+              "give it an implementation, like `Clock.frozen(t)`, or a \
+               wrapper's call without its last argument, like `retry(3)`")
         (if is_var then
            "`with` can't tell what this installs: its type isn't known here"
          else
@@ -2563,7 +2569,15 @@ and infer_record env cx (e : expr) name fields ~expected =
                        can fail with less than it's declared to: what more
                        it fails with is reported once the group is done *)
                     let declared = fst (row_parts errs) in
-                    let open_errs = extend declared (fresh_row env.st) in
+                    (* a lambda's is its own until the group is done (see
+                       [handler]); a function given by name fails with
+                       what it does, which is checked against the
+                       operation here *)
+                    let open_errs =
+                      match v.kind with
+                      | Lambda _ -> fresh_row env.st
+                      | _ -> extend declared (fresh_row env.st)
+                    in
                     env.impl_ops <-
                       {
                         idep = td.path;

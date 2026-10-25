@@ -117,8 +117,24 @@ let check_transparent sink (f : fn_def) =
                     d.name;
                 ]
               ~help:
-                (sprintf "to keep it, name what it needs: `%s: %s uses ..d`"
-                   name d.name)
+                (match f.body.kind with
+                | Handler { deps; _ } ->
+                    (* what it needs, the handler needs where it's
+                       installed *)
+                    sprintf
+                      "to keep it, name what it needs, `%s: %s uses ..d`, and \
+                       say the handler needs that: `for %s uses ..d`"
+                      name d.name
+                      (String.concat ", "
+                         (List.filter_map
+                            (fun (d : tname) ->
+                              match d.tref with
+                              | Named p -> Some p.name
+                              | _ -> None)
+                            deps))
+                | _ ->
+                    sprintf "to keep it, name what it needs: `%s: %s uses ..d`"
+                      name d.name)
               (sprintf "`%s` %s, so it isn't transparent" name what)
       in
       let is_param = function Local b -> b.id = param.id | _ -> false in
@@ -217,7 +233,23 @@ let check_transparent sink (f : fn_def) =
                 | Let { value; _ } -> walk ~ok:false value
                 | Expr e -> walk ~ok:false e)
               state;
-            List.iter (fun (a : handler_arm) -> walk ~ok:false a.arm_impl) arms
+            List.iter
+              (fun (a : handler_arm) ->
+                match a.arm_impl.kind with
+                | Lambda (_, body) when mentions body ->
+                    (* an arm keeps it as a lambda would, but there's no
+                       lambda written: point at where the arm uses it *)
+                    let rec use (e : expr) =
+                      match e.kind with
+                      | Var x when is_param x -> Some e.loc
+                      | _ -> List.find_map use (Ast.children e)
+                    in
+                    fail
+                      (Option.value (use body) ~default:a.arm_impl.loc)
+                      "is kept by the handler, whose operations run where a \
+                       `with` installs it"
+                | _ -> walk ~ok:false a.arm_impl)
+              arms
       in
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
     params
@@ -499,36 +531,47 @@ let check_uses env ~is_value ~main (f : fn_def) cx declared =
            else undeclared_use ~why f dep call))
     (List.sort_uniq String.compare (row_names cx.uses))
 
-(* What the handler [f] needs, [n], is only what its `uses` lists, as for
-   a function's own ([check_uses]); then it's closed, to be exactly that. *)
+(* What the handler [f] needs, [n]: never a dependency it implements,
+   and, if its needs are written (or it's public), only what its `uses`
+   lists, as for a function's own ([check_uses]); then that row is
+   closed, to be exactly that. *)
 let check_needs env (f : fn_def) n =
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let calls =
     List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(n.ncalls)
+  in
+  (* the first call that brings in [dep], and what to say about it *)
+  let call_of dep =
+    let call =
+      match List.find_opt (fun c -> List.mem dep c.own) calls with
+      | Some c -> Some c
+      | None -> List.find_opt (fun c -> List.mem dep (row_names c.row)) calls
+    in
+    Option.map
+      (fun c ->
+        (c.cloc, if c.needs then "installing this needs" else "this call uses"))
+      call
+  in
+  let own =
+    match Hashtbl.find_opt env.types n.nself with
+    | Some { body = Handler deps; _ } -> List.map Ty.dep_label deps
+    | _ -> []
   in
   let written =
     match f.body.kind with Handler { needs; _ } -> needs <> None | _ -> false
   in
   List.iter
     (fun dep ->
-      if not (List.mem dep n.ndeclared) then
-        let call =
-          match List.find_opt (fun c -> List.mem dep c.own) calls with
-          | Some c -> Some c
-          | None ->
-              List.find_opt (fun c -> List.mem dep (row_names c.row)) calls
-        in
-        let call =
-          Option.map
-            (fun c ->
-              ( c.cloc,
-                if c.needs then "installing this needs" else "this call uses" ))
-            call
-        in
-        report env
-          (undeclared_need ~written f (env.names (Ty.dep_path dep)) call))
+      let shown = env.names (Ty.dep_path dep) in
+      if List.mem dep own then
+        report env (handler_uses_itself f shown (call_of dep))
+      else
+        match n.ndeclared with
+        | Some declared when not (List.mem dep declared) ->
+            report env (undeclared_need ~written f shown (call_of dep))
+        | _ -> ())
     (List.sort_uniq String.compare (row_names n.nrow));
-  close_row n.nrow
+  if n.ndeclared <> None then close_row n.nrow
 
 (* ---- what a function fails with (errors.md) ---- *)
 
@@ -1304,6 +1347,58 @@ let settle_impls env =
                ~help
                (sprintf "this implementation can fail with %s, and `%s` can't"
                   shown op)));
+      (* then it's what the operation declares, whose errors' payloads it
+         has to agree with, and no more. A row still open may be a
+         parameter's, `try f()`, which then can fail with what the
+         operation can, not with nothing. *)
+      (try Unify.unify_row env.st o.ierrs (extend o.ideclared REmpty) with
+      | Unify.Two_shapes name ->
+          (* the `fail` of it, if it's one *)
+          let rec at (e : expr) =
+            match e.kind with
+            | Fail (t, _) when t.name = name -> Some e.loc
+            | (Lambda _ | Attempt _) when e != o.ivalue -> None
+            | _ -> List.find_map at (Ast.children e)
+          in
+          report env
+            (Diag.make
+               (Option.value (at o.ivalue) ~default:o.ivalue.loc)
+               ~notes:
+                 [
+                   sprintf "`%s.%s` declares `%s`'s payload as `%s`"
+                     (env.names o.idep) o.iop name
+                     (show_label pr
+                        (List.find
+                           (fun (l : label) -> l.name = name)
+                           o.ideclared));
+                 ]
+               ~help:
+                 (sprintf "fail with `%s` as the operation declares it" name)
+               (sprintf "this implementation fails with a different `%s`" name))
+      | Unify.Mismatch | Unify.Infinite -> (
+          match row_skolem o.ierrs with
+          | Some (_, n) ->
+              report env
+                (Diag.make o.ivalue.loc
+                   ~notes:
+                     [
+                       (match o.ideclared with
+                       | [] ->
+                           sprintf "`%s.%s` can't fail" (env.names o.idep) o.iop
+                       | ds ->
+                           sprintf "`%s.%s` can fail only with %s"
+                             (env.names o.idep) o.iop
+                             (and_list
+                                (List.map (fun (l : label) -> l.name) ds)));
+                     ]
+                   ~help:
+                     "handle what it passes on inside it, with `match` and \
+                      `fail` arms"
+                   (sprintf
+                      "this implementation can fail with anything `..%s` \
+                       stands for, and `%s.%s` can't"
+                      n (env.names o.idep) o.iop))
+          | None -> ()));
       close_row o.ierrs)
     (List.rev env.impl_ops);
   env.impl_ops <- []
@@ -1749,6 +1844,12 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             | Some t -> convert env ~tvars:tparams ~named ~row:closed t
             | None when f.pub && not (is_value f) ->
                 unit (* a public function without `->` returns Unit *)
+            | None when Ast.is_handler f ->
+                (* a handler whose needs aren't written: its type is its
+                   own, needing what its body works out, which is known
+                   before its body is checked, so the group's other
+                   functions, and its own arms, can install it *)
+                TCon (path f, [ TUses (fresh_row env.st) ])
             | None -> fresh_var env.st
           in
           (ps, ret, errs, uses)
@@ -1811,31 +1912,53 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                   ~notes:[ "a public function without `->` returns `Unit`" ]
                   ~help:(fun found _ ->
                     (* a handler's type, `counting_rates uses Clock`, is
-                       named after it, and can't be written *)
-                    let head =
-                      match String.index_opt found ' ' with
-                      | Some i -> String.sub found 0 i
-                      | None -> found
+                       named after it, and can't be written: is one of the
+                       names in what's found a handler's? *)
+                    let ident c =
+                      c = '_' || c = '.'
+                      || (c >= 'a' && c <= 'z')
+                      || (c >= 'A' && c <= 'Z')
+                      || (c >= '0' && c <= '9')
                     in
-                    let handler (td : Iface.type_decl) =
-                      match td.body with
-                      | Handler _ -> type_name env td.path = head
-                      | _ -> false
+                    let words =
+                      String.split_on_char ' '
+                        (String.map (fun c -> if ident c then c else ' ') found)
                     in
-                    if
-                      List.exists handler
-                        (Hashtbl.to_seq_values env.types |> List.of_seq)
-                    then
-                      sprintf
-                        "a handler's type can't be written yet, so a public \
-                         function can't return `%s`: make `%s` private, so its \
-                         type is inferred"
-                        head f.name.name
-                    else sprintf "add `-> %s` to the signature" found)
+                    let handler =
+                      Hashtbl.to_seq_values env.types
+                      |> List.of_seq
+                      |> List.filter_map (fun (td : Iface.type_decl) ->
+                          match td.body with
+                          | Handler _
+                            when List.mem (type_name env td.path) words ->
+                              Some (type_name env td.path)
+                          | _ -> None)
+                      |> List.sort compare
+                      |> function
+                      | h :: _ -> Some h
+                      | [] -> None
+                    in
+                    match handler with
+                    | Some h ->
+                        sprintf
+                          "a handler's type can't be written yet, so a public \
+                           function can't return `%s`%s: make `%s` private, so \
+                           its type is inferred"
+                          found
+                          (if List.hd words = h then ""
+                           else sprintf ", which holds `%s`" h)
+                          f.name.name
+                    | None -> sprintf "add `-> %s` to the signature" found)
                   ()
             | None -> plain
           in
-          check env cx ~why f.body ret)
+          match (f.body.kind, ret) with
+          | Handler { state; arms; _ }, TCon (_, [ TUses needs ])
+            when f.ret = None ->
+              (* its needs are what its state and arms use *)
+              handler env cx state arms ~needs ~declared:None;
+              Hashtbl.replace cx.nodes f.body.node ret
+          | _ -> check env cx ~why f.body ret)
         setups;
       (* every use of a function by another of its group, joined with the
          type its own body gave it *)
