@@ -117,6 +117,10 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
 - `uses` after a dependency's name is what an implementation needs:
   `c: Clock uses Os`. After `->` a `uses` is the function's own, so a
   result writes it in parentheses: `-> (Clock uses Os)`.
+- In a type argument, a comma after a `uses` list ends the argument, so
+  `Pair<fn() uses Clock, Int>` has two; a named row can still follow,
+  `Box<fn() uses Clock, ..d>`, and several dependencies are written in
+  parentheses, `Box<(fn() uses Clock, Console)>`.
 - **Only a signature names a row.** Every `..d` in one signature is the
   same row, and the body can write it again, in a `let`'s type or a
   lambda's parameter. A function that declares its `uses` or `!` declares
@@ -135,7 +139,8 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 ```
 
 - Items are installed outermost first. The innermost implementation of a
-  dependency wins.
+  dependency wins. A line that ends in `,` goes on with the list on the
+  next, indented further.
 - `with` removes what it installs from the body's `uses`, and adds what its
   items need.
 - An item is an implementation, or a **wrapper**: a function whose last
@@ -358,6 +363,12 @@ stage, or settled something the plan left open:
   closures and implementations name their rows in record fields; a
   type takes them as a type parameter instead, `type Button<F> = {
   on_click: F }`, written `Button<fn() uses ..d>` in a signature.
+- **In a type argument, a `uses` list ends at a comma,** where elsewhere
+  in a type a comma goes on with it to anything that can be a dependency:
+  `Pair<fn() uses Clock, Int>` would otherwise need `Int` to be one. A
+  named row can still follow, since it can't be an argument, and several
+  dependencies are written in parentheses, `Box<(fn() uses Clock,
+  Console)>`, as `ren types` prints them.
 - **A wrapper's body can't change a variable from outside it.** It's a
   lambda, which captures values, so a change would be lost.
 - **The `with` around a wrapper is the wrapper call's `try`.** What the

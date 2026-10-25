@@ -91,3 +91,147 @@ fn f() =
         (match_arm
           (wildcard)
           (number))))))
+
+================================================================================
+a lambda's block inside brackets
+================================================================================
+
+fn main() =
+  let r = R { g: fn(x) =>
+      let y = x + 1
+      // a comment
+      y * 2
+  }
+  let n = apply(fn(x) =>
+      match x
+        1 => 10
+        _ => 20
+    , 1)
+  [fn(x) =>
+    if x then
+      1
+    else 2]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (record_expression
+          (type_name
+            (type_identifier))
+          (field_initializer
+            (identifier)
+            (lambda
+              (parameters
+                (parameter
+                  (identifier)))
+              (block
+                (let_statement
+                  (identifier)
+                  (binary_expression
+                    (identifier)
+                    (number)))
+                (comment)
+                (binary_expression
+                  (identifier)
+                  (number)))))))
+      (let_statement
+        (identifier)
+        (call_expression
+          (identifier)
+          (arguments
+            (lambda
+              (parameters
+                (parameter
+                  (identifier)))
+              (block
+                (match_expression
+                  (identifier)
+                  (match_arm
+                    (number)
+                    (number))
+                  (match_arm
+                    (wildcard)
+                    (number)))))
+            (number))))
+      (array_expression
+        (lambda
+          (parameters
+            (parameter
+              (identifier)))
+          (block
+            (if_expression
+              (identifier)
+              (block
+                (number))
+              (number))))))))
+
+================================================================================
+a lambda's body on the next line, not indented further
+================================================================================
+
+fn main() =
+  apply(fn(x) =>
+  x + 1, 2)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (call_expression
+        (identifier)
+        (arguments
+          (lambda
+            (parameters
+              (parameter
+                (identifier)))
+            (binary_expression
+              (identifier)
+              (number)))
+          (number))))))
+
+================================================================================
+a line ending in a comma goes on on the next
+================================================================================
+
+fn main() uses Clock,
+    Console =
+  with a(),
+      b(),
+    c() in
+    body()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (uses_clause
+      (dependency
+        (type_identifier))
+      (dependency
+        (type_identifier)))
+    (block
+      (with_expression
+        (call_expression
+          (identifier)
+          (arguments))
+        (call_expression
+          (identifier)
+          (arguments))
+        (call_expression
+          (identifier)
+          (arguments))
+        (block
+          (call_expression
+            (identifier)
+            (arguments)))))))

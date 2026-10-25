@@ -586,7 +586,14 @@ let show_ctor_ref (c : ctor_ref) =
 let rec show_ty : ty -> string = function
   | TyName (name, []) -> show_tyname name
   | TyName (name, args) ->
-      show_tyname name ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
+      (* in a type argument, a `uses` list ends at a comma, so one of
+         several dependencies is in parentheses *)
+      let arg = function
+        | TyFn (_, _, _, Some u, _) as t when List.length u.deps > 1 ->
+            "(" ^ show_ty t ^ ")"
+        | t -> show_ty t
+      in
+      show_tyname name ^ "<" ^ String.concat ", " (List.map arg args) ^ ">"
   | TyInout (t, _) -> "inout " ^ show_ty t
   | TyFn (params, ret, errs, uses, _) ->
       let ret = match ret with Some r -> " -> " ^ show_ty r | None -> "" in

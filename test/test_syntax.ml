@@ -148,6 +148,107 @@ fn main() = fn x => x
       help: functions are defined at the top level; a lambda is `fn(x) => ...`
     |}]
 
+(* Inside brackets, line breaks are ignored, except in a lambda's body:
+   a `=>` that ends the line opens a block, if the next line is indented
+   further than the block around the brackets. *)
+
+let%expect_test "a lambda's block inside brackets" =
+  tokens {|
+fn f() =
+  R { g: fn(x) =>
+      let y = x
+      y
+  }
+|};
+  [%expect
+    {| FN (IDENT "f") LPAREN RPAREN EQ INDENT (IDENT "R") LBRACE (IDENT "g") COLON FN LPAREN (IDENT "x") RPAREN FATARROW INDENT LET (IDENT "y") EQ (IDENT "x") NEWLINE (IDENT "y") DEDENT RBRACE DEDENT EOF |}];
+  (* in a record's field, a call's argument and an array's element; the
+     closing bracket closes the block too *)
+  ast
+    {|
+fn main() =
+  let r = R { g: fn(x) =>
+      let y = x + 1
+      y * 2
+  }
+  let n = apply(fn(x) =>
+      match x
+        1 => 10
+        _ => 20
+    , 1)
+  [fn(x) =>
+    if x then
+      1
+    else 2]
+|};
+  [%expect
+    {| (fn main () (block (let r (record R g=(lambda (x) (block (let y (+ x 1)) (* y 2))))) (let n (call apply (lambda (x) (match x (1 => 10) (_ => 20))) 1)) (array (lambda (x) (if x 1 2))))) |}]
+
+let%expect_test "a lambda's body on the next line, not indented further" =
+  (* it isn't a block, so the line goes on inside the brackets, as before *)
+  ast {|
+fn main() =
+  apply(fn(x) =>
+  x + 1, 2)
+|};
+  [%expect {| (fn main () (call apply (lambda (x) (+ x 1)) 2)) |}]
+
+let%expect_test "a with's items wrap after a comma" =
+  ast {|
+fn main() =
+  with a(),
+      b(),
+    c() in
+    body()
+|};
+  [%expect
+    {| (fn main () (with (call a) (with (call b) (with (call c) (call body))))) |}];
+  ast {|
+fn main() =
+  with a(),
+  b() in
+    body()
+|};
+  [%expect
+    {|
+    error: the line ends in `,`, but the next item isn't indented under it
+      ┌─ test.ren:3:3
+    3 │   b() in
+      │   ^
+      help: indent the next item further than the line the `with` is on, and it goes on with the list
+    |}]
+
+let%expect_test "a uses list in a type argument ends at a comma" =
+  types
+    {|
+type Pair<A, B> = { a: A, b: B }
+type Box<F> = { f: F }
+fn one(p: Pair<fn() -> Int uses Clock, Int>) -> Int uses Clock = p.a() + p.b
+fn two(b: Box<(fn() -> Int uses Clock, Console)>) -> Int uses Clock, Console = b.f()
+fn row(b: Box<fn() -> Int uses Clock, ..d>) -> Int uses Clock, ..d = b.f()
+fn main() = ()
+|};
+  [%expect
+    {|
+    fn one(p: Pair<fn() -> Int uses Clock, Int>) -> Int uses Clock
+    fn two(b: Box<(fn() -> Int uses Clock, Console)>) -> Int uses Clock, Console
+    fn row(b: Box<fn() -> Int uses Clock, ..d>) -> Int uses Clock, ..d
+    fn main()
+    |}];
+  types
+    {|
+type Box<F> = { f: F }
+fn two(b: Box<fn() -> Int uses Clock, Console>) -> Int uses Clock, Console = b.f()
+|};
+  [%expect
+    {|
+    error: `Box` takes 1 type argument but was given 2
+      ┌─ test.ren:2:11
+    2 │ fn two(b: Box<fn() -> Int uses Clock, Console>) -> Int uses Clock, Console = b.f()
+      │           ^^^
+      help: in a type argument, a `uses` list ends at a comma: to list several dependencies, put the type in parentheses, `Box<(fn() uses Clock, Console)>`
+    |}]
+
 (* after a syntax error, parsing picks up at the next top-level item *)
 
 let%expect_test "syntax errors in two functions" =
@@ -667,7 +768,8 @@ fn main() = "Ren\
    second byte *)
 let%expect_test "a string that isn't UTF-8" =
   tokens "fn main() = \"caf\xc3\"\n";
-  [%expect {|
+  [%expect
+    {|
     error: this string isn't UTF-8
       ┌─ test.ren:1:13
     1 │ fn main() = "caf�"

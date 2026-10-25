@@ -556,7 +556,22 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
           not_a_type env (tyname_loc t) ~what:"it isn't a type of values" t;
           TyName (named (Named p), [])
       | Some (tref, n) when n <> given ->
-          report env (tyname_loc t)
+          (* `Box<fn() uses Clock, Console>` is two arguments: in one, a
+             `uses` list ends at a comma *)
+          let ends_in_uses : Parsed.ty -> bool = function
+            | TyFn (_, _, _, Some _, _) | TyImpl (_, Some _, _) -> true
+            | _ -> false
+          in
+          let help =
+            if given > n && List.exists ends_in_uses (List.tl (List.rev args))
+            then
+              Some
+                "in a type argument, a `uses` list ends at a comma: to list \
+                 several dependencies, put the type in parentheses, `Box<(fn() \
+                 uses Clock, Console)>`"
+            else None
+          in
+          report env (tyname_loc t) ?help
             (sprintf "`%s` takes %d type argument%s but was given %d"
                (show_tyname t) n (plural n) given);
           TyName (named tref, [])

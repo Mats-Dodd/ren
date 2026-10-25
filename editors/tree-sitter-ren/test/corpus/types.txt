@@ -349,3 +349,83 @@ fn k(r: Result<Int, !>) -> Result<Int, ! X> = r
           (error_tag
             (type_identifier)))))
     (identifier)))
+
+================================================================================
+a uses list in a type argument ends at a comma
+================================================================================
+
+fn one(p: Pair<fn() -> Int uses Clock, Int>) = 1
+fn two(b: Box<(fn() uses Clock, Console)>) = 2
+fn row(b: Box<fn() uses Clock, ..d>, c: Box<Clock uses Os, Int>) = 3
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (function_type
+              (named_type
+                (type_name
+                  (type_identifier)))
+              (uses_clause
+                (dependency
+                  (type_identifier))))
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (number))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (parenthesized_type
+              (function_type
+                (uses_clause
+                  (dependency
+                    (type_identifier))
+                  (dependency
+                    (type_identifier)))))))))
+    (number))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (function_type
+              (uses_clause
+                (dependency
+                  (type_identifier))
+                (named_row
+                  (identifier)))))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (implementation_type
+              (type_name
+                (type_identifier))
+              (uses_clause
+                (dependency
+                  (type_identifier))))
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (number)))

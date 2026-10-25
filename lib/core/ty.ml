@@ -283,8 +283,8 @@ and show pr t =
       let r = show_ret pr r in
       "fn(" ^ ps ^ ")" ^ r ^ show_effects pr e u
 
-(* Types separated by commas, each shown, and whether it ends in a `uses`
-   list, which a comma could go on: one that does is in parentheses
+(* A function type's parameters, each shown, and whether it ends in a
+   `uses` list, which a comma could go on: one that does is in parentheses
    unless it's the last, `fn((fn() uses Clock, Random), Int)`. *)
 and commas shown =
   let n = List.length shown in
@@ -293,12 +293,19 @@ and commas shown =
        (fun i (s, trails) -> if trails && i < n - 1 then "(" ^ s ^ ")" else s)
        shown)
 
+(* Type arguments: in one, a comma after a `uses` list ends the argument,
+   so a list of several dependencies is in parentheses,
+   `Box<(fn() uses Clock, Random)>`. *)
 and show_list pr ts =
-  commas
+  String.concat ", "
     (List.map
        (fun t ->
          let s = show pr t in
-         (s, ends_in_uses pr t))
+         match t with
+         | (Con (_, [ Uses u ]) | Fun (_, _, _, u))
+           when List.length u.labels > 1 ->
+             "(" ^ s ^ ")"
+         | _ -> s)
        ts)
 
 and show_param pr p =

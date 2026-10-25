@@ -20,7 +20,8 @@
      uses     := "uses" tyname { "," tyname } ["," row]
               |  "uses" row                       (in a type, a `,` goes on
                                                     only to a dependency or a
-                                                    row)
+                                                    row; in a type argument,
+                                                    only to a row)
      row      := ".." IDENT                       (a named row: `..e`, `..d`)
      error    := UIDENT ["(" payload, ... ")"]      (a tag)
               |  [IDENT "."] UIDENT                (a named error set)
@@ -108,6 +109,8 @@
      fails    := fail_pat { "|" fail_pat }
      fail_pat := "fail" "_" | "fail" UIDENT ["(" pattern, ... ")"]
      lambda   := "fn" "(" param, ... ")" "=>" body
+                                                   (inside brackets too, the
+                                                    lexer opens its block)
      pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
               |  ctor_ref ["(" pattern, ... ")"]
 
@@ -271,8 +274,10 @@ let parse_ctor_ref p : ctor_ref =
    function type they can: in `fn f() -> fn() ! Bad`, the `fn()` returned
    can fail with `Bad`. After `->`, a `uses` is the function's, never what
    an implementation it returns needs, which is written in parentheses,
-   `-> (Clock uses Os)`; [uses] says whether a type here can take one. *)
-let rec parse_ty ?(uses = true) p : ty =
+   `-> (Clock uses Os)`; [uses] says whether a type here can take one.
+   [arg] says it's a type argument, `Pair<fn() uses Clock, Int>`, where a
+   comma ends the argument rather than going on with the `uses`. *)
+let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
   match peek p with
   | LPAREN ->
       advance p;
@@ -287,11 +292,11 @@ let rec parse_ty ?(uses = true) p : ty =
       let ret =
         if peek p = ARROW then (
           advance p;
-          Some (parse_ty ~uses:false p))
+          Some (parse_ty ~uses:false ~arg p))
         else None
       in
       let errs = if peek p = BANG then Some (parse_errors p) else None in
-      let used = if peek p = USES then Some (parse_uses p) else None in
+      let used = if peek p = USES then Some (parse_uses ~arg p) else None in
       TyFn (params, ret, errs, used, Loc.span start (last_loc p))
   | BANG when peek2 p = GT || peek2 p = COMMA ->
       (* `Result<Int, !>`: an empty set, a [Result] that can't be [Err] *)
@@ -305,7 +310,7 @@ let rec parse_ty ?(uses = true) p : ty =
       let args =
         if peek p = LT then (
           advance p;
-          sep_list p ~close:GT parse_ty)
+          sep_list p ~close:GT (parse_ty ~arg:true))
         else []
       in
       if uses && peek p = USES then (
@@ -317,7 +322,7 @@ let rec parse_ty ?(uses = true) p : ty =
                "`%s` takes type arguments, so it isn't a dependency, and needs \
                 nothing"
                (show_tyname name));
-        let u = parse_uses p in
+        let u = parse_uses ~arg p in
         TyImpl (name, Some u, Loc.span start (last_loc p)))
       else TyName (name, args)
 
@@ -339,15 +344,19 @@ and parse_fn_ty_param p =
    store.Users`, and last, a named row, `..d`. [greedy] says a comma always
    goes on with another dependency, as in a signature, where `=` ends the
    list; inside a type, one goes on only if what's after the comma can be
-   one, so `fn(f: fn() uses Clock, n: Int)` has two parameters. *)
-and parse_uses ?(greedy = false) p : uses =
+   one, so `fn(f: fn() uses Clock, n: Int)` has two parameters. In a type
+   argument, [arg], a comma goes on only to a named row, which can't be an
+   argument: `Pair<fn() uses Clock, Int>` has two arguments, and several
+   dependencies there are written in parentheses, `Box<(fn() uses Clock,
+   Console)>`. *)
+and parse_uses ?(greedy = false) ?(arg = false) p : uses =
   let start = loc p in
   expect p USES;
   let continues () =
     match (peek2 p, peek3 p) with
     | DOTDOT, _ -> true
-    | IDENT n, _ when is_upper n -> true
-    | IDENT _, DOT -> true
+    | IDENT n, _ when is_upper n -> not arg
+    | IDENT _, DOT -> not arg
     | _ -> false
   in
   let rec items acc =
@@ -958,6 +967,12 @@ and parse_with p =
     let item = parse_expr p in
     if peek p = COMMA then (
       advance p;
+      if peek p = NEWLINE || peek p = DEDENT then
+        Diag.error (loc p)
+          ~help:
+            "indent the next item further than the line the `with` is on, and \
+             it goes on with the list"
+          "the line ends in `,`, but the next item isn't indented under it";
       items (item :: acc))
     else List.rev (item :: acc)
   in

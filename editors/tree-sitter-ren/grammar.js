@@ -11,8 +11,9 @@
  *
  * Layout works as in the compiler's lexer (lib/syntax/lexer.ml): the
  * external scanner (src/scanner.c) turns indentation into INDENT, DEDENT
- * and NEWLINE, ignores line breaks inside brackets, and lets an indented
- * line starting with `uses` continue the signature above it.
+ * and NEWLINE, ignores line breaks inside brackets except in a lambda's
+ * block, and lets an indented line starting with `uses` continue the
+ * signature above it.
  *
  * Capitalization tells names apart without looking anything up, as in the
  * compiler: types and constructors are capitalized, and variables,
@@ -57,6 +58,8 @@ module.exports = grammar({
     ']',
     '{',
     '}',
+    // a lambda's `=>` inside brackets that opens its body as a block
+    $._arrow_block,
     // never in the grammar: valid only while tree-sitter recovers from an
     // error, which is how the scanner knows it is
     $._error_sentinel,
@@ -80,6 +83,9 @@ module.exports = grammar({
     // in a type, `uses Clock, n: Int` ends at the comma, and
     // `uses Clock, store.Users` doesn't: the token after the name decides
     [$.uses_clause],
+    // and in a type argument, `uses Clock, ..d` doesn't, which the token
+    // after the comma decides
+    [$._argument_uses],
   ],
 
   supertypes: ($) => [$._expression, $._pattern, $._type],
@@ -420,7 +426,57 @@ module.exports = grammar({
         optional(field('arguments', $.type_arguments)),
       ),
 
-    type_arguments: ($) => seq('<', commaSep($._type), '>'),
+    // in a type argument, a `uses` list ends at a comma unless a named row
+    // follows it: `Pair<fn() uses Clock, Int>` has two arguments, and
+    // several dependencies are written in parentheses
+    type_arguments: ($) => seq('<', commaSep($._type_argument), '>'),
+
+    _type_argument: ($) =>
+      choice(
+        $.named_type,
+        $.parenthesized_type,
+        $.error_set,
+        alias('!', $.error_set),
+        alias($._argument_function_type, $.function_type),
+        alias($._argument_implementation_type, $.implementation_type),
+      ),
+
+    _argument_return_type: ($) =>
+      choice(
+        $.named_type,
+        alias($._argument_function_type, $.function_type),
+        $.parenthesized_type,
+        $.error_set,
+        alias('!', $.error_set),
+      ),
+
+    _argument_implementation_type: ($) =>
+      seq(
+        field('name', $.type_name),
+        field('uses', alias($._argument_uses, $.uses_clause)),
+      ),
+
+    _argument_function_type: ($) =>
+      prec.right(
+        seq(
+          'fn',
+          '(',
+          commaSep($.function_type_parameter),
+          ')',
+          optional(seq('->', field('return_type', $._argument_return_type))),
+          optional(field('errors', $.error_set)),
+          optional(field('uses', alias($._argument_uses, $.uses_clause))),
+        ),
+      ),
+
+    _argument_uses: ($) =>
+      seq(
+        'uses',
+        choice(
+          seq($.dependency, optional(seq(',', field('row', $.named_row)))),
+          field('row', $.named_row),
+        ),
+      ),
 
     // fn(inout Array<Int>, id: UserId) -> User ! NotFound uses Clock. The
     // `! ...` and `uses ...` belong to the innermost function type that can
@@ -650,15 +706,24 @@ module.exports = grammar({
     unit: (_) => seq('(', ')'),
     self: (_) => 'self',
 
+    // inside brackets, a body indented under the `=>` that ends its line
+    // is a block too, which the scanner opens with the `=>`
     lambda: ($) =>
       prec.right(
         seq(
           'fn',
           field('parameters', $.parameters),
-          '=>',
-          field('body', $._body),
+          choice(
+            seq('=>', field('body', $._body)),
+            seq(
+              alias($._arrow_block, '=>'),
+              field('body', alias($._bracket_block, $.block)),
+            ),
+          ),
         ),
       ),
+
+    _bracket_block: ($) => seq(sep1($._statement, $._newline), $._dedent),
 
     // Free, Pro(5), Pro(seats: 5), Plan.Free, billing.Plan.Free
     constructor_expression: ($) =>

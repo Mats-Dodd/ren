@@ -147,6 +147,15 @@ let summaries = async.par_map(users) fn(u) =>
   summarize(u, feed)
 ```
 
+Inside brackets, where line breaks are otherwise ignored, a lambda's body can be a block too: a `=>` that ends its line opens one, indented further than the line around the brackets, and it ends at a line indented less or at the closing bracket:
+
+```ren
+let supplier = Supplier { quote: fn(item) =>
+    Clock.sleep(Duration.ms(20))
+    try prices.get(item)
+}
+```
+
 Public functions spell out their full contract. Private functions can infer their `uses` and their error set (`! _`). `ren fmt --annotate` writes the inferred clauses into your code.
 
 A function parameter is **transparent** when the function only calls it: it doesn't store it, return it, or hand it to something that outlives the call. A transparent parameter's errors and dependencies flow into the caller automatically, so they're never written:
@@ -269,7 +278,7 @@ fn main() ! StartupError
     http.serve(cfg.port, routes)
 ```
 
-Production wiring, test fakes, allocators, simulators, and tracers all use the same mechanism. Items are listed from outermost to innermost, and the innermost implementation of a dependency wins. `with` removes what it installs from the body's `uses`, and adds what its items need.
+Production wiring, test fakes, allocators, simulators, and tracers all use the same mechanism. A long list of items can break after a comma, the next line indented further, as a signature's `uses` can. Items are listed from outermost to innermost, and the innermost implementation of a dependency wins. `with` removes what it installs from the body's `uses`, and adds what its items need.
 
 An item is either an **implementation**, or a **wrapper**: an ordinary function whose last parameter is the body.
 

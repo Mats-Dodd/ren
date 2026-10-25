@@ -13,16 +13,30 @@
        x                       x DEDENT
      fn g() = 2              NEWLINE FN g ( ) = 2 EOF
 
-   Inside parentheses, brackets or braces, line breaks and indentation are ignored so long
-   argument lists can wrap freely. Blank and comment-only lines are skipped.
+   Inside parentheses, brackets or braces, line breaks and indentation are
+   ignored so long argument lists can wrap freely, except in a lambda's
+   body: a `=>` that ends a line inside brackets, followed by a line
+   indented further than the block around the brackets, opens a block
+   there, which ends at a line indented less or at the closing bracket:
+
+     R { f: fn(x) =>         R { f : FN ( x ) => INDENT
+           let y = x + 1           LET y = x + 1 NEWLINE
+           y * 2                   y * 2 DEDENT
+     }                         }
+
+   Blank and comment-only lines are skipped.
 
    An indented line that starts with `uses` or with an error set's `!`
-   continues the signature above it, so it gets no layout token at all:
+   continues the signature above it, and one after a line that ends in
+   `,` continues that line, a list of `with` items or of dependencies, so
+   neither gets a layout token at all:
 
      pub fn load(id: Int) -> User
          ! NotFound | Timeout
          uses Console =
-       body *)
+       with Clock.frozen(t),
+           retry(3) in
+         body *)
 
 open Token
 
@@ -67,18 +81,27 @@ let is_ident_start c =
 
 let is_ident_char c = is_ident_start c || is_digit c
 
+(* What the lexer is inside, innermost first: a block, indented this far,
+   where line breaks are layout, or a bracket, where they're ignored. *)
+type frame = Block of int | Bracket
+
 let tokenize ~file (src : string) : (Token.t * Loc.t) array =
   let len = String.length src in
   (* Mutable lexer state. [bol] is the index where the current line begins,
      so the column of index [i] is [i - bol + 1]. *)
   let i = ref 0 and line = ref 1 and bol = ref 0 in
-  let depth =
-    ref 0
-    (* open parentheses *)
+  let frames =
+    ref [ Block 0 ]
+    (* the file is a block, indented 0 *)
   in
-  let indents =
-    ref [ 0 ]
-    (* stack of enclosing indentation widths *)
+  (* Are line breaks layout here, outside brackets or in a lambda's block
+     inside them? *)
+  let in_block () = match !frames with Block _ :: _ -> true | _ -> false in
+  (* How far the innermost block is indented. *)
+  let current () =
+    match List.find (function Block _ -> true | Bracket -> false) !frames with
+    | Block w -> w
+    | Bracket -> 0
   in
   let at_line_start = ref true in
   let toks =
@@ -94,33 +117,71 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
   let error ?help start msg =
     Diag.error ?help { Loc.file; start; stop = pos () } msg
   in
+  let last_tok () = match !toks with (tok, _) :: _ -> Some tok | [] -> None in
 
-  (* Called at the first token of each line (outside parentheses): compare its
-     indentation with the enclosing block's and emit layout tokens. *)
+  (* Called at the first token of each line in a block: compare its
+     indentation with the enclosing block's and emit layout tokens. A line
+     indented less than a lambda's block inside brackets closes it, and
+     goes on inside the brackets, with no NEWLINE. *)
   let layout () =
     let col = !i - !bol in
     let here = pos () in
     if !toks = [] then (
       if col > 0 then error here "the first line can't be indented")
-    else if col > List.hd !indents then (
-      indents := col :: !indents;
+    else if col > current () then (
+      frames := Block col :: !frames;
       emit INDENT here)
-    else (
-      while col < List.hd !indents do
-        indents := List.tl !indents;
-        emit DEDENT here
-      done;
-      if col <> List.hd !indents then
-        error ~help:"indent it to match the lines above it" here
-          "this line's indentation doesn't line up with any enclosing block";
-      emit NEWLINE here)
+    else
+      let rec close () =
+        match !frames with
+        | Block w :: rest when col < w ->
+            frames := rest;
+            emit DEDENT here;
+            close ()
+        | _ -> ()
+      in
+      close ();
+      match !frames with
+      | Block w :: _ ->
+          if col <> w then
+            error ~help:"indent it to match the lines above it" here
+              "this line's indentation doesn't line up with any enclosing block";
+          emit NEWLINE here
+      | _ -> ()
   in
 
-  (* Does the line starting here continue a signature: is it indented
+  (* Called at the first token of each line inside brackets: after a `=>`
+     that ended the line before, a line indented further than the
+     innermost block opens a block, a lambda's body. *)
+  let bracket_layout () =
+    let col = !i - !bol in
+    if last_tok () = Some FATARROW && col > current () then (
+      frames := Block col :: !frames;
+      emit INDENT (pos ()))
+  in
+
+  (* A closing bracket closes the lambdas' blocks still open inside it,
+     then the bracket. One without an opening bracket is left to the
+     parser. *)
+  let close_bracket start =
+    if List.mem Bracket !frames then
+      let rec close () =
+        match !frames with
+        | Block _ :: rest ->
+            frames := rest;
+            emit DEDENT start;
+            close ()
+        | Bracket :: rest -> frames := rest
+        | [] -> ()
+      in
+      close ()
+  in
+
+  (* Does the line starting here continue the one before: is it indented
      more than the block it's in, and does it start with the word `uses` or
-     with the `!` of an error set (not `!=`)? A `!` after `=` opens a
-     block instead: a named error set written one `|` per line,
-     `type E =` then `! A` indented under it. *)
+     with the `!` of an error set (not `!=`), or does the line before end
+     in `,`? A `!` after `=` opens a block instead: a named error set
+     written one `|` per line, `type E =` then `! A` indented under it. *)
   let continues () =
     let starts_uses =
       !i + 4 <= len
@@ -129,7 +190,8 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
     in
     let after_eq = match !toks with (EQ, _) :: _ -> true | _ -> false in
     let starts_errors = peek 0 = '!' && peek 1 <> '=' && not after_eq in
-    !i - !bol > List.hd !indents && (starts_uses || starts_errors)
+    let after_comma = last_tok () = Some COMMA in
+    !i - !bol > current () && (starts_uses || starts_errors || after_comma)
   in
 
   (* A string literal, `"Ren\n"`: its contents, with each escape undone.
@@ -219,22 +281,22 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | '|', '|' -> advance_by 2 PIPEPIPE
       | '.', '.' -> advance_by 2 DOTDOT
       | '(', _ ->
-          incr depth;
+          frames := Bracket :: !frames;
           advance_by 1 LPAREN
       | ')', _ ->
-          depth := max 0 (!depth - 1);
+          close_bracket start;
           advance_by 1 RPAREN
       | '{', _ ->
-          incr depth;
+          frames := Bracket :: !frames;
           advance_by 1 LBRACE
       | '}', _ ->
-          depth := max 0 (!depth - 1);
+          close_bracket start;
           advance_by 1 RBRACE
       | '[', _ ->
-          incr depth;
+          frames := Bracket :: !frames;
           advance_by 1 LBRACKET
       | ']', _ ->
-          depth := max 0 (!depth - 1);
+          close_bracket start;
           advance_by 1 RBRACKET
       | '&', _ -> advance_by 1 AMP
       | '!', _ -> advance_by 1 BANG
@@ -272,13 +334,15 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
         incr i
       done
     else (
-      if !at_line_start && !depth = 0 && not (continues ()) then layout ();
+      if !at_line_start then
+        if not (in_block ()) then bracket_layout ()
+        else if not (continues ()) then layout ();
       at_line_start := false;
       lex_token c start)
   done;
 
   (* Close any blocks still open at the end of the file. *)
   let eof = pos () in
-  List.iter (fun _ -> emit DEDENT eof) (List.tl !indents);
+  List.iter (function Block w when w > 0 -> emit DEDENT eof | _ -> ()) !frames;
   emit EOF eof;
   Array.of_list (List.rev !toks)

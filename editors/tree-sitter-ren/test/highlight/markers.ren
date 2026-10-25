@@ -121,3 +121,17 @@ group "frozen" = conforms(Clock.frozen(Time.epoch))
 // <- keyword
 //    ^ string
 //               ^ function
+
+fn table() = Supplier { quote: fn(item) =>
+//                             ^ keyword
+//                                ^ variable.parameter
+//                                      ^ operator
+    let p = 3
+//  ^ keyword
+    p
+}
+
+fn pick(p: Pair<fn() uses Clock, Int>) = p
+//              ^ keyword
+//                        ^ type.dependency
+//                               ^ type
