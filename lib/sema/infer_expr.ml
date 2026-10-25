@@ -130,13 +130,15 @@ type env = {
    and the parameters of the function and lambdas it's in. [tarm] says
    whether it's a `fail` arm's, which matches what a call fails with,
    rather than a tag inside `Err(...)`, which matches what a [Result]
-   holds. *)
+   holds, and [tvalue] whether it's not a pattern at all but a tag
+   written as a value, `Err(Short(a, b))` ([err_row]). *)
 and tag_pattern = {
   ttag : ident;
   tpayload : ty list;
   tset : row;
   tin : (string * ty) list;
   tarm : bool;
+  tvalue : bool;
 }
 
 (* A call that uses a named row, `f()` for `f: fn() uses ..d`, or a `with`
@@ -1857,6 +1859,12 @@ and synth env cx (e : expr) : ty =
          cover anything: the test may fail with nothing *)
       if e.node = Test_items.passed_on then m.failed <- true;
       let t = infer env { cx with markers = m :: cx.markers } a in
+      (match (a.kind, Hashtbl.find_opt cx.found a.node) with
+      | Con (_, [ (_, tag) ]), Some (Ctor_of (p, "Err")) when p = result_path ->
+          (* `fail` is the one way to fail with a tag written here *)
+          report env
+            (try_err e.loc (Option.value (env.source tag) ~default:"..."))
+      | _ -> ());
       (* `try r`, where [r] is a [Result]: what's in [r] if it's `Ok`, and
          if it's `Err`, its error again *)
       match reveal env.st t with
@@ -2673,6 +2681,70 @@ and infer_arg env cx (a : expr) =
       { mode = Inout; ty = t }
   | _ -> read (infer env cx a)
 
+(* The error set of `Err(tag(payload))`, where a value of type [expected]
+   is wanted. Where that's a `Result` whose errors are what something can
+   fail with, a function's declared result or what an `attempt` kept, the
+   tag has to be one of them, as in a pattern ([tag_pattern]): `attempt
+   f() == Err(Shrot)` is an error, not a comparison that's always false.
+   An open set is checked when its group is done. Anywhere else, the tag
+   makes a set of its own, open to more: `if c then Err(A) else Err(B)`. *)
+and err_row env cx (tag : ident) args ~expected =
+  let payload = List.map fst args in
+  let wanted =
+    match reveal env.st expected with
+    | TCon (p, [ _; errs ]) when p = result_path -> (
+        match repr errs with
+        | TErrors row -> (
+            match row_tail row with
+            | None -> Some row
+            | Some t
+              when List.exists (fun (k, _) -> row_tail k = Some t) env.kept ->
+                Some row
+            | Some _ -> None)
+        | _ -> None)
+    | _ -> None
+  in
+  match wanted with
+  | None -> extend [ { name = tag.name; payload } ] (fresh_row env.st)
+  | Some row -> (
+      let labels, tail = row_parts row in
+      match
+        (List.find_opt (fun (l : label) -> l.name = tag.name) labels, tail)
+      with
+      | Some l, _ when List.length l.payload = List.length payload ->
+          List.iter2
+            (fun (found, (a : expr)) expected ->
+              unify_at env (result_loc a) ~found ~expected
+                ~msg:(fun f x ->
+                  sprintf "this is %s, but `%s` holds %s here" (article f)
+                    tag.name (article x))
+                ~notes:[ sprintf "it's `%s`" (show_label (printer env) l) ])
+            args l.payload;
+          row
+      | Some l, _ ->
+          report env
+            (tag_arity ~value:true tag.loc tag (List.length l.payload)
+               (List.length payload));
+          row
+      | None, None ->
+          let pr = printer env in
+          report env
+            (not_an_error tag
+               (List.map (fun (l : label) -> (l.name, show_label pr l)) labels));
+          row
+      | None, Some _ ->
+          env.tag_patterns <-
+            {
+              ttag = tag;
+              tpayload = payload;
+              tset = row;
+              tin = cx.params;
+              tarm = false;
+              tvalue = true;
+            }
+            :: env.tag_patterns;
+          row)
+
 (* A constructor applied to [args], where a value of type [expected] is
    wanted. *)
 and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
@@ -2681,10 +2753,25 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
   | None ->
       List.iter (fun (_, a) -> ignore (infer env cx a)) args;
       TError
-  | Some (td, ctor) when td.path = result_path && ctor.cname = "Err" ->
-      (* what it holds is an error, and an error isn't a value *)
-      report env (err_made c.loc);
-      fst (instance env td)
+  | Some (td, ctor) when td.path = result_path && ctor.cname = "Err" -> (
+      match args with
+      | [ (_, ({ kind = Con ({ qual = None; name = tag }, payload); _ } as a)) ]
+        ->
+          (* a tag, written as the error the `Result` holds:
+             `Err(Short(a, b))`. It's a value only here, so an error is
+             still always inside a `Result`; a payload's names only
+             document it, as in a `fail` *)
+          Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
+          let payload = List.map (fun (_, a) -> (infer env cx a, a)) payload in
+          let row = err_row env cx tag payload ~expected in
+          Hashtbl.replace cx.nodes a.node (TErrors row);
+          TCon (td.path, [ fresh_var env.st; TErrors row ])
+      | _ ->
+          (* anything else would be an error of its own, outside the
+             `Result` *)
+          List.iter (fun (_, a) -> ignore (infer env cx a)) args;
+          report env (err_made c.loc);
+          fst (instance env td))
   | Some (td, ctor) ->
       Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
       let t, tvars = instance env td in
@@ -3159,6 +3246,7 @@ and tag_pattern env cx ?(arm = false) (p : pattern) (c : ident) ps errs =
           tset = errs;
           tin = cx.params;
           tarm = arm;
+          tvalue = false;
         }
         :: env.tag_patterns;
       bind payload

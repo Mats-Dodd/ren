@@ -602,15 +602,26 @@ let rec expr env sc (e : expr) =
       | Con (p, [ elem ]) when p = Path.prelude "Array" ->
           List.iter (fun (x : expr) -> same env x.loc "an element" x.ty elem) xs
       | t -> fail env loc (sprintf "an array literal has type `%s`" (show t)))
-  | Tag (t, args) ->
+  | Tag (t, args) -> (
       List.iter (expr env sc) args;
-      is
-        ("the error `" ^ t ^ "`")
-        (Errors
-           {
-             labels = [ { name = t; payload = List.map (fun a -> a.ty) args } ];
-             tail = None;
-           })
+      (* a set that has it: just it, after `fail`, or all of the set its
+         `Err(...)` holds *)
+      let label : Ty.label =
+        { name = t; payload = List.map (fun a -> a.ty) args }
+      in
+      match reveal env e.ty with
+      | Errors row
+        when List.exists
+               (fun (l : Ty.label) ->
+                 l.name = t
+                 && List.length l.payload = List.length label.payload
+                 && List.for_all2 (equal env) l.payload label.payload)
+               row.labels ->
+          ()
+      | t' ->
+          fail env loc
+            (sprintf "the error `%s` has type `%s`, which doesn't have it" t
+               (show t')))
   | Fail a ->
       expr env sc a;
       ignore (errors_of env a.loc "what `fail` fails with" a.ty)

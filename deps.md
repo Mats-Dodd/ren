@@ -526,10 +526,14 @@ stage, or settled something the plan left open:
 - **The settled test of a deposit lacked a `try`:** `acme.statement(a)`
   fails with `NoSuchAccount`, so the test reads it into a `let` with
   `try` first.
-- **A test of a refusal looks at it with a `match`,** since `Err(...)`
-  can't be written (an error isn't a value): `match attempt
-  &acme.transfer(t)` with an arm for the refusal it expects and `_ =>
-  assert false`.
+- **An error can be written inside `Err(...)`, by its tag,** so a test
+  of a refusal compares what it kept, `assert attempt &acme.transfer(t)
+  == Err(Short(a, Money.dollars(1)))`, and a failure shows what came
+  back. Only a tag goes inside `Err`, so an error is still never a value
+  outside a `Result`. Compared with what an `attempt` kept, or given
+  where a declared `Result` is wanted, the tag has to be one of its
+  errors, as in a pattern; anywhere else it makes a set of its own.
+  `try Err(X)` is an error, since `fail X` is the one way to fail.
 - **`attempt` stops at a comparison,** where `try` takes everything to
   its right: `attempt f() == x` is `(attempt f()) == x`, so a test can
   compare what it kept. Arithmetic is still inside it, `attempt a() +

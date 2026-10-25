@@ -709,7 +709,8 @@ let settle_errors env =
             payload l.payload
       | Some l ->
           report env
-            (tag_arity c.loc c (List.length l.payload) (List.length payload))
+            (tag_arity ~value:t.tvalue c.loc c (List.length l.payload)
+               (List.length payload))
       | None -> (
           (* a set still open holds what a function it was passed fails
              with *)

@@ -70,11 +70,14 @@ and 6).
 it reaches a `pub` signature or a `match`, which then rejects it and
 suggests the right name.
 
-**Tags aren't values.** They appear only after `!`, after `fail`, and in a
-`match`'s `fail` arms. A sum type is never an error, and an error is never
-a sum type: to say why something didn't happen as part of a value, use a
-sum type, as before. The one way to hold an error as a value is `attempt`
-(below), which puts it in a `Result`.
+**Tags aren't values.** They appear only after `!`, after `fail`, in a
+`match`'s `fail` arms, and inside `Err(...)`, in a pattern or as the error
+a `Result` holds. A sum type is never an error, and an error is never a
+sum type: to say why something didn't happen as part of a value, use a
+sum type, as before. An error held as a value is always inside a
+`Result`: the one kept by `attempt` (below), or one written with its tag,
+`Err(Short(a, Money.dollars(1)))`, which is what a test compares a kept
+one with.
 
 ## Marking
 
@@ -155,6 +158,21 @@ It's for an error that has to outlive the line it happened on: one decided
 on later or by another function, outcomes collected from many calls, a test
 that checks a call fails, and, in later stages, an error handed to another
 task or to the journal.
+
+A test writes the error it expects inside `Err`, by its tag, and compares:
+
+```ren
+assert attempt &acme.transfer(t) == Err(Short(a, Money.dollars(1)))
+```
+
+Where a `Result` it's compared with or given to holds what something can
+fail with, what an `attempt` kept or a function's declared result, the tag
+has to be one of those errors, as in a pattern, so `Err(Shrot(...))` is an
+error rather than a comparison that's never true. Written anywhere else,
+it makes a set of its own: `if c then Err(Left(1)) else Err(Right)` is a
+`Result<T, ! Left(Int) | Right>`. Only a tag can go inside `Err`, so an
+error is never a value outside a `Result`, and `fail` is still the one way
+to fail with one: `try Err(X)` is an error whose help says `fail X`.
 
 It's shorthand for `match f()` with `v => Ok(v)` and `fail e => Err(e)`, but
 that `match` can't be written: a `fail` pattern destructures a payload and

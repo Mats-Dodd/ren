@@ -680,20 +680,35 @@ let bound_error loc name =
     ~help:"match its tags, like `Err(NotFound(id))`, or ignore it with `Err(_)`"
     (sprintf "`%s` would hold an error, which isn't a value" name)
 
-(* `Err(...)` written as a value. *)
+(* `Err(...)` around something that isn't a tag: an error isn't a value
+   on its own (errors.md, "Keeping an error"). *)
 let err_made loc =
   Diag.make loc
-    ~notes:[ "`Err` holds an error, and an error isn't a value" ]
+    ~notes:
+      [
+        "an error isn't a value on its own: `Err` holds one written as its \
+         tag, or one that `attempt` kept";
+      ]
     ~help:
-      "write `attempt` before the call that fails, `attempt f()`, to keep what \
-       it fails with in a `Result`"
-    "an error is kept in a `Result` only by `attempt`"
+      "write the tag inside it, `Err(NotFound(id))`, or keep what a call fails \
+       with: `attempt f()`"
+    "`Err` holds an error, written as its tag"
 
-(* A tag pattern with the wrong number of payload patterns. *)
-let tag_arity loc (c : Ast.ident) want given =
+(* `try Err(X)`, which would fail with [X]: that's `fail X`. *)
+let try_err loc tag =
   Diag.make loc
-    (sprintf "`%s`'s payload has %d value%s, but this pattern has %d" c.name
-       want (plural want) given)
+    ~notes:[ "`fail` is the one way to fail with an error written here" ]
+    ~help:(sprintf "write `fail %s`" tag)
+    "this `try` fails with the error it's given"
+
+(* A tag pattern, or a tag written as a value ([value]), with the wrong
+   number of payload patterns or values. *)
+let tag_arity ?(value = false) loc (c : Ast.ident) want given =
+  Diag.make loc
+    (sprintf "`%s`'s payload has %d value%s, but this %s has %d" c.name want
+       (plural want)
+       (if value then "tag" else "pattern")
+       given)
 
 (* A tag pattern for an error the set doesn't have; [tags] are those it
    has, as shown. *)

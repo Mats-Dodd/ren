@@ -828,12 +828,137 @@ fn main() = ()
 |};
   [%expect
     {|
-    error: an error is kept in a `Result` only by `attempt`
-      ┌─ test.ren:1:13
-    1 │ fn made() = Err(NotFound(1))
-      │             ^^^
-      = `Err` holds an error, and an error isn't a value
-      help: write `attempt` before the call that fails, `attempt f()`, to keep what it fails with in a `Result`
+    fn made<T>() -> Result<T, ! NotFound(Int)>
+    fn main()
+    |}]
+
+let%expect_test "an error is written as its tag inside Err" =
+  (* so a kept outcome can be compared, and a test shows what came back *)
+  run
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else if id < 0 then fail Negative else id
+fn pick(c: Bool) = if c then Err(Left(1)) else Err(Right)
+pub fn sure() -> Result<Int, ! Gone(Int)> = Err(Gone(1))
+fn main() =
+  print(attempt load(0) == Err(NotFound(0)))
+  print(attempt load(0) != Err(NotFound(1)))
+  print(attempt load(-1) == Err(Negative))
+  print([pick(true), pick(false)])
+  print(sure())
+  match pick(true)
+    Err(Left(n)) => print(n)
+    _ => ()
+|};
+  [%expect {|
+    true
+    true
+    true
+    [Err(Left(1)), Err(Right)]
+    Err(Gone(1))
+    1
+    ()
+    |}];
+  types {|
+fn pick(c: Bool) = if c then Err(Left(1)) else Err(Right)
+fn main() = ()
+|};
+  [%expect {|
+    fn pick<T>(c: Bool) -> Result<T, ! Left(Int) | Right>
+    fn main()
+    |}];
+  test
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+
+test "a refusal shows what came back" =
+  assert attempt load(3) == Err(NotFound(3))
+|};
+  [%expect {|
+    test.ren
+      ✗ a refusal shows what came back
+
+    ──── a refusal shows what came back ── test.ren:4
+      │
+    4 │   assert attempt load(3) == Err(NotFound(3))
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      │
+      left:  Ok(3)
+      right: Err(NotFound(3))
+             ^ differs here
+
+      seed 6361 · rerun: ren test test.ren --only "a refusal" --seed 6361
+
+    0 passed, 1 failed
+    [exit 1]
+    |}]
+
+let%expect_test "a tag inside Err has to be one the Result can hold" =
+  (* compared with what an `attempt` kept, or given where a declared
+     `Result` is wanted, it's checked as a tag in a pattern is *)
+  types
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+pub fn sure() -> Result<Int, ! Gone(Int)> = Err(Gon(1))
+fn main() =
+  let _ = attempt load(0) == Err(NotFund(0))
+  let _ = attempt load(0) == Err(NotFound("x"))
+  let _ = attempt load(0) == Err(NotFound(0, 1))
+  ()
+|};
+  [%expect {|
+    error: `Gon` isn't one of the errors this can hold
+      ┌─ test.ren:2:49
+    2 │ pub fn sure() -> Result<Int, ! Gone(Int)> = Err(Gon(1))
+      │                                                 ^^^
+      = it can hold `Gone(Int)`
+      help: did you mean `Gone`? A tag that's written wrong is a different error
+
+    error: `NotFund` isn't one of the errors this can hold
+      ┌─ test.ren:4:34
+    4 │   let _ = attempt load(0) == Err(NotFund(0))
+      │                                  ^^^^^^^
+      = it can hold `NotFound(Int)`
+      help: did you mean `NotFound`? A tag that's written wrong is a different error
+
+    error: this is a `Str`, but `NotFound` holds an `Int` here
+      ┌─ test.ren:5:43
+    5 │   let _ = attempt load(0) == Err(NotFound("x"))
+      │                                           ^^^
+      = it's `NotFound(Int)`
+
+    error: `NotFound`'s payload has 1 value, but this tag has 2
+      ┌─ test.ren:6:34
+    6 │   let _ = attempt load(0) == Err(NotFound(0, 1))
+      │                                  ^^^^^^^^
+    |}];
+  (* anything else inside `Err` would be an error on its own *)
+  types
+    {|
+fn main() =
+  let x = 3
+  let _ = Err(x)
+  ()
+|};
+  [%expect {|
+    error: `Err` holds an error, written as its tag
+      ┌─ test.ren:3:11
+    3 │   let _ = Err(x)
+      │           ^^^
+      = an error isn't a value on its own: `Err` holds one written as its tag, or one that `attempt` kept
+      help: write the tag inside it, `Err(NotFound(id))`, or keep what a call fails with: `attempt f()`
+    |}];
+  (* and `fail` is the one way to fail with one *)
+  types {|
+fn f() -> Int = try Err(Gone(1))
+fn main() = ()
+|};
+  [%expect {|
+    error: this `try` fails with the error it's given
+      ┌─ test.ren:1:17
+    1 │ fn f() -> Int = try Err(Gone(1))
+      │                 ^^^^^^^^^^^^^^^^
+      = `fail` is the one way to fail with an error written here
+      help: write `fail Gone(1)`
     |}]
 
 let%expect_test "match handles a call's errors with fail arms" =

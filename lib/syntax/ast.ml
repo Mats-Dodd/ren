@@ -193,7 +193,9 @@ and ('v, 'b, 't) expr_kind =
       (** [for x in xs], or [for p in &ps] to change each element *)
   | Fail of ident * (ident option * ('v, 'b, 't) expr) list
       (** [fail Short(self.id, by)]: stop with that error. A tag isn't a value,
-          so it's only ever written here, after `!` and in a pattern *)
+          so it's only ever written here, after `!`, in a pattern, and as the
+          error an `Err(...)` holds, where it's a [Con] that inference tells
+          apart (infer_expr.ml, [err_row]) *)
   | Try of ('v, 'b, 't) expr
       (** [try e]: pass on the errors of every call in [e]. [try match] is a
           [Try] of a [Match] *)
@@ -837,9 +839,11 @@ let show_item : item -> string = function
 (* How tightly an operator binds: an operand that binds more loosely needs
    parentheses. `orelse` binds loosest, at 0, so `a || b orelse c` is
    `(a || b) orelse c`. `not` binds between `&&` and the comparisons, at 3,
-   so `not a == b` is `not (a == b)`; `-` binds tightest, at 7. `try`,
-   `attempt` and `fail` take everything to their right, so they need
-   parentheses only on an operator's left. *)
+   so `not a == b` is `not (a == b)`; `-` binds tightest, at 7. `try`
+   and `fail` take everything to their right, so they need parentheses
+   only on an operator's left. `attempt` takes what's to its right up to
+   a comparison, so it needs them on the left of `+` and tighter, and a
+   comparison inside it needs them too. *)
 let precedence = function
   | Orelse -> 0
   | Or -> 1
@@ -870,7 +874,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         let n = precedence op in
         left n a ^ " " ^ binop_to_string op ^ " " ^ operand (n + 1) b
     | Try a -> "try " ^ go a
-    | Attempt a -> "attempt " ^ go a
+    | Attempt a -> "attempt " ^ operand 5 a
     | Assert a -> "assert " ^ go a
     | Fail (t, []) -> "fail " ^ t.name
     | Fail (t, args) -> "fail " ^ t.name ^ "(" ^ con_args args ^ ")"
@@ -901,9 +905,12 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | _ -> go a
   (* an operator's left operand, or what a call, field or index is of
      (at 8, tighter than any operator): `try` would otherwise take
-     everything after it in *)
+     everything after it in, and `attempt` everything up to a comparison *)
   and left n (a : Resolved.expr) =
-    match a.kind with Try _ | Attempt _ -> "(" ^ go a ^ ")" | _ -> operand n a
+    match a.kind with
+    | Try _ -> "(" ^ go a ^ ")"
+    | Attempt _ when n > 4 -> "(" ^ go a ^ ")"
+    | _ -> operand n a
   and list xs = String.concat ", " (List.map go xs)
   and con_args args =
     let arg = function

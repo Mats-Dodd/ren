@@ -349,9 +349,12 @@ and expr_of cx (e : expr) : C.expr =
       in
       here (Lambda { params; ev; captures; body })
   | Block (stmts, last) -> block cx stmts last
-  | Con (_, args) -> (
-      match (node cx e.node).found with
-      | Some (Ctor_of (p, c)) ->
+  | Con (tag, args) -> (
+      match ((node cx e.node).found, ty ()) with
+      | None, Errors _ ->
+          (* a tag, inside `Err(...)`: the error it holds *)
+          here (Tag (tag.name.name, List.map (fun (_, a) -> expr cx a) args))
+      | Some (Ctor_of (p, c)), _ ->
           (* ctor_shape (infer_expr.ml) made sure the arguments are in the
              order of the fields *)
           here (Con (p, c, List.map (fun (_, a) -> expr cx a) args))
