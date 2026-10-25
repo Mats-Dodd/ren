@@ -1,0 +1,95 @@
+# A small just
+
+A command runner, like [just](https://github.com/casey/just): a
+`justfile` names recipes, each with the recipes it depends on and the
+lines it runs. It runs one, after everything it needs, each once, and
+stops at the first line that fails. It's the milestone of stage 8: it
+reads a file, takes its args and runs programs, all through `Fs`, `Os`
+and `Proc`, and its tests run on the test implementations of all three,
+with no setup.
+
+```
+cd just
+ren run main.ren              # the first recipe, `all`
+ren run main.ren -- broken    # a recipe that fails: exits with 1
+ren types main.ren            # every module's interface
+ren test .                    # every module's tests
+```
+
+| File | What's in it |
+|---|---|
+| `justfile.ren` | `Recipe` and `Justfile`, with `parse`, which fails with `BadLine`, and `recipe`, which fails with `UnknownRecipe` |
+| `plan.ren` | `order`: the recipes to run, each after what it depends on, each once; it fails with `UnknownRecipe` or `Cycle` |
+| `main.ren` | `main`, which reads the justfile, picks the recipe and runs each line with `sh -c`; its tests, on the fakes |
+| `justfile` | a few recipes that `echo`, two that share `base`, and one that fails |
+
+```
+all: build test
+  echo all done
+
+build: base
+  echo building
+```
+
+## What to look at
+
+**The signature says what it touches.** `ren types` shows `main` `uses
+Fs, Os, Proc`, and nothing else: no `Console`, though what the recipes
+print appears, since a program that `Proc` runs prints to this one's
+stdout itself. `run` uses only `Proc`, `plan` and `justfile` use nothing,
+and the compiler worked all of that out.
+
+**A string's indices are bytes.** `parse` splits the text on `"\n"`, and
+cuts a recipe's line at the offset `find(":")` gives, with `slice`. There's
+no way to land inside a character: `find` gives where a whole match starts.
+Bytes come in only at the edge: `Fs.read_str` reads them and turns them
+into a `Str` with `Str.from_utf8`, which fails with `InvalidUtf8`, so
+`main` can.
+
+**Every way it can fail is a tag.** No file is `NoSuchFile(path)`, from
+`Fs`; a recipe that isn't there is `UnknownRecipe(name)`; a line that
+exits with anything but 0 is `RecipeFailed(name, code)`. `main` passes
+them all on with `try`, so it fails, and the runtime prints `error:
+RecipeFailed("broken", 3)` and exits with 1. There's no `Os.exit`. A
+program that isn't there would be `NoSuchProgram`, never 127, but `sh`
+always is.
+
+**Each recipe once, in order.** `order` is depth first, and keeps two
+lists, `inout`: the recipes it's started and the ones it's done. A recipe
+two others depend on is done after the first, so the second skips it. One
+that's started but not done is further up, so reaching it again is a
+cycle.
+
+**Tests need no setup.** Each test of `main` gets an empty `mem_fs`, no
+args and a `test_proc` that runs nothing, without a `with`. A test that
+needs a justfile, args or a program that fails installs them: `with
+mem_fs(files(text)), test_os(["test"]) in try main()`. It looks at what
+would have run with `TestProc.ran()`, a list of `Command { cmd, args }`.
+A line that fails is a row of `test_proc`'s table, `Exit { command:
+sh("echo left"), code: 3 }`; the rest exit with 0. "No justfile" needs
+nothing installed at all: the empty `mem_fs` has no file, and `main` fails
+with `NoSuchFile`.
+
+**The same program, for real.** `just.t`, next to this folder, runs it on
+the real `Fs`, `Os` and `Proc` against `justfile`, and checks what the
+recipes print, in order, and how it fails.
+
+## What writing it ran into
+
+- **No `continue` or early return.** A blank line is skipped with `if
+  ... then ()`, and `visit` puts what it does in an `else`.
+- **No `let` at the top level.** The diamond justfile the tests share is
+  a function, `diamond()`.
+- **No multi-line strings.** A test's justfile is one literal with `\n`
+  in it, which is hard to read as a justfile.
+- **A function can't share a module's name.** The tests' `justfile(text)`
+  clashed with `import justfile`, and became `files(text)`.
+- **A function can't be imported by name,** only a type, so it's
+  `plan.order(...)`.
+- **No `contains`, `filter` or `map` on arrays.** `has` is a loop, and
+  `split(" ")` gives an empty string between two spaces, which `parse`
+  drops by hand.
+- **`Err(...)` still can't be written,** so a test of a failure looks at
+  its `Result` with a `match`, whose other arm is `_ => assert false`.
+- **A line isn't printed before it runs,** as just does on stderr, since
+  `Console` writes only to stdout.

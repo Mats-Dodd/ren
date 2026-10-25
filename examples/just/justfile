@@ -1,0 +1,21 @@
+# What `ren run main.ren` runs, from the folder this is in.
+
+# the first recipe, so the one that runs with no args
+all: build test
+  echo all done
+
+build: base
+  echo building
+  echo built
+
+test: base
+  echo testing
+
+base:
+  echo base
+
+# exits with 3 halfway through, so its last line never runs
+broken: base
+  echo trying
+  exit 3
+  echo never

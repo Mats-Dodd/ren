@@ -497,6 +497,12 @@ stage, or settled something the plan left open:
 - **A test `Proc`'s exit codes are a table,** `test_proc([Exit { command,
   code }])`, matched on the whole `Command`, since a program run through
   `sh -c` is told apart by its arguments.
+- **The just fails in three ways the slice didn't name,** besides
+  `UnknownRecipe` and `RecipeFailed`: `BadLine(number)`, a line that's
+  neither a recipe nor one of its lines; `Cycle(name)`, a recipe that
+  depends on itself; and `NoRecipes`, a justfile with none to run first.
+  It doesn't print a line before it runs it, as just does, since only
+  stdout can be written to.
 
 ## Later
 

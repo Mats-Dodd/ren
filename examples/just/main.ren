@@ -1,0 +1,77 @@
+// A small just: runs a recipe from the `justfile` in the folder it's run
+// from, after the recipes it depends on. README.md next to this file says
+// what to look at.
+//
+//   ren run main.ren            the first recipe
+//   ren run main.ren -- test    the recipe `test`
+
+import justfile.{Justfile, Recipe}
+import plan
+
+fn main() =
+  let j = try Justfile.parse(try Fs.read_str(Path.of("justfile")))
+  let args = Os.args()
+  let name =
+    if args.len() > 0 then args[0]
+    else if j.recipes.len() > 0 then j.recipes[0].name
+    else fail NoRecipes
+  for n in try plan.order(j, name)
+    try run(try j.recipe(n))
+
+// Each line of `r` in a shell, until one exits with anything but 0.
+fn run(r: Recipe) ! RecipeFailed(name: Str, code: Int) | NoSuchProgram(name: Str) uses Proc =
+  for line in r.lines
+    let code = try Proc.run("sh", ["-c", line])
+    if code != 0 then fail RecipeFailed(r.name, code)
+
+// The tests run `main` on the test `Fs`, `Os` and `Proc`: a justfile in
+// memory, the args a test gives, and programs that don't run but are kept,
+// to check what would have run, and in what order.
+
+fn sh(line: Str) -> Command = Command { cmd: "sh", args: ["-c", line] }
+
+fn files(text: Str) -> Array<File> = [File { path: Path.of("justfile"), data: text.bytes() }]
+
+fn diamond() -> Str =
+  "all: left right\n  echo all\nleft: base\n  echo left\nright: base\n  echo right\nbase:\n  echo base\n"
+
+test "no args runs the first recipe, after what it depends on" =
+  with mem_fs(files("build: fmt\n  cc a.c\n  cc b.c\nfmt:\n  fmt a.c\ntest:\n  ./a\n")) in
+    try main()
+  assert TestProc.ran() == [sh("fmt a.c"), sh("cc a.c"), sh("cc b.c")]
+
+test "the recipe named in the args" =
+  with mem_fs(files("build:\n  cc a.c\ntest: build\n  ./a\n")), test_os(["test"]) in
+    try main()
+  assert TestProc.ran() == [sh("cc a.c"), sh("./a")]
+
+test "a recipe two others depend on runs once" =
+  with mem_fs(files(diamond())) in
+    try main()
+  assert TestProc.ran() == [sh("echo base"), sh("echo left"), sh("echo right"), sh("echo all")]
+
+test "the first line to fail stops everything" =
+  let fails = Exit { command: sh("echo left"), code: 3 }
+  with mem_fs(files(diamond())), test_proc([fails]) in
+    match attempt main()
+      Err(RecipeFailed(name, code)) => assert name == "left" && code == 3
+      _ => assert false
+    assert TestProc.ran() == [sh("echo base"), sh("echo left")]
+
+test "a recipe that isn't there" =
+  with mem_fs(files(diamond())), test_os(["deploy"]) in
+    match attempt main()
+      Err(UnknownRecipe(name)) => assert name == "deploy"
+      _ => assert false
+  assert TestProc.ran() == []
+
+test "a justfile with no recipes" =
+  with mem_fs(files("# nothing yet\n")) in
+    match attempt main()
+      Err(NoRecipes) => assert true
+      _ => assert false
+
+test "no justfile" =
+  match attempt main()
+    Err(NoSuchFile(p)) => assert p == Path.of("justfile")
+    _ => assert false

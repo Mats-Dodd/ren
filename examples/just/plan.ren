@@ -1,0 +1,51 @@
+// The order to run recipes in: each one after the recipes it depends on,
+// and each once, however many depend on it.
+
+import justfile.{Justfile}
+
+// every recipe `name` needs, then `name`
+pub fn order(j: Justfile, name: Str) -> Array<Str> ! UnknownRecipe(name: Str) | Cycle(name: Str) =
+  var started: Array<Str> = []
+  var done: Array<Str> = []
+  try visit(j, name, &started, &done)
+  done
+
+// Depth first: a recipe goes into `done` after its dependencies. One
+// that's started but not done is being visited further up, so reaching it
+// again is a cycle.
+fn visit(j: Justfile, name: Str, inout started: Array<Str>, inout done: Array<Str>) =
+  if has(done, name) then ()
+  else
+    if has(started, name) then fail Cycle(name)
+    &started.push(name)
+    let r = try j.recipe(name)
+    for d in r.deps
+      try visit(j, d, &started, &done)
+    &done.push(name)
+
+fn has(names: Array<Str>, name: Str) -> Bool =
+  var found = false
+  for n in names
+    if n == name then found = true
+  found
+
+test "dependencies come first, in the order they're written" =
+  let j = try Justfile.parse("all: build test\nbuild: fmt\ntest:\nfmt:\n")
+  assert try order(j, "all") == ["fmt", "build", "test", "all"]
+  assert try order(j, "build") == ["fmt", "build"]
+
+test "a dependency shared by two runs once" =
+  let j = try Justfile.parse("all: left right\nleft: base\nright: base\nbase:\n")
+  assert try order(j, "all") == ["base", "left", "right", "all"]
+
+test "a recipe that isn't there" =
+  let j = try Justfile.parse("all: build\n")
+  match attempt order(j, "all")
+    Err(UnknownRecipe(name)) => assert name == "build"
+    _ => assert false
+
+test "a recipe that depends on itself" =
+  let j = try Justfile.parse("a: b\nb: a\n")
+  match attempt order(j, "a")
+    Err(Cycle(name)) => assert name == "a"
+    _ => assert false

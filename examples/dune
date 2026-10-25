@@ -1,5 +1,6 @@
 ; examples.t runs every example with `ren run` and checks what it prints.
-; Each folder is a program of several modules.
+; Each folder is a program of several modules. just.t runs examples/just
+; on a real justfile.
 
 (cram
  (deps
@@ -10,4 +11,6 @@
   (glob_files shop/billing/*.ren)
   (glob_files vm/*.ren)
   (glob_files bank/*.ren)
-  (glob_files prices/*.ren)))
+  (glob_files prices/*.ren)
+  (glob_files just/*.ren)
+  just/justfile))

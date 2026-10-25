@@ -1,0 +1,51 @@
+// A justfile: recipes, each with a name, the recipes it depends on, and
+// the lines it runs.
+
+pub type Recipe = { name: Str, deps: Array<Str>, lines: Array<Str> }
+
+pub type Justfile = { recipes: Array<Recipe> }
+  // The recipes in `text`. A line that isn't indented starts a recipe,
+  // `name: deps`, and an indented one is a line of the recipe above it.
+  // Blank lines and comments, after `#`, are skipped. Indices into a
+  // string are byte offsets, so `slice` cuts where `find` found.
+  pub fn parse(text: Str) -> Justfile ! BadLine(number: Int) =
+    var recipes: Array<Recipe> = []
+    var number = 0
+    for line in text.split("\n")
+      number += 1
+      let t = line.trim()
+      if t == "" || t.starts_with("#") then ()
+      else if line.starts_with(" ") || line.starts_with("\t") then
+        if recipes.len() == 0 then fail BadLine(number)
+        &recipes[recipes.len() - 1].lines.push(t)
+      else
+        let colon = t.find(":") orelse fail BadLine(number)
+        let name = t.slice(0, colon).trim()
+        if name == "" then fail BadLine(number)
+        var deps: Array<Str> = []
+        for d in t.slice(colon + 1, t.len()).split(" ")
+          if d != "" then &deps.push(d)
+        &recipes.push(Recipe { name: name, deps: deps, lines: [] })
+    Justfile { recipes: recipes }
+
+  // the recipe called `name`
+  pub fn recipe(self, name: Str) -> Recipe ! UnknownRecipe(name: Str) =
+    var found = None
+    for r in self.recipes
+      if r.name == name then found = Some(r)
+    found orelse fail UnknownRecipe(name)
+
+test "a recipe has a name, dependencies and lines" =
+  let j = try Justfile.parse("# build it\nbuild: fmt  gen\n  cc -c a.c\n\n\tcc -o a a.o\nfmt:\n")
+  assert j.recipes == [
+    Recipe { name: "build", deps: ["fmt", "gen"], lines: ["cc -c a.c", "cc -o a a.o"] },
+    Recipe { name: "fmt", deps: [], lines: [] },
+  ]
+
+test "a line that isn't a recipe or one of its lines" =
+  match attempt Justfile.parse("build:\n  make\nwhat is this\n")
+    Err(BadLine(n)) => assert n == 3
+    _ => assert false
+  match attempt Justfile.parse("  make\n")
+    Err(BadLine(n)) => assert n == 1
+    _ => assert false
