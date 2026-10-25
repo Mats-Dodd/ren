@@ -27,7 +27,8 @@ let report src f =
 
 let run src =
   let src = clean src in
-  report src (fun () -> print_endline (Value.show (Driver.run ~file src)))
+  report src (fun () ->
+      print_endline (Value.show (Driver.run ~lint:true ~file src)))
 
 let tokens src =
   let src = clean src in
@@ -43,7 +44,8 @@ let ast src =
 
 let types src =
   let src = clean src in
-  report src (fun () -> List.iter print_endline (Driver.types ~file src))
+  report src (fun () ->
+      List.iter print_endline (Driver.types ~lint:true ~file src))
 
 let plan_types =
   {|
@@ -54,3 +56,12 @@ type Plan =
 
 type User = { id: Int, plan: Plan }
 |}
+
+(* The program lowered to Core (core.ml), one function per line, after
+   Core Lint has checked it. *)
+let core src =
+  let src = clean src in
+  report src (fun () ->
+      List.iter
+        (fun f -> print_endline (Core.show_fn f))
+        (Driver.core ~lint:true ~file src).fns)

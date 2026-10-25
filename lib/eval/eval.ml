@@ -1,20 +1,20 @@
-(* A tree-walking interpreter: the "interpreted Ren" milestone on the roadmap.
+(* A tree-walking interpreter over Core (core.ml): the "interpreted Ren"
+   milestone on the roadmap.
 
-   By the time a program gets here it has been resolved (resolve.ml),
-   checked (mut.ml, exhaust.ml) and type-checked (infer.ml), so it can't
-   add a Bool to an Int, call a function that doesn't exist, or change a
-   `let`. The only errors left are
-   panics, like division by zero. A panic is the running program's fault,
-   not a mistake in its source, so it's an exception of its own rather than
-   a diagnostic.
+   By the time a program gets here it has been resolved, checked,
+   type-checked and lowered, so it can't add a Bool to an Int or call a
+   function that doesn't exist, and every change it makes is an assignment
+   to a local variable. The only errors left are panics, like division by
+   zero. A panic is the running program's fault, not a mistake in its
+   source, so it's an exception of its own rather than a diagnostic.
 
    Values are never changed in place. A variable is a cell ([ref]) holding a
-   value, and assigning to `user.plan` or `xs[i]` builds a new value and puts
-   it in the cell, so a value some other name holds can't change under it.
-   That's value semantics, done the slow way; Stage 11 makes it cheap. *)
+   value, and lowering has turned `user.plan = Free` or `xs[i] = v` into
+   building a new value and assigning it to the variable, so a value some
+   other name holds can't change under it. That's value semantics, done the
+   slow way; Stage 11 makes it cheap. *)
 
-open Ast
-open Ast.Parsed
+open Core
 open Value
 
 exception Panic of Loc.t * string
@@ -28,7 +28,8 @@ let bug what = failwith ("bug: the type checker let through " ^ what)
    them panics; Stage 9's operators will turn that into a type error. *)
 let rec equal loc a b =
   match (a, b) with
-  | VCon x, VCon y -> x.name = y.name && List.for_all2 (equal loc) x.args y.args
+  | VCon x, VCon y ->
+      x.ty = y.ty && x.name = y.name && List.for_all2 (equal loc) x.args y.args
   | VRecord xs, VRecord ys ->
       List.for_all2 (fun (_, x) (_, y) -> equal loc x y) xs ys
   | VArray xs, VArray ys ->
@@ -38,13 +39,10 @@ let rec equal loc a b =
       panic loc "functions can't be compared"
   | _ -> a = b
 
-(* Everything the evaluator looks up by name. *)
-type ctx = {
-  fns : (string, fn_def) Hashtbl.t;
-  ctor_types : (string, string) Hashtbl.t;  (** constructor -> its type *)
-}
+(* The program's top-level functions, by path. *)
+type ctx = { fns : (Path.t, fn_def) Hashtbl.t }
 
-let binop loc op a b =
+let binop loc (op : Ast.binop) a b =
   match (op, a, b) with
   | Add, VInt x, VInt y -> VInt (x + y)
   | Sub, VInt x, VInt y -> VInt (x - y)
@@ -58,15 +56,7 @@ let binop loc op a b =
   | Ge, VInt x, VInt y -> VBool (x >= y)
   | Eq, x, y -> VBool (equal loc x y)
   | Neq, x, y -> VBool (not (equal loc x y))
-  | _ -> bug ("`" ^ binop_to_string op ^ "` on the wrong types")
-
-(* ---- places ----
-
-   A place is somewhere a value can be written: a variable's cell, then a
-   path of fields and indices into its value, like `user.plan` or
-   `grid[i][j]`. Indices are evaluated once, when the place is found. *)
-
-type step = SField of string | SIndex of int * Loc.t
+  | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on the wrong types")
 
 let element loc xs i =
   if i < 0 || i >= Array.length xs then
@@ -75,38 +65,30 @@ let element loc xs i =
          (Array.length xs))
   else xs.(i)
 
-let rec get v path =
-  match (path, v) with
-  | [], v -> v
-  | SField f :: rest, VRecord fields -> get (List.assoc f fields) rest
-  | SIndex (i, loc) :: rest, VArray xs -> get (element loc xs i) rest
-  | _ -> bug "a place of the wrong shape"
-
-(* [v] with the value at [path] replaced by [x]: a new value, sharing
-   whatever didn't change. *)
-let rec set v path x =
-  match (path, v) with
-  | [], _ -> x
-  | SField f :: rest, VRecord fields ->
-      VRecord
-        (List.map
-           (fun (g, w) -> if g = f then (g, set w rest x) else (g, w))
-           fields)
-  | SIndex (i, loc) :: rest, VArray xs ->
+let prim loc op args =
+  match (op, args) with
+  | Neg, [ VInt n ] -> VInt (-n)
+  | Binop op, [ a; b ] -> binop loc op a b
+  | Length, [ VArray xs ] -> VInt (Array.length xs)
+  | Get_index, [ VArray xs; VInt i ] -> element loc xs i
+  | Set_index, [ VArray xs; VInt i; x ] ->
+      ignore (element loc xs i);
       let ys = Array.copy xs in
-      ys.(i) <- set (element loc xs i) rest x;
+      ys.(i) <- x;
       VArray ys
-  | _ -> bug "a place of the wrong shape"
+  | _ -> bug ("`" ^ show_prim op ^ "` on the wrong values")
+
+let truth = function VBool b -> b | _ -> bug "a non-Bool condition"
 
 (* Match a value against a pattern. On success, return the environment
    extended with the variables the pattern binds. *)
-let rec match_pattern (p : pattern) v env =
+let rec match_pattern p v env =
   match (p.pkind, v) with
   | PWild, _ -> Some env
-  | PVar x, _ -> Some (Env.add x.name (ref v) env)
+  | PVar x, _ -> Some (Env.add x.id (ref v) env)
   | PInt n, VInt m -> if n = m then Some env else None
   | PBool b, VBool c -> if b = c then Some env else None
-  | PCon (c, ps), VCon { name; args; _ } when c.name = name ->
+  | PCon (_, c, ps), VCon { name; args; _ } when c = name ->
       match_all ps args env
   | _ -> None
 
@@ -116,205 +98,136 @@ and match_all ps vs env =
   | p :: ps, v :: vs -> Option.bind (match_pattern p v env) (match_all ps vs)
   | _ -> None
 
+let cell env (v : var) =
+  match Env.find_opt v.id env with
+  | Some c -> c
+  | None -> bug ("`" ^ v.name ^ "` used outside its scope")
+
 let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
   | Bool b -> VBool b
   | Unit -> VUnit
-  | Var x -> (
-      (* locals shadow top-level functions *)
-      match Env.find_opt x env with
-      | Some cell -> !cell
-      | None when Hashtbl.mem cx.fns x -> VFn x
-      | None when Prelude.is_fn x -> VBuiltin x
-      | None -> bug ("the unknown name `" ^ x ^ "`"))
-  | Unop (Neg, a) -> (
-      match eval cx env a with
-      | VInt n -> VInt (-n)
-      | _ -> bug "`-` on a non-Int")
-  | Binop (op, a, b) -> binop e.loc op (eval cx env a) (eval cx env b)
-  | If (c, t, f) -> (
-      match (eval cx env c, f) with
-      | VBool true, _ -> eval cx env t
-      | VBool false, Some f -> eval cx env f
-      | VBool false, None -> VUnit
-      | _ -> bug "a non-Bool `if` condition")
-  | Call (f, args) ->
-      let f = eval cx env f in
-      (* an `&` argument is read from its place, and written back once the
-         call returns *)
-      let args =
-        List.map
-          (fun (a : expr) ->
-            match a.kind with
-            | Ref p ->
-                let cell, path = place cx env p in
-                (Some (cell, path), get !cell path)
-            | _ -> (None, eval cx env a))
-          args
-      in
-      let result, finals = apply cx f (List.map snd args) in
-      List.iter2
-        (fun (at, _) v ->
-          match at with
-          | Some (cell, path) -> cell := set !cell path v
-          | None -> ())
-        args finals;
-      result
-  | Lambda (params, body) ->
-      (* capture the variables' values now, in cells of the lambda's own:
-         assigning to a variable later doesn't change what the lambda sees *)
-      let env = Env.map (fun cell -> ref !cell) env in
-      VClosure
-        {
-          params = List.map (fun (p : param) -> p.pname.name) params;
-          body;
-          env;
-        }
-  | Block (stmts, last) ->
-      let exec env : stmt -> _ = function
-        | Let { name; value; _ } ->
-            Env.add name.name (ref (eval cx env value)) env
-        | Expr e ->
-            ignore (eval cx env e);
-            env
-      in
-      eval cx (List.fold_left exec env stmts) last
-  | Con (c, args) ->
-      (* inference has already confirmed the constructor exists *)
-      let ty = Hashtbl.find cx.ctor_types c.name in
-      VCon
-        {
-          ty;
-          name = c.name;
-          args = List.map (fun (_, a) -> eval cx env a) args;
-        }
-  | Record (_, fields) ->
-      let fields =
-        List.map (fun ((f : ident), v) -> (f.name, eval cx env v)) fields
-      in
-      VRecord (List.sort (fun (a, _) (b, _) -> String.compare a b) fields)
-  | Field (r, f) -> get (eval cx env r) [ SField f.name ]
-  | Array xs -> VArray (Array.of_list (List.map (eval cx env) xs))
-  | Index (a, i) -> (
-      let a = eval cx env a in
-      match eval cx env i with
-      | VInt n -> get a [ SIndex (n, e.loc) ]
-      | _ -> bug "a non-Int index")
-  | Ref a -> eval cx env a
-  | Assign { target; op; value } ->
-      let cell, path = place cx env target in
-      let v = eval cx env value in
-      let v =
-        match op with Some op -> binop e.loc op (get !cell path) v | None -> v
-      in
-      cell := set !cell path v;
+  | Local v -> !(cell env v)
+  | Global p -> VFn p
+  | Intrinsic x -> VBuiltin x
+  | Prim (op, args) -> prim e.loc op (eval_all cx env args)
+  | Let (v, value, body) ->
+      let x = eval cx env value in
+      eval cx (Env.add v.id (ref x) env) body
+  | Assign (v, value) ->
+      cell env v := eval cx env value;
       VUnit
-  | For { var; iter = { kind = Ref p; loc; _ }; body } ->
-      (* each element is copied into `var`, and written back after each
-         pass; mut.ml makes sure the body can't change the array itself *)
-      let cell, path = place cx env p in
-      let n =
-        match get !cell path with
-        | VArray xs -> Array.length xs
-        | _ -> bug "a `for` loop over a non-Array"
-      in
-      for i = 0 to n - 1 do
-        let at = path @ [ SIndex (i, loc) ] in
-        let x = ref (get !cell at) in
-        ignore (eval cx (Env.add var.name x env) body);
-        cell := set !cell at !x
+  | If (c, t, f) ->
+      if truth (eval cx env c) then eval cx env t else eval cx env f
+  | While (c, body) ->
+      while truth (eval cx env c) do
+        ignore (eval cx env body)
       done;
       VUnit
-  | For { var; iter; body } -> (
-      match eval cx env iter with
-      | VArray xs ->
-          Array.iter
-            (fun x -> ignore (eval cx (Env.add var.name (ref x) env) body))
-            xs;
-          VUnit
-      | _ -> bug "a `for` loop over a non-Array")
+  | Seq (a, b) ->
+      ignore (eval cx env a);
+      eval cx env b
+  | Call (f, args) ->
+      let f = eval cx env f in
+      (* an `inout` argument is a local: read it now, and write the
+         parameter's final value back once the call returns *)
+      let values =
+        eval_all cx env
+          (List.map (function Value a -> a | Ref v -> local v e.loc) args)
+      in
+      let result, finals = apply cx f values in
+      List.iter2
+        (fun a v -> match a with Ref x -> cell env x := v | Value _ -> ())
+        args finals;
+      result
+  | Lambda { params; captures; body } ->
+      (* copy the captured variables' values now, into cells of the
+         lambda's own: assigning to a variable later doesn't change what
+         the lambda sees *)
+      let env =
+        List.fold_left
+          (fun inner (v : var) -> Env.add v.id (ref !(cell env v)) inner)
+          Env.empty captures
+      in
+      VClosure
+        { params = List.map (fun (p : param) -> p.var.id) params; body; env }
+  | Con (p, c, args) -> VCon { ty = p; name = c; args = eval_all cx env args }
+  | Record (_, fields) ->
+      let values = eval_all cx env (List.map snd fields) in
+      let fields = List.combine (List.map fst fields) values in
+      VRecord (List.sort (fun (a, _) (b, _) -> String.compare a b) fields)
+  | Field (r, _, f) -> (
+      match eval cx env r with
+      | VRecord fields -> List.assoc f fields
+      | _ -> bug "a field of a non-record")
+  | Update (r, f, v) -> (
+      let r = eval cx env r in
+      let v = eval cx env v in
+      match r with
+      | VRecord fields ->
+          VRecord
+            (List.map (fun (g, w) -> if g = f then (g, v) else (g, w)) fields)
+      | _ -> bug "an update of a non-record")
+  | Array xs -> VArray (Array.of_list (eval_all cx env xs))
   | Match (subject, arms) ->
       let v = eval cx env subject in
       let guard_passes env = function
         | None -> true
-        | Some g -> (
-            match eval cx env g with
-            | VBool b -> b
-            | _ -> bug "a non-Bool guard")
+        | Some g -> truth (eval cx env g)
       in
       let rec first = function
         | [] -> panic e.loc "no arm of this `match` matched"
         | a :: rest -> (
-            match match_pattern a.arm_pat v env with
-            | Some env when guard_passes env a.arm_guard ->
-                eval cx env a.arm_body
+            match match_pattern a.pat v env with
+            | Some env when guard_passes env a.guard -> eval cx env a.body
             | _ -> first rest)
       in
       first arms
 
-(* The cell and path a place expression names (mut.ml has checked it is
-   one). *)
-and place cx env (e : expr) =
-  match e.kind with
-  | Var x -> (
-      match Env.find_opt x env with
-      | Some cell -> (cell, [])
-      | None -> bug ("an assignment to `" ^ x ^ "`, which isn't a variable"))
-  | Field (r, f) ->
-      let cell, path = place cx env r in
-      (cell, path @ [ SField f.name ])
-  | Index (a, i) -> (
-      let cell, path = place cx env a in
-      match eval cx env i with
-      | VInt n -> (cell, path @ [ SIndex (n, e.loc) ])
-      | _ -> bug "a non-Int index")
-  | _ -> bug "an assignment to something that isn't a place"
+(* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
+and eval_all cx env = function
+  | [] -> []
+  | e :: rest ->
+      let v = eval cx env e in
+      v :: eval_all cx env rest
 
 (* Call [f]. Returns its result and the final value of every parameter, so
-   the caller can write back the ones it passed with `&`. *)
+   the caller can write back the ones passed `inout`. *)
 and apply cx f args =
   let run params body env =
     let cells = List.map ref args in
     let env =
-      List.fold_left2 (fun env x c -> Env.add x c env) env params cells
+      List.fold_left2 (fun env id c -> Env.add id c env) env params cells
     in
     let result = eval cx env body in
     (result, List.map ( ! ) cells)
   in
-  match (f, args) with
-  | VBuiltin name, _ -> (
+  match f with
+  | VBuiltin name -> (
       match Prelude.find_fn name with
       | Some b -> b.eval args
       | None -> bug ("the unknown built-in `" ^ name ^ "`"))
-  | VFn name, _ ->
-      let f = Hashtbl.find cx.fns name in
-      run (List.map (fun (p : param) -> p.pname.name) f.params) f.body Env.empty
-  | VClosure { params; body; env }, _ -> run params body env
+  | VFn p ->
+      let f = Hashtbl.find cx.fns p in
+      run (List.map (fun (p : param) -> p.var.id) f.params) f.body Env.empty
+  | VClosure { params; body; env } -> run params body env
   | _ -> bug "a call to something that isn't a function"
 
-(* Run a program made of [modules] (the prelude, then the user's file).
-   Names are unique across them, since each was checked against the
-   interfaces of the ones before it. *)
+(* Run a program made of [modules] (the prelude, then the user's file),
+   starting from the last one's `main`. *)
 let run (modules : program list) =
-  let prog = List.concat modules in
-  let cx = { fns = Hashtbl.create 16; ctor_types = Hashtbl.create 16 } in
+  let cx = { fns = Hashtbl.create 16 } in
   List.iter
-    (function
-      | Fn f -> Hashtbl.replace cx.fns f.name.name f
-      | Type { type_name; type_body = Ctors cs; _ } ->
-          List.iter
-            (fun c ->
-              Hashtbl.replace cx.ctor_types c.ctor_name.name type_name.name)
-            cs
-      | Type { type_body = Fields _; _ } -> ())
-    prog;
-  match Hashtbl.find_opt cx.fns "main" with
+    (fun (m : program) ->
+      List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns)
+    modules;
+  let entry = List.nth modules (List.length modules - 1) in
+  match Hashtbl.find_opt cx.fns (Path.make entry.home "main") with
   | None -> bug "a program with no `main`"
   | Some f -> (
       (* OCaml's own stack runs out when a Ren function calls itself too
          deeply; that's the program's fault, so it's a panic *)
-      try fst (apply cx (VFn f.name.name) [])
+      try fst (apply cx (VFn f.path) [])
       with Stack_overflow ->
-        panic f.name.loc
-          "the stack overflowed: a function called itself too deeply")
+        panic f.loc "the stack overflowed: a function called itself too deeply")

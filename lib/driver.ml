@@ -36,9 +36,9 @@ let parse ~file src =
 (* Check one module against the interfaces it imports, before anything
    runs: first what its names refer to (found through scope), then what may
    change, then types (and what's found through them), then whether every
-   `match` is exhaustive. Returns the module's interface and what inference
-   found. [entry] is set for the module the program starts in, which needs
-   a `main`. *)
+   `match` is exhaustive. Returns the module resolved, its interface and
+   what inference found. [entry] is set for the module the program starts
+   in, which needs a `main`. *)
 let check_module ~home ~imports ?entry prog =
   let r =
     checked "resolve" (fun sink -> Resolve.program sink ~home ~imports prog)
@@ -78,48 +78,62 @@ let check_module ~home ~imports ?entry prog =
                    v.vname (show v.scheme) (show found);
              }))
     iface.values;
-  (iface, inferred)
+  (r, iface, inferred)
+
+(* A checked module, lowered to Core. With [lint], Core Lint checks the
+   result; the tests turn it on for every program. *)
+let lower ?(lint = false) ~imports r inferred =
+  let core = pass "lower" (fun () -> Lower.program r inferred) in
+  if lint then pass "lint" (fun () -> Core_lint.program ~imports core);
+  core
 
 (* The prelude, as a module: its source, parsed and checked against the
-   intrinsics (prelude.ml), and its whole interface. It's checked once, the
-   first time it's needed: [lazy] delays a computation and [Lazy.force] runs
-   it (at most once). It's the same for every program, so sharing it is
-   safe. *)
+   intrinsics (prelude.ml) and lowered (and linted), and its whole
+   interface. It's checked once, the first time it's needed: [lazy] delays
+   a computation and [Lazy.force] runs it (at most once). It's the same for
+   every program, so sharing it is safe. *)
 let prelude =
   lazy
     (let prog = parse ~file:"<prelude>" (String.trim Prelude.source) in
-     let iface, _ =
-       check_module ~home:Path.prelude_home ~imports:[ Prelude.intrinsics ] prog
+     let imports = [ Prelude.intrinsics ] in
+     let r, iface, inferred =
+       check_module ~home:Path.prelude_home ~imports prog
      in
-     (prog, Iface.union Prelude.intrinsics iface))
+     (lower ~lint:true ~imports r inferred, Iface.union Prelude.intrinsics iface))
 
-(* The user's program, checked against the prelude's interface. Returns
-   the program, its interface, and what inference found in it. *)
+(* The user's program, checked against the prelude's interface. *)
+type checked = {
+  prog : Ast.Parsed.program;
+  resolved : Resolve.t;
+  iface : Iface.t;
+  inferred : Infer.t;
+  imports : Iface.t list;
+}
+
 let check_all ~file src =
   let _, prelude_iface = Lazy.force prelude in
   let prog = parse ~file src in
   let home = Path.home_of_file file in
-  let iface, inferred =
-    check_module ~home ~imports:[ prelude_iface ] ~entry:file prog
+  let imports = [ prelude_iface ] in
+  let resolved, iface, inferred =
+    check_module ~home ~imports ~entry:file prog
   in
-  (prog, iface, inferred)
+  { prog; resolved; iface; inferred; imports }
 
-let check ~file src =
-  let prog, _, _ = check_all ~file src in
-  prog
-
-let inferred ~file src =
-  let _, _, inferred = check_all ~file src in
-  inferred
-
+let check ~file src = (check_all ~file src).prog
+let inferred ~file src = (check_all ~file src).inferred
 let schemes ~file src = (inferred ~file src).schemes
+let interface ~file src = (check_all ~file src).iface
 
-let interface ~file src =
-  let _, iface, _ = check_all ~file src in
-  iface
+let core ?lint ~file src =
+  let c = check_all ~file src in
+  lower ?lint ~imports:c.imports c.resolved c.inferred
 
-let types ~file src =
-  let prog, _, (inferred : Infer.t) = check_all ~file src in
+let types ?(lint = false) ~file src =
+  let ({ prog; inferred; _ } as c) = check_all ~file src in
+  (* the tests also check that the program lowers, and lints *)
+  if lint then
+    ignore (lower ~lint:true ~imports:c.imports c.resolved inferred);
   let schemes = inferred.schemes in
   List.filter_map
     (function
@@ -135,8 +149,8 @@ let types ~file src =
       | Type _ -> None)
     prog
 
-let run ~file src =
-  let prog = check ~file src in
+let run ?lint ~file src =
+  let prog = core ?lint ~file src in
   let prelude, _ = Lazy.force prelude in
   pass "eval" (fun () -> Eval.run [ prelude; prog ])
 

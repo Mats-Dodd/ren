@@ -92,7 +92,6 @@ let fns =
   ]
 
 let find_fn name = List.find_opt (fun (f : builtin_fn) -> f.name = name) fns
-let is_fn name = find_fn name <> None
 
 (* The intrinsic half of the prelude's interface. *)
 let intrinsics : Iface.t =

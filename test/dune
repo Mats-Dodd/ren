@@ -1,6 +1,10 @@
+; The examples are a dependency so test_lower.ml can lint every one.
+
 (library
  (name ren_tests)
- (inline_tests)
+ (inline_tests
+  (deps
+   (glob_files ../examples/*.ren)))
  (preprocess
   (pps ppx_expect))
  (libraries ren))

@@ -25,11 +25,17 @@ val inferred : file:string -> string -> Infer.t
    imports it. *)
 val interface : file:string -> string -> Iface.t
 
-(* Every function's inferred signature, as `ren types` prints it. *)
-val types : file:string -> string -> string list
+(* The program, checked and lowered to Core. With [lint] (off by default),
+   Core Lint checks what lowering made, and a problem is an
+   [Internal_error]; the tests turn it on. *)
+val core : ?lint:bool -> file:string -> string -> Core.program
 
-(* Check the program, then run it. *)
-val run : file:string -> string -> Value.t
+(* Every function's inferred signature, as `ren types` prints it. With
+   [lint], the program is also lowered and linted. *)
+val types : ?lint:bool -> file:string -> string -> string list
+
+(* Check the program, lower it, then run it. *)
+val run : ?lint:bool -> file:string -> string -> Value.t
 val dump_tokens : (Token.t * Loc.t) array -> string
 
 (* The message for an exception a pass raised: a diagnostic, a panic or an

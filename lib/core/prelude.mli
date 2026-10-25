@@ -16,7 +16,6 @@ type builtin_fn = {
 val types : builtin_type list
 val fns : builtin_fn list
 val find_fn : string -> builtin_fn option
-val is_fn : string -> bool
 
 (* The interface of the built-in half: the built-in types and functions.
    The driver joins it to the interface of [source]. *)
