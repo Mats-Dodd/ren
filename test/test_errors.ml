@@ -182,6 +182,9 @@ fn main() = ()
       ┌─ test.ren:2:18
     2 │ fn bad() = apply(fn() => fail Oops)
       │                  ^^^^^^^^^^^^^^^^^
+      = this function can fail with `Oops`, and the type wanted here can't fail
+      = a parameter whose type is inferred can fail only if it's called with `try`
+      help: pass its errors on with `try` where it's called, or handle them inside it with `match`
     |}]
 
 (* ---- 2. You can't ignore it ---- *)
@@ -273,15 +276,6 @@ fn main() = ()
       = `debit` can only fail with what's after its `!`
       help: add `Frozen(Int)` after `!`, or handle it here with `match`
 
-    error: `pub fn transfer` can fail with `Frozen`, but its signature doesn't say so
-      ┌─ test.ren:5:8
-    5 │ pub fn transfer(inout a: Int, m: Int) =
-      │        ^^^^^^^^
-    6 │   try debit(&a, m)
-      │       ------------ this call can fail with `Frozen`
-      = a public function without `!` can't fail, and its body is checked against that
-      help: add `! Frozen(Int)` to its signature, or handle it here with `match`
-
     error: `pub fn transfer` can fail with `Short`, but its signature doesn't say so
       ┌─ test.ren:5:8
     5 │ pub fn transfer(inout a: Int, m: Int) =
@@ -363,6 +357,40 @@ fn main() = ()
       ┌─ test.ren:3:22
     3 │ fn other() = try run(fn(x) => if x < 0 then fail Worse else x, 1)
       │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = this function can fail with `Worse`, and the type wanted here fails only with `Bad`
+      help: handle the others inside it with `match`
+    |}]
+
+let%expect_test "a transparent parameter is printed as it's written" =
+  (* its rows are its function's, so `f: fn(Int) ! Bad` would say
+     something else: that `f` fails with exactly `Bad` *)
+  checked_files
+    [
+      ( "main.ren",
+        {|
+import lib
+fn a(xs: Array<Int>) = try lib.each(xs, fn(x) => if x > 0 then fail Pos(x))
+fn main() = ()
+|}
+      );
+      ( "lib.ren",
+        {|
+pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad uses Io =
+  if xs.len() == 0 then fail Bad
+  print(1)
+  for x in xs
+    try f(x)
+|}
+      );
+    ];
+  [%expect
+    {|
+    -- lib
+    pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad uses Io
+
+    -- main
+    fn a(xs: Array<Int>) ! Bad | Pos(Int) uses Io
+    fn main()
     |}]
 
 (* ---- 4. Passing it on costs one word ---- *)
@@ -462,6 +490,50 @@ fn main() = ()
     fn main()
     |}]
 
+let%expect_test "attempt keeps what a passed function fails with" =
+  (* its `Result` keeps the passed function's open set, and the function
+     itself doesn't fail *)
+  checked
+    {|
+fn wrap(g: fn() -> Int) = attempt g()
+fn w(f) = attempt f()
+fn both(g: fn()) =
+  try g()
+  let r = attempt g()
+  r
+fn bad() -> Int = fail B
+fn use() = wrap(fn() => fail Q)
+fn use2() = w(bad)
+fn main() = ()
+|};
+  [%expect
+    {|
+    fn wrap(g: fn() -> Int ! ..e) -> Result<Int, ! ..e>
+    fn w<T>(f: fn() -> T ! ..e) -> Result<T, ! ..e>
+    fn both(g: fn()) -> Result<Unit, ! ..e> ! ..e
+    fn bad() -> Int ! B
+    fn use() -> Result<Int, ! Q>
+    fn use2() -> Result<Int, ! B>
+    fn main()
+    |}];
+  (* a public function's transparent parameter fails with the function's
+     own errors, as its signature says, so they're passed on *)
+  checked
+    {|
+pub fn wrap(g: fn() -> Int) -> Result<Int, ! Mine> = attempt g()
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `attempt` can't keep what `g` fails with here
+      ┌─ test.ren:1:62
+    1 │ pub fn wrap(g: fn() -> Int) -> Result<Int, ! Mine> = attempt g()
+      │                                                              ^^^
+      │                                                              - its type is written `fn(...)`, so what it fails with is passed on to whoever calls `wrap`
+      = a public signature can't name a passed function's errors in a `Result` yet: that arrives with `..e`, in stage 7
+      help: pass them on with `try`, or make `wrap` private, so its type is inferred
+    |}]
+
 let%expect_test "matching a Result handles every error it can hold" =
   checked
     {|
@@ -479,6 +551,9 @@ fn some(id: Int) -> Int =
   match attempt big(id)
     Ok(n) => n
     Err(NotFound(_)) => 0
+fn none(id: Int) -> Int =
+  match attempt big(id)
+    Ok(n) => n
 fn main() = ()
 |};
   [%expect
@@ -489,6 +564,13 @@ fn main() = ()
        │   ^^^^^
        = missing: Err(TooBig)
        help: add an arm for `Err(TooBig)`, or a `_ =>` arm for the rest
+
+    error: this `match` doesn't handle every `Result`
+       ┌─ test.ren:16:3
+    16 │   match attempt big(id)
+       │   ^^^^^
+       = missing: Err(NotFound(_)), Err(TooBig)
+       help: add an arm for `Err(NotFound(_))`, or a `_ =>` arm for the rest
     |}];
   (* a misspelled tag is a different error, which the `Result` can't hold *)
   checked
@@ -529,6 +611,34 @@ fn main() = ()
       │         ^
       = an error is a value only inside the `Result` that holds it
       help: match its tags, like `Err(NotFound(id))`, or ignore it with `Err(_)`
+    |}];
+  (* a `Result` made with `Ok` holds an error set too *)
+  checked
+    {|
+fn ok() = Ok(1)
+fn same<T>(a: T, b: T) = ()
+fn whole() =
+  match ok()
+    Ok(n) => ()
+    Err(x) => same(x, 5)
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `x` would hold an error, which isn't a value
+      ┌─ test.ren:6:9
+    6 │     Err(x) => same(x, 5)
+      │         ^
+      = an error is a value only inside the `Result` that holds it
+      help: match its tags, like `Err(NotFound(id))`, or ignore it with `Err(_)`
+    |}];
+  checked {|
+fn ok() = Ok(1)
+fn main() = ()
+|};
+  [%expect {|
+    fn ok() -> Result<Int, !>
+    fn main()
     |}];
   checked {|
 fn made() = Err(NotFound(1))
@@ -660,6 +770,26 @@ fn main() = ()
       help: give one of them another name
     |}]
 
+let%expect_test "a function passed where its tag has another shape" =
+  checked
+    {|
+pub fn each(xs: Array<Int>, f: fn(Int)) ! Bad =
+  if xs.len() == 0 then fail Bad
+  for x in xs
+    try f(x)
+fn a(xs: Array<Int>) = try each(xs, fn(x) => if x > 0 then fail Bad(x))
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: expected `fn(Int) ! Bad`, found `fn(Int) ! Bad(Int)`
+      ┌─ test.ren:5:37
+    5 │ fn a(xs: Array<Int>) = try each(xs, fn(x) => if x > 0 then fail Bad(x))
+      │                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = `Bad` has two shapes here, `Bad` and `Bad(Int)`: a tag is its name and its payload's types, so these are two errors with one name
+      help: give one of them another name, where it fails
+    |}]
+
 let%expect_test "a named set is imported like a type" =
   checked_files
     [
@@ -715,6 +845,32 @@ fn main() = ()
     1 │ fn first(r: Result<Int, Int>, s: Option<! Bad>) = ()
       │                                         ^^^^^
       help: an error set goes after `!` in a signature or a function type, or in `Result<T, ! ...>`
+    |}]
+
+let%expect_test "fail names a tag, not a set" =
+  checked
+    {|
+type Refusal = ! Short(Int) | Frozen
+fn f() = fail Refusal
+fn g() ! Short(Int) | Short = ()
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Refusal` is an error set, not a tag
+      ┌─ test.ren:2:15
+    2 │ fn f() = fail Refusal
+      │               ^^^^^^^
+      = an error set holds the tags a function can fail with, and `fail` fails with one of them
+      help: fail with one of its tags
+
+    error: `Short` has two shapes in this error set
+      ┌─ test.ren:3:23
+    3 │ fn g() ! Short(Int) | Short = ()
+      │                       ^^^^^
+      │          ----- `Short(Int)` is here
+      = a tag is its name and its payload's types, so these are two errors with one name
+      help: give one of them another name
     |}]
 
 let%expect_test "running error handling arrives later" =

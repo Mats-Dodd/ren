@@ -44,6 +44,7 @@ and owner = Of_type of Path.t | Of_set of (string * int) list | No_list
 type space = Any | Ctor of head * space list
 
 let bool_path = Path.prelude "Bool"
+let result_path = Path.prelude "Result"
 
 let rec simplify env (p : pattern) =
   match p.pkind with
@@ -202,7 +203,33 @@ let check_match env (e : expr) (subject : expr) arms =
       | Some [ w ] -> w :: collect (rows @ [ [ w ] ]) (k - 1)
       | _ -> []
   in
-  match collect rows 3 with
+  (* a missing `Err(_)` of a [Result] whose set is settled is each of its
+     tags, which can be named *)
+  let tags =
+    match (Infer.Nodes.find subject.node env.nodes).ty with
+    | Con (p, [ _; Errors { labels; tail = None } ]) when p = result_path ->
+        labels
+    | _ -> []
+  in
+  let owner =
+    Of_set
+      (List.map (fun (l : Ty.label) -> (l.name, List.length l.payload)) tags)
+  in
+  let expand = function
+    | Ctor (({ name = "Err"; owner = Of_type p } as err), [ Any ])
+      when p = result_path && tags <> [] ->
+        List.map
+          (fun (l : Ty.label) ->
+            Ctor
+              ( err,
+                [
+                  Ctor ({ name = l.name; owner }, wilds (List.length l.payload));
+                ] ))
+          tags
+    | w -> [ w ]
+  in
+  let missing = List.concat_map expand (collect rows 3) in
+  match List.filteri (fun i _ -> i < 3) missing with
   | [] -> ()
   | first :: _ as ws ->
       let what =
@@ -238,17 +265,7 @@ let rec no_bound_errors env (p : pattern) =
   | PVar b -> (
       match (Infer.Nodes.find p.pnode env.nodes).ty with
       | Errors _ ->
-          Diag.report env.sink
-            (Diag.make p.ploc
-               ~notes:
-                 [
-                   "an error is a value only inside the `Result` that holds it";
-                 ]
-               ~help:
-                 "match its tags, like `Err(NotFound(id))`, or ignore it with \
-                  `Err(_)`"
-               (sprintf "`%s` would hold an error, which isn't a value"
-                  b.ident.name))
+          Diag.report env.sink (Infer_msg.bound_error p.ploc b.ident.name)
       | _ -> ())
   | PCon (_, ps) | PFail (_, ps) | POr ps -> List.iter (no_bound_errors env) ps
   | PWild | PInt _ | PBool _ | PFail_any -> ()

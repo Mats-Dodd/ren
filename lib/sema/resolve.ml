@@ -415,16 +415,42 @@ and errors env ~params (es : Parsed.errors) : Resolved.errors =
     | Tag (t, _) -> t
     | Set n -> { name = show_tyname n; loc = tyname_loc n }
   in
+  (* a tag as its shape: its name and its payload's types *)
+  let shape : Parsed.error -> string option = function
+    | Tag (t, []) -> Some t.name
+    | Tag (t, ps) ->
+        Some
+          (t.name ^ "("
+          ^ String.concat ", "
+              (List.map
+                 (fun (p : tyname payload) -> Ast.show_ty p.payload_ty)
+                 ps)
+          ^ ")")
+    | Set _ -> None
+  in
   let seen = Hashtbl.create 8 in
   List.iter
     (fun e ->
       let id = name e in
       match Hashtbl.find_opt seen id.name with
-      | Some first ->
-          report env id.loc ~help:"remove one of them"
-            ~labels:[ (first, sprintf "the first `%s` is here" id.name) ]
-            (sprintf "`%s` is in this error set twice" id.name)
-      | None -> Hashtbl.replace seen id.name id.loc)
+      | Some (first, first_shape) -> (
+          match (first_shape, shape e) with
+          | Some a, Some b when a <> b ->
+              Diag.report env.sink
+                (Diag.make id.loc
+                   ~labels:[ (first, sprintf "`%s` is here" a) ]
+                   ~notes:
+                     [
+                       "a tag is its name and its payload's types, so these \
+                        are two errors with one name";
+                     ]
+                   ~help:"give one of them another name"
+                   (sprintf "`%s` has two shapes in this error set" id.name))
+          | _ ->
+              report env id.loc ~help:"remove one of them"
+                ~labels:[ (first, sprintf "the first `%s` is here" id.name) ]
+                (sprintf "`%s` is in this error set twice" id.name))
+      | None -> Hashtbl.replace seen id.name (id.loc, shape e))
     es.errs;
   { errs = List.map error es.errs; eloc = es.eloc }
 
@@ -855,7 +881,20 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let iter = go iter in
         let b, inner = bind env sc var bound in
         For { var = b; iter; body = expr env inner body }
-    | Fail (t, args) -> Fail (t, List.map (fun (l, a) -> (l, go a)) args)
+    | Fail (t, args) ->
+        (match Hashtbl.find_opt env.types t.name with
+        | Some (p, _) when is_set env p ->
+            Diag.report env.sink
+              (Diag.make t.loc
+                 ~notes:
+                   [
+                     "an error set holds the tags a function can fail with, \
+                      and `fail` fails with one of them";
+                   ]
+                 ~help:"fail with one of its tags"
+                 (sprintf "`%s` is an error set, not a tag" t.name))
+        | _ -> ());
+        Fail (t, List.map (fun (l, a) -> (l, go a)) args)
     | Try a -> Try (go a)
     | Attempt a -> Attempt (go a)
   in

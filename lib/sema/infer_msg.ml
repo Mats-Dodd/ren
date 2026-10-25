@@ -33,6 +33,41 @@ let rec mode_clash found expected =
       List.find_map (fun (x, y) -> mode_clash x y) (List.combine a1 a2)
   | _ -> None
 
+(* Where [found] can fail with errors that [expected], a closed row, can't:
+   those errors, and the ones it can. A function passed where its errors can't go looks much like
+   what's wanted, since a message doesn't show a row's tail. *)
+let rec errors_clash found expected =
+  let pairs a b =
+    if List.length a = List.length b then
+      List.find_map (fun (x, y) -> errors_clash x y) (List.combine a b)
+    else None
+  in
+  match (repr found, repr expected) with
+  | TFun (p1, r1, e1, _), TFun (p2, r2, e2, _) -> (
+      let wanted = row_names e2 in
+      match
+        List.filter
+          (fun (l : label) -> not (List.mem l.name wanted))
+          (fst (row_parts e1))
+      with
+      | _ :: _ as extra when row_tail e2 = None ->
+          Some (extra, fst (row_parts e2))
+      | _ -> pairs (r1 :: param_tys p1) (r2 :: param_tys p2))
+  | TCon (n1, a1), TCon (n2, a2) when n1 = n2 -> pairs a1 a2
+  | _ -> None
+
+(* The labels named [name] in the error rows inside [t]. *)
+let rec labels_named name t =
+  let row r =
+    List.filter (fun (l : label) -> l.name = name) (fst (row_parts r))
+  in
+  match repr t with
+  | TFun (ps, r, e, _) ->
+      row e @ List.concat_map (labels_named name) (r :: param_tys ps)
+  | TCon (_, args) -> List.concat_map (labels_named name) args
+  | TErrors e -> row e
+  | TVar _ | TSkol _ | TError -> []
+
 (* Notes for a mismatch between [found] and [expected] that the two types
    alone don't explain: the type parameters in them, and a parameter that's
    [inout] in one and not the other. Also the help that goes with the
@@ -523,6 +558,14 @@ let two_shapes loc name ~old:(old_from, old_shape) ~new_:(new_from, new_shape)
     ~help
     (sprintf "`%s` has two shapes here" name)
 
+(* A variable bound to an error, `Err(e)`, would make the error a value of
+   its own (errors.md, "Keeping an error"), so it's matched by its tags. *)
+let bound_error loc name =
+  Diag.make loc
+    ~notes:[ "an error is a value only inside the `Result` that holds it" ]
+    ~help:"match its tags, like `Err(NotFound(id))`, or ignore it with `Err(_)`"
+    (sprintf "`%s` would hold an error, which isn't a value" name)
+
 (* `Err(...)` written as a value. *)
 let err_made loc =
   Diag.make loc
@@ -572,6 +615,30 @@ let unhandled_param loc ~name_loc callee param =
       ]
     ~help:"pass the errors on with `try`, or handle them with `match`"
     (sprintf "`%s` can fail, and nothing handles it" callee)
+
+(* An `attempt` of a call of [callee], a transparent parameter of the
+   public function [fn], whose errors are [fn]'s own. *)
+let kept_passed_on loc ~name_loc callee ~fn =
+  Diag.make loc
+    ~labels:
+      [
+        ( name_loc,
+          sprintf
+            "its type is written `fn(...)`, so what it fails with is passed on \
+             to whoever calls `%s`"
+            fn );
+      ]
+    ~notes:
+      [
+        "a public signature can't name a passed function's errors in a \
+         `Result` yet: that arrives with `..e`, in stage 7";
+      ]
+    ~help:
+      (sprintf
+         "pass them on with `try`, or make `%s` private, so its type is \
+          inferred"
+         fn)
+    (sprintf "`attempt` can't keep what `%s` fails with here" callee)
 
 (* A `try` or `attempt`, at [loc], that covers nothing that can fail. *)
 let covers_nothing loc keyword =

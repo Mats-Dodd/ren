@@ -67,8 +67,9 @@ type env = {
       (** the group's calls that no marker covers, each with the row its errors
           went to, which has to end up empty *)
   mutable all_markers : marker list;  (** the group's `try`s and `attempt`s *)
-  mutable kept : row list;
-      (** the errors each `attempt` of the group keeps in its [Result] *)
+  mutable kept : (row * (string * ty) list) list;
+      (** the errors each `attempt` of the group keeps in its [Result], each
+          with the parameters of the function and lambdas it's in *)
   mutable unwraps : unwrap list;
       (** each `try r` of a [Result] in the group, most recent first *)
   mutable tag_patterns : (ident * ty list * row) list;
@@ -248,7 +249,7 @@ let plain = explain ()
 let unifies env why loc ~found ~expected =
   match Unify.unify env.st found expected with
   | () -> true
-  | exception (Unify.Mismatch | Unify.Two_shapes _) ->
+  | exception ((Unify.Mismatch | Unify.Two_shapes _) as failure) ->
       let pr = printer env in
       let f = show pr found and x = show pr expected in
       let msg =
@@ -258,6 +259,55 @@ let unifies env why loc ~found ~expected =
       in
       let help = Option.map (fun h -> h f x) why.help in
       let more, help = mismatch_notes ?help ~found ~expected () in
+      (* what's about errors: one tag with two shapes, or a function that
+         fails where nothing can *)
+      let more, help =
+        match (failure, errors_clash found expected) with
+        | Unify.Two_shapes name, _ ->
+            let shapes =
+              List.sort_uniq compare
+                (List.map (show_label pr)
+                   (labels_named name found @ labels_named name expected))
+            in
+            ( more
+              @ [
+                  sprintf
+                    "`%s` has two shapes here, %s: a tag is its name and its \
+                     payload's types, so these are two errors with one name"
+                    name (and_list shapes);
+                ],
+              Some
+                (Option.value help
+                   ~default:"give one of them another name, where it fails") )
+        | _, Some (extra, []) ->
+            ( more
+              @ [
+                  sprintf
+                    "this function can fail with %s, and the type wanted here \
+                     can't fail"
+                    (and_list (List.map (show_label pr) extra));
+                  "a parameter whose type is inferred can fail only if it's \
+                   called with `try`";
+                ],
+              Some
+                (Option.value help
+                   ~default:
+                     "pass its errors on with `try` where it's called, or \
+                      handle them inside it with `match`") )
+        | _, Some (extra, wanted) ->
+            ( more
+              @ [
+                  sprintf
+                    "this function can fail with %s, and the type wanted here \
+                     fails only with %s"
+                    (and_list (List.map (show_label pr) extra))
+                    (and_list (List.map (show_label pr) wanted));
+                ],
+              Some
+                (Option.value help
+                   ~default:"handle the others inside it with `match`") )
+        | _ -> (more, help)
+      in
       (* another module's opaque type can't stand in for what it's
          represented as, or the other way round. [blame] looks for one
          where the two types differ: at the top, inside the same type
@@ -376,9 +426,10 @@ and convert_param env ~tvars ~row = function
 let closed () = REmpty
 
 (* A parameter's type: as written, or a fresh variable. [own] are the
-   errors and dependencies of the top-level function the parameter belongs
-   to. A parameter written `fn(...)` is transparent: what it fails with and
-   uses is exactly what its function does, so that's its rows.
+   rows a transparent parameter of a top-level function gets: a parameter
+   written `fn(...)` is transparent, so what it uses is exactly what its
+   function does, and what it fails with is too, once a `try` passes it on
+   (infer_top.ml).
 
    A top-level function's signature is read exactly as its interface reads
    it (Iface.signature), so the body is checked against the type other
@@ -405,10 +456,21 @@ let param_type env ~tparams ?own (p : Resolved.param) =
   in
   { mode = p.pmode; ty = t }
 
+let result_path = Path.prelude "Result"
+let option_path = Path.prelude "Option"
+
 (* Fresh variables for a type declaration's parameters: `Option<T>` used
    once can be an `Option<Int>`, and elsewhere an `Option<Bool>`. *)
 let instance env (td : Iface.type_decl) =
   let tvars = List.map (fun _ -> fresh_var env.st) td.params in
+  (* a [Result]'s second argument is always an error set *)
+  let tvars =
+    if td.path = result_path then
+      List.mapi
+        (fun i t -> if i = 1 then TErrors (fresh_row env.st) else t)
+        tvars
+    else tvars
+  in
   (TCon (td.path, tvars), tvars)
 
 (* A field's type, given what the type's parameters stand for. A function
@@ -771,7 +833,20 @@ let absorb env cx ~(call : expr) ~ename ~name_loc ?target errs uses =
           tag args
     | None -> "rename one of them where it comes in"
   in
+  (* In a public function, a transparent parameter's errors are the
+     function's own, passed on to its caller, as its signature says: an
+     `attempt` can't keep them as well *)
+  let passed_on =
+    List.mem cx.self env.spelled
+    && row_tail cx.handler <> row_tail cx.errs
+    && row_tail errs <> None
+    && List.exists (fun r -> row_tail r = row_tail errs) cx.selves
+  in
   match cx.markers with
+  | m :: _ when passed_on && m.mkind = Mattempt ->
+      report env
+        (kept_passed_on call.loc ~name_loc ename ~fn:(short_name cx.self.name));
+      List.iter (fun m -> m.covered <- ec :: m.covered) cx.markers
   | [] ->
       let unhandled = fresh_row env.st in
       add_errors env ~loc:call.loc ~here ~sources ~fix errs unhandled;
@@ -807,9 +882,6 @@ let lambda_cx cx (params : Resolved.param list) ps ~errs ~uses =
     selves = errs :: cx.selves;
     sources = None;
   }
-
-let result_path = Path.prelude "Result"
-let option_path = Path.prelude "Option"
 
 (* The first [n] characters of [loc], a keyword at its start. *)
 let keyword (loc : Loc.t) n =
@@ -1128,7 +1200,7 @@ and synth env cx (e : expr) : ty =
          `fail` *)
       let m = marker env Mattempt e in
       let kept = fresh_row env.st in
-      env.kept <- kept :: env.kept;
+      env.kept <- (kept, cx.params) :: env.kept;
       let t =
         infer env { cx with handler = kept; markers = [ m ]; sources = None } a
       in
@@ -1671,6 +1743,11 @@ and bind_pattern env cx t (p : pattern) =
   | PCon ({ qual = None; name = c }, ps), TErrors errs ->
       (* a tag, inside `Err(...)`: one of the errors the [Result] holds *)
       tag_pattern env cx p c ps errs
+  | PVar b, TErrors _ ->
+      (* `Err(e)` would make the error a value of its own *)
+      report env (bound_error p.ploc b.ident.name);
+      Hashtbl.replace cx.nodes p.pnode TError;
+      Hashtbl.replace cx.locals b.id TError
   | pkind, _ -> (
       match pkind with
       | PWild -> ()

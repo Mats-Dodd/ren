@@ -351,12 +351,13 @@ fn main() = ()
       │                ------- the first `Refusal` is here
       help: remove one of them
 
-    error: `Frozen` is in this error set twice
+    error: `Frozen` has two shapes in this error set
       ┌─ test.ren:2:45
     2 │ type Twice = ! Refusal | Frozen | Refusal | Frozen(Int)
       │                                             ^^^^^^
-      │                          ------ the first `Frozen` is here
-      help: remove one of them
+      │                          ------ `Frozen` is here
+      = a tag is its name and its payload's types, so these are two errors with one name
+      help: give one of them another name
     |}]
 
 let%expect_test "a named error set can't include itself" =

@@ -932,7 +932,7 @@ fn main() = keep(fn() => print(1))()
 |};
   [%expect
     {|
-    fn keep<T>(f: fn() -> T uses ..d) -> (fn() -> T ! ..e uses ..d)
+    fn keep<T>(f: fn() -> T uses ..d) -> (fn() -> T uses ..d)
     fn main() uses Io
     |}];
   (* passing it on, directly or inside a lambda, is fine *)

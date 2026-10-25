@@ -405,6 +405,17 @@ let check_uses env ~is_value (f : fn_def) cx declared =
 
 (* ---- what a function fails with (errors.md) ---- *)
 
+(* The error rows of a function's transparent parameters, the [params]
+   written `fn(...)` without a `!`, given their types [ps]. *)
+let transparent_rows (params : Resolved.param list) ps =
+  List.concat
+    (List.map2
+       (fun (p : Resolved.param) (t : Types.param) ->
+         match (p.pty, repr t.ty) with
+         | Some (TyFn (_, _, None, _)), TFun (_, _, e, _) -> [ e ]
+         | _ -> [])
+       params ps)
+
 (* The errors [f] declares, as labels: those written after its `!`, named
    sets expanded, or none for a public function without one, or an
    associated value, which can't fail. A private function without `!`
@@ -448,7 +459,14 @@ let can_fail env (c : ecall) =
    5. every marker covers something that can fail *)
 let settle_errors env =
   let pr = printer env in
-  List.iter close_row env.kept;
+  (* an `attempt` of a call of a function it was passed keeps whatever
+     that function fails with: its set stays open, like the function's *)
+  List.iter
+    (fun (kept, params) ->
+      match row_tail kept with
+      | Some t when in_params params t -> ()
+      | _ -> close_row kept)
+    env.kept;
   List.iter
     (fun ((c : ident), payload, errs) ->
       match
@@ -615,6 +633,27 @@ let check_errors env (f : fn_def) cx declared =
           seen := tag :: !seen;
           report env (unused_error f ~tag ~via:(Option.map env.names via) loc)))
       written
+
+(* Once the body of the function at [path] has been reported failing with
+   something it doesn't declare, its callers see it failing with what it
+   declares, so the one mistake isn't reported again at every call. A
+   transparent parameter's row, which is its function's, goes with it. *)
+let as_declared env path cx declared =
+  let names = List.map (fun (l : label) -> l.name) declared in
+  if List.exists (fun n -> not (List.mem n names)) (row_names cx.errs) then
+    match repr (Hashtbl.find env.globals path) with
+    | TFun (ps, ret, errs, uses) ->
+        let errs' = extend declared (fresh_row env.st) in
+        let param (p : Types.param) =
+          match repr p.ty with
+          | TFun (qs, r, e, u)
+            when row_tail e <> None && row_tail e = row_tail errs ->
+              { p with ty = TFun (qs, r, errs', u) }
+          | _ -> p
+        in
+        Hashtbl.replace env.globals path
+          (TFun (List.map param ps, ret, errs', uses))
+    | _ -> ()
 
 (* ---- associated values ----
 
@@ -861,8 +900,17 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
               (Option.value (declared_uses ~is_value f) ~default:[])
               (fresh_row env.st)
           in
+          (* A public function's transparent parameter fails with exactly
+             its function's errors, as its interface says. A private one's
+             gets a row of its own, which a `try` of it joins to the
+             function's: an `attempt` of it keeps its errors instead, and
+             then the function itself doesn't fail with them. *)
           let ps =
-            List.map (param_type env ~tparams ~own:(errs, uses)) f.params
+            List.map
+              (fun p ->
+                let own = if f.pub then errs else fresh_row env.st in
+                param_type env ~tparams ~own:(own, uses) p)
+              f.params
           in
           let ret =
             match f.ret with
@@ -891,7 +939,8 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                 (fun (p : Resolved.param) (t : Types.param) ->
                   (p.pname.ident.name, t.ty))
                 f.params ps;
-            selves = [ errs ];
+            (* a transparent parameter's errors are the function's own *)
+            selves = errs :: transparent_rows f.params ps;
             sources = Some (ref []);
           }
         in
@@ -975,7 +1024,10 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
           Option.iter
             (check_uses env ~is_value f cx)
             (declared_uses ~is_value f);
-          Option.iter (check_errors env f cx)
+          Option.iter
+            (fun declared ->
+              check_errors env f cx declared;
+              as_declared env (path f) cx declared)
             (declared_errors env ~is_value
                ~tparams:(List.map (fun (id, n) -> TSkol (id, n)) skolems)
                f))

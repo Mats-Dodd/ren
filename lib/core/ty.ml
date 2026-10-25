@@ -263,8 +263,11 @@ and show_effects pr e u =
 
 (* How `ren types` prints a function: the signature `ren fmt --annotate`
    would write. [params] are the parameters' names. A row tail is printed
-   (as `..e` / `..d`) only when it reaches the result; otherwise the
-   parameter is transparent and the tail implied.
+   (as `..e` / `..d`) only when it reaches the result and links it to
+   something else; otherwise the parameter is transparent and the tail
+   implied, and a tail found only once says nothing. A transparent
+   parameter, whose row is its function's own, is printed as it's written,
+   `f: fn(Int)`: the function's `!` and `uses` already say what's in it.
 
    A member of a type is printed under its type, so [outer]
    are the type's parameters, which aren't the function's own and aren't
@@ -273,8 +276,26 @@ and show_effects pr e u =
 let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
   match s.ty with
   | Fun (ps, ret, errs, uses) ->
-      let in_ret = tails ret in
-      let pr = printer ~show_tail:(fun id -> List.mem id in_ret) ~names s in
+      (* a parameter's row that is the function's own, which isn't printed *)
+      let own (own : row) (r : row) =
+        if r.tail <> None && r.tail = own.tail then closed else r
+      in
+      let ps =
+        List.map
+          (fun (p : param) ->
+            match p.ty with
+            | Fun (qs, r, e, u) ->
+                { p with ty = Fun (qs, r, own errs e, own uses u) }
+            | _ -> p)
+          ps
+      in
+      let ty = Fun (ps, ret, errs, uses) in
+      let s = { s with ty } in
+      let in_ret = tails ret and all = tails ty in
+      let links id = List.length (List.filter (( = ) id) all) > 1 in
+      let pr =
+        printer ~show_tail:(fun id -> List.mem id in_ret && links id) ~names s
+      in
       pr.reserved <- outer;
       reserve pr s.ty;
       let params =
