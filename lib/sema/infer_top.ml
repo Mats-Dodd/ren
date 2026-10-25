@@ -484,7 +484,10 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                 explain
                   ~notes:
                     [
-                      sprintf "`%s` is declared to return `%s`" f.name.name
+                      (if is_value f then
+                         sprintf "`%s` is declared to have the type `%s`"
+                       else sprintf "`%s` is declared to return `%s`")
+                        f.name.name
                         (show (printer env) ret);
                     ]
                   ()

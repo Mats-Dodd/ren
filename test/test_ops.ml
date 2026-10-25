@@ -1058,7 +1058,7 @@ fn main() = count(Bag { items: [1] })
       ┌─ test.ren:9:15
     9 │ fn count(b) = b.size()
       │               ^
-      = `Bag` and `Box` each have a `size`
+      = `Bag` and `Box` each have a method `size`
       = a method is found through its receiver's type, which has to be known where it's called
       help: annotate `b` where it's defined, like `b: Bag`
     |}]
@@ -1115,7 +1115,7 @@ fn main() = 1
        ┌─ test.ren:11:14
     11 │ fn five(x) = x.get
        │              ^
-       = `B` and `C` each have a `get`
+       = `B` and `C` each have a method `get`
        = a method is found through its receiver's type, which has to be known where it's called
        help: annotate `x` where it's defined, like `x: B`
     |}]
@@ -1242,3 +1242,44 @@ fn main() =
   [xs[0], xs[1], c.n]
 |};
   [%expect {| [2, 6, 3] |}]
+
+let%expect_test "a field and a method of the same name, on different types" =
+  run
+    {|
+type A = { f: Int }
+
+type B = { n: Int }
+  ops =
+    fn f(self) -> Int = self.n
+
+fn g(x) = x.f()
+
+fn main() = g(B { n: 1 })
+|};
+  [%expect
+    {|
+    error: can't tell which type `x` is
+      ┌─ test.ren:7:11
+    7 │ fn g(x) = x.f()
+      │           ^
+      = `A` has a field `f`, and `B` has a method `f`
+      = a method is found through its receiver's type, which has to be known where it's called
+      help: annotate `x` where it's defined, like `x: A`
+    |}]
+
+let%expect_test "an associated value not of its declared type" =
+  run {|
+type T = { n: Int }
+  ops =
+    let a: Int = true
+
+fn main() = T.a
+|};
+  [%expect
+    {|
+    error: expected `Int`, found `Bool`
+      ┌─ test.ren:3:18
+    3 │     let a: Int = true
+      │                  ^^^^
+      = `T.a` is declared to have the type `Int`
+    |}]

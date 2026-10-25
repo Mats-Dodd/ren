@@ -421,6 +421,15 @@ let field_in name (td : Iface.type_decl) =
   Option.bind (record_fields td)
     (List.find_opt (fun (d : Iface.field) -> d.fname = name))
 
+(* What [name] is in the type [p], which has a field or an ops item of
+   that name, as an error says it: "a field", "a method", ... *)
+let member_kind env name p =
+  match op_in name (Hashtbl.find env.types p) with
+  | Some { okind = Method; _ } -> "a method"
+  | Some { okind = Function; _ } -> "an associated function"
+  | Some { okind = Value; _ } -> "an associated value"
+  | None -> "a field"
+
 (* The ops item [name] of [t]'s type, if [t] is already known to be a
    named type that has one. In its own module, an opaque type is also what
    it's represented as, so an item of that type is found too, if the
@@ -816,7 +825,8 @@ and infer_call env cx ?changed (e : expr) (f : expr) args =
                 | _ -> None
               in
               report env
-                (several_have_member ~names:env.names r.loc ?what m paths);
+                (several_have_member ~names:env.names r.loc ?what m
+                   (List.map (fun p -> (p, member_kind env m.name p)) paths));
               nothing ())
       | None, TVar _
         when not
@@ -1173,7 +1183,8 @@ and field_access env cx (e : expr) r tr (f : ident) =
               | Nowhere -> TError
               | Several paths ->
                   report env
-                    (several_have_member ~names:env.names r.loc ?what f paths);
+                    (several_have_member ~names:env.names r.loc ?what f
+                       (List.map (fun p -> (p, member_kind env f.name p)) paths));
                   TError)
           | Nowhere ->
               (* it may be in a record type the module can't name bare *)

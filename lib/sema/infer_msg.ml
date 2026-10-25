@@ -428,18 +428,30 @@ let item_not_field (m : Ast.ident) (kind : Iface.op_kind) ~item =
        | Method | Function -> "an associated function"))
 
 (* `s.size()`, where `s`'s type isn't known yet, and several types the
-   module can name have a `size` *)
-let several_have_member ~names loc ?what (m : Ast.ident) paths =
+   module can name have a `size`. [members] are those types, each with
+   what its `size` is: "a field", "a method", ... *)
+let several_have_member ~names loc ?what (m : Ast.ident) members =
+  let paths = List.map fst members in
   let what, help, extra =
     say_which ~names ~can_name:(fun _ -> true) ?what (List.hd paths)
+  in
+  let types ps = String.concat " and " (List.map (sprintf "`%s`") ps) in
+  let has =
+    match List.sort_uniq compare (List.map snd members) with
+    | [ kind ] ->
+        sprintf "%s each have %s `%s`"
+          (types (List.map (fun p -> names p) paths))
+          kind m.name
+    | _ ->
+        String.concat ", and "
+          (List.map
+             (fun (p, kind) -> sprintf "`%s` has %s `%s`" (names p) kind m.name)
+             members)
   in
   Diag.make loc ~help
     ~notes:
       ([
-         sprintf "%s each have a `%s`"
-           (String.concat " and "
-              (List.map (fun p -> sprintf "`%s`" (names p)) paths))
-           m.name;
+         has;
          "a method is found through its receiver's type, which has to be known \
           where it's called";
        ]
