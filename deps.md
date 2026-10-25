@@ -266,7 +266,13 @@ The program starts in `$start`, which installs the real implementation of
 each built-in `main` uses and calls `main`. `ren core` prints all of it.
 (The copies are a choice the implementation made, and the plan didn't
 spell out: passing a whole row of evidence as one value would need it
-looked up by name inside.)
+looked up by name inside.) A closure's type is inferred together with
+its caller's, so it usually names the caller's whole `uses`, not just what
+its body uses: `twice_gen(fn(x) => x + 1)` in a `main` that uses Clock,
+Console and Random calls `twice_gen[Clock, Console, Random]`. That runs
+the same, but the copies grow with callers' rows rather than with what the
+closures use; the rows on stored closures (`uses ..d`) are where to make
+them smaller.
 
 ## Later
 
