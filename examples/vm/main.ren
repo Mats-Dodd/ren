@@ -1,0 +1,59 @@
+// A stack machine, and a timeline of every state it's been in. README.md
+// next to this file says what to look at.
+
+import op.{Op}
+import machine.{Vm}
+import program.{Program}
+import timeline.{Timeline}
+import programs
+
+fn main() =
+  // 5!, on the machine, and in plain Ren
+  let p = load(programs.factorial(5))
+  var vm = Vm.fresh
+  &vm.run(p, 1000)
+  print(vm.out)                       // [120]
+  print(vm.out[0] == fact(5))         // true
+
+  // The same run, recorded. Every state is a copy, so the last one
+  // recorded is the machine as it ended.
+  var tl = Timeline.empty
+  var rec = Vm.fresh
+  &tl.run(&rec, p, 1000)
+  print(tl.size())                    // 65 states: 64 steps, and the start
+  print(tl.back(0) == Some(rec))      // true
+
+  // Back in time: start again from 10 steps before the end, and the run
+  // ends exactly as it did.
+  let before = tl.back(10).unwrap_or(Vm.fresh)
+  var again = before
+  &again.run(p, 1000)
+  print(again == rec)                 // true
+
+  // A different future: the Fibonacci machine, rewound to just after it
+  // set its count to 5, and told to count to 10 instead. The timeline still
+  // holds the state as it was.
+  let fib = load(programs.fibonacci(5))
+  var ftl = Timeline.empty
+  var f = Vm.fresh
+  &ftl.run(&f, fib, 1000)
+  print(f.out)                        // [0, 1, 1, 2, 3]
+  let early = ftl.back(ftl.size() - 3).unwrap_or(Vm.fresh)
+  var fork = early
+  fork.locals[0] = 10
+  &fork.run(fib, 1000)
+  print(fork.out)                     // [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+  print(ftl.back(ftl.size() - 3) == Some(early))  // true: untouched
+
+  // A program that runs out of stack fails, and says where.
+  var bad = Vm.fresh
+  &bad.run(load([Push(1), Add, Halt]), 1000)
+  print(bad.status)                   // Failed(Underflow(1))
+
+  // And one that jumps outside itself never becomes a `Program`.
+  print(Program.check([Jump(7), Halt]).is_some())   // false
+
+// the program, checked, or one that does nothing if it isn't
+fn load(ops: Array<Op>) -> Program = Program.check(ops).unwrap_or(Program.halt)
+
+fn fact(n: Int) -> Int = if n == 0 then 1 else n * fact(n - 1)

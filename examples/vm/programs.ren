@@ -1,0 +1,32 @@
+// Programs for the machine, written out by hand. The comment on each line
+// is the index of its first instruction, which is what a jump names.
+
+import op.{Op}
+
+// n!: local 0 counts down from n, and local 1 is the product so far.
+pub fn factorial(n: Int) -> Array<Op> = [
+  Push(n), Store(0),                  //  0  count = n
+  Push(1), Store(1),                  //  2  product = 1
+  Load(0), JumpIfZero(15),            //  4  while count != 0
+  Load(1), Load(0), Mul, Store(1),    //  6    product = product * count
+  Load(0), Push(1), Sub, Store(0),    // 10    count = count - 1
+  Jump(4),                            // 14
+  Load(1), Emit,                      // 15  emit product
+  Halt,                               // 17
+]
+
+// The first n Fibonacci numbers: local 0 counts down, and locals 1 and 2
+// are the next two numbers.
+pub fn fibonacci(n: Int) -> Array<Op> = [
+  Push(n), Store(0),                  //  0  count = n
+  Push(0), Store(1),                  //  2  a = 0
+  Push(1), Store(2),                  //  4  b = 1
+  Load(0), JumpIfZero(21),            //  6  while count != 0
+  Load(1), Emit,                      //  8    emit a
+  Load(1), Load(2), Add,              // 10    push a + b
+  Load(2), Store(1),                  // 13    a = b
+  Store(2),                           // 15    b = a + b
+  Load(0), Push(1), Sub, Store(0),    // 16    count = count - 1
+  Jump(6),                            // 20
+  Halt,                               // 21
+]

@@ -1,0 +1,26 @@
+// A stack of values. It's opaque: other modules get only its `ops`, and
+// can't see that inside it's a list, or rely on that.
+
+type List<T> =
+  | Nil
+  | Cons(head: T, rest: List<T>)
+
+pub type Stack<T> = opaque List<T>
+  ops =
+    pub let empty: Stack<T> = Nil
+
+    pub fn push(inout self, x: T) = self = Cons(x, self)
+
+    // the top value, taken off
+    pub fn pop(inout self) -> Option<T> =
+      match self
+        Nil => None
+        Cons(x, rest) =>
+          self = rest
+          Some(x)
+
+    // the top value, left where it is
+    pub fn peek(self) -> Option<T> =
+      match self
+        Nil => None
+        Cons(x, _) => Some(x)

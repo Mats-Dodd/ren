@@ -1,0 +1,34 @@
+// A program the machine can run: it isn't empty, it ends with `Halt`, and
+// every jump lands on one of its instructions. It's opaque, so
+// `Program.check` is the only way to make one, and every `Program` is one
+// that passed.
+
+import op.{Op}
+
+pub type Program = opaque Array<Op>
+  ops =
+    // the program that does nothing
+    pub let halt: Program = [Halt]
+
+    pub fn check(ops: Array<Op>) -> Option<Program> =
+      if ops.len() == 0 then None
+      else if ops[ops.len() - 1] != Halt then None
+      else if lands(ops) then Some(ops)
+      else None
+
+    // the instruction at `pc`; past the end, there's nothing left to do
+    pub fn at(self, pc: Int) -> Op =
+      if pc < self.len() then self[pc] else Halt
+
+    pub fn size(self) -> Int = self.len()
+
+// Does every jump land inside the program?
+fn lands(ops: Array<Op>) -> Bool =
+  var ok = true
+  for o in ops
+    match o.target()
+      Some(to) => if inside(to, ops.len()) then () else ok = false
+      None => ()
+  ok
+
+fn inside(i: Int, n: Int) -> Bool = if i < 0 then false else i < n

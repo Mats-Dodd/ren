@@ -1,0 +1,89 @@
+// The machine: a program counter, a stack, four locals and the output so
+// far. Everything it does is in `step`, which changes it, so every call is
+// marked `&vm.step(p)`. It's a plain value: copy one, and the copy is a
+// machine of its own.
+
+import program.{Program}
+import stack.{Stack}
+
+pub type Status =
+  | Running
+  | Halted
+  | Failed(fault: Fault)
+
+// an instruction needed a value the stack didn't have
+pub type Fault =
+  | Underflow(pc: Int)
+
+pub type Vm = {
+  pc: Int,
+  stack: Stack<Int>,
+  locals: Array<Int>,
+  out: Array<Int>,
+  steps: Int,
+  status: Status,
+}
+  ops =
+    pub let fresh: Vm = Vm {
+      pc: 0,
+      stack: Stack.empty,
+      locals: [0, 0, 0, 0],
+      out: [],
+      steps: 0,
+      status: Running,
+    }
+
+    pub fn running(self) -> Bool = self.status == Running
+
+    // Run one instruction.
+    pub fn step(inout self, p: Program) =
+      self.steps += 1
+      match p.at(self.pc)
+        Push(n) => &self.push(n)
+        Load(slot) =>
+          // read into a `let` first: the call changes `self`, so no
+          // argument can also reach into it
+          let v = self.locals[slot]
+          &self.push(v)
+        Store(slot) =>
+          match &self.stack.pop()
+            Some(v) =>
+              self.locals[slot] = v
+              self.pc += 1
+            None => &self.fail()
+        Add => &self.binary(fn(a, b) => a + b)
+        Sub => &self.binary(fn(a, b) => a - b)
+        Mul => &self.binary(fn(a, b) => a * b)
+        JumpIfZero(to) =>
+          match &self.stack.pop()
+            Some(v) => self.pc = if v == 0 then to else self.pc + 1
+            None => &self.fail()
+        Jump(to) => self.pc = to
+        Emit =>
+          match &self.stack.pop()
+            Some(v) =>
+              &self.out.push(v)
+              self.pc += 1
+            None => &self.fail()
+        Halt => self.status = Halted
+
+    // Run until it halts or fails, or `fuel` steps have run.
+    pub fn run(inout self, p: Program, fuel: Int) =
+      if fuel > 0 then
+        if self.running() then
+          &self.step(p)
+          &self.run(p, fuel - 1)
+
+    fn push(inout self, n: Int) =
+      &self.stack.push(n)
+      self.pc += 1
+
+    fn binary(inout self, f: fn(Int, Int) -> Int) =
+      match &self.stack.pop()
+        Some(b) =>
+          match &self.stack.pop()
+            Some(a) => &self.push(f(a, b))
+            None => &self.fail()
+        None => &self.fail()
+
+    fn fail(inout self) = self.status = Failed(Underflow(self.pc))

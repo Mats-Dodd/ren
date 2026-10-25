@@ -1,0 +1,22 @@
+// The machine's instructions. Adding one means adding an arm to every
+// `match` that names them all: until `Vm.step` handles it, the program
+// doesn't compile.
+
+pub type Op =
+  | Push(n: Int)          // push n
+  | Load(slot: Int)       // push the local in `slot`
+  | Store(slot: Int)      // pop into the local in `slot`
+  | Add                   // pop b, pop a, push a + b
+  | Sub                   //                  a - b
+  | Mul                   //                  a * b
+  | JumpIfZero(to: Int)   // pop; go to `to` if it was 0
+  | Jump(to: Int)         // go to `to`
+  | Emit                  // pop, and add it to the output
+  | Halt                  // stop
+  ops =
+    // where it can send the machine, if it's a jump
+    pub fn target(self) -> Option<Int> =
+      match self
+        JumpIfZero(to) => Some(to)
+        Jump(to) => Some(to)
+        _ => None

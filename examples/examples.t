@@ -200,3 +200,129 @@ A private method can't be called from another module:
     │                        ^^^^^^
     help: if it's defined in `cart`, mark it `pub`
   [1]
+
+The VM is a stack machine and a timeline of every state it has been in
+(vm/README.md). Rewinding is reading an old copy, and the copy never
+changes:
+
+  $ ren run vm/main.ren
+  [120]
+  true
+  65
+  true
+  true
+  [0, 1, 1, 2, 3]
+  [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+  true
+  Failed(Underflow(1))
+  false
+  $ ren types vm/main.ren
+  -- op
+  pub type Op
+    pub fn target(self) -> Option<Int>
+  
+  -- program
+  pub type Program
+    pub let halt: Program
+    pub fn check(ops: Array<Op>) -> Option<Program>
+    pub fn at(self, pc: Int) -> Op
+    pub fn size(self) -> Int
+  fn lands(ops: Array<Op>) -> Bool
+  fn inside(i: Int, n: Int) -> Bool
+  
+  -- stack
+  pub type Stack<T>
+    pub let empty: Stack<T>
+    pub fn push(inout self, x: T)
+    pub fn pop(inout self) -> Option<T>
+    pub fn peek(self) -> Option<T>
+  
+  -- machine
+  pub type Vm
+    pub let fresh: Vm
+    pub fn running(self) -> Bool
+    pub fn step(inout self, p: Program)
+    pub fn run(inout self, p: Program, fuel: Int)
+    fn push(inout self, n: Int)
+    fn binary(inout self, f: fn(Int, Int) -> Int)
+    fn fail(inout self)
+  
+  -- timeline
+  pub type Timeline
+    pub let empty: Timeline
+    pub fn record(inout self, vm: Vm)
+    pub fn size(self) -> Int
+    pub fn back(self, n: Int) -> Option<Vm>
+    pub fn run(inout self, inout vm: Vm, p: Program, fuel: Int)
+  
+  -- programs
+  pub fn factorial(n: Int) -> Array<Op>
+  pub fn fibonacci(n: Int) -> Array<Op>
+  
+  -- main
+  fn main() uses Io
+  fn load(ops: Array<Op>) -> Program
+  fn fact(n: Int) -> Int
+
+What it says when the VM is changed in the ways a reader might try. A new
+instruction isn't handled until `Vm.step` has an arm for it:
+
+  $ cp -r vm v1 && perl -0pi -e 's/(  \| Push\(n: Int\)[^\n]*\n)/$1  | Dup\n/' v1/op.ren
+  $ ren check v1/main.ren
+  error: this `match` doesn't handle every `op.Op`
+     ┌─ v1/machine.ren:41:7
+  41 │       match p.at(self.pc)
+     │       ^^^^^
+     = missing: Dup
+     help: add an arm for `Dup`, or a `_ =>` arm for the rest
+  [1]
+
+A method that changes its receiver is called with `&`:
+
+  $ cp -r vm v2 && perl -0pi -e 's/      &self.stack.push\(n\)/      self.stack.push(n)/' v2/machine.ren
+  $ ren check v2/main.ren
+  error: `push` changes `self.stack`, so the call needs `&`
+     ┌─ v2/machine.ren:78:7
+  78 │       self.stack.push(n)
+     │       ^^^^^^^^^^^^^^^^^^
+     = `&` shows at the call that `self.stack` is changed
+     help: write `&self.stack.push(n)`
+  [1]
+
+A private method can't be called from another module:
+
+  $ cp -r vm v3 && perl -0pi -e 's/  print\(bad.status\)[^\n]*/  &bad.fail()/' v3/main.ren
+  $ ren check v3/main.ren
+  error: `Vm` has no public `fail`
+     ┌─ v3/main.ren:51:8
+  51 │   &bad.fail()
+     │        ^^^^
+     help: if it's defined in `machine`, mark it `pub`
+  [1]
+
+A `Program` is opaque, so an array of instructions isn't one until
+`Program.check` says so:
+
+  $ cp -r vm v4 && perl -0pi -e 's/let p = load\(programs.factorial\(5\)\)/let p: Program = programs.factorial(5)/' v4/main.ren
+  $ ren check v4/main.ren
+  error: expected `Program`, found `Array<Op>`
+     ┌─ v4/main.ren:12:20
+  12 │   let p: Program = programs.factorial(5)
+     │                    ^^^^^^^^^^^^^^^^^^^^^
+     = `Program`'s representation is private to `program`
+     help: use a function from `program` to make or read one
+  [1]
+
+A call that changes `self` can't also read part of it in an argument:
+
+  $ cp -r vm v5 && perl -0pi -e 's/let v = self.locals\[slot\]\n *&self.push\(v\)/&self.push(self.locals[slot])/' v5/machine.ren
+  $ ren check v5/main.ren
+  error: this call changes `self`, so no other argument can use it
+     ┌─ v5/machine.ren:46:22
+  46 │           &self.push(self.locals[slot])
+     │                      ^^^^^^^^^^^^^^^^^
+     │            ---- passed with `&` here
+     = an argument passed with `&` has to be the only way the call can reach that value
+     = reading part of `self` counts as using it
+     help: read it into a `let` before the call, and pass that
+  [1]
