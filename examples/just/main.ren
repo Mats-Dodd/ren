@@ -19,7 +19,7 @@ fn main() =
     try run(try j.recipe(n))
 
 // Each line of `r` in a shell, until one exits with anything but 0.
-fn run(r: Recipe) ! RecipeFailed(name: Str, code: Int) | NoSuchProgram(name: Str) uses Proc =
+fn run(r: Recipe) ! RecipeFailed(name: Str, code: Int) | ProcError uses Proc =
   for line in r.lines
     let code = try Proc.run("sh", ["-c", line])
     if code != 0 then fail RecipeFailed(r.name, code)

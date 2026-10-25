@@ -47,12 +47,13 @@ into a `Str` with `Str.from_utf8`, which fails with `InvalidUtf8`, so
 `main` can.
 
 **Every way it can fail is a tag.** No file is `NoSuchFile(path)`, from
-`Fs`; a recipe that isn't there is `UnknownRecipe(name)`; a line that
+`Fs`, one of the four tags of `FsError`; a recipe that isn't there is `UnknownRecipe(name)`; a line that
 exits with anything but 0 is `RecipeFailed(name, code)`. `main` passes
 them all on with `try`, so it fails, and the runtime prints `error:
 RecipeFailed("broken", 3)` and exits with 1. There's no `Os.exit`. A
 program that isn't there would be `NoSuchProgram`, never 127, but `sh`
-always is.
+always is. `run` says it fails with `ProcError`, the prelude's name for
+everything `Proc.run` can fail with.
 
 **Each recipe once, in order.** `order` is depth first, and keeps two
 lists, `inout`: the recipes it's started and the ones it's done. A recipe

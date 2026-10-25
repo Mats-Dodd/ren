@@ -109,20 +109,43 @@ pub fn print<T>(x: T) uses Console = Console.write(show(x))
 // a file: where it is, and what's in it
 pub type File = { path: Path, data: Bytes }
 
+// every way the real `Fs` can fail: there's nothing at the path, the
+// system won't let this program at it, it's a folder, or something else
+// went wrong, which the system gives its reason for
+pub type FsError =
+  ! NoSuchFile(path: Path) | NotAllowed(path: Path) | IsAFolder(path: Path) | FsFailed(path: Path, reason: Str)
+
+// what the system said to a read or a write, which `fs_checked` turns
+// into its value or its error
+type FsOutcome<T> =
+  | FsDone(value: T)
+  | FsMissing
+  | FsDenied
+  | FsFolder
+  | FsOther(reason: Str)
+
+fn fs_checked<T>(o: FsOutcome<T>, p: Path) -> T ! FsError =
+  match o
+    FsDone(v) => v
+    FsMissing => fail NoSuchFile(p)
+    FsDenied => fail NotAllowed(p)
+    FsFolder => fail IsAFolder(p)
+    FsOther(reason) => fail FsFailed(p, reason)
+
 pub dep Fs =
-  read: fn(p: Path) -> Bytes ! NoSuchFile(path: Path)
+  read: fn(p: Path) -> Bytes ! FsError
   // makes the file, or replaces what's in it
-  write: fn(p: Path, b: Bytes)
+  write: fn(p: Path, b: Bytes) ! FsError
   exists: fn(p: Path) -> Bool
 
   // what's in a file, as a string
-  pub fn read_str(p: Path) -> Str ! NoSuchFile(path: Path) | InvalidUtf8 uses Fs =
+  pub fn read_str(p: Path) -> Str ! FsError | InvalidUtf8 uses Fs =
     let b = try Fs.read(p)
     try Str.from_utf8(b)
   let real: Fs =
     Fs {
-      read: fn(p) => fs_read(p) orelse fail NoSuchFile(p),
-      write: fn(p, b) => fs_write(p, b),
+      read: fn(p) => try fs_checked(fs_read(p), p),
+      write: fn(p, b) => try fs_checked(fs_write(p, b), p),
       exists: fn(p) => fs_exists(p),
     }
 
@@ -132,14 +155,33 @@ pub dep Os =
 
   let real: Os = Os { args: fn() => os_args() }
 
+// every way the real `Proc` can fail: there's no such program, the
+// system wouldn't start it, with its reason, or it was killed before it
+// could exit
+pub type ProcError = ! NoSuchProgram(name: Str) | CantRun(name: Str, reason: Str) | Killed(name: Str)
+
+// what became of a program, which `proc_checked` turns into its exit code
+// or its error
+type ProcOutcome =
+  | ProcExited(code: Int)
+  | ProcMissing
+  | ProcNotStarted(reason: Str)
+  | ProcKilled
+
+fn proc_checked(o: ProcOutcome, cmd: Str) -> Int ! ProcError =
+  match o
+    ProcExited(code) => code
+    ProcMissing => fail NoSuchProgram(cmd)
+    ProcNotStarted(reason) => fail CantRun(cmd, reason)
+    ProcKilled => fail Killed(cmd)
+
 pub dep Proc =
   // runs the program `cmd`, found on `PATH` unless it has a `/` in it,
   // with what this program prints to and reads from, and gives back its
   // exit code
-  run: fn(cmd: Str, args: Array<Str>) -> Int ! NoSuchProgram(name: Str)
+  run: fn(cmd: Str, args: Array<Str>) -> Int ! ProcError
 
-  let real: Proc =
-    Proc { run: fn(cmd, args) => proc_run(cmd, args) orelse fail NoSuchProgram(cmd) }
+  let real: Proc = Proc { run: fn(cmd, args) => try proc_checked(proc_run(cmd, args), cmd) }
 
 // ---- what a test gets (deps.md, "Tests") ----
 //
@@ -281,39 +323,61 @@ let bytes = Ty.Con (Path.prelude "Bytes", [])
    has no monotonic one (deps.md, "Built in"). *)
 let now_ms () = int_of_float (Unix.gettimeofday () *. 1000.)
 
-(* A file's bytes, or [None] if there's no file at [path]. Anything else
-   that stops it being read, or written, panics: `Fs` doesn't say it can
-   fail that way. *)
+(* What the system said to a read or a write, as the prelude's private
+   [FsOutcome<T>], which its source turns into the value or an `FsError`. *)
+let fs_outcome name args =
+  Value.VCon { ty = Path.prelude "FsOutcome"; name; args }
+
+let fs_failed (e : Unix.error) =
+  match e with
+  | ENOENT | ENOTDIR -> fs_outcome "FsMissing" []
+  | EACCES | EPERM | EROFS -> fs_outcome "FsDenied" []
+  | EISDIR -> fs_outcome "FsFolder" []
+  | e -> fs_outcome "FsOther" [ VStr (Unix.error_message e) ]
+
+(* A file's bytes, as [FsDone], or why it couldn't be read. A folder opens,
+   but isn't a file to read. *)
 let read_file path =
   match Unix.openfile path [ Unix.O_RDONLY ] 0 with
-  | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> None
-  | exception Unix.Unix_error (e, _, _) ->
-      raise
-        (Panic
-           (Printf.sprintf "can't read %s: %s" path (Unix.error_message e)))
+  | exception Unix.Unix_error (e, _, _) -> fs_failed e
   | fd -> (
-      let panic msg =
-        Unix.close fd;
-        raise (Panic (Printf.sprintf "can't read %s: %s" path msg))
-      in
-      (* a folder opens, but isn't a file to read *)
       match Unix.fstat fd with
-      | exception Unix.Unix_error (e, _, _) -> panic (Unix.error_message e)
-      | { st_kind = Unix.S_DIR; _ } -> panic (Unix.error_message Unix.EISDIR)
+      | exception Unix.Unix_error (e, _, _) ->
+          Unix.close fd;
+          fs_failed e
+      | { st_kind = Unix.S_DIR; _ } ->
+          Unix.close fd;
+          fs_failed Unix.EISDIR
       | _ -> (
           let ic = Unix.in_channel_of_descr fd in
           match In_channel.input_all ic with
           | data ->
               close_in ic;
-              Some data
+              fs_outcome "FsDone" [ VBytes data ]
           | exception Sys_error msg ->
               close_in_noerr ic;
-              raise (Panic (Printf.sprintf "can't read %s: %s" path msg))))
+              fs_outcome "FsOther" [ VStr msg ]))
 
-(* [Sys_error]'s message starts with the path *)
+(* Make the file at [path], or replace what's in it, as [FsDone ()], or say
+   why it couldn't be written. *)
 let write_file path data =
-  try Out_channel.with_open_bin path (fun oc -> output_string oc data)
-  with Sys_error msg -> raise (Panic ("can't write " ^ msg))
+  match
+    Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644
+  with
+  | exception Unix.Unix_error (e, _, _) -> fs_failed e
+  | fd -> (
+      let b = Bytes.unsafe_of_string data in
+      let rec go off =
+        if off < Bytes.length b then
+          go (off + Unix.write fd b off (Bytes.length b - off))
+      in
+      match go 0 with
+      | () ->
+          Unix.close fd;
+          fs_outcome "FsDone" [ VUnit ]
+      | exception Unix.Unix_error (e, _, _) ->
+          Unix.close fd;
+          fs_failed e)
 
 (* What `ren run file.ren -- args` was given after the `--`, which the
    real `Os.args` gives back. *)
@@ -322,7 +386,7 @@ let args : string list ref = ref []
 (* Where the program [cmd] is: [cmd] itself if it has a `/` in it and
    something's there, or else the first file of that name on `PATH` that
    can be run, as a shell looks. One that's there but can't be run is
-   found, and panics when it's run. *)
+   found, and `Proc` fails with `CantRun` when it's run. *)
 let find_program cmd =
   let runnable p =
     (try not (Sys.is_directory p) with Sys_error _ -> false)
@@ -341,31 +405,33 @@ let find_program cmd =
         if runnable p then Some p else None)
       (String.split_on_char ':' path)
 
+(* What became of a program, as the prelude's private [ProcOutcome]. *)
+let proc_outcome name args =
+  Value.VCon { ty = Path.prelude "ProcOutcome"; name; args }
+
 (* Run the program at [path] as [cmd], with [args], and wait for its exit
    code. It writes to, and reads from, what this program does, so what
-   this program has written so far goes out first. Anything that stops
-   it running, or finishing, panics: `Proc` doesn't say it can fail that
-   way. *)
+   this program has written so far goes out first. A program the system
+   won't start, or one killed by a signal, is said so, for `Proc` to fail
+   with. *)
 let run_program path cmd args =
-  let panic fmt = Printf.ksprintf (fun msg -> raise (Panic msg)) fmt in
   flush stdout;
   flush stderr;
-  let pid =
-    try
-      Unix.create_process path
-        (Array.of_list (cmd :: args))
-        Unix.stdin Unix.stdout Unix.stderr
-    with Unix.Unix_error (e, _, _) ->
-      panic "can't run %s: %s" cmd (Unix.error_message e)
-  in
-  let rec wait () =
-    match Unix.waitpid [] pid with
-    | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
-    | _, Unix.WEXITED code -> code
-    | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) ->
-        panic "%s was stopped by a signal" cmd
-  in
-  wait ()
+  match
+    Unix.create_process path
+      (Array.of_list (cmd :: args))
+      Unix.stdin Unix.stdout Unix.stderr
+  with
+  | exception Unix.Unix_error (e, _, _) ->
+      proc_outcome "ProcNotStarted" [ VStr (Unix.error_message e) ]
+  | pid ->
+      let rec wait () =
+        match Unix.waitpid [] pid with
+        | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
+        | _, Unix.WEXITED code -> proc_outcome "ProcExited" [ VInt code ]
+        | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> proc_outcome "ProcKilled" []
+      in
+      wait ()
 
 (* `Some(args)` or `None` *)
 let option name args = Value.VCon { ty = Path.prelude "Option"; name; args }
@@ -437,28 +503,26 @@ let fns =
             print_endline line;
             (Value.VUnit, args)
         | _ -> bug "console_write");
-    (* fn(Str) -> Option<Bytes>, the real `Fs.read`, which fails when it's
-       [None] *)
+    (* fn(Str) -> FsOutcome<Bytes>, the real `Fs.read` *)
     fn ~runtime:true "fs_read"
       (Fun
          ( [ read str ],
-           Con (Path.prelude "Option", [ bytes ]),
+           Con (Path.prelude "FsOutcome", [ bytes ]),
            open_row 0,
            open_row 1 ))
       (function
-        | [ Value.VStr path ] as args ->
-            ( (match read_file path with
-              | Some data -> option "Some" [ VBytes data ]
-              | None -> option "None" []),
-              args )
+        | [ Value.VStr path ] as args -> (read_file path, args)
         | _ -> bug "fs_read");
-    (* fn(Str, Bytes) *)
+    (* fn(Str, Bytes) -> FsOutcome<Unit>, the real `Fs.write` *)
     fn ~runtime:true "fs_write"
-      (Fun ([ read str; read bytes ], unit, open_row 0, open_row 1))
+      (Fun
+         ( [ read str; read bytes ],
+           Con (Path.prelude "FsOutcome", [ unit ]),
+           open_row 0,
+           open_row 1 ))
       (function
         | [ Value.VStr path; Value.VBytes data ] as args ->
-            write_file path data;
-            (Value.VUnit, args)
+            (write_file path data, args)
         | _ -> bug "fs_write");
     (* fn(Str) -> Bool *)
     fn ~runtime:true "fs_exists"
@@ -479,12 +543,11 @@ let fns =
         in
         let strs = List.mapi str !args in
         (Value.VArray (Array.of_list strs), a));
-    (* fn(Str, Array<Str>) -> Option<Int>, the real `Proc.run`, which
-       fails when it's [None]: there's no such program *)
+    (* fn(Str, Array<Str>) -> ProcOutcome, the real `Proc.run` *)
     fn ~runtime:true "proc_run"
       (Fun
          ( [ read str; read (array str) ],
-           Con (Path.prelude "Option", [ int ]),
+           Con (Path.prelude "ProcOutcome", []),
            open_row 0,
            open_row 1 ))
       (function
@@ -496,9 +559,8 @@ let fns =
                    xs)
             in
             ( (match find_program cmd with
-              | Some path ->
-                  option "Some" [ VInt (run_program path cmd strs) ]
-              | None -> option "None" []),
+              | Some path -> run_program path cmd strs
+              | None -> proc_outcome "ProcMissing" []),
               a )
         | _ -> bug "proc_run");
   ]

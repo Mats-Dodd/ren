@@ -153,16 +153,23 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 | `Clock` | `now`, `instant`, `sleep` | the system clock | `test_clock(Time.epoch)`: stopped until moved | `TestClock.advance(d)` |
 | `Random` | `int(below)` | the OS | seeded from the test's name | `TestRandom.seed()` |
 | `Console` | `write(line: Str)` | stdout | captured | `TestConsole.output() -> Array<Str>` |
-| `Fs` | `read(p) -> Bytes ! NoSuchFile`, `write(p, b)`, `exists(p)` | files, through `Unix` | `mem_fs([])`: no files | none: read back through `Fs` |
+| `Fs` | `read(p) -> Bytes ! FsError`, `write(p, b) ! FsError`, `exists(p)` | files, through `Unix` | `mem_fs([])`: no files | none: read back through `Fs` |
 | `Os` | `args() -> Array<Str>` | what follows `--` in `ren run file.ren -- args` | `test_os([])`: no args | none |
-| `Proc` | `run(cmd, args) -> Int ! NoSuchProgram` | a process, with this one's stdin, stdout and stderr | `test_proc([])`: runs nothing, exits with 0 | `TestProc.ran() -> Array<Command>` |
+| `Proc` | `run(cmd, args) -> Int ! ProcError` | a process, with this one's stdin, stdout and stderr | `test_proc([])`: runs nothing, exits with 0 | `TestProc.ran() -> Array<Command>` |
 
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.
 - `Fs.read_str(p)` is a member of `Fs`, `read` then `Str.from_utf8`.
   `mem_fs(files: Array<File>)` keeps files in memory, each a `File {
   path, data }`, so a test that needs some installs one with `with`.
-- `Proc.run` gives back the program's exit code, and fails only when
-  there's no such program. What it prints isn't captured.
+- `FsError` is `NoSuchFile(path) | NotAllowed(path) | IsAFolder(path) |
+  FsFailed(path, reason)`, the last for anything else the system says,
+  such as a full disk. The real `Fs` fails with them rather than
+  panicking: a file that can't be read is something to handle, not a bug.
+  `mem_fs` fails only with `NoSuchFile`, and its `write` never does.
+- `Proc.run` gives back the program's exit code. `ProcError` is
+  `NoSuchProgram(name) | CantRun(name, reason) | Killed(name)`: it isn't
+  there, the system wouldn't start it, or a signal stopped it before it
+  exited. What it prints isn't captured.
   `test_proc(exits: Array<Exit>)` keeps each `Command { cmd, args }`, and
   says it exited with the code of its `Exit { command, code }`, or 0.
 - `Time`, `Instant` and `Duration` are opaque, with methods only until
@@ -483,10 +490,8 @@ stage, or settled something the plan left open:
 - **`split("")` panics**, since there's nothing to split on.
 - **`Path.join` takes a `Str`**, `src.join("main.ren")`, and a name that
   starts at the root, `/etc`, replaces the path, as in most languages.
-- **The real `Fs` panics when it can't read or write a file for any
-  reason but its not being there,** a folder, a file it may not read,
-  or a write into a folder that isn't there, since `read` fails only
-  with `NoSuchFile` and `write` with nothing.
+- **A write into a folder that isn't there fails with `NoSuchFile`,**
+  naming the file, as the system does.
 - **The real `Fs.exists` is true of a folder,** as the system says,
   though `mem_fs` has only files.
 - **The real `Os.args` panics at an argument that isn't UTF-8,** since a
@@ -497,10 +502,10 @@ stage, or settled something the plan left open:
   fake the programs it runs and keep the real arguments, or the other way
   round.
 - **The real `Proc` looks for a program on `PATH` itself,** so one that
-  isn't there fails with `NoSuchProgram`, never exit code 127. One that's
-  there but can't run, or is killed by a signal, panics, since `run` says
-  it fails only that way. On `PATH` it skips a file that can't be run, as
-  a shell does.
+  isn't there fails with `NoSuchProgram`, never exit code 127. On `PATH`
+  it skips a file that can't be run, as a shell does. A file that may be
+  run but isn't a program is left to the system: Linux refuses it, with
+  `CantRun`, and macOS runs it with `sh`.
 - **A test `Proc`'s exit codes are a table,** `test_proc([Exit { command,
   code }])`, matched on the whole `Command`, since a program run through
   `sh -c` is told apart by its arguments.

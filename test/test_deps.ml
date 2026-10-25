@@ -1034,16 +1034,16 @@ let%expect_test "the real Fs" =
   run
     (Printf.sprintf
        {|
-fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Fs, Console =
+fn main() ! FsError | InvalidUtf8 uses Fs, Console =
   let p = Path.of("%s")
   print(Fs.exists(p))
   match attempt Fs.read(p)
     Err(NoSuchFile(q)) => print(q == p)
     _ => print("it read a file that isn't there")
-  Fs.write(p, "héllo".bytes())
+  try Fs.write(p, "héllo".bytes())
   print(Fs.exists(p))
   print((try Fs.read(p)).len())
-  Fs.write(p, "again".bytes())
+  try Fs.write(p, "again".bytes())
   print(try Fs.read_str(p))
   try Fs.read_str(Path.of("no/such/file.txt"))
 |}
@@ -1064,7 +1064,7 @@ fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Fs, Console =
   run
     (Printf.sprintf
        {|
-fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Fs, Console =
+fn main() ! FsError | InvalidUtf8 uses Fs, Console =
   let p = Path.of("%s")
   print((try Fs.read(p)).len())
   try Fs.read_str(p)
@@ -1076,37 +1076,33 @@ fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Fs, Console =
     error: InvalidUtf8
     |}]
 
-let%expect_test "the real Fs panics when it can't write" =
-  run
-    {|
-fn main() uses Fs =
-  Fs.write(Path.of("no/such/folder/file.txt"), "x".bytes())
-|};
-  [%expect
-    {|
-    error: panic: can't write no/such/folder/file.txt: No such file or directory
-      ┌─ test.ren:2:3
-    2 │   Fs.write(Path.of("no/such/folder/file.txt"), "x".bytes())
-      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |}]
-
-let%expect_test "the real Fs panics when it reads a folder" =
+let%expect_test "the real Fs fails, rather than panics" =
+  (* a file that may only be read *)
+  let locked = temp_file () in
+  Unix.chmod locked 0o444;
   Unix.mkdir "a-folder" 0o755;
   run
-    {|
-fn main() uses Fs, Console =
+    (Printf.sprintf
+       {|
+fn main() ! FsError uses Fs, Console =
   print(Fs.exists(Path.of("a-folder")))
   match attempt Fs.read(Path.of("a-folder"))
+    Err(IsAFolder(p)) => print(p)
     _ => print("it read a folder")
-|};
+  match attempt Fs.write(Path.of("%s"), "x".bytes())
+    Err(NotAllowed(_)) => print("not allowed")
+    _ => print("it wrote a file it may only read")
+  try Fs.write(Path.of("no/such/folder/file.txt"), "x".bytes())
+|}
+       locked);
   Unix.rmdir "a-folder";
+  Sys.remove locked;
   [%expect
     {|
     true
-    error: panic: can't read a-folder: Is a directory
-      ┌─ test.ren:3:17
-    3 │   match attempt Fs.read(Path.of("a-folder"))
-      │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    a-folder
+    not allowed
+    error: NoSuchFile("no/such/folder/file.txt")
     |}]
 
 let%expect_test "the real Fs is reached only through Fs" =
@@ -1244,7 +1240,7 @@ fn main() = 1
 let%expect_test "the real Os and Proc" =
   run ~args:[ "build"; "a b" ]
     {|
-fn main() ! NoSuchProgram(name: Str) uses Os, Proc, Console =
+fn main() ! ProcError uses Os, Proc, Console =
   print(Os.args())
   // what's printed before a program runs comes out before what it prints
   print("before")
@@ -1289,49 +1285,25 @@ fn main() uses Os, Console =
       │         ^^^^^^^^^
     |}]
 
-let%expect_test "the real Proc panics when a program can't run, or finish" =
-  (* a file that can be run, but isn't a program *)
-  let file = "not-a-program" in
-  Out_channel.with_open_bin file (fun oc -> output_string oc "\x00\x01");
-  Unix.chmod file 0o755;
-  run
-    {|
-fn main() ! NoSuchProgram(name: Str) uses Proc =
-  try Proc.run("./not-a-program", [])
-|};
-  Sys.remove file;
-  [%expect {|
-    error: panic: can't run ./not-a-program: Exec format error
-      ┌─ test.ren:2:7
-    2 │   try Proc.run("./not-a-program", [])
-      │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |}];
-  (* a file that's there, but may not be run *)
+let%expect_test "the real Proc fails when a program can't run, or finish" =
+  (* A file that's there, but may not be run. A file that may be run but
+     isn't a program is left to the system: Linux refuses it, and macOS
+     runs it with `sh`. *)
   let file = "not-runnable" in
   Out_channel.with_open_bin file (fun oc -> output_string oc "#!/bin/sh\n");
   Unix.chmod file 0o644;
   run
     {|
-fn main() ! NoSuchProgram(name: Str) uses Proc =
-  try Proc.run("./not-runnable", [])
+fn main() ! ProcError uses Proc, Console =
+  match attempt Proc.run("./not-runnable", [])
+    Err(CantRun(name, reason)) => print([name, reason])
+    _ => print("it ran a file that may not be run")
+  try Proc.run("sh", ["-c", "kill -9 $$"])
 |};
   Sys.remove file;
   [%expect {|
-    error: panic: can't run ./not-runnable: Permission denied
-      ┌─ test.ren:2:7
-    2 │   try Proc.run("./not-runnable", [])
-      │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |}];
-  run
-    {|
-fn main() ! NoSuchProgram(name: Str) uses Proc =
-  try Proc.run("sh", ["-c", "kill -9 $$"])
-|};
-  [%expect {|
-    error: panic: sh was stopped by a signal
-      ┌─ test.ren:2:7
-    2 │   try Proc.run("sh", ["-c", "kill -9 $$"])
-      │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ["./not-runnable", "Permission denied"]
+    error: Killed("sh")
     |}]
 
 let%expect_test "the real Os and Proc are reached only through them" =
@@ -3389,14 +3361,14 @@ fn main() uses Console =
 let%expect_test "mem_fs, installed by hand" =
   run
     {|
-fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Console =
+fn main() ! FsError | InvalidUtf8 uses Console =
   let notes = Path.of("notes.txt")
   let files = [File { path: notes, data: "hi".bytes() }]
   with mem_fs(files) in
     print(try Fs.read_str(notes))
     print(Fs.exists(Path.of("other.txt")))
-    Fs.write(notes, "bye".bytes())
-    Fs.write(Path.of("other.txt"), "new".bytes())
+    try Fs.write(notes, "bye".bytes())
+    try Fs.write(Path.of("other.txt"), "new".bytes())
     print(try Fs.read_str(notes))
     print(try Fs.read_str(Path.of("other.txt")))
   // each instance starts from `files` again
@@ -3423,7 +3395,7 @@ fn main() ! NoSuchFile(path: Path) | InvalidUtf8 uses Console =
 let%expect_test "a test gets no args, and programs that exit with 0" =
   test
     {|
-fn build() -> Int ! NoSuchProgram(name: Str) uses Proc =
+fn build() -> Int ! ProcError uses Proc =
   try Proc.run("make", ["all"])
 
 test "nothing runs" =
@@ -3450,13 +3422,13 @@ test "what ran, in order" =
 let%expect_test "test_os and test_proc, installed by hand" =
   run
     {|
-fn build() -> Int ! NoSuchProgram(name: Str) uses Os, Proc =
+fn build() -> Int ! ProcError uses Os, Proc =
   var last = 0
   for a in Os.args()
     last = try Proc.run("make", [a])
   last
 
-fn main() ! NoSuchProgram(name: Str) uses Console =
+fn main() ! ProcError uses Console =
   let fails = Command { cmd: "make", args: ["test"] }
   with test_os(["all", "test"]), test_proc([Exit { command: fails, code: 2 }]) in
     print(try build())
@@ -3783,8 +3755,8 @@ test "the test clock isn't" =
 let%expect_test "a test gets an empty mem_fs, or the files its with gives" =
   test
     {|
-fn save(name: Str, text: Str) uses Fs =
-  Fs.write(Path.of(name), text.bytes())
+fn save(name: Str, text: Str) ! FsError uses Fs =
+  try Fs.write(Path.of(name), text.bytes())
 
 test "there are no files" =
   assert not Fs.exists(Path.of("notes.txt"))
@@ -3793,7 +3765,7 @@ test "there are no files" =
     _ => assert false
 
 test "what it writes, it reads back" =
-  save("notes.txt", "hi")
+  try save("notes.txt", "hi")
   assert try Fs.read_str(Path.of("notes.txt")) == "hi"
 
 test "nothing's left from the test before" =
@@ -3837,7 +3809,7 @@ let%expect_test "a test whose uses asks for the real Fs" =
        {|
 test "the real file system" uses Fs =
   let p = Path.of("%s")
-  Fs.write(p, "real".bytes())
+  try Fs.write(p, "real".bytes())
   assert try Fs.read_str(p) == "real"
 |}
        file);
