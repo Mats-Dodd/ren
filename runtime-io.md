@@ -56,7 +56,7 @@ for chunk in Net.chunks(conn)              // chunk: Bytes from the pool
 // last reference dropped → the buffer goes back to the pool
 ```
 
-Ten thousand idle connections each holding a 64 KB receive buffer waste 640 MB. With io_uring's provided buffers, the kernel takes a buffer from the shared pool only when data actually arrives. Reference counting returns it with no lease protocol to get wrong: when the count reaches zero, the buffer goes back to the ring. Before stage 11, leased buffers are copied into ordinary `Bytes`.
+Ten thousand idle connections each holding a 64 KB receive buffer waste 640 MB. With io_uring's provided buffers, the kernel takes a buffer from the shared pool only when data actually arrives. Reference counting returns it with no lease protocol to get wrong: when the count reaches zero, the buffer goes back to the ring.
 
 Registered buffers, pinned once so each call skips setup, fit code without `Alloc`. A hot path that uses only pooled buffers needs neither `Alloc` nor per-call kernel work.
 

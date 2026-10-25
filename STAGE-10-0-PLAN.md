@@ -38,40 +38,27 @@ last commit, once `STAGE-10-0-REPORT.md` replaces it.
 
 ## Where it stands
 
-R0 is partway done. These commits are on the branch:
+R0's work is done, and it is in review. These commits are on the branch:
 
 - `849e97f` `--help` goes to stdout, there's `--version`, and `ren test`
   fails on a folder with no tests.
 - `bef1802` Test helpers that fail when an expected error doesn't come.
-- `42e1496` Tail calls are a loop, call depth is limited, and there are
-  benchmarks in `bench/` (`dune build @bench`). The 1M-iteration loop
-  went from 12.75s to 0.38s, and runaway recursion from 96s to 0.36s.
-- `97d8710` CI on Linux and macOS (`.github/workflows/ci.yml`). Its first
-  run was in progress when the work stopped: check it, and fix it if it
-  failed.
-- The Zed extension already points at the GitHub URL, and `.gitattributes`
-  marks the generated grammar files.
-- `e8ce6c9` (WIP):
-  - The compiler's messages and comments now use the new stage numbers
-    (operators 9, `outer` and the journal 10, the memory stage 11).
-    So do `deps.md`, `errors.md`, `module-build.md`, `runtime-io.md` and
-    `stdlib.md`.
-  - `compiler.md` is a draft.
-  - Tests pass.
+- `42e1496` Tail calls are a loop, call depth is limited to 100,000, and
+  there are benchmarks in `bench/` (`dune build @bench`). The
+  1M-iteration loop went from 12.75s to 0.38s, and runaway recursion
+  from 96s to 0.36s.
+- `97d8710` CI on Linux and macOS (`.github/workflows/ci.yml`), green.
+- `e8ce6c9`, `85a2b10` Stages renumbered for the new order, everywhere,
+  and the roadmap in `README.md` in that order, with the new rows.
+- `9e6c255` `compiler.md`, linked from `README.md`.
+- `b3fdf02` `module-build.md` amended for inferred requirements.
+- `a656dfc` Core Lint checks that a handler's instance is never a value.
+- `73fb8f9` Core binders numbered by first appearance in test snapshots.
+- `8d360b7` The Zed extension points at the grammar's latest commit.
+- Fixes from R0's first review: `compiler.md` says which of its promises
+  are still to come, and a test shows the instance check firing.
 
-**Still to do in R0:**
-
-1. Finish the roadmap in `README.md`: the rows in the new order, and the
-   new rows (see "The order of the stages" below). Check that every stage
-   number in the repo matches it, including `operators.md`.
-   - `grammar.js`'s comment changed, so run `make check` in
-     `editors/tree-sitter-ren`.
-   - Bump the Zed extension's grammar `rev` if the grammar's commit
-     changed.
-2. Finish `compiler.md` (see R0 below), and link it from `README.md`.
-3. Amend `module-build.md` for inferred requirements.
-4. Normalise binder ids in printed Core in tests, if it's cheap.
-5. Review R0 as a whole (the commits since `44d59f3`), then go on to R1.
+**Next:** finish R0's review, then go on to R1.
 
 ## Context
 
