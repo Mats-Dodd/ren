@@ -14,6 +14,9 @@ type builtin_fn = {
 }
 
 val types : builtin_type list
+
+(* The dependencies a function can list in its `uses`: [Io], [Net], ... *)
+val dependencies : string list
 val fns : builtin_fn list
 val find_fn : string -> builtin_fn option
 

@@ -165,6 +165,39 @@ let check_transparent sink (f : fn_def) =
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
     fn_params
 
+(* ---- what a function declares it uses ---- *)
+
+(* The dependencies [f] declares, sorted: those its `uses` lists, or none
+   for a public function without one. A private function without `uses`
+   declares nothing, and inference works out what it uses. *)
+let declared_uses (f : fn_def) =
+  match f.uses with
+  | Some ds ->
+      Some
+        (List.sort_uniq String.compare
+           (List.map (fun (d : ident) -> d.name) ds))
+  | None when f.pub -> Some []
+  | None -> None
+
+(* Report each dependency [f]'s body uses that it doesn't declare, at the
+   first call that brings it in. [cx] is what checking [f]'s body found. *)
+let check_uses env (f : fn_def) cx declared =
+  let pos (l : Loc.t) = (l.start.line, l.start.col) in
+  let calls =
+    List.sort (fun (a, _) (b, _) -> compare (pos a) (pos b)) !(cx.calls)
+  in
+  List.iter
+    (fun dep ->
+      if not (List.mem dep declared) then
+        let call =
+          List.find_map
+            (fun (loc, uses) ->
+              if List.mem dep (fst (row_parts uses)) then Some loc else None)
+            calls
+        in
+        report env (undeclared_use f dep call))
+    (List.sort_uniq String.compare (fst (row_parts cx.uses)))
+
 (* ---- the program ---- *)
 
 (* What inference found, in canonical form (ty.ml). *)
@@ -243,7 +276,17 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
         in
         let tparams = List.map (fun (id, n) -> TSkol (id, n)) skolems in
         let signature () =
-          let errs = fresh_row env.st and uses = fresh_row env.st in
+          (* a function that declares its dependencies starts with them: its
+             body can add to them only through a transparent parameter, whose
+             row this is too, and whatever else it adds is reported once the
+             group is done *)
+          let errs = fresh_row env.st in
+          let uses =
+            List.fold_right
+              (fun d rest -> RExtend (d, rest))
+              (Option.value (declared_uses f) ~default:[])
+              (fresh_row env.st)
+          in
           let ps =
             List.map (param_type env ~tparams ~own:(errs, uses)) f.params
           in
@@ -265,6 +308,7 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
             found = Hashtbl.create 16;
             errs;
             uses;
+            calls = ref [];
             tparams;
           }
         in
@@ -315,6 +359,12 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
         (List.rev env.joins);
       env.joins <- [];
       env.group <- [];
+      (* only now, with the group's uses of each other joined, is it known
+         everything each function uses *)
+      List.iter
+        (fun ((f : fn_def), _, cx, _, _) ->
+          Option.iter (check_uses env f cx) (declared_uses f))
+        setups;
       leave_level env.st;
       List.iter
         (fun ((f : fn_def), skolems, cx, _, _) ->

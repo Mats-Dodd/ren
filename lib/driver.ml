@@ -57,14 +57,7 @@ let check_module ~home ~imports ~reachable ?entry prog =
   checked "imports" (fun sink ->
       Resolve.unused_imports sink r ~found:inferred.in_scope);
   checked "exhaust" (fun sink -> Exhaust.program sink ~reachable r inferred);
-  (* what a public function uses can't be written in its signature yet, so
-     its interface takes that from inference *)
-  let uses name =
-    match (List.assoc name inferred.schemes).ty with
-    | Fun (_, _, _, u) -> u.labels
-    | _ -> []
-  in
-  let iface = Iface.of_module ~home ~uses r.prog in
+  let iface = Iface.of_module ~home r.prog in
   (* A public function's body was checked against its signature, so the
      type inference found for it is the one its interface states. Other
      modules see only the interface, so if the two ever differ, that's a

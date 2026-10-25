@@ -75,6 +75,10 @@ type ctx = {
   found : (int, found) Hashtbl.t;  (** what each lookup found, by node id *)
   errs : row;  (** the errors of the innermost function or lambda *)
   uses : row;  (** the dependencies of the innermost function or lambda *)
+  calls : (Loc.t * row) list ref;
+      (** each call that adds to [uses], with the callee's dependencies, most
+          recent first. A [ref] is a mutable cell, here shared by every copy of
+          the [ctx] for the same function or lambda. *)
   tparams : ty list;  (** what the type parameters in scope stand for *)
 }
 
@@ -375,6 +379,7 @@ let absorb env cx loc errs uses =
     | RExtend (l, rest) -> RExtend (l, reopen rest)
     | r -> r
   in
+  cx.calls := (loc, uses) :: !(cx.calls);
   try
     Unify.unify_row env.st (reopen errs) cx.errs;
     Unify.unify_row env.st (reopen uses) cx.uses
@@ -439,7 +444,9 @@ and check env cx ?(why = plain) (e : expr) expected =
       in
       let errs = fresh_row env.st and uses = fresh_row env.st in
       bind_params cx params ps;
-      check env { cx with errs; uses } body eret
+      check env
+        { cx with errs; uses; calls = ref [] }
+        body eret
         ~why:
           (explain ~notes:why.notes
              ~msg:(fun f x ->
@@ -532,7 +539,7 @@ and synth env cx (e : expr) : ty =
       let ps = List.map (param_type env ~tparams:cx.tparams) params in
       let errs = fresh_row env.st and uses = fresh_row env.st in
       bind_params cx params ps;
-      let tb = infer env { cx with errs; uses } body in
+      let tb = infer env { cx with errs; uses; calls = ref [] } body in
       TFun (ps, tb, errs, uses)
   | Block (stmts, last) ->
       List.iter (stmt env cx) stmts;

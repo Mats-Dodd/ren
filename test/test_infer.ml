@@ -326,7 +326,7 @@ fn main() = 1
       help: add `-> Int` to the signature
     |}];
   types {|
-pub fn show(x: Int) = print(x)
+pub fn show(x: Int) uses Io = print(x)
 fn main() = show(1)
 |};
   [%expect {|
@@ -1257,8 +1257,8 @@ let%expect_test "a public function's interface comes from its signature" =
 pub fn twice(f: fn()) =
   f()
   f()
-pub fn show(x: Int) = print(x)
-pub fn logged(f: fn()) =
+pub fn show(x: Int) uses Io = print(x)
+pub fn logged(f: fn()) uses Io =
   f()
   print(1)
 pub fn app(f: fn(fn() -> Int) -> Int) -> Int = f(fn() => 1)
@@ -1411,4 +1411,128 @@ fn main() = other(1, true, ())
     map_option:
     pick: 0=A, 1=B
     main:
+    |}]
+
+(* ---- what a function declares it uses ---- *)
+
+let%expect_test "a dependency that doesn't exist" =
+  types {|
+fn f() uses Io, Disk = 1
+fn main() = f()
+|};
+  [%expect
+    {|
+    error: there's no dependency named `Disk`
+      ┌─ test.ren:1:17
+    1 │ fn f() uses Io, Disk = 1
+      │                 ^^^^
+      = the dependencies there are: `Io`, `Net`, `Alloc`, `Async`, `Unsafe`, `Clock`, `Random`
+      help: use one of those, or remove it
+    |}]
+
+let%expect_test "a public function declares what it uses" =
+  (* the error points at the first call that brings the dependency in,
+     even through a private function that inferred it *)
+  types
+    {|
+fn log(x: Int) = print(x)
+pub fn load(x: Int) -> Int =
+  let y = x + 1
+  log(y)
+  print(y)
+  y
+fn main() = load(1)
+|};
+  [%expect
+    {|
+    error: `load` doesn't declare `Io`
+      ┌─ test.ren:2:8
+    2 │ pub fn load(x: Int) -> Int =
+      │        ^^^^
+    4 │   log(y)
+      │   ------ this call uses `Io`
+      = a public function without `uses` uses nothing, and its body is checked against that
+      help: add `uses Io`
+    |}]
+
+let%expect_test "a private function's uses are checked if it writes them" =
+  types
+    {|
+fn tick() uses Clock = print(1)
+fn quiet() = print(2)
+fn main() =
+  tick()
+  quiet()
+|};
+  [%expect
+    {|
+    error: `tick` doesn't declare `Io`
+      ┌─ test.ren:1:4
+    1 │ fn tick() uses Clock = print(1)
+      │    ^^^^
+      │                        -------- this call uses `Io`
+      = `tick`'s body can only use what its `uses` lists
+      help: add `Io` to its `uses`
+    |}]
+
+let%expect_test "declaring more than the body uses is allowed" =
+  (* the interface says what's declared, so the body can start using it
+     later without changing the interface *)
+  types
+    {|
+pub fn later() uses Io, Net = ()
+pub fn now(x: Int) -> Int
+    uses Io =
+  print(x)
+  x
+fn main() =
+  later()
+  now(1)
+|};
+  [%expect
+    {|
+    pub fn later() uses Io, Net
+    pub fn now(x: Int) -> Int uses Io
+    fn main() -> Int uses Io, Net
+    |}]
+
+let%expect_test
+    "a transparent parameter's uses flow through a declared function" =
+  run
+    {|
+pub fn twice(f: fn()) uses Io =
+  print(0)
+  f()
+  f()
+fn main() = twice(fn() => print(1))
+|};
+  [%expect {|
+    0
+    1
+    1
+    ()
+    |}]
+
+let%expect_test "a use found when a group's functions are joined" =
+  (* `ping` sees `pong` as declared until both are checked; only then is
+     it known that `pong`'s body uses `Io` *)
+  types
+    {|
+pub fn ping(n: Int) -> Int uses Clock =
+  if n == 0 then 0 else pong(n - 1)
+fn pong(n) =
+  print(n)
+  ping(n)
+fn main() = ping(3)
+|};
+  [%expect
+    {|
+    error: `ping` doesn't declare `Io`
+      ┌─ test.ren:1:8
+    1 │ pub fn ping(n: Int) -> Int uses Clock =
+      │        ^^^^
+    2 │   if n == 0 then 0 else pong(n - 1)
+      │                         ----------- this call uses `Io`
+      = `ping`'s body can only use what its `uses` lists
+      help: add `Io` to its `uses`
     |}]

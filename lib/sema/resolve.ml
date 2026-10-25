@@ -482,6 +482,32 @@ let type_def env (td : Parsed.type_def) : Resolved.type_def =
   in
   { td with type_body }
 
+(* The dependencies after a function's `uses`: each one is a dependency
+   the prelude declares, written once. *)
+let uses env (deps : ident list) =
+  let seen = Hashtbl.create 4 in
+  List.iter
+    (fun (d : ident) ->
+      if not (List.mem d.name Prelude.dependencies) then
+        Diag.report env.sink
+          (Diag.make d.loc
+             ~notes:
+               [
+                 sprintf "the dependencies there are: %s"
+                   (String.concat ", "
+                      (List.map (sprintf "`%s`") Prelude.dependencies));
+               ]
+             ~help:"use one of those, or remove it"
+             (sprintf "there's no dependency named `%s`" d.name))
+      else
+        match Hashtbl.find_opt seen d.name with
+        | Some first ->
+            report env d.loc ~help:"remove one of them"
+              ~labels:[ (first, sprintf "the first `%s` is here" d.name) ]
+              (sprintf "`%s` is in `uses` twice" d.name)
+        | None -> Hashtbl.replace seen d.name d.loc)
+    deps
+
 let fn_def env (f : Parsed.fn_def) : Resolved.fn_def * Path.t list =
   no_duplicates env "type parameters" f.tparams;
   List.iter
@@ -506,6 +532,7 @@ let fn_def env (f : Parsed.fn_def) : Resolved.fn_def * Path.t list =
       f.params
   in
   let ret = ty_opt env ~params:sc.tparams f.ret in
+  Option.iter (uses env) f.uses;
   let body = expr env inner f.body in
   ({ f with params = ps; ret; body }, List.sort_uniq compare sc.fn.calls)
 

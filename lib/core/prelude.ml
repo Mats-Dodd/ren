@@ -25,6 +25,15 @@ let types =
     { name = "Array"; arity = 1 };
   ]
 
+(* ---- built-in dependencies ----
+
+   What a function can name in its `uses`. For now these are the only
+   dependencies there are; dependency types of a program's own come in
+   stage 7. *)
+
+let dependencies =
+  [ "Io"; "Net"; "Alloc"; "Async"; "Unsafe"; "Clock"; "Random" ]
+
 (* ---- built-in functions ---- *)
 
 type builtin_fn = {

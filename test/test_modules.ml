@@ -937,3 +937,49 @@ fn main() =
       = a `billing.Plan` is expected here
       help: its constructors: `Free`, `Pro`
     |}]
+
+let%expect_test "editing a body leaves the interface as it was" =
+  (* the interface comes from declarations alone (module-build.md,
+     "Interface summaries"), so changing what a function's body does, even
+     what it uses, can't change what dependents see *)
+  let iface src =
+    let src = clean src in
+    let i = Ren.Driver.interface ~file src in
+    List.iter
+      (fun (v : Ren.Iface.value) ->
+        let pr = Ren.Ty.printer ~names:Ren.Path.full v.scheme in
+        Printf.printf "%s: %s\n" v.vname (Ren.Ty.show pr v.scheme.ty))
+      i.values;
+    i
+  in
+  let before =
+    iface
+      {|
+pub type Row = { id: Int }
+pub fn load(id: Int) -> Row
+    uses Io =
+  let n = helper(id)
+  Row { id: n }
+fn helper(n) = n
+fn main() = load(1)
+|}
+  in
+  let after =
+    iface
+      {|
+pub type Row = { id: Int }
+pub fn load(id: Int) -> Row
+    uses Io =
+  print(id)
+  Row { id: helper(id) }
+fn helper(n) = n * 2 + 1
+fn main() = load(1)
+|}
+  in
+  print_endline (if before = after then "the same" else "different");
+  [%expect
+    {|
+    load: fn(Int) -> test.Row uses Io
+    load: fn(Int) -> test.Row uses Io
+    the same
+    |}]

@@ -273,3 +273,26 @@ let several_records_have ~names loc ?what (f : Ast.ident) paths =
   Diag.make loc ~help
     ~notes:(field_of_types ~names f paths @ extra)
     (sprintf "can't tell which record type %s is" what)
+
+(* ---- dependencies ---- *)
+
+(* [f]'s body uses [dep], which it doesn't declare; [call] is the first
+   call that uses it. *)
+let undeclared_use (f : Ast.Resolved.fn_def) dep call =
+  let name = f.name.name in
+  Diag.make f.name.loc
+    ~labels:
+      (match call with
+      | Some l -> [ (l, sprintf "this call uses `%s`" dep) ]
+      | None -> [])
+    ~notes:
+      [
+        (if f.uses = None then
+           "a public function without `uses` uses nothing, and its body is \
+            checked against that"
+         else sprintf "`%s`'s body can only use what its `uses` lists" name);
+      ]
+    ~help:
+      (if f.uses = None then sprintf "add `uses %s`" dep
+       else sprintf "add `%s` to its `uses`" dep)
+    (sprintf "`%s` doesn't declare `%s`" name dep)

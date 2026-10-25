@@ -106,11 +106,14 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
    signature the same way (Infer_expr.param_type), and the driver checks
    that the two agree.
 
-   [uses] are the dependencies the function uses. Ren has no way to write
-   them in a signature yet, so they come from inference for now. *)
-let signature ~uses (f : Ast.Resolved.fn_def) : Ty.scheme =
+   Its dependencies are the ones its `uses` lists, none if it has no
+   `uses`; inference checks that its body uses nothing else. *)
+let signature (f : Ast.Resolved.fn_def) : Ty.scheme =
   (* row variables: 0 for the errors, 1 for the dependencies *)
   let errs : Ty.row = { labels = []; tail = Some 0 } in
+  let uses =
+    List.map (fun (d : Ast.ident) -> d.name) (Option.value f.uses ~default:[])
+  in
   let deps : Ty.row =
     { labels = List.sort_uniq String.compare uses; tail = Some 1 }
   in
@@ -137,9 +140,8 @@ let signature ~uses (f : Ast.Resolved.fn_def) : Ty.scheme =
    bodies (module-build.md, "Interface summaries"): every public type it
    declares, and the signature of every public function. A public one
    never mentions a private one (resolve.ml checks), so a dependent never
-   meets a type that isn't in some interface. [uses] gives the
-   dependencies of each public function, which can't be written yet. *)
-let of_module ~home ~uses (prog : Ast.Resolved.program) =
+   meets a type that isn't in some interface. *)
+let of_module ~home (prog : Ast.Resolved.program) =
   {
     home;
     types =
@@ -152,11 +154,7 @@ let of_module ~home ~uses (prog : Ast.Resolved.program) =
       List.filter_map
         (function
           | Ast.Fn (f : Ast.Resolved.fn_def) when f.pub ->
-              Some
-                {
-                  vname = f.name.name;
-                  scheme = signature ~uses:(uses f.name.name) f;
-                }
+              Some { vname = f.name.name; scheme = signature f }
           | _ -> None)
         prog;
   }
