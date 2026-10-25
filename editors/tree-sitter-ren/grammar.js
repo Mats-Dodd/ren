@@ -63,6 +63,9 @@ module.exports = grammar({
     [$._primary, $.type_name],
     // the next line of an indented sum type may start with `|`
     [$.sum_type],
+    // so may the next line after an `if`'s indented `then` block, with
+    // `else`: the token after the line break decides
+    [$.if_expression],
   ],
 
   supertypes: ($) => [$._expression, $._pattern, $._type],
@@ -436,8 +439,11 @@ module.exports = grammar({
 
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
 
+    // `if c then x = 1` assigns inside the `then`, as the parser does,
+    // rather than to the whole `if`
     if_expression: ($) =>
-      prec.right(
+      prec(
+        -1,
         seq(
           'if',
           field('condition', $._expression),

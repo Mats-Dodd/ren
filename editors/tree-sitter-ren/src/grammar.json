@@ -2589,8 +2589,8 @@
       ]
     },
     "if_expression": {
-      "type": "PREC_RIGHT",
-      "value": 0,
+      "type": "PREC",
+      "value": -1,
       "content": {
         "type": "SEQ",
         "members": [
@@ -2909,6 +2909,9 @@
     ],
     [
       "sum_type"
+    ],
+    [
+      "if_expression"
     ]
   ],
   "precedences": [],

@@ -176,3 +176,42 @@ fn f() =
             (identifier)
             (number))))
       (identifier))))
+
+================================================================================
+an assignment as the body of a one-line if
+================================================================================
+
+fn f() =
+  if c then x = 1 else y = 2
+  if a.id == id then found = Some(i)
+  x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (if_expression
+        (identifier)
+        (assignment
+          (identifier)
+          (number))
+        (assignment
+          (identifier)
+          (number)))
+      (if_expression
+        (binary_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (identifier))
+        (assignment
+          (identifier)
+          (constructor_expression
+            (constructor_ref
+              (type_identifier))
+            (constructor_arguments
+              (identifier)))))
+      (identifier))))
