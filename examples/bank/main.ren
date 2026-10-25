@@ -11,8 +11,8 @@ fn main() =
   let alice = &acme.open()
   let bob = &acme.open()
   let carol = &acme.open()
-  &acme.deposit(alice, Money.dollars(100))
-  &acme.deposit(bob, Money.dollars(20))
+  let _ = &acme.deposit(alice, Money.dollars(100))
+  let _ = &acme.deposit(bob, Money.dollars(20))
 
   // $30 from Alice to Bob: it goes through
   print(&acme.transfer(send(alice, bob, 30)))     // None
@@ -27,7 +27,7 @@ fn main() =
 
   // Carol's account is frozen, so it can't take money in. Alice's side
   // went through on the draft, but the draft was thrown away.
-  &acme.freeze(carol)
+  let _ = &acme.freeze(carol)
   print(&acme.transfer(send(alice, carol, 10)))   // Some(Frozen(3))
   print(cents(acme, alice))                       // 7000
 

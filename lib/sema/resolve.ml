@@ -197,7 +197,9 @@ let bind env sc (id : ident) bound =
   not_an_alias env id;
   sc.fn.last_id <- sc.fn.last_id + 1;
   let b = { id = sc.fn.last_id; ident = id; bound; depth = sc.depth } in
-  (b, { sc with locals = Env.add id.name b sc.locals })
+  (* `_`, as in `let _ = ...`, names nothing: the value is dropped *)
+  if id.name = "_" then (b, sc)
+  else (b, { sc with locals = Env.add id.name b sc.locals })
 
 (* ---- types ---- *)
 
@@ -427,6 +429,10 @@ let lookup env sc loc ~what x =
               env.imports
           in
           (match elsewhere with
+          | [] when x = "_" ->
+              report env loc
+                ~help:"give the value a name, `let x = ...`, to use it"
+                "`_` drops a value, so it can't be read"
           | [] when x = "self" ->
               report env loc
                 ~help:

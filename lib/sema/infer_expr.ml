@@ -60,6 +60,8 @@ type env = {
       (** those of [group] whose signature is written out in full, every
           parameter's type included: public functions, mostly *)
   mutable joins : join list;  (** most recent first *)
+  mutable drops : drop list;
+      (** the values the group's statements throw away, most recent first *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
@@ -72,6 +74,14 @@ type env = {
    same. Once every body is checked, each use is joined with the type that
    function's own body gave it. *)
 and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
+
+(* A statement's value, which is thrown away, so it has to be `Unit`: a
+   value can't be dropped without a word (errors.md, "Nothing is
+   dropped"). It's checked once the group's uses of each other are joined
+   ([dropped_values]), since a call of another function of the group
+   learns only then what it returns. [callee] names the function, if the
+   statement is a call. *)
+and drop = { dloc : Loc.t; dty : ty; callee : string option }
 
 (* A call that adds to a function's dependencies. [own] are the labels the
    callee's row had just before the call joined it to the caller's: what
@@ -123,8 +133,10 @@ let fail env ?help ?notes ?labels loc msg =
 
 (* The value an expression produces is its last line, which is where to
    point when that value has the wrong type. *)
-let rec result_loc (e : expr) =
-  match e.kind with Block (_, last) -> result_loc last | _ -> e.loc
+let rec result_of (e : expr) =
+  match e.kind with Block (_, last) -> result_of last | _ -> e
+
+let result_loc (e : expr) = (result_of e).loc
 
 (* How to explain a mismatch with an expected type, passed down along with
    it: [msg] words the error, [help] suggests a fix and [labels] point at
@@ -752,7 +764,9 @@ and synth env cx (e : expr) : ty =
           (result_loc array_of) ~found:ta ~expected:(array elem)
       in
       Hashtbl.replace cx.locals var.id (if ok then elem else TError);
-      ignore (infer env cx body);
+      (* each time round, the body's value is thrown away, as a
+         statement's is *)
+      dropped env (result_of body) (infer env cx body);
       unit
 
 and stmt env cx = function
@@ -768,7 +782,21 @@ and stmt env cx = function
         | None -> infer env cx value
       in
       Hashtbl.replace cx.locals name.id t
-  | Expr e -> ignore (infer env cx e)
+  | Expr e -> dropped env e (infer env cx e)
+
+(* Keep [t], the type of a value [e] throws away, to be checked later
+   (see [drop]). *)
+and dropped env (e : expr) t =
+  let callee =
+    match e.kind with
+    | Call (f, _) | Ref { kind = Call (f, _); _ } -> (
+        match f.kind with
+        | Var x -> Some (short_name (name_of x))
+        | Field (_, m) -> Some m.name
+        | _ -> None)
+    | _ -> None
+  in
+  env.drops <- { dloc = e.loc; dty = t; callee } :: env.drops
 
 (* A call. One with a dot, `x.m(...)`, can be a method call, found through
    [x]'s type: as a field is, by [through_type], except that a method can
@@ -1275,3 +1303,19 @@ and bind_pattern env cx t (p : pattern) =
               (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
               ctor.cfields ps
           else unknown ())
+
+(* Check every value the group threw away is `Unit` (see [drop]). One whose
+   type is still unknown, like the result of calling a parameter, becomes
+   `Unit`. *)
+let dropped_values env =
+  List.iter
+    (fun d ->
+      unify_at env d.dloc ~found:d.dty ~expected:unit
+        ~msg:(fun f _ ->
+          match d.callee with
+          | Some name ->
+              sprintf "`%s` returns `%s`, and this throws it away" name f
+          | None -> sprintf "this is %s, and it's thrown away" (article f))
+        ~help:"use it, or write `let _ = ...` if you mean to drop it")
+    (List.rev env.drops);
+  env.drops <- []

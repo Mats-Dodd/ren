@@ -196,7 +196,7 @@ let%expect_test "trailing lambdas" =
   run
     {|
 fn twice(f) =
-  f()
+  let _ = f()
   f()
 
 fn main() =

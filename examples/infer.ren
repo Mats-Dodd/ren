@@ -23,7 +23,7 @@ fn map_option(o, f) =
     None => None
 
 fn twice(f) =                          // f's dependencies become the caller's
-  f()
+  let _ = f()
   f()
 
 fn main() =                            // uses Io, because `print` does

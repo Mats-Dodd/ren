@@ -1161,7 +1161,7 @@ fn ids(a: Array<UserId>) = a
 fn bad() -> Ids = 3
 fn main() =
   let xs: Array<Int> = [1]
-  ids(xs)
+  let _ = ids(xs)
   bad()
 |}
       );
@@ -1178,9 +1178,9 @@ fn main() =
       help: use a function from `users` to make or read one
 
     error: expected `Array<UserId>`, found `Array<Int>`
-      ┌─ main.ren:7:7
-    7 │   ids(xs)
-      │       ^^
+      ┌─ main.ren:7:15
+    7 │   let _ = ids(xs)
+      │               ^^
       = `UserId`'s representation is private to `users`
       help: use a function from `users` to make or read one
     |}]

@@ -54,10 +54,11 @@ worked that out.
 
 ## What writing it ran into
 
-- **A refusal can be dropped without a word.** `&acme.deposit(...)` returns
-  an `Option<Refusal>`, and as a statement its value is thrown away. That's
-  the strongest case so far for stage 6: a function that can fail should
-  have to be marked with `try` at the call, so a failure can't be ignored.
+- **A refusal is dropped with `let _ =`.** `&acme.deposit(...)` returns
+  an `Option<Refusal>`, and a statement's value can't be thrown away
+  without a word any more, so `main` writes `let _ = &acme.deposit(...)`.
+  That's still a refusal ignored, on purpose: with stage 6's errors the
+  call would have to say what happens to it, with `try`.
 - **`Option<Refusal>` is backwards.** `None` means it worked. A `Result`,
   or stage 6's `! Refusal`, would say what it means.
 - **Nested `match` for "both found".** `transfer` matches on

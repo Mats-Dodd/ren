@@ -1616,3 +1616,112 @@ fn main() = ping(3)
       = `ping`'s body can only use what its `uses` lists
       help: add `Io` to its `uses`
     |}]
+
+(* ---- nothing is dropped (errors.md, "Nothing is dropped") ---- *)
+
+let%expect_test "a statement's value has to be Unit" =
+  run
+    {|
+type Bag = { xs: Array<Int> }
+  fn add(inout self, x: Int) -> Option<Int> =
+    &self.xs.push(x)
+    None
+
+fn count(xs: Array<Int>) -> Int = xs.len()
+
+fn main() =
+  var b = Bag { xs: [1] }
+  &b.add(2)
+  count(b.xs)
+  b.xs.len() + 1
+  if b.xs.len() == 0 then 1 else 2
+  for x in b.xs
+    x * 2
+  ()
+|};
+  [%expect
+    {|
+    error: `add` returns `Option<Int>`, and this throws it away
+       ┌─ test.ren:10:3
+    10 │   &b.add(2)
+       │   ^^^^^^^^^
+       help: use it, or write `let _ = ...` if you mean to drop it
+
+    error: `count` returns `Int`, and this throws it away
+       ┌─ test.ren:11:3
+    11 │   count(b.xs)
+       │   ^^^^^^^^^^^
+       help: use it, or write `let _ = ...` if you mean to drop it
+
+    error: this is an `Int`, and it's thrown away
+       ┌─ test.ren:12:3
+    12 │   b.xs.len() + 1
+       │   ^^^^^^^^^^^^^^
+       help: use it, or write `let _ = ...` if you mean to drop it
+
+    error: this is an `Int`, and it's thrown away
+       ┌─ test.ren:13:3
+    13 │   if b.xs.len() == 0 then 1 else 2
+       │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       help: use it, or write `let _ = ...` if you mean to drop it
+
+    error: this is an `Int`, and it's thrown away
+       ┌─ test.ren:15:5
+    15 │     x * 2
+       │     ^^^^^
+       help: use it, or write `let _ = ...` if you mean to drop it
+    |}]
+
+let%expect_test "let _ drops a value on purpose" =
+  run
+    {|
+fn main() =
+  let xs = [1, 2]
+  let _ = xs.len() + 1
+  let _ = 3
+  xs
+|};
+  [%expect {| [1, 2] |}];
+  run {|
+fn main() =
+  let _ = 1
+  _
+|};
+  [%expect
+    {|
+    error: `_` drops a value, so it can't be read
+      ┌─ test.ren:3:3
+    3 │   _
+      │   ^
+      help: give the value a name, `let x = ...`, to use it
+    |}]
+
+let%expect_test "a dropped call of the same group is checked once it's joined" =
+  types
+    {|
+fn even(n) = if n == 0 then true else odd(n - 1)
+fn odd(n) =
+  even(n)
+  if n == 0 then false else even(n - 1)
+fn main() = odd(3)
+|};
+  [%expect
+    {|
+    error: `even` returns `Bool`, and this throws it away
+      ┌─ test.ren:3:3
+    3 │   even(n)
+      │   ^^^^^^^
+      help: use it, or write `let _ = ...` if you mean to drop it
+    |}]
+
+let%expect_test "a dropped value nothing pins down is Unit" =
+  types {|
+fn twice(f) =
+  f()
+  f()
+fn main() = twice() fn() => ()
+|};
+  [%expect {|
+    fn twice(f: fn())
+    fn main()
+    |}]

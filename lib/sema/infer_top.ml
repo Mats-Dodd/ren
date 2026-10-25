@@ -355,6 +355,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       group = [];
       spelled = [];
       joins = [];
+      drops = [];
       in_scope = [];
     }
   in
@@ -531,6 +532,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
                   ])
         (List.rev env.joins);
       env.joins <- [];
+      dropped_values env;
       env.group <- [];
       env.spelled <- [];
       (* only now, with the group's uses of each other joined, is it known

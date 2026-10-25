@@ -404,21 +404,21 @@ module:
   $ cp -r bank b2 && perl -0pi -e 's/&acme.deposit\(bob, Money.dollars\(20\)\)/&acme.deposit(2, Money.dollars(20))/' b2/main.ren
   $ ren check b2/main.ren
   error: expected `AccountId`, found `Int`
-     ┌─ b2/main.ren:15:17
-  15 │   &acme.deposit(2, Money.dollars(20))
-     │                 ^
+     ┌─ b2/main.ren:15:25
+  15 │   let _ = &acme.deposit(2, Money.dollars(20))
+     │                         ^
      = `AccountId`'s representation is private to `account`
      help: use a function from `account` to make or read one
   [1]
 
 Freezing an account changes the bank, so the call says so:
 
-  $ cp -r bank b3 && perl -0pi -e 's/  &acme.freeze\(carol\)/  acme.freeze(carol)/' b3/main.ren
+  $ cp -r bank b3 && perl -0pi -e 's/&acme.freeze\(carol\)/acme.freeze(carol)/' b3/main.ren
   $ ren check b3/main.ren
   error: `freeze` changes `acme`, so the call needs `&`
-     ┌─ b3/main.ren:30:3
-  30 │   acme.freeze(carol)
-     │   ^^^^^^^^^^^^^^^^^^
+     ┌─ b3/main.ren:30:11
+  30 │   let _ = acme.freeze(carol)
+     │           ^^^^^^^^^^^^^^^^^^
      = `&` shows at the call that `acme` is changed
      help: write `&acme.freeze(carol)`
   [1]

@@ -1397,7 +1397,7 @@ fn main() =
 fn main() =
   var xs = [1]
   xs.push(2)
-  &xs.len()
+  let _ = &xs.len()
   xs.len
 |};
   [%expect
@@ -1410,9 +1410,9 @@ fn main() =
       help: write `&xs.push(2)`
 
     error: `len` doesn't change `xs`
-      ┌─ test.ren:4:3
-    4 │   &xs.len()
-      │   ^^^^^^^^^
+      ┌─ test.ren:4:11
+    4 │   let _ = &xs.len()
+      │           ^^^^^^^^^
       help: remove the `&`
 
     error: `len` is a method, so it has to be called
