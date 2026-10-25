@@ -4,7 +4,7 @@
 
 This doc covers how Ren code is organized into files and packages, how names are found, and how `ren build` turns all of it into binaries. The two halves depend on each other. The module rules are what make the build fast and trustworthy, and the build is the reason the module rules look the way they do.
 
-> **Status:** design. Today a program is a single file, and constructor names must be unique across it. Everything here is planned; see [Roadmap](#roadmap).
+> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors shared between types), interfaces made from declarations, and `uses` on signatures run today, in stage 5a; [examples/shop](examples/shop) uses them all. Methods and `ops`, error tags, dependency types, packages and the build are still planned; see [Roadmap](#roadmap).
 
 ---
 
@@ -371,8 +371,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 | When | What |
 |---|---|
-| **Today** | Single-file programs. Every compiler pass is a pure function of its inputs |
-| **Stage 5** | Files as modules, `import`, `pub`, `ops` with methods, lookup through types (constructors shared between types), interface summaries in memory, the prelude as a module, `dbg` |
+| **Today** (stage 5a) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types), interface summaries in memory, the prelude as a module, `uses` on signatures. Every compiler pass is a pure function of its inputs |
+| **Stage 5b** | `ops` with methods, `dbg` |
 | **Stage 6** | Structural error tags with payloads, and the "two shapes" error |
 | **Stage 7** | Dependency types imported like other types |
 | **Stage 10** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |

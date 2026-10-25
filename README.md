@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, and `var`, `inout`, `&` with value semantics over records and arrays (`push(&xs, x)` stands in for `&xs.push(x)` until methods arrive in stage 5). Most examples in this README show how Ren is intended to look, not what runs today.
+> **Status:** early. Stages 1–4 and 5a of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays (`push(&xs, x)` stands in for `&xs.push(x)` until methods arrive in stage 5b), and modules: files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body (see [examples/shop](examples/shop)). Most examples in this README show how Ren is intended to look, not what runs today.
 
 ---
 
@@ -751,7 +751,8 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 2 | records, sum types, exhaustive `match` | missing-case errors fire |
 | 3 | type inference, row unification for errors and `uses` | private functions need no annotations |
 | 4 | `var`, `inout`, `&`, value semantics | `normalize(&scores)` works |
-| 5 | files as modules, `import`, `pub`, `ops` with methods, lookup through types, interface summaries | a two-module program with shared constructor names and `&xs.push(x)` checks |
+| 5a | files as modules, `import`, `pub`, `opaque`, lookup through types, interface summaries, `uses` on signatures | a program of four modules with shared constructor names checks (done) |
+| 5b | `ops` with methods, `dbg` | `&xs.push(x)` checks |
 | 6 | `!`, `try`, `catch`, `fail`, `orelse` | error paths type-check |
 | 7 | `uses`, `with`, dependency types | tests swap implementations |
 | 8 | `handler`, `Async`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
