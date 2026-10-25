@@ -170,11 +170,13 @@ and fn_state = {
 let report env ?help ?labels loc msg =
   Diag.report env.sink (Diag.make ?help ?labels loc msg)
 
+(* `_` names nothing, so there can be any number of them: `fn f(_, _)` *)
 let no_duplicates env what (ids : ident list) =
   let seen = Hashtbl.create 8 in
   List.iter
     (fun (id : ident) ->
       match Hashtbl.find_opt seen id.name with
+      | _ when id.name = "_" -> ()
       | Some first ->
           report env id.loc ~help:"rename one of them"
             ~labels:[ (first, sprintf "the first `%s` is here" id.name) ]
@@ -817,6 +819,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
             (fun (acc, sc) (s : Parsed.stmt) ->
               match s with
               | Let { name; ty = t; value; mut } ->
+                  if mut && name.name = "_" then
+                    report env name.loc ~help:"write `let _ = ...`"
+                      "`var _` names nothing, so nothing can change it";
                   let value = expr env sc value in
                   let t = ty_opt env ~params:sc.tparams t in
                   let b, sc =
@@ -871,6 +876,17 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let a = go a in
         Index (a, go i)
     | Ref a -> Ref (go a)
+    | Assign { target = { kind = Var (Bare "_"); loc; _ } as target; op; value }
+      ->
+        report env loc
+          ~help:"write `let _ = ...` to drop a value, or assign to a `var`"
+          "`_` names nothing, so it can't be assigned to";
+        (* the placeholder an unknown name gets: nothing after this pass
+           runs once it has reported an error *)
+        let target =
+          { target with kind = Var (Global (Path.make env.home "_")) }
+        in
+        Assign { target; op; value = go value }
     | Assign { target; op; value } ->
         let target = go target in
         Assign { target; op; value = go value }

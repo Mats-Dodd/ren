@@ -434,3 +434,38 @@ fn main() =
       │                          ^
       help: bind the same names in every alternative
     |}]
+
+let%expect_test "`_` names nothing" =
+  (* so there can be several, and it can't be assigned to or be a `var` *)
+  run {|
+fn first(x, _, _) = x
+fn main() = first(1, 2, 3)
+|};
+  [%expect {| 1 |}];
+  run {|
+fn main() =
+  _ = 2
+  _ += 1
+  var _ = 3
+  ()
+|};
+  [%expect
+    {|
+    error: `_` names nothing, so it can't be assigned to
+      ┌─ test.ren:2:3
+    2 │   _ = 2
+      │   ^
+      help: write `let _ = ...` to drop a value, or assign to a `var`
+
+    error: `_` names nothing, so it can't be assigned to
+      ┌─ test.ren:3:3
+    3 │   _ += 1
+      │   ^
+      help: write `let _ = ...` to drop a value, or assign to a `var`
+
+    error: `var _` names nothing, so nothing can change it
+      ┌─ test.ren:4:7
+    4 │   var _ = 3
+      │       ^
+      help: write `let _ = ...`
+    |}]
