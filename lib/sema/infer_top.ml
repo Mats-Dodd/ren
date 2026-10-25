@@ -214,7 +214,9 @@ let program sink ~imports ?entry (r : Resolve.t) =
         iface.values)
     imports;
   let fns =
-    List.filter_map (function Fn f -> Some f | Type _ -> None) r.prog
+    List.filter_map
+      (function Fn f -> Some f | Type _ | Import _ -> None)
+      r.prog
   in
   let path (f : fn_def) = Path.make home f.name.name in
   List.iter (check_transparent sink) fns;

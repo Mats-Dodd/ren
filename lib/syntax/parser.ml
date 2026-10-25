@@ -4,8 +4,10 @@
    calls which: comparisons call additive, which calls multiplicative, and so
    on down to primary expressions.
 
-     program  := item { NEWLINE item } EOF
-     item     := ["pub"] (fn_def | type_def)
+     program  := item { NEWLINE item } EOF       (imports come first)
+     item     := import | ["pub"] (fn_def | type_def)
+     import   := "import" IDENT { "/" IDENT } ["." "{" UIDENT, ... "}"]
+                 ["as" IDENT]
      fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
                  ["->" type] "=" body
      param    := ["inout"] IDENT [":" type]
@@ -573,6 +575,85 @@ and parse_arm p =
 
 (* ---- items ---- *)
 
+(* [name] in snake_case: `UserId` is `user_id`. *)
+let snake_case name =
+  let b = Buffer.create (String.length name + 4) in
+  String.iteri
+    (fun i c ->
+      if c >= 'A' && c <= 'Z' then (
+        if i > 0 && name.[i - 1] <> '_' then Buffer.add_char b '_';
+        Buffer.add_char b (Char.lowercase_ascii c))
+      else Buffer.add_char b c)
+    name;
+  Buffer.contents b
+
+(* A name that's part of a module's path, or a module's alias: snake_case,
+   like the file it names. [file] says whether it's a file or folder's
+   name, which then has to change too. *)
+let module_ident p ~file =
+  let id = ident p in
+  if snake_case id.name <> id.name then
+    Diag.error id.loc
+      ~help:
+        (Printf.sprintf "write `%s`%s" (snake_case id.name)
+           (if file then ", and rename its file or folder to match" else ""))
+      (Printf.sprintf "`%s` can't name a module: module names are snake_case"
+         id.name);
+  id
+
+let parse_import p =
+  let start = loc p in
+  expect p IMPORT;
+  let rec segments acc =
+    let seg = module_ident p ~file:true in
+    if peek p = SLASH then (
+      advance p;
+      segments (seg :: acc))
+    else List.rev (seg :: acc)
+  in
+  let segments = segments [] in
+  let last = List.nth segments (List.length segments - 1) in
+  let path_loc = Loc.span (List.hd segments).loc last.loc in
+  let names =
+    if peek p = DOT then (
+      advance p;
+      let brace = loc p in
+      expect p LBRACE;
+      let names =
+        sep_list p ~close:RBRACE (fun p ->
+            let id = ident p in
+            if not (is_upper id.name) then
+              Diag.error id.loc
+                ~help:
+                  (Printf.sprintf "remove it, and write `%s.%s` where it's used"
+                     last.name id.name)
+                (Printf.sprintf
+                   "only types can be imported by name, and `%s` isn't one"
+                   id.name);
+            id)
+      in
+      if names = [] then
+        Diag.error
+          (Loc.span brace (last_loc p))
+          ~help:"remove the `.{}`" "this imports nothing by name";
+      names)
+    else []
+  in
+  let alias =
+    if peek p = AS then (
+      advance p;
+      module_ident p ~file:false)
+    else last
+  in
+  {
+    segments;
+    path = String.concat "/" (List.map (fun (s : ident) -> s.name) segments);
+    path_loc;
+    alias;
+    names;
+    iloc = Loc.span start (last_loc p);
+  }
+
 let parse_fn p ~pub =
   let start = loc p in
   expect p FN;
@@ -602,11 +683,16 @@ let parse_item p =
   match peek p with
   | FN -> Fn (parse_fn p ~pub)
   | TYPE -> Type (parse_type p)
+  | IMPORT when pub ->
+      Diag.error (loc p)
+        ~help:"remove the `pub`: a module can't pass on what it imports"
+        "an import can't be `pub`"
+  | IMPORT -> Import (parse_import p)
   | _ ->
       Diag.error (loc p)
         ~help:
-          "only function and type definitions can appear at the top level (for \
-           now)"
+          "only imports, and function and type definitions, can appear at the \
+           top level (for now)"
         (Printf.sprintf "expected `fn` or `type`, found %s" (describe (peek p)))
 
 (* After a syntax error, skip to where the next top-level item starts: a
@@ -639,6 +725,14 @@ let parse_program sink toks =
         else if peek p <> EOF then fail_expected p "a new line";
         item
       with
+      | Import i as item ->
+          (* a reader finds everything a module uses at its top *)
+          if List.exists (function Import _ -> false | _ -> true) acc then
+            Diag.report sink
+              (Diag.make i.iloc
+                 ~help:"move it above the file's first function or type"
+                 "imports go at the top of the file");
+          loop (item :: acc)
       | item -> loop (item :: acc)
       | exception Diag.Error d ->
           Diag.report sink d;

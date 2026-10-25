@@ -153,7 +153,7 @@ let types ?(lint = false) ~file src =
                     (fun (p : Ast.Parsed.param) -> p.pname.name)
                     f.params)
                (List.assoc f.name.name schemes))
-      | Type _ -> None)
+      | Type _ | Import _ -> None)
     prog
 
 let run ?lint ~file src =

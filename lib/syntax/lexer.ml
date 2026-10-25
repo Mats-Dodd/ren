@@ -34,6 +34,8 @@ let keywords =
     ("false", FALSE);
     ("type", TYPE);
     ("match", MATCH);
+    ("import", IMPORT);
+    ("as", AS);
   ]
 
 let is_digit c = c >= '0' && c <= '9'

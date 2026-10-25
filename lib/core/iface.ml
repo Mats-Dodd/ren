@@ -140,7 +140,8 @@ let of_module ~home ~uses (prog : Ast.Resolved.program) =
     home;
     types =
       List.filter_map
-        (function Ast.Type td -> Some (of_type_def ~home td) | Fn _ -> None)
+        (function
+          | Ast.Type td -> Some (of_type_def ~home td) | Fn _ | Import _ -> None)
         prog;
     values =
       List.filter_map

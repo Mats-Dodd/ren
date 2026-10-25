@@ -125,7 +125,27 @@ type ('v, 'b, 't) fn_def = {
   loc : Loc.t;
 }
 
-type ('v, 'b, 't) item = Fn of ('v, 'b, 't) fn_def | Type of 't type_def
+(* An import, at the top of a file: `import billing/stripe`,
+   `import billing/stripe as pay`, `import shop/plan.{Plan, User}`. Its
+   names are only strings and locations, so it's the same in both versions
+   of the tree. *)
+type import = {
+  segments : ident list;  (** [billing], [stripe] *)
+  path : string;  (** the module: [billing/stripe] *)
+  path_loc : Loc.t;  (** where the module's path is written *)
+  alias : ident;
+      (** what the module is called here: the name after [as], or else the
+          path's last segment *)
+  names : ident list;
+      (** the types imported by name: the [Plan] in [.{Plan}] *)
+  iloc : Loc.t;  (** the whole import *)
+}
+
+type ('v, 'b, 't) item =
+  | Fn of ('v, 'b, 't) fn_def
+  | Type of 't type_def
+  | Import of import
+
 type ('v, 'b, 't) program = ('v, 'b, 't) item list
 
 (* ---- names, once resolved ----
@@ -314,6 +334,15 @@ let show_type_def (td : type_def) =
   in
   parens ("type" :: name :: body)
 
+let show_import (i : import) =
+  let names =
+    match i.names with
+    | [] -> []
+    | ns -> [ parens (List.map (fun (n : ident) -> n.name) ns) ]
+  in
+  parens (("import" :: i.path :: names) @ [ "as"; i.alias.name ])
+
 let show_item : item -> string = function
   | Fn f -> show_fn f
   | Type td -> show_type_def td
+  | Import i -> show_import i

@@ -408,7 +408,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
               Hashtbl.replace first_local name.name name.loc;
               Hashtbl.replace env.types name.name
                 (Path.make home name.name, List.length td.type_params))
-      | Fn _ -> ())
+      | Fn _ | Import _ -> ())
     prog;
   (* the functions in scope: the imports', then this module's own *)
   List.iter
@@ -425,7 +425,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
     imports;
   let fns =
     List.filter_map
-      (function Fn (f : Parsed.fn_def) -> Some f | Type _ -> None)
+      (function Fn (f : Parsed.fn_def) -> Some f | Type _ | Import _ -> None)
       prog
   in
   no_duplicates env "functions"
@@ -448,12 +448,14 @@ let program sink ~home ~imports (prog : Parsed.program) =
            | Type td -> (Type (type_def env td), None)
            | Fn f ->
                let f', calls = fn_def env f in
-               (Fn f', Some (f.name.name, calls)))
+               (Fn f', Some (f.name.name, calls))
+           | Import i -> (Import i, None))
          prog)
   in
   let types =
     List.filter_map
-      (function Type td -> Some (Iface.of_type_def ~home td) | Fn _ -> None)
+      (function
+        | Type td -> Some (Iface.of_type_def ~home td) | Fn _ | Import _ -> None)
       items
   in
   unique_ctors env

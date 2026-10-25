@@ -261,5 +261,5 @@ let program sink ~imports (r : Resolve.t) (inferred : Infer.t) =
       | Fn (f : fn_def) ->
           let nodes = List.assoc f.name.name inferred.nodes in
           check_expr { types; nodes; home = r.home; sink } f.body
-      | Type _ -> ())
+      | Type _ | Import _ -> ())
     r.prog

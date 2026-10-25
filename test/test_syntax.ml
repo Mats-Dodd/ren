@@ -130,3 +130,93 @@ fn main() = 1
     4 │   x
       │   ^
     |}]
+
+(* imports *)
+
+let%expect_test "the four forms of import" =
+  ast
+    {|
+import util
+import billing/stripe as pay
+import shop/plan.{Plan, User}
+import shop/plan.{Plan} as p
+fn main() = 1
+|};
+  [%expect
+    {|
+    (import util as util)
+    (import billing/stripe as pay)
+    (import shop/plan (Plan User) as plan)
+    (import shop/plan (Plan) as p)
+    (fn main () 1)
+    |}]
+
+let%expect_test "an import after a function" =
+  ast {|
+fn main() = 1
+import util
+|};
+  [%expect
+    {|
+    error: imports go at the top of the file
+      ┌─ test.ren:2:1
+    2 │ import util
+      │ ^^^^^^^^^^^
+      help: move it above the file's first function or type
+    |}]
+
+let%expect_test "a module's name is snake_case" =
+  ast {|
+import billing/StripeApi
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `StripeApi` can't name a module: module names are snake_case
+      ┌─ test.ren:1:16
+    1 │ import billing/StripeApi
+      │                ^^^^^^^^^
+      help: write `stripe_api`, and rename its file or folder to match
+    |}]
+
+let%expect_test "an alias is snake_case too" =
+  ast {|
+import billing/stripe as Pay
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `Pay` can't name a module: module names are snake_case
+      ┌─ test.ren:1:26
+    1 │ import billing/stripe as Pay
+      │                          ^^^
+      help: write `pay`
+    |}]
+
+let%expect_test "only types can be imported by name" =
+  ast {|
+import billing/stripe.{charge}
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: only types can be imported by name, and `charge` isn't one
+      ┌─ test.ren:1:24
+    1 │ import billing/stripe.{charge}
+      │                        ^^^^^^
+      help: remove it, and write `stripe.charge` where it's used
+    |}]
+
+let%expect_test "an import can't be pub" =
+  ast {|
+pub import util
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: an import can't be `pub`
+      ┌─ test.ren:1:5
+    1 │ pub import util
+      │     ^^^^^^
+      help: remove the `pub`: a module can't pass on what it imports
+    |}]
