@@ -23,13 +23,16 @@ type t =
     }  (** a lambda, with the variables it captured when it was created *)
   | VFn of Path.t  (** a top-level function used as a value *)
   | VBuiltin of string  (** a function built into the prelude: [print] *)
+  | VTag of { name : string; args : t list }
+      (** an error, [Short(2, 45000)]: its tag and its payload. A program sees
+          one only inside a [Result]'s [Err] *)
 
 let rec show = function
   | VInt n -> string_of_int n
   | VBool b -> string_of_bool b
   | VUnit -> "()"
-  | VCon { name; args = []; _ } -> name
-  | VCon { name; args; _ } ->
+  | VCon { name; args = []; _ } | VTag { name; args = [] } -> name
+  | VCon { name; args; _ } | VTag { name; args } ->
       name ^ "(" ^ String.concat ", " (List.map show args) ^ ")"
   | VRecord fields ->
       let show_field (f, v) = f ^ ": " ^ show v in

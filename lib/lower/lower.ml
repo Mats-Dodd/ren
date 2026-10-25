@@ -19,6 +19,12 @@
    - an `if` without `else` gets `else ()`
    - a block becomes nested [Let]s and [Seq]s
    - a lambda lists the variables it captures
+   - `fail X(a)` is a [Fail] of the error [Tag]; `attempt e`, and a
+     `match` with `fail` arms, are [Handle]s; `try r` of a `Result` and
+     `x orelse e` are `match`es. A `try` of anything else is its operand:
+     a call that can fail passes its error on by itself
+   - a place passed with `&` to a call that can fail is written back in a
+     [Finally], so it's written back even if the call fails
 
    Everything is evaluated in the order it was before: the order the
    interpreter has always used, so a program prints the same things. *)
@@ -75,6 +81,12 @@ let lets binds (body : C.expr) =
     binds body
 
 let seq (a : C.expr) (b : C.expr) = mk (Seq (a, b)) b.ty a.loc
+
+(* Each of [es], which are [Unit]s, in turn. *)
+let seq_all loc (es : C.expr list) =
+  match List.rev es with
+  | [] -> C.unit loc
+  | last :: before -> List.fold_left (fun rest e -> seq e rest) last before
 
 (* A value that's always the same: using it later, instead of evaluating
    it into a temporary first, changes nothing. A local is the same until
@@ -146,16 +158,30 @@ let write pl (v : C.expr) loc =
 
 (* ---- expressions ---- *)
 
-(* Error handling is checked from stage 6.3, and runs from 6.5. Until then,
-   a program that uses it is reported here, before anything runs. *)
-let later loc what =
-  Diag.error loc
-    ~notes:[ "it's checked, and `ren types` shows what it does" ]
-    (what ^ " is checked, but running it arrives later in stage 6")
-
 let is_result : Ty.ty -> bool = function
   | Con (p, _) -> p = Path.prelude "Result"
   | _ -> false
+
+let result_path = Path.prelude "Result"
+let option_path = Path.prelude "Option"
+let pat pkind pty ploc : C.pattern = { pkind; pty; ploc }
+
+(* The arm `c(v) => body(v)` of a `match` on a value of type [ty]: [c] is
+   a constructor of the type at [path] with one field, of type [t], which
+   is bound to a temporary named [name]. *)
+let field_arm cx loc path ty c (name, t) body : C.arm =
+  let v = temp cx name t in
+  {
+    pat = pat (PCon (path, c, [ pat (PVar v) t loc ])) ty loc;
+    guard = None;
+    body = body (local v loc);
+  }
+
+(* The type arguments of [Result<T, ! ...>]. *)
+let result_args (t : Ty.ty) =
+  match t with
+  | Con (_, [ v; errs ]) -> (v, errs)
+  | _ -> bug "a `Result` without its two type arguments"
 
 let rec expr cx (e : expr) : C.expr =
   let ty () = ty_of cx e.node in
@@ -178,15 +204,71 @@ let rec expr cx (e : expr) : C.expr =
   | Binop (Or, a, b) ->
       let a = expr cx a in
       here (If (a, mk (Bool true) Ty.bool e.loc, expr cx b))
-  | Try a when not (is_result (ty_of cx a.node)) ->
-      (* Until stage 6.5 lowers `fail`, a program that can fail doesn't
-         run at all (below), so nothing a `try` covers fails when one does:
-         it's its operand. *)
+  | Binop (Orelse, a, b) ->
+      (* `x orelse e` is `match x { Some(v) => v, None => e }` *)
+      let a = expr cx a in
+      let some =
+        field_arm cx e.loc option_path a.ty "Some"
+          ("value", C.elem_ty a.ty)
+          Fun.id (* the function that returns its argument: the arm is `v` *)
+      in
+      let none : C.arm =
+        {
+          pat = pat (PCon (option_path, "None", [])) a.ty e.loc;
+          guard = None;
+          body = expr cx b;
+        }
+      in
+      here (Match (a, [ some; none ]))
+  | Fail (tag, args) ->
+      (* a payload's names only document it, so it's in the order written *)
+      let args = List.map (fun (_, a) -> expr cx a) args in
+      let set : Ty.row =
+        {
+          labels =
+            [
+              {
+                name = tag.name;
+                payload = List.map (fun (a : C.expr) -> a.ty) args;
+              };
+            ];
+          tail = None;
+        }
+      in
+      here (Fail (mk (Tag (tag.name, args)) (Errors set) e.loc))
+  | Try ({ kind = Match (subject, arms); _ } as m) when Infer_expr.handles arms
+    ->
+      handle_match cx ~passed:true (ty_of cx m.node) e.loc subject arms
+  | Try a when is_result (ty_of cx a.node) ->
+      (* `try r` is `match r { Ok(v) => v, Err(e) => fail e }`. A call in
+         [r] that fails passes its error on, as every call does *)
+      let r = expr cx a in
+      let v, errs = result_args r.ty in
+      let arm = field_arm cx e.loc result_path r.ty in
+      let ok = arm "Ok" ("value", v) Fun.id in
+      let err = arm "Err" ("error", errs) (fun err -> here (Fail err)) in
+      here (Match (r, [ ok; err ]))
+  | Try a ->
+      (* a call passes on what it fails with by itself: the `try` only says
+         so, for whoever reads it *)
       expr cx a
-  | Binop (Orelse, _, _) -> later e.loc "`orelse`"
-  | Fail _ -> later e.loc "`fail`"
-  | Try _ -> later e.loc "`try` of a `Result`"
-  | Attempt _ -> later e.loc "`attempt`"
+  | Attempt a ->
+      (* `Ok` of its value, or `Err` of its error *)
+      let t = ty () in
+      let v, errs = result_args t in
+      let body = expr cx a in
+      let value = temp cx "value" v and error = temp cx "error" errs in
+      here
+        (Handle
+           {
+             body;
+             value;
+             on_value =
+               mk (Con (result_path, "Ok", [ local value e.loc ])) t e.loc;
+             error;
+             on_error =
+               mk (Con (result_path, "Err", [ local error e.loc ])) t e.loc;
+           })
   | Binop (op, a, b) ->
       let a = expr cx a in
       here (Prim (Binop op, [ a; expr cx b ]))
@@ -233,14 +315,11 @@ let rec expr cx (e : expr) : C.expr =
       match (node cx e.node).found with
       | Some (Field_of p) -> here (Field (expr cx r, p, f.name))
       | _ -> bug "a field inference didn't find")
+  | Match (subject, arms) when Infer_expr.handles arms ->
+      handle_match cx ~passed:false (ty ()) e.loc subject arms
   | Match (subject, arms) ->
       let subject = expr cx subject in
-      let arm (a : arm) : C.arm =
-        let pat = pattern cx a.arm_pat in
-        let guard = Option.map (expr cx) a.arm_guard in
-        { pat; guard; body = expr cx a.arm_body }
-      in
-      here (Match (subject, List.map arm arms))
+      here (Match (subject, List.map (arm cx) arms))
   | Array xs -> here (Array (List.map (expr cx) xs))
   | Index (a, i) ->
       let a = expr cx a in
@@ -249,6 +328,42 @@ let rec expr cx (e : expr) : C.expr =
   | Ref _ -> bug "`&` outside a call or a `for` loop"
   | Assign { target; op; value } -> assign cx e target op value
   | For { var; iter; body } -> for_loop cx e var iter body
+
+and arm cx (a : arm) : C.arm =
+  let pat = pattern cx a.arm_pat in
+  let guard = Option.map (expr cx) a.arm_guard in
+  { pat; guard; body = expr cx a.arm_body }
+
+(* A `match` with `fail` arms, of type [ty]: a [Handle] of its subject,
+   whose value is matched by the other arms, and its error by the `fail`
+   arms. The arms aren't handled: what they fail with goes on. A `try
+   match` ([passed]) fails again with whatever no arm matched. *)
+and handle_match cx ~passed ty loc subject arms =
+  let body = expr cx subject in
+  let fails, values =
+    List.partition (fun (a : arm) -> Infer_expr.is_fail a.arm_pat) arms
+  in
+  (* every `fail` pattern's type is the set the subject fails with *)
+  let errs = ty_of cx (List.hd fails).arm_pat.pnode in
+  let value = temp cx "value" body.ty and error = temp cx "error" errs in
+  let on_value =
+    mk (Match (local value loc, List.map (arm cx) values)) ty loc
+  in
+  let rest =
+    if passed then
+      [
+        {
+          C.pat = pat PWild errs loc;
+          guard = None;
+          body = mk (Fail (local error loc)) ty loc;
+        };
+      ]
+    else []
+  in
+  let on_error =
+    mk (Match (local error loc, List.map (arm cx) fails @ rest)) ty loc
+  in
+  mk (Handle { body; value; on_value; error; on_error }) ty loc
 
 (* The place [e] names, and the temporaries holding its indices, in the
    order they're evaluated. mut.ml has checked it is a place. *)
@@ -353,11 +468,16 @@ and call cx ?(changed = false) (e : expr) f args =
                 writes @ [ write r.place (local t r.loc) r.loc ] ))
         (hold_f, [], []) lowered
     in
-    let result = temp cx "result" ty in
-    lets binds
-      (lets
-         [ (result, mk (Call (f, args)) ty e.loc) ]
-         (List.fold_right seq writes (local result e.loc)))
+    let call = mk (Call (f, args)) ty e.loc in
+    if C.fails f.ty then
+      (* the places are written back even if it fails *)
+      lets binds (mk (Finally (call, seq_all e.loc writes)) ty e.loc)
+    else
+      let result = temp cx "result" ty in
+      lets binds
+        (lets
+           [ (result, call) ]
+           (List.fold_right seq writes (local result e.loc)))
 
 and block cx stmts last =
   match stmts with
@@ -389,11 +509,15 @@ and for_loop cx (e : expr) var (iter : expr) body =
     let step =
       mk (Assign (i, binop Add index (int_lit 1 loc) Ty.int)) Ty.unit loc
     in
-    let pass =
-      mk
-        (Let (x, element, seq body (List.fold_right seq (after x) step)))
-        Ty.unit loc
+    (* what's written back after the body is written back even if the
+       body fails *)
+    let rest =
+      match after x with
+      | writes when writes <> [] && C.can_fail body ->
+          seq (mk (Finally (body, seq_all loc writes)) body.ty loc) step
+      | writes -> seq body (List.fold_right seq writes step)
     in
+    let pass = mk (Let (x, element, rest)) Ty.unit loc in
     lets
       [ (n, mk (Prim (Length, [ start ])) Ty.int loc); (i, int_lit 0 loc) ]
       (mk (While (binop Lt index (local n loc) Ty.bool, pass)) Ty.unit loc)
@@ -424,12 +548,16 @@ and pattern cx (p : pattern) : C.pattern =
     | PVar b -> PVar (bind cx b pty)
     | PInt n -> PInt n
     | PBool b -> PBool b
-    | PCon (_, ps) -> (
+    | PCon (c, ps) -> (
         match ((node cx p.pnode).found, pty) with
         | Some (Ctor_of (path, c)), _ -> PCon (path, c, List.map (pattern cx) ps)
-        | None, Errors _ -> later p.ploc "matching an error's tag"
+        | None, Errors _ ->
+            (* a tag, inside `Err(...)` *)
+            PTag (c.name.name, List.map (pattern cx) ps)
         | _ -> bug "a constructor pattern inference didn't find")
-    | PFail _ | PFail_any | POr _ -> later p.ploc "a `fail` arm"
+    | PFail (t, ps) -> PTag (t.name, List.map (pattern cx) ps)
+    | PFail_any -> PWild
+    | POr ps -> POr (List.map (pattern cx) ps)
   in
   { pkind; pty; ploc = p.ploc }
 
@@ -444,7 +572,18 @@ and free (e : C.expr) =
     match e.kind with
     | Int _ | Bool _ | Unit | Global _ | Global_value _ | Intrinsic _ -> ()
     | Local v -> use v
-    | Prim (_, args) | Array args | Con (_, _, args) -> List.iter go args
+    | Prim (_, args) | Array args | Con (_, _, args) | Tag (_, args) ->
+        List.iter go args
+    | Fail a -> go a
+    | Finally (a, b) ->
+        go a;
+        go b
+    | Handle { body; value; on_value; error; on_error } ->
+        go body;
+        bind value;
+        go on_value;
+        bind error;
+        go on_error
     | Let (v, value, body) ->
         bind v;
         go value;
@@ -475,7 +614,7 @@ and free (e : C.expr) =
   and pat (p : C.pattern) =
     match p.pkind with
     | PVar v -> bind v
-    | PCon (_, _, ps) -> List.iter pat ps
+    | PCon (_, _, ps) | PTag (_, ps) | POr ps -> List.iter pat ps
     | PWild | PInt _ | PBool _ -> ()
   in
   go e;

@@ -4,22 +4,33 @@
    By the time a program gets here it has been resolved, checked,
    type-checked and lowered, so it can't add a Bool to an Int or call a
    function that doesn't exist, and every change it makes is an assignment
-   to a local variable. The only errors left are panics, like division by
-   zero. A panic is the running program's fault, not a mistake in its
-   source, so it's an exception of its own rather than a diagnostic.
+   to a local variable. What's left is failing, which the program says it
+   can do, and panics, like division by zero. A panic is the running
+   program's fault, not a mistake in its source, so it's an exception of
+   its own rather than a diagnostic.
 
    Values are never changed in place. A variable is a cell ([ref]) holding a
    value, and lowering has turned `user.plan = Free` or `xs[i] = v` into
    building a new value and assigning it to the variable, so a value some
    other name holds can't change under it. That's value semantics, done the
-   slow way; Stage 11 makes it cheap. *)
+   slow way; Stage 11 makes it cheap.
+
+   A [Fail] raises [Failed], an OCaml exception, which the nearest [Handle]
+   catches. It never leaves the interpreter: a call returns what its
+   callee failed with as a [result] (OCaml's [Ok v] or [Error e]), so it
+   can write its `inout` arguments back first, and if `main` fails, [run]
+   raises [Uncaught] instead. *)
 
 open Core
 open Value
 
 exception Panic of Loc.t * string
+exception Uncaught of Value.t
 
 let panic loc msg = raise (Panic (loc, msg))
+
+(* An error on its way to the [Handle] that catches it. *)
+exception Failed of Value.t
 
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug what = failwith ("bug: checking or lowering let through " ^ what)
@@ -30,6 +41,10 @@ let rec equal loc a b =
   match (a, b) with
   | VCon x, VCon y ->
       x.ty = y.ty && x.name = y.name && List.for_all2 (equal loc) x.args y.args
+  | VTag x, VTag y ->
+      x.name = y.name
+      && List.length x.args = List.length y.args
+      && List.for_all2 (equal loc) x.args y.args
   | VRecord xs, VRecord ys ->
       List.for_all2 (fun (_, x) (_, y) -> equal loc x y) xs ys
   | VArray xs, VArray ys ->
@@ -95,6 +110,8 @@ let rec match_pattern p v env =
   | PBool b, VBool c -> if b = c then Some env else None
   | PCon (_, c, ps), VCon { name; args; _ } when c = name ->
       match_all ps args env
+  | PTag (t, ps), VTag { name; args } when t = name -> match_all ps args env
+  | POr ps, _ -> List.find_map (fun p -> match_pattern p v env) ps
   | _ -> None
 
 and match_all ps vs env =
@@ -146,10 +163,12 @@ let rec eval cx env (e : expr) =
           (List.map (function Value a -> a | Ref v -> local v e.loc) args)
       in
       let result, finals = apply cx f values in
+      (* written back whether the call failed or not: failing doesn't undo
+         what it changed (errors.md, "Failure and `&`") *)
       List.iter2
         (fun a v -> match a with Ref x -> cell env x := v | Value _ -> ())
         args finals;
-      result
+      ok result
   | Lambda { params; captures; body } ->
       (* copy the captured variables' values now, into cells of the
          lambda's own: assigning to a variable later doesn't change what
@@ -193,6 +212,26 @@ let rec eval cx env (e : expr) =
             | _ -> first rest)
       in
       first arms
+  | Tag (t, args) -> VTag { name = t; args = eval_all cx env args }
+  | Fail a -> raise (Failed (eval cx env a))
+  | Handle { body; value; on_value; error; on_error } -> (
+      (* [match ... with exception] runs one branch for a value and another
+         for an exception that evaluating it raised *)
+      match eval cx env body with
+      | v -> eval cx (Env.add value.id (ref v) env) on_value
+      | exception Failed err ->
+          eval cx (Env.add error.id (ref err) env) on_error)
+  | Finally (body, after) -> (
+      match eval cx env body with
+      | v ->
+          ignore (eval cx env after);
+          v
+      | exception Failed err ->
+          ignore (eval cx env after);
+          raise (Failed err))
+
+(* What a call returned, or else fail with its error. *)
+and ok = function Ok v -> v | Error err -> raise (Failed err)
 
 (* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
 and eval_all cx env = function
@@ -201,21 +240,24 @@ and eval_all cx env = function
       let v = eval cx env e in
       v :: eval_all cx env rest
 
-(* Call [f]. Returns its result and the final value of every parameter, so
-   the caller can write back the ones passed `inout`. *)
+(* Call [f]. Returns its result, or the error it failed with, and the final
+   value of every parameter, so the caller can write back the ones passed
+   `inout`. *)
 and apply cx f args =
   let run params body env =
     let cells = List.map ref args in
     let env =
       List.fold_left2 (fun env id c -> Env.add id c env) env params cells
     in
-    let result = eval cx env body in
+    let result = try Ok (eval cx env body) with Failed err -> Error err in
     (result, List.map ( ! ) cells)
   in
   match f with
   | VBuiltin name -> (
       match Prelude.find_fn name with
-      | Some b -> b.eval args
+      | Some b ->
+          let v, finals = b.eval args in
+          (Ok v, finals)
       | None -> bug ("the unknown built-in `" ^ name ^ "`"))
   | VFn p ->
       let f = Hashtbl.find cx.fns p in
@@ -227,7 +269,8 @@ and apply cx f args =
    starting from the last one's `main`. First each module's associated
    values are made, in order: a module's after those of every module it
    imports, which come before it, and within a module in the order
-   lowering gives, each after every value it uses. *)
+   lowering gives, each after every value it uses. If `main`, or making a
+   value, fails, nothing handles the error: [Uncaught]. *)
 let run (modules : program list) =
   let cx = { fns = Hashtbl.create 16; values = Hashtbl.create 16 } in
   List.iter
@@ -240,13 +283,16 @@ let run (modules : program list) =
   | Some f -> (
       (* OCaml's own stack runs out when a Ren function calls itself too
          deeply; that's the program's fault, so it's a panic *)
+      let call p =
+        match fst (apply cx (VFn p) []) with
+        | Ok v -> v
+        | Error err -> raise (Uncaught err)
+      in
       try
         List.iter
           (fun (m : program) ->
-            List.iter
-              (fun p -> Hashtbl.replace cx.values p (fst (apply cx (VFn p) [])))
-              m.values)
+            List.iter (fun p -> Hashtbl.replace cx.values p (call p)) m.values)
           modules;
-        fst (apply cx (VFn f.path) [])
+        call f.path
       with Stack_overflow ->
         panic f.loc "the stack overflowed: a function called itself too deeply")

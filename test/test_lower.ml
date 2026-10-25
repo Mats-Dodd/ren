@@ -169,6 +169,31 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       = this is a bug in the Ren compiler, not in your program
     |}]
 
+let%expect_test "Core Lint reports a fail of something that isn't an error" =
+  let loc = Ren.Loc.point ~file 1 1 in
+  let body =
+    Ren.Core.mk (Fail (Ren.Core.mk (Int 1) Ren.Ty.int loc)) Ren.Ty.unit loc
+  in
+  let main : Ren.Core.fn_def =
+    {
+      path = Ren.Path.make "test" "main";
+      params = [];
+      scheme =
+        { ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed); names = [] };
+      body;
+      loc;
+    }
+  in
+  report "" (fun () ->
+      Ren.Driver.pass "lint" (fun () ->
+          Ren.Core_lint.program ~imports:[]
+            { home = "test"; types = []; fns = [ main ]; values = [] }));
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: what `fail` fails with has type `Int`, which isn't an error set")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
 (* An associated value, `T.a` and `T.b`, is a function of no parameters
    in Core, named only by a [Global_value] node, and made after every
    value it uses. *)
@@ -285,4 +310,83 @@ fn main() =
     {|
     (fn main ()
       (let a/1 (< 1 2) (let b/2 (if a/1 (not a/1) false) (if b/2 true a/1))))
+    |}]
+
+let%expect_test "fail raises a tag; attempt and a fail arm handle it" =
+  core
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn keep(id: Int) -> Result<Int, ! NotFound(Int)> = attempt load(id)
+fn handled(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound(_) => 0
+fn passed(id: Int) -> Int =
+  try match load(id)
+    n => n
+    fail NotFound(0) => 0
+fn again(r: Result<Int, ! NotFound(Int)>) -> Int = try r
+fn first(o: Option<Int>) -> Int = o orelse fail Empty
+fn main() = ()
+|};
+  [%expect
+    {|
+    (fn load (id/1) (if (== id/1 0) (fail (tag NotFound id/1)) id/1))
+    (fn keep (id/1)
+      (handle (call load id/1) ($value/2 => (con Ok $value/2))
+        (fail $error/3 => (con Err $error/3))))
+    (fn handled (id/1)
+      (handle (call load id/1) ($value/3 => (match $value/3 (n/2 => n/2)))
+        (fail $error/4 => (match $error/4 ((tag NotFound _) => 0)))))
+    (fn passed (id/1)
+      (handle (call load id/1) ($value/3 => (match $value/3 (n/2 => n/2)))
+        (fail $error/4 =>
+          (match $error/4 ((tag NotFound 0) => 0) (_ => (fail $error/4))))))
+    (fn again (r/1)
+      (match r/1 ((Ok $value/2) => $value/2) ((Err $error/3) => (fail $error/3))))
+    (fn first (o/1)
+      (match o/1 ((Some $value/2) => $value/2) (None => (fail (tag Empty)))))
+    (fn main () ())
+    |}]
+
+let%expect_test "a call that can fail writes its & places back anyway" =
+  core
+    {|
+fn add(inout xs: Array<Int>, x: Int) =
+  &xs.push(x)
+  if x < 0 then fail Negative
+fn main() =
+  var grid = [[1]]
+  let _ = attempt add(&grid[0], 2)
+  let _ = attempt each(&grid)
+  ()
+fn each(inout grid: Array<Array<Int>>) =
+  for row in &grid
+    try add(&row, -1)
+|};
+  [%expect
+    {|
+    (fn add (xs/1 x/2)
+      (seq (call Array.push &xs/1 x/2) (if (< x/2 0) (fail (tag Negative)) ())))
+    (fn main ()
+      (let grid/1 (array (array 1))
+        (let _/2
+          (handle
+            (let $ref/4 (get grid/1 0)
+              (finally (call add &$ref/4 2) (= grid/1 (set grid/1 0 $ref/4))))
+            ($value/5 => (con Ok $value/5))
+            (fail $error/6 => (con Err $error/6)))
+          (let _/3
+            (handle (call each &grid/1) ($value/7 => (con Ok $value/7))
+              (fail $error/8 => (con Err $error/8)))
+            ()))))
+    (fn each (grid/1)
+      (let $n/3 (length grid/1)
+        (let $i/4 0
+          (while (< $i/4 $n/3)
+            (let row/2 (get grid/1 $i/4)
+              (seq
+                (finally (call add &row/2 (neg 1))
+                  (= grid/1 (set grid/1 $i/4 row/2)))
+                (= $i/4 (+ $i/4 1))))))))
     |}]

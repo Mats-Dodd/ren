@@ -1,6 +1,6 @@
 (* Errors (errors.md), organised by the seven things error handling has to
-   do. Until stage 6.5 lowers error handling these are checked, not run:
-   [checked] prints what `ren types` would. *)
+   do, then what running it does. [checked] prints what `ren types` would,
+   once the program has also lowered and passed Core Lint. *)
 
 open Helpers
 
@@ -1443,19 +1443,235 @@ fn main() = ()
       help: give one of them another name
     |}]
 
-let%expect_test "running error handling arrives later" =
+(* ---- running it ---- *)
+
+let%expect_test "fail stops a function, and try passes its error on" =
   run
     {|
-fn check(n: Int) = if n < 0 then fail Negative
-fn main() = try check(1)
+fn check(n: Int) -> Int = if n < 0 then fail Negative(n) else n
+fn twice(n: Int) -> Int = try check(n) + try check(n)
+fn main() =
+  print(attempt twice(2))
+  print(attempt twice(-3))
+|};
+  [%expect {|
+    Ok(4)
+    Err(Negative(-3))
+    ()
+    |}]
+
+let%expect_test "main fails with an error nothing handles" =
+  run
+    {|
+fn freeze(id: Int) = fail Frozen(id)
+fn main() =
+  print(1)
+  try freeze(3)
+  print(2)
+|};
+  [%expect {|
+    1
+    error: Frozen(3)
+    |}]
+
+let%expect_test "match handles a call's errors with fail arms" =
+  run
+    {|
+fn load(id: Int) -> Int =
+  if id == 0 then fail NotFound
+  if id > 9 then fail TooBig(id, 9)
+  id
+fn describe(id: Int) -> Int =
+  match load(id)
+    1 => 100
+    n => n
+    fail NotFound => -1
+    fail TooBig(n, max) => n - max
+fn any(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail _ => 0
+fn either(id: Int) -> Int =
+  match load(id)
+    n => n
+    fail NotFound | fail TooBig(_, _) => -2
+fn main() =
+  print([describe(1), describe(5), describe(0), describe(12)])
+  print([any(4), any(0), either(4), either(0), either(10)])
+|};
+  [%expect {|
+    [100, 5, -1, 3]
+    [4, 0, 4, -2, -2]
+    ()
+    |}]
+
+let%expect_test "an arm runs outside what its match handles" =
+  (* an arm that fails, failing with another error, isn't handled by its own
+     `match`: the error goes on *)
+  run
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn renamed(id: Int) -> Int =
+  match load(id)
+    n => if n > 5 then fail Big else n
+    fail NotFound(_) => fail Missing
+fn main() =
+  print(attempt renamed(1))
+  print(attempt renamed(7))
+  print(attempt renamed(0))
+|};
+  [%expect {|
+    Ok(1)
+    Err(Big)
+    Err(Missing)
+    ()
+    |}]
+
+let%expect_test "try match handles some errors and passes the rest on" =
+  run
+    {|
+fn load(id: Int) -> Int =
+  if id == 0 then fail NotFound(id)
+  if id > 9 then fail TooBig(id, 9)
+  id
+fn user(id: Int) -> Int =
+  try match load(id)
+    u => u
+    fail NotFound(_) => 0
+fn partly(id: Int) -> Int =
+  try match load(id)
+    u => u
+    fail TooBig(_, 10) => 10
+fn main() =
+  print([attempt user(3), attempt user(0), attempt user(12)])
+  print([attempt partly(10), attempt partly(11)])
 |};
   [%expect
     {|
-    error: `fail` is checked, but running it arrives later in stage 6
-      ┌─ test.ren:1:34
-    1 │ fn check(n: Int) = if n < 0 then fail Negative
-      │                                  ^^^^^^^^^^^^^
-      = it's checked, and `ren types` shows what it does
+    [Ok(3), Ok(0), Err(TooBig(12, 9))]
+    [Err(TooBig(10, 9)), Err(TooBig(11, 9))]
+    ()
+    |}]
+
+let%expect_test "attempt keeps the outcome, and try fails with it again" =
+  run
+    {|
+fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+fn later(r: Result<Int, ! NotFound(Int)>) -> Int = (try r) + 1
+fn worth_retrying(r: Result<Int, ! NotFound(Int) | Busy>) -> Bool =
+  match r
+    Ok(_) => false
+    Err(Busy) => true
+    Err(NotFound(_)) => false
+fn busy() -> Int = fail Busy
+fn main() =
+  let ok = attempt load(4)
+  let err = attempt load(0)
+  print([ok, err])
+  print([attempt later(ok), attempt later(err)])
+  print(ok == attempt load(4))
+  print(worth_retrying(attempt busy()))
+|};
+  [%expect
+    {|
+    [Ok(4), Err(NotFound(0))]
+    [Ok(5), Err(NotFound(0))]
+    true
+    true
+    ()
+    |}]
+
+let%expect_test "orelse turns an Option into a value or an error" =
+  run
+    {|
+fn find(xs: Array<Int>, x: Int) -> Option<Int> =
+  var found = None
+  var i = 0
+  for y in xs
+    if y == x then found = Some(i)
+    i += 1
+  found
+fn index(xs: Array<Int>, x: Int) -> Int = find(xs, x) orelse fail Missing(x)
+fn main() =
+  let xs = [5, 6, 7]
+  print([attempt index(xs, 6), attempt index(xs, 9)])
+  print(find(xs, 9) orelse -1)
+|};
+  [%expect {|
+    [Ok(1), Err(Missing(9))]
+    -1
+    ()
+    |}]
+
+let%expect_test "a call that fails keeps what it changed through &" =
+  (* failing doesn't roll back an `&` argument: whatever the call changed
+     before it failed stays changed, however the argument was passed *)
+  run
+    {|
+type Log = { items: Array<Int> }
+  fn add(inout self, x: Int) =
+    &self.items.push(x)
+    if x < 0 then fail Negative(x)
+fn push_then_fail(inout xs: Array<Int>, x: Int) =
+  &xs.push(x)
+  fail Full
+fn main() =
+  var xs = [1]
+  let r = attempt push_then_fail(&xs, 2)
+  print(r)
+  print(xs)
+  var logs = [Log { items: [] }]
+  print(attempt &logs[0].add(-1))
+  print(logs[0].items)
+  var all = [Log { items: [] }, Log { items: [] }]
+  print(attempt add_all(&all, -5))
+  print(all)
+fn add_all(inout logs: Array<Log>, x: Int) =
+  for l in &logs
+    try &l.add(x)
+|};
+  [%expect
+    {|
+    Err(Full)
+    [1, 2]
+    Err(Negative(-1))
+    [-1]
+    Err(Negative(-5))
+    [{ items: [-5] }, { items: [] }]
+    ()
+    |}]
+
+let%expect_test "a lambda's errors pass through the call it's passed to" =
+  run
+    {|
+fn each(xs: Array<Int>, f) =
+  for x in xs
+    try f(x)
+fn validate(x: Int) = if x > 2 then fail TooBig(x)
+fn main() =
+  print(attempt each([1, 2], fn(x) => try validate(x)))
+  print(attempt each([1, 2, 3, 4], fn(x) => try validate(x)))
+|};
+  [%expect {|
+    Ok(())
+    Err(TooBig(3))
+    ()
+    |}]
+
+let%expect_test "&& doesn't run its right side when the left decides" =
+  run
+    {|
+fn bad() -> Bool = fail Ran
+fn main() =
+  print(attempt (false && try bad()))
+  print(attempt (true || try bad()))
+  print(attempt (true && try bad()))
+|};
+  [%expect {|
+    Ok(false)
+    Ok(true)
+    Err(Ran)
+    ()
     |}]
 
 let%expect_test "ren types shows what a module fails with" =

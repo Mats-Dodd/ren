@@ -14,7 +14,15 @@
    ast.ml; lowering numbers its temporaries after the function's own
    locals). Constructors, record types and fields say which type they
    belong to, which inference found. core_lint.ml checks that all of this
-   fits together. *)
+   fits together.
+
+   Failing is explicit too (errors.md). [Fail] stops with an error, which
+   is a value of its own, a [Tag]. A call whose callee's type says it can
+   fail passes on whatever the callee fails with, and nothing else does.
+   [Handle] is the one place an error is caught, and [Finally] runs
+   something on the way out whether the code before it failed or not. So a
+   backend that compiles to C can make each function that can fail return
+   its error, and check for one after each call that can fail. *)
 
 type mode = Ty.mode = Read | Inout
 
@@ -72,6 +80,28 @@ and kind =
   | Update of expr * string * expr
       (** the record with one field replaced: a new record *)
   | Array of expr list
+  | Tag of string * expr list
+      (** an error, [Short(id, 5)]: its tag and its payload in order. Its type
+          is [Errors] of the one tag. An error is a value only in Core, which
+          raises one with [Fail] and catches one with [Handle] *)
+  | Fail of expr  (** stop with this error; of any type, since it never ends *)
+  | Handle of {
+      body : expr;
+      value : var;
+      on_value : expr;
+      error : var;
+      on_error : expr;
+    }
+      (** run [body]. If it ends, its value is [value], and the [Handle] is
+          [on_value]; if it fails, its error is [error] (of an [Errors] type),
+          and the [Handle] is [on_error]. Neither of those is handled here: what
+          they fail with goes on *)
+  | Finally of expr * expr
+      (** [body], then [after], a [Unit], which runs whether [body] fails or
+          not, and doesn't change what [body] did: its value, or its error,
+          which goes on once [after] has run. Lowering writes a place passed
+          with `&` back to it in [after], so a call that fails still changes it
+      *)
 
 (* A call's argument. An [inout] argument is always a plain local: the call
    reads it, and writes the parameter's final value back to it. *)
@@ -85,6 +115,9 @@ and pattern_kind =
   | PInt of int
   | PBool of bool
   | PCon of Path.t * string * pattern list
+  | PTag of string * pattern list  (** an error with this tag, destructured *)
+  | POr of pattern list
+      (** any of these; each binds the same variables (the same [var]s) *)
 
 type fn_def = {
   path : Path.t;
@@ -110,11 +143,49 @@ let mk kind ty loc = { kind; ty; loc }
 let unit loc = mk Unit Ty.unit loc
 let local (v : var) loc = mk (Local v) v.ty loc
 
-(* The type of an array's elements. *)
+(* The type of an array's elements, or of what's in an [Option]. *)
 let elem_ty (t : Ty.ty) =
   match t with
   | Con (_, [ elem ]) -> elem
   | _ -> invalid_arg "Core.elem_ty: not an array"
+
+(* Whether calling a function of type [t] can fail: whether its errors
+   row has a tag, or may have more than it says. *)
+let fails (t : Ty.ty) =
+  match t with
+  | Fun (_, _, errs, _) -> errs.labels <> [] || errs.tail <> None
+  | _ -> false
+
+(* The expressions directly inside [e], in the order they're evaluated (a
+   lambda's body, which isn't evaluated where the lambda is made, comes
+   last). *)
+let children (e : expr) =
+  match e.kind with
+  | Int _ | Bool _ | Unit | Local _ | Global _ | Global_value _ | Intrinsic _ ->
+      []
+  | Prim (_, es) | Array es | Con (_, _, es) | Tag (_, es) -> es
+  | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
+    ->
+      [ a; b ]
+  | Assign (_, a) | Field (a, _, _) | Fail a | Lambda { body = a; _ } -> [ a ]
+  | If (c, t, f) -> [ c; t; f ]
+  | Match (s, arms) ->
+      s :: List.concat_map (fun a -> Option.to_list a.guard @ [ a.body ]) arms
+  | Call (f, args) ->
+      f :: List.filter_map (function Value a -> Some a | Ref _ -> None) args
+  | Record (_, fs) -> List.map snd fs
+  | Handle { body; on_value; on_error; _ } -> [ body; on_value; on_error ]
+
+(* Whether running [e] can fail: whether it can reach a [Fail] or a call
+   that can fail, that no [Handle] in it catches. A lambda's body runs only
+   when it's called, so only the call can fail. *)
+let rec can_fail (e : expr) =
+  match e.kind with
+  | Fail _ -> true
+  | Call (f, _) when fails f.ty -> true
+  | Handle { on_value; on_error; _ } -> can_fail on_value || can_fail on_error
+  | Lambda _ -> false
+  | _ -> List.exists can_fail (children e)
 
 (* ---- printing, as s-expressions, for tests ----
 
@@ -166,6 +237,9 @@ let rec pattern_sexp p =
   | PBool b -> Atom (string_of_bool b)
   | PCon (_, c, []) -> Atom c
   | PCon (_, c, ps) -> List (Atom c :: List.map pattern_sexp ps)
+  | PTag (t, []) -> List [ atom "tag"; Atom t ]
+  | PTag (t, ps) -> List (atom "tag" :: Atom t :: List.map pattern_sexp ps)
+  | POr ps -> List (atom "or" :: List.map pattern_sexp ps)
 
 let rec sexp e =
   match e.kind with
@@ -209,6 +283,17 @@ let rec sexp e =
   | Field (r, _, f) -> List [ atom "."; sexp r; atom f ]
   | Update (r, f, v) -> List [ atom "update"; sexp r; Atom (f ^ ":"); sexp v ]
   | Array xs -> List (atom "array" :: List.map sexp xs)
+  | Tag (t, args) -> List (atom "tag" :: Atom t :: List.map sexp args)
+  | Fail a -> List [ atom "fail"; sexp a ]
+  | Handle { body; value; on_value; error; on_error } ->
+      List
+        [
+          atom "handle";
+          sexp body;
+          List [ var value; atom "=>"; sexp on_value ];
+          List [ atom "fail"; var error; atom "=>"; sexp on_error ];
+        ]
+  | Finally (body, after) -> List [ atom "finally"; sexp body; sexp after ]
 
 and arm_sexp a =
   let guard =

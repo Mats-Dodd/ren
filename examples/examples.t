@@ -66,6 +66,16 @@ An error in one module can point into another, and shows that file's line:
     help: move what both modules need into a third module that both can import
   [1]
 
+When `main` fails, nothing handles the error: the program prints it to
+stderr and exits with status 1. What it printed before stays printed:
+
+  $ printf 'fn freeze(id: Int) = fail Frozen(id)\nfn main() =\n  print(1)\n  try freeze(3)\n  print(2)\n' > fails.ren
+  $ ren run fails.ren 2> stderr.txt
+  1
+  [1]
+  $ cat stderr.txt
+  error: Frozen(3)
+
 The shop is the milestone of stages 5a and 5b: six modules, a type imported
 by name, a constructor name two types share, opaque types, `uses` on every
 public function that needs it, and methods. A `Cart` has methods that change

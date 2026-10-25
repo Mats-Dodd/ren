@@ -6,8 +6,10 @@
    checks that every node's type is the one its parts say it has, that
    every local is used inside its scope with the type it was bound with,
    that a lambda captures every local it uses, and that every constructor,
-   record and field is in the type it says. Effects aren't checked:
-   inference has, and Core has no use for them.
+   record and field is in the type it says, and that an error has the
+   payload its set says. Effects aren't checked, and neither is which
+   errors code can fail with: inference has, and Core has no use for
+   them.
 
    Lint finding anything is a bug in the compiler, never in the program,
    so it fails with an exception, which the driver reports as an internal
@@ -141,6 +143,7 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
           (fun (p : Ty.param) (q : Ty.param) -> p.mode = q.mode && go p.ty q.ty)
           ps qs
         && go r r' && row e e' && row u u'
+    | Errors e, Errors e' -> row e e'
     | _ ->
         let s' = reveal env s and t' = reveal env t in
         if s' == s && t' == t then false else go s' t'
@@ -367,6 +370,39 @@ let rec expr env sc (e : expr) =
       | Con (p, [ elem ]) when p = Path.prelude "Array" ->
           List.iter (fun (x : expr) -> same env x.loc "an element" x.ty elem) xs
       | t -> fail env loc (sprintf "an array literal has type `%s`" (show t)))
+  | Tag (t, args) ->
+      List.iter (expr env sc) args;
+      is
+        ("the error `" ^ t ^ "`")
+        (Errors
+           {
+             labels = [ { name = t; payload = List.map (fun a -> a.ty) args } ];
+             tail = None;
+           })
+  | Fail a ->
+      expr env sc a;
+      ignore (errors_of env a.loc "what `fail` fails with" a.ty)
+  | Handle { body; value; on_value; error; on_error } ->
+      expr env sc body;
+      same env loc "a handled value" value.ty body.ty;
+      ignore (errors_of env loc "a handled error" error.ty);
+      expr env (add value sc) on_value;
+      expr env (add error sc) on_error;
+      same env on_value.loc "what a `Handle` gives a value" on_value.ty e.ty;
+      same env on_error.loc "what a `Handle` gives an error" on_error.ty e.ty
+  | Finally (body, after) ->
+      expr env sc body;
+      expr env sc after;
+      same env after.loc "what runs after a `Finally`" after.ty Ty.unit;
+      is "a `Finally`" body.ty
+
+(* The error set an error of type [t] is in. *)
+and errors_of env loc what (t : Ty.ty) =
+  match t with
+  | Errors row -> row
+  | t ->
+      fail env loc
+        (sprintf "%s has type `%s`, which isn't an error set" what (show t))
 
 and prim env sc (e : expr) op args =
   let loc = e.loc in
@@ -435,6 +471,29 @@ and pattern env sc (p : pattern) t =
       List.fold_left2
         (fun sc (f : Iface.field) sub -> pattern env sc sub (subst targs f.fty))
         sc k.cfields ps
+  | PTag (tag, ps) -> (
+      let row = errors_of env loc "a tag pattern" t in
+      match List.find_opt (fun (l : Ty.label) -> l.name = tag) row.labels with
+      | Some l when List.length l.payload = List.length ps ->
+          List.fold_left2 (fun sc t sub -> pattern env sc sub t) sc l.payload ps
+      | Some _ ->
+          fail env loc (sprintf "`%s` has the wrong number of subpatterns" tag)
+      | None when row.tail <> None ->
+          (* a set that may hold more: its payload isn't known here *)
+          List.fold_left (fun sc sub -> pattern env sc sub sub.pty) sc ps
+      | None ->
+          fail env loc (sprintf "`%s` isn't in the set it's matched in" tag))
+  | POr [] -> fail env loc "an or-pattern of nothing"
+  | POr (first :: rest) ->
+      let first_sc = pattern env sc first t in
+      let names sc = List.map fst (Scope.bindings sc) in
+      List.iter
+        (fun alt ->
+          if names (pattern env sc alt t) <> names first_sc then
+            fail env alt.ploc
+              "the alternatives of an or-pattern bind different variables")
+        rest;
+      first_sc
 
 let fn_def env (f : fn_def) =
   let env = { env with fn = f.path.name } in
@@ -457,10 +516,15 @@ let rec globals (e : expr) =
   match e.kind with
   | Global p | Global_value p -> [ p ]
   | Int _ | Bool _ | Unit | Local _ | Intrinsic _ -> []
-  | Prim (_, es) | Array es | Con (_, _, es) -> List.concat_map globals es
-  | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) ->
+  | Prim (_, es) | Array es | Con (_, _, es) | Tag (_, es) ->
+      List.concat_map globals es
+  | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
+    ->
       globals a @ globals b
-  | Assign (_, a) | Field (a, _, _) | Lambda { body = a; _ } -> globals a
+  | Assign (_, a) | Field (a, _, _) | Lambda { body = a; _ } | Fail a ->
+      globals a
+  | Handle { body; on_value; on_error; _ } ->
+      globals body @ globals on_value @ globals on_error
   | If (c, t, f) -> globals c @ globals t @ globals f
   | Match (s, arms) ->
       globals s

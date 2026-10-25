@@ -103,15 +103,14 @@ let core src =
         (fun f -> print_endline (Core.show_fn f))
         (Driver.core ~lint:true ~file src).fns)
 
-(* The entry module's signatures, as `ren types` prints them, without
-   lowering the program: error handling is checked from stage 6.3, and
-   lowered from 6.5. *)
+(* The entry module's signatures, as `ren types` prints them, once the
+   program has lowered and passed Core Lint: the same as [types]. *)
 let checked src =
   let src = clean src in
   report src (fun () ->
       List.iter
         (fun (_, sigs) -> List.iter print_endline sigs)
-        (Driver.types ~file src))
+        (Driver.types ~lint:true ~file src))
 
 let checked_files files =
   let files, file, src, load = program files in
@@ -121,4 +120,4 @@ let checked_files files =
           if i > 0 then print_newline ();
           print_endline ("-- " ^ home);
           List.iter print_endline sigs)
-        (Driver.types ~load ~file src))
+        (Driver.types ~lint:true ~load ~file src))

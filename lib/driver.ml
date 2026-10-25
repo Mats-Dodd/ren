@@ -11,7 +11,8 @@ exception Internal_error of { pass : string; message : string }
    so it can't be mistaken for a problem with the program. *)
 let pass name f =
   try f () with
-  | (Diag.Error _ | Diag.Errors _ | Eval.Panic _ | Internal_error _) as e ->
+  | ( Diag.Error _ | Diag.Errors _ | Eval.Panic _ | Eval.Uncaught _
+    | Internal_error _ ) as e ->
       raise e
   | e -> raise (Internal_error { pass = name; message = Printexc.to_string e })
 
@@ -429,6 +430,9 @@ let render_error ~sources = function
   | Diag.Errors ds -> Some (Diag.render_all ~sources ds)
   | Eval.Panic (loc, msg) ->
       Some (Diag.render ~sources (Diag.make loc ("panic: " ^ msg)))
+  | Eval.Uncaught err ->
+      (* `main` failed: its error, shown as a value is (errors.md, "`main`") *)
+      Some ("error: " ^ Value.show err ^ "\n")
   | Internal_error { pass; message } ->
       Some
         (Printf.sprintf
