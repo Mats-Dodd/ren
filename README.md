@@ -803,7 +803,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 5a | files as modules, `import`, `pub`, `opaque`, lookup through types, interface summaries, `uses` on signatures | a program of four modules with shared constructor names checks (done) |
 | 5b | methods, associated functions and values under their type; `dbg` | `&xs.push(x)` checks (done, except `dbg`) |
 | 6 | `!`, `try`, `fail`, `match` on errors, `attempt`, `orelse`; `&&`, `\|\|`, `not` ([errors.md](errors.md)) | the shop, the VM and the bank fail with errors, not values (done) |
-| 7 | `uses`, `with`, dependency types | tests swap implementations |
+| 7 | `uses`, `with`, dependency types ([deps.md](deps.md)) | tests swap implementations |
 | 8 | `handler`, `Async`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
 | 9 | operators, derived equality and hashing, arithmetic for opaque number types | `Map<Email, User>` works |
 | **↑** | **interpreted Ren** | **a small web service and its tests run** |
