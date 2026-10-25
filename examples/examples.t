@@ -326,3 +326,132 @@ A call that changes `self` can't also read part of it in an argument:
      = reading part of `self` counts as using it
      help: read it into a `let` before the call, and pass that
   [1]
+
+The bank: accounts, transfers that can be refused, and batches that go
+through whole or not at all (bank/README.md). A transfer works on a copy of
+the bank and keeps it only if every step went through:
+
+  $ ren run bank/main.ren
+  None
+  7000
+  5000
+  Some(Short(2, 45000))
+  5000
+  true
+  Some(Frozen(3))
+  7000
+  Some(Frozen(3))
+  true
+  None
+  6500
+  5500
+  true
+  4
+  $ ren types bank/main.ren
+  -- money
+  pub type Money
+    pub let zero: Money
+    pub fn cents(n: Int) -> Money
+    pub fn dollars(n: Int) -> Money
+    pub fn plus(self, m: Money) -> Money
+    pub fn minus(self, m: Money) -> Money
+    pub fn covers(self, m: Money) -> Bool
+    pub fn positive(self) -> Bool
+    pub fn in_cents(self) -> Int
+  
+  -- account
+  pub type AccountId
+    pub fn of(n: Int) -> AccountId
+  pub type Refusal
+    pub fn worth_retrying(self) -> Bool
+  pub type Account
+    pub fn open(id: AccountId) -> Account
+    pub fn credit(inout self, m: Money, e: Entry) -> Option<Refusal>
+    pub fn debit(inout self, m: Money, e: Entry) -> Option<Refusal>
+  
+  -- bank
+  pub type Bank
+    pub let empty: Bank
+    pub fn open(inout self) -> AccountId
+    pub fn deposit(inout self, to: AccountId, m: Money) -> Option<Refusal>
+    pub fn transfer(inout self, t: Transfer) -> Option<Refusal>
+    pub fn batch(inout self, ts: Array<Transfer>) -> Option<Refusal>
+    pub fn freeze(inout self, id: AccountId) -> Option<Refusal>
+    pub fn balance(self, id: AccountId) -> Option<Money>
+    pub fn statement(self, id: AccountId) -> Array<Entry>
+    pub fn total(self) -> Money
+    fn find(self, id: AccountId) -> Option<Int>
+  
+  -- main
+  fn main() uses Io
+  fn send(from: AccountId, to: AccountId, dollars: Int) -> Transfer
+  fn cents(b: Bank, id: AccountId) -> Int
+  fn retry(why: Option<Refusal>) -> Bool
+
+`Money` and `AccountId` are opaque, so neither is an `Int` outside its
+module:
+
+  $ cp -r bank b1 && perl -0pi -e 's/print\(cents\(acme, alice\)\)( *\/\/ 7000\n  print\(cents\(acme, bob\)\))/print(acme.balance(alice).unwrap_or(Money.zero) + 5)$1/' b1/main.ren
+  $ ren check b1/main.ren
+  error: expected `Int`, found `Money`
+     ┌─ b1/main.ren:19:9
+  19 │   print(acme.balance(alice).unwrap_or(Money.zero) + 5)                       // 7000
+     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = `+` works on `Int`s
+     = `Money`'s representation is private to `money`
+     help: use a function from `money` to make or read one
+  [1]
+  $ cp -r bank b2 && perl -0pi -e 's/&acme.deposit\(bob, Money.dollars\(20\)\)/&acme.deposit(2, Money.dollars(20))/' b2/main.ren
+  $ ren check b2/main.ren
+  error: expected `AccountId`, found `Int`
+     ┌─ b2/main.ren:15:17
+  15 │   &acme.deposit(2, Money.dollars(20))
+     │                 ^
+     = `AccountId`'s representation is private to `account`
+     help: use a function from `account` to make or read one
+  [1]
+
+Freezing an account changes the bank, so the call says so:
+
+  $ cp -r bank b3 && perl -0pi -e 's/  &acme.freeze\(carol\)/  acme.freeze(carol)/' b3/main.ren
+  $ ren check b3/main.ren
+  error: `freeze` changes `acme`, so the call needs `&`
+     ┌─ b3/main.ren:30:3
+  30 │   acme.freeze(carol)
+     │   ^^^^^^^^^^^^^^^^^^
+     = `&` shows at the call that `acme` is changed
+     help: write `&acme.freeze(carol)`
+  [1]
+
+A new kind of refusal has to be handled wherever refusals are told apart:
+
+  $ cp -r bank b4 && perl -0pi -e 's/(  \| SameAccount\n)/$1  | Closed(account: AccountId)\n/' b4/account.ren
+  $ ren check b4/main.ren
+  error: this `match` doesn't handle every `Refusal`
+     ┌─ b4/account.ren:23:7
+  23 │       match self
+     │       ^^^^^
+     = missing: Closed(_)
+     help: add an arm for `Closed(_)`, or a `_ =>` arm for the rest
+  [1]
+
+A public function can't take a type other modules can't name:
+
+  $ cp -r bank b5 && perl -0pi -e 's/pub type Transfer/type Transfer/' b5/bank.ren
+  $ ren check b5/main.ren
+  error: `pub fn Bank.transfer` takes `Transfer`, which is private to this module
+     ┌─ b5/bank.ren:31:36
+  12 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
+     │      -------- `Transfer` is declared here, without `pub`
+  31 │     pub fn transfer(inout self, t: Transfer) -> Option<Refusal> =
+     │                                    ^^^^^^^^
+     help: mark `Transfer` `pub`
+  
+  error: `pub fn Bank.batch`'s signature mentions `Transfer`, which is private to this module
+     ┌─ b5/bank.ren:49:40
+  12 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
+     │      -------- `Transfer` is declared here, without `pub`
+  49 │     pub fn batch(inout self, ts: Array<Transfer>) -> Option<Refusal> =
+     │                                        ^^^^^^^^
+     help: mark `Transfer` `pub`
+  [1]

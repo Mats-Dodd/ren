@@ -1,0 +1,64 @@
+// One customer's account: its balance, whether it's frozen, and its
+// statement, every change to it in order.
+
+import money.{Money}
+
+pub type AccountId = opaque Int
+  ops =
+    pub fn of(n: Int) -> AccountId = n
+
+// Why the bank said no. Until Ren has errors (stage 6), a refusal is a value
+// like any other, and every function that can refuse says so in its type:
+// it returns an `Option<Refusal>`, which is `None` when it went through.
+pub type Refusal =
+  | Short(account: AccountId, by: Money)
+  | Frozen(account: AccountId)
+  | NoSuchAccount(account: AccountId)
+  | NotPositive(amount: Money)
+  | SameAccount
+  ops =
+    // whether asking again later could work
+    pub fn worth_retrying(self) -> Bool =
+      match self
+        Short(_, _) => true
+        Frozen(_) => true
+        NoSuchAccount(_) => false
+        NotPositive(_) => false
+        SameAccount => false
+
+// a line of a statement
+pub type Entry =
+  | Deposited(amount: Money)
+  | Sent(amount: Money, to: AccountId)
+  | Received(amount: Money, from: AccountId)
+
+pub type Account = {
+  id: AccountId,
+  balance: Money,
+  frozen: Bool,
+  statement: Array<Entry>,
+}
+  ops =
+    pub fn open(id: AccountId) -> Account = Account {
+      id,
+      balance: Money.zero,
+      frozen: false,
+      statement: [],
+    }
+
+    // money in, unless the account is frozen
+    pub fn credit(inout self, m: Money, e: Entry) -> Option<Refusal> =
+      if self.frozen then Some(Frozen(self.id))
+      else
+        self.balance = self.balance.plus(m)
+        &self.statement.push(e)
+        None
+
+    // money out, unless it's frozen or there isn't enough
+    pub fn debit(inout self, m: Money, e: Entry) -> Option<Refusal> =
+      if self.frozen then Some(Frozen(self.id))
+      else if self.balance.covers(m) then
+        self.balance = self.balance.minus(m)
+        &self.statement.push(e)
+        None
+      else Some(Short(self.id, m.minus(self.balance)))

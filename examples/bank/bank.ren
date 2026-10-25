@@ -1,0 +1,88 @@
+// The bank: every account, and the only way to change them.
+//
+// A transfer changes two accounts, and either change can be refused. So it
+// works on a copy of the bank, `var draft = self`, and only if everything
+// went through does the copy become the bank, `self = draft`. A refusal
+// halfway leaves the bank as it was, with nothing to undo. `batch` does
+// the same for many transfers: all of them, or none.
+
+import money.{Money}
+import account.{Account, AccountId, Entry, Refusal}
+
+pub type Transfer = { from: AccountId, to: AccountId, amount: Money }
+
+pub type Bank = { accounts: Array<Account>, next: Int }
+  ops =
+    pub let empty: Bank = Bank { accounts: [], next: 1 }
+
+    pub fn open(inout self) -> AccountId =
+      let id = AccountId.of(self.next)
+      self.next += 1
+      &self.accounts.push(Account.open(id))
+      id
+
+    pub fn deposit(inout self, to: AccountId, m: Money) -> Option<Refusal> =
+      if m.positive() then
+        match self.find(to)
+          Some(i) => &self.accounts[i].credit(m, Deposited(m))
+          None => Some(NoSuchAccount(to))
+      else Some(NotPositive(m))
+
+    pub fn transfer(inout self, t: Transfer) -> Option<Refusal> =
+      if t.from == t.to then Some(SameAccount)
+      else if t.amount.positive() then
+        match self.find(t.from)
+          None => Some(NoSuchAccount(t.from))
+          Some(i) =>
+            match self.find(t.to)
+              None => Some(NoSuchAccount(t.to))
+              Some(j) =>
+                var draft = self
+                let why = match &draft.accounts[i].debit(t.amount, Sent(t.amount, t.to))
+                  None => &draft.accounts[j].credit(t.amount, Received(t.amount, t.from))
+                  refused => refused
+                if why == None then self = draft
+                why
+      else Some(NotPositive(t.amount))
+
+    // every transfer, or, if one is refused, none of them
+    pub fn batch(inout self, ts: Array<Transfer>) -> Option<Refusal> =
+      var draft = self
+      var why = None
+      for t in ts
+        if why == None then why = &draft.transfer(t)
+      if why == None then self = draft
+      why
+
+    pub fn freeze(inout self, id: AccountId) -> Option<Refusal> =
+      match self.find(id)
+        Some(i) =>
+          self.accounts[i].frozen = true
+          None
+        None => Some(NoSuchAccount(id))
+
+    pub fn balance(self, id: AccountId) -> Option<Money> =
+      match self.find(id)
+        Some(i) => Some(self.accounts[i].balance)
+        None => None
+
+    pub fn statement(self, id: AccountId) -> Array<Entry> =
+      match self.find(id)
+        Some(i) => self.accounts[i].statement
+        None => []
+
+    // all the money in the bank: only deposits change it
+    pub fn total(self) -> Money =
+      var sum = Money.zero
+      for a in self.accounts
+        sum = sum.plus(a.balance)
+      sum
+
+    // where the account is in `accounts`
+    fn find(self, id: AccountId) -> Option<Int> =
+      var found = None
+      var i = 0
+      for a in self.accounts
+        if a.id == id then found = Some(i)
+        i += 1
+      found

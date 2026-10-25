@@ -1,0 +1,62 @@
+// A bank: accounts, transfers that can be refused, and batches that go
+// through whole or not at all. README.md next to this file says what to
+// look at.
+
+import money.{Money}
+import account.{AccountId, Refusal}
+import bank.{Bank, Transfer}
+
+fn main() =
+  var acme = Bank.empty
+  let alice = &acme.open()
+  let bob = &acme.open()
+  let carol = &acme.open()
+  &acme.deposit(alice, Money.dollars(100))
+  &acme.deposit(bob, Money.dollars(20))
+
+  // $30 from Alice to Bob: it goes through
+  print(&acme.transfer(send(alice, bob, 30)))     // None
+  print(cents(acme, alice))                       // 7000
+  print(cents(acme, bob))                         // 5000
+
+  // $500 from Bob, who has $50: refused, and nothing moves
+  let why = &acme.transfer(send(bob, carol, 500))
+  print(why)                                      // Some(Short(2, 45000))
+  print(cents(acme, bob))                         // 5000
+  print(retry(why))                               // true
+
+  // Carol's account is frozen, so it can't take money in. Alice's side
+  // went through on the draft, but the draft was thrown away.
+  &acme.freeze(carol)
+  print(&acme.transfer(send(alice, carol, 10)))   // Some(Frozen(3))
+  print(cents(acme, alice))                       // 7000
+
+  // A batch where the last transfer is refused: none of them happen.
+  let before = acme
+  let refused = &acme.batch([
+    send(alice, bob, 10),
+    send(bob, alice, 5),
+    send(bob, carol, 1),
+  ])
+  print(refused)                                  // Some(Frozen(3))
+  print(acme == before)                           // true
+
+  // The same batch without Carol: all of it happens.
+  print(&acme.batch([send(alice, bob, 10), send(bob, alice, 5)]))   // None
+  print(cents(acme, alice))                       // 6500
+  print(cents(acme, bob))                         // 5500
+
+  // Transfers move money, never make it: the total is what was deposited.
+  print(acme.total() == Money.dollars(120))       // true
+  print(acme.statement(bob).len())                // 4
+
+fn send(from: AccountId, to: AccountId, dollars: Int) -> Transfer =
+  Transfer { from, to, amount: Money.dollars(dollars) }
+
+fn cents(b: Bank, id: AccountId) -> Int =
+  b.balance(id).unwrap_or(Money.zero).in_cents()
+
+fn retry(why: Option<Refusal>) -> Bool =
+  match why
+    Some(r) => r.worth_retrying()
+    None => false

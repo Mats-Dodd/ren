@@ -1,0 +1,17 @@
+// An amount of money, in cents. It's opaque: outside this module a `Money`
+// isn't an `Int`, so it can't be added to a count, compared with an id, or
+// made from a stray number without saying which unit it's in.
+
+pub type Money = opaque Int
+  ops =
+    pub let zero: Money = 0
+
+    pub fn cents(n: Int) -> Money = n
+    pub fn dollars(n: Int) -> Money = n * 100
+
+    pub fn plus(self, m: Money) -> Money = self + m
+    pub fn minus(self, m: Money) -> Money = self - m
+    pub fn covers(self, m: Money) -> Bool = self >= m
+    pub fn positive(self) -> Bool = self > 0
+
+    pub fn in_cents(self) -> Int = self
