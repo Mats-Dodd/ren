@@ -137,6 +137,12 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.
 - `Time`, `Instant` and `Duration` are opaque, with methods only until
   operators arrive (stage 9).
+- For now the real `instant` reads the same wall clock as `now`, which the
+  system can set back (NTP, a manual change). A monotonic source needs a
+  primitive OCaml's standard library doesn't have; it comes with the
+  runtime's own system calls (stage 8, `Os`).
+- These six are the prelude's, named in every module, so a program's own
+  `type Time` or `dep Clock` is an error: it chooses another name.
 - `Fs`, `Net` and `Os` come in stage 8, with strings ([runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
