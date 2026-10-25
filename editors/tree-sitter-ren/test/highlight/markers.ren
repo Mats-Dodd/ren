@@ -44,6 +44,9 @@ pub type Refusal = ! Short(by: Int) | Frozen
 //                   ^ constructor
 //                         ^ property
 
+fn sure(r: Result<Int, !>) -> Int = 1
+//                     ^ keyword.failure
+
 fn pay(t: Int) -> Int ! Refusal | bank.Late =
 //                    ^ keyword.failure
 //                                ^ namespace

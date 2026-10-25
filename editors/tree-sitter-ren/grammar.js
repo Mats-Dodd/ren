@@ -257,8 +257,14 @@ module.exports = grammar({
     // ---- written types ----
 
     // an error set is a type only as `Result`'s second argument, which the
-    // compiler checks
-    _type: ($) => choice($.named_type, $.function_type, $.error_set),
+    // compiler checks; a lone `!` is the empty set, `Result<Int, !>`
+    _type: ($) =>
+      choice(
+        $.named_type,
+        $.function_type,
+        $.error_set,
+        alias('!', $.error_set),
+      ),
 
     // Int, Option<Int>, stripe.Client
     named_type: ($) =>

@@ -45,6 +45,8 @@
 ; something can fail here
 ["try" "fail" "attempt" "orelse"] @keyword.failure
 (error_set "!" @keyword.failure)
+; the empty set, `Result<Int, !>`, is the `!` alone
+((error_set) @keyword.failure (#eq? @keyword.failure "!"))
 
 ; a boundary the program crosses
 (dependency (type_identifier) @type.dependency)

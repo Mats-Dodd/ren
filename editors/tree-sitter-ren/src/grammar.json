@@ -1367,6 +1367,15 @@
         {
           "type": "SYMBOL",
           "name": "error_set"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
+            "value": "!"
+          },
+          "named": true,
+          "value": "error_set"
         }
       ]
     },

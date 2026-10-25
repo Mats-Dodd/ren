@@ -1779,3 +1779,19 @@ fn main() = make(fn() => 1, fn() => 2)
     4 │ fn main() = make(fn() => 1, fn() => 2)
       │                                     ^
     |}]
+
+let%expect_test "an empty error set is written `!`, as it's printed" =
+  types
+    {|
+fn h(r: Result<Int, ! X>) = match r
+  Ok(n) => Ok(n)
+  Err(X) => Ok(0)
+fn k(r: Result<Int, !>) -> Result<Int, !> = r
+fn main() = ()
+|};
+  [%expect
+    {|
+    fn h(r: Result<Int, ! X>) -> Result<Int, !>
+    fn k(r: Result<Int, !>) -> Result<Int, !>
+    fn main()
+    |}]

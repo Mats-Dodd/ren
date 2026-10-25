@@ -315,3 +315,37 @@ fn count(ops: Array<Int>) -> Int = ops.len()
       (identifier)
       (identifier)
       (arguments))))
+
+================================================================================
+an empty error set, as Result's argument
+================================================================================
+
+fn k(r: Result<Int, !>) -> Result<Int, ! X> = r
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))
+            (error_set)))))
+    (named_type
+      (type_name
+        (type_identifier))
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))
+        (error_set
+          (error_tag
+            (type_identifier)))))
+    (identifier)))

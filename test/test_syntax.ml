@@ -404,6 +404,14 @@ type Hooks = {
   [%expect
     {| (type Hooks (fields check:fn(Int) -> Bool ! Bad(Int) | Worse make:fn() -> fn() ! Bad last:Result<Int, ! Short(Int) | Frozen>)) |}]
 
+let%expect_test "an empty error set, a Result that can't be Err" =
+  (* what `ren types` prints for one, so it has to parse back *)
+  ast
+    {|
+fn f(r: Result<Int, !>, xs: Array<Result<Int, !>>) -> Result<Int, !> = r
+|};
+  [%expect {| (fn f (r xs) r) |}]
+
 let%expect_test "a named error set" =
   (* on one line, or indented under `type X =`, one `|` per line *)
   ast

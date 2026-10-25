@@ -245,6 +245,11 @@ let rec parse_ty p : ty =
       in
       let errs = if peek p = BANG then Some (parse_errors p) else None in
       TyFn (params, ret, errs, Loc.span start (last_loc p))
+  | BANG when peek2 p = GT || peek2 p = COMMA ->
+      (* `Result<Int, !>`: an empty set, a [Result] that can't be [Err] *)
+      let l = loc p in
+      advance p;
+      TyErrors { errs = []; eloc = l }
   | BANG -> TyErrors (parse_errors p)
   | _ ->
       let name = parse_tyname p in
