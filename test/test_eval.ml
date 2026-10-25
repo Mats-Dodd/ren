@@ -342,3 +342,26 @@ let%expect_test "an internal compiler error names its pass" =
     internal compiler error in infer: Failure("boom")
       = this is a bug in the Ren compiler, not in your program
     |}]
+
+let%expect_test "strings: literals, ==, show and print" =
+  run
+    {|
+fn main() =
+  print("Ren")
+  print("tab\there")
+  print(show(42) == "42")
+  print(show(Some(true)))
+  print("a" != "b")
+  print(["x", "y\n"])
+  show([1, 2])
+|};
+  [%expect
+    {|
+    Ren
+    tab	here
+    true
+    Some(true)
+    true
+    ["x", "y\n"]
+    "[1, 2]"
+    |}]

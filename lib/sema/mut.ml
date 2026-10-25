@@ -167,7 +167,7 @@ let writable cx (e : expr) ~what
 
 let rec walk cx (e : expr) =
   match e.kind with
-  | Int _ | Bool _ | Unit -> ()
+  | Int _ | Bool _ | Str _ | Unit -> ()
   | Var _ | Field _ | Index _ -> (
       match place_of e with
       | Some p ->

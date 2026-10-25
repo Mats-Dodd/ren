@@ -326,11 +326,11 @@ fn main() = 1
       help: add `-> Int` to the signature
     |}];
   types {|
-pub fn show(x: Int) uses Io = print(x)
-fn main() = show(1)
+pub fn say(x: Int) uses Io = print(x)
+fn main() = say(1)
 |};
   [%expect {|
-    pub fn show(x: Int) uses Io
+    pub fn say(x: Int) uses Io
     fn main() uses Io
     |}]
 
@@ -1302,7 +1302,7 @@ let%expect_test "a public function's interface comes from its signature" =
 pub fn twice(f: fn()) =
   try f()
   try f()
-pub fn show(x: Int) uses Io = print(x)
+pub fn say(x: Int) uses Io = print(x)
 pub fn logged(f: fn()) uses Io =
   try f()
   print(1)
@@ -1311,7 +1311,7 @@ pub fn maybe(f: Option<fn()>) =
   match f
     Some(g) => g()
     None => ()
-fn main() = twice(fn() => show(1))
+fn main() = twice(fn() => say(1))
 |}
   in
   let iface = Driver.interface ~file src in
@@ -1328,7 +1328,7 @@ fn main() = twice(fn() => show(1))
   [%expect
     {|
     twice: fn(fn() ! ..e uses ..d) ! ..e uses ..d (as inferred)
-    show: fn(Int) ! ..e uses Io, ..d (as inferred)
+    say: fn(Int) ! ..e uses Io, ..d (as inferred)
     logged: fn(fn() ! ..e uses Io, ..d) ! ..e uses Io, ..d (as inferred)
     app: fn(fn(fn() -> Int) -> Int ! ..e uses ..d) -> Int ! ..e uses ..d (as inferred)
     maybe: fn(Option<fn()>) ! ..e uses ..d (as inferred)
@@ -1794,4 +1794,31 @@ fn main() = ()
     fn h(r: Result<Int, ! X>) -> Result<Int, !>
     fn k(r: Result<Int, !>) -> Result<Int, !>
     fn main()
+    |}]
+
+let%expect_test "a string is a Str" =
+  types
+    {|
+fn name() = "Ren"
+fn same(a, b) = a == b
+fn label(n: Int) -> Str = show(n)
+fn main() = same(name(), label(1))
+|};
+  [%expect
+    {|
+    fn name() -> Str
+    fn same<T>(a: T, b: T) -> Bool
+    fn label(n: Int) -> Str
+    fn main() -> Bool
+    |}];
+  types {|
+fn main() = "1" == 1
+|};
+  [%expect
+    {|
+    error: `==` compares two values of the same type, but this is an `Int` and the left side is a `Str`
+      ┌─ test.ren:1:20
+    1 │ fn main() = "1" == 1
+      │                    ^
+      │             --- this is a `Str`
     |}]

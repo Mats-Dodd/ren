@@ -136,6 +136,7 @@ type ('v, 'b, 't) expr = {
 and ('v, 'b, 't) expr_kind =
   | Int of int
   | Bool of bool
+  | Str of string  (** ["Ren"], its escapes undone *)
   | Unit  (** [()] *)
   | Var of 'v
       (** a local variable, a top-level function, or a member written after its
@@ -412,6 +413,21 @@ let binop_to_string = function
 
 let parens words = "(" ^ String.concat " " words ^ ")"
 
+(* A string as it's written, in quotes, with its escapes. *)
+let show_str s =
+  let b = Buffer.create (String.length s + 2) in
+  Buffer.add_char b '"';
+  String.iter
+    (function
+      | '\n' -> Buffer.add_string b "\\n"
+      | '\t' -> Buffer.add_string b "\\t"
+      | '\\' -> Buffer.add_string b "\\\\"
+      | '"' -> Buffer.add_string b "\\\""
+      | c -> Buffer.add_char b c)
+    s;
+  Buffer.add_char b '"';
+  Buffer.contents b
+
 open Parsed
 
 let show_tyname (t : tyname) =
@@ -473,6 +489,7 @@ let rec show_expr (e : expr) =
   match e.kind with
   | Int n -> string_of_int n
   | Bool b -> string_of_bool b
+  | Str s -> show_str s
   | Unit -> "()"
   | Var (Bare x) -> x
   | Var (Item (t, f)) -> show_tyname t ^ "." ^ f.name
@@ -631,6 +648,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     match e.kind with
     | Int n -> string_of_int n
     | Bool b -> string_of_bool b
+    | Str s -> show_str s
     | Unit -> "()"
     | Var (Local b) -> b.ident.name
     | Var (Global p | Global_value p) -> value_name p

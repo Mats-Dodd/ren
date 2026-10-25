@@ -49,6 +49,7 @@ type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
 and kind =
   | Int of int
   | Bool of bool
+  | Str of string
   | Unit
   | Local of var
   | Global of Path.t
@@ -161,7 +162,8 @@ let fails (t : Ty.ty) =
    last). *)
 let children (e : expr) =
   match e.kind with
-  | Int _ | Bool _ | Unit | Local _ | Global _ | Global_value _ | Intrinsic _ ->
+  | Int _ | Bool _ | Str _ | Unit | Local _ | Global _ | Global_value _
+  | Intrinsic _ ->
       []
   | Prim (_, es) | Array es | Con (_, _, es) | Tag (_, es) -> es
   | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
@@ -245,6 +247,7 @@ let rec sexp e =
   match e.kind with
   | Int n -> Atom (string_of_int n)
   | Bool b -> Atom (string_of_bool b)
+  | Str s -> Atom (Ast.show_str s)
   | Unit -> Atom "()"
   | Local v -> var v
   | Global p | Global_value p -> Atom p.name

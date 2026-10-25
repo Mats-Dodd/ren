@@ -71,7 +71,8 @@
                          | "(" expr, ... ")" [lambda] }
                                                     (a trailing lambda is
                                                      the call's last argument)
-     primary  := INT | "true" | "false" | "(" ")" | IDENT | "self" | lambda
+     primary  := INT | STR | "true" | "false" | "(" ")" | IDENT | "self"
+              |  lambda
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
               |  tyname "." IDENT               (a member: `Stack.of`)
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
@@ -130,6 +131,7 @@ let mk kind start p = node p kind (Loc.span start (last_loc p))
 
 let describe = function
   | INT n -> Printf.sprintf "the number `%d`" n
+  | STR s -> Printf.sprintf "the string `%s`" (show_str s)
   | IDENT s -> Printf.sprintf "`%s`" s
   | NEWLINE -> "a new line"
   | INDENT -> "an indented block"
@@ -671,6 +673,9 @@ and parse_primary p =
   | INT n ->
       advance p;
       mk (Int n) start p
+  | STR s ->
+      advance p;
+      mk (Str s) start p
   | TRUE ->
       advance p;
       mk (Bool true) start p

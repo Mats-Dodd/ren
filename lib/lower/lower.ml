@@ -189,6 +189,7 @@ let rec expr cx (e : expr) : C.expr =
   match e.kind with
   | Int n -> here (Int n)
   | Bool b -> here (Bool b)
+  | Str s -> here (Str s)
   | Unit -> here Unit
   | Var (Local b) -> local (var_of cx b) e.loc
   | Var (Global p) -> here (Global p)
@@ -570,7 +571,8 @@ and free (e : C.expr) =
   let bind (v : C.var) = bound := v.id :: !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Bool _ | Unit | Global _ | Global_value _ | Intrinsic _ -> ()
+    | Int _ | Bool _ | Str _ | Unit | Global _ | Global_value _ | Intrinsic _ ->
+        ()
     | Local v -> use v
     | Prim (_, args) | Array args | Con (_, _, args) | Tag (_, args) ->
         List.iter go args
@@ -630,7 +632,7 @@ let max_binder (f : fn_def) =
   let see (b : binder) = m := max !m b.id in
   let rec go (e : expr) =
     match e.kind with
-    | Int _ | Bool _ | Unit | Var _ -> ()
+    | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
     | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> go a
     | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go a;

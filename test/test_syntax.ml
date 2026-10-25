@@ -592,3 +592,61 @@ fn main() =
     2 │   let try = 1
       │       ^^^
     |}]
+
+let%expect_test "string literals and their escapes" =
+  tokens {|
+fn main() = ["Ren", "a\tb\n", "say \"hi\"", "back\\slash", ""]
+|};
+  [%expect
+    {| FN (IDENT "main") LPAREN RPAREN EQ LBRACKET (STR "Ren") COMMA (STR "a\tb\n") COMMA (STR "say \"hi\"") COMMA (STR "back\\slash") COMMA (STR "") RBRACKET EOF |}];
+  ast {|
+fn main() = "a\tb" == "say \"hi\"\n"
+|};
+  [%expect {| (fn main () (== "a\tb" "say \"hi\"\n")) |}]
+
+let%expect_test "a string that isn't closed" =
+  tokens {|
+fn main() = "Ren
+|};
+  [%expect
+    {|
+    error: this string isn't closed
+      ┌─ test.ren:1:13
+    1 │ fn main() = "Ren
+      │             ^^^^
+      help: close it with `"` on this line; write `\n` for a line break
+    |}];
+  tokens {|
+fn main() = "Ren|};
+  [%expect
+    {|
+    error: this string isn't closed
+      ┌─ test.ren:1:13
+    1 │ fn main() = "Ren
+      │             ^^^^
+      help: close it with `"` on this line; write `\n` for a line break
+    |}]
+
+let%expect_test "an escape that isn't one" =
+  tokens {|
+fn main() = "C:\Ren"
+|};
+  [%expect
+    {|
+    error: `\R` isn't an escape
+      ┌─ test.ren:1:16
+    1 │ fn main() = "C:\Ren"
+      │                ^^
+      help: the escapes are `\n`, `\t`, `\"` and `\\`, which writes a backslash
+    |}];
+  tokens {|
+fn main() = "Ren\
+|};
+  [%expect
+    {|
+    error: a `\` at the end of a line escapes nothing
+      ┌─ test.ren:1:17
+    1 │ fn main() = "Ren\
+      │                 ^
+      help: the escapes are `\n`, `\t`, `\"` and `\\`, which writes a backslash
+    |}]

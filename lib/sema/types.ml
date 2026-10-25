@@ -101,6 +101,7 @@ let generic_row st = RVar (ref (RUnbound (fresh_id st, generic_level)))
 let int = TCon (Path.prelude "Int", [])
 let bool = TCon (Path.prelude "Bool", [])
 let unit = TCon (Path.prelude "Unit", [])
+let str = TCon (Path.prelude "Str", [])
 let array t = TCon (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let param_tys ps = List.map (fun p -> p.ty) ps

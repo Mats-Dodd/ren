@@ -101,7 +101,7 @@ let check_transparent sink (f : fn_def) =
         let any = List.exists mentions in
         match e.kind with
         | Var x -> is_param x
-        | Int _ | Bool _ | Unit -> false
+        | Int _ | Bool _ | Str _ | Unit -> false
         | Unop (_, a) | Field (a, _) | Ref a | Lambda (_, a) | Try a | Attempt a
           ->
             mentions a
@@ -136,7 +136,7 @@ let check_transparent sink (f : fn_def) =
         match e.kind with
         | Var x when is_param x ->
             if not ok then fail e.loc "is used as a value here"
-        | Int _ | Bool _ | Unit | Var _ -> ()
+        | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
         | Call (callee, args) ->
             walk ~ok:true callee;
             List.iter (walk ~ok:true) args
@@ -209,7 +209,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
   let rec expr (e : expr) =
     let go = List.iter expr in
     match e.kind with
-    | Int _ | Bool _ | Unit | Var _ -> ()
+    | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
     | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> expr a
     | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go [ a; b ]

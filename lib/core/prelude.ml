@@ -62,8 +62,17 @@ let fns =
                { labels = [ label "Io" ]; tail = Some 1 } ));
       eval =
         (fun args ->
-          List.iter (fun v -> print_endline (Value.show v)) args;
+          List.iter (fun v -> print_endline (Value.display v)) args;
           (Value.VUnit, args));
+    };
+    {
+      (* fn<T>(T) -> Str *)
+      name = "show";
+      scheme = scheme (Fun ([ read (Var 0) ], str, open_row 0, open_row 1));
+      eval =
+        (function
+        | [ v ] as args -> (Value.VStr (Value.display v), args)
+        | _ -> bug "show");
     };
   ]
 
@@ -116,6 +125,7 @@ let types =
     { name = "Int"; arity = 0; methods = [] };
     { name = "Bool"; arity = 0; methods = [] };
     { name = "Unit"; arity = 0; methods = [] };
+    { name = "Str"; arity = 0; methods = [] };
     { name = "Array"; arity = 1; methods = array_methods };
   ]
 

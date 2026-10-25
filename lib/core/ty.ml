@@ -51,6 +51,7 @@ type scheme = { ty : ty; names : (int * string) list }
 let int = Con (Path.prelude "Int", [])
 let bool = Con (Path.prelude "Bool", [])
 let unit = Con (Path.prelude "Unit", [])
+let str = Con (Path.prelude "Str", [])
 let array t = Con (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }

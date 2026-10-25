@@ -41,6 +41,7 @@ let keywords =
     ("true", TRUE);
     ("false", FALSE);
     ("type", TYPE);
+    ("dep", DEP);
     ("match", MATCH);
     ("import", IMPORT);
     ("as", AS);
@@ -126,6 +127,47 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
     !i - !bol > List.hd !indents && (starts_uses || starts_errors)
   in
 
+  (* A string literal, `"Ren\n"`: its contents, with each escape undone.
+     It ends on the line it starts on; `\n` writes a line break. *)
+  let lex_string start =
+    incr i;
+    let b = Buffer.create 16 in
+    let rec go () =
+      if !i >= len || peek 0 = '\n' then
+        error
+          ~help:"close it with `\"` on this line; write `\\n` for a line break"
+          start "this string isn't closed"
+      else
+        match peek 0 with
+        | '"' -> incr i
+        | '\\' -> (
+            let esc = pos () in
+            incr i;
+            match peek 0 with
+            | ('n' | 't' | '\\' | '"') as c ->
+                incr i;
+                Buffer.add_char b
+                  (match c with 'n' -> '\n' | 't' -> '\t' | c -> c);
+                go ()
+            | c ->
+                if c <> '\n' && !i < len then incr i;
+                error
+                  ~help:
+                    "the escapes are `\\n`, `\\t`, `\\\"` and `\\\\`, which \
+                     writes a backslash"
+                  esc
+                  (if c = '\n' || !i >= len then
+                     "a `\\` at the end of a line escapes nothing"
+                   else Printf.sprintf "`\\%c` isn't an escape" c))
+        | c ->
+            Buffer.add_char b c;
+            incr i;
+            go ()
+    in
+    go ();
+    emit (STR (Buffer.contents b)) start
+  in
+
   let lex_token c start =
     let advance_by n tok =
       i := !i + n;
@@ -144,6 +186,7 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       match int_of_string_opt text with
       | Some n -> emit (INT n) start
       | None -> error start "this number is too big to fit in an `Int`")
+    else if c = '"' then lex_string start
     else if is_ident_start c then (
       let s = !i in
       while is_ident_char (peek 0) do

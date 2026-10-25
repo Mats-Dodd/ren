@@ -765,6 +765,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     match e.kind with
     | Int n -> Int n
     | Bool b -> Bool b
+    | Str s -> Str s
     | Unit -> Unit
     | Var (Bare x) -> Var (lookup env sc e.loc ~what:"variable" x)
     | Var (Item (t, f)) -> Var (item env sc t f)

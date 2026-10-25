@@ -260,3 +260,30 @@ fn f() = not -x.ok(y) && not not z
       (unary_expression
         (unary_expression
           (identifier))))))
+
+================================================================================
+strings
+================================================================================
+
+fn f() = g("Ren", "a\tb\n", "say \"hi\" \\ there", "") == "(not a [bracket]"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (binary_expression
+      (call_expression
+        (identifier)
+        (arguments
+          (string)
+          (string
+            (escape_sequence)
+            (escape_sequence))
+          (string
+            (escape_sequence)
+            (escape_sequence)
+            (escape_sequence))
+          (string)))
+      (string))))

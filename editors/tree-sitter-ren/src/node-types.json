@@ -88,6 +88,10 @@
         "named": true
       },
       {
+        "type": "string",
+        "named": true
+      },
+      {
         "type": "try_expression",
         "named": true
       },
@@ -508,6 +512,10 @@
             "named": true
           },
           {
+            "type": "string",
+            "named": true
+          },
+          {
             "type": "unit",
             "named": true
           }
@@ -870,6 +878,10 @@
           },
           {
             "type": "self",
+            "named": true
+          },
+          {
+            "type": "string",
             "named": true
           },
           {
@@ -1283,6 +1295,10 @@
             "named": true
           },
           {
+            "type": "string",
+            "named": true
+          },
+          {
             "type": "unit",
             "named": true
           }
@@ -1592,6 +1608,10 @@
           },
           {
             "type": "self",
+            "named": true
+          },
+          {
+            "type": "string",
             "named": true
           },
           {
@@ -1947,6 +1967,21 @@
     }
   },
   {
+    "type": "string",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "escape_sequence",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "sum_type",
     "named": true,
     "fields": {},
@@ -2195,6 +2230,10 @@
     "named": false
   },
   {
+    "type": "\"",
+    "named": false
+  },
+  {
     "type": "%",
     "named": false
   },
@@ -2309,6 +2348,10 @@
   {
     "type": "else",
     "named": false
+  },
+  {
+    "type": "escape_sequence",
+    "named": true
   },
   {
     "type": "fail",

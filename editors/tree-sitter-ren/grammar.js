@@ -460,6 +460,7 @@ module.exports = grammar({
     _primary: ($) =>
       choice(
         $.number,
+        $.string,
         $.boolean,
         $.unit,
         $.identifier,
@@ -476,6 +477,17 @@ module.exports = grammar({
       ),
 
     number: (_) => /[0-9][0-9_]*/,
+
+    // "Ren\n": it ends on the line it starts on, and its escapes are
+    // `\n`, `\t`, `\"` and `\\`
+    string: ($) =>
+      seq(
+        '"',
+        repeat(choice($.escape_sequence, token.immediate(prec(1, /[^"\\\n]+/)))),
+        token.immediate('"'),
+      ),
+
+    escape_sequence: (_) => token.immediate(seq('\\', /[nt"\\]/)),
     boolean: (_) => choice('true', 'false'),
     unit: (_) => seq('(', ')'),
     self: (_) => 'self',

@@ -14,6 +14,8 @@
 
 (comment) @comment
 (number) @number
+(string) @string
+(escape_sequence) @string.escape
 (boolean) @boolean
 (self) @variable.special
 (wildcard) @variable.special

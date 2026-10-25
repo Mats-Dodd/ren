@@ -10,6 +10,7 @@ module Env = Map.Make (Int)
 type t =
   | VInt of int
   | VBool of bool
+  | VStr of string
   | VUnit
   | VCon of { ty : Path.t; name : string; args : t list }
       (** [Pro(5)]: the type it belongs to, the constructor, its fields *)
@@ -30,6 +31,7 @@ type t =
 let rec show = function
   | VInt n -> string_of_int n
   | VBool b -> string_of_bool b
+  | VStr s -> Ast.show_str s
   | VUnit -> "()"
   | VCon { name; args = []; _ } | VTag { name; args = [] } -> name
   | VCon { name; args; _ } | VTag { name; args } ->
@@ -42,3 +44,7 @@ let rec show = function
   | VClosure _ -> "<fn>"
   | VFn p -> "<fn " ^ p.name ^ ">"
   | VBuiltin name -> "<fn " ^ name ^ ">"
+
+(* What `show` makes of a value: a string is itself, and anything else,
+   a string inside it included, is shown as it's written. *)
+let display = function VStr s -> s | v -> show v

@@ -129,6 +129,7 @@ let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
   | Bool b -> VBool b
+  | Str s -> VStr s
   | Unit -> VUnit
   | Local v -> !(cell env v)
   | Global p -> VFn p

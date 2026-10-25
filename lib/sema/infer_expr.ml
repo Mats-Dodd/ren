@@ -1156,6 +1156,7 @@ and synth env cx (e : expr) : ty =
   match e.kind with
   | Int _ -> int
   | Bool _ -> bool
+  | Str _ -> str
   | Unit -> unit
   | Var x -> lookup env cx e.loc x
   | Unop (Neg, a) ->

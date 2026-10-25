@@ -217,6 +217,7 @@ let rec expr env sc (e : expr) =
   match e.kind with
   | Int _ -> is "an `Int`" Ty.int
   | Bool _ -> is "a `Bool`" Ty.bool
+  | Str _ -> is "a `Str`" Ty.str
   | Unit -> is "`()`" Ty.unit
   | Local v ->
       in_scope env sc loc v;
@@ -515,7 +516,7 @@ let fn_def env (f : fn_def) =
 let rec globals (e : expr) =
   match e.kind with
   | Global p | Global_value p -> [ p ]
-  | Int _ | Bool _ | Unit | Local _ | Intrinsic _ -> []
+  | Int _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
   | Prim (_, es) | Array es | Con (_, _, es) | Tag (_, es) ->
       List.concat_map globals es
   | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)

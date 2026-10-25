@@ -3,6 +3,7 @@
 
 type t =
   | INT of int
+  | STR of string  (** a string literal's contents, its escapes undone *)
   | IDENT of string
   (* keywords *)
   | FN
@@ -18,6 +19,7 @@ type t =
   | TRUE
   | FALSE
   | TYPE
+  | DEP
   | MATCH
   | IMPORT
   | AS
@@ -72,6 +74,7 @@ type t =
 (* How a token is spelled in source, for error messages. *)
 let to_string = function
   | INT n -> string_of_int n
+  | STR s -> "\"" ^ String.escaped s ^ "\""
   | IDENT s -> s
   | FN -> "fn"
   | PUB -> "pub"
@@ -86,6 +89,7 @@ let to_string = function
   | TRUE -> "true"
   | FALSE -> "false"
   | TYPE -> "type"
+  | DEP -> "dep"
   | MATCH -> "match"
   | IMPORT -> "import"
   | AS -> "as"
