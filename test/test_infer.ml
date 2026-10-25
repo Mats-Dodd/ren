@@ -1234,6 +1234,7 @@ fn main() = print(Some(true))
       | Some (Field_of p) -> print_endline ("field of " ^ path p)
       | Some (Ctor_of (p, c)) ->
           print_endline ("constructor " ^ c ^ " of " ^ path p)
+      | Some (Method_of p) -> print_endline ("method " ^ path p)
       | None -> ())
     (List.assoc "main" second.nodes);
   [%expect

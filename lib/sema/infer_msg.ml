@@ -343,3 +343,124 @@ let undeclared_use (f : Ast.Resolved.fn_def) dep call =
       (if f.uses = None then sprintf "add `uses %s`" dep
        else sprintf "add `%s` to its `uses`" dep)
     (sprintf "`%s` doesn't declare `%s`" name dep)
+
+(* ---- methods ----
+
+   [recv] is the receiver as it's written, `s` in `s.push(1)`, if it can be
+   printed (Ast.source), and [call] the whole call, for a help that shows
+   how to write it. *)
+
+(* "`s`", or "its receiver" when the receiver can't be printed *)
+let receiver recv =
+  match recv with Some r -> sprintf "`%s`" r | None -> "its receiver"
+
+(* `s.push(1)`, where `push` has `inout self` *)
+let needs_amp loc ~recv ~call (m : string) =
+  Diag.make loc
+    ~notes:
+      [
+        (match recv with
+        | Some r -> sprintf "`&` shows at the call that `%s` is changed" r
+        | None -> "`&` shows at the call that the receiver is changed");
+      ]
+    ~help:
+      (match call with
+      | Some c -> sprintf "write `&%s`" c
+      | None -> "write `&` before the call")
+    (sprintf "`%s` changes %s, so the call needs `&`" m (receiver recv))
+
+(* `&s.size()`, where `size` doesn't have `inout self`; or `&r.f()`, where
+   `f` is a field *)
+let not_changed loc ~recv (m : string) =
+  Diag.make loc ~help:"remove the `&`"
+    (sprintf "`%s` doesn't change %s" m
+       (match recv with Some r -> sprintf "`%s`" r | None -> "its receiver"))
+
+(* `s.grow()`, where `s`'s type [shown], declared in another module, has
+   no public `grow` *)
+let no_public_method (m : Ast.ident) ~shown (p : Path.t) =
+  Diag.make m.loc
+    ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
+    (sprintf "`%s` has no public `%s`" shown m.name)
+
+(* `s.grow()`, where `s`'s type [shown] is the module's own, or built in,
+   and has no `grow`. [methods] are the ones it has. *)
+let no_method (m : Ast.ident) ~shown ~own ~type_name methods =
+  let help =
+    match methods with
+    | _ :: _ -> Some (sprintf "its methods: %s" (quote methods))
+    | [] when own ->
+        Some
+          (sprintf "declare it in `%s`'s `ops` block, with `self` first"
+             type_name)
+    | [] -> None
+  in
+  Diag.make m.loc ?help (sprintf "`%s` has no method named `%s`" shown m.name)
+
+(* `t.of([1])`, where `of` is an associated function or value of [t]'s
+   type, which is called, or used, after its type: [fix] *)
+let not_a_method (m : Ast.ident) (kind : Iface.op_kind) ~fix =
+  Diag.make m.loc ~help:(sprintf "write `%s`" fix)
+    (match kind with
+    | Value -> sprintf "`%s` isn't a method (it's an associated value)" m.name
+    | Method | Function ->
+        sprintf "`%s` isn't a method (it has no `self`)" m.name)
+
+(* `s.peek`, where `peek` is a method, and isn't called. [item] is how to
+   write it as a function, `Stack.peek`. *)
+let method_not_called (m : Ast.ident) ~recv ~item =
+  Diag.make m.loc
+    ~help:
+      (sprintf "write `%s.%s()`, or use `%s` as a function"
+         (Option.value recv ~default:"x")
+         m.name item)
+    (sprintf "`%s` is a method, so it has to be called" m.name)
+
+(* `s.of`, where `of` is an associated function or value, not a field *)
+let item_not_field (m : Ast.ident) (kind : Iface.op_kind) ~item =
+  Diag.make m.loc
+    ~help:(sprintf "write `%s`" item)
+    (sprintf "`%s` is %s, not a field" m.name
+       (match kind with
+       | Value -> "an associated value"
+       | Method | Function -> "an associated function"))
+
+(* `s.size()`, where `s`'s type isn't known yet, and several types the
+   module can name have a `size` *)
+let several_have_member ~names loc ?what (m : Ast.ident) paths =
+  let what, help, extra =
+    say_which ~names ~can_name:(fun _ -> true) ?what (List.hd paths)
+  in
+  Diag.make loc ~help
+    ~notes:
+      ([
+         sprintf "%s each have a `%s`"
+           (String.concat " and "
+              (List.map (fun p -> sprintf "`%s`" (names p)) paths))
+           m.name;
+         "a method is found through its receiver's type, which has to be known \
+          where it's called";
+       ]
+      @ extra)
+    (sprintf "can't tell which type %s is" what)
+
+(* ---- associated values ---- *)
+
+(* The associated value [f]'s body uses [dep]; [call] is the first call
+   that uses it. *)
+let value_uses (f : Ast.Resolved.fn_def) dep call =
+  Diag.make f.name.loc
+    ~labels:
+      (match call with
+      | Some l -> [ (l, sprintf "this call uses `%s`" dep) ]
+      | None -> [])
+    ~notes:
+      [
+        "an associated value is made once, when the program starts, so it \
+         can't use a dependency";
+      ]
+    ~help:
+      (sprintf "make it an associated function, `fn %s() uses %s = ...`"
+         (Ast.short_name f.name.name)
+         dep)
+    (sprintf "the associated value `%s` uses `%s`" f.name.name dep)

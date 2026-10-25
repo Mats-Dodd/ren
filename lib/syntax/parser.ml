@@ -53,6 +53,7 @@
                                                      the call's last argument)
      primary  := INT | "true" | "false" | "(" ")" | IDENT | "self" | lambda
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
+              |  tyname "." IDENT               (an ops item: `Stack.of`)
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
               |  "if" expr "then" body [[NEWLINE] "else" body]
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
@@ -517,6 +518,12 @@ and parse_primary p =
           advance p;
           let fields = sep_list p ~close:RBRACE parse_field_init in
           mk (Record (Some t, fields)) start p
+      | DOT when match peek2 p with IDENT n -> not (is_upper n) | _ -> false ->
+          (* `Stack.of` and `stack.Stack.empty`: an item of the type's ops
+             block *)
+          advance p;
+          let f = ident p in
+          mk (Var (Item (t, f))) start p
       | DOT when match peek2 p with IDENT n -> is_upper n | _ -> false -> (
           advance p;
           let c =
@@ -539,10 +546,10 @@ and parse_primary p =
       | _ -> mk (Con ({ qual = None; name = t.tid }, [])) start p)
   | IDENT name ->
       advance p;
-      mk (Var name) start p
+      mk (Var (Bare name)) start p
   | SELF ->
       advance p;
-      mk (Var "self") start p
+      mk (Var (Bare "self")) start p
   | LPAREN when peek2 p = RPAREN ->
       advance p;
       advance p;
@@ -600,7 +607,7 @@ and parse_field_init p =
   if peek p = COLON then (
     advance p;
     (f, parse_expr p))
-  else (f, node p (Var f.name) f.loc)
+  else (f, node p (Var (Bare f.name)) f.loc)
 
 and parse_if p =
   let start = loc p in

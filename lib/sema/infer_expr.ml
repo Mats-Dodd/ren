@@ -9,12 +9,12 @@
    call's arguments are checked left to right against the callee's
    parameter types, so what one argument settles is known to the next.
 
-   Constructors, record fields and record literals without a type name are
-   all found through a type, by one lookup ([through_type]) in the three
-   steps of module-build.md. Nothing waits: a question that can't be
-   answered where it's asked is an error that says which annotation would
-   answer it, so the result never depends on the order inference happens to
-   learn things in.
+   Constructors, record fields, record literals without a type name and
+   methods called with a dot, `s.push(1)`, are all found through a type, by
+   one lookup ([through_type]) in the three steps of module-build.md.
+   Nothing waits: a question that can't be answered where it's asked is an
+   error that says which annotation would answer it, so the result never
+   depends on the order inference happens to learn things in.
 
    As it goes, inference records every expression's and pattern's type by
    its node id, and what each lookup found. infer_top.ml hands the table on
@@ -29,6 +29,9 @@ open Infer_msg
 type found =
   | Field_of of Path.t  (** a field access: the record type the field is in *)
   | Ctor_of of Path.t * string  (** a constructor: its type, and its name *)
+  | Method_of of Path.t
+      (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
+          function, [Stack.push] *)
 
 type env = {
   st : Types.state;
@@ -39,6 +42,8 @@ type env = {
   can_name : Path.t -> bool;
       (** whether the module can write a type's name at all (Resolve.can_name)
       *)
+  source : expr -> string option;
+      (** code as the module writes it, for a help that shows it (Ast.source) *)
   types : (Path.t, Iface.type_decl) Hashtbl.t;
       (** every type the module can meet: its own, and the public types of every
           module reachable through its imports (iface.ml) *)
@@ -99,7 +104,7 @@ let type_name env p = env.names p
 (* A name as it's written, for messages. *)
 let name_of = function
   | Local b -> b.ident.name
-  | Global p -> p.name
+  | Global p | Global_value p -> p.name
   | Intrinsic x -> x
 
 let report env d = Diag.report env.sink d
@@ -402,6 +407,36 @@ let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
 let record_fields (td : Iface.type_decl) =
   match td.body with Record fs -> Some fs | Sum _ | Builtin | Opaque _ -> None
 
+let op_in name (td : Iface.type_decl) =
+  List.find_opt (fun (o : Iface.op) -> o.oname = name) td.ops
+
+let field_in name (td : Iface.type_decl) =
+  Option.bind (record_fields td)
+    (List.find_opt (fun (d : Iface.field) -> d.fname = name))
+
+(* The ops item [name] of [t]'s type, if [t] is already known to be a
+   named type that has one. In its own module, an opaque type is also what
+   it's represented as, so an item of that type is found too, if the
+   opaque type has none of that name. *)
+let rec op_of env t name =
+  match repr t with
+  | TCon (p, args) -> (
+      match Hashtbl.find_opt env.types p with
+      | None -> None
+      | Some td -> (
+          match (op_in name td, Hashtbl.find_opt env.st.reps p) with
+          | Some o, _ -> Some (td, o)
+          | None, Some rep ->
+              op_of env
+                (of_ty ~vars:(List.nth args) ~tails:(fun _ -> REmpty) rep)
+                name
+          | None, None -> None))
+  | _ -> None
+
+(* The function an ops item is: [Stack.push]. *)
+let op_path (td : Iface.type_decl) (o : Iface.op) =
+  Path.make td.path.home (td.path.name ^ "." ^ o.oname)
+
 let sorted names = List.sort String.compare names
 
 (* ---- expressions ---- *)
@@ -411,8 +446,13 @@ let sorted names = List.sort String.compare names
    group being checked has the type its declaration gives it, joined with
    its real type once the group is done (see [join]), unless its
    declaration is all there is to know. *)
-let lookup env cx loc = function
+let rec lookup env cx loc = function
   | Local b -> Hashtbl.find cx.locals b.id
+  | Global_value p -> (
+      (* a function of no parameters (ast.ml), whose result is the value *)
+      match repr (lookup env cx loc (Global p)) with
+      | TFun ([], t, _, _) -> t
+      | _ -> TError)
   | Global p when List.mem p env.spelled ->
       (* its declaration says everything about it, so even in its own body
          it's an instance of that, joined with nothing: a use that closes
@@ -648,9 +688,14 @@ and synth env cx (e : expr) : ty =
       in
       want_int env "an index" i (infer env cx i);
       if ok then elem else TError
+  | Ref ({ kind = Call (f, args); _ } as call) ->
+      (* `&s.push(1)`: a method call that changes its receiver *)
+      let t = infer_call env cx ~changed:e.loc call f args in
+      Hashtbl.replace cx.nodes call.node t;
+      t
   | Ref a ->
-      (* mut.ml allows `&` only on call arguments and `for` loops, which
-         handle it themselves *)
+      (* mut.ml allows `&` only on call arguments, `for` loops and method
+         calls; the first two handle it themselves *)
       infer env cx a
   | Assign { target; op; value } ->
       let tt = infer env cx target in
@@ -701,11 +746,122 @@ and stmt env cx = function
       Hashtbl.replace cx.locals name.id t
   | Expr e -> ignore (infer env cx e)
 
-and infer_call env cx (e : expr) (f : expr) args =
-  let tf = infer env cx f in
-  let name =
-    match f.kind with Var x -> sprintf "`%s`" (name_of x) | _ -> "this"
+(* A call. One with a dot, `x.m(...)`, can be a method call, found through
+   [x]'s type: as a field is, by [through_type], except that a method can
+   be in a type of any kind, not only a record. [changed] is where the `&`
+   is, if it's `&x.m(...)`. *)
+and infer_call env cx ?changed (e : expr) (f : expr) args =
+  match f.kind with
+  | Field (r, m) -> (
+      let tr = infer env cx r in
+      (* `r.m` is a field holding a function *)
+      let field_call () =
+        Option.iter
+          (fun loc -> report env (not_changed loc ~recv:(env.source r) m.name))
+          changed;
+        let tf = field_access env cx f r tr m in
+        Hashtbl.replace cx.nodes f.node tf;
+        apply env cx e ~name:(sprintf "`%s`" m.name) f tf args
+      in
+      let nothing () =
+        List.iter (fun a -> ignore (infer_arg env cx a)) args;
+        TError
+      in
+      match (op_of env tr m.name, reveal env.st tr) with
+      | Some (td, o), _ -> method_call env cx ?changed e f r m tr td o args
+      | None, (TCon (p, _) as t)
+        when Option.bind (known_decl env t) (field_in m.name) = None ->
+          let td = Hashtbl.find env.types p in
+          let shown = show (printer env) tr in
+          (if p.home <> env.home && p.home <> Path.prelude_home then
+             report env (no_public_method m ~shown p)
+           else
+             let methods =
+               List.filter_map
+                 (fun (o : Iface.op) ->
+                   if o.okind = Method then Some o.oname else None)
+                 td.ops
+             in
+             report env
+               (no_method m ~shown ~own:(p.home = env.home)
+                  ~type_name:(type_name env p) methods));
+          nothing ()
+      | None, TVar _
+        when List.exists (fun td -> op_in m.name td <> None) env.visible -> (
+          (* step 2: the one visible type with a field or an item of that
+             name *)
+          let fits td =
+            match (op_in m.name td, field_in m.name td) with
+            | Some o, _ -> Some (Some o)
+            | None, Some _ -> Some None
+            | None, None -> None
+          in
+          match through_type env ~known:None ~fits with
+          | Found (td, Some o) ->
+              let t, _ = instance env td in
+              unify_at env r.loc ~found:tr ~expected:t;
+              method_call env cx ?changed e f r m tr td o args
+          | Found (_, None) | Nowhere -> field_call ()
+          | Several paths ->
+              let what =
+                match r.kind with
+                | Var x -> Some (Infer_msg.Named (name_of x))
+                | _ -> None
+              in
+              report env
+                (several_have_member ~names:env.names r.loc ?what m paths);
+              nothing ())
+      | None, _ -> field_call ())
+  | _ ->
+      let tf = infer env cx f in
+      let name =
+        match f.kind with Var x -> sprintf "`%s`" (name_of x) | _ -> "this"
+      in
+      apply env cx e ~name f tf args
+
+(* `r.m(args)`, the call [e] of [f], where [m] is the ops item [o] of
+   [r]'s type [td]: a method is called with [r] as its `self`. [tr] is
+   [r]'s type. *)
+and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
+    =
+  let recv = env.source r in
+  let item = type_name env td.path ^ "." ^ o.oname in
+  let nothing () =
+    List.iter (fun a -> ignore (infer_arg env cx a)) args;
+    TError
   in
+  match o.okind with
+  | Function | Value ->
+      let fix =
+        match (o.okind, List.map env.source args) with
+        | Value, _ -> item
+        | _, shown when List.for_all Option.is_some shown ->
+            item ^ "(" ^ String.concat ", " (List.filter_map Fun.id shown) ^ ")"
+        | _ -> item ^ "(...)"
+      in
+      report env (not_a_method m o.okind ~fix);
+      nothing ()
+  | Method -> (
+      let path = op_path td o in
+      let tm = lookup env cx f.loc (Global path) in
+      Hashtbl.replace cx.nodes f.node tm;
+      Hashtbl.replace cx.found f.node (Method_of path);
+      match repr tm with
+      | TFun (self :: ps, ret, errs, uses) ->
+          unify_at env r.loc ~found:tr ~expected:self.ty;
+          (match (self.mode, changed) with
+          | Inout, None ->
+              report env (needs_amp e.loc ~recv ~call:(env.source e) o.oname)
+          | Read, Some loc -> report env (not_changed loc ~recv o.oname)
+          | Inout, Some _ | Read, None -> ());
+          apply env cx e ~name:(sprintf "`%s`" o.oname) f
+            (TFun (ps, ret, errs, uses))
+            args
+      | _ -> nothing ())
+
+(* The call [e] of [f], a function of type [tf]; [name] says which, for
+   messages. *)
+and apply env cx (e : expr) ~name (f : expr) tf args =
   match reveal env.st tf with
   | TFun (ps, ret, errs, uses) ->
       let n = List.length ps and given = List.length args in
@@ -719,8 +875,11 @@ and infer_call env cx (e : expr) (f : expr) args =
         (* left to right, each against its parameter's type *)
         List.iter2
           (fun (p : Types.param) (a : expr) ->
+            (* `f(&s.pop())` passes the call's result: its `&` is the
+               receiver's *)
+            let passed = changed_receiver a = None in
             match (p.mode, a.kind) with
-            | Inout, Ref place ->
+            | Inout, Ref place when passed ->
                 Hashtbl.replace cx.nodes a.node p.ty;
                 check env cx place p.ty
             | Inout, _ ->
@@ -738,7 +897,7 @@ and infer_call env cx (e : expr) (f : expr) args =
                      ~notes:
                        [ "`&` shows at the call that the argument is changed" ]
                      (sprintf "%s changes this argument, so it needs `&`" name))
-            | Read, Ref place ->
+            | Read, Ref place when passed ->
                 ignore (infer env cx place);
                 ignore
                   (fail env a.loc ~help:"remove the `&`"
@@ -771,7 +930,7 @@ and infer_call env cx (e : expr) (f : expr) args =
 (* An argument's type, and whether it's passed with `&`. *)
 and infer_arg env cx (a : expr) =
   match a.kind with
-  | Ref place ->
+  | Ref place when changed_receiver a = None ->
       let t = infer env cx place in
       Hashtbl.replace cx.nodes a.node t;
       { mode = Inout; ty = t }
@@ -888,63 +1047,76 @@ and infer_record env cx (e : expr) name fields ~expected =
 (* `r.f`: the field is found through [r]'s type, which has to be known by
    now, or be the one record type that has a field named [f]. *)
 and infer_field env cx (e : expr) r (f : ident) =
-  let tr = infer env cx r in
-  let field_of (td : Iface.type_decl) =
-    Option.bind (record_fields td)
-      (List.find_opt (fun (d : Iface.field) -> d.fname = f.name))
-  in
-  let found (td : Iface.type_decl) fd tvars =
-    Hashtbl.replace cx.found e.node (Field_of td.path);
-    field_type ~tvars fd
-  in
-  let needs_record t =
-    report env (needs_record f (show (printer env) t));
-    TError
-  in
-  match reveal env.st tr with
-  | TError -> TError
-  | TCon (p, args) as t -> (
-      let td = Hashtbl.find env.types p in
-      match (record_fields td, field_of td) with
-      | _, Some fd -> found td fd args
-      | Some decl, None ->
-          report env (no_such_field ~names:env.names f p decl);
-          TError
-      | None, None when td.body = Opaque None ->
-          report env (opaque_private f.loc td);
-          TError
-      | None, None -> needs_record t)
-  | TVar _ -> (
-      let what =
-        match r.kind with
-        | Var x -> Some (Infer_msg.Named (name_of x))
-        | Call ({ kind = Var (Global p); _ }, _)
-          when p <> cx.self && List.mem_assoc p env.group ->
-            (* another function of the group, seen only as declared *)
-            Some (Group_result p.name)
-        | _ -> None
+  field_access env cx e r (infer env cx r) f
+
+(* The same, once [r]'s type [tr] is known. An item of [r]'s type's ops
+   block isn't a field: a method has to be called, and anything else is
+   written after the type. *)
+and field_access env cx (e : expr) r tr (f : ident) =
+  let field_of = field_in f.name in
+  match op_of env tr f.name with
+  | Some (td, o) ->
+      let item = type_name env td.path ^ "." ^ o.oname in
+      report env
+        (match o.okind with
+        | Method -> method_not_called f ~recv:(env.source r) ~item
+        | Function | Value -> item_not_field f o.okind ~item);
+      TError
+  | None -> (
+      let found (td : Iface.type_decl) fd tvars =
+        Hashtbl.replace cx.found e.node (Field_of td.path);
+        field_type ~tvars fd
       in
-      match through_type env ~known:None ~fits:field_of with
-      | Found (td, fd) ->
-          let t, tvars = instance env td in
-          unify_at env r.loc ~found:tr ~expected:t;
-          found td fd tvars
-      | Nowhere ->
-          (* it may be in a record type the module can't name bare *)
-          let elsewhere =
-            Hashtbl.fold
-              (fun p td acc -> if field_of td <> None then p :: acc else acc)
-              env.types []
-            |> List.sort compare
+      let needs_record t =
+        report env (needs_record f (show (printer env) t));
+        TError
+      in
+      match reveal env.st tr with
+      | TError -> TError
+      | TCon (p, args) as t -> (
+          let td = Hashtbl.find env.types p in
+          match (record_fields td, field_of td) with
+          | _, Some fd -> found td fd args
+          | Some decl, None ->
+              report env (no_such_field ~names:env.names f p decl);
+              TError
+          | None, None when td.body = Opaque None ->
+              report env (opaque_private f.loc td);
+              TError
+          | None, None -> needs_record t)
+      | TVar _ -> (
+          let what =
+            match r.kind with
+            | Var x -> Some (Infer_msg.Named (name_of x))
+            | Call ({ kind = Var (Global p); _ }, _)
+              when p <> cx.self && List.mem_assoc p env.group ->
+                (* another function of the group, seen only as declared *)
+                Some (Group_result p.name)
+            | _ -> None
           in
-          report env
-            (no_record_has ~names:env.names ~can_name:env.can_name ?what f
-               elsewhere);
-          TError
-      | Several paths ->
-          report env (several_records_have ~names:env.names r.loc ?what f paths);
-          TError)
-  | t -> needs_record t
+          match through_type env ~known:None ~fits:field_of with
+          | Found (td, fd) ->
+              let t, tvars = instance env td in
+              unify_at env r.loc ~found:tr ~expected:t;
+              found td fd tvars
+          | Nowhere ->
+              (* it may be in a record type the module can't name bare *)
+              let elsewhere =
+                Hashtbl.fold
+                  (fun p td acc ->
+                    if field_of td <> None then p :: acc else acc)
+                  env.types []
+                |> List.sort compare
+              in
+              report env
+                (no_record_has ~names:env.names ~can_name:env.can_name ?what f
+                   elsewhere);
+              TError
+          | Several paths ->
+              report env
+                (several_records_have ~names:env.names r.loc ?what f paths);
+              TError)
+      | t -> needs_record t)
 
 (* A `match`. With [want], every arm is checked against the type it says;
    otherwise the first arm says what the others have to be. *)

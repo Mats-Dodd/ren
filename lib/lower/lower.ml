@@ -11,6 +11,9 @@
    - an argument passed with `&` that isn't a plain variable, like
      `&ps[0].x`, is copied into a temporary, which is passed instead and
      written back to the place once the call returns
+   - a method call, `s.size()`, is a call of the type's function with the
+     receiver first, `Stack.size(s)`; with `&`, `&s.push(1)`, the receiver
+     is passed `inout`, `Stack.push(&s, 1)`, like any argument with `&`
    - `for x in xs` and `for p in &ps` become `while` loops over an index;
      the second writes each element back after each pass
    - an `if` without `else` gets `else ()`
@@ -79,7 +82,7 @@ let seq (a : C.expr) (b : C.expr) = mk (Seq (a, b)) b.ty a.loc
    but reading runs before it's used. *)
 let is_atom ~local (e : C.expr) =
   match e.kind with
-  | Int _ | Bool _ | Unit | Global _ | Intrinsic _ -> true
+  | Int _ | Bool _ | Unit | Global _ | Global_value _ | Intrinsic _ -> true
   | Local _ -> local
   | _ -> false
 
@@ -152,6 +155,7 @@ let rec expr cx (e : expr) : C.expr =
   | Unit -> here Unit
   | Var (Local b) -> local (var_of cx b) e.loc
   | Var (Global p) -> here (Global p)
+  | Var (Global_value p) -> here (Global_value p)
   | Var (Intrinsic x) -> here (Intrinsic x)
   | Unop (Neg, a) -> here (Prim (Neg, [ expr cx a ]))
   | Binop (op, a, b) ->
@@ -212,6 +216,7 @@ let rec expr cx (e : expr) : C.expr =
   | Index (a, i) ->
       let a = expr cx a in
       here (Prim (Get_index, [ a; expr cx i ]))
+  | Ref ({ kind = Call (f, args); _ } as c) -> call cx ~changed:true c f args
   | Ref _ -> bug "`&` outside a call or a `for` loop"
   | Assign { target; op; value } -> assign cx e target op value
   | For { var; iter; body } -> for_loop cx e var iter body
@@ -262,18 +267,32 @@ and assign cx (e : expr) target op value =
    stays as it is. Otherwise each one is read into a temporary, which is
    passed instead and written back to its place once the call returns. The
    callee and the other arguments are held in temporaries too, so
-   everything is still evaluated left to right. *)
-and call cx (e : expr) f args =
-  let f = expr cx f in
+   everything is still evaluated left to right.
+
+   A method call's receiver is its first argument, passed `inout` when
+   [changed], `&s.push(1)`. *)
+and call cx ?(changed = false) (e : expr) f args =
+  let inout (p : expr) ty =
+    let binds, pl = place cx p in
+    Inout { binds; place = pl; ty; loc = p.loc }
+  in
+  let f, receiver =
+    match (f.kind, (node cx f.node).found) with
+    | Field (r, _), Some (Method_of p) ->
+        let recv =
+          if changed then inout r (ty_of cx r.node) else Read (expr cx r)
+        in
+        (mk (Global p) (ty_of cx f.node) f.loc, [ recv ])
+    | _ -> (expr cx f, [])
+  in
   let lowered =
-    List.map
-      (fun (a : expr) ->
-        match a.kind with
-        | Ref p ->
-            let binds, pl = place cx p in
-            Inout { binds; place = pl; ty = ty_of cx a.node; loc = a.loc }
-        | _ -> Read (expr cx a))
-      args
+    receiver
+    @ List.map
+        (fun (a : expr) ->
+          match a.kind with
+          | Ref p when changed_receiver a = None -> inout p (ty_of cx a.node)
+          | _ -> Read (expr cx a))
+        args
   in
   let ty = ty_of cx e.node in
   let direct = function
@@ -386,7 +405,7 @@ and free (e : C.expr) =
   let bind (v : C.var) = bound := v.id :: !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Bool _ | Unit | Global _ | Intrinsic _ -> ()
+    | Int _ | Bool _ | Unit | Global _ | Global_value _ | Intrinsic _ -> ()
     | Local v -> use v
     | Prim (_, args) | Array args | Con (_, _, args) -> List.iter go args
     | Let (v, value, body) ->
@@ -513,4 +532,5 @@ let program (r : Resolve.t) (inferred : Infer.t) : C.program =
     home = r.home;
     types = r.types;
     fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog);
+    values = List.map (Path.make r.home) inferred.values;
   }

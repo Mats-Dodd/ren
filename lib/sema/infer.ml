@@ -22,10 +22,11 @@
    has a single type; the group is generalized once it's done.
 
    Inference is bidirectional: an expression is checked against the type
-   it's expected to have whenever that's known. Constructors, record fields
-   and record literals are found through a type, in the three steps of
-   module-build.md, and a question that can't be answered where it's asked
-   is an error, never put off until later (infer_expr.ml).
+   it's expected to have whenever that's known. Constructors, record
+   fields, record literals and methods are found through a type, in the
+   three steps of module-build.md, and a question that can't be answered
+   where it's asked is an error, never put off until later
+   (infer_expr.ml).
 
    Every name has already been resolved (resolve.ml): a local is known by
    its binder's id, and a top-level function by its path, so nothing here
@@ -51,6 +52,7 @@
 type found = Infer_expr.found =
   | Field_of of Path.t
   | Ctor_of of Path.t * string
+  | Method_of of Path.t
 
 module Nodes = Infer_top.Nodes
 
@@ -58,6 +60,7 @@ type node = Infer_top.node = { ty : Ty.ty; found : found option }
 
 type t = Infer_top.t = {
   schemes : (string * Ty.scheme) list;
+  values : string list;
   nodes : (string * node Nodes.t) list;
   in_scope : Path.t list;
 }

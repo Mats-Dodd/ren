@@ -6,9 +6,12 @@
      to be a `var`, an `inout` parameter, or the element of `for p in &ps`.
    - A lambda can't change a variable from outside it. It captures the
      values it uses when it's created, so the change would go nowhere.
-   - `&` only appears on a call's arguments and in `for p in &ps`.
+   - `&` only appears on a call's arguments, in `for p in &ps`, and before
+     a method call that changes its receiver, `&s.push(1)`, whose receiver
+     has to be a place this code may change, like an argument's.
    - Exclusivity: an argument passed with `&` must be the only way the call
-     can reach that value, so `swap(&a, &a)` and `f(&xs, xs)` are errors.
+     can reach that value, so `swap(&a, &a)` and `f(&xs, xs)` are errors,
+     and so is `&s.push(s)`, whose receiver is passed with `&`.
      Likewise, inside `for p in &ps` the loop body reaches `ps` only
      through `p`.
 
@@ -54,6 +57,8 @@ type ctx = {
   depth : int;  (** how many lambdas deep *)
   locks : lock list;
   sink : Diag.sink;
+  source : expr -> string option;
+      (** code as it's written, for messages (Ast.source) *)
 }
 
 (* Run a check; if it finds a problem, report it and carry on. *)
@@ -61,7 +66,7 @@ let guard cx f = Diag.recover cx.sink ~default:() f
 
 let name_of = function
   | Local b -> b.ident.name
-  | Global p -> p.name
+  | Global p | Global_value p -> p.name
   | Intrinsic x -> x
 
 let rec place_of (e : expr) =
@@ -85,7 +90,7 @@ let rec overlap a b =
 
 let check_locks cx (p : place) =
   match p.root with
-  | Global _ | Intrinsic _ -> ()
+  | Global _ | Global_value _ | Intrinsic _ -> ()
   | Local b ->
       List.iter
         (fun l ->
@@ -123,16 +128,20 @@ let kind (b : binder) =
           sprintf "loop with `for %s in &...` to change the elements" x )
 
 (* Check that [e] is a place this code may change. [what] words the error
-   when it isn't a place at all. *)
-let writable cx (e : expr) ~what =
+   when it isn't a place at all, and [help] says what to do. *)
+let writable cx (e : expr) ~what
+    ?(help = "only a variable, or a field or element of one, can be changed") ()
+    =
   match place_of e with
-  | None ->
-      Diag.error e.loc
-        ~help:"only a variable, or a field or element of one, can be changed"
-        what
+  | None -> Diag.error e.loc ~help what
   | Some ({ root = Global _ | Intrinsic _; _ } as p) ->
       Diag.error p.rloc
         (sprintf "`%s` is a function, not a variable" (name_of p.root))
+  | Some ({ root = Global_value _; _ } as p) ->
+      Diag.error p.rloc ~help:"copy it into a `var`, and change the copy"
+        ~notes:[ "an associated value is made once, and never changes" ]
+        (sprintf "`%s` is an associated value, so it can't be changed"
+           (name_of p.root))
   | Some ({ root = Local b; _ } as p) -> (
       let x = b.ident.name in
       match kind b with
@@ -164,6 +173,20 @@ let rec walk cx (e : expr) =
               walk cx a;
               walk cx i
           | _ -> ()))
+  | Ref { kind = Call ({ kind = Field (r, _); _ }, args); _ } ->
+      (* `&s.push(1)`: the receiver is changed, as if passed with `&` *)
+      guard cx (fun () ->
+          writable cx r ~help:"put it in a `var` first"
+            ~what:
+              (sprintf
+                 "`&` needs something it can change, but %s is a new value"
+                 (match cx.source r with
+                 | Some code -> sprintf "`%s`" code
+                 | None -> "this"))
+            ());
+      (match place_of r with Some _ -> walk_indices cx r | None -> walk cx r);
+      List.iter (arg cx) args;
+      guard cx (fun () -> exclusive ({ r with kind = Ref r } :: args))
   | Ref _ ->
       Diag.report cx.sink
         (Diag.make e.loc ~help:"remove the `&`"
@@ -180,15 +203,7 @@ let rec walk cx (e : expr) =
   | If (c, t, f) -> List.iter (walk cx) (c :: t :: Option.to_list f)
   | Call (f, args) ->
       walk cx f;
-      List.iter
-        (fun (a : expr) ->
-          match a.kind with
-          | Ref p ->
-              guard cx (fun () ->
-                  writable cx p ~what:"`&` needs a variable it can change");
-              walk_indices cx p
-          | _ -> walk cx a)
-        args;
+      List.iter (arg cx) args;
       guard cx (fun () -> exclusive args)
   | Lambda (ps, body) ->
       List.iter
@@ -209,12 +224,13 @@ let rec walk cx (e : expr) =
   | Record (_, fields) -> List.iter (fun (_, v) -> walk cx v) fields
   | Array xs -> List.iter (walk cx) xs
   | Assign { target; value; _ } ->
-      guard cx (fun () -> writable cx target ~what:"this can't be assigned to");
+      guard cx (fun () ->
+          writable cx target ~what:"this can't be assigned to" ());
       walk_indices cx target;
       walk cx value
   | For { var; iter = { kind = Ref a; loc = iter_loc; _ }; body } ->
       guard cx (fun () ->
-          writable cx a ~what:"`&` needs a variable it can change");
+          writable cx a ~what:"`&` needs a variable it can change" ());
       walk_indices cx a;
       (* lock the array, if it's a place the loop can change *)
       let locks =
@@ -235,6 +251,16 @@ let rec walk cx (e : expr) =
           Option.iter (walk cx) a.arm_guard;
           walk cx a.arm_body)
         arms
+
+(* A call's argument. One passed with `&` is a place the call changes,
+   unless it's a method call, `f(&s.pop())`, which changes `s` itself. *)
+and arg cx (a : expr) =
+  match a.kind with
+  | Ref p when changed_receiver a = None ->
+      guard cx (fun () ->
+          writable cx p ~what:"`&` needs a variable it can change" ());
+      walk_indices cx p
+  | _ -> walk cx a
 
 (* The index expressions inside a place, like the `i` in `xs[i].pos`. *)
 and walk_indices cx (e : expr) =
@@ -296,6 +322,10 @@ and exclusive args =
   check places
 
 let program sink (r : Resolve.t) =
+  let source =
+    Ast.source ~type_name:(Resolve.type_name r)
+      ~value_name:(Resolve.value_name r)
+  in
   List.iter
-    (fun (f : fn_def) -> walk { depth = 0; locks = []; sink } f.body)
+    (fun (f : fn_def) -> walk { depth = 0; locks = []; sink; source } f.body)
     (Ast.functions r.prog)

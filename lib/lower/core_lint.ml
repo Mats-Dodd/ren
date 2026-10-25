@@ -20,7 +20,11 @@ let sprintf = Printf.sprintf
 
 type env = {
   types : (Path.t, Iface.type_decl) Hashtbl.t;
-  schemes : (Path.t, Ty.scheme) Hashtbl.t;  (** every top-level function *)
+  schemes : (Path.t, Ty.scheme) Hashtbl.t;
+      (** every top-level function, and every function of a type's `ops` block
+      *)
+  values : (Path.t, Ty.scheme) Hashtbl.t;
+      (** every associated value's type, as a scheme *)
   fn : string;  (** the function being checked *)
 }
 
@@ -207,6 +211,14 @@ let rec expr env sc (e : expr) =
             (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
                p.name (show e.ty) (show s.ty))
       | None -> fail env loc (sprintf "there's no function `%s`" p.name))
+  | Global_value p -> (
+      match Hashtbl.find_opt env.values p with
+      | Some s when instance_of env s.ty e.ty -> ()
+      | Some s ->
+          fail env loc
+            (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
+               p.name (show e.ty) (show s.ty))
+      | None -> fail env loc (sprintf "there's no value `%s`" p.name))
   | Intrinsic x -> (
       match Prelude.find_fn x with
       | Some b when instance_of env b.scheme.ty e.ty -> ()
@@ -424,12 +436,25 @@ let fn_def env (f : fn_def) =
    up in its code. *)
 let program ~imports (prog : program) =
   let env =
-    { types = Hashtbl.create 16; schemes = Hashtbl.create 16; fn = "" }
+    {
+      types = Hashtbl.create 16;
+      schemes = Hashtbl.create 16;
+      values = Hashtbl.create 16;
+      fn = "";
+    }
   in
   List.iter
     (fun (iface : Iface.t) ->
       List.iter
-        (fun (td : Iface.type_decl) -> Hashtbl.replace env.types td.path td)
+        (fun (td : Iface.type_decl) ->
+          Hashtbl.replace env.types td.path td;
+          List.iter
+            (fun (o : Iface.op) ->
+              let p = Path.make td.path.home (td.path.name ^ "." ^ o.oname) in
+              Hashtbl.replace
+                (if o.okind = Value then env.values else env.schemes)
+                p o.oscheme)
+            td.ops)
         iface.types;
       List.iter
         (fun (v : Iface.value) ->
@@ -440,6 +465,13 @@ let program ~imports (prog : program) =
     (fun (td : Iface.type_decl) -> Hashtbl.replace env.types td.path td)
     prog.types;
   List.iter
-    (fun (f : fn_def) -> Hashtbl.replace env.schemes f.path f.scheme)
+    (fun (f : fn_def) ->
+      Hashtbl.replace env.schemes f.path f.scheme;
+      (* an associated value's function has no parameters, and its result
+         is the value *)
+      match f.scheme with
+      | { ty = Fun ([], t, _, _); names } when List.mem f.path prog.values ->
+          Hashtbl.replace env.values f.path { ty = t; names }
+      | _ -> ())
     prog.fns;
   List.iter (fn_def env) prog.fns

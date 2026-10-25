@@ -13,6 +13,9 @@ type found =
   | Ctor_of of Path.t * string
       (** a constructor, in an expression or a pattern: its type, and its name
       *)
+  | Method_of of Path.t
+      (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
+          function, [Stack.push] *)
 
 (* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
    that takes a module (here [Int], which says how to compare keys) and
@@ -28,6 +31,9 @@ type node = { ty : Ty.ty; found : found option }
 type t = {
   schemes : (string * Ty.scheme) list;
       (** each function's type scheme, in source order *)
+  values : string list;
+      (** the module's associated values, in the order they're made when the
+          program starts: each after every value it uses *)
   nodes : (string * node Nodes.t) list;
       (** each function's expressions and patterns, by node id *)
   in_scope : Path.t list;

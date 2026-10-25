@@ -39,8 +39,12 @@ let rec equal loc a b =
       panic loc "functions can't be compared"
   | _ -> a = b
 
-(* The program's top-level functions, by path. *)
-type ctx = { fns : (Path.t, fn_def) Hashtbl.t }
+(* The program's top-level functions, by path, and its associated values
+   once they're made. *)
+type ctx = {
+  fns : (Path.t, fn_def) Hashtbl.t;
+  values : (Path.t, Value.t) Hashtbl.t;
+}
 
 let binop loc (op : Ast.binop) a b =
   match (op, a, b) with
@@ -110,6 +114,10 @@ let rec eval cx env (e : expr) =
   | Unit -> VUnit
   | Local v -> !(cell env v)
   | Global p -> VFn p
+  | Global_value p -> (
+      match Hashtbl.find_opt cx.values p with
+      | Some v -> v
+      | None -> bug ("the value `" ^ p.name ^ "` used before it's made"))
   | Intrinsic x -> VBuiltin x
   | Prim (op, args) -> prim e.loc op (eval_all cx env args)
   | Let (v, value, body) ->
@@ -215,9 +223,12 @@ and apply cx f args =
   | _ -> bug "a call to something that isn't a function"
 
 (* Run a program made of [modules] (the prelude, then the user's file),
-   starting from the last one's `main`. *)
+   starting from the last one's `main`. First each module's associated
+   values are made, in order: a module's after those of every module it
+   imports, which come before it, and within a module in the order
+   lowering gives, each after every value it uses. *)
 let run (modules : program list) =
-  let cx = { fns = Hashtbl.create 16 } in
+  let cx = { fns = Hashtbl.create 16; values = Hashtbl.create 16 } in
   List.iter
     (fun (m : program) ->
       List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns)
@@ -228,6 +239,13 @@ let run (modules : program list) =
   | Some f -> (
       (* OCaml's own stack runs out when a Ren function calls itself too
          deeply; that's the program's fault, so it's a panic *)
-      try fst (apply cx (VFn f.path) [])
+      try
+        List.iter
+          (fun (m : program) ->
+            List.iter
+              (fun p -> Hashtbl.replace cx.values p (fst (apply cx (VFn p) [])))
+              m.values)
+          modules;
+        fst (apply cx (VFn f.path) [])
       with Stack_overflow ->
         panic f.loc "the stack overflowed: a function called itself too deeply")

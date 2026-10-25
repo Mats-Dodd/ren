@@ -14,7 +14,9 @@ open Infer_expr
 (* Group functions into strongly connected components of the call graph,
    callees before callers (Tarjan's algorithm, which finishes a component
    only after every component it reaches). [calls] lists the top-level
-   functions each function uses, which resolve.ml found. *)
+   functions each function uses, which resolve.ml found, and the methods
+   it may call with a dot: which one `s.push(1)` calls is only found by
+   checking it, so it's after every method of the module named `push`. *)
 let components ~home ~calls (fns : fn_def list) =
   let by_name = Hashtbl.create 16 in
   List.iter (fun (f : fn_def) -> Hashtbl.replace by_name f.name.name f) fns;
@@ -168,10 +170,12 @@ let check_transparent sink (f : fn_def) =
 (* ---- what a function declares it uses ---- *)
 
 (* The dependencies [f] declares, sorted: those its `uses` lists, or none
-   for a public function without one. A private function without `uses`
-   declares nothing, and inference works out what it uses. *)
-let declared_uses (f : fn_def) =
+   for a public function without one, or an associated value, which uses
+   nothing. A private function without `uses` declares nothing, and
+   inference works out what it uses. *)
+let declared_uses ~is_value (f : fn_def) =
   match f.uses with
+  | _ when is_value f -> Some []
   | Some ds ->
       Some
         (List.sort_uniq String.compare
@@ -186,7 +190,7 @@ let declared_uses (f : fn_def) =
    the caller uses. Only if there's none, which happens when the callee is
    in [f]'s group and its uses were found at the join, is it the first
    call whose row has it now. *)
-let check_uses env (f : fn_def) cx declared =
+let check_uses env ~is_value (f : fn_def) cx declared =
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let calls =
     List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(cx.calls)
@@ -202,8 +206,96 @@ let check_uses env (f : fn_def) cx declared =
           | Some loc -> Some loc
           | None -> first (fun c -> List.mem dep (fst (row_parts c.row)))
         in
-        report env (undeclared_use f dep call))
+        report env
+          (if is_value f then value_uses f dep call
+           else undeclared_use f dep call))
     (List.sort_uniq String.compare (fst (row_parts cx.uses)))
+
+(* ---- associated values ----
+
+   An associated value is made once, when the program starts, before
+   `main` runs: each after every value it uses, through any function it
+   calls, so a value never sees one that isn't made yet. Another module's
+   values are made before this module's, since the modules are made in
+   the order they import each other. *)
+
+(* The module's values in the order they're made, each reported if it
+   needs itself to be made. A function's edges are what resolve.ml found
+   it uses, and the methods it calls with a dot, which [found] says (the
+   context each function was checked in). *)
+let value_order env (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
+  let home = r.home in
+  let edges name =
+    let dots =
+      match Hashtbl.find_opt found name with
+      | Some cx ->
+          Hashtbl.fold
+            (fun _ f acc ->
+              match f with
+              | Method_of (p : Path.t) when p.home = home -> p.name :: acc
+              | _ -> acc)
+            cx.found []
+      | None -> []
+    in
+    List.filter_map
+      (fun (p : Path.t) -> if p.home = home then Some p.name else None)
+      (List.assoc name r.calls)
+    @ dots
+    |> List.sort_uniq compare
+  in
+  let values = List.filter is_value fns in
+  let value_named n =
+    List.find_opt (fun (f : fn_def) -> f.name.name = n) values
+  in
+  (* a way from [n] back to [goal], if there is one: the functions and
+     values on it, ending with [goal] *)
+  let rec back ~seen goal n =
+    List.find_map
+      (fun m ->
+        if m = goal then Some [ m ]
+        else if Hashtbl.mem seen m then None
+        else (
+          Hashtbl.replace seen m ();
+          Option.map (fun way -> m :: way) (back ~seen goal m)))
+      (edges n)
+  in
+  (* the values of a cycle already reported, so a cycle is reported once,
+     from whichever of its values comes first *)
+  let reported = ref [] in
+  List.iter
+    (fun (v : fn_def) ->
+      let n = v.name.name in
+      if not (List.mem n !reported) then
+        match back ~seen:(Hashtbl.create 8) n n with
+        | Some way ->
+            let chain = n :: way in
+            reported :=
+              List.filter (fun m -> value_named m <> None) chain @ !reported;
+            report env
+              (Diag.make v.name.loc
+                 ~notes:
+                   [
+                     "an associated value is made once, when the program \
+                      starts, so it can't need itself to be made";
+                   ]
+                 ~help:
+                   (if way = [ n ] then "make it without using itself"
+                    else "make one of them without the other")
+                 (sprintf "`%s` is made from itself: %s" n
+                    (String.concat " → " chain)))
+        | None -> ())
+    values;
+  (* each value after every one it reaches: a depth-first walk, which adds
+     a value once everything it reaches is done *)
+  let visited = Hashtbl.create 16 and order = ref [] in
+  let rec visit n =
+    if not (Hashtbl.mem visited n) then (
+      Hashtbl.replace visited n ();
+      List.iter visit (edges n);
+      if value_named n <> None then order := n :: !order)
+  in
+  List.iter (fun (v : fn_def) -> visit v.name.name) values;
+  List.rev !order
 
 (* ---- the program ---- *)
 
@@ -214,6 +306,9 @@ type node = { ty : Ty.ty; found : found option }
 
 type t = {
   schemes : (string * Ty.scheme) list;  (** each function's, in source order *)
+  values : string list;
+      (** the module's associated values, in the order they're made when the
+          program starts: each after every value it uses *)
   nodes : (string * node Nodes.t) list;
       (** each function's expressions and patterns, by node id *)
   in_scope : Path.t list;
@@ -251,6 +346,9 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
       home;
       names = Resolve.type_name r;
       can_name = Resolve.can_name r;
+      source =
+        Ast.source ~type_name:(Resolve.type_name r)
+          ~value_name:(Resolve.value_name r);
       types;
       visible;
       globals = Hashtbl.create 16;
@@ -269,6 +367,21 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
             (of_scheme st v.scheme))
         iface.values)
     imports;
+  (* and the ops items of every type the module can meet, which it can
+     call with a dot; an associated value is a function of no parameters,
+     as in its own module (ast.ml) *)
+  List.iter
+    (fun (iface : Iface.t) ->
+      List.iter
+        (fun (td : Iface.type_decl) ->
+          List.iter
+            (fun (o : Iface.op) ->
+              let t = of_scheme st o.oscheme in
+              Hashtbl.replace env.globals (op_path td o)
+                (if o.okind = Value then TFun ([], t, REmpty, REmpty) else t))
+            td.ops)
+        iface.types)
+    reachable;
   (* the module's functions, its types' ops items included; an associated
      value is checked as a function of no parameters (ast.ml) *)
   let fns = Ast.functions r.prog in
@@ -309,7 +422,7 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
           let uses =
             List.fold_right
               (fun d rest -> RExtend (d, rest))
-              (Option.value (declared_uses f) ~default:[])
+              (Option.value (declared_uses ~is_value f) ~default:[])
               (fresh_row env.st)
           in
           let ps =
@@ -400,7 +513,9 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
          everything each function uses *)
       List.iter
         (fun ((f : fn_def), _, cx, _, _) ->
-          Option.iter (check_uses env f cx) (declared_uses f))
+          Option.iter
+            (check_uses env ~is_value f cx)
+            (declared_uses ~is_value f))
         setups;
       leave_level env.st;
       List.iter
@@ -487,7 +602,13 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
                   f.params ps
             | _ -> assert false)
         setups)
-    (components ~home ~calls:r.calls fns);
+    (components ~home
+       ~calls:
+         (List.map
+            (fun (f, calls) -> (f, calls @ List.assoc f r.methods))
+            r.calls)
+       fns);
+  let values = value_order env r fns ~is_value ~found:tables in
   (match
      Option.map
        (fun file ->
@@ -529,4 +650,4 @@ let program sink ~imports ~reachable ?entry (r : Resolve.t) =
     ((f.name.name, scheme), (f.name.name, nodes))
   in
   let schemes, nodes = List.split (List.map canonical fns) in
-  { schemes; nodes; in_scope = List.sort compare env.in_scope }
+  { schemes; values; nodes; in_scope = List.sort compare env.in_scope }

@@ -162,7 +162,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[]
-            { home = "test"; types = []; fns = [ main ] }));
+            { home = "test"; types = []; fns = [ main ]; values = [] }));
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: the value of `x` has type `Bool`, but should have `Int`")

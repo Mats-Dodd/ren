@@ -42,8 +42,13 @@ and kind =
   | Unit
   | Local of var
   | Global of Path.t
-      (** a top-level function; [ty] is the type it's used at here, an instance
-          of its scheme *)
+      (** a top-level function, or an ops item's, [Stack.push]; [ty] is the type
+          it's used at here, an instance of its scheme. A method call,
+          [s.push(1)], is a call of its function, with [s] first. *)
+  | Global_value of Path.t
+      (** an associated value, [Stack.empty], which the program makes once when
+          it starts: its function of no parameters, called then. [ty] is an
+          instance of its type. *)
   | Intrinsic of string  (** a function built into the compiler: [print] *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
@@ -90,6 +95,9 @@ type program = {
   home : string;
   types : Iface.type_decl list;
   fns : fn_def list;
+  values : Path.t list;
+      (** its associated values, in the order they're made, each after every
+          value it uses; each is one of [fns], of no parameters *)
 }
 
 (* ---- building ---- *)
@@ -160,7 +168,7 @@ let rec sexp e =
   | Bool b -> Atom (string_of_bool b)
   | Unit -> Atom "()"
   | Local v -> var v
-  | Global p -> Atom p.name
+  | Global p | Global_value p -> Atom p.name
   | Intrinsic x -> Atom x
   | Prim (op, args) -> List (Atom (show_prim op) :: List.map sexp args)
   | Let (v, value, body) -> List [ atom "let"; var v; sexp value; sexp body ]

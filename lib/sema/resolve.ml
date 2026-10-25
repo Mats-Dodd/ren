@@ -17,13 +17,19 @@
    - each item of a type's `ops` block is resolved as a function named
      after its type, `Stack.push`, with the type's parameters in scope and
      `self`, its first parameter if it's a method, of the type (ast.ml).
+     An item written after its type, `Stack.of` or `stack.Stack.empty`, is
+     found through scope too: the type is, and the item is in its
+     declaration. A method called with a dot, `s.push(1)`, is found
+     through `s`'s type, by inference.
 
    Along the way it reports every name that doesn't exist, types given the
    wrong number of arguments, names declared twice, a local or function
    with the name of an imported module, public declarations that
    mention a private type, opaque types represented as themselves, and
-   `self` anywhere but first in a method; and in an `ops` block, two items
-   with the same name, or an item with a field's name.
+   `self` anywhere but first in a method; in an `ops` block, two items
+   with the same name, or an item with a field's name; and an item written
+   after a type that doesn't have it, `Stack.grow`, or has it privately,
+   in another module.
    Imports nothing uses are reported once inference is done
    ([unused_imports]). Later passes never look a name up: inference reads
    a binder's id, mut.ml its kind.
@@ -61,7 +67,13 @@ type t = {
   types : Iface.type_decl list;
       (** the types the module declares, in the order it declares them *)
   calls : (string * Path.t list) list;
-      (** each function, and the top-level functions its body uses *)
+      (** each function, and the top-level functions its body uses: the ops
+          items written after their type included *)
+  methods : (string * Path.t list) list;
+      (** each function, and the methods of the module's own types it may call
+          with a dot: for `s.push(1)`, every one named `push`. Which one it is
+          is found through `s`'s type, by inference, which needs to have checked
+          the method first. *)
   scope : (string * Path.t) list;
       (** the types written bare here, by name, sorted: the prelude's, those
           imported by name and the module's own *)
@@ -83,6 +95,21 @@ let type_name (r : t) (p : Path.t) =
   | _, Some alias -> alias ^ "." ^ p.name
   | _ -> Path.full p
 
+(* How module [r] writes the top-level function or value [p]: bare if it's
+   its own or the prelude's; with its module's alias in front,
+   `util.double`, if not; and an ops item after its type, written as
+   [type_name] writes it, `Stack.of` or `stack.Stack.of`. *)
+let value_name (r : t) (p : Path.t) =
+  match String.index_opt p.name '.' with
+  | Some i ->
+      type_name r { p with name = String.sub p.name 0 i }
+      ^ "." ^ Ast.short_name p.name
+  | None when p.home = r.home || p.home = Path.prelude_home -> p.name
+  | None -> (
+      match List.assoc_opt p.home r.aliases with
+      | Some alias -> alias ^ "." ^ p.name
+      | None -> Path.full p)
+
 (* Whether module [r] can write the type [p] at all: it's in scope, or its
    module is imported. *)
 let can_name (r : t) (p : Path.t) =
@@ -96,6 +123,11 @@ type env = {
   values : (string, name) Hashtbl.t;  (** every top-level function in scope *)
   imports : (import * Iface.t) list;
       (** each module the module imports, in the order it imports them *)
+  ifaces : Iface.t list;
+      (** the interfaces of every module it imports, the prelude's included *)
+  own_ops : (string, (string * Iface.op_kind) list * string list) Hashtbl.t;
+      (** the `ops` items of each of the module's own types, by the type's name,
+          in source order, and its fields *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
   used : (string, unit) Hashtbl.t;  (** the aliases used *)
   used_types : (Path.t, unit) Hashtbl.t;
@@ -116,6 +148,7 @@ type scope = {
 and fn_state = {
   mutable last_id : int;  (** the last binder id handed out *)
   mutable calls : Path.t list;
+  mutable dots : string list;  (** the names called with a dot, `s.push(1)` *)
 }
 
 let report env ?help ?labels loc msg =
@@ -283,6 +316,63 @@ let qualified env sc ((i : import), (iface : Iface.t)) (f : ident) =
   else sc.fn.calls <- p :: sc.fn.calls;
   Global p
 
+(* The ops item [f] of the type [t], written `Stack.of`, or with the type's
+   module in front, `stack.Stack.of`: the type is found through scope, and
+   the item in its declaration. Another module's type lists only its public
+   items, so a private one can't be told apart from one that doesn't
+   exist. An associated value is a [Global_value]; the rest are functions. *)
+let item env sc (t : tyname) (f : ident) =
+  match
+    declared_type env ~params:sc.tparams ~what:"it has no `ops` items" t
+  with
+  | None -> Global (Path.make env.home f.name)
+  | Some { tref = Param _; _ } ->
+      (* [declared_type] gives only a declared type *)
+      assert false
+  | Some { tref = Named p; _ } -> (
+      let shown = show_tyname t in
+      let decl =
+        Option.bind
+          (List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces)
+          (fun iface -> Iface.find_type iface p.name)
+      in
+      let items, fields =
+        if p.home = env.home then
+          Option.value ~default:([], []) (Hashtbl.find_opt env.own_ops p.name)
+        else
+          ( List.map
+              (fun (o : Iface.op) -> (o.oname, o.okind))
+              (Option.fold ~none:[]
+                 ~some:(fun (d : Iface.type_decl) -> d.ops)
+                 decl),
+            [] )
+      in
+      let path = Path.make p.home (p.name ^ "." ^ f.name) in
+      match List.assoc_opt f.name items with
+      | Some kind ->
+          sc.fn.calls <- path :: sc.fn.calls;
+          if kind = Value then Global_value path else Global path
+      | None when p.home <> env.home ->
+          report env f.loc
+            ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
+            (sprintf "`%s` has no public `%s`" shown f.name);
+          Global path
+      | None ->
+          report env f.loc
+            ~help:
+              (match items with
+              | _ when List.mem f.name fields ->
+                  sprintf
+                    "`%s` is a field, so it's read from a value, like `x.%s`"
+                    f.name f.name
+              | [] -> sprintf "declare it in `%s`'s `ops` block" shown
+              | _ ->
+                  sprintf "its `ops` items: %s"
+                    (String.concat ", "
+                       (List.map (fun (n, _) -> sprintf "`%s`" n) items)))
+            (sprintf "`%s` has no `ops` item named `%s`" shown f.name);
+          Global path)
+
 (* What the name [x] refers to. [what] words the error when it's nothing:
    "variable", or "function" for the name being called. *)
 let lookup env sc loc ~what x =
@@ -374,7 +464,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Int n -> Int n
     | Bool b -> Bool b
     | Unit -> Unit
-    | Var x -> Var (lookup env sc e.loc ~what:"variable" x)
+    | Var (Bare x) -> Var (lookup env sc e.loc ~what:"variable" x)
+    | Var (Item (t, f)) -> Var (item env sc t f)
     | Unop (op, a) -> Unop (op, go a)
     | Binop (op, a, b) ->
         let a = go a in
@@ -386,12 +477,18 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Call (f, args) ->
         let f =
           match f.kind with
-          | Var x ->
+          | Var (Bare x) ->
               {
                 kind = Var (lookup env sc f.loc ~what:"function" x);
                 loc = f.loc;
                 node = f.node;
               }
+          | Field ({ kind = Var (Bare m); _ }, _) when Env.mem m env.modules ->
+              go f
+          | Field (_, m) ->
+              (* `s.push(1)`: which type's `push` is found by inference *)
+              sc.fn.dots <- m.name :: sc.fn.dots;
+              go f
           | _ -> go f
         in
         Call (f, List.map go args)
@@ -445,7 +542,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
             name
         in
         Record (name, List.map (fun (f, v) -> (f, go v)) fields)
-    | Field ({ kind = Var m; _ }, f) when Env.mem m env.modules ->
+    | Field ({ kind = Var (Bare m); _ }, f) when Env.mem m env.modules ->
         Var (qualified env sc (Env.find m env.modules) f)
     | Field (r, f) -> Field (go r, f)
     | Match (subject, arms) ->
@@ -559,7 +656,7 @@ let uses env (deps : ident list) =
    parameter can be `self`, which has the type, `Stack<T>`. `self` is no
    other parameter. *)
 let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
-    Resolved.fn_def * Path.t list =
+    Resolved.fn_def * Path.t list * string list =
   let outer = match owner with Some td -> td.type_params | None -> [] in
   let tparams = outer @ f.tparams in
   no_duplicates env "type parameters" tparams;
@@ -603,7 +700,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       locals = Env.empty;
       tparams = List.map (fun (t : ident) -> t.name) tparams;
       depth = 0;
-      fn = { last_id = 0; calls = [] };
+      fn = { last_id = 0; calls = []; dots = [] };
     }
   in
   let ps, inner =
@@ -637,12 +734,14 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     | None -> f.name
   in
   ( { f with name; tparams; params = ps; ret; body },
-    List.sort_uniq compare sc.fn.calls )
+    List.sort_uniq compare sc.fn.calls,
+    List.sort_uniq compare sc.fn.dots )
 
 (* A type declaration, and its ops block: each item resolved as a
-   function (see [fn_def]), with the top-level functions it uses. *)
+   function (see [fn_def]), with the top-level functions it uses and the
+   names it calls with a dot. *)
 let type_def env (td : Parsed.type_def) :
-    Resolved.type_def * (string * Path.t list) list =
+    Resolved.type_def * (string * Path.t list * string list) list =
   no_duplicates env "type parameters" td.type_params;
   let no_duplicate_fields (fs : Parsed.field list) =
     no_duplicates env "fields"
@@ -716,8 +815,8 @@ let type_def env (td : Parsed.type_def) :
     List.split
       (List.map
          (fun (o : Parsed.op) ->
-           let f, calls = fn_def env ~owner:td o.op_fn in
-           ({ op_kind = o.op_kind; op_fn = f }, (f.name.name, calls)))
+           let f, calls, dots = fn_def env ~owner:td o.op_fn in
+           ({ op_kind = o.op_kind; op_fn = f }, (f.name.name, calls, dots)))
          td.type_ops)
   in
   ({ td with type_body; type_ops }, calls)
@@ -869,6 +968,8 @@ let program sink ~home ~imports (prog : Parsed.program) =
       types = Hashtbl.create 16;
       values = Hashtbl.create 16;
       imports = imported;
+      ifaces = imports;
+      own_ops = Hashtbl.create 8;
       modules =
         List.fold_left
           (fun acc ((i : import), iface) -> Env.add i.alias.name (i, iface) acc)
@@ -918,6 +1019,29 @@ let program sink ~home ~imports (prog : Parsed.program) =
               Hashtbl.replace env.types n.name (d.path, List.length d.params))
         i.names)
     env.imports;
+  List.iter
+    (function
+      | Type (td : Parsed.type_def) ->
+          let kind (o : Parsed.op) : Iface.op_kind =
+            match (o.op_kind, o.op_fn.params) with
+            | Op_value, _ -> Value
+            | Op_fn, p :: _ when p.pname.name = "self" -> Method
+            | Op_fn, _ -> Function
+          in
+          let fields =
+            match td.type_body with
+            | Fields fs ->
+                List.map (fun (f : Parsed.field) -> f.field_name.name) fs
+            | Ctors _ | Opaque _ -> []
+          in
+          if not (Hashtbl.mem env.own_ops td.type_name.name) then
+            Hashtbl.replace env.own_ops td.type_name.name
+              ( List.map
+                  (fun (o : Parsed.op) -> (o.op_fn.name.name, kind o))
+                  td.type_ops,
+                fields )
+      | Fn _ | Import _ -> ())
+    prog;
   let first_local = Hashtbl.create 16 in
   List.iter
     (function
@@ -994,8 +1118,8 @@ let program sink ~home ~imports (prog : Parsed.program) =
                let td, calls = type_def env td in
                (Type td, calls)
            | Fn f ->
-               let f', calls = fn_def env f in
-               (Fn f', [ (f.name.name, calls) ])
+               let f', calls, dots = fn_def env f in
+               (Fn f', [ (f.name.name, calls, dots) ])
            | Import i -> (Import i, []))
          prog)
   in
@@ -1045,7 +1169,22 @@ let program sink ~home ~imports (prog : Parsed.program) =
     home;
     prog = items;
     types;
-    calls = List.concat calls;
+    calls = List.map (fun (f, calls, _) -> (f, calls)) (List.concat calls);
+    methods =
+      List.map
+        (fun (f, _, dots) ->
+          ( f,
+            List.concat_map
+              (fun m ->
+                Hashtbl.fold
+                  (fun t (items, _) acc ->
+                    if List.mem_assoc m items then
+                      Path.make home (t ^ "." ^ m) :: acc
+                    else acc)
+                  env.own_ops []
+                |> List.sort compare)
+              dots ))
+        (List.concat calls);
     scope;
     aliases =
       List.map (fun ((i : import), _) -> (i.path, i.alias.name)) env.imports;

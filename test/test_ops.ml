@@ -1,7 +1,7 @@
 (* A type's `ops` block: its methods, associated functions and associated
-   values, declared under the type (module-build.md, "Methods and
-   operators live on the type"). Calling them arrives in the next step of
-   stage 5b; these tests are about declaring them. *)
+   values, declared under the type, and called: `s.push(1)` through the
+   receiver's type, `Stack.of(...)` and `Stack.empty` after the type
+   (module-build.md, "Methods and operators live on the type"). *)
 
 open Helpers
 
@@ -414,3 +414,539 @@ fn main() = 1
       │         ^
       help: put each item on its own line, indented under `ops =`
     |}]
+
+(* ---- calling ----
+
+   A method is called through its receiver's type, `s.size()`, which is
+   `Stack.size(s)`; an associated function or value is written after its
+   type, found through scope. *)
+
+let%expect_test "methods, associated functions and values, from another module"
+    =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack.{Stack}
+fn main() uses Io =
+  var s = Stack.empty
+  &s.push(1)
+  &s.push(s.size() + 1)
+  print(s.peek())
+  let t = Stack.of([7, 8, 9])
+  print(t.size())
+  print(stack.Stack.of([1]).size())
+  let peek = Stack.peek
+  peek(t)
+|}
+      );
+      stack;
+    ];
+  [%expect {|
+    Some(2)
+    3
+    1
+    Some(9)
+    |}]
+
+let%expect_test "a method call is a call of the type's function" =
+  (* the receiver comes first, and `&` passes it `inout`: a place that
+     isn't a plain variable goes through a temporary, as any argument
+     with `&` does *)
+  core
+    {|
+type Counter = { n: Int }
+  ops =
+    fn bump(inout self, by: Int) = self.n += by
+    fn get(self) -> Int = self.n
+
+type Pair = { left: Counter, right: Counter }
+  ops =
+    fn bump_left(inout self) = &self.left.bump(1)
+    let zero = Pair { left: Counter { n: 0 }, right: Counter { n: 0 } }
+
+fn main() =
+  var p = Pair.zero
+  &p.bump_left()
+  &p.right.bump(p.left.get() + 2)
+  p
+|};
+  [%expect
+    {|
+    (fn Counter.bump (self/1 by/2)
+      (= self/1 (update self/1 n: (+ (. self/1 n) by/2))))
+    (fn Counter.get (self/1) (. self/1 n))
+    (fn Pair.bump_left (self/1)
+      (let $ref/2 (. self/1 left)
+        (let $result/3 (call Counter.bump &$ref/2 1)
+          (seq (= self/1 (update self/1 left: $ref/2)) $result/3))))
+    (fn Pair.zero () (record (left: (record (n: 0))) (right: (record (n: 0)))))
+    (fn main ()
+      (let p/1 Pair.zero
+        (seq (call Pair.bump_left &p/1)
+          (seq
+            (let $ref/2 (. p/1 right)
+              (let $arg/3 (+ (call Counter.get (. p/1 left)) 2)
+                (let $result/4 (call Counter.bump &$ref/2 $arg/3)
+                  (seq (= p/1 (update p/1 right: $ref/2)) $result/4))))
+            p/1))))
+    |}]
+
+let%expect_test "methods inside their own module" =
+  (* a method can call its type's other methods, and itself; another
+     type's method of the same name is a different one *)
+  run
+    {|
+type Light =
+  | Red
+  | Green
+  ops =
+    fn next(self) -> Light =
+      match self
+        Red => Green
+        Green => Red
+    fn after(self, n: Int) -> Light =
+      if n == 0 then self else self.next().after(n - 1)
+
+type Counter = { n: Int }
+  ops =
+    fn next(self) -> Counter = Counter { n: self.n + 1 }
+
+fn main() uses Io =
+  let c = Counter { n: 1 }
+  print([Light.Red.after(3), Light.Red.after(4)])
+  print(c.next().next())
+|};
+  [%expect {|
+    [Green, Red]
+    { n: 3 }
+    ()
+    |}]
+
+let%expect_test "an opaque type's API is its ops" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import users.{UserId}
+fn main() =
+  let id = UserId.new(42)
+  id.raw() + 1
+|}
+      );
+      ( "users.ren",
+        {|
+pub type UserId = opaque Int
+  ops =
+    pub fn new(n: Int) -> UserId = n
+    pub fn raw(self) -> Int = self
+|}
+      );
+    ];
+  [%expect {| 43 |}]
+
+let%expect_test "associated values are made in the order they need" =
+  (* `b` is made from `a`, so `a` is made first, though it's declared
+     after it; `c` uses `a` through a function *)
+  run
+    {|
+type Box = { n: Int }
+  ops =
+    let b = Box { n: Box.a.n + 1 }
+    let c = Box.twice()
+    fn twice() -> Box = Box { n: Box.a.n * 2 }
+    let a = Box { n: 10 }
+
+fn main() = [Box.a.n, Box.b.n, Box.c.n]
+|};
+  [%expect {| [10, 11, 20] |}]
+
+let%expect_test "a receiver whose type isn't known yet" =
+  (* step 2: the one type in scope with a `size` *)
+  types
+    {|
+type Bag = { items: Array<Int> }
+  ops =
+    fn size(self) -> Int = len(self.items)
+
+fn count(b) = b.size()
+fn main() = count(Bag { items: [1] })
+|};
+  [%expect
+    {|
+    type Bag
+      fn size(self) -> Int
+    fn count(b: Bag) -> Int
+    fn main() -> Int
+    |}]
+
+(* ---- calling: errors ---- *)
+
+let%expect_test "a method that changes its receiver needs `&`" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack.{Stack}
+fn main() =
+  var s = Stack.of([1])
+  s.push(1)
+|}
+      );
+      stack;
+    ];
+  [%expect
+    {|
+    error: `push` changes `s`, so the call needs `&`
+      ┌─ main.ren:4:3
+    4 │   s.push(1)
+      │   ^^^^^^^^^
+      = `&` shows at the call that `s` is changed
+      help: write `&s.push(1)`
+    |}]
+
+let%expect_test "`&` on a method that doesn't change its receiver" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack.{Stack}
+fn main() =
+  var s = Stack.of([1])
+  &s.size()
+|}
+      );
+      stack;
+    ];
+  [%expect
+    {|
+    error: `size` doesn't change `s`
+      ┌─ main.ren:4:3
+    4 │   &s.size()
+      │   ^^^^^^^^^
+      help: remove the `&`
+    |}]
+
+let%expect_test "`&` needs a receiver that can change" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack.{Stack}
+fn main() =
+  let s = Stack.of([1])
+  &s.push(1)
+|}
+      );
+      stack;
+    ];
+  run_files
+    [
+      ("main.ren", {|
+import stack.{Stack}
+fn main() = &Stack.of([1]).push(2)
+|});
+      stack;
+    ];
+  run_files
+    [
+      ("main.ren", {|
+import stack.{Stack}
+fn main() = &Stack.empty.push(2)
+|});
+      stack;
+    ];
+  [%expect
+    {|
+    error: `s` is a `let`, so it can't be changed
+      ┌─ main.ren:4:4
+    4 │   &s.push(1)
+      │    ^
+      help: declare it with `var` to change it
+    error: `&` needs something it can change, but `Stack.of([1])` is a new value
+      ┌─ main.ren:2:14
+    2 │ fn main() = &Stack.of([1]).push(2)
+      │              ^^^^^^^^^^^^^
+      help: put it in a `var` first
+    error: `Stack.empty` is an associated value, so it can't be changed
+      ┌─ main.ren:2:14
+    2 │ fn main() = &Stack.empty.push(2)
+      │              ^^^^^^^^^^^
+      = an associated value is made once, and never changes
+      help: copy it into a `var`, and change the copy
+    |}]
+
+let%expect_test "a changed receiver can't be another argument" =
+  run
+    {|
+type Bag = { items: Array<Int> }
+  ops =
+    fn add(inout self, other: Bag) = self.items = other.items
+
+fn main() =
+  var b = Bag { items: [1] }
+  &b.add(Bag { items: [b.items[0] + 1] })
+  &b.add(b)
+|};
+  [%expect
+    {|
+    error: this call changes `b`, so no other argument can use it
+      ┌─ test.ren:8:10
+    8 │   &b.add(b)
+      │          ^
+      │    - passed with `&` here
+      = an argument passed with `&` has to be the only way the call can reach that value
+      help: copy it with `let` first if the call should see the value `b` had before
+    |}]
+
+let%expect_test "another module's private method" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack.{Stack}
+fn main() =
+  var s = Stack.of([1])
+  &s.grow()
+|}
+      );
+      stack;
+    ];
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack.{Stack}
+fn main() =
+  var s = Stack.of([1])
+  Stack.grow(&s)
+|}
+      );
+      stack;
+    ];
+  [%expect
+    {|
+    error: `Stack<Int>` has no public `grow`
+      ┌─ main.ren:4:6
+    4 │   &s.grow()
+      │      ^^^^
+      help: if it's defined in `stack`, mark it `pub`
+    error: `Stack` has no public `grow`
+      ┌─ main.ren:4:9
+    4 │   Stack.grow(&s)
+      │         ^^^^
+      help: if it's defined in `stack`, mark it `pub`
+    |}]
+
+let%expect_test "an associated function isn't a method" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack.{Stack}
+fn main() =
+  let s = Stack.of([1])
+  s.of([1])
+  s.empty()
+|}
+      );
+      stack;
+    ];
+  [%expect
+    {|
+    error: `of` isn't a method (it has no `self`)
+      ┌─ main.ren:4:5
+    4 │   s.of([1])
+      │     ^^
+      help: write `Stack.of([1])`
+
+    error: `empty` isn't a method (it's an associated value)
+      ┌─ main.ren:5:5
+    5 │   s.empty()
+      │     ^^^^^
+      help: write `Stack.empty`
+    |}]
+
+let%expect_test "a method has to be called" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import stack.{Stack}
+fn main() =
+  let s = Stack.of([1])
+  let f = s.peek
+  let g = s.of
+  1
+|}
+      );
+      stack;
+    ];
+  [%expect
+    {|
+    error: `peek` is a method, so it has to be called
+      ┌─ main.ren:4:13
+    4 │   let f = s.peek
+      │             ^^^^
+      help: write `s.peek()`, or use `Stack.peek` as a function
+
+    error: `of` is an associated function, not a field
+      ┌─ main.ren:5:13
+    5 │   let g = s.of
+      │             ^^
+      help: write `Stack.of`
+    |}]
+
+let%expect_test "a type without the method" =
+  run
+    {|
+type Bag = { items: Array<Int> }
+  ops =
+    fn size(self) -> Int = len(self.items)
+
+type Empty = { n: Int }
+
+fn main() =
+  let b = Bag { items: [] }
+  let e = Empty { n: 0 }
+  [b.count(), e.count(), [1].count()]
+|};
+  run
+    {|
+type Bag = { items: Array<Int> }
+  ops =
+    fn size(self) -> Int = len(self.items)
+
+fn main() = [Bag.count(Bag { items: [] }), Bag.items]
+|};
+  [%expect
+    {|
+    error: `Bag` has no method named `count`
+       ┌─ test.ren:10:6
+    10 │   [b.count(), e.count(), [1].count()]
+       │      ^^^^^
+       help: its methods: `size`
+
+    error: `Empty` has no method named `count`
+       ┌─ test.ren:10:17
+    10 │   [b.count(), e.count(), [1].count()]
+       │                 ^^^^^
+       help: declare it in `Empty`'s `ops` block, with `self` first
+
+    error: `Array<Int>` has no method named `count`
+       ┌─ test.ren:10:30
+    10 │   [b.count(), e.count(), [1].count()]
+       │                              ^^^^^
+    error: `Bag` has no `ops` item named `count`
+      ┌─ test.ren:5:18
+    5 │ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
+      │                  ^^^^^
+      help: its `ops` items: `size`
+
+    error: `Bag` has no `ops` item named `items`
+      ┌─ test.ren:5:48
+    5 │ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
+      │                                                ^^^^^
+      help: `items` is a field, so it's read from a value, like `x.items`
+    |}]
+
+let%expect_test "a receiver that could be several types" =
+  types
+    {|
+type Bag = { items: Array<Int> }
+  ops =
+    fn size(self) -> Int = len(self.items)
+
+type Box = { n: Int }
+  ops =
+    fn size(self) -> Int = 1
+
+fn count(b) = b.size()
+fn main() = count(Bag { items: [1] })
+|};
+  [%expect
+    {|
+    error: can't tell which type `b` is
+      ┌─ test.ren:9:15
+    9 │ fn count(b) = b.size()
+      │               ^
+      = `Bag` and `Box` each have a `size`
+      = a method is found through its receiver's type, which has to be known where it's called
+      help: annotate `b` where it's defined, like `b: Bag`
+    |}]
+
+let%expect_test "an associated value uses nothing" =
+  types
+    {|
+type Log = { lines: Array<Int> }
+  ops =
+    let noisy = Log.make()
+    fn make() -> Log =
+      print(1)
+      Log { lines: [] }
+
+fn main() = Log.noisy
+|};
+  [%expect
+    {|
+    error: the associated value `Log.noisy` uses `Io`
+      ┌─ test.ren:3:9
+    3 │     let noisy = Log.make()
+      │         ^^^^^
+      │                 ---------- this call uses `Io`
+      = an associated value is made once, when the program starts, so it can't use a dependency
+      help: make it an associated function, `fn noisy() uses Io = ...`
+    |}]
+
+let%expect_test "an associated value can't need itself" =
+  types
+    {|
+type Box = { n: Int }
+  ops =
+    let a = Box { n: Box.b.n }
+    let b = Box.make()
+    fn make() -> Box = Box.a
+    let c = Box { n: Box.c.n }
+
+fn main() = Box.a
+|};
+  [%expect
+    {|
+    error: `Box.a` is made from itself: Box.a → Box.b → Box.make → Box.a
+      ┌─ test.ren:3:9
+    3 │     let a = Box { n: Box.b.n }
+      │         ^
+      = an associated value is made once, when the program starts, so it can't need itself to be made
+      help: make one of them without the other
+
+    error: `Box.c` is made from itself: Box.c → Box.c
+      ┌─ test.ren:6:9
+    6 │     let c = Box { n: Box.c.n }
+      │         ^
+      = an associated value is made once, when the program starts, so it can't need itself to be made
+      help: make it without using itself
+    |}]
+
+let%expect_test "an item written after its type parses as one name" =
+  ast {|
+fn main() = stack.Stack.of(Stack.empty).size()
+|};
+  [%expect {| (fn main () (call (. (call stack.Stack.of Stack.empty) size))) |}]
+
+let%expect_test "a call that changes its receiver is a value like any call" =
+  run
+    {|
+type Counter = { n: Int }
+  ops =
+    fn take(inout self) -> Int =
+      self.n += 1
+      self.n
+
+fn twice(x: Int) = x * 2
+
+fn main() =
+  var c = Counter { n: 1 }
+  let xs = [&c.take(), twice(&c.take())]
+  [xs[0], xs[1], c.n]
+|};
+  [%expect {| [2, 6, 3] |}]

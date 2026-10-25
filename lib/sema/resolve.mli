@@ -14,7 +14,12 @@ type t = {
   types : Iface.type_decl list;
       (** the types the module declares, in the order it declares them *)
   calls : (string * Path.t list) list;
-      (** each function, and the top-level functions its body uses *)
+      (** each function, and the top-level functions its body uses: the ops
+          items written after their type, `Stack.of`, included *)
+  methods : (string * Path.t list) list;
+      (** each function, and the methods of the module's own types it may call
+          with a dot: for `s.push(1)`, every one named `push`, since which it is
+          is found by inference *)
   scope : (string * Path.t) list;
       (** the types written bare in the module, by name, sorted: the prelude's,
           those imported by name and the module's own *)
@@ -27,6 +32,11 @@ type t = {
    it's in scope, `alias.T` if its module is imported, and otherwise in
    full, `billing/invoice.Invoice`. *)
 val type_name : t -> Path.t -> string
+
+(* How the module writes the top-level function or value [p]: bare if
+   it's its own or the prelude's, `alias.f` if not, and an ops item after
+   its type, as [type_name] writes that: `Stack.of`. *)
+val value_name : t -> Path.t -> string
 
 (* Whether the module can write the type [p] at all: it's in scope, or its
    module is imported. *)

@@ -22,6 +22,12 @@ type tyname = {
   tid : ident;  (** the type's own name *)
 }
 
+(* A name used as a value, as the parser read it: a bare name, `x` or
+   `double`, or an item of a type's `ops` block written after its type,
+   `Stack.of` or `stack.Stack.of`. Resolve finds the type through scope,
+   and the item in its declaration. *)
+type vname = Bare of string | Item of tyname * ident
+
 (* A type as written: `Int`, `Option<Int>`, `fn(Int) -> Bool`. *)
 type 't ty =
   | TyName of 't * 't ty list  (** [Int], [Option<Int>] *)
@@ -78,7 +84,9 @@ and ('v, 'b, 't) expr_kind =
   | Int of int
   | Bool of bool
   | Unit  (** [()] *)
-  | Var of 'v  (** a local variable, or a top-level function *)
+  | Var of 'v
+      (** a local variable, a top-level function, or an ops item written after
+          its type, [Stack.of] *)
   | Unop of unop * ('v, 'b, 't) expr
   | Binop of binop * ('v, 'b, 't) expr * ('v, 'b, 't) expr
   | If of ('v, 'b, 't) expr * ('v, 'b, 't) expr * ('v, 'b, 't) expr option
@@ -99,7 +107,8 @@ and ('v, 'b, 't) expr_kind =
   | Index of ('v, 'b, 't) expr * ('v, 'b, 't) expr  (** [xs[i]] *)
   | Ref of ('v, 'b, 't) expr
       (** [&scores]: an argument the call changes, or the array a [for] loop
-          changes *)
+          changes; or, before a method call, [&s.push(1)], the receiver the call
+          changes (see [changed_receiver]) *)
   | Assign of {
       target : ('v, 'b, 't) expr;
       op : binop option;
@@ -211,6 +220,16 @@ let functions (prog : ('v, 'b, 't) program) =
       | Import _ -> [])
     prog
 
+(* `&s.push(1)`: a method call whose `&` marks the receiver it changes,
+   as opposed to `&xs`, a place passed `inout`. A call's result is never a
+   place, so the two can't be confused (module-build.md, "Methods and
+   operators live on the type"); mut.ml makes sure the call is one with a
+   receiver, `x.m(...)`. *)
+let changed_receiver (e : ('v, 'b, 't) expr) =
+  match e.kind with
+  | Ref ({ kind = Call _; _ } as call) -> Some call
+  | _ -> None
+
 (* An ops item's name as it's written: `push` for `Stack.push`. *)
 let short_name name =
   match String.rindex_opt name '.' with
@@ -244,7 +263,12 @@ and bound =
 (* A name used as a value. *)
 type name =
   | Local of binder
-  | Global of Path.t  (** a top-level function *)
+  | Global of Path.t
+      (** a top-level function, or a function of a type's `ops` block:
+          [Stack.push] *)
+  | Global_value of Path.t
+      (** an associated value, [Stack.empty]: made once, when the program starts
+      *)
   | Intrinsic of string  (** a function built into the compiler: [print] *)
 
 (* A type's name: a declared type, or the [i]th type parameter in scope
@@ -257,17 +281,17 @@ module Parsed = struct
   type nonrec ctor_ref = tyname ctor_ref
   type nonrec pattern = (ident, tyname) pattern
   type nonrec param = (ident, tyname) param
-  type nonrec expr = (string, ident, tyname) expr
-  type nonrec expr_kind = (string, ident, tyname) expr_kind
-  type nonrec arm = (string, ident, tyname) arm
-  type nonrec stmt = (string, ident, tyname) stmt
+  type nonrec expr = (vname, ident, tyname) expr
+  type nonrec expr_kind = (vname, ident, tyname) expr_kind
+  type nonrec arm = (vname, ident, tyname) arm
+  type nonrec stmt = (vname, ident, tyname) stmt
   type nonrec field = tyname field
   type nonrec ctor = tyname ctor
-  type nonrec op = (string, ident, tyname) op
-  type nonrec type_def = (string, ident, tyname) type_def
-  type nonrec fn_def = (string, ident, tyname) fn_def
-  type nonrec item = (string, ident, tyname) item
-  type nonrec program = (string, ident, tyname) program
+  type nonrec op = (vname, ident, tyname) op
+  type nonrec type_def = (vname, ident, tyname) type_def
+  type nonrec fn_def = (vname, ident, tyname) fn_def
+  type nonrec item = (vname, ident, tyname) item
+  type nonrec program = (vname, ident, tyname) program
 end
 
 module Resolved = struct
@@ -343,7 +367,8 @@ let rec show_expr (e : expr) =
   | Int n -> string_of_int n
   | Bool b -> string_of_bool b
   | Unit -> "()"
-  | Var x -> x
+  | Var (Bare x) -> x
+  | Var (Item (t, f)) -> show_tyname t ^ "." ^ f.name
   | Unop (Neg, a) -> parens [ "neg"; show_expr a ]
   | Binop (op, a, b) -> parens [ binop_to_string op; show_expr a; show_expr b ]
   | If (c, t, Some f) -> parens [ "if"; show_expr c; show_expr t; show_expr f ]
@@ -450,3 +475,71 @@ let show_item : item -> string = function
   | Fn f -> show_fn f
   | Type td -> show_type_def td
   | Import i -> show_import i
+
+(* ---- code as it's written, for messages ----
+
+   A help that says "write `&s.push(1)`" shows code the way it's written,
+   not as an s-expression. [source] prints a resolved expression back as
+   source, for the kinds of expression a help needs: names, literals,
+   operators, calls, fields, indices, constructors and records. Anything
+   else, like a `match` or a block, isn't worth printing in one line, and
+   gives [None], so the message can say "this" instead. [type_name] and
+   [value_name] say how the module writes a type's name and a top-level
+   name (Resolve.type_name, Resolve.value_name). *)
+
+(* How tightly an operator binds: an operand that binds more loosely needs
+   parentheses. *)
+let precedence = function
+  | Eq | Neq | Lt | Le | Gt | Ge -> 1
+  | Add | Sub -> 2
+  | Mul | Div | Mod -> 3
+
+let source ~type_name ~value_name (e : Resolved.expr) =
+  (* [exception Exit] is raised by anything that isn't printed, and caught
+     once, at the top *)
+  let rec go (e : Resolved.expr) =
+    match e.kind with
+    | Int n -> string_of_int n
+    | Bool b -> string_of_bool b
+    | Unit -> "()"
+    | Var (Local b) -> b.ident.name
+    | Var (Global p | Global_value p) -> value_name p
+    | Var (Intrinsic x) -> x
+    | Unop (Neg, a) -> "-" ^ operand 4 a
+    | Binop (op, a, b) ->
+        let n = precedence op in
+        operand n a ^ " " ^ binop_to_string op ^ " " ^ operand (n + 1) b
+    | Call (f, args) -> go f ^ "(" ^ list args ^ ")"
+    | Field (r, f) -> go r ^ "." ^ f.name
+    | Index (a, i) -> go a ^ "[" ^ go i ^ "]"
+    | Array xs -> "[" ^ list xs ^ "]"
+    | Ref a -> "&" ^ go a
+    | Con (c, []) -> ctor c
+    | Con (c, args) ->
+        let arg = function
+          | Some (l : ident), a -> l.name ^ ": " ^ go a
+          | None, a -> go a
+        in
+        ctor c ^ "(" ^ String.concat ", " (List.map arg args) ^ ")"
+    | Record (t, fields) ->
+        let t =
+          match t with
+          | Some { tref = Named p; _ } -> type_name p ^ " "
+          | Some { tref = Param _; _ } | None -> ""
+        in
+        t ^ "{ "
+        ^ String.concat ", "
+            (List.map (fun ((f : ident), v) -> f.name ^ ": " ^ go v) fields)
+        ^ " }"
+    | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ -> raise Exit
+  and operand n (a : Resolved.expr) =
+    match a.kind with
+    | Binop (op, _, _) when precedence op < n -> "(" ^ go a ^ ")"
+    | _ -> go a
+  and list xs = String.concat ", " (List.map go xs)
+  and ctor (c : Resolved.ctor_ref) =
+    match c.qual with
+    | Some { tref = Named p; _ } -> type_name p ^ "." ^ c.name.name
+    | Some { tref = Param _; _ } | None -> c.name.name
+  in
+  try Some (go e) with Exit -> None
