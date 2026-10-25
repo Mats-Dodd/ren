@@ -56,7 +56,8 @@ pub dep Clock =
 Calling an operation adds the dependency to the function's `uses`:
 
 ```ren
-pub fn credit(inout self, m: Money, what: Movement) uses Clock =
+pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) uses Clock =
+  if self.frozen then fail Frozen(self.id)
   self.balance = self.balance.plus(m)
   &self.statement.push(Entry { at: Clock.now(), what })
 ```
@@ -155,14 +156,15 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.
 - `Time`, `Instant` and `Duration` are opaque, with methods only until
-  operators arrive (stage 9).
+  operators arrive (stage 10).
 - For now the real `instant` reads the same wall clock as `now`, which the
   system can set back (NTP, a manual change). A monotonic source needs a
   primitive OCaml's standard library doesn't have; it comes with the
   runtime's own system calls (stage 8, `Os`).
 - These six are the prelude's, named in every module, so a program's own
   `type Time` or `dep Clock` is an error: it chooses another name.
-- `Fs`, `Net` and `Os` come in stage 8, with strings ([runtime-io.md](runtime-io.md)).
+- `Fs` and `Os` come in stage 8, with strings, and `Net` with `Async` in
+  stage 9 ([runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.
@@ -191,11 +193,16 @@ test "a deposit is stamped with the time" =
   let a = &acme.open()
   TestClock.advance(Duration.minutes(5))
   try &acme.deposit(a, Money.dollars(10))
-  assert acme.statement(a)[0].at == Time.epoch.plus(Duration.minutes(5))
+  let s = try acme.statement(a)
+  assert s[0].at == Time.epoch.plus(Duration.minutes(5))
 
-test "main prints the balances" =
+test "main prints the balances, and every refusal" =
   try main()
-  assert TestConsole.output() == ["10000", "0", "45000"]
+  assert TestConsole.output() == [
+    "7000", "5000",
+    "Err(Short(2, 45000))", "5000", "true",
+    ...
+  ]
 ```
 
 - Tests sit next to the code, so they can reach private functions. `ren run`
@@ -238,27 +245,50 @@ first place they differ. Any other `assert` shows its source. A failed
 ### `ren test`
 
 ```
-$ ren test bank/
+$ ren test bank
 bank.ren
   ✓ a deposit is stamped with the time
+  ✓ a transfer moves money, and stamps both sides
   ✗ an overdraft is refused, and nothing moves
+  ✓ a frozen account takes nothing in
+  ✓ an account that doesn't exist is refused
+  ✓ only a positive amount moves
+  ✓ an account can't send to itself
+  ✗ a batch that fails moves nothing
 
-──── an overdraft is refused, and nothing moves ── bank.ren:14
-   │
-14 │   assert acme == before
-   │          ^^^^^^^^^^^^^^
-   │
-   left:  Bank { accounts: [Account { id: AccountId(1), balance: Money(-100), ... }], next: 3 }
-   right: Bank { accounts: [Account { id: AccountId(1), balance: Money(0), ... }], next: 3 }
-                                                                  ^ differs here
+clocks.ren
+  frozen
+    ✓ now never goes back
+    ✓ an instant never goes back
+    ✓ sleeping doesn't move it back
+  test clock
+    ✓ now never goes back
+    ✓ an instant never goes back
+    ✓ sleeping doesn't move it back
 
-   seed 2871 · rerun: ren test bank/ --only "an overdraft" --seed 2871
+main.ren
+  ✗ main prints the balances, and every refusal
 
-1 passed, 1 failed in 5ms
+──── an overdraft is refused, and nothing moves ── bank.ren:115
+    │
+115 │   assert acme == before
+    │          ^^^^^^^^^^^^^^
+    │
+    left:  Bank { accounts: [Account { id: AccountId(1), balance: Money(-100), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }, Entry { at: Time(0), what: Sent(Money(1100), AccountId(2)) }] }, Account { id: AccountId(2), balance: Money(1100), frozen: false, statement: [Entry { at: Time(0), what: Received(Money(1100), AccountId(1)) }] }], next: 3 }
+    right: Bank { accounts: [Account { id: AccountId(1), balance: Money(1000), frozen: false, statement: [Entry { at: Time(0), what: Deposited(Money(1000)) }] }, Account { id: AccountId(2), balance: Money(0), frozen: false, statement: [] }], next: 3 }
+                                                                        ^ differs here
+
+    seed 3529 · rerun: ren test bank --only "an overdraft" --seed 3529
+
+...
+
+12 passed, 3 failed
 ```
 
 - One line per test, then each failure: where, the two sides, the seed, the
-  rerun command, and what it printed to `Console`.
+  rerun command, and what it printed to `Console`. Above, `covers` was
+  broken to check only that the balance isn't negative; `examples.t` has
+  all of it, with the batch's failure and `main`'s.
 - `--only <text>` runs the tests whose name contains it (`--exact`: whose
   name it is, or whose group run it labels). `--seed N` sets
   every test's seed. `--list` lists tests, and flags the ones that use a
@@ -421,10 +451,22 @@ stage, or settled something the plan left open:
   test is.
 - **`ren run` shows a failed `assert a == b`'s sides as `ren test`
   does,** through their types, `Money(-100)`.
+- **A failure shows both sides in full,** where the settled DX elided
+  what they share, `Account { ..., balance: Money(-100), ... }`. The
+  `ren test` example above is the bank's real output, so its lines are
+  long.
+- **The settled test of a deposit lacked a `try`:** `acme.statement(a)`
+  fails with `NoSuchAccount`, so the test reads it into a `let` with
+  `try` first.
+- **A test of a refusal looks at it with a `match`,** since `Err(...)`
+  can't be written (an error isn't a value): `match attempt
+  &acme.transfer(t)` with an arm for the refusal it expects and `_ =>
+  assert false`. `attempt` takes what follows it whole, so `attempt f()
+  == x` would be `attempt (f() == x)`.
 
 ## Later
 
-- `outer` and forwarding handlers, `Async`, the journal (stage 9).
+- `outer` and forwarding handlers, `Async`, `Net`, the journal (stage 9).
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.

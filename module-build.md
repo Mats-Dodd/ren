@@ -4,7 +4,7 @@
 
 This doc covers how Ren code is organized into files and packages, how names are found, and how `ren build` turns all of it into binaries. The two halves depend on each other. The module rules are what make the build fast and trustworthy, and the build is the reason the module rules look the way they do.
 
-> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and methods, associated functions and associated values declared under their type run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Structural error tags, named error sets imported like types, and the "two shapes" error run too, in stage 6; [examples/bank](examples/bank) uses them. Operators, dependency types, packages and the build are still planned; see [Roadmap](#roadmap).
+> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and methods, associated functions and associated values declared under their type run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Structural error tags, named error sets imported like types, and the "two shapes" error run too, in stage 6; [examples/bank](examples/bank) uses them. Dependencies declared with `dep`, imported like types, and `pub group`s imported to run their tests run too, in stage 7. Operators, packages and the build are still planned; see [Roadmap](#roadmap).
 
 ---
 
@@ -158,11 +158,11 @@ let t = Stack.of([7, 8, 9])       // an associated function
 
 You can't add methods to a type you don't own. Write a function in your own module (`mylib.chunks(xs)`), or wrap the type in an `opaque` type and give that type its own methods.
 
-Operators (written `add(a, b) => ...`, arriving in stage 9) are public whenever their type is. Methods, associated functions and associated values are private unless they're marked `pub`, like everything else, and the `pub` ones are listed under their type in the module's interface.
+Operators (written `add(a, b) => ...`, arriving in stage 10) are public whenever their type is. Methods, associated functions and associated values are private unless they're marked `pub`, like everything else, and the `pub` ones are listed under their type in the module's interface.
 
 ### Dependencies are types
 
-`import shop/db.{Users}` followed by `uses Users` gives you `Users.get(id)`. `Users` is found through scope, and `get` through the type. A dependency's operations are its fields, so they're found the same way record fields are.
+`import shop/db.{Users}` followed by `uses Users` gives you `Users.get(id)`. `Users` is found through scope, and `get` through the `dep` declaration, which lists its operations and then its members, so `Users.get` and `Users.none()` are found the same way a type's members are. An operation and a member can't share a name, so `Users.x` means one thing. A handler is imported like a function, and a `pub group` like one too, to run its tests: `group "s3" = blob_conforms(s3.client(bucket))`.
 
 ### Error tags have no home
 
@@ -374,11 +374,10 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 | When | What |
 |---|---|
-| **Today** (stages 5a, 5b, 6) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, and the "two shapes" error. Every compiler pass is a pure function of its inputs |
+| **Today** (stages 5a, 5b, 6, 7) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, the "two shapes" error, dependency types imported like other types, and public groups imported to run their tests. Every compiler pass is a pure function of its inputs |
 | **Stage 5b, left over** | `dbg` |
-| **Stage 7** | Dependency types imported like other types |
-| **Stage 10** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
-| **Stage 14** | Cached simulation-test results |
+| **Stage 11** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
+| **Stage 15** | Cached simulation-test results |
 | **After 1.0** | `build.ren`, sandboxed tools, remote cache and execution |
 
 ---

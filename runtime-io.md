@@ -4,7 +4,7 @@
 
 This doc covers how Ren code reaches the operating system: the shape of an I/O call, who owns a buffer while the kernel uses it, how cancellation finishes, how calls are batched, and how all of it sits under narrow dependencies like `Fs` and `Net`. What the standard library builds on top is in [stdlib.md](stdlib.md).
 
-> **Status:** design. The interpreter does no I/O through this model yet. Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
+> **Status:** design. The interpreter does no I/O through this model yet. `Clock`, `Random` and `Console` are dependencies today (stage 7, [deps.md](deps.md)), whose real implementations call OCaml's standard library and `Unix` directly. Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
 
 ---
 
@@ -16,7 +16,7 @@ This doc covers how Ren code reaches the operating system: the shape of an I/O c
  cancelling waits                a cancelled read returns only once the kernel lets go
  one submission, many calls      the scheduler batches every fiber's pending calls
  a call is a value               submission, completion and journal entry have one shape
- narrow capabilities, one ring   Fs, Net, Clock, Random, Os in signatures; one queue underneath
+ narrow capabilities, one ring   Fs, Net, Clock, Random, Console, Os in signatures; one queue underneath
 ```
 
 ---
@@ -56,7 +56,7 @@ for chunk in Net.chunks(conn)              // chunk: Bytes from the pool
 // last reference dropped → the buffer goes back to the pool
 ```
 
-Ten thousand idle connections each holding a 64 KB receive buffer waste 640 MB. With io_uring's provided buffers, the kernel takes a buffer from the shared pool only when data actually arrives. Reference counting returns it with no lease protocol to get wrong: when the count reaches zero, the buffer goes back to the ring. Before stage 11, leased buffers are copied into ordinary `Bytes`.
+Ten thousand idle connections each holding a 64 KB receive buffer waste 640 MB. With io_uring's provided buffers, the kernel takes a buffer from the shared pool only when data actually arrives. Reference counting returns it with no lease protocol to get wrong: when the count reaches zero, the buffer goes back to the ring. Before stage 12, leased buffers are copied into ordinary `Bytes`.
 
 Registered buffers, pinned once so each call skips setup, fit code without `Alloc`. A hot path that uses only pooled buffers needs neither `Alloc` nor per-call kernel work.
 
@@ -64,7 +64,7 @@ Registered buffers, pinned once so each call skips setup, fit code without `Allo
 
 Rust's async I/O lends out `&mut buf`, and dropping a future cancels it at once. With a completion API the kernel may still be writing into a buffer that has been freed, which is why tokio-uring needs a different, owned-buffer API.
 
-Ren avoids the problem by rule (*proposed*, stage 8):
+Ren avoids the problem by rule (*proposed*, stage 9):
 
 > A call cancelled while the kernel holds its buffer returns only after the kernel confirms it has let go.
 
@@ -103,8 +103,8 @@ try Fs.write_then_sync(file, offset, bytes)
 ## Part 2: Capabilities over one ring
 
 ```
- user code sees      Fs    Net    Clock    Random    Os    Alloc    Async
-                       \     |      |        |       /
+ user code sees      Fs    Net    Clock    Random    Console    Os    Alloc    Async
+                       \     |      |        |         |       /
  runtime handler        ring: io_uring · epoll · kqueue · IOCP · sim
                         requires Unsafe; installed once, before main
 ```
@@ -115,15 +115,16 @@ try Fs.write_then_sync(file, offset, bytes)
 | `Net` | TCP, UDP and Unix sockets; DNS is a `std` module built on `Net` |
 | `Clock` | `now` (wall clock), `instant` (monotonic), `sleep`, timers |
 | `Random` | seeds for hashing and the cryptographic random number generator |
+| `Console` | writing a line to standard output, which `print` goes through |
 | `Os` | environment, arguments, signals, exit, spawning processes |
 
-These replace the README's single `Io`. Each is an ordinary dependency type, so `mem_fs`, `clock.frozen` and `sim.net` implement them like any user handler would. Finer capabilities (`Fs.read` without `Fs.write`, a directory, an address) can split off later without changing this model.
+There's no single `Io`. Each is an ordinary dependency type, declared with `dep`, so `mem_fs`, `Clock.frozen` and `sim.net` implement them like any user handler would. Finer capabilities (`Fs.read` without `Fs.write`, a directory, an address) can split off later without changing this model.
 
 Why not one capability? io_uring itself shows the cost. It had a run of kernel vulnerabilities, and several large operators (Google among them) turned it off, partly because one interface that can do everything is impossible to audit. A function that says `uses Io` tells a reader almost nothing. `uses Fs` tells them it never opens a socket.
 
 ### Journal entries
 
-A journal entry has the shape of a submission and its completion (*proposed*, stage 8):
+A journal entry has the shape of a submission and its completion (*proposed*, stage 9):
 
 ```
 { task: 17, seq: 412, dep: Fs,  op: read,   args: (file: 7, len: 4096), result: Ok(4096 bytes) }
@@ -155,8 +156,8 @@ This is the format question from the README's roadmap. Taking the shape from the
 
 The standard library is written in Ren on top of a small set of primitives: submit an operation (read, write, open, accept, connect, timer, cancel), wait for completions, get random bytes, plus the basics of `Str` and `Bytes`.
 
-- **To stage 9,** the primitives are OCaml, built on Eio, so the interpreter already uses the right model.
-- **From stage 10,** the primitives and the rest of the runtime (fibers, the scheduler, reference counting, the allocator, the journal) are C, emitted alongside the compiler's output.
+- **To stage 10,** the primitives are OCaml, built on Eio, so the interpreter already uses the right model.
+- **From stage 11,** the primitives and the rest of the runtime (fibers, the scheduler, reference counting, the allocator, the journal) are C, emitted alongside the compiler's output.
 
 Everything above the primitives carries over unchanged from the interpreter to native code. Only the primitives are rewritten.
 
@@ -174,12 +175,13 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 | When | What |
 |---|---|
-| **Stage 7** | `Fs`, `Net`, `Clock`, `Random`, `Os` as dependency types, with real implementations on Eio and in-memory ones |
-| **Stage 8** | fibers and `Async` on the ring; batched submission; cancellation that waits; the journal entry format; linked operations |
-| **Stage 10** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls |
-| **Stage 11** | leased buffers returned to the pool when their count reaches zero |
-| **Stage 12** | registered buffers for code without `Alloc` |
-| **Stage 14** | the ring replaced wholesale by the simulator; replay from journal entries |
+| **Stage 7** | `Clock`, `Random` and `Console` as dependency types, with real implementations and test ones (done) |
+| **Stage 8** | `Fs` and `Os` as dependency types, with real implementations on Eio and in-memory ones; a monotonic `Clock.instant` |
+| **Stage 9** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; the journal entry format; linked operations |
+| **Stage 11** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls |
+| **Stage 12** | leased buffers returned to the pool when their count reaches zero |
+| **Stage 13** | registered buffers for code without `Alloc` |
+| **Stage 15** | the ring replaced wholesale by the simulator; replay from journal entries |
 | **After 1.0** | kTLS; finer capabilities; WASI |
 
 ---

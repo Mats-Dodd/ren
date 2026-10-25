@@ -177,7 +177,8 @@ pub fn transfer(inout self, t: Transfer) ! TransferError =
 ```
 
 The copy is visible, and you choose to pay for it. A `with transaction`
-handler (stage 7 or 8) can do the same for you later.
+handler can do the same for you later, once a handler can reach the
+implementation installed outside it, `outer` (stage 9).
 
 ## Nothing is dropped
 
@@ -195,7 +196,9 @@ error: Frozen(3)
 
 ## Later
 
-- `..e` on a closure that's stored (stage 7, with dependency types). A
-  closure passed to a transparent parameter already passes its errors to
-  the call: `try ts.map(fn(t) => try validate(t))`.
-- `with` and handlers (stages 7 and 8).
+- ~~`..e` on a closure that's stored~~ came in stage 7, with dependency
+  types: a stored closure writes `fn() ! ..e uses ..d`
+  ([deps.md](deps.md)). A closure passed to a transparent parameter
+  passes its errors to the call: `try ts.map(fn(t) => try validate(t))`.
+- ~~`with` and handlers~~ came in stage 7 too. A handler forwarding to
+  the next implementation out, `outer`, comes in stage 9.

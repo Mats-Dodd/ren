@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4, 5a, 5b and 6 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not` (see [examples/bank](examples/bank)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
+> **Status:** early. Stages 1–4, 5a, 5b, 6 and 7 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
 
 ---
 
@@ -215,15 +215,12 @@ Bugs aren't errors. Out-of-bounds access, a failed `assert`, or `unwrap` on `Non
 
 ### 5. `uses`: dependencies are types
 
-A dependency is an ordinary record of functions. Listing it in `uses` makes it available to the function.
+A dependency is declared with `dep`: its operations first, then its members, as a sum type lists its variants first. Calling an operation, `Users.get(id)`, calls whatever implementation is installed, and adds `Users` to the function's `uses`.
 
 ```ren
-type Users = {
-  get:  fn(id: UserId) -> User?,
-  save: fn(u: User) ! Conflict,
-}
-
-type Clock = { now: fn() -> Time, sleep: fn(d: Duration) }
+pub dep Users =
+  get:  fn(id: UserId) -> Option<User>
+  save: fn(u: User) ! Conflict
 
 pub fn touch(id: UserId) ! NotFound | Conflict
     uses Users, Clock =
@@ -232,7 +229,11 @@ pub fn touch(id: UserId) ! NotFound | Conflict
   try Users.save(u)
 ```
 
-The built-in dependencies are types too: `Clock`, `Random`, `Console`, `Net`, `Alloc`, `Async`, and `Unsafe`. Even `print` goes through one: it's `Console.write(show(x))`.
+A dependency call takes no marker: the capitalised `Users.` already shows it. Its errors are marked as any call's, `try Users.save(u)`. A private function's `uses` is inferred, and a public one's is checked against its body, with the error pointing at the call that uses what the signature leaves out. `Users.x` means exactly one thing: an operation and a member can't share a name.
+
+The built-in dependencies are `Clock`, `Random` and `Console` today, then `Fs` and `Os` (stage 8), `Net` and `Async` (stage 9), `Alloc` (stage 13) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`.
+
+The runtime installs exactly the built-ins `main` lists in its `uses`, outermost. Any other dependency has to be installed inside `main`, and leaving it out is a compile error, `nothing installs Users before main`, with a help that says how.
 
 ```ren
 pub fn checksum(data: Bytes) -> u32 =          // no `uses`: pure, cannot allocate
@@ -242,32 +243,39 @@ pub fn checksum(data: Bytes) -> u32 =          // no `uses`: pure, cannot alloca
   h
 ```
 
+The whole design, and why, is in [deps.md](deps.md).
+
 ### 6. `with`: installing implementations
 
-```ren
-let frozen = Clock { now: fn() => Time.epoch, sleep: fn(_) => () }
+An implementation is a value of the dependency's type. A stateless one is a record of its operations, and a dependency can offer one as a member:
 
+```ren
+pub dep Clock =
+  now:     fn() -> Time
+  instant: fn() -> Instant
+  sleep:   fn(d: Duration)
+
+  pub fn frozen(at: Time) -> Clock =
+    Clock { now: fn() => at, instant: fn() => Instant.zero, sleep: fn(_) => () }
+```
+
+`with` installs it around a body:
+
+```ren
 fn main() ! StartupError
     uses Os, Net, Alloc =
   let cfg = try Config.from_env()
-  with sql.pool(cfg.db_url), pg_users, clock.system, log.json in
+  with sql.pool(cfg.db_url), pg_users, log.json in
     http.serve(cfg.port, routes)
-
-test "touch updates last_seen" =
-  with mem_users([alice]), frozen in
-    try touch(alice.id)
-    assert Users.get(alice.id).unwrap().last_seen == Time.epoch
 ```
 
-Production wiring, test fakes, allocators, simulators, and tracers all use the same mechanism. Implementations in a `with` are listed from outermost to innermost, and order matters: in `with retry(3), transaction in`, the retry wraps the transaction.
+Production wiring, test fakes, allocators, simulators, and tracers all use the same mechanism. Items are listed from outermost to innermost, and the innermost implementation of a dependency wins. `with` removes what it installs from the body's `uses`, and adds what its items need.
 
-`with` has one definition:
+An item is either an **implementation**, or a **wrapper**: an ordinary function whose last parameter is the body.
 
 ```
-with a, b in body    ≡    a(fn() => b(fn() => body))
+with retry(3) in body    ≡    retry(3, fn() => body)
 ```
-
-An item is either a **wrapper**, an ordinary function that takes the body, or an **implementation**, which is shorthand for installing it:
 
 ```ren
 pub fn retry<T>(n: Int, body: fn() -> T) -> T   // a wrapper: calls body up to n times
@@ -275,20 +283,67 @@ pub fn retry<T>(n: Int, body: fn() -> T) -> T   // a wrapper: calls body up to n
 
 `retry` calls the body again from the top. It doesn't resume anything. It also repeats any dependency calls the body made before failing, so wrap only work that's safe to repeat.
 
-Dependencies are looked up when code runs, not when it's written. A function or closure whose type says `uses Users` gets whatever `Users` is installed where it's called, and the type checker makes sure one is. Tasks inherit their parent's dependencies. A closure that outlives its `with` is still safe: it never holds on to the old implementation.
+Dependencies are found when code runs, not when it's written. A function or closure whose type says `uses Users` gets whatever `Users` is installed where it's called, and the type checker makes sure one is. A closure that outlives its `with` is still safe: it never holds on to the old implementation.
 
-The one exception is a handler's own dependencies. These are fixed once, when the handler is installed. A `cached` installed outside `with frozen in` keeps using the real clock even when it's called from inside that block. A handler can only see handlers installed further out, so handlers can't call each other in a loop.
+The one exception is an implementation's own dependencies. **What an implementation needs is part of its type**, and is required at the `with` that installs it: a `Clock` whose `now` calls `Os` makes `with` that clock need `Os`, while the code inside sees only `Clock`. Its dependencies are fixed once, when it's installed, to whatever is installed further out. And **interfaces are exact**: an operation's implementation may fail with fewer errors than the interface declares, never more.
+
+#### Tests
+
+```ren
+test "a deposit is stamped with the time" =
+  var acme = Bank.empty
+  let a = &acme.open()
+  TestClock.advance(Duration.minutes(5))
+  try &acme.deposit(a, Money.dollars(10))
+  let s = try acme.statement(a)
+  assert s[0].at == Time.epoch.plus(Duration.minutes(5))
+```
+
+Tests sit next to the code they test, so they can reach private functions, and `ren run` ignores them. Every test gets test implementations of the built-ins without a `with`: a `Clock` stopped at `Time.epoch` until `TestClock.advance` moves it, a `Random` seeded from the test's name, and a `Console` that keeps what it's given, `TestConsole.output()`. So a test that uses no real dependency gives the same result on every run. A test asks for a real one in its `uses`, `test "the system clock moves" uses Clock =`, so going outside is visible. Any other dependency needs a `with`, and forgetting one is a compile error naming the test and the call that needs it.
+
+A group is a function over implementations, so one suite runs against every implementation of a dependency, each test with a fresh one:
+
+```ren
+pub group clock_conforms(c: Clock) with c =
+  test "now never goes back" =
+    let t = Clock.now()
+    assert not Clock.now().before(t)
+
+group "frozen" = clock_conforms(Clock.frozen(Time.epoch))
+group "test clock" = clock_conforms(test_clock(Time.epoch))
+```
+
+A failed `assert` is a panic: it's a bug, not an error. `assert a == b` shows both sides, with a marker under the first place they differ, and an opaque value as its type around its contents, `Money(-100)`. To check that something fails, keep it with `attempt`.
+
+`ren test` runs every module's tests in a folder: one line per test, then each failure with its source, both sides, its seed and the command that reruns it, and what it printed. `--only <text>` runs the tests whose name has it, `--seed N` sets every test's seed, `--list` lists them, saying which use a real dependency, and it exits with status 1 if any failed. [examples/bank](examples/bank) carries a suite like this.
 
 ### 7. `handler`: stateful implementations
 
-Stateless implementations are plain values, as in `frozen` above. An implementation needs a `handler` when it holds state or forwards calls to the next implementation out.
+Stateless implementations are plain values, like `Clock.frozen` above. An implementation needs a `handler` when it holds state:
 
 ```ren
 handler mem_users(init: List<User>) for Users =
   var table = init.index_by(.id)
   get(id) => table.get(id)
   save(u) => table[u.id] = u
+```
 
+A handler can implement several dependencies that share one state:
+
+```ren
+handler counting_rates(rate: Decimal) for Rates, RateCalls =
+  var calls = 0
+  usd_to(_) =>
+    calls += 1
+    rate
+  count() => calls
+```
+
+Calling `counting_rates(r)` describes a handler, a value of the dependency's type like any implementation, and each `with` creates a fresh instance with its own state: two `with`s never share it. Handlers resume at most once, which keeps them as cheap as function calls. Inside a handler for `Users`, writing `Users.get` is an error.
+
+A handler forwarding calls to the next implementation out, through `outer`, comes in stage 9:
+
+```ren
 handler cached(ttl: Duration) for Users
     uses Clock =
   var cache = {}
@@ -304,13 +359,13 @@ handler cached(ttl: Duration) for Users
     try outer.save(u)
 ```
 
-Handlers resume at most once, which keeps them as cheap as function calls. Each `with` creates a fresh handler instance with its own state. Inside a handler for `Users`, writing `Users.get` is an error; the next implementation out is always `outer`.
+A `cached` installed outside `with Clock.frozen(t) in` keeps using the clock that was installed where it was, even when it's called from inside that block. A handler can only see implementations installed further out, so handlers can't call each other in a loop.
 
 A handler's state is exclusive between dependency calls. Two tasks are never inside the pure part of the same handler at once, so state updates can't corrupt each other. Other calls can interleave only at a dependency call, such as `outer.save` or `Clock.now()`, and cancellation happens only there too.
 
 That narrows where a race can happen without hiding it. `cached` above has one: between `cache.remove` and `outer.save`, another task's `get` can miss, read the old user, and put it back in the cache. The simulation scheduler switches tasks at exactly these points, so `ren test --sim` finds the race. The fix is to invalidate again after `outer.save` returns.
 
-A handler can also run code when its `with` block ends. `arena` frees everything it allocated, and `transaction` commits or rolls back:
+A handler will also be able to run code when its `with` block ends. `arena` frees everything it allocated, and `transaction` commits or rolls back:
 
 ```ren
 handler transaction() for Sql =
@@ -334,7 +389,7 @@ let n = try Fs.read(fd, &buf)          // the kernel gets exclusive access to bu
 swap(&a, &a)                           // error: `a` passed as inout twice
 ```
 
-An argument passed with `&` has to be the only way the call can reach that value, so no other argument of the call can use it: `f(&xs, xs)` is an error. If it were allowed, the read would either point into a buffer the call is changing in place, or make that buffer shared and force a hidden copy. For now that also covers reading a part of it, as in `&xs.push(xs[0])`: read it into a `let` first. Once reference counting arrives (stage 11), reading a plain value out of it, such as an `Int` element, will be allowed, because that read copies the value before the call starts. Reading something that is itself counted, like an array element or a `T`, will stay an error.
+An argument passed with `&` has to be the only way the call can reach that value, so no other argument of the call can use it: `f(&xs, xs)` is an error. If it were allowed, the read would either point into a buffer the call is changing in place, or make that buffer shared and force a hidden copy. For now that also covers reading a part of it, as in `&xs.push(xs[0])`: read it into a `let` first. Once reference counting arrives (stage 12), reading a plain value out of it, such as an `Int` element, will be allowed, because that read copies the value before the call starts. Reading something that is itself counted, like an array element or a `T`, will stay an error.
 
 A function body uses exactly two markers: `try` means a call can fail, and `&` means a call changes something.
 
@@ -386,7 +441,7 @@ pub type UserId = opaque Int
   pub fn raw(self) -> Int = self
 ```
 
-Operators go in the same place, written with `=>`, and are public whenever their type is. They arrive in stage 9:
+Operators go in the same place, written with `=>`, and are public whenever their type is. They arrive in stage 10:
 
 ```ren
 type Vec3 = { x: f32, y: f32, z: f32 }
@@ -404,7 +459,7 @@ pub fn sum<T>(xs: Array<T>) -> T where T has add, zero =
 
 `==`, `hash`, `compare`, and `show` are derived structurally for every type, except that types containing functions get no `==` or `hash`. To change what "equal" means, override `key`, so equality, hashing, and ordering always agree. Overriding `eq` alone is an error. Only the module that declares a type can write its members. To extend a type you don't own, write a function in your own module or wrap it in an `opaque` type. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
 
-An opaque number type, like `type Meters = opaque f64`, will get a shorthand that gives it its arithmetic, planned for stage 9. Its spelling isn't settled: a member line like `derive numeric`, or something on the type line like `opaque f64 with numeric`, which is the current lean. What it gives comes first, though. All of `f64`'s operators would make `Meters * Meters` a `Meters`, which is dimensionally wrong. So it should probably give only `+`, `-`, negation, zero, comparison, and scaling by a plain `f64`, and leave anything else (`Meters * Meters -> Area`) to be written by hand.
+An opaque number type, like `type Meters = opaque f64`, will get a shorthand that gives it its arithmetic, planned for stage 10. Its spelling isn't settled: a member line like `derive numeric`, or something on the type line like `opaque f64 with numeric`, which is the current lean. What it gives comes first, though. All of `f64`'s operators would make `Meters * Meters` a `Meters`, which is dimensionally wrong. So it should probably give only `+`, `-`, negation, zero, comparison, and scaling by a plain `f64`, and leave anything else (`Meters * Meters -> Area`) to be written by hand.
 
 ---
 
@@ -786,7 +841,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 
 - The compiler is written in **OCaml**.
 - The backend emits **C**: `tcc` for fast debug builds, `clang -O2` (or `zig cc`) for release builds, and Wasm through the same path.
-- Debug builds pass dependencies as dictionaries for fast compiles. Release builds specialize implementations known at compile time using lambda sets, so dependency calls become direct, inlinable calls, within a specialization budget.
+- Every function takes the implementations installed where it's called as one hidden parameter, an evidence vector, which a dependency call searches by the dependency's identity ([deps.md](deps.md#how-it-runs)). Release builds specialize implementations known at compile time using lambda sets, so dependency calls become direct, inlinable calls, within a specialization budget.
 - Modules, name lookup, interface summaries, and the content-addressed build are designed in [module-build.md](module-build.md). Every compiler pass is a pure function of one module or call-graph group plus the interfaces of its imports.
 - Golden tests cover every example and every error message from day one. All generated C runs under ASan and UBSan, and the interpreter and native backend are differentially tested against each other.
 
@@ -803,18 +858,19 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 5a | files as modules, `import`, `pub`, `opaque`, lookup through types, interface summaries, `uses` on signatures | a program of four modules with shared constructor names checks (done) |
 | 5b | methods, associated functions and values under their type; `dbg` | `&xs.push(x)` checks (done, except `dbg`) |
 | 6 | `!`, `try`, `fail`, `match` on errors, `attempt`, `orelse`; `&&`, `\|\|`, `not` ([errors.md](errors.md)) | the shop, the VM and the bank fail with errors, not values (done) |
-| 7 | `uses`, `with`, dependency types ([deps.md](deps.md)) | tests swap implementations |
-| 8 | `handler`, `Async`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
-| 9 | operators, derived equality and hashing, arithmetic for opaque number types | `Map<Email, User>` works |
+| 7 | `dep`, `uses`, `with`, `handler`, `Clock`, `Random` and `Console`; `test`, `group`, `assert`, `ren test` ([deps.md](deps.md)) | the bank's tests run on the test implementations, with no `with` (done) |
+| 8 | `Str` and `Bytes`, `Fs`, `Os`, `Path`, each with real and in-memory implementations | a small [just](https://github.com/casey/just) runs, and its tests run on `mem_fs` and a fake `Os` |
+| 9 | handler `outer`, `Async`, `Net`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
+| 10 | operators, derived equality and hashing, arithmetic for opaque number types | `Map<Email, User>` works |
 | **↑** | **interpreted Ren** | **a small web service and its tests run** |
-| 10 | C backend, packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
-| 11 | reference counting with reuse | `map` reuses memory in place; `&xs.push(xs[0])` is allowed when the element is a plain value |
-| 12 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
-| 13 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
-| 14 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
+| 11 | C backend, packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
+| 12 | reference counting with reuse | `map` reuses memory in place; `&xs.push(xs[0])` is allowed when the element is a plain value |
+| 13 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
+| 14 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
+| 15 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
 | **↑** | **Ren 1.0** | **flottning, rewritten in Ren, passes 10,000 simulation seeds** |
 
-The **effect journal** in stage 8, the record of every dependency call, is the most important design artifact after the type system. Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
+The **effect journal** in stage 9, the record of every dependency call, is the most important design artifact after the type system. Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
 
 ---
 
