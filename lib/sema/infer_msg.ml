@@ -583,16 +583,84 @@ let tag_arity loc (c : Ast.ident) want given =
 
 (* A tag pattern for an error the set doesn't have; [tags] are those it
    has, as shown. *)
+(* How many single-character edits turn [a] into [b] (the Levenshtein
+   distance), for a name that's probably a misspelling of another. *)
+let distance a b =
+  let n = String.length b in
+  (* [prev.(j)] is the distance from the part of [a] seen so far to the
+     first [j] characters of [b] *)
+  let prev = Array.init (n + 1) Fun.id in
+  String.iteri
+    (fun i ca ->
+      let diag = ref prev.(0) in
+      prev.(0) <- i + 1;
+      for j = 1 to n do
+        let here = prev.(j) in
+        prev.(j) <-
+          min
+            (min (prev.(j) + 1) (prev.(j - 1) + 1))
+            (!diag + if ca = b.[j - 1] then 0 else 1);
+        diag := here
+      done)
+    a;
+  prev.(n)
+
+(* The name among [names] that [name] is most likely a misspelling of:
+   the nearest, if it's near enough. *)
+let nearest name names =
+  let near n =
+    let d = distance (String.lowercase_ascii name) (String.lowercase_ascii n) in
+    if d <= max 2 (String.length name / 3) && d < String.length name then
+      Some (d, n)
+    else None
+  in
+  match List.sort compare (List.filter_map near names) with
+  | (_, n) :: _ -> Some n
+  | [] -> None
+
+(* [c] matched in an error set that doesn't hold it; [tags] are what it
+   holds, each its name and how it's shown. *)
 let not_an_error (c : Ast.ident) tags =
   Diag.make c.loc
     ~notes:
       [
         (match tags with
         | [] -> "it holds no errors at all"
-        | tags -> sprintf "it can hold %s" (and_list tags));
+        | tags -> sprintf "it can hold %s" (and_list (List.map snd tags)));
       ]
-    ~help:"check the spelling: a tag that's written wrong is a different error"
+    ~help:
+      (match nearest c.name (List.map fst tags) with
+      | Some n ->
+          sprintf
+            "did you mean `%s`? A tag that's written wrong is a different error"
+            n
+      | None ->
+          "check the spelling: a tag that's written wrong is a different error")
     (sprintf "`%s` isn't one of the errors this can hold" c.name)
+
+(* [c] matched in an error set that's open: it holds whatever the
+   function passed as [param] fails with, which no name can be checked
+   against. *)
+let tag_in_open_set (c : Ast.ident) ~param tags =
+  Diag.make c.loc
+    ~notes:
+      [
+        sprintf
+          "this holds %swhatever the function passed as `%s` fails with, which \
+           could be anything"
+          (match tags with
+          | [] -> ""
+          | tags -> and_list (List.map snd tags) ^ " and ")
+          param;
+      ]
+    ~help:
+      (sprintf
+         "match those with `Err(_)`, or write the errors `%s` can fail with in \
+          its type, after `!`"
+         param)
+    (sprintf
+       "`%s` can't be matched here, because the errors this holds aren't known"
+       c.name)
 
 (* A call no marker covers, of [callee], which can fail with [tags], as
    shown; [name_loc] is where the callee is written. *)
@@ -641,7 +709,7 @@ let kept_passed_on loc ~name_loc callee ~fn =
     (sprintf "`attempt` can't keep what `%s` fails with here" callee)
 
 (* A `try` or `attempt`, at [loc], that covers nothing that can fail. *)
-let covers_nothing loc keyword =
+let covers_nothing ?help loc keyword =
   Diag.make loc
     ~notes:
       [
@@ -650,7 +718,7 @@ let covers_nothing loc keyword =
            code can stop"
           keyword;
       ]
-    ~help:(sprintf "remove the `%s`" keyword)
+    ~help:(Option.value help ~default:(sprintf "remove the `%s`" keyword))
     "nothing here can fail"
 
 (* How a message names the function [f]: `pub fn transfer`. *)

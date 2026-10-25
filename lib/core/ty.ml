@@ -276,9 +276,12 @@ and show_effects pr e u =
 let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
   match s.ty with
   | Fun (ps, ret, errs, uses) ->
-      (* a parameter's row that is the function's own, which isn't printed *)
+      (* a parameter's row that is the function's own, which isn't printed:
+         a transparent parameter, written `fn(...)`. One that ends in the
+         same tail but has fewer labels fails with less than the function,
+         and is printed, so the tail shows whose it is *)
       let own (own : row) (r : row) =
-        if r.tail <> None && r.tail = own.tail then closed else r
+        if r.tail <> None && r = own then closed else r
       in
       let ps =
         List.map

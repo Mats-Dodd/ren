@@ -138,10 +138,14 @@ There is no `catch`: handling an error is pattern matching, so it's a
 `Err(tag)`, instead of acting on it now:
 
 ```ren
-let r = attempt &acme.transfer(t)      // Result<(), ! Refusal | NoSuchAccount(account: AccountId) | SameAccount>
+let r = attempt &acme.transfer(t)      // Result<Unit, ! Refusal | NoSuchAccount(account: AccountId) | SameAccount>
 print(r)                               // Err(Short(2, 45000))
 try r                                  // fail with it again, later
 ```
+
+(`ren types` writes the unit type `Unit` here, as it does everywhere: an
+earlier draft wrote `Result<(), ...>`, but `()` is a value, not a type
+name.)
 
 It's for an error that has to outlive the line it happened on: one decided
 on later or by another function, outcomes collected from many calls, a test

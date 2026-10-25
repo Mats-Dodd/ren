@@ -433,21 +433,65 @@ let in_params params tail =
   List.exists (fun (_, t) -> List.mem tail (row_vars t)) params
 
 (* Whether the call [c] can fail, now that its group is done: its callee
-   brought in errors of its own, or is a function of the group that turned
-   out to fail, or its errors are those of a function the caller was
-   passed. *)
-let can_fail env (c : ecall) =
-  c.eown <> []
-  || (match c.etarget with
-    | Some p -> (
-        match repr (Hashtbl.find env.globals p) with
-        | TFun (_, _, e, _) -> row_names e <> []
-        | _ -> false)
-    | None -> false)
+   fails with something, which for a function of the group is known only
+   now, or its errors are those of a function the caller was passed. *)
+let can_fail (c : ecall) =
+  row_names c.erow <> []
   ||
   match row_tail c.erow with
   | Some t -> in_params c.eparams t
   | None -> false
+
+(* Finish each inclusion of the group (see [Infer_expr.inclusion]), now
+   that its functions are joined: add the labels each row learned since,
+   until no row learns any more, and end a row that includes a
+   parameter's errors in the same tail as that parameter's. *)
+let settle_inclusions env =
+  let changed = ref true in
+  (* a row's tail, the variable at its end *)
+  let rec tail r =
+    match repr_row r with RExtend (_, rest) -> tail rest | r -> r
+  in
+  while !changed do
+    changed := false;
+    List.iter
+      (fun (i : inclusion) ->
+        let labels, src_tail = row_parts i.isrc in
+        (match
+           List.filter
+             (fun (l : label) -> not (List.mem l.name i.ipassed))
+             labels
+         with
+        | [] -> ()
+        | fresh ->
+            changed := true;
+            i.ipassed <- i.ipassed @ List.map (fun (l : label) -> l.name) fresh;
+            i.iadd (extend fresh REmpty));
+        match src_tail with
+        | Some t when (not i.ilinked) && in_params i.iparams t -> (
+            changed := true;
+            i.ilinked <- true;
+            (* an open row takes on the parameter's tail, and stays what
+               it is before it; a closed one, a lambda's whose type is
+               written, says what the parameter can fail with *)
+            let a, b =
+              match row_tail i.idst with
+              | Some _ -> (tail i.isrc, tail i.idst)
+              | None -> (i.isrc, i.idst)
+            in
+            try Unify.unify_row env.st a b
+            with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
+              report env
+                (Diag.make i.iloc
+                   ~help:
+                     "write what the function passed can fail with in its \
+                      parameter's type, after `!`"
+                   "this can fail with whatever a function it was passed fails \
+                    with, which isn't allowed here"))
+        | _ -> ())
+      (List.rev env.includes)
+  done;
+  env.includes <- []
 
 (* The rules of markers, checked once the group's functions are joined,
    when it's known what each call fails with (errors.md, "Marking"):
@@ -459,6 +503,7 @@ let can_fail env (c : ecall) =
    5. every marker covers something that can fail *)
 let settle_errors env =
   let pr = printer env in
+  settle_inclusions env;
   (* an `attempt` of a call of a function it was passed keeps whatever
      that function fails with: its set stays open, like the function's *)
   List.iter
@@ -468,12 +513,12 @@ let settle_errors env =
       | _ -> close_row kept)
     env.kept;
   List.iter
-    (fun ((c : ident), payload, errs) ->
-      match
-        List.find_opt
-          (fun (l : label) -> l.name = c.name)
-          (fst (row_parts errs))
-      with
+    (fun ((c : ident), payload, errs, params) ->
+      let labels, tail = row_parts errs in
+      let tags =
+        List.map (fun (l : label) -> (l.name, show_label pr l)) labels
+      in
+      match List.find_opt (fun (l : label) -> l.name = c.name) labels with
       | Some l when List.length l.payload = List.length payload ->
           List.iter2
             (fun found expected -> unify_at env c.loc ~found ~expected)
@@ -481,23 +526,16 @@ let settle_errors env =
       | Some l ->
           report env
             (tag_arity c.loc c (List.length l.payload) (List.length payload))
-      | None ->
-          report env
-            (not_an_error c (List.map (show_label pr) (fst (row_parts errs)))))
+      | None -> (
+          (* a set still open holds what a function it was passed fails
+             with *)
+          match
+            Option.bind tail (fun t ->
+                List.find_opt (fun (_, ty) -> List.mem t (row_vars ty)) params)
+          with
+          | Some (param, _) -> report env (tag_in_open_set c ~param tags)
+          | None -> report env (not_an_error c tags)))
     (List.rev env.tag_patterns);
-  List.iter
-    (fun (u : unwrap) ->
-      let sources =
-        match u.usources with
-        | Some s -> (!s, "from the signature")
-        | None -> ([], "from an earlier call")
-      in
-      add_errors env ~loc:u.uloc ~here:"from this `Result`" ~sources
-        ~fix:(fun _ -> "rename one of them where it comes in")
-        u.uerrs u.uhandler;
-      u.umarker.unwrapped <- u.uerrs :: u.umarker.unwrapped;
-      Option.iter (fun s -> s := Unwrapped (u.uloc, u.uerrs) :: !s) u.usources)
-    (List.rev env.unwraps);
   List.iter
     (fun ((c : ecall), unhandled) ->
       let labels, tail = row_parts unhandled in
@@ -526,16 +564,17 @@ let settle_errors env =
       if
         not
           (m.failed
-          || List.exists (can_fail env) m.covered
-          || List.exists (fun r -> row_names r <> []) m.unwrapped)
+          || List.exists can_fail m.covered
+          || List.exists
+               (fun r -> row_names r <> [] || row_tail r <> None)
+               m.unwrapped)
       then
         report env
-          (covers_nothing m.mloc
+          (covers_nothing m.mloc ?help:m.hint
              (match m.mkind with Mtry -> "try" | Mattempt -> "attempt")))
     (List.rev env.all_markers);
   env.kept <- [];
   env.tag_patterns <- [];
-  env.unwraps <- [];
   env.unmarked <- [];
   env.all_markers <- []
 
@@ -558,16 +597,10 @@ let check_errors env (f : fn_def) cx declared =
   let is_declared name =
     List.exists (fun (d : label) -> d.name = name) declared
   in
-  (* what each source fails with: its own errors, or if it's a call of
-     the group, its callee's *)
+  (* what each source fails with: a call, its callee's errors, unless
+     they're [f]'s own *)
   let brings = function
-    | Passed c -> (
-        match (c.eown, c.etarget) with
-        | [], Some p -> (
-            match repr (Hashtbl.find env.globals p) with
-            | TFun (_, _, e, _) -> row_names e
-            | _ -> [])
-        | own, _ -> List.map (fun (l : label) -> l.name) own)
+    | Passed c -> if c.eself then [] else row_names c.erow
     | Failed (_, l) -> [ l.name ]
     | Unwrapped (_, r) -> row_names r
   in
@@ -809,7 +842,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       unmarked = [];
       all_markers = [];
       kept = [];
-      unwraps = [];
+      includes = [];
       tag_patterns = [];
       in_scope = [];
     }

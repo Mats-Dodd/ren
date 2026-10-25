@@ -70,12 +70,13 @@ type env = {
   mutable kept : (row * (string * ty) list) list;
       (** the errors each `attempt` of the group keeps in its [Result], each
           with the parameters of the function and lambdas it's in *)
-  mutable unwraps : unwrap list;
-      (** each `try r` of a [Result] in the group, most recent first *)
-  mutable tag_patterns : (ident * ty list * row) list;
+  mutable includes : inclusion list;
+      (** each place the group adds one row of errors to another, most recent
+          first, finished once the group is done (see [inclusion]) *)
+  mutable tag_patterns : (ident * ty list * row * (string * ty) list) list;
       (** tags matched in an error set that was still open: each tag, its
-          payload's types, and the set, which has to have it once the group is
-          done *)
+          payload's types, the set, which has to have it once the group is done,
+          and the parameters of the function and lambdas it's in *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
@@ -110,11 +111,14 @@ and ecall = {
       (** the callee as it's written, for a message that says where an error
           comes from: [acme.debit] *)
   eown : label list;
-      (** what the callee's errors were just before the call joined them to the
-          marker's: what it brings in itself. Nothing, if its errors are the
-          caller's own: the caller's transparent parameter, or the caller itself
-      *)
-  erow : row;  (** the callee's errors *)
+      (** what the callee's errors were at the call: what it brings in itself.
+          Nothing, if its errors are the caller's own *)
+  eself : bool;
+      (** whether the callee's errors are the caller's own: a public function's
+          transparent parameter, whose row is its function's *)
+  erow : row;
+      (** the callee's errors, which the call adds to its marker's but never
+          becomes: once the group is done, exactly what the callee fails with *)
   etarget : Path.t option;
       (** the callee, if it's a function of the group, whose errors are known
           only once the group is done *)
@@ -133,20 +137,32 @@ and marker = {
   mutable covered : ecall list;
   mutable unwrapped : row list;
       (** for `try r`: the errors of the [Result] it fails with again *)
+  mutable hint : string option;
+      (** for `try`: a help that explains why it may cover nothing *)
   mutable failed : bool;  (** for `attempt`: whether a `fail` is inside it *)
 }
 
 and marker_kind = Mtry | Mattempt
 
-(* `try r`, where [r] is a [Result]: it fails again with what [r] holds,
-   [uerrs], which are added to [uhandler] once the group is done, when each
-   `attempt`'s errors are settled. *)
-and unwrap = {
-  uloc : Loc.t;
-  uerrs : row;
-  uhandler : row;
-  umarker : marker;
-  usources : source list ref option;
+(* One row of errors added to another: a call's to its marker's handler,
+   or a [Result]'s to the handler of the `try` that fails with it again.
+   [isrc] is added to [idst] by inclusion: [idst] gets each of its labels,
+   and [isrc] stays as it was, so a callee never fails with what its
+   caller does. Labels known at the time are added then; those a row
+   learns later (a function of the group, joined at its end) are added
+   once the group is done, by [iadd], which reports a tag with two shapes
+   at [iloc] ([ipassed] are the names added so far). A row that stands for
+   whatever a parameter fails with can't be listed, so [idst] ends in the
+   same tail instead ([ilinked], once it does). *)
+and inclusion = {
+  iloc : Loc.t;
+  isrc : row;
+  idst : row;
+  iparams : (string * ty) list;
+      (** the parameters of the function and lambdas where it's added *)
+  iadd : row -> unit;
+  mutable ipassed : string list;
+  mutable ilinked : bool;
 }
 
 (* Something that adds to a top-level function's errors: a call its `try`
@@ -743,7 +759,9 @@ let add_errors env ~loc ~here ~sources:(sources, elsewhere) ~fix errs into =
   (* the labels already there, before they're unified with the new ones *)
   let before = fst (row_parts into) in
   let new_ = fst (row_parts errs) in
-  match Unify.unify_row env.st (reopen env errs) into with
+  (* only [errs]'s labels, with a fresh tail: unified with its own tail,
+     [errs] would become [into], and fail with everything [into] does *)
+  match Unify.unify_row env.st (extend new_ (fresh_row env.st)) into with
   | () -> ()
   | exception Unify.Two_shapes name ->
       let pr = printer env in
@@ -765,6 +783,23 @@ let add_errors env ~loc ~here ~sources:(sources, elsewhere) ~fix errs into =
         (fail env loc
            (sprintf "this can fail with %s, which isn't allowed here"
               (show_row (printer env) ~prefix:"" ~sep:" | " ~kind:"e" errs)))
+
+(* Add [errs] to [into] by inclusion (see [inclusion]): its labels now,
+   with [add] (an [add_errors] waiting for its two rows), and what it
+   learns later once the group is done. *)
+let include_errors env cx ~loc add errs into =
+  add errs into;
+  env.includes <-
+    {
+      iloc = loc;
+      isrc = errs;
+      idst = into;
+      iparams = cx.params;
+      iadd = (fun r -> add r into);
+      ipassed = row_names errs;
+      ilinked = false;
+    }
+    :: env.includes
 
 (* A call adds the callee's dependencies to the caller's, and its errors
    to whatever marks it (errors.md, "Marking"): the innermost marker's
@@ -790,11 +825,12 @@ let absorb env cx ~(call : expr) ~ename ~name_loc ?target errs uses =
     | _ -> ename
   in
   (* a call whose errors are the caller's own brings in nothing itself *)
-  let own =
+  let self =
     match (row_tail errs, row_tail cx.errs) with
-    | Some a, Some b when a = b -> []
-    | _ -> fst (row_parts errs)
+    | Some a, Some b -> a = b
+    | _ -> false
   in
+  let own = if self then [] else fst (row_parts errs) in
   let ec =
     {
       eloc = call.loc;
@@ -802,6 +838,7 @@ let absorb env cx ~(call : expr) ~ename ~name_loc ?target errs uses =
       ename;
       ewritten;
       eown = own;
+      eself = self;
       erow = errs;
       etarget = target;
       eparams = cx.params;
@@ -848,12 +885,15 @@ let absorb env cx ~(call : expr) ~ename ~name_loc ?target errs uses =
         (kept_passed_on call.loc ~name_loc ename ~fn:(short_name cx.self.name));
       List.iter (fun m -> m.covered <- ec :: m.covered) cx.markers
   | [] ->
-      let unhandled = fresh_row env.st in
-      add_errors env ~loc:call.loc ~here ~sources ~fix errs unhandled;
-      env.unmarked <- (ec, unhandled) :: env.unmarked
+      (* the callee's own row, which an inferred parameter's is too: if
+         nothing else says it fails, it's closed at the end, and the
+         parameter can't fail *)
+      env.unmarked <- (ec, reopen env errs) :: env.unmarked
   | markers ->
       List.iter (fun m -> m.covered <- ec :: m.covered) markers;
-      add_errors env ~loc:call.loc ~here ~sources ~fix errs cx.handler;
+      include_errors env cx ~loc:call.loc
+        (add_errors env ~loc:call.loc ~here ~sources ~fix)
+        errs cx.handler;
       Option.iter (fun s -> s := Passed ec :: !s) cx.sources
 
 (* Inside the function, an `inout` parameter is an ordinary variable. *)
@@ -896,11 +936,43 @@ let marker env mkind (e : expr) =
       mloc = keyword e.loc n;
       covered = [];
       unwrapped = [];
+      hint = None;
       failed = false;
     }
   in
   env.all_markers <- m :: env.all_markers;
   m
+
+(* Why a `try` of [a], of type [t], which isn't a [Result], may cover
+   nothing: [a] is a [Result] whose type isn't known yet, or `try` covers
+   more than it seems to, everything to its right, as in `try r + try r`. *)
+let try_hint env cx (a : expr) t =
+  let is_result t =
+    match reveal env.st t with TCon (p, _) -> p = result_path | _ -> false
+  in
+  let rec leftmost (e : expr) =
+    match e.kind with Binop (_, l, _) -> leftmost l | _ -> e
+  in
+  match (a.kind, reveal env.st t) with
+  | Var x, TVar _ ->
+      Some
+        (sprintf
+           "if `%s` is a `Result`, say so where it's declared, as in `%s: \
+            Result<Int, ! E>`: `try` fails with a `Result`'s error only once \
+            its type is known"
+           (name_of x) (name_of x))
+  | Binop _, _ -> (
+      let l = leftmost a in
+      match Hashtbl.find_opt cx.nodes l.node with
+      | Some lt when is_result lt ->
+          Some
+            (sprintf
+               "`try` covers everything to its right, so this is `try (%s)`: \
+                to fail with the `Result`'s error first, write `(try %s)`"
+               (Option.value (env.source a) ~default:"...")
+               (Option.value (env.source l) ~default:"..."))
+      | _ -> None)
+  | _ -> None
 
 (* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
@@ -1183,18 +1255,20 @@ and synth env cx (e : expr) : ty =
       | TCon (p, [ v; errs ]) when p = result_path -> (
           match repr errs with
           | TErrors errs ->
-              env.unwraps <-
-                {
-                  uloc = a.loc;
-                  uerrs = errs;
-                  uhandler = cx.handler;
-                  umarker = m;
-                  usources = cx.sources;
-                }
-                :: env.unwraps;
+              include_errors env cx ~loc:a.loc
+                (add_errors env ~loc:a.loc ~here:"from this `Result`"
+                   ~sources:(sources_of cx) ~fix:(fun _ ->
+                     "rename one of them where it comes in"))
+                errs cx.handler;
+              m.unwrapped <- errs :: m.unwrapped;
+              Option.iter
+                (fun s -> s := Unwrapped (a.loc, errs) :: !s)
+                cx.sources;
               v
           | _ -> t)
-      | _ -> t)
+      | t ->
+          m.hint <- try_hint env cx a t;
+          t)
   | Attempt a ->
       (* the calls it covers fail into its [Result] instead, and so does a
          `fail` *)
@@ -1790,11 +1864,13 @@ and tag_pattern env cx (p : pattern) (c : ident) ps errs =
   | Some l, _ -> bind l.payload
   | None, None ->
       let pr = printer env in
-      report env (not_an_error c (List.map (show_label pr) labels));
+      report env
+        (not_an_error c
+           (List.map (fun (l : label) -> (l.name, show_label pr l)) labels));
       List.iter (bind_pattern env cx TError) ps
   | None, Some _ ->
       let payload = List.map (fun _ -> fresh_var env.st) ps in
-      env.tag_patterns <- (c, payload, errs) :: env.tag_patterns;
+      env.tag_patterns <- (c, payload, errs, cx.params) :: env.tag_patterns;
       bind payload
 
 (* Check every value the group threw away is `Unit` (see [drop]). One whose

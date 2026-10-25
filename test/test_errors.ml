@@ -91,6 +91,62 @@ fn main() = ()
       help: remove the `try`
     |}]
 
+let%expect_test "a call marked again can fail again" =
+  (* each call adds its callee's errors to its marker's, and the callee's
+     own errors stay what they were, so the second call brings them in
+     too *)
+  checked
+    {|
+fn twice(n: Int) -> Int =
+  let h = fn() => if n > 0 then fail Q else 1
+  let x = try h()
+  let y = try h()
+  x + y
+fn then_kept(n: Int) =
+  let h = fn() => if n > 0 then fail Q else 1
+  let x = try h()
+  attempt h()
+fn main() = ()
+|};
+  [%expect
+    {|
+    fn twice(n: Int) -> Int ! Q
+    fn then_kept(n: Int) -> Result<Int, ! Q> ! Q
+    fn main()
+    |}]
+
+let%expect_test "a try of a Result has to know it's a Result" =
+  (* `try` fails with a `Result`'s error only once its type is known, and
+     it covers everything to its right *)
+  checked
+    {|
+fn unknown(r) -> Int = try r
+fn both(r: Result<Int, ! A>) -> Int = try r + try r
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: nothing here can fail
+      ┌─ test.ren:1:24
+    1 │ fn unknown(r) -> Int = try r
+      │                        ^^^
+      = `try` marks the calls that can fail, so a reader can see where the code can stop
+      help: if `r` is a `Result`, say so where it's declared, as in `r: Result<Int, ! E>`: `try` fails with a `Result`'s error only once its type is known
+
+    error: nothing here can fail
+      ┌─ test.ren:2:39
+    2 │ fn both(r: Result<Int, ! A>) -> Int = try r + try r
+      │                                       ^^^
+      = `try` marks the calls that can fail, so a reader can see where the code can stop
+      help: `try` covers everything to its right, so this is `try (r + try r)`: to fail with the `Result`'s error first, write `(try r)`
+
+    error: expected `Int`, found `Result<Int, ! A>`
+      ┌─ test.ren:2:43
+    2 │ fn both(r: Result<Int, ! A>) -> Int = try r + try r
+      │                                           ^
+      = `+` works on `Int`s
+    |}]
+
 let%expect_test "a lambda's body has markers of its own" =
   (* a transparent parameter passes the lambda's errors to the call, so
      both the call and the lambda's own call are marked *)
@@ -424,6 +480,43 @@ fn main() = ()
       help: pass the errors on with `try`, or handle them with `match`
     |}]
 
+let%expect_test "an attempt of a function that calls back keeps its errors" =
+  (* `a` keeps what `b` fails with in a `Result`, so it doesn't fail with
+     them, though `b` fails with what `a` does *)
+  checked
+    {|
+fn a(n: Int) -> Int ! X =
+  if n == 0 then fail X
+  let r = attempt b(n - 1)
+  match r
+    Ok(v) => v
+    Err(X) => 0
+    Err(Y) => 1
+fn b(n: Int) -> Int =
+  if n == 5 then fail Y
+  try a(n)
+fn c(n: Int) -> Int =
+  if n == 0 then fail X
+  match attempt d(n - 1)
+    Ok(v) => v
+    Err(X) => 0
+    Err(Y) => 1
+fn d(n: Int) -> Int =
+  if n == 5 then fail Y
+  try c(n)
+pub fn pu() -> Int ! X = try c(1)
+fn main() = ()
+|};
+  [%expect
+    {|
+    fn a(n: Int) -> Int ! X
+    fn b(n: Int) -> Int ! X | Y
+    fn c(n: Int) -> Int ! X
+    fn d(n: Int) -> Int ! X | Y
+    pub fn pu() -> Int ! X
+    fn main()
+    |}]
+
 let%expect_test "orelse turns an Option into a value or an error" =
   checked
     {|
@@ -534,6 +627,62 @@ fn main() = ()
       help: pass them on with `try`, or make `wrap` private, so its type is inferred
     |}]
 
+let%expect_test "attempt keeps only what its call fails with" =
+  (* the function's own errors aren't the callee's, so a `Result` doesn't
+     hold them *)
+  checked
+    {|
+fn local(n: Int) =
+  let h = fn() => if n > 0 then fail Q else 1
+  if n == 3 then fail Other
+  let r = attempt h()
+  let x = try h()
+  r
+fn passed(g: fn() -> Int, n: Int) =
+  if n == 0 then fail Z
+  let a = try g()
+  attempt g()
+fn again(g: fn() -> Int) -> Int =
+  let r = attempt g()
+  try r
+fn exact(n: Int) -> Int =
+  let h = fn() => if n > 0 then fail Q else 1
+  if n == 3 then fail Other
+  let x = try h()
+  match attempt h()
+    Ok(v) => v + x
+    Err(Q) => 0
+fn main() = ()
+|};
+  [%expect
+    {|
+    fn local(n: Int) -> Result<Int, ! Q> ! Other | Q
+    fn passed(g: fn() -> Int ! ..e, n: Int) -> Result<Int, ! ..e> ! Z | ..e
+    fn again(g: fn() -> Int) -> Int
+    fn exact(n: Int) -> Int ! Other | Q
+    fn main()
+    |}]
+
+let%expect_test "a tag can't be matched in a passed function's errors" =
+  checked
+    {|
+fn w(g: fn() -> Int) -> Int =
+  match attempt g()
+    Ok(v) => v
+    Err(Bad) => 0
+    Err(_) => 1
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Bad` can't be matched here, because the errors this holds aren't known
+      ┌─ test.ren:4:9
+    4 │     Err(Bad) => 0
+      │         ^^^
+      = this holds whatever the function passed as `g` fails with, which could be anything
+      help: match those with `Err(_)`, or write the errors `g` can fail with in its type, after `!`
+    |}]
+
 let%expect_test "matching a Result handles every error it can hold" =
   checked
     {|
@@ -581,6 +730,11 @@ fn typo(id: Int) -> Int =
     Ok(n) => n
     Err(NotFuond(_)) => 0
     Err(_) => 1
+fn swapped(r: Result<Int, ! A(Int) | Big>) -> Int =
+  match r
+    Ok(v) => v
+    Err(Bgi) => 0
+    Err(_) => 1
 fn main() = ()
 |};
   [%expect
@@ -590,7 +744,14 @@ fn main() = ()
     5 │     Err(NotFuond(_)) => 0
       │         ^^^^^^^^
       = it can hold `NotFound(Int)`
-      help: check the spelling: a tag that's written wrong is a different error
+      help: did you mean `NotFound`? A tag that's written wrong is a different error
+
+    error: `Bgi` isn't one of the errors this can hold
+       ┌─ test.ren:10:9
+    10 │     Err(Bgi) => 0
+       │         ^^^
+       = it can hold `A(Int)` and `Big`
+       help: did you mean `Big`? A tag that's written wrong is a different error
     |}]
 
 let%expect_test "an error is a value only inside a Result" =
