@@ -27,7 +27,11 @@
      [Finally], so it's written back even if the call fails
 
    Everything is evaluated in the order it was before: the order the
-   interpreter has always used, so a program prints the same things. *)
+   interpreter has always used, so a program prints the same things.
+
+   Dependencies stay implicit here: a call of an operation is a call of a
+   [Dep_op], and no call passes evidence. Threading it needs the whole
+   program, which evidence.ml has. *)
 
 open Ast
 open Ast.Resolved
@@ -297,7 +301,7 @@ let rec expr cx (e : expr) : C.expr =
       let captures =
         List.filter (fun (v : C.var) -> not (List.mem v.id own)) (free body)
       in
-      here (Lambda { params; captures; body })
+      here (Lambda { params; evidence = []; captures; body })
   | Block (stmts, last) -> block cx stmts last
   | Con (_, args) -> (
       match (node cx e.node).found with
@@ -453,7 +457,7 @@ and call cx ?(changed = false) (e : expr) f args =
     | Inout _ -> None
   in
   if List.for_all (fun a -> direct a <> None) lowered then
-    mk (Call (f, List.filter_map direct lowered)) ty e.loc
+    mk (Call (f, List.filter_map direct lowered, [])) ty e.loc
   else
     let hold_f, f = hold cx "f" f in
     let binds, args, writes =
@@ -470,7 +474,7 @@ and call cx ?(changed = false) (e : expr) f args =
                 writes @ [ write r.place (local t r.loc) r.loc ] ))
         (hold_f, [], []) lowered
     in
-    let call = mk (Call (f, args)) ty e.loc in
+    let call = mk (Call (f, args, [])) ty e.loc in
     if C.fails f.ty then
       (* the places are written back even if it fails *)
       lets binds (mk (Finally (call, seq_all e.loc writes)) ty e.loc)
@@ -576,8 +580,15 @@ and free (e : C.expr) =
     | Dep_op _ ->
         ()
     | Local v -> use v
-    | Prim (_, args) | Array args | Con (_, _, args) | Tag (_, args) ->
+    | Prim (_, args)
+    | Array args
+    | Con (_, _, args)
+    | Tag (_, args)
+    | Dep_call { args; _ } ->
         List.iter go args
+    | With { impl; body; _ } ->
+        go impl;
+        go body
     | Fail a -> go a
     | Finally (a, b) ->
         go a;
@@ -607,7 +618,7 @@ and free (e : C.expr) =
     | While (a, b) | Seq (a, b) | Update (a, _, b) ->
         go a;
         go b
-    | Call (f, args) ->
+    | Call (f, args, _) ->
         go f;
         List.iter (function C.Value a -> go a | C.Ref v -> use v) args
     | Lambda { params; captures; _ } ->
@@ -703,6 +714,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
   {
     path = Path.make home name;
     params;
+    evidence = [];
     scheme;
     body = expr cx f.body;
     loc = f.name.loc;

@@ -106,18 +106,28 @@ let check_module ~home ~imports ~reachable ?entry prog =
     iface.types;
   (r, iface, inferred)
 
-(* A checked module, lowered to Core. With [lint], Core Lint checks the
-   result; the tests turn it on for every program. *)
-let lower ?(lint = false) ~imports r inferred =
-  let core = pass "lower" (fun () -> Lower.program r inferred) in
-  if lint then pass "lint" (fun () -> Core_lint.program ~imports core);
-  core
+(* A checked module, lowered to Core, with its evidence not threaded yet:
+   that needs the whole program (evidence.ml). *)
+let lower r inferred = pass "lower" (fun () -> Lower.program r inferred)
+
+(* A program's modules, lowered, the prelude first, with their evidence
+   threaded. With [lint], Core Lint checks each one; the tests turn it on
+   for every program. [imports] are the interfaces each module sees. *)
+let thread ?(lint = false) ~imports modules =
+  let linked = pass "evidence" (fun () -> Evidence.program modules) in
+  if lint then
+    List.iter2
+      (fun imports m ->
+        pass "lint" (fun () -> Core_lint.program ~imports ~linked m))
+      imports linked;
+  linked
 
 (* The prelude, as a module: its source, parsed and checked against the
-   intrinsics (prelude.ml) and lowered (and linted), and its whole
-   interface. It's checked once, the first time it's needed: [lazy] delays
-   a computation and [Lazy.force] runs it (at most once). It's the same for
-   every program, so sharing it is safe. *)
+   intrinsics (prelude.ml) and lowered, and its whole interface. It's
+   checked once, the first time it's needed: [lazy] delays a computation
+   and [Lazy.force] runs it (at most once). It's the same for every
+   program, so sharing it is safe. On its own, with its evidence threaded,
+   it's linted then too, since that costs nothing per program. *)
 let prelude =
   lazy
     (let prog = parse ~file:Prelude.file (String.trim Prelude.source) in
@@ -125,7 +135,9 @@ let prelude =
      let r, iface, inferred =
        check_module ~home:Path.prelude_home ~imports ~reachable:imports prog
      in
-     (lower ~lint:true ~imports r inferred, Iface.union Prelude.public iface))
+     let core = lower r inferred in
+     ignore (thread ~lint:true ~imports:[ imports ] [ core ]);
+     (core, Iface.union Prelude.public iface))
 
 (* ---- loading a program's modules ----
 
@@ -327,19 +339,25 @@ let inferred ?load ~file src = (entry_of (check_all ?load ~file src)).inferred
 let schemes ?load ~file src = (inferred ?load ~file src).schemes
 let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
 
-let lower_module ?lint (c : checked) =
-  lower ?lint ~imports:c.reachable c.resolved c.inferred
+(* The whole program in Core, the prelude first, each module lowered and
+   its evidence threaded. *)
+let link ?lint (modules : checked list) =
+  let prelude, _ = Lazy.force prelude in
+  thread ?lint
+    ~imports:([ Prelude.intrinsics ] :: List.map (fun c -> c.reachable) modules)
+    (prelude :: List.map (fun c -> lower c.resolved c.inferred) modules)
 
-let core ?lint ?load ~file src =
-  lower_module ?lint (entry_of (check_all ?load ~file src))
+let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
+let core ?lint ?load ~file src = entry_of (linked ?lint ?load ~file src)
 
 (* Every module's signatures, as `ren types` prints them: each function's,
    and each type with members, its members indented under it. *)
 let types ?(lint = false) ?load ~file src =
+  let modules = check_all ?load ~file src in
+  (* the tests also check that the program lowers, and lints *)
+  if lint then ignore (link ~lint:true modules);
   List.map
-    (fun ({ home; inferred; resolved; _ } as c) ->
-      (* the tests also check that the program lowers, and lints *)
-      if lint then ignore (lower_module ~lint:true c);
+    (fun { home; inferred; resolved; _ } ->
       let names = Resolve.type_name resolved in
       let fn_ ?outer ~name (f : Ast.Resolved.fn_def) =
         Ty.signature ?outer ~names ~pub:f.pub ~name
@@ -430,15 +448,15 @@ let types ?(lint = false) ?load ~file src =
                 ]
             | Type _ | Import _ -> [])
           resolved.prog ))
-    (check_all ?load ~file src)
+    modules
 
-(* Check every module, lower each to Core, and run them as one program:
-   the prelude, then each module in dependency order, starting from the
-   entry's `main`. *)
+(* Check every module, lower each to Core, thread the evidence through
+   them, and run them as one program: the prelude, then each module in
+   dependency order, starting from the entry's `$start`, which installs
+   what `main` uses and calls it. *)
 let run ?lint ?load ~file src =
-  let modules = List.map (lower_module ?lint) (check_all ?load ~file src) in
-  let prelude, _ = Lazy.force prelude in
-  pass "eval" (fun () -> Eval.run (prelude :: modules))
+  let modules = link ?lint (check_all ?load ~file src) in
+  pass "eval" (fun () -> Eval.run modules)
 
 let dump_tokens toks =
   toks |> Array.to_list

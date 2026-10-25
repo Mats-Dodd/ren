@@ -19,6 +19,9 @@ type t =
   | VArray of t array  (** never changed in place: an update copies it *)
   | VClosure of {
       params : int list;  (** the parameters' binder ids *)
+      evidence : int list;
+          (** its evidence's ids: the implementations it's passed where it's
+              called *)
       body : Core.expr;
       env : t ref Env.t;
     }  (** a lambda, with the variables it captured when it was created *)

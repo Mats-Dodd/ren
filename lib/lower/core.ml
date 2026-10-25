@@ -22,7 +22,18 @@
    [Handle] is the one place an error is caught, and [Finally] runs
    something on the way out whether the code before it failed or not. So a
    backend that compiles to C can make each function that can fail return
-   its error, and check for one after each call that can fail. *)
+   its error, and check for one after each call that can fail.
+
+   Dependencies are explicit too (deps.md, "How it runs"). Each dependency
+   a function uses is a hidden parameter of its, its evidence: the
+   implementation installed by whoever called it. A call passes the
+   caller's evidence on, a [Dep_call] calls an operation of the evidence
+   it names, and [With] installs an implementation around its body. A
+   lambda's evidence is its own, passed where it's called, so it never
+   keeps the implementation that was installed where it was made. Nothing
+   is looked up by name. Lowering leaves the evidence out; evidence.ml
+   threads it through the whole program, and until then an operation is
+   a [Dep_op]. *)
 
 type mode = Ty.mode = Read | Inout
 
@@ -64,8 +75,22 @@ and kind =
       (** a function built into the compiler: [print], or a method, [Array.push]
       *)
   | Dep_op of Path.t * string
-      (** an operation of the dependency at the path, [Clock.now]: the function
-          the implementation installed where it's called gives for it *)
+      (** an operation of the dependency at the path, [Clock.now], before
+          evidence.ml has threaded the evidence: then it's a [Dep_call] *)
+  | Dep_call of {
+      dep : Path.t;
+      op : string;
+      fty : Ty.ty;  (** the operation's type, at this call *)
+      impl : var;  (** the evidence: the implementation it calls *)
+      args : expr list;
+    }
+      (** [Clock.now()]: a call of an operation of the implementation [impl]
+          holds. Kept apart from other calls, so what was called, with what, can
+          be recorded (the journal, stage 9). Never with `&` *)
+  | With of { ev : var; impl : expr; body : expr }
+      (** install [impl], an implementation of the dependency that's [ev]'s
+          type, as the evidence [ev] for [body]. The runtime's installs around
+          `main` are these *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)
@@ -73,10 +98,18 @@ and kind =
   | Match of expr * arm list
   | While of expr * expr  (** the condition, then the body *)
   | Seq of expr * expr  (** the first's value is dropped *)
-  | Call of expr * arg list
-  | Lambda of { params : param list; captures : var list; body : expr }
+  | Call of expr * arg list * var list
+      (** the callee, its arguments, and the evidence it's passed: one for each
+          dependency it uses, in the order of its row's labels *)
+  | Lambda of {
+      params : param list;
+      evidence : var list;
+      captures : var list;
+      body : expr;
+    }
       (** [captures] are the locals from outside the lambda its body uses, in
-          order of id; their values are copied when the lambda is made *)
+          order of id; their values are copied when the lambda is made. Its
+          [evidence] is passed where it's called, never captured *)
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
@@ -126,6 +159,9 @@ and pattern_kind =
 type fn_def = {
   path : Path.t;
   params : param list;
+  evidence : var list;
+      (** its hidden parameters: an implementation of each dependency its type
+          uses, in the order of its row's labels *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
   loc : Loc.t;  (** its name, where it's declared *)
@@ -168,7 +204,13 @@ let children (e : expr) =
   | Int _ | Bool _ | Str _ | Unit | Local _ | Global _ | Global_value _
   | Intrinsic _ | Dep_op _ ->
       []
-  | Prim (_, es) | Array es | Con (_, _, es) | Tag (_, es) -> es
+  | Prim (_, es)
+  | Array es
+  | Con (_, _, es)
+  | Tag (_, es)
+  | Dep_call { args = es; _ } ->
+      es
+  | With { impl; body; _ } -> [ impl; body ]
   | Let (_, a, b) | While (a, b) | Seq (a, b) | Update (a, _, b) | Finally (a, b)
     ->
       [ a; b ]
@@ -176,7 +218,7 @@ let children (e : expr) =
   | If (c, t, f) -> [ c; t; f ]
   | Match (s, arms) ->
       s :: List.concat_map (fun a -> Option.to_list a.guard @ [ a.body ]) arms
-  | Call (f, args) ->
+  | Call (f, args, _) ->
       f :: List.filter_map (function Value a -> Some a | Ref _ -> None) args
   | Record (_, fs) -> List.map snd fs
   | Handle { body; on_value; on_error; _ } -> [ body; on_value; on_error ]
@@ -187,7 +229,8 @@ let children (e : expr) =
 let rec can_fail (e : expr) =
   match e.kind with
   | Fail _ -> true
-  | Call (f, _) when fails f.ty -> true
+  | Call (f, _, _) when fails f.ty -> true
+  | Dep_call { fty; _ } when fails fty -> true
   | Handle { on_value; on_error; _ } -> can_fail on_value || can_fail on_error
   | Lambda _ -> false
   | _ -> List.exists can_fail (children e)
@@ -256,6 +299,13 @@ let rec sexp e =
   | Global p | Global_value p -> Atom p.name
   | Intrinsic x -> Atom x
   | Dep_op (p, op) -> Atom (Path.full p ^ "." ^ op)
+  | Dep_call { dep; op; impl; args; _ } ->
+      List
+        (atom "dep-call"
+        :: Atom (Path.full dep ^ "." ^ op)
+        :: var impl :: List.map sexp args)
+  | With { ev; impl; body } ->
+      List [ atom "with"; var ev; sexp impl; sexp body ]
   | Prim (op, args) -> List (Atom (show_prim op) :: List.map sexp args)
   | Let (v, value, body) -> List [ atom "let"; var v; sexp value; sexp body ]
   | Assign (v, value) -> List [ atom "="; var v; sexp value ]
@@ -263,25 +313,26 @@ let rec sexp e =
   | Match (s, arms) -> List (atom "match" :: sexp s :: List.map arm_sexp arms)
   | While (c, body) -> List [ atom "while"; sexp c; sexp body ]
   | Seq (a, b) -> List [ atom "seq"; sexp a; sexp b ]
-  | Call (f, args) ->
+  | Call (f, args, evidence) ->
       let arg = function
         | Value a -> sexp a
         | Ref v -> Atom ("&" ^ show_var v)
       in
-      List (atom "call" :: sexp f :: List.map arg args)
-  | Lambda { params; captures; body } ->
+      List ((atom "call" :: sexp f :: List.map arg args) @ uses evidence)
+  | Lambda { params; evidence; captures; body } ->
       let param p =
         match p.mode with
         | Inout -> Atom ("inout " ^ show_var p.var)
         | Read -> var p.var
       in
       List
-        [
-          atom "lambda";
-          List (List.map param params);
-          List (atom "captures" :: List.map var captures);
-          sexp body;
-        ]
+        ([
+           atom "lambda";
+           List (List.map param params);
+           List (atom "captures" :: List.map var captures);
+         ]
+        @ uses evidence
+        @ [ sexp body ])
   | Con (_, c, args) -> List (atom "con" :: atom c :: List.map sexp args)
   | Record (_, fields) ->
       List
@@ -308,14 +359,21 @@ and arm_sexp a =
   in
   List ((pattern_sexp a.pat :: guard) @ [ atom "=>"; sexp a.body ])
 
+(* Evidence, passed or taken, after what it's passed with: nothing when
+   there's none, so code that uses no dependency prints as it always has. *)
+and uses = function
+  | [] -> []
+  | evs -> [ List (atom "uses" :: List.map var evs) ]
+
 let show e = render 0 (sexp e)
 
 let show_fn f =
   render 0
     (List
-       [
-         atom "fn";
-         Atom f.path.name;
-         List (List.map (fun p -> var p.var) f.params);
-         sexp f.body;
-       ])
+       ([
+          atom "fn";
+          Atom f.path.name;
+          List (List.map (fun p -> var p.var) f.params);
+        ]
+       @ uses f.evidence
+       @ [ sexp f.body ]))

@@ -634,3 +634,400 @@ fn main() = 1
       = the prelude's types and dependencies, like `Option`, `Time` and `Clock`, can be named in every module
       help: choose another name
     |}]
+
+(* ---- how it runs (deps.md, "How it runs") ----
+
+   Each dependency a function uses is a hidden parameter in Core, its
+   evidence, which each call passes on. A local prints as its name and id,
+   and so does evidence, named after its dependency. *)
+
+let%expect_test "each dependency a function uses is a parameter of it" =
+  core
+    {|
+fn stamp() = Clock.now()
+fn main() uses Clock, Console =
+  let t = stamp()
+  print(t.after(Time.epoch))
+|};
+  [%expect
+    {|
+    (fn stamp () (uses Clock/1) (dep-call Clock.now Clock/1))
+    (fn main () (uses Clock/2 Console/3)
+      (let t/1 (call stamp (uses Clock/2))
+        (call print (call Time.after t/1 Time.epoch) (uses Console/3))))
+    (fn $start ()
+      (with Clock/1 Clock.real
+        (with Console/2 Console.real (call main (uses Clock/1 Console/2)))))
+    |}]
+
+let%expect_test "a lambda takes its evidence where it's called" =
+  core
+    {|
+fn later() uses Clock =
+  let _ = Clock.now()
+  fn() => Clock.now()
+fn main() uses Clock =
+  let f = later()
+  f()
+|};
+  [%expect
+    {|
+    (fn later () (uses Clock/2)
+      (let _/1 (dep-call Clock.now Clock/2)
+        (lambda () (captures) (uses Clock/3) (dep-call Clock.now Clock/3))))
+    (fn main () (uses Clock/2)
+      (let f/1 (call later (uses Clock/2)) (call f/1 (uses Clock/2))))
+    (fn $start () (with Clock/1 Clock.real (call main (uses Clock/1))))
+    |}]
+
+let%expect_test "a function over closures has a copy for what they use" =
+  core
+    {|
+fn twice(f: fn()) =
+  try f()
+  try f()
+fn quiet() = twice(fn() => ())
+fn main() uses Console =
+  twice(fn() => print(1))
+  quiet()
+|};
+  [%expect
+    {|
+    (fn twice (f/1) (seq (call f/1) (call f/1)))
+    (fn quiet () (call twice (lambda () (captures) ())))
+    (fn main () (uses Console/1)
+      (seq
+        (call twice[Console]
+          (lambda () (captures) (uses Console/2) (call print 1 (uses Console/2)))
+          (uses Console/1))
+        (call quiet)))
+    (fn twice[Console] (f/1) (uses Console/2)
+      (seq (call f/1 (uses Console/2)) (call f/1 (uses Console/2))))
+    (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+    |}];
+  (* the copy is in the module of what it copies *)
+  core_files
+    [
+      ( "main.ren",
+        {|
+import lib
+fn main() uses Console = lib.twice(fn() => print(1))
+|} );
+      ("lib.ren", {|
+pub fn twice(f: fn()) =
+  try f()
+  try f()
+|});
+    ];
+  [%expect
+    {|
+    -- lib
+    (fn twice (f/1) (seq (call f/1) (call f/1)))
+    (fn twice[Console] (f/1) (uses Console/2)
+      (seq (call f/1 (uses Console/2)) (call f/1 (uses Console/2))))
+
+    -- main
+    (fn main () (uses Console/1)
+      (call twice[Console]
+        (lambda () (captures) (uses Console/2) (call print 1 (uses Console/2)))
+        (uses Console/1)))
+    (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+    |}];
+  run_files
+    [
+      ( "main.ren",
+        {|
+import lib
+fn main() uses Console = lib.twice(fn() => print(1))
+|} );
+      ("lib.ren", {|
+pub fn twice(f: fn()) =
+  try f()
+  try f()
+|});
+    ];
+  [%expect {|
+    1
+    1
+    ()
+    |}]
+
+let%expect_test "a function used as a value takes what its type there names" =
+  core
+    {|
+fn one() = 1
+fn apply(f: fn() -> Int) -> Int = try f()
+fn main() uses Console =
+  print(apply(one))
+  let write = Console.write
+  write("written")
+|};
+  [%expect
+    {|
+    (fn one () 1)
+    (fn apply (f/1) (call f/1))
+    (fn main () (uses Console/2)
+      (seq
+        (call print
+          (call apply[Console] (lambda () (captures) (uses Console/3) (call one))
+            (uses Console/2))
+          (uses Console/2))
+        (let write/1
+          (lambda ($x/4) (captures) (uses Console/5)
+            (dep-call Console.write Console/5 $x/4))
+          (call write/1 "written" (uses Console/2)))))
+    (fn apply[Console] (f/1) (uses Console/2) (call f/1 (uses Console/2)))
+    (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
+    |}];
+  run
+    {|
+fn one() = 1
+fn apply(f: fn() -> Int) -> Int = try f()
+fn main() uses Console =
+  print(apply(one))
+  let write = Console.write
+  write("written")
+|};
+  [%expect {|
+    1
+    written
+    ()
+    |}]
+
+(* `with` arrives with its syntax in 7.3; this is the Core it lowers to.
+   The closure is made where one clock is installed, and called where
+   another is, which it uses. *)
+let%expect_test "a closure uses the implementation installed where it's called"
+    =
+  let src =
+    clean
+      {|
+fn later() uses Clock =
+  let _ = Clock.now()
+  fn() => Clock.now()
+fn frozen_at(minutes: Int) -> Clock =
+  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+fn main() uses Clock =
+  let f = later()
+  let _ = frozen_at(0)
+  f()
+|}
+  in
+  report src (fun () ->
+      let open Ren in
+      let linked = Driver.linked ~file src in
+      let entry = List.nth linked (List.length linked - 1) in
+      let fn_ name =
+        List.find (fun (f : Core.fn_def) -> f.path.name = name) entry.fns
+      in
+      let later = fn_ "later" and frozen_at = fn_ "frozen_at" in
+      let loc = later.loc in
+      let clock = Ty.Con (Path.prelude "Clock", []) in
+      let ev id : Core.var = { id; name = "Clock"; ty = clock } in
+      let global (f : Core.fn_def) = Core.mk (Global f.path) f.scheme.ty loc in
+      let frozen minutes =
+        Core.mk
+          (Call
+             (global frozen_at, [ Value (Core.mk (Int minutes) Ty.int loc) ], []))
+          clock loc
+      in
+      let closure_ty =
+        match later.scheme.ty with Fun (_, t, _, _) -> t | _ -> assert false
+      in
+      let time =
+        match closure_ty with Fun (_, t, _, _) -> t | _ -> assert false
+      in
+      let f : Core.var = { id = 3; name = "f"; ty = closure_ty } in
+      (* with Clock.frozen at 0 minutes, make the closure; with it at 5,
+         call it *)
+      let body =
+        Core.mk
+          (With
+             {
+               ev = ev 1;
+               impl = frozen 0;
+               body =
+                 Core.mk
+                   (Let
+                      ( f,
+                        Core.mk
+                          (Call (global later, [], [ ev 1 ]))
+                          closure_ty loc,
+                        Core.mk
+                          (With
+                             {
+                               ev = ev 2;
+                               impl = frozen 5;
+                               body =
+                                 Core.mk
+                                   (Call (Core.local f loc, [], [ ev 2 ]))
+                                   time loc;
+                             })
+                          time loc ))
+                   time loc;
+             })
+          time loc
+      in
+      print_endline (Core.show body);
+      let start =
+        {
+          (fn_ Evidence.start_name) with
+          body;
+          scheme = { ty = Fun ([], time, Ty.closed, Ty.closed); names = [] };
+        }
+      in
+      let entry =
+        {
+          entry with
+          fns =
+            List.map
+              (fun (g : Core.fn_def) ->
+                if g.path = start.path then start else g)
+              entry.fns;
+        }
+      in
+      let modules = List.rev (entry :: List.tl (List.rev linked)) in
+      print_endline (Value.show (Eval.run modules)));
+  [%expect
+    {|
+    (with Clock/1 (call frozen_at 0)
+      (let f/3 (call later (uses Clock/1))
+        (with Clock/2 (call frozen_at 5) (call f/3 (uses Clock/2)))))
+    300000
+    |}]
+
+(* Core Lint checks the evidence is threaded: a module with a dependency
+   `D` of one operation, and a `main` that takes evidence for it *)
+let lint_evidence body =
+  let open Ren in
+  let loc = Loc.point ~file 1 1 in
+  let d = Path.make "test" "D" in
+  let int_fn : Ty.ty = Fun ([], Ty.int, Ty.closed, Ty.closed) in
+  let uses_d : Ty.row =
+    { labels = [ Ty.label (Ty.dep_label d) ]; tail = None }
+  in
+  let ev id : Core.var = { id; name = "D"; ty = Con (d, []) } in
+  let op ev =
+    Core.mk
+      (Dep_call
+         {
+           dep = d;
+           op = "op";
+           fty = Fun ([], Ty.int, Ty.closed, uses_d);
+           impl = ev;
+           args = [];
+         })
+      Ty.int loc
+  in
+  let main : Core.fn_def =
+    {
+      path = Path.make "test" "main";
+      params = [];
+      evidence = [ ev 1 ];
+      scheme = { ty = Fun ([], Ty.int, Ty.closed, uses_d); names = [] };
+      body = body ~loc ~ev ~op ~uses_d ~int_fn;
+      loc;
+    }
+  in
+  report "" (fun () ->
+      Driver.pass "lint" (fun () ->
+          Core_lint.program ~imports:[] ~linked:[]
+            {
+              home = "test";
+              types =
+                [
+                  {
+                    path = d;
+                    params = [];
+                    body = Dep [ { fname = "op"; fty = int_fn } ];
+                    members = [];
+                    loc = None;
+                  };
+                ];
+              fns = [ main ];
+              values = [];
+            }))
+
+let%expect_test "Core Lint checks evidence is threaded" =
+  (* clean: the operation is called on the function's evidence *)
+  lint_evidence (fun ~loc:_ ~ev ~op ~uses_d:_ ~int_fn:_ -> op (ev 1));
+  [%expect {||}];
+  (* evidence that isn't in scope *)
+  lint_evidence (fun ~loc:_ ~ev ~op ~uses_d:_ ~int_fn:_ -> op (ev 2));
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `D` (2) is passed for `test.D`, but isn't in scope here")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* a lambda that keeps the evidence of the function it's made in *)
+  lint_evidence (fun ~loc ~ev ~op ~uses_d:_ ~int_fn ->
+      let f =
+        Ren.Core.mk
+          (Lambda
+             { params = []; evidence = []; captures = []; body = op (ev 1) })
+          int_fn loc
+      in
+      Ren.Core.mk (Call (f, [], [])) Ren.Ty.int loc);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `D` (1) is passed for `test.D`, but isn't in scope here")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* one whose evidence isn't what its type uses *)
+  lint_evidence (fun ~loc ~ev ~op ~uses_d ~int_fn:_ ->
+      let f =
+        Ren.Core.mk
+          (Lambda
+             { params = []; evidence = []; captures = []; body = op (ev 1) })
+          (Fun ([], Ren.Ty.int, Ren.Ty.closed, uses_d))
+          loc
+      in
+      Ren.Core.mk (Call (f, [], [ ev 1 ])) Ren.Ty.int loc);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a lambda takes evidence for [], but should for [test.D]")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* evidence an inner `With` shadows *)
+  lint_evidence (fun ~loc ~ev ~op ~uses_d:_ ~int_fn ->
+      let d = (ev 2).ty in
+      let one =
+        Ren.Core.mk
+          (Lambda
+             {
+               params = [];
+               evidence = [];
+               captures = [];
+               body = Ren.Core.mk (Int 1) Ren.Ty.int loc;
+             })
+          int_fn loc
+      in
+      let impl =
+        Ren.Core.mk (Record (Ren.Path.make "test" "D", [ ("op", one) ])) d loc
+      in
+      Ren.Core.mk (With { ev = ev 2; impl; body = op (ev 1) }) Ren.Ty.int loc);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `D` (1) is passed for `test.D`, but isn't the innermost installed")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* a call that doesn't pass what its callee takes *)
+  lint_evidence (fun ~loc ~ev ~op ~uses_d ~int_fn:_ ->
+      let f =
+        Ren.Core.mk
+          (Lambda
+             {
+               params = [];
+               evidence = [ ev 2 ];
+               captures = [];
+               body = op (ev 2);
+             })
+          (Fun ([], Ren.Ty.int, Ren.Ty.closed, uses_d))
+          loc
+      in
+      Ren.Core.mk (Call (f, [], [])) Ren.Ty.int loc);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a call passes 0 evidence, but its callee takes [test.D]")
+      = this is a bug in the Ren compiler, not in your program
+    |}]

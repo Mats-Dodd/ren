@@ -39,11 +39,18 @@ val inferred : ?load:loader -> file:string -> string -> Infer.t
    that imports it. *)
 val interface : ?load:loader -> file:string -> string -> Iface.t
 
-(* The entry module, checked and lowered to Core. With [lint] (off by
-   default), Core Lint checks what lowering made, and a problem is an
+(* The entry module, checked and lowered to Core, with the program's
+   evidence threaded through it (evidence.ml): with the copies of its
+   functions that made, and `$start` if it has a `main`. With [lint] (off
+   by default), Core Lint checks every module, and a problem is an
    [Internal_error]; the tests turn it on. The prelude's Core is always
    linted, once, since that costs nothing per program. *)
 val core : ?lint:bool -> ?load:loader -> file:string -> string -> Core.program
+
+(* The same, for the whole program: every module in Core, the prelude
+   first and the entry last, as [Eval.run] takes them. *)
+val linked :
+  ?lint:bool -> ?load:loader -> file:string -> string -> Core.program list
 
 (* Every function's inferred signature, as `ren types` prints it, for each
    module of the program in the order they're checked (the entry last), by

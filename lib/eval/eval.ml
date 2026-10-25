@@ -19,7 +19,11 @@
    catches. It never leaves the interpreter: a call returns what its
    callee failed with as a [result] (OCaml's [Ok v] or [Error e]), so it
    can write its `inout` arguments back first, and if `main` fails, [run]
-   raises [Uncaught] instead. *)
+   raises [Uncaught] instead.
+
+   An implementation of a dependency is evidence (core.ml): a value in a
+   variable like any other, passed to each call as its hidden parameters,
+   so nothing is looked up by name. *)
 
 open Core
 open Value
@@ -54,13 +58,12 @@ let rec equal loc a b =
       panic loc "functions can't be compared"
   | _ -> a = b
 
-(* The program's top-level functions, by path, its associated values
-   once they're made, and the implementation of each dependency installed
-   around `main`, by the dependency's path. *)
+(* The program's top-level functions, by path, and its associated values
+   once they're made. Nothing else is global: the implementation of a
+   dependency is evidence (core.ml), held in a variable like any value. *)
 type ctx = {
   fns : (Path.t, fn_def) Hashtbl.t;
   values : (Path.t, Value.t) Hashtbl.t;
-  mutable installed : (Path.t * Value.t) list;
 }
 
 let binop loc (op : Ast.binop) a b =
@@ -140,13 +143,17 @@ let rec eval cx env (e : expr) =
       | Some v -> v
       | None -> bug ("the value `" ^ p.name ^ "` used before it's made"))
   | Intrinsic x -> VBuiltin x
-  | Dep_op (p, op) -> (
-      (* the operation of the implementation installed: the type checker
-         made sure there's one *)
-      match List.assoc_opt p cx.installed with
-      | Some (VRecord ops) -> List.assoc op ops
-      | _ -> bug ("a call of `" ^ p.name ^ "." ^ op ^ "` with nothing installed")
-      )
+  | Dep_op _ -> bug "an operation whose evidence wasn't threaded"
+  | Dep_call { op; impl; args; _ } -> (
+      (* the operation of the implementation that's the evidence: a record
+         of functions, which use nothing *)
+      let args = eval_all cx env args in
+      match !(cell env impl) with
+      | VRecord ops -> ok (fst (call_at cx e.loc (List.assoc op ops) args []))
+      | _ -> bug "an implementation that isn't a record")
+  | With { ev; impl; body } ->
+      let v = eval cx env impl in
+      eval cx (Env.add ev.id (ref v) env) body
   | Prim (op, args) -> prim e.loc op (eval_all cx env args)
   | Let (v, value, body) ->
       let x = eval cx env value in
@@ -164,7 +171,7 @@ let rec eval cx env (e : expr) =
   | Seq (a, b) ->
       ignore (eval cx env a);
       eval cx env b
-  | Call (f, args) ->
+  | Call (f, args, evidence) ->
       let f = eval cx env f in
       (* an `inout` argument is a local: read it now, and write the
          parameter's final value back once the call returns *)
@@ -173,13 +180,7 @@ let rec eval cx env (e : expr) =
           (List.map (function Value a -> a | Ref v -> local v e.loc) args)
       in
       let result, finals =
-        try apply cx f values with
-        | Prelude.Panic msg -> panic e.loc msg
-        | Panic (l, msg)
-          when l.file = Prelude.file && e.loc.file <> Prelude.file ->
-            (* the prelude's source can't be shown, so a panic inside it is
-               the program's call that reached it *)
-            panic e.loc msg
+        call_at cx e.loc f values (List.map (fun v -> !(cell env v)) evidence)
       in
       (* written back whether the call failed or not: failing doesn't undo
          what it changed (errors.md, "Failure and `&`") *)
@@ -187,7 +188,7 @@ let rec eval cx env (e : expr) =
         (fun a v -> match a with Ref x -> cell env x := v | Value _ -> ())
         args finals;
       ok result
-  | Lambda { params; captures; body } ->
+  | Lambda { params; evidence; captures; body } ->
       (* copy the captured variables' values now, into cells of the
          lambda's own: assigning to a variable later doesn't change what
          the lambda sees *)
@@ -197,7 +198,12 @@ let rec eval cx env (e : expr) =
           Env.empty captures
       in
       VClosure
-        { params = List.map (fun (p : param) -> p.var.id) params; body; env }
+        {
+          params = List.map (fun (p : param) -> p.var.id) params;
+          evidence = List.map (fun (v : var) -> v.id) evidence;
+          body;
+          env;
+        }
   | Con (p, c, args) -> VCon { ty = p; name = c; args = eval_all cx env args }
   | Record (_, fields) ->
       let values = eval_all cx env (List.map snd fields) in
@@ -258,14 +264,26 @@ and eval_all cx env = function
       let v = eval cx env e in
       v :: eval_all cx env rest
 
-(* Call [f]. Returns its result, or the error it failed with, and the final
-   value of every parameter, so the caller can write back the ones passed
-   `inout`. *)
-and apply cx f args =
-  let run params body env =
+(* [apply], from a call at [loc]. *)
+and call_at cx loc f args evidence =
+  try apply cx f args evidence with
+  | Prelude.Panic msg -> panic loc msg
+  | Panic (l, msg) when l.file = Prelude.file && loc.file <> Prelude.file ->
+      (* the prelude's source can't be shown, so a panic inside it is the
+         program's call that reached it *)
+      panic loc msg
+
+(* Call [f], passing it [evidence]. Returns its result, or the error it
+   failed with, and the final value of every parameter, so the caller can
+   write back the ones passed `inout`. *)
+and apply cx f args evidence =
+  let run params evs body env =
     let cells = List.map ref args in
     let env =
       List.fold_left2 (fun env id c -> Env.add id c env) env params cells
+    in
+    let env =
+      List.fold_left2 (fun env id v -> Env.add id (ref v) env) env evs evidence
     in
     let result = try Ok (eval cx env body) with Failed err -> Error err in
     (result, List.map ( ! ) cells)
@@ -279,51 +297,35 @@ and apply cx f args =
       | None -> bug ("the unknown built-in `" ^ name ^ "`"))
   | VFn p ->
       let f = Hashtbl.find cx.fns p in
-      run (List.map (fun (p : param) -> p.var.id) f.params) f.body Env.empty
-  | VClosure { params; body; env } -> run params body env
+      run
+        (List.map (fun (p : param) -> p.var.id) f.params)
+        (List.map (fun (v : var) -> v.id) f.evidence)
+        f.body Env.empty
+  | VClosure { params; evidence; body; env } -> run params evidence body env
   | _ -> bug "a call to something that isn't a function"
 
-(* Run a program made of [modules] (the prelude, then the user's file),
-   starting from the last one's `main`. First each module's associated
-   values are made, in order: a module's after those of every module it
-   imports, which come before it, and within a module in the order
-   lowering gives, each after every value it uses. If `main`, or making a
-   value, fails, nothing handles the error: [Uncaught]. *)
+(* Run a program made of [modules] (the prelude, then the user's files),
+   with its evidence threaded (evidence.ml), starting from the last one's
+   `$start`, which installs what `main` uses and calls it. First each
+   module's associated values are made, in order: a module's after those
+   of every module it imports, which come before it, and within a module
+   in the order lowering gives, each after every value it uses. If
+   `main`, or making a value, fails, nothing handles the error:
+   [Uncaught]. *)
 let run (modules : program list) =
-  let cx =
-    { fns = Hashtbl.create 16; values = Hashtbl.create 16; installed = [] }
-  in
+  let cx = { fns = Hashtbl.create 16; values = Hashtbl.create 16 } in
   List.iter
     (fun (m : program) ->
       List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns)
     modules;
   let entry = List.nth modules (List.length modules - 1) in
-  match Hashtbl.find_opt cx.fns (Path.make entry.home "main") with
+  match Hashtbl.find_opt cx.fns (Path.make entry.home Evidence.start_name) with
   | None -> bug "a program with no `main`"
   | Some f -> (
-      (* the runtime installs the real implementation of each built-in
-         dependency `main` uses, around it; the type checker made sure
-         it uses no other (deps.md, "`main`") *)
-      let installs () =
-        match f.scheme.ty with
-        | Fun (_, _, _, uses) ->
-            List.filter_map
-              (fun (l : Ty.label) ->
-                let p = Ty.dep_path l.name in
-                if
-                  p.home = Path.prelude_home
-                  && List.mem p.name Prelude.runtime_deps
-                then
-                  Some
-                    (p, Hashtbl.find cx.values (Path.prelude (p.name ^ ".real")))
-                else None)
-              uses.labels
-        | _ -> []
-      in
       (* OCaml's own stack runs out when a Ren function calls itself too
          deeply; that's the program's fault, so it's a panic *)
       let call p =
-        match fst (apply cx (VFn p) []) with
+        match fst (apply cx (VFn p) [] []) with
         | Ok v -> v
         | Error err -> raise (Uncaught err)
       in
@@ -332,7 +334,6 @@ let run (modules : program list) =
           (fun (m : program) ->
             List.iter (fun p -> Hashtbl.replace cx.values p (call p)) m.values)
           modules;
-        cx.installed <- installs ();
         call f.path
       with Stack_overflow ->
         panic f.loc "the stack overflowed: a function called itself too deeply")

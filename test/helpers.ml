@@ -102,3 +102,15 @@ let core src =
       List.iter
         (fun f -> print_endline (Core.show_fn f))
         (Driver.core ~lint:true ~file src).fns)
+
+(* Every module of the program in Core, but the prelude, each after its
+   name, with the program's evidence threaded through them. *)
+let core_files files =
+  let files, file, src, load = program files in
+  report_files files (fun () ->
+      List.iteri
+        (fun i (m : Core.program) ->
+          if i > 0 then print_newline ();
+          print_endline ("-- " ^ m.home);
+          List.iter (fun f -> print_endline (Core.show_fn f)) m.fns)
+        (List.tl (Driver.linked ~lint:true ~load ~file src)))

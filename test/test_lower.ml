@@ -26,6 +26,7 @@ fn main() =
               (let grid/3 (array (array 1))
                 (let $v/4 (. p/1 y)
                   (= grid/3 (set grid/3 0 (set (get grid/3 0) 0 $v/4))))))))))
+    (fn $start () (call main))
     |}]
 
 let%expect_test "a place passed with & goes through a temporary" =
@@ -52,6 +53,7 @@ fn main() =
               (let $result/5 (call swap &$ref/3 &$ref/4)
                 (seq (= ps/1 (set ps/1 0 (update (get ps/1 0) x: $ref/3)))
                   (seq (= n/2 $ref/4) $result/5))))))))
+    (fn $start () (call main))
     |}]
 
 let%expect_test "for loops become while loops; for & writes back" =
@@ -66,7 +68,7 @@ fn main() =
 |};
   [%expect
     {|
-    (fn main ()
+    (fn main () (uses Console/9)
       (let xs/1 (array 1 2)
         (seq
           (let $n/4 (length xs/1)
@@ -80,7 +82,9 @@ fn main() =
               (let $i/7 0
                 (while (< $i/7 $n/6)
                   (let x/3 (get $xs/8 $i/7)
-                    (seq (if (> x/3 2) (call print x/3) ()) (= $i/7 (+ $i/7 1)))))))))))
+                    (seq (if (> x/3 2) (call print x/3 (uses Console/9)) ())
+                      (= $i/7 (+ $i/7 1)))))))))))
+    (fn $start () (with Console/1 Console.real (call main (uses Console/1))))
     |}]
 
 let%expect_test "a lambda lists what it captures" =
@@ -97,6 +101,7 @@ fn main() =
       (let n/1 1
         (let m/2 2
           (let f/4 (lambda (x/3) (captures n/1) (+ x/3 n/1)) (call f/4 m/2)))))
+    (fn $start () (call main))
     |}]
 
 let%expect_test "an index in a place is evaluated once, before the call" =
@@ -137,6 +142,7 @@ fn main() =
                               (update (get ps/1 $index/9) xs:
                                 (set (. (get ps/1 $index/9) xs) $i/8 y/3))))
                           (= $i/8 (+ $i/8 1)))))))))))))
+    (fn $start () (call main))
     |}]
 
 (* lint catches a lowering mistake at the node it's in *)
@@ -153,6 +159,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
     {
       path = Ren.Path.make "test" "main";
       params = [];
+      evidence = [];
       scheme =
         { ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed); names = [] };
       body;
@@ -161,7 +168,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
   in
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
-          Ren.Core_lint.program ~imports:[]
+          Ren.Core_lint.program ~imports:[] ~linked:[]
             { home = "test"; types = []; fns = [ main ]; values = [] }));
   [%expect
     {|
@@ -178,6 +185,7 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
     {
       path = Ren.Path.make "test" "main";
       params = [];
+      evidence = [];
       scheme =
         { ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed); names = [] };
       body;
@@ -186,7 +194,7 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
   in
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
-          Ren.Core_lint.program ~imports:[]
+          Ren.Core_lint.program ~imports:[] ~linked:[]
             { home = "test"; types = []; fns = [ main ]; values = [] }));
   [%expect
     {|
@@ -205,6 +213,7 @@ let values_program ~uses_b ~values =
     {
       path = path name;
       params = [];
+      evidence = [];
       scheme = { ty = int_fn; names = [] };
       body;
       loc;
@@ -214,7 +223,7 @@ let values_program ~uses_b ~values =
   let b = value "T.b" (Ren.Core.mk (Int 1) Ren.Ty.int loc) in
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
-          Ren.Core_lint.program ~imports:[]
+          Ren.Core_lint.program ~imports:[] ~linked:[]
             {
               home = "test";
               types = [];
@@ -230,6 +239,7 @@ let%expect_test "Core Lint reports a value named as a function" =
              (Global (Ren.Path.make "test" "T.b"))
              (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed))
              (Ren.Loc.point ~file 1 1),
+           [],
            [] ))
     ~values:[ "T.b"; "T.a" ];
   [%expect
@@ -310,6 +320,7 @@ fn main() =
     {|
     (fn main ()
       (let a/1 (< 1 2) (let b/2 (if a/1 (not a/1) false) (if b/2 true a/1))))
+    (fn $start () (call main))
     |}]
 
 let%expect_test "fail raises a tag; attempt and a fail arm handle it" =
@@ -347,6 +358,7 @@ fn main() = ()
     (fn first (o/1)
       (match o/1 ((Some $value/2) => $value/2) (None => (fail (tag Empty)))))
     (fn main () ())
+    (fn $start () (call main))
     |}]
 
 let%expect_test "a call that can fail writes its & places back anyway" =
@@ -389,4 +401,5 @@ fn each(inout grid: Array<Array<Int>>) =
                 (finally (call add &row/2 (neg 1))
                   (= grid/1 (set grid/1 $i/4 row/2)))
                 (= $i/4 (+ $i/4 1))))))))
+    (fn $start () (call main))
     |}]

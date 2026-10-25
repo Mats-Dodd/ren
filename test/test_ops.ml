@@ -531,6 +531,7 @@ fn main() =
                 (let $result/4 (call Counter.bump &$ref/2 $arg/3)
                   (seq (= p/1 (update p/1 right: $ref/2)) $result/4))))
             p/1))))
+    (fn $start () (call main))
     |}]
 
 let%expect_test "methods inside their own module" =
@@ -1377,6 +1378,7 @@ fn main() =
             (let $result/3 (call Array.push &$ref/2 1)
               (seq (= b/1 (update b/1 items: $ref/2)) $result/3)))
           (call Array.len (. b/1 items)))))
+    (fn $start () (call main))
     |}]
 
 let%expect_test "an array's built-in methods, called wrong" =
