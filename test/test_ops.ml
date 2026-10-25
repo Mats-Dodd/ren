@@ -1283,3 +1283,22 @@ fn main() = T.a
       │                  ^^^^
       = `T.a` is declared to have the type `Int`
     |}]
+
+let%expect_test "`&` before a call with no receiver" =
+  run {|
+fn id(xs) = xs
+
+fn main() =
+  var xs = [1]
+  let ys = &id(xs)
+  ys
+|};
+  [%expect
+    {|
+    error: `&` marks a method's receiver, but `id(xs)` has none
+      ┌─ test.ren:5:12
+    5 │   let ys = &id(xs)
+      │            ^^^^^^^
+      = `&` before a call marks a method's receiver as changed, like `&s.push(1)`, and an argument the call changes is marked inside it, like `f(&x)`
+      help: remove the `&`
+    |}]

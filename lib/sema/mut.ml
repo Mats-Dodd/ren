@@ -194,6 +194,20 @@ let rec walk cx (e : expr) =
       (match place_of r with Some _ -> walk_indices cx r | None -> walk cx r);
       List.iter (arg cx) args;
       guard cx (fun () -> exclusive ({ r with kind = Ref r } :: args))
+  | Ref ({ kind = Call _; _ } as call) ->
+      (* `&id(xs)`: a call with no receiver for the `&` to mark *)
+      Diag.report cx.sink
+        (Diag.make e.loc ~help:"remove the `&`"
+           ~notes:
+             [
+               "`&` before a call marks a method's receiver as changed, like \
+                `&s.push(1)`, and an argument the call changes is marked \
+                inside it, like `f(&x)`";
+             ]
+           (sprintf "`&` marks a method's receiver, but %s has none"
+              (match cx.source call with
+              | Some code -> sprintf "`%s`" code
+              | None -> "this call")))
   | Ref _ ->
       Diag.report cx.sink
         (Diag.make e.loc ~help:"remove the `&`"
