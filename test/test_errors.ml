@@ -1393,6 +1393,39 @@ pub fn debit(inout a: Int, m: Int) ! Refusal =
     fn main()
     |}]
 
+(* ---- 7. Bugs aren't errors ---- *)
+
+let%expect_test "an index out of bounds panics, and isn't an error" =
+  types
+    {|
+fn third(xs: Array<Int>) -> Int = xs[2]
+fn main() = print(attempt third([1]))
+|};
+  [%expect
+    {|
+    error: nothing here can fail
+      ┌─ test.ren:2:19
+    2 │ fn main() = print(attempt third([1]))
+      │                   ^^^^^^^
+      = `attempt` marks the calls that can fail, so a reader can see where the code can stop
+      help: remove the `attempt`
+    |}];
+  run
+    {|
+fn third(xs: Array<Int>) -> Int = xs[2]
+fn main() =
+  print(third([1, 2, 3]))
+  print(third([1]))
+|};
+  [%expect
+    {|
+    3
+    error: panic: index 2 is out of bounds for an array of length 1
+      ┌─ test.ren:1:35
+    1 │ fn third(xs: Array<Int>) -> Int = xs[2]
+      │                                   ^^^^^
+    |}]
+
 (* ---- what's written ---- *)
 
 let%expect_test "an error set is a type argument only of Result" =
