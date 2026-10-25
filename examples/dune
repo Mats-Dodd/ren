@@ -9,4 +9,5 @@
   (glob_files shop/*.ren)
   (glob_files shop/billing/*.ren)
   (glob_files vm/*.ren)
-  (glob_files bank/*.ren)))
+  (glob_files bank/*.ren)
+  (glob_files prices/*.ren)))

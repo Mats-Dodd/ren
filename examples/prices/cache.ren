@@ -1,0 +1,80 @@
+// Prices, from a supplier that's slow and limits how often it's asked, so
+// each answer is kept for a while. An entry older than `ttl` is asked for
+// again.
+//
+// A handler can't call the dependency it implements until `outer`
+// (stage 9), so the cache can't sit in front of another `Prices`: what it
+// asks is a dependency of its own, `Supplier`.
+
+import limiter.{Limiter}
+
+pub dep Supplier =
+  quote: fn(item: Str) -> Int ! Unknown(item: Str)
+
+pub dep Prices =
+  price: fn(item: Str) -> Int ! Unknown(item: Str) | Throttled(until: Instant)
+
+type Entry = { item: Str, price: Int, until: Instant }
+
+// at most `ttl` old, and the supplier asked only past the limiter
+pub handler cached(ttl: Duration) for Prices uses Supplier, Limiter, Clock =
+  var entries: Array<Entry> = []
+  price(item) =>
+    let now = Clock.instant()
+    var found = None
+    for e in entries
+      if e.item == item && now.before(e.until) then found = Some(e.price)
+    match found
+      Some(p) => p
+      None =>
+        try Limiter.take()
+        let p = try Supplier.quote(item)
+        &entries.push(Entry { item, price: p, until: now.plus(ttl) })
+        p
+
+// ---- tests ----
+
+pub dep Calls =
+  // how many times the supplier has been asked
+  count: fn() -> Int
+
+// a supplier that knows two prices, and counts how often it's asked
+handler counting() for Supplier, Calls =
+  var n = 0
+  quote(item) =>
+    n += 1
+    if item == "apple" then 3
+    else if item == "pear" then 5
+    else fail Unknown(item)
+  count() => n
+
+test "a second ask is answered from the cache" =
+  with counting(), Limiter.none, cached(Duration.seconds(10)) in
+    assert try Prices.price("apple") == 3
+    assert try Prices.price("apple") == 3
+    assert Calls.count() == 1
+
+test "an old entry is asked for again" =
+  with counting(), Limiter.none, cached(Duration.seconds(10)) in
+    let _ = try Prices.price("apple")
+    TestClock.advance(Duration.seconds(10))
+    let _ = try Prices.price("apple")
+    assert Calls.count() == 2
+
+test "an unknown item isn't kept" =
+  with counting(), Limiter.none, cached(Duration.seconds(10)) in
+    match attempt Prices.price("plum")
+      Err(Unknown(item)) => assert item == "plum"
+      _ => assert false
+    match attempt Prices.price("plum")
+      Err(Unknown(_)) => ()
+      _ => assert false
+    assert Calls.count() == 2
+
+test "a cached answer doesn't count against the limit" =
+  with counting(), limiter.fixed_window(1, Duration.seconds(1)), cached(Duration.seconds(10)) in
+    assert try Prices.price("apple") == 3
+    assert try Prices.price("apple") == 3
+    match attempt Prices.price("pear")
+      Err(Throttled(until)) => assert until == Instant.zero.plus(Duration.seconds(1))
+      _ => assert false

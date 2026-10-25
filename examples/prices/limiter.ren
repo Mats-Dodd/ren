@@ -1,0 +1,39 @@
+// A rate limiter: at most `limit` calls in each `window` of time. Each
+// window starts at the first call after the last one ended.
+
+pub dep Limiter =
+  // let one call through, or say when the next one can be made
+  take: fn() ! Throttled(until: Instant)
+
+  // a limiter that lets everything through
+  pub let none: Limiter = Limiter { take: fn() => () }
+
+pub handler fixed_window(limit: Int, window: Duration) for Limiter uses Clock =
+  var start = Clock.instant()
+  var used = 0
+  take() =>
+    let now = Clock.instant()
+    if now.not_before(start.plus(window)) then
+      start = now
+      used = 0
+    if used == limit then fail Throttled(start.plus(window))
+    used += 1
+
+test "calls up to the limit go through" =
+  with fixed_window(2, Duration.seconds(1)) in
+    try Limiter.take()
+    try Limiter.take()
+
+test "one more is throttled until the window ends" =
+  with fixed_window(2, Duration.seconds(1)) in
+    try Limiter.take()
+    try Limiter.take()
+    match attempt Limiter.take()
+      Err(Throttled(until)) => assert until == Instant.zero.plus(Duration.seconds(1))
+      _ => assert false
+
+test "a new window lets calls through again" =
+  with fixed_window(1, Duration.seconds(1)) in
+    try Limiter.take()
+    TestClock.advance(Duration.seconds(1))
+    try Limiter.take()

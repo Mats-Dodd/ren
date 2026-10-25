@@ -887,3 +887,31 @@ below zero. The tests that check nothing moved show the two banks, and
   
   12 passed, 3 failed
   [1]
+
+The price lookup puts a cache with expiry in front of a supplier that a
+rate limiter guards (prices/README.md). Each piece is a dependency, and
+`main` stacks them with one `with`:
+
+  $ ren run prices/main.ren
+  3
+  3
+  5
+  throttled
+  8
+  unknown
+  $ ren test prices
+  cache.ren
+    ✓ a second ask is answered from the cache
+    ✓ an old entry is asked for again
+    ✓ an unknown item isn't kept
+    ✓ a cached answer doesn't count against the limit
+  
+  limiter.ren
+    ✓ calls up to the limit go through
+    ✓ one more is throttled until the window ends
+    ✓ a new window lets calls through again
+  
+  main.ren
+    ✓ main prints each price, or what stopped it
+  
+  8 passed
