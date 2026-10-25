@@ -523,7 +523,9 @@ stage, or settled something the plan left open:
   that the two lines stay short and the marker finds the one shown. A
   part that can't be looked inside, an opaque value, one its type's own
   `show` shows, two different constructors or an element only one side
-  has, is shown whole, and a value whose parts are all shown the same,
+  has, is shown whole. Arrays that differ only in length keep the last
+  element both have, so the shorter one reads as ending there, `[..., 3]`
+  against `[..., 3, 4, ...]`. A value whose parts are all shown the same,
   through a `show` that hides a difference, is shown in full.
 - **The settled test of a deposit lacked a `try`:** `acme.statement(a)`
   fails with `NoSuchAccount`, so the test reads it into a `let` with

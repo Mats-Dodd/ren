@@ -4479,6 +4479,9 @@ test "two constructors" =
 test "one side is longer" =
   assert [1, 2, 3, 4] == [1, 2]
 
+test "the left side is shorter" =
+  assert [1, 2, 3] == [1, 2, 3, 4, 5]
+
 test "only the first difference" =
   assert P { name: "a", at: 1, shapes: [] } == P { name: "b", at: 2, shapes: [Dot] }
 
@@ -4490,6 +4493,7 @@ test "nothing in common" =
       ✗ a payload
       ✗ two constructors
       ✗ one side is longer
+      ✗ the left side is shorter
       ✗ only the first difference
       ✗ nothing in common
 
@@ -4520,15 +4524,26 @@ test "nothing in common" =
     11 │   assert [1, 2, 3, 4] == [1, 2]
        │          ^^^^^^^^^^^^^^^^^^^^^^
        │
-       left:  [..., 3, ...]
-       right: [...]
-                  ^ differs here
+       left:  [..., 2, 3, ...]
+       right: [..., 2]
+                     ^ differs here
 
        seed 3291 · rerun: ren test test.ren --only "one side" --seed 3291
 
-    ──── only the first difference ── test.ren:14
+    ──── the left side is shorter ── test.ren:14
        │
-    14 │   assert P { name: "a", at: 1, shapes: [] } == P { name: "b", at: 2, shapes: [Dot] }
+    14 │   assert [1, 2, 3] == [1, 2, 3, 4, 5]
+       │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  [..., 3]
+       right: [..., 3, 4, ...]
+                     ^ differs here
+
+       seed 3665 · rerun: ren test test.ren --only "the left" --seed 3665
+
+    ──── only the first difference ── test.ren:17
+       │
+    17 │   assert P { name: "a", at: 1, shapes: [] } == P { name: "b", at: 2, shapes: [Dot] }
        │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
        │
        left:  P { name: "a", ... }
@@ -4537,9 +4552,9 @@ test "nothing in common" =
 
        seed 9197 · rerun: ren test test.ren --only "only the" --seed 9197
 
-    ──── nothing in common ── test.ren:17
+    ──── nothing in common ── test.ren:20
        │
-    17 │   assert 1 == 2
+    20 │   assert 1 == 2
        │          ^^^^^^
        │
        left:  1
@@ -4548,7 +4563,7 @@ test "nothing in common" =
 
        seed 6226 · rerun: ren test test.ren --only "nothing in" --seed 6226
 
-    0 passed, 5 failed
+    0 passed, 6 failed
     [exit 1]
     |}]
 

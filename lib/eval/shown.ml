@@ -107,7 +107,9 @@ let shown ~own types (t : Ty.ty) (v : Value.t) =
    both, and a marker can be put under it. A part is kept whole where it
    can't be looked inside to compare: an opaque value, one its type's own
    `show` shows, two different constructors, and an element only one side
-   has. If nothing's left to tell them apart, both are shown in full. *)
+   has, after the last they share, which stays so the shorter side reads
+   as ending there. If nothing's left to tell them apart, both are shown
+   in full. *)
 let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
   let value = value ~own types in
   (* whether the difference has been shown: everything after it is `...`.
@@ -165,6 +167,16 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
               (fun _ s -> s)
               (List.filteri (fun i _ -> i < n) xs)
               (List.filteri (fun i _ -> i < n) ys)
+          in
+          (* if they differ only in length, the last element both have
+             stays, so the shorter side reads as ending there: `[..., 3]`
+             against `[..., 3, 4, ...]` *)
+          let l, r =
+            if (not !shown) && n > 0 then
+              let last = value elem (List.nth xs (n - 1)) in
+              let s = parts ((if n > 1 then [ "..." ] else []) @ [ last ]) in
+              (s, s)
+            else (l, r)
           in
           let extra side n_side =
             match List.nth_opt side n with
