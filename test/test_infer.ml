@@ -381,7 +381,7 @@ let%expect_test "a lambda takes its parameters' types from where it's going" =
   run
     (admin_types
    ^ {|
-fn apply<T>(x: T, f: fn(T) -> Int) -> Int = f(x)
+fn apply<T>(x: T, f: fn(T) -> Int) -> Int = try f(x)
 fn main() =
   print(apply(User { id: 1, name: 2 }, fn(u) => u.id))
   print(apply(Admin { id: 3, level: 4 }, fn(a) => a.id + a.level))
@@ -846,8 +846,8 @@ let%expect_test "dependencies flow through transparent parameters" =
   types
     {|
 fn twice(f: fn()) =
-  f()
-  f()
+  try f()
+  try f()
 
 fn shout() = print(1)
 
@@ -917,6 +917,13 @@ fn main() = 1
       │                    ^^^^^^^^^^^
       = a parameter whose type is written `fn(...)` can only be called, or passed straight to another function
       help: remove the type from `f` and let it be inferred, so its errors and dependencies are tracked wherever it goes
+
+    error: `f` can fail, and nothing handles it
+      ┌─ test.ren:1:28
+    1 │ fn keep(f: fn()) = fn() => f()
+      │                            ^^^
+      │                            - it can fail with whatever the function passed as `f` fails with
+      help: pass the errors on with `try`, or handle them with `match`
     |}];
   (* following the help: inferred, its dependencies show up as ..d *)
   types {|
@@ -925,18 +932,18 @@ fn main() = keep(fn() => print(1))()
 |};
   [%expect
     {|
-    fn keep<T>(f: fn() -> T ! ..e uses ..d) -> (fn() -> T ! ..e uses ..d)
+    fn keep<T>(f: fn() -> T uses ..d) -> (fn() -> T ! ..e uses ..d)
     fn main() uses Io
     |}];
   (* passing it on, directly or inside a lambda, is fine *)
   types
     {|
 fn twice(f: fn()) =
-  f()
-  f()
+  try f()
+  try f()
 fn four(f: fn()) =
-  twice(f)
-  twice(fn() => f())
+  try twice(f)
+  try twice(fn() => try f())
 fn main() = 1
 |};
   [%expect
@@ -952,7 +959,7 @@ let%expect_test "row unification" =
   let open Types in
   let st = new_state () in
   let row labels tail =
-    List.fold_right (fun l r -> RExtend (l, r)) labels tail
+    List.fold_right (fun l r -> RExtend (dep l, r)) labels tail
   in
   let show r =
     let pr = printer ~show_tail:(fun _ -> true) ~names:Path.full st in
@@ -996,7 +1003,7 @@ let%expect_test "inout in signatures" =
 fn bump(inout n) =
   n += 1
 fn apply(f: fn(inout Int), inout x: Int) =
-  f(&x)
+  try f(&x)
 fn main() =
   var a = 1
   apply(bump, &a)
@@ -1038,7 +1045,7 @@ fn main() =
     |}];
   run
     {|
-fn apply(f: fn(inout Int), inout x: Int) = f(&x)
+fn apply(f: fn(inout Int), inout x: Int) = try f(&x)
 fn main() =
   var a = 1
   apply(fn(n) => (), &a)
@@ -1293,13 +1300,13 @@ let%expect_test "a public function's interface comes from its signature" =
     clean
       {|
 pub fn twice(f: fn()) =
-  f()
-  f()
+  try f()
+  try f()
 pub fn show(x: Int) uses Io = print(x)
 pub fn logged(f: fn()) uses Io =
-  f()
+  try f()
   print(1)
-pub fn app(f: fn(fn() -> Int) -> Int) -> Int = f(fn() => 1)
+pub fn app(f: fn(fn() -> Int) -> Int) -> Int = try f(fn() => 1)
 pub fn maybe(f: Option<fn()>) =
   match f
     Some(g) => g()
@@ -1582,8 +1589,8 @@ let%expect_test
     {|
 pub fn twice(f: fn()) uses Io =
   print(0)
-  f()
-  f()
+  try f()
+  try f()
 fn main() = twice(fn() => print(1))
 |};
   [%expect {|

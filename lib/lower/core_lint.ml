@@ -44,8 +44,13 @@ let rec has_error (t : Ty.ty) =
   | Error -> true
   | Var _ -> false
   | Con (_, args) -> List.exists has_error args
-  | Fun (ps, r, _, _) ->
-      List.exists (fun (p : Ty.param) -> has_error p.ty) ps || has_error r
+  | Errors e -> row_has_error e
+  | Fun (ps, r, e, _) ->
+      List.exists (fun (p : Ty.param) -> has_error p.ty) ps
+      || has_error r || row_has_error e
+
+and row_has_error (r : Ty.row) =
+  List.exists (fun (l : Ty.label) -> List.exists has_error l.payload) r.labels
 
 (* A declaration's field type, given what its type parameters stand for. *)
 let rec subst args (t : Ty.ty) : Ty.ty =
@@ -53,12 +58,23 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   | Var i -> List.nth args i
   | Error -> Error
   | Con (p, a) -> Con (p, List.map (subst args) a)
+  | Errors e -> Errors (subst_row args e)
   | Fun (ps, r, e, u) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
           subst args r,
-          e,
+          subst_row args e,
           u )
+
+and subst_row args (r : Ty.row) =
+  {
+    r with
+    labels =
+      List.map
+        (fun (l : Ty.label) ->
+          { l with payload = List.map (subst args) l.payload })
+        r.labels;
+  }
 
 (* In its own module, an opaque type is its representation (iface.ml), so
    `UserId` and `Int` are the same type there. [reveal] replaces an opaque
@@ -74,7 +90,7 @@ let rec reveal env (t : Ty.ty) : Ty.ty =
       | Some { Iface.body = Opaque (Some rep); _ } ->
           reveal env (subst args rep)
       | _ -> t)
-  | Fun _ | Var _ | Error -> t
+  | Fun _ | Var _ | Errors _ | Error -> t
 
 (* Are [a] and [b] the same type, once opaque types are revealed where they
    differ? *)

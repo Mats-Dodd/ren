@@ -58,7 +58,9 @@ let components ~home ~calls (fns : fn_def list) =
       let pos (g : fn_def) = (g.loc.start.line, g.loc.start.col) in
       result := List.sort (fun a b -> compare (pos a) (pos b)) group :: !result
   in
-  List.iter (fun f -> if not (Hashtbl.mem index f.name.name) then visit f) fns;
+  List.iter
+    (fun (f : fn_def) -> if not (Hashtbl.mem index f.name.name) then visit f)
+    fns;
   List.rev !result
 
 (* ---- transparent parameters ----
@@ -171,48 +173,44 @@ let check_transparent sink (f : fn_def) =
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
     fn_params
 
-(* ---- what isn't checked yet ----
+(* ---- what's written ----
 
-   Error handling (errors.md) is parsed and resolved, but checked only from
-   stage 6.3. Until then each place that uses it is reported here, and
-   inference doesn't run. Declaring a named error set is fine: it does
-   nothing until a function fails with it. *)
+   Every type and error set written in the module, visited in source
+   order: [ty] sees each type, inner ones too, [errors] each error set,
+   and [pattern] each pattern. *)
 
-let not_yet sink (prog : program) =
-  let later loc what =
-    Diag.report sink
-      (Diag.make loc
-         ~help:"for now, return an `Option` to say that something didn't work"
-         (sprintf "%s later in stage 6" what))
-  in
-  let errors (es : Resolved.errors) =
-    later es.eloc "a function's errors, after `!`, arrive"
-  in
-  let rec ty (t : Resolved.ty) =
+let walk ~ty ~errors ~pattern (prog : program) =
+  let rec ty_ (t : Resolved.ty) =
+    ty t;
     match t with
-    | TyName (_, args) -> List.iter ty args
+    | TyName (_, args) -> List.iter ty_ args
     | TyFn (ps, ret, errs, _) ->
-        List.iter ty ps;
-        Option.iter ty ret;
-        Option.iter errors errs
-    | TyInout (t, _) -> ty t
-    | TyErrors es -> later es.eloc "an error set as a type argument arrives"
+        List.iter ty_ ps;
+        Option.iter ty_ ret;
+        Option.iter errors_ errs
+    | TyInout (t, _) -> ty_ t
+    | TyErrors es -> errors_ es
+  and errors_ (es : Resolved.errors) =
+    errors es;
+    List.iter
+      (function
+        | Tag (_, ps) ->
+            List.iter (fun (p : Resolved.payload) -> ty_ p.payload_ty) ps
+        | Set _ -> ())
+      es.errs
   in
-  let param (p : Resolved.param) = Option.iter ty p.pty in
-  let rec pattern (p : pattern) =
+  let param (p : Resolved.param) = Option.iter ty_ p.pty in
+  let rec pattern_ (p : Resolved.pattern) =
+    pattern p;
     match p.pkind with
-    | PWild | PVar _ | PInt _ | PBool _ -> ()
-    | PCon (_, ps) -> List.iter pattern ps
-    | PFail _ | PFail_any | POr _ -> later p.ploc "`fail` patterns arrive"
+    | PWild | PVar _ | PInt _ | PBool _ | PFail_any -> ()
+    | PCon (_, ps) | PFail (_, ps) | POr ps -> List.iter pattern_ ps
   in
   let rec expr (e : expr) =
     let go = List.iter expr in
     match e.kind with
     | Int _ | Bool _ | Unit | Var _ -> ()
-    | Unop (_, a) | Field (a, _) | Ref a -> expr a
-    | Binop (Orelse, a, b) ->
-        later e.loc "`orelse` arrives";
-        go [ a; b ]
+    | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a -> expr a
     | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go [ a; b ]
     | If (c, t, f) -> go (c :: t :: Option.to_list f)
@@ -224,55 +222,142 @@ let not_yet sink (prog : program) =
         List.iter
           (function
             | Let { ty = t; value; _ } ->
-                Option.iter ty t;
+                Option.iter ty_ t;
                 expr value
             | Expr e -> expr e)
           stmts;
         expr last
-    | Con (_, args) -> go (List.map snd args)
-    | Fail (_, args) ->
-        later e.loc "`fail` arrives";
-        go (List.map snd args)
+    | Con (_, args) | Fail (_, args) -> go (List.map snd args)
     | Record (_, fields) -> go (List.map snd fields)
     | Match (s, arms) ->
         expr s;
         List.iter
           (fun (a : arm) ->
-            pattern a.arm_pat;
+            pattern_ a.arm_pat;
             Option.iter expr a.arm_guard;
             expr a.arm_body)
           arms
     | Array xs -> go xs
     | For { iter; body; _ } -> go [ iter; body ]
-    | Try a ->
-        later e.loc "`try` arrives";
-        expr a
-    | Attempt a ->
-        later e.loc "`attempt` arrives";
-        expr a
   in
   let fn_ (f : fn_def) =
     List.iter param f.params;
-    Option.iter ty f.ret;
-    Option.iter errors f.errors;
+    Option.iter ty_ f.ret;
+    Option.iter errors_ f.errors;
     expr f.body
   in
   List.iter
     (function
       | Fn f -> fn_ f
       | Type td ->
-          let field (fd : Resolved.field) = ty fd.field_ty in
+          let field (fd : Resolved.field) = ty_ fd.field_ty in
           (match td.type_body with
           | Fields fs -> List.iter field fs
           | Ctors cs -> List.iter (fun c -> List.iter field c.ctor_fields) cs
-          | Opaque t -> ty t
-          | Errors _ ->
-              (* a named error set means nothing until it's used, and
-                 resolve.ml has checked its names *)
-              ());
+          | Opaque t -> ty_ t
+          | Errors es -> errors_ es);
           List.iter (fun (o : op) -> fn_ o.op_fn) td.type_ops
       | Import _ -> ())
     prog
+
+(* `fail` patterns (errors.md, "Handling: `match`") are parsed and resolved,
+   but checked only from stage 6.4. Until then each one is reported here,
+   and inference doesn't run. *)
+let not_yet sink (prog : program) =
+  walk prog
+    ~ty:(fun _ -> ())
+    ~errors:(fun _ -> ())
+    ~pattern:(fun p ->
+      match p.pkind with
+      | PFail _ | PFail_any | POr _ ->
+          Diag.report sink
+            (Diag.make p.ploc
+               ~help:
+                 "for now, keep the outcome with `attempt` and match the \
+                  `Result`: `Err(Short(_, by))`"
+               "`fail` patterns arrive later in stage 6")
+      | _ -> ())
+
+(* The error sets and `Result`s written in the module make sense: an
+   error set is a type argument only of `Result`, whose second argument
+   is always one, and no set, named sets expanded, has two shapes of one
+   tag. [sets] are the named error sets the module can see, and [names]
+   says how it writes a type's name. *)
+let written_loc : Resolved.ty -> Loc.t = function
+  | TyName ({ tloc; _ }, _) -> tloc
+  | TyFn (_, _, _, l) | TyInout (_, l) -> l
+  | TyErrors es -> es.eloc
+
+let check_written sink ~sets ~names (prog : program) =
+  let report = Diag.report sink in
+  let result = Path.prelude "Result" in
+  let ty (t : Resolved.ty) =
+    match t with
+    | TyName ({ tref = Named p; _ }, [ _; arg ]) when p = result -> (
+        match arg with
+        | TyErrors _ -> ()
+        | arg ->
+            report
+              (Diag.make (written_loc arg)
+                 ~notes:
+                   [
+                     "a `Result` holds a value or an error, which `attempt` \
+                      keeps there";
+                   ]
+                 ~help:
+                   "write an error set, after `!`: `Result<Int, ! NotFound>`"
+                 "`Result`'s second argument is an error set"))
+    | TyName ({ tref = Named p; _ }, args) ->
+        List.iter
+          (function
+            | TyErrors (es : Resolved.errors) ->
+                report
+                  (Diag.make es.eloc
+                     ~help:
+                       "an error set goes after `!` in a signature or a \
+                        function type, or in `Result<T, ! ...>`"
+                     (sprintf "`%s` doesn't take an error set" (names p)))
+            | _ -> ())
+          args
+    | TyName _ | TyFn _ | TyInout _ | TyErrors _ -> ()
+  in
+  let pr = Ty.printer ~names { ty = Error; names = [] } in
+  let errors (es : Resolved.errors) =
+    let tags = Iface.tags ~sets (Iface.declared_errors ~sets es) in
+    let reported = ref [] in
+    List.iter
+      (fun ((l : Ty.label), via) ->
+        match
+          List.find_opt
+            (fun ((m : Ty.label), _) ->
+              m.name = l.name && m.payload <> l.payload)
+            tags
+        with
+        | Some (m, via') when not (List.mem l.name !reported) ->
+            reported := l.name :: !reported;
+            let from (l : Ty.label) via =
+              let where =
+                match via with
+                | Some (p : Path.t) -> sprintf "from `%s`" (names p)
+                | None -> "written here"
+              in
+              sprintf "%s: `%s`" where (Ty.show_label pr l)
+            in
+            report
+              (Diag.make es.eloc
+                 ~notes:
+                   [
+                     from l via;
+                     from m via';
+                     "a tag is its name and its payload's types, so these are \
+                      two errors with one name";
+                   ]
+                 ~help:"rename one of them"
+                 (sprintf "`%s` has two shapes here" l.name))
+        | _ -> ())
+      tags
+  in
+  walk prog ~ty ~errors ~pattern:(fun _ -> ())
 
 (* ---- what a function declares it uses ---- *)
 
@@ -311,12 +396,225 @@ let check_uses env ~is_value (f : fn_def) cx declared =
         let call =
           match first (fun c -> List.mem dep c.own) with
           | Some loc -> Some loc
-          | None -> first (fun c -> List.mem dep (fst (row_parts c.row)))
+          | None -> first (fun c -> List.mem dep (row_names c.row))
         in
         report env
           (if is_value f then value_uses f dep call
            else undeclared_use f dep call))
-    (List.sort_uniq String.compare (fst (row_parts cx.uses)))
+    (List.sort_uniq String.compare (row_names cx.uses))
+
+(* ---- what a function fails with (errors.md) ---- *)
+
+(* The errors [f] declares, as labels: those written after its `!`, named
+   sets expanded, or none for a public function without one, or an
+   associated value, which can't fail. A private function without `!`
+   declares nothing, and inference works out what it fails with. *)
+let declared_errors env ~is_value ~tparams (f : fn_def) =
+  match f.errors with
+  | _ when is_value f -> Some []
+  | Some es -> Some (error_labels env ~tvars:tparams es)
+  | None when f.pub -> Some []
+  | None -> None
+
+(* Does a row ending in [tail] belong to one of [params]? Then it stands
+   for whatever the function passed there fails with. *)
+let in_params params tail =
+  List.exists (fun (_, t) -> List.mem tail (row_vars t)) params
+
+(* Whether the call [c] can fail, now that its group is done: its callee
+   brought in errors of its own, or is a function of the group that turned
+   out to fail, or its errors are those of a function the caller was
+   passed. *)
+let can_fail env (c : ecall) =
+  c.eown <> []
+  || (match c.etarget with
+    | Some p -> (
+        match repr (Hashtbl.find env.globals p) with
+        | TFun (_, _, e, _) -> row_names e <> []
+        | _ -> false)
+    | None -> false)
+  ||
+  match row_tail c.erow with
+  | Some t -> in_params c.eparams t
+  | None -> false
+
+(* The rules of markers, checked once the group's functions are joined,
+   when it's known what each call fails with (errors.md, "Marking"):
+
+   1. each `attempt` keeps exactly what the calls it covers fail with
+   2. each tag matched in an `attempt`'s errors is one of them
+   3. each `try r` of a [Result] fails with what [r] holds
+   4. a call no marker covers can't fail
+   5. every marker covers something that can fail *)
+let settle_errors env =
+  let pr = printer env in
+  List.iter close_row env.kept;
+  List.iter
+    (fun ((c : ident), payload, errs) ->
+      match
+        List.find_opt
+          (fun (l : label) -> l.name = c.name)
+          (fst (row_parts errs))
+      with
+      | Some l when List.length l.payload = List.length payload ->
+          List.iter2
+            (fun found expected -> unify_at env c.loc ~found ~expected)
+            payload l.payload
+      | Some l ->
+          report env
+            (tag_arity c.loc c (List.length l.payload) (List.length payload))
+      | None ->
+          report env
+            (not_an_error c (List.map (show_label pr) (fst (row_parts errs)))))
+    (List.rev env.tag_patterns);
+  List.iter
+    (fun (u : unwrap) ->
+      let sources =
+        match u.usources with
+        | Some s -> (!s, "from the signature")
+        | None -> ([], "from an earlier call")
+      in
+      add_errors env ~loc:u.uloc ~here:"from this `Result`" ~sources
+        ~fix:(fun _ -> "rename one of them where it comes in")
+        u.uerrs u.uhandler;
+      u.umarker.unwrapped <- u.uerrs :: u.umarker.unwrapped;
+      Option.iter (fun s -> s := Unwrapped (u.uloc, u.uerrs) :: !s) u.usources)
+    (List.rev env.unwraps);
+  List.iter
+    (fun ((c : ecall), unhandled) ->
+      let labels, tail = row_parts unhandled in
+      let own t = List.exists (fun e -> row_tail e = Some t) c.eselves in
+      match tail with
+      | Some t when own t && in_params c.eparams t ->
+          (* the call's errors are its caller's own, those of a function
+             it was passed *)
+          let param, _ =
+            List.find (fun (_, ty) -> List.mem t (row_vars ty)) c.eparams
+          in
+          report env
+            (unhandled_param c.eloc ~name_loc:c.ename_loc c.ename param)
+      | _ when labels <> [] ->
+          report env
+            (unhandled_call c.eloc ~name_loc:c.ename_loc c.ename
+               (List.map (show_label pr) labels))
+      | Some t when own t ->
+          (* the caller's own errors, which it doesn't pass on: it fails
+             with none, or this is reported where it does *)
+          ()
+      | _ -> close_row unhandled)
+    (List.rev env.unmarked);
+  List.iter
+    (fun m ->
+      if
+        not
+          (m.failed
+          || List.exists (can_fail env) m.covered
+          || List.exists (fun r -> row_names r <> []) m.unwrapped)
+      then
+        report env
+          (covers_nothing m.mloc
+             (match m.mkind with Mtry -> "try" | Mattempt -> "attempt")))
+    (List.rev env.all_markers);
+  env.kept <- [];
+  env.tag_patterns <- [];
+  env.unwraps <- [];
+  env.unmarked <- [];
+  env.all_markers <- []
+
+(* Check that [f], which declares its errors, [declared], fails with
+   exactly those: nothing else, reported at the first place that brings
+   it in, and each of them, reported where it's written. [cx] is what
+   checking [f]'s body found. *)
+let check_errors env (f : fn_def) cx declared =
+  let pr = printer env in
+  let pos (l : Loc.t) = (l.start.line, l.start.col) in
+  let loc = function
+    | Passed c -> c.eloc
+    | Failed (l, _) | Unwrapped (l, _) -> l
+  in
+  let sources =
+    List.sort
+      (fun a b -> compare (pos (loc a)) (pos (loc b)))
+      (Option.fold ~none:[] ~some:( ! ) cx.sources)
+  in
+  let is_declared name =
+    List.exists (fun (d : label) -> d.name = name) declared
+  in
+  (* what each source fails with: its own errors, or if it's a call of
+     the group, its callee's *)
+  let brings = function
+    | Passed c -> (
+        match (c.eown, c.etarget) with
+        | [], Some p -> (
+            match repr (Hashtbl.find env.globals p) with
+            | TFun (_, _, e, _) -> row_names e
+            | _ -> [])
+        | own, _ -> List.map (fun (l : label) -> l.name) own)
+    | Failed (_, l) -> [ l.name ]
+    | Unwrapped (_, r) -> row_names r
+  in
+  let what = function
+    | Passed _ -> "this call can fail with"
+    | Failed _ -> "this fails with"
+    | Unwrapped _ -> "this `Result` holds"
+  in
+  List.iter
+    (fun (l : label) ->
+      if not (is_declared l.name) then
+        let from =
+          match List.find_opt (fun s -> List.mem l.name (brings s)) sources with
+          | Some s -> Some (loc s, what s)
+          | None -> (
+              match
+                List.find_opt
+                  (function
+                    | Passed c -> List.mem l.name (row_names c.erow)
+                    | _ -> false)
+                  sources
+              with
+              | Some s -> Some (loc s, what s)
+              | None -> None)
+        in
+        report env
+          (undeclared_error f ~tag:l.name ~shape:(show_label pr l) from))
+    (List.sort
+       (fun (a : label) b -> String.compare a.name b.name)
+       (fst (row_parts cx.errs)));
+  (* a call of a function [f] was passed can fail with anything, so with
+     each of them *)
+  let anything =
+    List.exists
+      (function
+        | Passed c -> (
+            match row_tail c.erow with
+            | Some t -> in_params c.eparams t
+            | None -> false)
+        | _ -> false)
+      sources
+  in
+  if not anything then
+    let actual = List.concat_map brings sources in
+    let written =
+      match f.errors with
+      | None -> []
+      | Some es ->
+          List.concat_map
+            (function
+              | Tag ((t : ident), _) -> [ (t.name, t.loc, None) ]
+              | Set { tref = Named p; tloc } ->
+                  List.map
+                    (fun ((l : Ty.label), _) -> (l.name, tloc, Some p))
+                    (Iface.tags ~sets:env.sets [ Iface.Set p ])
+              | Set { tref = Param _; _ } -> [])
+            es.errs
+    in
+    let seen = ref [] in
+    List.iter
+      (fun (tag, loc, via) ->
+        if not (List.mem tag actual || List.mem tag !seen) then (
+          seen := tag :: !seen;
+          report env (unused_error f ~tag ~via:(Option.map env.names via) loc)))
+      written
 
 (* ---- associated values ----
 
@@ -458,15 +756,26 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
         Ast.source ~type_name:(Resolve.type_name r)
           ~value_name:(Resolve.value_name r);
       types;
+      sets =
+        (fun p ->
+          match Hashtbl.find_opt types p with
+          | Some { body = Errors es; _ } -> Some es
+          | _ -> None);
       visible;
       globals = Hashtbl.create 16;
       group = [];
       spelled = [];
       joins = [];
       drops = [];
+      unmarked = [];
+      all_markers = [];
+      kept = [];
+      unwraps = [];
+      tag_patterns = [];
       in_scope = [];
     }
   in
+  check_written sink ~sets:env.sets ~names:env.names r.prog;
   List.iter
     (fun (iface : Iface.t) ->
       List.iter
@@ -503,7 +812,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       | p :: _ when p.pname.ident.name = "self" && Ast.spelled f ->
           Hashtbl.replace env.globals
             (Path.make home f.name.name)
-            (of_scheme st (Iface.signature f))
+            (of_scheme st (Iface.signature ~sets:env.sets f))
       | _ -> ())
     fns;
   let values =
@@ -538,11 +847,17 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
           (* a function that declares its dependencies starts with them: its
              body can add to them only through a transparent parameter, whose
              row this is too, and whatever else it adds is reported once the
-             group is done *)
-          let errs = fresh_row env.st in
+             group is done. The same goes for its errors. *)
+          let errs =
+            extend
+              (Option.value
+                 (declared_errors env ~is_value ~tparams f)
+                 ~default:[])
+              (fresh_row env.st)
+          in
           let uses =
             List.fold_right
-              (fun d rest -> RExtend (d, rest))
+              (fun d rest -> RExtend (dep d, rest))
               (Option.value (declared_uses ~is_value f) ~default:[])
               (fresh_row env.st)
           in
@@ -551,7 +866,7 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
           in
           let ret =
             match f.ret with
-            | Some t -> convert ~tvars:tparams ~row:closed t
+            | Some t -> convert env ~tvars:tparams ~row:closed t
             | None when f.pub && not (is_value f) ->
                 unit (* a public function without `->` returns Unit *)
             | None -> fresh_var env.st
@@ -569,6 +884,15 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
             uses;
             calls = ref [];
             tparams;
+            handler = errs;
+            markers = [];
+            params =
+              List.map2
+                (fun (p : Resolved.param) (t : Types.param) ->
+                  (p.pname.ident.name, t.ty))
+                f.params ps;
+            selves = [ errs ];
+            sources = Some (ref []);
           }
         in
         Hashtbl.replace env.globals (path f) (TFun (ps, ret, errs, uses));
@@ -641,15 +965,20 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
         (List.rev env.joins);
       env.joins <- [];
       dropped_values env;
+      (* only now, with the group's uses of each other joined, is it known
+         everything each function uses and fails with *)
+      settle_errors env;
       env.group <- [];
       env.spelled <- [];
-      (* only now, with the group's uses of each other joined, is it known
-         everything each function uses *)
       List.iter
-        (fun ((f : fn_def), _, cx, _, _) ->
+        (fun ((f : fn_def), skolems, cx, _, _) ->
           Option.iter
             (check_uses env ~is_value f cx)
-            (declared_uses ~is_value f))
+            (declared_uses ~is_value f);
+          Option.iter (check_errors env f cx)
+            (declared_errors env ~is_value
+               ~tparams:(List.map (fun (id, n) -> TSkol (id, n)) skolems)
+               f))
         setups;
       leave_level env.st;
       List.iter

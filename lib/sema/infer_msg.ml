@@ -497,3 +497,139 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
          (Ast.short_name f.name.name)
          dep)
     (sprintf "the associated value `%s` uses `%s`" f.name.name dep)
+
+(* ---- errors (errors.md) ---- *)
+
+(* "`Short(Int)`", "`Short(Int)` and `Frozen`", "`A`, `B` and `C`" *)
+let and_list items =
+  match List.rev (List.map (sprintf "`%s`") items) with
+  | [] -> ""
+  | [ x ] -> x
+  | last :: rest -> String.concat ", " (List.rev rest) ^ " and " ^ last
+
+(* One error set would hold two shapes of the tag [name]: [old] is where
+   the one already there came from and its shape, and [new_] the same for
+   the one coming in. *)
+let two_shapes loc name ~old:(old_from, old_shape) ~new_:(new_from, new_shape)
+    ~help =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf "%s: `%s`" old_from old_shape;
+        sprintf "%s: `%s`" new_from new_shape;
+        "a tag is its name and its payload's types, so these are two errors \
+         with one name";
+      ]
+    ~help
+    (sprintf "`%s` has two shapes here" name)
+
+(* `Err(...)` written as a value. *)
+let err_made loc =
+  Diag.make loc
+    ~notes:[ "`Err` holds an error, and an error isn't a value" ]
+    ~help:
+      "write `attempt` before the call that fails, `attempt f()`, to keep what \
+       it fails with in a `Result`"
+    "an error is kept in a `Result` only by `attempt`"
+
+(* A tag pattern with the wrong number of payload patterns. *)
+let tag_arity loc (c : Ast.ident) want given =
+  Diag.make loc
+    (sprintf "`%s`'s payload has %d value%s, but this pattern has %d" c.name
+       want (plural want) given)
+
+(* A tag pattern for an error the set doesn't have; [tags] are those it
+   has, as shown. *)
+let not_an_error (c : Ast.ident) tags =
+  Diag.make c.loc
+    ~notes:
+      [
+        (match tags with
+        | [] -> "it holds no errors at all"
+        | tags -> sprintf "it can hold %s" (and_list tags));
+      ]
+    ~help:"check the spelling: a tag that's written wrong is a different error"
+    (sprintf "`%s` isn't one of the errors this can hold" c.name)
+
+(* A call no marker covers, of [callee], which can fail with [tags], as
+   shown; [name_loc] is where the callee is written. *)
+let unhandled_call loc ~name_loc callee tags =
+  Diag.make loc
+    ~labels:[ (name_loc, sprintf "it can fail with %s" (and_list tags)) ]
+    ~help:"pass the errors on with `try`, or handle them with `match`"
+    (sprintf "`%s` can fail, and nothing handles it" callee)
+
+(* The same, for a call of [callee] whose errors are those of the
+   function passed as the parameter [param]. *)
+let unhandled_param loc ~name_loc callee param =
+  Diag.make loc
+    ~labels:
+      [
+        ( name_loc,
+          sprintf
+            "it can fail with whatever the function passed as `%s` fails with"
+            param );
+      ]
+    ~help:"pass the errors on with `try`, or handle them with `match`"
+    (sprintf "`%s` can fail, and nothing handles it" callee)
+
+(* A `try` or `attempt`, at [loc], that covers nothing that can fail. *)
+let covers_nothing loc keyword =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`%s` marks the calls that can fail, so a reader can see where the \
+           code can stop"
+          keyword;
+      ]
+    ~help:(sprintf "remove the `%s`" keyword)
+    "nothing here can fail"
+
+(* How a message names the function [f]: `pub fn transfer`. *)
+let fn_named (f : Ast.Resolved.fn_def) =
+  sprintf "%sfn %s" (if f.pub then "pub " else "") f.name.name
+
+(* [f]'s body can fail with [tag], shown as [shape], which its signature
+   doesn't list; [from] is the first place it comes from, and what it is. *)
+let undeclared_error (f : Ast.Resolved.fn_def) ~tag ~shape from =
+  let fn = fn_named f in
+  Diag.make f.name.loc
+    ~labels:
+      (match from with
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" what tag) ]
+      | None -> [])
+    ~notes:
+      [
+        (if f.errors = None then
+           sprintf
+             "a public function without `!` can't fail, and its body is \
+              checked against that"
+         else sprintf "`%s` can only fail with what's after its `!`" f.name.name);
+      ]
+    ~help:
+      (if f.errors = None then
+         sprintf "add `! %s` to its signature, or handle it here with `match`"
+           shape
+       else sprintf "add `%s` after `!`, or handle it here with `match`" shape)
+    (sprintf "`%s` can fail with `%s`, but its signature doesn't say so" fn tag)
+
+(* [f]'s signature lists [tag], written at [loc] (through the named set
+   [via], if it's in one), but nothing in its body can fail with it. *)
+let unused_error (f : Ast.Resolved.fn_def) ~tag ~via loc =
+  Diag.make loc
+    ~notes:
+      ((match via with
+         | Some set -> [ sprintf "`%s` is in `%s`" tag set ]
+         | None -> [])
+      @ [
+          "a signature lists exactly what a function can fail with, so its \
+           callers handle nothing that can't happen";
+        ])
+    ~help:
+      (match via with
+      | Some set ->
+          sprintf "write the errors it can fail with in place of `%s`" set
+      | None -> sprintf "remove `%s` from after `!`" tag)
+    (sprintf "`%s` says it can fail with `%s`, but nothing in it can"
+       (fn_named f) tag)

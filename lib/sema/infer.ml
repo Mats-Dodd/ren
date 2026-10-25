@@ -8,13 +8,20 @@
 
    Every function type also carries two rows (types.ml): the errors it can
    fail with and the dependencies it uses. Each function body has its own
-   pair of open rows, and every call adds the callee's rows to the caller's,
-   so a function's `uses` is everything the functions it calls use. `print`
-   uses `Io`, so `main` does too, unless it declares its dependencies: a
-   function that writes `uses`, and every public function, can use only
-   what it lists (infer_top.ml). Nothing can fail with an error until Stage
-   6, so error rows are always empty for now, but they're inferred the same
-   way.
+   pair of open rows, and every call adds the callee's dependencies to the
+   caller's, so a function's `uses` is everything the functions it calls
+   use. `print` uses `Io`, so `main` does too, unless it declares its
+   dependencies: a function that writes `uses`, and every public function,
+   can use only what it lists (infer_top.ml).
+
+   Errors (errors.md) are rows too, whose labels are tags with payloads,
+   `Short(Int)`, but a call's errors go only where a marker says: a `try`
+   adds them to the function's own, an `attempt` keeps them in a `Result`,
+   and a call no marker covers can't fail at all. A `fail` adds its tag to
+   whatever handles the code it's in. Whether each call can fail is known
+   only once its group is done, so the markers' rules, and that a function
+   that writes its errors (every public one does) fails with exactly
+   those, are checked then (infer_top.ml).
 
    Top-level functions are checked in dependency order: callees before
    callers, with mutually recursive functions checked together (a strongly

@@ -33,6 +33,9 @@ type ty =
   | TCon of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
   | TFun of param list * ty * row * row  (** params, result, errors, uses *)
   | TVar of tvar ref
+  | TErrors of row
+      (** an error set as a type argument, which only [Result<T, ! ...>] takes
+      *)
   | TSkol of int * string
       (** a type parameter like [T], while checking the function that declares
           it: equal only to itself, since the function has to work for every [T]
@@ -48,8 +51,12 @@ type ty =
    wouldn't write `&`, and the change would be lost. *)
 and param = { mode : mode; ty : ty }
 and tvar = Unbound of int * int  (** id, level *) | Link of ty
-and row = REmpty | RExtend of string * row | RVar of rvar ref
+and row = REmpty | RExtend of label * row | RVar of rvar ref
 and rvar = RUnbound of int * int  (** id, level *) | RLink of row
+
+(* A row's label: an error's tag and its payload's types, or a dependency,
+   whose payload is empty (ty.ml). *)
+and label = { name : string; payload : ty list }
 
 let generic_level = max_int
 
@@ -97,6 +104,7 @@ let unit = TCon (Path.prelude "Unit", [])
 let array t = TCon (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let param_tys ps = List.map (fun p -> p.ty) ps
+let dep name = { name; payload = [] }
 
 (* Follow links to the type a variable currently stands for, shortening the
    chain as it goes so later lookups are quick. *)
@@ -117,7 +125,7 @@ let rec repr_row r =
   | r -> r
 
 (* A row's labels and, if it's open, the id of its tail variable. *)
-let row_parts r =
+let rec row_parts r =
   let rec go acc r =
     match repr_row r with
     | REmpty -> (List.rev acc, None)
@@ -126,6 +134,23 @@ let row_parts r =
     | RVar { contents = RLink _ } -> assert false (* repr_row followed it *)
   in
   go [] r
+
+(* Just the labels' names. *)
+and row_names r = List.map (fun l -> l.name) (fst (row_parts r))
+
+(* The row variable a row ends in, if it's open. *)
+let row_tail r = snd (row_parts r)
+
+(* Close [r]: it has exactly the labels it has now. *)
+let rec close_row r =
+  match repr_row r with
+  | RExtend (_, rest) -> close_row rest
+  | RVar ({ contents = RUnbound _ } as cell) -> cell := RLink REmpty
+  | RVar { contents = RLink _ } | REmpty -> ()
+
+(* A row of [labels], ending in [tail]. *)
+let extend labels tail =
+  List.fold_right (fun l rest -> RExtend (l, rest)) labels tail
 
 (* ---- generalizing and instantiating ---- *)
 
@@ -155,6 +180,7 @@ let generalize st ~skolems t =
               Hashtbl.replace st.skolem_vars id v;
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
+    | TErrors e -> TErrors (row e)
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
     | TError -> TError
   and param p = { p with ty = go p.ty }
@@ -165,7 +191,8 @@ let generalize st ~skolems t =
         r
     | RVar { contents = RLink _ } -> assert false
     | REmpty -> REmpty
-    | RExtend (l, rest) -> RExtend (l, row rest)
+    | RExtend (l, rest) ->
+        RExtend ({ l with payload = List.map go l.payload }, row rest)
   in
   go t
 
@@ -184,6 +211,7 @@ let instantiate st t =
             v)
     | (TVar _ | TSkol _ | TError) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
+    | TErrors e -> TErrors (row e)
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
   and param p = { p with ty = go p.ty }
   and row r =
@@ -196,7 +224,8 @@ let instantiate st t =
             Hashtbl.add rows id v;
             v)
     | (REmpty | RVar _) as r -> r
-    | RExtend (l, rest) -> RExtend (l, row rest)
+    | RExtend (l, rest) ->
+        RExtend ({ l with payload = List.map go l.payload }, row rest)
   in
   go t
 
@@ -268,6 +297,7 @@ let rec canon_ty c ~all t : Ty.ty =
       | None -> Error)
   | TVar _ | TError -> Error
   | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
+  | TErrors e -> Errors (canon_row c ~all e)
   | TFun (ps, r, e, u) ->
       (* `let`s fix the order of first appearance: OCaml evaluates a
          constructor's arguments right to left *)
@@ -280,7 +310,9 @@ let rec canon_ty c ~all t : Ty.ty =
       Fun (ps, r, e, u)
 
 and canon_row c ~all r : Ty.row =
-  (* only a generic tail stands for "and possibly more", in a scheme *)
+  (* only a generic tail stands for "and possibly more", in a scheme. The
+     labels' payloads are converted in order of name, then the tail, as
+     Ty.canonical numbers them. *)
   let rec tail r =
     match repr_row r with
     | RVar { contents = RUnbound (id, l) } ->
@@ -291,7 +323,18 @@ and canon_row c ~all r : Ty.row =
     | REmpty -> None
     | RVar { contents = RLink _ } -> assert false
   in
-  { labels = List.sort_uniq String.compare (fst (row_parts r)); tail = tail r }
+  let labels =
+    List.sort_uniq
+      (fun (a : label) b -> String.compare a.name b.name)
+      (fst (row_parts r))
+  in
+  let labels =
+    List.map
+      (fun (l : label) ->
+        { Ty.name = l.name; payload = List.map (canon_ty c ~all) l.payload })
+      labels
+  in
+  { labels; tail = tail r }
 
 (* What [canon] has numbered so far, as a scheme's [names]. *)
 let canon_names c = List.sort compare c.names
@@ -307,6 +350,7 @@ let to_scheme st t : Ty.scheme =
 let rec of_ty ~vars ~tails (t : Ty.ty) =
   match t with
   | Con (p, args) -> TCon (p, List.map (of_ty ~vars ~tails) args)
+  | Errors e -> TErrors (of_row ~vars ~tails e)
   | Fun (ps, r, e, u) ->
       TFun
         ( List.map
@@ -314,14 +358,19 @@ let rec of_ty ~vars ~tails (t : Ty.ty) =
               { mode = p.mode; ty = of_ty ~vars ~tails p.ty })
             ps,
           of_ty ~vars ~tails r,
-          of_row ~tails e,
-          of_row ~tails u )
+          of_row ~vars ~tails e,
+          of_row ~vars ~tails u )
   | Var n -> vars n
   | Error -> TError
 
-and of_row ~tails (r : Ty.row) =
+and of_row ~vars ~tails (r : Ty.row) =
   let tail = match r.tail with Some n -> tails n | None -> REmpty in
-  List.fold_right (fun l rest -> RExtend (l, rest)) r.labels tail
+  extend
+    (List.map
+       (fun (l : Ty.label) ->
+         { name = l.name; payload = List.map (of_ty ~vars ~tails) l.payload })
+       r.labels)
+    tail
 
 (* [t], or if it's one of the module's own opaque types, what that's
    represented as, and so on until it's some other type (resolve.ml makes
@@ -408,15 +457,37 @@ let show pr t = Ty.show pr.ty_printer (to_ty pr t)
 let show_row pr ~prefix ~sep ~kind r =
   Ty.show_row pr.ty_printer ~prefix ~sep ~kind (canon_row pr.canon ~all:false r)
 
+(* A label as a row shows it, `Short(Int, Money)`. *)
+let show_label pr (l : label) =
+  let payload = List.map (to_ty pr) l.payload in
+  Ty.show_label pr.ty_printer { name = l.name; payload }
+
 let show_effects pr e u =
   let e = canon_row pr.canon ~all:false e in
   let u = canon_row pr.canon ~all:false u in
   Ty.show_effects pr.ty_printer e u
 
+(* The row variables in a type, by id: a function type's tails, and those
+   of the function types inside it. *)
+let rec row_vars t =
+  let row r =
+    let labels, tail = row_parts r in
+    List.concat_map
+      (fun (l : label) -> List.concat_map row_vars l.payload)
+      labels
+    @ Option.to_list tail
+  in
+  match repr t with
+  | TVar _ | TSkol _ | TError -> []
+  | TCon (_, args) -> List.concat_map row_vars args
+  | TErrors e -> row e
+  | TFun (ps, r, e, u) ->
+      List.concat_map row_vars (r :: param_tys ps) @ row e @ row u
+
 (* Does the type mention a type parameter? Error messages explain those. *)
 let rec skolems t =
   match repr t with
   | TSkol (id, n) -> [ (id, n) ]
-  | TVar _ | TError -> []
+  | TVar _ | TError | TErrors _ -> []
   | TCon (_, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)

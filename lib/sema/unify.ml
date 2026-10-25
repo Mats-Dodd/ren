@@ -14,6 +14,10 @@ exception Mismatch
 exception Infinite
 (** a variable would have to contain itself *)
 
+exception Two_shapes of string
+(** two labels of one name, whose payloads differ: one error set would hold two
+    shapes of the tag (module-build.md, "Error tags have no home") *)
+
 (* Before binding variable [id] to [t]: fail if [t] contains the variable,
    and lower the levels inside [t] to [level] (see types.ml). *)
 let rec occurs id level t =
@@ -24,21 +28,25 @@ let rec occurs id level t =
   | TVar { contents = Link _ } -> assert false
   | TSkol _ | TError -> ()
   | TCon (_, args) -> List.iter (occurs id level) args
+  | TErrors e -> occurs_row ~ty:id (-1) level e
   | TFun (ps, r, e, u) ->
       List.iter (occurs id level) (r :: param_tys ps);
-      occurs_row (-1) level e;
-      occurs_row (-1) level u
+      occurs_row ~ty:id (-1) level e;
+      occurs_row ~ty:id (-1) level u
 
 (* The same for row variables. Type and row ids never clash, so passing -1
-   as [id] just adjusts levels. *)
-and occurs_row id level r =
+   as [id] just adjusts levels. A label's payload is made of types, which
+   are looked through for the type variable [ty], if there is one. *)
+and occurs_row ?(ty = -1) id level r =
   match repr_row r with
   | RVar ({ contents = RUnbound (id', l) } as cell) ->
       if id = id' then raise Infinite;
       if l > level then cell := RUnbound (id', level)
   | RVar { contents = RLink _ } -> assert false
   | REmpty -> ()
-  | RExtend (_, rest) -> occurs_row id level rest
+  | RExtend (label, rest) ->
+      List.iter (occurs ty level) label.payload;
+      occurs_row ~ty id level rest
 
 let rec unify st a b =
   match (repr a, repr b) with
@@ -67,6 +75,7 @@ let rec unify st a b =
       unify st r1 r2;
       unify_row st e1 e2;
       unify_row st u1 u2
+  | TErrors e1, TErrors e2 -> unify_row st e1 e2
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 
@@ -96,11 +105,17 @@ and unify_row st a b =
       assert false
 
 (* [row] with [label] removed, extending an open tail if the label isn't
-   there yet. *)
-and rewrite st row label =
+   there yet. A label of the same name has to have the same payload. *)
+and rewrite st row (label : label) =
   match repr_row row with
   | REmpty -> raise Mismatch
-  | RExtend (l, rest) when l = label -> rest
+  | RExtend (l, rest) when l.name = label.name ->
+      (try
+         if List.length l.payload <> List.length label.payload then
+           raise Mismatch;
+         List.iter2 (unify st) l.payload label.payload
+       with Mismatch | Infinite -> raise (Two_shapes label.name));
+      rest
   | RExtend (l, rest) -> RExtend (l, rewrite st rest label)
   | RVar ({ contents = RUnbound (_, level) } as cell) ->
       let rest = RVar (ref (RUnbound (fresh_id st, level))) in

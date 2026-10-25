@@ -146,6 +146,17 @@ let write pl (v : C.expr) loc =
 
 (* ---- expressions ---- *)
 
+(* Error handling is checked from stage 6.3, and runs from 6.5. Until then,
+   a program that uses it is reported here, before anything runs. *)
+let later loc what =
+  Diag.error loc
+    ~notes:[ "it's checked, and `ren types` shows what it does" ]
+    (what ^ " is checked, but running it arrives later in stage 6")
+
+let is_result : Ty.ty -> bool = function
+  | Con (p, _) -> p = Path.prelude "Result"
+  | _ -> false
+
 let rec expr cx (e : expr) : C.expr =
   let ty () = ty_of cx e.node in
   let here kind = mk kind (ty ()) e.loc in
@@ -167,9 +178,15 @@ let rec expr cx (e : expr) : C.expr =
   | Binop (Or, a, b) ->
       let a = expr cx a in
       here (If (a, mk (Bool true) Ty.bool e.loc, expr cx b))
-  | Binop (Orelse, _, _) | Fail _ | Try _ | Attempt _ ->
-      (* inference reports error handling until stage 6.3 checks it *)
-      bug "error handling, which inference doesn't check yet"
+  | Try a when not (is_result (ty_of cx a.node)) ->
+      (* Until stage 6.5 lowers `fail`, a program that can fail doesn't
+         run at all (below), so nothing a `try` covers fails when one does:
+         it's its operand. *)
+      expr cx a
+  | Binop (Orelse, _, _) -> later e.loc "`orelse`"
+  | Fail _ -> later e.loc "`fail`"
+  | Try _ -> later e.loc "`try` of a `Result`"
+  | Attempt _ -> later e.loc "`attempt`"
   | Binop (op, a, b) ->
       let a = expr cx a in
       here (Prim (Binop op, [ a; expr cx b ]))
@@ -408,8 +425,9 @@ and pattern cx (p : pattern) : C.pattern =
     | PInt n -> PInt n
     | PBool b -> PBool b
     | PCon (_, ps) -> (
-        match (node cx p.pnode).found with
-        | Some (Ctor_of (path, c)) -> PCon (path, c, List.map (pattern cx) ps)
+        match ((node cx p.pnode).found, pty) with
+        | Some (Ctor_of (path, c)), _ -> PCon (path, c, List.map (pattern cx) ps)
+        | None, Errors _ -> later p.ploc "matching an error's tag"
         | _ -> bug "a constructor pattern inference didn't find")
     | PFail _ | PFail_any | POr _ ->
         bug "a `fail` pattern, which inference doesn't check yet"

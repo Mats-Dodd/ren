@@ -75,32 +75,100 @@ let find_type iface name =
 
 let find_value iface name = List.find_opt (fun v -> v.vname = name) iface.values
 
+(* ---- named error sets ---- *)
+
+(* Where to find each named error set's errors, as it declares them, by its
+   path: [None] if the path isn't a named set. A module sees its own sets
+   and those of every module it can reach ([sets_of]). *)
+type sets = Path.t -> error list option
+
+let sets_of (decls : type_decl list) : sets =
+ fun p ->
+  List.find_map
+    (fun d ->
+      match d.body with Errors es when d.path = p -> Some es | _ -> None)
+    decls
+
+(* Every tag [errs] stand for, in order: a named set stands for all of its
+   own, and the sets it includes for theirs. Each tag comes with the named
+   set it came through, if any, which a message about it can name. A set is
+   expanded once even if it's included twice, and never inside itself
+   (resolve.ml reports a set that includes itself). *)
+let tags ~sets (errs : error list) =
+  let rec go seen via errs =
+    List.concat_map
+      (function
+        | Tag (name, payload) -> [ ({ Ty.name; payload }, via) ]
+        | Set p when List.mem p seen -> []
+        | Set p -> (
+            match sets p with
+            | Some es -> go (p :: seen) (Some (Option.value via ~default:p)) es
+            | None -> []))
+      errs
+  in
+  go [] None errs
+
+(* The labels of a row for [errs], sorted, each tag once. One with two
+   shapes keeps the first; inference reports it (Infer_top). *)
+let labels ~sets errs =
+  let rec dedup seen = function
+    | [] -> []
+    | ((l : Ty.label), _) :: rest ->
+        if List.mem l.name seen then dedup seen rest
+        else l :: dedup (l.name :: seen) rest
+  in
+  Ty.sort_labels (dedup [] (tags ~sets errs))
+
 (* ---- from a module's declarations ---- *)
 
 (* A written type, once Resolve has said what its names mean, in canonical
-   form. A function type written in a declaration uses and fails with
-   nothing. *)
-let rec of_written (t : Ast.Resolved.ty) : Ty.ty =
+   form. A function type written in a declaration uses nothing, and fails
+   with exactly what it's written to fail with, after `!`; [sets] says
+   what each named set it names stands for. *)
+let rec of_written ~sets (t : Ast.Resolved.ty) : Ty.ty =
   match t with
   | TyName ({ tref = Param i; _ }, _) -> Var i
   | TyName ({ tref = Named path; _ }, args) ->
-      Con (path, List.map of_written args)
-  | TyFn (ps, ret, _, _) ->
-      (* what it's written to fail with, after `!`, is checked from stage
-         6.3; until then inference reports it *)
-      let ret = match ret with Some r -> of_written r | None -> Ty.unit in
-      Fun (List.map of_written_param ps, ret, Ty.closed, Ty.closed)
+      Con (path, List.map (of_written ~sets) args)
+  | TyFn (ps, ret, errs, _) ->
+      let ret =
+        match ret with Some r -> of_written ~sets r | None -> Ty.unit
+      in
+      let errs =
+        match errs with
+        | Some es -> { Ty.closed with labels = of_errors ~sets es }
+        | None -> Ty.closed
+      in
+      Fun (List.map (of_written_param ~sets) ps, ret, errs, Ty.closed)
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
-  | TyErrors _ ->
-      (* an error set as a type argument, which inference reports until
-         stage 6.3 *)
-      Error
+  | TyErrors es -> Errors { Ty.closed with labels = of_errors ~sets es }
 
-and of_written_param = function
-  | Ast.TyInout (t, _) -> { mode = Inout; ty = of_written t }
-  | t -> Ty.read (of_written t)
+and of_written_param ~sets = function
+  | Ast.TyInout (t, _) -> { mode = Inout; ty = of_written ~sets t }
+  | t -> Ty.read (of_written ~sets t)
+
+(* An error set as written, as declared errors: each tag with its
+   payload's types, its fields' names dropped. *)
+and declared_errors ~sets (es : Ast.Resolved.errors) =
+  List.map
+    (function
+      | Ast.Tag (t, ps) ->
+          Tag
+            ( t.name,
+              List.map
+                (fun (p : Ast.tname Ast.payload) ->
+                  of_written ~sets p.payload_ty)
+                ps )
+      | Set { Ast.tref = Named p; _ } -> Set p
+      | Set { tref = Param _; _ } ->
+          (* resolve.ml only makes a declared set a [Set] *)
+          assert false)
+    es.errs
+
+(* The same, as a row's labels: named sets expanded. *)
+and of_errors ~sets es = labels ~sets (declared_errors ~sets es)
 
 (* A public function's type scheme, from its signature alone. Its type
    parameters, parameters and result are all written; a public function
@@ -118,31 +186,40 @@ and of_written_param = function
    that the two agree.
 
    Its dependencies are the ones its `uses` lists, none if it has no
-   `uses`; inference checks that its body uses nothing else. What it's
-   written to fail with, after `!`, is left out until stage 6.3 checks it
-   (inference reports it until then). *)
-let signature (f : Ast.Resolved.fn_def) : Ty.scheme =
+   `uses`, and its errors the ones written after `!`, none if there's no
+   `!`, with every named set expanded; inference checks that its body
+   uses and fails with exactly those. A parameter that writes what it
+   fails with, `f: fn() ! Bad`, fails with just that, so its errors aren't
+   the function's own (its dependencies still are). *)
+let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   (* row variables: 0 for the errors, 1 for the dependencies *)
-  let errs : Ty.row = { labels = []; tail = Some 0 } in
+  let declared =
+    match f.errors with Some es -> of_errors ~sets es | None -> []
+  in
+  let errs : Ty.row = { labels = declared; tail = Some 0 } in
   let uses =
     List.map (fun (d : Ast.ident) -> d.name) (Option.value f.uses ~default:[])
   in
   let deps : Ty.row =
-    { labels = List.sort_uniq String.compare uses; tail = Some 1 }
+    {
+      labels = List.map Ty.label (List.sort_uniq String.compare uses);
+      tail = Some 1;
+    }
   in
   let param (p : Ast.Resolved.param) : Ty.param =
     let ty : Ty.ty =
       match p.pty with
-      | Some (TyFn _ as t) -> (
-          match of_written t with
-          | Fun (ps, r, _, _) -> Fun (ps, r, errs, deps)
+      | Some (TyFn (_, _, written, _) as t) -> (
+          match of_written ~sets t with
+          | Fun (ps, r, e, _) ->
+              Fun (ps, r, (if written = None then errs else e), deps)
           | _ -> assert false)
-      | Some t -> of_written t
+      | Some t -> of_written ~sets t
       | None -> Error
     in
     { mode = p.pmode; ty }
   in
-  let ret = match f.ret with Some t -> of_written t | None -> Ty.unit in
+  let ret = match f.ret with Some t -> of_written ~sets t | None -> Ty.unit in
   Ty.canonical
     {
       ty = Fun (List.map param f.params, ret, errs, deps);
@@ -150,9 +227,9 @@ let signature (f : Ast.Resolved.fn_def) : Ty.scheme =
     }
 
 (* A type declared in module [home]. *)
-let of_type_def ~home (td : Ast.Resolved.type_def) =
+let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
   let field (f : Ast.Resolved.field) =
-    { fname = f.field_name.name; fty = of_written f.field_ty }
+    { fname = f.field_name.name; fty = of_written ~sets f.field_ty }
   in
   let body =
     match td.type_body with
@@ -167,23 +244,8 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
                  cloc = c.ctor_name.loc;
                })
              cs)
-    | Opaque t -> Opaque (Some (of_written t))
-    | Errors es ->
-        Errors
-          (List.map
-             (function
-               | Ast.Tag (t, ps) ->
-                   Tag
-                     ( t.name,
-                       List.map
-                         (fun (p : Ast.tname Ast.payload) ->
-                           of_written p.payload_ty)
-                         ps )
-               | Set { Ast.tref = Named p; _ } -> Set p
-               | Set { tref = Param _; _ } ->
-                   (* resolve.ml only makes a declared set a [Set] *)
-                   assert false)
-             es.errs)
+    | Opaque t -> Opaque (Some (of_written ~sets t))
+    | Errors es -> Errors (declared_errors ~sets es)
   in
   let op (o : Ast.Resolved.op) =
     let f = o.op_fn in
@@ -195,12 +257,13 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
           (Value, { Ty.ty = Error; names = [] })
       | Op_value, _ -> (
           (* a function of no parameters, whose result is the value *)
-          match signature f with
+          match signature ~sets f with
           | { ty = Fun ([], t, _, _); names } ->
               (Value, Ty.canonical { ty = t; names })
           | _ -> assert false)
-      | Op_fn, p :: _ when p.pname.ident.name = "self" -> (Method, signature f)
-      | Op_fn, _ -> (Function, signature f)
+      | Op_fn, p :: _ when p.pname.ident.name = "self" ->
+          (Method, signature ~sets f)
+      | Op_fn, _ -> (Function, signature ~sets f)
     in
     { oname = Ast.short_name f.name.name; opub = f.pub; okind; oscheme }
   in
@@ -218,8 +281,9 @@ let of_type_def ~home (td : Ast.Resolved.type_def) =
    public function. A public one
    never mentions a private one (resolve.ml checks), so a dependent never
    meets a type that isn't in some interface. An opaque type is listed
-   without its representation. *)
-let of_module ~home (prog : Ast.Resolved.program) =
+   without its representation. [sets] are the named error sets it can
+   see. *)
+let of_module ~home ~sets (prog : Ast.Resolved.program) =
   let public (td : type_decl) =
     let td = { td with members = List.filter (fun o -> o.opub) td.members } in
     match td.body with Opaque _ -> { td with body = Opaque None } | _ -> td
@@ -229,14 +293,15 @@ let of_module ~home (prog : Ast.Resolved.program) =
     types =
       List.filter_map
         (function
-          | Ast.Type td when td.type_pub -> Some (public (of_type_def ~home td))
+          | Ast.Type td when td.type_pub ->
+              Some (public (of_type_def ~home ~sets td))
           | Type _ | Fn _ | Import _ -> None)
         prog;
     values =
       List.filter_map
         (function
           | Ast.Fn (f : Ast.Resolved.fn_def) when f.pub ->
-              Some { vname = f.name.name; scheme = signature f }
+              Some { vname = f.name.name; scheme = signature ~sets f }
           | _ -> None)
         prog;
   }

@@ -80,7 +80,7 @@ pub type Vm = {
     match &self.stack.pop()
       Some(b) =>
         match &self.stack.pop()
-          Some(a) => &self.push(f(a, b))
+          Some(a) => &self.push(try f(a, b))
           None => &self.underflow()
       None => &self.underflow()
 

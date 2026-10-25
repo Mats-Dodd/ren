@@ -212,6 +212,33 @@ let bind env sc (id : ident) bound =
 
 (* ---- types ---- *)
 
+(* The named error sets module [items] can see, for Iface: its own, and
+   those of the modules it imports. A payload can be a function type that
+   names a set, so a set's errors are made with this lookup too; [making]
+   are the sets being made, so a set named inside its own payload isn't
+   made forever. *)
+let sets env (items : Resolved.program) : Iface.sets =
+  let making = ref [] in
+  let rec sets (p : Path.t) =
+    if p.home <> env.home then
+      Iface.sets_of
+        (List.concat_map (fun (i : Iface.t) -> i.types) env.ifaces)
+        p
+    else if List.mem p !making then None
+    else
+      List.find_map
+        (function
+          | Type { type_name; type_body = Errors es; _ }
+            when type_name.name = p.name ->
+              making := p :: !making;
+              let errs = Iface.declared_errors ~sets es in
+              making := List.filter (( <> ) p) !making;
+              Some errs
+          | _ -> None)
+        items
+  in
+  sets
+
 (* Whether [p] is a named error set, `type Refusal = ! ...`, rather than a
    type of values: one of the module's own, or another module's, which its
    interface says. *)
@@ -1551,7 +1578,8 @@ let program sink ~home ~imports (prog : Parsed.program) =
   let types =
     List.filter_map
       (function
-        | Type td -> Some (Iface.of_type_def ~home td) | Fn _ | Import _ -> None)
+        | Type td -> Some (Iface.of_type_def ~home ~sets:(sets env items) td)
+        | Fn _ | Import _ -> None)
       items
   in
   (* [imported n] says whether the name [n] in `.{}` imported a type; one

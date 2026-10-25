@@ -23,16 +23,25 @@ type ty =
       (** a type variable. In a scheme, a generic one, numbered by first
           appearance; in a type declaration, the declaration's parameter at that
           position (`T` in `Option<T>` is [Var 0]) *)
+  | Errors of row
+      (** an error set as a type argument, [! Short(Int) | Frozen], which only
+          [Result<T, ! ...>] takes (errors.md, "Keeping an error") *)
   | Error  (** the type of code that had an error, already reported *)
 
 and param = { mode : mode; ty : ty }
 
 and row = {
-  labels : string list;  (** sorted *)
+  labels : label list;  (** sorted by name *)
   tail : int option;
       (** [None]: exactly these labels. [Some n]: these and possibly more,
           standing for row variable [n] (numbered apart from type variables) *)
 }
+
+(* A row's label: an error's tag and its payload's types, `Short(Int)`, or
+   a dependency, `Io`, whose payload is always empty. A tag is its name and
+   its payload's types, in order, so one row never has two labels of the
+   same name (module-build.md, "Error tags have no home"). *)
+and label = { name : string; payload : ty list }
 
 (* A function's type, for every choice of its variables. [names] are the
    names its variables were declared with, like the `T` of `fn id<T>`, so
@@ -45,16 +54,25 @@ let unit = Con (Path.prelude "Unit", [])
 let array t = Con (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
+let label name = { name; payload = [] }
+let label_names r = List.map (fun l -> l.name) r.labels
+
+(* Labels sorted by name, as a row keeps them. *)
+let sort_labels ls = List.sort (fun a b -> String.compare a.name b.name) ls
 
 (* The row variables inside a type. *)
 let rec tails t =
-  let of_row r = Option.to_list r.tail in
   match t with
   | Var _ | Error -> []
   | Con (_, args) -> List.concat_map tails args
+  | Errors e -> row_tails e
   | Fun (ps, r, e, u) ->
       List.concat_map (fun (p : param) -> tails p.ty) ps
-      @ tails r @ of_row e @ of_row u
+      @ tails r @ row_tails e @ row_tails u
+
+and row_tails r =
+  List.concat_map (fun l -> List.concat_map tails l.payload) r.labels
+  @ Option.to_list r.tail
 
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, as inference numbers them: type variables and row
@@ -73,6 +91,7 @@ let canonical (s : scheme) =
     | Var n -> Var (number tys n)
     | Error -> Error
     | Con (p, args) -> Con (p, List.map go args)
+    | Errors e -> Errors (row e)
     | Fun (ps, r, e, u) ->
         (* `let`s fix the order of first appearance: OCaml evaluates a
            constructor's arguments right to left *)
@@ -81,7 +100,15 @@ let canonical (s : scheme) =
         let e = row e in
         let u = row u in
         Fun (ps, r, e, u)
-  and row r = { r with tail = Option.map (number rows) r.tail } in
+  (* the labels' payloads, in order of name, then the tail *)
+  and row r =
+    let labels =
+      List.map
+        (fun l -> { l with payload = List.map go l.payload })
+        (sort_labels r.labels)
+    in
+    { labels; tail = Option.map (number rows) r.tail }
+  in
   let ty = go s.ty in
   let names =
     List.filter_map
@@ -161,8 +188,12 @@ let rec reserve pr t =
         (List.assoc_opt id pr.hints)
   | Error -> ()
   | Con (_, args) -> List.iter (reserve pr) args
-  | Fun (ps, r, _, _) ->
-      List.iter (reserve pr) (r :: List.map (fun (p : param) -> p.ty) ps)
+  | Errors e -> List.iter (reserve_label pr) e.labels
+  | Fun (ps, r, e, _) ->
+      List.iter (reserve pr) (r :: List.map (fun (p : param) -> p.ty) ps);
+      List.iter (reserve_label pr) e.labels
+
+and reserve_label pr l = List.iter (reserve pr) l.payload
 
 let tail_name pr id kind =
   match Hashtbl.find_opt pr.tail_names id with
@@ -177,21 +208,33 @@ let tail_name pr id kind =
       Hashtbl.add pr.tail_names id n;
       n
 
-let show_row pr ~prefix ~sep ~kind r =
+(* A row: its labels, each with its payload, `Short(Int, Money)`, then its
+   tail if it's shown. *)
+let rec show_row pr ~prefix ~sep ~kind r =
   let tail =
     match r.tail with
     | Some id when pr.show_tail id -> [ ".." ^ tail_name pr id kind ]
     | _ -> []
   in
-  match r.labels @ tail with
+  match List.map (show_label pr) r.labels @ tail with
   | [] -> ""
   | parts -> prefix ^ String.concat sep parts
 
-let rec show pr t =
+and show_label pr l =
+  match l.payload with
+  | [] -> l.name
+  | ps -> l.name ^ "(" ^ String.concat ", " (List.map (show pr) ps) ^ ")"
+
+and show pr t =
   match t with
   | Con (p, []) -> pr.type_name p
   | Con (p, args) ->
       pr.type_name p ^ "<" ^ String.concat ", " (List.map (show pr) args) ^ ">"
+  | Errors e -> (
+      (* an empty set, which nothing fails with, is just the `!` *)
+      match show_row pr ~prefix:"! " ~sep:" | " ~kind:"e" e with
+      | "" -> "!"
+      | s -> s)
   | Error -> "_"
   | Var id -> var_name pr id
   | Fun (ps, r, e, u) ->

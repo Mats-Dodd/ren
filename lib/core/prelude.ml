@@ -21,6 +21,10 @@ pub type Option<T> =
     match self
       Some(x) => x
       None => d
+
+pub type Result<T, E> =
+  | Ok(value: T)
+  | Err(error: E)
 |}
 
 (* ---- built-in functions ---- *)
@@ -55,7 +59,7 @@ let fns =
              ( [ read (Var 0) ],
                unit,
                open_row 0,
-               { labels = [ "Io" ]; tail = Some 1 } ));
+               { labels = [ label "Io" ]; tail = Some 1 } ));
       eval =
         (fun args ->
           List.iter (fun v -> print_endline (Value.show v)) args;

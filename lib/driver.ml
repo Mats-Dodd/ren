@@ -57,7 +57,11 @@ let check_module ~home ~imports ~reachable ?entry prog =
   checked "imports" (fun sink ->
       Resolve.unused_imports sink r ~found:inferred.in_scope);
   checked "exhaust" (fun sink -> Exhaust.program sink ~reachable r inferred);
-  let iface = Iface.of_module ~home r.prog in
+  let sets =
+    Iface.sets_of
+      (List.concat_map (fun (i : Iface.t) -> i.types) reachable @ r.types)
+  in
+  let iface = Iface.of_module ~home ~sets r.prog in
   (* A public function's body was checked against its signature, so the
      type inference found for it is the one its interface states. Other
      modules see only the interface, so if the two ever differ, that's a
@@ -374,6 +378,33 @@ let types ?(lint = false) ?load ~file src =
                   (if td.type_pub then "pub " else "")
                   td.type_name.name params
                 :: List.map (fun o -> "  " ^ op o) td.type_ops
+            | Type ({ type_body = Errors _; _ } as td) ->
+                (* a named error set, as it's declared, each tag with its
+                   payload's types *)
+                let pr = Ty.printer ~names { ty = Error; names = [] } in
+                let errors =
+                  match
+                    (List.find
+                       (fun (d : Iface.type_decl) ->
+                         d.path.name = td.type_name.name)
+                       resolved.types)
+                      .body
+                  with
+                  | Errors es ->
+                      List.map
+                        (function
+                          | Iface.Tag (name, payload) ->
+                              Ty.show_label pr { name; payload }
+                          | Set p -> names p)
+                        es
+                  | _ -> []
+                in
+                [
+                  sprintf "%stype %s = ! %s"
+                    (if td.type_pub then "pub " else "")
+                    td.type_name.name
+                    (String.concat " | " errors);
+                ]
             | Type _ | Import _ -> [])
           resolved.prog ))
     (check_all ?load ~file src)

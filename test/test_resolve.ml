@@ -55,7 +55,7 @@ fn main() =
     {|
 fn call(f: fn()) =
   let id = fn(f) => f
-  f()
+  try f()
 fn main() = call(fn() => ())
 |};
   [%expect {|
@@ -208,72 +208,24 @@ let%expect_test "a file can't be named prelude.ren" =
 
 (* ---- error sets (errors.md) ---- *)
 
-let%expect_test "until stage 6.3, error handling is reported where it's used" =
-  (* declaring a named error set is fine: it does nothing until it's used *)
+let%expect_test "until stage 6.4, fail patterns are reported where they're used"
+    =
+  (* the rest of error handling is checked (test_errors.ml) *)
   run
     {|
-type Refusal = ! Short(account: Int, by: Int) | Frozen(account: Int)
-fn debit(inout a: Int, m: Int) ! Refusal =
-  if a < m then fail Short(a, m - a)
-  a = a - m
-fn first(xs: Array<Int>, f: fn(Int) -> Bool ! Bad, r: Option<! Bad>) -> Int =
-  let ok = try f(1)
-  let r = attempt f(2)
-  match f(3)
+fn f() = fail Bad
+fn main() =
+  match f()
     _ => ()
     fail _ => ()
-  xs.first() orelse 0
-fn main() = ()
 |};
   [%expect
     {|
-    error: a function's errors, after `!`, arrive later in stage 6
-      ┌─ test.ren:2:32
-    2 │ fn debit(inout a: Int, m: Int) ! Refusal =
-      │                                ^^^^^^^^^
-      help: for now, return an `Option` to say that something didn't work
-
-    error: `fail` arrives later in stage 6
-      ┌─ test.ren:3:17
-    3 │   if a < m then fail Short(a, m - a)
-      │                 ^^^^^^^^^^^^^^^^^^^^
-      help: for now, return an `Option` to say that something didn't work
-
-    error: a function's errors, after `!`, arrive later in stage 6
-      ┌─ test.ren:5:45
-    5 │ fn first(xs: Array<Int>, f: fn(Int) -> Bool ! Bad, r: Option<! Bad>) -> Int =
-      │                                             ^^^^^
-      help: for now, return an `Option` to say that something didn't work
-
-    error: an error set as a type argument arrives later in stage 6
-      ┌─ test.ren:5:62
-    5 │ fn first(xs: Array<Int>, f: fn(Int) -> Bool ! Bad, r: Option<! Bad>) -> Int =
-      │                                                              ^^^^^
-      help: for now, return an `Option` to say that something didn't work
-
-    error: `try` arrives later in stage 6
-      ┌─ test.ren:6:12
-    6 │   let ok = try f(1)
-      │            ^^^^^^^^
-      help: for now, return an `Option` to say that something didn't work
-
-    error: `attempt` arrives later in stage 6
-      ┌─ test.ren:7:11
-    7 │   let r = attempt f(2)
-      │           ^^^^^^^^^^^^
-      help: for now, return an `Option` to say that something didn't work
-
     error: `fail` patterns arrive later in stage 6
-       ┌─ test.ren:10:5
-    10 │     fail _ => ()
-       │     ^^^^^^
-       help: for now, return an `Option` to say that something didn't work
-
-    error: `orelse` arrives later in stage 6
-       ┌─ test.ren:11:3
-    11 │   xs.first() orelse 0
-       │   ^^^^^^^^^^^^^^^^^^^
-       help: for now, return an `Option` to say that something didn't work
+      ┌─ test.ren:5:5
+    5 │     fail _ => ()
+      │     ^^^^^^
+      help: for now, keep the outcome with `attempt` and match the `Result`: `Err(Short(_, by))`
     |}]
 
 let%expect_test "a named error set is found through scope, and tags aren't" =

@@ -188,7 +188,7 @@ fn main() =
     {|
     fn double(x: Int) -> Int
     fn apply<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U>
-    fn compose<T, U, V>(f: fn(T) -> U ! ..e uses ..d, g: fn(U) -> V ! ..e uses ..d) -> (fn(T) -> V ! ..e uses ..d)
+    fn compose<T, U, V>(f: fn(T) -> U uses ..d, g: fn(U) -> V uses ..d) -> (fn(T) -> V ! ..e uses ..d)
     fn main() uses Io
     |}]
 

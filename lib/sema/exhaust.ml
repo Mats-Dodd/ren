@@ -34,9 +34,13 @@ type env = {
    row does? An arm that isn't useful against the arms above it can never
    match. A match is exhaustive when a wildcard row wouldn't be useful. *)
 
-(* A constructor of a pattern: its name, and the type it belongs to.
-   [None] for an Int, which isn't one of a list of constructors. *)
-type head = { name : string; owner : Path.t option }
+(* A constructor of a pattern: its name, and what it belongs to: a type,
+   or an error set, whose tags are like a sum type's constructors
+   (errors.md, "Keeping an error"). [No_list] for an Int, which isn't one
+   of a list of constructors, and for a tag of a set that's still open. *)
+type head = { name : string; owner : owner }
+and owner = Of_type of Path.t | Of_set of (string * int) list | No_list
+
 type space = Any | Ctor of head * space list
 
 let bool_path = Path.prelude "Bool"
@@ -44,16 +48,23 @@ let bool_path = Path.prelude "Bool"
 let rec simplify env (p : pattern) =
   match p.pkind with
   | PWild | PVar _ -> Any
-  | PInt n -> Ctor ({ name = string_of_int n; owner = None }, [])
-  | PBool b -> Ctor ({ name = string_of_bool b; owner = Some bool_path }, [])
+  | PInt n -> Ctor ({ name = string_of_int n; owner = No_list }, [])
+  | PBool b -> Ctor ({ name = string_of_bool b; owner = Of_type bool_path }, [])
   | PCon (c, ps) ->
+      let node = Infer.Nodes.find p.pnode env.nodes in
       let owner =
-        match (Infer.Nodes.find p.pnode env.nodes).found with
-        | Some (Ctor_of (path, _)) -> path
+        match (node.ty, node.found) with
+        | Errors { labels; tail = None }, _ ->
+            (* a tag, of a set inference settled: every tag it can hold *)
+            Of_set
+              (List.map
+                 (fun (l : Ty.label) -> (l.name, List.length l.payload))
+                 labels)
+        | Errors { tail = Some _; _ }, _ -> No_list
+        | _, Some (Ctor_of (path, _)) -> Of_type path
         | _ -> assert false (* inference found it, or reported an error *)
       in
-      Ctor
-        ({ name = c.name.name; owner = Some owner }, List.map (simplify env) ps)
+      Ctor ({ name = c.name.name; owner }, List.map (simplify env) ps)
   | PFail _ | PFail_any | POr _ ->
       (* inference reports `fail` patterns until stage 6.4 checks them *)
       invalid_arg "Exhaust.simplify: a `fail` pattern"
@@ -70,19 +81,21 @@ let wilds n = List.init n (fun _ -> Any)
    [None] for Int, which has too many values to list. *)
 let siblings env c =
   match c.owner with
-  | Some p when p = bool_path ->
-      let b name = { name; owner = Some bool_path } in
+  | Of_type p when p = bool_path ->
+      let b name = { name; owner = Of_type bool_path } in
       Some [ (b "true", 0); (b "false", 0) ]
-  | Some p -> (
+  | Of_type p -> (
       match Hashtbl.find env.types p with
       | { body = Sum cs; _ } ->
           Some
             (List.map
                (fun (k : Iface.ctor) ->
-                 ({ name = k.cname; owner = Some p }, List.length k.cfields))
+                 ({ name = k.cname; owner = Of_type p }, List.length k.cfields))
                cs)
       | _ -> None)
-  | None -> None
+  | Of_set tags ->
+      Some (List.map (fun (t, n) -> ({ name = t; owner = c.owner }, n)) tags)
+  | No_list -> None
 
 (* The rows that still apply once we know the first value was built with
    constructor [c]: their first pattern is replaced by its [arity]
@@ -165,7 +178,7 @@ let check_match env (e : expr) (subject : expr) arms =
   let column =
     match (Infer.Nodes.find subject.node env.nodes).ty with
     | Con (p, _) -> Some (env.names p)
-    | Var _ | Fun _ | Error -> None
+    | Var _ | Fun _ | Errors _ | Error -> None
   in
   (* Arms with a guard might not match even when their pattern does, so they
      never count toward covering a case. *)
@@ -218,6 +231,28 @@ let check_match env (e : expr) (subject : expr) arms =
       Diag.error keyword ~notes ~help
         (sprintf "this `match` doesn't handle %s" what)
 
+(* A variable bound to an error, `Err(e)`, would make the error a value of
+   its own (errors.md, "Keeping an error"), so it's matched by its tags. *)
+let rec no_bound_errors env (p : pattern) =
+  match p.pkind with
+  | PVar b -> (
+      match (Infer.Nodes.find p.pnode env.nodes).ty with
+      | Errors _ ->
+          Diag.report env.sink
+            (Diag.make p.ploc
+               ~notes:
+                 [
+                   "an error is a value only inside the `Result` that holds it";
+                 ]
+               ~help:
+                 "match its tags, like `Err(NotFound(id))`, or ignore it with \
+                  `Err(_)`"
+               (sprintf "`%s` would hold an error, which isn't a value"
+                  b.ident.name))
+      | _ -> ())
+  | PCon (_, ps) | PFail (_, ps) | POr ps -> List.iter (no_bound_errors env) ps
+  | PWild | PInt _ | PBool _ | PFail_any -> ()
+
 (* ---- walking the program ---- *)
 
 (* Run a check; if it finds a problem, report it and carry on. *)
@@ -248,6 +283,7 @@ let rec check_expr env (e : expr) =
   | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields
   | Match (subject, arms) ->
       check_expr env subject;
+      List.iter (fun (a : arm) -> no_bound_errors env a.arm_pat) arms;
       guard env (fun () -> check_match env e subject arms);
       List.iter
         (fun (a : arm) ->
