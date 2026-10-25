@@ -21,6 +21,7 @@
 type t = {
   loc : Loc.t;
   msg : string;
+  says : string option;  (** text beside the error's own `^`s *)
   notes : string list;
   help : string option;
   labels : (Loc.t * string) list;  (** other code worth pointing at *)
@@ -29,13 +30,14 @@ type t = {
 exception Error of t
 exception Errors of t list
 
-(* [notes] are extra facts printed as `= ...` lines; [help] suggests a fix;
-   [labels] point at other code. *)
-let make ?help ?(notes = []) ?(labels = []) loc msg =
-  { loc; msg; notes; help; labels }
+(* [says] is printed beside the error's own underline; [notes] are extra
+   facts printed as `= ...` lines; [help] suggests a fix; [labels] point at
+   other code. *)
+let make ?says ?help ?(notes = []) ?(labels = []) loc msg =
+  { loc; msg; says; notes; help; labels }
 
-let error ?help ?notes ?labels loc msg =
-  raise (Error (make ?help ?notes ?labels loc msg))
+let error ?says ?help ?notes ?labels loc msg =
+  raise (Error (make ?says ?help ?notes ?labels loc msg))
 
 (* ---- collecting ---- *)
 
@@ -133,7 +135,9 @@ let render ~(sources : string -> string option) (d : t) =
           let n = max 1 (stop_col - l.start.col) in
           let mark, text =
             match label with
-            | None -> (String.make n '^', "")
+            | None ->
+                ( String.make n '^',
+                  match d.says with Some s -> " " ^ s | None -> "" )
             | Some s -> (String.make n '-', " " ^ s)
           in
           Printf.bprintf b "%s │ %s%s%s\n" pad

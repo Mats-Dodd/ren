@@ -172,8 +172,8 @@ and fn_state = {
       (** the locals whose type is written, by binder id, with that type *)
 }
 
-let report env ?help ?labels loc msg =
-  Diag.report env.sink (Diag.make ?help ?labels loc msg)
+let report env ?help ?notes ?labels loc msg =
+  Diag.report env.sink (Diag.make ?help ?notes ?labels loc msg)
 
 (* `_` names nothing, so there can be any number of them: `fn f(_, _)` *)
 let no_duplicates env what (ids : ident list) =
@@ -1692,6 +1692,18 @@ let program sink ~home ~imports (prog : Parsed.program) =
           | Some { body = Builtin; _ }, _ ->
               report env name.loc ~help:"choose another name"
                 (sprintf "`%s` is a built-in type" name.name)
+          | Some { path; body; _ }, _ when path.home = Path.prelude_home ->
+              (* the prelude's source isn't the program's, so there's no
+                 first one to point at *)
+              report env name.loc ~help:"choose another name"
+                ~notes:
+                  [
+                    "the prelude's types and dependencies, like `Option`, \
+                     `Time` and `Clock`, can be named in every module";
+                  ]
+                (sprintf "the prelude already has a %s named `%s`"
+                   (match body with Dep _ -> "dependency" | _ -> "type")
+                   name.name)
           | Some { loc = first; _ }, _ ->
               report env name.loc ~help:"rename one of them"
                 ~labels:

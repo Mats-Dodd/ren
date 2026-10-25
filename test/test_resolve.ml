@@ -168,12 +168,12 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: there are two types named `Option`
+    error: the prelude already has a type named `Option`
       ┌─ test.ren:1:6
     1 │ type Option = { x: Int }
       │      ^^^^^^
-      = the first `Option` is here: <prelude>:1:10
-      help: rename one of them
+      = the prelude's types and dependencies, like `Option`, `Time` and `Clock`, can be named in every module
+      help: choose another name
     |}]
 
 let%expect_test "a prelude function's name can't be reused" =

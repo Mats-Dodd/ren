@@ -147,6 +147,11 @@ let writable cx (e : expr) ~what
         (sprintf "`%s` is a function, not a variable" (name_of p.root))
   | Some ({ root = Dep_op _; _ } as p) ->
       Diag.error p.rloc
+        ~help:
+          (sprintf
+             "call it, `%s(...)`; what it does is changed by installing \
+              another implementation, with `with`"
+             (name_of p.root))
         (sprintf "`%s` is an operation of a dependency, not a variable"
            (name_of p.root))
   | Some ({ root = Global_value _; _ } as p) ->
@@ -199,6 +204,19 @@ let rec walk cx (e : expr) =
       (match place_of r with Some _ -> walk_indices cx r | None -> walk cx r);
       List.iter (arg cx) args;
       guard cx (fun () -> exclusive ({ r with kind = Ref r } :: args))
+  | Ref { kind = Call ({ kind = Var (Dep_op _ as op); _ }, _); _ } ->
+      (* `&Clock.now()`: an operation's state is its implementation's *)
+      Diag.report cx.sink
+        (Diag.make e.loc ~help:"remove the `&`"
+           ~notes:
+             [
+               "what an operation changes belongs to the implementation \
+                installed for it, a handler's state say, which isn't a value \
+                the caller holds";
+             ]
+           (sprintf
+              "`%s` is a dependency's operation, and its call never takes `&`"
+              (name_of op)))
   | Ref ({ kind = Call _; _ } as call) ->
       (* `&id(xs)`: a call with no receiver for the `&` to mark *)
       Diag.report cx.sink

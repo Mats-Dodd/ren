@@ -203,13 +203,13 @@ let cmp_op = function
 
 (* A type's name: `Plan`, or `stripe.Client`, with its module's alias in
    front. *)
-let parse_tyname p =
+let parse_tyname ?(what = "a type name") p =
   match (peek p, peek2 p) with
   | IDENT m, DOT when not (is_upper m) ->
       let alias = ident p in
       advance p;
-      { tmod = Some alias; tid = upper_ident p "a type name" }
-  | _ -> { tmod = None; tid = upper_ident p "a type name" }
+      { tmod = Some alias; tid = upper_ident p what }
+  | _ -> { tmod = None; tid = upper_ident p what }
 
 (* Is the next thing a type's name with a module in front, `billing.Plan`,
    rather than a variable or a field? *)
@@ -978,10 +978,9 @@ let parse_fn p ~pub =
     if peek p = USES then (
       advance p;
       let rec deps acc =
-        let d =
-          if at_module_type p then parse_tyname p
-          else { tmod = None; tid = upper_ident p "a dependency's name" }
-        in
+        (* `store.Users`, or bare `Users`: after a module's alias, the
+           error for a lowercase name points at the name *)
+        let d = parse_tyname ~what:"a dependency's name" p in
         if peek p = COMMA then (
           advance p;
           deps (d :: acc))

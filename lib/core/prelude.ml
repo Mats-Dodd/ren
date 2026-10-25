@@ -122,7 +122,10 @@ let open_row n : Ty.row = { labels = []; tail = Some n }
 
 (* What the real implementations of the built-in dependencies run on: the
    system's clock, its source of randomness, and stdout. Each is a number
-   of milliseconds, as [source] represents time. *)
+   of milliseconds, as [source] represents time. [Unix.gettimeofday] is
+   the wall clock, which can be set back, so `instant` isn't yet the clock
+   that never goes back that `Instant` promises: OCaml's standard library
+   has no monotonic one (deps.md, "Built in"). *)
 let now_ms () = int_of_float (Unix.gettimeofday () *. 1000.)
 
 let fns =

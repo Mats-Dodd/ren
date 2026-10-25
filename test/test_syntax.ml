@@ -604,6 +604,18 @@ fn main() = "a\tb" == "say \"hi\"\n"
 |};
   [%expect {| (fn main () (== "a\tb" "say \"hi\"\n")) |}]
 
+let%expect_test "a string in an error is written with Ren's escapes" =
+  ast {|
+fn main() = 1 "café\t"
+|};
+  [%expect
+    {|
+    error: expected a new line, found the string `"café\t"`
+      ┌─ test.ren:1:15
+    1 │ fn main() = 1 "café\t"
+      │               ^^^^^^^^^
+    |}]
+
 let%expect_test "a string that isn't closed" =
   tokens {|
 fn main() = "Ren

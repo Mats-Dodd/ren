@@ -71,10 +71,25 @@ type t =
   | EOF
 [@@deriving show { with_path = false }]
 
+(* A string as it's written, in quotes, with its escapes. *)
+let show_str s =
+  let b = Buffer.create (String.length s + 2) in
+  Buffer.add_char b '"';
+  String.iter
+    (function
+      | '\n' -> Buffer.add_string b "\\n"
+      | '\t' -> Buffer.add_string b "\\t"
+      | '\\' -> Buffer.add_string b "\\\\"
+      | '"' -> Buffer.add_string b "\\\""
+      | c -> Buffer.add_char b c)
+    s;
+  Buffer.add_char b '"';
+  Buffer.contents b
+
 (* How a token is spelled in source, for error messages. *)
 let to_string = function
   | INT n -> string_of_int n
-  | STR s -> "\"" ^ String.escaped s ^ "\""
+  | STR s -> show_str s
   | IDENT s -> s
   | FN -> "fn"
   | PUB -> "pub"

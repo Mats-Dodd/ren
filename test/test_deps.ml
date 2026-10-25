@@ -182,6 +182,19 @@ dep Timer =
       │   ^^^^^
       help: a dependency's operations come first, before its members
     |}];
+  (* a record's field under it is the same mistake, the other way round *)
+  ast {|
+type R = { a: Int }
+  b: Int
+|};
+  [%expect
+    {|
+    error: expected `fn`, `let` or an operator, in `R`'s members, found `b`
+      ┌─ test.ren:2:3
+    2 │   b: Int
+      │   ^
+      help: a record's fields go in its braces, `{ ... }`
+    |}];
   ast {|
 dep Timer = now: fn() -> Int
 |};
@@ -207,6 +220,18 @@ dep Box<T> =
     |}]
 
 let%expect_test "uses names a dependency" =
+  types {|
+fn b() uses users.lookup = 1
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: a dependency's name must start with a capital letter
+      ┌─ test.ren:1:19
+    1 │ fn b() uses users.lookup = 1
+      │                   ^^^^^^
+      help: write `Lookup`
+    |}];
   types {|
 fn f() uses Int = 1
 fn g() uses Nope = 1
@@ -402,8 +427,9 @@ fn main() uses Users, Console =
     error: nothing installs `Users` before `main`
       ┌─ test.ren:6:16
     6 │ fn main() uses Users, Console =
-      │                ^^^^^
-      = the runtime installs only `Clock`, `Random` and `Console`
+      │                ^^^^^ the runtime installs only `Clock`, `Random` and `Console`
+    7 │   print(Users.get(1))
+      │         ------------ this call uses `Users`
       help: install one inside `main`: `with Users.none() in ...`
     |}];
   types
@@ -421,9 +447,8 @@ fn main() = print(find(1))
     error: nothing installs `Users` before `main`
       ┌─ test.ren:7:4
     7 │ fn main() = print(find(1))
-      │    ^^^^
+      │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
       │                   ------- this call uses `Users`
-      = the runtime installs only `Clock`, `Random` and `Console`
       help: install one inside `main`: `with mem_users(...) in ...`
     |}];
   types
@@ -443,19 +468,17 @@ fn main() uses Net = print(Users.get(1))
       = `main`'s body can only use what its `uses` lists
       help: add `Console` to its `uses`
 
-    error: `main` doesn't declare `Users`
+    error: nothing installs `Users` before `main`
       ┌─ test.ren:4:4
     4 │ fn main() uses Net = print(Users.get(1))
-      │    ^^^^
+      │    ^^^^ the runtime installs only `Clock`, `Random` and `Console`
       │                            ------------ this call uses `Users`
-      = `main`'s body can only use what its `uses` lists
-      help: add `Users` to its `uses`
+      help: install one inside `main`, with `with`: an implementation is a `Users { ... }` that gives each of its operations
 
     error: nothing installs `Net` before `main`
       ┌─ test.ren:4:16
     4 │ fn main() uses Net = print(Users.get(1))
-      │                ^^^
-      = the runtime installs only `Clock`, `Random` and `Console`
+      │                ^^^ the runtime installs only `Clock`, `Random` and `Console`
       help: remove it: nothing can implement `Net` yet
     |}]
 
@@ -544,4 +567,70 @@ fn main() = Clock.real
     1 │ fn main() = Clock.real
       │                   ^^^^
       help: its operations: `now`, `instant`, `sleep`; its members: `frozen`
+    |}]
+
+let%expect_test "an operation is called, not changed or made" =
+  types {|
+fn main() =
+  Clock.now = 1
+|};
+  [%expect
+    {|
+    error: `Clock.now` is an operation of a dependency, not a variable
+      ┌─ test.ren:2:3
+    2 │   Clock.now = 1
+      │   ^^^^^^^^^
+      help: call it, `Clock.now(...)`; what it does is changed by installing another implementation, with `with`
+    |}];
+  types {|
+fn main() uses Clock = &Clock.now()
+|};
+  [%expect
+    {|
+    error: `Clock.now` is a dependency's operation, and its call never takes `&`
+      ┌─ test.ren:1:24
+    1 │ fn main() uses Clock = &Clock.now()
+      │                        ^^^^^^^^^^^^
+      = what an operation changes belongs to the implementation installed for it, a handler's state say, which isn't a value the caller holds
+      help: remove the `&`
+    |}];
+  types
+    {|
+dep Users =
+  get: fn(id: Int) -> Option<Int>
+
+fn main() = Users.Foo
+|};
+  [%expect
+    {|
+    error: `Users` is a dependency, so it has no constructors
+      ┌─ test.ren:4:13
+    4 │ fn main() = Users.Foo
+      │             ^^^^^^^^^
+      help: make an implementation of it with `Users { ... }`, giving each of its operations
+    |}]
+
+let%expect_test "the prelude's names are taken" =
+  types
+    {|
+type Time = { at: Int }
+dep Clock =
+  now: fn() -> Int
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: the prelude already has a type named `Time`
+      ┌─ test.ren:1:6
+    1 │ type Time = { at: Int }
+      │      ^^^^
+      = the prelude's types and dependencies, like `Option`, `Time` and `Clock`, can be named in every module
+      help: choose another name
+
+    error: the prelude already has a dependency named `Clock`
+      ┌─ test.ren:2:5
+    2 │ dep Clock =
+      │     ^^^^^
+      = the prelude's types and dependencies, like `Option`, `Time` and `Clock`, can be named in every module
+      help: choose another name
     |}]

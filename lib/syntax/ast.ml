@@ -420,20 +420,8 @@ let binop_to_string = function
 
 let parens words = "(" ^ String.concat " " words ^ ")"
 
-(* A string as it's written, in quotes, with its escapes. *)
-let show_str s =
-  let b = Buffer.create (String.length s + 2) in
-  Buffer.add_char b '"';
-  String.iter
-    (function
-      | '\n' -> Buffer.add_string b "\\n"
-      | '\t' -> Buffer.add_string b "\\t"
-      | '\\' -> Buffer.add_string b "\\\\"
-      | '"' -> Buffer.add_string b "\\\""
-      | c -> Buffer.add_char b c)
-    s;
-  Buffer.add_char b '"';
-  Buffer.contents b
+(* A string as it's written, in quotes, with its escapes (token.ml). *)
+let show_str = Token.show_str
 
 open Parsed
 

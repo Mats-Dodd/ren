@@ -362,14 +362,21 @@ let declared_uses ~is_value (f : fn_def) =
   | None when f.pub -> Some []
   | None -> None
 
+(* Whether the runtime installs the dependency [p] around `main`: one of
+   the prelude's built-ins (deps.md, "`main`"). *)
+let runtime_dep (p : Path.t) =
+  p.home = Path.prelude_home && List.mem p.name Prelude.runtime_deps
+
 (* Report each dependency [f]'s body uses that it doesn't declare, at the
    first call that brings it in. [cx] is what checking [f]'s body found.
    That's the first call whose callee had the dependency itself, before
    joining the caller's row; once joined, every open row has everything
    the caller uses. Only if there's none, which happens when the callee is
    in [f]'s group and its uses were found at the join, is it the first
-   call whose row has it now. *)
-let check_uses env ~is_value (f : fn_def) cx declared =
+   call whose row has it now. For the program's `main` ([main]), one the
+   runtime doesn't install is left to [check_main]: adding it to `uses`
+   wouldn't help. *)
+let check_uses env ~is_value ~main (f : fn_def) cx declared =
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let calls =
     List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(cx.calls)
@@ -379,7 +386,11 @@ let check_uses env ~is_value (f : fn_def) cx declared =
   in
   List.iter
     (fun dep ->
-      if not (List.mem dep declared) then
+      if
+        not
+          (List.mem dep declared
+          || (main && not (runtime_dep (Ty.dep_path dep))))
+      then
         let call =
           match first (fun c -> List.mem dep c.own) with
           | Some loc -> Some loc
@@ -793,34 +804,25 @@ type t = {
       (** the types step 2 of a lookup through a type found, sorted *)
 }
 
-(* Infer every function's type, and return each function's type scheme and
-   the types of its expressions, in canonical form. [imports] are the
-   interfaces of the modules it imports, whose functions it can call, and
-   [reachable] those of every module reachable through them, whose types
-   it can meet: a field of an imported type can have a type from a module
-   this one never imported. [extra] are the dot calls of methods found so
-   far that the call graph needs besides [r]'s (see [program]). *)
 (* ---- what's installed around `main` ---- *)
 
 (* The runtime installs exactly the built-in dependencies `main` uses, as
    the outermost implementations (deps.md, "`main`"), so any other one it
-   uses is reported: where its `uses` lists it, or at the first call that
-   uses it. [ty] is `main`'s type, and [cx] what checking its body found.
+   uses is reported: where its `uses` lists it, or at `main`'s name, with
+   a label at the first call that uses it. [ty] is `main`'s type, and [cx] what checking its body found.
    The help shows how to install one inside `main`, with a function that
    makes an implementation if there is one: one of the module's own
    functions, [fns], whose type [schemes] has, or a member of the
    dependency. *)
 let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
-  (* what it lists, if it lists any: what else it uses is reported as
-     undeclared already *)
+  (* what it lists, if it lists any, and what its body uses: [check_uses]
+     leaves a dependency the runtime doesn't install to this *)
   let uses =
-    match (declared_uses ~is_value:(fun _ -> false) f, repr ty) with
-    | Some ds, _ -> ds
-    | None, TFun (_, _, _, u) -> row_names u
-    | None, _ -> []
-  in
-  let runtime (p : Path.t) =
-    p.home = Path.prelude_home && List.mem p.name Prelude.runtime_deps
+    (match (declared_uses ~is_value:(fun _ -> false) f, repr ty) with
+      | Some ds, _ -> ds
+      | None, TFun (_, _, _, u) -> row_names u
+      | None, _ -> [])
+    @ row_names cx.uses
   in
   let makes p t =
     match repr t with
@@ -886,28 +888,29 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
   List.iter
     (fun dep ->
       let p = Ty.dep_path dep in
-      if not (runtime p) then
+      if not (runtime_dep p) then
         let d = env.names p in
         let written =
           Option.bind f.uses
             (List.find_opt (fun (t : tname) -> t.tref = Named p))
         in
-        let loc, labels =
-          match written with
-          | Some t -> (t.tloc, [])
-          | None -> (
-              (* the first call that brings it in itself, as in
-                 [check_uses] *)
-              let first has = List.find_opt has calls in
-              match
-                match first (fun c -> List.mem dep c.own) with
-                | Some c -> Some c
-                | None -> first (fun c -> List.mem dep (row_names c.row))
-              with
-              | Some c ->
-                  (f.name.loc, [ (c.cloc, sprintf "this call uses `%s`" d) ])
-              | None -> (f.name.loc, []))
+        (* the call that needs it: the first that brings it in itself, as
+           in [check_uses]. Once `main`'s uses are joined every call's row
+           has what it lists, so for one it lists, only a call that brings
+           it in itself is that. *)
+        let needs =
+          let first has = List.find_opt has calls in
+          match
+            match first (fun c -> List.mem dep c.own) with
+            | Some c -> Some c
+            | None when written = None ->
+                first (fun c -> List.mem dep (row_names c.row))
+            | None -> None
+          with
+          | Some c -> [ (c.cloc, sprintf "this call uses `%s`" d) ]
+          | None -> []
         in
+        let loc = match written with Some t -> t.tloc | None -> f.name.loc in
         let help =
           match (maker p, Hashtbl.find_opt env.types p) with
           | Some m, _ -> sprintf "install one inside `main`: `with %s in ...`" m
@@ -919,15 +922,20 @@ let check_main env (r : Resolve.t) ~fns ~schemes (f : fn_def) ty cx =
           | None, None -> sprintf "remove it: nothing can implement `%s` yet" d
         in
         report env
-          (Diag.make loc ~labels ~help
-             ~notes:
-               [
-                 sprintf "the runtime installs only %s"
-                   (and_list Prelude.runtime_deps);
-               ]
+          (Diag.make loc ~labels:needs ~help
+             ~says:
+               (sprintf "the runtime installs only %s"
+                  (and_list Prelude.runtime_deps))
              (sprintf "nothing installs `%s` before `main`" d)))
     (List.sort_uniq String.compare uses)
 
+(* Infer every function's type, and return each function's type scheme and
+   the types of its expressions, in canonical form. [imports] are the
+   interfaces of the modules it imports, whose functions it can call, and
+   [reachable] those of every module reachable through them, whose types
+   it can meet: a field of an imported type can have a type from a module
+   this one never imported. [extra] are the dot calls of methods found so
+   far that the call graph needs besides [r]'s (see [program]). *)
 let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
   let st = Types.new_state () in
   let home = r.home in
@@ -1185,7 +1193,9 @@ let check sink ~extra ~imports ~reachable ?entry (r : Resolve.t) =
       List.iter
         (fun ((f : fn_def), skolems, cx, _, _) ->
           Option.iter
-            (check_uses env ~is_value f cx)
+            (check_uses env ~is_value
+               ~main:(entry <> None && f.name.name = "main")
+               f cx)
             (declared_uses ~is_value f);
           Option.iter
             (fun declared ->
