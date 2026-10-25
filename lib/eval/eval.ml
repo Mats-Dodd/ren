@@ -330,7 +330,6 @@ let rec eval cx env (e : expr) =
 (* What a call returned, or else fail with its error. *)
 and ok = function Ok v -> v | Error err -> raise (Failed err)
 
-(* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
 (* A fresh instance of the handler [h], made with [outer], what's
    installed where it's installed, which its operations then run with: its
    implementation of each of its dependencies. *)
@@ -339,6 +338,7 @@ and instance cx (h : handler) outer what =
   | VInstance impls -> impls
   | _ -> bug (what ^ " whose description doesn't make an instance")
 
+(* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
 and eval_all cx env = function
   | [] -> []
   | e :: rest ->

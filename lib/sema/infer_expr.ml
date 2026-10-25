@@ -1046,9 +1046,10 @@ let reopen env r =
   go r
 
 (* What an implementation needs, [needs], copied for one place it's used
-   at [loc] (see [copy]), which [what] says: the same labels, and a tail of its own. A closed
-   row is just opened, since it learns nothing more, and a named one,
-   `..d`, is kept, since it stands for the same labels everywhere. *)
+   at [loc] (see [copy]), which [what] says: the same labels, and a tail
+   of its own. A closed row is just opened, since it learns nothing more,
+   and a named one, `..d`, is kept, since it stands for the same labels
+   everywhere. *)
 let copy_needs env ~loc ~what needs =
   match (row_skolem needs, row_tail needs) with
   | Some _, _ | _, None -> reopen env needs
@@ -1875,13 +1876,13 @@ and synth env cx (e : expr) : ty =
 (* A handler's body (ast.ml, [Handler]), the body of its function,
    [cx.self], whose result is the handler's type ([handler_type]). Its
    state and its arms run where it's installed, not where the function is
-   called, so what they use is what the handler needs, [needs], and the function itself
-   uses nothing. Its state is made when it's installed, which can't fail.
-   Each arm is checked as an implementation's operation is ([infer_record]):
-   it uses what the handler needs, and can fail with fewer errors than
-   its operation declares, never more. What it needs is checked once the
-   group is done, against what's [declared], if anything is (see
-   [handler_needs]). *)
+   called, so what they use is what the handler needs, [needs], and the
+   function itself uses nothing. Its state is made when it's installed,
+   which can't fail. Each arm is checked as an implementation's operation
+   is ([infer_record]): it uses what the handler needs, and can fail with
+   fewer errors than its operation declares, never more. What it needs is
+   checked once the group is done, against what's [declared], if anything
+   is (see [handler_needs]). *)
 and handler env cx state arms ~needs ~declared =
   let hcx = lambda_cx cx [] [] ~errs:REmpty ~uses:needs in
   env.cant_fail <-
