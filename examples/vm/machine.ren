@@ -68,10 +68,9 @@ pub type Vm = {
 
   // Run until it halts or fails, or `fuel` steps have run.
   pub fn run(inout self, p: Program, fuel: Int) =
-    if fuel > 0 then
-      if self.running() then
-        &self.step(p)
-        &self.run(p, fuel - 1)
+    if fuel > 0 && self.running() then
+      &self.step(p)
+      &self.run(p, fuel - 1)
 
   fn push(inout self, n: Int) =
     &self.stack.push(n)

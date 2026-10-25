@@ -10,10 +10,8 @@ pub type Program = opaque Array<Op>
   pub let halt: Program = [Halt]
 
   pub fn check(ops: Array<Op>) -> Option<Program> =
-    if ops.len() == 0 then None
-    else if ops[ops.len() - 1] != Halt then None
-    else if lands(ops) then Some(ops)
-    else None
+    let n = ops.len()
+    if n > 0 && ops[n - 1] == Halt && lands(ops) then Some(ops) else None
 
   // the instruction at `pc`; past the end, there's nothing left to do
   pub fn at(self, pc: Int) -> Op =
@@ -26,8 +24,8 @@ fn lands(ops: Array<Op>) -> Bool =
   var ok = true
   for o in ops
     match o.target()
-      Some(to) => if inside(to, ops.len()) then () else ok = false
+      Some(to) => if not inside(to, ops.len()) then ok = false
       None => ()
   ok
 
-fn inside(i: Int, n: Int) -> Bool = if i < 0 then false else i < n
+fn inside(i: Int, n: Int) -> Bool = i >= 0 && i < n

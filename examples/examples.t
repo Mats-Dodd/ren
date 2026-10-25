@@ -282,8 +282,8 @@ A method that changes its receiver is called with `&`:
   $ cp -r vm v2 && perl -0pi -e 's/    &self.stack.push\(n\)/    self.stack.push(n)/' v2/machine.ren
   $ ren check v2/main.ren
   error: `push` changes `self.stack`, so the call needs `&`
-     ┌─ v2/machine.ren:77:5
-  77 │     self.stack.push(n)
+     ┌─ v2/machine.ren:76:5
+  76 │     self.stack.push(n)
      │     ^^^^^^^^^^^^^^^^^^
      = `&` shows at the call that `self.stack` is changed
      help: write `&self.stack.push(n)`

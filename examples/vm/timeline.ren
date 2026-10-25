@@ -22,8 +22,7 @@ pub type Timeline = { frames: Array<Vm> }
   // `&tl.run(&vm, p, fuel)`.
   pub fn run(inout self, inout vm: Vm, p: Program, fuel: Int) =
     &self.record(vm)
-    if fuel > 0 then
-      if vm.running() then
-        &vm.step(p)
-        &self.run(&vm, p, fuel - 1)
+    if fuel > 0 && vm.running() then
+      &vm.step(p)
+      &self.run(&vm, p, fuel - 1)
 

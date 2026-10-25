@@ -60,8 +60,6 @@ and shows what the compiler says for each:
 The program works around what Ren doesn't have yet. These are the
 candidates for what comes next:
 
-- **No `&&`, `||` or `not`.** `program.ren` needs `inside(to, n)` and
-  `if ... then () else ok = false`.
 - **No `while`, ranges, `break` or early `return`.** `Vm.run` loops by
   recursing with a `fuel` count.
 - **No error handling yet (stage 6).** `tl.back(10).unwrap_or(Vm.fresh)`

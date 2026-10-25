@@ -69,6 +69,5 @@ worked that out.
   later `bank.open()` is also reported, as a missing function of the
   module: six errors that say nothing new. The compiler should report the
   clash once, and then treat the name as the variable.
-- **No `&&` or `||`.** As in the VM: chains of `else if` instead.
 - **No strings.** A statement can't be printed as text, so `main` prints
   cents and counts.
