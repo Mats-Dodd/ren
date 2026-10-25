@@ -61,7 +61,7 @@ inference every body a value goes through.
 | IR | Made by | Holds | Checked by | Today |
 |---|---|---|---|---|
 | tokens | lexer.ml | the source, with indentation as tokens | the parser | yes |
-| AST, parsed | parser.ml | the program as written | the tree-sitter grammar's differential test | yes |
+| AST, parsed | parser.ml | the program as written | nothing yet: the tree-sitter grammar's differential test only checks that both parsers accept the same programs, not that they read them alike | yes |
 | AST, resolved | resolve.ml | every name found through scope, by its binder's id or its path | inference, which only reads it | yes |
 | inferred | infer.ml | each function's scheme and each node's type and lookup | the driver: a public function's inferred scheme is the one its interface states | yes |
 | Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments from R2, requirement dictionaries from R4 | Core Lint, which the tests run on every program | yes |
@@ -195,9 +195,10 @@ the next starts:
   runtime half moves to eval/, so resolve, lower and lint no longer link
   against it, and intrinsics are found by an id. A type's member is
   `{owner; name; overload}`, and schemes, nodes and interface members are
-  kept in maps keyed by it. infer_expr.ml is split by concern, and what
-  inference decides is recorded for lower to read. Every existing output
-  stays byte for byte the same.
+  kept in maps keyed by it. infer_expr.ml is split by concern, what
+  inference decides is recorded for lower to read, inference's message
+  wording moves into infer_msg.ml, and the cheap quadratic spots are
+  fixed. Every existing output stays byte for byte the same.
 - **R2, typed Core.** Every Core node and binder carries its type, and a
   call of a polymorphic function its type arguments, so the interpreter
   no longer works types out at runtime. A scheme gains a slot for
@@ -205,7 +206,11 @@ the next starts:
 - **R3, one constraint solver.** The deferred queues inference keeps
   become one representation of constraints, solved by one worklist per
   call-graph group, reporting every failure, in an order that doesn't
-  change the answer. It fixes the bugs the order caused.
+  change the answer. It fixes four bugs of inference: a generic
+  function's written signature not instantiated at a use in its own
+  group, a handler coercion that depends on argument order, a private
+  function rejected because two rows share a tail, and an error set of
+  tags written in `Err` left open after its group.
 - **R4, requirements and lambda sets.** `==` and `!=` require `eq`,
   derived structurally and absent from a type with a function in it. A
   generic function's requirements are inferred and kept in its scheme and

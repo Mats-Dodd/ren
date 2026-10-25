@@ -426,7 +426,7 @@ stage, or settled something the plan left open:
   inside a handler for `Rates`, nor through a function it calls that
   uses `Rates`, even though its operations run with what's installed
   outside it: reaching the next implementation out is `outer`'s (stage
-  9), and the README's section 7 already says it's an error. It's
+  10), and the README's section 7 already says it's an error. It's
   checked on what the handler needs, so an arm can still install
   another `Rates`, even the same handler, `with counting_rates(r) in
   ...`, around a call that uses one.
