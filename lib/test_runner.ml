@@ -59,74 +59,36 @@ let shown_file ~dir file =
       (String.length file - String.length prefix)
   else file
 
-(* ---- values, as a test shows them ----
-
-   A value is shown as it's written, with the names of the types it's
-   made of: a record after its type's name, `Account { id: AccountId(1)
-   }`, and an opaque value as its type's name around what it is,
-   `Money(-100)`, which `show` can't do, since at runtime it's only what
-   it's represented as. So a value is shown through its type, and each
-   type's declaration, [types], by its path. *)
-
-(* [t] with each of its type's parameters, [Var i], replaced by [args]'s
-   [i]th. *)
-let rec subst args (t : Ty.ty) : Ty.ty =
-  match t with
-  | Var i -> ( match List.nth_opt args i with Some a -> a | None -> t)
-  | Con (p, ts) -> Con (p, List.map (subst args) ts)
-  | Fun (ps, r, e, u) ->
-      Fun
-        ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
-          subst args r,
-          e,
-          u )
-  | Errors _ | Uses _ | Error -> t
-
-let rec shown types (t : Ty.ty) (v : Value.t) =
-  let list xs = String.concat ", " xs in
-  match (t, v) with
-  | Con (p, [ elem ]), VArray xs when p = Path.prelude "Array" ->
-      "[" ^ list (Array.to_list (Array.map (shown types elem) xs)) ^ "]"
-  | Con (p, args), _ -> (
-      let d = Hashtbl.find_opt types p in
-      match (Option.map (fun (d : Iface.type_decl) -> d.body) d, v) with
-      | Some (Record fields), VRecord vs ->
-          (* the fields in the order they're declared *)
-          p.name ^ " { "
-          ^ list
-              (List.map
-                 (fun (f : Iface.field) ->
-                   f.fname ^ ": "
-                   ^ shown types (subst args f.fty) (List.assoc f.fname vs))
-                 fields)
-          ^ " }"
-      | Some (Sum ctors), VCon c -> (
-          match
-            List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) ctors
-          with
-          | Some k
-            when k.cfields <> [] && List.length k.cfields = List.length c.args
-            ->
-              c.name ^ "("
-              ^ list
-                  (List.map2
-                     (fun (f : Iface.field) a ->
-                       shown types (subst args f.fty) a)
-                     k.cfields c.args)
-              ^ ")"
-          | _ -> Value.show v)
-      | Some (Opaque (Some rep)), _ ->
-          p.name ^ "(" ^ shown types (subst args rep) v ^ ")"
-      | Some (Opaque None), _ -> p.name ^ "(" ^ Value.show v ^ ")"
-      | _ -> Value.show v)
-  | _ -> Value.show v
-
-(* Where [a] and [b] first differ: an index into both, or the length of
-   the shorter if it's the start of the other. *)
+(* The column where [a] and [b] first differ: how many characters come
+   before it in both, or the length of the shorter if it's the start of
+   the other. Strings are UTF-8, where a character can take several
+   bytes, so it counts the bytes that start one: every byte but those
+   written 10xxxxxx in binary, which continue one. *)
 let first_difference a b =
   let n = min (String.length a) (String.length b) in
   let rec go i = if i < n && a.[i] = b.[i] then go (i + 1) else i in
-  go 0
+  let at = go 0 and starts = ref 0 in
+  String.iteri
+    (fun j c -> if j < at && Char.code c land 0xc0 <> 0x80 then incr starts)
+    a;
+  !starts
+
+(* Whether [c] is a character [one_line] writes as its escape. *)
+let unseen c = Char.code c < 0x20 || c = '\x7f'
+
+(* A test's name, as a line shows it: a character that would break the
+   line, or that can't be seen, written as its escape, as in the source,
+   so each test stays on one line. *)
+let one_line name =
+  let b = Buffer.create (String.length name) in
+  String.iter
+    (function
+      | '\n' -> Buffer.add_string b "\\n"
+      | '\t' -> Buffer.add_string b "\\t"
+      | c when unseen c -> Printf.bprintf b "\\x%02x" (Char.code c)
+      | c -> Buffer.add_char b c)
+    name;
+  Buffer.contents b
 
 (* ---- what's printed ---- *)
 
@@ -151,30 +113,46 @@ let snippet b ~sources (loc : Loc.t) =
   | None -> ());
   String.make (width + 1) ' '
 
-(* The shortest start of [name], in whole words and at least two of them,
-   that `--only` finds in no other test's name of [all], so a rerun runs
-   just this one; or the whole name, if another has it all. *)
+(* Whether [sub] is somewhere in [s]. *)
+let contains s sub =
+  let ls = String.length sub and ln = String.length s in
+  let rec at i = i + ls <= ln && (String.sub s i ls = sub || at (i + 1)) in
+  at 0
+
+(* What a rerun of the test [name] looks for, of [all]'s names: the
+   shortest start of [name], in whole words and at least two of them,
+   that `--only` finds in no other test's name, so a rerun runs just this
+   one. If there's none, the whole name, and whether `--exact` is needed
+   for it, when another test's name has it inside. A shell's double
+   quotes can't hold a character [one_line] escapes, so the start stops
+   before the first such one, and a rerun of a name with one may run
+   others too. *)
 let only_for all name =
-  let words = String.split_on_char ' ' name in
-  let least = min 2 (List.length words) in
-  let has sub n =
-    let ls = String.length sub and ln = String.length n in
-    let rec at i = i + ls <= ln && (String.sub n i ls = sub || at (i + 1)) in
-    at 0
+  let others = List.filter (( <> ) name) all in
+  let unique prefix = not (List.exists (fun n -> contains n prefix) others) in
+  (* where each word of [name] ends, but the last, and where the name
+     does *)
+  let ends =
+    List.filteri
+      (fun i _ -> i > 0 && name.[i - 1] <> ' ' && name.[i] = ' ')
+      (List.init (String.length name) Fun.id)
+    @ [ String.length name ]
   in
-  let rec go n taken = function
-    | [] -> name
-    | w :: rest ->
-        let prefix = if taken = "" then w else taken ^ " " ^ w in
-        if
-          n >= least
-          && List.for_all (fun n -> n = name || not (has prefix n)) all
-        then
-          if List.length (List.filter (( = ) name) all) > 1 then name
-          else prefix
-        else go (n + 1) prefix rest
+  let least = min 2 (List.length ends) in
+  (* where the first character a shell can't be given is, if any *)
+  let seen = String.to_seq name |> Seq.find_index unseen in
+  let rec go n = function
+    | [] -> (
+        match seen with
+        | Some i -> (String.sub name 0 i, false)
+        | None -> (name, List.exists (fun n -> contains n name) others))
+    | stop :: rest ->
+        let prefix = String.sub name 0 stop in
+        if Option.fold ~none:false ~some:(fun i -> i < stop) seen then go n []
+        else if n >= least && unique prefix then (prefix, false)
+        else go (n + 1) rest
   in
-  go 1 "" words
+  go 1 ends
 
 (* A quoted argument for a shell: in double quotes, with what a shell would read
    inside them escaped. *)
@@ -207,14 +185,13 @@ let details b ~opts ~sources ~types ~all f =
         loc
     | _ -> f.test.loc
   in
-  Printf.bprintf b "\n──── %s ── %s:%d\n" name
+  Printf.bprintf b "\n──── %s ── %s:%d\n" (one_line name)
     (shown_file ~dir:opts.dir loc.file)
     loc.start.line;
   let pad = snippet b ~sources loc in
   (match f.how with
   | Panicked (Eval.Assert_failed { sides = Some (t, l, r); _ }) ->
-      let types = types in
-      let l = shown types t l and r = shown types t r in
+      let l = Shown.value types t l and r = Shown.value types t r in
       Printf.bprintf b "%sleft:  %s\n%sright: %s\n%s%s^ differs here\n" pad l
         pad r pad
         (String.make (String.length "right: " + first_difference l r) ' ')
@@ -224,9 +201,10 @@ let details b ~opts ~sources ~types ~all f =
   | Failed err -> Printf.bprintf b "%serror: %s\n" pad (Value.show err)
   | Panicked e -> raise e
   | Passed -> ());
-  Printf.bprintf b "\n%sseed %d · rerun: ren test %s --only %s --seed %d\n" pad
-    f.seed opts.path
-    (quoted (only_for all name))
+  let only, exact = only_for all name in
+  Printf.bprintf b "\n%sseed %d · rerun: ren test %s --only %s%s --seed %d\n"
+    pad f.seed opts.path (quoted only)
+    (if exact then " --exact" else "")
     f.seed;
   if f.console <> [] then (
     Printf.bprintf b "\n%sprinted:\n" pad;
@@ -241,12 +219,7 @@ let run ~opts ~sources (suite : Driver.suite) =
     match opts.only with
     | None -> true
     | Some text when opts.exact -> full_name t = text || t.label = Some text
-    | Some text ->
-        let n = full_name t and ls = String.length text in
-        let rec at i =
-          i + ls <= String.length n && (String.sub n i ls = text || at (i + 1))
-        in
-        at 0
+    | Some text -> contains (full_name t) text
   in
   let files =
     List.filter_map
@@ -259,10 +232,7 @@ let run ~opts ~sources (suite : Driver.suite) =
   let all =
     List.concat_map (fun (_, _, ts) -> List.map full_name ts) suite.files
   in
-  let types = Hashtbl.create 64 in
-  List.iter
-    (fun (d : Iface.type_decl) -> Hashtbl.replace types d.path d)
-    suite.types;
+  let types = Shown.types suite.types in
   (* a file's tests, each under its group run's label if it has one,
      printed by [line] *)
   let each_line ~line (file, home, tests) =
@@ -271,7 +241,7 @@ let run ~opts ~sources (suite : Driver.suite) =
       (List.fold_left
          (fun label (t : Test_items.test) ->
            if t.label <> label then
-             Option.iter (fun l -> print_endline ("  " ^ l)) t.label;
+             Option.iter (fun l -> print_endline ("  " ^ one_line l)) t.label;
            line (if t.label = None then "  " else "    ") (file, home) t;
            t.label)
          None tests)
@@ -286,9 +256,14 @@ let run ~opts ~sources (suite : Driver.suite) =
               | [] -> ""
               | ds -> " · uses the real " ^ Infer_msg.and_list ds
             in
-            print_endline (indent ^ t.name ^ real)))
+            print_endline (indent ^ one_line t.name ^ real)))
       files;
-    0)
+    (* as when they're run, an `--only` that matches none is a mistake *)
+    match (files, opts.only) with
+    | [], Some text ->
+        print_endline (sprintf "no test's name has %s in it" (quoted text));
+        1
+    | _ -> 0)
   else
     let started = Unix.gettimeofday () in
     let cx = Eval.load suite.core in
@@ -306,10 +281,10 @@ let run ~opts ~sources (suite : Driver.suite) =
             (match how with
             | Passed ->
                 incr passed;
-                print_endline (indent ^ "✓ " ^ t.name)
+                print_endline (indent ^ "✓ " ^ one_line t.name)
             | _ ->
                 failures := { test = t; file; seed; how; console } :: !failures;
-                print_endline (indent ^ "✗ " ^ t.name));
+                print_endline (indent ^ "✗ " ^ one_line t.name));
             flush stdout))
       files;
     let b = Buffer.create 1024 in

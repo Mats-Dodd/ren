@@ -1836,6 +1836,9 @@ and synth env cx (e : expr) : ty =
       t
   | Try a -> (
       let m = marker env Mtry (keyword e.loc 3) in
+      (* the `try` around a group's test in a run of it, which needn't
+         cover anything: the test may fail with nothing *)
+      if e.node = Test_items.passed_on then m.failed <- true;
       let t = infer env { cx with markers = m :: cx.markers } a in
       (* `try r`, where [r] is a [Result]: what's in [r] if it's `Ok`, and
          if it's `Err`, its error again *)

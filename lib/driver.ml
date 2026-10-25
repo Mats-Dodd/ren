@@ -52,7 +52,7 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
   in
   let r =
     checked "resolve" (fun sink ->
-        Resolve.program sink ~home ~imports items.prog)
+        Resolve.program sink ~home ~imports ~groups:items.pub_tests items.prog)
   in
   checked "mut" (fun sink -> Mut.program sink r);
   let inferred =
@@ -428,6 +428,25 @@ let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
 
 (* ---- tests ---- *)
 
+(* Every type of the program [modules], the prelude's included, each as
+   its own module sees it, which is how a failed `assert` shows a value
+   (shown.ml). *)
+let types_of modules =
+  let _, _, prelude_types = Lazy.force prelude in
+  prelude_types
+  @ List.concat_map (fun (c : checked) -> c.resolved.types) modules
+
+(* A failed `assert`, as `ren run` reports it: a panic, with the sides of
+   an `assert a == b` shown through their type, as `ren test` shows them. *)
+let assert_failed ~types loc sides =
+  let notes =
+    match sides with
+    | Some (t, l, r) ->
+        [ "left:  " ^ Shown.value types t l; "right: " ^ Shown.value types t r ]
+    | None -> []
+  in
+  Diag.make loc ~notes "panic: this `assert` failed"
+
 (* A program's tests, checked and lowered with the functions they were
    made (test_items.ml), ready to run. *)
 type suite = {
@@ -467,15 +486,12 @@ let suite ?lint ?(load = fun _ -> None) ~dir roots =
       (List.map (fun (file, src) -> (home file, file, src)) roots)
   in
   let core = link ?lint ~for_tests:true modules in
-  let _, _, prelude_types = Lazy.force prelude in
   {
     core;
     files =
       List.sort compare
         (List.map (fun c -> (c.file, c.home, c.items.tests)) modules);
-    types =
-      prelude_types
-      @ List.concat_map (fun (c : checked) -> c.resolved.types) modules;
+    types = types_of modules;
   }
 
 let core ?lint ?load ~file src = entry_of (linked ?lint ?load ~file src)
@@ -601,8 +617,13 @@ let types ?(lint = false) ?load ~file src =
    dependency order, starting from the entry's `$start`, which installs
    what `main` uses and calls it. *)
 let run ?lint ?load ~file src =
-  let modules = link ?lint (check_all ?load ~file src) in
-  pass "eval" (fun () -> Eval.run modules)
+  let checked = check_all ?load ~file src in
+  let modules = link ?lint checked in
+  try pass "eval" (fun () -> Eval.run modules)
+  with Eval.Assert_failed { loc; sides } ->
+    raise
+      (Diag.Error
+         (assert_failed ~types:(Shown.types (types_of checked)) loc sides))
 
 let dump_tokens toks =
   toks |> Array.to_list
@@ -616,16 +637,6 @@ let render_error ~sources = function
   | Diag.Errors ds -> Some (Diag.render_all ~sources ds)
   | Eval.Panic (loc, msg) ->
       Some (Diag.render ~sources (Diag.make loc ("panic: " ^ msg)))
-  | Eval.Assert_failed { loc; sides } ->
-      let notes =
-        match sides with
-        | Some (_, l, r) ->
-            [ "left:  " ^ Value.show l; "right: " ^ Value.show r ]
-        | None -> []
-      in
-      Some
-        (Diag.render ~sources
-           (Diag.make loc ~notes "panic: this `assert` failed"))
   | Eval.Uncaught err ->
       (* `main` failed: its error, shown as a value is (errors.md, "`main`") *)
       Some ("error: " ^ Value.show err ^ "\n")

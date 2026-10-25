@@ -1766,7 +1766,7 @@ let no_private_errors env ~private_ ~set ~tag (es : Resolved.errors) =
             ~say:(fun (q : Path.t) -> set q.name))
     es.errs
 
-let no_leaks env ~private_ (items : Resolved.program) =
+let no_leaks env ~private_ ~groups (items : Resolved.program) =
   let fn_ (f : Resolved.fn_def) =
     let kind = if Ast.is_handler f then "handler" else "fn" in
     let check ~verb t =
@@ -1821,11 +1821,25 @@ let no_leaks env ~private_ (items : Resolved.program) =
             sprintf "`pub handler %s` implements `%s`" f.name.name p.name)
     | _ -> ()
   in
+  (* a public group's parameters, which each of its tests' functions
+     has; each error is reported once, however many tests it has *)
+  let group g (f : Resolved.fn_def) =
+    List.iter
+      (fun (p : Resolved.param) ->
+        Option.iter
+          (no_private env ~private_
+             ~whole:(sprintf "`pub group %s` takes `%s`" g)
+             ~inside:(sprintf "`pub group %s`'s parameters mention `%s`" g))
+          p.pty)
+      f.params
+  in
   List.iter
     (function
       | Fn (f : Resolved.fn_def) when f.pub ->
           handler f;
           fn_ f
+      | Fn f when List.mem_assoc f.name.name groups ->
+          group (List.assoc f.name.name groups) f
       | Type (td : Resolved.type_def) when td.type_pub -> (
           (* a public type's public items are in the interface too *)
           List.iter
@@ -1951,7 +1965,7 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
       | _ -> callees td)
   | Some None | None -> []
 
-let program sink ~home ~imports (prog : Parsed.program) =
+let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
   (* tests are functions by now (test_items.ml); any left are ignored *)
   let prog = List.filter (function Testing _ -> false | _ -> true) prog in
   (* each import, with the interface of the module it imports; the driver
@@ -2176,7 +2190,7 @@ let program sink ~home ~imports (prog : Parsed.program) =
           Hashtbl.replace private_ td.type_name.name td.type_name.loc
       | Fn _ | Type _ | Import _ | Testing _ -> ())
     items;
-  no_leaks env ~private_ items;
+  no_leaks env ~private_ ~groups items;
   no_opaque_cycles env items;
   no_set_cycles env items;
   let types =

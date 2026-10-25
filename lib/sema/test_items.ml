@@ -65,6 +65,9 @@ type t = {
   bodies : string list;
       (** the functions whose body is a test's, a top-level one's or a group's,
           which has to be `Unit` *)
+  pub_tests : (string * string) list;
+      (** each function made for a public group's test, with the group's name:
+          another module calls it, so its parameters are in the interface *)
 }
 
 (* The built-in dependencies a test gets the test implementation of, each
@@ -84,6 +87,14 @@ let full_name (t : test) =
    what runs the [i]th of the [k]th group run. *)
 let group_fn g i = sprintf "%s$%d" g i
 let run_fn k i = sprintf "$run%d$%d" k i
+
+(* The node of the `try` a group run's function puts around its call
+   of the group's test, which passes on whatever that test fails with.
+   It may fail with nothing, and Infer doesn't report such a `try` as
+   covering nothing, as it would one the program writes. The parser
+   numbers nodes from zero, and the `with`s of a group from -2 down
+   ([program]), so -1 is this one's alone. *)
+let passed_on = -1
 
 (* A test's `uses`: the built-ins it asks for the real implementation of,
    by name. *)
@@ -247,6 +258,7 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
   in
   (* each test, group and run, numbered in source order *)
   let tests = ref [] and made = ref [] and bodies = ref [] in
+  let pub_tests = ref [] in
   let make name item =
     made := name :: !made;
     item
@@ -290,6 +302,8 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
               (fun i (t : test_def) ->
                 let name = group_fn g.group_name.name (i + 1) in
                 bodies := name :: !bodies;
+                if g.group_pub then
+                  pub_tests := (name, g.group_name.name) :: !pub_tests;
                 make name
                   (fn_of ~name ~loc:t.test_loc ~params:g.group_params
                      (nest t.test_body)))
@@ -326,10 +340,20 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
                           real;
                         }
                         :: !tests;
+                      (* `try g$i(args)`, so what the test fails with
+                         reaches the runner, as a top-level test's does *)
                       let call =
                         {
                           r.run_call with
-                          kind = Call (callee (group_fn grp.gname (i + 1)), args);
+                          kind =
+                            Try
+                              {
+                                r.run_call with
+                                kind =
+                                  Call
+                                    (callee (group_fn grp.gname (i + 1)), args);
+                              };
+                          node = passed_on;
                         }
                       in
                       make fn (fn_of ~name:fn ~loc:r.run_loc call))
@@ -343,4 +367,5 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
     groups;
     made = List.rev !made;
     bodies = List.rev !bodies;
+    pub_tests = List.rev !pub_tests;
   }

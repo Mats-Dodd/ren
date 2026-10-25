@@ -746,3 +746,33 @@ pass, and a flag without its value says what it needs:
   $ ren test tested --seed
   error: --seed needs a number, like --seed 42
   [2]
+
+A folder in the one tested that holds a program of its own, with a
+`main`, finds its imports from itself, so it isn't part of this program;
+its tests are left out, with a note that says how to run them:
+
+  $ mkdir -p outer/inner
+  $ cat > outer/sums.ren <<'END'
+  > test "sums" =
+  >   assert 1 + 1 == 2
+  > END
+  $ cat > outer/inner/main.ren <<'END'
+  > import parts
+  > fn main() = print(parts.two())
+  > END
+  $ cat > outer/inner/parts.ren <<'END'
+  > pub fn two() -> Int = 2
+  > test "two" =
+  >   assert two() == 2
+  > END
+  $ ren test outer
+  note: outer/inner holds a program of its own, so its tests aren't run here: run them with `ren test outer/inner`
+  sums.ren
+    ✓ sums
+  
+  1 passed
+  $ ren test outer/inner
+  parts.ren
+    ✓ two
+  
+  1 passed

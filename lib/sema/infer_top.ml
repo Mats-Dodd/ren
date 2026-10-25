@@ -2349,8 +2349,14 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
           | With { body; _ } -> last body
           | _ -> e
         in
-        match repr (Hashtbl.find schemes f.name.name) with
-        | TFun (_, ret, _, _) ->
+        (* the last line's own type: a wrapper's `with` around it has the
+           wrapper's result, which is reported where it's wrong *)
+        let own =
+          Option.bind (Hashtbl.find_opt tables f.name.name) (fun cx ->
+              Hashtbl.find_opt cx.nodes (last f.body).node)
+        in
+        match (own, repr (Hashtbl.find schemes f.name.name)) with
+        | Some ret, _ | None, TFun (_, ret, _, _) ->
             unify_at env (last f.body).loc ~found:ret ~expected:unit
               ~msg:(fun found _ ->
                 sprintf "a test's body is `Unit`, but this is %s"

@@ -4397,6 +4397,83 @@ test "dividing by zero" =
     [exit 1]
     |}]
 
+let%expect_test "a group's test that fails with an error, or passes" =
+  (* a run calls each of the group's tests with `try`, so what it fails
+     with reaches the runner, and a test that can't fail runs as well *)
+  test
+    {|
+fn may(n: Int) -> Int ! Boom = if n > 0 then fail Boom else n
+
+group g() =
+  test "fails" =
+    assert try may(1) == 0
+  test "passes" =
+    assert try may(0) == 0
+  test "can't fail" =
+    assert 1 == 1
+
+group "run" = g()
+|};
+  [%expect
+    {|
+    test.ren
+      run
+        ✗ fails
+        ✓ passes
+        ✓ can't fail
+
+    ──── run / fails ── test.ren:11
+       │
+    11 │ group "run" = g()
+       │       ^^^^^
+       │
+       error: Boom
+
+       seed 6182 · rerun: ren test test.ren --only "run / fails" --seed 6182
+
+    2 passed, 1 failed
+    [exit 1]
+    |}];
+  test_files
+    [
+      ("main.ren", {|
+import lib
+
+group "wrapped" = lib.wrapped()
+|});
+      ( "lib.ren",
+        {|
+pub fn retry(n: Int, body: fn() ! ..e uses ..d) ! ..e uses ..d =
+  match attempt body()
+    Ok(_) => ()
+    Err(_) =>
+      if n <= 1 then try body() else try retry(n - 1, body)
+
+pub group wrapped() with retry(5) =
+  test "always fails" =
+    fail Boom
+|}
+      );
+    ];
+  [%expect
+    {|
+    main.ren
+      wrapped
+        ✗ always fails
+
+    ──── wrapped / always fails ── main.ren:3
+      │
+    3 │ group "wrapped" = lib.wrapped()
+      │       ^^^^^^^^^
+      │
+      error: Boom
+
+      seed 6897 · rerun: ren test . --only "wrapped /" --seed 6897
+
+    0 passed, 1 failed
+    [exit 1]
+    |}]
+
 let%expect_test "what a test can't use" =
   test
     {|
@@ -4491,6 +4568,70 @@ test "one subtracts" =
   test ~only:"multiplies" src;
   [%expect {|
     no test's name has "multiplies" in it
+    [exit 1]
+    |}];
+  (* listing them is the same mistake *)
+  test ~only:"multiplies" ~list:true src;
+  [%expect {|
+    no test's name has "multiplies" in it
+    [exit 1]
+    |}]
+
+let%expect_test "a rerun runs just the test that failed" =
+  (* "panics" is inside "it panics", so its rerun needs `--exact` *)
+  test {|
+test "panics" =
+  assert false
+
+test "it panics" =
+  assert true
+|};
+  [%expect
+    {|
+    test.ren
+      ✗ panics
+      ✓ it panics
+
+    ──── panics ── test.ren:2
+      │
+    2 │   assert false
+      │          ^^^^^
+      │
+      this is false
+
+      seed 4325 · rerun: ren test test.ren --only "panics" --exact --seed 4325
+
+    1 passed, 1 failed
+    [exit 1]
+    |}]
+
+let%expect_test "a test's name with a line break, and a difference after an é" =
+  (* the name is shown as it's written, so it stays on one line; a rerun
+     looks for what comes before the break *)
+  test
+    {|
+type P = {name: Str, n: Int}
+
+test "café\nprices" =
+  assert P { name: "café", n: 1 } == P { name: "café", n: 2 }
+|};
+  [%expect
+    {|
+    test.ren
+      ✗ café\nprices
+
+    ──── café\nprices ── test.ren:4
+      │
+    4 │   assert P { name: "café", n: 1 } == P { name: "café", n: 2 }
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      │
+      left:  P { name: "café", n: 1 }
+      right: P { name: "café", n: 2 }
+                                  ^ differs here
+
+      seed 6167 · rerun: ren test test.ren --only "café" --seed 6167
+
+    0 passed, 1 failed
     [exit 1]
     |}]
 
@@ -4691,6 +4832,37 @@ group "frozen" = counts(Clock.frozen(Time.epoch))
        help: rename one of them
     |}]
 
+let%expect_test "a public group can't take a private type" =
+  (* another module runs it, so it has to be able to name what it gives *)
+  test
+    {|
+type Priv = {n: Int}
+
+pub group leaky(p: Priv, ps: Array<Priv>) =
+  test "a" =
+    assert p.n == 1
+  test "b" =
+    assert ps == []
+|};
+  [%expect
+    {|
+    error: `pub group leaky` takes `Priv`, which is private to this module
+      ┌─ test.ren:3:20
+    1 │ type Priv = {n: Int}
+      │      ---- `Priv` is declared here, without `pub`
+    3 │ pub group leaky(p: Priv, ps: Array<Priv>) =
+      │                    ^^^^
+      help: mark `Priv` `pub`
+
+    error: `pub group leaky`'s parameters mention `Priv`, which is private to this module
+      ┌─ test.ren:3:36
+    1 │ type Priv = {n: Int}
+      │      ---- `Priv` is declared here, without `pub`
+    3 │ pub group leaky(p: Priv, ps: Array<Priv>) =
+      │                                    ^^^^
+      help: mark `Priv` `pub`
+    |}]
+
 let%expect_test "a group's run needs what its tests use" =
   test
     {|
@@ -4827,6 +4999,25 @@ group g() =
        help: check it with `assert`, or write `let _ = ...` if you mean to drop it
     |}]
 
+let%expect_test "a group's wrapper that gives a value is reported once" =
+  (* the test's body is the wrapper's, which is wrong; its last line is
+     `Unit`, as a test's is *)
+  test
+    {|
+fn retry(n: Int, body: fn() -> Int) -> Int = try body()
+
+group g() with retry(3) =
+  test "a" =
+    assert 1 == 1
+|};
+  [%expect
+    {|
+    error: expected `Int`, found `Unit`
+      ┌─ test.ren:5:5
+    5 │     assert 1 == 1
+      │     ^^^^^^^^^^^^^
+    |}]
+
 let%expect_test
     "`ren run` doesn't run the tests, and `ren types` leaves them out" =
   let src = {|
@@ -4860,4 +5051,22 @@ fn main() =
       │          ^^^^^^^^^^^^
       = left:  [1, 2]
       = right: [1, 3]
+    |}];
+  (* its sides read as `ren test` shows them, through their type *)
+  run
+    {|
+type M = opaque Int
+type P = {m: M, n: Int}
+
+fn main() =
+  assert P { m: 1, n: 2 } == P { m: 2, n: 2 }
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:5:10
+    5 │   assert P { m: 1, n: 2 } == P { m: 2, n: 2 }
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = left:  P { m: M(1), n: 2 }
+      = right: P { m: M(2), n: 2 }
     |}]

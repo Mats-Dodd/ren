@@ -13,7 +13,9 @@ the file's folder: `import billing/stripe` is the file billing/stripe.ren.
 commands:
   run     run the program's `main` function
   test    run the tests of every module in the folder (the current one if
-          none is given), or of the file and what it imports:
+          none is given) and the folders in it, but those holding a
+          program of their own, with a `main`; or of the file and what
+          it imports:
             --only <text>  only the tests whose name has <text> in it
             --exact        <text> is a test's whole name, or a group
                            run's label
@@ -53,19 +55,48 @@ let fail ~known e =
       exit 1
   | None -> raise e
 
-(* Every `.ren` file under the folder [dir], in sorted order. *)
-let rec ren_files dir =
-  Sys.readdir dir |> Array.to_list |> List.sort compare
-  |> List.concat_map (fun name ->
-      let path =
-        if dir = Filename.current_dir_name then name
-        else Filename.concat dir name
-      in
-      if Sys.is_directory path then
-        if String.starts_with ~prefix:"." name || name = "_build" then []
-        else ren_files path
-      else if Filename.check_suffix name ".ren" then [ path ]
-      else [])
+(* Whether the file [path] declares `main`: a program starts there. One
+   that can't be read or parsed doesn't, here; it's reported if it's
+   loaded. *)
+let has_main path =
+  try
+    List.exists
+      (function
+        | Ast.Fn (f : Ast.Parsed.fn_def) -> f.name.name = "main" | _ -> false)
+      (Driver.parse ~file:path (read path))
+  with _ -> false
+
+(* Every `.ren` file under the folder [dir], in sorted order, and the
+   folders below it left out because each holds a program of its own: one
+   of the files right in it declares `main`. Its imports are found from
+   its folder, not [dir], so it can't be a part of [dir]'s program. *)
+let rec ren_files ?(top = true) dir =
+  let names = Sys.readdir dir |> Array.to_list |> List.sort compare in
+  let path name =
+    if dir = Filename.current_dir_name then name else Filename.concat dir name
+  in
+  let here =
+    List.filter_map
+      (fun name ->
+        let p = path name in
+        if Filename.check_suffix name ".ren" && not (Sys.is_directory p) then
+          Some p
+        else None)
+      names
+  in
+  if (not top) && List.exists has_main here then ([], [ dir ])
+  else
+    List.fold_left
+      (fun (files, apart) name ->
+        let p = path name in
+        if
+          Sys.is_directory p
+          && not (String.starts_with ~prefix:"." name || name = "_build")
+        then
+          let f, a = ren_files ~top:false p in
+          (files @ f, apart @ a)
+        else (files, apart))
+      (here, []) names
 
 (* `ren test [path] [flags]` (deps.md, "`ren test`"). *)
 let test args =
@@ -112,14 +143,23 @@ let test args =
   in
   let path = if opts.path = "" then "." else opts.path in
   let dir, files =
-    if Sys.file_exists path && Sys.is_directory path then
+    if Sys.file_exists path && Sys.is_directory path then (
       (* a folder is written with or without a `/` on the end *)
       let dir =
         if String.length path > 1 && String.ends_with ~suffix:"/" path then
           String.sub path 0 (String.length path - 1)
         else path
       in
-      (dir, ren_files dir)
+      let files, apart = ren_files dir in
+      List.iter
+        (fun d ->
+          prerr_endline
+            (Printf.sprintf
+               "note: %s holds a program of its own, so its tests aren't run \
+                here: run them with `ren test %s`"
+               d d))
+        apart;
+      (dir, files))
     else (Filename.dirname path, [ path ])
   in
   let opts = { opts with path; dir } in

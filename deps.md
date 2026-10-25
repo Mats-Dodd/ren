@@ -390,8 +390,11 @@ stage, or settled something the plan left open:
   congruential generator, the same on every machine. A test's own seed
   is a hash of its name, from 0 to 9999.
 - **A failure's rerun names the shortest start of the test's name, of at
-  least two words, that no other test's name has,** or all of it.
-  What the test printed comes after it, under `printed:`.
+  least two words, that no other test's name has,** or all of it, with
+  `--exact` if another test's name has all of it inside, `panics` in
+  `it panics`. What the test printed comes after it, under `printed:`.
+  A name is shown as it's written: a line break in it is `\n`, so its
+  lines stay whole, and its rerun looks for what comes before the break.
 - **`REN_NO_TIMINGS`, set, leaves out how long the tests took,** as the
   cram tests do.
 - **The test implementations are the prelude's too:** `TestClock`,
@@ -408,6 +411,16 @@ stage, or settled something the plan left open:
   which is what an editor's run button beside a test uses.
 - **A test that asks for the real `Console`** writes to stdout as it
   runs, between the lines `ren test` prints for each test.
+- **`ren test` on a folder leaves out a folder in it that holds a program
+  of its own,** one with a file that declares `main`, with a note saying
+  to test it on its own: its imports are found from its folder, so it
+  can't be part of the outer program. `ren test examples` runs only the
+  files right in `examples`.
+- **A run of a group calls each of its tests with `try`,** so a group's
+  test that fails with an error is reported like `main`, as a top-level
+  test is.
+- **`ren run` shows a failed `assert a == b`'s sides as `ren test`
+  does,** through their types, `Money(-100)`.
 
 ## Later
 
