@@ -51,7 +51,8 @@ open Ast
 open Ast.Parsed
 open Token
 
-(* [node] is the last node id handed out in the current top-level item. *)
+(* [node] is the last node id handed out in the current top-level item, to
+   an expression or a pattern. *)
 type t = { toks : (Token.t * Loc.t) array; mutable i : int; mutable node : int }
 
 let peek p = fst p.toks.(p.i)
@@ -252,7 +253,10 @@ let parse_type p =
 
 let rec parse_pattern p : pattern =
   let start = loc p in
-  let finish pkind = { pkind; ploc = Loc.span start (last_loc p) } in
+  let finish pkind =
+    p.node <- p.node + 1;
+    { pkind; ploc = Loc.span start (last_loc p); pnode = p.node }
+  in
   match peek p with
   | IDENT "_" ->
       advance p;

@@ -175,7 +175,7 @@ let rec pattern sc (p : Parsed.pattern) : Resolved.pattern * scope =
         in
         (PCon (c, List.rev ps), sc)
   in
-  ({ pkind = kind; ploc = p.ploc }, sc)
+  ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
 
 let rec expr env sc (e : Parsed.expr) : Resolved.expr =
   let go = expr env sc in

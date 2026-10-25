@@ -26,8 +26,9 @@ type 't ty =
 type binop = Add | Sub | Mul | Div | Mod | Eq | Neq | Lt | Le | Gt | Ge
 type unop = Neg
 
-(* Patterns, the left-hand side of a `match` arm. *)
-type 'b pattern = { pkind : 'b pattern_kind; ploc : Loc.t }
+(* Patterns, the left-hand side of a `match` arm. [pnode] numbers it along
+   with the expressions of its function (see [expr] below). *)
+type 'b pattern = { pkind : 'b pattern_kind; ploc : Loc.t; pnode : int }
 
 and 'b pattern_kind =
   | PWild  (** [_] *)
@@ -43,8 +44,8 @@ type mode = Read | Inout
 (* A parameter of a function or lambda; its type may be left out. *)
 type ('b, 't) param = { pname : 'b; pty : 't ty option; pmode : mode }
 
-(* [node] numbers the expressions of one top-level function, so later
-   passes can say things about a particular expression. *)
+(* [node] numbers the expressions and patterns of one top-level function,
+   so later passes can say things about a particular expression. *)
 type ('v, 'b, 't) expr = {
   kind : ('v, 'b, 't) expr_kind;
   loc : Loc.t;
