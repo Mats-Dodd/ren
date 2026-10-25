@@ -292,6 +292,38 @@ caller's evidence when it's called, like any other. The program starts
 in `$start`, which installs the real implementation of each built-in
 `main` uses and calls `main`. `ren core` prints all of it.
 
+## Deviations
+
+Where the implementation forced a change to what was settled for this
+stage, or settled something the plan left open:
+
+- **The exactness help says `match`, not `try match`.** The settled DX
+  said `try match Http.get_rate(c)`, but that `try` would cover nothing
+  when the call fails only with the tag being mapped, and the compiler
+  says so. The help says `try match` only when the call can fail with
+  more.
+- **A type's declaration can't name a row.** The plan had stored
+  closures and implementations name their rows in record fields; a
+  type takes them as a type parameter instead, `type Button<F> = {
+  on_click: F }`, written `Button<fn() uses ..d>` in a signature.
+- **A wrapper's body can't change a variable from outside it.** It's a
+  lambda, which captures values, so a change would be lost.
+- **The `with` around a wrapper is the wrapper call's `try`.** What the
+  wrapper fails with goes on, as for `try`; the body marks its own calls.
+- **A parameter whose type is written transparent, `f: fn() -> Int` or
+  `r: Rates`, and is called or installed inside a `with`, still passes
+  everything it uses to the caller**, even what that `with` installs: its
+  row is its function's. That's more than it needs, never less. An
+  inferred parameter, `fn run_at(f) = with at(1) in try f()`, gets
+  exactly what the `with` doesn't install, and a signature can say so:
+  `f: fn() -> Int uses Clock, ..d` with `uses ..d`.
+- **A closure called inside two `with`s** gets only what's installed
+  outside both, so the same holds for it.
+- **`ren types` prints a transparent parameter without the rows a
+  signature names for it**, `body: fn() -> Int ! ..e uses ..d` as `body:
+  fn() -> Int`, when they're only its function's own: the two are the
+  same type.
+
 ## Later
 
 - `outer` and forwarding handlers, `Async`, the journal (stage 9).
