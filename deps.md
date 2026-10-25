@@ -339,19 +339,34 @@ stage, or settled something the plan left open:
   when it starts and writes back the ones it changes when it ends, even
   if it fails; only the runtime holds a cell. A `let` in the state is
   kept as a lambda keeps a value.
-- **A handler can't call an operation of a dependency it implements,**
-  `Rates.usd_to` inside a handler for `Rates`, even though its
-  operations run with what's installed outside it: reaching the next
-  implementation out is `outer`'s (stage 9), and the README's section 7
-  already says it's an error.
+- **A handler can't use a dependency it implements,** `Rates.usd_to`
+  inside a handler for `Rates`, nor through a function it calls that
+  uses `Rates`, even though its operations run with what's installed
+  outside it: reaching the next implementation out is `outer`'s (stage
+  9), and the README's section 7 already says it's an error. It's
+  checked on what the handler needs, so an arm can still install
+  another `Rates`, even the same handler, `with counting_rates(r) in
+  ...`, around a call that uses one.
 - **A handler's state is made where it's installed, and can't fail:**
   the `with` that installs it isn't a call a `try` could mark.
 - **A handler's type can't be written.** It's named after the handler,
   `counting_rates`, in messages and `ren types`, but a type's name
   starts with a capital, so only inferred code can keep one, `let h =
-  counting_rates(1)`; a public function can't take or return one yet.
-  A handler that keeps a closure names its row in its own signature,
-  `handler h(f: fn() -> Int uses ..d) for N uses ..d`.
+  counting_rates(1)`, and no function can take one to install: not a
+  public one, which would have to write its type, nor a private one,
+  `fn run(r) = with r in ...`, since `with` needs to know what it
+  installs where it's checked, and a parameter `r: Rates` is an
+  implementation, not a handler. A public function can't return one
+  either. So a group parameterised by an implementation (stage 7.6's
+  Clock conformance group) can be run against `Clock.frozen(t)` and
+  other record implementations, but not a handler: `test_clock` has to
+  be installed where it's made. A handler that keeps a closure names its
+  row in its own signature, `handler h(f: fn() -> Int uses ..d) for N
+  uses ..d`.
+- **A handler's parameters are written in parentheses even if it has
+  none,** `handler transaction() for Sql =`, as a function's are:
+  calling it, `transaction()`, describes it, and `with transaction in`
+  is an error whose help says to call it.
 
 ## Later
 

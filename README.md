@@ -313,7 +313,7 @@ That narrows where a race can happen without hiding it. `cached` above has one: 
 A handler can also run code when its `with` block ends. `arena` frees everything it allocated, and `transaction` commits or rolls back:
 
 ```ren
-handler transaction for Sql =
+handler transaction() for Sql =
   var tx = outer.begin()
   query(q) => try tx.query(q)
   finally(result) =>
