@@ -34,6 +34,23 @@ type found =
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
 
+(* The type arguments a use of a top-level function, a member, an
+   associated value or an intrinsic picked, by the generic variables of
+   [tcallee]'s scheme (Types.subst). An associated value ([tvalue]) is used
+   as its result, so its type arguments are only those of the result's
+   type. *)
+type targs = { tcallee : Path.t; tvalue : bool; tpicked : picked }
+
+and picked =
+  | Fresh of Types.subst
+      (** the variables [instantiate] put in their place: only those of the
+          result's type, for a value *)
+  | Group of ty
+      (** a function of the group being checked, used at this type: its
+          declaration's, or its own. Its variables are generic only once the
+          group is done, and then what each stands for in this type is its type
+          argument (Types.matching, infer_top.ml) *)
+
 (* A call that adds to a function's dependencies, or a `with` that
    installs an implementation, which adds what it needs. [own] are the
    labels the callee's row had just before the call joined it to the
@@ -333,6 +350,8 @@ type ctx = {
       (** each expression that gives a handler of several dependencies where a
           value of one of their types is wanted, by node id, with that one (see
           [as_one]) *)
+  targs : (int, targs) Hashtbl.t;
+      (** the type arguments of each use of a top-level function, by node id *)
   errs : row;  (** the errors of the innermost function or lambda *)
   uses : row;  (** the dependencies of the innermost function or lambda *)
   handler : row;

@@ -51,6 +51,10 @@ type node = {
   as_dep : Path.t option;
       (** a handler of several dependencies where a value of one of their types
           is wanted: that one, which it's taken as a description of *)
+  targs : Ty.args option;
+      (** a use of a top-level function, a member, an associated value or an
+          intrinsic: the type arguments it picked, the n-th for its scheme's
+          [Var n] (Ty.args) *)
 }
 
 (* What inference found, in canonical form (ty.ml). A function's scheme and

@@ -188,7 +188,7 @@ and with_ core env cx (e : expr) item body lam =
             let path = op_path td o in
             if path.home = env.home && not (Hashtbl.mem env.globals path) then
               raise (Unchecked { caller = cx.self; callee = path });
-            match repr (lookup env cx f.loc (Global path)) with
+            match repr (lookup env cx ~node:f.node f.loc (Global path)) with
             | TFun (self :: ps, ret, errs, uses) as tm
               when List.length ps = List.length args + 1 ->
                 Some (path, tm, self, TFun (ps, ret, errs, uses))

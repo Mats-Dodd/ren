@@ -170,7 +170,7 @@ and synth env cx (e : expr) : ty =
   | Bool _ -> bool
   | Str _ -> str
   | Unit -> unit
-  | Var x -> lookup env cx e.loc x
+  | Var x -> lookup env cx ~node:e.node e.loc x
   | Unop (Neg, a) ->
       want_int env (Operator "-") a (infer env cx a);
       int
@@ -560,7 +560,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       let path = op_path td o in
       if path.home = env.home && not (Hashtbl.mem env.globals path) then
         raise (Unchecked { caller = cx.self; callee = path });
-      let tm = lookup env cx f.loc (Global path) in
+      let tm = lookup env cx ~node:f.node f.loc (Global path) in
       Hashtbl.replace cx.nodes f.node tm;
       Hashtbl.replace cx.found f.node (Method_of path);
       match repr tm with

@@ -67,5 +67,7 @@ val field_access :
    errors are known only once the group is done. *)
 val group_call : env -> Path.t -> bool
 
-(* A name's type, used at the location given. *)
-val lookup : env -> ctx -> Loc.t -> Ast.name -> Types.ty
+(* A name's type, used at the location given by the expression [node], at
+   which it records the type arguments a top-level function's use picked
+   (Infer_env.targs). *)
+val lookup : env -> ctx -> node:int -> Loc.t -> Ast.name -> Types.ty

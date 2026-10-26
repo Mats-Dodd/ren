@@ -1336,6 +1336,9 @@ type node = {
   as_dep : Path.t option;
       (** a handler of several dependencies, where one of them is wanted: that
           one, which it's taken as a description of (Infer_handlers.as_one) *)
+  targs : Ty.args option;
+      (** a use of a top-level function, a member, an associated value or an
+          intrinsic: the type arguments it's used at *)
 }
 
 type t = {
@@ -1819,6 +1822,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
             nodes = Hashtbl.create 64;
             found = Hashtbl.create 16;
             as_dep = Hashtbl.create 4;
+            targs = Hashtbl.create 16;
             errs;
             uses;
             calls = ref [];
@@ -2062,27 +2066,55 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
             (Hashtbl.find tables (path f))
       | None -> ())
     tests;
+  (* A use's type arguments (Infer_env.targs), what each variable of the
+     callee's scheme stands for. A function of the group being checked is
+     generic now, so what each of its variables stands for in the type it
+     was used at is known. *)
+  let type_args c (u : Infer_env.targs) : Ty.args =
+    let s =
+      match u.tpicked with
+      | Fresh s -> s
+      | Group t -> (
+          let scheme = Hashtbl.find env.globals u.tcallee in
+          let s = matching st scheme t in
+          match repr scheme with
+          | TFun ([], r, _, _) when u.tvalue -> restrict s (generics r)
+          | _ -> s)
+    in
+    {
+      tys = List.map (fun (_, t) -> canon_ty c ~all:true t) s.tys;
+      rows = List.map (fun (_, r) -> canon_row c ~all:true r) s.rows;
+    }
+  in
   (* Each function's scheme and node types share one numbering, so a
-     variable is the same [Var n] in both. Nodes are converted in order of
-     their ids, so the numbering doesn't depend on a hash table's order. *)
+     variable is the same [Var n] in both, and so do the type arguments
+     its uses pick. Nodes are converted in order of their ids, so the
+     numbering doesn't depend on a hash table's order, and their type
+     arguments after all their types, so those number variables just as
+     they did before there were type arguments. *)
   let canonical (f : fn_def) =
     let c = canon st in
     let ty = canon_ty c ~all:false (Hashtbl.find schemes (path f)) in
     let scheme : Ty.scheme = { ty; names = canon_names c; reqs = [] } in
     let cx = Hashtbl.find tables (path f) in
+    let ids =
+      Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes [] |> List.sort compare
+    in
+    let tys =
+      List.map (fun id -> canon_ty c ~all:true (Hashtbl.find cx.nodes id)) ids
+    in
     let nodes =
-      Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes []
-      |> List.sort compare
-      |> List.fold_left
-           (fun acc id ->
-             Nodes.add id
-               {
-                 ty = canon_ty c ~all:true (Hashtbl.find cx.nodes id);
-                 found = Hashtbl.find_opt cx.found id;
-                 as_dep = Hashtbl.find_opt cx.as_dep id;
-               }
-               acc)
-           Nodes.empty
+      List.fold_left2
+        (fun acc id ty ->
+          Nodes.add id
+            {
+              ty;
+              found = Hashtbl.find_opt cx.found id;
+              as_dep = Hashtbl.find_opt cx.as_dep id;
+              targs = Option.map (type_args c) (Hashtbl.find_opt cx.targs id);
+            }
+            acc)
+        Nodes.empty ids tys
     in
     ((path f, scheme), (path f, nodes))
   in

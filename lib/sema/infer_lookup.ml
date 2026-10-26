@@ -294,31 +294,62 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
 let group_call env p =
   List.mem_assoc p env.group && not (List.mem p env.spelled)
 
-(* A name's type. A top-level function's is a fresh instance of its
-   scheme, so each use can pick its own types; another function of the
-   group being checked has the type its declaration gives it, joined with
-   its real type once the group is done (see [join]), unless its
-   declaration is all there is to know. *)
-let rec lookup env cx loc = function
+(* A fresh instance of the scheme of [p], a function of an earlier group
+   or another module, or an intrinsic, recording the type arguments it
+   picked at [node]. *)
+let fresh env cx ~node p =
+  let t, s = instantiate env.st (Hashtbl.find env.globals p) in
+  Hashtbl.replace cx.targs node
+    { tcallee = p; tvalue = false; tpicked = Fresh s };
+  t
+
+(* [p], a function of the group being checked, is used at [node] at the
+   type [t]. *)
+let in_group cx ~node p t =
+  Hashtbl.replace cx.targs node
+    { tcallee = p; tvalue = false; tpicked = Group t };
+  t
+
+(* A name's type, at the expression [node]. A top-level function's is a
+   fresh instance of its scheme, so each use can pick its own types;
+   another function of the group being checked has the type its
+   declaration gives it, joined with its real type once the group is done
+   (see [join]), unless its declaration is all there is to know. Which
+   type arguments a use of a top-level function picked is recorded at
+   [node] (see [targs]). *)
+let rec lookup env cx ~node loc = function
   | Local b -> Hashtbl.find cx.locals b.id
   | Global_value p -> (
       (* a function of no parameters (ast.ml), whose result is the value *)
-      match repr (lookup env cx loc (Global p)) with
-      | TFun ([], t, _, _) -> t
-      | _ -> TError)
+      let t = lookup env cx ~node loc (Global p) in
+      (* its type arguments are those of the result's type, which a
+         function of the group knows only once the group is done *)
+      let used = Hashtbl.find cx.targs node in
+      let picked =
+        match (used.tpicked, repr (Hashtbl.find env.globals p)) with
+        | Fresh s, TFun ([], r, _, _) -> Fresh (restrict s (generics r))
+        | picked, _ -> picked
+      in
+      Hashtbl.replace cx.targs node
+        { used with tvalue = true; tpicked = picked };
+      match repr t with TFun ([], t, _, _) -> t | _ -> TError)
   | Global p when List.mem p env.spelled ->
       (* its declaration says everything about it, so even in its own body
          it's an instance of that, joined with nothing: a use that closes
          its rows, like storing it as a `fn()`, closes only the instance's *)
-      (List.assoc p env.group) ()
+      in_group cx ~node p ((List.assoc p env.group) ())
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let used = (List.assoc p env.group) () in
       env.joins <-
         { jloc = loc; jname = Path.local p; used; target = p } :: env.joins;
-      used
-  | Global p -> fst (instantiate env.st (Hashtbl.find env.globals p))
-  | Intrinsic x ->
-      fst (instantiate env.st (Hashtbl.find env.globals (Intrinsic.path x)))
+      in_group cx ~node p used
+  | Global p when p = cx.self ->
+      (* its own type, not generic until its group is done, so the copy
+         is the same type *)
+      in_group cx ~node p
+        (fst (instantiate env.st (Hashtbl.find env.globals p)))
+  | Global p -> fresh env cx ~node p
+  | Intrinsic x -> fresh env cx ~node (Intrinsic.path x)
   | Dep_op (p, op) -> (
       (* the operation as declared, which uses its dependency: a call
          adds it to the caller's `uses` *)
