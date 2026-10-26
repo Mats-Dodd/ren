@@ -84,9 +84,10 @@ it, each fact says so, and which step fixes it.
   interpreter never works one out.
 - **Effects.** What a function can fail with, its `!` row, and what it
   uses, its `uses` row. Inference, carried in function types. From R3,
-  in the same solver as types. Today it's work deferred into fourteen
-  queues during inference, each settled by a pass of its own after it, in
-  an order fixed by hand (infer_top.ml).
+  in the same solver as types. Today part of it is constraints that
+  solver decides (The constraint solver, below), and the rest is work
+  deferred into queues during inference, each settled by a pass of its
+  own after it, in an order fixed by hand (infer_top.ml).
 - **Requirements.** From R4. What a generic function needs of a type
   parameter, such as `eq` for `==`. Inference, in the same solver; never
   written, on a public function either (operators.md, "Generic code").
@@ -192,6 +193,74 @@ by lowering, which lists it with its method in its module's Core. The
 interpreter evaluates descriptors as it evaluates evidence, and never
 matches or substitutes a type. A release build specializes them away
 like dictionaries.
+
+## The constraint solver
+
+Inference checks the functions of a module a group at a time, where a
+group is functions that call each other, callees' groups first
+(infer_top.ml). Each body of a group sees the others only as their
+declarations describe them, so no body learns anything from another,
+and checking them in another order would find the same. What can be
+decided only once every body is checked is a **constraint**
+(infer_env.ml, `constr`), and once the group is done the solver
+(solve.ml) decides them all.
+
+The constraints so far:
+
+- **A use of another function of the group** has the type that
+  function's own body gave it.
+- **A value a statement throws away** is `Unit` (errors.md, "Nothing is
+  dropped"). One whose type is still unknown becomes `Unit`, and a later
+  mismatch at a call of its function points back at it.
+- **A tag written as a value,** `Err(Right)`, is in its error set, if
+  the set is one of its own: `if c then Err(Left(1)) else Err(Right)`
+  holds both.
+- **One row of errors is included in another:** a call's errors in what
+  marks it, a `Result`'s in the `try` that fails with it again. The row
+  included from stays as it is, so a callee never fails with what its
+  caller does. The labels it has when it's met are added then, and those
+  it learns later, from a function of its group, by the solver.
+
+The rest of what inference leaves until a group is done is still kept in
+queues of their own, each settled by a pass of its own in infer_top.ml:
+what a `with` installs, the copies of what an implementation needs, the
+rules of markers, tags matched in an open set, implementations'
+operations, named rows and handlers' needs. R3 moves each onto the
+solver. Until it has, the solver runs in two parts, since two of those
+passes, what a `with` installs and a function's own named error row,
+have to come between: the uses and the values thrown away first, and
+what each error set holds after them.
+
+Each constraint carries where it comes from and what a message about it
+needs, and the solver decides them like this:
+
+- **By rank.** The constraints of one kind are all decided before the
+  next kind starts, because the later one reads what the earlier decides:
+  the uses of the group's functions first, since a call of one learns
+  only then what it returns, then the values thrown away, then each set's
+  own tags, then the inclusions. The checks that only report, like a
+  marker's rules, read the result after all of them.
+- **To a fixpoint.** A use or a value thrown away is decided once. An
+  inclusion is a worklist item: whenever the row it adds from gains a
+  label, it's woken and adds that too. Rows only ever gain labels, and
+  each has finitely many to gain, so this ends.
+- **Reporting every failure, and changing nothing by one.** Each
+  unification is tried first on copies of its types (unify.ml,
+  `atomically`), and done for real only if that worked. So one that fails
+  partway, a variable bound and the next label refused, doesn't leave
+  half its changes for the next constraint to trip over. Its message is
+  worded from the copies, as far as they got.
+
+The answer doesn't depend on the order the constraints were met, which
+is the order their bodies were checked in. Unification finds the most
+general solution whatever order it's given the equalities in. An
+inclusion only adds labels, so each row ends up with the union of what's
+included in it, whatever order they're added in. A check that reads a
+result is ranked after whatever decides it, so it never sees half of it.
+And a constraint that fails changes nothing, so it can't change what
+another sees. What order does decide is only which of two constraints
+that can't both hold is blamed: the one met second, so a mistake is
+reported where the code reads it, after what it contradicts.
 
 ## Stage 10.0
 
