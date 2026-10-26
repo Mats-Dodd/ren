@@ -1287,6 +1287,8 @@ fn main() = print(Some(true))
       | Some Wraps -> print_endline "wraps"
       | Some Handles -> print_endline "handles errors"
       | Some Fail_arm -> print_endline "a `fail` arm"
+      | Some Error_tag -> print_endline "an error's tag"
+      | Some Unwraps -> print_endline "unwraps a result"
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect

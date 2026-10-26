@@ -15,6 +15,9 @@ open Types
 type found =
   | Field_of of Path.t  (** a field access: the record type the field is in *)
   | Ctor_of of Path.t * string  (** a constructor: its type, and its name *)
+  | Error_tag
+      (** a tag inside `Err(...)`, written as a value or matched: one of the
+          errors a [Result] holds, not a constructor *)
   | Method_of of Path.t
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
@@ -27,6 +30,9 @@ type found =
   | Handles  (** a `match` that handles errors: one with `fail` arms *)
   | Fail_arm
       (** a `fail` arm's pattern, which matches an error rather than a value *)
+  | Unwraps
+      (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
+          it's `Err`, its error again *)
 
 (* A call that adds to a function's dependencies, or a `with` that
    installs an implementation, which adds what it needs. [own] are the

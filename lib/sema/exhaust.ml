@@ -78,13 +78,13 @@ let rec simplify env (p : pattern) =
   | PCon (c, ps) ->
       let node = Infer.Nodes.find p.pnode env.nodes in
       let owner =
-        match (node.ty, node.found) with
-        | (Errors _ as t), _ -> (
+        match node.found with
+        | Some Error_tag -> (
             (* a tag, of a set inference settled: every tag it can hold *)
-            match set_of t with
+            match set_of node.ty with
             | Some tags -> Of_set tags
             | None -> No_list)
-        | _, Some (Ctor_of (path, _)) -> Of_type path
+        | Some (Ctor_of (path, _)) -> Of_type path
         | _ -> assert false (* inference found it, or reported an error *)
       in
       Ctor ({ name = c.name.name; owner }, List.map (simplify env) ps)

@@ -177,10 +177,6 @@ let write pl (v : C.expr) loc =
 
 (* ---- expressions ---- *)
 
-let is_result : Ty.ty -> bool = function
-  | Con (p, _) -> p = Path.prelude "Result"
-  | _ -> false
-
 let result_path = Path.prelude "Result"
 let option_path = Path.prelude "Option"
 let pat pkind pty ploc : C.pattern = { pkind; pty; ploc }
@@ -285,7 +281,7 @@ and expr_of cx (e : expr) : C.expr =
       here (Fail (mk (Tag (tag.name, args)) (Errors set) e.loc))
   | Try ({ kind = Match (subject, arms); _ } as m) when handles cx m.node ->
       handle_match cx ~passed:true (ty_of cx m.node) e.loc subject arms
-  | Try a when is_result (ty_of cx a.node) ->
+  | Try a when (node cx e.node).found = Some Unwraps ->
       (* `try r` is `match r { Ok(v) => v, Err(e) => fail e }`. A call in
          [r] that fails passes its error on, as every call does *)
       let r = expr cx a in
@@ -354,11 +350,11 @@ and expr_of cx (e : expr) : C.expr =
       here (Lambda { params; ev; captures; body })
   | Block (stmts, last) -> block cx stmts last
   | Con (tag, args) -> (
-      match ((node cx e.node).found, ty ()) with
-      | None, Errors _ ->
+      match (node cx e.node).found with
+      | Some Error_tag ->
           (* a tag, inside `Err(...)`: the error it holds *)
           here (Tag (tag.name.name, List.map (fun (_, a) -> expr cx a) args))
-      | Some (Ctor_of (p, c)), _ ->
+      | Some (Ctor_of (p, c)) ->
           (* ctor_shape (infer_lookup.ml) made sure the arguments are in the
              order of the fields *)
           here (Con (p, c, List.map (fun (_, a) -> expr cx a) args))
@@ -776,9 +772,9 @@ and pattern cx (p : pattern) : C.pattern =
     | PInt n -> PInt n
     | PBool b -> PBool b
     | PCon (c, ps) -> (
-        match ((node cx p.pnode).found, pty) with
-        | Some (Ctor_of (path, c)), _ -> PCon (path, c, List.map (pattern cx) ps)
-        | None, Errors _ ->
+        match (node cx p.pnode).found with
+        | Some (Ctor_of (path, c)) -> PCon (path, c, List.map (pattern cx) ps)
+        | Some Error_tag ->
             (* a tag, inside `Err(...)` *)
             PTag (c.name.name, List.map (pattern cx) ps)
         | _ -> bug "a constructor pattern inference didn't find")

@@ -366,6 +366,7 @@ and synth env cx (e : expr) : ty =
       | TCon (p, [ v; errs ]) when p = result_path -> (
           match repr errs with
           | TErrors errs ->
+              Hashtbl.replace cx.found e.node Unwraps;
               include_errors env cx ~loc:a.loc
                 (add_errors env ~loc:a.loc ~here:(This "Result")
                    ~sources:(sources_of cx) ~fix:rename_where_in)
@@ -690,6 +691,7 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
           let payload = List.map (fun (_, a) -> (infer env cx a, a)) payload in
           let row = err_row env cx tag payload ~expected in
           Hashtbl.replace cx.nodes a.node (TErrors row);
+          Hashtbl.replace cx.found a.node Error_tag;
           TCon (td.path, [ fresh_var env.st; TErrors row ])
       | _ ->
           (* anything else would be an error of its own, outside the
@@ -954,6 +956,7 @@ and bind_pattern env cx t (p : pattern) =
   match (p.pkind, repr t) with
   | PCon ({ qual = None; name = c }, ps), TErrors errs ->
       (* a tag, inside `Err(...)`: one of the errors the [Result] holds *)
+      Hashtbl.replace cx.found p.pnode Error_tag;
       tag_pattern env cx p c ps errs
   | PVar b, TErrors _ ->
       (* `Err(e)` would make the error a value of its own *)

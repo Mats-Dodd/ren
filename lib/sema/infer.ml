@@ -61,12 +61,14 @@
 type found = Infer_env.found =
   | Field_of of Path.t
   | Ctor_of of Path.t * string
+  | Error_tag
   | Method_of of Path.t
   | Installs of Path.t
   | Installs_handler of Path.t list
   | Wraps
   | Handles
   | Fail_arm
+  | Unwraps
 
 module Nodes = Infer_top.Nodes
 
