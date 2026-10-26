@@ -11,6 +11,13 @@ gets equality, hashing, `show` and, where it's obvious, ordering, without
 asking. It changes them in one way, `key`. It gets arithmetic in one way,
 `with numeric`, or by writing the operator.
 
+It's built in two halves:
+
+- **9a:** operators as methods, `key`, derived `==`, `hash`, ordering and
+  `show`, `with numeric`, and the rules for `Int` and `Float`.
+- **9b:** tuples, ranges, `Map` and `Set`, and the collection methods,
+  which need 9a's `hash` and ordering.
+
 ## What it has to do
 
 1. **Nothing is found behind your back.** An operator is found on its left
@@ -82,9 +89,6 @@ error: `Duration` has no `+` that takes a `Time`
   the type, so comparing functions is a compile error, never a runtime
   panic. An implementation of a dependency, and a handler, is its
   operations, which are functions, so it has none either.
-- **A type with a `Float` in it has `==` but no `hash`,** so it can't be a
-  map key: `NaN` isn't equal to itself, and a key that's `NaN` could never
-  be found again.
 - **An opaque type is equal by its representation,** unless it has a
   `key`. That's right for `Money` and `UserId`. A type whose
   representation isn't unique, so that two equal values can be stored
@@ -93,6 +97,10 @@ error: `Duration` has no `+` that takes a `Time`
   can write its own, `pub fn show(self) -> Str`, as `Path` does. A `Str`
   shows as itself at the top, `hello`, and quoted inside something,
   `["hello"]`.
+- **The three are one walk over a type,** run over the type descriptors
+  stage 10.0 already passes at run time for `show`. A type's shape,
+  `T.shape` ([shapes.md](shapes.md)), exposes the same descriptor later,
+  rather than a second mechanism.
 
 ### `key`
 
@@ -115,7 +123,7 @@ disagree, as Java's `equals` and `hashCode` can.
 `<` and the others come from a type's order, which is derived only where
 it's obvious:
 
-- `Int`, `Float` (IEEE), `Str` (by bytes, which is code point order) and
+- `Int`, `Float` (a total order, since there's no `NaN`), `Str` (by bytes, which is code point order) and
   `Bool`;
 - a sum type with no fields, by the order of its variants;
 - tuples, element by element;
@@ -233,19 +241,41 @@ error: `fn(Int) -> Int` has no `==`, which `same` needs
   gives up build speed.
 - `T.zero` reaches a member through a type parameter, which works for
   whatever the function needs of `T`.
+- **In generic code, an operator is the one of the same type on both
+  sides:** `a + b` with `a: T` needs `add(T, T) -> T`, so a requirement is
+  just a name, `has add`. An operator with another type on its right,
+  `Time + Duration`, is found only where the types are known. Like
+  everything else, the left side's type is known first: types flow left
+  to right ([deps.md](deps.md)).
 
 ## `Int` and `Float`
 
-- **`Int` is 64 bits.** Overflow panics, in every build, as an
-  out-of-bounds index does. Wrapping is a method, `a.wrapping_add(b)`.
+- **`Int` is 64 bits,** in the interpreter too, so overflow panics at the
+  same point in every build and on every backend. It panics in every
+  build, as an out-of-bounds index does. Wrapping is a method,
+  `a.wrapping_add(b)`.
 - **`/` and `%` round toward zero,** as in C, Go and Rust: `-7 / 2` is
   `-3`. Dividing by zero panics.
 - **`Float` is a 64-bit IEEE double.** `1.5` is a `Float` and `1` is an
-  `Int`, always.
+  `Int`, always: a literal's type is read from its spelling, never from
+  where it's used. A `Float` times two is `x * 2.0`, and `x * 2` is an
+  error whose help says so.
 - **Numbers never convert by themselves:** `Float.of(n)`, `f.round()`,
   `f.truncate()`.
-- `==` and `<` on `Float` are IEEE's. `f.total_order()` is a key that
-  sorts every float, `NaN` included.
+- **There's no `NaN`.** An operation that would make one, `0.0 / 0.0`,
+  `inf - inf`, `(-1.0).sqrt()`, panics, as an `Int` overflow does. A
+  `NaN` doesn't stop anything: it spreads through what comes after and
+  surfaces three functions later as a wrong answer, which is a failure
+  nobody sees. Infinity stays, since it's ordered and means something.
+- **So `Float` has a total order and `hash`.** `sort()`, `min()`,
+  `max()`, `Set<Float>` and float map keys just work, and `-0.0 == 0.0`,
+  hashed as one.
+- **The check is cheap.** `NaN` is sticky: once made, every `+`, `-`, `*`
+  and `/` after it gives `NaN`. So a float is checked only where it
+  leaves arithmetic, when it's stored, compared, passed, returned or
+  converted, never inside an expression. A float from C is checked where
+  it comes in. Code that used `NaN` for "missing" writes
+  `Option<Float>`.
 
 ```
 error: `Int` has no `/` that takes a `Float`
@@ -319,8 +349,7 @@ for (email, u) in users
 let seen = Set.of(["a", "b"])
 ```
 
-- **A key needs `hash`,** so it's any type without a function or a
-  `Float` in it.
+- **A key needs `hash`,** so it's any type without a function in it.
 - **They keep insertion order.** Iterating gives what was set first,
   first, so a program's output never depends on a hash seed, and
   simulation replays exactly without maps needing `uses Random`. The seed,
@@ -400,7 +429,9 @@ and `len()`, and the methods above over its `(k, v)` pairs.
 - Public signatures spell out everything but what they need of a type
   parameter.
 - `where T has add` goes: it's inferred.
-- Map iteration order is insertion order, not seeded.
+- Map iteration order is insertion order, not seeded, and the hash seed
+  is the runtime's own, which nothing can observe.
+- There's no `NaN`, so `Float` is ordered and hashed.
 - Ranges, `a..b`, half-open only.
 - Conditions are `Bool`, stated as a rule.
 - `Array` and `Map` use `Enumerable`'s names, and `Str.find` becomes
@@ -408,7 +439,13 @@ and `len()`, and the methods above over its `(k, v)` pairs.
 
 ## Done when
 
-`Map<Email, User>` works, with `Email` an opaque `Str` keyed by its
+**9a:** `Money` in the bank is `opaque Int with numeric`, and `Time`,
+`Instant` and `Duration` use operators, so `plus`, `covers`, `before` and
+`not_before` are gone. `Email` is equal by its lowercase. `==` on a
+function is an error, `0.0 / 0.0` panics, `Int` overflow panics at
+2^63, and a generic `sum` runs on `Int`, `Float` and `Money`.
+
+**9b:** `Map<Email, User>` works, with `Email` an opaque `Str` keyed by its
 lowercase. The bank uses `Money` with `with numeric` and keeps its
 accounts in a `Map`; the prices cache is a `Map`; `Time`, `Instant` and
 `Duration` use operators; and the examples' workarounds (`plus`, `covers`,
@@ -421,6 +458,8 @@ accounts in a `Map`; the prices cache is a `Map`; `Time`, `Instant` and
 - **Rust:** an operator chosen by its right side's type, `Instant -
   Instant`; overflow as a bug.
 - **Swift:** overflow panics in every build.
+- **Rust's `ordered_float::NotNan`:** floats with no `NaN`, as a library
+  type. Ren makes it the only `Float`.
 - **Roc:** every type has `==` except one with a function in it.
 - **Go:** a struct is a map key when its fields can be; numbers convert
   only when asked; `5 * time.Second`.
@@ -440,8 +479,15 @@ Named here so they aren't forgotten:
 
 - **Lazy iterators.** The collection methods make a new collection each
   time until they arrive.
-- **Interpolation and `Shell`,** with the rest of strings. Interpolation
-  uses `show`.
+- **Interpolation and `Shell`,** with the rest of strings, in stage 12,
+  where `sql"..."` hands its parts to a library. Interpolation uses
+  `show`.
+- **Literal suffixes.** A literal's type stays read from its spelling,
+  and a closed set of suffixes says the rest: `0.08d` for `Decimal`,
+  which moves into the prelude when it arrives (stage 12), and `255u8`
+  to `i64` with sized integers (stage 13). There are no user-defined
+  suffixes. Mixing needs no context: `price * 0.08` with a `Decimal`
+  price is an error whose help says `0.08d`.
 - **Shapes and build time,** for `json` and SQL rows, in
   [shapes.md](shapes.md) rather than `comptime`.
 - **Sized integers,** `u8` to `i64`, with the C backend. `len()` and

@@ -125,29 +125,28 @@ log.info("done", took: Clock.instant() - started)   // Instant - Instant → Dur
 let bad = Clock.now() - started                      // error: Time - Instant
 ```
 
-`sim.clock` controls both, and can make `now` jump (an NTP correction) while `instant` keeps advancing steadily. `Time`, `Instant` and `Duration` are in the prelude (stage 7), with methods, `Duration.ms(100)` and `t.plus(d)`, until operators and literals like `100.ms` arrive (stage 9). Formatting, parsing and time zones are in the `time` module, with the time zone database built in and pinned for determinism.
+`sim.clock` controls both, and can make `now` jump (an NTP correction) while `instant` keeps advancing steadily. `Time`, `Instant` and `Duration` are in the prelude (stage 7), with methods, `Duration.ms(100)` and `t.plus(d)`, until operators arrive (stage 9) and `t.plus(d)` becomes `t + d`. Formatting, parsing and time zones are in the `time` module, with the time zone database built in and pinned for determinism.
 
 ### `Decimal`
 
-The danger with money is `0.1` silently becoming an `f64`. Putting `Decimal` in the prelude doesn't prevent that. Typing literals by context does (*proposed*, stage 9):
+The danger with money is `0.1` silently becoming a `Float`. One type per literal, and numbers that never convert, prevent it: `price * 0.1` with a `Decimal` price is an error whose help says `0.1d`. `Decimal` gets the `d` suffix, so it's in the prelude ([operators.md](operators.md#deferred)):
 
 ```ren
 type Decimal = opaque i128
-  from_literal(digits: Str) => ...         // called by the compiler at compile time
-  add(a, b) => ...
-  mul(a, b) => ...
+  pub fn add(self, b: Decimal) -> Decimal = ...
+  pub fn mul(self, b: Decimal) -> Decimal = ...
   pub fn round(self, places: Int, mode: Rounding) -> Decimal = ...
   pub fn div(self, b: Decimal, scale: Int, mode: Rounding) -> Decimal = ...
 
-let price: Decimal = 19.99                 // exact: never passes through f64
-let tax = price.mul(0.0825).round(2, HalfEven)
-let third = price.div(3, scale: 2, mode: HalfEven)
-let x = 19.99 + 0.01                       // nothing in context says Decimal: f64, as before
+let price = 19.99d                         // exact: never passes through a Float
+let tax = (price * 0.0825d).round(2, HalfEven)
+let third = price.div(3d, scale: 2, mode: HalfEven)
+let x = 19.99 + 0.01                       // a Float: the spelling says so
 ```
 
 - **Representation.** 128-bit fixed precision, about 34 significant digits, like C#'s `decimal`. It's an inline value, so it costs nothing in code without `Alloc`. Arbitrary precision lives in `bigint`.
 - **No `/` operator.** Every division states its scale and rounding mode. The signature is the truth, applied to arithmetic.
-- **Why `std`, not the prelude.** Most modules don't handle money, so it fails the prelude's test. It is a shared type: `json` decodes numbers into `Decimal` straight from their source text, never through an `f64`, and Postgres's `numeric` maps to it.
+- **Why the prelude.** Its literals are part of the language, so it's there, though most modules don't handle money. It is a shared type: `json` decodes numbers into `Decimal` straight from their source text, never through an `f64`, and Postgres's `numeric` maps to it.
 - **`Money`** (an amount with a currency) involves policy choices, such as what adding two currencies means, so it belongs in `std.x`.
 
 ### HTTP
@@ -351,7 +350,7 @@ for row in Sql.query(sql"select * from users where plan = {plan}")
   ...
 ```
 
-`sql"..."` needs interpolation a library can intercept, like tagged templates in JavaScript. Without it, every SQL library has either an injection risk or an awkward API, so it has to land before the first SQL library does (*proposed*, stage 9).
+`sql"..."` needs interpolation a library can intercept, like tagged templates in JavaScript. Without it, every SQL library has either an injection risk or an awkward API, so it has to land before the first SQL library does (*proposed*, stage 12).
 
 ---
 
@@ -392,10 +391,10 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 6** | the error-tag convention; everything that parses or validates |
 | **Stage 7** | `Clock` (with `Time`, `Instant` and `Duration`), `Random` and `Console`, each with a real and a test implementation; conformance suites as groups |
 | **Stage 8** | `str` and `bytes`; `Fs`, `Os` and `path`, each real and in-memory; `config`, `schedule`, `retry`; the infrastructure types with in-memory implementations |
-| **Stage 9** | `Map` and `Set`; `from_literal` and `Decimal`; interpolation libraries can intercept |
+| **Stage 9** | operators; `Map` and `Set` ([operators.md](operators.md)) |
 | **Stage 10** | handlers `over` a dependency, like `transaction() over Sql`; journal fixtures for tests |
 | **Stage 11** | `Net` and `Async` ([async.md](async.md)); `channel`; fault-injecting fakes; buffers leased from a pool for `Net` |
-| **Stage 12** | `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); `for x in f(...)`, push streams; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
+| **Stage 12** | `Decimal` and its `d` suffix; interpolation libraries can intercept; `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); `for x in f(...)`, push streams; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
 | **↑ interpreted Ren** | a JSON API on SQLite, configured from the environment, with retries on an outgoing HTTPS call, whose tests run in under a second on in-memory fakes |
 | **Stage 13** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd, `postgres`, HTTP/2; conformance suites for vendor packages |
 | **Stage 15** | non-allocating pure modules (`checksum`, `hash`, parsers), `push_within`, registered buffers |

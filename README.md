@@ -674,7 +674,7 @@ The compiler flags any code that can't be simulated, meaning anything with `Unsa
 
 Ren controls the other sources of nondeterminism too:
 
-- **Hashing.** Hash seeds come from the `Random` dependency, which simulation fixes from the seed. Map iteration order replays exactly.
+- **Hashing.** Maps and sets keep insertion order, so iteration replays exactly, and the hash seed is the runtime's own, which nothing can observe.
 - **Addresses.** Safe code can't compare, hash, or order values by memory address.
 - **Floats.** Arithmetic is strict IEEE. The C backend disables fused multiply-add contraction and fast-math.
 - **Math functions.** Ren ships its own `sin`, `exp`, and the rest instead of using the platform's C library, so a trace recorded on x86 replays identically on ARM.
