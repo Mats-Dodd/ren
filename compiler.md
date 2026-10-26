@@ -79,8 +79,9 @@ it, each fact says so, and which step fixes it.
 - **Types.** Inference, by Hindley–Milner with levels (types.ml,
   unify.ml). Carried by every Core node and binder, in canonical form
   (ty.ml), and each use of a generic function carries the type
-  arguments it picks. Today the interpreter still works them out again
-  as it runs (eval.ml); R2 stops it.
+  arguments it picks. Where the running program needs a type, to show
+  a value, it's given a descriptor of it (Specialization, below), so the
+  interpreter never works one out.
 - **Effects.** What a function can fail with, its `!` row, and what it
   uses, its `uses` row. Inference, carried in function types. From R3,
   in the same solver as types. Today it's work deferred into fourteen
@@ -128,8 +129,10 @@ falls short it says so.
   type, and every function its evidence. Core Lint checks each of those
   against the others, from scratch. Every use of a polymorphic function
   has its type arguments too, and Lint checks the type it's used at is
-  its scheme's with them put in. `ren core --types` prints them. Today
-  the interpreter still finds them again each time it calls one.
+  its scheme's with them put in. `ren core --types` prints them. A
+  generic function takes a descriptor of each of its type variables, as
+  a hidden parameter, and Lint checks each descriptor a use passes
+  describes its type argument.
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -175,6 +178,20 @@ Both mean the same: specialization only makes code faster (rule 1). The
 interpreter runs the debug strategy. Evidence is passed this way today
 (deps.md, "How it runs"); dictionaries come with requirements, in R4,
 where `eq` is the first.
+
+So are types, where the running program needs one. Showing a value
+depends on its type, `Account { id: 1 }` rather than `{ id: 1 }`, and
+what `T` stands for in `print<T>` only its caller knows. So a generic
+function takes a hidden parameter for each of its type variables,
+holding a descriptor of the type it stands for (core.ml, `desc`), and
+each use of it passes descriptors that lowering built from the use's
+type arguments: a type without the caller's type variables is a
+constant, and one of them is what the caller was itself given. A type
+that shows its values through a `show` method of its own is found once,
+by lowering, which lists it with its method in its module's Core. The
+interpreter evaluates descriptors as it evaluates evidence, and never
+matches or substitutes a type. A release build specializes them away
+like dictionaries.
 
 ## Stage 10.0
 
@@ -281,3 +298,21 @@ Where the work forced a change to the plan above:
   so its arguments are found once the group is: what each of its
   variables stands for in the type it was used at (`Types.matching`).
   `ren core` prints as before, and `ren core --types` prints them.
+- **R2, types at runtime.** The plan says only that the interpreter stops
+  working types out. It's given them instead, as debug builds will be
+  given dictionaries: a descriptor of the type each type variable stands
+  for, a hidden parameter of every generic function, one for each of its
+  type variables whether it shows a value of that type or not, which is
+  simpler and costs little (Specialization). Neither `ren core` nor `ren
+  core --types` prints them, since the type arguments say what they are,
+  and Lint checks the two agree. A hidden type parameter's id is
+  negative, so no local's number changed. A type variable inference left
+  undecided, like the type of what `Ok` holds in `Err(Gone(1))`, is
+  described as itself, and a value of it is shown by its shape, as
+  before. One thing shows differently: a generic associated value is
+  made once, with nothing known of its type variables, and a function
+  stored in it, `pub let shower: fn(T) -> Str = show`, is given that, so
+  it shows `{ id: 1 }` where it showed `Acc { id: 1 }`. The interpreter
+  used to give `show` the type at each call, but a lambda in the same
+  place, `fn(x) => show(x)`, already showed `{ id: 1 }`; now both do
+  (test_eval.ml).
