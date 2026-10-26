@@ -4,8 +4,9 @@
    a `match` with `fail` arms (errors.md, "Marking"). Errors are added by
    inclusion, so a callee never fails with what its caller does, and an
    implementation's needs are copied to each place it's used. What a row
-   learns only once its group is done is kept in the environment, for
-   infer_top.ml to finish then. *)
+   learns only once its group is done is left to the constraint solver
+   (solve.ml), and the rest in the environment, for infer_top.ml to finish
+   then. *)
 
 open Ast
 open Ast.Resolved
@@ -40,15 +41,15 @@ let copy_needs env ~loc ~what needs =
   | None, Some _ ->
       let labels = fst (row_parts needs) in
       let copy = extend labels (fresh_row env.st) in
-      env.copies <-
-        {
-          kloc = loc;
-          ksrc = needs;
-          kdst = copy;
-          kwhat = what;
-          kpassed = List.map (fun (l : label) -> l.name) labels;
-        }
-        :: env.copies;
+      defer env
+        (Copy
+           {
+             kloc = loc;
+             ksrc = needs;
+             kdst = copy;
+             kwhat = what;
+             kpassed = List.map (fun (l : label) -> l.name) labels;
+           });
       copy
 
 (* [t], used at [loc], or if it's an implementation, one that may need

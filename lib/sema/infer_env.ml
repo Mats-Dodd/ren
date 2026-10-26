@@ -107,9 +107,6 @@ type env = {
           it's done (see [impl_op]) *)
   mutable installs : install list;
       (** the group's `with`s that install, innermost first (see [install]) *)
-  mutable copies : copy list;
-      (** the group's uses of an implementation, each with a copy of what it
-          needs (see [copy]) *)
   mutable handler_needs : handler_needs list;
       (** the group's handlers, whose needs are checked once it's done (see
           [handler_needs]) *)
@@ -192,7 +189,8 @@ and install = {
    joined to both, the two places would use the same row, so what the
    inner `with` installs would be needed outside it too. The labels [ksrc]
    learns later (from a function of the group, once it's joined) are added
-   once the group is done, at [kloc]; [kpassed] are those added so far. *)
+   once the group is done, by the solver, at [kloc]; [kpassed] are those
+   added so far. *)
 and copy = {
   kloc : Loc.t;
   ksrc : row;
@@ -246,6 +244,9 @@ and constr =
   | Marker of marker
       (** a `try`, an `attempt` or a `match` with `fail` arms covers something
           that can fail *)
+  | Copy of copy
+      (** what an implementation needs is needed where it's used: what it learns
+          later as well *)
 
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their
@@ -403,6 +404,10 @@ type ctx = {
    for whatever the function passed there fails with. *)
 let in_params params tail =
   List.exists (fun (_, t) -> List.mem tail (row_vars t)) params
+
+(* The variable or named row [r] ends in, or [REmpty]. *)
+let rec row_end r =
+  match repr_row r with RExtend (_, rest) -> row_end rest | r -> r
 
 (* Leave [c] for the solver, once the group is done. *)
 let defer env c = env.pending <- c :: env.pending

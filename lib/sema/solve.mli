@@ -6,11 +6,18 @@
 open Infer_env
 
 (* Which of them to decide: the uses of the group's functions by each
-   other and the values thrown away ([Equalities]), or what each error set
-   holds ([Error_rows]). Other passes still run between the two. *)
-type stage = Equalities | Error_rows
+   other and the values thrown away ([Equalities]), what each place an
+   implementation is used needs ([Needs]), or what each error set holds
+   and the rules of markers ([Error_rows]). Other passes still run between
+   them. *)
+type stage = Equalities | Needs | Error_rows
 
 (* Decide every pending constraint of the stage given, and take it off
    the environment's list. [is_value] says whether a top-level function
    is an associated value, which a use joins by its result. *)
 val solve : env -> is_value:(Path.t -> bool) -> stage -> unit
+
+(* Add to each pending copy of what an implementation needs what it has
+   learned since, leaving them pending: what a `with` that installs it
+   finds its body needs depends on them (infer_top.ml). *)
+val copies : env -> unit

@@ -22,10 +22,11 @@ open Infer_env
 open Infer_report
 
 (* Which constraints the solver decides now. Other passes still run
-   between them, so the solver is run in two parts: [Equalities], the uses
-   of the group's functions joined and the values thrown away checked, and
-   [Error_rows], what each error set holds. *)
-type stage = Equalities | Error_rows
+   between them, so the solver is run in parts: [Equalities], the uses of
+   the group's functions joined and the values thrown away checked;
+   [Needs], what each place an implementation is used needs; and
+   [Error_rows], what each error set holds, and the rules of markers. *)
+type stage = Equalities | Needs | Error_rows
 
 (* A constraint's rank: those of a lower one are decided first. A value
    thrown away is checked after the group's uses of each other are joined,
@@ -38,14 +39,19 @@ type stage = Equalities | Error_rows
 let rank = function
   | Join _ -> 0
   | Drop _ -> 1
-  | Value_tag _ -> 2
-  | Include _ -> 3
-  | Kept _ -> 4
-  | Tag_pattern _ -> 5
-  | Unmarked _ -> 6
-  | Marker _ -> 7
+  | Copy _ -> 2
+  | Value_tag _ -> 3
+  | Include _ -> 4
+  | Kept _ -> 5
+  | Tag_pattern _ -> 6
+  | Unmarked _ -> 7
+  | Marker _ -> 8
 
-let stage_of c = if rank c <= 1 then Equalities else Error_rows
+let stage_of = function
+  | Join _ | Drop _ -> Equalities
+  | Copy _ -> Needs
+  | Value_tag _ | Include _ | Kept _ | Tag_pattern _ | Unmarked _ | Marker _ ->
+      Error_rows
 
 (* ---- deciding one ---- *)
 
@@ -157,10 +163,6 @@ let add env i r =
    includes a parameter's errors in the same tail as that parameter's.
    Whether it did anything, which may have woken others. *)
 let include_ env i =
-  (* a row's tail, the variable at its end *)
-  let rec tail r =
-    match repr_row r with RExtend (_, rest) -> tail rest | r -> r
-  in
   let labels, src_tail = row_parts i.isrc in
   let added =
     match
@@ -180,7 +182,7 @@ let include_ env i =
          what the parameter can fail with *)
        let a, b =
          match row_tail i.idst with
-         | Some _ -> (tail i.isrc, tail i.idst)
+         | Some _ -> (row_end i.isrc, row_end i.idst)
          | None -> (i.isrc, i.idst)
        in
        match
@@ -191,6 +193,34 @@ let include_ env i =
        | Error _ -> report env (param_fails_here i.iloc));
       true
   | _ -> added
+
+(* Whether the copy [k] of what an implementation needs (see
+   [Infer_env.copy]) has anything to do: labels its source has learned
+   since it last added them. *)
+let copy_awake k =
+  List.exists
+    (fun (l : label) -> not (List.mem l.name k.kpassed))
+    (fst (row_parts k.ksrc))
+
+(* Add to the copy [k] the labels its source has learned since, or say
+   the place it's used can't use them. Whether it added any. *)
+let copy env k =
+  match
+    List.filter
+      (fun (l : label) -> not (List.mem l.name k.kpassed))
+      (fst (row_parts k.ksrc))
+  with
+  | [] -> false
+  | fresh ->
+      k.kpassed <- k.kpassed @ List.map (fun (l : label) -> l.name) fresh;
+      let joined = extend fresh (fresh_row env.st) in
+      (match
+         Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
+             Unify.unify_row st (c.row joined) (c.row k.kdst))
+       with
+      | Ok () -> ()
+      | Error _ -> report env (cant_use k.kloc k.kwhat (row_names joined)));
+      true
 
 (* ---- the rules of markers ----
 
@@ -303,15 +333,16 @@ let marker env m =
 
 (* ---- the worklist ---- *)
 
-(* Decide the inclusions [is], in the order they were met, until none is
-   [awake]. Doing one can wake others, any whose source gained a label:
-   one met after it is done later in the same round, and one met before
-   it in the next, so each round goes through them in order. *)
-let includes env is =
+(* Decide [items], in the order they were met, until none is [awake]:
+   [decide] does one, and says whether it did anything. Doing one can wake
+   others, any whose source gained a label: one met after it is done later
+   in the same round, and one met before it in the next, so each round
+   goes through them in order. *)
+let worklist ~awake ~decide items =
   (* arrays, whose cells can be changed in place: [queued.(k)] says
      whether the [k]th is waiting to be done *)
-  let is = Array.of_list is in
-  let queued = Array.make (Array.length is) true in
+  let items = Array.of_list items in
+  let queued = Array.make (Array.length items) true in
   (* [now]: what this round still has to do, sorted; [next]: what the
      next round does *)
   let rec round now next =
@@ -322,16 +353,26 @@ let includes env is =
         queued.(k) <- false;
         (* if it did something, wake each that has something to do now *)
         let woken = ref [] in
-        if include_ env is.(k) then
+        if decide items.(k) then
           Array.iteri
             (fun j i ->
               if (not queued.(j)) && awake i then woken := j :: !woken)
-            is;
+            items;
         List.iter (fun j -> queued.(j) <- true) !woken;
         let later, again = List.partition (fun j -> j > k) !woken in
         round (List.merge compare now (List.sort compare later)) (again @ next)
   in
-  round (List.init (Array.length is) Fun.id) []
+  round (List.init (Array.length items) Fun.id) []
+
+(* The copies among [cs], decided until none has anything to add. *)
+let copies_of env cs =
+  worklist ~awake:copy_awake ~decide:(copy env)
+    (List.filter_map (function Copy k -> Some k | _ -> None) cs)
+
+(* Bring every copy of what an implementation needs up to date, leaving
+   them for the solver: a `with` that installs reads what its body needs
+   (infer_top.ml), until that's a constraint too. *)
+let copies env = copies_of env (List.rev env.pending)
 
 (* Decide every pending constraint of [stage], rank by rank. [is_value]
    says whether a function is an associated value, which a use joins by
@@ -344,10 +385,18 @@ let solve env ~is_value stage =
   let of_rank r = List.filter (fun c -> rank c = r) mine in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) (of_rank 0);
   List.iter (function Drop d -> drop env d | _ -> ()) (of_rank 1);
+  copies_of env (of_rank 2);
+  (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
+     implementation needs only what it has: a transparent parameter's
+     row closes with it, which infer_top.ml's [check_open_rows] reports *)
+  List.iter
+    (function
+      | Copy k -> if row_end k.kdst = REmpty then close_row k.ksrc | _ -> ())
+    (of_rank 2);
   let kept_sets =
     List.filter_map
       (function Kept (k, p) -> Some (k, p) | _ -> None)
-      (of_rank 4)
+      (of_rank 5)
   in
   (* the tags that went in are no longer checked with the patterns *)
   let added =
@@ -356,10 +405,10 @@ let solve env ~is_value stage =
         | Value_tag t when value_tag env ~kept:(List.map fst kept_sets) t ->
             Some t
         | _ -> None)
-      (of_rank 2)
+      (of_rank 3)
   in
-  includes env
-    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 3));
+  worklist ~awake ~decide:(include_ env)
+    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 4));
   List.iter kept kept_sets;
   (* the patterns, and the tags written as values that didn't go in, in
      the order they were met *)
@@ -371,5 +420,5 @@ let solve env ~is_value stage =
     mine;
   List.iter
     (function Unmarked (c, r) -> unmarked env c r | _ -> ())
-    (of_rank 6);
-  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 7)
+    (of_rank 7);
+  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 8)

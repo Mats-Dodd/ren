@@ -658,10 +658,6 @@ let as_declared env path cx declared =
 
 (* ---- named rows (deps.md, "Implementations") ---- *)
 
-(* The variable or named row [r] ends in, or [REmpty]. *)
-let rec row_end r =
-  match repr_row r with RExtend (_, rest) -> row_end rest | r -> r
-
 (* A public function's own rows stay open, as its interface says: a caller
    adds them to its own. A transparent parameter shares them, so if the
    body keeps one where its type is closed, `Box<fn() -> Int>`, the
@@ -843,30 +839,6 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
    Unless another `with` calls the same closure: then it's what's outside
    them all, more than it needs if it uses what one installs, never
    less. *)
-(* Add to each copy of what an implementation needs (see
-   [Infer_env.copy]) the labels it has learned since, until none learns
-   any more. *)
-let settle_copies env =
-  let changed = ref true in
-  while !changed do
-    changed := false;
-    List.iter
-      (fun (k : copy) ->
-        match
-          List.filter
-            (fun (l : label) -> not (List.mem l.name k.kpassed))
-            (fst (row_parts k.ksrc))
-        with
-        | [] -> ()
-        | fresh ->
-            changed := true;
-            k.kpassed <- k.kpassed @ List.map (fun (l : label) -> l.name) fresh;
-            Infer_rows.join_uses env ~loc:k.kloc ~what:k.kwhat
-              (extend fresh (fresh_row env.st))
-              k.kdst)
-      (List.rev env.copies)
-  done
-
 let settle_installs env =
   let ws = List.rev env.installs in
   let dep_name w = env.names (Ty.dep_path w.wdep) in
@@ -884,7 +856,7 @@ let settle_installs env =
   List.iter
     (fun w ->
       (* what the body learns from an implementation used in it, first *)
-      settle_copies env;
+      Solve.copies env;
       let labels, tail = row_parts w.wbody in
       let rest = List.filter (fun (l : label) -> l.name <> w.wdep) labels in
       let into r =
@@ -929,15 +901,7 @@ let settle_installs env =
         report env
           (with_body_uses w.wloc (List.map (fun (l : label) -> l.name) rest)))
     ws;
-  settle_copies env;
-  (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
-     implementation needs only what it has: a transparent parameter's
-     row closes with it, which [check_open_rows] reports *)
-  List.iter
-    (fun (k : copy) -> if row_end k.kdst = REmpty then close_row k.ksrc)
-    env.copies;
-  env.installs <- [];
-  env.copies <- []
+  env.installs <- []
 
 (* Each operation an implementation of the group gives fails with no more
    than its dependency declares (deps.md, "Implementations"): anything more
@@ -1478,7 +1442,6 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       impl_ops = [];
       handler_needs = [];
       installs = [];
-      copies = [];
       withheld = [];
       in_state = false;
       in_scope = [];
@@ -1689,6 +1652,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
          type its own body gave it, and then the values thrown away *)
       Solve.solve env ~is_value:is_value_path Equalities;
       settle_installs env;
+      Solve.solve env ~is_value:is_value_path Needs;
       (* only now, with the group's uses of each other joined, is it known
          everything each function uses and fails with *)
       own_error_rows env (List.map (fun (f, _, cx, _, _) -> (f, cx)) setups);
