@@ -316,9 +316,9 @@ let rec lookup env cx loc = function
       env.joins <-
         { jloc = loc; jname = Path.local p; used; target = p } :: env.joins;
       used
-  | Global p -> instantiate env.st (Hashtbl.find env.globals p)
+  | Global p -> fst (instantiate env.st (Hashtbl.find env.globals p))
   | Intrinsic x ->
-      instantiate env.st (Hashtbl.find env.globals (Intrinsic.path x))
+      fst (instantiate env.st (Hashtbl.find env.globals (Intrinsic.path x)))
   | Dep_op (p, op) -> (
       (* the operation as declared, which uses its dependency: a call
          adds it to the caller's `uses` *)

@@ -234,8 +234,17 @@ let generalize st ~skolems ?(row_skolems = []) t =
   in
   go t
 
+(* What [instantiate] put in place of a scheme's generic variables: each
+   one's id and the fresh variable that took its place, type variables and
+   row variables apart. They're in the order canonical form numbers them
+   (ty.ml), by where they first appear reading left to right, so the n-th
+   of [tys] is what [Var n] of the function's [Ty.scheme] became at this
+   use: its n-th type argument. *)
+type subst = { tys : (int * ty) list; rows : (int * row) list }
+
 (* A copy of a type scheme with fresh variables in place of the generic
-   ones, so each use of a function can pick its own types. *)
+   ones, so each use of a function can pick its own types, and which
+   fresh variable took each one's place. *)
 let instantiate st t =
   let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
   let rec go t =
@@ -266,7 +275,46 @@ let instantiate st t =
     | RExtend (l, rest) ->
         RExtend ({ l with payload = List.map go l.payload }, row rest)
   in
-  go t
+  let copy = go t in
+  (* the generic variables' ids in order of first appearance, walked as
+     [canon_ty] walks a type: a function's parameters, result, errors and
+     uses, and a row's labels by name, then its tail. [go] can't record
+     the order itself, since OCaml evaluates a constructor's arguments
+     right to left *)
+  let seen_tys = ref [] and seen_rows = ref [] in
+  let see seen id = if not (List.mem id !seen) then seen := id :: !seen in
+  let rec walk t =
+    match repr t with
+    | TVar { contents = Unbound (id, l) } when l = generic_level ->
+        see seen_tys id
+    | TVar _ | TSkol _ | TError -> ()
+    | TCon (_, args) -> List.iter walk args
+    | TErrors e | TUses e -> walk_row e
+    | TFun (ps, r, e, u) ->
+        List.iter (fun p -> walk p.ty) ps;
+        walk r;
+        walk_row e;
+        walk_row u
+  and walk_row r =
+    List.iter
+      (fun l -> List.iter walk l.payload)
+      (List.sort_uniq
+         (fun (a : label) b -> String.compare a.name b.name)
+         (fst (row_parts r)));
+    walk_tail r
+  and walk_tail r =
+    match repr_row r with
+    | RVar { contents = RUnbound (id, l) } when l = generic_level ->
+        see seen_rows id
+    | RExtend (_, rest) -> walk_tail rest
+    | REmpty | RVar _ | RSkol _ -> ()
+  in
+  walk t;
+  (* each id with the fresh variable [go] made for it *)
+  let pairs table seen =
+    List.rev_map (fun id -> (id, Hashtbl.find table id)) !seen
+  in
+  (copy, { tys = pairs tys seen_tys; rows = pairs rows seen_rows })
 
 (* ---- canonical types ---- *)
 

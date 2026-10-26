@@ -1834,3 +1834,52 @@ fn main() = "1" == 1
       │                    ^
       │             --- this is a `Str`
     |}]
+
+(* [instantiate]'s substitution lists the fresh variables in the order
+   canonical form numbers the scheme's: the n-th is what [Var n] became.
+   The type below is one where reading right to left, or a row's labels
+   in the order they were added, would number them differently. *)
+let%expect_test "instantiate gives its fresh variables in variable order" =
+  let open Ty in
+  let row labels tail = { labels; tail = Some tail } in
+  let tag name payload = { name; payload } in
+  let s =
+    canonical
+      {
+        ty =
+          Fun
+            ( [ read (Var 0); read (Fun ([], Var 1, row [] 0, closed)) ],
+              array (Var 2),
+              row [ tag "B" [ Var 3 ]; tag "A" [ Var 4 ] ] 1,
+              row [] 2 );
+        names = [];
+        reqs = [];
+      }
+  in
+  let st = Types.new_state () in
+  let copy, subst = Types.instantiate st (Types.of_scheme st s) in
+  (* number the copy's variables, all of them fresh now, as canonical form
+     would, and print each substituted variable's number *)
+  let c = Types.canon st in
+  ignore (Types.canon_ty c ~all:true copy);
+  let id_of_ty t =
+    match Types.repr t with
+    | TVar { contents = Unbound (id, _) } -> id
+    | _ -> assert false
+  in
+  let id_of_row r =
+    match Types.repr_row r with
+    | RVar { contents = RUnbound (id, _) } -> id
+    | _ -> assert false
+  in
+  let numbers table ids =
+    String.concat " "
+      (List.map (fun id -> string_of_int (Hashtbl.find table id)) ids)
+  in
+  print_endline (numbers c.tys (List.map (fun (_, t) -> id_of_ty t) subst.tys));
+  print_endline
+    (numbers c.rows (List.map (fun (_, r) -> id_of_row r) subst.rows));
+  [%expect {|
+    0 1 2 3 4
+    0 1 2
+    |}]
