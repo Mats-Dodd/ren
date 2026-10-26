@@ -230,9 +230,12 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
   in
   (* With `fail` arms, each row is an outcome (see [owner]), and the error
      set they match is in each `fail` pattern's type *)
-  let handles = Infer_rows.handles arms in
+  let found id = (Infer.Nodes.find id env.nodes).found in
+  let handles = found e.node = Some Infer.Handles in
   let errors =
-    match List.find_opt (fun a -> Infer_rows.is_fail a.arm_pat) arms with
+    match
+      List.find_opt (fun a -> found a.arm_pat.pnode = Some Infer.Fail_arm) arms
+    with
     | Some a -> Some (Infer.Nodes.find a.arm_pat.pnode env.nodes).ty
     | None -> None
   in

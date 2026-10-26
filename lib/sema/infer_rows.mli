@@ -87,7 +87,9 @@ val try_hint :
   env -> ctx -> Ast.Resolved.expr -> Types.ty -> Infer_msg.try_hint option
 
 (* Whether a pattern is a `fail` pattern, which matches an error, and
-   whether a `match` handles errors: whether it has a `fail` arm. *)
+   whether a `match` handles errors: whether it has a `fail` arm. Only
+   inference asks: it records the answers ([Handles], [Fail_arm]), which
+   later passes read. *)
 val is_fail : Ast.Resolved.pattern -> bool
 val handles : ('a, Ast.binder, Ast.tname) Ast.arm list -> bool
 

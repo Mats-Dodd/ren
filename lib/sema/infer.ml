@@ -48,7 +48,8 @@
    Besides each function's type scheme, inference returns the type of
    every expression and pattern, and what each lookup through a type
    found, so later passes don't have to work it out again: exhaust.ml reads
-   which constructor each pattern is.
+   which constructor each pattern is, and it and lower.ml which `match`es
+   handle errors.
 
    The pass is split in three: infer_expr.ml infers expressions, with
    the modules beside it it names, infer_top.ml works over the whole
@@ -64,6 +65,8 @@ type found = Infer_env.found =
   | Installs of Path.t
   | Installs_handler of Path.t list
   | Wraps
+  | Handles
+  | Fail_arm
 
 module Nodes = Infer_top.Nodes
 

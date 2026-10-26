@@ -1285,6 +1285,8 @@ fn main() = print(Some(true))
           print_endline
             ("installs a handler of " ^ String.concat ", " (List.map path ps))
       | Some Wraps -> print_endline "wraps"
+      | Some Handles -> print_endline "handles errors"
+      | Some Fail_arm -> print_endline "a `fail` arm"
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect

@@ -10,7 +10,9 @@
    is for `main`. [bodies] are the functions whose body is a test's,
    which has to be `Unit`. *)
 
-(* What a lookup through a type found. *)
+(* What a lookup through a type found, or what else inference decided
+   about an expression or pattern that a later pass needs, so it never
+   decides it again. *)
 type found =
   | Field_of of Path.t  (** a field access: the record type the field is in *)
   | Ctor_of of Path.t * string
@@ -26,6 +28,9 @@ type found =
       (** a `with` whose item describes a handler of these dependencies, all of
           which it installs *)
   | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
+  | Handles  (** a `match` that handles errors: one with `fail` arms *)
+  | Fail_arm
+      (** a `fail` arm's pattern, which matches an error rather than a value *)
 
 (* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
    that takes a module (here [Int], which says how to compare keys) and

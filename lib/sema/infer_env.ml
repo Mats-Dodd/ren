@@ -9,7 +9,9 @@ open Ast
 open Ast.Resolved
 open Types
 
-(* What a lookup through a type found. *)
+(* What a lookup through a type found, or what else inference decided
+   about an expression or pattern that a later pass needs, so it never
+   decides it again (compiler.md, "What it has to do"). *)
 type found =
   | Field_of of Path.t  (** a field access: the record type the field is in *)
   | Ctor_of of Path.t * string  (** a constructor: its type, and its name *)
@@ -22,6 +24,9 @@ type found =
       (** a `with` whose item describes a handler of these dependencies, which
           it makes an instance of *)
   | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
+  | Handles  (** a `match` that handles errors: one with `fail` arms *)
+  | Fail_arm
+      (** a `fail` arm's pattern, which matches an error rather than a value *)
 
 (* A call that adds to a function's dependencies, or a `with` that
    installs an implementation, which adds what it needs. [own] are the

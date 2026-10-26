@@ -110,7 +110,8 @@ and check env cx ?(why = plain) (e : expr) expected =
       check env cx ~why f expected
   | Match (subject, arms), _ ->
       fits ();
-      ignore (infer_match env cx subject arms ~want:(Some (expected, why)))
+      ignore
+        (infer_match env cx e.node subject arms ~want:(Some (expected, why)))
   | Lambda (params, body), TFun (eps, eret, _, _)
     when List.length eps = List.length params
          && List.for_all2
@@ -245,7 +246,7 @@ and synth env cx (e : expr) : ty =
   | Record (name, fields) ->
       infer_record env cx e name fields ~expected:(fresh_var env.st)
   | Field (r, f) -> infer_field env cx e r f
-  | Match (subject, arms) -> infer_match env cx subject arms ~want:None
+  | Match (subject, arms) -> infer_match env cx e.node subject arms ~want:None
   | Array xs ->
       (* the first element says what the others have to be. One that's a
          handler of several dependencies waits for one that isn't, which
@@ -343,7 +344,7 @@ and synth env cx (e : expr) : ty =
          aren't covered by the `try`: a call in one is marked like any
          other *)
       let m = marker env Mtry (keyword e.loc 3) in
-      let t = infer_match env cx ~passed:m subject arms ~want:None in
+      let t = infer_match env cx ~passed:m a.node subject arms ~want:None in
       Hashtbl.replace cx.nodes a.node t;
       t
   | Try a -> (
@@ -868,10 +869,14 @@ and infer_field env cx (e : expr) r (f : ident) =
    marked by the `match`, as they would be by an `attempt`: their errors,
    and a `fail`'s, go to a row of the `match`'s own, which the `fail` arms
    match. The arms are outside it, under the code's own handler. [passed]
-   is the `try` of a `try match`, which passes on what no arm handles. *)
-and infer_match env cx ?passed subject arms ~want =
+   is the `try` of a `try match`, which passes on what no arm handles.
+   Which `match`es handle errors, and which arms are `fail` arms, is
+   recorded by [node], the `match`'s id, and each arm's pattern's, for
+   later passes. *)
+and infer_match env cx ?passed node subject arms ~want =
   let ts, errs =
     if handles arms then (
+      Hashtbl.replace cx.found node Handles;
       let first = List.find (fun a -> is_fail a.arm_pat) arms in
       let m = marker env Mmatch first.arm_pat.ploc in
       let errs = fresh_row env.st in
@@ -898,7 +903,9 @@ and infer_match env cx ?passed subject arms ~want =
   List.iteri
     (fun i a ->
       (match errs with
-      | Some errs when is_fail a.arm_pat -> bind_fail env cx errs a.arm_pat
+      | Some errs when is_fail a.arm_pat ->
+          Hashtbl.replace cx.found a.arm_pat.pnode Fail_arm;
+          bind_fail env cx errs a.arm_pat
       | _ -> bind_pattern env cx ts a.arm_pat);
       Option.iter (fun g -> want_bool env Guard g (infer env cx g)) a.arm_guard;
       check env cx ~why:(arm_why i) a.arm_body result)
