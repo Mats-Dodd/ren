@@ -92,13 +92,8 @@ let unifies env why loc ~found ~expected =
           let f = show pr found in
           (pr, f, show pr expected)
       in
-      let msg =
-        match why.msg with
-        | Some m -> m f x
-        | None -> sprintf "expected `%s`, found `%s`" x f
-      in
+      let msg = Option.map (fun m -> m f x) why.msg in
       let help = Option.map (fun h -> h f x) why.help in
-      let more, help = mismatch_notes ?help ~found ~expected () in
       (* two implementations of one dependency that need different things,
          themselves or inside the types they're part of, `Box<Rates>` *)
       let rec impls found expected =
@@ -110,73 +105,32 @@ let unifies env why loc ~found ~expected =
             List.find_map Fun.id (List.map2 impls fs xs)
         | _ -> None
       in
-      let more, help =
+      let needs_more =
         match impls found expected with
-        | Some t ->
-            (* `uses` after `->` is the function's, so a dependency's own
-               is parenthesized; inside `Box<...>` it needs nothing *)
-            let f = if t == repr found then sprintf "(%s)" f else f in
-            ( more
-              @ [
-                  "an implementation's type says what it needs, so one that \
-                   needs more can't stand in for one that needs less";
-                ],
-              Some
-                (Option.value help
-                   ~default:
-                     (sprintf
-                        "say what it needs where its type is written: `%s`" f))
-            )
-        | _ -> (more, help)
+        | Some t -> [ Needs_more { ty = f; alone = t == repr found } ]
+        | None -> []
       in
       (* what's about errors: one tag with two shapes, or a function that
          fails where nothing can *)
-      let more, help =
+      let errors =
         match (failure, errors_clash found expected) with
         | Unify.Two_shapes name, _ ->
-            let shapes =
-              List.sort_uniq compare
-                (List.map (show_label pr)
-                   (labels_named name found @ labels_named name expected))
-            in
-            ( more
-              @ [
-                  sprintf
-                    "`%s` has two shapes here, %s: a tag is its name and its \
-                     payload's types, so these are two errors with one name"
-                    name (and_list shapes);
-                ],
-              Some
-                (Option.value help
-                   ~default:"give one of them another name, where it fails") )
+            [
+              Shapes
+                ( name,
+                  List.sort_uniq compare
+                    (List.map (show_label pr)
+                       (labels_named name found @ labels_named name expected))
+                );
+            ]
         | _, Some (extra, []) ->
-            ( more
-              @ [
-                  sprintf
-                    "this function can fail with %s, and the type wanted here \
-                     can't fail"
-                    (and_list (List.map (show_label pr) extra));
-                  "a parameter whose type is inferred can fail only if it's \
-                   called with `try`";
-                ],
-              Some
-                (Option.value help
-                   ~default:
-                     "pass its errors on with `try` where it's called, or \
-                      handle them inside it with `match`") )
+            [ Fails_where_none (List.map (show_label pr) extra) ]
         | _, Some (extra, wanted) ->
-            ( more
-              @ [
-                  sprintf
-                    "this function can fail with %s, and the type wanted here \
-                     fails only with %s"
-                    (and_list (List.map (show_label pr) extra))
-                    (and_list (List.map (show_label pr) wanted));
-                ],
-              Some
-                (Option.value help
-                   ~default:"handle the others inside it with `match`") )
-        | _ -> (more, help)
+            [
+              Fails_beyond
+                (List.map (show_label pr) extra, List.map (show_label pr) wanted);
+            ]
+        | _ -> []
       in
       (* another module's opaque type can't stand in for what it's
          represented as, or the other way round. [blame] looks for one
@@ -218,12 +172,8 @@ let unifies env why loc ~found ~expected =
                       (s :: List.map (fun p -> p.ty) qs)
                 | _ -> None))
       in
-      let more, help =
-        match blame found expected with
-        | Some p ->
-            let note, h = representation_private p in
-            (more @ [ note ], Some (Option.value help ~default:h))
-        | None -> (more, help)
+      let private_ =
+        match blame found expected with Some p -> [ Private p ] | None -> []
       in
       (* a handler of several dependencies where an implementation is
          wanted, at the top or inside the types (`Option<Rates>`): one of
@@ -245,58 +195,26 @@ let unifies env why loc ~found ~expected =
               :: List.map2 (fun p q -> handler_pair p.ty q.ty) ps qs)
         | _ -> None
       in
-      let more, help =
+      let handler =
         match handler_pair found expected with
-        | Some (h, deps, d) when List.mem d deps ->
-            let d = type_name env d in
-            ( more
-              @ [
-                  sprintf
-                    "`%s` implements %s, so it's taken as just `%s` only where \
-                     `%s` is wanted as it's made"
-                    (type_name env h)
-                    (and_list (List.map (type_name env) deps))
-                    d d;
-                ],
-              Some
-                (Option.value help
-                   ~default:
-                     (sprintf "say so where it's made: `let x: %s = %s(...)`" d
-                        (type_name env h))) )
         | Some (h, deps, d) ->
-            let d = type_name env d in
-            ( more
-              @ [
-                  sprintf
-                    "`%s` is a handler for %s, so what its call describes \
-                     implements those, not `%s`"
-                    (type_name env h)
-                    (and_list (List.map (type_name env) deps))
-                    d;
-                ],
-              Some
-                (Option.value help
-                   ~default:
-                     (sprintf
-                        "give an implementation of `%s` here: a `%s { ... }`, \
-                         or a handler for `%s`"
-                        d d d)) )
-        | None -> (more, help)
+            let handler = type_name env h
+            and deps' = List.map (type_name env) deps
+            and dep = type_name env d in
+            if List.mem d deps then
+              [ Taken_as_one { handler; deps = deps'; dep } ]
+            else [ Other_handler { handler; deps = deps'; dep } ]
+        | None -> []
       in
-      ignore
-        (fail env ?help ~notes:(why.notes @ more) ~labels:(why.labels f x) loc
-           msg);
+      report env
+        (mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
+           ~found ~expected ~f ~x
+           (needs_more @ errors @ private_ @ handler));
       false
   | exception Unify.Infinite ->
       let pr = printer env in
-      ignore
-        (fail env loc
-           ~notes:
-             [
-               sprintf "it would have to be `%s` and `%s` at the same time"
-                 (show pr expected) (show pr found);
-             ]
-           "this value's type would have to contain itself");
+      report env
+        (contains_itself loc ~found:(show pr found) ~expected:(show pr expected));
       false
 
 let unify_at env ?msg ?notes ?help ?labels loc ~found ~expected =

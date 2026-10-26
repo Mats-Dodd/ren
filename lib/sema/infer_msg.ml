@@ -8,6 +8,13 @@ let sprintf = Printf.sprintf
 let plural n = if n = 1 then "" else "s"
 let quote names = String.concat ", " (List.map (sprintf "`%s`") names)
 
+(* "`Short(Int)`", "`Short(Int)` and `Frozen`", "`A`, `B` and `C`" *)
+let and_list items =
+  match List.rev (List.map (sprintf "`%s`") items) with
+  | [] -> ""
+  | [ x ] -> x
+  | last :: rest -> String.concat ", " (List.rev rest) ^ " and " ^ last
+
 (* "a `Bool`", "an `Int`", and by the sound: "a `Unit`", "a `User`", but
    "an `Undo`", "an `Update`" *)
 let article name =
@@ -399,6 +406,120 @@ let several_records_have ~names loc ?what (f : Ast.ident) paths =
     ~notes:(field_of_types ~names f paths @ extra)
     (sprintf "can't tell which record type %s is" what)
 
+(* ---- mismatches ---- *)
+
+(* What else explains a mismatch, found by looking inside the two types
+   (Infer_report.unifies). Each says what it is with notes, and suggests
+   a fix, unless something else did first. Types are as the message prints
+   them. *)
+type behind =
+  | Needs_more of { ty : string; alone : bool }
+      (** an implementation that needs more than the one wanted, of the type
+          [ty]; [alone] if it's the whole type, not inside another, `Box<Rates>`
+      *)
+  | Shapes of string * string list
+      (** the tag with two shapes, and the shapes *)
+  | Fails_where_none of string list
+      (** a function that fails with these where nothing can fail *)
+  | Fails_beyond of string list * string list
+      (** a function that fails with the first where only the second can *)
+  | Private of Path.t  (** another module's opaque type *)
+  | Taken_as_one of { handler : string; deps : string list; dep : string }
+      (** a handler of [deps] where an implementation of [dep], one of them, is
+          wanted, somewhere that wasn't known as it was made *)
+  | Other_handler of { handler : string; deps : string list; dep : string }
+      (** a handler of [deps], where an implementation of [dep], which isn't one
+          of them, is wanted *)
+
+let behind_note = function
+  | Needs_more { ty; alone } ->
+      (* `uses` after `->` is the function's, so a dependency's own is
+         parenthesized; inside `Box<...>` it needs nothing *)
+      let ty = if alone then sprintf "(%s)" ty else ty in
+      ( [
+          "an implementation's type says what it needs, so one that needs more \
+           can't stand in for one that needs less";
+        ],
+        sprintf "say what it needs where its type is written: `%s`" ty )
+  | Shapes (name, shapes) ->
+      ( [
+          sprintf
+            "`%s` has two shapes here, %s: a tag is its name and its payload's \
+             types, so these are two errors with one name"
+            name (and_list shapes);
+        ],
+        "give one of them another name, where it fails" )
+  | Fails_where_none extra ->
+      ( [
+          sprintf
+            "this function can fail with %s, and the type wanted here can't \
+             fail"
+            (and_list extra);
+          "a parameter whose type is inferred can fail only if it's called \
+           with `try`";
+        ],
+        "pass its errors on with `try` where it's called, or handle them \
+         inside it with `match`" )
+  | Fails_beyond (extra, wanted) ->
+      ( [
+          sprintf
+            "this function can fail with %s, and the type wanted here fails \
+             only with %s"
+            (and_list extra) (and_list wanted);
+        ],
+        "handle the others inside it with `match`" )
+  | Private p ->
+      let note, help = representation_private p in
+      ([ note ], help)
+  | Taken_as_one { handler; deps; dep } ->
+      ( [
+          sprintf
+            "`%s` implements %s, so it's taken as just `%s` only where `%s` is \
+             wanted as it's made"
+            handler (and_list deps) dep dep;
+        ],
+        sprintf "say so where it's made: `let x: %s = %s(...)`" dep handler )
+  | Other_handler { handler; deps; dep } ->
+      ( [
+          sprintf
+            "`%s` is a handler for %s, so what its call describes implements \
+             those, not `%s`"
+            handler (and_list deps) dep;
+        ],
+        sprintf
+          "give an implementation of `%s` here: a `%s { ... }`, or a handler \
+           for `%s`"
+          dep dep dep )
+
+(* A mismatch between [found] and [expected], printed as [f] and [x], at
+   [loc]: worded by [msg] if the caller has a way to say it, and explained
+   by the caller's [notes] and [help] and by what's [behind] it. *)
+let mismatch loc ?msg ~notes ?help ~labels ~found ~expected ~f ~x behind =
+  let msg =
+    match msg with
+    | Some m -> m
+    | None -> sprintf "expected `%s`, found `%s`" x f
+  in
+  let more, help = mismatch_notes ?help ~found ~expected () in
+  let more, help =
+    List.fold_left
+      (fun (more, help) b ->
+        let notes, h = behind_note b in
+        (more @ notes, Some (Option.value help ~default:h)))
+      (more, help) behind
+  in
+  Diag.make loc ?help ~notes:(notes @ more) ~labels msg
+
+(* A type that would have to contain itself, `a = Array<a>`. *)
+let contains_itself loc ~found ~expected =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf "it would have to be `%s` and `%s` at the same time" expected
+          found;
+      ]
+    "this value's type would have to contain itself"
+
 (* ---- dependencies ---- *)
 
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
@@ -646,13 +767,6 @@ let value_fails (f : Ast.Resolved.fn_def) ~tag ~shape from =
           %s() ! %s = ...`"
          f.name.name shape)
     (sprintf "the associated value `%s` can fail with `%s`" (Ast.fn_name f) tag)
-
-(* "`Short(Int)`", "`Short(Int)` and `Frozen`", "`A`, `B` and `C`" *)
-let and_list items =
-  match List.rev (List.map (sprintf "`%s`") items) with
-  | [] -> ""
-  | [ x ] -> x
-  | last :: rest -> String.concat ", " (List.rev rest) ^ " and " ^ last
 
 (* One error set would hold two shapes of the tag [name]: [old] is where
    the one already there came from and its shape, and [new_] the same for
