@@ -1044,6 +1044,24 @@ let%expect_test "editing a body changes the interface only by what it needs" =
     different
     |}]
 
+let%expect_test "another module's generic function compares what it's given" =
+  (* `same` needs `eq` of `T`, which its interface says, so `main` passes
+     it `Int`'s dictionary; with a function it's refused at `main`'s call
+     (test_infer.ml, "another module's function needs what it needs") *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import util
+fn main() = util.same(1, 1) && util.same(1, 2) == false && util.same([1], [1])
+|}
+      );
+      ("util.ren", {|
+pub fn same<T>(a: T, b: T) -> Bool = a == b
+|});
+    ];
+  [%expect {| true |}]
+
 let%expect_test "what the implementation tier records" =
   (* only public functions and members, and of those only the ones the
      specializer will copy into callers: a generic one, `same`, or a
