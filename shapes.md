@@ -218,7 +218,7 @@ error: `handle_request` uses `Fs`, which this module says it never does
 ```
 
 - "The request path never touches the disk." "The ledger never
-  allocates," once `Alloc` exists (stage 13). "This module never uses the
+  allocates," once `Alloc` exists (stage 15). "This module never uses the
   network."
 - The error shows the path the dependency is reached by, the way
   [async.md](async.md#how-it-runs) shows a task's path.

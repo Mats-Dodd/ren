@@ -2,8 +2,7 @@
 
 How a type gets `+` and `<`, what `==` means, and how values become map
 keys. It's the roadmap's next stage, operators, derived equality and
-hashing, which now comes before `outer` and `Async`: the roadmap swaps
-their numbers when it lands. The short version is in the README's
+hashing, which comes before handlers that wrap and `Async`. The short version is in the README's
 [Methods, operators, and equality](README.md#methods-operators-and-equality).
 
 The aim is pragmatic simplicity: one way to do each thing, nothing that
@@ -345,7 +344,7 @@ default hides it. `xs[i]` is also a place, `xs[i] = v` and
 best-named collection vocabulary there is, so that std doesn't grow
 whatever names its first users needed. A method that changes nothing
 returns a new collection: `xs.sort()`, not a sorting `&xs`. Once memory
-is reused in place (stage 11), sorting an array nothing else holds
+is reused in place (stage 14), sorting an array nothing else holds
 doesn't copy it, so there's no second, changing version as Ruby's `sort!`
 is.
 
@@ -387,9 +386,9 @@ and `len()`, and the methods above over its `(k, v)` pairs.
   as an optimisation that changes nothing.
 - **Derived operations are made when they're used,** one structural walk
   over a type, with `key` where a type has one.
-- **That walk stays inside the compiler.** Whether `json.decode<T>` and
-  SQL rows use it, as reflection or something like `comptime`, is decided
-  when they arrive ([stdlib.md](stdlib.md#open-questions)).
+- **That walk stays inside the compiler.** `json.decode<T>` and SQL rows
+  don't use it: they read a type's shape, `T.shape`, as ordinary Ren
+  ([shapes.md](shapes.md)).
 
 ## What the README changes
 
@@ -443,8 +442,8 @@ Named here so they aren't forgotten:
   time until they arrive.
 - **Interpolation and `Shell`,** with the rest of strings. Interpolation
   uses `show`.
-- **`comptime` or reflection,** exposing the derived walk, for `json` and
-  SQL rows.
+- **Shapes and build time,** for `json` and SQL rows, in
+  [shapes.md](shapes.md) rather than `comptime`.
 - **Sized integers,** `u8` to `i64`, with the C backend. `len()` and
   indexes stay `Int`, so there's no Rust-style `as usize`.
 - **`Decimal`,** in std ([stdlib.md](stdlib.md)).

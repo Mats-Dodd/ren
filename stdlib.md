@@ -106,7 +106,7 @@ When the body returns, the chunk's reference count reaches zero, its buffer goes
 
 Push iteration can't easily zip two streams or read exactly *n* bytes for a framed protocol. Two escape hatches cover that:
 
-- **`async.pull(seq)`** runs a push sequence on a fiber and hands back a pull iterator, like Go's `iter.Pull`.
+- **`Async.pull(seq)`** runs a push sequence on a fiber and hands back a pull iterator, like Go's `iter.Pull`.
 - **A buffered reader value** keeps its position in an `inout` value, which value semantics allow: `var r = bufio.reader(conn)`, then `try &r.read_exact(4)`.
 
 ### `Time` and `Instant`
@@ -199,7 +199,7 @@ Every tag `std` uses then either agrees with user code by design or can't collid
 | `Http` (client) | `http.client()` | `mem_http(routes)` | `sim.http(seed, p99: 2.s)` |
 | `Sql` | the driver | `sqlite.memory` | `sim.sql(seed, conflict_rate: 5%)` |
 
-Simulated implementations need the simulation scheduler, so they arrive in stage 16. Until then the rule is two implementations, with fault-injecting fakes (`fail_rate:`) from stage 12.
+Simulated implementations need the simulation scheduler, so they arrive in stage 17. Until then the rule is two implementations, with fault-injecting fakes (`fail_rate:`) from stage 11.
 
 Each dependency type also ships a **conformance suite**: one set of tests every implementation must pass, including the in-memory and simulated ones. It's a `pub group` over an implementation, which a vendor package imports and runs against its own ([deps.md](deps.md#groups)):
 
@@ -301,7 +301,7 @@ Each type costs an interface, written semantics, in-memory and simulated impleme
 | MySQL, Redis clients | std.x | useful, not universal |
 | Kafka, NATS, cloud SDKs | out | vendor churn; they implement the infrastructure types instead |
 
-**Concurrency and resilience:** `Async`, `par_map`, `channel`, `select`, a semaphore, a rate limiter, `schedule`, `retry`, `cache` (LRU and TTL), all std. There's no mutex: handler state replaces it.
+**Concurrency and resilience:** `Async` ([async.md](async.md)), `xs.par_map` for pure work, `channel`, `select`, a semaphore, a rate limiter, `schedule`, `retry`, `cache` (LRU and TTL), all std. There's no mutex: handler state replaces it.
 
 **Observability:** `trace`, `log`, `metrics`, the flight recorder and the OTLP exporter, all std. Logging is the trace stream, so there's no Go-style split between `log` and `slog`. A Prometheus exporter goes in `std.x`.
 
@@ -332,7 +332,7 @@ Retry policies are values:
 ```ren
 let backoff = schedule.exponential(100.ms).jitter().up_to(5)
 
-with retry(backoff), async.timeout(3.s) in
+with retry(backoff) over Async.timeout(3.s) in
   try Billing.charge(card, amount)
 ```
 
@@ -392,13 +392,15 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 6** | the error-tag convention; everything that parses or validates |
 | **Stage 7** | `Clock` (with `Time`, `Instant` and `Duration`), `Random` and `Console`, each with a real and a test implementation; conformance suites as groups |
 | **Stage 8** | `str` and `bytes`; `Fs`, `Os` and `path`, each real and in-memory; `config`, `schedule`, `retry`; the infrastructure types with in-memory implementations |
-| **Stage 9** | `Map` and `Set`, seeded from `Random`; `json`, `schema`; `from_literal` and `Decimal`; interpolation libraries can intercept; `sqlite`; property and snapshot tests |
-| **Stage 12** | `Net` and `Async`; `for x in f(...)`, push streams, `async.pull`; `http` server, client and router; `cache`, `channel`; fault-injecting fakes; `log`; buffers leased from a pool for `Net` |
+| **Stage 9** | `Map` and `Set`; `from_literal` and `Decimal`; interpolation libraries can intercept |
+| **Stage 10** | handlers `over` a dependency, like `transaction() over Sql`; journal fixtures for tests |
+| **Stage 11** | `Net` and `Async` ([async.md](async.md)); `channel`; fault-injecting fakes; buffers leased from a pool for `Net` |
+| **Stage 12** | `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); `for x in f(...)`, push streams; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
 | **↑ interpreted Ren** | a JSON API on SQLite, configured from the environment, with retries on an outgoing HTTPS call, whose tests run in under a second on in-memory fakes |
 | **Stage 13** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd, `postgres`, HTTP/2; conformance suites for vendor packages |
-| **Stage 14** | non-allocating pure modules (`checksum`, `hash`, parsers), `push_within`, registered buffers |
-| **Stage 15** | `Array<T, soa>`, in-place `unique` APIs in `collections` |
-| **Stage 16** | `sim.*` for every dependency; the flight recorder and the OTLP exporter |
+| **Stage 15** | non-allocating pure modules (`checksum`, `hash`, parsers), `push_within`, registered buffers |
+| **Stage 16** | `Array<T, soa>`, in-place `unique` APIs in `collections` |
+| **Stage 17** | `sim.*` for every dependency; the flight recorder and the OTLP exporter |
 | **After 1.0** | promotions from `std.x`; perhaps the TLS state machine in Ren |
 
 ---
@@ -406,9 +408,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 ## Open questions
 
 - What does flottning need? Its dependencies decide what 1.0 has to ship.
-- Is `Alloc` inferred before stage 14 and enforced from it, or added to signatures all at once in stage 14? Inferring it early keeps `std`'s public signatures stable.
+- Is `Alloc` inferred before stage 15 and enforced from it, or added to signatures all at once in stage 15? Inferring it early keeps `std`'s public signatures stable.
 - Is rule 3 a hard rule or a warning? We're leaning hard for `std`, with `trust` and non-simulatable flagging covering user FFI.
-- How far does derivation go? If `json.decode<T>`, `config.load<T>` and SQL rows use the same mechanism as derived `==`, `hash` and `show`, they need no macros. This is the README's question about `comptime`, and it has to be answered in stage 9.
 - How does interpolation hand its parts to a library: `sql"..."` resolved through a member of the type, or something else?
 - Does `std.x` version separately from `std`, or move with the toolchain?
 - When does `websocket` move from `std.x` to `std`?

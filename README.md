@@ -82,6 +82,8 @@ These are ranked. When two of them conflict, the one higher on the list wins.
 
 A useful filter for any proposed feature: does it make function bodies read more like a script, or signatures more like a proof? If it does neither, cut it.
 
+The three bars Ren is measured against (within 2× of Rust, debug builds faster than Go, replay byte for byte) and the principles that follow from them are in [vision.md](vision.md).
+
 ---
 
 ## A tour
@@ -142,7 +144,7 @@ Lambdas, with trailing-lambda syntax for multi-line bodies:
 ```ren
 let names = users.map(fn(u) => u.name)
 
-let summaries = async.par_map(users) fn(u) =>
+let summaries = Async.map(users) fn(u) =>
   let feed = try load_feed(u.id)
   summarize(u, feed)
 ```
@@ -162,11 +164,10 @@ A function parameter is **transparent** when the function only calls it: it does
 
 ```ren
 pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>
-pub fn par_map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> uses Async
-pub fn timeout<T>(d: Duration, f: fn() -> T) -> T ! Timeout uses Async
+pub fn retry<T>(n: Int, body: fn() -> T) -> T
 ```
 
-Calling `par_map` with a lambda that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError` and use `Net`. `par_map` is still transparent even though it runs `f` on other tasks, because structured concurrency guarantees those tasks finish before it returns.
+`Async.map` and `Async.timeout` take theirs the same way. Calling `Async.map` with a lambda that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError` and use `Net`. It's still transparent even though it runs `f` on other tasks, because no task outlives the call that started it ([async.md](async.md)).
 
 A function that stores a closure names the closure's errors and dependencies with `..e` and `..d`:
 
@@ -218,7 +219,7 @@ A public function lists its errors exactly, so a signature can get long. That's 
 
 When a call fails, whatever it changed before failing stays changed. For all-or-nothing, change a copy and keep it only if nothing failed: `var draft = self`, then `self = draft` at the end. A statement whose value isn't `()` is an error, so a result can't be dropped without a word; `let _ = ...` drops it on purpose. The whole design, and why, is in [errors.md](errors.md).
 
-Tags only have to agree where they meet. `Timeout` from `async.timeout` and `Timeout` from your own code are the same error if they have the same shape. If one error set would contain two shapes of the same tag, such as `Timeout(ms: Int)` and a plain `Timeout`, that's a compile error asking you to rename one. So adding a dependency never breaks code that doesn't touch it.
+Tags only have to agree where they meet. `Timeout` from `Async.timeout` and `Timeout` from your own code are the same error if they have the same shape. If one error set would contain two shapes of the same tag, such as `Timeout(ms: Int)` and a plain `Timeout`, that's a compile error asking you to rename one. So adding a dependency never breaks code that doesn't touch it.
 
 Bugs aren't errors. Out-of-bounds access, a failed `assert`, or `unwrap` on `None` panics the program.
 
@@ -278,7 +279,7 @@ fn main() ! StartupError
     http.serve(cfg.port, routes)
 ```
 
-Production wiring, test fakes, allocators, simulators, and tracers all use the same mechanism. A long list of items can break after a comma, the next line indented further. Any line outside brackets that ends in `,` goes on this way, so a signature's `uses Clock,` can wrap too, with the rest of the list indented on the next line. Items are listed from outermost to innermost, and the innermost implementation of a dependency wins. `with` removes what it installs from the body's `uses`, and adds what its items need.
+Production wiring, test fakes, allocators, simulators, and tracers all use the same mechanism. A long list of items can break after a comma, the next line indented further. Any line outside brackets that ends in `,` goes on this way, so a signature's `uses Clock,` can wrap too, with the rest of the list indented on the next line. A `with` is a set: each dependency appears in it once, and the order of its items never matters. An item's needs are met by the other items first, then by what's installed outside, and putting one implementation in front of another is written with `over` ([section 7](#7-handler-stateful-implementations)). A `with` nested inside another can install a dependency again, and the inner one wins inside it. `with` removes what it installs from the body's `uses`, and adds what its items need.
 
 An item is either an **implementation**, or a **wrapper**: an ordinary function whose last parameter is the body.
 
@@ -348,41 +349,47 @@ handler counting_rates(rate: Decimal) for Rates, RateCalls =
   count() => calls
 ```
 
-Calling `counting_rates(r)` describes a handler, a value of the dependency's type like any implementation, and each `with` creates a fresh instance with its own state: two `with`s never share it. Handlers resume at most once, which keeps them as cheap as function calls. Inside a handler for `Users`, writing `Users.get` is an error.
+Calling `counting_rates(r)` describes a handler, a value of the dependency's type like any implementation, and each `with` creates a fresh instance with its own state: two `with`s never share it. Its type lists what it implements, `Rates & RateCalls`. `with` installs what the type says, so both, sharing the state. Where a written type asks for one of them, `fn run(r: Rates)`, it becomes that one ([deps.md](deps.md)). Handlers resume at most once, which keeps them as cheap as function calls. Inside a handler for `Users`, writing `Users.get` is an error.
 
-A handler forwarding calls to the next implementation out, through `outer`, comes in stage 10:
+A handler can sit in front of another implementation of the same dependency. It's declared `over` it, may leave operations out, which go to the one under it, and calls that one through `next` (stage 10, [handlers.md](handlers.md)):
 
 ```ren
-handler cached(ttl: Duration) for Users
-    uses Clock =
-  var cache = {}
+pub handler cached(ttl: Duration) over Users uses Clock =
+  var cache: Map<UserId, (User, Time)> = Map.empty
   get(id) =>
     match cache.get(id)
-      Some(e) if Clock.now() - e.at < ttl => Some(e.user)
+      Some((u, at)) if Clock.now() - at < ttl => Some(u)
       _ =>
-        let u = outer.get(id)                   // forward to the next Users out
-        if u is Some(user) then cache[id] = { user, at: Clock.now() }
-        u
+        let found = try next.get(id)            // the Users under this one
+        if found is Some(u) then &cache.set(id, (u, Clock.now()))
+        found
   save(u) =>
     &cache.remove(u.id)
-    try outer.save(u)
+    try next.save(u)
+
+with cached(ttl) over postgres_users(pool) in
+  serve(requests)
 ```
 
-A `cached` installed outside `with Clock.frozen(t) in` keeps using the clock that was installed where it was, even when it's called from inside that block. A handler can only see implementations installed further out, so handlers can't call each other in a loop.
+What wraps what is written with `over`, never implied by the order of a `with`. A `cached` installed outside `with Clock.frozen(t) in` keeps using the clock that was installed where it was, even when it's called from inside that block. A handler can only see implementations installed further out, so handlers can't call each other in a loop.
 
-A handler's state is exclusive between dependency calls. Two tasks are never inside the pure part of the same handler at once, so state updates can't corrupt each other. Other calls can interleave only at a dependency call, such as `outer.save` or `Clock.now()`, and cancellation happens only there too.
+A handler's state is exclusive between dependency calls. Two tasks are never inside the pure part of the same handler at once, so state updates can't corrupt each other. Other calls can interleave only at a dependency call, such as `next.save` or `Clock.now()`, and cancellation happens only there too.
 
-That narrows where a race can happen without hiding it. `cached` above has one: between `cache.remove` and `outer.save`, another task's `get` can miss, read the old user, and put it back in the cache. The simulation scheduler switches tasks at exactly these points, so `ren test --sim` finds the race. The fix is to invalidate again after `outer.save` returns.
+That narrows where a race can happen without hiding it. `cached` above has one: between `cache.remove` and `next.save`, another task's `get` can miss, read the old user, and put it back in the cache. The compiler warns about it, since `cache` is read before a dependency call and written after it ([async.md](async.md#state-that-changed-during-a-call)), and the simulation scheduler switches tasks at exactly these points, so `ren test --sim` finds it too. The fix is to invalidate after `next.save` returns.
 
-A handler will also be able to run code when its `with` block ends. `arena` frees everything it allocated, and `transaction` commits or rolls back:
+A handler can also run code when its `with` ends, in `finally`, which is given the body's result and returns the `with`'s. Its state can fail to start, and the `with` passes that failure on:
 
 ```ren
-handler transaction() for Sql =
-  var tx = outer.begin()
+pub handler transaction() over Sql =
+  var tx = try next.begin()
   query(q) => try tx.query(q)
-  finally(result) =>
-    if result is Ok(_) then try tx.commit() else tx.rollback()
+  finally(r) =>
+    match r
+      Ok(v) => { try tx.commit(); v }
+      fail e => { tx.rollback(); fail e }
 ```
+
+When the body is cancelled, `finally` sees `fail Cancelled`, and what it returns is discarded ([async.md](async.md#cancellation)).
 
 ### 8. `&`: this call changes it
 
@@ -569,15 +576,17 @@ An arena also works as a per-request memory limit: a request that exceeds `req.b
 
 ## Concurrency
 
-Ren has no `async` or `await` and no colored functions. Concurrency is structured: no task outlives the block that started it, and a failure in one task cancels the others.
+Ren has no `async` or `await` and no colored functions. `Async` is a dependency like `Clock`, and concurrency is structured: no task outlives the call that started it, and a failure in one task cancels the others.
 
 ```ren
 pub fn dashboard(ids: List<UserId>) -> List<Summary> ! Timeout | FeedError
-    uses Users, Net, Async, Alloc =
-  async.timeout(2.s) fn() =>
-    async.par_map(ids) fn(id) =>
+    uses Users, Net, Async =
+  Async.timeout(2.s) fn() =>
+    Async.map(ids) fn(id) =>
       summarize(id, try load_feed(id))
 ```
+
+Four rules hold everywhere. No task outlives its call. A failure cancels its siblings, and the first one wins. A handler's state is touched by one task at a time between dependency calls. And everything has a limit: `Async.map` runs 64 at once unless told otherwise. Cancellation can't be caught, and work that finished is never reported as timed out. Tests run on virtual time with a seeded scheduler, so `ren test --seeds 1000` tries a thousand interleavings and `--seed` replays one. The design is in [async.md](async.md).
 
 Shared data is immutable, mutable data has exactly one owner, and handler state is exclusive between dependency calls, so data races can't happen. Logic races are still possible, but only at dependency calls, which is where the simulation scheduler looks for them. Values with a single owner move between threads for free, and only values that are actually shared pay for atomic reference counts.
 
@@ -647,7 +656,7 @@ Run your system under a seeded fake scheduler, clock, network, and disk. Every f
 test sim "log survives S3 flakiness and crashes" (seed) =
   with sim.scheduler(seed), sim.clock, sim.s3(seed, fail_rate: 5%), sim.crash(seed) in
     let log = DurableLog.open("bucket")
-    async.par_map([writer, reader]) fn(task) => task(log)
+    Async.map([writer, reader]) fn(task) => task(log)
     assert DurableLog.recover("bucket").is_prefix_consistent()
 ```
 
@@ -849,8 +858,9 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 ## Implementation
 
 - The compiler is written in **OCaml**.
-- The backend emits **C**: `tcc` for fast debug builds, `clang -O2` (or `zig cc`) for release builds, and Wasm through the same path.
+- The backend emits **C**: `tcc` for fast debug builds, `clang -O2` (or `zig cc`) for release builds, and Wasm through the same path. A naive C backend comes before the memory stage, so Ren runs natively early and every later stage is measured.
 - Every function takes the implementations installed where it's called as one hidden parameter, an evidence vector, which a dependency call searches by the dependency's identity ([deps.md](deps.md#how-it-runs)). Release builds specialize implementations known at compile time using lambda sets, so dependency calls become direct, inlinable calls, within a specialization budget.
+- What Ren is measured against and the principles behind it are in [vision.md](vision.md). The stages ahead are designed in [handlers.md](handlers.md) (wrapping and the journal), [async.md](async.md) (concurrency), [shapes.md](shapes.md) (shapes and build time), [stdlib.md](stdlib.md) and [runtime-io.md](runtime-io.md).
 - How the compiler is laid out, the passes and the languages between them, what each promises and what checks it, and the rules every pass keeps, is in [compiler.md](compiler.md).
 - Modules, name lookup, interface summaries, and the content-addressed build are designed in [module-build.md](module-build.md). Every compiler pass is a pure function of one module or call-graph group plus the interfaces of its imports.
 - Golden tests cover every example and every error message from day one. All generated C runs under ASan and UBSan, and the interpreter and native backend are differentially tested against each other.
@@ -871,17 +881,20 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 7 | `dep`, `uses`, `with`, `handler`, `Clock`, `Random` and `Console`; `test`, `group`, `assert`, `ren test` ([deps.md](deps.md)) | the bank's tests run on the test implementations, with no `with` (done) |
 | 8 | `Str` and `Bytes`, `Fs`, `Os`, `Proc`, `Path`, each with real and in-memory implementations | a small [just](https://github.com/casey/just) runs, and its tests run on `mem_fs` and a fake `Os` and `Proc` (done, as a slice: `Os` has only `args`, and `Proc.run` doesn't capture output) |
 | 9 | operators, derived equality and hashing, arithmetic for opaque number types ([operators.md](operators.md)) | `Map<Email, User>` works |
-| 10 | handler `outer`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
-| 11 | memory: specialization, defunctionalization, the Mem IR, borrow inference, reference counting with reuse, run by an instrumented interpreter ([compiler.md](compiler.md)) | `map` reuses memory in place; `&xs.push(xs[0])` is allowed when the element is a plain value |
-| 12 | `Async`, `Net`, `par_map`, on the memory stage's interpreter, from a design written first | a handler can wait on the network, and `par_map` runs its calls at once |
-| **↑** | **interpreted Ren** | **a small web service and its tests run** |
-| 13 | C backend, emitting the Mem IR; packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
-| 14 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
-| 15 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
-| 16 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
+| 10.0 | one constraint solver, typed Core, requirements passed as dictionaries, lambda sets in function types ([compiler.md](compiler.md)) | every stage-10.0 step passes its check (done) |
+| 10 | `over` and `next`, `with` as a set, `finally`, **the journal**: `ren run --record`, `ren replay`, `--trace` ([handlers.md](handlers.md)) | a cache wraps a real implementation, and the `just` replays byte for byte |
+| 11 | `Async` and `Net`: structured concurrency, cancellation, tasks in handlers, deterministic tests on virtual time ([async.md](async.md)) | a server shuts down gracefully, and `ren test --seeds` finds the `cached` race |
+| 12 | the standard library for a web service and the compiler: `http`, `json` and `cli` over shapes, top-level `let` and `assert` ([stdlib.md](stdlib.md), [shapes.md](shapes.md)) | a small web service and its tests run, interpreted |
+| 13 | a naive C backend, emitting Core with reference counting and no optimizations; packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally; debug builds measured against Go ([vision.md](vision.md)) |
+| 14 | memory: specialization, defunctionalization, borrow inference, reference counting with reuse ([compiler.md](compiler.md)) | `map` reuses memory in place; the benchmarks measured against Rust ([vision.md](vision.md)) |
+| **↑** | **native Ren** | **the web service runs natively, within the bars** |
+| 15 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
+| 16 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
+| 17 | the full simulation scheduler, flight recorder, profiler | a failing seed replays exactly |
+| 18 | the compiler, rewritten in Ren | it compiles itself |
 | **↑** | **Ren 1.0** | **flottning, rewritten in Ren, passes 10,000 simulation seeds** |
 
-The **effect journal** in stage 10, the record of every dependency call, is the most important design artifact after the type system. Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
+The **effect journal** in stage 10, the record of every dependency call, is the most important design artifact after the type system ([handlers.md](handlers.md#the-journal)). Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
 
 ---
 
@@ -922,7 +935,7 @@ $ ren test --model-check --nodes 3 --max-steps 40
 
 ```ren
 with batched(Users, max: 100) in
-  async.par_map(ids) fn(id) => Users.get(id)  // one query, not 100
+  Async.map(ids) fn(id) => Users.get(id)      // one query, not 100
 ```
 
 **Read-only capabilities.** `uses Users.read` versus `uses Users.write`. The compiler then knows which functions are safe to retry, hedge, or cache, with no idempotency annotations.
@@ -950,10 +963,11 @@ $ ren replay --traces last-hour/ --against ./new-build --diff
 
 ## Open questions
 
-- How much `comptime` is needed for `json.decode<T>`-style reflection without macros?
-- Should handler ordering be linted, and which orderings are known to be bad?
-- What exactly goes in an effect journal entry so it serves simulation, replay, and migration alike?
 - Which dependencies are traced per call by default, and which only in aggregate (`Clock`, `Alloc`)?
+- Does the journal designed in [handlers.md](handlers.md#the-journal) serve simulation and moving a request mid-flight as well as replay?
+- How is `call` typed in a handler written for any dependency ([shapes.md](shapes.md#open-questions))?
+
+Answered since: how much `comptime` reflection needs is [shapes.md](shapes.md), and handler ordering is written with `over` ([handlers.md](handlers.md)).
 
 ---
 

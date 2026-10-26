@@ -64,16 +64,16 @@ Registered buffers, pinned once so each call skips setup, fit code without `Allo
 
 Rust's async I/O lends out `&mut buf`, and dropping a future cancels it at once. With a completion API the kernel may still be writing into a buffer that has been freed, which is why tokio-uring needs a different, owned-buffer API.
 
-Ren avoids the problem by rule (*proposed*, stage 12):
+Ren avoids the problem by rule (*proposed*, stage 11):
 
 > A call cancelled while the kernel holds its buffer returns only after the kernel confirms it has let go.
 
 ```ren
-let n = async.timeout(50.ms) fn() =>
+let n = Async.timeout(50.ms) fn() =>
   try Net.recv(conn, &buf)
 ```
 
-When the timeout fires, the runtime submits a cancel request for the read and waits for its completion before `async.timeout` returns. `buf` is never touched after the call returns. Ren can keep this rule where Rust can't because cancellation happens only at dependency calls and is allowed to wait, and structured concurrency means no task outlives the block that started it.
+When the timeout fires, the runtime submits a cancel request for the read and waits for its completion before `Async.timeout` returns. `buf` is never touched after the call returns. Ren can keep this rule where Rust can't because cancellation happens only at dependency calls and is allowed to wait, and structured concurrency means no task outlives the block that started it.
 
 Some operations can't be stopped once the kernel has started them; a regular file read may simply finish. The wait is then the remaining time of that operation, which is bounded.
 
@@ -82,7 +82,7 @@ Some operations can't be stopped once the kernel has started them; a regular fil
 Fibers pause at every dependency call. The scheduler collects the calls pending across all fibers and submits them with one system call:
 
 ```ren
-let srcs = async.par_map(paths) fn(p) => try Fs.read_all(p)
+let srcs = Async.map(paths) fn(p) => try Fs.read_all(p)
 // 500 reads → 500 submissions → one io_uring_enter
 ```
 
@@ -157,7 +157,7 @@ This is the format question from the README's roadmap. Taking the shape from the
 
 The standard library is written in Ren on top of a small set of primitives: submit an operation (read, write, open, accept, connect, timer, cancel), wait for completions, get random bytes, plus the basics of `Str` and `Bytes`.
 
-- **To stage 12,** the primitives are OCaml, built on Eio, so the interpreter already uses the right model.
+- **Until stage 13,** the primitives are OCaml, built on Eio, so the interpreter already uses the right model.
 - **From stage 13,** the primitives and the rest of the runtime (fibers, the scheduler, reference counting, the allocator, the journal) are C, emitted alongside the compiler's output.
 
 Everything above the primitives carries over unchanged from the interpreter to native code. Only the primitives are rewritten.
@@ -179,10 +179,10 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 7** | `Clock`, `Random` and `Console` as dependency types, with real implementations and test ones (done) |
 | **Stage 8** | `Fs`, `Os` and `Proc` as dependency types, with real implementations and in-memory ones: `Fs` on `Unix` and `mem_fs`, `Os.args` and `test_os`, `Proc.run` and `test_proc` (done) |
 | **Stage 10** | the journal entry format |
-| **Stage 12** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; linked operations; leased buffers returned to the pool when their count reaches zero |
+| **Stage 11** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; linked operations; leased buffers returned to the pool when their count reaches zero |
 | **Stage 13** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls; a monotonic `Clock.instant` |
-| **Stage 14** | registered buffers for code without `Alloc` |
-| **Stage 16** | the ring replaced wholesale by the simulator; replay from journal entries |
+| **Stage 15** | registered buffers for code without `Alloc` |
+| **Stage 17** | the ring replaced wholesale by the simulator; replay from journal entries |
 | **After 1.0** | kTLS; finer capabilities; WASI |
 
 ---

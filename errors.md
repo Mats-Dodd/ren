@@ -214,8 +214,8 @@ pub fn transfer(inout self, t: Transfer) ! TransferError =
 ```
 
 The copy is visible, and you choose to pay for it. A `with transaction`
-handler can do the same for you later, once a handler can reach the
-implementation installed outside it, `outer` (stage 10).
+handler can do the same for you later, once a handler can sit `over`
+another and reach it through `next` (stage 10, [handlers.md](handlers.md)).
 
 ## Nothing is dropped
 
@@ -237,5 +237,6 @@ error: Frozen(AccountId(3))
   types: a stored closure writes `fn() ! ..e uses ..d`
   ([deps.md](deps.md)). A closure passed to a transparent parameter
   passes its errors to the call: `try ts.map(fn(t) => try validate(t))`.
-- ~~`with` and handlers~~ came in stage 7 too. A handler forwarding to
-  the next implementation out, `outer`, comes in stage 10.
+- ~~`with` and handlers~~ came in stage 7 too. A handler in front of
+  another, `over` it and calling `next`, comes in stage 10
+  ([handlers.md](handlers.md)).

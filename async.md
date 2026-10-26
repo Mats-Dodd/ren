@@ -49,7 +49,7 @@ xs.par_map(f)                                      // f is pure: runs on every c
 
 `Async` is a dependency like `Clock`, and these are its operations, so a
 signature says `uses Async` and the code says `Async.map`. The lambdas they
-take are transparent ([README](README.md#functions)): their errors and
+take are transparent ([README](README.md#3-functions)): their errors and
 dependencies flow into the caller.
 
 - **`map` and `each` run 64 at once by default,** and `max:` changes it.
@@ -552,7 +552,7 @@ limit, and cleanup that can't wait. Ren has none of them.
   `attempt` or `retry` inside a task.
 - **Per-core handlers** (`with per_core(cached(ttl)) over ...`), if a
   shared handler becomes a bottleneck across loops.
-- **The rest of the simulation scheduler** (stage 15): failing networks
+- **The rest of the simulation scheduler** (stage 17): failing networks
   and disks, crashes, and checking every interleaving.
 
 ## Open questions

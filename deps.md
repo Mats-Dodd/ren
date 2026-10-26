@@ -128,8 +128,9 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   type's declaration can't name one yet, so a type that keeps a closure
   takes it as a type parameter, `type Button<F> = { on_click: F }`, and a
   signature writes `Button<fn() ! ..e uses ..d>`.
-- A handler forwarding to the next implementation out, `outer`, comes
-  later (stage 10).
+- A handler in front of another implementation, declared `over` it and
+  calling it through `next`, comes in stage 10
+  ([handlers.md](handlers.md)).
 
 ## `with`
 
@@ -139,7 +140,9 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 ```
 
 - Items are installed outermost first. The innermost implementation of a
-  dependency wins. A line that ends in `,` goes on with the list on the
+  dependency wins. Stage 10 changes this: a `with` becomes a set, each
+  dependency once and in any order, and wrapping is written with `over`
+  ([handlers.md](handlers.md#a-with-is-a-set)). A line that ends in `,` goes on with the list on the
   next, indented further. That holds for any line outside brackets that
   ends in `,`, so a signature's `uses` list wraps the same way:
   `uses Clock,` then `    Console =` on the next line.
@@ -199,7 +202,8 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   `Bytes`, `File`, `Command`, `Exit`, `TestClock`, `TestProc` and the
   rest. A program's own `type Time`, `type Command` or `dep Clock` is an
   error: it chooses another name.
-- `Net` comes with `Async` in stage 12 ([runtime-io.md](runtime-io.md)).
+- `Net` comes with `Async` in stage 11 ([async.md](async.md),
+  [runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.
@@ -425,13 +429,15 @@ stage, or settled something the plan left open:
 - **A handler can't use a dependency it implements,** `Rates.usd_to`
   inside a handler for `Rates`, nor through a function it calls that
   uses `Rates`, even though its operations run with what's installed
-  outside it: reaching the next implementation out is `outer`'s (stage
-  10), and the README's section 7 already says it's an error. It's
+  outside it: reaching the implementation under it is `next`'s, through `over`
+  (stage 10), and the README's section 7 already says it's an error. It's
   checked on what the handler needs, so an arm can still install
   another `Rates`, even the same handler, `with counting_rates(r) in
   ...`, around a call that uses one.
 - **A handler's state is made where it's installed, and can't fail:**
-  the `with` that installs it isn't a call a `try` could mark.
+  the `with` that installs it isn't a call a `try` could mark. Stage 10
+  lifts this: a `with` passes on what setting up its handlers fails with
+  ([handlers.md](handlers.md#state-that-can-fail-to-start)).
 - **A handler of several dependencies has a type that lists them,**
   `Rates & RateCalls`, from the moment it's made, and it never changes.
   The order doesn't matter: `RateCalls & Rates` is the same type. A
@@ -625,8 +631,9 @@ error: `with` can't tell what `c` installs
 
 ## Later
 
-- `outer` and forwarding handlers, and the journal (stage 10).
-- `Async` and `Net` (stage 12).
+- `over`, `next`, `finally`, `with` as a set, and the journal (stage 10,
+  [handlers.md](handlers.md)).
+- `Async` and `Net` (stage 11, [async.md](async.md)).
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.

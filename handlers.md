@@ -365,10 +365,10 @@ The shape is `runtime-io.md`'s, a submission and its completion:
 
 - **Recording what the scheduler decides,** with `Async`, so a concurrent
   program replays exactly too.
-- **The flight recorder** (stage 15): keeping a journal in a ring buffer,
+- **The flight recorder** (stage 17): keeping a journal in a ring buffer,
   and deciding at the end of a request whether to keep it.
 - **Replaying production traffic against a new build,** and comparing the
   responses.
 - **`secret` types,** recorded as `<redacted>`.
-- **`arena`, with `Alloc`** (stage 13): a handler whose `finally` frees
+- **`arena`, with `Alloc`** (stage 15): a handler whose `finally` frees
   everything it allocated.

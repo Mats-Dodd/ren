@@ -212,7 +212,7 @@ The prelude is an ordinary module that every module imports implicitly.
 | Dependencies | `Clock` `Random` `Console` `Net` `Alloc` `Async` `Unsafe` |
 | Functions | `print` `dbg` `assert` |
 
-Everything else in the standard library is imported like any other module: `import std/async` gives you `async.par_map`.
+Everything else in the standard library is imported like any other module: `import std/json` gives you `json.decode`.
 
 **`print` uses `Console`.** It's an ordinary function, `Console.write(show(x))`, so calling it from code that doesn't declare `Console` is an error. Otherwise any pure function could quietly reach the outside world, and simulation and replay would stop being trustworthy.
 
@@ -377,7 +377,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Today** (stages 5a, 5b, 6, 7) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, the "two shapes" error, dependency types imported like other types, and public groups imported to run their tests. Every compiler pass is a pure function of its inputs |
 | **Stage 5b, left over** | `dbg` |
 | **Stage 13** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
-| **Stage 16** | Cached simulation-test results |
+| **Stage 17** | Cached simulation-test results |
 | **After 1.0** | `build.ren`, sandboxed tools, remote cache and execution |
 
 ---
@@ -386,4 +386,4 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 - Should modules be able to re-export imported types (`pub import`)? We're leaning no until a real need shows up.
 - How do vendored dependencies get updated? Probably `ren deps update json --from <git url>`.
-- Where does the boundary between the prelude and `std` sit? `Map` and `Set` are in the prelude, but `async.par_map` isn't. The test should be what nearly every module needs.
+- Where does the boundary between the prelude and `std` sit? `Map` and `Set` are in the prelude, but `json` isn't. The test should be what nearly every module needs.
