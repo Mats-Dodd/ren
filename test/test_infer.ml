@@ -1883,3 +1883,32 @@ let%expect_test "instantiate gives its fresh variables in variable order" =
     0 1 2 3 4
     0 1 2
     |}]
+
+let%expect_test "a use in the group at another type, and its value thrown away" =
+  (* the use is joined with what [f]'s body made it once the group is
+     done, and only then is [h]'s statement known to throw an `Int` away *)
+  check_error
+    {|
+fn f(n: Int) =
+  if n > 0 then
+    g(n)
+  1
+fn g(n: Int) = f(n)
+fn h(n: Int) =
+  f(n)
+  ()
+fn main() = ()
+|};
+  [%expect {|
+    error: `f` is used here as `fn(Int)`, but its definition makes it `fn(Int) -> Int`
+      ┌─ test.ren:5:16
+    5 │ fn g(n: Int) = f(n)
+      │                ^
+      = functions that call each other are checked at a single type
+
+    error: `f` returns `Int`, and this throws it away
+      ┌─ test.ren:7:3
+    7 │   f(n)
+      │   ^^^^
+      help: use it, or write `let _ = ...` if you mean to drop it
+    |}]

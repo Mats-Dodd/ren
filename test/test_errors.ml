@@ -1603,6 +1603,37 @@ fn main() = ()
       help: give one of them another name
     |}]
 
+let%expect_test "a tag of two shapes, learned once the group is done" =
+  (* what [a] and [b] fail with is known only once their group is: the
+     constraint solver adds each to the other's, and finds the clash *)
+  check_error
+    {|
+fn a(n: Int) -> Int = if n > 0 then try b(n - 1) else fail Bad(1)
+fn b(n: Int) -> Int =
+  if n > 2 then fail Bad(true)
+  try a(n)
+fn main() = ()
+|};
+  [%expect {|
+    error: `Bad` has two shapes here
+      ┌─ test.ren:1:41
+    1 │ fn a(n: Int) -> Int = if n > 0 then try b(n - 1) else fail Bad(1)
+      │                                         ^^^^^^^^
+      = from the signature: `Bad(Int)`
+      = from `b`: `Bad(Bool)`
+      = a tag is its name and its payload's types, so these are two errors with one name
+      help: rename one where it comes in: `try match b(n - 1)` with the arm `fail Bad => fail BBad`
+
+    error: `Bad` has two shapes here
+      ┌─ test.ren:4:7
+    4 │   try a(n)
+      │       ^^^^
+      = from the `fail` on line 3: `Bad(Bool)`
+      = from `a`: `Bad(Int)`
+      = a tag is its name and its payload's types, so these are two errors with one name
+      help: rename one where it comes in: `try match a(n)` with the arm `fail Bad => fail ABad`
+    |}]
+
 let%expect_test "a function passed where its tag has another shape" =
   types
     {|
