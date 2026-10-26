@@ -276,8 +276,9 @@ needs, and the solver decides them like this:
 - **To a fixpoint.** A use or a value thrown away is decided once. An
   inclusion, or a copy of what an implementation needs, is a worklist
   item: whenever the row it adds from gains a label, it's woken and adds
-  that too. Rows only ever gain labels, and each has finitely many to
-  gain, so this ends. A `with` that installs is decided once, innermost
+  that too, in the next round through those woken, in the order they were
+  met. Rows only ever gain labels, and each has finitely many to gain, so
+  this ends. A `with` that installs is decided once, innermost
   first, after the copies are brought up to date, since what its body
   uses includes them.
 - **Reporting every failure, and changing nothing by one.** Each

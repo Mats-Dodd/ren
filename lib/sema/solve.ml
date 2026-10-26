@@ -589,34 +589,19 @@ let rows_due env ~declaring ds =
 
 (* Decide [items], in the order they were met, until none is [awake]:
    [decide] does one, and says whether it did anything. Doing one can wake
-   others, any whose source gained a label: one met after it is done later
-   in the same round, and one met before it in the next, so each round
-   goes through them in order. *)
+   others, any whose source gained a label. Each round goes through those
+   still to do in order, and the next round takes those that are awake
+   once it's done, until a round does nothing. Looking for them after
+   every one done, not once a round, was quadratic: a group of thousands
+   of `try f(i)` took seconds. *)
 let worklist ~awake ~decide items =
-  (* arrays, whose cells can be changed in place: [queued.(k)] says
-     whether the [k]th is waiting to be done *)
-  let items = Array.of_list items in
-  let queued = Array.make (Array.length items) true in
-  (* [now]: what this round still has to do, sorted; [next]: what the
-     next round does *)
-  let rec round now next =
-    match (now, next) with
-    | [], [] -> ()
-    | [], next -> round (List.sort compare next) []
-    | k :: now, next ->
-        queued.(k) <- false;
-        (* if it did something, wake each that has something to do now *)
-        let woken = ref [] in
-        if decide items.(k) then
-          Array.iteri
-            (fun j i ->
-              if (not queued.(j)) && awake i then woken := j :: !woken)
-            items;
-        List.iter (fun j -> queued.(j) <- true) !woken;
-        let later, again = List.partition (fun j -> j > k) !woken in
-        round (List.merge compare now (List.sort compare later)) (again @ next)
+  let rec round todo =
+    (* whether any did something: [List.fold_left] carries it through *)
+    let did = List.fold_left (fun did i -> decide i || did) false todo in
+    if did then
+      match List.filter awake items with [] -> () | todo -> round todo
   in
-  round (List.init (Array.length items) Fun.id) []
+  round items
 
 (* The copies among [cs], decided until none has anything to add. *)
 let copies_of env cs =

@@ -139,7 +139,9 @@ let add_failed env ~loc ~here ~sources:(sources, elsewhere) ~fix ~before errs
    with two shapes is reported: [here] says where the new one comes from,
    and [sources] where the old one may have, for the message
    (module-build.md, "Error tags have no home"); [fix] is the help, given
-   the tag. *)
+   the tag. [sources] is a function, called only for the message: finding
+   them goes through every call the function has made so far, which for
+   every call would be quadratic. *)
 let add_errors env ~loc ~here ~sources ~fix errs into =
   (* the labels already there, before they're unified with the new ones *)
   let before = fst (row_parts into) in
@@ -153,14 +155,14 @@ let add_errors env ~loc ~here ~sources ~fix errs into =
   with
   | Ok () -> ()
   | Error failure ->
-      add_failed env ~loc ~here ~sources ~fix ~before errs failure
+      add_failed env ~loc ~here ~sources:(sources ()) ~fix ~before errs failure
 
 (* Add [errs] to [into] by inclusion (see [inclusion]): its labels now,
    and what it learns later, once the group is done, by the constraint
    solver (solve.ml). [without] are tags it doesn't pass on, and
    [sources] gives the [sources] of [add_errors] when it's called. *)
 let include_errors env cx ~loc ~here ~sources ~fix ?without:handled errs into =
-  add_errors env ~loc ~here ~sources:(sources ()) ~fix
+  add_errors env ~loc ~here ~sources ~fix
     (match handled with Some names -> without names errs | None -> errs)
     into;
   defer env

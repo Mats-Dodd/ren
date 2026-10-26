@@ -27,13 +27,13 @@ val sources_later :
 
 (* Add the errors of the first row, what's new here, to the second. One
    error with two shapes is reported: [here] says where the new one comes
-   from, [sources] where the old one may have, and [fix] is the help, given
-   the tag. *)
+   from, [sources] where the old one may have, read only then, and [fix]
+   is the help, given the tag. *)
 val add_errors :
   env ->
   loc:Loc.t ->
   here:Infer_msg.origin ->
-  sources:source list * Infer_msg.origin ->
+  sources:(unit -> source list * Infer_msg.origin) ->
   fix:(string -> string) ->
   Types.row ->
   Types.row ->
