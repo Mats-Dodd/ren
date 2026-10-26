@@ -1149,7 +1149,6 @@ let settle_impls env =
       | [] -> ()
       | extra ->
           let op = env.names o.idep ^ "." ^ o.iop in
-          let shown = and_list (List.map (show_label pr) extra) in
           (* where it fails: the first call or `fail` in the lambda's body
              that brings in one of [extra] (a `try`'s call with its
              `try`), or else the whole body, or what's given if it isn't a
@@ -1178,7 +1177,7 @@ let settle_impls env =
             | Lambda (_, b) -> Option.value (site b) ~default:b
             | _ -> o.ivalue
           in
-          let help =
+          let fix =
             match (body.kind, extra, o.ideclared) with
             | Try ({ kind = Call (f, _); _ } as call), [ l ], d :: _ ->
                 (* `try match` passes on what the arms don't handle, if the
@@ -1192,56 +1191,31 @@ let settle_impls env =
                       || match row_end errs with RSkol _ -> true | _ -> false)
                   | _ -> true
                 in
-                sprintf "map it: `%smatch %s` with the arm `fail %s => fail %s`"
-                  (if more then "try " else "")
-                  (Option.value (env.source call) ~default:"...")
-                  l.name d.name
-            | Fail _, _, [] ->
-                sprintf "`%s` can't fail: give a value here instead" op
-            | Fail _, _, d :: _ ->
-                sprintf "fail with what `%s` can instead: `fail %s`" op d.name
-            | _, l :: _, ds when not (is_lambda o.ivalue) -> (
+                Map_call
+                  {
+                    try_ = more;
+                    call = env.source call;
+                    tag = l.name;
+                    into = d.name;
+                  }
+            | Fail _, _, [] -> Give_value
+            | Fail _, _, d :: _ -> Fail_instead d.name
+            | _, l :: _, ds when not (is_lambda o.ivalue) ->
                 (* a function given by name: there's no inside to map in *)
-                let given =
-                  match env.source o.ivalue with
-                  | Some s -> sprintf "`%s`" s
-                  | None -> "it"
-                in
-                match ds with
-                | [] ->
-                    sprintf
-                      "give a lambda that calls %s and handles what it fails \
-                       with, with `match` and `fail` arms"
-                      given
-                | d :: _ ->
-                    sprintf
-                      "give a lambda that calls %s and maps what it fails \
-                       with, with `match` and `fail` arms, to what `%s` can: \
-                       `fail %s => fail %s`"
-                      given op l.name d.name)
-            | _, _, [] ->
-                "handle what it fails with inside it, with `match` and `fail` \
-                 arms"
-            | _, _, d :: _ ->
-                sprintf
-                  "map what it fails with inside it, with `match` and `fail` \
-                   arms, to what it can: `fail %s`"
-                  d.name
+                Wrap
+                  {
+                    given = env.source o.ivalue;
+                    tag = l.name;
+                    into = (match ds with [] -> None | d :: _ -> Some d.name);
+                  }
+            | _, _, [] -> Handle_inside
+            | _, _, d :: _ -> Map_inside d.name
           in
           report env
-            (Diag.make body.loc
-               ~says:(sprintf "fails with %s" shown)
-               ~notes:
-                 [
-                   (match o.ideclared with
-                   | [] -> sprintf "`%s` can't fail" op
-                   | ds ->
-                       sprintf "`%s` can fail only with %s" op
-                         (and_list (List.map (fun (l : label) -> l.name) ds)));
-                 ]
-               ~help
-               (sprintf "this implementation can fail with %s, and `%s` can't"
-                  shown op)));
+            (impl_fails_more body.loc ~op
+               ~shown:(and_list (List.map (show_label pr) extra))
+               ~declared:(List.map (fun (l : label) -> l.name) o.ideclared)
+               fix));
       (* then it's what the operation declares, whose errors' payloads it
          has to agree with, and no more. A row still open may be a
          parameter's, `try f()`, which then can fail with what the
@@ -1256,43 +1230,21 @@ let settle_impls env =
             | _ -> List.find_map at (Ast.children e)
           in
           report env
-            (Diag.make
+            (impl_other_shape
                (Option.value (at o.ivalue) ~default:o.ivalue.loc)
-               ~notes:
-                 [
-                   sprintf "`%s.%s` declares `%s`'s payload as `%s`"
-                     (env.names o.idep) o.iop name
-                     (show_label pr
-                        (List.find
-                           (fun (l : label) -> l.name = name)
-                           o.ideclared));
-                 ]
-               ~help:
-                 (sprintf "fail with `%s` as the operation declares it" name)
-               (sprintf "this implementation fails with a different `%s`" name))
+               ~op:(env.names o.idep ^ "." ^ o.iop)
+               ~tag:name
+               ~shape:
+                 (show_label pr
+                    (List.find (fun (l : label) -> l.name = name) o.ideclared)))
       | Unify.Mismatch | Unify.Infinite -> (
           match row_skolem o.ierrs with
           | Some (_, n) ->
               report env
-                (Diag.make o.ivalue.loc
-                   ~notes:
-                     [
-                       (match o.ideclared with
-                       | [] ->
-                           sprintf "`%s.%s` can't fail" (env.names o.idep) o.iop
-                       | ds ->
-                           sprintf "`%s.%s` can fail only with %s"
-                             (env.names o.idep) o.iop
-                             (and_list
-                                (List.map (fun (l : label) -> l.name) ds)));
-                     ]
-                   ~help:
-                     "handle what it passes on inside it, with `match` and \
-                      `fail` arms"
-                   (sprintf
-                      "this implementation can fail with anything `..%s` \
-                       stands for, and `%s.%s` can't"
-                      n (env.names o.idep) o.iop))
+                (impl_fails_named o.ivalue.loc
+                   ~op:(env.names o.idep ^ "." ^ o.iop)
+                   ~declared:(List.map (fun (l : label) -> l.name) o.ideclared)
+                   n)
           | None -> ()));
       close_row o.ierrs)
     (List.rev env.impl_ops);
@@ -1357,17 +1309,8 @@ let value_order env (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
             reported :=
               List.filter (fun m -> value_named m <> None) chain @ !reported;
             report env
-              (Diag.make v.name.loc
-                 ~notes:
-                   [
-                     "an associated value is made once, when the program \
-                      starts, so it can't need itself to be made";
-                   ]
-                 ~help:
-                   (if way = [ n ] then "make it without using itself"
-                    else "make one of them without the other")
-                 (sprintf "`%s` is made from itself: %s" (Path.local n)
-                    (String.concat " → " (List.map Path.local chain))))
+              (made_from_itself v.name.loc (Path.local n)
+                 (List.map Path.local chain))
         | None -> ())
     values;
   (* each value after every one it reaches: a depth-first walk, which adds
@@ -1615,6 +1558,61 @@ let check_test env r ~fns ~schemes (t : Test_items.test) (f : fn_def) ty cx =
         at = t.loc;
       }
 
+(* What a public function without `->` would write as its result, which
+   is [found], printed with [pr]. A handler of several dependencies has a
+   type of its own, named after it, `counting_rates uses Clock`, which
+   can't be written: if one is in [found], the first by name, it's written
+   as the first dependency it implements. *)
+let result_help env pr found =
+  let rec handlers t =
+    match repr t with
+    | TCon (p, args) ->
+        (match Hashtbl.find_opt env.types p with
+          | Some { body = Handler deps; _ } -> [ (type_name env p, deps) ]
+          | _ -> [])
+        @ List.concat_map handlers args
+    | TFun (ps, r, e, u) ->
+        List.concat_map handlers (r :: param_tys ps) @ in_row e @ in_row u
+    | TErrors r | TUses r -> in_row r
+    | TVar _ | TSkol _ | TError -> []
+  and in_row r =
+    List.concat_map
+      (fun (l : label) -> List.concat_map handlers l.payload)
+      (fst (row_parts r))
+  in
+  match List.sort compare (handlers found) with
+  | (h, d :: _) :: _ -> (
+      match repr found with
+      | TCon (p, _) when type_name env p = h -> Say_dep (type_name env d)
+      | _ ->
+          (* [found] with [h] written as [d] everywhere *)
+          let rec rename t =
+            match repr t with
+            | TCon (p, args) ->
+                TCon
+                  ((if type_name env p = h then d else p), List.map rename args)
+            | TFun (ps, r, e, u) ->
+                TFun
+                  ( List.map
+                      (fun (p : Types.param) -> { p with ty = rename p.ty })
+                      ps,
+                    rename r,
+                    rename_row e,
+                    rename_row u )
+            | TErrors r -> TErrors (rename_row r)
+            | TUses r -> TUses (rename_row r)
+            | t -> t
+          and rename_row r =
+            match repr_row r with
+            | RExtend (l, rest) ->
+                RExtend
+                  ( { l with payload = List.map rename l.payload },
+                    rename_row rest )
+            | r -> r
+          in
+          Say_dep_inside { handler = h; written = show pr (rename found) })
+  | _ -> Write_found
+
 (* Infer every function's type, and return each function's type scheme and
    the types of its expressions, in canonical form. [imports] are the
    interfaces of the modules it imports, whose functions it can call, and
@@ -1860,80 +1858,14 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
                 explain
                   ~notes:
                     [
-                      (if is_value f then
-                         sprintf "`%s` is declared to have the type `%s`"
-                       else sprintf "`%s` is declared to return `%s`")
-                        (Ast.fn_name f)
+                      declared_type ~value:(is_value f) (Ast.fn_name f)
                         (show (printer env) ret);
                     ]
                   ()
             | None when f.pub && not (is_value f) ->
-                explain
-                  ~notes:[ "a public function without `->` returns `Unit`" ]
-                  ~help:(fun found _ ->
-                    (* the type of a handler of several dependencies,
-                       `counting_rates uses Clock`, is named after it, and
-                       can't be written: is one of the names in what's
-                       found a handler's? *)
-                    let ident c =
-                      c = '_' || c = '.'
-                      || (c >= 'a' && c <= 'z')
-                      || (c >= 'A' && c <= 'Z')
-                      || (c >= '0' && c <= '9')
-                    in
-                    let words =
-                      String.split_on_char ' '
-                        (String.map (fun c -> if ident c then c else ' ') found)
-                    in
-                    let handler =
-                      Hashtbl.to_seq_values env.types
-                      |> List.of_seq
-                      |> List.filter_map (fun (td : Iface.type_decl) ->
-                          match td.body with
-                          | Handler deps
-                            when List.mem (type_name env td.path) words ->
-                              Some (type_name env td.path, deps)
-                          | _ -> None)
-                      |> List.sort compare
-                      |> function
-                      | h :: _ -> Some h
-                      | [] -> None
-                    in
-                    match handler with
-                    | Some (h, d :: _) when List.hd words = h ->
-                        sprintf
-                          "say which of its dependencies it gives an \
-                           implementation of, `-> %s`: the type of a handler \
-                           of several can't be written"
-                          (type_name env d)
-                    | Some (h, d :: _) ->
-                        (* [found] with [h] written as [d], where [h] is a
-                           whole word *)
-                        let n = String.length h in
-                        let b = Buffer.create (String.length found) in
-                        let rec go i =
-                          if i >= String.length found then ()
-                          else if
-                            i + n <= String.length found
-                            && String.sub found i n = h
-                            && (i = 0 || not (ident found.[i - 1]))
-                            && (i + n = String.length found
-                               || not (ident found.[i + n]))
-                          then (
-                            Buffer.add_string b (type_name env d);
-                            go (i + n))
-                          else (
-                            Buffer.add_char b found.[i];
-                            go (i + 1))
-                        in
-                        go 0;
-                        sprintf
-                          "say which of its dependencies `%s` gives an \
-                           implementation of, `-> %s`: the type of a handler \
-                           of several can't be written"
-                          h (Buffer.contents b)
-                    | Some (_, []) | None ->
-                        sprintf "add `-> %s` to the signature" found)
+                explain ~notes:[ returns_unit ]
+                  ~help_of:(fun pr found ->
+                    write_result (show pr found) (result_help env pr found))
                   ()
             | None -> plain
           in
@@ -1949,11 +1881,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
          type its own body gave it *)
       List.iter
         (fun j ->
-          let msg f x =
-            sprintf
-              "`%s` is used here as `%s`, but its definition makes it `%s`"
-              j.jname f x
-          in
+          let msg = used_as j.jname in
           let expected = Hashtbl.find env.globals j.target in
           match (repr j.used, repr expected) with
           | TFun ([], used, _, _), TFun ([], made, _, _)
@@ -1961,18 +1889,10 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
               (* an associated value, a function of no parameters (ast.ml),
                  is used as its result, which is what's shown *)
               unify_at env j.jloc ~found:used ~expected:made ~msg
-                ~notes:
-                  [
-                    "values and functions that need each other are checked at \
-                     a single type";
-                  ]
+                ~notes:[ group_type ~values:true ]
           | _ ->
               unify_at env j.jloc ~found:j.used ~expected ~msg
-                ~notes:
-                  [
-                    "functions that call each other are checked at a single \
-                     type";
-                  ])
+                ~notes:[ group_type ~values:false ])
         (List.rev env.joins);
       env.joins <- [];
       dropped_values env;
@@ -2029,24 +1949,9 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
               let declared =
                 List.find (fun (p : ident) -> p.name = t) o.tparams
               in
-              ignore
-              @@ fail env f.name.loc
-                   ~labels:[ (declared.loc, sprintf "`%s` is declared here" t) ]
-                   ~notes:
-                     [
-                       sprintf
-                         "`%s` and `%s` call each other, and functions that \
-                          call each other are checked at a single type"
-                         (Ast.fn_name f) (Ast.fn_name o);
-                     ]
-                   ~help:
-                     (sprintf
-                        "remove the type parameter from `%s`, or break the \
-                         cycle"
-                        (Ast.fn_name o))
-                   (sprintf
-                      "`%s` would have to use `%s`, the type parameter of `%s`"
-                      (Ast.fn_name f) t (Ast.fn_name o))
+              report env
+                (others_param f.name.loc ~fn:(Ast.fn_name f)
+                   ~other:(Ast.fn_name o) ~param:t ~declared:declared.loc)
           | [] -> ());
           let row_skolems =
             List.filter_map
@@ -2066,13 +1971,9 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
             | TFun (_, t, _, _) as scheme ->
                 let pr = printer env in
                 reserve pr scheme;
-                ignore
-                @@ fail env f.name.loc
-                     ~help:
-                       (sprintf "write `pub let %s: %s`" f.name.name (show pr t))
-                     ~notes:[ "public values spell out their type" ]
-                     (sprintf "the public value `%s` has no type"
-                        (Ast.fn_name f))
+                report env
+                  (untyped_value f.name.loc ~name:f.name.name
+                     ~fn:(Ast.fn_name f) (show pr t))
             | _ -> assert false)
         setups;
       (* public functions spell out their full contract *)
@@ -2087,18 +1988,9 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
                       let pr = printer env in
                       reserve pr scheme;
                       let name = p.pname.ident in
-                      ignore
-                      @@ fail env name.loc
-                           ~help:
-                             (sprintf "write `%s: %s`" name.name (show pr t.ty))
-                           ~notes:
-                             [
-                               "public functions spell out their full signature";
-                             ]
-                           (sprintf
-                              "the parameter `%s` of the public function `%s` \
-                               has no type"
-                              name.name (Ast.fn_name f))))
+                      report env
+                        (untyped_param name.loc ~name:name.name
+                           ~fn:(Ast.fn_name f) (show pr t.ty))))
                   f.params ps
             | _ -> assert false)
         setups)
@@ -2138,15 +2030,8 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
         match (own, repr (Hashtbl.find schemes (path f))) with
         | Some ret, _ | None, TFun (_, ret, _, _) ->
             unify_at env (last f.body).loc ~found:ret ~expected:unit
-              ~msg:(fun found _ ->
-                sprintf "a test's body is `Unit`, but this is %s"
-                  (article found))
-              ~notes:[ "a test passes unless it panics or fails" ]
-              ~help:
-                (if repr ret = bool then "to check it, write `assert` before it"
-                 else
-                   "check it with `assert`, or write `let _ = ...` if you mean \
-                    to drop it")
+              ~msg:test_body ~notes:[ test_passes ]
+              ~help:(test_body_help ~is_bool:(repr ret = bool))
         | _ -> ())
     fns;
   (match
@@ -2159,15 +2044,9 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
        entry
    with
   | None -> ()
-  | Some (file, None) ->
-      ignore
-        (fail env (Loc.point ~file 1 1)
-           ~help:"add `fn main() = ...`, which is where the program starts"
-           "this program has no `main` function")
+  | Some (file, None) -> report env (no_main (Loc.point ~file 1 1))
   | Some (_, Some f) when f.params <> [] ->
-      ignore
-        (fail env (List.hd f.params).pname.ident.loc
-           ~help:"remove the parameters" "`main` can't take parameters")
+      report env (main_params (List.hd f.params).pname.ident.loc)
   | Some (_, Some f) ->
       check_main env r ~fns ~schemes f
         (Hashtbl.find schemes (path f))

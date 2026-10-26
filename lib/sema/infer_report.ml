@@ -60,16 +60,19 @@ let rec binders (p : pattern) =
 (* How to explain a mismatch with an expected type, passed down along with
    it: [msg] words the error, [help] suggests a fix and [labels] point at
    other code, each given both types printed (the one found, then the one
-   expected); [notes] say where the expectation comes from. *)
+   expected); [notes] say where the expectation comes from. A help that
+   the printed types don't tell, [help_of], is given the type found, and
+   the printer the message prints it with. *)
 type why = {
   msg : (string -> string -> string) option;
   notes : string list;
   help : (string -> string -> string) option;
+  help_of : (Types.printer -> Types.ty -> string) option;
   labels : string -> string -> (Loc.t * string) list;
 }
 
-let explain ?msg ?(notes = []) ?help ?(labels = fun _ _ -> []) () =
-  { msg; notes; help; labels }
+let explain ?msg ?(notes = []) ?help ?help_of ?(labels = fun _ _ -> []) () =
+  { msg; notes; help; help_of; labels }
 
 let plain = explain ()
 
@@ -93,7 +96,11 @@ let unifies env why loc ~found ~expected =
           (pr, f, show pr expected)
       in
       let msg = Option.map (fun m -> m f x) why.msg in
-      let help = Option.map (fun h -> h f x) why.help in
+      let help =
+        match why.help_of with
+        | Some h -> Some (h pr found)
+        | None -> Option.map (fun h -> h f x) why.help
+      in
       (* two implementations of one dependency that need different things,
          themselves or inside the types they're part of, `Box<Rates>` *)
       let rec impls found expected =

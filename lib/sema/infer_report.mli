@@ -41,11 +41,14 @@ val binders : Ast.Resolved.pattern -> (Ast.binder * Loc.t) list
 (* How to explain a mismatch with an expected type: [msg] words the error,
    [help] suggests a fix and [labels] point at other code, each given both
    types printed (the one found, then the one expected); [notes] say where
-   the expectation comes from. *)
+   the expectation comes from. [help_of], if it's given, is the help
+   instead, worked out from the type found, printed with the printer
+   given. *)
 type why = {
   msg : (string -> string -> string) option;
   notes : string list;
   help : (string -> string -> string) option;
+  help_of : (Types.printer -> Types.ty -> string) option;
   labels : string -> string -> (Loc.t * string) list;
 }
 
@@ -53,6 +56,7 @@ val explain :
   ?msg:(string -> string -> string) ->
   ?notes:string list ->
   ?help:(string -> string -> string) ->
+  ?help_of:(Types.printer -> Types.ty -> string) ->
   ?labels:(string -> string -> (Loc.t * string) list) ->
   unit ->
   why

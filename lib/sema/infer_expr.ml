@@ -133,8 +133,8 @@ and check env cx ?(why = plain) (e : expr) expected =
         (lambda_cx cx params ps ~errs ~uses)
         body eret
         ~why:
-          (explain ~notes:why.notes ?help:why.help ~labels:why.labels
-             ~msg:lambda_produces ());
+          (explain ~notes:why.notes ?help:why.help ?help_of:why.help_of
+             ~labels:why.labels ~msg:lambda_produces ());
       let t = TFun (ps, eret, errs, uses) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)

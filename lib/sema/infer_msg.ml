@@ -1417,6 +1417,105 @@ let not_installed loc runner ~dep ~short ~real ~maker ~declared ~needs ~why =
     ~notes:(notes @ List.map withheld why)
     ~help ~says:only missing
 
+(* ---- signatures (infer_top.ml) ---- *)
+
+(* Where a function's body's type comes from: what's declared, [shown],
+   as its type if it's an associated value ([value]), or its result. *)
+let declared_type ~value name shown =
+  if value then sprintf "`%s` is declared to have the type `%s`" name shown
+  else sprintf "`%s` is declared to return `%s`" name shown
+
+let returns_unit = "a public function without `->` returns `Unit`"
+
+(* What a public function without `->` would write as its result, its
+   body's type [found], for the help. *)
+type result_help =
+  | Write_found  (** [found] itself *)
+  | Say_dep of string
+      (** [found] is a handler of several dependencies, whose type can't be
+          written: one of them, this one *)
+  | Say_dep_inside of { handler : string; written : string }
+      (** a handler of several dependencies is inside [found]: [found] with it
+          written as one of them *)
+
+let write_result found = function
+  | Write_found -> sprintf "add `-> %s` to the signature" found
+  | Say_dep d ->
+      sprintf
+        "say which of its dependencies it gives an implementation of, `-> %s`: \
+         the type of a handler of several can't be written"
+        d
+  | Say_dep_inside { handler; written } ->
+      sprintf
+        "say which of its dependencies `%s` gives an implementation of, `-> \
+         %s`: the type of a handler of several can't be written"
+        handler written
+
+(* [name], a function of a group that uses another of it, is used as [f]
+   but made [x]. *)
+let used_as name f x =
+  sprintf "`%s` is used here as `%s`, but its definition makes it `%s`" name f x
+
+(* Why it has to be one type: the group's functions, or its associated
+   values and functions, are checked at one. *)
+let group_type ~values =
+  if values then
+    "values and functions that need each other are checked at a single type"
+  else "functions that call each other are checked at a single type"
+
+(* [fn] would have to use [param], the type parameter of [other], which
+   calls it, and is declared at [declared]. *)
+let others_param loc ~fn ~other ~param ~declared =
+  Diag.make loc
+    ~labels:[ (declared, sprintf "`%s` is declared here" param) ]
+    ~notes:
+      [
+        sprintf
+          "`%s` and `%s` call each other, and functions that call each other \
+           are checked at a single type"
+          fn other;
+      ]
+    ~help:
+      (sprintf "remove the type parameter from `%s`, or break the cycle" other)
+    (sprintf "`%s` would have to use `%s`, the type parameter of `%s`" fn param
+       other)
+
+(* The public value [fn], named [name] where it's declared, without a
+   type: it's [shown]. *)
+let untyped_value loc ~name ~fn shown =
+  Diag.make loc
+    ~help:(sprintf "write `pub let %s: %s`" name shown)
+    ~notes:[ "public values spell out their type" ]
+    (sprintf "the public value `%s` has no type" fn)
+
+(* The parameter [name] of the public function [fn], without a type: it's
+   [shown]. *)
+let untyped_param loc ~name ~fn shown =
+  Diag.make loc
+    ~help:(sprintf "write `%s: %s`" name shown)
+    ~notes:[ "public functions spell out their full signature" ]
+    (sprintf "the parameter `%s` of the public function `%s` has no type" name
+       fn)
+
+(* A test's last line, of the type [f], which isn't `Unit`; [is_bool]
+   says whether it's a `Bool`, which `assert` would check. *)
+let test_body f _ =
+  sprintf "a test's body is `Unit`, but this is %s" (article f)
+
+let test_passes = "a test passes unless it panics or fails"
+
+let test_body_help ~is_bool =
+  if is_bool then "to check it, write `assert` before it"
+  else "check it with `assert`, or write `let _ = ...` if you mean to drop it"
+
+(* A program without `main`, or whose `main` takes parameters. *)
+let no_main loc =
+  Diag.make loc ~help:"add `fn main() = ...`, which is where the program starts"
+    "this program has no `main` function"
+
+let main_params loc =
+  Diag.make loc ~help:"remove the parameters" "`main` can't take parameters"
+
 (* ---- dependencies ---- *)
 
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
