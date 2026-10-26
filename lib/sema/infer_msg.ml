@@ -462,6 +462,9 @@ type behind =
   | Other_handler of { handler : string; deps : string list; dep : string }
       (** a handler of [deps], where an implementation of [dep], which isn't one
           of them, is wanted *)
+  | Taken_elsewhere of { handler : string; deps : string list; other : string }
+      (** a value a handler of [deps] was given to, which something else takes
+          as [other], one of them, passed where another of them is wanted *)
 
 let behind_note = function
   | Needs_more { ty; alone } ->
@@ -533,6 +536,18 @@ let behind_note = function
           "give an implementation of `%s` here: a `%s { ... }`, or a handler \
            for `%s`"
           dep dep dep )
+  | Taken_elsewhere { handler; deps; other } ->
+      ( [
+          sprintf
+            "this holds a `%s`, which implements %s, but something else here \
+             takes it as just `%s`, so it's that everywhere: a handler of \
+             several stays its own only where nothing says which it is"
+            handler (and_list deps) other;
+        ],
+        sprintf
+          "make another for this one, `%s(...)`, or leave out what says it's a \
+           `%s`"
+          handler other )
 
 (* A mismatch between [found] and [expected], printed as [f] and [x], at
    [loc]: worded by [msg] if the caller has a way to say it, and explained

@@ -14,9 +14,10 @@ val as_one : env -> Types.ty -> Types.ty -> (Path.t * Types.ty) option
 (* The type an expression of the first type has where a value of the
    second is wanted, which is known: a handler of several dependencies,
    where one of theirs is wanted, is taken as that one, which lowering is
-   told. *)
+   told, and so is a variable one was given to, once the solver says
+   that's what it is, explaining a mismatch then with [why]. *)
 val taken_as :
-  env -> ctx -> Ast.Resolved.expr -> Types.ty -> Types.ty -> Types.ty
+  env -> ctx -> why -> Ast.Resolved.expr -> Types.ty -> Types.ty -> Types.ty
 
 (* Decide a coercion the solver was left, now that what's wanted is known
    or never will be. *)

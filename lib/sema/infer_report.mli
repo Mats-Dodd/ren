@@ -61,10 +61,18 @@ val plain : why
 val settle : env -> (Types.tvar ref -> bool) -> unit
 
 (* Report that [found] (what the code has) didn't unify with [expected]
-   (what it needs), at the location given, explained with [why]: the
-   exception is how unifying them failed (Unify). *)
+   (what it needs), at the location given, explained with [why], and by
+   [behind] before what's found inside the two types: the exception is how
+   unifying them failed (Unify). *)
 val mismatch :
-  env -> why -> Loc.t -> found:Types.ty -> expected:Types.ty -> exn -> unit
+  env ->
+  why ->
+  Loc.t ->
+  ?behind:Infer_msg.behind list ->
+  found:Types.ty ->
+  expected:Types.ty ->
+  exn ->
+  unit
 
 (* Unify [found] with [expected], and say whether that worked; if not, the
    mismatch is reported, as [mismatch] does. *)

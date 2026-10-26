@@ -473,12 +473,21 @@ Where the work forced a change to the plan above:
   rejected, and a test pinned that ("where nothing says which, a handler
   of several is its own"). A `then` branch that can't be what the `else`
   is is now blamed itself, "this `then` branch is ...", since the fix
-  goes there. Passed as an argument where one of the handler's
-  dependencies is wanted, it's that one there and then, needing what the
-  handler needs, which is copied where it's passed as for a handler
-  whose type is known (`taken_as`): joined to what the callee uses, it
-  would have been what a `with` of it around the call uses, and the
-  dependency the `with` installs would have been needed outside it.
+  goes there. A variable a handler was given to, passed as an argument
+  where one of the handler's dependencies is wanted, is taken as that
+  one at that argument only, needing what the handler needs, which is
+  copied where it's passed as for a handler whose type is known
+  (`taken_as`): joined to what the callee uses, it would have been what a
+  `with` of it around the call uses, and the dependency the `with`
+  installs would have been needed outside it. The variable itself is left
+  to the solver, so another use of the same value can take it as another
+  of the dependencies, `run(h) + run2(h)`, or install them all, `with h
+  in`. Whether the argument is taken as that one, is it already, or
+  can't be, since something else said it's another, is a coercion of its
+  own, decided after the variable's. A first fix made the variable that
+  one dependency everywhere, which rejected programs that compiled before
+  R3 (test_deps.ml, "a value holding a handler of several, taken as each
+  of them").
 - **R3, rows that hold a label twice (B4).** A call joins what its callee
   uses to what its caller does by unifying the two rows, which works as
   long as they don't already end in the same variable. In `fn twice(k) =

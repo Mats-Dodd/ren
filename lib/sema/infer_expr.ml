@@ -667,7 +667,7 @@ and check_args env cx ~name ?callee ps args =
               (* an implementation that needs less than the parameter
                  allows will do, and so will a handler of several
                  dependencies, one of them the parameter's *)
-              let t = taken_as env cx a (infer env cx a) p.ty in
+              let t = taken_as env cx why a (infer env cx a) p.ty in
               ignore
                 (unifies env why (result_loc a) ~found:(widen env ~loc:a.loc t)
                    ~expected:p.ty)

@@ -128,7 +128,7 @@ let settle env is =
 
 (* Report that [found] (what the code has) didn't unify with [expected]
    (what it needs), which failed with [failure], explained with [why]. *)
-let mismatch env why loc ~found ~expected failure =
+let mismatch env why loc ?(behind = []) ~found ~expected failure =
   match failure with
   | Unify.Infinite ->
       let pr = printer env in
@@ -278,7 +278,7 @@ let mismatch env why loc ~found ~expected failure =
       report env
         (mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
            ~found ~expected ~f ~x
-           (needs_more @ errors @ private_ @ handler))
+           (behind @ needs_more @ errors @ private_ @ handler))
 
 (* Unify [found] with [expected], and say whether that worked. The message
    shows a handler given to a variable in either as that handler, as it

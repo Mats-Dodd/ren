@@ -3150,12 +3150,13 @@ fn main() uses Console =
     |}]
 
 let%expect_test "a handler of several passed on inside its own `with`" =
-  (* what's in `o` is a `Rates`, which only `run(r)`, inside the `with r`,
-     says. What `r` needs is then copied where it's passed, as it is for a
-     handler whose type is known: joined to what `run` uses, it would be
-     what the `with`'s body uses, `Rates` included, and `main` would have
-     to install the `Rates` the `with` installs. Only `Rates` is
-     installed, so `k` still gets `RateCalls` from outside *)
+  (* nothing says what's in `o` is one of the handler's dependencies, so
+     it's the handler itself: `with r` installs both, and `run(r)`, inside
+     it, takes it as a `Rates` there. What `r` needs is then copied where
+     it's passed, as it is for a handler whose type is known: joined to
+     what `run` uses, it would be what the `with`'s body uses, `Rates`
+     included, and `main` would have to install the `Rates` the `with`
+     installs. `k` gets nothing from outside *)
   let src =
     {|
 pub dep Rates =
@@ -3194,7 +3195,7 @@ fn main() uses Console =
       count: fn() -> Int
     handler counting_rates(rate: Int) for Rates, RateCalls
     fn run(r: Rates) -> Int
-    fn k() -> Int uses RateCalls
+    fn k() -> Int
     fn ap2<T, U>(x: T, f: fn(T) -> U uses ..d) -> U uses ..d
     fn main() uses Console
     |}];
@@ -3203,6 +3204,84 @@ fn main() uses Console =
     12
     6
     ()
+    |}]
+
+let%expect_test "a value holding a handler of several, taken as each of them" =
+  (* passing a value a handler of several was given to, where one of its
+     dependencies is wanted, takes it as that one there, and no more: the
+     value is still the handler, so another use can take it as the other
+     dependency, or install both with `with`. Each of these compiled
+     before R3, and R3's first fix rejected them, having made the value
+     that one dependency everywhere *)
+  run
+    (rates
+   ^ {|
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn run2(c: RateCalls) -> Int = with c in RateCalls.count()
+
+fn id(x) = x
+
+fn ap(x, f) = f(x)
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(h) => print(run(h) + run2(h))
+    None => print(0)
+  let h = id(counting_rates(3))
+  print(run(h))
+  with h in
+    print(RateCalls.count())
+  let hs = [counting_rates(4), counting_rates(5)]
+  let a = hs[1]
+  print(run(a))
+  with a in
+    print(RateCalls.count())
+  let b = if hs.len() > 1 then counting_rates(6) else counting_rates(7)
+  print(run(b))
+  with b in
+    print(Rates.usd_to(1) + RateCalls.count())
+  print(ap(counting_rates(8), fn(r) => run(r) + (with r in RateCalls.count())))
+|}
+    );
+  [%expect {|
+    2
+    3
+    0
+    5
+    0
+    6
+    7
+    8
+    ()
+    |}]
+
+let%expect_test "a value holding a handler of several, taken as one elsewhere" =
+  (* once something says the value is one of the handler's dependencies,
+     it's that one everywhere, and can't be passed as the other *)
+  check_error
+    (rates
+   ^ {|
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(h) => print(run(h))
+    None => ()
+  let p: Option<RateCalls> = o
+  print(0)
+|}
+    );
+  [%expect
+    {|
+    error: expected `Rates`, found `RateCalls`
+       ┌─ test.ren:21:26
+    21 │     Some(h) => print(run(h))
+       │                          ^
+       = this holds a `counting_rates`, which implements `Rates` and `RateCalls`, but something else here takes it as just `RateCalls`, so it's that everywhere: a handler of several stays its own only where nothing says which it is
+       help: make another for this one, `counting_rates(...)`, or leave out what says it's a `RateCalls`
     |}]
 
 let%expect_test "a closure called inside a `with` and outside it (B4)" =

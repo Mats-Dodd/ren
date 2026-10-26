@@ -316,13 +316,17 @@ and constr =
    taken as (Infer_coerce.as_one), or something else, which the handler's
    own type has to be, is decided once it's known, so it doesn't depend on
    which came first. [cas_dep] is where that's recorded, by node id, and
-   [cwhy] explains a mismatch. *)
+   [cwhy] explains a mismatch. [cof] is the handler, if [cfound] is a
+   variable one was given to, passed where one of its dependencies is
+   wanted (Infer_coerce.taken_as): it's decided after the coercion of the
+   handler to the variable, which was met first. *)
 and coerce = {
   cvalue : expr;
   cfound : ty;
   cwanted : ty;
   cwhy : why;
   cas_dep : (int, Path.t) Hashtbl.t;
+  cof : Path.t option;
 }
 
 (* A function of the group, [ffn], and what checking its body found,

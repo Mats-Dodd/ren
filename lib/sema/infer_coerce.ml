@@ -37,10 +37,10 @@ let as_one env t expected =
   | _ -> None
 
 (* If [t] is a variable that a handler of several dependencies was given
-   to, and nothing has said what it is since: that handler's
+   to, and nothing has said what it is since: that handler, its
    dependencies, and what it needs. The first handler given to it is the
    one, as for [settle]. *)
-let pending env t =
+let given env t =
   match repr t with
   | TVar v ->
       List.find_map
@@ -49,34 +49,50 @@ let pending env t =
               match (repr cwanted, repr cfound) with
               | TVar v', TCon (h, [ TUses needs ]) when v' == v -> (
                   match Hashtbl.find_opt env.types h with
-                  | Some { body = Handler deps; _ } -> Some (deps, needs)
+                  | Some { body = Handler deps; _ } -> Some (h, deps, needs)
                   | _ -> None)
               | _ -> None)
           | _ -> None)
         (List.rev env.pending)
   | _ -> None
 
+(* The same, without the handler. *)
+let pending env t =
+  Option.map (fun (_, deps, needs) -> (deps, needs)) (given env t)
+
 (* The type [e], of type [t], has where a value of type [expected] is
-   wanted, which is known: [as_one]'s, which lowering is told, or [t]. If
-   [t] is a variable a handler of several dependencies was given to, and
-   one of them is wanted, it's that one, needing what the handler needs:
-   the handler is taken as it once the solver decides ([coerce]), and
-   what it needs is then copied where it's passed, as for a handler whose
-   type was known (Infer_rows.widen). Unified with what's wanted as it is,
-   the variable would need what the parameter's function uses, and in a
-   `with` of it, around the call, that's what the `with`'s body uses. *)
-let taken_as env cx (e : expr) t expected =
+   wanted, which is known, explained with [why]: [as_one]'s, which
+   lowering is told, or [t]. If [t] is a variable a handler of several
+   dependencies was given to, and one of them is wanted, it's that one
+   here, needing what the handler needs, and what it needs is then copied
+   where it's passed, as for a handler whose type was known
+   (Infer_rows.widen). The variable itself is left open: another use of
+   the same value can take it as another of the handler's dependencies, or
+   install them all with `with`. Whether [e] is taken as that one, or is
+   it already, or can't be, is decided by the solver once the variable is
+   ([coerce]), which comes after, since the handler was given to it
+   first. Unified with what's wanted as it is, the variable would need
+   what the parameter's function uses, and in a `with` of it, around the
+   call, that's what the `with`'s body uses. *)
+let taken_as env cx why (e : expr) t expected =
   match as_one env t expected with
   | Some (d, one) ->
       Hashtbl.replace cx.as_dep e.node d;
       one
   | None -> (
-      match (pending env t, reveal env.st expected) with
-      | Some (deps, needs), TCon (d, [ TUses _ ]) when List.mem d deps ->
-          (* a variable still unbound takes any type that doesn't hold
-             it *)
+      match (given env t, reveal env.st expected) with
+      | Some (h, deps, needs), TCon (d, [ TUses _ ]) when List.mem d deps ->
           let one = TCon (d, [ TUses needs ]) in
-          Unify.unify env.st t one;
+          defer env
+            (Coerce
+               {
+                 cvalue = e;
+                 cfound = t;
+                 cwanted = one;
+                 cwhy = why;
+                 cas_dep = cx.as_dep;
+                 cof = Some h;
+               });
           one
       | _ -> t)
 
@@ -98,9 +114,32 @@ let coerce env k =
         Unify.unify st (c.ty found) (c.ty k.cwanted))
   with
   | Ok () -> ()
-  | Error failure ->
-      mismatch env k.cwhy (result_loc k.cvalue) ~found:(c.ty found)
-        ~expected:(c.ty k.cwanted) failure
+  | Error failure -> (
+      let report behind =
+        mismatch env k.cwhy (result_loc k.cvalue) ~behind ~found:(c.ty found)
+          ~expected:(c.ty k.cwanted) failure
+      in
+      match (k.cof, repr found) with
+      | None, _ -> report []
+      | Some h, TCon (other, [ TUses _ ]) -> (
+          match Hashtbl.find_opt env.types h with
+          | Some { body = Handler deps; _ } when List.mem other deps ->
+              (* something else took the value as another of the
+                 handler's dependencies *)
+              report
+                [
+                  Taken_elsewhere
+                    {
+                      handler = type_name env h;
+                      deps = List.map (type_name env) deps;
+                      other = type_name env other;
+                    };
+                ]
+          | _ -> ())
+      | Some _, _ ->
+          (* the handler couldn't be what the variable is, which its own
+             coercion, decided first, reported *)
+          ())
 
 (* [e], of type [t], is given where a value of type [expected] is wanted,
    explained with [why]: unify the two, with [e] taken as one dependency
@@ -117,11 +156,12 @@ let give env cx why (e : expr) t expected =
              cwanted = expected;
              cwhy = why;
              cas_dep = cx.as_dep;
+             cof = None;
            })
   | _ ->
       ignore
         (unifies env why (result_loc e)
-           ~found:(taken_as env cx e t expected)
+           ~found:(taken_as env cx why e t expected)
            ~expected)
 
 (* What [t] is, where it's about to be looked into: if it's a variable
