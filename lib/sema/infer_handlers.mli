@@ -30,7 +30,7 @@ type core = {
   check_args :
     env ->
     ctx ->
-    name:string ->
+    name:string option ->
     ?callee:Path.t ->
     Types.param list ->
     Ast.Resolved.expr list ->

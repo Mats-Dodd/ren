@@ -26,21 +26,16 @@ let short_of = function
   | Intrinsic x -> Intrinsic.member_name x
   | Dep_op (_, op) -> op
 
-(* The name of the function [f] a call calls, for messages: "`print`", or
-   "this" if it's something else. *)
+(* The name of the function [f] a call calls, for messages, if it's a
+   function's name. *)
 let callee_name (f : expr) =
-  match f.kind with Var x -> sprintf "`%s`" (name_of x) | _ -> "this"
+  match f.kind with Var x -> Some (name_of x) | _ -> None
 
 (* The callee [f]'s own name, without a type's in front: `push`. *)
 let short_callee (f : expr) =
   match f.kind with Var x -> short_of x | Field (_, m) -> m.name | _ -> "this"
 
 let report env d = Diag.report env.sink d
-
-(* Report an error, and carry on: the code it's about has type [TError]. *)
-let fail env ?help ?notes ?labels loc msg =
-  report env (Diag.make ?help ?notes ?labels loc msg);
-  TError
 
 (* The value an expression produces is its last line, which is where to
    point when that value has the wrong type. *)

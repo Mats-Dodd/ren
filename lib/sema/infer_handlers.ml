@@ -29,7 +29,7 @@ type core = {
   check_args :
     env ->
     ctx ->
-    name:string ->
+    name:string option ->
     ?callee:Path.t ->
     Types.param list ->
     expr list ->
@@ -382,7 +382,7 @@ and wrap core env cx (e : expr) ~call ~f ~args ?target ?callee tf body lam =
       absorb env
         { cx with markers = m :: cx.markers }
         ~call
-        ~ename:(String.concat "" (String.split_on_char '`' name))
+        ~ename:(Option.value name ~default:"this")
         ~fn:f ?target ?callee errs uses;
       (* the call's type, unless it's the bare function, `with twice in` *)
       if call != f then Hashtbl.replace cx.nodes call.node ret;

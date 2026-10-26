@@ -13,23 +13,13 @@ val type_name : env -> Path.t -> string
 val name_of : Ast.name -> string
 val short_of : Ast.name -> string
 
-(* The function a call calls, as a message names it: "`print`", or "this"
-   if it's something else; and its own name, without a type's: `push`. *)
-val callee_name : Ast.Resolved.expr -> string
+(* The function a call calls: its name, if it's a function's name, for a
+   message; and its own name, without a type's: `push`. *)
+val callee_name : Ast.Resolved.expr -> string option
 val short_callee : Ast.Resolved.expr -> string
 
-(* Report an error. [fail] reports one and carries on, giving the code it's
-   about the type [TError]. *)
+(* Report an error. *)
 val report : env -> Diag.t -> unit
-
-val fail :
-  env ->
-  ?help:string ->
-  ?notes:string list ->
-  ?labels:(Loc.t * string) list ->
-  Loc.t ->
-  string ->
-  Types.ty
 
 (* An expression's last line, which produces its value, and where it is. *)
 val result_of : Ast.Resolved.expr -> Ast.Resolved.expr

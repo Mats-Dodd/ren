@@ -446,7 +446,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
           changed;
         let tf = field_access env cx f r tr m in
         Hashtbl.replace cx.nodes f.node tf;
-        apply env cx e ~name:(code m.name) f tf args
+        apply env cx e ~name:(Some m.name) f tf args
       in
       let nothing () =
         List.iter (fun a -> ignore (infer_arg env cx a)) args;
@@ -572,7 +572,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
               report env (needs_amp e.loc ~recv ~call:(env.source e) o.oname)
           | Read, Some loc -> report env (not_changed loc ~recv o.oname)
           | Inout, Some _ | Read, None -> ());
-          apply env cx e ~name:(code o.oname)
+          apply env cx e ~name:(Some o.oname)
             ?target:(if group_call env path then Some path else None)
             ~callee:path f
             (TFun (ps, ret, errs, uses))
@@ -583,7 +583,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
    messages, [target] which function of the group it is, if it's one, and
    [callee] which top-level function it is, if it's one. *)
 and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
-  let ename = String.concat "" (String.split_on_char '`' name) in
+  let ename = Option.value name ~default:"this" in
   match reveal env.st tf with
   | TFun (ps, ret, errs, uses) ->
       let n = List.length ps and given = List.length args in

@@ -619,15 +619,20 @@ let rename_where_in _ = "rename one of them where it comes in"
 
 (* ---- calls ----
 
-   [name] is the callee as a message names it: "`print`", or "this". *)
+   [name] is the callee's name, if what's called is a function's name. *)
+
+(* The callee as a message names it: "`print`", or "this". *)
+let callee name = match name with Some n -> code n | None -> "this"
 
 let wrong_arity loc name n given =
   Diag.make loc
-    (sprintf "%s takes %d argument%s but was given %d" name n (plural n) given)
+    (sprintf "%s takes %d argument%s but was given %d" (callee name) n
+       (plural n) given)
 
 (* [shown] is the type of what's called *)
 let not_a_function loc name shown =
-  Diag.make loc (sprintf "%s is %s, not a function" name (article shown))
+  Diag.make loc
+    (sprintf "%s is %s, not a function" (callee name) (article shown))
 
 (* `take(&c.pop())`, where `take` changes its argument: the `&` is `c`'s.
    [arg] is the argument as written, and [call] the call in it. *)
@@ -643,7 +648,7 @@ let changes_call_result loc name ~arg ~call =
     (sprintf
        "%s changes this argument, but %s is a call's result, not something it \
         can change"
-       name
+       (callee name)
        (match call with Some c -> code c | None -> "it"))
 
 (* An argument for an `inout` parameter without `&`; [var] is the variable
@@ -655,12 +660,12 @@ let arg_needs_amp loc name ~var =
       | Some x -> sprintf "write `&` before it, as in `&%s`" x
       | None -> "pass a variable, marked with `&`")
     ~notes:[ "`&` shows at the call that the argument is changed" ]
-    (sprintf "%s changes this argument, so it needs `&`" name)
+    (sprintf "%s changes this argument, so it needs `&`" (callee name))
 
 let arg_not_changed loc name =
   Diag.make loc ~help:"remove the `&`"
     ~notes:[ "`&` marks an argument the call changes: an `inout` parameter" ]
-    (sprintf "%s doesn't change this argument" name)
+    (sprintf "%s doesn't change this argument" (callee name))
 
 (* ---- constructors and records ---- *)
 
@@ -847,7 +852,7 @@ let arm_arity loc ~dep ~op n given =
        (plural n) given (plural given))
 
 let call_outside name =
-  sprintf "call %s outside the `with`, with all its arguments" name
+  sprintf "call %s outside the `with`, with all its arguments" (callee name)
 
 (* `with r.w(a) in body`, where the method [m] has `inout self` *)
 let wrapper_changes_receiver loc m =
@@ -857,12 +862,13 @@ let wrapper_changes_receiver loc m =
         "`with r.w(a) in body` calls `r.w(a, fn() => body)`, and a `with`'s \
          item can't change what it's called on";
       ]
-    ~help:(call_outside (code m))
+    ~help:(call_outside (Some m))
     (sprintf "`%s` changes its receiver, so it can't wrap a body" m)
 
 (* `with h(1) in`, where [name] takes [n] arguments, and makes the
    implementation [made] *)
 let with_too_few loc name ~made n given =
+  let name = callee name in
   Diag.make loc
     ~notes:
       [
@@ -930,13 +936,15 @@ let wrapper_changes_body loc name =
          place to change";
       ]
     ~help:(call_outside name)
-    (sprintf "%s changes its last argument, so it can't take a body" name)
+    (sprintf "%s changes its last argument, so it can't take a body"
+       (callee name))
 
 let wrapper_body_note =
   "`with w(a) in body` calls `w(a, fn() => body)`, so the wrapper's last \
    parameter is a function of no parameters"
 
 let wrapper_last name _ x =
+  let name = callee name in
   sprintf "%s's last parameter is %s, but a `with` passes it its body, a `fn()`"
     name (article x)
 
@@ -950,7 +958,7 @@ let body_changes_outer loc ~wrapper ~var =
           "`with` passes its body to %s as a lambda, `fn() => ...`, which \
            captures the values of the variables it uses when it's made, so \
            changing them would have no effect outside"
-          wrapper;
+          (callee wrapper);
       ]
     ~help:"give the body's result back as its value instead"
     (sprintf
