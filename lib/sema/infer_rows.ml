@@ -194,9 +194,8 @@ let rec use_row env cx ~loc ?(needs = false) ?callee uses =
   let joined =
     match row_skolem uses with
     | Some named ->
-        env.rows_due <-
-          { rloc = loc; rinto = cx.uses; rnamed = named; rwhat = what }
-          :: env.rows_due;
+        defer env
+          (Row_due { rloc = loc; rinto = cx.uses; rnamed = named; rwhat = what });
         extend (fst (row_parts uses)) (fresh_row env.st)
     | None
       when callee = Some cx.self

@@ -8,9 +8,15 @@ open Infer_env
 (* Which of them to decide: the uses of the group's functions by each
    other and the values thrown away ([Equalities]), what each place an
    implementation is used needs ([Needs]), or what each error set holds
-   and the rules of markers ([Error_rows]). Other passes still run between
+   and the rules of markers ([Error_rows]), or which rows end in a named
+   row ([Named_rows]), given the group's functions that declare what they
+   use, by the variable their row ends in. Other passes still run between
    them. *)
-type stage = Equalities | Needs | Error_rows
+type stage =
+  | Equalities
+  | Needs
+  | Error_rows
+  | Named_rows of (int * Ast.Resolved.fn_def) list
 
 (* Decide every pending constraint of the stage given, and take it off
    the environment's list. [is_value] says whether a top-level function

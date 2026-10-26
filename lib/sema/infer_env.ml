@@ -100,8 +100,6 @@ type env = {
       (** each statement that threw away a value of a type still unknown, which
           the solver made `Unit`, with the function it's in: a later mismatch at
           a call of that function points back at it *)
-  mutable rows_due : row_due list;
-      (** the group's uses of a named row (see [row_due]) *)
   mutable impl_ops : impl_op list;
       (** the group's implementations' operations, whose errors are checked once
           it's done (see [impl_op]) *)
@@ -141,7 +139,7 @@ and tag_pattern = {
    that installs an implementation that needs one: the row [rinto] of the
    function or lambda it's in has to end in [rnamed]. Ending a row in one
    would stop it getting any more labels, so that's done once the group is
-   done, when it has all of them (infer_top.ml). [rwhat] says what needs
+   done, when it has all of them, by the solver. [rwhat] says what needs
    it, for a message: a call, a `with`. *)
 and row_due = {
   rloc : Loc.t;
@@ -247,6 +245,7 @@ and constr =
   | Copy of copy
       (** what an implementation needs is needed where it's used: what it learns
           later as well *)
+  | Row_due of row_due  (** a row that a named row is added to ends in it *)
 
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their

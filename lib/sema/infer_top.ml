@@ -702,27 +702,13 @@ let check_open_rows env (f : fn_def) cx =
       report env
         (kept_closed p.pname.ident.loc ~name ~fn:(Ast.fn_name f) kept closed)
 
-(* `uses Clock, ..d`, what [f] would write to use [n] as well. *)
-let uses_with env (f : fn_def) n =
-  let deps =
-    match f.uses with
-    | Some u ->
-        List.filter_map
-          (fun (d : tname) ->
-            match d.tref with Named p -> Some (env.names p) | Param _ -> None)
-          u.deps
-    | None -> []
-  in
-  uses_written deps n
-
-(* Once the group is done, when every row has all its labels: each use of
-   a named row (see [row_due]) ends the row it's added to in that row, and
-   each function that names its own, `uses ..d` or `! ..e`, ends its own
-   in it. A function that declares what it uses or fails with, but not a
-   named row it does, is reported, and so is a row that can't end in one.
-   [fns] are the group's functions, each with what checking it found and
-   whether it declares what it uses and fails with. *)
-let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
+(* Once the group is done, and the uses of named rows have ended the rows
+   they're added to (solve.ml), each function that names its own, `uses
+   ..d` or `! ..e`, ends its own in it. One that declares what it fails
+   with, but not a named row a call of a closure it was passed fails with,
+   is reported. [fns] are the group's functions, each with what checking it
+   found and whether it declares what it fails with. *)
+let own_named_rows env (fns : (fn_def * ctx * bool) list) =
   let own_tail (es : Resolved.errors option) =
     Option.map
       (fun (n : ident) -> n.name)
@@ -732,61 +718,21 @@ let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
       (fun (n : ident) -> n.name)
       (Option.bind u (fun (u : Resolved.uses) -> u.dtail))
   in
-  (* the functions that declare what they use, by the variable their row
-     ends in *)
-  let declaring =
-    List.filter_map
-      (fun ((f : fn_def), cx, uses, _) ->
-        if uses then Option.map (fun t -> (t, f)) (row_tail cx.uses) else None)
-      fns
-  in
-  let bind tail (id, n) =
-    try Unify.unify_row env.st tail (RSkol (id, n))
-    with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ -> ()
-  in
-  (* a row can end in only one named row *)
-  let two d other =
-    report env (two_named_rows d.rloc d.rwhat ~other (snd d.rnamed))
-  in
-  (* the uses checked once every other is, ending a row that's still open:
-     ending it before would hide what the function doesn't declare *)
-  let later = ref [] in
   List.iter
-    (fun d ->
-      let id, n = d.rnamed in
-      match row_end d.rinto with
-      | RSkol (id', _) when id' = id -> ()
-      | RSkol (_, other) -> two d other
-      | RVar _ -> (
-          match
-            Option.bind (row_tail d.rinto) (fun t -> List.assoc_opt t declaring)
-          with
-          | Some f when own_dtail f.uses <> Some n ->
-              report env
-                (named_row_undeclared d.rloc d.rwhat n ~fn:(Ast.fn_name f)
-                   ~other:(own_dtail f.uses) ~uses:(uses_with env f n))
-          | _ -> later := d :: !later)
-      | REmpty | RExtend _ ->
-          report env (named_row_not_allowed d.rloc d.rwhat n))
-    (List.rev env.rows_due);
-  List.iter
-    (fun d ->
-      match row_end d.rinto with
-      | RSkol (id, _) when id = fst d.rnamed -> ()
-      | RSkol (_, other) -> two d other
-      | tail -> bind tail d.rnamed)
-    (List.rev !later);
-  env.rows_due <- [];
-  List.iter
-    (fun ((f : fn_def), cx, _, errors) ->
+    (fun ((f : fn_def), cx, errors) ->
       let named n =
         match List.assoc_opt n cx.named with
         | Some (RSkol (id, n)) -> Some (id, n)
         | _ -> None
       in
       (match Option.bind (own_dtail f.uses) named with
-      | Some r -> (
-          match row_end cx.uses with RVar _ as t -> bind t r | _ -> ())
+      | Some (id, n) -> (
+          match row_end cx.uses with
+          | RVar _ as t ->
+              (* a variable still unbound takes any row, so this can't
+                 fail *)
+              Unify.unify_row env.st t (RSkol (id, n))
+          | _ -> ())
       | None -> ());
       let declared = own_tail f.errors in
       match row_end cx.errs with
@@ -819,9 +765,10 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
       with
       | Some (n : ident), (RVar _ as tail) -> (
           match List.assoc_opt n.name cx.named with
-          | Some r -> (
-              try Unify.unify_row env.st tail r
-              with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ -> ())
+          | Some r ->
+              (* a variable still unbound takes any row, so this can't
+                 fail *)
+              Unify.unify_row env.st tail r
           | None -> ())
       | _ -> ())
     fns
@@ -886,14 +833,14 @@ let settle_installs env =
             into (extend rest t)
         | RSkol (id, n) ->
             (* a named row: what's outside ends in it too *)
-            env.rows_due <-
-              {
-                rloc = w.wloc;
-                rinto = w.wouter;
-                rnamed = (id, n);
-                rwhat = With_body;
-              }
-              :: env.rows_due;
+            defer env
+              (Row_due
+                 {
+                   rloc = w.wloc;
+                   rinto = w.wouter;
+                   rnamed = (id, n);
+                   rwhat = With_body;
+                 });
             into (extend rest (fresh_row env.st))
         | REmpty | RExtend _ -> into (extend rest (fresh_row env.st))
       in
@@ -1438,7 +1385,6 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       spelled = [];
       pending = [];
       forced = [];
-      rows_due = [];
       impl_ops = [];
       handler_needs = [];
       installs = [];
@@ -1659,13 +1605,20 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       (* what each error set holds, and then the rules of markers *)
       Solve.solve env ~is_value:is_value_path Error_rows;
       settle_impls env;
-      settle_rows env
+      (* the uses of named rows, ending the rows they're added to, and
+         then each function's own *)
+      Solve.solve env ~is_value:is_value_path
+        (Named_rows
+           (List.filter_map
+              (fun ((f : fn_def), _, cx, _, _) ->
+                if declared_uses ~is_value f <> None then
+                  Option.map (fun t -> (t, f)) (row_tail cx.uses)
+                else None)
+              setups));
+      own_named_rows env
         (List.map
            (fun ((f : fn_def), _, cx, _, _) ->
-             ( f,
-               cx,
-               declared_uses ~is_value f <> None,
-               declared_errors env ~is_value ~tparams:cx.tparams f <> None ))
+             (f, cx, declared_errors env ~is_value ~tparams:cx.tparams f <> None))
            setups);
       env.group <- [];
       env.spelled <- [];

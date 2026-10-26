@@ -25,8 +25,15 @@ open Infer_report
    between them, so the solver is run in parts: [Equalities], the uses of
    the group's functions joined and the values thrown away checked;
    [Needs], what each place an implementation is used needs; and
-   [Error_rows], what each error set holds, and the rules of markers. *)
-type stage = Equalities | Needs | Error_rows
+   [Error_rows], what each error set holds, and the rules of markers; and
+   [Named_rows], the rows that end in a named row, given the group's
+   functions that declare what they use, by the variable their row ends
+   in. *)
+type stage =
+  | Equalities
+  | Needs
+  | Error_rows
+  | Named_rows of (int * Ast.Resolved.fn_def) list
 
 (* A constraint's rank: those of a lower one are decided first. A value
    thrown away is checked after the group's uses of each other are joined,
@@ -35,7 +42,9 @@ type stage = Equalities | Needs | Error_rows
    from other sets, so a tag of two shapes is blamed on the inclusion. A
    kept set is closed once it has every tag it gets, and only then are the
    tags matched in a set checked against it. The rules of markers read
-   what every set holds, so they're checked last. *)
+   what every set holds, so they're checked after them; and a row is
+   ended in a named row only once it has every label it gets, since that
+   stops it getting more. *)
 let rank = function
   | Join _ -> 0
   | Drop _ -> 1
@@ -46,12 +55,19 @@ let rank = function
   | Tag_pattern _ -> 6
   | Unmarked _ -> 7
   | Marker _ -> 8
+  | Row_due _ -> 9
 
-let stage_of = function
-  | Join _ | Drop _ -> Equalities
-  | Copy _ -> Needs
-  | Value_tag _ | Include _ | Kept _ | Tag_pattern _ | Unmarked _ | Marker _ ->
-      Error_rows
+(* Whether [stage] decides [c]. *)
+let decides stage c =
+  match (stage, c) with
+  | Equalities, (Join _ | Drop _)
+  | Needs, Copy _
+  | ( Error_rows,
+      (Value_tag _ | Include _ | Kept _ | Tag_pattern _ | Unmarked _ | Marker _)
+    )
+  | Named_rows _, Row_due _ ->
+      true
+  | _ -> false
 
 (* ---- deciding one ---- *)
 
@@ -331,6 +347,78 @@ let marker env m =
       | Mattempt -> covers_nothing m.mloc ?hint:m.hint "attempt"
       | Mmatch -> cannot_fail_arm m.mloc)
 
+(* ---- named rows (deps.md, "Implementations") ---- *)
+
+(* `uses Clock, ..d`, what [f] would write to use [n] as well. *)
+let uses_with env (f : Ast.Resolved.fn_def) n =
+  let deps =
+    match f.uses with
+    | Some u ->
+        List.filter_map
+          (fun (d : Ast.tname) ->
+            match d.tref with Named p -> Some (env.names p) | Param _ -> None)
+          u.deps
+    | None -> []
+  in
+  uses_written deps n
+
+(* What the function [f] names its own `uses` row, `..d`, if it does. *)
+let own_dtail (f : Ast.Resolved.fn_def) =
+  Option.map
+    (fun (n : Ast.ident) -> n.name)
+    (Option.bind f.uses (fun (u : Ast.Resolved.uses) -> u.dtail))
+
+(* Each use of a named row (see [Infer_env.row_due]) ends the row it's
+   added to in that row. A row can end in only one, and only a row still
+   open can end in one; and a function that declares what it uses has to
+   name the row, or it would use more than it says. Those are reported
+   first, and the rest are ended after, in the order they were met: ending
+   one before would hide what a function doesn't declare. [declaring] are
+   the group's functions that declare what they use, by the variable their
+   row ends in. *)
+let rows_due env ~declaring ds =
+  (* a row can end in only one named row *)
+  let two d other =
+    report env (two_named_rows d.rloc d.rwhat ~other (snd d.rnamed))
+  in
+  let later =
+    List.filter
+      (fun d ->
+        let id, n = d.rnamed in
+        match row_end d.rinto with
+        | RSkol (id', _) when id' = id -> false
+        | RSkol (_, other) ->
+            two d other;
+            false
+        | RVar _ -> (
+            match
+              Option.bind (row_tail d.rinto) (fun t ->
+                  List.assoc_opt t declaring)
+            with
+            | Some f when own_dtail f <> Some n ->
+                report env
+                  (named_row_undeclared d.rloc d.rwhat n ~fn:(Ast.fn_name f)
+                     ~other:(own_dtail f) ~uses:(uses_with env f n));
+                false
+            | _ -> true)
+        | REmpty | RExtend _ ->
+            report env (named_row_not_allowed d.rloc d.rwhat n);
+            false)
+      ds
+  in
+  List.iter
+    (fun d ->
+      let id, n = d.rnamed in
+      match row_end d.rinto with
+      | RSkol (id', _) when id' = id -> ()
+      | RSkol (_, other) -> two d other
+      | RVar _ as tail ->
+          (* a variable still unbound takes any row, so this can't fail *)
+          Unify.unify_row env.st tail (RSkol (id, n))
+      | REmpty | RExtend _ ->
+          report env (named_row_not_allowed d.rloc d.rwhat n))
+    later
+
 (* ---- the worklist ---- *)
 
 (* Decide [items], in the order they were met, until none is [awake]:
@@ -378,9 +466,7 @@ let copies env = copies_of env (List.rev env.pending)
    says whether a function is an associated value, which a use joins by
    its result. *)
 let solve env ~is_value stage =
-  let mine, rest =
-    List.partition (fun c -> stage_of c = stage) (List.rev env.pending)
-  in
+  let mine, rest = List.partition (decides stage) (List.rev env.pending) in
   env.pending <- List.rev rest;
   let of_rank r = List.filter (fun c -> rank c = r) mine in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) (of_rank 0);
@@ -421,4 +507,11 @@ let solve env ~is_value stage =
   List.iter
     (function Unmarked (c, r) -> unmarked env c r | _ -> ())
     (of_rank 7);
-  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 8)
+  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 8);
+  match stage with
+  | Named_rows declaring ->
+      rows_due env ~declaring
+        (List.filter_map
+           (function Row_due d -> Some d | _ -> None)
+           (of_rank 9))
+  | _ -> ()
