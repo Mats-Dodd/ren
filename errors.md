@@ -31,8 +31,8 @@ with an optional payload, like a constructor:
 ```ren
 pub fn debit(inout self, m: Money, e: Entry) ! Short(account: AccountId, by: Money) | Frozen(account: AccountId) =
   if self.frozen then fail Frozen(self.id)
-  if not self.balance.covers(m) then fail Short(self.id, m.minus(self.balance))
-  self.balance = self.balance.minus(m)
+  if self.balance < m then fail Short(self.id, m - self.balance)
+  self.balance = self.balance - m
   &self.statement.push(e)
 ```
 

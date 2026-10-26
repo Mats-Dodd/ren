@@ -140,11 +140,10 @@ fn main() = ()
       = `try` marks the calls that can fail, so a reader can see where the code can stop
       help: `try` covers everything to its right, so this is `try (r + try r)`: to fail with the `Result`'s error first, write `(try r)`
 
-    error: expected `Int`, found `Result<Int, ! A>`
+    error: `Result<Int, ! A>` has no `+`
       ┌─ test.ren:2:43
     2 │ fn both(r: Result<Int, ! A>) -> Int = try r + try r
-      │                                           ^
-      = `+` works on `Int`s
+      │                                           ^^^^^^^^^
     |}]
 
 let%expect_test "a lambda's body has markers of its own" =
@@ -2155,7 +2154,7 @@ let%expect_test "a call that fails keeps what it changed through &" =
   run
     {|
 type Log = { items: Array<Int> }
-  fn add(inout self, x: Int) =
+  fn record(inout self, x: Int) =
     &self.items.push(x)
     if x < 0 then fail Negative(x)
 fn push_then_fail(inout xs: Array<Int>, x: Int) =
@@ -2167,14 +2166,14 @@ fn main() =
   print(r)
   print(xs)
   var logs = [Log { items: [] }]
-  print(attempt &logs[0].add(-1))
+  print(attempt &logs[0].record(-1))
   print(logs[0].items)
   var all = [Log { items: [] }, Log { items: [] }]
   print(attempt add_all(&all, -5))
   print(all)
 fn add_all(inout logs: Array<Log>, x: Int) =
   for l in &logs
-    try &l.add(x)
+    try &l.record(x)
 |};
   [%expect
     {|

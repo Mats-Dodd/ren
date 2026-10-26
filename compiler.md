@@ -88,7 +88,10 @@ it, each fact says so, and which step fixes it.
   functions is checked is a constraint that solver decides (The
   constraint solver, below).
 - **Requirements.** From R4. What a generic function needs of a type
-  parameter, such as `eq` for `==`. Inference, in the same solver; never
+  parameter: `eq` for `==`, `ord` for `<`, `add`, `sub`, `mul`, `div`,
+  `rem` and `neg` for the operators, and `zero` and `one` for `T.zero`
+  and `T.one` (stage 9a), with `hash`, which agrees with `eq`, kept for
+  `Map` and `Set`. Inference, in the same solver; never
   written, on a public function either (operators.md, "Generic code").
   Carried in the scheme, the interface, and as hidden dictionary
   parameters in Core. Inferred since R4, and carried in schemes and
@@ -143,7 +146,14 @@ falls short it says so.
   requirements too, and Lint checks each use passes one for each, for
   the type argument it's on, as each `==` has one for what it compares,
   built only from the function's own dictionaries, and derived only for
-  a type that has what it's derived for. Every function type has a
+  a type that has what it's derived for. Since 9a the same holds of each
+  `<` on what isn't a number (`Compare`), each operator on a type
+  variable's values (`Op`) and each `T.zero` (`Value_of`); the
+  language's own operator (`Binop`) is only on an `Int`, a `Float` or a
+  `with numeric` type, `*` of which takes what it's represented as; and
+  each type a module says has a `key`, or an operator or associated
+  value for a requirement (`Core.program`'s `keys` and `ops`), has that
+  member, of the type the interpreter calls it at. Every function type has a
   lambda set in canonical form, and Lint checks that a lambda's type's
   set has the lambda's identity, and a function's, member's or
   intrinsic's used as a value its own; that a use's set is its scheme's
@@ -209,11 +219,18 @@ derived from the type's structure, given the caller's dictionaries for
 its type variables in it. So `both<U has eq>` passes `same` its own `U`
 dictionary, and for `Box<U>` one derived from `Box`'s declaration and
 that. Each `==` compares through the dictionary of what it compares, the
-same way, so one in `same` uses the one `same` was given. The
-interpreter makes a derived dictionary a function of its own, which
-compares two values as the type's declaration says: never a function,
-since inference makes sure there's none in what's compared, with one
-exception (Deviations).
+same way, so one in `same` uses the one `same` was given, and so does
+each `<` on what isn't a number, each operator on a type variable's
+values and each `T.zero`. The interpreter makes a derived dictionary a
+function of its own, from the type it's derived for, which it knows from
+the dictionary's descriptor: `==`, `hash` and ordering are each a fold
+over one walk of the type's structure (walk.ml), through its `key` if it
+has one, which `show` walks too; an operator or an associated value is
+`Int`'s or `Float`'s own, or the type's member that gives it, which
+lowering lists once (`Core.program`'s `ops`), or for a `with numeric`
+type what it's represented as has. It never meets a function, since
+inference makes sure there's none in what's compared, with one exception
+(Deviations).
 
 So are types, where the running program needs one. Showing a value
 depends on its type, `Account { id: 1 }` rather than `{ id: 1 }`, and
@@ -308,7 +325,10 @@ The constraints:
   their sides, once it's known. A type variable that has to have it
   passes that on to the function it's in, which then needs it of its
   type parameter, `same<T has eq>`; a type with a function in it is an
-  error where it's compared.
+  error where it's compared. The same constraint, `Compared`, with the
+  requirement it's for, says what `<` compares has `ord`, that a type
+  variable an operator is used on has that operator, `add` for `+`, and
+  that one `T.zero` is reached through has `zero` (stage 9a).
 - **A use of a function that needs something of its type parameters**
   needs it of what it puts in their place: an error at the argument it's
   in, if that can't have it, or passed on again, if it's a type variable
@@ -722,10 +742,13 @@ Where the work forced a change to the plan above:
   checks it of what it puts in the row's place, as of a type argument
   (infer_reqs.ml, `pass`), and `ren types` prints it after the type
   parameters, `cmp<T has eq, ..e has eq>`. It's a check only: nothing is
-  passed for it at runtime, since a dictionary compares a tag a set's
-  tail brought in by its shape, which can't meet a function once every
+  passed for it at runtime, since an error carries the descriptors of
+  its payload's types (`Core.Tag`), built where it's made, so a tag a
+  set's tail brought in is compared, hashed and shown through its
+  payload's types, keys included, and can't meet a function once every
   use is checked. An earlier fix took such a tag to have `eq`, which
-  let `cmp(bad)` panic.
+  let `cmp(bad)` panic; stage 9a's first cut compared one by its shape,
+  which ignored a `key` in its payload.
 - **R4, dictionaries beside descriptors.** The plan leaves open whether a
   requirement's dictionary is a hidden parameter of its own or carried
   in the type's descriptor, which a generic function already takes for
@@ -889,3 +912,83 @@ Where the work forced a change to the plan above:
   it (types.ml, `canon_lams`). The cost: a type argument for a set's
   variable can then list some of the scheme's own identities too, which
   changes nothing it means, the set being their union.
+
+## Stage 9a deviations
+
+Where building operators, `key` and `with numeric` (operators.md, 9a)
+differed from its plan:
+
+- **Where `with numeric` is kept.** The plan puts it in `Iface.Hidden`,
+  beside `eq`. It's a field of every type declaration instead,
+  `Iface.type_decl.numeric`, what the type is represented as, so the
+  module's own inference, Lint and `ren types` read it the same way as
+  another module's do. `Hidden` keeps only `eq`; a type's order is
+  derived from its key, `numeric` or, in its own module, its
+  representation, where it's asked for.
+- **An opaque type in its own module.** An operator on one is found as
+  in any other module first: the one it writes that takes the right
+  side's type, or what `with numeric` gives, so in `Money`'s own module
+  `price * 3` is a `Money`. Where none of them takes the right side, it's
+  its representation's, as everything else about the type is there:
+  `price + 1` is an `Int`. Inside the type's own members it's always its
+  representation's, since that's what they're written in terms of:
+  `self - t` in `Time.sub(self, t: Time)` subtracts two `Int`s rather
+  than calling itself. Comparisons aren't revealed: `<` on one is
+  through its order, which in its own module is its representation's,
+  unless it has a key.
+- **`NaN` is checked after every `Float` operation** in the interpreter
+  (eval.ml), not only where a float leaves arithmetic, as operators.md
+  plans for the C backend. It panics at the operation that made it,
+  which is earlier than the plan's, never later; the message text is
+  built only once there's a panic, so the check costs a comparison.
+- **A key that leads back to its own type** (its type has the type in
+  it, or a type whose key does) is an error (Infer_reqs.key_loops),
+  which operators.md doesn't name: comparing two would compare two of
+  the same type again, and never end. Such a key is otherwise treated
+  as absent, so inference, Core Lint and the walk never go round.
+- **A generic function called with a type that lacks several of its
+  requirements** is reported once, for the first, as operators.md's
+  `sum([true, false])` is. Another module's function's note says what it
+  uses but not where, since an interface doesn't carry its body's
+  locations.
+- **An operator written for several types on its right can't be named
+  as `V.add`**, as a value or a call, since nothing there says which;
+  `a + b` and `a.add(b)` choose by the right side.
+- **`Int` and `Float` have no `add` method.** Their operators are the
+  language's own, so `n + 2` works and `n.add(2)` doesn't; only their
+  `wrapping_*` methods are methods.
+- **The overflow panic's help**, `n.wrapping_add(1)`, is given only when
+  the left side is written as an `Int`: a `T` or a `with numeric` type
+  has no `wrapping_add` to suggest. For `n += 1` it's `n = n.wrapping_add(1)`,
+  since the call alone changes nothing.
+- **A derived dictionary at runtime** is made from the type the
+  dictionary's descriptor describes, in the running program, not from
+  the dictionaries it was derived from: the walk needs the whole type
+  anyway, to call a generic type's `key` or operator with what its
+  parameters stand for. `Derived`'s `from` is still there, for Core Lint
+  to check it's built only from the function's own.
+- **What a reserved member may be is checked twice.** Resolve checks
+  what's written: an operator, `key` or `show` is a method with its
+  types written, no `inout`, no `!` and no `uses`, `zero` and `one` are
+  values with their type written, and `eq`, `hash` and `compare` can't
+  be written; once names are resolved, that `show` makes a `Str` and
+  `zero` and `one` are of their own type. Inference then checks its scheme fails with nothing and
+  uses nothing, since a private member's body can add to an unwritten
+  row.
+- **An associated value can still compare its `T`s.** The plan makes any
+  requirement on an associated value an error, since it's made once and
+  given no dictionaries. Values of a type variable nothing decided are
+  compared by their shape, as before 9a, so `eq` and `hash` are allowed,
+  and only the others, which have no shape to go by, are errors.
+- **A comparison of two opaque types** no longer says either one's
+  representation is private: neither is the other's representation, so
+  `t -= Time.epoch` says only that it makes a `Duration`, not a `Time`.
+- **The smallest `Int` is a literal**, `-9223372036854775808`, though
+  2^63 alone doesn't fit: the lexer reads it as `Int64.min_int`, and the
+  parser lets it through only right after a `-`, as the whole literal,
+  not a `Neg` of it, which would overflow.
+- **A `Float` is shown without an exponent**, `100000000000000000000.0`,
+  not `1e+20`: a literal has none, so what's shown reads back as Ren.
+- **Tuples are 9b.** The spec's `Name` key, `(Str, Str)`, and ordering
+  tuples element by element wait for them.
+

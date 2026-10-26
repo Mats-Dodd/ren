@@ -1706,6 +1706,251 @@ let no_eq loc ~shown ~op ~by ~failed why =
       (kept @ ("a type with a function in it has no `==` or `hash`" :: inside))
     msg
 
+(* ---- operators (operators.md) ---- *)
+
+(* How a requirement is written where it's used: `add` is `+`, `ord` is
+   `<`, and an associated value is itself, `zero`. *)
+let req_symbol = function
+  | "eq" -> "=="
+  | "ord" -> "<"
+  | "add" -> "+"
+  | "sub" | "neg" -> "-"
+  | "mul" -> "*"
+  | "div" -> "/"
+  | "rem" -> "%"
+  | r -> r
+
+(* Why a type has no order (Infer_reqs): it's ordered only by its `key`,
+   or it isn't ordered at all. *)
+type no_ord =
+  | Unordered_record of string  (** a record, named *)
+  | Unordered_sum of string  (** a sum type with fields, named *)
+  | Unordered_prelude of string
+      (** a sum type with fields the prelude declares, named, which a program
+          can't give a key: `Option` *)
+  | Unordered_opaque of string
+      (** another module's opaque type, named, without a key *)
+  | Unordered_key of string * string
+      (** a type, named, with a key, whose type, shown, has no order *)
+  | Unordered  (** anything else: an array, `Unit`, `Bytes`, a function *)
+
+(* What a generic function [f] does with what it's given, for the note
+   under an error at a call of it that gives it a type without that:
+   `sum` uses `+` on its `T` (util.ren:4). [tparam] is the type
+   parameter's name, if it has one, and [at] where [f] uses it, if it's
+   the module's own function. *)
+let uses_note ~f ~op ~tparam ~at =
+  let where =
+    match at with
+    | Some (l : Loc.t) -> sprintf " (%s:%d)" l.file l.start.line
+    | None -> ""
+  in
+  match tparam with
+  | Some t -> sprintf "`%s` uses `%s` on its `%s`%s" f op t where
+  | None -> sprintf "`%s` uses `%s` on what it's given here%s" f op where
+
+(* [shown] has no order, at [loc]: compared there with [op], `<`, or
+   given to [by], which compares what it's given; [uses] says how
+   (uses_note). *)
+let no_ord loc ~shown ~op ~by ~uses why =
+  let msg =
+    match by with
+    | None -> sprintf "`%s` has no `%s`" shown op
+    | Some f -> sprintf "`%s` has no `<`, which `%s` needs" shown f
+  in
+  let key t = sprintf "give `%s` a key: `pub fn key(self) -> K = ...`" t in
+  let note, help =
+    match why with
+    | Unordered_record t ->
+        ( [
+            "a record is ordered only by its `key`, so that reordering its \
+             fields can't change a sort";
+          ],
+          Some (key t) )
+    | Unordered_sum t ->
+        ( [
+            "a sum type with fields is ordered only by its `key`, so that \
+             reordering them can't change a sort";
+          ],
+          Some (key t) )
+    | Unordered_prelude t ->
+        ( [
+            sprintf
+              "a sum type with fields is ordered only by its `key`, and `%s` \
+               has none"
+              t;
+          ],
+          None )
+    | Unordered_opaque t ->
+        ( [ "another module's opaque type is ordered only by its `key`" ],
+          Some (sprintf "give `%s` a key in its module" t) )
+    | Unordered_key (t, k) ->
+        ( [
+            sprintf "`%s` is ordered by its key, %s, which has no order" t
+              (article k);
+          ],
+          Some
+            (sprintf
+               "make `%s`'s key something ordered, such as an `Int` or a `Str`"
+               t) )
+    | Unordered -> ([], None)
+  in
+  Diag.make loc ?help ~notes:(Option.to_list uses @ note) msg
+
+(* [shown] has no [op], `+`, or no associated value [op], `zero`, at
+   [loc], or given to [by], which uses it; [uses] says how (uses_note).
+   [Str]'s `+` is `concat`. [other] says [shown] has an [op], but not one
+   that takes another [shown], which is the one generic code uses. *)
+let no_op ?hidden ?(other = false) loc ~shown ~op ~by ~uses =
+  let what =
+    if other then sprintf "`%s` that takes %s" op (article shown)
+    else sprintf "`%s`" op
+  in
+  let msg =
+    match by with
+    | None -> sprintf "`%s` has no %s" shown what
+    | Some f -> sprintf "`%s` has no %s, which `%s` needs" shown what f
+  in
+  (* another module's opaque type, used as what it's represented as *)
+  let notes, help =
+    match (hidden, shown, op) with
+    | Some p, _, _ ->
+        let note, help = representation_private p in
+        ([ note ], Some help)
+    | None, "Str", "+" -> ([], Some "join two strings with `a.concat(b)`")
+    | None, _, _ when other ->
+        ( [
+            sprintf
+              "in generic code, `%s` takes the same type on both sides and \
+               makes it"
+              op;
+          ],
+          None )
+    | None, _, _ -> ([], None)
+  in
+  Diag.make loc ?help ~notes:(Option.to_list uses @ notes) msg
+
+(* `a op b` where [left], [a]'s type, has no [op] taking [right], [b]'s:
+   an operator is found on its left side's type, chosen by its right
+   side's (operators.md). [numbers] says both are numbers, which never
+   convert by themselves, and [help] what to write instead, if anything
+   can be said. *)
+let no_op_taking loc ~left ~op ~right ~numbers ?help () =
+  let notes =
+    if numbers then [ "numbers never convert by themselves" ]
+    else [ sprintf "`%s` is found on its left side's type, `%s`" op left ]
+  in
+  Diag.make loc ?help ~notes
+    (sprintf "`%s` has no `%s` that takes %s" left op (article right))
+
+(* The help for [no_op_taking] on two numbers: a literal on the right
+   written as the left's type, `x * 2.0`, or else one of them
+   converted. *)
+let convert_help ~written = sprintf "convert one: `%s`" written
+let float_literal_help ~written = sprintf "write it as a `Float`: `%s`" written
+
+(* The other way round, `now + Duration.seconds(5)`, for `+` and `*`,
+   where the right side's type has the operator taking the left's. *)
+let swap_help ~written = sprintf "write it the other way round: `%s`" written
+
+(* `a op b` where [left] has several [op]s and [b]'s type isn't known
+   yet, so which one it is can't be told. *)
+let which_overload loc ~left ~op =
+  Diag.make loc
+    ~help:"say what the right side is, with a type on the variable it's in"
+    (sprintf
+       "can't tell which `%s` of `%s` this is: the right side's type isn't \
+        known yet"
+       op left)
+
+(* An operator written for several types on its right, [name], called
+   by name with other than one argument. *)
+let wrong_arity_overload loc ~name =
+  Diag.make loc
+    (sprintf "`%s` takes one argument, which says which `%s` it is" name name)
+
+(* A `with numeric` type, [left], times one of its own: only scaling by
+   what it's represented as, [rep], is given. *)
+let numeric_mul loc ~left ~rep =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`with numeric` gives `%s` `*` only by %s, so `%s * %s` isn't a `%s`"
+          left (article rep) left left left;
+      ]
+    ~help:
+      (sprintf
+         "if it's a product, write it on `%s`: `pub fn mul(self, b: %s) -> \
+          Area = ...`"
+         left left)
+    (sprintf "`%s` has no `*` that takes a `%s`" left left)
+
+(* A `with numeric` type divided, [op] `/` or `%`, without a `div` or
+   `rem` of its own: a division says how it rounds. *)
+let numeric_div loc ~left ~rep ~op ~meth =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf "`with numeric` gives no `%s`: a division says how it rounds" op;
+      ]
+    ~help:
+      (sprintf "write it on `%s`: `pub fn %s(self, n: %s) -> %s = ...`" left
+         meth rep left)
+    (sprintf "`%s` has no `%s`" left op)
+
+(* `x op= v`, [written], where `x op v` makes [made], not [target],
+   what the place holds, as types are printed: the message. *)
+let op_assign_makes ~written ~made ~target =
+  sprintf "`%s` makes %s, not %s" written (article made) (article target)
+
+(* A member of a type parameter other than `zero` or `one`. *)
+let through_param loc ~name =
+  Diag.make loc
+    ~help:"call a function that takes it, or give the function a parameter"
+    ~notes:[ sprintf "`%s` stands for whatever type the function's given" name ]
+    "through a type parameter, only `zero` and `one` can be reached"
+
+(* A member with a reserved name, [name], whose body does [what] it
+   can't. *)
+let reserved_impure loc ~name ~what =
+  Diag.make loc
+    ~notes:
+      [
+        (match name with
+        | "key" -> "a key runs wherever two values are compared"
+        | "show" -> "`show` runs wherever a value is shown"
+        | _ ->
+            "an operator has no `try` in front, so it can't fail or use \
+             anything");
+      ]
+    (sprintf "`%s` can't %s" name what)
+
+(* The key of the type [owner] leads back to [owner]: comparing two would
+   never end. *)
+let key_loops loc ~owner =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "two `%s`s are compared by their keys, so comparing those would \
+           compare `%s`s again, and never end"
+          owner owner;
+      ]
+    ~help:"make the key of what's in it, its fields, rather than itself"
+    (sprintf "the key of `%s` leads back to `%s`" owner owner)
+
+(* An associated value that needs something of its type's parameter,
+   `T.zero`, which it can't: it's made once, before anything says what
+   `T` is (operators.md, flag S). *)
+let value_needs loc ~value ~what =
+  Diag.make loc
+    ~notes:
+      [ "an associated value is made once, before anything says what `T` is" ]
+    ~help:"make it a function, which is given its types each time it's called"
+    (sprintf "the associated value `%s` can't use `%s` of a type parameter"
+       value what)
+
 (* The public value [fn], named [name] where it's declared, without a
    type: it's [shown]. *)
 let untyped_value loc ~name ~fn shown =

@@ -35,37 +35,37 @@ pub type Result<T, E> =
 
 // ---- time ----
 //
-// Opaque, with methods only, until operators arrive (stage 9). Inside the
-// prelude each is a number of milliseconds.
+// Inside the prelude each is a number of milliseconds. A `Duration` is a
+// number of its own (operators.md, "Number types"); a `Time` and an
+// `Instant` are moments, so two can be told apart, giving a `Duration`,
+// and one moved on by a `Duration`, but not added together.
 
 // how long something takes
-pub type Duration = opaque Int
+pub type Duration = opaque Int with numeric
   pub fn ms(n: Int) -> Duration = n
   pub fn seconds(n: Int) -> Duration = n * 1000
   pub fn minutes(n: Int) -> Duration = n * 60000
-  pub fn plus(self, d: Duration) -> Duration = self + d
-  // this, `n` times over
-  pub fn times(self, n: Int) -> Duration = self * n
-  pub fn before(self, d: Duration) -> Bool = self < d
-  pub fn after(self, d: Duration) -> Bool = self > d
   // how many milliseconds it is
   pub fn in_ms(self) -> Int = self
 
 // a moment on the calendar: since the epoch, 1970-01-01 00:00 UTC
 pub type Time = opaque Int
   pub let epoch: Time = 0
-  pub fn plus(self, d: Duration) -> Time = self + d
-  pub fn before(self, t: Time) -> Bool = self < t
-  pub fn after(self, t: Time) -> Bool = self > t
+  pub fn add(self, d: Duration) -> Time = self + d.in_ms()
+  pub fn sub(self, t: Time) -> Duration = Duration.ms(self - t)
+  pub fn sub(self, d: Duration) -> Time = self - d.in_ms()
+  // ordered by when it is
+  pub fn key(self) -> Int = self
 
 // a moment for measuring how long something took, on a clock that never
 // goes back: an instant means nothing on its own, only next to another
 pub type Instant = opaque Int
   pub let zero: Instant = 0
-  pub fn plus(self, d: Duration) -> Instant = self + d
-  pub fn since(self, earlier: Instant) -> Duration = self - earlier
-  pub fn before(self, i: Instant) -> Bool = self < i
-  pub fn not_before(self, i: Instant) -> Bool = self >= i
+  pub fn add(self, d: Duration) -> Instant = self + d.in_ms()
+  pub fn sub(self, i: Instant) -> Duration = Duration.ms(self - i)
+  pub fn sub(self, d: Duration) -> Instant = self - d.in_ms()
+  // ordered by when it is
+  pub fn key(self) -> Int = self
 
 // ---- paths ----
 
@@ -217,11 +217,11 @@ pub handler test_clock(at: Time) for Clock, TestClock =
   now() => time
   instant() => since
   sleep(d) =>
-    time = time.plus(d)
-    since = since.plus(d)
+    time = time + d
+    since = since + d
   advance(d) =>
-    time = time.plus(d)
-    since = since.plus(d)
+    time = time + d
+    since = since + d
 
 pub dep TestRandom =
   // the seed the test's numbers come from, which `ren test --seed`
@@ -390,6 +390,21 @@ let scheme (x : Intrinsic.t) =
              any_lams ))
   (* fn(self: Bytes) -> Int *)
   | Bytes_len -> fn [ read bytes ] int
+  (* fn(self: Int, n: Int) -> Int: the arithmetic that wraps around at
+     64 bits instead of panicking (operators.md, "`Int` and `Float`") *)
+  | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul ->
+      fn [ read int; read int ] int
+  (* fn(self: Int) -> Int *)
+  | Int_wrapping_neg -> fn [ read int ] int
+  (* fn(n: Int) -> Float: numbers never convert by themselves *)
+  | Float_of -> fn [ read int ] float
+  (* fn(self: Float) -> Int: the nearest, half away from zero; and
+     toward zero *)
+  | Float_round | Float_truncate -> fn [ read float ] int
+  (* fn(self: Float) -> Float *)
+  | Float_sqrt -> fn [ read float ] float
+  (* fn(self: Str) -> Str, with `A` to `Z` made `a` to `z` *)
+  | Str_lower -> fn [ read str ] str
 
 (* Whether only the prelude's own source can call it: it reaches the
    world, which a program does only through a dependency, in the real
@@ -403,7 +418,9 @@ let runtime (x : Intrinsic.t) =
       true
   | Show | Array_len | Array_push | Str_len | Str_slice | Str_find | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
-  | Bytes_len ->
+  | Bytes_len | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
+  | Int_wrapping_neg | Float_of | Float_round | Float_truncate | Float_sqrt
+  | Str_lower ->
       false
 
 (* The built-in functions that aren't a type's members, in the order the
@@ -445,7 +462,14 @@ let types =
   (* `Array` before `Str`, whose `len` an old-style `len(xs)` means
      less often (resolve.ml) *)
   [
-    t "Int";
+    t "Int"
+      ~methods:
+        [
+          Int_wrapping_add; Int_wrapping_sub; Int_wrapping_mul; Int_wrapping_neg;
+        ];
+    t "Float"
+      ~methods:[ Float_round; Float_truncate; Float_sqrt ]
+      ~functions:[ Float_of ];
     t "Bool";
     t "Unit";
     t "Array" ~arity:1 ~methods:[ Array_len; Array_push ];
@@ -460,6 +484,7 @@ let types =
           Str_starts_with;
           Str_concat;
           Str_bytes;
+          Str_lower;
         ]
       ~functions:[ Str_from_utf8 ];
     t "Bytes" ~methods:[ Bytes_len ];
@@ -513,6 +538,7 @@ let intrinsics : Iface.t =
                        } ))
                    (List.map (fun x -> (Iface.Method, x)) t.methods
                    @ List.map (fun x -> (Iface.Function, x)) t.functions));
+            numeric = None;
             loc = None;
           })
         types;

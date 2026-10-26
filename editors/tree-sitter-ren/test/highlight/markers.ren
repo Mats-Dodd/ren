@@ -135,3 +135,14 @@ fn pick(p: Pair<fn() uses Clock, Int>) = p
 //              ^ keyword
 //                        ^ type.dependency
 //                               ^ type
+
+pub type Money = opaque Int with numeric
+//               ^ keyword
+//                          ^ keyword
+//                               ^ keyword
+  pub fn add(self, b: Money) -> Money = self
+//       ^ function
+
+fn half() = 0.5 * 3.0
+//          ^ number
+//                ^ number

@@ -118,6 +118,9 @@ type state = {
           its id: a generic variable's are its scheme's requirements, and a type
           parameter's, while its function is checked, what its body found
           (Infer_reqs). Only looked up, never walked *)
+  need_at : (int * string, Loc.t) Hashtbl.t;
+      (** where each variable was first found to need each requirement, for a
+          message at a call that gives it a type without it *)
   reps : (Path.t, Ty.ty) Hashtbl.t;
       (** what each opaque type of the module being checked is represented as:
           in its own module, an opaque type is its representation (see [reveal])
@@ -132,6 +135,7 @@ let new_state () =
     skolem_vars = Hashtbl.create 16;
     skolem_rows = Hashtbl.create 8;
     needs = Hashtbl.create 8;
+    need_at = Hashtbl.create 8;
     reps = Hashtbl.create 4;
   }
 
@@ -147,6 +151,7 @@ let fresh_row st = RVar (ref (RUnbound (fresh_id st, st.level)))
 let generic_var st = TVar (ref (Unbound (fresh_id st, generic_level)))
 let generic_row st = RVar (ref (RUnbound (fresh_id st, generic_level)))
 let int = TCon (Path.prelude "Int", [])
+let float = TCon (Path.prelude "Float", [])
 let bool = TCon (Path.prelude "Bool", [])
 let unit = TCon (Path.prelude "Unit", [])
 let str = TCon (Path.prelude "Str", [])
@@ -272,12 +277,16 @@ let join_marks a b =
 (* What the variable or type parameter [id] needs, sorted. *)
 let needs st id = Option.value (Hashtbl.find_opt st.needs id) ~default:[]
 
-(* Say that [id] needs [req]. Whether that's new. *)
-let add_need st id req =
+(* Where [id] was first found to need [req], if that's known. *)
+let need_at st id req = Hashtbl.find_opt st.need_at (id, req)
+
+(* Say that [id] needs [req], found [at] that place. Whether that's new. *)
+let add_need ?at st id req =
   let have = needs st id in
   if List.mem req have then false
   else (
     Hashtbl.replace st.needs id (List.sort compare (req :: have));
+    Option.iter (Hashtbl.replace st.need_at (id, req)) at;
     true)
 
 (* A row of [labels], ending in [tail]. *)
@@ -317,7 +326,9 @@ let generalize st ~skolems ?(row_skolems = []) t =
               (match v with
               | TVar { contents = Unbound (vid, _) } ->
                   Hashtbl.replace st.hints vid name;
-                  List.iter (fun r -> ignore (add_need st vid r)) (needs st id)
+                  List.iter
+                    (fun r -> ignore (add_need ?at:(need_at st id r) st vid r))
+                    (needs st id)
               | _ -> ());
               Hashtbl.add table id v;
               Hashtbl.replace st.skolem_vars id v;

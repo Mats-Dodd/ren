@@ -106,6 +106,7 @@ type scheme = {
 type args = { tys : ty list; rows : row list; lams : lams list }
 
 let int = Con (Path.prelude "Int", [])
+let float = Con (Path.prelude "Float", [])
 let bool = Con (Path.prelude "Bool", [])
 let unit = Con (Path.prelude "Unit", [])
 let str = Con (Path.prelude "Str", [])
@@ -135,8 +136,12 @@ let impl_parts t =
 let any_lams = { ids = []; lvar = None }
 
 (* The identity a top-level function, a member or an intrinsic has in a
-   lambda set: its path, written in full, `shop/cart.total`. *)
-let global_id p = Path.full p
+   lambda set: its path, written in full, `shop/cart.total`, and for an
+   operator's second overload or later, which one it is, `Time.sub/1`. *)
+let global_id p =
+  match Path.overload p with
+  | 0 -> Path.full p
+  | n -> Path.full p ^ "/" ^ string_of_int n
 
 (* And the [n]-th lambda of the top-level function [p], counting from 1
    in the order inference meets them, `main.main#2`: its function's path

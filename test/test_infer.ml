@@ -50,11 +50,11 @@ fn main() = 1 + true
 |};
   [%expect
     {|
-    error: expected `Int`, found `Bool`
-      ┌─ test.ren:1:17
+    error: `Int` has no `+` that takes a `Bool`
+      ┌─ test.ren:1:13
     1 │ fn main() = 1 + true
-      │                 ^^^^
-      = `+` works on `Int`s
+      │             ^^^^^^^^
+      = `+` is found on its left side's type, `Int`
     |}]
 
 let%expect_test "missing main" =
@@ -834,11 +834,11 @@ fn main() =
       │         ^^^^^
       help: check the spelling, or declare it in a type, like `type Shape = | Basic`
 
-    error: expected `Int`, found `Bool`
-       ┌─ test.ren:10:7
+    error: `Int` has no `+` that takes a `Bool`
+       ┌─ test.ren:10:3
     10 │   1 + true
-       │       ^^^^
-       = `+` works on `Int`s
+       │   ^^^^^^^^
+       = `+` is found on its left side's type, `Int`
     |}]
 
 (* rows: dependencies flow through calls and transparent parameters *)
@@ -1201,11 +1201,11 @@ fn main() = f() == true
 |};
   [%expect
     {|
-    error: expected `Int`, found `Bool`
-      ┌─ test.ren:1:14
+    error: `Int` has no `+` that takes a `Bool`
+      ┌─ test.ren:1:10
     1 │ fn f() = 1 + true
-      │              ^^^^
-      = `+` works on `Int`s
+      │          ^^^^^^^^
+      = `+` is found on its left side's type, `Int`
 
     error: expected `Bool`, found `Int`
       ┌─ test.ren:2:13
@@ -1290,6 +1290,8 @@ fn main() = print(Some(true))
       | Some Error_tag -> print_endline "an error's tag"
       | Some Unwraps -> print_endline "unwraps a result"
       | Some (Lambda_id id) -> print_endline ("lambda " ^ id)
+      | Some Builtin_op -> print_endline "a built-in operator"
+      | Some (Generic_op r) -> print_endline ("an operator, by its " ^ r)
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect
@@ -1647,7 +1649,7 @@ let%expect_test "a statement's value has to be Unit" =
   run
     {|
 type Bag = { xs: Array<Int> }
-  fn add(inout self, x: Int) -> Option<Int> =
+  fn put(inout self, x: Int) -> Option<Int> =
     &self.xs.push(x)
     None
 
@@ -1655,7 +1657,7 @@ fn count(xs: Array<Int>) -> Int = xs.len()
 
 fn main() =
   var b = Bag { xs: [1] }
-  &b.add(2)
+  &b.put(2)
   count(b.xs)
   b.xs.len() + 1
   if b.xs.len() == 0 then 1 else 2
@@ -1665,9 +1667,9 @@ fn main() =
 |};
   [%expect
     {|
-    error: `add` returns `Option<Int>`, and this throws it away
+    error: `put` returns `Option<Int>`, and this throws it away
        ┌─ test.ren:10:3
-    10 │   &b.add(2)
+    10 │   &b.put(2)
        │   ^^^^^^^^^
        help: use it, or write `let _ = ...` if you mean to drop it
 
@@ -2016,11 +2018,10 @@ fn g(n) = if n > 0 then first(["a"], 0) * 0 else n
 fn main() = ()
 |};
   [%expect {|
-    error: expected `Int`, found `Str`
+    error: `Str` has no `*`
       ┌─ test.ren:2:25
     2 │ fn g(n) = if n > 0 then first(["a"], 0) * 0 else n
-      │                         ^^^^^^^^^^^^^^^
-      = `*` works on `Int`s
+      │                         ^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "a group of many calls checks in time linear in them" =

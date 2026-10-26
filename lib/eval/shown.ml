@@ -9,28 +9,11 @@
    represented as, so a value is shown through its type, and each type's
    declaration, by its path. *)
 
-(* Every type's declaration, by its path. *)
-type types = (Path.t, Iface.type_decl) Hashtbl.t
+(* Every type's declaration, by its path (walk.ml). *)
+type types = Walk.types
 
-let types (decls : Iface.type_decl list) : types =
-  let t = Hashtbl.create 64 in
-  List.iter (fun (d : Iface.type_decl) -> Hashtbl.replace t d.path d) decls;
-  t
-
-(* [t] with each of its type's parameters, [Var i], replaced by [args]'s
-   [i]th. *)
-let rec subst args (t : Ty.ty) : Ty.ty =
-  match t with
-  | Var i -> ( match List.nth_opt args i with Some a -> a | None -> t)
-  | Con (p, ts) -> Con (p, List.map (subst args) ts)
-  | Fun (ps, r, e, u, l) ->
-      Fun
-        ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
-          subst args r,
-          e,
-          u,
-          l )
-  | Errors _ | Uses _ | All _ | Error -> t
+let types = Walk.types_of
+let subst = Walk.subst
 
 (* How a type shows its values: as its own `show` method made [v] look,
    [Itself], or as it's declared. [Inside] is inside that method, where
@@ -38,58 +21,31 @@ let rec subst args (t : Ty.ty) : Ty.ty =
    `show(self)` there doesn't call the method again. *)
 type own = Itself of string | Inside | Declared
 
-(* [v], a value of type [t]. [own p args v] says how the type [p], given
-   [args], shows [v] (eval.ml). *)
+(* [v], a value of type [t], through what [Walk.view] says it's made of.
+   [own p args v] says how the type [p], given [args], shows [v]
+   (eval.ml). *)
 let rec value ~own (types : types) (t : Ty.ty) (v : Value.t) =
   let value = value ~own types in
   let list xs = String.concat ", " xs in
-  match (t, v) with
-  | Con (p, [ elem ]), VArray xs when p = Path.prelude "Array" ->
+  let how = match t with Con (p, args) -> own p args v | _ -> Declared in
+  match (how, Walk.view types t v) with
+  | Itself s, _ -> s
+  | _, Elems (elem, xs) ->
       "[" ^ list (Array.to_list (Array.map (value elem) xs)) ^ "]"
-  | Con (p, args), _ -> (
-      match own p args v with
-      | Itself s -> s
-      | how -> (
-          let d = Hashtbl.find_opt types p in
-          match (Option.map (fun (d : Iface.type_decl) -> d.body) d, v) with
-          | Some (Record fields), VRecord vs ->
-              (* the fields in the order they're declared *)
-              p.name ^ " { "
-              ^ list
-                  (List.map
-                     (fun (f : Iface.field) ->
-                       f.fname ^ ": "
-                       ^ value (subst args f.fty) (List.assoc f.fname vs))
-                     fields)
-              ^ " }"
-          | Some (Sum ctors), VCon c -> (
-              match
-                List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) ctors
-              with
-              | Some k
-                when k.cfields <> []
-                     && List.length k.cfields = List.length c.args ->
-                  c.name ^ "("
-                  ^ list
-                      (List.map2
-                         (fun (f : Iface.field) a -> value (subst args f.fty) a)
-                         k.cfields c.args)
-                  ^ ")"
-              | _ -> Value.show v)
-          | Some (Opaque (Rep rep)), _ when how = Inside ->
-              value (subst args rep) v
-          | Some (Opaque (Rep rep)), _ ->
-              p.name ^ "(" ^ value (subst args rep) v ^ ")"
-          | Some (Opaque (Hidden _)), _ -> p.name ^ "(" ^ Value.show v ^ ")"
-          | _ -> Value.show v))
-  | Errors row, VTag { name; args } -> (
+  | _, Record (name, fields) ->
+      (* the fields in the order they're declared *)
+      name ^ " { "
+      ^ list (List.map (fun (f, t, x) -> f ^ ": " ^ value t x) fields)
+      ^ " }"
+  | _, Ctor { name; fields = _ :: _ as fields; _ } ->
+      name ^ "(" ^ list (List.map (fun (t, x) -> value t x) fields) ^ ")"
+  | Inside, Opaque (_, rep) -> value rep v
+  | _, Opaque (name, rep) -> name ^ "(" ^ value rep v ^ ")"
+  | _, Hidden name -> name ^ "(" ^ Value.show v ^ ")"
+  | _, Tag (name, (_ :: _ as payload)) ->
       (* an error, through its tag's payload's types in the set *)
-      match List.find_opt (fun (l : Ty.label) -> l.name = name) row.labels with
-      | Some l when l.payload <> [] && List.length l.payload = List.length args
-        ->
-          name ^ "(" ^ list (List.map2 value l.payload args) ^ ")"
-      | _ -> Value.show v)
-  | _ -> Value.show v
+      name ^ "(" ^ list (List.map (fun (t, x) -> value t x) payload) ^ ")"
+  | _, (Leaf | Ctor _ | Tag _ | Shape) -> Value.show v
 
 (* What `show` makes of [v]: a string is itself, and anything else, a
    string inside it included, is shown as it's written. *)
@@ -159,8 +115,18 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
         shown := true;
         (l, r)
       in
-      match (t, x, y) with
-      | Con (p, [ elem ]), VArray xs, VArray ys when p = Path.prelude "Array" ->
+      (* a value its type's own `show` shows is kept whole *)
+      let own_shown =
+        match t with
+        | Con (p, args) -> (
+            match own p args x with
+            | Itself _ -> true
+            | Inside | Declared -> false)
+        | _ -> false
+      in
+      match (Walk.view types t x, Walk.view types t y) with
+      | _ when own_shown -> whole ()
+      | Elems (elem, xs), Elems (_, ys) ->
           (* the elements both have, then the first that only one side
              has *)
           let xs = Array.to_list xs and ys = Array.to_list ys in
@@ -195,64 +161,31 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           and er = extra ys (List.length ys) in
           let side shared extra = "[" ^ parts (shared @ extra) ^ "]" in
           (side l el, side r er)
-      | Con (p, args), _, _ -> (
-          match own p args x with
-          | Itself _ -> whole ()
-          | _ -> (
-              match
-                ( Option.map
-                    (fun (d : Iface.type_decl) -> d.body)
-                    (Hashtbl.find_opt types p),
-                  x,
-                  y )
-              with
-              | Some (Record fields), VRecord xs, VRecord ys ->
-                  let get vs =
-                    List.map
-                      (fun (f : Iface.field) -> List.assoc f.fname vs)
-                      fields
-                  in
-                  let l, r =
-                    both
-                      (List.map
-                         (fun (f : Iface.field) -> subst args f.fty)
-                         fields)
-                      (fun i s -> (List.nth fields i).fname ^ ": " ^ s)
-                      (get xs) (get ys)
-                  in
-                  (p.name ^ " { " ^ l ^ " }", p.name ^ " { " ^ r ^ " }")
-              | Some (Sum ctors), VCon c, VCon d when c.name = d.name -> (
-                  match
-                    List.find_opt
-                      (fun (k : Iface.ctor) -> k.cname = c.name)
-                      ctors
-                  with
-                  | Some k
-                    when k.cfields <> []
-                         && List.length k.cfields = List.length c.args
-                         && List.length c.args = List.length d.args ->
-                      let l, r =
-                        both
-                          (List.map
-                             (fun (f : Iface.field) -> subst args f.fty)
-                             k.cfields)
-                          (fun _ s -> s)
-                          c.args d.args
-                      in
-                      (c.name ^ "(" ^ l ^ ")", c.name ^ "(" ^ r ^ ")")
-                  | _ -> whole ())
-              | _ -> whole ()))
-      | Errors row, VTag x, VTag y when x.name = y.name -> (
-          match
-            List.find_opt (fun (l : Ty.label) -> l.name = x.name) row.labels
-          with
-          | Some l
-            when l.payload <> []
-                 && List.length l.payload = List.length x.args
-                 && List.length x.args = List.length y.args ->
-              let l, r = both l.payload (fun _ s -> s) x.args y.args in
-              (x.name ^ "(" ^ l ^ ")", x.name ^ "(" ^ r ^ ")")
-          | _ -> whole ())
+      | Record (name, xs), Record (_, ys) ->
+          let l, r =
+            both
+              (List.map (fun (_, t, _) -> t) xs)
+              (fun i s ->
+                let f, _, _ = List.nth xs i in
+                f ^ ": " ^ s)
+              (List.map (fun (_, _, x) -> x) xs)
+              (List.map (fun (_, _, y) -> y) ys)
+          in
+          (name ^ " { " ^ l ^ " }", name ^ " { " ^ r ^ " }")
+      | Ctor c, Ctor d when c.name = d.name && c.fields <> [] ->
+          let l, r =
+            both (List.map fst c.fields)
+              (fun _ s -> s)
+              (List.map snd c.fields) (List.map snd d.fields)
+          in
+          (c.name ^ "(" ^ l ^ ")", c.name ^ "(" ^ r ^ ")")
+      | Tag (x, xs), Tag (y, ys) when x = y && xs <> [] ->
+          let l, r =
+            both (List.map fst xs)
+              (fun _ s -> s)
+              (List.map snd xs) (List.map snd ys)
+          in
+          (x ^ "(" ^ l ^ ")", x ^ "(" ^ r ^ ")")
       | _ -> whole ()
   in
   match go t a b with

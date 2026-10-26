@@ -77,6 +77,10 @@ type type_decl = {
   members : op Path.Map.t;
       (** its members, each by its path (path.ml): every item in its own
           module's view of it, only the public ones in its interface *)
+  numeric : Ty.ty option;
+      (** for an opaque type `with numeric`, what it's represented as, `Int` or
+          `Float`, which even its interface says: another module adds two and
+          scales one by that (operators.md, "Number types") *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
@@ -93,8 +97,64 @@ let find_type iface name =
 
 let find_value iface name = List.find_opt (fun v -> v.vname = name) iface.values
 
-(* The member [name] of the type [d], if it has one. *)
+(* The member [name] of the type [d], if it has one: the first of that
+   name, if it's an operator written for several types on its right. *)
 let find_member d name = Path.Map.find_opt (Path.member d.path name) d.members
+
+(* Every member [name] of [d], with its path: one for each type on an
+   operator's right, and one for anything else, in source order. *)
+let find_members d name =
+  let rec go n =
+    let p = Path.member_n d.path name n in
+    match Path.Map.find_opt p d.members with
+    | Some o -> (p, o) :: go (n + 1)
+    | None -> []
+  in
+  go 0
+
+(* The operators that are methods, by their requirement's name: `add`
+   for `+` (operators.md, "Operators are methods"). *)
+let operators = [ "add"; "sub"; "mul"; "div"; "rem"; "neg" ]
+
+(* Every requirement a type variable can have: `eq`, `hash` and `ord`,
+   the operators, and the associated values `zero` and `one`. *)
+let requirements = [ "eq"; "hash"; "ord" ] @ operators @ [ "zero"; "one" ]
+
+(* Whether [t], a type as a declaration writes it, is [d]'s own type
+   with its own parameters: `Vec`, or `Box<T>` in `Box`'s members. *)
+let is_self d (t : Ty.ty) =
+  match t with
+  | Con (q, args) ->
+      q = d.path
+      && List.for_all2
+           (fun a n -> a = Ty.Var n)
+           args
+           (List.mapi (fun i _ -> i) args)
+  | _ -> false
+
+(* [d]'s `key`, if it has one: its path, and the key's type, the type's
+   parameters [Var]s. *)
+let key d =
+  match find_member d "key" with
+  | Some { okind = Method; oscheme = { ty = Fun (_, k, _, _, _); _ }; _ } ->
+      Some (Path.member d.path "key", k)
+  | _ -> None
+
+(* The member of [d] that gives it the requirement [req], an operator or
+   an associated value, if one does (operators.md, "Generic code"): an
+   operator that takes one of the type and gives one, or `neg`, which
+   takes only `self`, or a value of the type. *)
+let provider d req =
+  let fits o =
+    match (o.okind, o.oscheme.ty) with
+    | Method, Fun ([ s; b ], r, _, _, _) when req <> "neg" ->
+        is_self d s.ty && is_self d b.ty && is_self d r
+    | Method, Fun ([ s ], r, _, _, _) when req = "neg" ->
+        is_self d s.ty && is_self d r
+    | Value, t when req = "zero" || req = "one" -> is_self d t
+    | _ -> false
+  in
+  List.find_opt (fun (_, o) -> fits o) (find_members d req)
 
 (* The members of [d], in source order. *)
 let members d =
@@ -102,9 +162,16 @@ let members d =
     (fun a b -> compare a.onum b.onum)
     (List.map snd (Path.Map.bindings d.members))
 
-(* The members [ops] of the type at [path], each by its own path. *)
+(* The members [ops] of the type at [path], each by its own path: the
+   [n]th of a name, by [Path.member_n]. *)
 let members_of path ops =
-  Path.Map.of_list (List.map (fun o -> (Path.member path o.oname, o)) ops)
+  let rec go seen = function
+    | [] -> []
+    | o :: rest ->
+        let n = List.length (List.filter (( = ) o.oname) seen) in
+        (Path.member_n path o.oname n, o) :: go (o.oname :: seen) rest
+  in
+  Path.Map.of_list (go [] ops)
 
 (* ---- named error sets ---- *)
 
@@ -352,7 +419,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
                  cloc = c.ctor_name.loc;
                })
              cs)
-    | Opaque t -> Opaque (Rep (of_written ~sets t))
+    | Opaque { rep; _ } -> Opaque (Rep (of_written ~sets rep))
     | Errors es -> Errors (declared_errors ~sets es)
     | Dep ops -> Dep (List.map field ops)
   in
@@ -382,6 +449,10 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
     params = List.map (fun (p : Ast.ident) -> p.name) td.type_params;
     body;
     members = members_of path (List.mapi op td.type_ops);
+    numeric =
+      (match td.type_body with
+      | Opaque { rep; numeric = Some _ } -> Some (of_written ~sets rep)
+      | _ -> None);
     loc = Some td.type_name.loc;
   }
 

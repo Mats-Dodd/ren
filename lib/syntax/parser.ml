@@ -158,8 +158,14 @@ let node p kind loc : expr =
 
 let mk kind start p = node p kind (Loc.span start (last_loc p))
 
+(* A node of its own for the method an operator uses (ast.ml, [Binop]). *)
+let onode p =
+  p.node <- p.node + 1;
+  p.node
+
 let describe = function
-  | INT n -> Printf.sprintf "the number `%d`" n
+  | INT n -> Printf.sprintf "the number `%Ld`" n
+  | FLOAT f -> Printf.sprintf "the number `%s`" (Token.show_float f)
   | STR s -> Printf.sprintf "the string `%s`" (show_str s)
   | IDENT s -> Printf.sprintf "`%s`" s
   | NEWLINE -> "a new line"
@@ -167,6 +173,14 @@ let describe = function
   | DEDENT -> "the end of the block"
   | EOF -> "the end of the file"
   | tok -> Printf.sprintf "`%s`" (Token.to_string tok)
+
+(* The number 2^63, which the lexer reads as [Int64.min_int]: it's an
+   `Int` only as `-9223372036854775808`, the smallest one, which [Neg]
+   can't make, since `-` of 2^63 is past the largest. Anywhere else it's
+   too big. *)
+let too_big p =
+  Diag.error (loc p) ~help:"the smallest `Int` is `-9223372036854775808`"
+    "this number is too big to fit in an `Int`"
 
 let fail_expected p what =
   Diag.error (loc p)
@@ -544,7 +558,23 @@ let parse_type_body p =
       Fields (sep_list p ~close:RBRACE parse_field_decl)
   | OPAQUE ->
       advance p;
-      Opaque (parse_ty p)
+      let rep = parse_ty p in
+      (* `with numeric` gives it its arithmetic (operators.md, "Number
+         types") *)
+      let numeric =
+        if peek p = WITH then (
+          advance p;
+          match peek p with
+          | IDENT "numeric" ->
+              let at = loc p in
+              advance p;
+              Some at
+          | _ ->
+              Diag.error (loc p) ~help:"write `opaque Int with numeric`"
+                "an opaque type can only be `with numeric`")
+        else None
+      in
+      Opaque { rep; numeric }
   | BANG -> Errors (parse_errors ~lines:true p)
   | _ -> Ctors (parse_ctors p)
 
@@ -554,6 +584,12 @@ let parse_type_body p =
 let mk_pattern p start pkind =
   p.node <- p.node + 1;
   { pkind; ploc = Loc.span start (last_loc p); pnode = p.node }
+
+(* A `Float` isn't a pattern: two floats that print the same can differ,
+   so matching one exactly is rarely what's meant. *)
+let float_pattern p =
+  Diag.error (loc p) ~help:"compare it in a guard: `x if x == 1.5 => ...`"
+    "a `Float` can't be a pattern"
 
 let rec parse_pattern p : pattern =
   let start = loc p in
@@ -572,6 +608,7 @@ let rec parse_pattern p : pattern =
   | IDENT name ->
       advance p;
       finish (PVar { name; loc = Loc.span start (last_loc p) })
+  | INT n when n = Int64.min_int -> too_big p
   | INT n ->
       advance p;
       finish (PInt n)
@@ -579,9 +616,13 @@ let rec parse_pattern p : pattern =
       advance p;
       match peek p with
       | INT n ->
+          (* for `-9223372036854775808`, [n] is [Int64.min_int], and so is
+             its [Int64.neg] *)
           advance p;
-          finish (PInt (-n))
+          finish (PInt (Int64.neg n))
+      | FLOAT _ -> float_pattern p
       | _ -> fail_expected p "a number")
+  | FLOAT _ -> float_pattern p
   | TRUE ->
       advance p;
       finish (PBool true)
@@ -669,7 +710,7 @@ and parse_line p =
   | Some op ->
       advance p;
       let value = parse_body p in
-      mk (Assign { target = e; op; value }) start p
+      mk (Assign { target = e; op; value; onode = onode p }) start p
 
 and parse_block p =
   let start = loc p in
@@ -731,7 +772,7 @@ and parse_expr p =
   if peek p = ORELSE then (
     advance p;
     let rhs = parse_expr p in
-    mk (Binop (Orelse, lhs, rhs)) start p)
+    mk (Binop (Orelse, lhs, rhs, onode p)) start p)
   else lhs
 
 and parse_or p = left_assoc [ (PIPEPIPE, Or) ] parse_and p
@@ -743,7 +784,7 @@ and parse_not p =
       let start = loc p in
       advance p;
       let e = parse_not p in
-      mk (Unop (Not, e)) start p
+      mk (Unop (Not, e, onode p)) start p
   | _ -> parse_cmp p
 
 and parse_cmp p =
@@ -762,7 +803,7 @@ and parse_cmp p =
       if cmp_op (peek p) <> None then
         Diag.error (loc p) ~help:"split it into two comparisons"
           "comparisons can't be chained";
-      mk (Binop (op, lhs, rhs)) start p
+      mk (Binop (op, lhs, rhs, onode p)) start p
 
 (* A left-associative binary level: `a - b - c` parses as `(a - b) - c`. *)
 and left_assoc ops next p =
@@ -772,7 +813,7 @@ and left_assoc ops next p =
     | Some op ->
         advance p;
         let rhs = next p in
-        loop (mk (Binop (op, lhs, rhs)) start p)
+        loop (mk (Binop (op, lhs, rhs, onode p)) start p)
     | None -> lhs
   in
   loop (next p)
@@ -784,11 +825,19 @@ and parse_mul p =
 
 and parse_unary p =
   match peek p with
-  | MINUS ->
+  | MINUS -> (
       let start = loc p in
       advance p;
-      let e = parse_unary p in
-      mk (Unop (Neg, e)) start p
+      match (peek p, peek2 p) with
+      | INT n, tok
+        when n = Int64.min_int && not (List.mem tok [ DOT; LBRACKET; LPAREN ])
+        ->
+          (* the smallest `Int`, written whole ([too_big]) *)
+          advance p;
+          mk (Int n) start p
+      | _ ->
+          let e = parse_unary p in
+          mk (Unop (Neg, e, onode p)) start p)
   | AMP ->
       let start = loc p in
       advance p;
@@ -848,9 +897,13 @@ and parse_postfix p =
 and parse_primary p =
   let start = loc p in
   match peek p with
+  | INT n when n = Int64.min_int -> too_big p
   | INT n ->
       advance p;
       mk (Int n) start p
+  | FLOAT f ->
+      advance p;
+      mk (Float f) start p
   | STR s ->
       advance p;
       mk (Str s) start p
@@ -1208,6 +1261,7 @@ let parse_fn p ~pub =
     uses;
     body;
     owner = None;
+    overload = 0;
     loc = Loc.span start (last_loc p);
   }
 
@@ -1256,6 +1310,7 @@ let parse_op ?(dep = false) p ~tname =
               uses = None;
               body;
               owner = None;
+              overload = 0;
               loc = Loc.span start (last_loc p);
             };
         }
@@ -1273,16 +1328,21 @@ let parse_op ?(dep = false) p ~tname =
       in
       expect p FATARROW;
       ignore (parse_body p);
+      (* the old way to write an operator: now it's a method with a
+         reserved name, or an associated value (operators.md) *)
+      let help =
+        match (params, name.name) with
+        | [], n -> Printf.sprintf "write `pub let %s: %s = ...`" n tname
+        | _, "neg" ->
+            Printf.sprintf "write `pub fn neg(self) -> %s = ...`" tname
+        | _, n ->
+            Printf.sprintf "write `pub fn %s(self, b: %s) -> %s = ...`" n tname
+              tname
+      in
       Diag.report p.sink
-        (Diag.make name.loc
-           ~help:
-             (if params = [] then
-                Printf.sprintf
-                  "for now, write an associated value: `let %s = ...`" name.name
-              else
-                Printf.sprintf
-                  "for now, write a method: `fn %s(self, ...) = ...`" name.name)
-           (Printf.sprintf "operators like `%s` arrive in stage 9" name.name));
+        (Diag.make name.loc ~help
+           (if params = [] then "an associated value is written with `let`"
+            else "an operator is a method"));
       None
   | tok ->
       let what =
@@ -1317,11 +1377,18 @@ let parse_members ?dep p ~tname =
   in
   items []
 
-(* The members [ops] of the type [type_name], each knowing whose it is. *)
+(* The members [ops] of the type [type_name], each knowing whose it is,
+   and which of the members of its name it is (Ast.fn_def's [overload]). *)
 let owned_by type_name ops =
-  List.map
-    (fun o -> { o with op_fn = { o.op_fn with owner = Some type_name } })
-    ops
+  let rec go seen = function
+    | [] -> []
+    | o :: rest ->
+        let name = o.op_fn.name.name in
+        let overload = List.length (List.filter (( = ) name) seen) in
+        { o with op_fn = { o.op_fn with owner = Some type_name; overload } }
+        :: go (name :: seen) rest
+  in
+  go [] ops
 
 let parse_type p ~pub =
   expect p TYPE;
@@ -1588,6 +1655,7 @@ let parse_handler p ~pub =
     uses = None;
     body;
     owner = None;
+    overload = 0;
     loc = Loc.span start (last_loc p);
   }
 

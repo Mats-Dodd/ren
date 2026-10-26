@@ -125,7 +125,7 @@ log.info("done", took: Clock.instant() - started)   // Instant - Instant → Dur
 let bad = Clock.now() - started                      // error: Time - Instant
 ```
 
-`sim.clock` controls both, and can make `now` jump (an NTP correction) while `instant` keeps advancing steadily. `Time`, `Instant` and `Duration` are in the prelude (stage 7), with methods, `Duration.ms(100)` and `t.plus(d)`, until operators arrive (stage 9) and `t.plus(d)` becomes `t + d`. Formatting, parsing and time zones are in the `time` module, with the time zone database built in and pinned for determinism.
+`sim.clock` controls both, and can make `now` jump (an NTP correction) while `instant` keeps advancing steadily. `Time`, `Instant` and `Duration` are in the prelude (stage 7), with operators since stage 9a: `Duration.ms(100)`, `t + d`, and `t - u` for the `Duration` between two. Formatting, parsing and time zones are in the `time` module, with the time zone database built in and pinned for determinism.
 
 ### `Decimal`
 

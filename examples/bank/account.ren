@@ -38,12 +38,12 @@ pub type Account = {
   // clock, so the signature says `uses Clock`.
   pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) uses Clock =
     if self.frozen then fail Frozen(self.id)
-    self.balance = self.balance.plus(m)
+    self.balance = self.balance + m
     &self.statement.push(Entry { at: Clock.now(), what })
 
   // money out, unless it's frozen or there isn't enough
   pub fn debit(inout self, m: Money, what: Movement) ! Refusal uses Clock =
     if self.frozen then fail Frozen(self.id)
-    if not self.balance.covers(m) then fail Short(self.id, m.minus(self.balance))
-    self.balance = self.balance.minus(m)
+    if self.balance < m then fail Short(self.id, m - self.balance)
+    self.balance = self.balance - m
     &self.statement.push(Entry { at: Clock.now(), what })

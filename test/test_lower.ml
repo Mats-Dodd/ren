@@ -258,6 +258,8 @@ let%expect_test "Core Lint reports a node of the wrong type" =
               fns = [ main ];
               values = [];
               shows = [];
+              keys = [];
+              ops = [];
             }));
   [%expect
     {|
@@ -322,7 +324,7 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
                     ~default:(List.map (Ren.Core.describe []) targs.tys),
                   [] ))
              int_fn loc,
-           [ Value (Ren.Core.mk (Int 1) Ren.Ty.int loc) ],
+           [ Value (Ren.Core.mk (Int 1L) Ren.Ty.int loc) ],
            Ren.Core.evidence 9 ))
       Ren.Ty.int loc
   in
@@ -339,7 +341,15 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
-            { home = "test"; types; fns = [ id; main ]; values = []; shows });
+            {
+              home = "test";
+              types;
+              fns = [ id; main ];
+              values = [];
+              shows;
+              keys = [];
+              ops = [];
+            });
       print_endline "ok")
 
 let%expect_test "Core Lint reports a use at the wrong type arguments" =
@@ -427,7 +437,15 @@ let%expect_test "Core Lint reports a pattern of an error type" =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
-            { home = "test"; types = []; fns = [ f ]; values = []; shows = [] }));
+            {
+              home = "test";
+              types = [];
+              fns = [ f ];
+              values = [];
+              shows = [];
+              keys = [];
+              ops = [];
+            }));
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `f`, at test.ren:1:1: a pattern has an error type")
@@ -437,7 +455,7 @@ let%expect_test "Core Lint reports a pattern of an error type" =
 let%expect_test "Core Lint reports a fail of something that isn't an error" =
   let loc = Ren.Loc.point ~file 1 1 in
   let body =
-    Ren.Core.mk (Fail (Ren.Core.mk (Int 1) Ren.Ty.int loc)) Ren.Ty.unit loc
+    Ren.Core.mk (Fail (Ren.Core.mk (Int 1L) Ren.Ty.int loc)) Ren.Ty.unit loc
   in
   let main : Ren.Core.fn_def =
     {
@@ -472,6 +490,8 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
               fns = [ main ];
               values = [];
               shows = [];
+              keys = [];
+              ops = [];
             }));
   [%expect
     {|
@@ -522,6 +542,8 @@ let%expect_test "Core Lint reports an instance that is a value" =
               fns = [ main ];
               values = [];
               shows = [];
+              keys = [];
+              ops = [];
             }));
   [%expect
     {|
@@ -553,7 +575,7 @@ let values_program ~uses_b ~values =
     }
   in
   let a = value "a" (Ren.Core.mk uses_b Ren.Ty.int loc) in
-  let b = value "b" (Ren.Core.mk (Int 1) Ren.Ty.int loc) in
+  let b = value "b" (Ren.Core.mk (Int 1L) Ren.Ty.int loc) in
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
@@ -563,6 +585,8 @@ let values_program ~uses_b ~values =
               fns = [ a; b ];
               values = List.map path values;
               shows = [];
+              keys = [];
+              ops = [];
             }))
 
 let%expect_test "Core Lint reports a value named as a function" =
@@ -789,6 +813,7 @@ let%expect_test "Core Lint reports a type said to show itself that can't" =
       params = [ "T" ];
       body = Record [ { fname = "v"; fty = Var 0 } ];
       members = Ren.Path.Map.empty;
+      numeric = None;
       loc = None;
     }
   in
@@ -887,7 +912,7 @@ let%expect_test "Core Lint checks requirements' dictionaries" =
         { f with body = { f.body with kind = kind d args } }
     | _ -> f
   in
-  let eq dty from = Derived { req = "eq"; dty; from } in
+  let eq dty from = Derived { req = "eq"; dty; ddesc = Known dty; from } in
   lint_same Fun.id;
   [%expect {| ok |}];
   (* `same` without its dictionary parameter *)
@@ -929,7 +954,7 @@ let%expect_test "Core Lint checks requirements' dictionaries" =
   (* `same`'s `==` through one derived for its own `T`, not its own *)
   lint_same
     (compared (fun d args ->
-         let own = List.map (fun v -> (0, v)) (dict_vars d) in
+         let own = List.map (fun v -> ((0, "eq"), v)) (dict_vars d) in
          Prim (Equal (eq (Var 0) own), args)));
   [%expect
     {|

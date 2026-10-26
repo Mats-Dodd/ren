@@ -180,8 +180,8 @@ let details b ~opts ~sources ~all f =
   let name = full_name f.test in
   let loc =
     match f.how with
-    | Panicked (Eval.Panic (loc, _)) | Panicked (Eval.Assert_failed { loc; _ })
-      ->
+    | Panicked (Eval.Panic { loc; _ })
+    | Panicked (Eval.Assert_failed { loc; _ }) ->
         loc
     | _ -> f.test.loc
   in
@@ -196,7 +196,11 @@ let details b ~opts ~sources ~all f =
         (String.make (String.length "right: " + first_difference l r) ' ')
   | Panicked (Eval.Assert_failed { sides = None; _ }) ->
       Printf.bprintf b "%sthis is false\n" pad
-  | Panicked (Eval.Panic (_, msg)) -> Printf.bprintf b "%spanic: %s\n" pad msg
+  | Panicked (Eval.Panic { msg; wrap; _ }) -> (
+      Printf.bprintf b "%spanic: %s\n" pad msg;
+      match Option.bind wrap (Driver.wrap_help ~sources) with
+      | Some h -> Printf.bprintf b "%shelp: %s\n" pad h
+      | None -> ())
   | Failed err -> Printf.bprintf b "%serror: %s\n" pad err
   | Panicked e -> raise e
   | Passed -> ());

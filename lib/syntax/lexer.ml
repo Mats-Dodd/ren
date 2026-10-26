@@ -279,14 +279,31 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       while is_digit (peek 0) || peek 0 = '_' do
         incr i
       done;
+      (* a `.` and a digit after it make it a `Float`, `1.5`; `1..3` is a
+         range and `1.show()` a call, as before *)
+      let is_float = peek 0 = '.' && is_digit (peek 1) in
+      if is_float then (
+        incr i;
+        while is_digit (peek 0) || peek 0 = '_' do
+          incr i
+        done);
       (* `1_000_000` is allowed; drop the underscores before converting *)
       let text =
         String.sub src s (!i - s)
         |> String.split_on_char '_' |> String.concat ""
       in
-      match int_of_string_opt text with
-      | Some n -> emit (INT n) start
-      | None -> error start "this number is too big to fit in an `Int`")
+      if is_float then
+        match float_of_string_opt text with
+        | Some f when Float.is_finite f -> emit (FLOAT f) start
+        | _ -> error start "this number is too big for a `Float`"
+      else
+        match (Int64.of_string_opt text, Int64.of_string_opt ("-" ^ text)) with
+        | Some n, _ -> emit (INT n) start
+        (* 2^63, which fits only after a `-`: the smallest `Int`. It's
+           [Int64.min_int] here, and the parser lets it through only right
+           after a `-` ([Parser.too_big]) *)
+        | None, Some n when n = Int64.min_int -> emit (INT n) start
+        | _ -> error start "this number is too big to fit in an `Int`")
     else if c = '"' then lex_string start
     else if is_ident_start c then (
       let s = !i in

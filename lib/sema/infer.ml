@@ -70,6 +70,8 @@ type found = Infer_env.found =
   | Fail_arm
   | Unwraps
   | Lambda_id of string
+  | Builtin_op
+  | Generic_op of string
 
 module Nodes = Infer_top.Nodes
 

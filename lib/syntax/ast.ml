@@ -128,7 +128,7 @@ type ('b, 't) pattern = {
 and ('b, 't) pattern_kind =
   | PWild  (** [_] *)
   | PVar of 'b  (** a lowercase name: matches anything, binds it *)
-  | PInt of int
+  | PInt of Int64.t
   | PBool of bool
   | PCon of 't ctor_ref * ('b, 't) pattern list
       (** [Free], [Pro(seats)], [Plan.Free] *)
@@ -156,15 +156,20 @@ type ('v, 'b, 't) expr = {
 }
 
 and ('v, 'b, 't) expr_kind =
-  | Int of int
+  | Int of Int64.t
+  | Float of float  (** [1.5]: a literal's spelling says its type *)
   | Bool of bool
   | Str of string  (** ["Ren"], its escapes undone *)
   | Unit  (** [()] *)
   | Var of 'v
       (** a local variable, a top-level function, or a member written after its
           type, [Stack.of] *)
-  | Unop of unop * ('v, 'b, 't) expr
-  | Binop of binop * ('v, 'b, 't) expr * ('v, 'b, 't) expr
+  | Unop of unop * ('v, 'b, 't) expr * int
+  | Binop of binop * ('v, 'b, 't) expr * ('v, 'b, 't) expr * int
+      (** [a + b]. An operator is a method of its left side's type, `a.add(b)`
+          (operators.md), and the [int] numbers that method's use, as a node of
+          its own, as [With]'s [lam] does: what inference found it to be, and
+          the type it's used at, are recorded there. [-a] is [Unop]'s *)
   | If of ('v, 'b, 't) expr * ('v, 'b, 't) expr * ('v, 'b, 't) expr option
       (** with no [else], the [if] is [Unit] *)
   | Call of ('v, 'b, 't) expr * ('v, 'b, 't) expr list
@@ -189,6 +194,7 @@ and ('v, 'b, 't) expr_kind =
       target : ('v, 'b, 't) expr;
       op : binop option;
       value : ('v, 'b, 't) expr;
+      onode : int;  (** the method [op] uses, as [Binop]'s *)
     }  (** [x = 1], [user.plan = Free], [xs[i] += 1]; the target is a place *)
   | For of { var : 'b; iter : ('v, 'b, 't) expr; body : ('v, 'b, 't) expr }
       (** [for x in xs], or [for p in &ps] to change each element *)
@@ -255,7 +261,7 @@ type 't ctor = { ctor_name : ident; ctor_fields : 't field list }
 type 't type_body =
   | Fields of 't field list  (** a record: [{ id: Int, plan: Plan }] *)
   | Ctors of 't ctor list  (** a sum type: [| Free | Pro(seats: Int)] *)
-  | Opaque of 't ty
+  | Opaque of { rep : 't ty; numeric : Loc.t option }
       (** [opaque Int]: a type of its own, represented as the type written,
           which only its module can see *)
   | Errors of 't errors
@@ -280,6 +286,11 @@ type ('v, 'b, 't) fn_def = {
   owner : ident option;
       (** the type it's a member of, [Stack] for [push]; [None] for a top-level
           function *)
+  overload : int;
+      (** which of its type's members of its name it is, counting from 0 in
+          source order: an operator can be written once for each type on its
+          right, `sub(self, t: Time)` and `sub(self, d: Duration)`, and nothing
+          else more than once (operators.md). 0 for anything else *)
   loc : Loc.t;
 }
 
@@ -390,7 +401,7 @@ let functions (prog : ('v, 'b, 't) program) =
    and which member it is (path.ml). *)
 let fn_path home (f : ('v, 'b, 't) fn_def) =
   match f.owner with
-  | Some t -> Path.member (Path.make home t.name) f.name.name
+  | Some t -> Path.member_n (Path.make home t.name) f.name.name f.overload
   | None -> Path.make home f.name.name
 
 (* How [f] is written in its own module, for a message: `Stack.push` for a
@@ -441,8 +452,8 @@ let changed_receiver (e : ('v, 'b, 't) expr) =
 let children (e : ('v, 'b, 't) expr) =
   let stmt = function Let { value; _ } -> value | Expr e -> e in
   match e.kind with
-  | Int _ | Bool _ | Str _ | Unit | Var _ -> []
-  | Unop (_, a)
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> []
+  | Unop (_, a, _)
   | Field (a, _)
   | Ref a
   | Lambda (_, a)
@@ -450,7 +461,7 @@ let children (e : ('v, 'b, 't) expr) =
   | Attempt a
   | Assert a ->
       [ a ]
-  | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
+  | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
       [ a; b ]
   | If (c, t, f) -> c :: t :: Option.to_list f
   | Call (f, args) -> f :: args
@@ -492,6 +503,11 @@ and bound =
   | By_ref_loop  (** [p] in [for p in &ps], which changes each element *)
   | By_pattern
 
+(* A type's name: a declared type, or the [i]th type parameter in scope
+   (of the type being declared, or of the function). *)
+type tname = { tref : tref; tloc : Loc.t }
+and tref = Named of Path.t | Param of int
+
 (* A name used as a value. *)
 type name =
   | Local of binder
@@ -507,11 +523,11 @@ type name =
   | Dep_op of Path.t * string
       (** an operation of the dependency at the path, [Clock.now]: calling it
           calls the implementation installed where it's called *)
-
-(* A type's name: a declared type, or the [i]th type parameter in scope
-   (of the type being declared, or of the function). *)
-type tname = { tref : tref; tloc : Loc.t }
-and tref = Named of Path.t | Param of int
+  | Assoc_value of tref * string
+      (** [zero] or [one] of a type that has it without declaring it: of a type
+          parameter, [T.zero], whatever the function's given for [T] has
+          (operators.md, "Generic code"); of [Int] or [Float]; or a `with
+          numeric` type's [zero] *)
 
 module Parsed = struct
   type nonrec ty = tyname ty
@@ -581,10 +597,22 @@ let binop_to_string = function
   | Or -> "||"
   | Orelse -> "orelse"
 
+(* The method an arithmetic operator is, `+` is `add` (operators.md,
+   "Operators are methods"), and the requirement it makes of a type
+   variable; [None] for the rest, which aren't methods. `-a` is `neg`. *)
+let binop_method = function
+  | Add -> Some "add"
+  | Sub -> Some "sub"
+  | Mul -> Some "mul"
+  | Div -> Some "div"
+  | Mod -> Some "rem"
+  | Eq | Neq | Lt | Le | Gt | Ge | And | Or | Orelse -> None
+
 let parens words = "(" ^ String.concat " " words ^ ")"
 
 (* A string as it's written, in quotes, with its escapes (token.ml). *)
 let show_str = Token.show_str
+let show_float = Token.show_float
 
 open Parsed
 
@@ -650,7 +678,7 @@ let rec show_pattern (p : pattern) =
   match p.pkind with
   | PWild -> "_"
   | PVar x -> x.name
-  | PInt n -> string_of_int n
+  | PInt n -> Int64.to_string n
   | PBool b -> string_of_bool b
   | PCon (c, []) -> show_ctor_ref c
   | PCon (c, args) ->
@@ -667,15 +695,17 @@ let rec show_pattern (p : pattern) =
 
 let rec show_expr (e : expr) =
   match e.kind with
-  | Int n -> string_of_int n
+  | Int n -> Int64.to_string n
+  | Float f -> show_float f
   | Bool b -> string_of_bool b
   | Str s -> show_str s
   | Unit -> "()"
   | Var (Bare x) -> x
   | Var (Item (t, f)) -> show_tyname t ^ "." ^ f.name
-  | Unop (Neg, a) -> parens [ "neg"; show_expr a ]
-  | Unop (Not, a) -> parens [ "not"; show_expr a ]
-  | Binop (op, a, b) -> parens [ binop_to_string op; show_expr a; show_expr b ]
+  | Unop (Neg, a, _) -> parens [ "neg"; show_expr a ]
+  | Unop (Not, a, _) -> parens [ "not"; show_expr a ]
+  | Binop (op, a, b, _) ->
+      parens [ binop_to_string op; show_expr a; show_expr b ]
   | If (c, t, Some f) -> parens [ "if"; show_expr c; show_expr t; show_expr f ]
   | If (c, t, None) -> parens [ "if"; show_expr c; show_expr t ]
   | Call (f, args) -> parens ("call" :: show_expr f :: List.map show_expr args)
@@ -699,7 +729,7 @@ let rec show_expr (e : expr) =
   | Array xs -> parens ("array" :: List.map show_expr xs)
   | Index (a, i) -> parens [ "index"; show_expr a; show_expr i ]
   | Ref a -> parens [ "&"; show_expr a ]
-  | Assign { target; op; value } ->
+  | Assign { target; op; value; _ } ->
       let op =
         match op with Some o -> binop_to_string o ^ "=" | None -> "="
       in
@@ -781,7 +811,9 @@ let show_type_def (td : type_def) =
           (fun c ->
             parens (c.ctor_name.name :: List.map show_field c.ctor_fields))
           cs
-    | Opaque t -> [ parens [ "opaque"; show_ty t ] ]
+    | Opaque { rep; numeric = None } -> [ parens [ "opaque"; show_ty rep ] ]
+    | Opaque { rep; numeric = Some _ } ->
+        [ parens [ "opaque"; show_ty rep; "numeric" ] ]
     | Errors es -> [ parens [ show_errors es ] ]
     | Dep ops -> [ parens ("ops" :: List.map show_field ops) ]
   in
@@ -872,7 +904,8 @@ let source ~type_name ~value_name (e : Resolved.expr) =
      once, at the top *)
   let rec go (e : Resolved.expr) =
     match e.kind with
-    | Int n -> string_of_int n
+    | Int n -> Int64.to_string n
+    | Float f -> show_float f
     | Bool b -> string_of_bool b
     | Str s -> show_str s
     | Unit -> "()"
@@ -880,12 +913,14 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Var (Global p | Global_value p) -> value_name p
     | Var (Intrinsic x) -> Intrinsic.name x
     | Var (Dep_op (p, op)) -> type_name p ^ "." ^ op
-    | Unop (Neg, a) -> "-" ^ operand 7 a
-    | Unop (Not, a) -> "not " ^ operand 3 a
-    | Binop (Orelse, a, b) ->
+    | Var (Assoc_value (Named p, v)) -> type_name p ^ "." ^ v
+    | Var (Assoc_value (Param _, _)) -> raise Exit
+    | Unop (Neg, a, _) -> "-" ^ operand 7 a
+    | Unop (Not, a, _) -> "not " ^ operand 3 a
+    | Binop (Orelse, a, b, _) ->
         (* it groups to the right: `a orelse b orelse c` tries `a`, then `b` *)
         left 1 a ^ " orelse " ^ operand 0 b
-    | Binop (op, a, b) ->
+    | Binop (op, a, b, _) ->
         let n = precedence op in
         left n a ^ " " ^ binop_to_string op ^ " " ^ operand (n + 1) b
     | Try a -> "try " ^ go a
@@ -915,8 +950,8 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         raise Exit
   and operand n (a : Resolved.expr) =
     match a.kind with
-    | Binop (op, _, _) when precedence op < n -> "(" ^ go a ^ ")"
-    | Unop (Not, _) when 3 < n -> "(" ^ go a ^ ")"
+    | Binop (op, _, _, _) when precedence op < n -> "(" ^ go a ^ ")"
+    | Unop (Not, _, _) when 3 < n -> "(" ^ go a ^ ")"
     | _ -> go a
   (* an operator's left operand, or what a call, field or index is of
      (at 8, tighter than any operator): a `try` it ends in would otherwise
@@ -931,11 +966,11 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     match a.kind with
     | Try _ -> true
     | Attempt _ -> n > 4
-    | Binop (Orelse, _, b) when 0 >= at -> ends_open n 0 b
-    | Binop (op, _, b) when precedence op >= at ->
+    | Binop (Orelse, _, b, _) when 0 >= at -> ends_open n 0 b
+    | Binop (op, _, b, _) when precedence op >= at ->
         ends_open n (precedence op + 1) b
-    | Unop (Neg, b) -> ends_open n 7 b
-    | Unop (Not, b) when 3 >= at -> ends_open n 3 b
+    | Unop (Neg, b, _) -> ends_open n 7 b
+    | Unop (Not, b, _) when 3 >= at -> ends_open n 3 b
     | _ -> false
   and list xs = String.concat ", " (List.map go xs)
   and con_args args =

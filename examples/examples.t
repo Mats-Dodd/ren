@@ -118,7 +118,7 @@ A program of several modules is a folder; its entry imports the rest:
   $ ren types two/main.ren
   -- util
   pub fn double(n: Int) -> Int
-  fn twice(n: Int) -> Int
+  fn twice<T has add>(n: T) -> T
   
   -- main
   fn main() -> Int uses Console
@@ -455,13 +455,9 @@ copy of the bank and keeps it only if nothing failed:
   true
   $ ren types bank/main.ren
   -- money
-  pub type Money
-    pub let zero: Money
+  pub type Money with numeric
     pub fn cents(n: Int) -> Money
     pub fn dollars(n: Int) -> Money
-    pub fn plus(self, m: Money) -> Money
-    pub fn minus(self, m: Money) -> Money
-    pub fn covers(self, m: Money) -> Bool
     pub fn positive(self) -> Bool
     pub fn in_cents(self) -> Int
   
@@ -499,13 +495,11 @@ module:
 
   $ cp -r bank b1 && perl -0pi -e 's/print\(try cents\(acme, alice\)\)( *\/\/ 7000\n  print\(try cents\(acme, bob\)\))/print(try acme.balance(alice) + 5)$1/' b1/main.ren
   $ ren check b1/main.ren
-  error: expected `Int`, found `Money`
+  error: `Money` has no `+` that takes an `Int`
      ┌─ b1/main.ren:18:13
   18 │   print(try acme.balance(alice) + 5)                   // 7000
-     │             ^^^^^^^^^^^^^^^^^^^
-     = `+` works on `Int`s
-     = `Money`'s representation is private to `money`
-     help: use a function from `money` to make or read one
+     │             ^^^^^^^^^^^^^^^^^^^^^^^
+     = `+` is found on its left side's type, `Money`
   [1]
   $ cp -r bank b2 && perl -0pi -e 's/&acme.deposit\(bob, Money.dollars\(20\)\)/&acme.deposit(2, Money.dollars(20))/' b2/main.ren
   $ ren check b2/main.ren
@@ -677,18 +671,18 @@ many passed ends it, and how long that took:
   >   assert cup(3).len() == 3
   > 
   > test "the system clock has started" uses Clock =
-  >   assert Clock.now().after(Time.epoch)
+  >   assert Clock.now() > Time.epoch
   > END
   $ cat > tested/clock.ren <<'END'
   > pub group conforms(c: Clock) with c =
   >   test "now never goes back" =
   >     let t = Clock.now()
   >     Clock.sleep(Duration.seconds(1))
-  >     assert not Clock.now().before(t)
+  >     assert Clock.now() >= t
   >   test "sleeping moves it on" =
   >     let t = Clock.now()
   >     Clock.sleep(Duration.seconds(1))
-  >     assert Clock.now() == t.plus(Duration.seconds(1))
+  >     assert Clock.now() == t + Duration.seconds(1)
   > 
   > group "frozen" = conforms(Clock.frozen(Time.epoch))
   > group "test clock" = conforms(test_clock(Time.epoch))
@@ -716,8 +710,8 @@ prints the same on every run; it exits with 1 if any failed:
   
   ──── frozen / sleeping moves it on ── clock.ren:9
     │
-  9 │     assert Clock.now() == t.plus(Duration.seconds(1))
-    │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  9 │     assert Clock.now() == t + Duration.seconds(1)
+    │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     │
     left:  Time(0)
     right: Time(1000)
@@ -853,11 +847,11 @@ says no, with `attempt`, one runs `main` and checks what it printed, and
   
   15 passed
 
-If `covers` only checks the balance isn't negative, an account can go
+If `debit` only checks the balance isn't negative, an account can go
 below zero. The tests that check nothing moved show the two banks, and
 `main`'s shows what it printed before it stopped:
 
-  $ cp -r bank b12 && perl -pi -e 's/= self >= m$/= self >= 0/' b12/money.ren
+  $ cp -r bank b12 && perl -pi -e 's/if self.balance < m then/if self.balance < Money.zero then/' b12/account.ren
   $ ren test b12
   bank.ren
     ✓ a deposit is stamped with the time
@@ -906,8 +900,8 @@ below zero. The tests that check nothing moved show the two banks, and
   
   ──── main prints the balances, and every refusal ── main.ren:59
      │
-  59 │   print(not s[3].at.before(s[0].at))              // true
-     │             ^^^^
+  59 │   print(s[3].at >= s[0].at)                       // true
+     │         ^^^^
      │
      panic: index 3 is out of bounds for an array of length 3
   

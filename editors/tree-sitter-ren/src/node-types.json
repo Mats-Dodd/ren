@@ -40,6 +40,10 @@
         "named": true
       },
       {
+        "type": "float",
+        "named": true
+      },
+      {
         "type": "identifier",
         "named": true
       },
@@ -500,6 +504,10 @@
             "named": true
           },
           {
+            "type": "float",
+            "named": true
+          },
+          {
             "type": "identifier",
             "named": true
           },
@@ -706,10 +714,6 @@
           },
           {
             "type": "function_definition",
-            "named": true
-          },
-          {
-            "type": "operator_definition",
             "named": true
           }
         ]
@@ -949,6 +953,10 @@
             "named": true
           },
           {
+            "type": "float",
+            "named": true
+          },
+          {
             "type": "identifier",
             "named": true
           },
@@ -1135,6 +1143,10 @@
             "named": true
           },
           {
+            "type": "implementation_type",
+            "named": true
+          },
+          {
             "type": "named_type",
             "named": true
           },
@@ -1200,6 +1212,10 @@
           },
           {
             "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "implementation_type",
             "named": true
           },
           {
@@ -1529,7 +1545,7 @@
     "named": true,
     "fields": {
       "name": {
-        "multiple": false,
+        "multiple": true,
         "required": true,
         "types": [
           {
@@ -1540,7 +1556,7 @@
       },
       "uses": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "uses_clause",
@@ -1626,6 +1642,10 @@
           },
           {
             "type": "field_expression",
+            "named": true
+          },
+          {
+            "type": "float",
             "named": true
           },
           {
@@ -1949,6 +1969,10 @@
             "named": true
           },
           {
+            "type": "float",
+            "named": true
+          },
+          {
             "type": "identifier",
             "named": true
           },
@@ -2094,6 +2118,16 @@
     "type": "opaque_type",
     "named": true,
     "fields": {
+      "numeric": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "numeric",
+            "named": true
+          }
+        ]
+      },
       "representation": {
         "multiple": false,
         "required": true,
@@ -2126,50 +2160,6 @@
         "types": [
           {
             "type": "function_type",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "operator_definition",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "_expression",
-            "named": true
-          },
-          {
-            "type": "assignment",
-            "named": true
-          },
-          {
-            "type": "block",
-            "named": true
-          }
-        ]
-      },
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "parameters": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "parameters",
             "named": true
           }
         ]
@@ -2633,10 +2623,6 @@
         {
           "type": "function_definition",
           "named": true
-        },
-        {
-          "type": "operator_definition",
-          "named": true
         }
       ]
     }
@@ -2942,6 +2928,10 @@
     "named": false
   },
   {
+    "type": "float",
+    "named": true
+  },
+  {
     "type": "fn",
     "named": false
   },
@@ -2991,6 +2981,10 @@
   },
   {
     "type": "number",
+    "named": true
+  },
+  {
+    "type": "numeric",
     "named": true
   },
   {

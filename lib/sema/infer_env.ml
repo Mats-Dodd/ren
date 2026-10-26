@@ -37,6 +37,15 @@ type found =
   | Lambda_id of string
       (** a lambda, or the body a `with` passes to a wrapper: its identity in
           lambda sets (Ty.lambda_id), which its type's set has *)
+  | Builtin_op
+      (** at an operator's own node (Ast.Binop), an operator the language does
+          itself: on [Int]s or [Float]s, a `with numeric` type's, or an opaque
+          type's, in its own module, on what it's represented as. Where it's a
+          method, the operator's node has [Method_of] instead *)
+  | Generic_op of string
+      (** at an operator's own node, `a + b` on a type variable, or at an
+          associated value's, `T.zero`: done by whatever its type turns out to
+          have of this requirement, `add` *)
 
 (* The type arguments a use of a top-level function, a member, an
    associated value or an intrinsic picked, by the generic variables of
@@ -287,18 +296,20 @@ and constr =
       (** a function does what it declares: it uses, and fails with, no more *)
   | Needs of handler_needs
       (** a handler needs no more than it declares, and not itself *)
-  | Compared of compared  (** the type of what `==` compares has `eq` *)
+  | Compared of compared
+      (** the type `==`, `<` or an operator is used on has what it needs *)
   | Required of required
       (** a use of a function that needs something of its type parameters: what
           it puts in their place has it *)
 
-(* `a == b` or `a != b`, at [qloc]: both sides are of type [qty], which has
-   to have `eq` (operators.md, "Equality, hashing and `show`"). It's
-   decided once the group's types are known, by the solver: a type
-   variable of the group then passes the requirement on to the function
-   it's in, which needs it of whatever it's given (Infer_reqs). [qop] is
-   the operator, for a message. *)
-and compared = { qty : ty; qloc : Loc.t; qop : string }
+(* `a == b`, `a < b`, `a + b` on a type parameter, or `T.zero`, at
+   [qloc]: [qty], the type of both sides, has to have the requirement
+   [qreq], `eq`, `ord`, `add` or `zero` (operators.md). It's decided once
+   the group's types are known, by the solver: a type variable of the
+   group then passes the requirement on to the function it's in, which
+   needs it of whatever it's given (Infer_reqs). [qop] is the operator, or
+   the associated value, as it's written, for a message. *)
+and compared = { qty : ty; qloc : Loc.t; qop : string; qreq : string }
 
 (* A use, at [uloc], of the function [uname], which may need something of
    its type parameters, `eq` of its `T`: whatever the use put in their

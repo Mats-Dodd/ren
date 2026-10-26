@@ -23,7 +23,7 @@ let bug x =
    the wall clock, which can be set back, so `instant` isn't yet the clock
    that never goes back that `Instant` promises: OCaml's standard library
    has no monotonic one (deps.md, "Built in"). *)
-let now_ms () = int_of_float (Unix.gettimeofday () *. 1000.)
+let now_ms () = Int64.of_float (Unix.gettimeofday () *. 1000.)
 
 (* What the system said to a read or a write, as the prelude's private
    [FsOutcome<T>], which its source turns into the value or an `FsError`. *)
@@ -92,10 +92,10 @@ let find_program cmd =
   let runnable p =
     (try not (Sys.is_directory p) with Sys_error _ -> false)
     &&
-    try
-      Unix.access p [ Unix.X_OK ];
-      true
-    with Unix.Unix_error _ -> false
+      try
+        Unix.access p [ Unix.X_OK ];
+        true
+      with Unix.Unix_error _ -> false
   in
   if String.contains cmd '/' then if Sys.file_exists cmd then Some cmd else None
   else
@@ -129,8 +129,10 @@ let run_program path cmd args =
       let rec wait () =
         match Unix.waitpid [] pid with
         | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
-        | _, Unix.WEXITED code -> proc_outcome "ProcExited" [ VInt code ]
-        | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> proc_outcome "ProcKilled" []
+        | _, Unix.WEXITED code ->
+            proc_outcome "ProcExited" [ VInt (Int64.of_int code) ]
+        | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) ->
+            proc_outcome "ProcKilled" []
       in
       wait ()
 
@@ -139,7 +141,7 @@ let option name args = VCon { ty = Path.prelude "Option"; name; args }
 
 (* `Random.int`'s panic, real or not, for a [below] it can't stay below *)
 let not_above_0 below =
-  Printf.sprintf "`Random.int` needs a number above 0 to stay below, not %d"
+  Printf.sprintf "`Random.int` needs a number above 0 to stay below, not %Ld"
     below
 
 (* ---- strings and bytes ----
@@ -161,21 +163,22 @@ let find_from s sub from =
 
 (* Whether byte [i] of [s] starts a character, or ends [s]: it isn't one
    of the bytes after a character's first, which are 0b10xxxxxx. *)
-let boundary s i =
-  i = String.length s || Char.code s.[i] land 0xc0 <> 0x80
+let boundary s i = i = String.length s || Char.code s.[i] land 0xc0 <> 0x80
 
 let slice s from to_ =
-  let n = String.length s in
+  let n = Int64.of_int (String.length s) in
   let fail fmt = Printf.ksprintf (fun msg -> raise (Panic msg)) fmt in
-  if from > to_ then fail "slice %d to %d ends before it starts" from to_;
-  if from < 0 || to_ > n then
-    fail "slice %d to %d is out of bounds for a string of length %d" from to_
+  if from > to_ then fail "slice %Ld to %Ld ends before it starts" from to_;
+  if from < 0L || to_ > n then
+    fail "slice %Ld to %Ld is out of bounds for a string of length %Ld" from to_
       n;
-  if not (boundary s from) then
-    fail "slice %d to %d starts inside a character" from to_;
-  if not (boundary s to_) then
-    fail "slice %d to %d ends inside a character" from to_;
-  String.sub s from (to_ - from)
+  (* in bounds, so each fits in an OCaml [int] *)
+  let i = Int64.to_int from and j = Int64.to_int to_ in
+  if not (boundary s i) then
+    fail "slice %Ld to %Ld starts inside a character" from to_;
+  if not (boundary s j) then
+    fail "slice %Ld to %Ld ends inside a character" from to_;
+  String.sub s i (j - i)
 
 let split s sep =
   if sep = "" then raise (Panic "`split` needs a separator that isn't empty");
@@ -185,6 +188,32 @@ let split s sep =
     | None -> [ String.sub s from (String.length s - from) ]
   in
   go 0
+
+(* ---- numbers ---- *)
+
+(* An `Int`, from a count OCaml keeps as an [int]: a length, an index. *)
+let int n = VInt (Int64.of_int n)
+
+(* [f], made an `Int` by [how] (`round` or `truncate`), which panics if
+   it isn't one: infinity, or too big for 64 bits. 2^63 is the first
+   float past the largest `Int`. *)
+let to_int how f =
+  let r = if how = "round" then Float.round f else Float.trunc f in
+  if
+    Float.is_finite r
+    && r >= -9.223372036854775808e18
+    && r < 9.223372036854775808e18
+  then VInt (Int64.of_float r)
+  else
+    raise
+      (Panic
+         (Printf.sprintf "`%s` of %s doesn't fit in an `Int`" how
+            (Ast.show_float f)))
+
+(* `A` to `Z` made `a` to `z`, and every other byte left as it is, so a
+   `Str` stays UTF-8. There's no table of the rest of Unicode's cases
+   yet. *)
+let lower s = String.map Char.lowercase_ascii s
 
 (* ---- running one ---- *)
 
@@ -200,30 +229,33 @@ let run (x : Intrinsic.t) =
   | Clock_sleep ->
       pure (function
         | [ VInt ms ] ->
-            if ms > 0 then Unix.sleepf (float_of_int ms /. 1000.);
+            if ms > 0L then Unix.sleepf (Int64.to_float ms /. 1000.);
             VUnit
         | _ -> bug x)
   | Random_int ->
       pure (function
         | [ VInt below ] ->
-            if below <= 0 then raise (Panic (not_above_0 below));
+            if below <= 0L then raise (Panic (not_above_0 below));
             let state = Random.State.make_self_init () in
-            VInt (Random.State.full_int state below)
+            VInt (Random.State.int64 state below)
         | _ -> bug x)
   (* the state after [state] of the test `Random`, a linear congruential
      generator's, which never goes negative *)
   | Seeded_next ->
       pure (function
         | [ VInt state ] ->
-            VInt (((abs state * 1103515245) + 12345) land 0x7fffffff)
+            let state = Int64.to_int state in
+            VInt
+              (Int64.of_int
+                 (((abs state * 1103515245) + 12345) land 0x7fffffff))
         | _ -> bug x)
   (* a number from 0 below [below], from that state's high bits, which
      vary more than its low ones *)
   | Seeded_int ->
       pure (function
         | [ VInt state; VInt below ] ->
-            if below <= 0 then raise (Panic (not_above_0 below));
-            VInt ((state lsr 16) mod below)
+            if below <= 0L then raise (Panic (not_above_0 below));
+            VInt (Int64.rem (Int64.shift_right_logical state 16) below)
         | _ -> bug x)
   | Console_write ->
       pure (function
@@ -263,15 +295,14 @@ let run (x : Intrinsic.t) =
       pure (function
         | [ VStr cmd; VArray xs ] -> (
             let strs =
-              Array.to_list
-                (Array.map (function VStr s -> s | _ -> bug x) xs)
+              Array.to_list (Array.map (function VStr s -> s | _ -> bug x) xs)
             in
             match find_program cmd with
             | Some path -> run_program path cmd strs
             | None -> proc_outcome "ProcMissing" [])
         | _ -> bug x)
   | Array_len ->
-      pure (function [ VArray xs ] -> VInt (Array.length xs) | _ -> bug x)
+      pure (function [ VArray xs ] -> int (Array.length xs) | _ -> bug x)
   (* the one that changes a parameter: its receiver, `inout` *)
   | Array_push -> (
       function
@@ -279,7 +310,7 @@ let run (x : Intrinsic.t) =
       | _ -> bug x)
   (* in bytes *)
   | Str_len ->
-      pure (function [ VStr s ] -> VInt (String.length s) | _ -> bug x)
+      pure (function [ VStr s ] -> int (String.length s) | _ -> bug x)
   (* the bytes from [from] up to, but not including, [to] *)
   | Str_slice ->
       pure (function
@@ -290,7 +321,7 @@ let run (x : Intrinsic.t) =
       pure (function
         | [ VStr s; VStr sub ] -> (
             match find_from s sub 0 with
-            | Some i -> option "Some" [ VInt i ]
+            | Some i -> option "Some" [ int i ]
             | None -> option "None" [])
         | _ -> bug x)
   (* the parts between each [sep] *)
@@ -315,7 +346,33 @@ let run (x : Intrinsic.t) =
       pure (function
         | [ VBytes b ] ->
             if String.is_valid_utf_8 b then VStr b
-            else raise (Fail (VTag { name = "InvalidUtf8"; args = [] }))
+            else
+              raise (Fail (VTag { name = "InvalidUtf8"; args = []; tys = [] }))
         | _ -> bug x)
   | Bytes_len ->
-      pure (function [ VBytes b ] -> VInt (String.length b) | _ -> bug x)
+      pure (function [ VBytes b ] -> int (String.length b) | _ -> bug x)
+  | Str_lower -> pure (function [ VStr s ] -> VStr (lower s) | _ -> bug x)
+  (* the arithmetic that wraps around at 64 bits, as [Int64]'s does *)
+  | Int_wrapping_add ->
+      pure (function [ VInt a; VInt b ] -> VInt (Int64.add a b) | _ -> bug x)
+  | Int_wrapping_sub ->
+      pure (function [ VInt a; VInt b ] -> VInt (Int64.sub a b) | _ -> bug x)
+  | Int_wrapping_mul ->
+      pure (function [ VInt a; VInt b ] -> VInt (Int64.mul a b) | _ -> bug x)
+  | Int_wrapping_neg ->
+      pure (function [ VInt a ] -> VInt (Int64.neg a) | _ -> bug x)
+  | Float_of ->
+      pure (function [ VInt n ] -> VFloat (Int64.to_float n) | _ -> bug x)
+  | Float_round ->
+      pure (function [ VFloat f ] -> to_int "round" f | _ -> bug x)
+  | Float_truncate ->
+      pure (function [ VFloat f ] -> to_int "truncate" f | _ -> bug x)
+  (* a negative number has no square root that's a `Float`: it would be
+     `NaN`, which there isn't (operators.md, "`Int` and `Float`") *)
+  | Float_sqrt ->
+      pure (function
+        | [ VFloat f ] ->
+            if f < 0. then
+              raise (Panic ("`sqrt` of a negative number: " ^ Ast.show_float f));
+            VFloat (Float.sqrt f)
+        | _ -> bug x)

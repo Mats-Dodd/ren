@@ -1,7 +1,14 @@
 (* The interpreter's interface (see eval.ml). *)
 
-(* A running program failed: division by zero, an index out of bounds. *)
-exception Panic of Loc.t * string
+(* What a panic's help suggests for an `Int` operation that overflowed:
+   the method [meth] that wraps instead, `wrapping_add`, called on what's
+   at [recv] with what's at [arg], as the source writes them (driver.ml
+   makes the help, from the source). *)
+type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
+
+(* A running program failed: division by zero, an index out of bounds, an
+   `Int` that overflowed. *)
+exception Panic of { loc : Loc.t; msg : string; wrap : wrap option }
 
 (* `main` failed with this error, and nothing handled it: the error, shown
    through its type (shown.ml). *)

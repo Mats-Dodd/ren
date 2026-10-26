@@ -260,7 +260,16 @@ module.exports = grammar({
 
     record_type: ($) => seq('{', commaSep($.field_declaration), '}'),
 
-    opaque_type: ($) => seq('opaque', field('representation', $._type)),
+    // opaque Int, and opaque Int with numeric, which gives an opaque number
+    // its arithmetic; the compiler checks it's an `Int` or a `Float`
+    opaque_type: ($) =>
+      seq(
+        'opaque',
+        field('representation', $._type),
+        optional(seq('with', field('numeric', $.numeric))),
+      ),
+
+    numeric: (_) => 'numeric',
 
     // | Free | Pro(seats: Int), and indented, one `|` per line
     sum_type: ($) =>
@@ -372,12 +381,11 @@ module.exports = grammar({
 
     // ---- a type's members ----
 
-    // its methods, associated functions and values, and operators, one
-    // per line
+    // its methods, associated functions and values, one per line: an
+    // operator is a method with a reserved name, `add` for `+`
     type_members: ($) => sep1($._member, $._newline),
 
-    _member: ($) =>
-      choice($.function_definition, $.associated_value, $.operator_definition),
+    _member: ($) => choice($.function_definition, $.associated_value),
 
     // pub let empty: Stack<T> = Stack { items: [] }
     associated_value: ($) =>
@@ -388,15 +396,6 @@ module.exports = grammar({
         optional(seq(':', field('type', $._type))),
         '=',
         field('value', $._body),
-      ),
-
-    // add(other) => ...: parsed by the compiler, but reported until stage 9
-    operator_definition: ($) =>
-      seq(
-        field('name', $.identifier),
-        optional(field('parameters', $.parameters)),
-        '=>',
-        field('body', $._body),
       ),
 
     // ---- written types ----
@@ -414,11 +413,24 @@ module.exports = grammar({
         $.parenthesized_type,
         $.error_set,
         alias('!', $.error_set),
+        alias($._joined, $.implementation_type),
       ),
 
-    // Clock uses Os: an implementation of a dependency, and what it needs
+    // Clock uses Os: an implementation of a dependency, and what it needs;
+    // or of several, Clock & TestClock uses Os
     implementation_type: ($) =>
-      seq(field('name', $.type_name), field('uses', $.uses_clause)),
+      choice(
+        seq(field('name', $.type_name), field('uses', $.uses_clause)),
+        seq($._joined, field('uses', $.uses_clause)),
+      ),
+
+    // Clock & TestClock: an implementation of each, sharing one state. As
+    // a function's result its `uses` is the function's, as above
+    _joined: ($) =>
+      seq(
+        field('name', $.type_name),
+        repeat1(seq('&', field('name', $.type_name))),
+      ),
 
     parenthesized_type: ($) => seq('(', $._type, ')'),
 
@@ -442,6 +454,7 @@ module.exports = grammar({
         alias('!', $.error_set),
         alias($._argument_function_type, $.function_type),
         alias($._argument_implementation_type, $.implementation_type),
+        alias($._joined, $.implementation_type),
       ),
 
     _argument_return_type: ($) =>
@@ -451,12 +464,16 @@ module.exports = grammar({
         $.parenthesized_type,
         $.error_set,
         alias('!', $.error_set),
+        alias($._joined, $.implementation_type),
       ),
 
     _argument_implementation_type: ($) =>
-      seq(
-        field('name', $.type_name),
-        field('uses', alias($._argument_uses, $.uses_clause)),
+      choice(
+        seq(
+          field('name', $.type_name),
+          field('uses', alias($._argument_uses, $.uses_clause)),
+        ),
+        seq($._joined, field('uses', alias($._argument_uses, $.uses_clause))),
       ),
 
     _argument_function_type: ($) =>
@@ -676,6 +693,7 @@ module.exports = grammar({
     _primary: ($) =>
       choice(
         $.number,
+        $.float,
         $.string,
         $.boolean,
         $.unit,
@@ -694,6 +712,10 @@ module.exports = grammar({
       ),
 
     number: (_) => /[0-9][0-9_]*/,
+
+    // 1.5: a digit after the `.`, so `1..3` and `1.show()` are an `Int`
+    // and what follows it. Never a pattern
+    float: (_) => /[0-9][0-9_]*\.[0-9][0-9_]*/,
 
     // "Ren\n": it ends on the line it starts on, and its escapes are
     // `\n`, `\t`, `\"` and `\\`

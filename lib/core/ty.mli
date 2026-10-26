@@ -72,6 +72,7 @@ type args = { tys : ty list; rows : row list; lams : lams list }
 
 (* The prelude's types: [Int], [Bool], [Unit], [Str] and [Array<t>]. *)
 val int : ty
+val float : ty
 val bool : ty
 val unit : ty
 val str : ty

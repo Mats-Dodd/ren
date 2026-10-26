@@ -29,6 +29,15 @@ type t =
   | Str_bytes
   | Str_from_utf8
   | Bytes_len
+  | Int_wrapping_add
+  | Int_wrapping_sub
+  | Int_wrapping_mul
+  | Int_wrapping_neg
+  | Float_of
+  | Float_round
+  | Float_truncate
+  | Float_sqrt
+  | Str_lower
 
 (* Its path in the prelude: [show], or a built-in type's member,
    [Array.push]. *)

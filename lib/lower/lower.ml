@@ -94,12 +94,17 @@ let lambda_name cx id =
    [desc]), built from the function's own hidden type parameters. *)
 let descs cx (a : Ty.args) = List.map (C.describe cx.tys) a.tys
 
+(* The descriptors of an error's payload's types, which the error carries
+   (core.ml, [Tag]). *)
+let payload_descs cx (args : C.expr list) =
+  List.map (fun (a : C.expr) -> C.describe cx.tys a.ty) args
+
 (* [req]'s dictionary for [t] (core.ml, [dict]), built from the function's
    own dictionary parameters. Inference passed on to the function each
    requirement a type variable of it in [t] has to meet, so it has one
    for each. *)
 let dict cx req t =
-  try C.dict_for (List.length cx.tys) cx.dicts req t
+  try C.dict_for cx.tys cx.dicts req t
   with Not_found -> bug "a requirement inference didn't pass on"
 
 (* The dictionaries the use at node [id] is passed: one for each of the
@@ -162,7 +167,8 @@ let seq_all loc (es : C.expr list) =
    but reading runs before it's used. *)
 let is_atom ~local (e : C.expr) =
   match e.kind with
-  | Int _ | Bool _ | Unit | Global _ | Global_value _ | Intrinsic _ -> true
+  | Int _ | Float _ | Bool _ | Unit | Global _ | Global_value _ | Intrinsic _ ->
+      true
   | Local _ -> local
   | _ -> false
 
@@ -228,6 +234,10 @@ let write pl (v : C.expr) loc =
 
 let result_path = Path.prelude "Result"
 let option_path = Path.prelude "Option"
+
+(* Whether [t] is an [Int] or a [Float], whose operators and order are
+   the language's own. *)
+let is_number (t : Ty.ty) = t = Ty.int || t = Ty.float
 let pat pkind pty ploc : C.pattern = { pkind; pty; ploc }
 
 (* The arm `c(v) => body(v)` of a `match` on a value of type [ty]: [c] is
@@ -262,6 +272,7 @@ and expr_of cx (e : expr) : C.expr =
   let here kind = mk kind (ty ()) e.loc in
   match e.kind with
   | Int n -> here (Int n)
+  | Float f -> here (Float f)
   | Bool b -> here (Bool b)
   | Str s -> here (Str s)
   | Unit -> here Unit
@@ -292,17 +303,19 @@ and expr_of cx (e : expr) : C.expr =
                  body = mk (Dep_call { dep; op; fty; ev; args }) ret e.loc;
                })
       | _ -> bug "an operation whose type isn't a function's")
-  | Unop (Neg, a) -> here (Prim (Neg, [ expr cx a ]))
-  | Unop (Not, a) -> here (Prim (Not, [ expr cx a ]))
+  | Var (Assoc_value (_, req)) -> value_of cx req (ty ()) e.loc
+  | Unop (Neg, a, onode) ->
+      operator cx ~onode ~meth:"neg" C.Neg (ty ()) e.loc [ expr cx a ]
+  | Unop (Not, a, _) -> here (Prim (Not, [ expr cx a ]))
   (* `a && b` is `if a then b else false`, and `a || b` is
      `if a then true else b`: [b] runs only when [a] doesn't decide *)
-  | Binop (And, a, b) ->
+  | Binop (And, a, b, _) ->
       let a = expr cx a in
       here (If (a, expr cx b, mk (Bool false) Ty.bool e.loc))
-  | Binop (Or, a, b) ->
+  | Binop (Or, a, b, _) ->
       let a = expr cx a in
       here (If (a, mk (Bool true) Ty.bool e.loc, expr cx b))
-  | Binop (Orelse, a, b) ->
+  | Binop (Orelse, a, b, _) ->
       (* `x orelse e` is `match x { Some(v) => v, None => e }` *)
       let a = expr cx a in
       let some =
@@ -333,7 +346,9 @@ and expr_of cx (e : expr) : C.expr =
           tail = None;
         }
       in
-      here (Fail (mk (Tag (tag.name, args)) (Errors set) e.loc))
+      here
+        (Fail
+           (mk (Tag (tag.name, args, payload_descs cx args)) (Errors set) e.loc))
   | Try ({ kind = Match (subject, arms); _ } as m) when handles cx m.node ->
       handle_match cx ~passed:true (ty_of cx m.node) e.loc subject arms
   | Try a when (node cx e.node).found = Some Unwraps ->
@@ -349,7 +364,7 @@ and expr_of cx (e : expr) : C.expr =
       (* a call passes on what it fails with by itself: the `try` only says
          so, for whoever reads it *)
       expr cx a
-  | Assert ({ kind = Binop (Eq, a, b); _ } as cmp) ->
+  | Assert ({ kind = Binop (Eq, a, b, _); _ } as cmp) ->
       (* both sides, so a failure can show them, and where the comparison
          is, which it points at *)
       let a = expr cx a in
@@ -375,15 +390,26 @@ and expr_of cx (e : expr) : C.expr =
              on_error =
                mk (Con (result_path, "Err", [ local error e.loc ])) t e.loc;
            })
-  | Binop (((Eq | Neq) as op), a, b) ->
+  | Binop (((Eq | Neq) as op), a, b, _) ->
       (* through the `eq` dictionary of what it compares *)
       let a = expr cx a in
       let d = dict cx "eq" a.ty in
       let op : C.prim = if op = Eq then Equal d else Not_equal d in
       here (Prim (op, [ a; expr cx b ]))
-  | Binop (op, a, b) ->
+  | Binop (((Lt | Le | Gt | Ge) as op), a, b, _) ->
+      (* a number's own, or else through the `ord` dictionary of what it
+         compares *)
       let a = expr cx a in
-      here (Prim (Binop op, [ a; expr cx b ]))
+      let op : C.prim =
+        if is_number a.ty then Binop op else Compare (op, dict cx "ord" a.ty)
+      in
+      here (Prim (op, [ a; expr cx b ]))
+  | Binop (op, a, b, onode) -> (
+      match binop_method op with
+      | Some meth ->
+          let a = expr cx a in
+          operator cx ~onode ~meth (C.Binop op) (ty ()) e.loc [ a; expr cx b ]
+      | None -> bug ("`" ^ binop_to_string op ^ "` as an operator"))
   | If (c, t, f) ->
       let c = expr cx c in
       let t = expr cx t in
@@ -417,7 +443,8 @@ and expr_of cx (e : expr) : C.expr =
       match (node cx e.node).found with
       | Some Error_tag ->
           (* a tag, inside `Err(...)`: the error it holds *)
-          here (Tag (tag.name.name, List.map (fun (_, a) -> expr cx a) args))
+          let args = List.map (fun (_, a) -> expr cx a) args in
+          here (Tag (tag.name.name, args, payload_descs cx args))
       | Some (Ctor_of (p, c)) ->
           (* ctor_shape (infer_lookup.ml) made sure the arguments are in the
              order of the fields *)
@@ -445,7 +472,7 @@ and expr_of cx (e : expr) : C.expr =
       here (Prim (Get_index, [ a; expr cx i ]))
   | Ref ({ kind = Call (f, args); _ } as c) -> call cx ~changed:true c f args
   | Ref _ -> bug "`&` outside a call or a `for` loop"
-  | Assign { target; op; value } -> assign cx e target op value
+  | Assign { target; op; value; onode } -> assign cx e ~onode target op value
   | For { var; iter; body } -> for_loop cx e var iter body
   | With { item; body; lam } -> (
       (* the body sees evidence of its own: the [With]'s, which extends
@@ -676,7 +703,7 @@ and place cx (e : expr) =
 (* `x = v` stays as it is. Anything else finds the place, then evaluates
    the value, then reads and writes the place: the value is held in a
    temporary first in case it changes what the place holds. *)
-and assign cx (e : expr) target op value =
+and assign cx (e : expr) ~onode target op value =
   let value = expr cx value in
   match (target.kind, op) with
   | Var (Local b), None -> mk (Assign (var_of cx b, value)) Ty.unit e.loc
@@ -689,9 +716,51 @@ and assign cx (e : expr) target op value =
       let v =
         match op with
         | None -> v
-        | Some op -> mk (Prim (Binop op, [ read pl e.loc; v ])) Ty.int e.loc
+        | Some op -> (
+            (* `x += v` is `x = x + v`, whose `+` is the operator's *)
+            match binop_method op with
+            | Some meth ->
+                operator cx ~onode ~meth (C.Binop op) (ty_of cx target.node)
+                  e.loc
+                  [ read pl target.loc; v ]
+            | None -> bug ("`" ^ binop_to_string op ^ "=`"))
       in
       lets (binds @ hold_v) (write pl v e.loc)
+
+(* An operator, `a + b` or `-a`, given its operands, lowered: what
+   inference found at its node [onode] (Infer_expr.operator). A method of
+   the left side's type, `Time.sub`, is called, as `a.sub(b)` would be;
+   an operator on a type variable's values goes through that
+   requirement's dictionary, `add` for `+`; and a number's, or a `with
+   numeric` type's, is the language's own, [prim]. A `with numeric`
+   type's value is what it's represented as, so the same operator does
+   for both. *)
+and operator cx ~onode ~meth prim ty loc (args : C.expr list) =
+  match ((node cx onode).found, args) with
+  | Some (Method_of p), _ ->
+      let a = targs_of cx onode in
+      let callee : C.kind =
+        match Prelude.find p with
+        | Some x -> Intrinsic (x, a, descs cx a)
+        | None -> Global (p, a, descs cx a, dicts_of cx onode)
+      in
+      mk
+        (Call
+           ( mk callee (ty_of cx onode) loc,
+             List.map (fun a -> C.Value a) args,
+             cx.ev ))
+        ty loc
+  | Some (Generic_op _), a :: _ when not (is_number a.ty) ->
+      mk (Prim (Op (meth, dict cx meth a.ty), args)) ty loc
+  | _ -> mk (Prim (prim, args)) ty loc
+
+(* `T.zero` or `T.one`, of type [t]: a number's is a literal, and any
+   other type's is through that requirement's dictionary. *)
+and value_of cx req (t : Ty.ty) loc =
+  let one = req = "one" in
+  if t = Ty.int then mk (Int (if one then 1L else 0L)) t loc
+  else if t = Ty.float then mk (Float (if one then 1. else 0.)) t loc
+  else mk (Prim (Value_of (req, dict cx req t), [])) t loc
 
 (* A call. When every argument passed with `&` is a plain variable, it
    stays as it is. Otherwise each one is read into a temporary, which is
@@ -807,7 +876,7 @@ and for_loop cx (e : expr) var (iter : expr) body =
     let x = bind cx var elem in
     let body = expr cx body in
     let step =
-      mk (Assign (i, binop Add index (int_lit 1 loc) Ty.int)) Ty.unit loc
+      mk (Assign (i, binop Add index (int_lit 1L loc) Ty.int)) Ty.unit loc
     in
     (* what's written back after the body is written back even if the
        body fails *)
@@ -819,7 +888,7 @@ and for_loop cx (e : expr) var (iter : expr) body =
     in
     let pass = mk (Let (x, element, rest)) Ty.unit loc in
     lets
-      [ (n, mk (Prim (Length, [ start ])) Ty.int loc); (i, int_lit 0 loc) ]
+      [ (n, mk (Prim (Length, [ start ])) Ty.int loc); (i, int_lit 0L loc) ]
       (mk (While (binop Lt index (local n loc) Ty.bool, pass)) Ty.unit loc)
   in
   match iter.kind with
@@ -870,7 +939,7 @@ and free (e : C.expr) =
   let bind (v : C.var) = bound := Ids.add v.id !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Bool _ | Str _ | Unit | Global_value _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ -> ()
     | Global (_, _, ds, dicts) ->
         (* the hidden type and dictionary parameters its descriptors and
            dictionaries are built from *)
@@ -878,14 +947,15 @@ and free (e : C.expr) =
         List.iter use (List.concat_map C.dict_vars dicts)
     | Intrinsic (_, _, ds) -> List.iter use (List.concat_map C.desc_vars ds)
     | Local v -> use v
-    | Prim ((Equal d | Not_equal d), args) ->
+    | Prim
+        ( (Equal d | Not_equal d | Compare (_, d) | Op (_, d) | Value_of (_, d)),
+          args ) ->
         List.iter use (C.dict_vars d);
         List.iter go args
-    | Prim (_, args)
-    | Array args
-    | Con (_, _, args)
-    | Tag (_, args)
-    | Dep_call { args; _ } ->
+    | Tag (_, args, ds) ->
+        List.iter use (List.concat_map C.desc_vars ds);
+        List.iter go args
+    | Prim (_, args) | Array args | Con (_, _, args) | Dep_call { args; _ } ->
         List.iter go args
     | With { impl; body; _ } ->
         (* its evidence isn't a local: nothing captures it *)
@@ -957,9 +1027,10 @@ let max_binder (f : fn_def) =
   let see (b : binder) = m := max !m b.id in
   let rec go (e : expr) =
     match e.kind with
-    | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
-    | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a -> go a
-    | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
+    | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+        go a
+    | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go a;
         go b
     | Fail (_, args) -> List.iter (fun (_, a) -> go a) args
@@ -1079,6 +1150,31 @@ let shows (types : Iface.type_decl list) (fns : C.fn_def list) =
       | _ -> None)
     types
 
+(* The types among [types] that have a `key` (Iface.key), each with its
+   function, one of [fns]: what the interpreter equals, hashes and orders
+   their values by (walk.ml). *)
+let keys (types : Iface.type_decl list) (fns : C.fn_def list) =
+  List.filter_map
+    (fun (d : Iface.type_decl) ->
+      match Iface.key d with
+      | Some (m, _) when List.exists (fun (f : C.fn_def) -> f.path = m) fns ->
+          Some (d.path, m)
+      | _ -> None)
+    types
+
+(* The types among [types] that have an operator or an associated value
+   for a requirement, `add` or `zero`, through a member of their own
+   (Iface.provider), each with that member: what a dictionary for the
+   requirement calls, or is. *)
+let ops (types : Iface.type_decl list) =
+  List.concat_map
+    (fun (d : Iface.type_decl) ->
+      List.filter_map
+        (fun req ->
+          Option.map (fun (m, _) -> ((d.path, req), m)) (Iface.provider d req))
+        Iface.requirements)
+    types
+
 let program (r : Resolve.t) (inferred : Infer.t) : C.program =
   let fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog) in
   {
@@ -1087,6 +1183,8 @@ let program (r : Resolve.t) (inferred : Infer.t) : C.program =
     fns;
     values = inferred.values;
     shows = shows r.types fns;
+    keys = keys r.types fns;
+    ops = ops r.types;
   }
 
 (* ---- starting ---- *)

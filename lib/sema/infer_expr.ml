@@ -229,25 +229,31 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
 and synth env cx (e : expr) : ty =
   match e.kind with
   | Int _ -> int
+  | Float _ -> float
   | Bool _ -> bool
   | Str _ -> str
   | Unit -> unit
   | Var x -> lookup env cx ~node:e.node e.loc x
-  | Unop (Neg, a) ->
-      want_int env (Operator "-") a (infer env cx a);
-      int
-  | Unop (Not, a) ->
+  | Unop (Neg, a, onode) ->
+      operator env cx e ~onode ~meth:"neg" ~name:"-" a (infer env cx a) None
+  | Unop (Not, a, _) ->
       want_bool env Negated a (infer env cx a);
       bool
-  | Binop (op, a, b) -> (
+  | Binop (op, a, b, onode) -> (
       let name = binop_to_string op in
       match op with
-      | Add | Sub | Mul | Div | Mod | Lt | Le | Gt | Ge ->
+      | Add | Sub | Mul | Div | Mod ->
+          let meth = Option.get (binop_method op) in
+          operator env cx e ~onode ~meth ~name a (infer env cx a) (Some b)
+      | Lt | Le | Gt | Ge ->
+          (* the left side says what the right side has to be, and that
+             has to have an order, which is known once the group's types
+             are, as `==` is *)
           let ta = infer env cx a in
-          let tb = infer env cx b in
-          want_int env (Operator name) a ta;
-          want_int env (Operator name) b tb;
-          if List.mem op [ Lt; Le; Gt; Ge ] then bool else int
+          compared env cx ~name a ta b;
+          defer env
+            (Compared { qty = ta; qloc = e.loc; qop = name; qreq = "ord" });
+          bool
       | And | Or ->
           want_bool env (Side name) a (infer env cx a);
           want_bool env (Side name) b (infer env cx b);
@@ -269,12 +275,9 @@ and synth env cx (e : expr) : ty =
           (* the left side says what the right side has to be, and that
              has to have `==`, which is known once the group's types are *)
           let ta = infer env cx a in
-          check env cx b ta
-            ~why:
-              (explain ~msg:(compares name)
-                 ~labels:(fun _ x -> [ (a.loc, this_is x) ])
-                 ());
-          defer env (Compared { qty = ta; qloc = e.loc; qop = name });
+          compared env cx ~name a ta b;
+          defer env
+            (Compared { qty = ta; qloc = e.loc; qop = name; qreq = "eq" });
           bool)
   | If (c, t, Some f) ->
       want_bool env Condition c (infer env cx c);
@@ -334,13 +337,32 @@ and synth env cx (e : expr) : ty =
       (* mut.ml allows `&` only on call arguments, `for` loops and method
          calls; the first two handle it themselves *)
       infer env cx a
-  | Assign { target; op; value } ->
+  | Assign { target; op; value; onode } ->
       let tt = infer env cx target in
       (match op with
       | Some op ->
-          let name = binop_to_string op ^ "=" in
-          want_int env (Operator name) target tt;
-          want_int env (Operator name) value (infer env cx value)
+          (* `x += v` puts `x + v` back in `x`, so it has to make what [x]
+             holds *)
+          let name = binop_to_string op in
+          let meth = Option.get (binop_method op) in
+          let made =
+            operator env cx e ~onode ~meth ~name target tt (Some value)
+          in
+          let written =
+            match (env.source target, env.source value) with
+            | Some t, Some v -> Some (sprintf "%s %s= %s" t name v)
+            | _ -> None
+          in
+          ignore
+            (unifies env
+               (explain
+                  ~msg:(fun made held ->
+                    match written with
+                    | Some w -> op_assign_makes ~written:w ~made ~target:held
+                    | None ->
+                        op_assign_makes ~written:(name ^ "=") ~made ~target:held)
+                  ())
+               e.loc ~found:made ~expected:tt)
       | None ->
           (* a place whose type is written narrows what's assigned to it,
              as it does what it's made with *)
@@ -533,6 +555,336 @@ and dropped env cx (e : expr) t =
   in
   defer env (Drop { dloc = e.loc; dty = t; callee; dself = cx.self })
 
+(* ---- operators (operators.md) ----
+
+   An operator is a method with a reserved name, `a + b` is `a.add(b)`,
+   found on its left side's type and nowhere else, and chosen among that
+   type's `add`s by its right side's type: the one place a name is
+   defined more than once. Types flow left to right, so the left side's
+   type is known first. It's one of:
+
+   - a type variable, `a: T`: the operator is the one of the same type on
+     both sides, so the right side is checked against the left, and the
+     type needs it, `T has add`, which the solver decides once the
+     group's types are known (Infer_reqs);
+   - `Int` or `Float`, whose operators are the language's own, and take
+     one of the same type: numbers never convert by themselves;
+   - a `with numeric` type, which has `+`, `-` and `-a` of its own type
+     and `*` by what it's represented as, and any other operator it
+     writes;
+   - any other type, whose method it is.
+
+   In its own module an opaque type has its operators as anywhere else,
+   the ones it writes and what `with numeric` gives, and where none of
+   them takes the right side, it's what it's represented as (Types.
+   reveal). Inside its own members it's always what it's represented as,
+   which is what they're written in terms of: `self - t` in `Time.sub`
+   subtracts two `Int`s, rather than calling itself. What it found is
+   recorded at the operator's own node, [onode] (Ast.Binop). *)
+
+(* The name of the type an operator method takes on its right, which
+   tells it apart from the type's other operators of its name. *)
+and right_head (o : Iface.op) =
+  match o.oscheme.ty with
+  | Fun ([ _; { ty = Con (q, _); _ } ], _, _, _, _) -> Some q
+  | _ -> None
+
+(* [t] as a type of the checker's, from a type a declaration writes with
+   none of its parameters in it. *)
+and of_decl (t : Ty.ty) =
+  of_ty
+    ~vars:(fun _ -> TError)
+    ~tails:(fun _ -> REmpty)
+    ~lams:(fun _ -> REmpty)
+    t
+
+(* The operator methods [meth] the type [p] writes. *)
+and op_overloads env p meth =
+  match Hashtbl.find_opt env.types p with
+  | Some td ->
+      List.filter
+        (fun (_, (o : Iface.op)) -> o.okind = Method)
+        (Iface.find_members td meth)
+  | None -> []
+
+(* Whether [p], a `with numeric` type, has the operator [meth] itself,
+   given the right side's type [tb], if it has one: `+` and `-` of its own
+   type, `*` by its representation's, and `-a`. *)
+and numeric_takes env p meth tb =
+  match (Infer_reqs.numeric env p, meth, Option.map (fun t -> repr t) tb) with
+  | Some _, "neg", None -> true
+  | Some _, ("add" | "sub"), Some (TCon (q, _)) -> q = p
+  | Some rep, "mul", Some (TCon (q, _)) -> TCon (q, []) = of_decl rep
+  | _ -> false
+
+(* The operator [name], `+`, the method [meth], `add`, on [a], of type
+   [ta], and [b], the right side, if it has one: the type it makes. *)
+and operator env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
+  let found f = Hashtbl.replace cx.found onode f in
+  let done_ t =
+    Hashtbl.replace cx.nodes onode t;
+    t
+  in
+  let pr = printer env in
+  (* the right side is inferred once, when it's first needed *)
+  let b_inferred = lazy (Option.map (fun b -> (b, infer env cx b)) b) in
+  let infer_b () = Lazy.force b_inferred in
+  (* the left side's type, seen as an operator sees it: one of the
+     module's own opaque types is what it's represented as unless it has
+     an operator of its own that takes the right side *)
+  let left =
+    match repr ta with
+    | TCon (p, _) as t when Hashtbl.mem env.st.reps p ->
+        let in_its_members = cx.self.member <> None && Path.owner cx.self = p in
+        let tb = Option.map snd (infer_b ()) in
+        let written =
+          match Option.map repr tb with
+          | Some (TCon (q, _)) ->
+              List.exists
+                (fun (_, o) -> right_head o = Some q)
+                (op_overloads env p meth)
+          | Some _ -> false
+          | None -> op_overloads env p meth <> []
+        in
+        if (not in_its_members) && (written || numeric_takes env p meth tb) then
+          t
+        else reveal env.st ta
+    | _ -> reveal env.st ta
+  in
+  match left with
+  | TError ->
+      ignore (infer_b ());
+      TError
+  | (TVar _ | TSkol _) as t ->
+      (* in generic code, an operator is the one of the same type on both
+         sides *)
+      Option.iter
+        (fun b ->
+          check env cx b ta
+            ~why:
+              (explain
+                 ~msg:(fun found left ->
+                   sprintf "`%s` has no `%s` that takes %s" left name
+                     (code found))
+                 ~notes:
+                   [
+                     "in generic code, an operator takes one of the same type \
+                      on both sides";
+                   ]
+                 ()))
+        b;
+      defer env (Compared { qty = t; qloc = e.loc; qop = name; qreq = meth });
+      found (Generic_op meth);
+      done_ ta
+  | TCon (p, []) as t when Infer_reqs.is_number p ->
+      Option.iter
+        (fun (b, tb) -> numbers env e ~meth ~name a t b tb)
+        (infer_b ());
+      found Builtin_op;
+      done_ t
+  | TCon (p, _) as t -> (
+      let left = show pr t in
+      let numeric = Infer_reqs.numeric env p in
+      (* another module's opaque type, which may be used here as though
+         it were what it's represented as *)
+      let hidden =
+        match Hashtbl.find_opt env.types p with
+        | Some { body = Opaque (Hidden _); _ } when p.home <> env.home -> Some p
+        | _ -> None
+      in
+      let overloads = op_overloads env p meth in
+      let numeric_takes tb = numeric_takes env p meth tb in
+      let builtin () =
+        found Builtin_op;
+        done_ ta
+      in
+      match infer_b () with
+      | None when numeric_takes None -> builtin ()
+      | None -> (
+          match overloads with
+          | [ (path, _) ] -> op_method env cx e ~onode a ta None path
+          | _ ->
+              report env
+                (no_op ?hidden e.loc ~shown:left ~op:name ~by:None ~uses:None);
+              TError)
+      | Some (b, tb) -> (
+          (* the overload that takes [tb]'s type, by its type's name *)
+          let head = right_head in
+          let taking q =
+            List.find_opt (fun (_, o) -> head o = Some q) overloads
+          in
+          let right = show pr tb in
+          let no_taking () =
+            match (numeric, meth, repr tb) with
+            | Some _, "mul", TCon (q, _) when q = p ->
+                report env
+                  (numeric_mul e.loc ~left
+                     ~rep:(show pr (of_decl (Option.get numeric))))
+            | Some _, ("div" | "rem"), _ when overloads = [] ->
+                report env
+                  (numeric_div e.loc ~left
+                     ~rep:(show pr (of_decl (Option.get numeric)))
+                     ~op:name ~meth)
+            | _, _, _ when overloads = [] && numeric = None ->
+                report env
+                  (no_op ?hidden e.loc ~shown:left ~op:name ~by:None ~uses:None)
+            | _ ->
+                report env
+                  (no_op_taking e.loc ~left ~op:name ~right ~numbers:false
+                     ?help:(swapped env ~meth ~name p a tb b)
+                     ())
+          in
+          (* one it writes, `mul(self, b: Meters) -> Area`, comes before
+             what `with numeric` gives *)
+          match repr tb with
+          | TError -> TError
+          | TCon (q, _) when taking q <> None -> (
+              match taking q with
+              | Some (path, _) ->
+                  op_method env cx e ~onode a ta (Some (b, tb)) path
+              | None -> TError)
+          | _ when numeric_takes (Some tb) -> builtin ()
+          | TCon _ ->
+              no_taking ();
+              TError
+          | _ -> (
+              (* the right side's type isn't known yet: if there's only
+                 one, it's that one's *)
+              match (overloads, numeric) with
+              | [ (path, _) ], None ->
+                  op_method env cx e ~onode a ta (Some (b, tb)) path
+              | [], None ->
+                  no_taking ();
+                  TError
+              | _, Some _ when meth = "add" || meth = "sub" ->
+                  unify_at env b.loc ~found:tb ~expected:ta;
+                  builtin ()
+              | _, Some rep when meth = "mul" && overloads = [] ->
+                  unify_at env b.loc ~found:tb ~expected:(of_decl rep);
+                  builtin ()
+              | _ ->
+                  report env (which_overload e.loc ~left ~op:name);
+                  TError)))
+  | t ->
+      ignore (infer_b ());
+      report env (no_op e.loc ~shown:(show pr t) ~op:name ~by:None ~uses:None);
+      TError
+
+(* `a op b` on [Int]s or [Float]s, [ta] [a]'s type: [b], of type [tb],
+   has to be the same, since numbers never convert by themselves. In its
+   own module an opaque type is what it's represented as. *)
+and numbers env (e : expr) ~meth ~name (a : expr) ta (b : expr) tb =
+  let pr = printer env in
+  match (repr ta, reveal env.st tb) with
+  | TCon (p, _), TCon (q, _) when p <> q ->
+      let left = show pr ta and right = show pr (reveal env.st tb) in
+      let is_numbers = Infer_reqs.is_number q in
+      let help =
+        if is_numbers then numbers_help env ~name ~left a b
+        else swapped env ~meth ~name p a tb b
+      in
+      report env
+        (no_op_taking e.loc ~left ~op:name ~right ~numbers:is_numbers ?help ())
+  | _ ->
+      unify_at env b.loc ~found:tb ~expected:ta ~msg:(fun found left ->
+          sprintf "`%s` has no `%s` that takes %s" left name (code found))
+
+(* The help for `a op b` where [a]'s type, [p], has no [meth] taking
+   [b]'s, [tb], but [tb]'s has one taking [p]'s: write it the other way
+   round. Only for `+` and `*`, which don't care which side is which. A
+   `with numeric` type's `*` takes what it's represented as, so
+   `3 * price` is `price * 3`. *)
+and swapped env ~meth ~name p (a : expr) tb (b : expr) =
+  match repr tb with
+  | TCon (q, _) when meth = "add" || meth = "mul" -> (
+      let written =
+        match Hashtbl.find_opt env.types q with
+        | Some td ->
+            List.exists
+              (fun (_, o) -> right_head o = Some p)
+              (Iface.find_members td meth)
+        | None -> false
+      in
+      let numeric =
+        match Infer_reqs.numeric env q with
+        | Some _ when q = p -> true
+        | Some rep when meth = "mul" -> repr (of_decl rep) = TCon (p, [])
+        | _ -> false
+      in
+      match (written || numeric, env.source a, env.source b) with
+      | true, Some sa, Some sb ->
+          Some (swap_help ~written:(sprintf "%s %s %s" sb name sa))
+      | _ -> None)
+  | _ -> None
+
+(* What to write for `a op b` on an [Int] and a [Float], [left] [a]'s
+   type: a literal written as the other number, `2.0`, or else one of
+   them converted. *)
+and numbers_help env ~name ~left (a : expr) (b : expr) =
+  match (env.source a, env.source b, a.kind, b.kind) with
+  | Some sa, Some _, _, Int n ->
+      Some (float_literal_help ~written:(sprintf "%s %s %Ld.0" sa name n))
+  | Some _, Some sb, Int n, _ ->
+      Some (float_literal_help ~written:(sprintf "%Ld.0 %s %s" n name sb))
+  | Some sa, Some sb, _, _ when left = "Float" ->
+      Some (convert_help ~written:(sprintf "%s %s Float.of(%s)" sa name sb))
+  | Some sa, Some sb, _, _ ->
+      Some (convert_help ~written:(sprintf "Float.of(%s) %s %s" sa name sb))
+  | _ -> None
+
+(* `a op b`, a comparison, [ta] [a]'s type: [b] has to be the same type.
+   An [Int] and a [Float] never convert by themselves, which is said, as
+   it is for arithmetic ([numbers]). *)
+and compared env cx ~name (a : expr) ta (b : expr) =
+  let why ?(notes = []) ?help () =
+    explain ~msg:(compares name)
+      ~labels:(fun _ x -> [ (a.loc, this_is x) ])
+      ~notes
+      ?help:(Option.map (fun h _ _ -> h) help)
+      ()
+  in
+  match repr ta with
+  | TCon (p, []) when Infer_reqs.is_number p -> (
+      let tb = infer env cx b in
+      match reveal env.st tb with
+      | TCon (q, []) when Infer_reqs.is_number q && q <> p ->
+          let left = show (printer env) ta in
+          let help = numbers_help env ~name ~left a b in
+          ignore
+            (unifies env
+               (why ~notes:[ "numbers never convert by themselves" ] ?help ())
+               (result_loc b) ~found:tb ~expected:ta)
+      | _ -> ignore (unifies env (why ()) (result_loc b) ~found:tb ~expected:ta)
+      )
+  | _ -> check env cx b ta ~why:(why ())
+
+(* The operator [e] is [path], a method of [a]'s type, `Time.sub`, used
+   at the node [onode]: [a] is its `self`, and [b] its other operand, if
+   it has one, of type [tb]. A method of the module not checked yet is
+   checked first, as a dot call's is (Infer_env.Unchecked). *)
+and op_method env cx (e : expr) ~onode (a : expr) ta b path =
+  if path.home = env.home && not (Hashtbl.mem env.globals path) then
+    raise (Unchecked { caller = cx.self; callee = path });
+  let tm = lookup env cx ~node:onode e.loc (Global path) in
+  Hashtbl.replace cx.nodes onode tm;
+  Hashtbl.replace cx.found onode (Method_of path);
+  match repr tm with
+  | TFun (self :: ps, ret, _, _, _) -> (
+      blame_at cx onode
+        ((self.ty, a.loc)
+        ::
+        (match (ps, b) with
+        | [ p ], Some ((b : expr), _) -> [ (p.ty, b.loc) ]
+        | _ -> []));
+      unify_at env a.loc ~found:ta ~expected:self.ty;
+      match (ps, b) with
+      | [ p ], Some (b, tb) ->
+          unify_at env b.loc ~found:tb ~expected:p.ty;
+          ret
+      | [], None -> ret
+      | _ -> TError)
+  | _ -> TError
+
 (* A call. One with a dot, `x.m(...)`, can be a method call, found through
    [x]'s type: as a field is, by [through_type], except that a method can
    be in a type of any kind, not only a record. [changed] is where the `&`
@@ -569,11 +921,15 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
           | _ when p.home <> env.home && p.home <> Path.prelude_home ->
               report env (no_public_method m ~shown p)
           | _ ->
+              (* an operator written for several types on its right is
+                 named once *)
               let methods =
-                List.filter_map
-                  (fun (o : Iface.op) ->
-                    if o.okind = Method then Some o.oname else None)
-                  (Iface.members td)
+                List.fold_left
+                  (fun acc (o : Iface.op) ->
+                    if o.okind = Method && not (List.mem o.oname acc) then
+                      acc @ [ o.oname ]
+                    else acc)
+                  [] (Iface.members td)
               in
               report env
                 (no_method m ~shown ~own:(p.home = env.home)
@@ -661,6 +1017,36 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
   | Function | Value ->
       report env (not_a_method m o.okind ~item (List.map env.source args));
       nothing ()
+  | Method when List.length (Iface.find_members td o.oname) > 1 -> (
+      (* an operator written for several types on its right, called by
+         name, `t.sub(d)`: the one that takes its argument's type, as
+         `t - d` would be *)
+      let pr = printer env in
+      match args with
+      | [ a ] -> (
+          let ta = infer env cx a in
+          match repr ta with
+          | TError -> TError
+          | TCon (q, _) -> (
+              match
+                List.find_opt
+                  (fun (_, o) -> right_head o = Some q)
+                  (Iface.find_members td o.oname)
+              with
+              | Some (path, _) ->
+                  op_method env cx e ~onode:f.node r tr (Some (a, ta)) path
+              | None ->
+                  report env
+                    (no_op_taking e.loc ~left:(show pr tr) ~op:("." ^ o.oname)
+                       ~right:(show pr ta) ~numbers:false ());
+                  TError)
+          | _ ->
+              report env
+                (which_overload e.loc ~left:(show pr tr) ~op:("." ^ o.oname));
+              TError)
+      | _ ->
+          report env (wrong_arity_overload e.loc ~name:o.oname);
+          nothing ())
   | Method -> (
       let path = op_path td o in
       if path.home = env.home && not (Hashtbl.mem env.globals path) then
@@ -692,7 +1078,10 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
    the first of its arguments it's in, if one is, given as each one's
    parameter's type and the argument's location, before they're checked
    (Infer_env.required). A method's receiver comes first. *)
-and blame_args cx (f : expr) args =
+and blame_args cx (f : expr) args = blame_at cx f.node args
+
+(* The same, for the use at [node]. *)
+and blame_at cx node args =
   (* the first argument whose type [is_in] says has it *)
   let blame r is_in vars =
     List.filter_map
@@ -712,7 +1101,7 @@ and blame_args cx (f : expr) args =
     (fun r ->
       r.uat <- r.uat @ blame r mentions r.uinst;
       r.uat <- r.uat @ blame r row_in r.urows)
-    (Hashtbl.find_opt cx.required f.node)
+    (Hashtbl.find_opt cx.required node)
 
 (* The call [e] of [f], a function of type [tf]; [name] says which, for
    messages, [target] which function of the group it is, if it's one, and

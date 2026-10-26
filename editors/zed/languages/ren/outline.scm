@@ -34,9 +34,6 @@
   "let" @context
   name: (identifier) @name) @item
 
-(operator_definition
-  name: (identifier) @name) @item
-
 (test_definition
   "test" @context
   name: (string) @name) @item

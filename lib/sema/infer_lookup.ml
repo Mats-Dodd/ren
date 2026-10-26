@@ -478,6 +478,15 @@ let rec lookup env cx ~node loc = function
   | Intrinsic x ->
       let p = Intrinsic.path x in
       named env p (fresh env cx ~node loc p)
+  | Assoc_value (Param i, v) ->
+      (* `T.zero`: whatever the function's given for [T] has it *)
+      let t = List.nth cx.tparams i in
+      defer env (Compared { qty = t; qloc = loc; qop = v; qreq = v });
+      Hashtbl.replace cx.found node (Generic_op v);
+      t
+  | Assoc_value (Named p, _) ->
+      (* `Int.zero`, or a `with numeric` type's: it has no parameters *)
+      TCon (p, [])
   | Dep_op (p, op) -> (
       (* the operation as declared, which uses its dependency: a call
          adds it to the caller's `uses` *)

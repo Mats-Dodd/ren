@@ -152,6 +152,7 @@ let fn_of ~name ~loc ?(params = []) body =
       uses = None;
       body;
       owner = None;
+      overload = 0;
       loc = Loc.span loc body.loc;
     }
 

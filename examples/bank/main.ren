@@ -56,7 +56,7 @@ fn main() =
 
   // Every entry is stamped with Clock.now(), so a statement is in order.
   let s = try acme.statement(bob)
-  print(not s[3].at.before(s[0].at))              // true
+  print(s[3].at >= s[0].at)                       // true
 
 fn send(from: AccountId, to: AccountId, dollars: Int) -> Transfer =
   Transfer { from, to, amount: Money.dollars(dollars) }

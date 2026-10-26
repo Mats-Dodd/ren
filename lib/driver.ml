@@ -624,7 +624,9 @@ let types ?(lint = false) ?load ~file src =
                   td.type_name.name
                 :: ops
                 @ List.map (member ~outer:[]) td.type_ops
-            | Type ({ type_ops = _ :: _; _ } as td) ->
+            | Type
+                (( { type_ops = _ :: _; _ }
+                 | { type_body = Opaque { numeric = Some _; _ }; _ } ) as td) ->
                 let outer =
                   List.map (fun (p : Ast.ident) -> p.name) td.type_params
                 in
@@ -633,9 +635,16 @@ let types ?(lint = false) ?load ~file src =
                   | [] -> ""
                   | ps -> "<" ^ String.concat ", " ps ^ ">"
                 in
-                sprintf "%stype %s%s"
+                (* a `with numeric` type says so: it's what gives it its
+                   `+`, `-`, `zero` and order *)
+                let numeric =
+                  match td.type_body with
+                  | Opaque { numeric = Some _; _ } -> " with numeric"
+                  | _ -> ""
+                in
+                sprintf "%stype %s%s%s"
                   (if td.type_pub then "pub " else "")
-                  td.type_name.name params
+                  td.type_name.name params numeric
                 :: List.map (member ~outer) td.type_ops
             | Type ({ type_body = Errors _; _ } as td) ->
                 (* a named error set, as it's declared, each tag with its
@@ -681,13 +690,86 @@ let dump_tokens toks =
   |> List.map (fun (t, _) -> Token.show t)
   |> String.concat " "
 
+(* The help a panic gives for an `Int` that overflowed (Eval.wrap): the
+   method that wraps, called on its operands as the source writes them,
+   `n.wrapping_add(1)`. The receiver is put in parentheses unless it's a
+   name, a literal, a call or a field, which a `.` can follow; and for
+   `n += 1`, where what's between the operands ends in `=`, it's put back,
+   `n = n.wrapping_add(1)`, since a call on its own line does nothing.
+   [None] if an operand isn't on one line of a file [sources] has. *)
+let wrap_help ~sources (w : Eval.wrap) =
+  let text (l : Loc.t) =
+    match sources l.file with
+    | Some src when l.start.line = l.stop.line ->
+        let line = Diag.line_text src l.start.line in
+        let from = l.start.col - 1 and n = l.stop.col - l.start.col in
+        if from >= 0 && n > 0 && from + n <= String.length line then
+          Some (String.sub line from n)
+        else None
+    | _ -> None
+  in
+  (* whether [s] is names and numbers with `.`s between, each followed by
+     any number of `(...)` and `[...]`, which end where they started *)
+  let postfix s =
+    let n = String.length s in
+    let word c =
+      match c with
+      | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' -> true
+      | _ -> false
+    in
+    (* the index just past the bracket that closes the one at [i] *)
+    let rec close i depth =
+      if i >= n then None
+      else
+        match s.[i] with
+        | '(' | '[' -> close (i + 1) (depth + 1)
+        | (')' | ']') when depth = 1 -> Some (i + 1)
+        | ')' | ']' -> close (i + 1) (depth - 1)
+        | _ -> close (i + 1) depth
+    in
+    let rec go i =
+      if i >= n then true
+      else if word s.[i] then go (i + 1)
+      else if (s.[i] = '(' || s.[i] = '[') && i > 0 then
+        match close i 0 with Some j -> go j | None -> false
+      else false
+    in
+    n > 0 && word s.[0] && go 0
+  in
+  (* whether the operator between the operands is `+=` or another `op=` *)
+  let assigns (a : Loc.t) =
+    a.start.line = w.recv.stop.line
+    && a.start.col > w.recv.stop.col
+    &&
+    match text { a with start = w.recv.stop; stop = a.start } with
+    | Some between ->
+        let op = String.trim between in
+        op <> "" && op.[String.length op - 1] = '='
+    | None -> false
+  in
+  let call ~assign recv arg =
+    let target = if postfix recv then recv else "(" ^ recv ^ ")" in
+    let made = Printf.sprintf "%s.%s(%s)" target w.meth arg in
+    let made = if assign then recv ^ " = " ^ made else made in
+    Some (Printf.sprintf "if wrapping is what you mean, write `%s`" made)
+  in
+  match (text w.recv, w.arg) with
+  | Some recv, None -> call ~assign:false recv ""
+  | Some recv, Some a -> Option.bind (text a) (call ~assign:(assigns a) recv)
+  | None, _ -> None
+
+(* A panic, as `ren run` reports it. *)
+let panic_diag ~sources loc msg wrap =
+  let help = Option.bind wrap (wrap_help ~sources) in
+  Diag.make ?help loc ("panic: " ^ msg)
+
 (* What to print for an exception a pass raised, or [None] if it isn't one
    the compiler knows about. [sources] is the source map (diag.ml). *)
 let render_error ~sources = function
   | Diag.Error d -> Some (Diag.render ~sources d)
   | Diag.Errors ds -> Some (Diag.render_all ~sources ds)
-  | Eval.Panic (loc, msg) ->
-      Some (Diag.render ~sources (Diag.make loc ("panic: " ^ msg)))
+  | Eval.Panic { loc; msg; wrap } ->
+      Some (Diag.render ~sources (panic_diag ~sources loc msg wrap))
   | Eval.Uncaught err ->
       (* `main` failed: its error, shown as a value is (errors.md, "`main`") *)
       Some ("error: " ^ err ^ "\n")

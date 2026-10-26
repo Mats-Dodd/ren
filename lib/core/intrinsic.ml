@@ -36,6 +36,15 @@ type t =
   | Str_bytes
   | Str_from_utf8
   | Bytes_len
+  | Int_wrapping_add
+  | Int_wrapping_sub
+  | Int_wrapping_mul
+  | Int_wrapping_neg
+  | Float_of
+  | Float_round
+  | Float_truncate
+  | Float_sqrt
+  | Str_lower
 
 (* Its path in the prelude (path.ml): a function's, [show], or a built-in
    type's member's, [Array.push]. *)
@@ -68,6 +77,15 @@ let path x =
   | Str_bytes -> member "Str" "bytes"
   | Str_from_utf8 -> member "Str" "from_utf8"
   | Bytes_len -> member "Bytes" "len"
+  | Int_wrapping_add -> member "Int" "wrapping_add"
+  | Int_wrapping_sub -> member "Int" "wrapping_sub"
+  | Int_wrapping_mul -> member "Int" "wrapping_mul"
+  | Int_wrapping_neg -> member "Int" "wrapping_neg"
+  | Float_of -> member "Float" "of"
+  | Float_round -> member "Float" "round"
+  | Float_truncate -> member "Float" "truncate"
+  | Float_sqrt -> member "Float" "sqrt"
+  | Str_lower -> member "Str" "lower"
 
 let name x = Path.local (path x)
 let member_name x = Path.short (path x)

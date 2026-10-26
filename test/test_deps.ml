@@ -147,12 +147,15 @@ let lint_evidence body =
                     params = [];
                     body = Dep [ { fname = "op"; fty = int_fn } ];
                     members = Path.Map.empty;
+                    numeric = None;
                     loc = None;
                   };
                 ];
               fns = [ main ];
               values = [];
               shows = [];
+              keys = [];
+              ops = [];
             }))
 
 (* deps.md's handler of two dependencies sharing one state, and a function
@@ -466,7 +469,7 @@ let%expect_test "a parameter of a dependency's type is transparent" =
     {|
 pub dep Rates =
   usd_to: fn(c: Int) -> Int
-fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn timed() = Rates { usd_to: fn(c) => if Clock.now() > Time.epoch then c else 0 }
 fn convert(r: Rates) = with r in Rates.usd_to(1)
 fn passed(r: Rates) = convert(r)
 pub fn public(r: Rates) -> Int = with r in Rates.usd_to(1)
@@ -513,7 +516,7 @@ let%expect_test "a dependency parameter that's kept names its row" =
     {|
 pub fn id(c: Clock uses ..d) -> (Clock uses ..d) = c
 fn at(minutes: Int) -> Clock =
-  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+  Clock.frozen(Time.epoch + Duration.minutes(minutes))
 fn main() uses Console =
   print(with id(at(2)) in Clock.now())
 |};
@@ -1045,8 +1048,8 @@ let%expect_test "the real Clock and Random" =
 fn main() uses Clock, Random, Console =
   let start = Clock.instant()
   Clock.sleep(Duration.ms(1))
-  print(Clock.instant().not_before(start))
-  print(Clock.now().after(Time.epoch))
+  print(Clock.instant() >= start)
+  print(Clock.now() > Time.epoch)
   print(Random.int(10) < 10)
   Random.int(0)
 |};
@@ -1166,16 +1169,16 @@ let%expect_test "time, with methods" =
   run
     {|
 fn main() =
-  let t = Time.epoch.plus(Duration.minutes(5)).plus(Duration.seconds(1))
-  print(t.after(Time.epoch))
-  print(t == Time.epoch.plus(Duration.ms(301000)))
-  let i = Instant.zero.plus(Duration.ms(5))
-  print(i.since(Instant.zero) == Duration.ms(5))
-  print(Instant.zero.before(i))
-  let d = Duration.seconds(2).times(3)
+  let t = Time.epoch + Duration.minutes(5) + Duration.seconds(1)
+  print(t > Time.epoch)
+  print(t == Time.epoch + Duration.ms(301000))
+  let i = Instant.zero + Duration.ms(5)
+  print(i - Instant.zero == Duration.ms(5))
+  print(Instant.zero < i)
+  let d = Duration.seconds(2) * 3
   print(d.in_ms())
-  print(d.after(Duration.seconds(5)))
-  print(d.before(Duration.seconds(6)))
+  print(d > Duration.seconds(5))
+  print(d < Duration.seconds(6))
 |};
   [%expect
     {|
@@ -1754,7 +1757,7 @@ let%expect_test "with installs around its body, and the innermost wins" =
   let src =
     {|
 fn at(minutes: Int) -> Clock =
-  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+  Clock.frozen(Time.epoch + Duration.minutes(minutes))
 fn stamp() = Clock.now()
 fn main() uses Console =
   print(with at(1) in stamp())
@@ -1777,7 +1780,7 @@ fn main() uses Console =
     {|
     (fn at (minutes/1) ev/2
       (call ev/2 Clock.frozen
-        (call ev/2 Time.plus Time.epoch (call ev/2 Duration.minutes minutes/1))))
+        (call ev/2 Time.add Time.epoch (call ev/2 Duration.minutes minutes/1))))
     (fn stamp () ev/1 (dep-call ev/1 Clock.now))
     (fn main () ev/1
       (seq
@@ -1840,11 +1843,11 @@ let%expect_test "a with's body uses no more than what's outside it" =
 pub dep Rates =
   usd_to: fn(c: Int) -> Int
 fn at(minutes: Int) -> Clock =
-  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+  Clock.frozen(Time.epoch + Duration.minutes(minutes))
 fn run_at(f: fn() -> Int) -> Int = with at(1) in try f()
 fn run_inferred(f) = with at(1) in try f()
 fn convert(r: Rates) = with Clock.frozen(Time.epoch) in with r in Rates.usd_to(4)
-fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn timed() = Rates { usd_to: fn(c) => if Clock.now() > Time.epoch then c else 0 }
 fn local() uses Console =
   let k = fn() => print(Clock.now())
   with at(2) in k()
@@ -1917,7 +1920,7 @@ fn main() uses Console =
 fn run_at(f: fn() -> Int uses Clock, ..d) -> Int uses ..d =
   with Clock.frozen(Time.epoch) in f()
 fn main() uses Console, Clock =
-  print(run_at(fn() => if Clock.now().after(Time.epoch) then 1 else 2))
+  print(run_at(fn() => if Clock.now() > Time.epoch then 1 else 2))
 |};
   [%expect {|
     2
@@ -1929,7 +1932,7 @@ fn main() uses Console, Clock =
 dep Log =
   put: fn(n: Int)
 fn at(minutes: Int) -> Clock =
-  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+  Clock.frozen(Time.epoch + Duration.minutes(minutes))
 fn logger(base: Int) = Log { put: fn(n) => print(base + n) }
 fn walk(n: Int) =
   if n > 0 then
@@ -2820,7 +2823,7 @@ fn main() -> Bool =
   let b = Box { c: test_clock(Time.epoch) }
   with b.c in
     Clock.sleep(Duration.ms(3))
-    Clock.now() == Time.epoch.plus(Duration.ms(3))
+    Clock.now() == Time.epoch + Duration.ms(3)
 |};
   [%expect {| true |}]
 
@@ -3392,11 +3395,10 @@ fn main() uses Console =
     );
   [%expect
     {|
-    error: expected `Int`, found `RateCalls & Rates`
+    error: `RateCalls & Rates` has no `+`
        ┌─ test.ren:22:9
     22 │   print(b + 1)
-       │         ^
-       = `+` works on `Int`s
+       │         ^^^^^
     |}];
   check_error
     (rates ^ fns
@@ -3525,7 +3527,7 @@ fn main() uses Console =
     pub dep Rates
       usd_to: fn(Int) -> Int
     fn run<T>(k: fn() -> T uses Rates, ..d) -> T uses ..d
-    fn twice(k: fn() -> Int uses Rates, ..d) -> Int uses Rates, ..d
+    fn twice<T has add>(k: fn() -> T uses Rates, ..d) -> T uses Rates, ..d
     fn main() uses Console
     5
     ()
@@ -3548,7 +3550,7 @@ fn f(n: Int) -> Int =
   if n > 0 then b.r(n - 1) else Rates.usd_to(n)
 
 fn g() =
-  let b = Box { r: fn(n) => with Rates { usd_to: fn(c) => c } in n + Clock.instant().since(Instant.zero).in_ms() }
+  let b = Box { r: fn(n) => with Rates { usd_to: fn(c) => c } in n + (Clock.instant() - Instant.zero).in_ms() }
   b.r(1)
 
 fn main() = ()
@@ -3564,7 +3566,7 @@ fn main() = ()
 
     error: this `with`'s body uses `Clock`, which what's outside it can't
        ┌─ test.ren:11:34
-    11 │   let b = Box { r: fn(n) => with Rates { usd_to: fn(c) => c } in n + Clock.instant().since(Instant.zero).in_ms() }
+    11 │   let b = Box { r: fn(n) => with Rates { usd_to: fn(c) => c } in n + (Clock.instant() - Instant.zero).in_ms() }
        │                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
        = a function or lambda uses everything its `with`s' bodies use, but what they install, and the type of what this is in says it can't use all of that
        help: add `Clock` to the `uses` of the type it's used as, like a stored `fn()`'s, or install it around this, with `with`
@@ -3616,7 +3618,7 @@ fn clock_conforms(c: Clock) -> Bool =
   with c in
     let a = Clock.instant()
     Clock.sleep(Duration.ms(5))
-    Clock.instant().not_before(a)
+    Clock.instant() >= a
 
 fn main() uses Console =
   print(clock_conforms(Clock.frozen(Time.epoch)))
@@ -3624,7 +3626,7 @@ fn main() uses Console =
   print(clock_conforms(fakes.stopped()))
   with fakes.manual_clock(Time.epoch) in
     fakes.ManualClock.advance(Duration.minutes(1))
-    print(Clock.now() == Time.epoch.plus(Duration.minutes(1)))
+    print(Clock.now() == Time.epoch + Duration.minutes(1))
 |}
       );
       ( "fakes.ren",
@@ -3638,11 +3640,11 @@ pub handler manual_clock(start: Time) for Clock, ManualClock =
   now() => now
   instant() => at
   sleep(d) =>
-    now = now.plus(d)
-    at = at.plus(d)
+    now = now + d
+    at = at + d
   advance(d) =>
-    now = now.plus(d)
-    at = at.plus(d)
+    now = now + d
+    at = at + d
 
 pub fn stopped() -> Clock = manual_clock(Time.epoch)
 |}
@@ -3992,8 +3994,8 @@ fn main() uses Console =
   with test_clock(Time.epoch) in
     TestClock.advance(Duration.minutes(5))
     Clock.sleep(Duration.seconds(1))
-    print(Clock.now() == Time.epoch.plus(Duration.ms(301000)))
-    print(Clock.instant().since(Instant.zero) == Duration.ms(301000))
+    print(Clock.now() == Time.epoch + Duration.ms(301000))
+    print(Clock.instant() - Instant.zero == Duration.ms(301000))
   // the same seed gives the same numbers
   let a = with test_random(42) in [Random.int(100), Random.int(100), TestRandom.seed()]
   let b = with test_random(42) in [Random.int(100), Random.int(100), TestRandom.seed()]
@@ -4223,7 +4225,7 @@ test "paying takes the money" =
   let a = Account { id: 1, balance: Money.dollars(1), at: Time.epoch }
   TestClock.advance(Duration.minutes(5))
   let paid = pay(a, Money.dollars(1))
-  assert paid == Account { id: 1, balance: Money.dollars(0), at: Time.epoch.plus(Duration.minutes(5)) }
+  assert paid == Account { id: 1, balance: Money.dollars(0), at: Time.epoch + Duration.minutes(5) }
 
 test "paying too much is caught" =
   let a = Account { id: 1, balance: Money.dollars(1), at: Time.epoch }
@@ -4382,7 +4384,7 @@ let%expect_test "a test's `uses` asks for the real implementation" =
   test
     {|
 test "the system clock is past the epoch" uses Clock =
-  assert Clock.now().after(Time.epoch)
+  assert Clock.now() > Time.epoch
 
 test "the test clock isn't" =
   assert Clock.now() == Time.epoch
@@ -4399,7 +4401,7 @@ test "the test clock isn't" =
   test ~list:true
     {|
 test "the system clock is past the epoch" uses Clock, Random =
-  assert Clock.now().after(Time.epoch)
+  assert Clock.now() > Time.epoch
 
 test "the test clock isn't" =
   assert Clock.now() == Time.epoch
@@ -4752,11 +4754,11 @@ let%expect_test "a group runs its tests against each implementation" =
 pub group clock_conforms(c: Clock) with c =
   test "instant never goes backwards" =
     let a = Clock.instant()
-    assert Clock.instant().not_before(a)
+    assert Clock.instant() >= a
   test "sleeping moves it on" =
     let t = Clock.now()
     Clock.sleep(Duration.ms(5))
-    assert Clock.now().after(t)
+    assert Clock.now() > t
 |}
       );
       ( "main.ren",
@@ -4780,8 +4782,8 @@ group "test clock" = conform.clock_conforms(test_clock(Time.epoch))
 
     ──── frozen / sleeping moves it on ── conform.ren:8
       │
-    8 │     assert Clock.now().after(t)
-      │            ^^^^^^^^^^^^^^^^^^^^
+    8 │     assert Clock.now() > t
+      │            ^^^^^^^^^^^^^^^
       │
       this is false
 
@@ -4797,7 +4799,7 @@ let%expect_test "each test of a group gets a fresh instance" =
 group stopped(c: Clock) with c =
   test "moving it on" =
     Clock.sleep(Duration.minutes(1))
-    assert Clock.now() == Time.epoch.plus(Duration.minutes(1))
+    assert Clock.now() == Time.epoch + Duration.minutes(1)
   test "it starts where it was made" =
     assert Clock.now() == Time.epoch
 
@@ -5343,7 +5345,7 @@ let%expect_test "what an implementation needs is part of its type" =
     {|
 pub dep Rates =
   usd_to: fn(c: Int) -> Int
-fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn timed() = Rates { usd_to: fn(c) => if Clock.now() > Time.epoch then c else 0 }
 fn fixed() -> Rates = Rates { usd_to: fn(c) => c }
 pub fn stored() -> Rates uses Clock = timed()
 fn convert() = with timed() in Rates.usd_to(1)
@@ -5375,7 +5377,7 @@ fn main() = 1
 pub dep Rates =
   usd_to: fn(c: Int) -> Int
 pub fn timed() -> (Rates uses Clock) =
-  Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+  Rates { usd_to: fn(c) => if Clock.now() > Time.epoch then c else 0 }
 pub fn convert(r: Rates uses Clock) -> Int uses Clock = 1
 fn main() = 1
 |};
@@ -5408,7 +5410,7 @@ let%expect_test "an implementation that needs more, inside another type" =
 dep Rates =
   usd_to: fn(c: Int) -> Int
 type Box<T> = { it: T }
-fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+fn timed() = Rates { usd_to: fn(c) => if Clock.now() > Time.epoch then c else 0 }
 fn boxed() -> Box<Rates> = Box { it: timed() }
 fn main() = 1
 |};
@@ -5429,8 +5431,8 @@ let%expect_test "an implementation's needs are fixed where it's installed" =
 dep Rates =
   usd_to: fn(c: Int) -> Int
 fn at(minutes: Int) -> Clock =
-  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
-fn timed() = Rates { usd_to: fn(c) => if Clock.now().after(Time.epoch) then c else 0 }
+  Clock.frozen(Time.epoch + Duration.minutes(minutes))
+fn timed() = Rates { usd_to: fn(c) => if Clock.now() > Time.epoch then c else 0 }
 fn main() uses Console =
   with at(1) in
     with timed() in
@@ -5883,7 +5885,7 @@ fn stamp() = Clock.now()
 fn double(n: Int) = n * 2
 fn main() uses Clock, Console =
   let t = stamp()
-  print(t.after(Time.epoch))
+  print(t > Time.epoch)
   print(double(2))
 |};
   [%expect
@@ -5892,7 +5894,7 @@ fn main() uses Clock, Console =
     (fn double (n/1) ev/2 (* n/1 2))
     (fn main () ev/1
       (let t/2 (call ev/1 stamp)
-        (seq (call ev/1 print (call ev/1 Time.after t/2 Time.epoch))
+        (seq (call ev/1 print (> t/2 Time.epoch))
           (call ev/1 print (call ev/1 double 2)))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Clock Clock.real)
@@ -6020,24 +6022,24 @@ let%expect_test "a closure in an associated value gets its caller's evidence" =
   let src =
     {|
 type T = { n: Int }
-  let one = fn() => 1
+  let answer = fn() => 1
   let f = fn(g) => g()
 fn twice(g) = g() + g()
 fn main() uses Console =
-  print(T.one())
-  print(twice(T.one))
+  print(T.answer())
+  print(twice(T.answer))
   T.f(fn() => print(3))
 |}
   in
   core src;
   [%expect
     {|
-    (fn T.one () ev/1 (lambda () (captures) ev/2 1))
+    (fn T.answer () ev/1 (lambda () (captures) ev/2 1))
     (fn T.f () ev/1 (lambda (g/2) (captures) ev/3 (call ev/3 g/2)))
     (fn twice (g/1) ev/2 (+ (call ev/2 g/1) (call ev/2 g/1)))
     (fn main () ev/1
-      (seq (call ev/1 print (call ev/1 T.one))
-        (seq (call ev/1 print (call ev/1 twice T.one))
+      (seq (call ev/1 print (call ev/1 T.answer))
+        (seq (call ev/1 print (call ev/1 twice T.answer))
           (call ev/1 T.f (lambda () (captures) ev/2 (call ev/2 print 3))))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
@@ -6058,9 +6060,9 @@ let%expect_test "closures in values, and pure lambdas, run where more is used" =
   run
     {|
 type T = { n: Int }
-  let one = fn() => 1
+  let answer = fn() => 1
 fn main() uses Console =
-  print(T.one())
+  print(T.answer())
 |};
   [%expect {|
     1
@@ -6157,7 +6159,7 @@ fn later() uses Clock =
   let _ = Clock.now()
   fn() => Clock.now()
 fn frozen_at(minutes: Int) -> Clock =
-  Clock.frozen(Time.epoch.plus(Duration.minutes(minutes)))
+  Clock.frozen(Time.epoch + Duration.minutes(minutes))
 fn main() uses Console =
   let f = with frozen_at(0) in later()
   print(with frozen_at(5) in f())
@@ -6171,7 +6173,7 @@ fn main() uses Console =
         (lambda () (captures) ev/3 (dep-call ev/3 Clock.now))))
     (fn frozen_at (minutes/1) ev/2
       (call ev/2 Clock.frozen
-        (call ev/2 Time.plus Time.epoch (call ev/2 Duration.minutes minutes/1))))
+        (call ev/2 Time.add Time.epoch (call ev/2 Duration.minutes minutes/1))))
     (fn main () ev/1
       (let f/2
         (with ev/3 (extend ev/1 Clock (call ev/1 frozen_at 0)) (call ev/3 later))
@@ -6269,7 +6271,7 @@ let%expect_test "Core Lint checks evidence is threaded" =
     |}];
   (* a call that doesn't pass the evidence in scope *)
   lint_evidence (fun ~loc ~op:_ ~lambda ~call ~uses_d:_ ->
-      call (lambda 2 (Ren.Core.mk (Int 1) Ren.Ty.int loc)) 2);
+      call (lambda 2 (Ren.Core.mk (Int 1L) Ren.Ty.int loc)) 2);
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a call is given `ev` (2), but the evidence in scope is `ev` (1)")
@@ -6296,7 +6298,7 @@ let%expect_test "Core Lint checks evidence is threaded" =
       let d = Ren.Path.make "test" "D" in
       let impl =
         Ren.Core.mk
-          (Record (d, [ ("op", lambda 3 (Ren.Core.mk (Int 1) Ren.Ty.int loc)) ]))
+          (Record (d, [ ("op", lambda 3 (Ren.Core.mk (Int 1L) Ren.Ty.int loc)) ]))
           (Con (d, [ Uses Ren.Ty.closed ]))
           loc
       in
@@ -6375,7 +6377,7 @@ test "the test clock moves on" =
   let c = test_clock(Time.epoch)
   with c in
     TestClock.advance(Duration.ms(3))
-    assert Clock.now() == Time.epoch.plus(Duration.ms(3))
+    assert Clock.now() == Time.epoch + Duration.ms(3)
 |};
   [%expect
     {|

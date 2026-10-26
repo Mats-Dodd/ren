@@ -58,7 +58,7 @@ Calling an operation adds the dependency to the function's `uses`:
 ```ren
 pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) uses Clock =
   if self.frozen then fail Frozen(self.id)
-  self.balance = self.balance.plus(m)
+  self.balance = self.balance + m
   &self.statement.push(Entry { at: Clock.now(), what })
 ```
 
@@ -189,10 +189,12 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   exited. What it prints isn't captured.
   `test_proc(exits: Array<Exit>)` keeps each `Command { cmd, args }`, and
   says it exited with the code of its `Exit { command, code }`, or 0.
-- `Time`, `Instant` and `Duration` are opaque, with methods only until
-  operators arrive (stage 9). A `Duration` is made with `ms`, `seconds`
-  or `minutes`, added to with `plus` and `times`, compared with `before`
-  and `after`, and read back with `in_ms`.
+- `Time`, `Instant` and `Duration` are opaque, with operators
+  ([operators.md](operators.md)). A `Duration` is made with `ms`,
+  `seconds` or `minutes`, and read back with `in_ms`; it's `with
+  numeric`, so two add up, `d * 3` scales one, and they're ordered. A
+  `Time` or an `Instant` moves on by one, `t + d`, and two give the
+  `Duration` between them, `t - u`; they're ordered by when they are.
 - For now the real `instant` reads the same wall clock as `now`, which the
   system can set back (NTP, a manual change). A monotonic source needs a
   primitive OCaml's standard library doesn't have; it comes with the
@@ -235,7 +237,7 @@ test "a deposit is stamped with the time" =
   TestClock.advance(Duration.minutes(5))
   try &acme.deposit(a, Money.dollars(10))
   let s = try acme.statement(a)
-  assert s[0].at == Time.epoch.plus(Duration.minutes(5))
+  assert s[0].at == Time.epoch + Duration.minutes(5)
 
 test "main prints the balances, and every refusal" =
   try main()
@@ -269,7 +271,7 @@ every implementation of a dependency:
 pub group clock_conforms(c: Clock) with c =
   test "instant never goes backwards" =
     let a = Clock.instant()
-    assert Clock.instant().not_before(a)
+    assert Clock.instant() >= a
 
 group "frozen" = clock_conforms(Clock.frozen(Time.epoch))
 group "test clock" = clock_conforms(test_clock(Time.epoch))
@@ -332,7 +334,7 @@ main.ren
 ```
 
 - One line per test, then each failure: where, the two sides, the seed, the
-  rerun command, and what it printed to `Console`. Above, `covers` was
+  rerun command, and what it printed to `Console`. Above, `debit` was
   broken to check only that the balance isn't negative; `examples.t` has
   all of it, with the batch's failure and `main`'s.
 - `--only <text>` runs the tests whose name contains it (`--exact`: whose

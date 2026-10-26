@@ -287,3 +287,31 @@ fn f() = g("Ren", "a\tb\n", "say \"hi\" \\ there", "") == "(not a [bracket]"
             (escape_sequence))
           (string)))
       (string))))
+
+================================================================================
+floats, and what isn't one
+================================================================================
+
+fn main() = [1.5, 1_000.25, 2.0.sqrt(), 1.show(), -0.5 * x]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (array_expression
+      (float)
+      (float)
+      (method_call_expression
+        (float)
+        (identifier)
+        (arguments))
+      (method_call_expression
+        (number)
+        (identifier)
+        (arguments))
+      (binary_expression
+        (unary_expression
+          (float))
+        (identifier)))))

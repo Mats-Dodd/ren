@@ -119,8 +119,8 @@ let check_transparent sink (f : fn_def) =
         let any = List.exists mentions in
         match e.kind with
         | Var x -> is_param x
-        | Int _ | Bool _ | Str _ | Unit -> false
-        | Unop (_, a)
+        | Int _ | Float _ | Bool _ | Str _ | Unit -> false
+        | Unop (_, a, _)
         | Field (a, _)
         | Ref a
         | Lambda (_, a)
@@ -129,8 +129,9 @@ let check_transparent sink (f : fn_def) =
         | Assert a ->
             mentions a
         | Fail (_, args) -> any (List.map snd args)
-        | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ }
-          ->
+        | Binop (_, a, b, _)
+        | Index (a, b)
+        | Assign { target = a; value = b; _ } ->
             any [ a; b ]
         | If (c, t, f) -> any (c :: t :: Option.to_list f)
         | Array xs -> any xs
@@ -169,18 +170,20 @@ let check_transparent sink (f : fn_def) =
             (* `c.now()`: inference reports it isn't how an operation is
                called *)
             ()
-        | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
+        | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
         | Call (callee, args) ->
             walk ~ok:true callee;
             List.iter (walk ~ok:true) args
         | Lambda (_, body) ->
             if (not ok) && mentions body then fail e.loc Captured
             else walk ~ok:false body
-        | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+        | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a
+          ->
             walk_all [ a ]
         | Fail (_, args) -> walk_all (List.map snd args)
-        | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ }
-          ->
+        | Binop (_, a, b, _)
+        | Index (a, b)
+        | Assign { target = a; value = b; _ } ->
             walk_all [ a; b ]
         | If (c, t, f) -> walk_all (c :: t :: Option.to_list f)
         | Array xs -> walk_all xs
@@ -269,10 +272,10 @@ let walk ~ty ~errors ~pattern (prog : program) =
   let rec expr (e : expr) =
     let go = List.iter expr in
     match e.kind with
-    | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
-    | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
+    | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
         expr a
-    | Binop (_, a, b) | Index (a, b) | Assign { target = a; value = b; _ } ->
+    | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go [ a; b ]
     | If (c, t, f) -> go (c :: t :: Option.to_list f)
     | Call (f, args) -> go (f :: args)
@@ -318,7 +321,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
           (match td.type_body with
           | Fields fs | Dep fs -> List.iter field fs
           | Ctors cs -> List.iter (fun c -> List.iter field c.ctor_fields) cs
-          | Opaque t -> ty_ t
+          | Opaque { rep; _ } -> ty_ rep
           | Errors es -> errors_ es);
           List.iter (fun (o : op) -> fn_ o.op_fn) td.type_ops
       | Import _ | Testing _ -> ())
@@ -1088,6 +1091,36 @@ let check_spelled env ~is_value so_far ms =
         | _ -> assert false)
     ms
 
+(* A member with a reserved name, an operator, `key` or `show`, doesn't
+   fail or use a dependency, whatever its body calls: `a + b` has no `try`
+   in front, and `==` and `show` run wherever a value is compared or
+   shown (resolve.ml, [reserved], checks what's written). *)
+let check_reserved env so_far ms =
+  List.iter
+    (fun m ->
+      let f = m.fn in
+      let reserved =
+        f.owner <> None
+        && List.mem f.name.name ("key" :: "show" :: Infer_reqs.operators)
+      in
+      if reserved then
+        match Hashtbl.find so_far.schemes m.cx.self with
+        | TFun (_, _, errs, uses, _) -> (
+            match (fst (row_parts errs), fst (row_parts uses)) with
+            | l :: _, _ ->
+                report env
+                  (Infer_msg.reserved_impure f.name.loc ~name:f.name.name
+                     ~what:(sprintf "fail, but it can fail with `%s`" l.name))
+            | [], l :: _ ->
+                report env
+                  (Infer_msg.reserved_impure f.name.loc ~name:f.name.name
+                     ~what:
+                       (sprintf "use a dependency, but it uses `%s`"
+                          (env.names (Ty.dep_path l.name))))
+            | [], [] -> ())
+        | _ -> ())
+    ms
+
 (* Check a group of functions that call each other: each one's body, then
    what that leaves to decide once every body is checked, by the
    constraint solver; then each is generalized. Each body sees the others
@@ -1120,7 +1153,8 @@ let check_group env ~values ~main so_far group =
   env.spelled <- [];
   leave_level env.st;
   generalize_group env so_far ms;
-  check_spelled env ~is_value so_far ms
+  check_spelled env ~is_value so_far ms;
+  check_reserved env so_far ms
 
 (* A test's body is `Unit`, so one whose value is thrown away, like a
    comparison without its `assert`, is reported, as any other dropped
@@ -1291,6 +1325,19 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
   in
   let is_value (f : fn_def) = List.mem (Ast.fn_path home f) values in
   List.iter (check_transparent sink) fns;
+  (* a key that leads back to its own type *)
+  List.iter
+    (function
+      | Type td ->
+          List.iter
+            (fun (o : op) ->
+              let p = Path.make home td.type_name.name in
+              if o.op_fn.name.name = "key" && Infer_reqs.key_loops env p then
+                report env
+                  (Infer_msg.key_loops o.op_fn.name.loc ~owner:td.type_name.name))
+            td.type_ops
+      | Fn _ | Import _ | Testing _ -> ())
+    r.prog;
   let so_far =
     { schemes = Hashtbl.create 16; tables = Hashtbl.create 16; withheld = [] }
   in
@@ -1315,6 +1362,18 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
     fns;
   check_runs env r so_far ?entry ~tests fns;
   let schemes, nodes = List.split (List.map (canonical env so_far) fns) in
+  (* an associated value is made once, so it's given no dictionaries: a
+     value of its type variable is compared by its shape alone (walk.ml),
+     but nothing else can be done with one *)
+  List.iter2
+    (fun (f : fn_def) (path, (s : Ty.scheme)) ->
+      match List.filter (fun (_, r) -> r <> "eq" && r <> "hash") s.reqs with
+      | (_, req) :: _ when List.mem path values ->
+          report env
+            (value_needs f.name.loc ~value:(Ast.fn_name f)
+               ~what:(Infer_msg.req_symbol req))
+      | _ -> ())
+    fns schemes;
   {
     schemes = Path.Map.of_list schemes;
     values;

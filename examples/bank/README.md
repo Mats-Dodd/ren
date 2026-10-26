@@ -16,7 +16,7 @@ ren test bank              # every module's tests
 
 | File | What's in it |
 |---|---|
-| `money.ren` | `Money`, opaque cents, with `Money.dollars(5)`, `a.plus(b)` and `a.covers(b)` |
+| `money.ren` | `Money`, opaque cents `with numeric`, so `Money.dollars(5)`, `a + b` and `a < b` |
 | `account.ren` | `AccountId`, opaque; `Refusal`, the errors an account fails with; `Movement` and `Entry`, a line of a statement and its time; `Account`, with `credit` and `debit` |
 | `bank.ren` | `Bank`: `open`, `deposit`, `transfer`, `batch`, `freeze`, and reading balances; `TransferError`; a test for each way it says no |
 | `main.ren` | three customers, and every way a transfer can go; a test of what it prints |
@@ -57,10 +57,11 @@ keeps one with `attempt`, a `Result` it prints and gives to
 `TransferError` breaks both the `match` and `worth_retrying` until they
 say what to do about it.
 
-**Money isn't a number.** `Money` and `AccountId` are opaque, so outside
+**Money isn't an `Int`.** `Money` and `AccountId` are opaque, so outside
 their modules `balance + 5` and `deposit(2, ...)` don't compile. Money is
-made in a unit you can see, `Money.dollars(100)`, and changes only through
-`plus` and `minus`.
+made in a unit you can see, `Money.dollars(100)`, and it's a number of
+its own, `with numeric`: two add up, `a + b`, and compare, `a < b`, but
+`Money * Money` isn't a `Money`.
 
 **`&` shows what changes.** `&acme.transfer(...)` changes the bank, and
 `acme.balance(alice)` doesn't. Inside, `&draft.accounts[i].debit(...)` changes
@@ -104,7 +105,7 @@ clock_conforms(test_clock(Time.epoch))`. Each test gets a fresh clock.
 - `main` failing: it prints `error: Frozen(AccountId(3))` and exits with status 1
 - `credit` dropping `uses Clock`: the error points at `Clock.now()`
 
-and `covers` checking only that the balance isn't negative, which the
+and `debit` checking only that the balance isn't negative, which the
 compiler can't see: `ren test` catches it, in the overdraft and batch
 tests and the test of `main`.
 

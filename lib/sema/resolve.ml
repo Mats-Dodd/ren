@@ -150,6 +150,8 @@ type env = {
           source order, and its fields *)
   own_sets : (string, unit) Hashtbl.t;
       (** the module's own named error sets, by name *)
+  own_numeric : (string, unit) Hashtbl.t;
+      (** the module's own `with numeric` types, by name *)
   own_deps : (string, string list) Hashtbl.t;
       (** the module's own dependencies, by name, each with its operations *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
@@ -755,87 +757,137 @@ let qualified env sc ((i : import), (iface : Iface.t)) (f : ident) =
    items, so a private one can't be told apart from one that doesn't
    exist. An associated value is a [Global_value]; the rest are functions. *)
 let item env sc (t : tyname) (f : ident) =
-  match declared_type env ~params:sc.tparams ~what:"it has no members" t with
-  | None -> Global (Path.make env.home f.name)
-  | Some { tref = Param _; _ } ->
-      (* [declared_type] gives only a declared type *)
-      assert false
-  | Some { tref = Named p; _ } -> (
-      let shown = show_tyname t in
-      let decl =
-        Option.bind
-          (List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces)
-          (fun iface -> Iface.find_type iface p.name)
-      in
-      let declared () =
-        ( List.map
-            (fun (o : Iface.op) -> (o.oname, o.okind))
-            (Option.fold ~none:[] ~some:Iface.members decl),
-          [] )
-      in
-      (* the prelude's own source finds a built-in type's members,
+  let assoc = f.name = "zero" || f.name = "one" in
+  match (t.tmod, index_of t.tid.name 0 sc.tparams) with
+  | None, Some i when assoc ->
+      (* `T.zero`: whatever the function's given for `T` has *)
+      Assoc_value (Param i, f.name)
+  | None, Some _ ->
+      Diag.report env.sink (Infer_msg.through_param f.loc ~name:t.tid.name);
+      Global (Path.make env.home f.name)
+  | _ -> (
+      match
+        declared_type env ~params:sc.tparams ~what:"it has no members" t
+      with
+      | None -> Global (Path.make env.home f.name)
+      | Some { tref = Param _; _ } ->
+          (* [declared_type] gives only a declared type *)
+          assert false
+      | Some { tref = Named p; _ } -> (
+          let shown = show_tyname t in
+          let decl =
+            Option.bind
+              (List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces)
+              (fun iface -> Iface.find_type iface p.name)
+          in
+          let declared () =
+            ( List.map
+                (fun (o : Iface.op) -> (o.oname, o.okind))
+                (Option.fold ~none:[] ~some:Iface.members decl),
+              [] )
+          in
+          (* the prelude's own source finds a built-in type's members,
          `Str.from_utf8`, in the intrinsics *)
-      let items, fields =
-        if p.home = env.home then
-          match Hashtbl.find_opt env.own_ops p.name with
-          | Some own -> own
-          | None -> declared ()
-        else declared ()
-      in
-      let path = Path.member p f.name in
-      let ops = Option.value (dep_ops env p) ~default:[] in
-      (* a built-in method, `Array.len`: built into the compiler, not a
+          let items, fields =
+            if p.home = env.home then
+              match Hashtbl.find_opt env.own_ops p.name with
+              | Some own -> own
+              | None -> declared ()
+            else declared ()
+          in
+          let path = Path.member p f.name in
+          let ops = Option.value (dep_ops env p) ~default:[] in
+          (* a built-in method, `Array.len`: built into the compiler, not a
          function of the program *)
-      let builtin =
-        if p.home = Path.prelude_home then Prelude.find path else None
-      in
-      match (List.assoc_opt f.name items, builtin) with
-      | _ when List.mem f.name ops ->
-          (* `Clock.now`: an operation, which calls the implementation
+          let builtin =
+            if p.home = Path.prelude_home then Prelude.find path else None
+          in
+          match (List.assoc_opt f.name items, builtin) with
+          | _ when List.mem f.name ops ->
+              (* `Clock.now`: an operation, which calls the implementation
              installed where it's called (one a handler calls of what it
              implements is reported by infer_declared.ml); resolve.ml
              reports one that's also a member's name *)
-          Dep_op (p, f.name)
-      | Some _, Some x -> Intrinsic x
-      | Some kind, None ->
-          sc.fn.calls <- path :: sc.fn.calls;
-          if kind = Value then Global_value path else Global path
-      | None, _ when p.home <> env.home && p.home <> Path.prelude_home ->
-          report env f.loc
-            ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
-            (sprintf "`%s` has no public `%s`" shown f.name);
-          Global path
-      | None, _ ->
-          (* the module's own type, or a built-in one, which has every item
+              Dep_op (p, f.name)
+          | Some _, Some x -> Intrinsic x
+          | Some _, None
+            when List.length (List.filter (fun (n, _) -> n = f.name) items) > 1
+            ->
+              (* an operator written for several types on its right: which
+                 one is told by what's on the right, which `V.add` alone
+                 doesn't say *)
+              report env f.loc
+                ~help:
+                  (sprintf "write it as an operator, `a %s b`, or `a.%s(b)`"
+                     (Infer_msg.req_symbol f.name)
+                     f.name)
+                ~notes:
+                  [
+                    sprintf
+                      "`%s.%s` is written for more than one type on its right"
+                      shown f.name;
+                  ]
+                (sprintf "`%s.%s` can't say which `%s` it is" shown f.name
+                   f.name);
+              Global path
+          | Some kind, None ->
+              sc.fn.calls <- path :: sc.fn.calls;
+              if kind = Value then Global_value path else Global path
+          | None, _
+            when assoc
+                 && (p = Path.prelude "Int"
+                    || p = Path.prelude "Float"
+                    || f.name = "zero"
+                       &&
+                       if p.home = env.home then
+                         Hashtbl.mem env.own_numeric p.name
+                       else
+                         Option.fold ~none:false
+                           ~some:(fun (d : Iface.type_decl) ->
+                             d.numeric <> None)
+                           decl) ->
+              (* a number's `zero` and `one`, and a `with numeric` type's
+             `zero`, which it has without writing it *)
+              Assoc_value (Named p, f.name)
+          | None, _ when p.home <> env.home && p.home <> Path.prelude_home ->
+              report env f.loc
+                ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
+                (sprintf "`%s` has no public `%s`" shown f.name);
+              Global path
+          | None, _ ->
+              (* the module's own type, or a built-in one, which has every item
              it will ever have *)
-          let quoted ns = String.concat ", " (List.map (sprintf "`%s`") ns) in
-          report env f.loc
-            ?help:
-              (match items with
-              | _ when ops <> [] ->
-                  Some
-                    (sprintf "its operations: %s%s" (quoted ops)
-                       (if items = [] then ""
-                        else
-                          sprintf "; its members: %s"
-                            (quoted (List.map fst items))))
-              | _ when List.mem f.name fields ->
-                  Some
-                    (sprintf
-                       "`%s` is a field, so it's read from a value, like `x.%s`"
-                       f.name f.name)
-              | [] when p.home = env.home ->
-                  Some (sprintf "declare it under `type %s`" shown)
-              | [] -> None
-              | _ ->
-                  Some
-                    (sprintf "its members: %s"
-                       (String.concat ", "
-                          (List.map (fun (n, _) -> sprintf "`%s`" n) items))))
-            (sprintf "`%s` has no %s named `%s`" shown
-               (if ops = [] then "member" else "operation or member")
-               f.name);
-          Global path)
+              let quoted ns =
+                String.concat ", " (List.map (sprintf "`%s`") ns)
+              in
+              report env f.loc
+                ?help:
+                  (match items with
+                  | _ when ops <> [] ->
+                      Some
+                        (sprintf "its operations: %s%s" (quoted ops)
+                           (if items = [] then ""
+                            else
+                              sprintf "; its members: %s"
+                                (quoted (List.map fst items))))
+                  | _ when List.mem f.name fields ->
+                      Some
+                        (sprintf
+                           "`%s` is a field, so it's read from a value, like \
+                            `x.%s`"
+                           f.name f.name)
+                  | [] when p.home = env.home ->
+                      Some (sprintf "declare it under `type %s`" shown)
+                  | [] -> None
+                  | _ ->
+                      Some
+                        (sprintf "its members: %s"
+                           (String.concat ", "
+                              (List.map (fun (n, _) -> sprintf "`%s`" n) items))))
+                (sprintf "`%s` has no %s named `%s`" shown
+                   (if ops = [] then "member" else "operation or member")
+                   f.name);
+              Global path))
 
 (* What the name [x] refers to. [what] words the error when it's nothing:
    "variable", or "function" for the name being called. *)
@@ -1032,15 +1084,16 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
   let kind : Resolved.expr_kind =
     match e.kind with
     | Int n -> Int n
+    | Float f -> Float f
     | Bool b -> Bool b
     | Str s -> Str s
     | Unit -> Unit
     | Var (Bare x) -> Var (lookup env sc e.loc ~what:"variable" x)
     | Var (Item (t, f)) -> Var (item env sc t f)
-    | Unop (op, a) -> Unop (op, go a)
-    | Binop (op, a, b) ->
+    | Unop (op, a, n) -> Unop (op, go a, n)
+    | Binop (op, a, b, n) ->
         let a = go a in
-        Binop (op, a, go b)
+        Binop (op, a, go b, n)
     | If (c, t, f) ->
         let c = go c in
         let t = go t in
@@ -1124,8 +1177,13 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let a = go a in
         Index (a, go i)
     | Ref a -> Ref (go a)
-    | Assign { target = { kind = Var (Bare "_"); loc; _ } as target; op; value }
-      ->
+    | Assign
+        {
+          target = { kind = Var (Bare "_"); loc; _ } as target;
+          op;
+          value;
+          onode;
+        } ->
         report env loc
           ~help:"write `let _ = ...` to drop a value, or assign to a `var`"
           "`_` names nothing, so it can't be assigned to";
@@ -1134,10 +1192,10 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let target =
           { target with kind = Var (Global (Path.make env.home "_")) }
         in
-        Assign { target; op; value = go value }
-    | Assign { target; op; value } ->
+        Assign { target; op; value = go value; onode }
+    | Assign { target; op; value; onode } ->
         let target = go target in
-        Assign { target; op; value = go value }
+        Assign { target; op; value = go value; onode }
     | For { var; iter; body } ->
         let bound =
           match iter.kind with Ref _ -> By_ref_loop | _ -> By_loop
@@ -1364,7 +1422,7 @@ let no_opaque_cycles env (items : Resolved.program) =
   let reps = Hashtbl.create 8 in
   List.iter
     (function
-      | Type ({ type_body = Opaque t; _ } as td) ->
+      | Type ({ type_body = Opaque { rep = t; _ }; _ } as td) ->
           Hashtbl.replace reps td.type_name.name t
       | Fn _ | Type _ | Import _ | Testing _ -> ())
     items;
@@ -1380,7 +1438,7 @@ let no_opaque_cycles env (items : Resolved.program) =
   let reported = ref [] in
   List.iter
     (function
-      | Type ({ type_body = Opaque t; _ } as td)
+      | Type ({ type_body = Opaque { rep = t; _ }; _ } as td)
         when not (List.mem td.type_name.name !reported) ->
           let start = td.type_name in
           (* [seen]: the opaque types followed so far, the last one first *)
@@ -1598,6 +1656,210 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     List.sort_uniq compare sc.fn.calls,
     List.sort_uniq compare sc.fn.dots )
 
+(* ---- reserved members ----
+
+   A member with a reserved name is what a type does with an operator,
+   `add` for `+`, an associated value, `zero`, its `key`, which says what
+   equal means and so how its values are hashed and ordered, or its
+   `show` (operators.md). Each is decided once, from its signature, so
+   the signature is written in full: what an operator takes and gives,
+   and that it doesn't fail or use a dependency, since `a + b` has no
+   `try` in front (infer_top.ml checks its body keeps to that). On a
+   public type it's public too, since it changes what `==` or `+` means in
+   every module that uses the type. *)
+
+(* The operator each operator method is, `add` for `+`, and the one
+   [`-a`] is. *)
+let operator_symbol = function
+  | "add" -> "+"
+  | "sub" -> "-"
+  | "mul" -> "*"
+  | "div" -> "/"
+  | "rem" -> "%"
+  | "neg" -> "-a"
+  | m -> m
+
+let binary_operators = [ "add"; "sub"; "mul"; "div"; "rem" ]
+
+(* The reserved members of [td], as written, checked. *)
+let reserved env (td : Parsed.type_def) =
+  let tname = td.type_name.name in
+  let own =
+    tname
+    ^
+    match td.type_params with
+    | [] -> ""
+    | ps ->
+        "<" ^ String.concat ", " (List.map (fun (p : ident) -> p.name) ps) ^ ">"
+  in
+  let numeric =
+    match td.type_body with
+    | Opaque { numeric = Some _; _ } -> true
+    | _ -> false
+  in
+  List.iter
+    (fun (o : Parsed.op) ->
+      let f = o.op_fn in
+      let name = f.name.name in
+      let at = f.name.loc in
+      let written_ret () = f.ret <> None in
+      let others () =
+        match f.params with
+        | (s : Parsed.param) :: rest when s.pname.name = "self" -> Some (s, rest)
+        | _ -> None
+      in
+      (* what a well-formed one looks like *)
+      let shape () =
+        match name with
+        | "neg" -> sprintf "pub fn neg(self) -> %s = ..." own
+        | "key" -> "pub fn key(self) -> K = ..."
+        | "show" -> "pub fn show(self) -> Str = ..."
+        | "zero" | "one" -> sprintf "pub let %s: %s = ..." name own
+        | _ -> sprintf "pub fn %s(self, b: %s) -> %s = ..." name own own
+      in
+      let wrong why =
+        report env at
+          ~help:(sprintf "write `%s`" (shape ()))
+          (sprintf "`%s` is reserved for %s, so %s" name
+             (match name with
+             | "key" -> "what equal means"
+             | "show" -> "how a value is shown"
+             | "zero" | "one" -> "an associated value"
+             | _ -> sprintf "`%s`" (operator_symbol name))
+             why)
+      in
+      let pure () =
+        if f.errors <> None then wrong "it can't fail"
+        else if f.uses <> None then wrong "it can't use a dependency"
+      in
+      let method_with n =
+        match (o.op_kind, others ()) with
+        | Op_value, _ -> wrong "it's a method"
+        | Op_fn, None -> wrong "it's a method"
+        | Op_fn, Some (s, rest) ->
+            if s.pmode = Inout then wrong "it can't change `self`"
+            else if List.length rest <> n then
+              wrong
+                (if n = 0 then "it takes only `self`"
+                 else "it takes `self` and one more")
+            else if
+              (not (written_ret ()))
+              || List.exists (fun (p : Parsed.param) -> p.pty = None) rest
+            then wrong "its signature is written in full"
+            else if List.exists (fun (p : Parsed.param) -> p.pmode = Inout) rest
+            then wrong "it can't change what it's given"
+            else pure ()
+      in
+      (match name with
+      | "eq" | "hash" | "compare" ->
+          report env at ~help:"write `pub fn key(self) -> K = ...`"
+            (sprintf "`%s` can't be written: what equal means comes from `key`"
+               name)
+      | _ when List.mem name binary_operators -> method_with 1
+      | "neg" | "key" | "show" -> method_with 0
+      | "zero" | "one" -> (
+          match (o.op_kind, f.ret) with
+          | Op_fn, _ -> wrong "it's a value, written with `let`"
+          | Op_value, None -> wrong "its type is written"
+          | Op_value, Some _ -> ())
+      | _ -> ());
+      (* what `with numeric` gives already *)
+      (if numeric then
+         let gives =
+           match name with
+           | "add" | "sub" -> Some (sprintf "its `%s`" (operator_symbol name))
+           | "neg" -> Some "its `-a`"
+           | "zero" -> Some "its `zero`"
+           | "key" -> Some "its `==` and its order"
+           | _ -> None
+         in
+         match gives with
+         | Some g ->
+             report env at
+               ~help:(sprintf "remove `%s`" name)
+               (sprintf "`with numeric` gives `%s` %s already" tname g)
+         | None -> ());
+      (* a public type's are public *)
+      if
+        td.type_pub && (not f.pub)
+        && List.mem name
+             ("neg" :: "key" :: "show" :: "zero" :: "one" :: binary_operators)
+      then
+        report env at
+          ~help:
+            (sprintf "write `pub %s`"
+               (if o.op_kind = Op_value then "let" else "fn"))
+          ~notes:
+            [
+              sprintf "it says what `%s` does in every module that uses `%s`"
+                (match name with
+                | "key" -> "=="
+                | "show" -> "show"
+                | "zero" | "one" -> tname ^ "." ^ name
+                | _ -> operator_symbol name)
+                tname;
+            ]
+          (sprintf "`%s` of the public type `%s` has to be public" name tname))
+    td.type_ops
+
+(* What a reserved member's type is, where [reserved] can't tell from
+   what's written: a type's own `show` makes a [Str], since it's how a
+   value of it is shown wherever one is, and its `zero` and `one` are
+   values of it (operators.md). *)
+let reserved_types env (td : Resolved.type_def) =
+  let own = Path.make env.home td.type_name.name in
+  let written =
+    own.name
+    ^
+    match td.type_params with
+    | [] -> ""
+    | ps ->
+        "<" ^ String.concat ", " (List.map (fun (p : ident) -> p.name) ps) ^ ">"
+  in
+  List.iter
+    (fun (o : Resolved.op) ->
+      let f = o.op_fn in
+      let name = f.name.name in
+      match (name, o.op_kind, f.ret) with
+      | "show", Op_fn, Some (TyName ({ tref = Named p; _ }, []))
+        when p = Path.prelude "Str" ->
+          ()
+      | "show", Op_fn, Some _ ->
+          report env f.name.loc ~help:"write `pub fn show(self) -> Str = ...`"
+            "`show` is reserved for how a value is shown, so it makes a `Str`"
+      | ("zero" | "one"), Op_value, Some (TyName ({ tref = Named p; _ }, _))
+        when p = own ->
+          ()
+      | ("zero" | "one"), Op_value, Some _ ->
+          report env f.name.loc
+            ~help:(sprintf "write `pub let %s: %s = ...`" name written)
+            (sprintf "`%s` is reserved for an associated value, so it's a `%s`"
+               name written)
+      | _ -> ())
+    td.type_ops
+
+(* An operator written more than once is one for each type on its right,
+   told apart by that type's name (operators.md): two that take the same
+   one can't be told apart. *)
+let overloads env (td : Resolved.type_def) =
+  let seen = Hashtbl.create 8 in
+  List.iter
+    (fun (o : Resolved.op) ->
+      let f = o.op_fn in
+      match f.params with
+      | [ _; { pty = Some (TyName ({ tref = Named q; _ }, _)); _ } ]
+        when List.mem f.name.name binary_operators -> (
+          match Hashtbl.find_opt seen (f.name.name, q) with
+          | Some first ->
+              report env f.name.loc ~help:"remove one of them"
+                ~labels:[ (first, "the first is here") ]
+                (sprintf "`%s` has two `%s` that take %s" td.type_name.name
+                   (operator_symbol f.name.name)
+                   (Infer_msg.article q.name))
+          | None -> Hashtbl.replace seen (f.name.name, q) f.name.loc)
+      | _ -> ())
+    td.type_ops
+
 (* A type declaration, and its members: each item resolved as a
    function (see [fn_def]), with its path, the top-level functions it uses
    and the names it calls with a dot. *)
@@ -1633,7 +1895,18 @@ let type_def env (td : Parsed.type_def) :
                  ctor_fields = List.map field c.ctor_fields;
                })
              cs)
-    | Opaque t -> Opaque (ty env ~params t)
+    | Opaque { rep; numeric } ->
+        let rep = ty env ~params rep in
+        (* only a number's operators can be given *)
+        (match (numeric, rep) with
+        | Some _, TyName ({ tref = Named p; _ }, [])
+          when p = Path.prelude "Int" || p = Path.prelude "Float" ->
+            ()
+        | Some at, _ ->
+            report env at ~help:"write it by hand: `pub fn add(self, b: ...)`"
+              "`with numeric` is for an opaque `Int` or `Float`"
+        | None, _ -> ());
+        Opaque { rep; numeric }
     | Errors es -> Errors (errors env ~params es)
     | Dep ops -> Dep (List.map field ops)
   in
@@ -1645,12 +1918,16 @@ let type_def env (td : Parsed.type_def) :
     (fun (o : Parsed.op) ->
       let id = o.op_fn.name in
       match Hashtbl.find_opt seen id.name with
+      | Some _ when List.mem id.name binary_operators ->
+          (* one for each type on its right: [overloads] *)
+          ()
       | Some first ->
           report env id.loc ~help:"rename one of them"
             ~labels:[ (first, sprintf "the first `%s` is here" id.name) ]
             (sprintf "`%s` has two members named `%s`" tname id.name)
       | None -> Hashtbl.replace seen id.name id.loc)
     td.type_ops;
+  reserved env td;
   (* and so does a dependency's operation: `Clock.now` would be one or the
      other *)
   (match td.type_body with
@@ -1719,7 +1996,10 @@ let type_def env (td : Parsed.type_def) :
              (Ast.fn_path env.home f, calls, dots) ))
          td.type_ops)
   in
-  ({ td with type_body; type_ops }, calls)
+  let td = { td with type_body; type_ops } in
+  overloads env td;
+  reserved_types env td;
+  (td, calls)
 
 (* ---- what a public declaration can mention ----
 
@@ -2034,6 +2314,7 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
       imports = imported;
       ifaces = imports;
       own_ops = Hashtbl.create 8;
+      own_numeric = Hashtbl.create 8;
       own_sets = Hashtbl.create 8;
       own_deps = Hashtbl.create 8;
       modules =
@@ -2102,6 +2383,8 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
           in
           (match td.type_body with
           | Errors _ -> Hashtbl.replace env.own_sets td.type_name.name ()
+          | Opaque { numeric = Some _; _ } ->
+              Hashtbl.replace env.own_numeric td.type_name.name ()
           | Dep ops ->
               if not (Hashtbl.mem env.own_deps td.type_name.name) then
                 Hashtbl.replace env.own_deps td.type_name.name

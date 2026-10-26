@@ -40,6 +40,14 @@ type found =
   | Lambda_id of string
       (** a lambda, or the body a `with` passes to a wrapper: its identity in
           lambda sets (Ty.lambda_id), which its type's set has *)
+  | Builtin_op
+      (** at an operator's own node (Ast.Binop), one the language does itself:
+          on [Int]s or [Float]s, a `with numeric` type's, or an opaque type's in
+          its own module, on what it's represented as. One that's a method has
+          [Method_of] there instead *)
+  | Generic_op of string
+      (** at an operator's own node, `a + b` on a type variable, or at `T.zero`:
+          done by what its type turns out to have of this requirement, `add` *)
 
 (* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
    that takes a module (here [Int], which says how to compare keys) and

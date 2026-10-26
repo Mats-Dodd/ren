@@ -206,7 +206,7 @@ type Role =
     match self
       Admin => 10
       Guest(n) => n
-  add(other) => other
+  pub fn add(self, other: Role) -> Role = other
 
 --------------------------------------------------------------------------------
 
@@ -246,11 +246,20 @@ type Role =
                   (type_identifier))
                 (identifier))
               (identifier)))))
-      (operator_definition
+      (function_definition
+        (visibility)
         (identifier)
         (parameters
           (parameter
-            (identifier)))
+            (self))
+          (parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (named_type
+          (type_name
+            (type_identifier)))
         (identifier)))))
 
 ================================================================================
@@ -429,3 +438,148 @@ fn row(b: Box<fn() uses Clock, ..d>, c: Box<Clock uses Os, Int>) = 3
               (type_name
                 (type_identifier)))))))
     (number)))
+
+================================================================================
+an opaque number with numeric, and operators as methods
+================================================================================
+
+pub type Money = opaque Int with numeric
+  pub fn dollars(n: Int) -> Money = n * 100
+
+pub type Time = opaque Int
+  pub fn sub(self, t: Time) -> Duration = Duration.ms(self - t)
+  pub fn sub(self, d: Duration) -> Time = self - d.in_ms()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (opaque_type
+      (named_type
+        (type_name
+          (type_identifier)))
+      (numeric))
+    (type_members
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (binary_expression
+          (identifier)
+          (number)))))
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (opaque_type
+      (named_type
+        (type_name
+          (type_identifier))))
+    (type_members
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (self))
+          (parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments
+            (binary_expression
+              (self)
+              (identifier)))))
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (self))
+          (parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (binary_expression
+          (self)
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments)))))))
+
+================================================================================
+an implementation of several dependencies, joined with `&`
+================================================================================
+
+fn f(h: Rates & RateCalls, o: Option<Clock & TestClock>) -> Rates & RateCalls uses Clock = h
+fn g(t: Clock & TestClock uses Os) = ()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (implementation_type
+          (type_name
+            (type_identifier))
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (implementation_type
+              (type_name
+                (type_identifier))
+              (type_name
+                (type_identifier)))))))
+    (implementation_type
+      (type_name
+        (type_identifier))
+      (type_name
+        (type_identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (identifier))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (implementation_type
+          (type_name
+            (type_identifier))
+          (type_name
+            (type_identifier))
+          (uses_clause
+            (dependency
+              (type_identifier))))))
+    (unit)))

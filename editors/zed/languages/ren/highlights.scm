@@ -14,6 +14,7 @@
 
 (comment) @comment
 (number) @number
+(float) @number
 (string) @string
 (escape_sequence) @string.escape
 (boolean) @boolean
@@ -45,6 +46,7 @@
 ] @keyword
 
 (visibility) @keyword
+(numeric) @keyword
 
 ; something changes here
 (reference "&" @keyword.mutation)
@@ -68,7 +70,6 @@
 ; ---- declarations ----
 
 (function_definition name: (identifier) @function)
-(operator_definition name: (identifier) @function)
 (associated_value name: (identifier) @constant)
 (type_definition name: (type_identifier) @type)
 (operation name: (identifier) @function)

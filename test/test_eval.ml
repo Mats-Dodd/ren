@@ -60,6 +60,123 @@ fn main() = 10 / (5 - 5)
       │             ^^^^^^^^^^^^
     |}]
 
+let%expect_test "`/` and `%` round toward zero" =
+  run
+    {|
+fn main() uses Console =
+  print(-7 / 2)
+  print(-7 % 2)
+  print(7 / -2)
+  print(-7.5 % 2.0)
+  print(10 % (5 - 5))
+|};
+  [%expect
+    {|
+    -3
+    -1
+    -3
+    -1.5
+    error: panic: division by zero
+      ┌─ test.ren:6:9
+    6 │   print(10 % (5 - 5))
+      │         ^^^^^^^^^^^^
+    |}]
+
+let%expect_test "infinity stays, but what has no answer panics" =
+  run
+    {|
+fn main() uses Console =
+  let inf = 1.0 / 0.0
+  print(inf > 1000000.0)
+  print(-inf)
+  print(inf - inf)
+|};
+  [%expect
+    {|
+    true
+    -inf
+    error: panic: `-` has no answer here: inf - inf
+      ┌─ test.ren:5:9
+    5 │   print(inf - inf)
+      │         ^^^^^^^^^
+    |}]
+
+let%expect_test "wrapping is a method" =
+  run
+    {|
+fn main() uses Console =
+  let big = 9223372036854775807
+  print(big.wrapping_add(1))
+  print((0 - big - 1).wrapping_sub(1))
+  print(big.wrapping_mul(2))
+  print((0 - big - 1).wrapping_neg())
+|};
+  [%expect
+    {|
+    -9223372036854775808
+    9223372036854775807
+    -2
+    -9223372036854775808
+    ()
+    |}]
+
+(* `hash` has no use in Ren until `Map` and `Set` (stage 9b), so the walk's
+   is tested here: it agrees with `==`, by a key too *)
+let%expect_test "a hash agrees with ==" =
+  let open Ren in
+  let email = Path.make "test" "Email" in
+  let types = Walk.types_of [] in
+  let cx : Walk.cx =
+    {
+      types;
+      key =
+        (fun p _ v ->
+          match v with
+          | Value.VStr s when p = email ->
+              Some (Ty.str, Value.VStr (String.lowercase_ascii s))
+          | _ -> None);
+    }
+  in
+  let same t a b =
+    Printf.printf "%b %b\n" (Walk.equal cx t a b)
+      (Walk.hash cx t a = Walk.hash cx t b)
+  in
+  same Ty.float (VFloat 0.0) (VFloat (-0.0));
+  same Ty.float (VFloat 1.5) (VFloat 2.5);
+  same (Ty.array Ty.int)
+    (VArray [| VInt 1L; VInt 2L |])
+    (VArray [| VInt 1L; VInt 2L |]);
+  same (Ty.Con (email, [])) (VStr "Ann@X") (VStr "ann@x");
+  same (Ty.Con (email, [])) (VStr "Ann@X") (VStr "bob@x");
+  (* an error says its payload's types itself, whatever type it's
+     walked as, so its payload goes through their keys *)
+  let bad t x = Value.VTag { name = "Bad"; args = [ x ]; tys = [ t ] } in
+  same (Ty.Var 0) (bad Ty.float (VFloat (-0.0))) (bad Ty.float (VFloat 0.0));
+  same (Ty.Var 0) (bad Ty.float (VFloat 1.0)) (bad Ty.float (VFloat 0.0));
+  same (Ty.Var 0)
+    (bad (Ty.Con (email, [])) (VStr "Ann@X"))
+    (bad (Ty.Con (email, [])) (VStr "ann@x"));
+  (* a value nothing says the type of is compared by its shape, and
+     hashed by it, -0.0 and 0.0 the same there too *)
+  let some x =
+    Value.VCon { ty = Path.prelude "Option"; name = "Some"; args = [ x ] }
+  in
+  same (Ty.Var 0) (some (VFloat (-0.0))) (some (VFloat 0.0));
+  same (Ty.Var 0) (some (VFloat 1.0)) (some (VFloat 0.0));
+  [%expect
+    {|
+    true true
+    false false
+    true true
+    true true
+    false false
+    true true
+    false false
+    true true
+    true true
+    false false
+    |}]
+
 let%expect_test "seat_limit from the README runs" =
   run
     (plan_types
@@ -313,7 +430,8 @@ fn main() =
   print(ps)
   grid
 |};
-  [%expect {|
+  [%expect
+    {|
     [P { x: 1, y: 5 }, P { x: 10, y: 2 }]
     [[1, 2], [9, 4]]
     |}]
@@ -384,7 +502,8 @@ fn main() =
   print(s.find(""))
   s.find("z")
 |};
-  [%expect {|
+  [%expect
+    {|
     14
     hé
     wörld
@@ -399,7 +518,8 @@ let%expect_test "a slice out of bounds panics, as an index does" =
   run {|
 fn main() = "Ren".slice(1, 4)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: slice 1 to 4 is out of bounds for a string of length 3
       ┌─ test.ren:1:13
     1 │ fn main() = "Ren".slice(1, 4)
@@ -408,7 +528,8 @@ fn main() = "Ren".slice(1, 4)
   run {|
 fn main() = "Ren".slice(-1, 2)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: slice -1 to 2 is out of bounds for a string of length 3
       ┌─ test.ren:1:13
     1 │ fn main() = "Ren".slice(-1, 2)
@@ -417,7 +538,8 @@ fn main() = "Ren".slice(-1, 2)
   run {|
 fn main() = "Ren".slice(2, 1)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: slice 2 to 1 ends before it starts
       ┌─ test.ren:1:13
     1 │ fn main() = "Ren".slice(2, 1)
@@ -429,7 +551,8 @@ let%expect_test "a slice inside a character panics" =
   run {|
 fn main() = "né".slice(0, 2)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: slice 0 to 2 ends inside a character
       ┌─ test.ren:1:13
     1 │ fn main() = "né".slice(0, 2)
@@ -438,7 +561,8 @@ fn main() = "né".slice(0, 2)
   run {|
 fn main() = "né".slice(2, 3)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: slice 2 to 3 starts inside a character
       ┌─ test.ren:1:13
     1 │ fn main() = "né".slice(2, 3)
@@ -460,7 +584,8 @@ fn main() =
   print("".starts_with(""))
   "wör".concat("ld").concat("")
 |};
-  [%expect {|
+  [%expect
+    {|
     ["a", "b", "", "c"]
     ["a", "b"]
     ["abc"]
@@ -477,7 +602,8 @@ let%expect_test "splitting on nothing panics" =
   run {|
 fn main() = "abc".split("")
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: `split` needs a separator that isn't empty
       ┌─ test.ren:1:13
     1 │ fn main() = "abc".split("")
@@ -510,12 +636,15 @@ fn main() =
 let%expect_test "from_utf8 fails with InvalidUtf8" =
   List.iter
     (fun b ->
-      match Ren.Builtins.run Ren.Intrinsic.Str_from_utf8 [ Ren.Value.VBytes b ] with
+      match
+        Ren.Builtins.run Ren.Intrinsic.Str_from_utf8 [ Ren.Value.VBytes b ]
+      with
       | v, _ -> print_endline (Ren.Value.show v)
       | exception Ren.Builtins.Fail err ->
           print_endline ("fails: " ^ Ren.Value.show err))
     [ "caf\xc3\xa9"; "caf\xc3"; "\xff"; "\xed\xa0\x80" ];
-  [%expect {|
+  [%expect
+    {|
     "café"
     fails: InvalidUtf8
     fails: InvalidUtf8
@@ -526,7 +655,8 @@ let%expect_test "from_utf8 is fallible" =
   run {|
 fn main() = Str.from_utf8("x".bytes())
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Str.from_utf8` can fail, and nothing handles it
       ┌─ test.ren:1:13
     1 │ fn main() = Str.from_utf8("x".bytes())
@@ -555,7 +685,8 @@ fn main() =
   print(Path.of("").join("a"))
   src.show()
 |};
-  [%expect {|
+  [%expect
+    {|
     src/main.ren
     src/main.ren
     src/lib/a.ren
@@ -568,7 +699,8 @@ let%expect_test "a path isn't a string" =
   run {|
 fn main() = Path.of("src").len()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Path` has no method named `len`
       ┌─ test.ren:1:28
     1 │ fn main() = Path.of("src").len()
@@ -580,7 +712,8 @@ fn main() =
   let p: Path = "src"
   p
 |};
-  [%expect {|
+  [%expect
+    {|
     error: expected `Path`, found `Str`
       ┌─ test.ren:2:17
     2 │   let p: Path = "src"
@@ -592,7 +725,8 @@ fn main() =
 (* ---- calls, deep and long ---- *)
 
 let%expect_test "a loop written as recursion runs in constant stack" =
-  run {|
+  run
+    {|
 fn count(n: Int, acc: Int) -> Int =
   if n == 0 then acc else count(n - 1, acc + n)
 fn main() -> Int = count(1000000, 0)
@@ -600,11 +734,13 @@ fn main() -> Int = count(1000000, 0)
   [%expect {| 500000500000 |}]
 
 let%expect_test "recursion with no end panics, and soon" =
-  run_error {|
+  run_error
+    {|
 fn down(n: Int) -> Int = 1 + down(n + 1)
 fn main() -> Int = down(0)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: the stack overflowed: a function called itself too deeply
       ┌─ test.ren:2:4
     2 │ fn main() -> Int = down(0)
@@ -612,13 +748,15 @@ fn main() -> Int = down(0)
     |}]
 
 let%expect_test "an associated value that calls too deeply panics" =
-  run_error {|
+  run_error
+    {|
 fn deep(n: Int) -> Int = if n == 0 then 0 else 1 + deep(n - 1)
 type Box = { v: Int }
   let big: Box = Box { v: deep(200000) }
 fn main() -> Int = Box.big.v
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: the stack overflowed: a function called itself too deeply
       ┌─ test.ren:3:7
     3 │   let big: Box = Box { v: deep(200000) }
@@ -627,22 +765,26 @@ fn main() -> Int = Box.big.v
 
 let%expect_test "`ren test` reports a value that calls too deeply as a panic" =
   (* its values are made before any test runs, outside them all *)
-  test {|
+  test
+    {|
 fn deep(n: Int) -> Int = if n == 0 then 0 else 1 + deep(n - 1)
 type Box = { v: Int }
   let big: Box = Box { v: deep(200000) }
 test "uses big" =
   assert Box.big.v == 0
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: the stack overflowed: a function called itself too deeply
       ┌─ test.ren:3:7
     3 │   let big: Box = Box { v: deep(200000) }
       │       ^^^
     |}]
 
-let%expect_test "a call that ends a function still writes back what it changed" =
-  run {|
+let%expect_test "a call that ends a function still writes back what it changed"
+    =
+  run
+    {|
 fn len_of(xs: Array<Int>) -> Int = xs.len()
 fn add_two(inout xs: Array<Int>) -> Int =
   &xs.push(1)
@@ -660,29 +802,175 @@ fn main() =
     |}]
 
 let%expect_test "a panic in a built-in called last is where it's called" =
-  run_error {|
+  run_error
+    {|
 fn cut(s: Str) -> Str = s.slice(3, 1)
 fn main() = print(cut("abc"))
 |};
-  [%expect {|
+  [%expect
+    {|
     error: panic: slice 3 to 1 ends before it starts
       ┌─ test.ren:1:25
     1 │ fn cut(s: Str) -> Str = s.slice(3, 1)
       │                         ^^^^^^^^^^^^^
     |}]
 
-(* Overflow panics in stage 9 (operators.md, "`Int` and `Float`"); until
-   then an `Int` is OCaml's, 63 bits, and wraps. *)
-let%expect_test "an Int wraps at 63 bits, for now" =
+(* An `Int` is 64 bits, and overflowing it panics (operators.md, "`Int`
+   and `Float`"): the help names the method that wraps. *)
+let%expect_test "an Int overflowing panics" =
+  run
+    {|
+fn main() =
+  let n = 9223372036854775807
+  print(n - 1)
+  print(n.wrapping_add(1))
+  print(n + 1)
+|};
+  [%expect
+    {|
+    9223372036854775806
+    -9223372036854775808
+    error: panic: `+` overflowed: 9223372036854775807 + 1
+      ┌─ test.ren:5:9
+    5 │   print(n + 1)
+      │         ^^^^^
+      help: if wrapping is what you mean, write `n.wrapping_add(1)`
+    |}];
+  run {|
+fn main() = print(-(-9223372036854775808))
+|};
+  [%expect
+    {|
+    error: panic: `-` overflowed: -(-9223372036854775808)
+      ┌─ test.ren:1:19
+    1 │ fn main() = print(-(-9223372036854775808))
+      │                   ^^^^^^^^^^^^^^^^^^^^^^^
+      help: if wrapping is what you mean, write `(-9223372036854775808).wrapping_neg()`
+    |}];
   run {|
 fn main() =
-  print(4611686018427387903 + 1)
-  print(0 - 4611686018427387903 - 2)
+  var n = 4611686018427387904
+  n *= 2
+  print(n)
+|};
+  [%expect
+    {|
+    error: panic: `*` overflowed: 4611686018427387904 * 2
+      ┌─ test.ren:3:3
+    3 │   n *= 2
+      │   ^^^^^^
+      help: if wrapping is what you mean, write `n = n.wrapping_mul(2)`
+    |}];
+  run {|
+fn main() = print(-9223372036854775808 / -1)
+|};
+  [%expect
+    {|
+    error: panic: `/` overflowed: -9223372036854775808 / -1
+      ┌─ test.ren:1:19
+    1 │ fn main() = print(-9223372036854775808 / -1)
+      │                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |}]
+
+(* The smallest `Int` is written whole, though 2^63 alone doesn't fit
+   (Parser.too_big). *)
+let%expect_test "the smallest Int is a literal" =
+  run
+    {|
+fn main() =
+  let n = -9223372036854775808
+  print(n)
+  print(n == -9223372036854775807 - 1)
+  match n
+    -9223372036854775808 => print("the smallest")
+    _ => print("another")
 |};
   [%expect {|
-    -4611686018427387904
-    4611686018427387903
+    -9223372036854775808
+    true
+    the smallest
     ()
+    |}];
+  run {|
+fn main() = print(1 - 9223372036854775808)
+|};
+  [%expect
+    {|
+    error: this number is too big to fit in an `Int`
+      ┌─ test.ren:1:23
+    1 │ fn main() = print(1 - 9223372036854775808)
+      │                       ^^^^^^^^^^^^^^^^^^^
+      help: the smallest `Int` is `-9223372036854775808`
+    |}]
+
+(* A Float is shown as a literal that reads back as it: a literal has no
+   exponent, so neither does what's shown (Token.show_float). *)
+let%expect_test "a big or small Float is shown without an exponent" =
+  run
+    {|
+fn main() =
+  print(100000000.0 * 1000000000000.0)
+  print(0.0 - 1.5 / 10000000000.0)
+  print(100000000000000000000.0 == 100000000.0 * 1000000000000.0)
+  print(-0.00000000015 == 0.0 - 1.5 / 10000000000.0)
+|};
+  [%expect
+    {|
+    100000000000000000000.0
+    -0.00000000015
+    true
+    true
+    ()
+    |}]
+
+let%expect_test "a Float has no NaN" =
+  run
+    {|
+fn main() =
+  print(1.5 * 2.0)
+  print(0.1 + 0.2)
+  print(1.0 / 0.0)
+  print(-0.0 == 0.0)
+  print(2.0.sqrt())
+  print(Float.of(3) / 2.0)
+  print(2.5.round())
+  print((0.0 - 2.5).truncate())
+  print(0.0 / 0.0)
+|};
+  [%expect
+    {|
+    3.0
+    0.30000000000000004
+    inf
+    true
+    1.4142135623730951
+    1.5
+    3
+    -2
+    error: panic: `/` has no answer here: 0.0 / 0.0
+       ┌─ test.ren:10:9
+    10 │   print(0.0 / 0.0)
+       │         ^^^^^^^^^
+    |}];
+  run {|
+fn main() = print((0.0 - 1.0).sqrt())
+|};
+  [%expect
+    {|
+    error: panic: `sqrt` of a negative number: -1.0
+      ┌─ test.ren:1:19
+    1 │ fn main() = print((0.0 - 1.0).sqrt())
+      │                   ^^^^^^^^^^^^^^^^^^
+    |}];
+  run {|
+fn main() = print((1.0 / 0.0).round())
+|};
+  [%expect
+    {|
+    error: panic: `round` of inf doesn't fit in an `Int`
+      ┌─ test.ren:1:19
+    1 │ fn main() = print((1.0 / 0.0).round())
+      │                   ^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "a generic function shows what its type variables stand for" =
@@ -724,7 +1012,8 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "an `assert` in a generic function shows its sides by their type" =
+let%expect_test
+    "an `assert` in a generic function shows its sides by their type" =
   run
     {|
 type Acc = { id: Int }
@@ -765,7 +1054,8 @@ fn main() uses Console =
 
 (* ---- equality, through requirements' dictionaries ---- *)
 
-let%expect_test "a generic function compares through the dictionary it's given" =
+let%expect_test "a generic function compares through the dictionary it's given"
+    =
   (* `same` is compiled once, and given `eq` of whatever it's used at:
      `Int`'s, `Str`'s, or one derived from a type's declaration, which
      `both` builds from the one it was given for its own `U` *)
@@ -856,8 +1146,7 @@ fn main() uses Console =
   print(short2 != gone)
   print(count([short2, gone, short2, attempt find(0)], attempt find(2)))
 |};
-  [%expect
-    {|
+  [%expect {|
     [true, false]
     [false, true]
     true
@@ -899,8 +1188,7 @@ fn main() uses Console =
   print([Box.eqf(1, 1), Box.eqf(Point { x: 1, y: 2 }, Point { x: 1, y: 2 })])
   print([Box.eqf([Some("a")], [Some("b")]), Box.eqf(Ok(1), Err(Oops))])
 |};
-  [%expect
-    {|
+  [%expect {|
     [true, true]
     [false, false]
     ()
@@ -943,7 +1231,8 @@ let%expect_test "== can't panic" =
     "fn cmp(g) = (attempt g()) == (attempt g())\n\
      fn bad() = if true then fail Bad(fn() => 1) else 1\n\
      fn main() = cmp(bad)";
-  [%expect {|
+  [%expect
+    {|
     refused
     refused
     refused
@@ -972,7 +1261,8 @@ pub type Id = opaque Pair
 |}
       );
     ];
-  [%expect {|
+  [%expect
+    {|
     error: `a.F` has no `==`, which `same` needs
       ┌─ main.ren:3:18
     3 │ fn main() = same(a.mk(), a.mk()) || a.Id.of(1) == a.Id.of(1)

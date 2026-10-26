@@ -560,13 +560,30 @@ and descs env sc loc name (a : Ty.args) ds =
       describes env sc loc (sprintf "type argument %d of `%s`" (i + 1) name) d t)
     (List.combine ds a.tys)
 
-(* Whether [t] has `eq`, by its structure, as inference decides it
-   (infer_reqs.ml): a function hasn't, nor an implementation of a
-   dependency or a handler of several, nor a type with one in it. A type
-   variable is taken to have it: one of the function's has a dictionary
-   of its own. [seen] are the declarations being looked into, so a
-   recursive one is looked into once. *)
-let rec has_eq env seen (t : Ty.ty) =
+(* Whether [t] has the requirement [req], as inference decides it
+   (infer_reqs.ml). A type variable is taken to have it: one of the
+   function's has a dictionary of its own. [seen] are the declarations
+   being looked into for `eq`, so a recursive one is looked into once. *)
+let rec has_req env req (t : Ty.ty) =
+  match t with
+  | Var _ | Error | Uses _ -> true
+  | _ -> (
+      match req with
+      | "eq" | "hash" -> has_eq env [] t
+      | "ord" -> has_ord env t
+      | _ -> has_op env req t)
+
+(* [p]'s `key`'s type, given [args], if [p] has a key: equal, hashed and
+   ordered by that. *)
+and key_ty env p args =
+  Option.bind (Hashtbl.find_opt env.types p) (fun td ->
+      Option.map (fun (_, k) -> subst args k) (Iface.key td))
+
+(* `eq`, and `hash`, which agrees with it: by its key, if it has one, and
+   otherwise by its structure. A function hasn't it, nor an
+   implementation of a dependency or a handler of several, nor a type
+   with one in it. *)
+and has_eq env seen (t : Ty.ty) =
   let row (r : Ty.row) =
     List.for_all
       (fun (l : Ty.label) -> List.for_all (has_eq env seen) l.payload)
@@ -577,24 +594,62 @@ let rec has_eq env seen (t : Ty.ty) =
   | Var _ | Error | Uses _ -> true
   | All _ -> false
   | Errors r -> row r
-  | Con (p, args) ->
-      List.for_all (has_eq env seen) args
-      && (List.mem p seen
-         ||
-         let field (f : Iface.field) = has_eq env (p :: seen) f.fty in
-         match Hashtbl.find_opt env.types p with
-         | None -> true
-         | Some td -> (
-             match td.body with
-             | Builtin | Errors _ -> true
-             | Opaque (Hidden { eq }) -> eq
-             | Record fs -> List.for_all field fs
-             | Sum cs ->
-                 List.for_all
-                   (fun (c : Iface.ctor) -> List.for_all field c.cfields)
-                   cs
-             | Opaque (Rep rep) -> has_eq env (p :: seen) rep
-             | Dep _ -> false))
+  | Con (p, args) -> (
+      match key_ty env p args with
+      | Some k -> has_eq env seen k
+      | None ->
+          List.for_all (has_eq env seen) args
+          && (List.mem p seen
+             ||
+             let field (f : Iface.field) = has_eq env (p :: seen) f.fty in
+             match Hashtbl.find_opt env.types p with
+             | None -> true
+             | Some td -> (
+                 match td.body with
+                 | Builtin | Errors _ -> true
+                 | Opaque (Hidden { eq }) -> eq
+                 | Record fs -> List.for_all field fs
+                 | Sum cs ->
+                     List.for_all
+                       (fun (c : Iface.ctor) -> List.for_all field c.cfields)
+                       cs
+                 | Opaque (Rep rep) -> has_eq env (p :: seen) rep
+                 | Dep _ -> false)))
+
+(* An order: a number's, a `Str`'s or a `Bool`'s, a sum type's with no
+   fields, a `with numeric` type's, or by its key; and in its own module
+   an opaque type's representation's. *)
+and has_ord env (t : Ty.ty) =
+  match t with
+  | Var _ | Error -> true
+  | Con (p, args) -> (
+      match (key_ty env p args, Hashtbl.find_opt env.types p) with
+      | Some k, _ -> has_req env "ord" k
+      | None, _ when List.mem t [ Ty.int; Ty.float; Ty.str; Ty.bool ] -> true
+      | None, Some { numeric = Some _; _ } -> true
+      | None, Some { body = Sum cs; _ } ->
+          List.for_all (fun (c : Iface.ctor) -> c.cfields = []) cs
+      | None, Some { body = Opaque (Rep rep); _ } ->
+          has_req env "ord" (subst args rep)
+      | _ -> false)
+  | _ -> false
+
+(* An operator or an associated value: a number's, a member that gives
+   it (Iface.provider), what a `with numeric` type has without writing
+   it, or in its own module an opaque type's representation's. *)
+and has_op env req (t : Ty.ty) =
+  match t with
+  | Var _ | Error -> true
+  | _ when t = Ty.int || t = Ty.float -> true
+  | Con (p, args) -> (
+      match Hashtbl.find_opt env.types p with
+      | Some td when Iface.provider td req <> None -> true
+      | Some { numeric = Some _; _ }
+        when List.mem req [ "add"; "sub"; "neg"; "zero" ] ->
+          true
+      | Some { body = Opaque (Rep rep); _ } -> has_req env req (subst args rep)
+      | _ -> false)
+  | _ -> false
 
 (* The requirement a dictionary (core.ml, [dict]) is for, and the type, in
    the type variables of the function being checked: one of its own
@@ -617,27 +672,35 @@ let dict_of env sc loc (d : dict) =
   | Dict_param v ->
       let n, req = own v in
       (req, Ty.Var n)
-  | Derived { req; dty; from } ->
+  | Derived { req; dty; ddesc; from } ->
       (match dty with
       | Var n when n < env.ntys ->
           fail env loc
             (sprintf "a dictionary for `%s` is derived, not the function's own"
                (show dty))
       | _ -> ());
-      if req <> "eq" then
+      if not (List.mem req Iface.requirements) then
         fail env loc
           (sprintf "a dictionary for `%s`, which isn't a requirement" req);
-      if not (has_eq env [] dty) then
-        fail env loc (sprintf "`%s` has no `eq` to derive" (show dty));
-      if List.map fst from <> params_in env.ntys dty then
+      if not (has_req env req dty) then
+        fail env loc (sprintf "`%s` has no `%s` to derive" (show dty) req);
+      describes env sc loc
+        (sprintf "the dictionary for `%s`" (show dty))
+        ddesc dty;
+      if
+        not
+          (List.for_all
+             (fun ((n, _), _) -> List.mem n (params_in env.ntys dty))
+             from)
+      then
         fail env loc
           (sprintf
-             "the dictionary for `%s` isn't built from one dictionary for each \
-              of the function's type variables in it"
+             "the dictionary for `%s` is built from a dictionary for a type \
+              variable not in it"
              (show dty));
       List.iter
         (fun (n, v) ->
-          if own v <> (n, req) then
+          if own v <> n then
             fail env loc
               (sprintf "the dictionary for `%s` is built from `%s`, for another"
                  (show dty) v.name))
@@ -675,6 +738,7 @@ let rec expr env sc (e : expr) =
   let is what t = same env loc what e.ty t in
   match e.kind with
   | Int _ -> is "an `Int`" Ty.int
+  | Float _ -> is "a `Float`" Ty.float
   | Bool _ -> is "a `Bool`" Ty.bool
   | Str _ -> is "a `Str`" Ty.str
   | Unit -> is "`()`" Ty.unit
@@ -1017,8 +1081,16 @@ let rec expr env sc (e : expr) =
       | Con (p, [ elem ]) when p = Path.prelude "Array" ->
           List.iter (fun (x : expr) -> same env x.loc "an element" x.ty elem) xs
       | t -> fail env loc (sprintf "an array literal has type `%s`" (show t)))
-  | Tag (t, args) -> (
+  | Tag (t, args, ds) -> (
       List.iter (expr env sc) args;
+      if List.length ds <> List.length args then
+        fail env loc
+          (sprintf "the error `%s` has %d values, but %d descriptors" t
+             (List.length args) (List.length ds));
+      List.iter2
+        (fun d (a : expr) ->
+          describes env sc a.loc (sprintf "a value of the error `%s`" t) d a.ty)
+        ds args;
       (* a set that has it: just it, after `fail`, or all of the set its
          `Err(...)` holds *)
       let label : Ty.label =
@@ -1083,10 +1155,36 @@ and prim env sc (e : expr) op args =
     | Con (p, [ t ]) when p = Path.prelude "Array" -> t
     | t -> fail env loc (sprintf "an array operation on a `%s`" (show t))
   in
+  (* a number, an [Int] or a [Float], once revealed, or a `with numeric`
+     type, and what it's represented as: the language's own operators are
+     on those *)
+  let number (a : expr) =
+    match reveal env a.ty with
+    | t when t = Ty.int || t = Ty.float -> t
+    | Con (p, []) as t -> (
+        match Hashtbl.find_opt env.types p with
+        | Some { numeric = Some _; _ } -> t
+        | _ -> fail env a.loc (sprintf "arithmetic on a `%s`" (show a.ty)))
+    | _ -> fail env a.loc (sprintf "arithmetic on a `%s`" (show a.ty))
+  in
+  let rep_of (t : Ty.ty) =
+    match t with
+    | Con (p, []) -> (
+        match Hashtbl.find_opt env.types p with
+        | Some { numeric = Some rep; _ } -> rep
+        | _ -> t)
+    | _ -> t
+  in
+  let plain (a : expr) =
+    let t = number a in
+    if t <> Ty.int && t <> Ty.float then
+      fail env a.loc
+        (sprintf "`%s` on a `%s`, which hasn't it" (show_prim op) (show a.ty))
+  in
   match (op, args) with
   | Neg, [ a ] ->
-      int a;
-      is "`-`" Ty.int
+      ignore (number a);
+      is "`-`" a.ty
   | Not, [ a ] ->
       same env a.loc "an operand" a.ty Ty.bool;
       is "`not`" Ty.bool
@@ -1099,14 +1197,41 @@ and prim env sc (e : expr) op args =
       same env loc "the right side of a comparison" b.ty a.ty;
       gives env sc loc "a comparison" d "eq" a.ty;
       is "a comparison" Ty.bool
-  | Binop (Add | Sub | Mul | Div | Mod), [ a; b ] ->
-      int a;
-      int b;
-      is "arithmetic" Ty.int
+  | Binop (Add | Sub), [ a; b ] ->
+      ignore (number a);
+      same env b.loc "the right side of arithmetic" b.ty a.ty;
+      is "arithmetic" a.ty
+  | Binop Mul, [ a; b ] ->
+      (* a `with numeric` type's `*` is by what it's represented as *)
+      let t = number a in
+      same env b.loc "the right side of `*`" b.ty (rep_of t);
+      is "arithmetic" a.ty
+  | Binop (Div | Mod), [ a; b ] ->
+      plain a;
+      same env b.loc "the right side of arithmetic" b.ty a.ty;
+      is "arithmetic" a.ty
   | Binop (Lt | Le | Gt | Ge), [ a; b ] ->
-      int a;
-      int b;
+      plain a;
+      same env b.loc "the right side of a comparison" b.ty a.ty;
       is "a comparison" Ty.bool
+  | Compare (_, d), [ a; b ] ->
+      same env b.loc "the right side of a comparison" b.ty a.ty;
+      gives env sc loc "a comparison" d "ord" a.ty;
+      is "a comparison" Ty.bool
+  | Op (req, d), a :: rest when List.length rest = if req = "neg" then 0 else 1
+    ->
+      if not (List.mem req Iface.operators) then
+        fail env loc (sprintf "`%s` isn't an operator" req);
+      List.iter
+        (fun (b : expr) ->
+          same env b.loc "the right side of an operator" b.ty a.ty)
+        rest;
+      gives env sc loc "an operator" d req a.ty;
+      is "an operator" a.ty
+  | Value_of (req, d), [] ->
+      if req <> "zero" && req <> "one" then
+        fail env loc (sprintf "`%s` isn't an associated value" req);
+      gives env sc loc "an associated value" d req e.ty
   | Length, [ a ] ->
       ignore (elem a);
       is "a length" Ty.int
@@ -1233,11 +1358,11 @@ let fn_def env (f : fn_def) =
 let rec globals (e : expr) =
   match e.kind with
   | Global (p, _, _, _) | Global_value (p, _) -> [ p ]
-  | Int _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
   | Prim (_, es)
   | Array es
   | Con (_, _, es)
-  | Tag (_, es)
+  | Tag (_, es, _)
   | Dep_call { args = es; _ } ->
       List.concat_map globals es
   | With { impl; body; _ } -> globals impl @ globals body
@@ -1340,6 +1465,78 @@ let shows env (prog : program) =
                (Path.local m) (Path.full p)))
     prog.shows
 
+(* Each type [prog] says has a `key` is one it declares, and its key one
+   of its functions, of the type the interpreter calls it at: taking only
+   a value of the type, with the type's parameters as its type variables,
+   in order, without failing or using anything. And each type it says
+   has an operator or an associated value through a member, `add` or
+   `zero`, has that member: an operator that takes one or two of the type
+   and gives one, without failing or using anything, or a value of the
+   type, made before anything uses it. *)
+let keys_and_ops env (prog : program) =
+  let decl what (p : Path.t) =
+    match
+      List.find_opt (fun (d : Iface.type_decl) -> d.path = p) prog.types
+    with
+    | Some d -> List.init (List.length d.params) (fun n -> Ty.Var n)
+    | None ->
+        failwith
+          (sprintf "Core Lint: `%s` is said to have %s, but isn't declared here"
+             (Path.full p) what)
+  in
+  let fn what (m : Path.t) =
+    match List.find_opt (fun (f : fn_def) -> f.path = m) prog.fns with
+    | Some f -> f
+    | None ->
+        failwith
+          (sprintf "Core Lint: %s, `%s`, isn't a function here" what
+             (Path.local m))
+  in
+  let pure (t : Ty.ty) =
+    match t with
+    | Fun (ps, ret, errs, uses, _) when errs.labels = [] && uses.labels = [] ->
+        Some (List.map (fun (p : Ty.param) -> p.ty) ps, ret)
+    | _ -> None
+  in
+  List.iter
+    (fun (p, m) ->
+      let own = decl "a key" p in
+      let f = fn "a key" m in
+      match pure f.scheme.ty with
+      | Some ([ Con (q, args) ], _) when q = p && args = own -> ()
+      | _ ->
+          fail
+            { env with fn = Path.local m }
+            f.loc
+            (sprintf "`%s` is the key of `%s`, but has type `%s`" (Path.local m)
+               (Path.full p) (show f.scheme.ty)))
+    prog.keys;
+  List.iter
+    (fun ((p, req), m) ->
+      let own = decl ("`" ^ req ^ "`") p in
+      let self = Ty.Con (p, own) in
+      let f = fn ("its `" ^ req ^ "`") m in
+      let fits =
+        match (req, pure f.scheme.ty) with
+        | ("zero" | "one"), _ -> (
+            (* a value is made by a function of no parameters *)
+            List.mem m prog.values
+            &&
+            match f.scheme.ty with
+            | Fun ([], r, _, _, _) -> r = self
+            | _ -> false)
+        | "neg", Some ([ a ], r) -> a = self && r = self
+        | _, Some ([ a; b ], r) -> a = self && b = self && r = self
+        | _ -> false
+      in
+      if not (List.mem req Iface.requirements && fits) then
+        fail
+          { env with fn = Path.local m }
+          f.loc
+          (sprintf "`%s` gives `%s` its `%s`, but has type `%s`" (Path.local m)
+             (Path.full p) req (show f.scheme.ty)))
+    prog.ops
+
 (* The identities a lambda set of [prog] can have, each with how many
    parameters what it names takes. Inference puts one in a set only where
    a lambda is, or a function, a member, an intrinsic or an operation is
@@ -1441,4 +1638,5 @@ let program ~imports ~linked (prog : program) =
     (linked @ [ prog ]);
   value_order prog;
   shows env prog;
+  keys_and_ops env prog;
   List.iter (fn_def env) prog.fns

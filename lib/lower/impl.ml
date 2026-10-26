@@ -27,8 +27,8 @@ let rec unplaced (e : Core.expr) : Core.expr =
   let go = unplaced in
   let kind : Core.kind =
     match e.kind with
-    | ( Int _ | Bool _ | Str _ | Unit | Local _ | Global _ | Global_value _
-      | Intrinsic _ ) as k ->
+    | ( Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
+      | Global_value _ | Intrinsic _ ) as k ->
         k
     | Dep_call d -> Dep_call { d with args = List.map go d.args }
     | With w -> With { w with impl = go w.impl; body = go w.body }
@@ -67,7 +67,7 @@ let rec unplaced (e : Core.expr) : Core.expr =
     | Field (r, t, f) -> Field (go r, t, f)
     | Update (r, f, e) -> Update (go r, f, go e)
     | Array es -> Array (List.map go es)
-    | Tag (t, es) -> Tag (t, List.map go es)
+    | Tag (t, es, ds) -> Tag (t, List.map go es, ds)
     | Fail e -> Fail (go e)
     | Handle h ->
         Handle

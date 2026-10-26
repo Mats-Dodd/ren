@@ -8,7 +8,8 @@
 module Env = Map.Make (Int)
 
 type t =
-  | VInt of int
+  | VInt of Int64.t
+  | VFloat of float
   | VBool of bool
   | VStr of string  (** UTF-8, always *)
   | VBytes of string  (** any bytes at all *)
@@ -41,9 +42,10 @@ type t =
   | VDict of dict
       (** a requirement's dictionary, built where it's passed (core.ml, [dict]):
           what a hidden dictionary parameter holds. A program never sees one *)
-  | VTag of { name : string; args : t list }
-      (** an error, [Short(2, 45000)]: its tag and its payload. A program sees
-          one only inside a [Result]'s [Err] *)
+  | VTag of { name : string; args : t list; tys : Ty.ty list }
+      (** an error, [Short(2, 45000)]: its tag, its payload, and the payload's
+          types in the running program (Core.Tag). A program sees one only
+          inside a [Result]'s [Err] *)
   | VHandler of handler
       (** a handler, described (core.ml, [Handler]): a value of its dependency's
           type, or of the handler's own *)
@@ -55,9 +57,17 @@ type t =
       (** evidence (core.ml): what's installed, the innermost first. A program
           never sees one *)
 
-(* A dictionary: the operations a type has that a requirement names, as
-   functions of the interpreter's own. [eq] is `eq`'s `==`. *)
-and dict = { eq : t -> t -> bool }
+(* A dictionary: what a type has that a requirement names, as the
+   interpreter's own functions (core.ml, [dict]): `eq`'s `==`, `ord`'s
+   comparison, negative, 0 or positive, `hash`'s hash, an operator, `add`,
+   given where it's used and where its operands are, for a panic, and an
+   associated value, `zero`. *)
+and dict =
+  | Eq of (t -> t -> bool)
+  | Ord of (t -> t -> int)
+  | Hash of (t -> int64)
+  | Op of (Loc.t -> Loc.t list -> t list -> t)
+  | Const of t
 
 (* A handler's description: its body makes an instance, given the
    evidence [ev] where it's installed, with the variables it captured. *)
@@ -68,7 +78,8 @@ and handler = { ev : int; body : Core.expr; env : t ref Env.t }
 and installed = { dep : Path.t; impl : t; outer : installed list }
 
 let rec show = function
-  | VInt n -> string_of_int n
+  | VInt n -> Int64.to_string n
+  | VFloat f -> Ast.show_float f
   | VBool b -> string_of_bool b
   | VStr s -> Ast.show_str s
   | VBytes b ->
@@ -76,8 +87,8 @@ let rec show = function
       let hex i = Printf.sprintf " %02x" (Char.code b.[i]) in
       "<bytes" ^ String.concat "" (List.init (String.length b) hex) ^ ">"
   | VUnit -> "()"
-  | VCon { name; args = []; _ } | VTag { name; args = [] } -> name
-  | VCon { name; args; _ } | VTag { name; args } ->
+  | VCon { name; args = []; _ } | VTag { name; args = []; _ } -> name
+  | VCon { name; args; _ } | VTag { name; args; _ } ->
       name ^ "(" ^ String.concat ", " (List.map show args) ^ ")"
   | VRecord fields ->
       let show_field (f, v) = f ^ ": " ^ show v in

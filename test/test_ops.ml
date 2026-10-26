@@ -65,7 +65,7 @@ type Light =
       Red => Green
       Green => Red
   fn all() = [Red, Green]
-  fn show(self) uses Console = print(self)
+  fn shout(self) uses Console = print(self)
 
 pub type UserId = opaque Int
   pub fn new(n: Int) -> UserId = n
@@ -78,7 +78,7 @@ fn main() = 1
     type Light
       fn next(self) -> Light
       fn all() -> Array<Light>
-      fn show(self) uses Console
+      fn shout(self) uses Console
     pub type UserId
       pub fn new(n: Int) -> UserId
       pub fn raw(self) -> Int
@@ -144,17 +144,17 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: operators like `add` arrive in stage 9
+    error: an operator is a method
       ┌─ test.ren:2:3
     2 │   add(a, b) => Vec { x: a.x + b.x, y: a.y + b.y }
       │   ^^^
-      help: for now, write a method: `fn add(self, ...) = ...`
+      help: write `pub fn add(self, b: Vec) -> Vec = ...`
 
-    error: operators like `zero` arrive in stage 9
+    error: an associated value is written with `let`
       ┌─ test.ren:3:3
     3 │   zero => Vec { x: 0, y: 0 }
       │   ^^^^
-      help: for now, write an associated value: `let zero = ...`
+      help: write `pub let zero: Vec = ...`
     |}]
 
 let%expect_test "`self` is only a method's first parameter" =
@@ -504,10 +504,10 @@ type Counter = { n: Int }
 
 type Pair = { left: Counter, right: Counter }
   fn bump_left(inout self) = &self.left.bump(1)
-  let zero = Pair { left: Counter { n: 0 }, right: Counter { n: 0 } }
+  let start = Pair { left: Counter { n: 0 }, right: Counter { n: 0 } }
 
 fn main() =
-  var p = Pair.zero
+  var p = Pair.start
   &p.bump_left()
   &p.right.bump(p.left.get() + 2)
   p
@@ -521,10 +521,10 @@ fn main() =
       (let $ref/3 (. self/1 left)
         (let $result/4 (call ev/2 Counter.bump &$ref/3 1)
           (seq (= self/1 (update self/1 left: $ref/3)) $result/4))))
-    (fn Pair.zero () ev/1
+    (fn Pair.start () ev/1
       (record (left: (record (n: 0))) (right: (record (n: 0)))))
     (fn main () ev/1
-      (let p/2 Pair.zero
+      (let p/2 Pair.start
         (seq (call ev/1 Pair.bump_left &p/2)
           (seq
             (let $ref/3 (. p/2 right)
@@ -875,19 +875,19 @@ let%expect_test "a changed receiver can't be another argument" =
   run
     {|
 type Bag = { items: Array<Int> }
-  fn add(inout self, other: Bag) = self.items = other.items
+  fn take(inout self, other: Bag) = self.items = other.items
 
 fn main() =
   var b = Bag { items: [1] }
-  &b.add(Bag { items: [b.items[0] + 1] })
-  &b.add(b)
+  &b.take(Bag { items: [b.items[0] + 1] })
+  &b.take(b)
 |};
   [%expect
     {|
     error: this call changes `b`, so no other argument can use it
-      ┌─ test.ren:7:10
-    7 │   &b.add(b)
-      │          ^
+      ┌─ test.ren:7:11
+    7 │   &b.take(b)
+      │           ^
       │    - passed with `&` here
       = an argument passed with `&` has to be the only way the call can reach that value
       help: copy it with `let` first if the call should see the value `b` had before
@@ -1203,6 +1203,7 @@ fn main() = [Int.foo, Array.foo]
       ┌─ test.ren:1:18
     1 │ fn main() = [Int.foo, Array.foo]
       │                  ^^^
+      help: its members: `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`
 
     error: `Array` has no member named `foo`
       ┌─ test.ren:1:29

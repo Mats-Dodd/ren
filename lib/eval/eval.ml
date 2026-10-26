@@ -45,11 +45,13 @@
 open Core
 open Value
 
-exception Panic of Loc.t * string
+type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
+
+exception Panic of { loc : Loc.t; msg : string; wrap : wrap option }
 exception Uncaught of string
 exception Assert_failed of { loc : Loc.t; sides : (string * string) option }
 
-let panic loc msg = raise (Panic (loc, msg))
+let panic ?wrap loc msg = raise (Panic { loc; msg; wrap })
 
 (* An error on its way to the [Handle] that catches it. *)
 exception Failed of Value.t
@@ -59,7 +61,9 @@ let bug what = failwith ("bug: checking or lowering let through " ^ what)
 
 (* The program's top-level functions, by path, its associated values
    once they're made, and its types, with the function that shows each
-   type that has a `show` method of its own (Core.program). Nothing else
+   type that has a `show` method of its own, the `key` of each that has
+   one, and the member that gives each its operators and associated
+   values (Core.program). Nothing else
    is global: what's installed is evidence (core.ml), held in a variable
    like any value. [showing] are the types whose own `show` method the
    program is inside. [depth] is how many calls deep the program is, not
@@ -70,6 +74,8 @@ type ctx = {
   values : (Path.t, Value.t) Hashtbl.t;
   types : Shown.types;
   shows : (Path.t, Path.t) Hashtbl.t;
+  keys : (Path.t, Path.t) Hashtbl.t;
+  ops : (Path.t * string, Path.t) Hashtbl.t;
   showing : Path.t list;
   depth : int ref;
 }
@@ -99,38 +105,125 @@ type step =
       ev : Value.t;  (** the evidence it's passed *)
     }
 
-let binop loc (op : Ast.binop) a b =
-  match (op, a, b) with
-  | Add, VInt x, VInt y -> VInt (x + y)
-  | Sub, VInt x, VInt y -> VInt (x - y)
-  | Mul, VInt x, VInt y -> VInt (x * y)
-  | (Div | Mod), VInt _, VInt 0 -> panic loc "division by zero"
-  | Div, VInt x, VInt y -> VInt (x / y)
-  | Mod, VInt x, VInt y -> VInt (x mod y)
-  | Lt, VInt x, VInt y -> VBool (x < y)
-  | Le, VInt x, VInt y -> VBool (x <= y)
-  | Gt, VInt x, VInt y -> VBool (x > y)
-  | Ge, VInt x, VInt y -> VBool (x >= y)
+(* ---- numbers ----
+
+   An `Int` is 64 bits, as it is on every backend, and arithmetic that
+   doesn't fit panics, in every build (operators.md, "`Int` and
+   `Float`"). A `Float` is never `NaN`: an operation that would make one
+   panics too, and each result is checked here, where the C backend will
+   check one only where it leaves arithmetic. [at] are the operands'
+   expressions, for the panic's help to show them calling the method that
+   wraps, `n.wrapping_add(1)`: none for an operator through a dictionary,
+   on a `T`, which has no such method. *)
+
+(* An overflow's panic: with the help, if the left side is written as an
+   `Int`, which has the method [meth], and not a `with numeric` type. *)
+let overflowed ~(at : expr list) loc op meth shown =
+  let wrap =
+    match at with
+    | { ty = Con (p, []); loc = recv; _ } :: rest when p = Path.prelude "Int" ->
+        let arg = match rest with b :: _ -> Some b.loc | [] -> None in
+        Some { meth; recv; arg }
+    | _ -> None
+  in
+  panic ?wrap loc (Printf.sprintf "`%s` overflowed: %s" op shown)
+
+(* What a panic shows of [x op y], made only once there is one: building
+   it for every operation made arithmetic several times slower. *)
+let shown_ints op x y = Printf.sprintf "%Ld %s %Ld" x (Ast.binop_to_string op) y
+
+let int_over ~at loc op meth x y =
+  overflowed ~at loc (Ast.binop_to_string op) meth (shown_ints op x y)
+
+let int_binop ~at loc (op : Ast.binop) x y =
+  match op with
+  | Add ->
+      let r = Int64.add x y in
+      (* it overflowed if both have the same sign and [r] the other *)
+      if Int64.logand (Int64.logxor x r) (Int64.logxor y r) < 0L then
+        int_over ~at loc op "wrapping_add" x y
+      else VInt r
+  | Sub ->
+      let r = Int64.sub x y in
+      if Int64.logand (Int64.logxor x y) (Int64.logxor x r) < 0L then
+        int_over ~at loc op "wrapping_sub" x y
+      else VInt r
+  | Mul ->
+      let r = Int64.mul x y in
+      if
+        (x = -1L && y = Int64.min_int)
+        || (y = -1L && x = Int64.min_int)
+        || (x <> 0L && Int64.div r x <> y)
+      then int_over ~at loc op "wrapping_mul" x y
+      else VInt r
+  | (Div | Mod) when y = 0L -> panic loc "division by zero"
+  | Div when x = Int64.min_int && y = -1L ->
+      panic loc (Printf.sprintf "`/` overflowed: %s" (shown_ints op x y))
+  (* both round toward zero, as C's do *)
+  | Div -> VInt (Int64.div x y)
+  | Mod -> VInt (Int64.rem x y)
+  | Lt -> VBool (x < y)
+  | Le -> VBool (x <= y)
+  | Gt -> VBool (x > y)
+  | Ge -> VBool (x >= y)
+  | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on `Int`s")
+
+(* [r], unless it's `NaN`, which there isn't: a panic that says what made
+   it. *)
+let not_nan loc (op : Ast.binop) x y r =
+  if Float.is_nan r then
+    panic loc
+      (Printf.sprintf "`%s` has no answer here: %s %s %s"
+         (Ast.binop_to_string op) (Ast.show_float x) (Ast.binop_to_string op)
+         (Ast.show_float y))
+  else VFloat r
+
+let float_binop loc (op : Ast.binop) x y =
+  match op with
+  | Add -> not_nan loc op x y (x +. y)
+  | Sub -> not_nan loc op x y (x -. y)
+  | Mul -> not_nan loc op x y (x *. y)
+  | Div -> not_nan loc op x y (x /. y)
+  | Mod -> not_nan loc op x y (Float.rem x y)
+  (* a total order, since there's no `NaN`, with -0.0 and 0.0 equal *)
+  | Lt -> VBool (Float.compare x y < 0)
+  | Le -> VBool (Float.compare x y <= 0)
+  | Gt -> VBool (Float.compare x y > 0)
+  | Ge -> VBool (Float.compare x y >= 0)
+  | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on `Float`s")
+
+let binop ~at loc (op : Ast.binop) a b =
+  match (a, b) with
+  | VInt x, VInt y -> int_binop ~at loc op x y
+  | VFloat x, VFloat y -> float_binop loc op x y
   | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on the wrong types")
 
-let element loc xs i =
-  if i < 0 || i >= Array.length xs then
-    panic loc
-      (Printf.sprintf "index %d is out of bounds for an array of length %d" i
-         (Array.length xs))
-  else xs.(i)
+let neg ~at loc = function
+  | VInt n when n = Int64.min_int ->
+      overflowed ~at loc "-" "wrapping_neg" (Printf.sprintf "-(%Ld)" n)
+  | VInt n -> VInt (Int64.neg n)
+  | VFloat f -> VFloat (Float.neg f)
+  | _ -> bug "`-` on the wrong type"
 
-let prim loc op args =
+let element loc xs i =
+  if i < 0L || i >= Int64.of_int (Array.length xs) then
+    panic loc
+      (Printf.sprintf "index %Ld is out of bounds for an array of length %d" i
+         (Array.length xs))
+  else xs.(Int64.to_int i)
+
+(* [op] on [args], whose expressions are [at]. *)
+let prim loc op args (at : expr list) =
   match (op, args) with
-  | Neg, [ VInt n ] -> VInt (-n)
+  | Neg, [ v ] -> neg ~at loc v
   | Not, [ VBool b ] -> VBool (not b)
-  | Binop op, [ a; b ] -> binop loc op a b
-  | Length, [ VArray xs ] -> VInt (Array.length xs)
+  | Binop op, [ x; y ] -> binop ~at loc op x y
+  | Length, [ VArray xs ] -> VInt (Int64.of_int (Array.length xs))
   | Get_index, [ VArray xs; VInt i ] -> element loc xs i
   | Set_index, [ VArray xs; VInt i; x ] ->
       ignore (element loc xs i);
       let ys = Array.copy xs in
-      ys.(i) <- x;
+      ys.(Int64.to_int i) <- x;
       VArray ys
   | New_cell, [ v ] -> VCell (ref v)
   | Get_cell, [ VCell c ] -> !c
@@ -151,7 +244,7 @@ let rec match_pattern p v env =
   | PBool b, VBool c -> if b = c then Some env else None
   | PCon (_, c, ps), VCon { name; args; _ } when c = name ->
       match_all ps args env
-  | PTag (t, ps), VTag { name; args } when t = name -> match_all ps args env
+  | PTag (t, ps), VTag { name; args; _ } when t = name -> match_all ps args env
   | POr ps, _ -> List.find_map (fun p -> match_pattern p v env) ps
   | _ -> None
 
@@ -213,127 +306,39 @@ let rec type_of env (d : desc) : Ty.ty =
           Ty.any_lams )
   | Errs e -> Errors (row e)
 
-(* ---- equality ---- *)
-
-(* [a] and [b] compared by their shape alone, where nothing says what
-   type they are: a type variable inference left undecided, or one of a
-   function the runtime calls from outside, which nothing gave a
-   dictionary for ([from_outside]). Inference made sure nothing compared
-   holds a function, an opaque type's value or an error's payload
-   included. *)
-let rec by_shape a b =
-  match (a, b) with
-  | VCon x, VCon y ->
-      x.ty = y.ty && x.name = y.name
-      && List.length x.args = List.length y.args
-      && List.for_all2 by_shape x.args y.args
-  | VTag x, VTag y ->
-      x.name = y.name
-      && List.length x.args = List.length y.args
-      && List.for_all2 by_shape x.args y.args
-  | VRecord xs, VRecord ys ->
-      List.length xs = List.length ys
-      && List.for_all2 (fun (_, x) (_, y) -> by_shape x y) xs ys
-  | VArray xs, VArray ys ->
-      Array.length xs = Array.length ys && Array.for_all2 by_shape xs ys
-  | (VInt _ | VBool _ | VStr _ | VBytes _ | VUnit), _ -> a = b
-  | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _), _ ->
-      bug "a comparison of functions"
-  | (VCon _ | VTag _ | VRecord _ | VArray _), _ -> false
-  | (VType _ | VDict _ | VCell _ | VEvidence _), _ ->
-      bug "a comparison of something a program never sees"
-
-(* [a] and [b], of type [t], compared as [t]'s `eq` derived from its
-   structure does (core.ml, [Derived]): a record field by field as its
-   declaration says, a constructor's fields, an array's elements and an
-   error's payload each as the type it's declared with, and a value of the
-   function's type variable [Var n] through [var n], its dictionary. *)
-let rec derived cx var (t : Ty.ty) a b =
-  let at = derived cx var in
-  match (t, a, b) with
-  | Var n, _, _ -> (
-      match var n with Some eq -> eq a b | None -> by_shape a b)
-  | _, (VInt _ | VBool _ | VStr _ | VBytes _ | VUnit), _ -> a = b
-  | Con (p, [ elem ]), VArray xs, VArray ys when p = Path.prelude "Array" ->
-      Array.length xs = Array.length ys && Array.for_all2 (at elem) xs ys
-  | Con (p, args), _, _ -> (
-      let field (f : Iface.field) = Shown.subst args f.fty in
-      match
-        ( Option.map
-            (fun (d : Iface.type_decl) -> d.body)
-            (Hashtbl.find_opt cx.types p),
-          a,
-          b )
-      with
-      | Some (Record fs), VRecord xs, VRecord ys ->
-          List.for_all
-            (fun (f : Iface.field) ->
-              at (field f) (List.assoc f.fname xs) (List.assoc f.fname ys))
-            fs
-      | Some (Sum cs), VCon x, VCon y -> (
-          x.name = y.name
-          &&
-          match List.find_opt (fun (c : Iface.ctor) -> c.cname = x.name) cs with
-          | Some c
-            when List.length c.cfields = List.length x.args
-                 && List.length x.args = List.length y.args ->
-              List.for_all2
-                (fun f (x, y) -> at (field f) x y)
-                c.cfields
-                (List.combine x.args y.args)
-          | _ -> bug "a constructor of the wrong type")
-      | Some (Opaque (Rep rep)), _, _ -> at (Shown.subst args rep) a b
-      | _ -> by_shape a b)
-  | Errors row, VTag x, VTag y -> (
-      x.name = y.name
-      &&
-      match
-        List.find_opt (fun (l : Ty.label) -> l.name = x.name) row.labels
-      with
-      | Some l
-        when List.length l.payload = List.length x.args
-             && List.length x.args = List.length y.args ->
-          List.for_all2
-            (fun t (x, y) -> at t x y)
-            l.payload
-            (List.combine x.args y.args)
-      | _ ->
-          (* a tag the set's tail brought in, which says nothing of it *)
-          by_shape a b)
-  | Fun _, _, _ -> bug "a comparison of functions"
-  | _ -> by_shape a b
-
 (* The dictionary the hidden dictionary parameter [v] holds. *)
 let dict_in env (v : var) =
   match !(cell env v) with
   | VDict d -> d
   | _ -> bug ("a dictionary built from `" ^ v.name ^ "`, which isn't one")
 
-(* The dictionary [d] stands for (core.ml, [dict]), with what the hidden
-   dictionary parameters it's built from hold. *)
-let dict cx env (d : Core.dict) : Value.dict =
-  match d with
-  | Dict_param v -> dict_in env v
-  | Derived { dty; from; _ } ->
-      let vars = List.map (fun (n, v) -> (n, (dict_in env v).eq)) from in
-      { eq = (fun a b -> derived cx (fun n -> List.assoc_opt n vars) dty a b) }
+(* Two values the same, by an `eq` dictionary. *)
+let equal_by (d : Value.dict) x y =
+  match d with Eq f -> f x y | _ -> bug "`==` through a dictionary not `eq`'s"
 
-(* `eq`'s dictionary for [t], a type the running program knows, which a
-   function given nothing else is given: one the runtime calls from
-   outside, or a type's own `show` method, which is given the types its
-   value's type was given. *)
-let known cx (t : Ty.ty) : Value.dict =
-  { eq = (fun a b -> derived cx (fun _ -> None) t a b) }
+(* The binary operator a requirement is: `add` is `+`. *)
+let binop_of_req req : Ast.binop =
+  match req with
+  | "add" -> Add
+  | "sub" -> Sub
+  | "mul" -> Mul
+  | "div" -> Div
+  | "rem" -> Mod
+  | _ -> bug ("`" ^ req ^ "` as a binary operator")
 
-(* What a function of [f]'s scheme is given for its requirements, for the
-   types [tys] its type variables stand for: each one's dictionary, as
-   [known]. *)
-let known_dicts cx (f : fn_def) tys =
-  List.map (fun (n, _) -> VDict (known cx (List.nth tys n))) f.scheme.reqs
+(* An [Int]'s or a [Float]'s operator, as a dictionary has it, which is
+   given where its operands are and doesn't need them. *)
+let number_op req loc (_ : Loc.t list) vs =
+  (* no help: the operands are a `T`'s, which has no `wrapping_add` *)
+  match (req, vs) with
+  | "neg", [ v ] -> neg ~at:[] loc v
+  | _, [ x; y ] -> binop ~at:[] loc (binop_of_req req) x y
+  | _ -> bug ("`" ^ req ^ "` on the wrong number of values")
 
 let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
+  | Float f -> VFloat f
   | Bool b -> VBool b
   | Str s -> VStr s
   | Unit -> VUnit
@@ -414,9 +419,32 @@ let rec eval cx env (e : expr) =
   | Prim (((Equal d | Not_equal d) as op), [ a; b ]) ->
       let x = eval cx env a in
       let y = eval cx env b in
-      let same = (dict cx env d).eq x y in
+      let same = equal_by (dict cx env d) x y in
       VBool (match op with Not_equal _ -> not same | _ -> same)
-  | Prim (op, args) -> prim e.loc op (eval_all cx env args)
+  | Prim (Compare (op, d), [ a; b ]) -> (
+      let x = eval cx env a in
+      let y = eval cx env b in
+      match dict cx env d with
+      | Ord compare ->
+          let c = compare x y in
+          VBool
+            (match op with
+            | Lt -> c < 0
+            | Le -> c <= 0
+            | Gt -> c > 0
+            | Ge -> c >= 0
+            | _ -> bug "a comparison that isn't one")
+      | _ -> bug "a comparison through a dictionary that isn't `ord`'s")
+  | Prim (Op (_, d), args) -> (
+      let vs = eval_all cx env args in
+      match dict cx env d with
+      | Op f -> f e.loc (List.map (fun (a : expr) -> a.loc) args) vs
+      | _ -> bug "an operator through a dictionary that isn't one")
+  | Prim (Value_of (_, d), []) -> (
+      match dict cx env d with
+      | Const v -> v
+      | _ -> bug "an associated value through a dictionary that isn't one")
+  | Prim (op, args) -> prim e.loc op (eval_all cx env args) args
   | Let (v, value, body) ->
       let x = eval cx env value in
       eval cx (Env.add v.id (ref x) env) body
@@ -486,7 +514,13 @@ let rec eval cx env (e : expr) =
   | Match (subject, arms) ->
       let env, body = arm_for cx env e.loc (eval cx env subject) arms in
       eval cx env body
-  | Tag (t, args) -> VTag { name = t; args = eval_all cx env args }
+  | Tag (t, args, ds) ->
+      VTag
+        {
+          name = t;
+          args = eval_all cx env args;
+          tys = List.map (type_of env) ds;
+        }
   | Fail a -> raise (Failed (eval cx env a))
   | Handle { body; value; on_value; error; on_error } -> (
       (* [match ... with exception] runs one branch for a value and another
@@ -502,7 +536,7 @@ let rec eval cx env (e : expr) =
   | Assert_equal (a, b, d, eq) ->
       let x = eval cx env a in
       let y = eval cx env b in
-      if not ((dict cx env eq).eq x y) then
+      if not (equal_by (dict cx env eq) x y) then
         raise
           (Assert_failed
              {
@@ -580,7 +614,7 @@ and finish cx at step =
       let next =
         try enter cx t.f t.args t.ev with
         | Builtins.Panic msg -> panic (Option.value at ~default:t.loc) msg
-        | Panic (l, msg) when l.file = Prelude.file && at <> None ->
+        | Panic { loc; msg; _ } when loc.file = Prelude.file && at <> None ->
             panic (Option.get at) msg
       in
       finish cx at next
@@ -607,7 +641,8 @@ and eval_all cx env = function
 and call_at cx loc f args ev =
   try apply cx f args ev with
   | Builtins.Panic msg -> panic loc msg
-  | Panic (l, msg) when l.file = Prelude.file && loc.file <> Prelude.file ->
+  | Panic { loc = l; msg; _ }
+    when l.file = Prelude.file && loc.file <> Prelude.file ->
       (* the prelude's source can't be shown, so a panic inside it is the
          program's call that reached it *)
       panic loc msg
@@ -724,6 +759,102 @@ and own_show cx (p : Path.t) args v : Shown.own =
       | _ -> Declared)
   | _ -> Declared
 
+(* ---- dictionaries ----
+
+   A requirement's dictionary for a type the running program knows
+   (core.ml, [dict]): `eq`, `hash` and ordering by the walk over the type
+   (walk.ml), through its key, if it has one; and an operator or an
+   associated value by [Int]'s and [Float]'s own, or by the member of the
+   type that gives it (Core.program's [ops]), or, for an opaque type that
+   has none, what it's represented as has, which the value is: a `with
+   numeric` type's. *)
+
+(* The walk's view of the program: its types, and how to find a value's
+   key. *)
+and walk cx : Walk.cx = { types = cx.types; key = key_of cx }
+
+(* [v]'s key, and its type, if [v]'s type, [p] given [args], has one: its
+   `key` method's result, given [args] for its type variables, which are
+   the type's parameters, in order, as [own_show]'s are. *)
+and key_of cx (p : Path.t) args v =
+  match Hashtbl.find_opt cx.keys p with
+  | Some m when Hashtbl.mem cx.fns m -> (
+      let f = Hashtbl.find cx.fns m in
+      let k =
+        match f.scheme.ty with
+        | Fun (_, r, _, _, _) -> Walk.subst args r
+        | _ -> bug "a key that isn't a function"
+      in
+      match
+        apply cx (VFn (m, args, known_dicts cx f args)) [ v ] (VEvidence [])
+      with
+      | Ok key, _ -> Some (k, key)
+      | Error _, _ -> bug "a key that failed")
+  | _ -> None
+
+(* [req]'s dictionary for [t]. *)
+and known cx req (t : Ty.ty) : Value.dict =
+  match req with
+  | "eq" -> Eq (Walk.equal (walk cx) t)
+  | "hash" -> Hash (Walk.hash (walk cx) t)
+  | "ord" -> Ord (Walk.compare (walk cx) t)
+  | "zero" | "one" -> Const (constant cx req t)
+  | _ -> Op (operator cx req t)
+
+(* The associated value [req], `zero` or `one`, of [t]. *)
+and constant cx req (t : Ty.ty) =
+  let one = req = "one" in
+  match t with
+  | Con (p, []) when p = Path.prelude "Int" -> VInt (if one then 1L else 0L)
+  | Con (p, []) when p = Path.prelude "Float" -> VFloat (if one then 1. else 0.)
+  | Con (p, args) -> (
+      match (Hashtbl.find_opt cx.ops (p, req), Hashtbl.find_opt cx.types p) with
+      | Some m, _ -> (
+          match Hashtbl.find_opt cx.values m with
+          | Some v -> v
+          | None ->
+              bug ("the value `" ^ Path.local m ^ "` used before it's made"))
+      | None, Some { body = Opaque (Rep rep); _ } ->
+          constant cx req (Walk.subst args rep)
+      | _ -> bug ("`" ^ req ^ "` of a type that hasn't it"))
+  | _ -> bug ("`" ^ req ^ "` of a type that hasn't it")
+
+(* The operator [req], `add`, of [t]: given where it's used and where its
+   operands are, for a panic, and their values. *)
+and operator cx req (t : Ty.ty) =
+  match t with
+  | Con (p, []) when p = Path.prelude "Int" || p = Path.prelude "Float" ->
+      number_op req
+  | Con (p, args) -> (
+      match (Hashtbl.find_opt cx.ops (p, req), Hashtbl.find_opt cx.types p) with
+      | Some m, _ ->
+          fun loc _ vs ->
+            let f = Hashtbl.find cx.fns m in
+            ok
+              (fst
+                 (call_at cx loc
+                    (VFn (m, args, known_dicts cx f args))
+                    vs (VEvidence [])))
+      | None, Some { body = Opaque (Rep rep); _ } ->
+          operator cx req (Walk.subst args rep)
+      | _ -> fun _ _ _ -> bug ("`" ^ req ^ "` of a type that hasn't it"))
+  | _ -> fun _ _ _ -> bug ("`" ^ req ^ "` of a type that hasn't it")
+
+(* What a function of [f]'s scheme is given for its requirements, for the
+   types [tys] its type variables stand for: each one's dictionary, as
+   [known]. *)
+and known_dicts cx (f : fn_def) tys =
+  List.map (fun (n, req) -> VDict (known cx req (List.nth tys n))) f.scheme.reqs
+
+(* The dictionary [d] stands for (core.ml, [dict]): what a hidden
+   dictionary parameter holds, or one derived for the type its descriptor
+   describes, with what the hidden type parameters it's built from
+   hold. *)
+and dict cx env (d : Core.dict) : Value.dict =
+  match d with
+  | Dict_param v -> dict_in env v
+  | Derived { req; ddesc; _ } -> known cx req (type_of env ddesc)
+
 (* An error nothing handled, which the top-level function [p] failed
    with, shown through the types its errors' payloads have there. *)
 let error_of cx p err =
@@ -751,7 +882,12 @@ let from_outside cx (p : Path.t) =
 let overflowed cx (p : Path.t) =
   match Hashtbl.find_opt cx.fns p with
   | Some f ->
-      Panic (f.loc, "the stack overflowed: a function called itself too deeply")
+      Panic
+        {
+          loc = f.loc;
+          msg = "the stack overflowed: a function called itself too deeply";
+          wrap = None;
+        }
   | None ->
       bug ("a call too deep from `" ^ Path.local p ^ "`, which isn't there")
 
@@ -769,6 +905,8 @@ let load (modules : program list) =
       types =
         Shown.types (List.concat_map (fun (m : program) -> m.types) modules);
       shows = Hashtbl.create 16;
+      keys = Hashtbl.create 16;
+      ops = Hashtbl.create 16;
       showing = [];
       depth = ref 0;
     }
@@ -776,7 +914,9 @@ let load (modules : program list) =
   List.iter
     (fun (m : program) ->
       List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns;
-      List.iter (fun (p, m) -> Hashtbl.replace cx.shows p m) m.shows)
+      List.iter (fun (p, m) -> Hashtbl.replace cx.shows p m) m.shows;
+      List.iter (fun (p, k) -> Hashtbl.replace cx.keys p k) m.keys;
+      List.iter (fun (r, o) -> Hashtbl.replace cx.ops r o) m.ops)
     modules;
   List.iter
     (fun (m : program) ->
@@ -855,7 +995,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
         ( "Clock",
           "test_clock",
           [ value (Path.member (Path.prelude "Time") "epoch") ] );
-        ("Random", "test_random", [ VInt seed ]);
+        ("Random", "test_random", [ VInt (Int64.of_int seed) ]);
         ("Console", "test_console", []);
         ("Fs", "mem_fs", [ VArray [||] ]);
         ("Os", "test_os", [ VArray [||] ]);

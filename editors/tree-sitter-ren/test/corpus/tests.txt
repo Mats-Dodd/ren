@@ -51,7 +51,7 @@ group: public, its parameters, its with, and its tests
 pub group clock_conforms(c: Clock, n: Int) with c, retry(n) =
   test "instant never goes backwards" =
     let a = Clock.instant()
-    assert Clock.instant().not_before(a)
+    assert Clock.instant() >= a
   test "one line" = assert true
 
 --------------------------------------------------------------------------------
@@ -88,16 +88,14 @@ pub group clock_conforms(c: Clock, n: Int) with c, retry(n) =
               (identifier))
             (arguments)))
         (assert_expression
-          (method_call_expression
+          (binary_expression
             (call_expression
               (item_expression
                 (type_name
                   (type_identifier))
                 (identifier))
               (arguments))
-            (identifier)
-            (arguments
-              (identifier))))))
+            (identifier)))))
     (test_definition
       (string)
       (assert_expression

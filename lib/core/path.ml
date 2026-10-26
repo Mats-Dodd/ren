@@ -22,16 +22,25 @@ type t = {
 and member = {
   mname : string;  (** as it's written: [push] *)
   overload : int;
-      (** which of the members of that name: always 0 for now. Operators will
-          have one per right-hand type (operators.md), all with one name *)
+      (** which of the members of that name, counting from 0 in source order: an
+          operator has one per type on its right (operators.md), all with one
+          name, and anything else only 0 *)
 }
 
 let prelude_home = "prelude"
 let make home name = { home; name; member = None }
 let prelude name = make prelude_home name
 
-(* The member [m] of the type [owner]. *)
-let member owner m = { owner with member = Some { mname = m; overload = 0 } }
+(* The member [m] of the type [owner], the [n]th of that name. *)
+let member_n owner m n =
+  { owner with member = Some { mname = m; overload = n } }
+
+(* The member [m] of the type [owner]: the first of that name, and for
+   anything but an operator, the only one. *)
+let member owner m = member_n owner m 0
+
+(* Which of its type's members of its name [p] is. *)
+let overload p = match p.member with Some m -> m.overload | None -> 0
 
 (* The type a member is of; a path that isn't a member's is its own. *)
 let owner p = { p with member = None }

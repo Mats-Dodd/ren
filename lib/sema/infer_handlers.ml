@@ -404,7 +404,7 @@ and outer_changes env (body : expr) name =
   let rec walk (e : expr) =
     let all = List.iter walk in
     match e.kind with
-    | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
     | Lambda _ -> () (* its own changes are mut.ml's *)
     | Assign { target; value; _ } ->
         changed target;
@@ -434,8 +434,8 @@ and outer_changes env (body : expr) name =
             Option.iter walk a.arm_guard;
             walk a.arm_body)
           arms
-    | Unop (_, a) | Field (a, _) | Try a | Attempt a | Assert a -> walk a
-    | Binop (_, a, b) | Index (a, b) -> all [ a; b ]
+    | Unop (_, a, _) | Field (a, _) | Try a | Attempt a | Assert a -> walk a
+    | Binop (_, a, b, _) | Index (a, b) -> all [ a; b ]
     | If (c, t, f) -> all (c :: t :: Option.to_list f)
     | Call (f, args) -> all (f :: args)
     | Con (_, args) | Fail (_, args) -> all (List.map snd args)

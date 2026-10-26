@@ -1187,8 +1187,37 @@
             "type": "SYMBOL",
             "name": "_type"
           }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "with"
+                },
+                {
+                  "type": "FIELD",
+                  "name": "numeric",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "numeric"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
+    },
+    "numeric": {
+      "type": "STRING",
+      "value": "numeric"
     },
     "sum_type": {
       "type": "SEQ",
@@ -1913,10 +1942,6 @@
         {
           "type": "SYMBOL",
           "name": "associated_value"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "operator_definition"
         }
       ]
     },
@@ -1986,47 +2011,6 @@
         }
       ]
     },
-    "operator_definition": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "parameters",
-              "content": {
-                "type": "SYMBOL",
-                "name": "parameters"
-              }
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "STRING",
-          "value": "=>"
-        },
-        {
-          "type": "FIELD",
-          "name": "body",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_body"
-          }
-        }
-      ]
-    },
     "_type": {
       "type": "CHOICE",
       "members": [
@@ -2067,10 +2051,62 @@
           },
           "named": true,
           "value": "error_set"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_joined"
+          },
+          "named": true,
+          "value": "implementation_type"
         }
       ]
     },
     "implementation_type": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "name",
+              "content": {
+                "type": "SYMBOL",
+                "name": "type_name"
+              }
+            },
+            {
+              "type": "FIELD",
+              "name": "uses",
+              "content": {
+                "type": "SYMBOL",
+                "name": "uses_clause"
+              }
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "_joined"
+            },
+            {
+              "type": "FIELD",
+              "name": "uses",
+              "content": {
+                "type": "SYMBOL",
+                "name": "uses_clause"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "_joined": {
       "type": "SEQ",
       "members": [
         {
@@ -2082,11 +2118,23 @@
           }
         },
         {
-          "type": "FIELD",
-          "name": "uses",
+          "type": "REPEAT1",
           "content": {
-            "type": "SYMBOL",
-            "name": "uses_clause"
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "&"
+              },
+              {
+                "type": "FIELD",
+                "name": "name",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "type_name"
+                }
+              }
+            ]
           }
         }
       ]
@@ -2236,6 +2284,15 @@
           },
           "named": true,
           "value": "implementation_type"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_joined"
+          },
+          "named": true,
+          "value": "implementation_type"
         }
       ]
     },
@@ -2271,32 +2328,68 @@
           },
           "named": true,
           "value": "error_set"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_joined"
+          },
+          "named": true,
+          "value": "implementation_type"
         }
       ]
     },
     "_argument_implementation_type": {
-      "type": "SEQ",
+      "type": "CHOICE",
       "members": [
         {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "type_name"
-          }
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "name",
+              "content": {
+                "type": "SYMBOL",
+                "name": "type_name"
+              }
+            },
+            {
+              "type": "FIELD",
+              "name": "uses",
+              "content": {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_argument_uses"
+                },
+                "named": true,
+                "value": "uses_clause"
+              }
+            }
+          ]
         },
         {
-          "type": "FIELD",
-          "name": "uses",
-          "content": {
-            "type": "ALIAS",
-            "content": {
+          "type": "SEQ",
+          "members": [
+            {
               "type": "SYMBOL",
-              "name": "_argument_uses"
+              "name": "_joined"
             },
-            "named": true,
-            "value": "uses_clause"
-          }
+            {
+              "type": "FIELD",
+              "name": "uses",
+              "content": {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_argument_uses"
+                },
+                "named": true,
+                "value": "uses_clause"
+              }
+            }
+          ]
         }
       ]
     },
@@ -3592,6 +3685,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "float"
+        },
+        {
+          "type": "SYMBOL",
           "name": "string"
         },
         {
@@ -3655,6 +3752,10 @@
     "number": {
       "type": "PATTERN",
       "value": "[0-9][0-9_]*"
+    },
+    "float": {
+      "type": "PATTERN",
+      "value": "[0-9][0-9_]*\\.[0-9][0-9_]*"
     },
     "string": {
       "type": "SEQ",

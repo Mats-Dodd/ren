@@ -23,13 +23,13 @@ pub handler cached(ttl: Duration) for Prices uses Supplier, Limiter, Clock =
     let now = Clock.instant()
     var found = None
     for e in entries
-      if e.item == item && now.before(e.until) then found = Some(e.price)
+      if e.item == item && now < e.until then found = Some(e.price)
     match found
       Some(p) => p
       None =>
         try Limiter.take()
         let p = try Supplier.quote(item)
-        &entries.push(Entry { item, price: p, until: now.plus(ttl) })
+        &entries.push(Entry { item, price: p, until: now + ttl })
         p
 
 // ---- tests ----
@@ -73,4 +73,4 @@ test "a cached answer doesn't count against the limit" =
       cached(Duration.seconds(10)) in
     assert try Prices.price("apple") == 3
     assert try Prices.price("apple") == 3
-    assert attempt Prices.price("pear") == Err(Throttled(Instant.zero.plus(Duration.seconds(1))))
+    assert attempt Prices.price("pear") == Err(Throttled(Instant.zero + Duration.seconds(1)))

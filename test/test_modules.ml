@@ -220,11 +220,11 @@ pub fn double(n: Int) -> Int = n * true
     ];
   [%expect
     {|
-    error: expected `Int`, found `Bool`
-      ┌─ util.ren:1:36
+    error: `Int` has no `*` that takes a `Bool`
+      ┌─ util.ren:1:32
     1 │ pub fn double(n: Int) -> Int = n * true
-      │                                    ^^^^
-      = `*` works on `Int`s
+      │                                ^^^^^^^^
+      = `*` is found on its left side's type, `Int`
     |}]
 
 let%expect_test "only a public function can be called from another module" =
@@ -1314,11 +1314,10 @@ fn main() =
       = `UserId`'s representation is private to `users`
       help: use a function from `users` to make or read one
 
-    error: expected `Int`, found `users.UserId`
+    error: `users.UserId` has no `+`
       ┌─ main.ren:4:11
     4 │   let m = users.make(1) + 1
-      │           ^^^^^^^^^^^^^
-      = `+` works on `Int`s
+      │           ^^^^^^^^^^^^^^^^^
       = `UserId`'s representation is private to `users`
       help: use a function from `users` to make or read one
 

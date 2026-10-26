@@ -18,13 +18,15 @@ let name_of = function
   | Global p | Global_value p -> Path.local p
   | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
+  | Assoc_value (Named p, v) -> p.name ^ "." ^ v
+  | Assoc_value (Param _, v) -> v
 
 (* The same, without its type's name if it's a member: `push`. *)
 let short_of = function
   | Local b -> b.ident.name
   | Global p | Global_value p -> Path.short p
   | Intrinsic x -> Intrinsic.member_name x
-  | Dep_op (_, op) -> op
+  | Dep_op (_, op) | Assoc_value (_, op) -> op
 
 (* The name of the function [f] a call calls, for messages, if it's a
    function's name. *)
@@ -180,6 +182,10 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
         | TCon (p, a), TCon (q, b) when p = q -> pairs a b
         | _ -> (
             match (foreign f, foreign x, own f, own x) with
+            | Some _, Some _, _, _ ->
+                (* two of them: neither is what the other is represented
+                   as *)
+                None
             | Some p, _, _, _ | _, Some p, _, _ -> Some p
             | _, _, Some f, _ -> blame f x
             | _, _, _, Some x -> blame f x

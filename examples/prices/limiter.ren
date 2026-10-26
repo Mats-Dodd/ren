@@ -15,10 +15,10 @@ pub handler fixed_window(limit: Int, window: Duration) for Limiter uses Clock =
   var used = 0
   take() =>
     let now = Clock.instant()
-    if now.not_before(start.plus(window)) then
+    if now >= start + window then
       start = now
       used = 0
-    if used == limit then fail Throttled(start.plus(window))
+    if used == limit then fail Throttled(start + window)
     used += 1
 
 // up to `burst` calls at once, and then one more each time `every` goes
@@ -28,11 +28,11 @@ pub handler token_bucket(burst: Int, every: Duration) for Limiter uses Clock =
   // when the last token was added
   var added = Clock.instant()
   take() =>
-    let gained = Clock.instant().since(added).in_ms() / every.in_ms()
+    let gained = (Clock.instant() - added).in_ms() / every.in_ms()
     if gained > 0 then
       tokens = if tokens + gained > burst then burst else tokens + gained
-      added = added.plus(every.times(gained))
-    if tokens == 0 then fail Throttled(added.plus(every))
+      added = added + every * gained
+    if tokens == 0 then fail Throttled(added + every)
     tokens -= 1
 
 test "calls up to the limit go through" =
@@ -44,7 +44,7 @@ test "one more is throttled until the window ends" =
   with fixed_window(2, Duration.seconds(1)) in
     try Limiter.take()
     try Limiter.take()
-    assert attempt Limiter.take() == Err(Throttled(Instant.zero.plus(Duration.seconds(1))))
+    assert attempt Limiter.take() == Err(Throttled(Instant.zero + Duration.seconds(1)))
 
 test "a new window lets calls through again" =
   with fixed_window(1, Duration.seconds(1)) in
@@ -56,10 +56,10 @@ test "a burst goes through, and then one call each time a token comes" =
   with token_bucket(2, Duration.ms(500)) in
     try Limiter.take()
     try Limiter.take()
-    assert attempt Limiter.take() == Err(Throttled(Instant.zero.plus(Duration.ms(500))))
+    assert attempt Limiter.take() == Err(Throttled(Instant.zero + Duration.ms(500)))
     TestClock.advance(Duration.ms(500))
     try Limiter.take()
-    assert attempt Limiter.take() == Err(Throttled(Instant.zero.plus(Duration.seconds(1))))
+    assert attempt Limiter.take() == Err(Throttled(Instant.zero + Duration.seconds(1)))
 
 test "tokens build up to the burst, and no more" =
   with token_bucket(2, Duration.ms(500)) in
@@ -68,4 +68,4 @@ test "tokens build up to the burst, and no more" =
     TestClock.advance(Duration.seconds(10))
     try Limiter.take()
     try Limiter.take()
-    assert attempt Limiter.take() == Err(Throttled(Instant.zero.plus(Duration.ms(10500))))
+    assert attempt Limiter.take() == Err(Throttled(Instant.zero + Duration.ms(10500)))

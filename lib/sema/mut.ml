@@ -70,6 +70,8 @@ let name_of = function
   | Global p | Global_value p -> Path.local p
   | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
+  | Assoc_value (Named p, v) -> p.name ^ "." ^ v
+  | Assoc_value (Param _, v) -> v
 
 let rec place_of (e : expr) =
   match e.kind with
@@ -92,7 +94,7 @@ let rec overlap a b =
 
 let check_locks cx (p : place) =
   match p.root with
-  | Global _ | Global_value _ | Intrinsic _ | Dep_op _ -> ()
+  | Global _ | Global_value _ | Intrinsic _ | Dep_op _ | Assoc_value _ -> ()
   | Local b ->
       List.iter
         (fun l ->
@@ -155,7 +157,7 @@ let writable cx (e : expr) ~what
              (name_of p.root))
         (sprintf "`%s` is an operation of a dependency, not a variable"
            (name_of p.root))
-  | Some ({ root = Global_value _; _ } as p) ->
+  | Some ({ root = Global_value _ | Assoc_value _; _ } as p) ->
       Diag.error p.rloc ~help:"copy it into a `var`, and change the copy"
         ~notes:[ "an associated value is made once, and never changes" ]
         (sprintf "`%s` is an associated value, so it can't be changed"
@@ -201,7 +203,7 @@ let no_inout cx (ps : param list) =
 
 let rec walk cx (e : expr) =
   match e.kind with
-  | Int _ | Bool _ | Str _ | Unit -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit -> ()
   | Var _ | Field _ | Index _ -> (
       match place_of e with
       | Some p ->
@@ -264,14 +266,14 @@ let rec walk cx (e : expr) =
                 loop changes";
              ]
            "`&` can't be used here")
-  | Unop (_, a) | Try a | Attempt a | Assert a -> walk cx a
+  | Unop (_, a, _) | Try a | Attempt a | Assert a -> walk cx a
   | With { item; body; _ } ->
       (* a wrapper's body is a lambda, which can't change what's outside
          it: inference, which knows which items are wrappers, says so *)
       walk cx item;
       walk cx body
   | Fail (_, args) -> List.iter (fun (_, a) -> walk cx a) args
-  | Binop (_, a, b) ->
+  | Binop (_, a, b, _) ->
       walk cx a;
       walk cx b
   | If (c, t, f) -> List.iter (walk cx) (c :: t :: Option.to_list f)

@@ -59,6 +59,10 @@ type type_decl = {
   members : op Path.Map.t;
       (** its members, each by its path (path.ml): every item in its own
           module's view of it, only the public ones in its interface *)
+  numeric : Ty.ty option;
+      (** for an opaque type `with numeric`, what it's represented as, `Int` or
+          `Float`, which even its interface says: another module adds two and
+          scales one by that (operators.md, "Number types") *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
@@ -75,8 +79,30 @@ type t = {
 val find_type : t -> string -> type_decl option
 val find_value : t -> string -> value option
 
-(* The member of that name of a type, if it has one. *)
+(* The member of that name of a type, if it has one: the first, if it's
+   an operator written for several types on its right. *)
 val find_member : type_decl -> string -> op option
+
+(* Every member of that name of a type, with its path: one for each type
+   on an operator's right, and one for anything else. *)
+val find_members : type_decl -> string -> (Path.t * op) list
+
+(* The operators that are methods, by their requirement's name: `add`,
+   `sub`, `mul`, `div`, `rem` and `neg`. *)
+val operators : string list
+
+(* Every requirement a type variable can have: `eq`, `hash`, `ord`, the
+   operators, `zero` and `one`. *)
+val requirements : string list
+
+(* A type's `key`, if it has one: its path, and the key's type, the
+   type's parameters [Var]s. *)
+val key : type_decl -> (Path.t * Ty.ty) option
+
+(* The member of a type that gives it a requirement, `add` or `zero`, if
+   one does: an operator that takes one of the type and gives one, `neg`
+   that takes only `self`, or a value of the type. *)
+val provider : type_decl -> string -> (Path.t * op) option
 
 (* A type's members, in source order. *)
 val members : type_decl -> op list

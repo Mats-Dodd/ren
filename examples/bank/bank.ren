@@ -64,7 +64,7 @@ pub type Bank = { accounts: Array<Account>, next: Int }
   pub fn total(self) -> Money =
     var sum = Money.zero
     for a in self.accounts
-      sum = sum.plus(a.balance)
+      sum = sum + a.balance
     sum
 
   // where the account is in `accounts`. It's private, so what it fails
@@ -88,7 +88,7 @@ test "a deposit is stamped with the time" =
   TestClock.advance(Duration.minutes(5))
   try &acme.deposit(a, Money.dollars(10))
   let s = try acme.statement(a)
-  assert s[0].at == Time.epoch.plus(Duration.minutes(5))
+  assert s[0].at == Time.epoch + Duration.minutes(5)
 
 test "a transfer moves money, and stamps both sides" =
   var acme = Bank.empty
@@ -97,7 +97,7 @@ test "a transfer moves money, and stamps both sides" =
   try &acme.deposit(a, Money.dollars(10))
   TestClock.advance(Duration.seconds(1))
   try &acme.transfer(Transfer { from: a, to: b, amount: Money.dollars(4) })
-  let now = Time.epoch.plus(Duration.seconds(1))
+  let now = Time.epoch + Duration.seconds(1)
   assert try acme.statement(a) == [
     Entry { at: Time.epoch, what: Deposited(Money.dollars(10)) },
     Entry { at: now, what: Sent(Money.dollars(4), b) },

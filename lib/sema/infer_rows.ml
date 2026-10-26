@@ -349,7 +349,7 @@ let try_hint env cx (a : expr) t =
     match reveal env.st t with TCon (p, _) -> p = result_path | _ -> false
   in
   let rec leftmost (e : expr) =
-    match e.kind with Binop (_, l, _) -> leftmost l | _ -> e
+    match e.kind with Binop (_, l, _, _) -> leftmost l | _ -> e
   in
   match (a.kind, reveal env.st t) with
   | Var x, TVar _ -> Some (Maybe_result (name_of x))

@@ -856,7 +856,7 @@ let%expect_test "code printed for a message keeps a try or attempt to itself" =
   let at = Loc.point ~file 1 1 in
   let e kind : Ast.Resolved.expr = { kind; loc = at; node = 0 } in
   let name n = e (Var (Global (Path.make "test" n))) in
-  let x = name "x" and one = e (Int 1) in
+  let x = name "x" and one = e (Int 1L) in
   let a = e (Call (name "a", [])) in
   let show kind =
     print_endline
@@ -866,12 +866,13 @@ let%expect_test "code printed for a message keeps a try or attempt to itself" =
             ~value_name:(fun (p : Path.t) -> p.name)
             (e kind)))
   in
-  show (Binop (Add, e (Binop (Mul, x, e (Attempt a))), one));
-  show (Binop (Add, e (Binop (Mul, x, e (Try a))), one));
-  show (Binop (Add, e (Binop (Mul, x, e (Unop (Neg, e (Try a))))), one));
+  show (Binop (Add, e (Binop (Mul, x, e (Attempt a), 0)), one, 0));
+  show (Binop (Add, e (Binop (Mul, x, e (Try a), 0)), one, 0));
+  show
+    (Binop (Add, e (Binop (Mul, x, e (Unop (Neg, e (Try a), 0)), 0)), one, 0));
   (* and a comparison doesn't end an `attempt`'s reach *)
-  show (Binop (Eq, e (Binop (Mul, x, e (Attempt a))), one));
-  show (Binop (Add, x, e (Attempt a)));
+  show (Binop (Eq, e (Binop (Mul, x, e (Attempt a), 0)), one, 0));
+  show (Binop (Add, x, e (Attempt a), 0));
   [%expect {|
     (x * attempt a()) + 1
     (x * try a()) + 1
@@ -915,4 +916,50 @@ fn f() uses Rates & RateCalls = 1
     1 │ fn f() uses Rates & RateCalls = 1
       │                   ^
       help: write `Rates, ...`: a function uses each of them
+    |}]
+
+let%expect_test "a Float is digits, a dot and digits" =
+  (* `1..3` and `1.foo()` lex as before: a dot that a digit doesn't
+     follow isn't part of the number *)
+  tokens {|
+fn main() = [1.5, 0.25, 1_000.5, 2.0.sqrt(), 1.foo(), 9223372036854775807]
+|};
+  [%expect {| FN (IDENT "main") LPAREN RPAREN EQ LBRACKET (FLOAT 1.5) COMMA (FLOAT 0.25) COMMA (FLOAT 1000.5) COMMA (FLOAT 2.0) DOT (IDENT "sqrt") LPAREN RPAREN COMMA (INT 1) DOT (IDENT "foo") LPAREN RPAREN COMMA (INT 9223372036854775807) RBRACKET EOF |}];
+  ast {|
+fn main() = 1.5 * -2.0
+|};
+  [%expect {| (fn main () (* 1.5 (neg 2.0))) |}];
+  ast {|
+fn main() = 9223372036854775808
+|};
+  [%expect {|
+    error: this number is too big to fit in an `Int`
+      ┌─ test.ren:1:13
+    1 │ fn main() = 9223372036854775808
+      │             ^^^^^^^^^^^^^^^^^^^
+      help: the smallest `Int` is `-9223372036854775808`
+    |}];
+  ast {|
+fn main(x: Float) =
+  match x
+    1.5 => 1
+    _ => 2
+|};
+  [%expect {|
+    error: a `Float` can't be a pattern
+      ┌─ test.ren:3:5
+    3 │     1.5 => 1
+      │     ^^^
+      help: compare it in a guard: `x if x == 1.5 => ...`
+    |}];
+  ast {|
+pub type Money = opaque Int with numeric
+pub type Odd = opaque Int with sums
+|};
+  [%expect {|
+    error: an opaque type can only be `with numeric`
+      ┌─ test.ren:2:32
+    2 │ pub type Odd = opaque Int with sums
+      │                                ^^^^
+      help: write `opaque Int with numeric`
     |}]

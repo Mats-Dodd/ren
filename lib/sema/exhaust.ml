@@ -73,7 +73,7 @@ let set_of (t : Ty.ty) =
 let rec simplify env (p : pattern) =
   match p.pkind with
   | PWild | PVar _ -> Any
-  | PInt n -> Ctor ({ name = string_of_int n; owner = No_list }, [])
+  | PInt n -> Ctor ({ name = Int64.to_string n; owner = No_list }, [])
   | PBool b -> Ctor ({ name = string_of_bool b; owner = Of_type bool_path }, [])
   | PCon (c, ps) ->
       let node = Infer.Nodes.find p.pnode env.nodes in
@@ -365,13 +365,13 @@ let guard env f = Diag.recover env.sink ~default:() f
 
 let rec check_expr env (e : expr) =
   match e.kind with
-  | Int _ | Bool _ | Str _ | Unit | Var _ -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms
-  | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+  | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
       check_expr env a
   | Fail (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
-  | Binop (_, a, b) | Index (a, b) ->
+  | Binop (_, a, b, _) | Index (a, b) ->
       check_expr env a;
       check_expr env b
   | If (c, t, f) -> List.iter (check_expr env) (c :: t :: Option.to_list f)

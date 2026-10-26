@@ -16,51 +16,6 @@ type mode = Ty.mode = Read | Inout
 (* A local variable. Every use of it carries the same record. *)
 type var = { id : int; name : string; ty : Ty.ty }
 
-(* A requirement's dictionary: how a type does what a function needs of
-   one of its type variables, `eq` for `==` (compiler.md,
-   "Specialization"). A generic function with requirements takes one for
-   each, as hidden parameters, and each use of it passes one built from its
-   type arguments, as a descriptor is built ([desc]): one of the caller's
-   own type variables is the dictionary the caller was itself given for
-   it, and any other type's is derived from its structure, given those of
-   the caller's type variables in it. Each [==] in a function is done by
-   the dictionary of what it compares too. *)
-type dict =
-  | Dict_param of var
-      (** one of the function's own hidden dictionary parameters (see [fn_def]):
-          what it was given for one of its requirements *)
-  | Derived of { req : string; dty : Ty.ty; from : (int * var) list }
-      (** [req] of [dty], a type that isn't one of the function's type
-          variables, from its structure: for each of the function's type
-          variables in it, [Var n], [from] has the dictionary parameter it was
-          given for [n]'s [req], in order of [n]. A type variable inference left
-          undecided has no dictionary: no value of its type is ever made *)
-
-(* Operations built into the language. Each one's operands are listed in
-   the order they're evaluated. *)
-type prim =
-  | Neg
-  | Not  (** on a [Bool] *)
-  | Binop of Ast.binop
-      (** on [Int]s. Never [&&] or [||]: lowering makes those [If]s, so their
-          right side is evaluated only when it's needed; and never [==] or [!=],
-          which are [Equal] and [Not_equal] *)
-  | Equal of dict
-      (** [==] on two values of the same type, through that type's `eq`
-          dictionary *)
-  | Not_equal of dict  (** [!=], the same way *)
-  | Length  (** an array's length *)
-  | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
-  | Set_index  (** [xs] with element [i] replaced: a new array *)
-  | New_cell
-      (** a new cell holding a value: a `var` of a handler's state, which its
-          instance's operations share (see [Handler]). Nothing else holds a
-          cell, and a program never sees one *)
-  | Get_cell  (** what a cell holds *)
-  | Set_cell  (** change what a cell holds, to the second operand *)
-
-type param = { mode : mode; var : var }
-
 (* A type as the running program knows it: what a generic function is
    given for each of its type variables, as a hidden parameter, so it can
    show a value of that type (shown.ml) without working the type out. A
@@ -85,10 +40,76 @@ type desc =
 (* An error row's tags, each with its payload, and its tail (Ty.row). *)
 and desc_row = { dlabels : (string * desc list) list; dtail : int option }
 
+(* A requirement's dictionary: how a type does what a function needs of
+   one of its type variables, `eq` for `==` (compiler.md,
+   "Specialization"). A generic function with requirements takes one for
+   each, as hidden parameters, and each use of it passes one built from its
+   type arguments, as a descriptor is built ([desc]): one of the caller's
+   own type variables is the dictionary the caller was itself given for
+   it, and any other type's is derived from its structure, given those of
+   the caller's type variables in it. Each [==] in a function is done by
+   the dictionary of what it compares too. *)
+type dict =
+  | Dict_param of var
+      (** one of the function's own hidden dictionary parameters (see [fn_def]):
+          what it was given for one of its requirements *)
+  | Derived of {
+      req : string;
+      dty : Ty.ty;
+      ddesc : desc;
+      from : ((int * string) * var) list;
+    }
+      (** [req] of [dty], a type that isn't one of the function's type
+          variables, from its structure, its `key` and its members (Infer_reqs):
+          [ddesc] describes [dty], so the walk can call a member of a generic
+          type with what its parameters stand for, and [from] has the function's
+          own dictionary parameters for its type variables in [dty], by the
+          variable and the requirement each is for, which is what it can be
+          derived from. A type variable inference left undecided has no
+          dictionary: no value of its type is ever made *)
+
+(* Operations built into the language. Each one's operands are listed in
+   the order they're evaluated. *)
+type prim =
+  | Neg
+  | Not  (** on a [Bool] *)
+  | Binop of Ast.binop
+      (** the language's own operator: on [Int]s or [Float]s, or a `with
+          numeric` type's, `+` and `-` of two, `*` by what it's represented as
+          (operators.md, "Number types"). Never [&&] or [||]: lowering makes
+          those [If]s, so their right side is evaluated only when it's needed;
+          and never [==] or [!=], which are [Equal] and [Not_equal] *)
+  | Equal of dict
+      (** [==] on two values of the same type, through that type's `eq`
+          dictionary *)
+  | Not_equal of dict  (** [!=], the same way *)
+  | Compare of Ast.binop * dict
+      (** [<], [<=], [>] or [>=] on two values of the same type, through its
+          `ord` dictionary: what isn't an [Int] or a [Float], which [Binop]
+          compares *)
+  | Op of string * dict
+      (** an operator on a type variable's values, `add` for `+`, through the
+          dictionary of that requirement: two operands, or one for `neg` *)
+  | Value_of of string * dict
+      (** `zero` or `one` of a type, through that requirement's dictionary: no
+          operands *)
+  | Length  (** an array's length *)
+  | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
+  | Set_index  (** [xs] with element [i] replaced: a new array *)
+  | New_cell
+      (** a new cell holding a value: a `var` of a handler's state, which its
+          instance's operations share (see [Handler]). Nothing else holds a
+          cell, and a program never sees one *)
+  | Get_cell  (** what a cell holds *)
+  | Set_cell  (** change what a cell holds, to the second operand *)
+
+type param = { mode : mode; var : var }
+
 type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
 
 and kind =
-  | Int of int
+  | Int of Int64.t
+  | Float of float
   | Bool of bool
   | Str of string
   | Unit
@@ -191,10 +212,15 @@ and kind =
   | Update of expr * string * expr
       (** the record with one field replaced: a new record *)
   | Array of expr list
-  | Tag of string * expr list
-      (** an error, [Short(id, 5)]: its tag and its payload in order. Its type
-          is [Errors] of the one tag. An error is a value only in Core, which
-          raises one with [Fail] and catches one with [Handle] *)
+  | Tag of string * expr list * desc list
+      (** an error, [Short(id, 5)]: its tag, its payload in order, and the
+          descriptor of each of the payload's types. Its type is [Errors] of the
+          one tag, or of a set that has it. An error is a value only in Core,
+          which raises one with [Fail] and catches one with [Handle]. The error
+          carries its payload's types at runtime: an error a row variable's tail
+          brings into a set is one nothing else says the type of, and `==`,
+          `hash` and `show` go through those types' keys and members (walk.ml)
+      *)
   | Fail of expr  (** stop with this error; of any type, since it never ends *)
   | Handle of {
       body : expr;
@@ -230,7 +256,7 @@ and pattern = { pkind : pattern_kind; pty : Ty.ty; ploc : Loc.t }
 and pattern_kind =
   | PWild
   | PVar of var
-  | PInt of int
+  | PInt of Int64.t
   | PBool of bool
   | PCon of Path.t * string * pattern list
   | PTag of string * pattern list  (** an error with this tag, destructured *)
@@ -269,6 +295,16 @@ type program = {
           only a value of the type, with the type's parameters as its type
           variables, in order, and gives a [Str] without failing or using a
           dependency *)
+  keys : (Path.t * Path.t) list;
+      (** the types it declares that have a `key`, each with that method's
+          function, which takes only a value of the type, with the type's
+          parameters as its type variables, in order, without failing or using a
+          dependency: what it's equal, hashed and ordered by *)
+  ops : ((Path.t * string) * Path.t) list;
+      (** the types it declares that have an operator or an associated value for
+          a requirement, `add` or `zero`, by the type and the requirement, each
+          with the member that gives it: an operator that takes one of the type
+          and gives one, or a value of the type (Infer_reqs) *)
 }
 
 (* ---- building ---- *)
@@ -318,14 +354,17 @@ val dict_params : Ty.scheme -> var list
    that a type has in it, each once, in order. *)
 val params_in : int -> Ty.ty -> int list
 
-(* [dict_for n own req t] is [req]'s dictionary for [t], a type written in
-   the type variables of a function of [n] of them, whose own dictionary
-   parameters are [own], by the requirement each is for: [Var m]'s is its
-   own, and any other type's is derived. Fails with [Not_found] if the
-   function hasn't a requirement that takes. *)
-val dict_for : int -> ((int * string) * var) list -> string -> Ty.ty -> dict
+(* [dict_for tys own req t] is [req]'s dictionary for [t], a type written
+   in the type variables of a function whose hidden type parameters are
+   [tys], and whose own dictionary parameters are [own], by the
+   requirement each is for: [Var m]'s is its own, and any other type's is
+   derived, from what it's given for the type variables in it. Fails with
+   [Not_found] if the function hasn't a requirement that takes. *)
+val dict_for :
+  var list -> ((int * string) * var) list -> string -> Ty.ty -> dict
 
-(* The hidden dictionary parameters a dictionary uses. *)
+(* The hidden dictionary parameters a dictionary uses, and the hidden type
+   parameters its descriptor does. *)
 val dict_vars : dict -> var list
 
 (* The type of a cell holding a value of this type (see [New_cell]). *)

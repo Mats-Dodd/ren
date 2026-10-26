@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4, 5a, 5b, 6, 7 and 8 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
+> **Status:** early. Stages 1–4, 5a, 5b, 6, 7, 8 and 9a of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9a: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, and `Float`s with no `NaN` (see [examples/bank](examples/bank)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
 
 ---
 
@@ -134,8 +134,8 @@ pub fn name(params) -> Value ! Errors      what goes in, what comes out, how it 
 ```
 
 ```ren
-fn total(xs: Array<f64>) -> f64                // read-only parameter (default)
-fn normalize(inout xs: Array<f64>)             // updates the caller's value
+fn total(xs: Array<Float>) -> Float            // read-only parameter (default)
+fn normalize(inout xs: Array<Float>)           // updates the caller's value
 fn blur(unique img: Image) -> Image            // proven unshared, so in-place is guaranteed
 ```
 
@@ -249,7 +249,7 @@ The runtime installs exactly the built-ins `main` lists in its `uses`, outermost
 pub fn checksum(data: Bytes) -> u32 =          // no `uses`: pure, cannot allocate
   var h: u32 = 2166136261
   for b in data
-    h = (h ^ b.u32) *% 16777619
+    h = (h ^ b.u32).wrapping_mul(16777619)
   h
 ```
 
@@ -306,7 +306,7 @@ test "a deposit is stamped with the time" =
   TestClock.advance(Duration.minutes(5))
   try &acme.deposit(a, Money.dollars(10))
   let s = try acme.statement(a)
-  assert s[0].at == Time.epoch.plus(Duration.minutes(5))
+  assert s[0].at == Time.epoch + Duration.minutes(5)
 ```
 
 Tests sit next to the code they test, so they can reach private functions, and `ren run` ignores them. Every test gets test implementations of the built-ins without a `with`: a `Clock` stopped at `Time.epoch` until `TestClock.advance` moves it, a `Random` seeded from the test's name, and a `Console` that keeps what it's given, `TestConsole.output()`. So a test that uses no real dependency gives the same result on every run. A test asks for a real one in its `uses`, `test "the system clock moves" uses Clock =`, so going outside is visible. Any other dependency needs a `with`, and forgetting one is a compile error naming the test and the call that needs it.
@@ -317,7 +317,7 @@ A group is a function over implementations, so one suite runs against every impl
 pub group clock_conforms(c: Clock) with c =
   test "now never goes back" =
     let t = Clock.now()
-    assert not Clock.now().before(t)
+    assert Clock.now() >= t
 
 group "frozen" = clock_conforms(Clock.frozen(Time.epoch))
 group "test clock" = clock_conforms(test_clock(Time.epoch))
@@ -457,25 +457,69 @@ pub type UserId = opaque Int
   pub fn raw(self) -> Int = self
 ```
 
-Operators go in the same place, written with `=>`, and are public whenever their type is. They arrive in stage 9 ([operators.md](operators.md)):
+Operators go in the same place: an operator is a method with a reserved name, so `a + b` is `a.add(b)`, and `-a` is `a.neg()`. The names are `add`, `sub`, `mul`, `div`, `rem` and `neg`, and `zero` and `one` are associated values. There are no new operator symbols, and an operator is found on its left side's type, nowhere else ([operators.md](operators.md)):
 
 ```ren
-type Vec3 = { x: f32, y: f32, z: f32 }
-  add(a, b)      => { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
-  mul(a, s: f32) => { x: a.x * s,   y: a.y * s,   z: a.z * s   }
-  zero           => { x: 0, y: 0, z: 0 }
-  pub fn length(self) -> f32 = (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
-
-type Email = opaque Str
-  key(a) => a.lower()                           // eq, hash, and compare all use this
-
-pub fn sum<T>(xs: Array<T>) -> T where T has add, zero =
-  xs.fold(T.zero, fn(acc, x) => acc + x)
+pub type Vec = { x: Float, y: Float }
+  pub fn add(self, b: Vec) -> Vec = Vec { x: self.x + b.x, y: self.y + b.y }
+  pub fn mul(self, k: Float) -> Vec = Vec { x: self.x * k, y: self.y * k }
+  pub let zero: Vec = Vec { x: 0.0, y: 0.0 }
+  pub fn length(self) -> Float = (self.x * self.x + self.y * self.y).sqrt()
 ```
 
-`==`, `hash`, `compare`, and `show` are derived structurally for every type, except that types containing functions get no `==` or `hash`. To change what "equal" means, override `key`, so equality, hashing, and ordering always agree. Overriding `eq` alone is an error. Only the module that declares a type can write its members. To extend a type you don't own, write a function in your own module or wrap it in an `opaque` type. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
+An operator can be written once for each type on its right, the one place a name is defined more than once, and the right side's type chooses which. Inside its module an opaque type is its representation, so `self + d.in_ms()` adds two `Int`s:
 
-An opaque number type, like `type Meters = opaque f64`, will get a shorthand that gives it its arithmetic, planned for stage 9. Its spelling isn't settled: a member line like `derive numeric`, or something on the type line like `opaque f64 with numeric`, which is the current lean. What it gives comes first, though. All of `f64`'s operators would make `Meters * Meters` a `Meters`, which is dimensionally wrong. So it should probably give only `+`, `-`, negation, zero, comparison, and scaling by a plain `f64`, and leave anything else (`Meters * Meters -> Area`) to be written by hand.
+```ren
+pub type Time = opaque Int
+  pub fn add(self, d: Duration) -> Time = self + d.in_ms()
+  pub fn sub(self, t: Time) -> Duration = Duration.ms(self - t)
+  pub fn sub(self, d: Duration) -> Time = self - d.in_ms()
+
+let deadline = Clock.now() + Duration.seconds(30)   // a Time
+let waited = Clock.now() - started                  // a Duration
+```
+
+Writing it the other way round, `Duration.seconds(30) + now`, is an error that says `+` is found on its left side's type and suggests swapping them. A reserved member spells out what it takes and gives, can't fail or use a dependency, since `a + b` has no `try` in front, and is public whenever its type is.
+
+`==`, `hash` and `show` are derived for every type, by its structure, except that a type with a function in it has no `==` or `hash`: comparing two functions is a compile error, never a panic. `key` is the one way to change what equal means, and equality, hashing and ordering all go through it, so they can't disagree. `eq`, `hash` and `compare` can't be written:
+
+```ren
+pub type Email = opaque Str
+  pub fn of(s: Str) -> Email = s
+  pub fn key(self) -> Str = self.lower()
+
+assert Email.of("Ann@Example.com") == Email.of("ann@example.com")
+```
+
+`<` and the other comparisons need an order, which is derived only where it's obvious: `Int`, `Float`, `Str` (by bytes) and `Bool`, a sum type with no fields, by the order of its variants, a `with numeric` type, and anything with a `key`, by its key. A record, or a sum type with fields, is ordered only through its `key`, so reordering its fields can't change a sort.
+
+An opaque number type gets its arithmetic with `with numeric`:
+
+```ren
+pub type Money = opaque Int with numeric
+  pub fn dollars(n: Int) -> Money = n * 100
+
+let total = price * 3 + shipping - discount
+if total > budget then fail OverBudget(total - budget)
+```
+
+It gives `+` and `-` of two, negation, `zero`, comparison, and `*` by a plain `Int` (or `Float`, for `opaque Float with numeric`), and nothing else: `Money * Money` isn't a `Money`, and `/` says how it rounds, so it's written by hand, `pub fn div(self, n: Int) -> Money`, as is `pub fn mul(self, b: Meters) -> Area`. Literals don't convert: it's `Money.dollars(5)` or `Money.zero`, never `5`.
+
+Generic code uses operators on a type parameter, and the compiler works out what it needs. Public signatures spell out everything else, `uses` and `!` included, but not this:
+
+```ren
+pub fn sum<T>(xs: Array<T>) -> T =
+  var acc = T.zero
+  for x in xs
+    acc = acc + x
+  acc
+```
+
+`ren types` shows it as `sum<T has add, zero>`, and `sum([true, false])` is an error where it's called: `` `Bool` has no `+`, which `sum` needs ``. In generic code an operator is the one of the same type on both sides.
+
+Numbers follow a few rules, so nothing surprises at runtime. `Int` is 64 bits everywhere and overflow panics in every build, as an out-of-bounds index does; wrapping is a method, `n.wrapping_add(1)`. `/` and `%` round toward zero. `Float` is a 64-bit double, and a literal's type is read from its spelling: `1.5` is a `Float` and `1` an `Int`, always. Numbers never convert by themselves, so `Float.of(n)`, `f.round()` and `f.truncate()` say where they do. There's no `NaN`: `0.0 / 0.0` panics, so `Float` is ordered and hashed. And a condition is a `Bool`, always.
+
+Only the module that declares a type can write its members. To extend a type you don't own, write a function in your own module or wrap it in an `opaque` type. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
 
 ---
 
@@ -526,11 +570,11 @@ Memory layout is part of the type, not part of the loop:
 type Particle = {
   pos: Vec3,
   vel: Vec3,
-  mass: f32,
+  mass: Float,
   cold name: Str,                 // stored out of line, never pulled into hot loops
 } where size <= 64                // compile error if it outgrows a cache line
 
-fn step(inout ps: Array<Particle, soa>, dt: f32) =
+fn step(inout ps: Array<Particle, soa>, dt: Float) =
   for p in &ps
     p.pos += p.vel * dt           // switch soa ↔ aos with one word; the body doesn't change
 ```
@@ -551,7 +595,7 @@ fn step(inout ps: Array<Particle, soa>, dt: f32) =
 
 **Closures.** A lambda passed to a transparent parameter is never heap-allocated. That's a language guarantee, not an optimization that might fail. A transparent parameter can't escape, so its closure can live on the stack.
 
-**Generics.** `where T has add` works like a transparent parameter. `sum<Int>` doesn't allocate; `sum<BigInt>` uses `Alloc`, because `BigInt.add` does.
+**Generics.** A requirement on a type parameter, `T has add`, which the compiler infers, works like a transparent parameter. `sum<Int>` doesn't allocate; `sum<BigInt>` uses `Alloc`, because `BigInt.add` does.
 
 **Panics.** A panic in a function without `Alloc` uses a message formatted at compile time and aborts.
 
@@ -880,7 +924,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 6 | `!`, `try`, `fail`, `match` on errors, `attempt`, `orelse`; `&&`, `\|\|`, `not` ([errors.md](errors.md)) | the shop, the VM and the bank fail with errors, not values (done) |
 | 7 | `dep`, `uses`, `with`, `handler`, `Clock`, `Random` and `Console`; `test`, `group`, `assert`, `ren test` ([deps.md](deps.md)) | the bank's tests run on the test implementations, with no `with` (done) |
 | 8 | `Str` and `Bytes`, `Fs`, `Os`, `Proc`, `Path`, each with real and in-memory implementations | a small [just](https://github.com/casey/just) runs, and its tests run on `mem_fs` and a fake `Os` and `Proc` (done, as a slice: `Os` has only `args`, and `Proc.run` doesn't capture output) |
-| 9 | operators, derived equality and hashing, arithmetic for opaque number types ([operators.md](operators.md)) | `Map<Email, User>` works |
+| 9 | operators, derived equality and hashing, arithmetic for opaque number types ([operators.md](operators.md)) | `Map<Email, User>` works (9a done: operators, `key`, `with numeric`, `Int` and `Float`) |
 | 10.0 | one constraint solver, typed Core, requirements passed as dictionaries, lambda sets in function types ([compiler.md](compiler.md)) | every stage-10.0 step passes its check (done) |
 | 10 | `over` and `next`, `with` as a set, `finally`, **the journal**: `ren run --record`, `ren replay`, `--trace` ([handlers.md](handlers.md)) | a cache wraps a real implementation, and the `just` replays byte for byte |
 | 11 | `Async` and `Net`: structured concurrency, cancellation, tasks in handlers, deterministic tests on virtual time ([async.md](async.md)) | a server shuts down gracefully, and `ren test --seeds` finds the `cached` race |
