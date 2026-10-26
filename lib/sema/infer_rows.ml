@@ -144,15 +144,15 @@ let add_errors env ~loc ~here ~sources ~fix errs into =
   (* the labels already there, before they're unified with the new ones *)
   let before = fst (row_parts into) in
   (* only [errs]'s labels, with a fresh tail: unified with its own tail,
-     [errs] would become [into], and fail with everything [into] does *)
+     [errs] would become [into], and fail with everything [into] does.
+     Tried on copies first, so if it fails, nothing changes *)
+  let added = extend (fst (row_parts errs)) (fresh_row env.st) in
   match
-    Unify.unify_row env.st
-      (extend (fst (row_parts errs)) (fresh_row env.st))
-      into
+    Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
+        Unify.unify_row st (c.row added) (c.row into))
   with
-  | () -> ()
-  | exception
-      ((Unify.Two_shapes _ | Unify.Mismatch | Unify.Infinite) as failure) ->
+  | Ok () -> ()
+  | Error failure ->
       add_failed env ~loc ~here ~sources ~fix ~before errs failure
 
 (* Add [errs] to [into] by inclusion (see [inclusion]): its labels now,
@@ -241,9 +241,13 @@ and join_uses env ~loc ~what joined into =
       if missing <> [] then
         Unify.unify_row env.st t (extend missing (fresh_row env.st))
   | _ -> (
-      try Unify.unify_row env.st joined into
-      with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
-        report env (cant_use loc what (dep_names env joined)))
+      (* tried on copies first, so if it fails, nothing changes *)
+      match
+        Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
+            Unify.unify_row st (c.row joined) (c.row into))
+      with
+      | Ok () -> ()
+      | Error _ -> report env (cant_use loc what (dep_names env joined)))
 
 (* A call adds the callee's dependencies to the caller's, and its errors
    to whatever marks it (errors.md, "Marking"): the innermost marker's
