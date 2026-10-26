@@ -261,17 +261,18 @@ only generalizing touches the group's types.
 Each constraint carries where it comes from and what a message about it
 needs, and the solver decides them like this:
 
-- **By rank.** The constraints of one kind are all decided before the
+- **Kind by kind.** The constraints of one kind are all decided before the
   next kind starts, because the later one reads what the earlier decides
   (solve.ml, `solve`): the uses of the group's functions first, since a
   call of one learns only then what it returns, then the handlers taken
-  as one dependency, then the values thrown away, then what each `with`
-  installs and what each place an implementation is used needs, then a
-  function's own error row, each set's own tags, the inclusions, and the
-  kept sets closed and the tags matched in them checked. The checks that
-  only report, like a marker's rules or what an operation fails with,
-  read the result after all of them; a row ends in a named row after
-  that, and what each function declares is checked last.
+  as one dependency, which tells a `with` of one which it installs, then
+  the values thrown away, then what each `with` installs and what each
+  place an implementation is used needs, then a function's own error
+  row, each set's own tags, the inclusions, and the kept sets closed and
+  the tags matched in them checked. The checks that only report, like a
+  marker's rules or what an operation fails with, read the result after
+  all of them; a row ends in a named row after that, and what each
+  function declares is checked last.
 - **To a fixpoint.** A use or a value thrown away is decided once. An
   inclusion, or a copy of what an implementation needs, is a worklist
   item: whenever the row it adds from gains a label, it's woken and adds
@@ -291,7 +292,7 @@ is the order their bodies were checked in. Unification finds the most
 general solution whatever order it's given the equalities in. An
 inclusion only adds labels, so each row ends up with the union of what's
 included in it, whatever order they're added in. A check that reads a
-result is ranked after whatever decides it, so it never sees half of it.
+result is decided after whatever decides it, so it never sees half of it.
 And a constraint that fails changes nothing, so it can't change what
 another sees. What order does decide is only which of two constraints
 that can't both hold is blamed: the one met second, so a mistake is

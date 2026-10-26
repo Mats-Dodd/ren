@@ -507,7 +507,10 @@ let impl_op env o =
                ~op:(env.names o.idep ^ "." ^ o.iop)
                ~declared:(List.map (fun (l : label) -> l.name) o.ideclared)
                n)
-      | None -> ()));
+      | None ->
+          (* a row already closed with fewer errors than declared is fine,
+             and one with more was reported by [fails_more] *)
+          ()));
   close_row o.ierrs
 
 (* ---- named rows (deps.md, "Implementations") ---- *)
