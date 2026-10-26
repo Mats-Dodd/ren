@@ -100,9 +100,6 @@ type env = {
       (** each statement that threw away a value of a type still unknown, which
           the solver made `Unit`, with the function it's in: a later mismatch at
           a call of that function points back at it *)
-  mutable impl_ops : impl_op list;
-      (** the group's implementations' operations, whose errors are checked once
-          it's done (see [impl_op]) *)
   mutable installs : install list;
       (** the group's `with`s that install, innermost first (see [install]) *)
   mutable handler_needs : handler_needs list;
@@ -153,7 +150,7 @@ and row_due = {
    never more (deps.md, "Implementations"). Its errors [ierrs] start as
    [ideclared] with room for more, and once the group is done (when it's
    known what its calls fail with), anything more is reported and the room
-   closed. [ivalue] is what's given for it, and [inodes] the types of the
+   closed, by the solver. [ivalue] is what's given for it, and [inodes] the types of the
    expressions of the function it's in, for a message. *)
 and impl_op = {
   idep : Path.t;
@@ -245,6 +242,9 @@ and constr =
   | Copy of copy
       (** what an implementation needs is needed where it's used: what it learns
           later as well *)
+  | Impl_op of impl_op
+      (** an implementation's operation fails with no more than its dependency
+          declares *)
   | Row_due of row_due  (** a row that a named row is added to ends in it *)
 
 (* A use of another function of the group being checked. While the group's

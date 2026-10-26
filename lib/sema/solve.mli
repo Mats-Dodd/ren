@@ -7,8 +7,9 @@ open Infer_env
 
 (* Which of them to decide: the uses of the group's functions by each
    other and the values thrown away ([Equalities]), what each place an
-   implementation is used needs ([Needs]), or what each error set holds
-   and the rules of markers ([Error_rows]), or which rows end in a named
+   implementation is used needs ([Needs]), or what each error set holds,
+   the rules of markers and what implementations' operations fail with
+   ([Error_rows]), or which rows end in a named
    row ([Named_rows]), given the group's functions that declare what they
    use, by the variable their row ends in. Other passes still run between
    them. *)

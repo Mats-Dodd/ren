@@ -850,126 +850,6 @@ let settle_installs env =
     ws;
   env.installs <- []
 
-(* Each operation an implementation of the group gives fails with no more
-   than its dependency declares (deps.md, "Implementations"): anything more
-   is reported, where the operation is given, and then it fails with
-   exactly what it's found to. *)
-let settle_impls env =
-  let pr = printer env in
-  let is_lambda (e : expr) =
-    match e.kind with Lambda _ -> true | _ -> false
-  in
-  List.iter
-    (fun o ->
-      let labels, _ = row_parts o.ierrs in
-      let declared n =
-        List.exists (fun (l : label) -> l.name = n) o.ideclared
-      in
-      (match List.filter (fun (l : label) -> not (declared l.name)) labels with
-      | [] -> ()
-      | extra ->
-          let op = env.names o.idep ^ "." ^ o.iop in
-          (* where it fails: the first call or `fail` in the lambda's body
-             that brings in one of [extra] (a `try`'s call with its
-             `try`), or else the whole body, or what's given if it isn't a
-             lambda *)
-          let brings (f : expr) =
-            match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
-            | Some (TFun (_, _, errs, _)) ->
-                List.exists
-                  (fun (l : label) -> List.mem l.name (row_names errs))
-                  extra
-            | _ -> false
-          in
-          let rec site (e : expr) =
-            match e.kind with
-            | Try { kind = Call (f, _); _ } when brings f -> Some e
-            | Call (f, _) when brings f -> Some e
-            | Fail (t, _)
-              when List.exists (fun (l : label) -> l.name = t.name) extra ->
-                Some e
-            (* a lambda's calls are its own, and `attempt` keeps them *)
-            | Lambda _ | Attempt _ -> None
-            | _ -> List.find_map site (Ast.children e)
-          in
-          let body =
-            match o.ivalue.kind with
-            | Lambda (_, b) -> Option.value (site b) ~default:b
-            | _ -> o.ivalue
-          in
-          let fix =
-            match (body.kind, extra, o.ideclared) with
-            | Try ({ kind = Call (f, _); _ } as call), [ l ], d :: _ ->
-                (* `try match` passes on what the arms don't handle, if the
-                   call fails with more. A function's row is open where it's
-                   called, room for errors it never has, so only a named row
-                   at its end, whatever a closure fails with, is more *)
-                let more =
-                  match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
-                  | Some (TFun (_, _, errs, _)) -> (
-                      List.exists (fun n -> n <> l.name) (row_names errs)
-                      || match row_end errs with RSkol _ -> true | _ -> false)
-                  | _ -> true
-                in
-                Map_call
-                  {
-                    try_ = more;
-                    call = env.source call;
-                    tag = l.name;
-                    into = d.name;
-                  }
-            | Fail _, _, [] -> Give_value
-            | Fail _, _, d :: _ -> Fail_instead d.name
-            | _, l :: _, ds when not (is_lambda o.ivalue) ->
-                (* a function given by name: there's no inside to map in *)
-                Wrap
-                  {
-                    given = env.source o.ivalue;
-                    tag = l.name;
-                    into = (match ds with [] -> None | d :: _ -> Some d.name);
-                  }
-            | _, _, [] -> Handle_inside
-            | _, _, d :: _ -> Map_inside d.name
-          in
-          report env
-            (impl_fails_more body.loc ~op
-               ~shown:(and_list (List.map (show_label pr) extra))
-               ~declared:(List.map (fun (l : label) -> l.name) o.ideclared)
-               fix));
-      (* then it's what the operation declares, whose errors' payloads it
-         has to agree with, and no more. A row still open may be a
-         parameter's, `try f()`, which then can fail with what the
-         operation can, not with nothing. *)
-      (try Unify.unify_row env.st o.ierrs (extend o.ideclared REmpty) with
-      | Unify.Two_shapes name ->
-          (* the `fail` of it, if it's one *)
-          let rec at (e : expr) =
-            match e.kind with
-            | Fail (t, _) when t.name = name -> Some e.loc
-            | (Lambda _ | Attempt _) when e != o.ivalue -> None
-            | _ -> List.find_map at (Ast.children e)
-          in
-          report env
-            (impl_other_shape
-               (Option.value (at o.ivalue) ~default:o.ivalue.loc)
-               ~op:(env.names o.idep ^ "." ^ o.iop)
-               ~tag:name
-               ~shape:
-                 (show_label pr
-                    (List.find (fun (l : label) -> l.name = name) o.ideclared)))
-      | Unify.Mismatch | Unify.Infinite -> (
-          match row_skolem o.ierrs with
-          | Some (_, n) ->
-              report env
-                (impl_fails_named o.ivalue.loc
-                   ~op:(env.names o.idep ^ "." ^ o.iop)
-                   ~declared:(List.map (fun (l : label) -> l.name) o.ideclared)
-                   n)
-          | None -> ()));
-      close_row o.ierrs)
-    (List.rev env.impl_ops);
-  env.impl_ops <- []
-
 (* ---- associated values ----
 
    An associated value is made once, when the program starts, before
@@ -1385,7 +1265,6 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       spelled = [];
       pending = [];
       forced = [];
-      impl_ops = [];
       handler_needs = [];
       installs = [];
       withheld = [];
@@ -1604,7 +1483,6 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       own_error_rows env (List.map (fun (f, _, cx, _, _) -> (f, cx)) setups);
       (* what each error set holds, and then the rules of markers *)
       Solve.solve env ~is_value:is_value_path Error_rows;
-      settle_impls env;
       (* the uses of named rows, ending the rows they're added to, and
          then each function's own *)
       Solve.solve env ~is_value:is_value_path

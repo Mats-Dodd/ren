@@ -826,16 +826,16 @@ and infer_record env cx (e : expr) name fields ~expected =
                       | Lambda _ -> fresh_row env.st
                       | _ -> extend declared (fresh_row env.st)
                     in
-                    env.impl_ops <-
-                      {
-                        idep = td.path;
-                        iop = f.name;
-                        ideclared = declared;
-                        ierrs = open_errs;
-                        ivalue = v;
-                        inodes = cx.nodes;
-                      }
-                      :: env.impl_ops;
+                    defer env
+                      (Impl_op
+                         {
+                           idep = td.path;
+                           iop = f.name;
+                           ideclared = declared;
+                           ierrs = open_errs;
+                           ivalue = v;
+                           inodes = cx.nodes;
+                         });
                     TFun (ps, r, open_errs, needs)
                 | _ -> ft
               in

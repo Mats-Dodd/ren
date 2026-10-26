@@ -123,16 +123,16 @@ let rec handler core env cx state arms ~needs ~declared =
              one of its parameters' errors passed on with `try` ends in
              it, and then can fail with what the operation can *)
           let open_errs = fresh_row env.st in
-          env.impl_ops <-
-            {
-              idep = p;
-              iop = op;
-              ideclared = declared;
-              ierrs = open_errs;
-              ivalue = a.arm_impl;
-              inodes = cx.nodes;
-            }
-            :: env.impl_ops;
+          defer env
+            (Impl_op
+               {
+                 idep = p;
+                 iop = op;
+                 ideclared = declared;
+                 ierrs = open_errs;
+                 ivalue = a.arm_impl;
+                 inodes = cx.nodes;
+               });
           (* checked as a lambda is, against the operation, but what its
              calls use is what the handler needs, and they're the
              handler's calls, so a message can point at one *)

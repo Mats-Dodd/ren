@@ -24,8 +24,9 @@ open Infer_report
 (* Which constraints the solver decides now. Other passes still run
    between them, so the solver is run in parts: [Equalities], the uses of
    the group's functions joined and the values thrown away checked;
-   [Needs], what each place an implementation is used needs; and
-   [Error_rows], what each error set holds, and the rules of markers; and
+   [Needs], what each place an implementation is used needs;
+   [Error_rows], what each error set holds, the rules of markers, and
+   what implementations' operations fail with; and
    [Named_rows], the rows that end in a named row, given the group's
    functions that declare what they use, by the variable their row ends
    in. *)
@@ -42,9 +43,10 @@ type stage =
    from other sets, so a tag of two shapes is blamed on the inclusion. A
    kept set is closed once it has every tag it gets, and only then are the
    tags matched in a set checked against it. The rules of markers read
-   what every set holds, so they're checked after them; and a row is
-   ended in a named row only once it has every label it gets, since that
-   stops it getting more. *)
+   what every set holds, so they're checked after them, and so is what an
+   operation fails with, which has every error its calls bring in by then;
+   and a row is ended in a named row only once it has every label it gets,
+   since that stops it getting more. *)
 let rank = function
   | Join _ -> 0
   | Drop _ -> 1
@@ -55,7 +57,8 @@ let rank = function
   | Tag_pattern _ -> 6
   | Unmarked _ -> 7
   | Marker _ -> 8
-  | Row_due _ -> 9
+  | Impl_op _ -> 9
+  | Row_due _ -> 10
 
 (* Whether [stage] decides [c]. *)
 let decides stage c =
@@ -63,8 +66,8 @@ let decides stage c =
   | Equalities, (Join _ | Drop _)
   | Needs, Copy _
   | ( Error_rows,
-      (Value_tag _ | Include _ | Kept _ | Tag_pattern _ | Unmarked _ | Marker _)
-    )
+      ( Value_tag _ | Include _ | Kept _ | Tag_pattern _ | Unmarked _ | Marker _
+      | Impl_op _ ) )
   | Named_rows _, Row_due _ ->
       true
   | _ -> false
@@ -347,6 +350,125 @@ let marker env m =
       | Mattempt -> covers_nothing m.mloc ?hint:m.hint "attempt"
       | Mmatch -> cannot_fail_arm m.mloc)
 
+(* ---- what an operation fails with (deps.md, "Implementations") ---- *)
+
+(* Report that the operation [o] (see [Infer_env.impl_op]) fails with
+   [extra], errors its dependency doesn't declare, where it's given. *)
+let fails_more env o extra =
+  let pr = printer env in
+  let is_lambda (e : Ast.Resolved.expr) =
+    match e.kind with Lambda _ -> true | _ -> false
+  in
+  let op = env.names o.idep ^ "." ^ o.iop in
+  (* where it fails: the first call or `fail` in the lambda's body
+     that brings in one of [extra] (a `try`'s call with its
+     `try`), or else the whole body, or what's given if it isn't a
+     lambda *)
+  let brings (f : Ast.Resolved.expr) =
+    match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
+    | Some (TFun (_, _, errs, _)) ->
+        List.exists (fun (l : label) -> List.mem l.name (row_names errs)) extra
+    | _ -> false
+  in
+  let rec site (e : Ast.Resolved.expr) =
+    match e.kind with
+    | Try { kind = Call (f, _); _ } when brings f -> Some e
+    | Call (f, _) when brings f -> Some e
+    | Fail (t, _) when List.exists (fun (l : label) -> l.name = t.name) extra ->
+        Some e
+    (* a lambda's calls are its own, and `attempt` keeps them *)
+    | Lambda _ | Attempt _ -> None
+    | _ -> List.find_map site (Ast.children e)
+  in
+  let body =
+    match o.ivalue.kind with
+    | Lambda (_, b) -> Option.value (site b) ~default:b
+    | _ -> o.ivalue
+  in
+  let fix =
+    match (body.kind, extra, o.ideclared) with
+    | Try ({ kind = Call (f, _); _ } as call), [ l ], d :: _ ->
+        (* `try match` passes on what the arms don't handle, if the
+           call fails with more. A function's row is open where it's
+           called, room for errors it never has, so only a named row
+           at its end, whatever a closure fails with, is more *)
+        let more =
+          match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
+          | Some (TFun (_, _, errs, _)) -> (
+              List.exists (fun n -> n <> l.name) (row_names errs)
+              || match row_end errs with RSkol _ -> true | _ -> false)
+          | _ -> true
+        in
+        Map_call
+          { try_ = more; call = env.source call; tag = l.name; into = d.name }
+    | Fail _, _, [] -> Give_value
+    | Fail _, _, d :: _ -> Fail_instead d.name
+    | _, l :: _, ds when not (is_lambda o.ivalue) ->
+        (* a function given by name: there's no inside to map in *)
+        Wrap
+          {
+            given = env.source o.ivalue;
+            tag = l.name;
+            into = (match ds with [] -> None | d :: _ -> Some d.name);
+          }
+    | _, _, [] -> Handle_inside
+    | _, _, d :: _ -> Map_inside d.name
+  in
+  report env
+    (impl_fails_more body.loc ~op
+       ~shown:(and_list (List.map (show_label pr) extra))
+       ~declared:(List.map (fun (l : label) -> l.name) o.ideclared)
+       fix)
+
+(* An operation an implementation gives fails with no more than its
+   dependency declares: anything more is reported, and then it fails with
+   exactly what it's found to. It's what the operation declares, whose
+   errors' payloads it has to agree with, and no more. A row still open may
+   be a parameter's, `try f()`, which then can fail with what the
+   operation can, not with nothing. One already closed with fewer errors
+   than declared is fine as it is: an operation can fail with less. *)
+let impl_op env o =
+  let pr = printer env in
+  let declared n = List.exists (fun (l : label) -> l.name = n) o.ideclared in
+  (match
+     List.filter
+       (fun (l : label) -> not (declared l.name))
+       (fst (row_parts o.ierrs))
+   with
+  | [] -> ()
+  | extra -> fails_more env o extra);
+  (match
+     Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
+         Unify.unify_row st (c.row o.ierrs) (extend o.ideclared REmpty))
+   with
+  | Ok () -> ()
+  | Error (Unify.Two_shapes name) ->
+      (* the `fail` of it, if it's one *)
+      let rec at (e : Ast.Resolved.expr) =
+        match e.kind with
+        | Fail (t, _) when t.name = name -> Some e.loc
+        | (Lambda _ | Attempt _) when e != o.ivalue -> None
+        | _ -> List.find_map at (Ast.children e)
+      in
+      report env
+        (impl_other_shape
+           (Option.value (at o.ivalue) ~default:o.ivalue.loc)
+           ~op:(env.names o.idep ^ "." ^ o.iop)
+           ~tag:name
+           ~shape:
+             (show_label pr
+                (List.find (fun (l : label) -> l.name = name) o.ideclared)))
+  | Error _ -> (
+      match row_skolem o.ierrs with
+      | Some (_, n) ->
+          report env
+            (impl_fails_named o.ivalue.loc
+               ~op:(env.names o.idep ^ "." ^ o.iop)
+               ~declared:(List.map (fun (l : label) -> l.name) o.ideclared)
+               n)
+      | None -> ()));
+  close_row o.ierrs
+
 (* ---- named rows (deps.md, "Implementations") ---- *)
 
 (* `uses Clock, ..d`, what [f] would write to use [n] as well. *)
@@ -508,10 +630,11 @@ let solve env ~is_value stage =
     (function Unmarked (c, r) -> unmarked env c r | _ -> ())
     (of_rank 7);
   List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 8);
+  List.iter (function Impl_op o -> impl_op env o | _ -> ()) (of_rank 9);
   match stage with
   | Named_rows declaring ->
       rows_due env ~declaring
         (List.filter_map
            (function Row_due d -> Some d | _ -> None)
-           (of_rank 9))
+           (of_rank 10))
   | _ -> ()
