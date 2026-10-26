@@ -937,3 +937,356 @@ let%expect_test "Core Lint checks requirements' dictionaries" =
     internal compiler error in lint: Failure("Core Lint: in `same`, at test.ren:1:17: `==` or `!=` without the dictionary it compares by")
       = this is a bug in the Ren compiler, not in your program
     |}]
+
+(* ---- lambda sets ----
+
+   Every function type has a lambda set, which only a print with [lams]
+   shows (compiler.md, "The facts"): the identities of the lambdas and
+   functions a value of the type can be, `main.main#1` for the first
+   lambda in `main`, and `..l0` for the rest. *)
+
+let%expect_test "lambda sets of a map-like function's calls" =
+  (* each call of [map] puts what it's given in its [f]'s set, at that
+     call only: [map]'s own scheme has a variable for it, as a row *)
+  core ~lams:true
+    {|
+fn map(xs, f) =
+  var out = []
+  for x in xs
+    &out.push(try f(x))
+  out
+fn inc(x: Int) -> Int = x + 1
+fn main() =
+  let a = map([1, 2], fn(x) => x * 2)
+  let b = map(a, inc)
+  print(b)
+|};
+  [%expect
+    {|
+    (fn map :
+      fn(Array<T>, fn(T) -> U ! ..e uses ..d [..l0]) -> Array<U> ! ..e uses ..d [..l1]
+      (xs/1 f/2)
+      ev/3
+      (let out/4 (array)
+        (seq
+          (let $xs/5 xs/1
+            (let $n/6 (length $xs/5)
+              (let $i/7 0
+                (while (< $i/7 $n/6)
+                  (let x/8 (get $xs/5 $i/7)
+                    (seq
+                      (call ev/3 (inst Array.push U {} {..d} [Array.push | ..l2])
+                        &out/4
+                        (call ev/3 (: f/2 fn(T) -> U ! ..e uses ..d [..l0]) x/8))
+                      (= $i/7 (+ $i/7 1))))))))
+          out/4)))
+    (fn inc : fn(Int) -> Int ! ..e uses ..d [..l0] (x/1) ev/2 (+ x/1 1))
+    (fn main : fn() ! ..e uses Console, ..d [..l0] () ev/1
+      (let a/2
+        (call ev/1
+          (inst map Int Int {} {Console | ..d} [test.main#1 | ..l1]
+            [test.map | ..l2])
+          (array 1 2)
+          (lambda test.main#1 :
+            fn(Int) -> Int uses Console, ..d [test.main#1 | ..l1]
+            (x/3)
+            (captures)
+            ev/4
+            (* x/3 2)))
+        (let b/5
+          (call ev/1
+            (inst map Int Int {} {Console | ..d} [test.inc | ..l3]
+              [test.map | ..l4])
+            a/2
+            (inst inc {} {Console | ..d} [test.inc | ..l3]))
+          (call ev/1 (inst print Array<Int> {} {..d} [print | ..l5]) b/5))))
+    (fn $start : fn() ! ..e [..l0] () ev/1
+      (with ev/2 (extend ev/1 Console Console.real)
+        (call ev/2 (inst main {..e} {..r} [test.main | ..l0]))))
+    |}]
+
+let%expect_test "an if of two lambdas can be either" =
+  (* the `if`'s set has both, and so has the variable it's given to, and
+     so does each branch, since inference unifies them *)
+  core ~lams:true
+    {|
+fn inc(x: Int) -> Int = x + 1
+fn main() =
+  let n = 2
+  let f = if n > 1 then fn(x: Int) => x + n else inc
+  let g = if n > 1 then fn(x: Int) => x * 2 else fn(x: Int) => x
+  print(f(g(1)))
+|};
+  [%expect
+    {|
+    (fn inc : fn(Int) -> Int ! ..e uses ..d [..l0] (x/1) ev/2 (+ x/1 1))
+    (fn main : fn() ! ..e uses Console, ..d [..l0] () ev/1
+      (let n/2 2
+        (let f/3
+          (:
+            (if (> n/2 1)
+              (lambda test.main#1 :
+                fn(Int) -> Int uses Console, ..d [test.inc, test.main#1 | ..l1]
+                (x/4)
+                (captures n/2)
+                ev/5
+                (+ x/4 n/2))
+              (inst inc {} {Console | ..d} [test.inc, test.main#1 | ..l1]))
+            fn(Int) -> Int uses Console, ..d [test.inc, test.main#1 | ..l1])
+          (let g/6
+            (:
+              (if (> n/2 1)
+                (lambda test.main#2 :
+                  fn(Int) -> Int uses Console, ..d [test.main#2, test.main#3 | ..l2]
+                  (x/7)
+                  (captures)
+                  ev/8
+                  (* x/7 2))
+                (lambda test.main#3 :
+                  fn(Int) -> Int uses Console, ..d [test.main#2, test.main#3 | ..l2]
+                  (x/9)
+                  (captures)
+                  ev/10
+                  x/9))
+              fn(Int) -> Int uses Console, ..d [test.main#2, test.main#3 | ..l2])
+            (call ev/1 (inst print Int {} {..d} [print | ..l3])
+              (call ev/1
+                (: f/3
+                  fn(Int) -> Int uses Console, ..d [test.inc, test.main#1 | ..l1])
+                (call ev/1
+                  (: g/6
+                    fn(Int) -> Int uses Console, ..d [test.main#2, test.main#3 | ..l2])
+                  1)))))))
+    (fn $start : fn() ! ..e [..l0] () ev/1
+      (with ev/2 (extend ev/1 Console Console.real)
+        (call ev/2 (inst main {..e} {..r} [test.main | ..l0]))))
+    |}]
+
+let%expect_test "a recursive group passes functions to each other" =
+  (* [even] and [odd] are checked together: [odd]'s lambda reaches [even]'s
+     [k] and comes back, so each one's [k] can be it, and whatever its
+     callers pass, the set's variable *)
+  core ~lams:true
+    {|
+fn even(n, k) = if n == 0 then k(0) else odd(n - 1, k)
+fn odd(n, k) = if n == 0 then false else even(n - 1, fn(m) => k(m + 1))
+fn main() =
+  print(even(4, fn(x) => x == 0))
+  let e = even
+  print(e(3, fn(x) => true))
+|};
+  [%expect
+    {|
+    (fn even :
+      fn(Int, fn(Int) -> Bool uses ..d [test.odd#1 | ..l0]) -> Bool uses ..d [..l1]
+      (n/1 k/2)
+      ev/3
+      (if (== (eq Int) n/1 0)
+        (call ev/3 (: k/2 fn(Int) -> Bool uses ..d [test.odd#1 | ..l0]) 0)
+        (call ev/3 (inst odd {..d} [..l0] [test.odd | ..l2]) (- n/1 1)
+          (: k/2 fn(Int) -> Bool uses ..d [test.odd#1 | ..l0]))))
+    (fn odd :
+      fn(Int, fn(Int) -> Bool uses ..d [test.odd#1 | ..l0]) -> Bool uses ..d [..l1]
+      (n/1 k/2)
+      ev/3
+      (if (== (eq Int) n/1 0) false
+        (call ev/3 (inst even {..d} [..l0] [test.even | ..l2]) (- n/1 1)
+          (lambda test.odd#1 : fn(Int) -> Bool uses ..d [test.odd#1 | ..l0] (m/4)
+            (captures k/2)
+            ev/5
+            (call ev/5 (: k/2 fn(Int) -> Bool uses ..d [test.odd#1 | ..l0])
+              (+ m/4 1))))))
+    (fn main : fn() ! ..e uses Console, ..d [..l0] () ev/1
+      (seq
+        (call ev/1 (inst print Bool {} {..d} [print | ..l1])
+          (call ev/1
+            (inst even {Console | ..d} [test.main#1 | ..l2] [test.even | ..l3])
+            4
+            (lambda test.main#1 :
+              fn(Int) -> Bool uses Console, ..d [test.main#1, test.odd#1 | ..l2]
+              (x/2)
+              (captures)
+              ev/3
+              (== (eq Int) x/2 0))))
+        (let e/4
+          (inst even {Console | ..d} [test.main#2 | ..l4] [test.even | ..l5])
+          (call ev/1 (inst print Bool {} {..d} [print | ..l6])
+            (call ev/1
+              (: e/4
+                fn(Int, fn(Int) -> Bool uses Console, ..d [test.main#2, test.odd#1 | ..l4]) -> Bool uses Console, ..d [test.even | ..l5])
+              3
+              (lambda test.main#2 :
+                fn(Int) -> Bool uses Console, ..d [test.main#2, test.odd#1 | ..l4]
+                (x/5)
+                (captures)
+                ev/6
+                true))))))
+    (fn $start : fn() ! ..e [..l0] () ev/1
+      (with ev/2 (extend ev/1 Console Console.real)
+        (call ev/2 (inst main {..e} {..r} [test.main | ..l0]))))
+    |}]
+
+(* [prog]'s [main], lowered, with [f] applied to its body's lets, ifs,
+   calls and lambdas, and then linted: enough to put one thing wrong in
+   a small program. *)
+let lint_changed src f =
+  let open Ren in
+  let linked = Driver.linked ~lint:true ~file (clean src) in
+  let prog = List.nth linked (List.length linked - 1) in
+  let rec go (e : Core.expr) : Core.expr =
+    let kind : Core.kind =
+      match e.kind with
+      | Let (v, a, b) -> Let (v, go a, go b)
+      | Seq (a, b) -> Seq (go a, go b)
+      | If (c, t, e) -> If (go c, go t, go e)
+      | Call (g, args, ev) ->
+          Call
+            ( go g,
+              List.map
+                (function Core.Value a -> Core.Value (go a) | r -> r)
+                args,
+              ev )
+      | Lambda l -> Lambda { l with body = go l.body }
+      | k -> k
+    in
+    f { e with kind }
+  in
+  let fns =
+    List.map
+      (fun (fd : Core.fn_def) ->
+        if Path.local fd.path = "main" then { fd with body = go fd.body }
+        else fd)
+      prog.fns
+  in
+  report "" (fun () ->
+      Driver.pass "lint" (fun () ->
+          Core_lint.program ~imports:[] ~linked { prog with fns });
+      print_endline "ok")
+
+let%expect_test "Core Lint catches a wrong lambda set" =
+  let src =
+    {|
+fn inc(x: Int) -> Int = x + 1
+fn main() =
+  let f = if true then fn(x: Int) => x + 2 else inc
+  print(f(1))
+|}
+  in
+  (* as lowered, it's clean *)
+  lint_changed src Fun.id;
+  [%expect {| ok |}];
+  (* a lambda whose set hasn't its identity *)
+  lint_changed src (fun e ->
+      match e.kind with
+      | Lambda l -> { e with kind = Lambda { l with name = "test.main#7" } }
+      | _ -> e);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:3:24: a lambda is `test.main#7`, but its lambda set `[test.inc, test.main#1 | ..l1]` doesn't have it")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* an `if` whose set hasn't one of what its branches can be *)
+  let without id (t : Ren.Ty.ty) : Ren.Ty.ty =
+    match t with
+    | Fun (ps, r, es, u, l) ->
+        Fun (ps, r, es, u, { l with ids = List.filter (( <> ) id) l.ids })
+    | t -> t
+  in
+  lint_changed src (fun e ->
+      match e.kind with
+      | If _ -> { e with ty = without "test.inc" e.ty }
+      | _ -> e);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:3:24: the `then` branch can be `test.inc`, which the lambda set `[test.main#1 | ..l1]` it's given to hasn't")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* a call of what its set says can be [inc], given two arguments *)
+  lint_changed src (fun e ->
+      match e.kind with
+      | Call (({ kind = Local _; _ } as g), [ a ], ev) ->
+          { e with kind = Call (g, [ a; a ], ev) }
+      | _ -> e);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:4:9: a call passes 2 arguments to what can be `test.inc`, which takes 1")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
+let%expect_test "an implementation's and a handler's operations have sets" =
+  (* a record of lambdas, a handler's arms, a function given by name for
+     an operation, and an operation used as a value, which is a lambda
+     that calls it, of the operation's identity *)
+  core ~lams:true
+    {|
+dep Rates =
+  usd_to: fn(c: Int) -> Int
+handler doubling() for Rates =
+  usd_to(c) => c * 2
+fn same(c: Int) -> Int = c
+fn convert(n: Int) uses Rates =
+  let f = Rates.usd_to
+  f(n)
+fn main() =
+  print(with Rates { usd_to: fn(c) => c + 1 } in convert(1))
+  print(with Rates { usd_to: same } in convert(2))
+  print(with doubling() in convert(3))
+|};
+  [%expect
+    {|
+    (fn doubling : fn() -> (test.Rates uses ..d) ! ..e uses ..d2 [..l0] () ev/1
+      (handler (captures) ev/2
+        (instance
+          (test.Rates:
+            (record
+              (usd_to:
+                (lambda test.doubling#1 :
+                  fn(Int) -> Int uses ..d [test.doubling#1 | ..l1]
+                  (c/3)
+                  (captures)
+                  ev/4
+                  (* c/3 2))))))))
+    (fn same : fn(Int) -> Int ! ..e uses ..d [..l0] (c/1) ev/2 c/1)
+    (fn convert : fn(Int) -> Int ! ..e uses test.Rates, ..d [..l0] (n/1) ev/2
+      (let f/3
+        (lambda test.Rates.usd_to :
+          fn(Int) -> Int uses test.Rates, ..d [test.Rates.usd_to | ..l1]
+          ($x/4)
+          (captures)
+          ev/5
+          (dep-call ev/5 test.Rates.usd_to $x/4))
+        (call ev/2
+          (: f/3 fn(Int) -> Int uses test.Rates, ..d [test.Rates.usd_to | ..l1])
+          n/1)))
+    (fn main : fn() ! ..e uses Console, ..d [..l0] () ev/1
+      (seq
+        (call ev/1 (inst print Int {} {..d} [print | ..l1])
+          (with ev/2
+            (extend ev/1 test.Rates
+              (record
+                (usd_to:
+                  (lambda test.main#1 :
+                    fn(Int) -> Int uses ..d2 [test.main#1 | ..l2]
+                    (c/3)
+                    (captures)
+                    ev/4
+                    (+ c/3 1)))))
+            (call ev/2 (inst convert {} {Console | ..d} [test.convert | ..l3]) 1)))
+        (seq
+          (call ev/1 (inst print Int {} {..d} [print | ..l4])
+            (with ev/5
+              (extend ev/1 test.Rates
+                (record (usd_to: (inst same {} {..r2} [test.same | ..l5]))))
+              (call ev/5 (inst convert {} {Console | ..d} [test.convert | ..l6])
+                2)))
+          (call ev/1 (inst print Int {} {..d} [print | ..l7])
+            (with ev/6
+              (extend ev/1 test.Rates
+                (call ev/1
+                  (inst doubling {..r} {} {Console | ..d} [test.doubling | ..l8])))
+              (call ev/6 (inst convert {} {Console | ..d} [test.convert | ..l9])
+                3))))))
+    (fn $start : fn() ! ..e [..l0] () ev/1
+      (with ev/2 (extend ev/1 Console Console.real)
+        (call ev/2 (inst main {..e} {..r} [test.main | ..l0]))))
+    |}]
