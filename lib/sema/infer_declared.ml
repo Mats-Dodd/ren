@@ -64,7 +64,7 @@ let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
           || (main && not (runtime_dep (Ty.dep_path dep))))
       then
         let call =
-          match first (fun c -> List.mem dep c.own) with
+          match first (fun c -> brings c dep) with
           | Some c -> Some c
           | None -> first (fun c -> List.mem dep (row_names c.row))
         in
@@ -92,7 +92,7 @@ let check_needs env (f : fn_def) n =
   (* the first call that brings in [dep], and what to say about it *)
   let call_of dep =
     let call =
-      match List.find_opt (fun c -> List.mem dep c.own) calls with
+      match List.find_opt (fun c -> brings c dep) calls with
       | Some c -> Some c
       | None -> List.find_opt (fun c -> List.mem dep (row_names c.row)) calls
     in

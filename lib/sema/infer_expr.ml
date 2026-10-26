@@ -448,7 +448,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
   | Field (r, m) -> (
       (* [tr] is the receiver's type, if it's inferred already *)
       let tr = match tr with Some t -> t | None -> infer env cx r in
-      settle env tr;
+      settle_for_member env tr ~has:(fun t -> has_member env t m.name);
       (* `r.m` is a field holding a function *)
       let field_call () =
         Option.iter

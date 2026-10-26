@@ -97,3 +97,51 @@ let settle env t =
   match repr t with
   | TVar v -> Infer_report.settle env (fun v' -> v' == v)
   | _ -> ()
+
+(* If [t] is a variable that a handler of several dependencies was given
+   to, and nothing has said what it is since: that handler's
+   dependencies, and what it needs. The first handler given to it is the
+   one, as for [settle]. *)
+let pending env t =
+  match repr t with
+  | TVar v ->
+      List.find_map
+        (function
+          | Coerce { cwanted; cfound; _ } -> (
+              match (repr cwanted, repr cfound) with
+              | TVar v', TCon (h, [ TUses needs ]) when v' == v -> (
+                  match Hashtbl.find_opt env.types h with
+                  | Some { body = Handler deps; _ } -> Some (deps, needs)
+                  | _ -> None)
+              | _ -> None)
+          | _ -> None)
+        (List.rev env.pending)
+  | _ -> None
+
+(* The same as [settle], where a member or a field is about to be looked
+   up in [t]: if just one of the handler's dependencies has it, [has] says,
+   it's that one that's wanted, since the handler's own type has neither
+   and the others don't have this one. Then whatever says what's wanted,
+   before or after, has to agree. *)
+let settle_for_member env t ~has =
+  match pending env t with
+  | Some (deps, needs) -> (
+      match List.filter (fun d -> has (TCon (d, [ TUses needs ]))) deps with
+      | [ d ] ->
+          (* a variable still unbound takes any type that doesn't hold it *)
+          Unify.unify env.st t (TCon (d, [ TUses needs ]))
+      | _ -> settle env t)
+  | None -> settle env t
+
+(* What a `with` of a handler given before what's wanted was known
+   installs, now that that's decided ([coerce]): just the one of its
+   dependencies it's taken as, or else all of them. Lowering is told
+   which, and each of the `with`s [o.owiths] knows if it installs. *)
+let installs (o : install_one_of) =
+  Hashtbl.replace o.ofound o.onode
+    (match repr o.oty with
+    | TCon (d, _) when List.mem d o.odeps -> Installs d
+    | _ -> Installs_handler o.odeps);
+  List.map
+    (fun (d, w) -> { w with winstalls = installs_dep o.oty o.odeps d })
+    o.owiths

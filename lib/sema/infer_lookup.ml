@@ -185,6 +185,17 @@ let rec op_of env t name =
           | None, None -> None))
   | _ -> None
 
+(* Whether a value of type [t] has a member or a field named [name]: a
+   dependency's operations are its fields. *)
+let has_member env t name =
+  op_of env t name <> None
+  ||
+  match known_decl env t with
+  | Some { body = Dep ops; _ } ->
+      List.exists (fun (d : Iface.field) -> d.fname = name) ops
+  | Some td -> field_in name td <> None
+  | None -> false
+
 (* The function a member is: [Stack.push]. *)
 let op_path (td : Iface.type_decl) (o : Iface.op) = Path.member td.path o.oname
 let sorted names = List.sort String.compare names
@@ -218,7 +229,8 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
         report env (needs_record f (show (printer env) t));
         TError
       in
-      Infer_coerce.settle env tr;
+      Infer_coerce.settle_for_member env tr ~has:(fun t ->
+          has_member env t f.name);
       match reveal env.st tr with
       | TError -> TError
       | TCon (p, args) as t -> (

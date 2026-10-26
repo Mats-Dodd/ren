@@ -32,3 +32,18 @@ val give :
    dependencies was given to, and nothing has said what it is since,
    it's the handler's type now. *)
 val settle : env -> Types.ty -> unit
+
+(* If a type is a variable a handler of several dependencies was given to,
+   and nothing has said what it is since: the handler's dependencies, and
+   the row of what it needs. *)
+val pending : env -> Types.ty -> (Path.t list * Types.row) option
+
+(* Before a member or a field is looked up in a type: as [settle], except
+   that a handler of several dependencies just one of which has it, the
+   function says, is taken as that one. *)
+val settle_for_member : env -> Types.ty -> has:(Types.ty -> bool) -> unit
+
+(* What a `with` of a handler given before what's wanted was known
+   installs, once that's decided: the `with`s it is, each knowing whether
+   it installs its dependency. Lowering is told which. *)
+val installs : install_one_of -> install list

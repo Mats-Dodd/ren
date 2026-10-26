@@ -57,13 +57,17 @@ and picked =
    labels the callee's row had just before the call joined it to the
    caller's: what the callee brings in itself. After the join the two rows
    are one, so [row] then also has everything the caller uses. [needs]
-   says it's a `with`. *)
+   says it's a `with`. [unless] are the `with`s around it that may install
+   what it brings in, or may not, until the solver decides (see
+   [install_one_of]): each one's item's type, the dependencies of the
+   handler given to it, and the one of them this `with` is ([brings]). *)
 type call = {
   cloc : Loc.t;
   own : string list;
   row : row;
   needs : bool;
   callee : Path.t option;  (** the top-level function called, if it's one *)
+  unless : (Types.ty * Path.t list * Path.t) list;
 }
 
 (* How to explain a mismatch with an expected type (Infer_report.why,
@@ -187,13 +191,33 @@ and impl_op = {
    equality: a closure called both in the body and outside it uses what
    the outside does, which is less than the body can. It's decided once
    the group is done, by the solver, when every call of the group knows
-   what it uses. *)
+   what it uses. [winstalls] is false where the `with` turned out not to
+   install [wdep] after all: one of a handler of several dependencies
+   that's taken as another of them ([install_one_of]). Then the body's row
+   is only passed on. *)
 and install = {
   wloc : Loc.t;
   wdep : string;
   wbody : row;
   wouter : row;
   wself : Path.t;  (** the function the `with` is in *)
+  winstalls : bool;
+}
+
+(* A `with`, at node [onode], whose item's type [oty] is a
+   variable a handler of several dependencies, [odeps], was given to
+   before what's wanted was known (see [coerce]). Whether it installs them
+   all or just one, as which the handler is taken, is known once that
+   coercion is decided, so it doesn't depend on which came first, the
+   `with` or what says what's wanted. [owiths] are the `with`s each of
+   [odeps] would be, the innermost first; [ofound] is where what it
+   installs is recorded, by node id, for lowering. *)
+and install_one_of = {
+  oty : ty;
+  odeps : Path.t list;
+  owiths : (Path.t * install) list;
+  onode : int;
+  ofound : (int, found) Hashtbl.t;
 }
 
 (* A place an implementation is used: a `with` installs it, or it's passed
@@ -266,6 +290,9 @@ and constr =
   | Install of install
       (** a `with` that installs: its body uses no more than what it installs
           and what's installed outside it *)
+  | Install_one_of of install_one_of
+      (** a `with` that installs a handler of several dependencies, or just one
+          of them, whichever it's taken as *)
   | Impl_op of impl_op
       (** an implementation's operation fails with no more than its dependency
           declares *)
@@ -480,6 +507,22 @@ let rec row_end r =
 (* The dependencies of the row [r], as the module names them. *)
 let dep_names env r =
   List.map (fun n -> env.names (Ty.dep_path n)) (row_names r)
+
+(* Whether a `with` whose item has type [t], a variable a handler of
+   several dependencies [deps] was given to (see [install_one_of]),
+   installs [d], one of them: it does unless the handler is taken as
+   another one. *)
+let installs_dep t deps d =
+  match repr t with TCon (d', _) when List.mem d' deps -> d' = d | _ -> true
+
+(* Whether the call [c] brings in [dep] itself, once the group is solved:
+   it had it before the join, and no `with` around it installs it. *)
+let brings c dep =
+  List.mem dep c.own
+  && not
+       (List.exists
+          (fun (t, deps, d) -> Ty.dep_label d = dep && installs_dep t deps d)
+          c.unless)
 
 (* Leave [c] for the solver, once the group is done. *)
 let defer env c = env.pending <- c :: env.pending

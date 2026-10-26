@@ -3053,6 +3053,102 @@ fn main() =
        help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
     |}]
 
+let%expect_test "a `with` or a method before what's wanted is said" =
+  (* B3: what's in `o` is a `Rates`, which `p` says only after the `with`
+     and the method call that look into it: the `with` installs just that,
+     whichever comes first, and the method is `Rates`'s, the one of the
+     handler's dependencies that has it. So `RateCalls` isn't installed in
+     the second program, before or after the `p` *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+  fn twice(self, c: Int) -> Int = (with self in Rates.usd_to(c)) * 2
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(r) =>
+      print(with r in Rates.usd_to(5))
+      print(r.twice(5))
+    None => ()
+  let p: Option<Rates> = o
+  ()
+|}
+  in
+  run src;
+  [%expect {|
+    10
+    20
+    ()
+    |}];
+  check_error
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(r) => print(with r in RateCalls.count())
+    None => ()
+  let p: Option<Rates> = o
+  ()
+|};
+  [%expect {|
+    error: nothing installs `RateCalls` before `main`
+       ┌─ test.ren:11:4
+    11 │ fn main() uses Console =
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+    14 │     Some(r) => print(with r in RateCalls.count())
+       │                                ----------------- this call uses `RateCalls`
+       help: install one inside `main`: `with counting_rates(...) in ...`
+    |}];
+  check_error
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  let p: Option<Rates> = o
+  match o
+    Some(r) => print(with r in RateCalls.count())
+    None => ()
+  ()
+|};
+  [%expect {|
+    error: nothing installs `RateCalls` before `main`
+       ┌─ test.ren:11:4
+    11 │ fn main() uses Console =
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+    15 │     Some(r) => print(with r in RateCalls.count())
+       │                                ----------------- this call uses `RateCalls`
+       help: install one inside `main`: `with counting_rates(...) in ...`
+    |}]
+
 let%expect_test "a closure called inside a `with` and outside it (B4)" =
   (* [run] installs `Rates` around its call of [k], and [twice] calls [k]
      itself too, outside any `with`: so [k] uses `Rates` and what [run]

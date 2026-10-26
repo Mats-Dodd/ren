@@ -448,12 +448,20 @@ Where the work forced a change to the plan above:
   in the environment; it's what the solver returns for each group, which
   infer_top.ml keeps for the next ones and for `main` and tests.
 - **R3, a handler taken as one dependency.** The plan has it decided once
-  both sides are known. Inference can't always wait for that: a `with`,
-  a field, a method or a call has to know the type it's looking into, and
-  a mismatch shows it, so that makes a handler given to a type not known
-  yet its own type then, as the solver would if nothing said otherwise
-  (infer_coerce.ml, `settle`). What's wanted can still be said by
-  anything before that, in either order, which fixes B3, and so
+  both sides are known. A `with` of a handler given to a type not known
+  yet waits for that too: it's a constraint of its own, which installs
+  the one dependency the handler is taken as, or all of them, once that's
+  decided (infer_coerce.ml, `installs`). A field or a method looked up in
+  it is taken as the one of the handler's dependencies that has it, if
+  just one does, since the handler's own type has neither. Anything else
+  that looks into it, a call or a mismatch that shows it, makes it the
+  handler's own type then, as the solver would if nothing said otherwise
+  (`settle`). Each of those is an error whatever it's taken as, so it
+  changes at most what the message says. The one place order still
+  decides is a method that two of the handler's dependencies both have:
+  looked up before anything says which is wanted, it's the handler's own
+  type, which has no methods. What's wanted can be said before the
+  handler is given or after, which fixes B3, and so
   `let o = Some(counting_rates(1))` followed by `let p: Option<Rates> =
   o` is accepted now too: one error a test showed is gone (test_deps.ml,
   "a handler of several where something else is wanted"). An `if` whose

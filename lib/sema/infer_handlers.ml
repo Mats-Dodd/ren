@@ -160,7 +160,7 @@ and with_ core env cx (e : expr) item body lam =
   match item.kind with
   | Call (({ kind = Field (r, m); _ } as f), args) -> (
       let tr = core.infer env cx r in
-      settle env tr;
+      settle_for_member env tr ~has:(fun t -> has_member env t m.name);
       (* a method is a wrapper if it takes one more argument, besides its
          `self`, than it's given *)
       let wrapper =
@@ -223,7 +223,8 @@ and with_ core env cx (e : expr) item body lam =
           install core env cx e item t body)
   | _ -> (
       let t = core.infer env cx item in
-      settle env t;
+      (* a handler given before what's wanted was known isn't a function
+         either way, and [install] leaves what it is to the solver *)
       match reveal env.st t with
       | TFun ([ _ ], _, _, _) ->
           wrap core env cx e ~call:item ~f:item ~args:[] t body lam
@@ -233,30 +234,29 @@ and with_ core env cx (e : expr) item body lam =
    but the dependency installed, and the `with` uses what the
    implementation needs too. *)
 and install core env cx (e : expr) item t body =
-  (* [body], with each of [deps] installed around it, the first outermost *)
-  let rec around cx = function
+  (* [body], with each of [deps] installed around it, the first outermost.
+     [emit] is given each one's `with`, the innermost first, and [strip]
+     takes what a dependency's `with` installs out of what a call in its
+     body brings in *)
+  let rec around ~emit ~strip cx = function
     | [] -> core.infer env cx body
     | d :: rest ->
         let label = Ty.dep_label d in
         (* the body's own row, which the solver relates to the outer one
            once the group is done *)
         let inner = { cx with uses = fresh_row env.st; calls = ref [] } in
-        let tb = around inner rest in
-        defer env
-          (Install
-             {
-               wloc = item.loc;
-               wdep = label;
-               wbody = inner.uses;
-               wouter = cx.uses;
-               wself = cx.self;
-             });
+        let tb = around ~emit ~strip inner rest in
+        emit d
+          {
+            wloc = item.loc;
+            wdep = label;
+            wbody = inner.uses;
+            wouter = cx.uses;
+            wself = cx.self;
+            winstalls = true;
+          };
         (* the body's calls bring in what they bring in, but [d] *)
-        cx.calls :=
-          List.map
-            (fun c -> { c with own = List.filter (( <> ) label) c.own })
-            !(inner.calls)
-          @ !(cx.calls);
+        cx.calls := List.map (strip d) !(inner.calls) @ !(cx.calls);
         tb
   in
   (* what an implementation of [d] installs: a handler's instance, each
@@ -270,6 +270,14 @@ and install core env cx (e : expr) item t body =
         Hashtbl.replace cx.found e.node (Installs d);
         [ d ]
   in
+  (* a `with` that's known to install what it does *)
+  let now ~deps =
+    around
+      ~emit:(fun _ w -> defer env (Install w))
+      ~strip:(fun d c ->
+        { c with own = List.filter (( <> ) (Ty.dep_label d)) c.own })
+      cx deps
+  in
   (* a `with` that can't tell what it installs might have installed what
      its body uses, so that's not passed on: it would be reported as missing
      too, where the function is called *)
@@ -277,39 +285,65 @@ and install core env cx (e : expr) item t body =
     ignore
       (core.infer env { cx with uses = fresh_row env.st; calls = ref [] } body)
   in
-  settle env t;
-  match reveal env.st t with
-  | TCon (d, [ TUses needs ]) ->
-      (* what it needs it needs here, outside: its operations run with what's
-         installed where it's installed *)
+  match pending env t with
+  | Some (deps, needs) ->
+      (* a handler of several dependencies, given before what's wanted was
+         known: whether it installs them all or the one it's taken as is
+         left to the solver, which knows that (Infer_coerce.installs). It
+         needs the same either way *)
       use_row env cx ~loc:item.loc ~needs:true
         (copy_needs env ~loc:item.loc ~what:Installing needs);
-      around cx (installs d)
-  | TFun ([], ret, _, _) as tf
-    when match reveal env.st ret with
-         | TCon (_, [ TUses _ ]) -> true
-         | _ -> false -> (
-      (* `with h in`, a handler or a function that makes an implementation
-         not called: the body is checked as if it were, so what it uses
-         isn't reported as missing too *)
-      let src = Option.value (env.source item) ~default:"f" in
-      report env (with_uncalled item.loc src (show (printer env) tf));
-      match reveal env.st ret with
-      | TCon (d, _) -> around cx (installs d)
-      | _ -> TError)
-  | TError ->
-      unknown ();
-      TError
-  | t ->
-      unknown ();
-      let what =
-        match (t, item.kind) with
-        | TVar _, Var (Local b) -> Unknown_var b.ident.name
-        | TVar _, _ -> Unknown
-        | _ -> Known (show (printer env) t)
+      let ws = ref [] in
+      let tb =
+        around
+          ~emit:(fun d w -> ws := (d, w) :: !ws)
+          ~strip:(fun d c -> { c with unless = (t, deps, d) :: c.unless })
+          cx deps
       in
-      report env (cant_install item.loc what);
-      TError
+      defer env
+        (Install_one_of
+           {
+             oty = t;
+             odeps = deps;
+             owiths = List.rev !ws;
+             onode = e.node;
+             ofound = cx.found;
+           });
+      tb
+  | None -> (
+      settle env t;
+      match reveal env.st t with
+      | TCon (d, [ TUses needs ]) ->
+          (* what it needs it needs here, outside: its operations run with
+             what's installed where it's installed *)
+          use_row env cx ~loc:item.loc ~needs:true
+            (copy_needs env ~loc:item.loc ~what:Installing needs);
+          now ~deps:(installs d)
+      | TFun ([], ret, _, _) as tf
+        when match reveal env.st ret with
+             | TCon (_, [ TUses _ ]) -> true
+             | _ -> false -> (
+          (* `with h in`, a handler or a function that makes an
+             implementation not called: the body is checked as if it were,
+             so what it uses isn't reported as missing too *)
+          let src = Option.value (env.source item) ~default:"f" in
+          report env (with_uncalled item.loc src (show (printer env) tf));
+          match reveal env.st ret with
+          | TCon (d, _) -> now ~deps:(installs d)
+          | _ -> TError)
+      | TError ->
+          unknown ();
+          TError
+      | t ->
+          unknown ();
+          let what =
+            match (t, item.kind) with
+            | TVar _, Var (Local b) -> Unknown_var b.ident.name
+            | TVar _, _ -> Unknown
+            | _ -> Known (show (printer env) t)
+          in
+          report env (cant_install item.loc what);
+          TError)
 
 (* The wrapper call [call], `retry(3)`, of [f], of type [tf], given
    [args]: [body] is its last argument, a lambda of no parameters, whose

@@ -187,7 +187,7 @@ let in_own_body env cx =
    function's `uses`. *)
 let rec use_row env cx ~loc ?(needs = false) ?callee uses =
   cx.calls :=
-    { cloc = loc; own = row_names uses; row = uses; needs; callee }
+    { cloc = loc; own = row_names uses; row = uses; needs; callee; unless = [] }
     :: !(cx.calls);
   let what = if needs then Installing else Call_uses in
   let joined =

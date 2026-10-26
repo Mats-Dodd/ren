@@ -50,6 +50,10 @@ val member_kind : env -> string -> Path.t -> Iface.op_kind option
    member is: [Stack.push]. *)
 val op_of : env -> Types.ty -> string -> (Iface.type_decl * Iface.op) option
 val op_path : Iface.type_decl -> Iface.op -> Path.t
+
+(* Whether a value of the type has a member or a field of the name. *)
+val has_member : env -> Types.ty -> string -> bool
+
 val sorted : string list -> string list
 
 (* `r.f`, the expression given, once [r]'s type is known: the field's

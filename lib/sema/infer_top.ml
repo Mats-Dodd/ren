@@ -659,7 +659,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
         let needs =
           let first has = List.find_opt has calls in
           match
-            match first (fun c -> List.mem dep c.own) with
+            match first (fun c -> brings c dep) with
             | Some c -> Some c
             | None when written = None ->
                 first (fun c -> List.mem dep (row_names c.row))

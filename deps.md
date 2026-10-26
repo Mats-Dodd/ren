@@ -443,13 +443,15 @@ stage, or settled something the plan left open:
   only that: `clock_conforms(test_clock(t))` with `c: Clock`. What's
   wanted can be said before the handler is given or after, in the same
   function: `same(test_clock(t), c)` takes it as a `Clock` as
-  `same(c, test_clock(t))` does. Where nothing says which, `let h =
-  counting_rates(1)`, it keeps its own type: `with h in` installs all of
-  them, sharing one state, and `run(h)` takes it as a `Rates`, inside
-  that `with` too. So a value of a dependency's type is a record or a
-  handler's description, and `with` tells which as it runs. A handler
-  that keeps a closure names its row in its own signature, `handler h(f:
-  fn() -> Int uses ..d) for N uses ..d`.
+  `same(c, test_clock(t))` does. A `with` that installs it, or a call of
+  a method of one of them, can come before what says which as well as
+  after (compiler.md's Deviations has the one exception). Where nothing
+  says which, `let h = counting_rates(1)`, it keeps its own type: `with
+  h in` installs all of them, sharing one state, and `run(h)` takes it
+  as a `Rates`, inside that `with` too. So a value of a dependency's
+  type is a record or a handler's description, and `with` tells which as
+  it runs. A handler that keeps a closure names its row in its own
+  signature, `handler h(f: fn() -> Int uses ..d) for N uses ..d`.
 - **A handler's name starts with a lowercase letter,** as a function's
   does, which is now an error for both: a capitalized name is a type's.
 - **A handler's parameters are written in parentheses even if it has

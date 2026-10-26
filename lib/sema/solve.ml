@@ -225,7 +225,10 @@ let copy env k =
 let install env ~shared w =
   let dep_name = env.names (Ty.dep_path w.wdep) in
   let labels, tail = row_parts w.wbody in
-  let rest = List.filter (fun (l : label) -> l.name <> w.wdep) labels in
+  let rest =
+    if w.winstalls then List.filter (fun (l : label) -> l.name <> w.wdep) labels
+    else labels
+  in
   (* add [r] to what's outside: whether it could *)
   let into r =
     Result.is_ok
@@ -237,11 +240,14 @@ let install env ~shared w =
     | _ when tail <> None && tail = row_tail w.wouter ->
         (* the same row: everything it uses but [wdep] is outside too *)
         let outer = row_names w.wouter in
-        ( Some (Same_row { fn = Path.local w.wself; dep = dep_name }),
+        ( (if w.winstalls then
+             Some (Same_row { fn = Path.local w.wself; dep = dep_name })
+           else None),
           None,
           List.for_all (fun (l : label) -> List.mem l.name outer) rest )
     | RVar _ as t
-      when List.length rest = List.length labels
+      when w.winstalls
+           && List.length rest = List.length labels
            && not (shared (Option.get tail)) ->
         (* it may use [wdep] too, as a closure the body calls may; a
            variable still unbound takes any row, so this can't fail *)
@@ -250,7 +256,7 @@ let install env ~shared w =
         (None, None, into (extend rest t'))
     | RVar _ as t ->
         let withheld =
-          if List.length rest = List.length labels then
+          if w.winstalls && List.length rest = List.length labels then
             Some (Several_withs { fn = Path.local w.wself; dep = dep_name })
           else None
         in
@@ -651,7 +657,8 @@ let installs env ~copies cs =
    by each other are joined first, since a call of another function of
    the group learns only then what it returns; then a handler given where
    what's wanted wasn't known is taken as what's wanted, which is known
-   as far as it will be; then a value thrown away is checked. What a
+   as far as it will be, and a `with` of it then knows what it installs;
+   then a value thrown away is checked. What a
    `with` installs is decided next, each `with` once the copies of what
    an implementation needs are up to date, since what its body uses
    includes them. A function that names its own errors' row fails with it
@@ -675,6 +682,16 @@ let solve env ~is_value ~withheld =
   in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) cs;
   List.iter (function Coerce k -> Infer_coerce.coerce env k | _ -> ()) cs;
+  (* a `with` of a handler given before what's wanted was known is the
+     `with`s of what it installs, now that that's known *)
+  let cs =
+    List.concat_map
+      (function
+        | Install_one_of o ->
+            List.map (fun w -> Install w) (Infer_coerce.installs o)
+        | c -> [ c ])
+      cs
+  in
   List.iter (function Drop d -> drop env d | _ -> ()) cs;
   let held, dues = installs env ~copies:cs cs in
   copies_of env cs;
