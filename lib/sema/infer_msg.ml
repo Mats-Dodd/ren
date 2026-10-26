@@ -1041,12 +1041,11 @@ let set_not_taken loc t =
 (* The help for a tag with two shapes in one written set. *)
 let rename_one = "rename one of them"
 
-(* ---- what a group leaves to be checked (infer_top.ml) ---- *)
+(* ---- what a group leaves to be checked (solve.ml, infer_declared.ml) ---- *)
 
 (* Why a call brings in a dependency it seems not to: the function it
    calls calls a closure inside a `with` of the dependency, [dep], that
-   still gets it from outside (Infer_top.settle_installs). [fn] is that
-   function. *)
+   still gets it from outside (Solve.install). [fn] is that function. *)
 type withheld =
   | Same_row of { fn : string; dep : string }
       (** what's called inside the `with` uses what [fn] itself does *)
