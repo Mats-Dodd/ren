@@ -8,6 +8,7 @@ let version = "ren 0.1.0"
 let usage =
   {|usage: ren <command> <file.ren>
        ren run <file.ren> [-- <args>...]
+       ren core --types <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
        ren --help | --version
@@ -33,7 +34,9 @@ commands:
   types   print every function's inferred signature, module by module,
           and each type's members under it
   core    print every module in Core, the language it's lowered to,
-          with the evidence of what's installed passed explicitly
+          with the evidence of what's installed passed explicitly:
+            --types  also each function's type, and the type arguments
+                     each use of a generic function picks
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree
 
@@ -193,7 +196,14 @@ let test args =
   | exception e -> fail ~known:roots e
 
 let () =
-  match Sys.argv with
+  (* `ren core --types <file.ren>`: the flag is taken out, and the rest
+     read as any command's is *)
+  let types, argv =
+    match Sys.argv with
+    | [| ren; "core"; "--types"; path |] -> (true, [| ren; "core"; path |])
+    | argv -> (false, argv)
+  in
+  match argv with
   | [| _; ("--help" | "-h" | "help") |] ->
       (* asked for, so it's the output, not an error *)
       print_endline usage
@@ -249,7 +259,7 @@ let () =
               (fun i (m : Core.program) ->
                 if i > 0 then print_newline ();
                 print_endline ("-- " ^ m.home);
-                List.iter (fun f -> print_endline (Core.show_fn f)) m.fns)
+                List.iter (fun f -> print_endline (Core.show_fn ~types f)) m.fns)
               (List.tl (Driver.linked ~load ~file:path src))
         | "tokens" ->
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))

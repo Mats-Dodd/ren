@@ -354,15 +354,34 @@ let rec pattern_sexp p =
   | PTag (t, ps) -> List (atom "tag" :: Atom t :: List.map pattern_sexp ps)
   | POr ps -> List (atom "or" :: List.map pattern_sexp ps)
 
-let rec sexp e =
+(* A use of a top-level function, [name], printed bare; or, by a typed
+   printer [pr], with the type arguments [a] if it has any, as
+   [(inst first_or Int)]. A row argument is its labels and its tail, in
+   braces: [{Short | ..e}]. *)
+let used pr name (a : Ty.args) =
+  match pr with
+  | Some pr when a.tys <> [] || a.rows <> [] ->
+      let row r =
+        "{" ^ Ty.show_row pr ~prefix:"" ~sep:" | " ~kind:"r" r ^ "}"
+      in
+      (* `let`s fix the order variables are named in: OCaml evaluates a
+         constructor's arguments right to left *)
+      let tys = List.map (fun t -> Atom (Ty.show pr t)) a.tys in
+      let rows = List.map (fun r -> Atom (row r)) a.rows in
+      List ((atom "inst" :: Atom name :: tys) @ rows)
+  | _ -> Atom name
+
+(* [pr] is the printer of a typed print, [None] for a plain one. *)
+let rec sexp_with pr e =
+  let sexp = sexp_with pr and arm_sexp = arm_sexp_with pr in
   match e.kind with
   | Int n -> Atom (string_of_int n)
   | Bool b -> Atom (string_of_bool b)
   | Str s -> Atom (Ast.show_str s)
   | Unit -> Atom "()"
   | Local v -> var v
-  | Global (p, _) | Global_value (p, _) -> Atom (Path.local p)
-  | Intrinsic (x, _) -> Atom (Intrinsic.name x)
+  | Global (p, a) | Global_value (p, a) -> used pr (Path.local p) a
+  | Intrinsic (x, a) -> used pr (Intrinsic.name x) a
   | Dep_call { dep; op; ev; args; _ } ->
       List
         (atom "dep-call" :: var ev
@@ -454,22 +473,35 @@ let rec sexp e =
   | Assert a -> List [ atom "assert"; sexp a ]
   | Assert_equal (a, b) -> List [ atom "assert"; atom "=="; sexp a; sexp b ]
 
-and arm_sexp a =
+and arm_sexp_with pr a =
   let guard =
-    match a.guard with Some g -> [ atom "if"; sexp g ] | None -> []
+    match a.guard with Some g -> [ atom "if"; sexp_with pr g ] | None -> []
   in
-  List ((pattern_sexp a.pat :: guard) @ [ atom "=>"; sexp a.body ])
+  List ((pattern_sexp a.pat :: guard) @ [ atom "=>"; sexp_with pr a.body ])
 
+let sexp e = sexp_with None e
 let show e = render 0 (sexp e)
 
-let fn_sexp f =
+(* A typed print also shows the function's type after its name, whose
+   variables its uses' type arguments are written in, with every row
+   tail. *)
+let fn_sexp ?(types = false) f =
+  let pr =
+    if types then
+      Some (Ty.printer ~show_tail:(fun _ -> true) ~names:Path.full f.scheme)
+    else None
+  in
+  let ty =
+    match pr with
+    | Some pr -> [ atom ":"; Atom (Ty.show pr f.scheme.ty) ]
+    | None -> []
+  in
   List
-    [
-      atom "fn";
-      Atom (Path.local f.path);
-      List (List.map (fun p -> var p.var) f.params);
-      var f.ev;
-      sexp f.body;
-    ]
+    ((atom "fn" :: Atom (Path.local f.path) :: ty)
+    @ [
+        List (List.map (fun p -> var p.var) f.params);
+        var f.ev;
+        sexp_with pr f.body;
+      ])
 
-let show_fn f = render 0 (fn_sexp f)
+let show_fn ?types f = render 0 (fn_sexp ?types f)

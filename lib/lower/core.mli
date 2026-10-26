@@ -241,5 +241,10 @@ val show_prim : prim -> string
    prints as its name and binder id, [x/3]. *)
 val sexp : expr -> sexp
 val show : expr -> string
-val fn_sexp : fn_def -> sexp
-val show_fn : fn_def -> string
+
+(* [types] prints a function typed: its type after its name, and each use
+   of a top-level function that has type arguments with them, as
+   [(inst first_or Int)], a row argument in braces, [{Short | ..e}]. A
+   plain print, the default, shows neither. *)
+val fn_sexp : ?types:bool -> fn_def -> sexp
+val show_fn : ?types:bool -> fn_def -> string

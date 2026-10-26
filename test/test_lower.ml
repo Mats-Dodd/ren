@@ -147,6 +147,74 @@ fn main() =
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
+(* A use of a generic function carries the type arguments it picks, which
+   a typed print shows: what each of the function's variables stands for,
+   in the variables of the function it's used in. *)
+
+let%expect_test "a typed print shows each use's type arguments" =
+  core ~types:true
+    {|
+type Stack<T> = { items: Array<T> }
+  fn push(inout self, x: T) = &self.items.push(x)
+  let empty: Stack<T> = Stack { items: [] }
+fn pair(a, b) = [a, b]
+fn main() =
+  var s = Stack.empty
+  &s.push(1)
+  let ns = pair(1, 2)
+  let words = pair("a", "b")
+  ()
+|};
+  [%expect
+    {|
+    (fn Stack.push : fn(inout test.Stack<T>, T) ! ..e uses ..d (self/1 x/2) ev/3
+      (let $ref/4 (. self/1 items)
+        (let $arg/5 x/2
+          (let $result/6 (call ev/3 (inst Array.push T {} {..d}) &$ref/4 $arg/5)
+            (seq (= self/1 (update self/1 items: $ref/4)) $result/6)))))
+    (fn Stack.empty : fn() -> test.Stack<T> ! ..e uses ..d () ev/1
+      (record (items: (array))))
+    (fn pair : fn(T, T) -> Array<T> ! ..e uses ..d (a/1 b/2) ev/3 (array a/1 b/2))
+    (fn main : fn() ! ..e uses ..d () ev/1
+      (let s/2 (inst Stack.empty Int)
+        (seq (call ev/1 (inst Stack.push Int {} {..d}) &s/2 1)
+          (let ns/3 (call ev/1 (inst pair Int {} {..d}) 1 2)
+            (let words/4 (call ev/1 (inst pair Str {} {..d}) "a" "b") ())))))
+    (fn $start : fn() ! ..e () ev/1 (call ev/1 (inst main {..e} {..r})))
+    |}]
+
+let%expect_test "a function of the group being checked is used at its own type"
+    =
+  (* [walk] and [back] are checked together, so each is used at its own
+     type in the other: its type arguments are the variables of the
+     function it's used in. A public function is used at a copy of the
+     type its declaration gives it, even in its own body, where storing
+     [f] as a `fn()` closes only that copy's rows *)
+  core ~types:true
+    {|
+type H = { h: fn() }
+fn walk(x, n) = if n == 0 then x else back(x, n - 1)
+fn back(x, n) = walk(x, n)
+pub fn f() =
+  let k = H { h: f }
+  ()
+fn main() =
+  let s = walk("a", 3)
+  f()
+|};
+  [%expect
+    {|
+    (fn walk : fn(T, Int) -> T uses ..d (x/1 n/2) ev/3
+      (if (== n/2 0) x/1 (call ev/3 (inst back T {..d}) x/1 (- n/2 1))))
+    (fn back : fn(T, Int) -> T uses ..d (x/1 n/2) ev/3
+      (call ev/3 (inst walk T {..d}) x/1 n/2))
+    (fn f : fn() ! ..e uses ..d () ev/1 (let k/2 (record (h: (inst f {} {}))) ()))
+    (fn main : fn() ! ..e uses ..d () ev/1
+      (let s/2 (call ev/1 (inst walk Str {..d}) "a" 3)
+        (call ev/1 (inst f {} {..d}))))
+    (fn $start : fn() ! ..e () ev/1 (call ev/1 (inst main {..e} {..r})))
+    |}]
+
 (* lint catches a lowering mistake at the node it's in *)
 
 let%expect_test "Core Lint reports a node of the wrong type" =
