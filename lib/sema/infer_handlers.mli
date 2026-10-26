@@ -8,7 +8,13 @@ open Infer_env
 type core = {
   infer : env -> ctx -> Ast.Resolved.expr -> Types.ty;
   check :
-    env -> ctx -> ?why:Infer_report.why -> Ast.Resolved.expr -> Types.ty -> unit;
+    env ->
+    ctx ->
+    ?why:Infer_report.why ->
+    ?written:Types.ty ->
+    Ast.Resolved.expr ->
+    Types.ty ->
+    unit;
   stmt : env -> ctx -> Ast.Resolved.stmt -> unit;
   infer_call :
     env ->
@@ -32,20 +38,15 @@ type core = {
     ctx ->
     name:string option ->
     ?callee:Path.t ->
+    written:bool list ->
     Types.param list ->
     Ast.Resolved.expr list ->
     unit;
 }
 
-(* The type the body of a handler of these dependencies gives, the
-   context's function's: the dependency's, if it implements one, or its
-   own, named after it. *)
-val handler_type : ctx -> Ast.tname list -> Path.t
-
-(* What the parameters of a type being made, its declaration's, stand for
-   where a value of the last type is wanted, as far as they're
-   implementations. *)
-val hint : env -> Iface.type_decl -> Types.ty list -> Types.ty -> unit
+(* The dependencies a handler of these implements, whose type its body
+   gives (Types.impl_type). *)
+val handler_deps : Ast.tname list -> Path.t list
 
 (* A handler's body: its state and its arms, which use [needs], checked
    once the group is done against what's [declared], if anything is. *)

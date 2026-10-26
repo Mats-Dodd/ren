@@ -30,7 +30,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
           e,
           u,
           l )
-  | Errors _ | Uses _ | Error -> t
+  | Errors _ | Uses _ | All _ | Error -> t
 
 (* How a type shows its values: as its own `show` method made [v] look,
    [Itself], or as it's declared. [Inside] is inside that method, where

@@ -55,10 +55,9 @@ let copy_needs env ~loc ~what needs =
    more than it does: where one that needs more is allowed, one that needs
    less will do. *)
 let widen env ~loc t =
-  match repr t with
-  | TCon (d, [ TUses u ]) ->
-      TCon (d, [ TUses (copy_needs env ~loc ~what:Passing u) ])
-  | t -> t
+  match impl_parts t with
+  | Some (ds, u) -> impl_type ds (copy_needs env ~loc ~what:Passing u)
+  | None -> t
 
 (* Where an error that's already in [row] came from, for a message about
    another shape of it: the first of [sources] that brought it in. *)
@@ -200,7 +199,7 @@ let in_own_body env cx =
    function's `uses`. *)
 let rec use_row env cx ~loc ?(needs = false) ?callee uses =
   cx.calls :=
-    { cloc = loc; own = row_names uses; row = uses; needs; callee; unless = [] }
+    { cloc = loc; own = row_names uses; row = uses; needs; callee }
     :: !(cx.calls);
   let what = if needs then Installing else Call_uses in
   let joined =

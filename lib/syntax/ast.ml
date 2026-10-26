@@ -36,11 +36,12 @@ type 't ty =
       (** [fn(Int) -> Bool], and what it can fail with and uses,
           [fn(Int) -> Bool ! Bad uses Clock]; with no [->] the function returns
           [Unit] *)
-  | TyImpl of 't * 't uses option * Loc.t
+  | TyImpl of 't list * 't uses option * Loc.t
       (** a dependency's type, whose values are implementations, and what one
-          needs (deps.md, "Implementations"): [Clock uses Os]. The parser reads
-          [Clock] alone as a [TyName], which Resolve makes a [TyImpl] with no
-          [uses] *)
+          needs (deps.md, "Implementations"): [Clock uses Os]; or several joined
+          with `&`, as written, an implementation of each sharing one state,
+          [Clock & TestClock]. The list is never empty. The parser reads [Clock]
+          alone as a [TyName], which Resolve makes a [TyImpl] with no [uses] *)
   | TyInout of 't ty * Loc.t
       (** [inout Int], a parameter of a function type: [fn(inout Int)] *)
   | TyErrors of 't errors
@@ -408,10 +409,9 @@ let spelled (f : ('v, 'b, 't) fn_def) =
 
 (* Whether [f] is a `handler` declaration: a function of its parameters
    whose body is a [Handler], and whose result describes the handler,
-   `counting_rates(r)`. Its type is its dependency's, if it implements one;
-   one of several has a type of its own, named after it, which can't be
-   written, since a type's name starts with a capital (Iface.handler_type).
-*)
+   `counting_rates(r)`. Its type is its dependency's, if it implements one,
+   or the type that lists them, `Rates & RateCalls`, if it implements
+   several. *)
 let is_handler (f : ('v, 'b, 't) fn_def) =
   match f.body.kind with Handler _ -> true | _ -> false
 
@@ -617,9 +617,13 @@ let rec show_ty : ty -> string = function
       "fn("
       ^ String.concat ", " (List.map show_ty params)
       ^ ")" ^ ret ^ errs ^ uses
-  | TyImpl (name, Some u, _) -> "(" ^ show_tyname name ^ " " ^ show_uses u ^ ")"
-  | TyImpl (name, None, _) -> show_tyname name
+  | TyImpl (names, Some u, _) ->
+      "(" ^ show_joined names ^ " " ^ show_uses u ^ ")"
+  | TyImpl (names, None, _) -> show_joined names
   | TyErrors es -> show_errors es
+
+(* `Clock & TestClock` *)
+and show_joined names = String.concat " & " (List.map show_tyname names)
 
 (* `uses Clock, ..d` *)
 and show_uses (u : uses) =

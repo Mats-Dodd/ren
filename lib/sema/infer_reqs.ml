@@ -73,8 +73,7 @@ let rec decl_lacks env seen p : Infer_msg.no_eq option =
               in
               Some (Has_function (Ty.show pr rep))
           | w -> w)
-      | Dep _ -> Some (Implementation (env.names p))
-      | Handler _ -> Some (Handler (env.names p)))
+      | Dep _ -> Some (Implementation (env.names p)))
 
 (* The same for a type as a declaration writes it, its parameters [Var]s,
    which [has] looks into where they're used. *)
@@ -82,6 +81,8 @@ and lacks_in env seen (t : Ty.ty) : Infer_msg.no_eq option =
   match t with
   | Fun _ -> Some Is_function
   | Var _ | Error | Uses _ -> None
+  | All (ds, _) ->
+      Some (Implementation (String.concat " & " (List.map env.names ds)))
   | Errors e ->
       List.find_map
         (fun (l : Ty.label) -> List.find_map (lacks_in env seen) l.payload)
@@ -113,6 +114,9 @@ let rec has env t =
   | TVar { contents = Unbound (id, _) } | TSkol (id, _) -> Has [ id ]
   | TVar { contents = Link _ } -> assert false (* [repr] followed it *)
   | TError | TUses _ -> Has []
+  | TAll (ds, _) ->
+      Lacks
+        (Decl (Implementation (String.concat " & " (List.map env.names ds))))
   | TFun _ as f -> Lacks (Fn f)
   | TErrors e -> (
       let labels, tail = row_parts e in

@@ -137,16 +137,17 @@ and kind =
           with the evidence [ev] it's given, each time a [With] or a
           [With_handler] installs it: it makes the handler's state, each `var`
           in a cell, and ends in an [Instance]. Its type is its dependency's, if
-          it implements one, or else the handler's own, either needing what its
-          operations use *)
+          it implements one, or else the type that lists them, either needing
+          what its operations use *)
   | Instance of (Path.t * expr) list
       (** a handler's instance: an implementation of each of its dependencies,
           in the order they're written, records of lambdas that share the cells
-          of one state. Of its [Handler]'s type *)
-  | As_dep of Path.t * expr
-      (** a description of a handler of several dependencies, taken as one of
-          [dep]'s: a [With] installs only its implementation of [dep]. Of
-          [dep]'s type, needing what the handler does *)
+          of one state. Of its [Handler]'s type, which lists them sorted *)
+  | Narrowed of Path.t list * expr
+      (** a description of a handler of several dependencies, narrowed to some
+          of them, where a written type asks for those: a [With] or a
+          [With_handler] installs only its implementations of those. Of their
+          type ([Ty.impl]), needing what the handler does *)
   | With_handler of {
       ev : var;
       outer : var;
@@ -156,8 +157,10 @@ and kind =
     }
       (** [body], with the evidence [ev]: [outer] with a fresh instance of
           [handler], made with [outer], installed on top, for each of [deps].
-          The instance's implementations all keep [outer], which their
-          operations run with *)
+          Those are what [handler]'s type lists, sorted: the instance may
+          implement more, if it was narrowed ([Narrowed]), which aren't
+          installed. The instance's implementations all keep [outer], which
+          their operations run with *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)

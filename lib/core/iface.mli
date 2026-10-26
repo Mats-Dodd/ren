@@ -27,11 +27,6 @@ type body =
       (** a dependency, [dep Clock = ...]: its operations, each a function type
           that fails with exactly what it's written to fail with, and uses
           nothing *)
-  | Handler of Path.t list
-      (** the type of a handler of several dependencies, named after the
-          `handler` declaration whose function gives one: a description of an
-          implementation of each of these dependencies. Its one argument is what
-          it needs (deps.md, "Implementations") *)
 
 (* An opaque type's representation in its own module's view of it, or
    in its interface, hidden but for whether it has `==`: it hasn't if what
@@ -106,6 +101,10 @@ val tags : sets:sets -> error list -> (Ty.label * Path.t option) list
 (* The labels of the dependencies a `uses` lists, sorted, each once. *)
 val dep_labels : Ast.tname list -> Ty.label list
 
+(* The dependencies a `uses` lists, or an implementation's type joins with
+   `&`, as written. *)
+val dep_paths : Ast.tname list -> Path.t list
+
 (* An error set as written, as declared errors: each tag with its
    payload's types, its fields' names dropped. *)
 val declared_errors : sets:sets -> Ast.Resolved.errors -> error list
@@ -122,17 +121,10 @@ val signature : sets:sets -> Ast.Resolved.fn_def -> Ty.scheme
 (* A type declared in module [home], with all its members. *)
 val of_type_def : home:string -> sets:sets -> Ast.Resolved.type_def -> type_decl
 
-(* The dependencies a function implements, if it's a `handler`. *)
+(* The dependencies a function implements, if it's a `handler`: calling
+   it gives an implementation of each, of the type that lists them
+   (Ty.impl). *)
 val handler_deps : Ast.Resolved.fn_def -> Path.t list option
-
-(* The type calling a `handler` gives: its dependency's, if it has one,
-   or its own, named after it, if it has several. [None] for any other
-   function. *)
-val handler_type : home:string -> Ast.Resolved.fn_def -> Path.t option
-
-(* The type a `handler` of several dependencies declares; [None] for one
-   of one dependency, or any other function. *)
-val of_handler : home:string -> Ast.Resolved.fn_def -> type_decl option
 
 (* The interface of module [home], from its declarations: every public
    type, with its public members and an opaque type's representation left

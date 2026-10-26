@@ -42,6 +42,10 @@ type ty =
   | TUses of row
       (** what an implementation needs, as its dependency type's one argument
           (ty.ml) *)
+  | TAll of Path.t list * row
+      (** an implementation of several dependencies, sharing one state, and what
+          it needs: what a handler of several describes, `Clock & TestClock`
+          ([impl_type]) *)
   | TSkol of int * string
       (** a type parameter like [T], while checking the function that declares
           it: equal only to itself, since the function has to work for every [T]
@@ -90,25 +94,9 @@ and mark_cell = Mark of Loc.t option | Mark_link of mark
 
 let generic_level = max_int
 
-(* What a variable that a handler of several dependencies was given to,
-   before what's wanted was known, can still become (Unify.watch). *)
-type watch = {
-  allowed : Path.t list;
-      (** the handler's own type, or one of its dependencies' *)
-  handler : ty;
-      (** the type of the first handler given to it, which it is if nothing else
-          says *)
-  order : int;
-      (** how many handlers had been given by then, so when two such variables
-          become one, the handler given first is still the first *)
-}
-
-(* A map with int keys. Unlike a [Hashtbl] it never changes: adding to one
-   makes a new map, sharing most of the old, so keeping the old is free. *)
-module Ids = Map.Make (Int)
-
-(* A set of strings, the same way: finding one is quick however many
-   there are. *)
+(* A set of strings. Unlike a [Hashtbl] it never changes: adding to one
+   makes a new set, sharing most of the old. Finding one is quick however
+   many there are. *)
 module Names = Set.Make (String)
 
 (* What inference changes as it goes. Each compilation makes its own and
@@ -134,11 +122,6 @@ type state = {
       (** what each opaque type of the module being checked is represented as:
           in its own module, an opaque type is its representation (see [reveal])
       *)
-  mutable watched : watch Ids.t;
-      (** what each variable a handler of several dependencies was given to can
-          still become, by the variable's id (Unify.watch). Only looked up,
-          never walked *)
-  mutable given : int;  (** how many handlers have been given so, ever *)
 }
 
 let new_state () =
@@ -150,8 +133,6 @@ let new_state () =
     skolem_rows = Hashtbl.create 8;
     needs = Hashtbl.create 8;
     reps = Hashtbl.create 4;
-    watched = Ids.empty;
-    given = 0;
   }
 
 let enter_level st = st.level <- st.level + 1
@@ -172,6 +153,15 @@ let str = TCon (Path.prelude "Str", [])
 let array t = TCon (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let param_tys ps = List.map (fun p -> p.ty) ps
+
+(* The type of an implementation of [deps], needing [needs]: one
+   dependency's, `Clock`, or for several, a type that lists them, `Clock &
+   TestClock`, the same whichever order they're written in, so they're
+   kept sorted, each once (deps.md, "Implementations"). *)
+let impl_type deps needs =
+  match List.sort_uniq compare deps with
+  | [ d ] -> TCon (d, [ TUses needs ])
+  | ds -> TAll (ds, needs)
 
 (* A label's mark when it isn't written inside `Err`: one of its own,
    since a mark is changed when it's joined with another. *)
@@ -199,6 +189,15 @@ let rec repr_row r =
       cell := RLink r'';
       r''
   | r -> r
+
+(* If [t] is an implementation, of one dependency or several: which, sorted,
+   and what it needs. A dependency's type always has its one argument, so
+   any other type with a [TUses] isn't one. *)
+let impl_parts t =
+  match repr t with
+  | TCon (d, [ TUses needs ]) -> Some ([ d ], needs)
+  | TAll (ds, needs) -> Some (ds, needs)
+  | _ -> None
 
 (* A row's labels and, if it's open, the id of its tail: a variable, or a
    named row, which stands for more labels too, only not ones inference
@@ -287,6 +286,15 @@ let extend labels tail =
 
 (* ---- generalizing and instantiating ---- *)
 
+(* A parameter's type [t] copied by [go]: if inference found it, it's
+   still a variable in the copy, linked to what it found, so the copy
+   doesn't look written (Infer_written.is_written), and an argument isn't
+   narrowed to it however the function is reached. *)
+let copy_param go t =
+  match t with
+  | TVar { contents = Link _ } -> TVar (ref (Link (go t)))
+  | t -> go t
+
 (* Make generic every variable created deeper than the current level, and
    replace the function's own type parameters ([skolems], as id and name)
    with generic variables too. The result is the function's type scheme. *)
@@ -317,10 +325,11 @@ let generalize st ~skolems ?(row_skolems = []) t =
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
     | TUses u -> TUses (row u)
+    | TAll (ds, u) -> TAll (ds, row u)
     | TFun (ps, r, e, u, l) ->
         TFun (List.map param ps, go r, row e, row u, row l)
     | TError -> TError
-  and param p = { p with ty = go p.ty }
+  and param p = { p with ty = copy_param go p.ty }
   and row r =
     match repr_row r with
     | RVar ({ contents = RUnbound (id, l) } as cell) as r ->
@@ -378,7 +387,7 @@ let generics t =
         see seen_tys id v
     | TVar _ | TSkol _ | TError -> ()
     | TCon (_, args) -> List.iter walk args
-    | TErrors e | TUses e -> walk_row e
+    | TErrors e | TUses e | TAll (_, e) -> walk_row e
     | TFun (ps, r, e, u, l) ->
         List.iter (fun p -> walk p.ty) ps;
         walk r;
@@ -432,9 +441,10 @@ let instantiate st t =
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
     | TUses u -> TUses (row u)
+    | TAll (ds, u) -> TAll (ds, row u)
     | TFun (ps, r, e, u, l) ->
         TFun (List.map param ps, go r, row e, row u, row l)
-  and param p = { p with ty = go p.ty }
+  and param p = { p with ty = copy_param go p.ty }
   and row r =
     match repr_row r with
     | RVar { contents = RUnbound (id, l) } when l = generic_level -> (
@@ -482,6 +492,7 @@ let replace (s : subst) t =
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
     | TUses u -> TUses (row u)
+    | TAll (ds, u) -> TAll (ds, row u)
     | TFun (ps, r, e, u, l) ->
         TFun (List.map param ps, go r, row e, row u, row l)
   and param p = { p with ty = go p.ty }
@@ -576,6 +587,7 @@ let rec canon_ty c ~all t : Ty.ty =
   | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
   | TErrors e -> Errors (canon_row c ~all e)
   | TUses u -> Uses (canon_row c ~all u)
+  | TAll (ds, u) -> All (ds, canon_row c ~all u)
   | TFun (ps, r, e, u, l) ->
       (* `let`s fix the order of first appearance: OCaml evaluates a
          constructor's arguments right to left *)
@@ -713,6 +725,7 @@ let rec of_ty ~vars ~tails ~lams (t : Ty.ty) =
   | Con (p, args) -> TCon (p, List.map go args)
   | Errors e -> TErrors (of_row ~vars ~tails ~lams e)
   | Uses u -> TUses (of_row ~vars ~tails ~lams u)
+  | All (ds, u) -> TAll (ds, of_row ~vars ~tails ~lams u)
   | Fun (ps, r, e, u, l) ->
       TFun
         ( List.map (fun (p : Ty.param) -> { mode = p.mode; ty = go p.ty }) ps,
@@ -786,6 +799,7 @@ let matching st s t =
         row rows u u';
         row lams l l'
     | TErrors e, TErrors e' | TUses e, TUses e' -> row rows e e'
+    | TAll (ds, e), TAll (ds', e') when ds = ds' -> row rows e e'
     | (TCon _ as s), (TCon _ as t) ->
         (* one of the module's opaque types, and what it's represented
            as: [!=] says [reveal] made something else of one *)
@@ -940,7 +954,7 @@ let rec row_vars t =
   match repr t with
   | TVar _ | TSkol _ | TError -> []
   | TCon (_, args) -> List.concat_map row_vars args
-  | TErrors e | TUses e -> row e
+  | TErrors e | TUses e | TAll (_, e) -> row e
   | TFun (ps, r, e, u, _) ->
       List.concat_map row_vars (r :: param_tys ps) @ row e @ row u
 
@@ -948,7 +962,7 @@ let rec row_vars t =
 let rec skolems t =
   match repr t with
   | TSkol (id, n) -> [ (id, n) ]
-  | TVar _ | TError | TErrors _ | TUses _ -> []
+  | TVar _ | TError | TErrors _ | TUses _ | TAll _ -> []
   | TCon (_, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _, _) -> List.concat_map skolems (r :: param_tys ps)
 
@@ -962,7 +976,7 @@ let mentions v t =
         | TVar { contents = Unbound (i, _) } -> i = id
         | TVar _ | TSkol _ | TError -> false
         | TCon (_, args) -> List.exists go args
-        | TErrors e | TUses e -> row e
+        | TErrors e | TUses e | TAll (_, e) -> row e
         | TFun (ps, r, e, u, _) ->
             List.exists go (r :: param_tys ps) || row e || row u
       and row r =

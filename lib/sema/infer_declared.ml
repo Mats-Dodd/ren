@@ -273,8 +273,9 @@ let check_open_rows env (f : fn_def) cx =
             | true, false -> Some (p, None, Cant_fail)
             | false, true -> Some (p, None, Cant_use)
             | true, true -> Some (p, None, Cant_fail_or_use))
-        | Some (TyImpl ({ tref = Named d; _ }, None, _)) when uses_closed ->
-            Some (p, Some d, Cant_need)
+        | Some (TyImpl (ds, None, _)) when uses_closed ->
+            let written = List.map env.names (Iface.dep_paths ds) in
+            Some (p, Some (String.concat " & " written), Cant_need)
         | _ -> None)
       f.params
   in
@@ -285,8 +286,8 @@ let check_open_rows env (f : fn_def) cx =
       let kept =
         match dep with
         | None -> Fn_param
-        | Some d when name = "self" -> Dep_self (env.names d)
-        | Some d -> Dep_param (env.names d)
+        | Some d when name = "self" -> Dep_self d
+        | Some d -> Dep_param d
       in
       report env
         (kept_closed p.pname.ident.loc ~name ~fn:(Ast.fn_name f) kept closed)

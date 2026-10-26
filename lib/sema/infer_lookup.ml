@@ -56,7 +56,7 @@ let known_decl env t =
 let ctor_in (c : ident) (td : Iface.type_decl) =
   match td.body with
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
-  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ | Handler _ -> None
+  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
 
 (* The constructor [c], where a value of type [expected] is wanted. One
    written after its type, `Light.Red`, is looked for there and nowhere
@@ -136,7 +136,7 @@ let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
 let record_fields (td : Iface.type_decl) =
   match td.body with
   | Record fs -> Some fs
-  | Sum _ | Builtin | Opaque _ | Errors _ | Dep _ | Handler _ -> None
+  | Sum _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
 
 (* The fields a literal of [td] gives, `T { f: ... }`: a record's, or a
    dependency's operations, which an implementation gives (deps.md,
@@ -145,13 +145,13 @@ let record_fields (td : Iface.type_decl) =
 let literal_fields (td : Iface.type_decl) =
   match td.body with
   | Record fs | Dep fs -> Some fs
-  | Sum _ | Builtin | Opaque _ | Errors _ | Handler _ -> None
+  | Sum _ | Builtin | Opaque _ | Errors _ -> None
 
 (* The operation [name] of the dependency [td], if it's one. *)
 let dep_op_in name (td : Iface.type_decl) =
   match td.body with
   | Dep ops -> List.find_opt (fun (o : Iface.field) -> o.fname = name) ops
-  | Record _ | Sum _ | Builtin | Opaque _ | Errors _ | Handler _ -> None
+  | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> None
 
 let op_in name (td : Iface.type_decl) = Iface.find_member td name
 
@@ -199,6 +199,48 @@ let has_member env t name =
   | Some td -> field_in name td <> None
   | None -> false
 
+(* [tr], the type of [r], where its member or field [name] is about to be
+   looked up: if it's an implementation of several dependencies, the one of
+   them that has it, which [r] is narrowed to there, so the lookup finds
+   it as in a value of that one (deps.md, "Implementations"). If more than
+   one has it, that's reported, and it's [TError]; if none has, it's [tr],
+   whose lookup reports that. *)
+let member_of_several env cx (r : expr) tr (name : ident) =
+  match repr tr with
+  | TAll (ds, needs) -> (
+      let one d = TCon (d, [ TUses needs ]) in
+      match List.filter (fun d -> has_member env (one d) name.name) ds with
+      | [ d ] -> (
+          match op_of env (one d) name.name with
+          | Some
+              ( _,
+                {
+                  okind = Method;
+                  oscheme =
+                    { ty = Fun ({ mode = Inout; _ } :: _, _, _, _, _); _ };
+                  _;
+                } ) ->
+              (* narrowing a place it changes would write a plain [d] back
+                 into a value of several *)
+              let recv = Option.value (env.source r) ~default:"h" in
+              report env
+                (changes_one_of_several name.loc ~recv
+                   ~all:(String.concat " & " (List.map env.names ds))
+                   ~name:name.name ~dep:(env.names d));
+              TError
+          | _ ->
+              Hashtbl.replace cx.narrowed r.node [ d ];
+              one d)
+      | [] -> tr
+      | have ->
+          report env
+            (member_of_several_deps name.loc
+               ~recv:(Option.value (env.source r) ~default:"h")
+               ~all:(String.concat " & " (List.map env.names ds))
+               ~name:name.name ~deps:(List.map env.names have));
+          TError)
+  | _ -> tr
+
 (* The function a member is: [Stack.push]. *)
 let op_path (td : Iface.type_decl) (o : Iface.op) = Path.member td.path o.oname
 let sorted names = List.sort String.compare names
@@ -232,8 +274,7 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
         report env (needs_record f (show (printer env) t));
         TError
       in
-      Infer_coerce.settle_for_member env tr ~has:(fun t ->
-          has_member env t f.name);
+      let tr = member_of_several env cx r tr f in
       match reveal env.st tr with
       | TError -> TError
       | TCon (p, args) as t -> (

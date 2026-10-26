@@ -34,7 +34,7 @@ let rec unplaced (e : Core.expr) : Core.expr =
     | With w -> With { w with impl = go w.impl; body = go w.body }
     | Handler h -> Handler { h with body = go h.body }
     | Instance impls -> Instance (List.map (fun (d, e) -> (d, go e)) impls)
-    | As_dep (d, e) -> As_dep (d, go e)
+    | Narrowed (d, e) -> Narrowed (d, go e)
     | With_handler w ->
         With_handler { w with handler = go w.handler; body = go w.body }
     | Prim (p, es) -> Prim (p, List.map go es)
@@ -100,7 +100,7 @@ let rec has_fn (t : Ty.ty) =
   | Con (_, ts) -> List.exists has_fn ts
   | Errors r ->
       List.exists (fun (l : Ty.label) -> List.exists has_fn l.payload) r.labels
-  | Var _ | Uses _ | Error -> false
+  | Var _ | Uses _ | All _ | Error -> false
 
 (* Whether a function's body is one to record: it has a type variable, or
    a parameter or result with a function in it. Every function has row

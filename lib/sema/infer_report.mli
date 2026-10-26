@@ -31,14 +31,15 @@ val binders : Ast.Resolved.pattern -> (Ast.binder * Loc.t) list
 (* How to explain a mismatch with an expected type: [msg] words the error,
    [help] suggests a fix and [labels] point at other code, each given both
    types printed (the one found, then the one expected); [notes] say where
-   the expectation comes from. [help_of], if it's given, is the help
-   instead, worked out from the type found, printed with the printer
-   given. It's Infer_env's, which a constraint can carry. *)
+   the expectation comes from. [narrowed_help], if it's given, is the help
+   where the two are an implementation of several dependencies and one of
+   some of them, given that one's type, printed. It's Infer_env's, which a
+   constraint can carry. *)
 type why = Infer_env.why = {
   msg : (string -> string -> string) option;
   notes : string list;
   help : (string -> string -> string) option;
-  help_of : (Types.printer -> Types.ty -> string) option;
+  narrowed_help : (string -> string) option;
   labels : string -> string -> (Loc.t * string) list;
 }
 
@@ -46,19 +47,13 @@ val explain :
   ?msg:(string -> string -> string) ->
   ?notes:string list ->
   ?help:(string -> string -> string) ->
-  ?help_of:(Types.printer -> Types.ty -> string) ->
+  ?narrowed_help:(string -> string) ->
   ?labels:(string -> string -> (Loc.t * string) list) ->
   unit ->
   why
 
 (* No explanation beyond the types themselves. *)
 val plain : why
-
-(* Before something is done with a variable that a handler of several
-   dependencies was given to when it wasn't known what's wanted there
-   (Infer_env.coerce): if nothing has said what it is since, it's the
-   handler's own type now. The function says which variables. *)
-val settle : env -> (Types.tvar ref -> bool) -> unit
 
 (* Report that [found] (what the code has) didn't unify with [expected]
    (what it needs), at the location given, explained with [why], and by

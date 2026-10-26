@@ -15,9 +15,11 @@
    module-build.md. Nothing waits: a question that can't be answered where
    it's asked is an error that says which annotation would answer it, so
    the result never depends on the order inference happens to learn things
-   in. (What a handler of several dependencies is taken as can wait, until
-   its group is done or something looks into it, infer_coerce.ml: it
-   isn't a question an annotation should have to answer.)
+   in. An implementation of several dependencies, `Rates & RateCalls`, is
+   narrowed to some of them only where [check]'s expected type is written
+   ([narrow]), never where it's a variable inference has solved. Its own
+   type is whatever inference knows of it there: types flow left to right,
+   as in Rust and TypeScript (deps.md, "Implementations").
 
    As it goes, inference records every expression's and pattern's type by
    its node id, and what each lookup found. infer_top.ml hands the table on
@@ -28,9 +30,8 @@
    share, infer_report.ml reports a mismatch and explains it,
    infer_written.ml turns written types into the checker's,
    infer_lookup.ml finds things through a type, infer_rows.ml keeps
-   track of what code fails with and uses, infer_handlers.ml checks
-   handlers and `with`, and infer_coerce.ml takes a handler of several
-   dependencies as one of them. *)
+   track of what code fails with and uses, and infer_handlers.ml checks
+   handlers and `with`. *)
 
 open Ast
 open Ast.Resolved
@@ -42,7 +43,6 @@ open Infer_written
 open Infer_lookup
 open Infer_rows
 open Infer_handlers
-open Infer_coerce
 
 (* ---- expressions ---- *)
 
@@ -82,6 +82,27 @@ let forced_why env callee expected =
           ()
   | _ -> plain
 
+(* [e], of type [t], where a value of type [expected] is wanted, which is
+   written: if [e] is an implementation of several dependencies, and
+   [expected] one of some of them, it's narrowed to those there, which
+   lowering is told. It still describes the same handler, but its other
+   dependencies can't be reached through it (deps.md, "Implementations").
+   Its type there, or else [t]. [t] is what inference knows of [e]'s type
+   by now: a lambda's parameter that a generic's `T` gave a type to
+   already is narrowed, one whose type comes later isn't. *)
+let narrow env cx (e : expr) t expected =
+  match (impl_parts t, impl_parts (reveal env.st expected)) with
+  | Some (have, needs), Some (want, _)
+    when List.length want < List.length have
+         && List.for_all (fun d -> List.mem d have) want ->
+      Hashtbl.replace cx.narrowed e.node want;
+      impl_type want needs
+  | _ -> t
+
+(* Whether [e] is made in branches, which [check] narrows one by one. *)
+let branchy (e : expr) =
+  match e.kind with Block _ | If (_, _, Some _) | Match _ -> true | _ -> false
+
 (* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
   let t = synth env cx e in
@@ -90,29 +111,60 @@ let rec infer env cx (e : expr) : ty =
 
 (* Check [e] against [expected], explaining a mismatch with [why]. When
    nothing is known about [expected] yet, that's inferring [e] and unifying
-   the two. *)
-and check env cx ?(why = plain) (e : expr) expected =
+   the two. [written] is the type written where [e] is, an annotation or a
+   declaration (Infer_written.is_written), usually [expected] itself: an
+   implementation of several dependencies is narrowed to what it asks for
+   ([narrow]). It's passed down only to the parts of it that are written
+   too. *)
+and check env cx ?(why = plain) ?written (e : expr) expected =
   let leaf () =
     let t = synth env cx e in
     Hashtbl.replace cx.nodes e.node t;
-    give env cx why e t expected
+    let t =
+      match written with
+      | Some w when impl_parts w <> None ->
+          (* one that needs less than what's written will do too *)
+          widen env ~loc:e.loc (narrow env cx e t w)
+      | Some w -> narrow env cx e t w
+      | None -> t
+    in
+    ignore (unifies env why (result_loc e) ~found:t ~expected)
   in
   let fits () = Hashtbl.replace cx.nodes e.node expected in
+  (* the expected type, and what's written of it, go to where the value is
+     made *)
+  let branches () =
+    fits ();
+    match e.kind with
+    | Block (stmts, last) ->
+        List.iter (stmt env cx) stmts;
+        check env cx ~why ?written last expected
+    | If (c, t, Some f) ->
+        want_bool env Condition c (infer env cx c);
+        check env cx ~why ?written t expected;
+        check env cx ~why ?written f expected
+    | Match (subject, arms) ->
+        ignore
+          (infer_match env cx e.node subject arms
+             ~want:(Some (expected, why, written)))
+    | _ -> assert false
+  in
   match (e.kind, reveal env.st expected) with
+  | Con (c, args), _ ->
+      let t = infer_con env cx e c args ~written ~expected in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env why e.loc ~found:t ~expected)
+  | Record (name, fields), _ ->
+      let t = infer_record env cx e name fields ~written ~expected in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env why e.loc ~found:t ~expected)
+  (* a block, an `if` or a `match` passes a written type on to where its
+     value is made, even where what's expected is still a variable, the
+     payload of a constructor `Option<Rates>` is written for *)
+  | (Block _ | If (_, _, Some _) | Match _), TVar _ when written <> None ->
+      branches ()
   | _, TVar _ -> leaf ()
-  | Block (stmts, last), _ ->
-      fits ();
-      List.iter (stmt env cx) stmts;
-      check env cx ~why last expected
-  | If (c, t, Some f), _ ->
-      fits ();
-      want_bool env Condition c (infer env cx c);
-      check env cx ~why t expected;
-      check env cx ~why f expected
-  | Match (subject, arms), _ ->
-      fits ();
-      ignore
-        (infer_match env cx e.node subject arms ~want:(Some (expected, why)))
+  | (Block _ | If (_, _, Some _) | Match _), _ -> branches ()
   | Lambda (params, body), TFun (eps, eret, _, _, _)
     when List.length eps = List.length params
          && List.for_all2
@@ -136,25 +188,25 @@ and check env cx ?(why = plain) (e : expr) expected =
       check env
         (lambda_cx cx params ps ~errs ~uses)
         body eret
+        ?written:
+          (match written with
+          | Some (TFun (_, r, _, _, _)) when is_written r -> Some r
+          | _ -> None)
         ~why:
-          (explain ~notes:why.notes ?help:why.help ?help_of:why.help_of
-             ~labels:why.labels ~msg:lambda_produces ());
+          (explain ~notes:why.notes ?help:why.help
+             ?narrowed_help:why.narrowed_help ~labels:why.labels
+             ~msg:lambda_produces ());
       let t = TFun (ps, eret, errs, uses, lams) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
-  | Con (c, args), _ ->
-      let t = infer_con env cx e c args ~expected in
-      Hashtbl.replace cx.nodes e.node t;
-      ignore (unifies env why e.loc ~found:t ~expected)
-  | Record (name, fields), _ ->
-      let t = infer_record env cx e name fields ~expected in
-      Hashtbl.replace cx.nodes e.node t;
-      ignore (unifies env why e.loc ~found:t ~expected)
-  | Handler { deps; state; arms; _ }, TCon (p, [ TUses declared ])
-    when p = handler_type cx deps ->
+  | Handler { deps; state; arms; _ }, t
+    when match impl_parts t with
+         | Some (ds, _) -> ds = List.sort_uniq compare (handler_deps deps)
+         | None -> false ->
       (* what it's written to need, and more, which is reported once the
          group is done *)
       fits ();
+      let declared = snd (Option.get (impl_parts t)) in
       let labels = fst (row_parts declared) in
       let needs = extend labels (fresh_row env.st) in
       handler core env cx state arms ~needs
@@ -162,7 +214,14 @@ and check env cx ?(why = plain) (e : expr) expected =
   | Array xs, TCon (p, [ elem ]) when p = Path.prelude "Array" ->
       fits ();
       List.iter
-        (fun x -> check env cx ~why:{ plain with notes = why.notes } x elem)
+        (fun x ->
+          check env cx
+            ~why:{ plain with notes = why.notes }
+            ?written:
+              (match written with
+              | Some (TCon (_, [ w ])) when is_written w -> Some w
+              | _ -> None)
+            x elem)
         xs
   | _ -> leaf ()
 
@@ -223,25 +282,10 @@ and synth env cx (e : expr) : ty =
       let else_why =
         explain ~msg:else_branch
           ~labels:(fun _ x -> [ (result_loc t, then_branch x) ])
-          ~notes:[ if_branches ] ()
+          ~notes:[ if_branches ] ~narrowed_help:if_produces ()
       in
-      if several env tt then (
-        (* a `then` branch that's a handler of several dependencies waits
-           for the `else`, which may be an implementation of one of them,
-           `if c then counting_rates(1) else Rates { ... }`: then it's
-           taken as that one, as it is with the branches the other way
-           round (Infer_coerce) *)
-        let res = fresh_var env.st in
-        give env cx
-          (explain ~msg:then_branch_other
-             ~labels:(fun _ x -> [ (result_loc f, else_branch_is x) ])
-             ~notes:[ if_branches ] ())
-          t tt res;
-        check env cx f res ~why:else_why;
-        res)
-      else (
-        check env cx f tt ~why:else_why;
-        tt)
+      check env cx f tt ~why:else_why;
+      tt
   | If (c, t, None) ->
       want_bool env Condition c (infer env cx c);
       let ok =
@@ -264,40 +308,14 @@ and synth env cx (e : expr) : ty =
   | Block (stmts, last) ->
       List.iter (stmt env cx) stmts;
       infer env cx last
-  | Con (c, args) -> infer_con env cx e c args ~expected:(fresh_var env.st)
+  | Con (c, args) ->
+      infer_con env cx e c args ~written:None ~expected:(fresh_var env.st)
   | Record (name, fields) ->
-      infer_record env cx e name fields ~expected:(fresh_var env.st)
+      infer_record env cx e name fields ~written:None
+        ~expected:(fresh_var env.st)
   | Field (r, f) -> infer_field env cx e r f
   | Match (subject, arms) -> infer_match env cx e.node subject arms ~want:None
-  | Array xs ->
-      (* the first element says what the others have to be. One that's a
-         handler of several dependencies waits for one that isn't, which
-         may be an implementation of one of them, `[counting_rates(1),
-         Rates { ... }]`: then it's taken as that one (Infer_coerce). If
-         every one is, what they are is decided once it's known what the
-         array's elements are *)
-      let elem = fresh_var env.st in
-      let waiting =
-        List.fold_left
-          (fun waiting (x : expr) ->
-            match repr elem with
-            | TVar _ ->
-                let t = infer env cx x in
-                if several env t then (x, t) :: waiting
-                else (
-                  ignore
-                    (unifies env plain (result_loc x) ~found:t ~expected:elem);
-                  waiting)
-            | _ ->
-                check env cx x elem ~why:(explain ~msg:element_before ());
-                waiting)
-          [] xs
-      in
-      List.iter
-        (fun ((x : expr), t) ->
-          give env cx (explain ~msg:element_others ()) x t elem)
-        (List.rev waiting);
-      array elem
+  | Array xs -> infer_array env cx xs
   | Index (a, i) ->
       let elem = fresh_var env.st in
       let ok =
@@ -323,7 +341,18 @@ and synth env cx (e : expr) : ty =
           let name = binop_to_string op ^ "=" in
           want_int env (Operator name) target tt;
           want_int env (Operator name) value (infer env cx value)
-      | None -> check env cx value tt ~why:(explain ~msg:assigned ()));
+      | None ->
+          (* a place whose type is written narrows what's assigned to it,
+             as it does what it's made with *)
+          let narrowed_help =
+            match target.kind with
+            | Var (Local b) when impl_parts tt <> None ->
+                Some (assigned_var b.ident.name)
+            | _ -> None
+          in
+          check env cx value tt
+            ?written:(if written_place cx target then Some tt else None)
+            ~why:(explain ~msg:assigned ?narrowed_help ()));
       unit
   | For { var; iter; body } ->
       let array_of = match iter.kind with Ref a -> a | _ -> iter in
@@ -415,21 +444,76 @@ and synth env cx (e : expr) : ty =
   | Handler { deps; state; arms; _ } ->
       let needs = fresh_row env.st in
       handler core env cx state arms ~needs ~declared:None;
-      TCon (handler_type cx deps, [ TUses needs ])
+      impl_type (handler_deps deps) needs
+
+(* Whether the place [target], assigned to, has a type that's written: a
+   local whose is, a field, by its declaration, or an item of an array
+   that's one of these and whose item type is written. *)
+and written_place cx (target : expr) =
+  match target.kind with
+  | Var (Local b) -> Hashtbl.mem cx.written_locals b.id
+  | Field _ -> is_written (Hashtbl.find cx.nodes target.node)
+  | Index (a, _) -> (
+      written_place cx a
+      &&
+      match Hashtbl.find_opt cx.nodes a.node with
+      | Some (TCon (_, [ item ])) -> is_written item
+      | _ -> false)
+  | _ -> false
+
+(* An array's items, [xs]: the first says what the others have to be. An
+   implementation of several dependencies and one of some of them aren't
+   the same type, and a written element type would narrow the first to
+   the second (deps.md, "Implementations"), so that's what the message
+   says to write, in a `let` of [name], if the array is one's value. *)
+and infer_array env cx ?(name = "xs") xs =
+  let elem = fresh_var env.st in
+  (match xs with
+  | [] -> ()
+  | first :: rest ->
+      let t1 = infer env cx first in
+      ignore (unifies env plain (result_loc first) ~found:t1 ~expected:elem);
+      let joined ds = String.concat " & " (List.map env.names ds) in
+      List.iter
+        (fun (x : expr) ->
+          let why = explain ~msg:element_before () in
+          match impl_parts elem with
+          | None -> check env cx x elem ~why
+          | Some (es, _) -> (
+              let t = infer env cx x in
+              match impl_parts t with
+              | Some (ds, _)
+                when ds <> es && List.exists (fun d -> List.mem d es) ds ->
+                  let part = List.filter (fun d -> List.mem d es) ds in
+                  report env
+                    (items_differ (result_loc x) ~this_ty:(joined ds)
+                       ~first_loc:(result_loc first) ~first_ty:(joined es) ~name
+                       ~part:(joined part))
+              | _ ->
+                  ignore
+                    (unifies env why (result_loc x) ~found:t ~expected:elem)))
+        rest);
+  array elem
 
 and stmt env cx = function
   | Let { name; ty; value; _ } ->
+      Hashtbl.replace cx.binders name.id Let_bound;
       let t =
-        match ty with
-        | Some ann ->
+        match (ty, value.kind) with
+        | Some ann, _ ->
             let t =
               convert env ~tvars:cx.tparams ~named:cx.named
                 ~row:(fun () -> fresh_row env.st)
                 ann
             in
-            check env cx value t;
+            check env cx ~written:t value t;
+            Hashtbl.replace cx.written_locals name.id ();
             t
-        | None -> infer env cx value
+        | None, Array xs ->
+            let t = infer_array env cx ~name:name.ident.name xs in
+            Hashtbl.replace cx.nodes value.node t;
+            t
+        | None, _ -> infer env cx value
       in
       Hashtbl.replace cx.locals name.id t
   | Expr e -> dropped env cx e (infer env cx e)
@@ -456,9 +540,10 @@ and dropped env cx (e : expr) t =
 and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
   match f.kind with
   | Field (r, m) -> (
-      (* [tr] is the receiver's type, if it's inferred already *)
+      (* [tr] is the receiver's type, if it's inferred already; one of
+         several dependencies' is the one that has [m] *)
       let tr = match tr with Some t -> t | None -> infer env cx r in
-      settle_for_member env tr ~has:(fun t -> has_member env t m.name);
+      let tr = member_of_several env cx r tr m in
       (* `r.m` is a field holding a function *)
       let field_call () =
         Option.iter
@@ -474,6 +559,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
       in
       match (op_of env tr m.name, reveal env.st tr) with
       | Some (td, o), _ -> method_call env cx ?changed e f r m tr td o args
+      | None, TError -> nothing ()
       | None, (TCon (p, _) as t)
         when Option.bind (known_decl env t) (field_in m.name) = None ->
           let td = Hashtbl.find env.types p in
@@ -595,7 +681,9 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
           | Inout, Some _ | Read, None -> ());
           apply env cx e ~name:(Some o.oname)
             ?target:(if group_call env path then Some path else None)
-            ~callee:path f
+            ~callee:path
+            ~written:(written_params env ~callee:path ~skip:1 tm ps)
+            f
             (TFun (ps, ret, errs, uses, lams))
             args
       | _ -> nothing ())
@@ -628,10 +716,11 @@ and blame_args cx (f : expr) args =
 
 (* The call [e] of [f], a function of type [tf]; [name] says which, for
    messages, [target] which function of the group it is, if it's one, and
-   [callee] which top-level function it is, if it's one. *)
-and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
+   [callee] which top-level function it is, if it's one. [written] says
+   which of its parameters have a type written, if the caller knows
+   better than [tf] (Infer_written.written_params). *)
+and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
   let ename = Option.value name ~default:"this" in
-  settle env tf;
   match reveal env.st tf with
   | TFun (ps, ret, errs, uses, _) ->
       let n = List.length ps and given = List.length args in
@@ -645,7 +734,12 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
           (List.map2
              (fun (p : Types.param) (a : expr) -> (p.ty, a.loc))
              ps args);
-        check_args env cx ~name ?callee ps args;
+        let written =
+          match written with
+          | Some w -> w
+          | None -> written_params env ?callee tf ps
+        in
+        check_args env cx ~name ?callee ~written ps args;
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
         ret)
   | TVar _ ->
@@ -668,10 +762,11 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
 
 (* A call's arguments [args], left to right, each against its parameter's
    type, of [ps]; [name] is the callee, for messages, and [callee] the
-   top-level function it is, if it's one. *)
-and check_args env cx ~name ?callee ps args =
+   top-level function it is, if it's one. [written] says which of [ps]
+   have a type written, where an argument is narrowed to it ([narrow]). *)
+and check_args env cx ~name ?callee ~written ps args =
   List.iter2
-    (fun (p : Types.param) (a : expr) ->
+    (fun ((p : Types.param), written) (a : expr) ->
       (* `f(&s.pop())` passes the call's result: its `&` is the
                receiver's *)
       let passed = changed_receiver a = None in
@@ -702,17 +797,29 @@ and check_args env cx ~name ?callee ps args =
           report env (arg_not_changed a.loc name)
       | Read, _ -> (
           let why = forced_why env callee p.ty in
-          match repr p.ty with
-          | TCon (_, [ TUses _ ]) ->
+          (* a parameter whose type is a variable, a generic's `T`, isn't
+             written, however it's solved: the argument is unified with
+             it *)
+          match if is_written p.ty then impl_parts p.ty else None with
+          | Some _ when written && branchy a ->
+              (* `run(if b then h1 else h2)`: each branch is narrowed, as
+                 under `let x: Rates = if ...` *)
+              check env cx ~why ~written:p.ty a p.ty
+          | Some _ ->
               (* an implementation that needs less than the parameter
-                 allows will do, and so will a handler of several
-                 dependencies, one of them the parameter's *)
-              let t = taken_as env cx why a (infer env cx a) p.ty in
+                 allows will do, and where the parameter's type is
+                 written, so will one of more dependencies, narrowed to
+                 the parameter's *)
+              let t = infer env cx a in
+              let t = if written then narrow env cx a t p.ty else t in
               ignore
                 (unifies env why (result_loc a) ~found:(widen env ~loc:a.loc t)
                    ~expected:p.ty)
-          | _ -> check env cx ~why a p.ty))
-    ps args
+          | None ->
+              check env cx ~why
+                ?written:(if written then Some p.ty else None)
+                a p.ty))
+    (List.combine ps written) args
 
 (* An argument's type, and whether it's passed with `&`. *)
 and infer_arg env cx (a : expr) =
@@ -725,7 +832,7 @@ and infer_arg env cx (a : expr) =
 
 (* A constructor applied to [args], where a value of type [expected] is
    wanted. *)
-and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
+and infer_con env cx (e : expr) (cref : ctor_ref) args ~written ~expected =
   let c = cref.name in
   match find_ctor env cref ~expected with
   | None ->
@@ -762,11 +869,12 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
   | Some (td, ctor) ->
       Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
       let t, tvars = instance env td in
-      hint env td tvars expected;
+      let written = written_args td written in
       if ctor_shape env e.loc c ctor (List.map fst args) then
         List.iter2
           (fun (f : Iface.field) (_, (a : expr)) ->
             check env cx a (field_type env ~tvars f)
+              ?written:(written_field env ~tvars written f)
               ~why:(explain ~notes:[ part_of c.name "field" f.fname ] ()))
           ctor.cfields args
       else
@@ -774,9 +882,28 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
         List.iter (fun (_, a) -> ignore (infer env cx a)) args;
       t
 
+(* What [td]'s parameters are where the type written for a value of it,
+   [written], says, if it's written: so a field whose declared type is a
+   parameter, `Box<T>`'s `T`, is written where the `Box` is, `let b:
+   Box<Users> = Box(h)`, and a handler there is narrowed to it (deps.md,
+   "Implementations"). The field is still checked against its type from
+   fresh variables, as without it, so only narrowing sees these. *)
+and written_args (td : Iface.type_decl) written =
+  match written with
+  | Some (TCon (p, xs))
+    when p = td.path && List.length xs = List.length td.params ->
+      Some xs
+  | _ -> None
+
+(* The type written for field [f], if it's written: its declared type,
+   where [written_args] found what the parameters are, or else [tvars]. *)
+and written_field env ~tvars xs (f : Iface.field) =
+  let ft = field_type env ~tvars:(Option.value xs ~default:tvars) f in
+  if is_written ft then Some ft else None
+
 (* A record literal: `User { ... }`, or `{ ... }` with its type found
    through [expected], or else through its fields. *)
-and infer_record env cx (e : expr) name fields ~expected =
+and infer_record env cx (e : expr) name fields ~written ~expected =
   let ids = List.map fst fields in
   let seen = Hashtbl.create 8 in
   List.iter
@@ -823,7 +950,7 @@ and infer_record env cx (e : expr) name fields ~expected =
       TError
   | Some (td, decl) ->
       let t, tvars = instance env td in
-      hint env td tvars expected;
+      let written = written_args td written in
       (* an implementation gives a dependency's operations *)
       let what = match td.body with Dep _ -> "operation" | _ -> "field" in
       (* a misspelled field is also a missing one; once it's reported, the
@@ -893,6 +1020,7 @@ and infer_record env cx (e : expr) name fields ~expected =
               in
               let help = Option.map (fun h _ _ -> h) (named_errors ()) in
               check env cx v ft
+                ?written:(written_field env ~tvars written fd)
                 ~why:
                   (explain
                      ~notes:[ part_of (type_name env td.path) what f.name ]
@@ -946,7 +1074,7 @@ and infer_match env cx ?passed node subject arms ~want =
   in
   let result, arm_why =
     match want with
-    | Some (expected, why) -> (expected, fun _ -> why)
+    | Some (expected, why, _) -> (expected, fun _ -> why)
     | None ->
         let first = result_loc (List.hd arms).arm_body in
         ( fresh_var env.st,
@@ -962,7 +1090,8 @@ and infer_match env cx ?passed node subject arms ~want =
           bind_fail env cx errs a.arm_pat
       | _ -> bind_pattern env cx ts a.arm_pat);
       Option.iter (fun g -> want_bool env Guard g (infer env cx g)) a.arm_guard;
-      check env cx ~why:(arm_why i) a.arm_body result)
+      let written = Option.bind want (fun (_, _, w) -> w) in
+      check env cx ~why:(arm_why i) ?written a.arm_body result)
     arms;
   result
 

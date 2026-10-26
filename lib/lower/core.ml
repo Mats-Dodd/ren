@@ -170,16 +170,18 @@ and kind =
           with the evidence [ev] it's given, each time a [With] or a
           [With_handler] installs it: it makes the handler's state, each `var`
           in a cell, and ends in an [Instance]. Its type is its dependency's, if
-          it implements one, or else the handler's own, either needing what its
-          operations use *)
+          it implements one, or else the type that lists them, either needing
+          what its operations use *)
   | Instance of (Path.t * expr) list
       (** a handler's instance: an implementation of each of its dependencies,
           in the order they're written, records of lambdas that share the cells
-          of one state. Of its [Handler]'s type *)
-  | As_dep of Path.t * expr
-      (** a description of a handler of several dependencies, taken as one of
-          [dep]'s: a [With] installs only its implementation of [dep]. Of
-          [dep]'s type, needing what the handler does *)
+          of one state. Of its [Handler]'s type, which lists them sorted *)
+  | Narrowed of Path.t list * expr
+      (** a description of a handler of several dependencies, narrowed to some
+          of them, where a written type asks for those (deps.md,
+          "Implementations"): a [With] or a [With_handler] installs only its
+          implementations of those. Of their type ([Ty.impl]), needing what the
+          handler does *)
   | With_handler of {
       ev : var;
       outer : var;
@@ -189,8 +191,10 @@ and kind =
     }
       (** [body], with the evidence [ev]: [outer] with a fresh instance of
           [handler], made with [outer], installed on top, for each of [deps].
-          The instance's implementations all keep [outer], which their
-          operations run with *)
+          Those are what [handler]'s type lists, sorted: the instance may
+          implement more, if it was narrowed ([Narrowed]), which aren't
+          installed. The instance's implementations all keep [outer], which
+          their operations run with *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)
@@ -356,7 +360,7 @@ let rec has_param n (t : Ty.ty) =
   | Fun (ps, r, e, u, _) ->
       List.exists (fun (p : Ty.param) -> has_param n p.ty) ps
       || has_param n r || row e || row u
-  | Errors r | Uses r -> row r
+  | Errors r | Uses r | All (_, r) -> row r
   | Error -> false
 
 (* The descriptor of [t], a type written in the type variables of a
@@ -385,7 +389,7 @@ let rec describe tys (t : Ty.ty) =
           row e,
           u )
   | Errors e -> Errs (row e)
-  | Uses _ | Error -> Known t
+  | Uses _ | All _ | Error -> Known t
 
 (* The type variables among [Var 0] to [Var (n - 1)] that [t] has in it,
    each once, in order. *)
@@ -408,7 +412,7 @@ let params_in n (t : Ty.ty) =
                 r)
              e)
           u
-    | Errors r | Uses r -> row acc r
+    | Errors r | Uses r | All (_, r) -> row acc r
   in
   List.sort_uniq compare (go [] t)
 
@@ -516,7 +520,7 @@ let children (e : expr) =
   | Assign (_, a)
   | Assert a
   | Field (a, _, _)
-  | As_dep (_, a)
+  | Narrowed (_, a)
   | Fail a
   | Lambda { body = a; _ }
   | Handler { body = a; _ } ->
@@ -705,7 +709,10 @@ and sexp_of_opt t e =
           var ev;
           sexp body;
         ]
-  | As_dep (d, h) -> List [ atom "as"; Atom (Path.full d); sexp h ]
+  | Narrowed (ds, h) ->
+      List
+        ((atom "narrowed" :: List.map (fun d -> Atom (Path.full d)) ds)
+        @ [ sexp h ])
   | Instance impls ->
       List
         (atom "instance"

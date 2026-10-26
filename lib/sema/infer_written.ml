@@ -55,16 +55,9 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
   match t with
   | TyName ({ tref = Param i; _ }, _) -> List.nth tvars i
   | TyName ({ tref = Named p; _ }, args) -> TCon (p, List.map go args)
-  | TyImpl ({ tref = Named p; _ }, u, _) ->
-      TCon
-        ( p,
-          [
-            TUses
-              (match u with Some u -> written_uses ~named u | None -> row ());
-          ] )
-  | TyImpl ({ tref = Param _; _ }, _, _) ->
-      (* resolve.ml only makes a dependency a [TyImpl] *)
-      assert false
+  | TyImpl (ds, u, _) ->
+      impl_type (Iface.dep_paths ds)
+        (match u with Some u -> written_uses ~named u | None -> row ())
   | TyFn (ps, ret, errs, u, _) ->
       let row = if names_row t then closed else row in
       let go = convert env ~tvars ~named ~row in
@@ -132,8 +125,8 @@ let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
                 (if written_u = None then uses else u),
                 l )
         | _ -> assert false)
-    | Some (TyImpl ({ tref = Named d; _ }, None, _)), Some (_, uses) ->
-        TCon (d, [ TUses uses ])
+    | Some (TyImpl (ds, None, _)), Some (_, uses) ->
+        impl_type (Iface.dep_paths ds) uses
     | Some t, Some _ -> convert env ~tvars:tparams ~named ~row:closed t
     | Some t, None ->
         convert env ~tvars:tparams ~named ~row:(fun () -> fresh_row env.st) t
@@ -157,12 +150,36 @@ let instance env (td : Iface.type_decl) =
     else tvars
   in
   match td.body with
-  | Dep _ | Handler _ ->
-      (* an implementation, or a handler, which needs whatever its
-         operations use *)
+  | Dep _ ->
+      (* an implementation, which needs whatever its operations use *)
       (TCon (td.path, [ TUses (fresh_row env.st) ]), tvars)
   | Record _ | Sum _ | Builtin | Opaque _ | Errors _ ->
       (TCon (td.path, tvars), tvars)
+
+(* Whether [t], the type of a parameter or a field as it was made from a
+   declaration or a scheme, is written there: not a variable, which stands
+   for a type inference finds, a generic one's or one nothing wrote. Only
+   a written type narrows an implementation of several dependencies to
+   some of them (Infer_expr.narrow). The variable itself is looked at, not
+   what it's been linked to: a generic's `T` that an earlier argument
+   solved still isn't written. *)
+let is_written t = match t with TVar _ -> false | _ -> true
+
+(* Which of [ps], the parameters of a call's callee, of type [tf], have a
+   type written: the callee's type isn't a variable, nor is the
+   parameter's, and if it's one of the module's functions, [callee], its
+   declaration writes that parameter's type ([env.written]), which a
+   scheme alone doesn't say. [skip] are the parameters before [ps] that
+   aren't among them, a method's `self`. *)
+let written_params env ?callee ?(skip = 0) tf (ps : param list) =
+  let declared i =
+    match Option.bind callee (Hashtbl.find_opt env.written) with
+    | Some ws -> Option.value (List.nth_opt ws (i + skip)) ~default:false
+    | None -> true
+  in
+  List.mapi
+    (fun i (p : param) -> is_written tf && declared i && is_written p.ty)
+    ps
 
 (* A field's type, given what the type's parameters stand for. A function
    type written in a declaration uses and fails with nothing, and has a

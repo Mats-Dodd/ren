@@ -31,6 +31,11 @@ type ty =
       (** what an implementation needs, as the one argument of its dependency's
           type: [Clock uses Os] is [Con (Clock, [Uses Os])] (deps.md,
           "Implementations"). Nothing else takes one *)
+  | All of Path.t list * row
+      (** an implementation of several dependencies, sharing one state, and what
+          it needs: what a handler of several describes, [Clock & TestClock].
+          They're sorted, each once, and there are at least two: one is
+          [Con (d, [Uses _])] ([impl]) *)
   | Error  (** the type of code that had an error, already reported *)
 
 and param = { mode : mode; ty : ty }
@@ -109,6 +114,22 @@ let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
 let label name = { name; payload = [] }
 
+(* The type of an implementation of [deps], needing [needs]: one
+   dependency's, or for several, the type that lists them, sorted, each
+   once, since which order they're written in doesn't matter. *)
+let impl deps needs =
+  match List.sort_uniq compare deps with
+  | [ d ] -> Con (d, [ Uses needs ])
+  | ds -> All (ds, needs)
+
+(* If [t] is an implementation, of one dependency or several: which, and
+   what it needs. *)
+let impl_parts t =
+  match t with
+  | Con (d, [ Uses needs ]) -> Some ([ d ], needs)
+  | All (ds, needs) -> Some (ds, needs)
+  | _ -> None
+
 (* The lambda set of a function type written in a declaration: one of its
    own, which nothing else shares, that [canonical] numbers. *)
 let any_lams = { ids = []; lvar = None }
@@ -143,7 +164,7 @@ let rec tails t =
   match t with
   | Var _ | Error -> []
   | Con (_, args) -> List.concat_map tails args
-  | Errors e | Uses e -> row_tails e
+  | Errors e | Uses e | All (_, e) -> row_tails e
   | Fun (ps, r, e, u, _) ->
       List.concat_map (fun (p : param) -> tails p.ty) ps
       @ tails r @ row_tails e @ row_tails u
@@ -157,7 +178,7 @@ let rec lam_vars t =
   match t with
   | Var _ | Error -> []
   | Con (_, args) -> List.concat_map lam_vars args
-  | Errors e | Uses e -> row_lam_vars e
+  | Errors e | Uses e | All (_, e) -> row_lam_vars e
   | Fun (ps, r, e, u, l) ->
       List.concat_map (fun (p : param) -> lam_vars p.ty) ps
       @ lam_vars r @ row_lam_vars e @ row_lam_vars u @ Option.to_list l.lvar
@@ -173,6 +194,7 @@ let rec without_lams t =
   | Con (p, args) -> Con (p, List.map without_lams args)
   | Errors e -> Errors (row_without_lams e)
   | Uses u -> Uses (row_without_lams u)
+  | All (ds, u) -> All (ds, row_without_lams u)
   | Fun (ps, r, e, u, _) ->
       Fun
         ( List.map (fun (p : param) -> { p with ty = without_lams p.ty }) ps,
@@ -202,7 +224,7 @@ let own_args t =
     | Var n -> [ n ]
     | Error -> []
     | Con (_, args) -> List.concat_map vars args
-    | Errors e | Uses e -> row_vars e
+    | Errors e | Uses e | All (_, e) -> row_vars e
     | Fun (ps, r, e, u, _) ->
         List.concat_map (fun (p : param) -> vars p.ty) ps
         @ vars r @ row_vars e @ row_vars u
@@ -245,6 +267,7 @@ let canonical (s : scheme) =
     | Con (p, args) -> Con (p, List.map go args)
     | Errors e -> Errors (row e)
     | Uses u -> Uses (row u)
+    | All (ds, u) -> All (ds, row u)
     | Fun (ps, r, e, u, l) ->
         (* `let`s fix the order of first appearance: OCaml evaluates a
            constructor's arguments right to left *)
@@ -367,7 +390,7 @@ let rec reserve pr t =
   | Error -> ()
   | Con (_, args) -> List.iter (reserve pr) args
   | Errors e -> List.iter (reserve_label pr) e.labels
-  | Uses _ -> ()
+  | Uses _ | All _ -> ()
   | Fun (ps, r, e, _, _) ->
       List.iter (reserve pr) (r :: List.map (fun (p : param) -> p.ty) ps);
       List.iter (reserve_label pr) e.labels
@@ -417,6 +440,10 @@ and show pr t =
   | Con (p, [ Uses u ]) ->
       (* an implementation, and what it needs *)
       pr.type_name p ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
+  | All (ds, u) ->
+      (* one of several, `Clock & TestClock uses Os` *)
+      String.concat " & " (List.map pr.type_name ds)
+      ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
   | Con (p, []) -> pr.type_name p
   | Con (p, args) -> pr.type_name p ^ "<" ^ show_list pr args ^ ">"
   | Errors e -> (
@@ -460,7 +487,7 @@ and show_list pr ts =
        (fun t ->
          let s = show pr t in
          match t with
-         | (Con (_, [ Uses u ]) | Fun (_, _, _, u, _))
+         | (Con (_, [ Uses u ]) | All (_, u) | Fun (_, _, _, u, _))
            when List.length u.labels > 1 ->
              "(" ^ s ^ ")"
          | _ -> s)
@@ -472,7 +499,7 @@ and show_param pr p =
 (* Whether [t], shown, ends in a `uses` list. *)
 and ends_in_uses pr t =
   match t with
-  | Con (_, [ Uses u ]) | Fun (_, _, _, u, _) ->
+  | Con (_, [ Uses u ]) | All (_, u) | Fun (_, _, _, u, _) ->
       show_row pr ~prefix:"" ~sep:"" ~kind:"d" u <> ""
   | _ -> false
 
@@ -560,6 +587,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
                 else { p with ty = Fun (qs, r, own errs e, own uses u, l) }
             | Con (d, [ Uses u ]) ->
                 { p with ty = Con (d, [ Uses (own uses u) ]) }
+            | All (ds, u) -> { p with ty = All (ds, own uses u) }
             | _ -> p)
           ps
       in
@@ -585,7 +613,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
          it can be used where anything is installed *)
       let rec needs t =
         match t with
-        | Con (_, [ Uses u ]) -> Option.to_list u.tail
+        | Con (_, [ Uses u ]) | All (_, u) -> Option.to_list u.tail
         | Con (_, args) -> List.concat_map needs args
         | Var _ | Error | Errors _ | Uses _ | Fun _ -> []
       in
@@ -675,11 +703,12 @@ let value_signature ~names ~pub ~name (s : scheme) =
 (* How `ren types` prints a handler (ast.ml, [is_handler]): its
    parameters, named [params], the dependencies it implements, [deps], and
    what it needs, from its function's scheme [s], whose result is the
-   handler's type: its dependency's, or its own. A row tail is printed
-   where it links two places, a closure it keeps and what it needs, say. *)
+   handler's type: its dependency's, or the one that lists them. A row
+   tail is printed where it links two places, a closure it keeps and what
+   it needs, say. *)
 let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
   match s.ty with
-  | Fun (ps, (Con (_, [ Uses needs ]) as ret), _, _, _) ->
+  | Fun (ps, ((Con (_, [ Uses needs ]) | All (_, needs)) as ret), _, _, _) ->
       let all =
         List.concat_map (fun (p : param) -> tails p.ty) ps @ tails ret
       in

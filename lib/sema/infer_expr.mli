@@ -7,9 +7,17 @@ open Infer_env
 val infer : env -> ctx -> Ast.Resolved.expr -> Types.ty
 
 (* Check an expression against the type it's expected to have,
-   explaining a mismatch with [why]. *)
+   explaining a mismatch with [why]. [written] is the type written there,
+   if one is, usually the same: an implementation of several dependencies
+   is narrowed to it. *)
 val check :
-  env -> ctx -> ?why:Infer_report.why -> Ast.Resolved.expr -> Types.ty -> unit
+  env ->
+  ctx ->
+  ?why:Infer_report.why ->
+  ?written:Types.ty ->
+  Ast.Resolved.expr ->
+  Types.ty ->
+  unit
 
 (* A statement: a `let`'s variable gets its type, and an expression's value
    is thrown away, which is checked once the group is done (solve.ml). *)

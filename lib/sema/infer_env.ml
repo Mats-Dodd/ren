@@ -60,17 +60,13 @@ and picked =
    labels the callee's row had just before the call joined it to the
    caller's: what the callee brings in itself. After the join the two rows
    are one, so [row] then also has everything the caller uses. [needs]
-   says it's a `with`. [unless] are the `with`s around it that may install
-   what it brings in, or may not, until the solver decides (see
-   [install_one_of]): each one's item's type, the dependencies of the
-   handler given to it, and the one of them this `with` is ([brings]). *)
+   says it's a `with`. *)
 type call = {
   cloc : Loc.t;
   own : string list;
   row : row;
   needs : bool;
   callee : Path.t option;  (** the top-level function called, if it's one *)
-  unless : (Types.ty * Path.t list * Path.t) list;
 }
 
 (* How to explain a mismatch with an expected type (Infer_report.why,
@@ -79,7 +75,7 @@ type why = {
   msg : (string -> string -> string) option;
   notes : string list;
   help : (string -> string -> string) option;
-  help_of : (Types.printer -> Types.ty -> string) option;
+  narrowed_help : (string -> string) option;
   labels : string -> string -> (Loc.t * string) list;
 }
 
@@ -104,6 +100,10 @@ type env = {
           prelude's *)
   globals : (Path.t, ty) Hashtbl.t;
       (** top-level functions: a type scheme once their group is done *)
+  written : (Path.t, bool list) Hashtbl.t;
+      (** which of each of the module's functions' parameters have a type
+          written: only there is an argument narrowed to what it asks for
+          (Infer_expr.narrow), not where its type was inferred *)
   mutable group : (Path.t * group_fn) list;
       (** the functions of the group being checked, each with what its
           declaration says of it *)
@@ -194,33 +194,13 @@ and impl_op = {
    equality: a closure called both in the body and outside it uses what
    the outside does, which is less than the body can. It's decided once
    the group is done, by the solver, when every call of the group knows
-   what it uses. [winstalls] is false where the `with` turned out not to
-   install [wdep] after all: one of a handler of several dependencies
-   that's taken as another of them ([install_one_of]). Then the body's row
-   is only passed on. *)
+   what it uses. *)
 and install = {
   wloc : Loc.t;
   wdep : string;
   wbody : row;
   wouter : row;
   wself : Path.t;  (** the function the `with` is in *)
-  winstalls : bool;
-}
-
-(* A `with`, at node [onode], whose item's type [oty] is a
-   variable a handler of several dependencies, [odeps], was given to
-   before what's wanted was known (see [coerce]). Whether it installs them
-   all or just one, as which the handler is taken, is known once that
-   coercion is decided, so it doesn't depend on which came first, the
-   `with` or what says what's wanted. [owiths] are the `with`s each of
-   [odeps] would be, the innermost first; [ofound] is where what it
-   installs is recorded, by node id, for lowering. *)
-and install_one_of = {
-  oty : ty;
-  odeps : Path.t list;
-  owiths : (Path.t * install) list;
-  onode : int;
-  ofound : (int, found) Hashtbl.t;
 }
 
 (* A place an implementation is used: a `with` installs it, or it's passed
@@ -294,9 +274,6 @@ and constr =
   | Install of install
       (** a `with` that installs: its body uses no more than what it installs
           and what's installed outside it *)
-  | Install_one_of of install_one_of
-      (** a `with` that installs a handler of several dependencies, or just one
-          of them, whichever it's taken as *)
   | Impl_op of impl_op
       (** an implementation's operation fails with no more than its dependency
           declares *)
@@ -310,9 +287,6 @@ and constr =
       (** a function does what it declares: it uses, and fails with, no more *)
   | Needs of handler_needs
       (** a handler needs no more than it declares, and not itself *)
-  | Coerce of coerce
-      (** a handler of several dependencies is taken as one of them where a
-          value of its type is wanted *)
   | Compared of compared  (** the type of what `==` compares has `eq` *)
   | Required of required
       (** a use of a function that needs something of its type parameters: what
@@ -344,25 +318,6 @@ and required = {
   urows : (int * row) list;
   mutable uat : (int * Loc.t) list;
   mutable udone : (int * string) list;
-}
-
-(* A value [cvalue] of type [cfound], a handler of several dependencies,
-   given where a value of type [cwanted] is wanted, which wasn't known
-   yet: whether it's one of those dependencies, which the handler is then
-   taken as (Infer_coerce.as_one), or something else, which the handler's
-   own type has to be, is decided once it's known, so it doesn't depend on
-   which came first. [cas_dep] is where that's recorded, by node id, and
-   [cwhy] explains a mismatch. [cof] is the handler, if [cfound] is a
-   variable one was given to, passed where one of its dependencies is
-   wanted (Infer_coerce.taken_as): it's decided after the coercion of the
-   handler to the variable, which was met first. *)
-and coerce = {
-  cvalue : expr;
-  cfound : ty;
-  cwanted : ty;
-  cwhy : why;
-  cas_dep : (int, Path.t) Hashtbl.t;
-  cof : Path.t option;
 }
 
 (* A function of the group, [ffn], and what checking its body found,
@@ -489,18 +444,29 @@ and source =
   | Unwrapped of Loc.t * row
   | Unhandled of Loc.t * row
 
+(* How a local is bound, if not by a pattern: as a parameter of the
+   top-level function, or of a lambda in it, or by a `let`. *)
+and bound_by = Own_param | Lambda_param | Let_bound
+
 (* What the expression being inferred can see. *)
 and ctx = {
   self : Path.t;  (** the top-level function being checked *)
   locals : (int, ty) Hashtbl.t;
       (** the type of each local of the top-level function, by binder id *)
+  binders : (int, bound_by) Hashtbl.t;
+      (** which locals are parameters, or are bound by a `let`, by binder id,
+          and not by a pattern: a message says where to write one's type *)
+  written_locals : (int, unit) Hashtbl.t;
+      (** the locals whose type is written, a parameter's or a `let`'s or
+          `var`'s, by binder id: assigning one narrows the value to it
+          (Infer_expr.narrow) *)
   nodes : (int, ty) Hashtbl.t;
       (** the type of each expression and pattern of the function, by node id *)
   found : (int, found) Hashtbl.t;  (** what each lookup found, by node id *)
-  as_dep : (int, Path.t) Hashtbl.t;
-      (** each expression that gives a handler of several dependencies where a
-          value of one of their types is wanted, by node id, with that one
-          (Infer_coerce.as_one) *)
+  narrowed : (int, Path.t list) Hashtbl.t;
+      (** each expression, by node id, whose value, an implementation of several
+          dependencies, is narrowed to some of them, these, where a written type
+          asks for those (Infer_expr.narrow) *)
   targs : (int, targs) Hashtbl.t;
       (** the type arguments of each use of a top-level function, by node id *)
   required : (int, required) Hashtbl.t;
@@ -555,21 +521,9 @@ let rec row_end r =
 let dep_names env r =
   List.map (fun n -> env.names (Ty.dep_path n)) (row_names r)
 
-(* Whether a `with` whose item has type [t], a variable a handler of
-   several dependencies [deps] was given to (see [install_one_of]),
-   installs [d], one of them: it does unless the handler is taken as
-   another one. *)
-let installs_dep t deps d =
-  match repr t with TCon (d', _) when List.mem d' deps -> d' = d | _ -> true
-
-(* Whether the call [c] brings in [dep] itself, once the group is solved:
-   it had it before the join, and no `with` around it installs it. *)
-let brings c dep =
-  List.mem dep c.own
-  && not
-       (List.exists
-          (fun (t, deps, d) -> Ty.dep_label d = dep && installs_dep t deps d)
-          c.unless)
+(* Whether the call [c] brings in [dep] itself: it had it before the
+   join, and no `with` around it installs it. *)
+let brings c dep = List.mem dep c.own
 
 (* A new lambda's lambda set, the lambda at [node]: its identity, the next
    of the function it's in (Ty.lambda_id), and a variable for the rest,
@@ -591,11 +545,15 @@ let kept env tail =
     (function Kept (k, _, _) -> row_tail k = Some tail | _ -> false)
     env.pending
 
-(* Inside the function, an `inout` parameter is an ordinary variable. *)
-let bind_params cx params ps =
+(* Inside the function, an `inout` parameter is an ordinary variable.
+   [own] says they're the top-level function's own, not a lambda's. *)
+let bind_params ?(own = false) cx params ps =
   List.iter2
     (fun (p : Resolved.param) (t : Types.param) ->
-      Hashtbl.replace cx.locals p.pname.id t.ty)
+      Hashtbl.replace cx.locals p.pname.id t.ty;
+      Hashtbl.replace cx.binders p.pname.id
+        (if own then Own_param else Lambda_param);
+      if p.pty <> None then Hashtbl.replace cx.written_locals p.pname.id ())
     params ps
 
 (* What a lambda's body sees: the lambda's own errors and dependencies,

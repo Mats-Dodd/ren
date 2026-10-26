@@ -240,24 +240,36 @@ decided only once every body is checked is a **constraint**
 (infer_env.ml, `constr`), and once the group is done the solver
 (solve.ml) decides them all.
 
+A handler of several dependencies isn't one. It has a type that lists
+them, `A & B`, fixed where it's made (deps.md, "Implementations").
+Checking an expression against a type narrows it to some of them only
+where that type is written, an annotation or a declaration, not a
+variable inference made (infer_expr.ml, `check ~written`, `narrow`).
+An `if`, `match` or block checked against a written type narrows each
+branch, under a `let` or passed to a written parameter alike. A
+`with` installs what the value's type says. Both take the value's type
+as inference knows it there: types flow left to right, as in Rust and
+TypeScript. `ap(counting_rates(1), fn(r) => run(r))` checks, since the
+generic's `T`, and so `r`, is already a `RateCalls & Rates` when `r`
+reaches `run`'s written `Rates`; `ap(fn(r) => run(r),
+counting_rates(1))` doesn't, since `r` is a `Rates` by then and `T`
+isn't written. A `with` of a value whose type is still a variable there
+can't tell what it installs. Whether a type is written is decided by the
+type itself, not what inference has linked it to (infer_written.ml,
+`is_written`): a generic's `T` is a variable however it's solved, and a
+function's scheme keeps an inferred parameter a variable, linked to what
+was found (types.ml, `copy_param`), so it isn't taken for a written one
+however the function is reached. One of the module's own functions is
+looked up by its declaration instead (infer_written.ml,
+`written_params`), as its scheme
+alone doesn't say (test_deps.ml, "types flow left to right").
+
 The constraints:
 
 - **A use of another function of the group** has the type that
   function's own body gave it, with the type parameters and rows its
   declaration names, `fn first<T>` or `! ..e`, made fresh for each use,
   since it says it works for any of them.
-- **A handler of several dependencies given where what's wanted isn't
-  known yet** is taken as one of them, if that's what's wanted once it's
-  known, or else as the handler itself (deps.md, "Implementations"), so
-  `same(counting_rates(2), Rates { ... })` and the same with its
-  arguments the other way round both take it as a `Rates`. Inference
-  doesn't always wait: something that has to look into the type before
-  the group is done, a `with`, a field, a method, a call, or a mismatch
-  that shows it, makes it the handler's own type first, as the solver
-  would if nothing else said (infer_coerce.ml). Meanwhile the variable
-  it was given to can only become the handler's type or one of its
-  dependencies': anything else said of it is a mismatch where it's said
-  (unify.ml, `watch`), so the handler, met first, isn't blamed for it.
 - **A value a statement throws away** is `Unit` (errors.md, "Nothing is
   dropped"). One whose type is still unknown becomes `Unit`, and a later
   mismatch at a call of its function points back at it.
@@ -526,10 +538,7 @@ Where the work forced a change to the plan above:
   (`Infer_report.unifies`), and passes what it found as data,
   `Infer_msg.behind`; the wording of every message, its notes and its
   help is `infer_msg.ml`'s. A mismatch is worded from the two types as
-  they're printed, since that's what its message shows, and one help that
-  needs more, the type to write for a public function whose body makes a
-  handler of several dependencies, is worked out from the type found
-  (`Infer_report.why.help_of`) rather than by rewriting the printed text.
+  they're printed, since that's what its message shows.
   Each message reads exactly as before, oddities included: the doubled
   backticks of B4, which R3 fixes, and "`` `an index` works on `Int`s ``",
   which a step that may change messages can reword.
@@ -573,54 +582,27 @@ Where the work forced a change to the plan above:
   (test_eval.ml).
 - **R3, where the solver's work lives.** Deciding a constraint that
   checks what a function declares, its uses, errors and named rows, and
-  a handler's needs, is in infer_declared.ml, and taking a handler of
-  several dependencies as one of them in infer_coerce.ml, beside solve.ml
-  rather than in it, since the messages they give need much of what
-  infer_top.ml had for them. Why a function still gets a dependency from
+  a handler's needs, is in infer_declared.ml, beside solve.ml rather than
+  in it, since the messages it gives need much of what infer_top.ml had
+  for them. Why a function still gets a dependency from
   outside, which a message about a call of it explains with, was a list
   in the environment; it's what the solver returns for each group, which
   infer_top.ml keeps for the next ones and for `main` and tests.
-- **R3, a handler taken as one dependency.** The plan has it decided once
-  both sides are known. A `with` of a handler given to a type not known
-  yet waits for that too: it's a constraint of its own, which installs
-  the one dependency the handler is taken as, or all of them, once that's
-  decided (infer_coerce.ml, `installs`). A field or a method looked up in
-  it is taken as the one of the handler's dependencies that has it, if
-  just one does, since the handler's own type has neither. Anything else
-  that looks into it, a call or a mismatch that shows it, makes it the
-  handler's own type then, as the solver would if nothing said otherwise
-  (`settle`). Each of those is an error whatever it's taken as, so it
-  changes at most what the message says. The one place order still
-  decides is a method that two of the handler's dependencies both have:
-  looked up before anything says which is wanted, it's the handler's own
-  type, which has no methods. What's wanted can be said before the
-  handler is given or after, which fixes B3, and so
-  `let o = Some(counting_rates(1))` followed by `let p: Option<Rates> =
-  o` is accepted now too: one error a test showed is gone (test_deps.ml,
-  "a handler of several where something else is wanted"). An `if` whose
-  `then` branch is a handler of several waits for its `else`, as an
-  element of an array waits for the others, so `if c then
-  counting_rates(1) else Rates { ... }` is a `Rates`, as it is with the
-  branches the other way round, as deps.md says it should be; it was
-  rejected, and a test pinned that ("where nothing says which, a handler
-  of several is its own", which no longer holds it). A branch that
-  can't be what the other is is blamed if it's the second, as before R3,
-  and the note says what the handler implements, whichever branch it's
-  in. A variable a handler was given to, passed as an argument
-  where one of the handler's dependencies is wanted, is taken as that
-  one at that argument only, needing what the handler needs, which is
-  copied where it's passed as for a handler whose type is known
-  (`taken_as`): joined to what the callee uses, it would have been what a
-  `with` of it around the call uses, and the dependency the `with`
-  installs would have been needed outside it. The variable itself is left
-  to the solver, so another use of the same value can take it as another
-  of the dependencies, `run(h) + run2(h)`, or install them all, `with h
-  in`. Whether the argument is taken as that one, is it already, or
-  can't be, since something else said it's another, is a coercion of its
-  own, decided after the variable's. A first fix made the variable that
-  one dependency everywhere, which rejected programs that compiled before
-  R3 (test_deps.ml, "a value holding a handler of several, taken as each
-  of them").
+- **R3, a handler taken as one dependency, since removed.** R3 decided
+  what a handler of several dependencies was taken as from its later
+  uses, which took a map of the variables a handler was given to
+  (`Unify.watch`), settling them early wherever something looked inside
+  (`settle`), and `with`s that waited to know what they installed. A
+  handler of several now has a type that lists them, `RateCalls &
+  Rates`, and is narrowed only where a written type asks for some of
+  them (see "The constraint solver"), so all of that is gone. A value
+  already made isn't narrowed later: `let o = Some(counting_rates(1))`
+  then `let p: Option<Rates> = o` is an error, and the programs B3 had
+  accepted that way are rejected by design, each with a help that says
+  which type to write (test_deps.ml, "whether it checks doesn't depend
+  on which comes first", "an `if` whose branches are a handler of
+  several and one of them", and the tests under "A handler of several
+  dependencies has a type that lists them").
 - **R3, rows that hold a label twice (B4).** A call joins what its callee
   uses to what its caller does by unifying the two rows, which works as
   long as they don't already end in the same variable. In `fn twice(k) =

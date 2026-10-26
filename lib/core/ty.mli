@@ -19,6 +19,10 @@ type ty =
       (** what an implementation needs, as the one argument of its dependency's
           type: [Clock uses Os] is [Con (Clock, [Uses Os])] (deps.md,
           "Implementations"). Nothing else takes one *)
+  | All of Path.t list * row
+      (** an implementation of several dependencies, sharing one state, and what
+          it needs, [Clock & TestClock]: sorted, each once, at least two
+          ([impl]) *)
   | Error  (** the type of code that had an error, already reported *)
 
 and param = { mode : mode; ty : ty }
@@ -81,6 +85,15 @@ val closed : row
 
 (* A label with no payload: an error tag like `Frozen`, or a dependency. *)
 val label : string -> label
+
+(* The type of an implementation of these dependencies, needing the row:
+   one's own, [Con (d, [Uses needs])], or for several, [All], sorted and
+   each once. *)
+val impl : Path.t list -> row -> ty
+
+(* If a type is an implementation's, of one dependency or several: which,
+   and what it needs. *)
+val impl_parts : ty -> (Path.t list * row) option
 
 (* A lambda set of its own, for a function type written in a
    declaration. *)

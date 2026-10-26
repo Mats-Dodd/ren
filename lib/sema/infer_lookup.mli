@@ -54,6 +54,13 @@ val op_path : Iface.type_decl -> Iface.op -> Path.t
 (* Whether a value of the type has a member or a field of the name. *)
 val has_member : env -> Types.ty -> string -> bool
 
+(* The type of an expression, where its member or field of the name is
+   about to be looked up: if it's an implementation of several
+   dependencies, the one of them that has it, which the expression is
+   narrowed to there. More than one is reported, and [TError]. *)
+val member_of_several :
+  env -> ctx -> Ast.Resolved.expr -> Types.ty -> Ast.ident -> Types.ty
+
 val sorted : string list -> string list
 
 (* `r.f`, the expression given, once [r]'s type is known: the field's

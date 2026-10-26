@@ -43,3 +43,21 @@ val instance : env -> Iface.type_decl -> Types.ty * Types.ty list
 
 (* A field's type, given what the type's parameters stand for. *)
 val field_type : Infer_env.env -> tvars:Types.ty list -> Iface.field -> Types.ty
+
+(* Whether a parameter's or a field's type, as it was made from a
+   declaration or a scheme, is written there, not a variable: looked at
+   itself, not at what inference has linked it to. Only a written type
+   narrows an implementation of several dependencies (Infer_expr.narrow). *)
+val is_written : Types.ty -> bool
+
+(* Which parameters of a call's callee, of the type given, have a type
+   written: [callee], one of the module's functions, has to write each in
+   its declaration too. [skip] are those before the ones given, a method's
+   `self`. *)
+val written_params :
+  env ->
+  ?callee:Path.t ->
+  ?skip:int ->
+  Types.ty ->
+  Types.param list ->
+  bool list

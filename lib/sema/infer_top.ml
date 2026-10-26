@@ -86,9 +86,14 @@ let check_transparent sink (f : fn_def) =
       (fun (p : Resolved.param) ->
         match p.pty with
         | Some (TyFn _ as t) when not (names_row t) -> Some (p.pname, None)
-        | Some (TyImpl ({ tref = Named d; _ }, None, _))
-          when p.pname.ident.name <> "self" ->
-            Some (p.pname, Some d)
+        | Some (TyImpl (ds, None, _)) when p.pname.ident.name <> "self" ->
+            Some
+              ( p.pname,
+                Some
+                  (String.concat " & "
+                     (List.map
+                        (fun (d : Path.t) -> d.name)
+                        (Iface.dep_paths ds))) )
         | _ -> None)
       f.params
   in
@@ -106,7 +111,6 @@ let check_transparent sink (f : fn_def) =
                    deps)
           | _ -> None
         in
-        let dep = Option.map (fun (d : Path.t) -> d.name) dep in
         raise (Diag.Error (not_transparent loc ~name ~dep ~handler_deps escape))
       in
       let is_param = function Local b -> b.id = param.id | _ -> false in
@@ -509,9 +513,9 @@ module Nodes = Map.Make (Int)
 type node = {
   ty : Ty.ty;
   found : found option;
-  as_dep : Path.t option;
-      (** a handler of several dependencies, where one of them is wanted: that
-          one, which it's taken as a description of (Infer_coerce.as_one) *)
+  narrowed : Path.t list option;
+      (** an implementation of several dependencies, narrowed to some of them,
+          these, where a written type asks for those (Infer_expr.narrow) *)
   targs : Ty.args option;
       (** a use of a top-level function, a member, an associated value or an
           intrinsic: the type arguments it's used at *)
@@ -569,19 +573,12 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
   (* an implementation that needs [p] itself would need one installed
      before it, so it isn't one to suggest; a handler of [p] is one *)
   let makes p t =
-    let implements q =
-      q = p
-      ||
-      match Hashtbl.find_opt env.types q with
-      | Some { body = Handler deps; _ } -> List.mem p deps
-      | _ -> false
-    in
     match repr t with
     | TFun (ps, ret, _, _, _) -> (
-        match repr ret with
-        | TCon (q, [ TUses needs ])
-          when implements q && not (List.mem (Ty.dep_label p) (row_names needs))
-          ->
+        match impl_parts ret with
+        | Some (ds, needs)
+          when List.mem p ds
+               && not (List.mem (Ty.dep_label p) (row_names needs)) ->
             Some (List.length ps)
         | _ -> None)
     | _ -> None
@@ -746,62 +743,6 @@ let check_test env r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
         at = t.loc;
       }
 
-(* What a public function without `->` would write as its result, which
-   is [found], printed with [pr]. A handler of several dependencies has a
-   type of its own, named after it, `counting_rates uses Clock`, which
-   can't be written: if one is in [found], the first by name, it's written
-   as the first dependency it implements. *)
-let result_help env pr found =
-  let rec handlers t =
-    match repr t with
-    | TCon (p, args) ->
-        (match Hashtbl.find_opt env.types p with
-          | Some { body = Handler deps; _ } -> [ (type_name env p, deps) ]
-          | _ -> [])
-        @ List.concat_map handlers args
-    | TFun (ps, r, e, u, _) ->
-        List.concat_map handlers (r :: param_tys ps) @ in_row e @ in_row u
-    | TErrors r | TUses r -> in_row r
-    | TVar _ | TSkol _ | TError -> []
-  and in_row r =
-    List.concat_map
-      (fun (l : label) -> List.concat_map handlers l.payload)
-      (fst (row_parts r))
-  in
-  match List.sort compare (handlers found) with
-  | (h, d :: _) :: _ -> (
-      match repr found with
-      | TCon (p, _) when type_name env p = h -> Say_dep (type_name env d)
-      | _ ->
-          (* [found] with [h] written as [d] everywhere *)
-          let rec rename t =
-            match repr t with
-            | TCon (p, args) ->
-                TCon
-                  ((if type_name env p = h then d else p), List.map rename args)
-            | TFun (ps, r, e, u, l) ->
-                TFun
-                  ( List.map
-                      (fun (p : Types.param) -> { p with ty = rename p.ty })
-                      ps,
-                    rename r,
-                    rename_row e,
-                    rename_row u,
-                    l )
-            | TErrors r -> TErrors (rename_row r)
-            | TUses r -> TUses (rename_row r)
-            | t -> t
-          and rename_row r =
-            match repr_row r with
-            | RExtend (l, rest) ->
-                RExtend
-                  ( { l with payload = List.map rename l.payload },
-                    rename_row rest )
-            | r -> r
-          in
-          Say_dep_inside { handler = h; written = show pr (rename found) })
-  | _ -> Write_found
-
 (* ---- checking the module ---- *)
 
 (* The environment the module [r] is checked in (Infer_env.env), with
@@ -845,6 +786,7 @@ let new_env sink ~reachable (r : Resolve.t) =
     spelled = [];
     pending = [];
     forced = [];
+    written = Hashtbl.create 16;
     in_state = false;
     in_scope = [];
   }
@@ -974,14 +916,12 @@ let setup env ~is_value (f : fn_def) =
       | None when f.pub && not (is_value f) ->
           unit (* a public function without `->` returns Unit *)
       | None when Ast.is_handler f ->
-          (* a handler whose needs aren't written: its type, its
-             dependency's or its own (Iface.handler_type), needs what its
-             body works out, which is known before its body is checked, so
-             the group's other functions, and its own arms, can install
-             it *)
-          TCon
-            ( Option.get (Iface.handler_type ~home:env.home f),
-              [ TUses (fresh_row env.st) ] )
+          (* a handler whose needs aren't written: its type, which lists
+             the dependencies it implements (Types.impl_type), needs what
+             its body works out, which is known before its body is
+             checked, so the group's other functions, and its own arms,
+             can install it *)
+          impl_type (Option.get (Iface.handler_deps f)) (fresh_row env.st)
       | None -> fresh_var env.st
     in
     (ps, ret, errs, uses)
@@ -992,9 +932,11 @@ let setup env ~is_value (f : fn_def) =
     {
       self = path;
       locals = Hashtbl.create 16;
+      binders = Hashtbl.create 8;
+      written_locals = Hashtbl.create 8;
       nodes = Hashtbl.create 64;
       found = Hashtbl.create 16;
-      as_dep = Hashtbl.create 4;
+      narrowed = Hashtbl.create 4;
       targs = Hashtbl.create 16;
       required = Hashtbl.create 4;
       errs;
@@ -1052,7 +994,7 @@ let setup env ~is_value (f : fn_def) =
 (* Check the body of [m], a function of the group, against its result. *)
 let check_body env ~is_value m =
   let f = m.fn in
-  bind_params m.cx f.params m.ps;
+  bind_params ~own:true m.cx f.params m.ps;
   let why =
     match f.ret with
     | Some _ ->
@@ -1065,17 +1007,20 @@ let check_body env ~is_value m =
           ()
     | None when f.pub && not (is_value f) ->
         explain ~notes:[ returns_unit ]
-          ~help_of:(fun pr found ->
-            write_result (show pr found) (result_help env pr found))
+          ~help:(fun found _ -> write_result found)
           ()
     | None -> plain
   in
   match (f.body.kind, m.ret) with
-  | Handler { state; arms; _ }, TCon (_, [ TUses needs ]) when f.ret = None ->
+  | Handler { state; arms; _ }, t when f.ret = None && impl_parts t <> None ->
       (* its needs are what its state and arms use *)
+      let needs = snd (Option.get (impl_parts t)) in
       handler core env m.cx state arms ~needs ~declared:None;
       Hashtbl.replace m.cx.nodes f.body.node m.ret
-  | _ -> check env m.cx ~why f.body m.ret
+  | _ ->
+      check env m.cx ~why
+        ?written:(if f.ret <> None then Some m.ret else None)
+        f.body m.ret
 
 (* Generalize each function of the group [ms], once it's solved, into its
    type scheme. A function whose type holds another's type parameter, one
@@ -1300,7 +1245,7 @@ let canonical env so_far (f : fn_def) =
           {
             ty;
             found = Hashtbl.find_opt cx.found id;
-            as_dep = Hashtbl.find_opt cx.as_dep id;
+            narrowed = Hashtbl.find_opt cx.narrowed id;
             targs = Option.map fst used;
             needs = Option.fold ~none:[] ~some:snd used;
           }
@@ -1325,6 +1270,13 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
      value is checked as a function of no parameters (ast.ml) *)
   let fns = Ast.functions r.prog in
   add_globals env ~imports ~reachable fns;
+  (* which parameters each function writes a type for, which a call's
+     arguments are narrowed to (Infer_written.written_params) *)
+  List.iter
+    (fun (f : fn_def) ->
+      Hashtbl.replace env.written (Ast.fn_path r.home f)
+        (List.map (fun (p : Resolved.param) -> p.pty <> None) f.params))
+    fns;
   let values =
     List.concat_map
       (function

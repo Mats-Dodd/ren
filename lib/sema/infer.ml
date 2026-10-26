@@ -76,7 +76,7 @@ module Nodes = Infer_top.Nodes
 type node = Infer_top.node = {
   ty : Ty.ty;
   found : found option;
-  as_dep : Path.t option;
+  narrowed : Path.t list option;
   targs : Ty.args option;
   needs : (int * string) list;
 }

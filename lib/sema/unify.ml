@@ -28,7 +28,7 @@ let rec occurs id level t =
   | TVar { contents = Link _ } -> assert false
   | TSkol _ | TError -> ()
   | TCon (_, args) -> List.iter (occurs id level) args
-  | TErrors e | TUses e -> occurs_row ~ty:id (-1) level e
+  | TErrors e | TUses e | TAll (_, e) -> occurs_row ~ty:id (-1) level e
   | TFun (ps, r, e, u, l) ->
       List.iter (occurs id level) (r :: param_tys ps);
       occurs_row ~ty:id (-1) level e;
@@ -49,72 +49,12 @@ and occurs_row ?(ty = -1) id level r =
       List.iter (occurs ty level) label.payload;
       occurs_row ~ty id level rest
 
-(* [w] is what variable [id] can become, as well as anything it could
-   already: any of what's allowed, and the handler given first is the one
-   it is if nothing else says. [Ids.update] gives the old entry, if there
-   is one, and keeps what it returns. *)
-let add_watch st id (w : watch) =
-  st.watched <-
-    Ids.update id
-      (fun before ->
-        let w =
-          match before with
-          | Some b when b.order < w.order ->
-              { b with allowed = b.allowed @ w.allowed }
-          | Some b -> { w with allowed = w.allowed @ b.allowed }
-          | None -> w
-        in
-        Some { w with allowed = List.sort_uniq compare w.allowed })
-      st.watched
-
-(* A handler of several dependencies, of type [handler], given to a
-   variable before what's wanted is known (Infer_coerce.give) makes the
-   variable one of [allowed]: the handler's own type, which it is if
-   nothing else says, or one of its dependencies', which it's taken as.
-   Anything else is a mismatch where it's said, not later at the handler,
-   so the message is about what said it: `let n: Int = h` is "expected
-   `Int`, found `counting_rates`". *)
-let watch st t ~handler allowed =
-  match repr t with
-  | TVar { contents = Unbound (id, _) } ->
-      st.given <- st.given + 1;
-      add_watch st id { allowed; handler; order = st.given }
-  | _ -> ()
-
-(* Whether [t] is a variable [watch] was given. *)
-let watched st t =
-  match repr t with
-  | TVar { contents = Unbound (id, _) } -> Ids.mem id st.watched
-  | _ -> false
-
-(* If [t] is a variable [watch] was given, the type of the first handler
-   given to it. *)
-let first_given st t =
-  match repr t with
-  | TVar { contents = Unbound (id, _) } ->
-      Option.map (fun (w : watch) -> w.handler) (Ids.find_opt id st.watched)
-  | _ -> None
-
-(* Before binding variable [id] to [t]: fail if [id] is watched and [t]
-   is none of what it can be. Another variable can be any of it, so it's
-   watched for all of that too. *)
-let check_watch st id t =
-  match Ids.find_opt id st.watched with
-  | None -> ()
-  | Some w -> (
-      match t with
-      | TVar { contents = Unbound (id', _) } -> add_watch st id' w
-      | TCon (p, _) when List.mem p w.allowed -> ()
-      | TError -> ()
-      | _ -> raise Mismatch)
-
 let rec unify st a b =
   match (repr a, repr b) with
   | TVar r1, TVar r2 when r1 == r2 -> ()
   | TVar ({ contents = Unbound (id, l) } as r), t
   | t, TVar ({ contents = Unbound (id, l) } as r) ->
       occurs id l t;
-      check_watch st id t;
       r := Link t
   (* code with an error, already reported, fits anywhere; a variable unified
      with it becomes an error too, so the mistake isn't reported again *)
@@ -138,6 +78,10 @@ let rec unify st a b =
       unify_row st u1 u2;
       unify_lams st l1 l2
   | TErrors e1, TErrors e2 | TUses e1, TUses e2 -> unify_row st e1 e2
+  (* an implementation of several dependencies is one of exactly those;
+     where a written type asks for fewer, it's narrowed before it gets
+     here (Infer_expr.narrow) *)
+  | TAll (d1, u1), TAll (d2, u2) when d1 = d2 -> unify_row st u1 u2
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 
@@ -322,6 +266,7 @@ let copier () =
             row l )
     | TErrors r -> TErrors (row r)
     | TUses r -> TUses (row r)
+    | TAll (ds, r) -> TAll (ds, row r)
     | (TSkol _ | TError) as t -> t
   and row r =
     match repr_row r with
@@ -356,9 +301,7 @@ let originals = { ty = Fun.id; row = Fun.id }
    which then can't fail. If it failed, it says how, and nothing but the
    copies changed: [c] gives them back, as far as it got, for a message.
    [{ st with level = st.level }] is a new record with the same fields,
-   whose counters and [watched] change without changing [st]'s. [watched]
-   is a map that never changes, only replaced by a bigger one, so sharing
-   it costs nothing, however much is in it. *)
+   whose counters change without changing [st]'s. *)
 let atomically st c f =
   match f { st with level = st.level } c with
   | () ->

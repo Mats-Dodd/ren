@@ -72,7 +72,7 @@ let rec has_error (t : Ty.ty) =
   | Error -> true
   | Var _ -> false
   | Con (_, args) -> List.exists has_error args
-  | Errors e | Uses e -> row_has_error e
+  | Errors e | Uses e | All (_, e) -> row_has_error e
   | Fun (ps, r, e, _, _) ->
       List.exists (fun (p : Ty.param) -> has_error p.ty) ps
       || has_error r || row_has_error e
@@ -88,6 +88,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   | Con (p, a) -> Con (p, List.map (subst args) a)
   | Errors e -> Errors (subst_row args e)
   | Uses u -> Uses u
+  | All (ds, u) -> All (ds, u)
   | Fun (ps, r, e, u, l) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
@@ -119,13 +120,20 @@ let rec reveal env (t : Ty.ty) : Ty.ty =
       match Hashtbl.find_opt env.types p with
       | Some { Iface.body = Opaque (Rep rep); _ } -> reveal env (subst args rep)
       | _ -> t)
-  | Fun _ | Var _ | Errors _ | Uses _ | Error -> t
+  | Fun _ | Var _ | Errors _ | Uses _ | All _ | Error -> t
 
 (* Are two lambda sets the same? One of a type written in a declaration
    ([Ty.any_lams]), a field's or an operation's, says nothing of what can
    flow to it, so it's the same as any. *)
 let same_lams (a : Ty.lams) (b : Ty.lams) =
   a.lvar = None || b.lvar = None || a = b
+
+(* An implementation that needs [a] will do where one that needs [b] is
+   wanted, if it needs no more (Infer_rows.widen); where it's used, what
+   it needs is copied, with a tail of its own (Infer_rows.copy_needs). *)
+let needs_within (a : Ty.row) (b : Ty.row) =
+  List.for_all (fun l -> List.mem l b.labels) a.labels
+  && (a.tail = None || b.tail <> None)
 
 (* Are [a] and [b] the same type, once opaque types are revealed where they
    differ? An implementation [a] may need less than [b]. *)
@@ -143,12 +151,8 @@ let rec equal env (a : Ty.ty) (b : Ty.ty) =
           p.mode = q.mode && equal env p.ty q.ty)
         ps qs
       && equal env r r' && e = e' && u = u' && same_lams l l'
-  | Uses a, Uses b ->
-      (* an implementation that needs less will do where one that needs
-         more is wanted (Infer_rows.widen); where it's used, what it needs
-         is copied, with a tail of its own (Infer_rows.copy_needs) *)
-      List.for_all (fun l -> List.mem l b.labels) a.labels
-      && (a.tail = None || b.tail <> None)
+  | Uses a, Uses b -> needs_within a b
+  | All (ds, a), All (ds', b) when ds = ds' -> needs_within a b
   | _ ->
       let a' = reveal env a and b' = reveal env b in
       if a' == a && b' == b then a = b else equal env a' b'
@@ -182,7 +186,7 @@ let rec canonical_lams env loc what (t : Ty.ty) =
   match t with
   | Var _ | Error -> ()
   | Con (_, args) -> List.iter (canonical_lams env loc what) args
-  | Errors r | Uses r -> row r
+  | Errors r | Uses r | All (_, r) -> row r
   | Fun (ps, r, e, u, l) ->
       if l.ids <> List.sort_uniq compare l.ids || l.lvar = None then
         fail env loc
@@ -224,7 +228,8 @@ let rec lams_within env loc what (found : Ty.ty) (expected : Ty.ty) =
   match (reveal env found, reveal env expected) with
   | Con (_, xs), Con (_, ys) when List.length xs = List.length ys ->
       List.iter2 (lams_within env loc what) xs ys
-  | (Errors a | Uses a), (Errors b | Uses b) -> row a b
+  | (Errors a | Uses a | All (_, a)), (Errors b | Uses b | All (_, b)) ->
+      row a b
   | Fun (ps, r, e, u, l), Fun (qs, r', e', u', l')
     when List.length ps = List.length qs ->
       (match List.find_opt (fun i -> not (List.mem i l'.ids)) l.ids with
@@ -274,6 +279,7 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
           ps qs
         && go r r' && row e e' && row u u' && lam_set l l'
     | Errors e, Errors e' | Uses e, Uses e' -> row e e'
+    | All (ds, e), All (ds', e') when ds = ds' -> row e e'
     | _ ->
         let s' = reveal env s and t' = reveal env t in
         if s' == s && t' == t then false else go s' t'
@@ -326,6 +332,7 @@ let rec apply (a : Ty.args) (s : Ty.ty) : Ty.ty =
   | Con (p, args) -> Con (p, List.map (apply a) args)
   | Errors e -> Errors (apply_row a e)
   | Uses u -> Uses (apply_row a u)
+  | All (ds, u) -> All (ds, apply_row a u)
   | Fun (ps, r, e, u, l) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = apply a p.ty }) ps,
@@ -420,13 +427,13 @@ let ctor_of env loc (td : Iface.type_decl) c =
       | Some k -> k
       | None ->
           fail env loc (sprintf "`%s` has no constructor `%s`" td.path.name c))
-  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ | Handler _ ->
+  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ ->
       fail env loc (sprintf "`%s` isn't a sum type" td.path.name)
 
 let fields_of env loc (td : Iface.type_decl) =
   match td.body with
   | Record fs | Dep fs -> fs
-  | Sum _ | Builtin | Opaque _ | Errors _ | Handler _ ->
+  | Sum _ | Builtin | Opaque _ | Errors _ ->
       fail env loc (sprintf "`%s` isn't a record" td.path.name)
 
 let field_ty env loc (td : Iface.type_decl) args f =
@@ -568,6 +575,7 @@ let rec has_eq env seen (t : Ty.ty) =
   match t with
   | Fun _ -> false
   | Var _ | Error | Uses _ -> true
+  | All _ -> false
   | Errors r -> row r
   | Con (p, args) ->
       List.for_all (has_eq env seen) args
@@ -586,7 +594,7 @@ let rec has_eq env seen (t : Ty.ty) =
                    (fun (c : Iface.ctor) -> List.for_all field c.cfields)
                    cs
              | Opaque (Rep rep) -> has_eq env (p :: seen) rep
-             | Dep _ | Handler _ -> false))
+             | Dep _ -> false))
 
 (* The requirement a dictionary (core.ml, [dict]) is for, and the type, in
    the type variables of the function being checked: one of its own
@@ -764,79 +772,70 @@ let rec expr env sc (e : expr) =
       (* like a lambda's, its body sees only what it captures, and its own
          evidence: what's installed where it's installed *)
       let inner = List.fold_left (fun sc v -> add v sc) Scope.empty captures in
-      match e.ty with
-      | Con (p, [ Uses needs ]) ->
-          (* its dependency's type, or the handler's own *)
-          (match (decl env loc p).body with
-          | Handler _ | Dep _ -> ()
-          | _ ->
-              fail env loc
-                (sprintf "`%s` isn't a handler or a dependency" (Path.full p)));
+      match Ty.impl_parts e.ty with
+      | Some (ds, needs) ->
+          (* its dependency's type, or the type that lists them *)
+          List.iter
+            (fun (d : Path.t) ->
+              match (decl env loc d).body with
+              | Dep _ -> ()
+              | _ ->
+                  fail env loc (sprintf "`%s` isn't a dependency" (Path.full d)))
+            ds;
           expr (inside env loc "a handler's evidence" ev needs) inner body;
           same env body.loc "a handler's body" body.ty e.ty
-      | t -> fail env loc (sprintf "a handler has type `%s`" (show t)))
+      | None -> fail env loc (sprintf "a handler has type `%s`" (show e.ty)))
   | Instance impls -> (
-      match e.ty with
-      | Con (p, [ Uses needs ]) -> (
-          (* a handler of one dependency has that dependency's type *)
-          let deps =
-            match (decl env loc p).body with
-            | Handler deps -> Some deps
-            | Dep _ -> Some [ p ]
-            | _ -> None
-          in
-          match deps with
-          | Some deps when deps = List.map fst impls ->
-              List.iter
-                (fun (d, (i : expr)) ->
-                  expr env sc i;
-                  same env i.loc
-                    ("the implementation of `" ^ d.Path.name ^ "`")
-                    i.ty
-                    (Con (d, [ Uses needs ])))
-                impls
-          | _ ->
-              fail env loc
-                (sprintf "an instance doesn't implement what `%s` does"
-                   (Path.full p)))
-      | t -> fail env loc (sprintf "an instance has type `%s`" (show t)))
-  | As_dep (d, h) -> (
+      match Ty.impl_parts e.ty with
+      | Some (ds, needs)
+        when List.sort compare (List.map fst impls) = ds
+             && List.length impls = List.length ds ->
+          (* in the order they're written, an implementation of each of
+             the dependencies its type lists, which it keeps sorted *)
+          List.iter
+            (fun (d, (i : expr)) ->
+              expr env sc i;
+              same env i.loc
+                ("the implementation of `" ^ d.Path.name ^ "`")
+                i.ty
+                (Con (d, [ Uses needs ])))
+            impls
+      | Some _ ->
+          fail env loc
+            (sprintf "an instance doesn't implement what `%s` does" (show e.ty))
+      | None -> fail env loc (sprintf "an instance has type `%s`" (show e.ty)))
+  | Narrowed (ds, h) -> (
       expr env sc h;
-      match h.ty with
-      | Con (p, [ Uses needs ]) -> (
-          match (decl env loc p).body with
-          | Handler deps when List.mem d deps ->
-              is "a handler taken as one dependency's" (Con (d, [ Uses needs ]))
-          | _ ->
-              fail env loc
-                (sprintf "`%s` isn't a handler of `%s`" (Path.full p)
-                   (Path.full d)))
-      | t ->
+      match Ty.impl_parts h.ty with
+      | Some (all, needs)
+        when List.length ds < List.length all
+             && List.for_all (fun d -> List.mem d all) ds ->
+          is "a handler narrowed to some of its dependencies" (Ty.impl ds needs)
+      | Some _ ->
+          fail env loc
+            (sprintf "`%s` can't be narrowed to `%s`" (show h.ty)
+               (String.concat " & " (List.map Path.full ds)))
+      | None ->
           fail env h.loc
-            (sprintf "a handler taken as `%s` has type `%s`" (Path.full d)
-               (show t)))
+            (sprintf "a handler narrowed to `%s` has type `%s`"
+               (String.concat " & " (List.map Path.full ds))
+               (show h.ty)))
   | With_handler { ev; outer; handler; deps; body } ->
       let what = "installing a handler" in
       current env loc what outer;
       is_evidence env loc what ev;
       expr env sc handler;
-      (* what it needs, it needs here *)
+      (* it installs what its type says, and what it needs, it needs here *)
       (match handler.ty with
-      | Con (p, [ Uses needs ]) -> (
-          match (decl env loc p).body with
-          | Handler ds when ds = deps ->
-              List.iter
-                (fun (l : Ty.label) ->
-                  available env loc what (Ty.dep_path l.name))
-                needs.labels
-          | _ ->
-              fail env loc
-                (sprintf "`%s` doesn't implement what's installed" (Path.full p))
-          )
+      | All (ds, needs) when ds = deps ->
+          List.iter
+            (fun (l : Ty.label) -> available env loc what (Ty.dep_path l.name))
+            needs.labels
       | t ->
           fail env handler.loc
-            (sprintf "what's installed has type `%s`, but should be a handler"
-               (show t)));
+            (sprintf "what's installed has type `%s`, but should be `%s`"
+               (show t)
+               (String.concat " & " (List.map Path.full deps))));
       expr { env with ev = Some ev; installed = deps @ env.installed } sc body;
       is "a `With`" body.ty
   | Prim (op, args) -> prim env sc e op args
@@ -1256,7 +1255,7 @@ let rec globals (e : expr) =
   | Field (a, _, _)
   | Lambda { body = a; _ }
   | Fail a
-  | As_dep (_, a)
+  | Narrowed (_, a)
   | Assert a ->
       globals a
   | Handle { body; on_value; on_error; _ } ->
@@ -1412,7 +1411,7 @@ let program ~imports ~linked (prog : program) =
       List.iter
         (fun (td : Iface.type_decl) ->
           match td.body with
-          | Dep _ | Handler _ -> Hashtbl.replace env.types td.path td
+          | Dep _ -> Hashtbl.replace env.types td.path td
           | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> ())
         m.types)
     linked;

@@ -438,7 +438,7 @@ stage, or settled something the plan left open:
   handler of one has its dependency's type.
 - **Where a written type asks for one of them, it becomes that one.**
   A parameter, a function's result, a field, or a `let`'s or a list's
-  type: `fn run(r: Rates)`, `-> Clock`, `let cs: List<Users> = [...]`.
+  type: `fn run(r: Rates)`, `-> Clock`, `let cs: Array<Users> = [...]`.
   Giving more than is asked is fine, as Effect's layers allow. From
   there on it's a `Rates`, still describing the same handler, but its
   other dependencies can't be reached through it. A written type can
@@ -451,11 +451,19 @@ stage, or settled something the plan left open:
   it's an error that says where to write one. That covers a generic,
   `apply(run, counting_rates(1))`, which never narrows through an
   inferred `A`, branches or list items that differ, and a `with` whose
-  value's type isn't known yet, `fn f(c) = with c in`. Narrowing only
-  where a type is written means whether code checks never depends on the
-  order the checker reads it in.
+  value's type isn't known yet, `fn f(c) = with c in`.
+- **Types flow left to right,** as in Rust and TypeScript: once a
+  value's type is known, later code sees it. `ap(counting_rates(1),
+  fn(r) => run(r))` checks, since `r` is already a `Rates & RateCalls`
+  when it reaches `run`'s written `Rates`. `ap(fn(r) => run(r),
+  counting_rates(1))` is an error: `r` is already a `Rates` when the
+  handler arrives, and `ap`'s `T` isn't a written type. The help says to
+  write one where the handler is made, `let h: Rates = ...`, which works
+  in either order.
 - **A method called on it is the one of its dependencies that has it,**
-  `h.count()`, and it's an error if more than one does.
+  `h.count()`, and it's an error if more than one does, or if the method
+  changes its receiver (`inout self`), since that would make `h` just one
+  of them.
 
 ```
 error: the items in this list have different types
@@ -465,7 +473,7 @@ error: the items in this list have different types
   │             ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^ is `Users & UserCalls`
   │             is `Users`
   │
-  = help: say what the list holds: `let bs: List<Users> = ...`
+  = help: say what the list holds: `let bs: Array<Users> = ...`
 ```
 
 ```

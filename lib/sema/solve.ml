@@ -27,7 +27,7 @@ open Infer_report
    changing nothing if that fails: the mismatch is reported as far as the
    copies got, which is what it would have said unifying the types
    themselves. *)
-let equal env ?msg ?notes ?help loc ~found ~expected =
+let equal env ?msg ?notes ?help ?narrowed_help loc ~found ~expected =
   let c = Unify.copier () in
   match
     Unify.atomically env.st c (fun st (c : Unify.copy) ->
@@ -37,7 +37,7 @@ let equal env ?msg ?notes ?help loc ~found ~expected =
   | Error failure ->
       let help = Option.map (fun h _ _ -> h) help in
       mismatch env
-        (explain ?msg ?notes ?help ())
+        (explain ?msg ?notes ?help ?narrowed_help ())
         loc ~found:(c.ty found) ~expected:(c.ty expected) failure
 
 (* A use of another function of the group is the type that function's
@@ -69,9 +69,28 @@ let join env ~is_value j =
          used as its result, which is what's shown *)
       equal env j.jloc ~found:used ~expected:made ~msg
         ~notes:[ group_type ~values:true ]
-  | _ ->
+  | used, made ->
+      (* a call of it isn't narrowed, as its result isn't written there
+         (Infer_expr.narrow), so that's what to write, if that's where the
+         two differ; or else the parameter's type, which an argument is
+         narrowed to once it's written (Infer_written.written_params) *)
+      let deps t = Option.map fst (impl_parts t) in
+      let at =
+        match (used, made) with
+        | TFun (ps, r, _, _, _), TFun (qs, r', _, _, _)
+          when deps r = deps r' && List.length ps = List.length qs ->
+            List.find_mapi
+              (fun i ((p : param), (q : param)) ->
+                if deps p.ty <> deps q.ty then Some i else None)
+              (List.combine ps qs)
+        | _ -> None
+      in
       equal env j.jloc ~found:j.used ~expected ~msg
         ~notes:[ group_type ~values:false ]
+        ~narrowed_help:
+          (match at with
+          | Some i -> write_group_param j.jname (i + 1)
+          | None -> write_group_result j.jname)
 
 (* A value thrown away is `Unit` (see [Infer_env.drop]). One whose type is
    still unknown, like the result of calling a parameter, becomes `Unit`,
@@ -82,9 +101,7 @@ let drop env d =
   | _ -> ());
   (* an implementation, or a handler's description, which a handler's
      call makes: it's for installing *)
-  let implementation =
-    match repr d.dty with TCon (_, [ TUses _ ]) -> true | _ -> false
-  in
+  let implementation = impl_parts d.dty <> None in
   equal env d.dloc ~found:d.dty ~expected:unit
     ~msg:(thrown_away ~callee:d.callee ~implementation)
     ~help:(thrown_away_help ~implementation)
@@ -240,10 +257,7 @@ let copy env k =
 let install env ~shared w =
   let dep_name = env.names (Ty.dep_path w.wdep) in
   let labels, tail = row_parts w.wbody in
-  let rest =
-    if w.winstalls then List.filter (fun (l : label) -> l.name <> w.wdep) labels
-    else labels
-  in
+  let rest = List.filter (fun (l : label) -> l.name <> w.wdep) labels in
   (* add [r] to what's outside: whether it could *)
   let into r =
     Result.is_ok
@@ -255,14 +269,11 @@ let install env ~shared w =
     | _ when tail <> None && tail = row_tail w.wouter ->
         (* the same row: everything it uses but [wdep] is outside too *)
         let outer = row_names w.wouter in
-        ( (if w.winstalls then
-             Some (Same_row { fn = Path.local w.wself; dep = dep_name })
-           else None),
+        ( Some (Same_row { fn = Path.local w.wself; dep = dep_name }),
           None,
           List.for_all (fun (l : label) -> List.mem l.name outer) rest )
     | RVar _ as t
-      when w.winstalls
-           && List.length rest = List.length labels
+      when List.length rest = List.length labels
            && not (shared (Option.get tail)) ->
         (* it may use [wdep] too, as a closure the body calls may; a
            variable still unbound takes any row, so this can't fail *)
@@ -271,7 +282,7 @@ let install env ~shared w =
         (None, None, into (extend rest t'))
     | RVar _ as t ->
         let withheld =
-          if w.winstalls && List.length rest = List.length labels then
+          if List.length rest = List.length labels then
             Some (Several_withs { fn = Path.local w.wself; dep = dep_name })
           else None
         in
@@ -744,10 +755,8 @@ let installs env ~copies cs =
    starts, and each kind in the order they were met, since a later kind
    reads what an earlier one decides. The uses of the group's functions
    by each other are joined first, since a call of another function of
-   the group learns only then what it returns; then a handler given where
-   what's wanted wasn't known is taken as what's wanted, which is known
-   as far as it will be, and a `with` of it then knows what it installs;
-   then a value thrown away is checked. What a
+   the group learns only then what it returns; then a value thrown away is
+   checked. What a
    `with` installs is decided next, each `with` once the copies of what
    an implementation needs are up to date, since what its body uses
    includes them. A function that names its own errors' row fails with it
@@ -771,19 +780,6 @@ let solve env ~is_value ~withheld =
     List.filter_map (function Declared c -> Some c | _ -> None) cs
   in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) cs;
-  List.iter (function Coerce k -> Infer_coerce.coerce env k | _ -> ()) cs;
-  (* each variable a handler was given to is decided now *)
-  env.st.watched <- Ids.empty;
-  (* a `with` of a handler given before what's wanted was known is the
-     `with`s of what it installs, now that that's known *)
-  let cs =
-    List.concat_map
-      (function
-        | Install_one_of o ->
-            List.map (fun w -> Install w) (Infer_coerce.installs o)
-        | c -> [ c ])
-      cs
-  in
   List.iter (function Drop d -> drop env d | _ -> ()) cs;
   let ks = copies cs in
   let held, dues = installs env ~copies:ks cs in

@@ -41,14 +41,6 @@ type body =
       (** a dependency, [dep Clock = ...]: its operations, each a function type
           that fails with exactly what it's written to fail with, and uses
           nothing. A value of it is an implementation, a record of them *)
-  | Handler of Path.t list
-      (** the type of a handler of several dependencies, named after the
-          `handler` declaration whose function gives one, [counting_rates]: a
-          description of an implementation of each of these dependencies,
-          sharing one state, which each `with` makes a fresh instance of
-          (deps.md, "Implementations"). Like an implementation, its one argument
-          is what it needs. A handler of one dependency has that dependency's
-          type ([handler_type]) *)
 
 (* An opaque type's representation, [Rep], in its own module's view of
    it, or in its interface, [Hidden]: all another module learns of it is
@@ -172,11 +164,7 @@ let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
   match t with
   | TyName ({ tref = Param i; _ }, _) -> Var i
   | TyName ({ tref = Named path; _ }, args) -> Con (path, List.map go args)
-  | TyImpl ({ tref = Named path; _ }, u, _) ->
-      Con (path, [ Uses (written_uses ~rows u) ])
-  | TyImpl ({ tref = Param _; _ }, _, _) ->
-      (* resolve.ml only makes a dependency a [TyImpl] *)
-      assert false
+  | TyImpl (ds, u, _) -> Ty.impl (dep_paths ds) (written_uses ~rows u)
   | TyFn (ps, ret, errs, u, _) ->
       let ret = match ret with Some r -> go r | None -> Ty.unit in
       Fun
@@ -210,16 +198,20 @@ and written_uses ~rows (u : Ast.Resolved.uses option) : Ty.row =
 
 and named rows (n : Ast.ident) = rows n.name
 
+(* The dependencies a `uses` lists, or that an implementation's type
+   joins with `&`. *)
+and dep_paths (ds : Ast.tname list) =
+  List.filter_map
+    (fun (d : Ast.tname) ->
+      match d.tref with
+      | Named p -> Some p
+      | Param _ -> (* resolve.ml only makes a dependency a [Named] *) None)
+    ds
+
 (* The labels of the dependencies a `uses` lists, sorted. *)
 and dep_labels (ds : Ast.tname list) =
   List.map Ty.label
-    (List.sort_uniq String.compare
-       (List.filter_map
-          (fun (d : Ast.tname) ->
-            match d.tref with
-            | Named p -> Some (Ty.dep_label p)
-            | Param _ -> (* resolve.ml only makes a dependency a [Named] *) None)
-          ds))
+    (List.sort_uniq String.compare (List.map Ty.dep_label (dep_paths ds)))
 
 (* An error set as written, as declared errors: each tag with its
    payload's types, its fields' names dropped. *)
@@ -324,7 +316,7 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
                   (if written_u = None then deps else u),
                   l )
           | _ -> assert false)
-      | Some (TyImpl ({ tref = Named d; _ }, None, _)) -> Con (d, [ Uses deps ])
+      | Some (TyImpl (ds, None, _)) -> Ty.impl (dep_paths ds) deps
       | Some t -> of_written ~rows ~sets t
       | None -> Error
     in
@@ -394,42 +386,13 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
   }
 
 (* The dependencies the handler [f] implements, if it's a `handler`
-   (ast.ml). *)
+   (ast.ml): calling it describes an implementation of each, sharing one
+   state, of their type, `Rates` for one, `Rates & RateCalls` for several
+   (deps.md, "Implementations"). *)
 let handler_deps (f : Ast.Resolved.fn_def) =
   match f.body.kind with
-  | Handler { deps; _ } ->
-      Some
-        (List.filter_map
-           (fun (d : Ast.tname) ->
-             match d.tref with Named p -> Some p | Param _ -> None)
-           deps)
+  | Handler { deps; _ } -> Some (dep_paths deps)
   | _ -> None
-
-(* The type calling the handler [f] gives, if it's a `handler`: a
-   handler of one dependency describes an implementation of it, so it's
-   that dependency's type, `Rates`; one of several has a type of its own,
-   named after it, `counting_rates`, which a value of one of its
-   dependencies' types can be made from (deps.md, "Implementations"). *)
-let handler_type ~home (f : Ast.Resolved.fn_def) =
-  match handler_deps f with
-  | Some [ d ] -> Some d
-  | Some _ -> Some (Path.make home f.name.name)
-  | None -> None
-
-(* The type of the handler [f] declares, if it's a `handler` of several
-   dependencies: one of one has its dependency's type. *)
-let of_handler ~home (f : Ast.Resolved.fn_def) =
-  match handler_deps f with
-  | Some [ _ ] | None -> None
-  | Some deps ->
-      Some
-        {
-          path = Path.make home f.name.name;
-          params = [];
-          body = Handler deps;
-          members = Path.Map.empty;
-          loc = Some f.name.loc;
-        }
 
 (* The interface of module [home] (module-build.md, "Interface
    summaries"): every public type it declares, with its public members,
@@ -478,7 +441,6 @@ let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
         (function
           | Ast.Type td when td.type_pub ->
               Some (public (of_type_def ~home ~sets td))
-          | Fn f when f.pub -> of_handler ~home f
           | Type _ | Fn _ | Import _ | Testing _ -> None)
         prog;
     values =

@@ -324,7 +324,29 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
           sep_list p ~close:GT (parse_ty ~arg:true))
         else []
       in
-      if uses && peek p = USES then (
+      if peek p = AMP then (
+        (* several dependencies, an implementation of each sharing one
+           state: `Clock & TestClock`, and what it needs, `uses Os` *)
+        let no_args l =
+          Diag.error l ~help:"only a dependency's type is joined with `&`"
+            "a type joined with `&` is a dependency's, which takes no type \
+             arguments"
+        in
+        if args <> [] then no_args (Loc.span start (last_loc p));
+        let rec joined acc =
+          if peek p = AMP then (
+            advance p;
+            let d = parse_tyname ~what:"a dependency's name" p in
+            if peek p = LT then no_args (loc p);
+            joined (d :: acc))
+          else List.rev acc
+        in
+        let names = joined [ name ] in
+        let u =
+          if uses && peek p = USES then Some (parse_uses ~arg p) else None
+        in
+        TyImpl (names, u, Loc.span start (last_loc p)))
+      else if uses && peek p = USES then (
         (* an implementation, and what it needs: `Clock uses Os` *)
         if args <> [] then
           Diag.error (loc p)
@@ -334,7 +356,7 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
                 nothing"
                (show_tyname name));
         let u = parse_uses ~arg p in
-        TyImpl (name, Some u, Loc.span start (last_loc p)))
+        TyImpl ([ name ], Some u, Loc.span start (last_loc p)))
       else TyName (name, args)
 
 (* A parameter in a function type may be named for documentation, as in
@@ -382,6 +404,12 @@ and parse_uses ?(greedy = false) ?(arg = false) p : uses =
       (* `store.Users`, or bare `Users`: after a module's alias, the error
          for a lowercase name points at the name *)
       let d = parse_tyname ~what:"a dependency's name" p in
+      if peek p = AMP then
+        Diag.error (loc p)
+          ~help:
+            (Printf.sprintf "write `%s, ...`: a function uses each of them"
+               (show_tyname d))
+          "in a `uses` list, dependencies are separated by commas";
       if peek p = COMMA && (greedy || continues ()) then (
         advance p;
         items (d :: acc))

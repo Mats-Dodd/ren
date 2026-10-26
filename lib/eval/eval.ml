@@ -380,7 +380,7 @@ let rec eval cx env (e : expr) =
       in
       let installed = VEvidence ({ dep; impl; outer } :: outer) in
       eval cx (Env.add ev.id (ref installed) env) body
-  | As_dep (_, h) -> eval cx env h
+  | Narrowed (_, h) -> eval cx env h
   | Handler { ev; captures; body } ->
       (* like a lambda, it copies what it captures now *)
       let env =
@@ -397,17 +397,19 @@ let rec eval cx env (e : expr) =
       let h = eval cx env handler in
       let outer = evidence_in env outer what in
       match h with
-      | VHandler h -> (
-          match instance cx h outer what with
-          | impls when List.map fst impls = deps ->
-              let installed =
-                List.fold_left
-                  (fun acc (dep, impl) -> { dep; impl; outer } :: acc)
-                  outer impls
-              in
-              eval cx (Env.add ev.id (ref (VEvidence installed)) env) body
-          | _ ->
-              bug (what ^ " whose instance doesn't implement its dependencies"))
+      | VHandler h ->
+          (* of what the instance implements, only [deps]: it may have
+             been narrowed to them (Core.Narrowed) *)
+          let impls = instance cx h outer what in
+          if not (List.for_all (fun d -> List.mem_assoc d impls) deps) then
+            bug (what ^ " whose instance doesn't implement its dependencies");
+          let installed =
+            List.fold_left
+              (fun acc (dep, impl) ->
+                if List.mem dep deps then { dep; impl; outer } :: acc else acc)
+              outer impls
+          in
+          eval cx (Env.add ev.id (ref (VEvidence installed)) env) body
       | _ -> bug (what ^ " with something that isn't a handler"))
   | Prim (((Equal d | Not_equal d) as op), [ a; b ]) ->
       let x = eval cx env a in

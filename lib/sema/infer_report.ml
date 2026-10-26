@@ -55,74 +55,26 @@ let rec binders (p : pattern) =
 (* How to explain a mismatch with an expected type, passed down along with
    it: [msg] words the error, [help] suggests a fix and [labels] point at
    other code, each given both types printed (the one found, then the one
-   expected); [notes] say where the expectation comes from. A help that
-   the printed types don't tell, [help_of], is given the type found, and
-   the printer the message prints it with. It's defined in infer_env.ml,
-   since a constraint can carry one: [= Infer_env.why] says it's that type,
-   not a new one with the same fields. *)
+   expected); [notes] say where the expectation comes from. [narrowed_help] is
+   the help, if the caller knows a better one, where the two are an
+   implementation of several dependencies and one of some of them, which
+   it's narrowed to only where a written type asks for that: it's given
+   that type, printed. It's defined in infer_env.ml, since a constraint
+   can carry one: [= Infer_env.why] says it's that type, not a new one with
+   the same fields. *)
 type why = Infer_env.why = {
   msg : (string -> string -> string) option;
   notes : string list;
   help : (string -> string -> string) option;
-  help_of : (Types.printer -> Types.ty -> string) option;
+  narrowed_help : (string -> string) option;
   labels : string -> string -> (Loc.t * string) list;
 }
 
-let explain ?msg ?(notes = []) ?help ?help_of ?(labels = fun _ _ -> []) () =
-  { msg; notes; help; help_of; labels }
+let explain ?msg ?(notes = []) ?help ?narrowed_help ?(labels = fun _ _ -> []) ()
+    =
+  { msg; notes; help; narrowed_help; labels }
 
 let plain = explain ()
-
-(* ---- a handler of several, given before what's wanted is known ---- *)
-
-(* Whether the variable [v] is in [t]. *)
-let rec has_var v t =
-  match repr t with
-  | TVar v' -> v' == v
-  | TCon (_, args) -> List.exists (has_var v) args
-  | TFun (ps, r, e, u, _) ->
-      List.exists (fun (p : param) -> has_var v p.ty) ps
-      || has_var v r || row_has_var v e || row_has_var v u
-  | TErrors r | TUses r -> row_has_var v r
-  | TSkol _ | TError -> false
-
-and row_has_var v r =
-  List.exists
-    (fun (l : label) -> List.exists (has_var v) l.payload)
-    (fst (row_parts r))
-
-(* A handler of several dependencies given where what's wanted isn't known
-   yet is left to the solver (Infer_env.coerce, Infer_coerce), which takes
-   it as one of them if that's what's wanted, and as itself if what's
-   wanted is still unknown then. If something has to be done with what's
-   wanted before that, looking into it or showing it in a message, it's
-   the handler's own type now, which is what the solver would decide if
-   nothing else said. [is] says which variables those are: the first
-   handler given to each is its type, and any other given to it is left to
-   the solver, which takes it as that type, or reports it isn't. *)
-let settle env is =
-  let first = ref [] in
-  let now, later =
-    List.partition
-      (function
-        | Coerce { cwanted; _ } -> (
-            match repr cwanted with
-            | TVar v when is v && not (List.memq v !first) ->
-                first := v :: !first;
-                true
-            | _ -> false)
-        | _ -> false)
-      (List.rev env.pending)
-  in
-  env.pending <- List.rev later;
-  List.iter
-    (function
-      | Coerce k ->
-          (* a variable still unbound takes any type that doesn't hold it,
-             and a handler's type holds only what it needs *)
-          Unify.unify env.st k.cwanted k.cfound
-      | _ -> ())
-    now
 
 (* ---- reporting ---- *)
 
@@ -149,21 +101,19 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
           (pr, f, show pr expected)
       in
       let msg = Option.map (fun m -> m f x) why.msg in
-      let help =
-        match why.help_of with
-        | Some h -> Some (h pr found)
-        | None -> Option.map (fun h -> h f x) why.help
-      in
-      (* two implementations of one dependency that need different things,
-         themselves or inside the types they're part of, `Box<Rates>` *)
+      let help = Option.map (fun h -> h f x) why.help in
+      (* two implementations of the same dependencies that need different
+         things, themselves or inside the types they're part of,
+         `Box<Rates>` *)
       let rec impls found expected =
-        match (repr found, repr expected) with
-        | (TCon (p, [ TUses _ ]) as t), TCon (q, [ TUses _ ]) when p = q ->
-            Some t
-        | TCon (p, fs), TCon (q, xs)
-          when p = q && List.length fs = List.length xs ->
-            List.find_map Fun.id (List.map2 impls fs xs)
-        | _ -> None
+        match (impl_parts found, impl_parts expected) with
+        | Some (ds, _), Some (es, _) when ds = es -> Some (repr found)
+        | _ -> (
+            match (repr found, repr expected) with
+            | TCon (p, fs), TCon (q, xs)
+              when p = q && List.length fs = List.length xs ->
+                List.find_map Fun.id (List.map2 impls fs xs)
+            | _ -> None)
       in
       let needs_more =
         match impls found expected with
@@ -244,61 +194,86 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
       let private_ =
         match blame found expected with Some p -> [ Private p ] | None -> []
       in
-      (* a handler of several dependencies where an implementation is
-         wanted, at the top or inside the types (`Option<Rates>`): one of
-         its own somewhere it wasn't known what's wanted
-         (Infer_coerce.as_one), or another one *)
-      let is_handler p =
-        match Hashtbl.find_opt env.types p with
-        | Some { body = Handler deps; _ } -> Some deps
+      (* an implementation of several dependencies where one of others, or
+         of some of them, is wanted, or the other way round, at the top or
+         inside the types, `Option<Rates>`: its dependencies, the other's,
+         and whether it's the one found *)
+      let rec all_pair f x =
+        (* whether what's wanted is a variable inference solved, to the
+           type of another value that came first, not a written type; or
+           the caller says where a type that narrows one of the two is
+           written, as when two uses of a function of a group differ *)
+        let solved =
+          why.narrowed_help <> None
+          || match x with TVar _ -> true | _ -> false
+        in
+        let f = repr f and x = repr x in
+        let pairs a b =
+          if List.length a = List.length b then
+            List.find_map Fun.id (List.map2 all_pair a b)
+          else None
+        in
+        match (f, x, impl_parts f, impl_parts x) with
+        | TAll (ds, _), _, _, Some (es, _) when ds <> es ->
+            Some (ds, es, true, solved)
+        | _, TAll (ds, _), Some (es, _), _ when ds <> es ->
+            Some (ds, es, false, solved)
+        | TCon (p, fs), TCon (q, xs), _, _ when p = q -> pairs fs xs
+        | TFun (ps, r, _, _, _), TFun (qs, r', _, _, _), _, _ ->
+            pairs
+              (r :: List.map (fun p -> p.ty) ps)
+              (r' :: List.map (fun p -> p.ty) qs)
         | _ -> None
       in
-      (* the handler, its dependencies, the one wanted or found, and
-         whether the handler is what's here: it can be what's wanted, given
-         first where an implementation is given now, `if c then
-         counting_rates(3) else Clock.frozen(t)` *)
-      let rec handler_pair f x =
-        match (repr f, repr x) with
-        | TCon (a, fs), TCon (b, [ TUses _ ]) when a <> b -> (
-            match (is_handler a, is_handler b, fs) with
-            | Some deps, _, _ -> Some (a, deps, b, true)
-            | None, Some deps, [ TUses _ ] -> Some (b, deps, a, false)
-            | _ -> None)
-        | TCon (p, fs), TCon (q, xs)
-          when p = q && List.length fs = List.length xs ->
-            List.find_map Fun.id (List.map2 handler_pair fs xs)
-        | TFun (ps, r, _, _, _), TFun (qs, r', _, _, _)
-          when List.length ps = List.length qs ->
-            List.find_map Fun.id
-              (handler_pair r r'
-              :: List.map2 (fun p q -> handler_pair p.ty q.ty) ps qs)
-        | _ -> None
-      in
-      let handler =
-        match handler_pair found expected with
-        | Some (h, deps, d, here) ->
-            let handler = type_name env h
-            and deps' = List.map (type_name env) deps
-            and dep = type_name env d in
-            if List.mem d deps then
-              [ Taken_as_one { handler; deps = deps'; dep } ]
-            else [ Other_handler { handler; deps = deps'; dep; here } ]
+      let joined ds = String.concat " & " (List.map (type_name env) ds) in
+      let within a b = List.for_all (fun d -> List.mem d b) a in
+      let several =
+        match all_pair found expected with
+        | Some (ds, es, here, solved) when within es ds || within ds es ->
+            (* the dependencies of what's found, and of what's wanted *)
+            let have, want = if here then (ds, es) else (es, ds) in
+            if within want have || solved then
+              (* fewer than another value, met first, has: that one is
+                 narrowed where a written type asks *)
+              let all, part =
+                if within want have then (have, want) else (want, have)
+              in
+              [
+                Narrowed_only_written
+                  {
+                    all = joined all;
+                    part = joined part;
+                    fix =
+                      Option.map (fun h -> h (joined part)) why.narrowed_help;
+                  };
+              ]
+            else
+              (* fewer than a written type wants, which no written type
+                 can add to: "expected, found" says it *)
+              []
+        | Some (ds, es, here, _) ->
+            [
+              Other_handler
+                {
+                  all = joined ds;
+                  deps = List.map (type_name env) ds;
+                  dep = joined es;
+                  here;
+                };
+            ]
         | None -> []
       in
       report env
         (mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
            ~found ~expected ~f ~x
-           (behind @ needs_more @ errors @ private_ @ handler))
+           (behind @ needs_more @ errors @ private_ @ several))
 
-(* Unify [found] with [expected], and say whether that worked. The message
-   shows a handler given to a variable in either as that handler, as it
-   is if nothing else says what it is ([settle]). *)
+(* Unify [found] with [expected], and say whether that worked. *)
 let unifies env why loc ~found ~expected =
   match Unify.unify env.st found expected with
   | () -> true
   | exception
       ((Unify.Mismatch | Unify.Two_shapes _ | Unify.Infinite) as failure) ->
-      settle env (fun v -> has_var v found || has_var v expected);
       mismatch env why loc ~found ~expected failure;
       false
 

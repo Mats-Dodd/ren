@@ -226,7 +226,7 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
   let column =
     match (Infer.Nodes.find subject.node env.nodes).ty with
     | Con (p, _) -> Some (env.names p)
-    | Var _ | Fun _ | Errors _ | Uses _ | Error -> None
+    | Var _ | Fun _ | Errors _ | Uses _ | All _ | Error -> None
   in
   (* With `fail` arms, each row is an outcome (see [owner]), and the error
      set they match is in each `fail` pattern's type *)

@@ -515,11 +515,44 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
       let errs = Option.map (errors env ~params ~rows) errs in
       TyFn (ps, ret, errs, Option.map (uses_of env ~rows) u, l)
   | TyInout (t, l) -> TyInout (ty env ~params ~rows t, l)
-  | TyImpl (t, u, l) -> (
+  | TyImpl ((_ :: _ :: _ as ts), u, l) -> (
+      (* several dependencies joined, `Clock & TestClock`: each has to be
+         one, and each is written once *)
+      let u = Option.map (uses_of env ~rows) u in
+      let deps =
+        List.fold_left
+          (fun deps (t : tyname) ->
+            match find_named env ~params t with
+            | Some (Named p, _) when dep_ops env p <> None -> (
+                match
+                  List.find_opt (fun (d : tname) -> d.tref = Named p) deps
+                with
+                | Some _ ->
+                    report env (tyname_loc t) ~help:"remove one"
+                      (sprintf "`%s` is joined with `&` twice" (show_tyname t));
+                    deps
+                | None -> deps @ [ { tref = Named p; tloc = tyname_loc t } ])
+            | Some _ ->
+                report env (tyname_loc t)
+                  ~help:
+                    (sprintf
+                       "`%s` isn't one: an implementation of several \
+                        dependencies is the one value of this type"
+                       (show_tyname t))
+                  "only a dependency's type can be joined with `&`";
+                deps
+            | None -> deps)
+          [] ts
+      in
+      match deps with
+      | [] -> TyName ({ tref = Named (Path.prelude "Unit"); tloc = l }, [])
+      | deps -> TyImpl (deps, u, l))
+  | TyImpl (ts, u, l) -> (
+      let t = List.hd ts in
       let u = Option.map (uses_of env ~rows) u in
       match find_named env ~params t with
       | Some (Named p, _) when dep_ops env p <> None ->
-          TyImpl ({ tref = Named p; tloc = tyname_loc t }, u, l)
+          TyImpl ([ { tref = Named p; tloc = tyname_loc t } ], u, l)
       | found ->
           if found <> None then
             report env (tyname_loc t)
@@ -576,7 +609,7 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
       | Some (Named p, _) when dep_ops env p <> None ->
           (* a dependency's type is an implementation's, which needs what
              it's written to need: nothing, here *)
-          TyImpl (named (Named p), None, tyname_loc t)
+          TyImpl ([ named (Named p) ], None, tyname_loc t)
       | Some (tref, _) ->
           TyName (named tref, List.map (ty env ~params ~rows ~arg:true) args))
 
@@ -1502,7 +1535,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
           | Dep _ ->
               (* a dependency's `self` is an implementation, which needs what
                  its method uses, as `c: Clock` does *)
-              TyImpl ({ tref = Named owner; tloc = loc }, None, loc)
+              TyImpl ([ { tref = Named owner; tloc = loc } ], None, loc)
           | Fields _ | Ctors _ | Opaque _ | Errors _ ->
               TyName
                 ( { tref = Named owner; tloc = loc },
@@ -1547,19 +1580,16 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
         in
         let body : Resolved.expr = { f.body with kind } in
         let none = Some { deps = []; dtail = None; uloc = f.name.loc } in
-        (* a handler of one dependency gives that dependency's type, and
-           one of several its own (Iface.handler_type) *)
+        (* a handler gives an implementation of its dependencies: one's
+           type, or the type that lists several *)
         let own =
           match kind with
-          | Handler { deps = [ d ]; _ } -> { d with tloc = f.name.loc }
-          | _ ->
-              {
-                tref = Named (Path.make env.home f.name.name);
-                tloc = f.name.loc;
-              }
+          | Handler { deps; _ } ->
+              List.map (fun (d : tname) -> { d with tloc = f.name.loc }) deps
+          | _ -> []
         in
         match kind with
-        | Handler { needs; _ } when f.pub || needs <> None ->
+        | Handler { needs; _ } when (f.pub || needs <> None) && own <> [] ->
             (body, Some (TyImpl (own, needs, f.name.loc)), none)
         | _ -> (body, None, none))
     | _ -> (expr env { inner with rows = !named } f.body, ret, deps)
@@ -1710,10 +1740,12 @@ let rec named_in (t : Resolved.ty) =
       @ Option.fold ~none:[] ~some:named_in ret
       @ Option.fold ~none:[] ~some:named_in_errors errs
       @ Option.fold ~none:[] ~some:named_in_uses u
-  | TyImpl ({ tref = Named p; tloc }, u, _) ->
-      (p, tloc) :: Option.fold ~none:[] ~some:named_in_uses u
-  | TyImpl ({ tref = Param _; _ }, u, _) ->
-      Option.fold ~none:[] ~some:named_in_uses u
+  | TyImpl (ds, u, _) ->
+      List.filter_map
+        (fun (d : tname) ->
+          match d.tref with Named p -> Some (p, d.tloc) | Param _ -> None)
+        ds
+      @ Option.fold ~none:[] ~some:named_in_uses u
   | TyInout (t, _) -> named_in t
   | TyErrors es -> named_in_errors es
 
@@ -2212,8 +2244,7 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
     List.filter_map
       (function
         | Type td -> Some (Iface.of_type_def ~home ~sets:(sets env items) td)
-        | Fn f -> Iface.of_handler ~home f
-        | Import _ | Testing _ -> None)
+        | Fn _ | Import _ | Testing _ -> None)
       items
   in
   (* [imported n] says whether the name [n] in `.{}` imported a type; one

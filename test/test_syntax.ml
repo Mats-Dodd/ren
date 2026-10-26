@@ -879,3 +879,40 @@ let%expect_test "code printed for a message keeps a try or attempt to itself" =
     x * attempt a() == 1
     x + attempt a()
     |}]
+
+let%expect_test "a type joined with `&`, and `&` on an argument" =
+  (* a dependency's type joined with `&` is an implementation of each, in
+     a parameter, a result and a type argument; a `uses` after `->` is
+     still the function's, and `&` before an argument still `inout` *)
+  ast
+    {|
+fn f(h: Rates & RateCalls, o: Option<Clock & TestClock>) -> Rates & RateCalls uses Clock = h
+fn g(n: Int) = bump(&n, &xs[0])
+|};
+  [%expect
+    {|
+    (fn f (h o) (uses Clock) h)
+    (fn g (n) (call bump (& n) (& (index xs 0))))
+    |}];
+  ast {|
+fn f(h: Rates & Box<Int>) = h
+|};
+  [%expect
+    {|
+    error: a type joined with `&` is a dependency's, which takes no type arguments
+      ┌─ test.ren:1:20
+    1 │ fn f(h: Rates & Box<Int>) = h
+      │                    ^
+      help: only a dependency's type is joined with `&`
+    |}];
+  ast {|
+fn f() uses Rates & RateCalls = 1
+|};
+  [%expect
+    {|
+    error: in a `uses` list, dependencies are separated by commas
+      ┌─ test.ren:1:19
+    1 │ fn f() uses Rates & RateCalls = 1
+      │                   ^
+      help: write `Rates, ...`: a function uses each of them
+    |}]

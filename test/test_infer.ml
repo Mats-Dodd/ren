@@ -2024,9 +2024,8 @@ fn main() = ()
     |}]
 
 let%expect_test "a group of many calls checks in time linear in them" =
-  (* each argument is looked at alone: one that isn't a handler of several
-     dependencies doesn't look through the group's other constraints, so
-     36,000 calls in one function check in about a second, not 45. The
+  (* each argument is looked at alone, never through the group's other
+     constraints, so 36,000 calls in one function check in about a second, not 45. The
      bound is far above the first and far below the second, so a slower
      machine doesn't fail it; [Sys.time] is the time this process has run,
      whatever else the machine is doing *)

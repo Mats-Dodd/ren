@@ -247,13 +247,14 @@ let result_args (t : Ty.ty) =
   | Con (_, [ v; errs ]) -> (v, errs)
   | _ -> bug "a `Result` without its two type arguments"
 
-(* [e], lowered: taken as one dependency's, if it's a handler of several
-   where a value of one of their types is wanted (Infer.node, [as_dep]). *)
+(* [e], lowered: narrowed to some of its dependencies, if it's an
+   implementation of several where a written type asks for those
+   (Infer.node, [narrowed]). *)
 let rec expr cx (e : expr) : C.expr =
   let x = expr_of cx e in
-  match ((node cx e.node).as_dep, x.ty) with
-  | Some d, Con (_, [ needs ]) -> mk (As_dep (d, x)) (Con (d, [ needs ])) e.loc
-  | Some _, _ -> bug "a handler taken as one dependency's isn't a handler"
+  match ((node cx e.node).narrowed, Ty.impl_parts x.ty) with
+  | Some ds, Some (_, needs) -> mk (Narrowed (ds, x)) (Ty.impl ds needs) e.loc
+  | Some _, None -> bug "a narrowed implementation isn't one"
   | None, _ -> x
 
 and expr_of cx (e : expr) : C.expr =
@@ -505,9 +506,9 @@ and expr_of cx (e : expr) : C.expr =
    runs inside another arm of the same instance. *)
 and handler cx (e : expr) deps state arms =
   let needs =
-    match ty_of cx e.node with
-    | Con (_, [ needs ]) -> needs
-    | _ -> bug "a handler whose type isn't a handler's"
+    match Ty.impl_parts (ty_of cx e.node) with
+    | Some (_, needs) -> Ty.Uses needs
+    | None -> bug "a handler whose type isn't a handler's"
   in
   let rec state_lets = function
     | [] -> instance ()
@@ -895,7 +896,7 @@ and free (e : C.expr) =
         go body
     | Instance impls -> List.iter (fun (_, i) -> go i) impls
     | Handler { captures; _ } -> List.iter use captures
-    | Fail a | As_dep (_, a) | Assert a -> go a
+    | Fail a | Narrowed (_, a) | Assert a -> go a
     | Finally (a, b) ->
         go a;
         go b

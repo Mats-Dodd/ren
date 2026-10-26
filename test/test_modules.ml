@@ -1250,8 +1250,7 @@ let%expect_test "an opaque type's interface hides its representation" =
         | Sum _ -> "a sum type"
         | Builtin -> "built in"
         | Errors _ -> "an error set"
-        | Dep _ -> "a dependency"
-        | Handler _ -> "a handler"))
+        | Dep _ -> "a dependency"))
     i.types;
   [%expect {|
     UserId: opaque
@@ -1450,4 +1449,71 @@ fn main() = 1
     4 │ type D = opaque E
       │      ^
       help: represent one of them as a type that isn't opaque
+    |}]
+
+(* ---- a handler of several dependencies ---- *)
+
+let%expect_test "another module's handler of several, as each type it has" =
+  (* its type in the interface lists its dependencies, as a type written
+     in another module does *)
+  let files =
+    [
+      ( "main.ren",
+        {|
+import fx
+
+fn one(r: fx.Rates) -> Int = with r in fx.Rates.usd_to(1)
+
+fn both(h: fx.Rates & fx.RateCalls) -> Int =
+  with h in fx.Rates.usd_to(1) + fx.RateCalls.count()
+
+fn main() uses Console =
+  let h = fx.counting(4)
+  print(one(h))
+  print(both(h))
+  print(both(fx.made()))
+|}
+      );
+      ( "fx.ren",
+        {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+pub handler counting(rate: Int) for Rates, RateCalls =
+  var calls = 0
+  usd_to(c) =>
+    calls += 1
+    c * rate
+  count() => calls
+
+pub fn made() -> RateCalls & Rates = counting(2)
+|}
+      );
+    ]
+  in
+  types_files files;
+  [%expect
+    {|
+    -- fx
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    pub dep RateCalls
+      count: fn() -> Int
+    pub handler counting(rate: Int) for Rates, RateCalls
+    pub fn made() -> RateCalls & Rates
+
+    -- main
+    fn one(r: fx.Rates) -> Int
+    fn both(h: fx.RateCalls & fx.Rates) -> Int
+    fn main() uses Console
+    |}];
+  run_files files;
+  [%expect {|
+    4
+    5
+    3
+    ()
     |}]

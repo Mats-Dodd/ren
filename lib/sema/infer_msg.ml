@@ -108,7 +108,7 @@ let rec labels_named name t =
       row e @ List.concat_map (labels_named name) (r :: param_tys ps)
   | TCon (_, args) -> List.concat_map (labels_named name) args
   | TErrors e -> row e
-  | TVar _ | TSkol _ | TError | TUses _ -> []
+  | TVar _ | TSkol _ | TError | TUses _ | TAll _ -> []
 
 (* Notes for a mismatch between [found] and [expected] that the two types
    alone don't explain: the type parameters in them, and a parameter that's
@@ -274,9 +274,6 @@ let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
                "make an implementation of it with `%s { ... }`, giving each of \
                 its operations"
                t) )
-    | Handler _ ->
-        ( sprintf "`%s` is a handler, so it has no constructors" t,
-          Some (sprintf "describe one by calling it, `%s(...)`" t) )
     | Builtin ->
         ( sprintf "`%s` is built in, and has no constructors" t,
           Some "its values are written directly, like `1`, `true` or `[1, 2]`"
@@ -461,21 +458,24 @@ type behind =
       (** a `Result` that can hold the first, where one that holds only the
           second, and no more, is wanted *)
   | Private of Path.t  (** another module's opaque type *)
-  | Taken_as_one of { handler : string; deps : string list; dep : string }
-      (** a handler of [deps] where an implementation of [dep], one of them, is
-          wanted, somewhere that wasn't known as it was made *)
+  | Narrowed_only_written of {
+      all : string;
+      part : string;
+      fix : string option;
+    }
+      (** an implementation of several dependencies, of type [all], and one of
+          some of them, [part], which it's narrowed to only where a written type
+          asks for that (deps.md, "Implementations"); [fix] is what the caller
+          says to write, if it knows better than where it's made or passed *)
   | Other_handler of {
-      handler : string;
+      all : string;
       deps : string list;
       dep : string;
       here : bool;
     }
-      (** a handler of [deps], where an implementation of [dep], which isn't one
-          of them, is wanted; or, if not [here], an implementation of [dep]
-          where that handler, given first, is *)
-  | Taken_elsewhere of { handler : string; deps : string list; other : string }
-      (** a value a handler of [deps] was given to, which something else takes
-          as [other], one of them, passed where another of them is wanted *)
+      (** an implementation of [deps], of type [all], where one of [dep], which
+          isn't among them, is wanted; or, if not [here], one of [dep] where
+          that one, given first, is *)
 
 let behind_note = function
   | Needs_more { ty; alone } ->
@@ -528,43 +528,31 @@ let behind_note = function
   | Private p ->
       let note, help = representation_private p in
       ([ note ], help)
-  | Taken_as_one { handler; deps; dep } ->
+  | Narrowed_only_written { all; part; fix } ->
       ( [
-          sprintf
-            "`%s` implements %s, so it's taken as just `%s` only where `%s` is \
-             wanted as it's made"
-            handler (and_list deps) dep dep;
+          sprintf "`%s` is %s only where a written type asks for one" all
+            (article part);
         ],
-        sprintf "say so where it's made: `let x: %s = %s(...)`" dep handler )
-  | Other_handler { handler; deps; dep; here } ->
+        match fix with
+        | Some fix -> fix
+        | None ->
+            sprintf
+              "write it where it's made or passed, `let x: %s = ...` or `fn \
+               f(x: %s)`"
+              part part )
+  | Other_handler { all; deps; dep; here } ->
       ( [
-          sprintf
-            "`%s` is a handler for %s, so what its call describes implements \
-             those, not `%s`"
-            handler (and_list deps) dep;
+          sprintf "%s is an implementation of %s, not of `%s`" (article all)
+            (and_list deps) dep;
         ],
-        if here then
-          sprintf
-            "give an implementation of `%s` here: a `%s { ... }`, or a handler \
-             for `%s`"
-            dep dep dep
+        let impl =
+          if String.contains dep '&' then "a handler for each of them"
+          else sprintf "a `%s { ... }`, or a handler for `%s`" dep dep
+        in
+        if here then sprintf "give an implementation of `%s` here: %s" dep impl
         else
-          sprintf
-            "give an implementation of `%s` where the `%s(...)` is: a `%s { \
-             ... }`, or a handler for `%s`"
-            dep handler dep dep )
-  | Taken_elsewhere { handler; deps; other } ->
-      ( [
-          sprintf
-            "this holds a `%s`, which implements %s, but something else here \
-             takes it as just `%s`, so it's that everywhere: a handler of \
-             several stays its own only where nothing says which it is"
-            handler (and_list deps) other;
-        ],
-        sprintf
-          "make another for this one, `%s(...)`, or leave out what says it's a \
-           `%s`"
-          handler other )
+          sprintf "give an implementation of `%s` instead of the `%s`: %s" dep
+            all impl )
 
 (* A mismatch between [found] and [expected], printed as [f] and [x], at
    [loc]: worded by [msg] if the caller has a way to say it, and explained
@@ -664,11 +652,11 @@ let else_branch f x =
 
 let then_branch x = sprintf "the `then` branch is %s" (article x)
 
-let then_branch_other f x =
-  sprintf "this `then` branch is %s, but the `else` branch is %s" (article f)
-    (article x)
+(* an `if` whose branches are an implementation of several dependencies
+   and one of some of them, [part] *)
+let if_produces part =
+  sprintf "say what the `if` produces: `let x: %s = if ...`" part
 
-let else_branch_is x = sprintf "the `else` branch is %s" (article x)
 let if_branches = "both branches of an `if` have to produce the same type"
 
 let no_else f _ =
@@ -680,14 +668,17 @@ let element_before f x =
   sprintf "this element is %s, but the elements before it are %s" (article f)
     (article x)
 
-let element_others f x =
-  sprintf "this element is %s, but the others are %s" (article f) (article x)
-
 let not_indexable f _ =
   sprintf "only an `Array` can be indexed, but this is %s" (article f)
 
 let assigned f x =
   sprintf "this is %s, but it's being assigned to %s" (article f) (article x)
+
+(* The help where an implementation of several is assigned to [var],
+   whose type isn't written, and was one of some of them, [part]. *)
+let assigned_var var part =
+  sprintf "write `%s`'s type where it's declared: `var %s: %s = ...`" var var
+    part
 
 let not_iterable f _ =
   sprintf "a `for` loop goes over an `Array`, but this is %s" (article f)
@@ -989,8 +980,7 @@ let with_uncalled loc src shown =
 (* What a `with` was given that's neither an implementation nor a
    wrapper. *)
 type with_item =
-  | Unknown_var of string  (** a variable whose type isn't known here *)
-  | Unknown  (** something else whose type isn't known *)
+  | Unknown  (** something whose type isn't known, but a variable's *)
   | Known of string  (** something of this type *)
 
 let cant_install loc item =
@@ -1003,8 +993,6 @@ let cant_install loc item =
       ]
     ~help:
       (match item with
-      | Unknown_var x ->
-          sprintf "say what it is where it's declared, like `%s: Clock`" x
       | Unknown ->
           "install something whose type is known here, like `Clock.frozen(t)`, \
            or a handler's call"
@@ -1012,12 +1000,73 @@ let cant_install loc item =
           "give it an implementation, like `Clock.frozen(t)`, or a wrapper's \
            call without its last argument, like `retry(3)`")
     (match item with
-    | Unknown_var _ | Unknown ->
+    | Unknown ->
         "`with` can't tell what this installs: its type isn't known here"
     | Known shown ->
         sprintf
           "`with` installs an implementation, or wraps its body, but this is %s"
           (article shown))
+
+(* `with c in`, where nothing has said what the variable [var] is, which
+   could install one dependency or several: [fix] is its declaration with a
+   type written, `fn run(c: Clock)` (deps.md, "Implementations"), if it's a
+   parameter or a `let`'s, or [""] if what to write can't be guessed *)
+let with_unknown loc ~var ~fix =
+  Diag.make loc ~says:"its type isn't written"
+    ~help:
+      (match fix with
+      | Some "" ->
+          sprintf "write `%s`'s type, the dependencies it implements" var
+      | Some fix -> sprintf "write it: `%s`" fix
+      | None ->
+          "write the type of what it installs where that's made or passed in, \
+           as a `let`'s or a parameter's")
+    (sprintf "`with` can't tell what `%s` installs" var)
+
+(* Two items of an array, an implementation of several dependencies and one
+   of some of them, which a written element type would narrow to that:
+   [this], at [loc], is of the type [this_ty], and the first, at
+   [first_loc], of [first_ty]. [fix] is the `let` to write, holding
+   [part]s. *)
+let items_differ loc ~this_ty ~first_loc ~first_ty ~name ~part =
+  Diag.make loc
+    ~says:(sprintf "is `%s`" this_ty)
+    ~labels:[ (first_loc, sprintf "is `%s`" first_ty) ]
+    ~help:
+      (sprintf "say what the list holds: `let %s: Array<%s> = ...`" name part)
+    "the items in this list have different types"
+
+(* `h.count()`, where [h], written [recv], is an implementation of several
+   dependencies, of type [all], and more than one of them, [deps], has
+   [name] *)
+let member_of_several_deps loc ~recv ~all ~name ~deps =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf "%s is an implementation of %s, and each of them has `%s`"
+          (article all) (and_list deps) name;
+      ]
+    ~help:
+      (sprintf "say which it is where it's made or passed: `let r: %s = %s`"
+         (List.hd deps) recv)
+    (sprintf "`%s` is a member of %s %s" name
+       (match deps with [ _; _ ] -> "both" | _ -> "each of")
+       (and_list deps))
+
+(* `&h.reset()`, where [h], written [recv], is an implementation of
+   several dependencies, of type [all], and [name] is a method of one of
+   them, [dep], that changes its receiver: narrowing [h] to [dep] there
+   would write a plain [dep] back into it *)
+let changes_one_of_several loc ~recv ~all ~name ~dep =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf "`%s` changes a `%s`, and `%s` is %s" name dep recv
+          (article all);
+      ]
+    ~help:(sprintf "change a `%s` of its own: `var r: %s = %s`" dep dep recv)
+    (sprintf "`%s` can't change `%s`, which implements more than `%s`" name recv
+       dep)
 
 (* `with w(a) in body`, where [name]'s last parameter is `inout` *)
 let wrapper_changes_body loc name =
@@ -1541,32 +1590,30 @@ let returns_unit = "a public function without `->` returns `Unit`"
 
 (* What a public function without `->` would write as its result, its
    body's type [found], for the help. *)
-type result_help =
-  | Write_found  (** [found] itself *)
-  | Say_dep of string
-      (** [found] is a handler of several dependencies, whose type can't be
-          written: one of them, this one *)
-  | Say_dep_inside of { handler : string; written : string }
-      (** a handler of several dependencies is inside [found]: [found] with it
-          written as one of them *)
-
-let write_result found = function
-  | Write_found -> sprintf "add `-> %s` to the signature" found
-  | Say_dep d ->
-      sprintf
-        "say which of its dependencies it gives an implementation of, `-> %s`: \
-         the type of a handler of several can't be written"
-        d
-  | Say_dep_inside { handler; written } ->
-      sprintf
-        "say which of its dependencies `%s` gives an implementation of, `-> \
-         %s`: the type of a handler of several can't be written"
-        handler written
+let write_result found = sprintf "add `-> %s` to the signature" found
 
 (* [name], a function of a group that uses another of it, is used as [f]
    but made [x]. *)
 let used_as name f x =
   sprintf "`%s` is used here as `%s`, but its definition makes it `%s`" name f x
+
+(* [name], of a group, whose result is an implementation of several
+   dependencies, used where [part], some of them, is wanted. *)
+let write_group_result name part =
+  sprintf "write `%s`'s result, `-> %s`, which narrows it there" name part
+
+(* The same, used where its parameter [n], counted from 1, is one of
+   [part]. *)
+let write_group_param name n part =
+  let nth =
+    match n with
+    | 1 -> "first"
+    | 2 -> "second"
+    | 3 -> "third"
+    | n -> sprintf "%dth" n
+  in
+  sprintf "write the type of `%s`'s %s parameter, `%s`, which narrows it there"
+    name nth part
 
 (* Why it has to be one type: the group's functions, or its associated
    values and functions, are checked at one. *)
@@ -1603,10 +1650,8 @@ type no_eq =
       (** a field of a type in it, by the record's name or the constructor's,
           and the field's, whose type has a function in it *)
   | Implementation of string
-      (** it's, or there's in it, an implementation of the dependency named *)
-  | Handler of string
-      (** it's, or there's in it, a handler of several dependencies, named after
-          its `handler` *)
+      (** it's, or there's in it, an implementation of the dependency named, or
+          of several, `Rates & RateCalls` *)
   | Opaque_hidden of string
       (** it's, or there's in it, another module's opaque type, named, that's
           represented as something with a function in it *)
@@ -1632,8 +1677,6 @@ let no_eq loc ~shown ~op ~by ~failed why =
           sprintf
             "an implementation of `%s` is its operations, which are functions" d;
         ]
-    | Handler h ->
-        [ sprintf "a `%s` handler is its operations, which are functions" h ]
     | Opaque_hidden t ->
         [
           sprintf
@@ -1647,8 +1690,7 @@ let no_eq loc ~shown ~op ~by ~failed why =
         sprintf "give `%s` something it can compare, without a function in it" f
     | None, Is_function ->
         "a function can't be compared: compare what it returns instead"
-    | None, (Implementation _ | Handler _) ->
-        "compare what its operations return instead"
+    | None, Implementation _ -> "compare what its operations return instead"
     | None, Opaque_hidden _ ->
         "compare something its module's functions tell you about it instead"
     | None, _ -> "compare the parts of it that have no function in them"
