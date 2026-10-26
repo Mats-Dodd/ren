@@ -8,6 +8,7 @@ open Ast.Resolved
 open Types
 open Infer_msg
 open Infer_env
+open Infer_report
 open Infer_expr
 
 (* ---- the call graph ---- *)
