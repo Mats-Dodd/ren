@@ -42,5 +42,7 @@ val find : Path.t -> Intrinsic.t option
 val intrinsics : Iface.t
 
 (* The same, as every other module sees it, without the functions that
-   reach the world. The driver joins it to the interface of [source]. *)
+   reach the world, or that make one of [source]'s values, which a program
+   uses instead: [map_empty], which is `Map.empty`. The driver joins it to
+   the interface of [source]. *)
 val public : Iface.t

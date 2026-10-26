@@ -2341,9 +2341,9 @@ pub type Bag<T> = { items: Array<T> }
       help: give `same` something it can compare, without a function in it
 
     error: `fn(Int) -> Int` has no `==`, which `Bag.has` needs
-      ┌─ main.ren:7:10
+      ┌─ main.ren:7:28
     7 │   assert Bag.of([inc]).has(inc)
-      │          ^^^^^^^^^^^^^
+      │                            ^^^
       = a type with a function in it has no `==` or `hash`
       help: give `Bag.has` something it can compare, without a function in it
     |}]
@@ -2440,9 +2440,9 @@ type Bag<T> = { items: Array<T> }
 |};
   [%expect {|
     error: `fn(Int) -> Int` has no `==`, which `Bag.has` needs
-      ┌─ test.ren:3:13
+      ┌─ test.ren:3:22
     3 │ fn main() = mk().has(inc)
-      │             ^^^^
+      │                      ^^^
       = a type with a function in it has no `==` or `hash`
       help: give `Bag.has` something it can compare, without a function in it
     |}]

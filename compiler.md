@@ -397,7 +397,7 @@ that can't both hold is blamed: the one met second, so a mistake is
 reported where the code reads it, after what it contradicts.
 
 One thing the solver can't do is put the groups in order. Which method
-a dot call like `s.size()` calls is found only by checking the call,
+a dot call like `s.len()` calls is found only by checking the call,
 through `s`'s type, but the groups are found from the call graph before
 anything is checked. So the graph starts with the dot calls resolve.ml
 can tell, and a dot call that turns out to call a method of the module
@@ -1012,13 +1012,15 @@ Tuples, ranges, `Map` and `Set`, and the collection methods
   `Con` like any other's, and inference, the requirements, Core Lint
   and the walk each have one case for it: its parts, in order. It's
   ordered when its parts are, lexicographically, and hashed and compared
-  part by part. A `let` or a `for` takes one apart with a pattern that
-  always matches (the parser checks: names, `_` and tuples of them), and
-  lowering makes it a `match` of one arm, so exhaust and Lint check it
-  as any other. A `var` can't take one apart.
+  part by part. A `let`, a `for` or a lambda's parameter takes one apart
+  with a pattern that always matches (the parser checks: names, `_` and
+  tuples of them), and lowering makes it a `match` of one arm, so
+  exhaust and Lint check it as any other. A `var` can't take one apart.
 - **A range** is a `for`'s, not a value: `For`'s `over` is `Each` or
   `Range`, and lowering makes a range a counting `while`, its end
-  evaluated once.
+  evaluated once. That keeps one way to count, and no second collection
+  type: `(0..n).map(f)` would do what `for` and `with_index` already do.
+  Slices, `xs[a..b]`, are deferred, and can reuse the syntax.
 - **`Map` and `Set`** are built-in types whose values are a table
   (value.ml, `VTable`; table.ml): entries in the order each key was
   first set, and each entry's number by its key's hash. Each operation
@@ -1062,9 +1064,13 @@ Tuples, ranges, `Map` and `Set`, and the collection methods
 
 Where it differed from its plan:
 
-- **No tuple parameters in a lambda.** `fn((k, v)) => ...` isn't
-  parsed: operators.md lists it as optional, and a lambda given a
-  `Map`'s pairs takes one apart inside, `let (k, v) = p`.
+- **Tuple parameters in a lambda only.** `fn((k, v)) => ...`, which
+  operators.md lists as optional, came as a follow-up: the parser makes
+  the tuple a parameter with a name no program can write, `$n`, and a
+  `let (k, v) = $n` at the start of the body, so it's checked and
+  lowered as that `let` is, a `match` of one arm. A named function's
+  parameter is still a name, which its signature shows, so `fn f((a,
+  b): (A, B))` is an error whose help takes it apart in the body.
 - **A written `Map<K, V>` doesn't check `K` has `hash`.** Requirements
   are checked where a value is used, so `Map<Sub, Int>`, with a
   function in `Sub`, is an error at its first `set` or `of`, with help
@@ -1072,7 +1078,10 @@ Where it differed from its plan:
   would need requirements on type arguments, which nothing else has.
 - **A `for` over `&m`, a `Map` or a `Set`, is an error,** with help to
   go over a copy and `set` what changes: a key changed in place would
-  be in the wrong bucket.
+  be in the wrong bucket. A `for` that changes each element of an array
+  names it, and can't take it apart; inference says so, not the parser,
+  so that `for (k, v) in &m` gets the map's message rather than one
+  whose help leads to it.
 - **`Map` and `Set` have most of `Array`'s methods, not all.** Neither
   has `index`, `uniq` or `tally`, and a `Map` has no `sum`. The methods
   that keep some of a table's entries give a table of the same kind;
@@ -1084,10 +1093,12 @@ Where it differed from its plan:
 - **`take` and `drop` of a negative count panic**, through an `assert`
   in the prelude. A failed `assert` in the prelude is a panic, said to
   be at the program's call that reached it, as any panic in the prelude
-  is, and showing the condition, which the prelude's source can't:
-  "this call needs `n >= 0`, and it isn't so".
+  is, and showing the condition, which the prelude's source can't, with
+  the function it's in and what each variable in it is: "`take` needs
+  `n >= 0`, but `n` is -1".
 - **A failed `assert` on two maps** leaves out the entries they share,
-  matched by how their keys are shown, and keeps a key whole beside its
+  their keys paired by `==`, as the maps find them, so two keys equal by
+  their type's `key` are one, and keeps a key whole beside its
   differing value: `Map.of([(AccountId(1), Account { ..., balance:
   Money(-100), ... }), ...])`.
 - **Help for names Ren doesn't use** (operators.md, "There's one name

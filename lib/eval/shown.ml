@@ -80,8 +80,10 @@ let shown ~own types (t : Ty.ty) (v : Value.t) =
    `show` shows, two different constructors, and an element only one side
    has, after the last they share, which stays so the shorter side reads
    as ending there. If nothing's left to tell them apart, both are shown
-   in full. *)
-let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
+   in full. [equal] is `==` on a type's values (walk.ml), which pairs a
+   key of one map with the other's, and a member of one set with the
+   other's, as the tables themselves do. *)
+let sides ~own ~equal types (t : Ty.ty) (a : Value.t) (b : Value.t) =
   let value = value ~own types in
   (* whether the difference has been shown: everything after it is `...`.
      A [ref] is a mutable cell, here local to one call *)
@@ -203,9 +205,10 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
       | Entries (k, v, xs), Entries (_, _, ys) ->
           (* two maps, each key's value against the other's, in the left
              side's order, a key written whole; then a key only the right
-             side has. Keys are matched by how they're shown, which is
-             only for the message *)
+             side has. Keys are paired by `==`, as the maps find them, so
+             two keys equal by their type's `key` are one *)
           let key a = value k a in
+          let same ka kb = equal k ka kb in
           let ys = Table.to_list ys in
           let entry ka s =
             if s = "..." then s else "(" ^ key ka ^ ", " ^ s ^ ")"
@@ -213,10 +216,12 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           let pairs =
             each
               (fun (ka, va) ->
-                match List.find_opt (fun (kb, _) -> key kb = key ka) ys with
-                | Some (_, vb) ->
+                match List.find_opt (fun (kb, _) -> same ka kb) ys with
+                | Some (kb, vb) ->
+                    (* each side's own key: equal, but perhaps not the
+                       same *)
                     let l, r = go v va vb in
-                    (entry ka l, entry ka r)
+                    (entry ka l, entry kb r)
                 | None when !shown -> ("...", "...")
                 | None ->
                     shown := true;
@@ -226,10 +231,7 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           let only_right =
             List.filter
               (fun (kb, _) ->
-                not
-                  (List.exists
-                     (fun (ka, _) -> key ka = key kb)
-                     (Table.to_list xs)))
+                not (List.exists (fun (ka, _) -> same ka kb) (Table.to_list xs)))
               ys
           in
           let l, r = List.split pairs in
@@ -244,14 +246,21 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           ("Map.of([" ^ parts l ^ "])", "Map.of([" ^ parts r ^ "])")
       | Members (elem, xs), Members (_, ys) ->
           (* two sets: on each side, the first member the other side
-             doesn't have *)
-          let shown_of t =
-            List.map (fun (a, _) -> value elem a) (Table.to_list t)
-          in
-          let xs = shown_of xs and ys = shown_of ys in
+             doesn't have, by `==` *)
+          let xs = List.map fst (Table.to_list xs)
+          and ys = List.map fst (Table.to_list ys) in
           let side mine theirs =
-            let first = List.find_opt (fun x -> not (List.mem x theirs)) mine in
-            List.map (fun x -> if Some x = first then x else "...") mine
+            let first =
+              List.find_opt
+                (fun x -> not (List.exists (equal elem x) theirs))
+                mine
+            in
+            List.map
+              (fun x ->
+                match first with
+                | Some f when f == x -> value elem x
+                | _ -> "...")
+              mine
           in
           let l = side xs ys and r = side ys xs in
           shown := true;

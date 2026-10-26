@@ -157,3 +157,8 @@ fn pairs(xs: Array<Int>) -> Array<(Int, Int)> =
 //  ^ keyword
     &out.push((a, b))
   out
+
+fn big(m: Map<Str, (Int, Bool)>) -> Map<Str, (Int, Bool)> =
+  m.select(fn((k, (v, _))) => v > 1)
+//             ^ variable.parameter
+//                 ^ variable.parameter

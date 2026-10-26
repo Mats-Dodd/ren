@@ -289,7 +289,7 @@ and one that doesn't change it is called without:
     ┌─ broken/extra_amp.ren:5:3
   5 │   &c.len()
     │   ^^^^^^^^
-    help: remove the `&`
+    help: remove the `&`, and use the `Int` it returns
   [1]
 
 A private method can't be called from another module:

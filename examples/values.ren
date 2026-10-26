@@ -3,6 +3,7 @@
 type Point = { x: Int, y: Int }
 
 // Shift every score so the lowest is 0. `inout` updates the caller's array.
+// The lowest is found by hand, to show `var` and `for`; `xs.min()` finds it too.
 fn normalize(inout xs: Array<Int>) =
   var low = xs[0]
   for x in xs
@@ -13,6 +14,7 @@ fn normalize(inout xs: Array<Int>) =
 fn nudge(inout p: Point, dx: Int) =
   p.x += dx
 
+// By hand, to show `var` and `for`; `xs.sum()` does the same.
 fn sum(xs) =
   var total = 0
   for x in xs

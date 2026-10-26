@@ -27,6 +27,9 @@
               |  [IDENT "."] UIDENT                (a named error set)
      payload  := [IDENT ":"] type
      param    := ["inout"] (IDENT | "self") [":" type]
+     lparam   := param
+              |  "(" pattern, ... ")" [":" type]     (a tuple taken apart:
+                                                     names, `_` and tuples)
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body [members]
      members  := INDENT op { NEWLINE op } DEDENT
                                                    (or, after an indented
@@ -114,7 +117,7 @@
      arm      := (pattern | fails) ["if" expr] "=>" body
      fails    := fail_pat { "|" fail_pat }
      fail_pat := "fail" "_" | "fail" UIDENT ["(" pattern, ... ")"]
-     lambda   := "fn" "(" param, ... ")" "=>" body
+     lambda   := "fn" "(" lparam, ... ")" "=>" body
                                                    (inside brackets too, the
                                                     lexer opens its block)
      pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
@@ -541,6 +544,14 @@ let parse_param p : param =
         let l = loc p in
         advance p;
         { name = "self"; loc = l }
+    | LPAREN ->
+        (* a lambda's can ([parse_lambda]), but a function's is a name,
+           which its signature shows *)
+        Diag.error (loc p)
+          ~help:
+            "name it, `p: (A, B)`, and take it apart in the body: `let (a, b) \
+             = p`"
+          "only a lambda's parameter can take a tuple apart"
     | _ -> ident p
   in
   let pty =
@@ -673,29 +684,30 @@ let rec parse_pattern p : pattern =
       finish (PTuple ps)
   | _ -> fail_expected p "a pattern"
 
-(* A pattern that always matches, which a `let` or a `for` can take a
-   tuple apart with: names, `_`, and tuples of them. *)
+(* A pattern that always matches, which a `let`, a `for` or a lambda's
+   parameter can take a tuple apart with: names, `_`, and tuples of
+   them. *)
 let rec irrefutable (pat : pattern) =
   match pat.pkind with
   | PVar _ | PWild -> true
   | PTuple ps -> List.for_all irrefutable ps
   | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | POr _ -> false
 
-(* A pattern after a `let` or a `for` ([what]) that might not match: a
-   constructor's is taken apart by a `match`, which says what happens
-   when it doesn't. *)
+(* A pattern after a `let` or a `for`, or a lambda's parameter ([what],
+   "a `let`"), that might not match: a constructor's is taken apart by a
+   `match`, which says what happens when it doesn't. *)
 let might_not_match (q : pattern) ~what =
   Diag.error q.ploc
     ~help:
       "take it apart with a `match`, which says what happens when it doesn't \
        match"
     (Printf.sprintf
-       "a `%s` takes apart only a tuple, of names and `_`, which always \
-        matches, but `%s` might not"
+       "%s takes apart only a tuple, of names and `_`, which always matches, \
+        but `%s` might not"
        what (show_pattern q))
 
-(* The tuple pattern after a `let` or a `for`, which has to always
-   match. *)
+(* The tuple pattern after a `let` or a `for`, or a lambda's parameter,
+   which has to always match. *)
 let binding_pattern p ~what =
   let pat = parse_pattern p in
   let rec refutable (q : pattern) =
@@ -816,7 +828,7 @@ and parse_stmt p =
   match (peek p, peek2 p) with
   | LET, LPAREN ->
       advance p;
-      let pat = binding_pattern p ~what:"let" in
+      let pat = binding_pattern p ~what:"a `let`" in
       if peek p = COLON then
         Diag.error (loc p)
           ~help:"write the type on the value: `let (a, b): (A, B)` isn't Ren"
@@ -826,7 +838,7 @@ and parse_stmt p =
   | LET, IDENT c when is_upper c && (peek3 p = LPAREN || peek3 p = DOT) ->
       (* `let Some(x) = o` *)
       advance p;
-      might_not_match (parse_pattern p) ~what:"let"
+      might_not_match (parse_pattern p) ~what:"a `let`"
   | VAR, LPAREN ->
       Diag.error (loc p)
         ~help:
@@ -853,7 +865,7 @@ and parse_for p =
   expect p FOR;
   let pat =
     match peek p with
-    | LPAREN -> binding_pattern p ~what:"for"
+    | LPAREN -> binding_pattern p ~what:"a `for`"
     | _ ->
         let l = loc p in
         let x = ident p in
@@ -880,14 +892,6 @@ and parse_for p =
         Range (iter, parse_orelse p)
     | _ -> Each iter
   in
-  (match (pat.pkind, over) with
-  | PTuple _, Each { kind = Ref _; _ } ->
-      Diag.error pat.ploc
-        ~help:
-          "write `for x in &xs`, and change `x`; to read its parts, take it \
-           apart inside the loop"
-        "a `for` that changes each element names it, and can't take it apart"
-  | _ -> ());
   if peek p <> INDENT then
     Diag.error (loc p) ~help:"put the loop's body on the lines below, indented"
       (Printf.sprintf "expected the body of the `for` loop, found %s"
@@ -1173,10 +1177,66 @@ and parse_lambda p =
       (Printf.sprintf "expected `(` to start a lambda, found %s"
          (describe (peek p)));
   advance p;
-  let params = sep_list p ~close:RPAREN parse_param in
+  let params = sep_list p ~close:RPAREN parse_lambda_param in
   expect p FATARROW;
   let body = parse_body p in
-  mk (Lambda (params, body)) start p
+  (* a name bound twice, by two parameters or by parts of tuples, as
+     Resolve reports two parameters of one name: here, where there's a
+     tuple, since its parts are bound by a `let`, which could have the
+     name of a parameter *)
+  let rec names (pat : pattern) =
+    match pat.pkind with
+    | PVar x -> [ x ]
+    | PTuple ps -> List.concat_map names ps
+    | _ -> []
+  in
+  let bound =
+    List.concat_map
+      (fun ((param : param), take) ->
+        match take with
+        | Some (Let_tuple { pat; _ }) -> names pat
+        | _ -> [ param.pname ])
+      params
+  in
+  (if List.exists (fun (_, take) -> take <> None) params then
+     let seen = Hashtbl.create 8 in
+     List.iter
+       (fun (x : ident) ->
+         match Hashtbl.find_opt seen x.name with
+         | Some first ->
+             Diag.error x.loc ~help:"rename one of them"
+               ~labels:
+                 [ (first, Printf.sprintf "the first `%s` is here" x.name) ]
+               (Printf.sprintf "there are two parameters named `%s`" x.name)
+         | None -> Hashtbl.replace seen x.name x.loc)
+       bound);
+  (* each tuple is taken apart at the start of the body, first to last *)
+  let lets = List.filter_map snd params in
+  let body = if lets = [] then body else node p (Block (lets, body)) body.loc in
+  mk (Lambda (List.map fst params, body)) start p
+
+(* A lambda's parameter: a name, as a function's is, or a tuple taken
+   apart, `fn((k, v)) => ...`, with or without its type written. A tuple
+   is a parameter with a name no program can write, and a `let` that
+   takes it apart at the start of the body, `fn(p) => let (k, v) = p`,
+   which is checked and lowered as any `let` is: the parameter, and that
+   `let`, if there is one. *)
+and parse_lambda_param p =
+  match peek p with
+  | LPAREN ->
+      let pat = binding_pattern p ~what:"a lambda's parameter" in
+      let pty =
+        if peek p = COLON then (
+          advance p;
+          Some (parse_ty p))
+        else None
+      in
+      (* `$` starts no name a program writes, and the pattern's node is
+         its own, so no two parameters share a name *)
+      let pname = { name = Printf.sprintf "$%d" pat.pnode; loc = pat.ploc } in
+      let value = node p (Var (Bare pname.name)) pat.ploc in
+      ({ pname; pty; pmode = Read }, Some (Let_tuple { pat; value }))
+  | _ -> (parse_param p, None)
 
 (* A constructor's arguments, in parentheses. *)
 and con_args p start c =

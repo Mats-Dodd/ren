@@ -734,26 +734,33 @@ let scheme (x : Intrinsic.t) =
   (* fn(self: Str) -> Str, with `A` to `Z` made `a` to `z` *)
   | Str_lower -> fn [ read str ] str
 
-(* Whether only the prelude's own source can call it: it reaches the
-   world, which a program does only through a dependency, in the real
-   implementation the runtime installs, or it's how one of the test
-   implementations works. *)
-let runtime (x : Intrinsic.t) =
+(* Who can call it. Any program can, unless only the prelude's own
+   source can: because it reaches the world, which a program does only
+   through a dependency, in the real implementation the runtime installs,
+   or it's how one of the test implementations works ([World]); or
+   because it's what one of the source's values is made with, which a
+   program uses instead: `map_empty()` is `Map.empty` ([Value]). *)
+type caller = Any | World | Value
+
+let caller (x : Intrinsic.t) =
   match x with
   | Clock_now | Clock_instant | Clock_sleep | Random_int | Seeded_next
   | Seeded_int | Console_write | Console_error | Fs_read | Fs_write | Fs_exists
-  | Os_args | Proc_run | Map_empty | Set_empty ->
-      true
+  | Os_args | Proc_run ->
+      World
+  | Map_empty | Set_empty -> Value
   | Array_sort | Map_of | Map_get | Map_set | Map_remove | Map_includes
   | Map_keys | Map_values | Map_len | Set_of | Set_add | Set_remove
   | Set_includes | Set_len ->
-      false
+      Any
   | Show | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
   | Bytes_len | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
   | Int_wrapping_neg | Float_of | Float_round | Float_truncate | Float_sqrt
   | Str_lower ->
-      false
+      Any
+
+let runtime x = caller x = World
 
 (* The built-in functions that aren't a type's members, in the order the
    prelude's interface lists them. *)
@@ -865,8 +872,8 @@ let by_path =
 let find p = Path.Map.find_opt p by_path
 
 (* The intrinsic half of the prelude's interface, as the prelude's own
-   source sees it, with what reaches the world; [public] is what every
-   other module sees, without it. *)
+   source sees it, with what reaches the world and what its values are
+   made with; [public] is what every other module sees, without them. *)
 let intrinsics : Iface.t =
   {
     home = Path.prelude_home;
@@ -908,7 +915,7 @@ let public =
       List.filter
         (fun (v : Iface.value) ->
           match find (Path.prelude v.vname) with
-          | Some x -> not (runtime x)
+          | Some x -> caller x = Any
           | None -> true)
         intrinsics.values;
   }

@@ -2312,6 +2312,10 @@
         {
           "type": "parameter",
           "named": true
+        },
+        {
+          "type": "tuple_parameter",
+          "named": true
         }
       ]
     }
@@ -2602,6 +2606,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "tuple_parameter",
+    "named": true,
+    "fields": {
+      "pattern": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "tuple_pattern",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_type",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {

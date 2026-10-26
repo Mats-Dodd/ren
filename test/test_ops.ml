@@ -779,7 +779,7 @@ fn main() =
       ┌─ main.ren:4:3
     4 │   &s.size()
       │   ^^^^^^^^^
-      help: remove the `&`
+      help: remove the `&`, and use the `Int` it returns
     |}]
 
 let%expect_test "`&` needs a receiver that can change" =
@@ -1417,7 +1417,7 @@ fn main() =
       ┌─ test.ren:4:11
     4 │   let _ = &xs.len()
       │           ^^^^^^^^^
-      help: remove the `&`
+      help: remove the `&`, and use the `Int` it returns
 
     error: `len` is a method, so it has to be called
       ┌─ test.ren:5:6

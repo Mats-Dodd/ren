@@ -241,7 +241,7 @@ pub fn touch(id: UserId) ! NotFound | Conflict
 
 A dependency call takes no marker: the capitalised `Users.` already shows it. Its errors are marked as any call's, `try Users.save(u)`. A private function's `uses` is inferred, and a public one's is checked against its body, with the error pointing at the call that uses what the signature leaves out. `Users.x` means exactly one thing: an operation and a member can't share a name.
 
-The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` today, then `Net` and `Async` (stage 12), `Alloc` (stage 14) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`. Stage 8 gives it methods, and `Bytes` and `Path` with it.
+The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` today, then `Net` and `Async` (stage 12), `Alloc` (stage 14) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`. Stage 8 gives it methods, and `Bytes` and `Path` with it. Stage 9 renames `s.find(":")` to `s.index(":")`, as `Array.index`: `index` finds where something is, and `find` takes a function.
 
 The runtime installs exactly the built-ins `main` lists in its `uses`, outermost. Any other dependency has to be installed inside `main`, and leaving it out is a compile error, `nothing installs Users before main`, with a help that says how.
 
@@ -515,7 +515,7 @@ pub fn sum<T>(xs: Array<T>) -> T =
   acc
 ```
 
-`ren types` shows it as `sum<T has add, zero>`, and `sum([true, false])` is an error where it's called: `` `Bool` has no `+`, which `sum` needs ``, whose help says to count them with `count`. In generic code an operator is the one of the same type on both sides.
+`ren types` shows it as `sum<T has add, zero>`, and `sum([true, false])` is an error where it's called: `` `Bool` has no `+`, which `sum` needs ``. The built-in `[true, false].sum()` gives the same error, and its help says to count them with `count`. In generic code an operator is the one of the same type on both sides.
 
 Numbers follow a few rules, so nothing surprises at runtime. `Int` is 64 bits everywhere and overflow panics in every build, as an out-of-bounds index does; wrapping is a method, `n.wrapping_add(1)`. `/` and `%` round toward zero. `Float` is a 64-bit double, and a literal's type is read from its spelling: `1.5` is a `Float` and `1` an `Int`, always. Numbers never convert by themselves, so `Float.of(n)`, `f.round()` and `f.truncate()` say where they do. There's no `NaN`: `0.0 / 0.0` panics, so `Float` is ordered and hashed. And a condition is a `Bool`, always.
 
@@ -531,7 +531,7 @@ for (email, u) in users
 
 `(a, b)` and `(a, b, c)` are tuples: two or three values passed together, taken apart only by patterns, `let (k, v) = pair`, `for (i, x) in xs.with_index()`, or a `match`. There's no `.0`: what wants names is a record. A range, `a..b`, is counted by a `for`, from `a` up to, but not including, `b`, and there's one kind: `for i in 0..xs.len()`.
 
-`Array`, `Map` and `Set` take their method names from Ruby's `Enumerable`: `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `first`, `last`, `take`, `drop` and `reverse`, and `xs.get(i)` for an index that may not be there. A method that changes nothing gives a new collection, `xs.sort()`, and there's one name for each: no `filter` beside `select`, and `xs.filter(...)` is an error whose help says `select`. A function a method takes is only called, so what it fails with and uses, the call does: `try xs.map(load)`.
+`Array` takes its method names from Ruby's `Enumerable`: `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `first`, `last`, `take`, `drop` and `reverse`, and `xs.get(i)` for an index that may not be there. A `Map` has them over its `(k, v)` pairs, and a `Set` over its members, except `index`, `uniq` and `tally`, which mean nothing without repeats or places; a `Map` has no `sum`, and its `includes(k)` and `get(k)` take a key. Those that keep some of a `Map`'s pairs, such as `select`, `take` and `reverse`, give a `Map`, and a `Set` gives a `Set` the same way. A method that changes nothing gives a new collection, `xs.sort()`, and there's one name for each: no `filter` beside `select`, and `xs.filter(...)` is an error whose help says `select`. A function a method takes is only called, so what it fails with and uses, the call does: `try xs.map(load)`.
 
 Only the module that declares a type can write its members. To extend a type you don't own, write a function in your own module or wrap it in an `opaque` type. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
 

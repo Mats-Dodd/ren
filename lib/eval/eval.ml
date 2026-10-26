@@ -273,6 +273,45 @@ let prelude_text (loc : Loc.t) =
   in
   String.sub line (loc.start.col - 1) (loc.stop.col - loc.start.col)
 
+(* What a failed `assert` [a] of the prelude's says: the function it's
+   in, which the program called, what it needs, and what each variable in
+   it is, `` `take` needs `n >= 0`, but `n` is -1 ``. The function is the
+   prelude's last declared before [a]. *)
+let unmet cx env (a : Core.expr) =
+  let fn =
+    Hashtbl.fold
+      (fun _ (f : fn_def) found ->
+        match found with
+        | _
+          when f.loc.file <> Prelude.file || f.loc.start.line > a.loc.start.line
+          ->
+            found
+        | Some (g : fn_def) when g.loc.start.line >= f.loc.start.line -> found
+        | _ -> Some f)
+      cx.fns None
+  in
+  let who =
+    match fn with
+    | Some f -> Printf.sprintf "`%s`" (Path.short f.path)
+    | None -> "this call"
+  in
+  let rec locals (e : Core.expr) =
+    match e.kind with
+    | Local v -> [ v ]
+    | _ -> List.concat_map locals (Core.children e)
+  in
+  let values =
+    List.map
+      (fun (v : var) -> Printf.sprintf "`%s` is %s" v.name (show !(cell env v)))
+      (List.sort_uniq compare (locals a))
+  in
+  match values with
+  | [] ->
+      Printf.sprintf "%s needs `%s`, and it isn't so" who (prelude_text a.loc)
+  | _ ->
+      Printf.sprintf "%s needs `%s`, but %s" who (prelude_text a.loc)
+        (String.concat " and " values)
+
 let describe = function
   | VFn (p, _, _) -> "`" ^ Path.local p ^ "`"
   | VBuiltin (x, _, _) -> "`" ^ Intrinsic.name x ^ "`"
@@ -553,9 +592,7 @@ let rec eval cx env (e : expr) =
           (* the prelude's, on what it was given, `n >= 0` in `take`: a
              panic, which [call_at] says is at the program's call, with the
              condition, since the prelude's source can't be shown *)
-          panic a.loc
-            (Printf.sprintf "this call needs `%s`, and it isn't so"
-               (prelude_text a.loc))
+          panic a.loc (unmet cx env a)
         else raise (Assert_failed { loc = a.loc; sides = None });
       VUnit
   | Assert_equal (a, b, d, eq) ->
@@ -568,7 +605,9 @@ let rec eval cx env (e : expr) =
                loc = e.loc;
                sides =
                  Some
-                   (Shown.sides ~own:(own_show cx) cx.types (type_of env d) x y);
+                   (Shown.sides ~own:(own_show cx)
+                      ~equal:(Walk.equal (walk cx))
+                      cx.types (type_of env d) x y);
              });
       VUnit
   | Finally (body, after) -> (

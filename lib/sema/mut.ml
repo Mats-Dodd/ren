@@ -325,8 +325,8 @@ let rec walk cx (e : expr) =
       let locks =
         match place_of a with
         | Some { root = Local b; path; _ } ->
-            (* the parser lets a loop that changes each element only name
-               it *)
+            (* a loop that changes each element only names it, or
+               inference reports it *)
             let elem =
               match pat.pkind with PVar x -> x.ident.name | _ -> "_"
             in

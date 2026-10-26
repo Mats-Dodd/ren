@@ -326,19 +326,22 @@ test "shutdown lets a request in flight finish" =
 ### A crawler
 
 ```ren
-fn crawl(url: Url, depth: Int) -> List<Page> uses Http, Seen, Async =
-  if depth == 0 or not Seen.claim(url) then []
+fn crawl(url: Url, depth: Int) -> Array<Page> uses Http, Seen, Async =
+  if depth == 0 || not Seen.claim(url) then []
   else
     match attempt Http.get(url)
       fail _ => []
       Ok(page) =>
         let below = Async.map(page.links) fn(link) => crawl(link, depth - 1)
-        [page] + below.flatten()
+        var pages = [page]
+        for p in below.flat_map(fn(ps) => ps)
+          &pages.push(p)
+        pages
 
 fn main() uses Http, Console, Async =
   with seen_set(), Async.limit(16) over Http in
     let pages = crawl(Url.parse("https://example.com"), 3)
-    print(pages.count())
+    print(pages.len())
 ```
 
 - `Seen.claim` is atomic without a lock (rule 3).

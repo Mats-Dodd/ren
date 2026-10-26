@@ -626,15 +626,18 @@ let not_bool_help (p : Path.t) ~written =
   (* `(a + b).len()`, for a method called on an operator's result *)
   let w = if String.contains w ' ' then "(" ^ w ^ ")" else w in
   if
-    p = Path.prelude "Array"
-    || p = Path.prelude "Map"
-    || p = Path.prelude "Set"
-    || p = Path.prelude "Str"
+    p = Path.prelude "Array" || p = Path.prelude "Map" || p = Path.prelude "Set"
   then
     Some
       (sprintf "to ask whether it has anything in it, write `%s.len() > 0`" w)
+  else if p = Path.prelude "Str" then
+    Some (sprintf "to ask whether it has anything in it, write `%s != \"\"`" w)
   else if p = Path.prelude "Option" then
-    Some (sprintf "to ask whether it holds a value, write `%s.is_some()`" w)
+    Some
+      (sprintf
+         "to ask whether it holds a value, write `%s.is_some()`, or `match` it \
+          to use the value"
+         w)
   else None
 
 (* A statement of the function [c] threw away a value whose type wasn't
@@ -737,6 +740,18 @@ let changes_entries loc ~what =
     (sprintf "a `for` can't change a %s's %s in place" what
        (if what = "map" then "entries" else "members"))
 
+(* `for (a, b) in &xs`, over an array, [over] as it's written: a loop
+   that changes each element names it, the place it changes. *)
+let changed_taken_apart loc ~over =
+  let xs = Option.value over ~default:"xs" in
+  Diag.make loc
+    ~help:
+      (sprintf
+         "write `for x in &%s`, and change `x`; to read its parts, take it \
+          apart inside the loop"
+         xs)
+    "a `for` that changes each element names it, and can't take it apart"
+
 (* The help for an error with two shapes, given the tag: one that comes
    from a `fail`, or from a `Result` or a `match` that passes it on. *)
 let rename_fail _ = "give one of them another name"
@@ -832,6 +847,32 @@ let alternative name f x =
 
 let pattern_for f x =
   sprintf "expected a pattern for `%s`, but this one is %s" x (article f)
+
+(* A tuple pattern, of the parts [ps], for a tuple of [n] parts: the
+   pattern with a part for each, keeping the parts it has, and `_` for
+   those it's missing. *)
+let tuple_parts_help (ps : Ast.Resolved.pattern list) n =
+  let rec shown (p : Ast.Resolved.pattern) =
+    let args ps = "(" ^ String.concat ", " (List.map shown ps) ^ ")" in
+    match p.pkind with
+    | PVar b -> b.ident.name
+    | PInt n -> Int64.to_string n
+    | PBool b -> string_of_bool b
+    | PCon (c, []) -> c.name.name
+    | PCon (c, ps) -> c.name.name ^ args ps
+    | PTuple ps -> args ps
+    | PWild | PFail _ | PFail_any | POr _ -> "_"
+  in
+  let parts =
+    List.init n (fun i ->
+        match List.nth_opt ps i with Some p -> shown p | None -> "_")
+  in
+  sprintf "the tuple has %d parts, so take it apart with %d: `(%s)`" n n
+    (String.concat ", " parts)
+
+(* A tuple pattern for [shown], which isn't a tuple. *)
+let not_a_tuple_help shown =
+  sprintf "`%s` isn't a tuple, so name it whole instead, like `x`" shown
 
 (* A statement's value [f], which isn't `Unit`. [callee] is the function
    called, if it's a call, and [implementation] whether [f] is an
@@ -2197,9 +2238,19 @@ let needs_amp loc ~recv ~call (m : string) =
     (sprintf "`%s` changes %s, so the call needs `&`" m (receiver recv))
 
 (* `&s.size()`, where `size` doesn't have `inout self`; or `&r.f()`, where
-   `f` is a field *)
-let not_changed loc ~recv (m : string) =
-  Diag.make loc ~help:"remove the `&`"
+   `f` is a field. [returns] is what it returns, if that isn't `Unit`, and
+   [keep] the assignment that keeps it, when it's a new value of the
+   receiver's type: `xs = xs.sort()`. *)
+let not_changed loc ~recv ?returns ?keep (m : string) =
+  let help =
+    match (returns, keep) with
+    | Some t, Some k ->
+        sprintf "remove the `&`; `%s` returns a new `%s`, so keep it: `%s`" m t
+          k
+    | Some t, None -> sprintf "remove the `&`, and use the `%s` it returns" t
+    | None, _ -> "remove the `&`"
+  in
+  Diag.make loc ~help
     (sprintf "`%s` doesn't change %s" m
        (match recv with Some r -> sprintf "`%s`" r | None -> "its receiver"))
 

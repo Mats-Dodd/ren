@@ -767,7 +767,7 @@ module.exports = grammar({
       prec.right(
         seq(
           'fn',
-          field('parameters', $.parameters),
+          field('parameters', alias($.lambda_parameters, $.parameters)),
           choice(
             seq('=>', field('body', $._body)),
             seq(
@@ -776,6 +776,16 @@ module.exports = grammar({
             ),
           ),
         ),
+      ),
+
+    // a lambda's parameter can take a tuple apart, fn((k, v)) => ...
+    lambda_parameters: ($) =>
+      seq('(', commaSep(choice($.parameter, $.tuple_parameter)), ')'),
+
+    tuple_parameter: ($) =>
+      seq(
+        field('pattern', $.tuple_pattern),
+        optional(seq(':', field('type', $._type))),
       ),
 
     _bracket_block: ($) => seq(sep1($._statement, $._newline), $._dedent),

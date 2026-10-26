@@ -426,14 +426,21 @@ and synth env cx (e : expr) : ty =
             | TCon (p, [ k; v ]), _ when p = map_path ->
                 TCon (Ty.tuple_path 2, [ k; v ])
             | TCon (p, [ x ]), _ when p = set_path -> x
-            | _ ->
+            | _ -> (
                 let elem = fresh_var env.st in
                 let ok =
                   unifies env
                     (explain ~msg:not_iterable ())
                     (result_loc array_of) ~found:ta ~expected:(array elem)
                 in
-                if ok then elem else TError)
+                match (pat.pkind, iter.kind) with
+                | PTuple _, Ref _ when ok ->
+                    (* here, not in the parser, so that a map's own
+                       message comes first, above *)
+                    report env
+                      (changed_taken_apart pat.ploc ~over:(env.source array_of));
+                    TError
+                | _ -> if ok then elem else TError))
       in
       bind_pattern env cx elem pat;
       (* each time round, the body's value is thrown away, as a
@@ -948,12 +955,15 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
       let tr = member_of_several env cx r tr m in
       (* `r.m` is a field holding a function *)
       let field_call () =
-        Option.iter
-          (fun loc -> report env (not_changed loc ~recv:(env.source r) m.name))
-          changed;
         let tf = field_access env cx f r tr m in
         Hashtbl.replace cx.nodes f.node tf;
-        apply env cx e ~name:(Some m.name) f tf args
+        let t = apply env cx e ~name:(Some m.name) f tf args in
+        match changed with
+        | Some loc ->
+            (* as for a method, below: only the `&` is reported *)
+            report env (not_changed loc ~recv:(env.source r) m.name);
+            TError
+        | None -> t
       in
       let nothing () =
         List.iter (fun a -> ignore (infer_arg env cx a)) args;
@@ -1108,23 +1118,53 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       Hashtbl.replace cx.nodes f.node tm;
       Hashtbl.replace cx.found f.node (Method_of path);
       match repr tm with
-      | TFun (self :: ps, ret, errs, uses, lams) ->
-          blame_args cx f [ (self.ty, r.loc) ];
+      | TFun (self :: ps, ret, errs, uses, lams) -> (
+          (* the arguments first, so `&m.set(k, v)` blames the key it's
+             given, rather than the map *)
+          let given =
+            if List.length ps = List.length args then
+              List.map2
+                (fun (p : Types.param) (a : expr) -> (p.ty, a.loc))
+                ps args
+            else []
+          in
+          blame_args cx f (given @ [ (self.ty, r.loc) ]);
           (* a dependency's method takes an implementation that needs less
              than its `self` allows, as an argument does *)
           unify_at env r.loc ~found:(widen env ~loc:r.loc tr) ~expected:self.ty;
           (match (self.mode, changed) with
           | Inout, None ->
               report env (needs_amp e.loc ~recv ~call:(env.source e) o.oname)
-          | Read, Some loc -> report env (not_changed loc ~recv o.oname)
-          | Inout, Some _ | Read, None -> ());
-          apply env cx e ~name:(Some o.oname)
-            ?target:(if group_call env path then Some path else None)
-            ~callee:path
-            ~written:(written_params env ~callee:path ~skip:1 tm ps)
-            f
-            (TFun (ps, ret, errs, uses, lams))
-            args
+          | Inout, Some _ | Read, _ -> ());
+          let t =
+            apply env cx e ~name:(Some o.oname)
+              ?target:(if group_call env path then Some path else None)
+              ~callee:path
+              ~written:(written_params env ~callee:path ~skip:1 tm ps)
+              f
+              (TFun (ps, ret, errs, uses, lams))
+              args
+          in
+          match (self.mode, changed) with
+          | Read, Some loc ->
+              (* what it returns is the `&`'s mistake, so it isn't also
+                 reported as thrown away *)
+              let pr = printer env in
+              let returns =
+                match repr t with
+                | TCon (p, []) when p = Path.prelude "Unit" -> None
+                | TError | TVar _ -> None
+                | _ -> Some (show pr t)
+              in
+              let keep =
+                match (recv, env.source e) with
+                | Some r, Some call when show pr t = show pr tr ->
+                    Some (sprintf "%s = %s" r call)
+                | _ -> None
+              in
+              report env (not_changed loc ~recv ?returns ?keep o.oname);
+              TError
+          | _ -> t)
       | _ -> nothing ())
 
 (* What the callee [f] of a call needs of a type argument is blamed on
@@ -1608,8 +1648,19 @@ and bind_pattern env cx t (p : pattern) =
                   ctor.cfields ps
               else unknown ())
       | PTuple ps ->
+          let n = List.length ps in
           let parts = List.map (fun _ -> fresh_var env.st) ps in
-          check (TCon (Ty.tuple_path (List.length ps), parts));
+          let help =
+            match repr t with
+            | TCon (p, args) when Ty.is_tuple p && List.length args <> n ->
+                Some (tuple_parts_help ps (List.length args))
+            | TCon (p, _) when not (Ty.is_tuple p) ->
+                Some (not_a_tuple_help (show (printer env) t))
+            | _ -> None
+          in
+          unify_at env p.ploc
+            ~found:(TCon (Ty.tuple_path n, parts))
+            ~expected:t ~msg:pattern_for ?help;
           List.iter2 (bind_pattern env cx) parts ps
       | PFail _ | PFail_any | POr _ ->
           (* a `fail` pattern is a whole arm's (the parser says so), and

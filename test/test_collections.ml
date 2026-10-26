@@ -85,6 +85,7 @@ fn main() = ()
       ┌─ test.ren:2:7
     2 │   let (a, b) = p
       │       ^^^^^^
+      help: the tuple has 3 parts, so take it apart with 3: `(a, b, _)`
     |}]
 
 let%expect_test "a tuple has two parts or three, and no `.0`" =
@@ -302,6 +303,115 @@ fn main() = ()
     (fn $start () ev/1 (call ev/1 main))
     |}]
 
+(* ---- a lambda's parameter taken apart ---- *)
+
+let%expect_test "a lambda's parameter takes a tuple apart" =
+  run
+    {|
+fn main() uses Console =
+  let m = Map.of([("a", 1), ("b", 2), ("c", 3)])
+  print(m.select(fn((_, v)) => v > 1))
+  print(m.map(fn((k, v)) => k.concat(show(v))))
+  print(m.any(fn((k, v)) => k == "c" && v == 3))
+  print(m.sort_by(fn((_, v)) => -v))
+  let ps = [(1, ("x", true)), (2, ("y", false))]
+  print(ps.select(fn((_, (_, b))) => b))
+  print(ps.map(fn((n, (s, _)): (Int, (Str, Bool))) => s.concat(show(n))))
+  let add = fn((a, b)) => a + b
+  print(add((1, 2)))
+  let f = fn((a, b), c) => a * b + c
+  print(f((2, 3), 4))
+|};
+  [%expect
+    {|
+    Map.of([("b", 2), ("c", 3)])
+    ["a1", "b2", "c3"]
+    true
+    [("c", 3), ("b", 2), ("a", 1)]
+    [(1, ("x", true))]
+    ["x1", "y2"]
+    3
+    10
+    ()
+    |}]
+
+let%expect_test "a lambda's tuple is lowered as a `let` that takes it apart" =
+  core {|
+fn main() =
+  let f = fn((a, _)) => a
+  f((1, 2))
+|};
+  [%expect
+    {|
+    (fn main () ev/1
+      (let f/2 (lambda ($3/3) (captures) ev/4 (match $3/3 ((tuple a/5 _) => a/5)))
+        (call ev/1 f/2 (tuple 1 2))))
+    (fn $start () ev/1 (call ev/1 main))
+    |}]
+
+let%expect_test "only a lambda's parameter takes a tuple apart, and always" =
+  check_error {|
+fn main() =
+  let f = fn((k, Some(v))) => v
+  ()
+|};
+  [%expect
+    {|
+    error: a lambda's parameter takes apart only a tuple, of names and `_`, which always matches, but `Some(v)` might not
+      ┌─ test.ren:2:18
+    2 │   let f = fn((k, Some(v))) => v
+      │                  ^^^^^^^
+      help: take it apart with a `match`, which says what happens when it doesn't match
+    |}];
+  check_error {|
+fn f((a, b): (Int, Int)) -> Int = a
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: only a lambda's parameter can take a tuple apart
+      ┌─ test.ren:1:6
+    1 │ fn f((a, b): (Int, Int)) -> Int = a
+      │      ^
+      help: name it, `p: (A, B)`, and take it apart in the body: `let (a, b) = p`
+    |}];
+  check_error {|
+fn main() =
+  let f = fn((a, b), a) => a
+  ()
+|};
+  [%expect
+    {|
+    error: there are two parameters named `a`
+      ┌─ test.ren:2:22
+    2 │   let f = fn((a, b), a) => a
+      │                      ^
+      │               - the first `a` is here
+      help: rename one of them
+    |}];
+  check_error
+    {|
+fn main() =
+  let m = Map.of([(1, 2)])
+  let a = m.select(fn((k, v, w)) => true)
+  let b = [1, 2].map(fn((x, y)) => x)
+  ()
+|};
+  [%expect
+    {|
+    error: expected a pattern for `(Int, Int)`, but this one is a `(_, _, _)`
+      ┌─ test.ren:3:23
+    3 │   let a = m.select(fn((k, v, w)) => true)
+      │                       ^^^^^^^^^
+      help: the tuple has 2 parts, so take it apart with 2: `(k, v)`
+
+    error: expected a pattern for `Int`, but this one is a `(_, _)`
+      ┌─ test.ren:4:25
+    4 │   let b = [1, 2].map(fn((x, y)) => x)
+      │                         ^^^^^^
+      help: `Int` isn't a tuple, so name it whole instead, like `x`
+    |}]
+
 (* ---- ranges ---- *)
 
 let%expect_test "`for i in a..b` counts from `a` up to, but not including, `b`"
@@ -510,7 +620,7 @@ fn main() = [1, 2].take(-1)
 |};
   [%expect
     {|
-    error: panic: this call needs `n >= 0`, and it isn't so
+    error: panic: `take` needs `n >= 0`, but `n` is -1
       ┌─ test.ren:1:13
     1 │ fn main() = [1, 2].take(-1)
       │             ^^^^^^^^^^^^^^^
@@ -913,7 +1023,7 @@ fn main() =
 |};
   [%expect
     {|
-    error: panic: this call needs `n >= 0`, and it isn't so
+    error: panic: `drop` needs `n >= 0`, but `n` is -1
       ┌─ test.ren:3:9
     3 │   print(m.drop(-1))
       │         ^^^^^^^^^^
@@ -932,9 +1042,9 @@ fn main() =
   [%expect
     {|
     error: `Sub` has no `hash`, which `Map.set` needs
-      ┌─ test.ren:5:4
+      ┌─ test.ren:5:10
     5 │   &m.set(s, 1)
-      │    ^
+      │          ^
       = a type with a function in it has `==` and `hash` only through its `key`
       = the field `notify` of `Sub` has a function in it
       help: give `Sub` a key, which says what makes two the same: `fn key(self) -> K = ...`
@@ -1019,7 +1129,7 @@ fn main() =
     5 │   if o then print(1) else ()
       │      ^
       = an `if` condition has to be a `Bool`
-      help: to ask whether it holds a value, write `o.is_some()`
+      help: to ask whether it holds a value, write `o.is_some()`, or `match` it to use the value
 
     error: expected `Bool`, found `Int`
       ┌─ test.ren:6:10
@@ -1054,4 +1164,219 @@ fn main() =
     Map.of([(E("A"), 2)])
     [E("A")]
     ()
+    |}]
+
+(* ---- follow-ups to 9b ---- *)
+
+let%expect_test "a `for` that changes a map's entries says so first" =
+  check_error
+    {|
+fn main() =
+  var m = Map.of([("a", 1)])
+  for (k, v) in &m
+    ()
+  var s = Set.of([(1, 2)])
+  for (a, b) in &s
+    ()
+  ()
+|};
+  [%expect
+    {|
+    error: a `for` can't change a map's entries in place
+      ┌─ test.ren:3:17
+    3 │   for (k, v) in &m
+      │                 ^^
+      help: go over a copy, `for (k, v) in m`, and `&m.set(k, ...)` what changes
+
+    error: a `for` can't change a set's members in place
+      ┌─ test.ren:6:17
+    6 │   for (a, b) in &s
+      │                 ^^
+      help: go over a copy, `for x in s`, and `&s.add(...)` what changes
+    |}]
+
+let%expect_test "`&` on a method that returns a new value is one error" =
+  check_error
+    {|
+type Box = { f: fn() -> Int }
+fn main() =
+  var xs = [3, 1, 2]
+  &xs.sort()
+  &xs.len()
+  var b = Box { f: fn() => 1 }
+  &b.f()
+  ()
+|};
+  [%expect
+    {|
+    error: `sort` doesn't change `xs`
+      ┌─ test.ren:4:3
+    4 │   &xs.sort()
+      │   ^^^^^^^^^^
+      help: remove the `&`; `sort` returns a new `Array<Int>`, so keep it: `xs = xs.sort()`
+
+    error: `len` doesn't change `xs`
+      ┌─ test.ren:5:3
+    5 │   &xs.len()
+      │   ^^^^^^^^^
+      help: remove the `&`, and use the `Int` it returns
+
+    error: `f` doesn't change `b`
+      ┌─ test.ren:7:3
+    7 │   &b.f()
+      │   ^^^^^^
+      help: remove the `&`
+    |}]
+
+let%expect_test "a requirement a key lacks is blamed on the key" =
+  check_error
+    {|
+type Sub = { id: Int, notify: fn(Int) -> Int }
+fn find(m: Map<Sub, Int>, s: Sub) -> Option<Int> = m.get(s)
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Sub` has no `hash`, which `Map.get` needs
+      ┌─ test.ren:2:58
+    2 │ fn find(m: Map<Sub, Int>, s: Sub) -> Option<Int> = m.get(s)
+      │                                                          ^
+      = a type with a function in it has `==` and `hash` only through its `key`
+      = the field `notify` of `Sub` has a function in it
+      help: give `Sub` a key, which says what makes two the same: `fn key(self) -> K = ...`
+    |}]
+
+let%expect_test "a tuple pattern that doesn't fit says how to take it apart" =
+  check_error
+    {|
+fn main() =
+  let (a, b, c) = (1, 2)
+  let (d, e) = 5
+  for (f, g) in [1, 2]
+    ()
+  for (h, i) in [(1, 2, 3)]
+    ()
+  ()
+|};
+  [%expect
+    {|
+    error: expected a pattern for `(Int, Int)`, but this one is a `(_, _, _)`
+      ┌─ test.ren:2:7
+    2 │   let (a, b, c) = (1, 2)
+      │       ^^^^^^^^^
+      help: the tuple has 2 parts, so take it apart with 2: `(a, b)`
+
+    error: expected a pattern for `Int`, but this one is a `(_, _)`
+      ┌─ test.ren:3:7
+    3 │   let (d, e) = 5
+      │       ^^^^^^
+      help: `Int` isn't a tuple, so name it whole instead, like `x`
+
+    error: expected a pattern for `Int`, but this one is a `(_, _)`
+      ┌─ test.ren:4:7
+    4 │   for (f, g) in [1, 2]
+      │       ^^^^^^
+      help: `Int` isn't a tuple, so name it whole instead, like `x`
+
+    error: expected a pattern for `(Int, Int, Int)`, but this one is a `(_, _)`
+      ┌─ test.ren:6:7
+    6 │   for (h, i) in [(1, 2, 3)]
+      │       ^^^^^^
+      help: the tuple has 3 parts, so take it apart with 3: `(h, i, _)`
+    |}]
+
+let%expect_test "a condition that isn't a `Bool` says how to ask" =
+  check_error
+    {|
+fn main() =
+  let s = "x"
+  if s then print(1) else ()
+  let o = Some(1)
+  assert not o
+  let m = Map.of([(1, 2)])
+  if m then print(1) else ()
+|};
+  [%expect
+    {|
+    error: expected `Bool`, found `Str`
+      ┌─ test.ren:3:6
+    3 │   if s then print(1) else ()
+      │      ^
+      = an `if` condition has to be a `Bool`
+      help: to ask whether it has anything in it, write `s != ""`
+
+    error: expected `Bool`, found `Option<Int>`
+      ┌─ test.ren:5:14
+    5 │   assert not o
+      │              ^
+      = what `not` is applied to has to be a `Bool`
+      help: to ask whether it holds a value, write `o.is_some()`, or `match` it to use the value
+
+    error: expected `Bool`, found `Map<Int, Int>`
+      ┌─ test.ren:7:6
+    7 │   if m then print(1) else ()
+      │      ^
+      = an `if` condition has to be a `Bool`
+      help: to ask whether it has anything in it, write `m.len() > 0`
+    |}]
+
+let%expect_test "a failed `assert` pairs two maps' keys by `==`" =
+  run_error
+    {|
+type Email = opaque Str
+  fn key(self) -> Str = self.lower()
+  pub fn of(s: Str) -> Email = s
+
+fn main() =
+  let a = Map.of([(Email.of("ANN@x"), 1), (Email.of("bo@x"), 2)])
+  let b = Map.of([(Email.of("ann@x"), 1), (Email.of("BO@x"), 3)])
+  assert a == b
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:8:10
+    8 │   assert a == b
+      │          ^^^^^^
+      = left:  Map.of([..., (Email("bo@x"), 2)])
+      = right: Map.of([..., (Email("BO@x"), 3)])
+    |}];
+  run_error
+    {|
+type Email = opaque Str
+  fn key(self) -> Str = self.lower()
+  pub fn of(s: Str) -> Email = s
+
+fn main() =
+  assert Set.of([Email.of("ANN@x"), Email.of("bo@x")]) == Set.of([Email.of("ann@x"), Email.of("cy@x")])
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:6:10
+    6 │   assert Set.of([Email.of("ANN@x"), Email.of("bo@x")]) == Set.of([Email.of("ann@x"), Email.of("cy@x")])
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = left:  Set.of([..., Email("bo@x")])
+      = right: Set.of([..., Email("cy@x")])
+    |}]
+
+let%expect_test "what makes the prelude's values isn't a program's" =
+  check_error
+    {|
+fn main() =
+  let m: Map<Int, Int> = map_empty()
+  let s: Set<Int> = set_empty()
+  ()
+|};
+  [%expect
+    {|
+    error: there's no function named `map_empty`
+      ┌─ test.ren:2:26
+    2 │   let m: Map<Int, Int> = map_empty()
+      │                          ^^^^^^^^^
+
+    error: there's no function named `set_empty`
+      ┌─ test.ren:3:21
+    3 │   let s: Set<Int> = set_empty()
+      │                     ^^^^^^^^^
     |}]

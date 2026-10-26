@@ -81,6 +81,9 @@
 (payload name: (identifier) @property)
 (field_declaration name: (identifier) @property)
 (parameter name: (identifier) @variable.parameter)
+(tuple_parameter (tuple_pattern (identifier) @variable.parameter))
+(tuple_parameter
+  (tuple_pattern (tuple_pattern (identifier) @variable.parameter)))
 (function_type_parameter name: (identifier) @variable.parameter)
 
 ; ---- modules ----

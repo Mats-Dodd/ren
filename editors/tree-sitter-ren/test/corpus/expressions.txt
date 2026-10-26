@@ -370,3 +370,60 @@ fn f(a, b) =
           (tuple_expression
             (identifier)
             (identifier)))))))
+
+================================================================================
+a lambda's parameter taken apart
+================================================================================
+
+fn f(m) =
+  m.select(fn((k, v)) => v > 1)
+  ps.map(fn((n, (s, _)): (Int, (Str, Bool)), x) => s)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)))
+    (block
+      (method_call_expression
+        (identifier)
+        (identifier)
+        (arguments
+          (lambda
+            (parameters
+              (tuple_parameter
+                (tuple_pattern
+                  (identifier)
+                  (identifier))))
+            (binary_expression
+              (identifier)
+              (number)))))
+      (method_call_expression
+        (identifier)
+        (identifier)
+        (arguments
+          (lambda
+            (parameters
+              (tuple_parameter
+                (tuple_pattern
+                  (identifier)
+                  (tuple_pattern
+                    (identifier)
+                    (wildcard)))
+                (tuple_type
+                  (named_type
+                    (type_name
+                      (type_identifier)))
+                  (tuple_type
+                    (named_type
+                      (type_name
+                        (type_identifier)))
+                    (named_type
+                      (type_name
+                        (type_identifier))))))
+              (parameter
+                (identifier)))
+            (identifier)))))))

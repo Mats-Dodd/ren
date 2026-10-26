@@ -326,7 +326,8 @@ panic: `+` overflowed: 9223372036854775807 + 1
 
 `a..b` is the `Int`s from `a` up to, but not including, `b`. There's one
 kind: half-open, so `0..xs.len()` is every index, and two ranges that
-meet, `0..n` and `n..m`, don't overlap.
+meet, `0..n` and `n..m`, don't overlap. A range is a `for`'s, not a
+value: it can't be kept in a `let` or passed, and it has no methods.
 
 ```ren
 // the elements after each one, paired with it
