@@ -404,7 +404,7 @@ let several_records_have ~names loc ?what (f : Ast.ident) paths =
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
    call that uses it. *)
 let undeclared_use ?(why = []) (f : Ast.Resolved.fn_def) dep call =
-  let name = f.name.name in
+  let name = Ast.fn_name f in
   Diag.make f.name.loc
     ~labels:
       (match call with
@@ -424,7 +424,7 @@ let undeclared_use ?(why = []) (f : Ast.Resolved.fn_def) dep call =
 (* A handler whose operations or state use [dep], which its `uses`
    doesn't list ([written] says whether it has one). *)
 let undeclared_need ~written (f : Ast.Resolved.fn_def) dep call =
-  let name = f.name.name in
+  let name = Ast.fn_name f in
   Diag.make f.name.loc
     ~labels:
       (match call with
@@ -455,7 +455,7 @@ let handler_uses_itself (f : Ast.Resolved.fn_def) dep call =
     ~labels:
       (match call with
       | Some _ ->
-          [ (f.name.loc, sprintf "`%s` implements `%s`" f.name.name dep) ]
+          [ (f.name.loc, sprintf "`%s` implements `%s`" (Ast.fn_name f) dep) ]
       | None -> [])
     ~notes:
       [
@@ -622,9 +622,9 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
       ]
     ~help:
       (sprintf "make it an associated function, `fn %s() uses %s = ...`"
-         (Ast.short_name f.name.name)
+         (Ast.short_name (Ast.fn_name f))
          dep)
-    (sprintf "the associated value `%s` uses `%s`" f.name.name dep)
+    (sprintf "the associated value `%s` uses `%s`" (Ast.fn_name f) dep)
 
 (* ---- errors (errors.md) ---- *)
 
@@ -645,9 +645,9 @@ let value_fails (f : Ast.Resolved.fn_def) ~tag ~shape from =
       (sprintf
          "handle it here with `match`, or make it an associated function, `fn \
           %s() ! %s = ...`"
-         (Ast.short_name f.name.name)
+         (Ast.short_name (Ast.fn_name f))
          shape)
-    (sprintf "the associated value `%s` can fail with `%s`" f.name.name tag)
+    (sprintf "the associated value `%s` can fail with `%s`" (Ast.fn_name f) tag)
 
 (* "`Short(Int)`", "`Short(Int)` and `Frozen`", "`A`, `B` and `C`" *)
 let and_list items =
@@ -882,7 +882,7 @@ let cannot_fail_arm loc =
 
 (* How a message names the function [f]: `pub fn transfer`. *)
 let fn_named (f : Ast.Resolved.fn_def) =
-  sprintf "%sfn %s" (if f.pub then "pub " else "") f.name.name
+  sprintf "%sfn %s" (if f.pub then "pub " else "") (Ast.fn_name f)
 
 (* [f]'s body can fail with [tag], shown as [shape], which its signature
    doesn't list; [from] is the first place it comes from, and what it is. *)
@@ -899,7 +899,9 @@ let undeclared_error (f : Ast.Resolved.fn_def) ~tag ~shape from =
            sprintf
              "a public function without `!` can't fail, and its body is \
               checked against that"
-         else sprintf "`%s` can only fail with what's after its `!`" f.name.name);
+         else
+           sprintf "`%s` can only fail with what's after its `!`"
+             (Ast.fn_name f));
       ]
     ~help:
       (if f.errors = None then

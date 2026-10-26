@@ -351,7 +351,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
           (Method, signature ~sets f)
       | Op_fn, _ -> (Function, signature ~sets f)
     in
-    { oname = Ast.short_name f.name.name; opub = f.pub; okind; oscheme }
+    { oname = f.name.name; opub = f.pub; okind; oscheme }
   in
   {
     path = Path.make home td.type_name.name;

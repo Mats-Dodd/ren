@@ -276,6 +276,9 @@ type ('v, 'b, 't) fn_def = {
       (** the dependencies after `uses`, if it's written: [Clock], or another
           module's, [store.Users] *)
   body : ('v, 'b, 't) expr;
+  owner : ident option;
+      (** the type it's a member of, [Stack] for [push]; [None] for a top-level
+          function *)
   loc : Loc.t;
 }
 
@@ -292,11 +295,11 @@ type ('v, 'b, 't) fn_def = {
    kept as a function of no parameters whose body is the value, so every
    pass checks it as one; only [op_kind] tells them apart.
 
-   The parser names each item as it's written, `push`. Resolve gives it
-   its type's name in front, `Stack.push`, its path's name in the module
-   (path.ml), so passes after it know it apart from a top-level `push`;
-   and it puts the type's parameters first in its [tparams], and gives
-   `self` its type, `Stack<T>`. *)
+   The parser names each item as it's written, `push`, and gives it its
+   type as its [owner], so its path ([fn_path]) is a member's (path.ml),
+   which passes after it know apart from a top-level `push`. Resolve puts
+   the type's parameters first in its [tparams], and gives `self` its
+   type, `Stack<T>`. *)
 type op_kind = Op_fn | Op_value
 type ('v, 'b, 't) op = { op_kind : op_kind; op_fn : ('v, 'b, 't) fn_def }
 
@@ -381,6 +384,20 @@ let functions (prog : ('v, 'b, 't) program) =
       | Type td -> List.map (fun o -> o.op_fn) td.type_ops
       | Import _ | Testing _ -> [])
     prog
+
+(* The path of [f], declared in module [home]: a member's is its type's,
+   and which member it is (path.ml). *)
+let fn_path home (f : ('v, 'b, 't) fn_def) =
+  match f.owner with
+  | Some t -> Path.member (Path.make home t.name) f.name.name
+  | None -> Path.make home f.name.name
+
+(* How [f] is written in its own module, for a message: `Stack.push` for a
+   member, after its type. *)
+let fn_name (f : ('v, 'b, 't) fn_def) =
+  match f.owner with
+  | Some t -> t.name ^ "." ^ f.name.name
+  | None -> f.name.name
 
 (* Whether [f]'s signature is written out in full, so that its declaration
    says everything about its type: it's public, so no `->` means Unit and

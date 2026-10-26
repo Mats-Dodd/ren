@@ -498,7 +498,7 @@ let types ?(lint = false) ?load ~file src =
             (List.map
                (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
                f.params)
-          (List.assoc f.name.name inferred.schemes)
+          (List.assoc (Ast.fn_name f) inferred.schemes)
       in
       (* a type's declaration, as Iface has it *)
       let decl (td : Ast.Resolved.type_def) =
@@ -509,12 +509,12 @@ let types ?(lint = false) ?load ~file src =
       (* one of a type's members, under it *)
       let member ~outer (o : Ast.Resolved.op) =
         let f = o.op_fn in
-        let name = Ast.short_name f.name.name in
+        let name = f.name.name in
         match o.op_kind with
         | Op_fn -> "  " ^ fn_ ~outer ~name f
         | Op_value -> (
             (* a function of no parameters (ast.ml) *)
-            match List.assoc f.name.name inferred.schemes with
+            match List.assoc (Ast.fn_name f) inferred.schemes with
             | { ty = Fun ([], t, _, _); names = tnames } ->
                 "  "
                 ^ Ty.value_signature ~names ~pub:f.pub ~name
@@ -538,7 +538,7 @@ let types ?(lint = false) ?load ~file src =
                            | Named p -> Some p
                            | Param _ -> None)
                          deps)
-                    (List.assoc f.name.name inferred.schemes);
+                    (List.assoc (Ast.fn_name f) inferred.schemes);
                 ]
             | Ast.Fn f when List.mem f.name.name items.made -> []
             | Ast.Fn f -> [ fn_ ~name:f.name.name f ]

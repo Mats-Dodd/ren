@@ -415,6 +415,6 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
     (List.concat_map (fun (iface : Iface.t) -> iface.types) reachable @ r.types);
   List.iter
     (fun (f : fn_def) ->
-      let nodes = List.assoc f.name.name inferred.nodes in
+      let nodes = List.assoc (Ast.fn_name f) inferred.nodes in
       check_expr { types; nodes; names = Resolve.type_name r; sink } f.body)
     (Ast.functions r.prog)

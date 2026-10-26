@@ -927,7 +927,7 @@ let max_binder (f : fn_def) =
   !m
 
 let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
-  let name = f.name.name in
+  let name = Ast.fn_name f in
   let scheme = List.assoc name inferred.schemes in
   let next = max_binder f + 1 in
   let cx =

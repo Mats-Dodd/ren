@@ -1568,12 +1568,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
         | _ -> (body, None, none))
     | _ -> (expr env { inner with rows = !named } f.body, ret, deps)
   in
-  let name =
-    match owner with
-    | Some td -> { f.name with name = td.type_name.name ^ "." ^ f.name.name }
-    | None -> f.name
-  in
-  ( { f with name; tparams; params = ps; ret; errors = errs; uses = deps; body },
+  ( { f with tparams; params = ps; ret; errors = errs; uses = deps; body },
     List.sort_uniq compare sc.fn.calls,
     List.sort_uniq compare sc.fn.dots )
 
@@ -1694,7 +1689,7 @@ let type_def env (td : Parsed.type_def) :
       (List.map
          (fun (o : Parsed.op) ->
            let f, calls, dots = fn_def env ~owner:td o.op_fn in
-           ({ op_kind = o.op_kind; op_fn = f }, (f.name.name, calls, dots)))
+           ({ op_kind = o.op_kind; op_fn = f }, (Ast.fn_name f, calls, dots)))
          td.type_ops)
   in
   ({ td with type_body; type_ops }, calls)
@@ -1795,9 +1790,9 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
     let kind = if Ast.is_handler f then "handler" else "fn" in
     let check ~verb t =
       no_private env ~private_ t
-        ~whole:(sprintf "`pub %s %s` %s `%s`" kind f.name.name verb)
+        ~whole:(sprintf "`pub %s %s` %s `%s`" kind (Ast.fn_name f) verb)
         ~inside:
-          (sprintf "`pub %s %s`'s signature mentions `%s`" kind f.name.name)
+          (sprintf "`pub %s %s`'s signature mentions `%s`" kind (Ast.fn_name f))
     in
     List.iter
       (fun (p : Resolved.param) -> Option.iter (check ~verb:"takes") p.pty)
@@ -1809,27 +1804,27 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
           (fun u ->
             no_private_named env ~private_ (named_in_uses u)
               ~say:(fun (p : Path.t) ->
-                sprintf "`pub handler %s` needs `%s`" f.name.name p.name))
+                sprintf "`pub handler %s` needs `%s`" (Ast.fn_name f) p.name))
           needs
     | ret -> Option.iter (check ~verb:"returns") ret);
     Option.iter
       (no_private_errors env ~private_
-         ~set:(sprintf "`pub fn %s` can fail with `%s`" f.name.name)
-         ~tag:(sprintf "`pub fn %s`'s error `%s` mentions `%s`" f.name.name))
+         ~set:(sprintf "`pub fn %s` can fail with `%s`" (Ast.fn_name f))
+         ~tag:(sprintf "`pub fn %s`'s error `%s` mentions `%s`" (Ast.fn_name f)))
       f.errors;
     Option.iter
       (fun u ->
         no_private_named env ~private_ (named_in_uses u)
           ~say:(fun (p : Path.t) ->
-            sprintf "`pub fn %s` uses `%s`" f.name.name p.name))
+            sprintf "`pub fn %s` uses `%s`" (Ast.fn_name f) p.name))
       f.uses
   in
   (* an associated value is a function of no parameters (ast.ml) *)
   let value (f : Resolved.fn_def) =
     Option.iter
       (no_private env ~private_
-         ~whole:(sprintf "`pub let %s` is a `%s`" f.name.name)
-         ~inside:(sprintf "`pub let %s`'s type mentions `%s`" f.name.name))
+         ~whole:(sprintf "`pub let %s` is a `%s`" (Ast.fn_name f))
+         ~inside:(sprintf "`pub let %s`'s type mentions `%s`" (Ast.fn_name f)))
       f.ret
   in
   (* a public handler's interface says what it implements *)
@@ -1842,7 +1837,7 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
                match d.tref with Named p -> Some (p, d.tloc) | Param _ -> None)
              deps)
           ~say:(fun (p : Path.t) ->
-            sprintf "`pub handler %s` implements `%s`" f.name.name p.name)
+            sprintf "`pub handler %s` implements `%s`" (Ast.fn_name f) p.name)
     | _ -> ()
   in
   (* a public group's parameters, which each of its tests' functions
@@ -1963,7 +1958,7 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
   let method_ (td : Resolved.type_def) =
     List.find_opt
       (fun (o : Resolved.op) ->
-        Ast.short_name o.op_fn.name.name = m
+        o.op_fn.name.name = m
         &&
         match (o.op_kind, o.op_fn.params) with
         | Op_fn, p :: _ -> p.pname.ident.name = "self"
@@ -1973,7 +1968,7 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
   let callees (td : Resolved.type_def) =
     match method_ td with
     | Some o when not (Ast.spelled o.op_fn) ->
-        [ Path.make home o.op_fn.name.name ]
+        [ Path.make home (Ast.fn_name o.op_fn) ]
     | Some _ | None -> []
   in
   let own (p : Path.t) =

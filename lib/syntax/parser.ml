@@ -1179,6 +1179,7 @@ let parse_fn p ~pub =
     errors;
     uses;
     body;
+    owner = None;
     loc = Loc.span start (last_loc p);
   }
 
@@ -1226,6 +1227,7 @@ let parse_op ?(dep = false) p ~tname =
               errors = None;
               uses = None;
               body;
+              owner = None;
               loc = Loc.span start (last_loc p);
             };
         }
@@ -1287,6 +1289,12 @@ let parse_members ?dep p ~tname =
   in
   items []
 
+(* The members [ops] of the type [type_name], each knowing whose it is. *)
+let owned_by type_name ops =
+  List.map
+    (fun o -> { o with op_fn = { o.op_fn with owner = Some type_name } })
+    ops
+
 let parse_type p ~pub =
   expect p TYPE;
   let type_name = upper_ident p "a type name" in
@@ -1333,7 +1341,13 @@ let parse_type p ~pub =
            "`%s` is an error set, not a type of values, so it has no members"
            tname)
   | _ -> ());
-  { type_pub = pub; type_name; type_params; type_body; type_ops }
+  {
+    type_pub = pub;
+    type_name;
+    type_params;
+    type_body;
+    type_ops = owned_by type_name type_ops;
+  }
 
 (* A dependency (deps.md, "Declaring one"): its operations, indented under
    it, then its members, as a sum type lists its variants first.
@@ -1405,7 +1419,7 @@ let parse_dep p ~pub =
     type_name;
     type_params = [];
     type_body = Dep ops;
-    type_ops = members;
+    type_ops = owned_by type_name members;
   }
 
 (* A handler (deps.md, "Implementations"): a function of its parameters
@@ -1545,6 +1559,7 @@ let parse_handler p ~pub =
     errors = None;
     uses = None;
     body;
+    owner = None;
     loc = Loc.span start (last_loc p);
   }
 

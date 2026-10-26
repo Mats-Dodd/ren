@@ -151,6 +151,7 @@ let fn_of ~name ~loc ?(params = []) body =
       errors = None;
       uses = None;
       body;
+      owner = None;
       loc = Loc.span loc body.loc;
     }
 
