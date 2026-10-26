@@ -1,0 +1,243 @@
+(* Core: the small, explicitly typed language a checked program is lowered
+   to (lower.ml), and that the interpreter runs (eval.ml); see core.ml.
+
+   Core has one way to change something, [Assign] to a local variable.
+   Every node says its type, in canonical form (ty.ml), and keeps the
+   location of the code it came from. Failing is explicit: [Fail],
+   [Handle] and [Finally], and a call fails only if its callee's type says
+   it can. So is the evidence every function and lambda takes. Core Lint
+   (core_lint.ml) checks that all of this fits together. *)
+
+type mode = Ty.mode = Read | Inout
+
+(* A local variable. Every use of it carries the same record. *)
+type var = { id : int; name : string; ty : Ty.ty }
+
+(* Operations built into the language. Each one's operands are listed in
+   the order they're evaluated. *)
+type prim =
+  | Neg
+  | Not  (** on a [Bool] *)
+  | Binop of Ast.binop
+      (** [==] and [!=] on any two values of the same type, the others on
+          [Int]s. Never [&&] or [||]: lowering makes those [If]s, so their right
+          side is evaluated only when it's needed *)
+  | Length  (** an array's length *)
+  | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
+  | Set_index  (** [xs] with element [i] replaced: a new array *)
+  | New_cell
+      (** a new cell holding a value: a `var` of a handler's state, which its
+          instance's operations share (see [Handler]). Nothing else holds a
+          cell, and a program never sees one *)
+  | Get_cell  (** what a cell holds *)
+  | Set_cell  (** change what a cell holds, to the second operand *)
+
+type param = { mode : mode; var : var }
+
+type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
+
+and kind =
+  | Int of int
+  | Bool of bool
+  | Str of string
+  | Unit
+  | Local of var
+  | Global of Path.t
+      (** a top-level function, or a member's, [Stack.push]; [ty] is the type
+          it's used at here, an instance of its scheme. A method call,
+          [s.push(1)], is a call of its function, with [s] first. *)
+  | Global_value of Path.t
+      (** an associated value, [Stack.empty], which the program makes once when
+          it starts: its function of no parameters, called then. [ty] is an
+          instance of its type. *)
+  | Intrinsic of Intrinsic.t
+      (** a function built into the compiler: [show], or a method, [Array.push]
+      *)
+  | Dep_call of {
+      dep : Path.t;
+      op : string;
+      fty : Ty.ty;  (** the operation's type, at this call *)
+      ev : var;  (** the evidence it finds [dep]'s implementation in *)
+      args : expr list;
+    }
+      (** [Clock.now()]: a call of an operation of the innermost implementation
+          of [dep] in [ev], which runs with the evidence that implementation was
+          installed with. Kept apart from other calls, so what was called, with
+          what, can be recorded (the journal, stage 10). Never with `&` *)
+  | With of { ev : var; outer : var; dep : Path.t; impl : expr; body : expr }
+      (** [body], with the evidence [ev]: [outer], the evidence here, with
+          [impl] installed for [dep] on top. [impl] is a value of [dep]'s type:
+          a record, installed as it is, or a handler's description, of which a
+          fresh instance is made with [outer], and its implementation of [dep]
+          installed. Either keeps [outer], which its operations run with. The
+          runtime's installs around `main` are these *)
+  | Handler of { ev : var; captures : var list; body : expr }
+      (** a handler, described: what calling a `handler` declaration gives. Like
+          a lambda of no parameters it keeps [captures], and its [body] runs
+          with the evidence [ev] it's given, each time a [With] or a
+          [With_handler] installs it: it makes the handler's state, each `var`
+          in a cell, and ends in an [Instance]. Its type is its dependency's, if
+          it implements one, or else the handler's own, either needing what its
+          operations use *)
+  | Instance of (Path.t * expr) list
+      (** a handler's instance: an implementation of each of its dependencies,
+          in the order they're written, records of lambdas that share the cells
+          of one state. Of its [Handler]'s type *)
+  | As_dep of Path.t * expr
+      (** a description of a handler of several dependencies, taken as one of
+          [dep]'s: a [With] installs only its implementation of [dep]. Of
+          [dep]'s type, needing what the handler does *)
+  | With_handler of {
+      ev : var;
+      outer : var;
+      handler : expr;
+      deps : Path.t list;
+      body : expr;
+    }
+      (** [body], with the evidence [ev]: [outer] with a fresh instance of
+          [handler], made with [outer], installed on top, for each of [deps].
+          The instance's implementations all keep [outer], which their
+          operations run with *)
+  | Prim of prim * expr list
+  | Let of var * expr * expr  (** [let x = value in body] *)
+  | Assign of var * expr  (** the only way anything changes *)
+  | If of expr * expr * expr
+  | Match of expr * arm list
+  | While of expr * expr  (** the condition, then the body *)
+  | Seq of expr * expr  (** the first's value is dropped *)
+  | Call of expr * arg list * var
+      (** the callee, its arguments, and the evidence it's passed: always the
+          caller's own, the innermost in scope *)
+  | Lambda of {
+      params : param list;
+      ev : var;
+      captures : var list;
+      body : expr;
+    }
+      (** [captures] are the locals from outside the lambda its body uses, in
+          order of id; their values are copied when the lambda is made. Its
+          evidence [ev] is passed where it's called, never captured *)
+  | Con of Path.t * string * expr list
+      (** a constructor: its type, its name, its fields in order *)
+  | Record of Path.t * (string * expr) list  (** in the order written *)
+  | Field of expr * Path.t * string  (** [r.f], and the record type of [r] *)
+  | Update of expr * string * expr
+      (** the record with one field replaced: a new record *)
+  | Array of expr list
+  | Tag of string * expr list
+      (** an error, [Short(id, 5)]: its tag and its payload in order. Its type
+          is [Errors] of the one tag. An error is a value only in Core, which
+          raises one with [Fail] and catches one with [Handle] *)
+  | Fail of expr  (** stop with this error; of any type, since it never ends *)
+  | Handle of {
+      body : expr;
+      value : var;
+      on_value : expr;
+      error : var;
+      on_error : expr;
+    }
+      (** run [body]. If it ends, its value is [value], and the [Handle] is
+          [on_value]; if it fails, its error is [error] (of an [Errors] type),
+          and the [Handle] is [on_error]. Neither of those is handled here: what
+          they fail with goes on *)
+  | Assert of expr
+      (** panic if this [Bool] is false: `assert e` (deps.md, "`assert`"). A
+          [Unit] *)
+  | Assert_equal of expr * expr
+      (** panic if these two, of the same type, differ, showing both: `assert a
+          == b`. A [Unit] *)
+  | Finally of expr * expr
+      (** [body], then [after], a [Unit], which runs whether [body] fails or
+          not, and doesn't change what [body] did: its value, or its error,
+          which goes on once [after] has run. Lowering writes a place passed
+          with `&` back to it in [after], so a call that fails still changes it
+      *)
+
+(* A call's argument. An [inout] argument is always a plain local: the call
+   reads it, and writes the parameter's final value back to it. *)
+and arg = Value of expr | Ref of var
+and arm = { pat : pattern; guard : expr option; body : expr }
+and pattern = { pkind : pattern_kind; pty : Ty.ty; ploc : Loc.t }
+
+and pattern_kind =
+  | PWild
+  | PVar of var
+  | PInt of int
+  | PBool of bool
+  | PCon of Path.t * string * pattern list
+  | PTag of string * pattern list  (** an error with this tag, destructured *)
+  | POr of pattern list
+      (** any of these; each binds the same variables (the same [var]s) *)
+
+type fn_def = {
+  path : Path.t;
+  params : param list;
+  ev : var;  (** its evidence, the hidden parameter every function takes *)
+  scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
+  body : expr;
+  loc : Loc.t;  (** its name, where it's declared *)
+}
+
+(* A module, lowered. [types] are the types it declares. *)
+type program = {
+  home : string;
+  types : Iface.type_decl list;
+  fns : fn_def list;
+  values : Path.t list;
+      (** its associated values, in the order they're made, each after every
+          value it uses; each is one of [fns], of no parameters *)
+}
+
+(* ---- building ---- *)
+
+(* A node of this kind and type, from the code at this location. *)
+val mk : kind -> Ty.ty -> Loc.t -> expr
+
+(* The type of evidence, which no type in Ren source can name. *)
+val evidence_ty : Ty.ty
+
+(* The evidence a function or lambda takes, or a [With] binds, as the
+   local with this id. *)
+val evidence : int -> var
+
+(* The type of a cell holding a value of this type (see [New_cell]). *)
+val cell_ty : Ty.ty -> Ty.ty
+
+(* [()], and a use of a local, of its type. *)
+val unit : Loc.t -> expr
+val local : var -> Loc.t -> expr
+
+(* The type of an array's elements, or of what's in an [Option]. Fails with
+   [Invalid_argument] for any other type. *)
+val elem_ty : Ty.ty -> Ty.ty
+
+(* Whether calling a function of this type can fail: whether its errors
+   row has a tag, or may have more than it says. *)
+val fails : Ty.ty -> bool
+
+(* The expressions directly inside one, in the order they're evaluated,
+   a lambda's or handler's body last. *)
+val children : expr -> expr list
+
+(* Whether running an expression can fail: whether it can reach a [Fail]
+   or a call that can fail that no [Handle] in it catches. A lambda's
+   body fails only when it's called. *)
+val can_fail : expr -> bool
+
+(* ---- printing, as s-expressions, for tests ---- *)
+
+type sexp = Atom of string | List of sexp list
+
+(* An s-expression, starting at this column: a list that fits on its line
+   is printed on it, and one that doesn't goes on over several, indented. *)
+val render : int -> sexp -> string
+
+(* A primitive's name, as printed: [neg], [get], [==]. *)
+val show_prim : prim -> string
+
+(* An expression, or a function, as an s-expression, and printed. A local
+   prints as its name and binder id, [x/3]. *)
+val sexp : expr -> sexp
+val show : expr -> string
+val fn_sexp : fn_def -> sexp
+val show_fn : fn_def -> string
