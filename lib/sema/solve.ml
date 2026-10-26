@@ -41,10 +41,21 @@ let equal env ?msg ?notes ?help loc ~found ~expected =
         loc ~found:(c.ty found) ~expected:(c.ty expected) failure
 
 (* A use of another function of the group is the type that function's
-   own body gave it (see [Infer_env.join]). *)
+   own body gave it (see [Infer_env.join]), with what the use put in place
+   of its type parameters and named rows. A row of its own that ends in one
+   of those once the group is done, `! ..e`, ends in what the use put
+   there, as it will. *)
 let join env ~is_value j =
   let msg = used_as j.jname in
-  let expected = Hashtbl.find env.globals j.target in
+  let g = List.assoc j.target env.group in
+  let ends =
+    List.map (fun (v, named) -> (v, List.assoc named j.jinst.rows)) (g.gends ())
+  in
+  let expected =
+    replace
+      { j.jinst with rows = j.jinst.rows @ ends }
+      (Hashtbl.find env.globals j.target)
+  in
   match (repr j.used, repr expected) with
   | TFun ([], used, _, _), TFun ([], made, _, _) when is_value j.target ->
       (* an associated value, a function of no parameters (ast.ml), is

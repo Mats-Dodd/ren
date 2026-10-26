@@ -311,11 +311,23 @@ let in_group cx ~node p t =
     { tcallee = p; tvalue = false; tpicked = Group t };
   t
 
+(* Fresh variables for the type parameters and named rows of [g], a
+   function of the group being checked, by their skolems' ids: what a use
+   of it puts in their place (Types.replace). Its declaration says it works
+   for any of them, so a function of its group can use it at [Int] and
+   another at [Str], as one of a later group could. *)
+let own_instance env (g : group_fn) : subst =
+  {
+    tys = List.map (fun id -> (id, fresh_var env.st)) g.gparams;
+    rows = List.map (fun id -> (id, fresh_row env.st)) g.grows;
+  }
+
 (* A name's type, at the expression [node]. A top-level function's is a
    fresh instance of its scheme, so each use can pick its own types;
    another function of the group being checked has the type its
-   declaration gives it, joined with its real type once the group is done
-   (see [join]), unless its declaration is all there is to know. Which
+   declaration gives it, with fresh variables for the type parameters and
+   rows it names, joined with its real type once the group is done (see
+   [join]), unless its declaration is all there is to know. Which
    type arguments a use of a top-level function picked is recorded at
    [node] (see [targs]). *)
 let rec lookup env cx ~node loc = function
@@ -338,10 +350,14 @@ let rec lookup env cx ~node loc = function
       (* its declaration says everything about it, so even in its own body
          it's an instance of that, joined with nothing: a use that closes
          its rows, like storing it as a `fn()`, closes only the instance's *)
-      in_group cx ~node p ((List.assoc p env.group) ())
+      let g = List.assoc p env.group in
+      in_group cx ~node p (replace (own_instance env g) (g.declared ()))
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
-      let used = (List.assoc p env.group) () in
-      defer env (Join { jloc = loc; jname = Path.local p; used; target = p });
+      let g = List.assoc p env.group in
+      let jinst = own_instance env g in
+      let used = replace jinst (g.declared ()) in
+      defer env
+        (Join { jloc = loc; jname = Path.local p; used; target = p; jinst });
       in_group cx ~node p used
   | Global p when p = cx.self ->
       (* its own type, not generic until its group is done, so the copy

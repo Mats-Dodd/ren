@@ -1001,7 +1001,33 @@ let setup env ~is_value (f : fn_def) =
     let ps, ret, errs, uses = signature ~seen:true () in
     TFun (ps, ret, errs, uses)
   in
-  ({ fn = f; skolems; cx; ps; ret }, (path, declared))
+  (* its errors and uses, if it names the row each ends in, `! ..e`, and
+     they don't end in it yet: the variable each ends in, and the named
+     row's skolem *)
+  let ends () =
+    List.filter_map
+      (fun (r, n) ->
+        match
+          (repr_row (row_end r), Option.map (fun (n : ident) -> n.name) n)
+        with
+        | RVar { contents = RUnbound (v, _) }, Some n ->
+            Option.map
+              (fun (id, _) -> (v, id))
+              (List.find_opt (fun (_, n') -> n' = n) row_skolems)
+        | _ -> None)
+      [
+        (errs, Option.bind f.errors (fun (es : Resolved.errors) -> es.etail));
+        (uses, Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail));
+      ]
+  in
+  ( { fn = f; skolems; cx; ps; ret },
+    ( path,
+      {
+        declared;
+        gparams = List.map fst skolems;
+        grows = List.map fst row_skolems;
+        gends = ends;
+      } ) )
 
 (* Check the body of [m], a function of the group, against its result. *)
 let check_body env ~is_value m =

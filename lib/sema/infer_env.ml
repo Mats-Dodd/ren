@@ -97,9 +97,9 @@ type env = {
           prelude's *)
   globals : (Path.t, ty) Hashtbl.t;
       (** top-level functions: a type scheme once their group is done *)
-  mutable group : (Path.t * (unit -> ty)) list;
-      (** the functions of the group being checked, each with a way to make the
-          type its declaration gives it *)
+  mutable group : (Path.t * group_fn) list;
+      (** the functions of the group being checked, each with what its
+          declaration says of it *)
   mutable spelled : Path.t list;
       (** those of [group] whose signature is written out in full, every
           parameter's type included: public functions, mostly *)
@@ -117,6 +117,23 @@ type env = {
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
+}
+
+(* A function of the group being checked, as the group's functions see
+   it until the group is done (infer_top.ml, [setup]). Its type parameters
+   and the rows it names are generic in what its declaration says, so each
+   use has fresh variables in their place (Infer_lookup.own_instance), and
+   so does its own type, where a use is joined with it (solve.ml). *)
+and group_fn = {
+  declared : unit -> ty;
+      (** a way to make the type its declaration gives it, with its type
+          parameters and the rows it names as skolems *)
+  gparams : int list;  (** its type parameters' skolems, by id *)
+  grows : int list;  (** the skolems of the rows it names, by id *)
+  gends : unit -> (int * int) list;
+      (** its own rows that end in a row it names once the group is done, `!
+          ..e`, but don't yet: the variable each ends in now, by id, and the
+          named row's skolem's id *)
 }
 
 (* A tag matched in an error set that was still open: the tag, its
@@ -294,8 +311,19 @@ and checked = { ffn : fn_def; fcx : ctx; fmain : bool }
    declarations describe them, so no body learns anything from another
    body of its group, and checking them in another order would find the
    same. Once every body is checked, each use is joined with the type that
-   function's own body gave it. *)
-and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
+   function's own body gave it. The type parameters its declaration names,
+   and the rows, it works for whatever they are, so each use has fresh
+   variables in their place, there and in what it's joined with. *)
+and join = {
+  jloc : Loc.t;
+  jname : string;
+  used : ty;
+  target : Path.t;
+  jinst : Types.subst;
+      (** what the use put in place of the function's type parameters and named
+          rows (Infer_lookup.own_instance), which its own type is joined at too
+      *)
+}
 
 (* A statement's value, which is thrown away, so it has to be `Unit`: a
    value can't be dropped without a word (errors.md, "Nothing is

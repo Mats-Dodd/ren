@@ -1912,3 +1912,103 @@ fn main() = ()
       │   ^^^^
       help: use it, or write `let _ = ...` if you mean to drop it
     |}]
+
+let%expect_test "a generic function used at another type in its group (B1)" =
+  (* [first] says it works for every [T], so [g], in its group, can use it
+     at [Int] while [main] uses it at [Str]: each use has fresh variables
+     in place of [T], and records what they became *)
+  let src =
+    {|
+fn first<T>(xs: Array<T>, n: Int) -> T = xs[g(n)]
+fn g(n) = if n > 0 then first([1, 2, 3], 0) * 0 else n
+pub fn last<T>(xs: Array<T>, n: Int) -> T = xs[h(n)]
+fn h(n) = if n > 0 then last([1, 2, 3], 0) * 0 else n
+fn main() =
+  print(first(["a", "b"], 1))
+  print(last(["c", "d"], 1))
+|}
+  in
+  run src;
+  core ~types:true src;
+  [%expect {|
+    a
+    c
+    ()
+    (fn first : fn(Array<T>, Int) -> T uses ..d (xs/1 n/2) ev/3
+      (get xs/1 (call ev/3 (inst g {..d}) n/2)))
+    (fn g : fn(Int) -> Int uses ..d (n/1) ev/2
+      (if (> n/1 0) (* (call ev/2 (inst first Int {..d}) (array 1 2 3) 0) 0) n/1))
+    (fn last : fn(Array<T>, Int) -> T ! ..e uses ..d (xs/1 n/2) ev/3
+      (get xs/1 (call ev/3 (inst h {..d}) n/2)))
+    (fn h : fn(Int) -> Int uses ..d (n/1) ev/2
+      (if (> n/1 0) (* (call ev/2 (inst last Int {} {..d}) (array 1 2 3) 0) 0)
+        n/1))
+    (fn main : fn() ! ..e uses Console, ..d () ev/1
+      (seq
+        (call ev/1 (inst print Str {} {..d})
+          (call ev/1 (inst first Str {Console | ..d}) (array "a" "b") 1))
+        (call ev/1 (inst print Str {} {..d})
+          (call ev/1 (inst last Str {} {Console | ..d}) (array "c" "d") 1))))
+    (fn $start : fn() ! ..e () ev/1
+      (with ev/2 (extend ev/1 Console Console.real)
+        (call ev/2 (inst main {..e} {..r}))))
+    |}]
+
+let%expect_test "a function that names its errors' row, used in its group (B1)" =
+  (* [call] fails with whatever [f] does, `..e`: [g], in its group, passes
+     it a closure that fails with `Bad`, and so the call does *)
+  let src =
+    {|
+type Bad = | Bad
+fn call(f: fn() -> Int ! ..e, n: Int) -> Int ! ..e =
+  if n > 0 then if attempt g(0) == Ok(2) then 0 else try f() else try f()
+fn g(n: Int) -> Int ! Bad = try call(fn() => if n > 0 then fail Bad else 1, n)
+fn main() = print(attempt g(1))
+|}
+  in
+  run src;
+  core ~types:true src;
+  [%expect {|
+    Err(Bad)
+    ()
+    (fn call : fn(fn() -> Int ! ..e, Int) -> Int ! ..e uses ..d (f/1 n/2) ev/3
+      (if (> n/2 0)
+        (if
+          (==
+            (handle (call ev/3 (inst g {..r} {..d}) 0)
+              ($value/4 => (con Ok $value/4))
+              (fail $error/5 => (con Err $error/5)))
+            (con Ok 2))
+          0
+          (call ev/3 f/1))
+        (call ev/3 f/1)))
+    (fn g : fn(Int) -> Int ! Bad | ..e uses ..d (n/1) ev/2
+      (call ev/2 (inst call {Bad | ..r} {..d})
+        (lambda () (captures n/1) ev/3 (if (> n/1 0) (fail (tag Bad)) 1))
+        n/1))
+    (fn main : fn() ! ..e uses Console, ..d () ev/1
+      (call ev/1 (inst print Result<Int, ! Bad> {} {..d})
+        (handle (call ev/1 (inst g {..r} {Console | ..d}) 1)
+          ($value/2 => (con Ok $value/2))
+          (fail $error/3 => (con Err $error/3)))))
+    (fn $start : fn() ! ..e () ev/1
+      (with ev/2 (extend ev/1 Console Console.real)
+        (call ev/2 (inst main {..e} {..r}))))
+    |}]
+
+let%expect_test "a generic function's uses in its group still agree with it" =
+  (* each use picks its own [T], but within one use the parameters and
+     result agree *)
+  check_error
+    {|
+fn first<T>(xs: Array<T>, n: Int) -> T = xs[g(n)]
+fn g(n) = if n > 0 then first(["a"], 0) * 0 else n
+fn main() = ()
+|};
+  [%expect {|
+    error: expected `Int`, found `Str`
+      ┌─ test.ren:2:25
+    2 │ fn g(n) = if n > 0 then first(["a"], 0) * 0 else n
+      │                         ^^^^^^^^^^^^^^^
+      = `*` works on `Int`s
+    |}]

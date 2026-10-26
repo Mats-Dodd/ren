@@ -333,6 +333,32 @@ let instantiate st t =
       rows = List.map (fun (id, _) -> (id, Hashtbl.find rows id)) g.rows;
     } )
 
+(* A copy of [t] with [s]'s types in place of the type parameters (as
+   skolems) it lists by id, and its rows in place of the named rows and
+   the unbound row variables it lists by id. That's how a function of the
+   group being checked, which isn't generic yet, is used at types of its
+   own: its type parameters and the rows it names are what its declaration
+   makes generic (infer_lookup.ml, [own_instance]). *)
+let replace (s : subst) t =
+  let rec go t =
+    match repr t with
+    | TSkol (id, _) as t -> Option.value (List.assoc_opt id s.tys) ~default:t
+    | (TVar _ | TError) as t -> t
+    | TCon (n, args) -> TCon (n, List.map go args)
+    | TErrors e -> TErrors (row e)
+    | TUses u -> TUses (row u)
+    | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
+  and param p = { p with ty = go p.ty }
+  and row r =
+    match repr_row r with
+    | (RSkol (id, _) | RVar { contents = RUnbound (id, _) }) as r ->
+        Option.value (List.assoc_opt id s.rows) ~default:r
+    | (REmpty | RVar _) as r -> r
+    | RExtend (l, rest) ->
+        RExtend ({ l with payload = List.map go l.payload }, row rest)
+  in
+  go t
+
 (* ---- canonical types ---- *)
 
 (* Converting to canonical form (ty.ml) numbers every variable by where it

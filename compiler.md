@@ -207,7 +207,9 @@ decided only once every body is checked is a **constraint**
 The constraints:
 
 - **A use of another function of the group** has the type that
-  function's own body gave it.
+  function's own body gave it, with the type parameters and rows its
+  declaration names, `fn first<T>` or `! ..e`, made fresh for each use,
+  since it says it works for any of them.
 - **A handler of several dependencies given where what's wanted isn't
   known yet** is taken as one of them, if that's what's wanted once it's
   known, or else as the handler itself (deps.md, "Implementations"), so
