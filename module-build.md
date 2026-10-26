@@ -27,7 +27,7 @@ This doc covers how Ren code is organized into files and packages, how names are
 Everything else in this doc follows from three rules.
 
 **1. What crosses a boundary is written down. What stays inside is inferred.**
-This is the first principle, *the signature is the truth*, applied to modules. Anything `pub` states its whole contract in its declaration: parameter and result types, errors, `uses`, and which function parameters are transparent. Private code can leave all of that out. Inference never crosses a module boundary, so a module can be checked knowing only its imports' declarations.
+This is the first principle, *the signature is the truth*, applied to modules. Anything `pub` states its whole contract in its declaration: parameter and result types, errors, `uses`, and which function parameters are transparent. Private code can leave all of that out. The one exception is what a generic function needs of a type parameter, such as `==`: it's inferred from the body, on a `pub` function too ([operators.md](operators.md#generic-code)), and kept in the module's interface. Inference never crosses a module boundary, so a module can be checked knowing only its imports' interfaces.
 
 **2. Every name has one home, found in one of two ways: through scope or through a type.**
 Modules, values, and types are found through scope, by importing them. Constructors, fields, operators, methods, and dependency operations are found through a type, by looking in that type's own declaration. Nothing is found any other way: no search, no wildcards, no implicit imports beyond the prelude. Error tags are the one deliberate exception: they're structural and have no home.
@@ -158,7 +158,7 @@ let t = Stack.of([7, 8, 9])       // an associated function
 
 You can't add methods to a type you don't own. Write a function in your own module (`mylib.chunks(xs)`), or wrap the type in an `opaque` type and give that type its own methods.
 
-Operators (written `add(a, b) => ...`, arriving in stage 10) are public whenever their type is. Methods, associated functions and associated values are private unless they're marked `pub`, like everything else, and the `pub` ones are listed under their type in the module's interface.
+Operators (written `add(a, b) => ...`, arriving in stage 9) are public whenever their type is. Methods, associated functions and associated values are private unless they're marked `pub`, like everything else, and the `pub` ones are listed under their type in the module's interface.
 
 ### Dependencies are types
 
@@ -224,16 +224,16 @@ For every module, the compiler generates a summary that dependents read instead 
 
 | Tier | Contains | Read by |
 |---|---|---|
-| **Interface** | `pub` types (with their representation, unless `opaque`), `pub` signatures, error sets, `uses`, transparency, the signatures of `pub` types' members | type checking of dependents |
-| **Implementation** | `opaque` representations, layouts and sizes, the bodies of `pub` generic and inlinable functions, inferred borrow modes, whether the module contains `trust` | code generation of dependents |
+| **Interface** | `pub` types (with their representation, unless `opaque`), `pub` signatures, error sets, `uses`, transparency, the signatures of `pub` types' members, what each `pub` generic function needs of its type parameters (inferred), and whether each `opaque` type has `==` | type checking of dependents |
+| **Implementation** | `opaque` representations, layouts and sizes, the bodies of `pub` generic, higher-order and inlinable functions, inferred borrow modes, whether the module contains `trust` | code generation of dependents |
 
-**The interface is computed from declarations alone, never from bodies.** Rule 1 makes that possible. The one fact that would otherwise need a body is transparency, so `pub` signatures state it: a function parameter without `..e` or `..d` is transparent, and the body is checked against that. The interface tier also contains no source locations, so adding a blank line at the top of a file doesn't change it.
+**The interface is computed from declarations, and from one inferred fact.** Rule 1 makes most of that possible. Transparency would otherwise need a body, so `pub` signatures state it: a function parameter without `..e` or `..d` is transparent, and the body is checked against that. Requirements are the exception: what a `pub` generic function needs of a type parameter, `same<T has eq>`, is never written, so it comes from inferring the body ([operators.md](operators.md#generic-code) says why). Lambda sets, which lambdas and functions can reach each function type ([compiler.md](compiler.md#lambda-sets)), are inferred from bodies too, but the interface leaves them out: each function type in it has a set of its own, which says nothing of what flows to it, so they never change it. The interface tier contains no source locations, so adding a blank line at the top of a file doesn't change it. The implementation tier is computed from bodies: today it holds the typed Core of each `pub` function that's generic or higher-order, a function given or giving a function, which is what release builds will specialize into their callers ([compiler.md](compiler.md#specialization)), lambda sets included. Nothing reads it yet, so it's worked out only when asked for, not kept by the build, and it leaves out what a specializer will also need, such as the private helpers those bodies call (compiler.md, "Deviations").
 
 This gives you:
 
-- **Editing a function body can never change its module's interface,** so dependents never have to be re-checked for it. Early cutoff is guaranteed, not just likely.
-- **Changing an `opaque` representation** reruns code generation for dependents, but never their type checking.
-- **Dependents can start checking as soon as a module's declarations are resolved,** without waiting for its bodies to be inferred.
+- **Editing a function body changes its module's interface only when it changes what a `pub` function needs of a type parameter:** using `==` on a `T` that didn't need it, or no longer using it. The same goes for the errors of a function it's given, `..e`, whose tags it compares if it compares two `attempt g()`s. Anything else a body does, its types, errors, `uses` and transparency, is fixed by the signature, so dependents aren't re-checked for it. Early cutoff still holds for every such edit, and the interface is compared after checking, so an edit that leaves requirements as they were stops there too. It's guaranteed for edits that don't touch requirements, not for all of them.
+- **Changing an `opaque` representation**, or the body of a `pub` generic or higher-order function, reruns code generation for dependents, which specialize them, but not their type checking, unless the representation gains or loses a function: whether the type has `==` is in the interface, so a dependent can't compare two values that would meet a function. The bodies are kept without source locations, so moving a function changes neither tier.
+- **Dependents wait for a module's bodies to be checked,** not just its declarations, since a `pub` function's requirements come from its body. Modules still check in parallel wherever the import graph allows. It's the one place the design gives up build speed for writing less.
 
 ### Packages
 
@@ -282,7 +282,7 @@ Ren owns its compiler, so every step of compilation can be **a pure function of 
                                        codegen ─▶ C ─zig cc─▶ .o ─link─▶ binary
 ```
 
-Within a module, private functions are inferred one group of mutually recursive functions at a time, so the group is the unit of checking. The same early cutoff applies inside a module: if a group's inferred types don't change, the groups that call it aren't re-checked.
+The one arrow the picture leaves out runs from bodies to the interface: a `pub` generic function's requirements join it once its group is checked. Within a module, private functions are inferred one group of mutually recursive functions at a time, so the group is the unit of checking. The same early cutoff applies inside a module: if a group's inferred types don't change, the groups that call it aren't re-checked.
 
 | | Conventional | Ren |
 |---|---|---|
@@ -298,7 +298,7 @@ Within a module, private functions are inferred one group of mutually recursive 
 
 **Nothing to clean, nothing stale.** Results live in a content-addressed store keyed only by input hashes. There are no timestamps and no "last build." Every branch, worktree, CI run, and teammate shares the same results, and a fresh checkout is always correct.
 
-**Early cutoff.** If you change a function's body, the module's interface can't change, so nothing that imports it gets re-checked.
+**Early cutoff.** If you change a function's body, the module's interface changes only if what a `pub` generic function needs of its type parameters changes, so otherwise nothing that imports it gets re-checked.
 
 **A cache you don't have to trust.**
 ```
@@ -357,7 +357,7 @@ The three rules decide how the compiler is laid out:
 ```
  file = module ─────────────────▶ one rule for where code lives; modules sized for readers
  two homes: scope or type ──────▶ every lookup goes to one place; Resolve and Infer split cleanly
- declarations are the contract ─▶ interfaces from headers alone; early cutoff by construction
+ declarations are the contract ─▶ interfaces from headers, plus inferred requirements; early cutoff unless those change
  no import cycles ──────────────▶ a build graph, checked in parallel
  pure compiler passes ──────────▶ a cache you can trust; the daemon is just a cache
  uses Build (no Net/Clock/Env) ──▶ hermetic build scripts, enforced by types
@@ -376,8 +376,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 |---|---|
 | **Today** (stages 5a, 5b, 6, 7) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, the "two shapes" error, dependency types imported like other types, and public groups imported to run their tests. Every compiler pass is a pure function of its inputs |
 | **Stage 5b, left over** | `dbg` |
-| **Stage 11** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
-| **Stage 15** | Cached simulation-test results |
+| **Stage 13** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
+| **Stage 16** | Cached simulation-test results |
 | **After 1.0** | `build.ren`, sandboxed tools, remote cache and execution |
 
 ---

@@ -210,8 +210,9 @@ let details b ~opts ~sources ~all f =
     List.iter (fun l -> Printf.bprintf b "%s  %s\n" pad l) f.console)
 
 (* Run [suite]'s tests, or with [opts.list], list them, printing as it
-   goes. Returns the exit status: 1 if a test failed, or if `--only`
-   matched none, which is more likely a mistyped name than a pass.
+   goes. Returns the exit status: 1 if a test failed, if there are no
+   tests at all, or if `--only` matched none, which is more likely a
+   mistyped name than a pass.
    [sources] gives the text of a file a failure points into. *)
 let run ~opts ~sources (suite : Driver.suite) =
   let wanted (t : Test_items.test) =
@@ -244,7 +245,15 @@ let run ~opts ~sources (suite : Driver.suite) =
            t.label)
          None tests)
   in
-  if opts.list then (
+  if all = [] then (
+    (* nothing to run is more likely a wrong folder than a pass *)
+    print_endline
+      (sprintf "no tests: nothing in %s declares a `test`" opts.path);
+    print_endline
+      "  = help: write one, `test \"it works\" = assert 1 + 1 == 2`, or give \
+       `ren test` the folder that has them";
+    1)
+  else if opts.list then (
     List.iteri
       (fun i f ->
         if i > 0 then print_newline ();

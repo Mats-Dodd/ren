@@ -13,7 +13,7 @@
    use, and calling a dependency's operation, `Console.write(s)`, adds the
    dependency. `print` uses `Console`, so `main` does too, unless it
    declares its dependencies: a function that writes `uses`, and every
-   public function, can use only what it lists (infer_top.ml).
+   public function, can use only what it lists (infer_declared.ml).
 
    Errors (errors.md) are rows too, whose labels are tags with payloads,
    `Short(Int)`, but a call's errors go only where a marker says: a `try`
@@ -22,7 +22,7 @@
    whatever handles the code it's in. Whether each call can fail is known
    only once its group is done, so the markers' rules, and that a function
    that writes its errors (every public one does) fails with exactly
-   those, are checked then (infer_top.ml).
+   those, are checked then (solve.ml, infer_declared.ml).
 
    Top-level functions are checked in dependency order: callees before
    callers, with mutually recursive functions checked together (a strongly
@@ -48,22 +48,28 @@
    Besides each function's type scheme, inference returns the type of
    every expression and pattern, and what each lookup through a type
    found, so later passes don't have to work it out again: exhaust.ml reads
-   which constructor each pattern is.
+   which constructor each pattern is, and it and lower.ml which `match`es
+   handle errors.
 
-   The pass is split in three: infer_expr.ml infers expressions,
-   infer_top.ml works over the whole module, and infer_msg.ml words the
-   errors. *)
+   The pass is split in three: infer_expr.ml infers expressions, with
+   the modules beside it it names, infer_top.ml works over the whole
+   module, and infer_msg.ml words the errors. *)
 
-(* [type found = Infer_expr.found = ...] re-exports a type along with its
+(* [type found = Infer_env.found = ...] re-exports a type along with its
    constructors (or fields), so they can be written [Infer.Field_of] as well
-   as [Infer_expr.Field_of]. *)
-type found = Infer_expr.found =
+   as [Infer_env.Field_of]. *)
+type found = Infer_env.found =
   | Field_of of Path.t
   | Ctor_of of Path.t * string
+  | Error_tag
   | Method_of of Path.t
   | Installs of Path.t
   | Installs_handler of Path.t list
   | Wraps
+  | Handles
+  | Fail_arm
+  | Unwraps
+  | Lambda_id of string
 
 module Nodes = Infer_top.Nodes
 
@@ -71,13 +77,16 @@ type node = Infer_top.node = {
   ty : Ty.ty;
   found : found option;
   as_dep : Path.t option;
+  targs : Ty.args option;
+  needs : (int * string) list;
 }
 
 type t = Infer_top.t = {
-  schemes : (string * Ty.scheme) list;
-  values : string list;
-  nodes : (string * node Nodes.t) list;
+  schemes : Ty.scheme Path.Map.t;
+  values : Path.t list;
+  nodes : node Nodes.t Path.Map.t;
   in_scope : Path.t list;
+  opaque_eq : Path.t list;
 }
 
 let program = Infer_top.program

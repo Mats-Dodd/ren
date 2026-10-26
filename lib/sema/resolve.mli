@@ -13,16 +13,16 @@ type t = {
   prog : Ast.Resolved.program;
   types : Iface.type_decl list;
       (** the types the module declares, in the order it declares them *)
-  calls : (string * Path.t list) list;
-      (** each function, and the top-level functions its body uses: the members
-          written after their type, `Stack.of`, included *)
-  methods : (string * Path.t list) list;
-      (** each function, and the methods of the module's own types it may call
-          with a dot, which inference checks first: for `s.push(1)`, the
-          `Stack.push` if `s`'s type is written, `s: Stack<Int>`, and otherwise
-          every one named `push`, since which it is is found by inference. A
-          method whose signature is written out in full ([Ast.spelled]) is never
-          one: its declaration is its type. *)
+  calls : Path.t list Path.Map.t;
+      (** each function, by its path, and the top-level functions its body uses:
+          the members written after their type, `Stack.of`, included *)
+  methods : Path.t list Path.Map.t;
+      (** each function, by its path, and the methods of the module's own types
+          it may call with a dot, which inference checks first: for `s.push(1)`,
+          the `Stack.push` if `s`'s type is written, `s: Stack<Int>`, and
+          otherwise every one named `push`, since which it is is found by
+          inference. A method whose signature is written out in full
+          ([Ast.spelled]) is never one: its declaration is its type. *)
   scope : (string * Path.t) list;
       (** the types written bare in the module, by name, sorted: the prelude's,
           those imported by name and the module's own *)

@@ -1,5 +1,5 @@
 (* Values: what a running Ren program computes. A module of its own, so the
-   prelude's built-in functions (prelude.ml) can work on values without
+   prelude's built-in functions (builtins.ml) can work on values without
    depending on the interpreter that calls them. *)
 
 (* Variables in scope: an immutable map from a local's binder id (core.ml)
@@ -23,12 +23,24 @@ type t =
       ev : int;  (** its evidence's id: what it's passed where it's called *)
       body : Core.expr;
       env : t ref Env.t;
-      tys : Ty.ty Env.t;
-          (** what the type variables of the function it's in stood for where it
-              was created, which its body's types are written in (eval.ml) *)
-    }  (** a lambda, with the variables it captured when it was created *)
-  | VFn of Path.t  (** a top-level function used as a value *)
-  | VBuiltin of string  (** a function built into the prelude: [print] *)
+    }
+      (** a lambda, with the variables it captured when it was created, the
+          hidden type parameters of the function it's in among them *)
+  | VFn of Path.t * Ty.ty list * t list
+      (** a top-level function used as a value, with what it's given for its
+          hidden type parameters, the types its type variables stand for where
+          it was used (core.ml, [desc]), and for its hidden dictionary
+          parameters, a [VDict] for each of its requirements (core.ml, [dict])
+      *)
+  | VBuiltin of Intrinsic.t * Ty.ty list
+      (** a function built into the prelude, [show], with the types its type
+          variables stand for, as a [VFn]'s *)
+  | VType of Ty.ty
+      (** a type's descriptor, built where it's passed (core.ml, [desc]): what a
+          hidden type parameter holds. A program never sees one *)
+  | VDict of dict
+      (** a requirement's dictionary, built where it's passed (core.ml, [dict]):
+          what a hidden dictionary parameter holds. A program never sees one *)
   | VTag of { name : string; args : t list }
       (** an error, [Short(2, 45000)]: its tag and its payload. A program sees
           one only inside a [Result]'s [Err] *)
@@ -43,14 +55,13 @@ type t =
       (** evidence (core.ml): what's installed, the innermost first. A program
           never sees one *)
 
+(* A dictionary: the operations a type has that a requirement names, as
+   functions of the interpreter's own. [eq] is `eq`'s `==`. *)
+and dict = { eq : t -> t -> bool }
+
 (* A handler's description: its body makes an instance, given the
    evidence [ev] where it's installed, with the variables it captured. *)
-and handler = {
-  ev : int;
-  body : Core.expr;
-  env : t ref Env.t;
-  tys : Ty.ty Env.t;  (** as a lambda's (above) *)
-}
+and handler = { ev : int; body : Core.expr; env : t ref Env.t }
 
 (* An implementation of the dependency [dep], installed: it runs with the
    evidence [outer], what was installed where it was. *)
@@ -74,9 +85,11 @@ let rec show = function
   | VArray xs ->
       "[" ^ String.concat ", " (Array.to_list (Array.map show xs)) ^ "]"
   | VClosure _ -> "<fn>"
-  | VFn p -> "<fn " ^ p.name ^ ">"
-  | VBuiltin name -> "<fn " ^ name ^ ">"
+  | VFn (p, _, _) -> "<fn " ^ Path.local p ^ ">"
+  | VBuiltin (x, _) -> "<fn " ^ Intrinsic.name x ^ ">"
   | VHandler _ -> "<handler>"
   | VInstance _ -> "<instance>"
   | VCell _ -> "<cell>"
   | VEvidence _ -> "<evidence>"
+  | VType _ -> "<type>"
+  | VDict _ -> "<dict>"

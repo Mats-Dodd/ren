@@ -95,7 +95,7 @@ for line in Fs.lines(path)                 // sugar for: Fs.lines(path) fn(line)
     try Index.add(parse(line))             // errors and `uses` flow out through the body
 ```
 
-`for x in f(...)` is sugar for passing the loop body as `f`'s last parameter (*proposed*, stage 9). Lines, SQL rows, HTTP bodies and byte chunks all use the same shape:
+`for x in f(...)` is sugar for passing the loop body as `f`'s last parameter (*proposed*, stage 12). Lines, SQL rows, HTTP bodies and byte chunks all use the same shape:
 
 ```ren
 for chunk in Net.chunks(conn)              // chunk: Bytes, leased from the runtime's pool
@@ -125,11 +125,11 @@ log.info("done", took: Clock.instant() - started)   // Instant - Instant → Dur
 let bad = Clock.now() - started                      // error: Time - Instant
 ```
 
-`sim.clock` controls both, and can make `now` jump (an NTP correction) while `instant` keeps advancing steadily. `Time`, `Instant` and `Duration` are in the prelude (stage 7), with methods, `Duration.ms(100)` and `t.plus(d)`, until operators and literals like `100.ms` arrive (stage 10). Formatting, parsing and time zones are in the `time` module, with the time zone database built in and pinned for determinism.
+`sim.clock` controls both, and can make `now` jump (an NTP correction) while `instant` keeps advancing steadily. `Time`, `Instant` and `Duration` are in the prelude (stage 7), with methods, `Duration.ms(100)` and `t.plus(d)`, until operators and literals like `100.ms` arrive (stage 9). Formatting, parsing and time zones are in the `time` module, with the time zone database built in and pinned for determinism.
 
 ### `Decimal`
 
-The danger with money is `0.1` silently becoming an `f64`. Putting `Decimal` in the prelude doesn't prevent that. Typing literals by context does (*proposed*, stage 10):
+The danger with money is `0.1` silently becoming an `f64`. Putting `Decimal` in the prelude doesn't prevent that. Typing literals by context does (*proposed*, stage 9):
 
 ```ren
 type Decimal = opaque i128
@@ -199,7 +199,7 @@ Every tag `std` uses then either agrees with user code by design or can't collid
 | `Http` (client) | `http.client()` | `mem_http(routes)` | `sim.http(seed, p99: 2.s)` |
 | `Sql` | the driver | `sqlite.memory` | `sim.sql(seed, conflict_rate: 5%)` |
 
-Simulated implementations need the simulation scheduler, so they arrive in stage 15. Until then the rule is two implementations, with fault-injecting fakes (`fail_rate:`) from stage 9.
+Simulated implementations need the simulation scheduler, so they arrive in stage 16. Until then the rule is two implementations, with fault-injecting fakes (`fail_rate:`) from stage 12.
 
 Each dependency type also ships a **conformance suite**: one set of tests every implementation must pass, including the in-memory and simulated ones. It's a `pub group` over an implementation, which a vendor package imports and runs against its own ([deps.md](deps.md#groups)):
 
@@ -351,7 +351,7 @@ for row in Sql.query(sql"select * from users where plan = {plan}")
   ...
 ```
 
-`sql"..."` needs interpolation a library can intercept, like tagged templates in JavaScript. Without it, every SQL library has either an injection risk or an awkward API, so it has to land before the first SQL library does (*proposed*, stage 10).
+`sql"..."` needs interpolation a library can intercept, like tagged templates in JavaScript. Without it, every SQL library has either an injection risk or an awkward API, so it has to land before the first SQL library does (*proposed*, stage 9).
 
 ---
 
@@ -369,7 +369,7 @@ Zig replaces a borrowed component when keeping it blocks a goal (cross-compilati
 
 The rule of thumb: ordinary code a good engineer can write and test (parsers, protocols, data structures) is **written in Ren from the start**, because that's where dogfooding is cheap. Ren borrows only where the work is decades of hardening (SQLite, cryptographic primitives) or a moving security target (TLS).
 
-| Component | Interpreter (to stage 10) | Native (stage 11 to 1.0) | Later |
+| Component | Interpreter (to stage 12) | Native (stage 13 to 1.0) | Later |
 |---|---|---|---|
 | json, http, postgres protocol, dns, url, toml, csv, regex, decimal, gzip, collections | Ren | Ren | Ren |
 | crypto primitives | OCaml libraries | aws-lc, through FFI | aws-lc: constant-time code needs assembly |
@@ -392,14 +392,13 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 6** | the error-tag convention; everything that parses or validates |
 | **Stage 7** | `Clock` (with `Time`, `Instant` and `Duration`), `Random` and `Console`, each with a real and a test implementation; conformance suites as groups |
 | **Stage 8** | `str` and `bytes`; `Fs`, `Os` and `path`, each real and in-memory; `config`, `schedule`, `retry`; the infrastructure types with in-memory implementations |
-| **Stage 9** | `Net` and `Async`; `for x in f(...)`, push streams, `async.pull`; `http` server, client and router; `cache`, `channel`; fault-injecting fakes; `log` |
-| **Stage 10** | `Map` and `Set`, seeded from `Random`; `json`, `schema`; `from_literal` and `Decimal`; interpolation libraries can intercept; `sqlite`; property and snapshot tests |
+| **Stage 9** | `Map` and `Set`, seeded from `Random`; `json`, `schema`; `from_literal` and `Decimal`; interpolation libraries can intercept; `sqlite`; property and snapshot tests |
+| **Stage 12** | `Net` and `Async`; `for x in f(...)`, push streams, `async.pull`; `http` server, client and router; `cache`, `channel`; fault-injecting fakes; `log`; buffers leased from a pool for `Net` |
 | **↑ interpreted Ren** | a JSON API on SQLite, configured from the environment, with retries on an outgoing HTTPS call, whose tests run in under a second on in-memory fakes |
-| **Stage 11** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd, `postgres`, HTTP/2; conformance suites for vendor packages |
-| **Stage 12** | buffers leased from a pool for `Net` |
-| **Stage 13** | non-allocating pure modules (`checksum`, `hash`, parsers), `push_within`, registered buffers |
-| **Stage 14** | `Array<T, soa>`, in-place `unique` APIs in `collections` |
-| **Stage 15** | `sim.*` for every dependency; the flight recorder and the OTLP exporter |
+| **Stage 13** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd, `postgres`, HTTP/2; conformance suites for vendor packages |
+| **Stage 14** | non-allocating pure modules (`checksum`, `hash`, parsers), `push_within`, registered buffers |
+| **Stage 15** | `Array<T, soa>`, in-place `unique` APIs in `collections` |
+| **Stage 16** | `sim.*` for every dependency; the flight recorder and the OTLP exporter |
 | **After 1.0** | promotions from `std.x`; perhaps the TLS state machine in Ren |
 
 ---
@@ -407,9 +406,9 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 ## Open questions
 
 - What does flottning need? Its dependencies decide what 1.0 has to ship.
-- Is `Alloc` inferred before stage 13 and enforced from it, or added to signatures all at once in stage 13? Inferring it early keeps `std`'s public signatures stable.
+- Is `Alloc` inferred before stage 14 and enforced from it, or added to signatures all at once in stage 14? Inferring it early keeps `std`'s public signatures stable.
 - Is rule 3 a hard rule or a warning? We're leaning hard for `std`, with `trust` and non-simulatable flagging covering user FFI.
-- How far does derivation go? If `json.decode<T>`, `config.load<T>` and SQL rows use the same mechanism as derived `==`, `hash` and `show`, they need no macros. This is the README's question about `comptime`, and it has to be answered in stage 10.
+- How far does derivation go? If `json.decode<T>`, `config.load<T>` and SQL rows use the same mechanism as derived `==`, `hash` and `show`, they need no macros. This is the README's question about `comptime`, and it has to be answered in stage 9.
 - How does interpolation hand its parts to a library: `sql"..."` resolved through a member of the type, or something else?
 - Does `std.x` version separately from `std`, or move with the toolchain?
 - When does `websocket` move from `std.x` to `std`?

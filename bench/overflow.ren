@@ -1,0 +1,6 @@
+// Recursion with no end: it has to reach the stack-overflow panic
+// promptly, not after the machine runs out of memory.
+
+fn down(n: Int) -> Int = 1 + down(n + 1)
+
+fn main() -> Int = down(0)

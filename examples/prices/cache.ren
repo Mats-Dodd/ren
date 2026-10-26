@@ -3,7 +3,7 @@
 // again.
 //
 // A handler can't call the dependency it implements until `outer`
-// (stage 9), so the cache can't sit in front of another `Prices`: what it
+// (stage 10), so the cache can't sit in front of another `Prices`: what it
 // asks is a dependency of its own, `Supplier`.
 
 import limiter.{Limiter}

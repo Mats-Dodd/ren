@@ -80,7 +80,7 @@ pub fn zero() -> Int = 0
     |}]
 
 let%expect_test "an import cycle" =
-  run_files
+  check_error_files
     [
       ("main.ren", {|
 import billing/stripe
@@ -970,9 +970,9 @@ fn main() =
     |}]
 
 let%expect_test "editing a body leaves the interface as it was" =
-  (* the interface comes from declarations alone (module-build.md,
-     "Interface summaries"), so changing what a function's body does, even
-     what it uses, can't change what dependents see *)
+  (* the interface comes from declarations (module-build.md, "Interface
+     summaries"), so changing what a function's body does, even what it
+     uses, can't change what dependents see *)
   let iface src =
     let src = clean src in
     let i = Ren.Driver.interface ~file src in
@@ -1012,6 +1012,182 @@ fn main() = load(1)
     {|
     load: fn(Int) -> test.Row uses Console
     load: fn(Int) -> test.Row uses Console
+    the same
+    |}]
+
+let%expect_test "editing a body changes the interface only by what it needs" =
+  (* the one thing the interface takes from a body is what a public
+     function needs of its type parameters, which isn't written
+     (module-build.md, "Interface summaries"): an edit that keeps it keeps
+     the interface, and one that changes it is seen by dependents *)
+  let iface src =
+    let i = Ren.Driver.interface ~file (src ^ "\nfn main() = 1\n") in
+    List.iter
+      (fun (v : Ren.Iface.value) ->
+        print_endline
+          (Ren.Ty.signature ~names:Ren.Path.full ~pub:true ~name:v.vname
+             ~params:[ "a"; "b" ] v.scheme))
+      i.values;
+    i
+  in
+  let compares = iface "pub fn same<T>(a: T, b: T) -> Bool = a == b" in
+  let swapped = iface "pub fn same<T>(a: T, b: T) -> Bool = b == a" in
+  let not_any = iface "pub fn same<T>(a: T, b: T) -> Bool = true" in
+  print_endline (if compares = swapped then "the same" else "different");
+  print_endline (if compares = not_any then "the same" else "different");
+  [%expect
+    {|
+    pub fn same<T has eq>(a: T, b: T) -> Bool
+    pub fn same<T has eq>(a: T, b: T) -> Bool
+    pub fn same<T>(a: T, b: T) -> Bool
+    the same
+    different
+    |}]
+
+let%expect_test "lambda sets don't change an interface" =
+  (* which lambdas flow where is inference's, found from bodies, so an
+     interface leaves it out (Ty.forget_lams): `pick` returns one of what
+     it's given, and `first` one of its own, but each states a function
+     type with a set of its own, as written, and editing which lambda a
+     body makes or passes keeps the interface the same *)
+  let iface src = Ren.Driver.interface ~file (src ^ "\nfn main() = 1\n") in
+  let picks =
+    iface
+      {|
+pub fn pick(c: Bool, f: fn() -> Int ! ..e, g: fn() -> Int ! ..e) -> fn() -> Int ! ..e =
+  if c then f else g
+pub fn first() -> fn(Int) -> Int = fn(x) => x
+|}
+  in
+  let edited =
+    iface
+      {|
+pub fn pick(c: Bool, f: fn() -> Int ! ..e, g: fn() -> Int ! ..e) -> fn() -> Int ! ..e =
+  if c then g else if c then fn() => 1 else f
+pub fn first() -> fn(Int) -> Int = if true then fn(x) => x + 1 else fn(x) => x
+|}
+  in
+  List.iter
+    (fun (v : Ren.Iface.value) ->
+      print_endline
+        (Ren.Core.render 0
+           (Atom
+              (Ren.Ty.show
+                 (Ren.Ty.printer ~show_lams:true ~names:Ren.Path.full v.scheme)
+                 v.scheme.ty))))
+    picks.values;
+  print_endline (if picks = edited then "the same" else "different");
+  [%expect
+    {|
+    fn(Bool, fn() -> Int [..l0], fn() -> Int [..l1]) -> (fn() -> Int [..l2]) [..l3]
+    fn() -> (fn(Int) -> Int [..l0]) [..l1]
+    the same
+    |}]
+
+let%expect_test
+    "another module's function, given lambdas, is linted by its interface" =
+  (* `main` uses `pick` at its interface's type, whose sets are each its
+     own, and Core Lint checks the use against that, not `pick`'s own
+     scheme, whose three sets are one *)
+  core_files ~lams:true
+    [
+      ( "main.ren",
+        {|
+import util
+fn one() -> Int = 1
+fn main() =
+  let f = util.pick(true, one, fn() => 2)
+  f()
+|}
+      );
+      ( "util.ren",
+        {|
+pub fn pick(c: Bool, f: fn() -> Int ! ..e, g: fn() -> Int ! ..e) -> fn() -> Int ! ..e =
+  if c then f else g
+|}
+      );
+    ];
+  [%expect
+    {|
+    -- util
+    (fn pick :
+      fn(Bool, fn() -> Int ! ..e [..l0], fn() -> Int ! ..e [..l0]) -> (fn() -> Int ! ..e [..l0]) ! ..e2 uses ..d [..l1]
+      (c/1 f/2 g/3)
+      ev/4
+      (:
+        (if c/1 (: f/2 fn() -> Int ! ..e [..l0]) (: g/3 fn() -> Int ! ..e [..l0]))
+        fn() -> Int ! ..e [..l0]))
+
+    -- main
+    (fn one : fn() -> Int ! ..e uses ..d [..l0] () ev/1 1)
+    (fn main : fn() -> Int ! ..e uses ..d [..l0] () ev/1
+      (let f/2
+        (:
+          (call ev/1
+            (inst pick {} {} {..d} [main.one | ..l1] [main.main#1 | ..l2] [..l3]
+              [util.pick | ..l4])
+            true
+            (inst one {} {} [main.one | ..l1])
+            (lambda main.main#1 : fn() -> Int [main.main#1 | ..l2] () (captures)
+              ev/3
+              2))
+          fn() -> Int [..l3])
+        (call ev/1 (: f/2 fn() -> Int [..l3]))))
+    (fn $start : fn() -> Int ! ..e [..l0] () ev/1
+      (call ev/1 (inst main {..e} {..r} [main.main | ..l0])))
+    |}]
+
+let%expect_test "another module's generic function compares what it's given" =
+  (* `same` needs `eq` of `T`, which its interface says, so `main` passes
+     it `Int`'s dictionary; with a function it's refused at `main`'s call
+     (test_infer.ml, "another module's function needs what it needs") *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import util
+fn main() = util.same(1, 1) && util.same(1, 2) == false && util.same([1], [1])
+|}
+      );
+      ("util.ren", {|
+pub fn same<T>(a: T, b: T) -> Bool = a == b
+|});
+    ];
+  [%expect {| true |}]
+
+let%expect_test "what the implementation tier records" =
+  (* only public functions and members, and of those only the ones the
+     specializer will copy into callers: a generic one, `same`, or a
+     member of a generic type, `Box.get` and `Box.size`, or one given a
+     function, `twice` (module-build.md, "Interface summaries"). Not
+     `add`, nor the private `pick` *)
+  let src =
+    {|
+pub fn same<T>(a: T, b: T) -> Bool = a == b
+pub fn twice(f: fn(Int) -> Int, x: Int) -> Int = try f(try f(x))
+pub fn add(a: Int, b: Int) -> Int = a + b
+fn pick<T>(a: T, b: T) -> T = a
+pub type Box<T> = { v: T }
+  pub fn get(self) -> T = self.v
+  pub fn size(self) -> Int = 1
+fn main() = add(1, 2)
+|}
+  in
+  let impl src = Ren.Driver.implementation ~file (clean src) in
+  print_endline (Ren.Impl.show (impl src));
+  (* it has no source locations, so moving the code doesn't change it *)
+  print_endline
+    (if impl src = impl ("\n\n" ^ src) then "the same" else "different");
+  [%expect
+    {|
+    (fn Box.get : fn(test.Box<T>) -> T ! ..e uses ..d (self/1) ev/2 (. self/1 v))
+    (fn Box.size : fn(test.Box<T>) -> Int ! ..e uses ..d (self/1) ev/2 1)
+    (fn same : fn(T, T) -> Bool ! ..e uses ..d (needs (eq T)) (a/1 b/2) ev/3
+      (== (eq T) a/1 b/2))
+    (fn twice : fn((fn(Int) -> Int ! ..e uses ..d), Int) -> Int ! ..e uses ..d
+      (f/1 x/2)
+      ev/3
+      (call ev/3 f/1 (call ev/3 f/1 x/2)))
     the same
     |}]
 
@@ -1067,8 +1243,9 @@ let%expect_test "an opaque type's interface hides its representation" =
     (fun (td : Ren.Iface.type_decl) ->
       Printf.printf "%s: %s\n" td.path.name
         (match td.body with
-        | Opaque None -> "opaque"
-        | Opaque (Some _) -> "opaque, with its representation"
+        | Opaque (Hidden { eq = true }) -> "opaque"
+        | Opaque (Hidden { eq = false }) -> "opaque, without `==`"
+        | Opaque (Rep _) -> "opaque, with its representation"
         | Record _ -> "a record"
         | Sum _ -> "a sum type"
         | Builtin -> "built in"
@@ -1080,6 +1257,33 @@ let%expect_test "an opaque type's interface hides its representation" =
     UserId: opaque
     Token: opaque
     Switch: opaque
+    |}]
+
+let%expect_test "an opaque type's interface says whether it has ==" =
+  (* the representation is hidden, but another module comparing two needs
+     to know if they'd meet a function *)
+  let src =
+    clean
+      {|
+pub type Id = opaque Int
+pub type F = opaque fn(Int) -> Int
+pub type Box<T> = opaque Array<T>
+pub type Held = opaque Box<F>
+fn main() = 1
+|}
+  in
+  let i = Ren.Driver.interface ~file:"a.ren" src in
+  List.iter
+    (fun (td : Ren.Iface.type_decl) ->
+      match td.body with
+      | Opaque (Hidden { eq }) -> Printf.printf "%s: %b\n" td.path.name eq
+      | _ -> ())
+    i.types;
+  [%expect {|
+    Id: true
+    F: false
+    Box: true
+    Held: false
     |}]
 
 let%expect_test "outside its module, an opaque type can't be looked inside" =

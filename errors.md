@@ -172,13 +172,22 @@ error rather than a comparison that's never true. That's so on either side
 of `==`, through a `let` or inside another value, `Some(Err(...))`, and a
 kept set never gains a tag no call fails with. Otherwise it makes a set of
 its own: `if c then Err(Left(1)) else Err(Right)` is a
-`Result<T, ! Left(Int) | Right>`. Only a tag can go inside `Err`, so an
-error is never a value outside a `Result`. A name there is always a tag,
-as in a pattern, even where a type in scope has a constructor of that
-name. `try` passes on what such a `Result` holds as it does any
-`Result`'s, so `let r = Err(Gone(1))` then `try r` fails with `Gone(1)`;
-`fail` is the way to fail with an error written in place, and `try
-Err(X)`, written directly, is an error whose help says `fail X`.
+`Result<T, ! Left(Int) | Right>`. Its tags are still ones written in
+`Err` wherever the `Result` goes, so with `fn mk2(c: Bool)` returning
+that, `if c then mk2(c) else attempt g()` is an error if `g` can't fail
+with `Right`, as it would be with the `Err`s written in place. A
+declared `Result` is different: its type says what it can hold, more
+than any call fails with if it likes, so what an `attempt` keeps can be
+one, as in `worth_retrying(attempt busy())` for a `fn
+worth_retrying(r: Result<Int, ! NotFound(Int) | Busy>)`, and so can one
+equal to both a declared `Result` and one made with `Err`. Only a tag
+can go inside `Err`, so an error is never a value outside a `Result`. A
+name there is always a tag, as in a pattern, even where a type in scope
+has a constructor of that name. `try` passes on what such a `Result`
+holds as it does any `Result`'s, so `let r = Err(Gone(1))` then `try
+r` fails with `Gone(1)`; `fail` is the way to fail with an error written
+in place, and `try Err(X)`, written directly, is an error whose help
+says `fail X`.
 
 It's shorthand for `match f()` with `v => Ok(v)` and `fail e => Err(e)`, but
 that `match` can't be written: a `fail` pattern destructures a payload and
@@ -206,7 +215,7 @@ pub fn transfer(inout self, t: Transfer) ! TransferError =
 
 The copy is visible, and you choose to pay for it. A `with transaction`
 handler can do the same for you later, once a handler can reach the
-implementation installed outside it, `outer` (stage 9).
+implementation installed outside it, `outer` (stage 10).
 
 ## Nothing is dropped
 
@@ -229,4 +238,4 @@ error: Frozen(AccountId(3))
   ([deps.md](deps.md)). A closure passed to a transparent parameter
   passes its errors to the call: `try ts.map(fn(t) => try validate(t))`.
 - ~~`with` and handlers~~ came in stage 7 too. A handler forwarding to
-  the next implementation out, `outer`, comes in stage 9.
+  the next implementation out, `outer`, comes in stage 10.

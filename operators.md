@@ -81,7 +81,8 @@ error: `Duration` has no `+` that takes a `Time`
 
 - **A type with a function in it has no `==` or `hash`.** It's known from
   the type, so comparing functions is a compile error, never a runtime
-  panic.
+  panic. An implementation of a dependency, and a handler, is its
+  operations, which are functions, so it has none either.
 - **A type with a `Float` in it has `==` but no `hash`,** so it can't be a
   map key: `NaN` isn't equal to itself, and a key that's `NaN` could never
   be found again.
@@ -344,7 +345,7 @@ default hides it. `xs[i]` is also a place, `xs[i] = v` and
 best-named collection vocabulary there is, so that std doesn't grow
 whatever names its first users needed. A method that changes nothing
 returns a new collection: `xs.sort()`, not a sorting `&xs`. Once memory
-is reused in place (stage 12), sorting an array nothing else holds
+is reused in place (stage 11), sorting an array nothing else holds
 doesn't copy it, so there's no second, changing version as Ruby's `sort!`
 is.
 

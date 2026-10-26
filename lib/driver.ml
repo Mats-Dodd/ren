@@ -69,17 +69,40 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
     Iface.sets_of
       (List.concat_map (fun (i : Iface.t) -> i.types) reachable @ r.types)
   in
-  let iface = Iface.of_module ~home ~sets r.prog in
+  (* what a public function needs of its type parameters isn't written,
+     so the interface takes it from inference (operators.md, "Generic
+     code") *)
+  let needs path =
+    let s = Path.Map.find path inferred.schemes in
+    (s.reqs, s.row_reqs)
+  in
+  let has_eq p = List.mem p inferred.opaque_eq in
+  let iface = Iface.of_module ~home ~sets ~needs ~has_eq r.prog in
   (* A public function's body was checked against its signature, so the
-     type inference found for it is the one its interface states. Other
-     modules see only the interface, so if the two ever differ, that's a
-     bug in the compiler, and it's caught here rather than in whichever
-     module trips over it. *)
+     type inference found for it is the one its interface states, with
+     what it needs of its type parameters. Other modules see only the
+     interface, so if the two ever differ, that's a bug in the compiler,
+     and it's caught here rather than in whichever module trips over
+     it. *)
   let mismatch name (said : Ty.scheme) (found : Ty.scheme) =
+    (* the type, then what it needs of each variable, `T has eq` *)
     let show (s : Ty.scheme) =
-      Ty.show
-        (Ty.printer ~show_tail:(fun _ -> true) ~names:(Resolve.type_name r) s)
-        s.ty
+      let pr =
+        Ty.printer ~show_tail:(fun _ -> true) ~names:(Resolve.type_name r) s
+      in
+      (* the type first, so its variables are named in the order they
+         appear *)
+      let ty = Ty.show pr s.ty in
+      let needs =
+        List.map (fun (n, req) -> Ty.show pr (Var n) ^ " has " ^ req) s.reqs
+        @ List.map
+            (fun (n, req) ->
+              Ty.show_row pr ~prefix:"" ~sep:"" ~kind:"e"
+                { labels = []; tail = Some n }
+              ^ " has " ^ req)
+            s.row_reqs
+      in
+      String.concat ", " (ty :: needs)
     in
     raise
       (Internal_error
@@ -91,24 +114,28 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
                (show said) (show found);
          })
   in
+  (* without lambda sets: the interface's are each one of its own, and
+     inference's say which lambdas flow where, which the body decides *)
+  let check name (said : Ty.scheme) (found : Ty.scheme) =
+    if Ty.forget_lams found <> Ty.forget_lams said then mismatch name said found
+  in
   List.iter
     (fun (v : Iface.value) ->
-      let found = List.assoc v.vname inferred.schemes in
-      if found <> v.scheme then mismatch v.vname v.scheme found)
+      check v.vname v.scheme
+        (Path.Map.find (Path.make home v.vname) inferred.schemes))
     iface.values;
   (* and so was each public member's, which is in its type's entry *)
   List.iter
     (fun (td : Iface.type_decl) ->
-      List.iter
-        (fun (o : Iface.op) ->
-          let name = td.path.name ^ "." ^ o.oname in
+      Path.Map.iter
+        (fun path (o : Iface.op) ->
           let found =
-            match (o.okind, List.assoc name inferred.schemes) with
-            | Value, { ty = Fun ([], t, _, _); names } ->
-                Ty.canonical { ty = t; names }
+            match (o.okind, Path.Map.find path inferred.schemes) with
+            | Value, ({ ty = Fun ([], t, _, _, _); _ } as s) ->
+                Ty.canonical { s with ty = t }
             | _, s -> s
           in
-          if found <> o.oscheme then mismatch name o.oscheme found)
+          check (Path.local path) o.oscheme found)
         td.members)
     iface.types;
   (* Another module runs a public group's tests by calling them, so they're
@@ -121,7 +148,12 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
           List.mapi
             (fun i _ ->
               let vname = Test_items.group_fn g.gname (i + 1) in
-              { Iface.vname; scheme = List.assoc vname inferred.schemes })
+              {
+                Iface.vname;
+                scheme =
+                  Ty.forget_lams
+                    (Path.Map.find (Path.make home vname) inferred.schemes);
+              })
             g.gtests
         else [])
       items.groups
@@ -195,6 +227,10 @@ let module_file ~entry path = file_in ~dir:(Filename.dirname entry) path
 let imports_of (prog : Ast.Parsed.program) =
   List.filter_map (function Ast.Import i -> Some i | _ -> None) prog
 
+(* Sets of modules' homes. [Set.Make] is a functor, like [Map.Make]: it makes
+   a module of sets whose elements are compared with [String.compare]. *)
+module Homes = Set.Make (String)
+
 (* A module, loaded and parsed. *)
 type source = { home : string; file : string; parsed : Ast.Parsed.program }
 
@@ -221,9 +257,9 @@ let load_all ~(load : loader) ~dir roots =
   (* each module once it's done, the last one first. A module that didn't
      parse is done too, so it isn't reported again. *)
   let loaded = ref [] in
-  let is_loaded path =
-    List.exists (fun (m : source) -> m.home = path) !loaded
-  in
+  (* the homes in [loaded], to look one up without walking the list *)
+  let homes = ref Homes.empty in
+  let is_loaded path = Homes.mem path !homes in
   (* [path] is the way here from the entry: each module on it, and its
      import of the next one *)
   let rec visit ~path home file src =
@@ -263,7 +299,8 @@ let load_all ~(load : loader) ~dir roots =
                 (sprintf "there's no module `%s`" i.path)
           | Some isrc -> visit ~path:(path @ [ (home, i) ]) i.path ifile isrc)
       imports;
-    loaded := { home; file; parsed } :: !loaded
+    loaded := { home; file; parsed } :: !loaded;
+    homes := Homes.add home !homes
   (* [i], in module [home], imports a module on the way here: the modules
      from that one to [home] import each other in a circle *)
   and cycle ~path home (i : Ast.import) =
@@ -322,6 +359,11 @@ type checked = {
       (** the interfaces of every module reachable through its imports, the
           prelude's first, each once *)
   items : Test_items.t;  (** its tests, and the functions they were made *)
+  core : Core.program Lazy.t;
+      (** it lowered to Core, once it's needed, and then only once *)
+  impl : Impl.t Lazy.t;
+      (** the implementation tier of its summary (impl.ml), beside its interface
+      *)
 }
 
 (* Load the program from its [roots] (see [load_all]), then check each of
@@ -349,16 +391,22 @@ let check_roots ~load ~dir ~entry roots =
          (* what each import reaches, then the import itself, each module
             once, in the order first met *)
          let reachable =
-           List.fold_left
-             (fun acc (c : checked) ->
-               List.fold_left
-                 (fun acc (i : Iface.t) ->
-                   if List.exists (fun (j : Iface.t) -> j.home = i.home) acc
-                   then acc
-                   else acc @ [ i ])
-                 acc
-                 (c.reachable @ [ c.iface ]))
-             [ prelude_iface ] direct
+           (* built most recent first, with the homes already in it in a
+              set, then reversed: adding to the end of a list each time
+              would copy it each time *)
+           let rev, _ =
+             List.fold_left
+               (fun acc (c : checked) ->
+                 List.fold_left
+                   (fun (rev, seen) (i : Iface.t) ->
+                     if Homes.mem i.home seen then (rev, seen)
+                     else (i :: rev, Homes.add i.home seen))
+                   acc
+                   (c.reachable @ [ c.iface ]))
+               ([ prelude_iface ], Homes.singleton prelude_iface.home)
+               direct
+           in
+           List.rev rev
          in
          let groups =
            List.map
@@ -374,6 +422,9 @@ let check_roots ~load ~dir ~entry roots =
              ?entry:(if entry m then Some m.file else None)
              m.parsed
          in
+         (* [lazy] delays lowering until something needs it, as for
+            [prelude]: checking a program, `ren types`, doesn't *)
+         let core = lazy (lower resolved inferred) in
          {
            home = m.home;
            file = m.file;
@@ -383,6 +434,8 @@ let check_roots ~load ~dir ~entry roots =
            inferred;
            reachable;
            items;
+           core;
+           impl = lazy (Impl.of_module iface (Lazy.force core));
          }
          :: done_)
        [] sources)
@@ -403,20 +456,24 @@ let inferred ?load ~file src = (entry_of (check_all ?load ~file src)).inferred
 let schemes ?load ~file src = (inferred ?load ~file src).schemes
 let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
 
+let implementation ?load ~file src =
+  Lazy.force (entry_of (check_all ?load ~file src)).impl
+
 (* The whole program in Core, the prelude first. The functions its tests
    were made are left out, unless it's [for_tests]: nothing else calls
    them. *)
 let link ?lint ?(for_tests = false) (modules : checked list) =
   let prelude, _, _ = Lazy.force prelude in
   let lowered c =
-    let core = lower c.resolved c.inferred in
+    let core = Lazy.force c.core in
     if for_tests then core
     else
       {
         core with
         fns =
           List.filter
-            (fun (f : Core.fn_def) -> not (List.mem f.path.name c.items.made))
+            (fun (f : Core.fn_def) ->
+              not (List.mem (Path.local f.path) c.items.made))
             core.fns;
       }
   in
@@ -498,7 +555,7 @@ let types ?(lint = false) ?load ~file src =
             (List.map
                (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
                f.params)
-          (List.assoc f.name.name inferred.schemes)
+          (Path.Map.find (Ast.fn_path home f) inferred.schemes)
       in
       (* a type's declaration, as Iface has it *)
       let decl (td : Ast.Resolved.type_def) =
@@ -509,16 +566,15 @@ let types ?(lint = false) ?load ~file src =
       (* one of a type's members, under it *)
       let member ~outer (o : Ast.Resolved.op) =
         let f = o.op_fn in
-        let name = Ast.short_name f.name.name in
+        let name = f.name.name in
         match o.op_kind with
         | Op_fn -> "  " ^ fn_ ~outer ~name f
         | Op_value -> (
             (* a function of no parameters (ast.ml) *)
-            match List.assoc f.name.name inferred.schemes with
-            | { ty = Fun ([], t, _, _); names = tnames } ->
+            match Path.Map.find (Ast.fn_path home f) inferred.schemes with
+            | { ty = Fun ([], t, _, _, _); _ } as s ->
                 "  "
-                ^ Ty.value_signature ~names ~pub:f.pub ~name
-                    { ty = t; names = tnames }
+                ^ Ty.value_signature ~names ~pub:f.pub ~name { s with ty = t }
             | _ -> assert false)
       in
       ( home,
@@ -538,7 +594,7 @@ let types ?(lint = false) ?load ~file src =
                            | Named p -> Some p
                            | Param _ -> None)
                          deps)
-                    (List.assoc f.name.name inferred.schemes);
+                    (Path.Map.find (Ast.fn_path home f) inferred.schemes);
                 ]
             | Ast.Fn f when List.mem f.name.name items.made -> []
             | Ast.Fn f -> [ fn_ ~name:f.name.name f ]
@@ -551,7 +607,13 @@ let types ?(lint = false) ?load ~file src =
                       List.map
                         (fun (o : Iface.field) ->
                           let pr =
-                            Ty.printer ~names { ty = o.fty; names = [] }
+                            Ty.printer ~names
+                              {
+                                ty = o.fty;
+                                names = [];
+                                reqs = [];
+                                row_reqs = [];
+                              }
                           in
                           sprintf "  %s: %s" o.fname (Ty.show pr o.fty))
                         ops
@@ -578,7 +640,10 @@ let types ?(lint = false) ?load ~file src =
             | Type ({ type_body = Errors _; _ } as td) ->
                 (* a named error set, as it's declared, each tag with its
                    payload's types *)
-                let pr = Ty.printer ~names { ty = Error; names = [] } in
+                let pr =
+                  Ty.printer ~names
+                    { ty = Error; names = []; reqs = []; row_reqs = [] }
+                in
                 let errors =
                   match (decl td).body with
                   | Errors es ->
@@ -605,7 +670,7 @@ let types ?(lint = false) ?load ~file src =
    what `main` uses and calls it. *)
 let run ?lint ?load ?(args = []) ~file src =
   let checked = check_all ?load ~file src in
-  Prelude.args := args;
+  Builtins.args := args;
   let modules = link ?lint checked in
   try pass "eval" (fun () -> Eval.run modules)
   with Eval.Assert_failed { loc; sides } ->

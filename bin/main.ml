@@ -2,11 +2,17 @@
 
 open Ren
 
+(* What `ren --version` prints. *)
+let version = "ren 0.1.0"
+
 let usage =
   {|usage: ren <command> <file.ren>
        ren run <file.ren> [-- <args>...]
+       ren core --types <file.ren>
+       ren core --lambdas <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
+       ren --help | --version
 
 The file is the program's entry module. A module it imports is found from
 the file's folder: `import billing/stripe` is the file billing/stripe.ren.
@@ -29,9 +35,18 @@ commands:
   types   print every function's inferred signature, module by module,
           and each type's members under it
   core    print every module in Core, the language it's lowered to,
-          with the evidence of what's installed passed explicitly
+          with the evidence of what's installed passed explicitly:
+            --types    also each function's type, and the type arguments
+                       each use of a generic function picks
+            --lambdas  as --types, and every function type's lambda set,
+                       which lambdas and functions a value of it can be:
+                       a debugging aid for the compiler
   tokens  print the tokens the lexer produces
-  ast     print the parsed syntax tree|}
+  ast     print the parsed syntax tree
+
+options:
+  -h, --help  print this, and stop
+  --version   print which version of Ren this is|}
 
 (* Read a file, or stop with its error. *)
 let read path =
@@ -59,14 +74,19 @@ let fail ~known e =
 
 (* Whether the file [path] declares `main`: a program starts there. One
    that can't be read or parsed doesn't, here; it's reported if it's
-   loaded. *)
+   loaded. Only those two are caught: any other exception is a bug, and
+   goes on. *)
 let has_main path =
-  try
-    List.exists
-      (function
-        | Ast.Fn (f : Ast.Parsed.fn_def) -> f.name.name = "main" | _ -> false)
-      (Driver.parse ~file:path (read path))
-  with _ -> false
+  match In_channel.with_open_bin path In_channel.input_all with
+  | exception Sys_error _ -> false
+  | src -> (
+      try
+        List.exists
+          (function
+            | Ast.Fn (f : Ast.Parsed.fn_def) -> f.name.name = "main"
+            | _ -> false)
+          (Driver.parse ~file:path src)
+      with Diag.Error _ | Diag.Errors _ -> false)
 
 (* Every `.ren` file under the folder [dir], in sorted order, and the
    folders below it left out because each holds a program of its own: one
@@ -180,7 +200,21 @@ let test args =
   | exception e -> fail ~known:roots e
 
 let () =
-  match Sys.argv with
+  (* `ren core --types <file.ren>`: the flag is taken out, and the rest
+     read as any command's is; and so is `--lambdas` *)
+  let types, lams, argv =
+    match Sys.argv with
+    | [| ren; "core"; "--types"; path |] ->
+        (true, false, [| ren; "core"; path |])
+    | [| ren; "core"; "--lambdas"; path |] ->
+        (true, true, [| ren; "core"; path |])
+    | argv -> (false, false, argv)
+  in
+  match argv with
+  | [| _; ("--help" | "-h" | "help") |] ->
+      (* asked for, so it's the output, not an error *)
+      print_endline usage
+  | [| _; "--version" |] -> print_endline version
   | args when Array.length args >= 2 && args.(1) = "test" ->
       test (List.tl (List.tl (Array.to_list args)))
   | args
@@ -232,7 +266,9 @@ let () =
               (fun i (m : Core.program) ->
                 if i > 0 then print_newline ();
                 print_endline ("-- " ^ m.home);
-                List.iter (fun f -> print_endline (Core.show_fn f)) m.fns)
+                List.iter
+                  (fun f -> print_endline (Core.show_fn ~types ~lams f))
+                  m.fns)
               (List.tl (Driver.linked ~load ~file:path src))
         | "tokens" ->
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))

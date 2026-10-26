@@ -32,11 +32,25 @@
    And the evidence (core.ml) is threaded: each function and lambda takes
    its own, each call passes the one in scope, and a call of an
    operation, `Clock.now()`, is a [Dep_call] on it. An operation used as a
-   value, `let write = Console.write`, is a lambda that calls it. *)
+   value, `let write = Console.write`, is a lambda that calls it.
+
+   So are types' descriptors (core.ml, [desc]): each function takes one
+   for each of its type variables, and each use of a generic function, and
+   each `assert a == b`, gets the descriptors of its types, built from
+   them. And requirements' dictionaries (core.ml, [dict]): each function
+   takes one for each of its requirements, and each use of a function
+   that has some, and each `==`, gets the dictionaries it needs, built
+   from them. Which types show their values through a `show` method of
+   their own is decided here too, once. *)
 
 open Ast
 open Ast.Resolved
 module C = Core
+
+(* Sets of binder ids. [Set.Make] is a functor: it makes a module of sets
+   whose elements are compared with [Int.compare], so looking one up takes
+   a few steps, not a walk of every element. *)
+module Ids = Set.Make (Int)
 
 (* The type checker and mut.ml rule these out, so reaching one is a
    compiler bug. *)
@@ -50,6 +64,9 @@ type cx = {
   mutable ev : C.var;
       (** the evidence in scope: the function's, or the lambda's whose body is
           being lowered *)
+  tys : C.var list;  (** the function's hidden type parameters (core.ml) *)
+  dicts : ((int * string) * C.var) list;
+      (** its hidden dictionary parameters, by the requirement each is for *)
 }
 
 let node cx id =
@@ -58,6 +75,43 @@ let node cx id =
   | None -> bug (Printf.sprintf "no type for node %d" id)
 
 let ty_of cx id = (node cx id).ty
+
+(* The type arguments inference found a use of a top-level function, a
+   member, an associated value or an intrinsic picked (Infer.node). *)
+let targs_of cx id =
+  match (node cx id).targs with
+  | Some a -> a
+  | None -> bug (Printf.sprintf "no type arguments for node %d" id)
+
+(* The identity inference gave the lambda at node [id] (Ty.lambda_id),
+   which its type's lambda set has. *)
+let lambda_name cx id =
+  match (node cx id).found with
+  | Some (Lambda_id name) -> name
+  | _ -> bug (Printf.sprintf "no identity for the lambda at node %d" id)
+
+(* The descriptors a use at the type arguments [a] is passed (core.ml,
+   [desc]), built from the function's own hidden type parameters. *)
+let descs cx (a : Ty.args) = List.map (C.describe cx.tys) a.tys
+
+(* [req]'s dictionary for [t] (core.ml, [dict]), built from the function's
+   own dictionary parameters. Inference passed on to the function each
+   requirement a type variable of it in [t] has to meet, so it has one
+   for each. *)
+let dict cx req t =
+  try C.dict_for (List.length cx.tys) cx.dicts req t
+  with Not_found -> bug "a requirement inference didn't pass on"
+
+(* The dictionaries the use at node [id] is passed: one for each of the
+   requirements of the function it uses, for the type argument it's on. *)
+let dicts_of cx id =
+  let a = targs_of cx id in
+  List.map (fun (n, req) -> dict cx req (List.nth a.tys n)) (node cx id).needs
+
+(* Whether inference found [id] to be a `match` with `fail` arms, or a
+   `fail` arm's pattern (Infer.found). *)
+let handles cx id = (node cx id).found = Some Handles
+let is_fail cx id = (node cx id).found = Some Fail_arm
 
 (* A local, when it's bound: it takes the binder's id and name. *)
 let bind cx (b : binder) ty =
@@ -172,10 +226,6 @@ let write pl (v : C.expr) loc =
 
 (* ---- expressions ---- *)
 
-let is_result : Ty.ty -> bool = function
-  | Con (p, _) -> p = Path.prelude "Result"
-  | _ -> false
-
 let result_path = Path.prelude "Result"
 let option_path = Path.prelude "Option"
 let pat pkind pty ploc : C.pattern = { pkind; pty; ploc }
@@ -215,20 +265,25 @@ and expr_of cx (e : expr) : C.expr =
   | Str s -> here (Str s)
   | Unit -> here Unit
   | Var (Local b) -> local (var_of cx b) e.loc
-  | Var (Global p) -> here (Global p)
-  | Var (Global_value p) -> here (Global_value p)
-  | Var (Intrinsic x) -> here (Intrinsic x)
+  | Var (Global p) ->
+      let a = targs_of cx e.node in
+      here (Global (p, a, descs cx a, dicts_of cx e.node))
+  | Var (Global_value p) -> here (Global_value (p, targs_of cx e.node))
+  | Var (Intrinsic x) ->
+      let a = targs_of cx e.node in
+      here (Intrinsic (x, a, descs cx a))
   | Var (Dep_op (dep, op)) -> (
       (* used as a value: a lambda that calls it, with the evidence it's
          given where it's called *)
       match ty () with
-      | Fun (ps, ret, _, _) as fty ->
+      | Fun (ps, ret, _, _, _) as fty ->
           let params = List.map (fun (p : Ty.param) -> temp cx "x" p.ty) ps in
           let ev = evidence cx in
           let args = List.map (fun v -> local v e.loc) params in
           here
             (Lambda
                {
+                 name = Ty.global_id (Path.member dep op);
                  params =
                    List.map (fun var : C.param -> { mode = Read; var }) params;
                  ev;
@@ -278,10 +333,9 @@ and expr_of cx (e : expr) : C.expr =
         }
       in
       here (Fail (mk (Tag (tag.name, args)) (Errors set) e.loc))
-  | Try ({ kind = Match (subject, arms); _ } as m) when Infer_expr.handles arms
-    ->
+  | Try ({ kind = Match (subject, arms); _ } as m) when handles cx m.node ->
       handle_match cx ~passed:true (ty_of cx m.node) e.loc subject arms
-  | Try a when is_result (ty_of cx a.node) ->
+  | Try a when (node cx e.node).found = Some Unwraps ->
       (* `try r` is `match r { Ok(v) => v, Err(e) => fail e }`. A call in
          [r] that fails passes its error on, as every call does *)
       let r = expr cx a in
@@ -298,7 +352,10 @@ and expr_of cx (e : expr) : C.expr =
       (* both sides, so a failure can show them, and where the comparison
          is, which it points at *)
       let a = expr cx a in
-      mk (Assert_equal (a, expr cx b)) Ty.unit cmp.loc
+      let b = expr cx b in
+      mk
+        (Assert_equal (a, b, C.describe cx.tys a.ty, dict cx "eq" a.ty))
+        Ty.unit cmp.loc
   | Assert a -> here (Assert (expr cx a))
   | Attempt a ->
       (* `Ok` of its value, or `Err` of its error *)
@@ -317,6 +374,12 @@ and expr_of cx (e : expr) : C.expr =
              on_error =
                mk (Con (result_path, "Err", [ local error e.loc ])) t e.loc;
            })
+  | Binop (((Eq | Neq) as op), a, b) ->
+      (* through the `eq` dictionary of what it compares *)
+      let a = expr cx a in
+      let d = dict cx "eq" a.ty in
+      let op : C.prim = if op = Eq then Equal d else Not_equal d in
+      here (Prim (op, [ a; expr cx b ]))
   | Binop (op, a, b) ->
       let a = expr cx a in
       here (Prim (Binop op, [ a; expr cx b ]))
@@ -329,7 +392,7 @@ and expr_of cx (e : expr) : C.expr =
   | Lambda (params, body) ->
       let ps =
         match ty () with
-        | Fun (ps, _, _, _) -> ps
+        | Fun (ps, _, _, _, _) -> ps
         | _ -> bug "a lambda whose type isn't a function"
       in
       let params =
@@ -343,19 +406,19 @@ and expr_of cx (e : expr) : C.expr =
       cx.ev <- ev;
       let body = expr cx body in
       cx.ev <- outer;
-      let own = List.map (fun (p : C.param) -> p.var.id) params in
+      let own = Ids.of_list (List.map (fun (p : C.param) -> p.var.id) params) in
       let captures =
-        List.filter (fun (v : C.var) -> not (List.mem v.id own)) (free body)
+        List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
       in
-      here (Lambda { params; ev; captures; body })
+      here (Lambda { name = lambda_name cx e.node; params; ev; captures; body })
   | Block (stmts, last) -> block cx stmts last
   | Con (tag, args) -> (
-      match ((node cx e.node).found, ty ()) with
-      | None, Errors _ ->
+      match (node cx e.node).found with
+      | Some Error_tag ->
           (* a tag, inside `Err(...)`: the error it holds *)
           here (Tag (tag.name.name, List.map (fun (_, a) -> expr cx a) args))
-      | Some (Ctor_of (p, c)), _ ->
-          (* ctor_shape (infer_expr.ml) made sure the arguments are in the
+      | Some (Ctor_of (p, c)) ->
+          (* ctor_shape (infer_lookup.ml) made sure the arguments are in the
              order of the fields *)
           here (Con (p, c, List.map (fun (_, a) -> expr cx a) args))
       | _ -> bug "a constructor inference didn't find")
@@ -370,7 +433,7 @@ and expr_of cx (e : expr) : C.expr =
       match (node cx e.node).found with
       | Some (Field_of p) -> here (Field (expr cx r, p, f.name))
       | _ -> bug "a field inference didn't find")
-  | Match (subject, arms) when Infer_expr.handles arms ->
+  | Match (subject, arms) when handles cx e.node ->
       handle_match cx ~passed:false (ty ()) e.loc subject arms
   | Match (subject, arms) ->
       let subject = expr cx subject in
@@ -408,7 +471,14 @@ and expr_of cx (e : expr) : C.expr =
           let ev, _, b = inner () in
           let lam =
             mk
-              (Lambda { params = []; ev; captures = free b; body = b })
+              (Lambda
+                 {
+                   name = lambda_name cx lam;
+                   params = [];
+                   ev;
+                   captures = free b;
+                   body = b;
+                 })
               (ty_of cx lam) body.loc
           in
           match item.kind with
@@ -487,7 +557,7 @@ and handler cx (e : expr) deps state arms =
 and arm_impl cx cells (a : handler_arm) =
   let lam = expr cx a.arm_impl in
   match lam.kind with
-  | Lambda { params; ev; captures; body } ->
+  | Lambda { name; params; ev; captures; body } ->
       let loc = a.arm_impl.loc in
       let used =
         List.filter
@@ -495,11 +565,11 @@ and arm_impl cx cells (a : handler_arm) =
             List.exists (fun (w : C.var) -> w.id = v.id) captures)
           cells
       in
-      let changed = assigned body in
+      let changed = assigned Ids.empty body in
       let writes =
         List.filter_map
           (fun ((v : C.var), (c : C.var)) ->
-            if List.mem v.id changed then
+            if Ids.mem v.id changed then
               Some
                 (mk (Prim (Set_cell, [ local c loc; local v loc ])) Ty.unit loc)
             else None)
@@ -522,24 +592,27 @@ and arm_impl cx cells (a : handler_arm) =
              used)
           body
       in
-      let own = List.map (fun (p : C.param) -> p.var.id) params in
+      let own = Ids.of_list (List.map (fun (p : C.param) -> p.var.id) params) in
       let captures =
-        List.filter (fun (v : C.var) -> not (List.mem v.id own)) (free body)
+        List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
       in
-      { lam with kind = Lambda { params; ev; captures; body } }
+      { lam with kind = Lambda { name; params; ev; captures; body } }
   | _ -> bug "a handler's arm that isn't a lambda"
 
-(* The locals [e] changes: those it assigns to, and those it passes to a
-   call with `&`, which the call writes back to. *)
-and assigned (e : C.expr) =
-  let own =
+(* The ids of the locals [e] changes, added to [acc]: those it assigns to,
+   and those it passes to a call with `&`, which the call writes back to. *)
+and assigned acc (e : C.expr) =
+  let acc =
     match e.kind with
-    | Assign (v, _) -> [ v.id ]
+    | Assign (v, _) -> Ids.add v.id acc
     | Call (_, args, _) ->
-        List.filter_map (function C.Ref v -> Some v.id | Value _ -> None) args
-    | _ -> []
+        List.fold_left
+          (fun acc -> function
+            | C.Ref (v : C.var) -> Ids.add v.id acc | Value _ -> acc)
+          acc args
+    | _ -> acc
   in
-  own @ List.concat_map assigned (C.children e)
+  List.fold_left assigned acc (C.children e)
 
 and arm cx (a : arm) : C.arm =
   let pat = pattern cx a.arm_pat in
@@ -553,7 +626,7 @@ and arm cx (a : arm) : C.arm =
 and handle_match cx ~passed ty loc subject arms =
   let body = expr cx subject in
   let fails, values =
-    List.partition (fun (a : arm) -> Infer_expr.is_fail a.arm_pat) arms
+    List.partition (fun (a : arm) -> is_fail cx a.arm_pat.pnode) arms
   in
   (* every `fail` pattern's type is the set the subject fails with *)
   let errs = ty_of cx (List.hd fails).arm_pat.pnode in
@@ -651,9 +724,10 @@ and plain_call cx ~changed ?last (e : expr) f args =
         in
         (* a built-in method, `xs.len()`, is built into the compiler *)
         let callee : C.kind =
-          if p.home = Path.prelude_home && Prelude.find_fn p.name <> None then
-            Intrinsic p.name
-          else Global p
+          let a = targs_of cx f.node in
+          match Prelude.find p with
+          | Some x -> Intrinsic (x, a, descs cx a)
+          | _ -> Global (p, a, descs cx a, dicts_of cx f.node)
         in
         (mk callee (ty_of cx f.node) f.loc, [ recv ])
     | _ -> (expr cx f, [])
@@ -774,9 +848,9 @@ and pattern cx (p : pattern) : C.pattern =
     | PInt n -> PInt n
     | PBool b -> PBool b
     | PCon (c, ps) -> (
-        match ((node cx p.pnode).found, pty) with
-        | Some (Ctor_of (path, c)), _ -> PCon (path, c, List.map (pattern cx) ps)
-        | None, Errors _ ->
+        match (node cx p.pnode).found with
+        | Some (Ctor_of (path, c)) -> PCon (path, c, List.map (pattern cx) ps)
+        | Some Error_tag ->
             (* a tag, inside `Err(...)` *)
             PTag (c.name.name, List.map (pattern cx) ps)
         | _ -> bug "a constructor pattern inference didn't find")
@@ -790,14 +864,22 @@ and pattern cx (p : pattern) : C.pattern =
    function has its own id, so that's every local used, minus every local
    bound. *)
 and free (e : C.expr) =
-  let used = ref [] and bound = ref [] in
+  let used = ref [] and bound = ref Ids.empty in
   let use (v : C.var) = used := v :: !used in
-  let bind (v : C.var) = bound := v.id :: !bound in
+  let bind (v : C.var) = bound := Ids.add v.id !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Bool _ | Str _ | Unit | Global _ | Global_value _ | Intrinsic _ ->
-        ()
+    | Int _ | Bool _ | Str _ | Unit | Global_value _ -> ()
+    | Global (_, _, ds, dicts) ->
+        (* the hidden type and dictionary parameters its descriptors and
+           dictionaries are built from *)
+        List.iter use (List.concat_map C.desc_vars ds);
+        List.iter use (List.concat_map C.dict_vars dicts)
+    | Intrinsic (_, _, ds) -> List.iter use (List.concat_map C.desc_vars ds)
     | Local v -> use v
+    | Prim ((Equal d | Not_equal d), args) ->
+        List.iter use (C.dict_vars d);
+        List.iter go args
     | Prim (_, args)
     | Array args
     | Con (_, _, args)
@@ -814,9 +896,14 @@ and free (e : C.expr) =
     | Instance impls -> List.iter (fun (_, i) -> go i) impls
     | Handler { captures; _ } -> List.iter use captures
     | Fail a | As_dep (_, a) | Assert a -> go a
-    | Finally (a, b) | Assert_equal (a, b) ->
+    | Finally (a, b) ->
         go a;
         go b
+    | Assert_equal (a, b, d, dict) ->
+        go a;
+        go b;
+        List.iter use (C.desc_vars d);
+        List.iter use (C.dict_vars dict)
     | Handle { body; value; on_value; error; on_error } ->
         go body;
         bind value;
@@ -857,7 +944,7 @@ and free (e : C.expr) =
     | PWild | PInt _ | PBool _ -> ()
   in
   go e;
-  List.filter (fun (v : C.var) -> not (List.mem v.id !bound)) !used
+  List.filter (fun (v : C.var) -> not (Ids.mem v.id !bound)) !used
   |> List.sort_uniq (fun (a : C.var) (b : C.var) -> compare a.id b.id)
 
 (* ---- top-level functions ---- *)
@@ -927,20 +1014,22 @@ let max_binder (f : fn_def) =
   !m
 
 let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
-  let name = f.name.name in
-  let scheme = List.assoc name inferred.schemes in
+  let path = Ast.fn_path home f in
+  let scheme = Path.Map.find path inferred.schemes in
   let next = max_binder f + 1 in
   let cx =
     {
-      nodes = List.assoc name inferred.nodes;
+      nodes = Path.Map.find path inferred.nodes;
       vars = Hashtbl.create 16;
       next = next + 1;
       ev = C.evidence next;
+      tys = C.type_params scheme;
+      dicts = List.combine scheme.reqs (C.dict_params scheme);
     }
   in
   let ps =
     match scheme.ty with
-    | Fun (ps, _, _, _) -> ps
+    | Fun (ps, _, _, _, _) -> ps
     | _ -> bug "a function whose type isn't a function"
   in
   let params =
@@ -950,20 +1039,53 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
       f.params ps
   in
   {
-    path = Path.make home name;
+    path;
     params;
     ev = cx.ev;
+    tys = cx.tys;
+    dicts = List.map snd cx.dicts;
     scheme;
     body = expr cx f.body;
     loc = f.name.loc;
   }
 
+(* The types among [types] that show their values through their own
+   `show` method (shown.ml), each with its function, one of [fns]: a
+   method that takes only its `self`, of the type with its parameters in
+   order, and gives a `Str` without failing or using a dependency. Decided
+   here, once, so the interpreter never looks for a member by its name. *)
+let shows (types : Iface.type_decl list) (fns : C.fn_def list) =
+  List.filter_map
+    (fun (d : Iface.type_decl) ->
+      let own = List.init (List.length d.params) (fun n -> Ty.Var n) in
+      match Iface.find_member d "show" with
+      | Some
+          {
+            okind = Method;
+            oscheme =
+              {
+                ty = Fun ([ { ty = Con (p, args); _ } ], ret, errs, uses, _);
+                _;
+              };
+            _;
+          }
+        when p = d.path && args = own && ret = Ty.str && errs.labels = []
+             && uses.labels = [] ->
+          let m = Path.member d.path "show" in
+          if List.exists (fun (f : C.fn_def) -> f.path = m) fns then
+            Some (d.path, m)
+          else None
+      | _ -> None)
+    types
+
 let program (r : Resolve.t) (inferred : Infer.t) : C.program =
+  let fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog) in
   {
     home = r.home;
     types = r.types;
-    fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog);
-    values = List.map (Path.make r.home) inferred.values;
+    fns;
+    values = inferred.values;
+    shows = shows r.types fns;
   }
 
 (* ---- starting ---- *)
@@ -976,27 +1098,45 @@ let start_name = "$start"
    (infer_top.ml, [check_main]). It starts from no evidence at all. *)
 let start (main : C.fn_def) : C.fn_def =
   let loc = main.loc in
-  let ret, errs, uses =
+  let ret, errs, uses, lams =
     match main.scheme.ty with
-    | Fun (_, ret, errs, uses) -> (ret, errs, uses)
+    | Fun (_, ret, errs, uses, lams) -> (ret, errs, uses, lams)
     | _ -> bug "a `main` whose type isn't a function's"
   in
   let deps = List.map (fun (l : Ty.label) -> Ty.dep_path l.name) uses.labels in
+  let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed, lams) } in
+  let tys = C.type_params scheme in
+  let dicts = C.dict_params scheme in
   (* each install's evidence is numbered after the one it extends *)
   let rec install n = function
     | [] ->
+        let own, ty = C.own_use main.path main.scheme.ty in
         mk
-          (Call (mk (Global main.path) main.scheme.ty loc, [], C.evidence n))
+          (Call
+             ( mk
+                 (Global
+                    ( main.path,
+                      own,
+                      List.map (C.describe tys) own.tys,
+                      List.map (fun v -> C.Dict_param v) dicts ))
+                 ty loc,
+               [],
+               C.evidence n ))
           ret loc
     | (dep : Path.t) :: rest ->
-        let real = Path.make dep.home (dep.name ^ ".real") in
+        let real = Path.member dep "real" in
         mk
           (With
              {
                ev = C.evidence (n + 1);
                outer = C.evidence n;
                dep;
-               impl = mk (Global_value real) (Con (dep, [ Uses Ty.closed ])) loc;
+               (* of a type with no variables *)
+               impl =
+                 mk
+                   (Global_value (real, { tys = []; rows = []; lams = [] }))
+                   (Con (dep, [ Uses Ty.closed ]))
+                   loc;
                body = install (n + 1) rest;
              })
           ret loc
@@ -1005,7 +1145,9 @@ let start (main : C.fn_def) : C.fn_def =
     path = Path.make main.path.home start_name;
     params = [];
     ev = C.evidence 1;
-    scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) };
+    tys;
+    dicts;
+    scheme;
     body = install 1 deps;
     loc;
   }

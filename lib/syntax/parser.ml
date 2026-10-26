@@ -51,7 +51,7 @@
               |  ["pub"] "let" IDENT [":" type] "=" body
               |  IDENT ["(" param, ... ")"] "=>" body
                                                    (an operator: parsed, but
-                                                    reported until stage 10)
+                                                    reported until stage 9)
      type_body:= "{" field, ... "}"                       (a record)
               |  "opaque" type                           (a type of its own)
               |  errors                                  (a named error set)
@@ -1179,6 +1179,7 @@ let parse_fn p ~pub =
     errors;
     uses;
     body;
+    owner = None;
     loc = Loc.span start (last_loc p);
   }
 
@@ -1194,7 +1195,7 @@ let no_ops_block p =
 
 (* One of the type [tname]'s members, or [None] for an operator, which is
    reported: the syntax is reserved, but what operators mean arrives in
-   stage 10. *)
+   stage 9. *)
 let parse_op ?(dep = false) p ~tname =
   no_ops_block p;
   let pub = peek p = PUB in
@@ -1226,6 +1227,7 @@ let parse_op ?(dep = false) p ~tname =
               errors = None;
               uses = None;
               body;
+              owner = None;
               loc = Loc.span start (last_loc p);
             };
         }
@@ -1252,7 +1254,7 @@ let parse_op ?(dep = false) p ~tname =
               else
                 Printf.sprintf
                   "for now, write a method: `fn %s(self, ...) = ...`" name.name)
-           (Printf.sprintf "operators like `%s` arrive in stage 10" name.name));
+           (Printf.sprintf "operators like `%s` arrive in stage 9" name.name));
       None
   | tok ->
       let what =
@@ -1286,6 +1288,12 @@ let parse_members ?dep p ~tname =
     | _ -> fail_expected p "the end of the line"
   in
   items []
+
+(* The members [ops] of the type [type_name], each knowing whose it is. *)
+let owned_by type_name ops =
+  List.map
+    (fun o -> { o with op_fn = { o.op_fn with owner = Some type_name } })
+    ops
 
 let parse_type p ~pub =
   expect p TYPE;
@@ -1333,7 +1341,13 @@ let parse_type p ~pub =
            "`%s` is an error set, not a type of values, so it has no members"
            tname)
   | _ -> ());
-  { type_pub = pub; type_name; type_params; type_body; type_ops }
+  {
+    type_pub = pub;
+    type_name;
+    type_params;
+    type_body;
+    type_ops = owned_by type_name type_ops;
+  }
 
 (* A dependency (deps.md, "Declaring one"): its operations, indented under
    it, then its members, as a sum type lists its variants first.
@@ -1405,7 +1419,7 @@ let parse_dep p ~pub =
     type_name;
     type_params = [];
     type_body = Dep ops;
-    type_ops = members;
+    type_ops = owned_by type_name members;
   }
 
 (* A handler (deps.md, "Implementations"): a function of its parameters
@@ -1545,6 +1559,7 @@ let parse_handler p ~pub =
     errors = None;
     uses = None;
     body;
+    owner = None;
     loc = Loc.span start (last_loc p);
   }
 

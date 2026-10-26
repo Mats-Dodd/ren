@@ -3,15 +3,25 @@
    Lowering rewrites a lot (places, loops, temporaries), and a mistake in
    it would show up as the interpreter computing something wrong, far from
    the cause. Lint catches it at the node where it happened instead. It
-   checks that every node's type is the one its parts say it has, that
-   every local is used inside its scope with the type it was bound with,
-   that a lambda captures every local it uses, and that every constructor,
+   checks that every node's type is the one its parts say it has (a use
+   of a top-level function's, its scheme's at the type arguments it
+   carries), that every local is used inside its scope with the type it
+   was bound with, that a lambda captures every local it uses, and that every constructor,
    record and field is in the type it says, and that an error has the
-   payload its set says. And that the evidence is threaded (core.ml):
+   payload its set says, and that a handler's instance is only ever the
+   end of its body. And that the evidence is threaded (core.ml):
    that every call passes the evidence in scope, a lambda's own inside it
    and never one it could have kept from where it was made, and that each
    dependency an operation or a callee uses is one the function it's in
-   uses too, or a [With] around it installs. Which errors code can fail with isn't checked: inference
+   uses too, or a [With] around it installs. And that each descriptor of
+   a type (core.ml, [desc]) describes the type argument it's passed for,
+   built only from the hidden type parameters of the function it's in;
+   that each function takes a dictionary for each of its requirements
+   (core.ml, [dict]), and each use of one passes one for each, for the
+   type argument it's on, as does each [==], built only from the
+   function's own dictionaries and derived only for a type that has what
+   it's derived for; and that each type said to show itself has a `show`
+   method the interpreter can call. Which errors code can fail with isn't checked: inference
    has, and Core has no use for them.
 
    Lint finding anything is a bug in the compiler, never in the program,
@@ -33,13 +43,23 @@ type env = {
   ev : var option;  (** the evidence in scope, the innermost *)
   uses : Ty.row;  (** what the function or lambda being checked uses *)
   installed : Path.t list;  (** what the [With]s around here in it install *)
+  ntys : int;  (** how many hidden type parameters the function has *)
+  own : ((int * string) * var) list;
+      (** the function's hidden dictionary parameters, by the requirement each
+          is for *)
+  identities : (string, int) Hashtbl.t;
+      (** how many parameters each identity a lambda set of the module can have
+          takes: each of its lambdas', and each function's, member's,
+          intrinsic's or operation's it uses (see [identities]). Only looked up
+      *)
 }
 
 let show t =
   Ty.show
     (Ty.printer
        ~show_tail:(fun _ -> true)
-       ~names:Path.full { ty = t; names = [] })
+       ~names:Path.full
+       { ty = t; names = []; reqs = []; row_reqs = [] })
     t
 
 let fail env (loc : Loc.t) msg =
@@ -53,7 +73,7 @@ let rec has_error (t : Ty.ty) =
   | Var _ -> false
   | Con (_, args) -> List.exists has_error args
   | Errors e | Uses e -> row_has_error e
-  | Fun (ps, r, e, _) ->
+  | Fun (ps, r, e, _, _) ->
       List.exists (fun (p : Ty.param) -> has_error p.ty) ps
       || has_error r || row_has_error e
 
@@ -68,12 +88,13 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   | Con (p, a) -> Con (p, List.map (subst args) a)
   | Errors e -> Errors (subst_row args e)
   | Uses u -> Uses u
-  | Fun (ps, r, e, u) ->
+  | Fun (ps, r, e, u, l) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
           subst args r,
           subst_row args e,
-          u )
+          u,
+          l )
 
 and subst_row args (r : Ty.row) =
   {
@@ -96,10 +117,15 @@ let rec reveal env (t : Ty.ty) : Ty.ty =
   match t with
   | Con (p, args) -> (
       match Hashtbl.find_opt env.types p with
-      | Some { Iface.body = Opaque (Some rep); _ } ->
-          reveal env (subst args rep)
+      | Some { Iface.body = Opaque (Rep rep); _ } -> reveal env (subst args rep)
       | _ -> t)
   | Fun _ | Var _ | Errors _ | Uses _ | Error -> t
+
+(* Are two lambda sets the same? One of a type written in a declaration
+   ([Ty.any_lams]), a field's or an operation's, says nothing of what can
+   flow to it, so it's the same as any. *)
+let same_lams (a : Ty.lams) (b : Ty.lams) =
+  a.lvar = None || b.lvar = None || a = b
 
 (* Are [a] and [b] the same type, once opaque types are revealed where they
    differ? An implementation [a] may need less than [b]. *)
@@ -110,22 +136,112 @@ let rec equal env (a : Ty.ty) (b : Ty.ty) =
          && List.length xs = List.length ys
          && List.for_all2 (equal env) xs ys ->
       true
-  | Fun (ps, r, e, u), Fun (qs, r', e', u') when List.length ps = List.length qs
-    ->
+  | Fun (ps, r, e, u, l), Fun (qs, r', e', u', l')
+    when List.length ps = List.length qs ->
       List.for_all2
         (fun (p : Ty.param) (q : Ty.param) ->
           p.mode = q.mode && equal env p.ty q.ty)
         ps qs
-      && equal env r r' && e = e' && u = u'
+      && equal env r r' && e = e' && u = u' && same_lams l l'
   | Uses a, Uses b ->
       (* an implementation that needs less will do where one that needs
-         more is wanted (Infer_expr.widen); where it's used, what it needs
-         is copied, with a tail of its own (Infer_expr.copy_needs) *)
+         more is wanted (Infer_rows.widen); where it's used, what it needs
+         is copied, with a tail of its own (Infer_rows.copy_needs) *)
       List.for_all (fun l -> List.mem l b.labels) a.labels
       && (a.tail = None || b.tail <> None)
   | _ ->
       let a' = reveal env a and b' = reveal env b in
       if a' == a && b' == b then a = b else equal env a' b'
+
+(* ---- lambda sets ----
+
+   What Lint checks of them (compiler.md, "What each IR promises"): every
+   function type of a node has one in canonical form; a lambda's type's set
+   has the lambda's identity, and a function's, member's or intrinsic's
+   used as a value its own; a use's set is its scheme's with the use's
+   lambda-set arguments put in ([used]); and what an [If] or [Match] gives
+   can be whatever any of its branches can. Nothing reads them yet, so a
+   wrong one would show only once specialization does, far from where it
+   went wrong. *)
+
+let show_lams l =
+  String.trim
+    (Ty.show_lams
+       (Ty.printer ~show_lams:true ~names:Path.full
+          { ty = Error; names = []; reqs = []; row_reqs = [] })
+       l)
+
+(* Each lambda set in [t] is in canonical form: its identities sorted,
+   each once, and a variable for the rest, since a set is always open. *)
+let rec canonical_lams env loc what (t : Ty.ty) =
+  let row (r : Ty.row) =
+    List.iter
+      (fun (l : Ty.label) -> List.iter (canonical_lams env loc what) l.payload)
+      r.labels
+  in
+  match t with
+  | Var _ | Error -> ()
+  | Con (_, args) -> List.iter (canonical_lams env loc what) args
+  | Errors r | Uses r -> row r
+  | Fun (ps, r, e, u, l) ->
+      if l.ids <> List.sort_uniq compare l.ids || l.lvar = None then
+        fail env loc
+          (sprintf "%s has the lambda set `%s`, which isn't in canonical form"
+             what (show_lams l));
+      List.iter (fun (p : Ty.param) -> canonical_lams env loc what p.ty) ps;
+      canonical_lams env loc what r;
+      row e;
+      row u
+
+(* [t], the type of [what], is a function's whose lambda set has [id]: a
+   value of it can be what [id] names. *)
+let has_identity env loc what id (t : Ty.ty) =
+  match reveal env t with
+  | Fun (_, _, _, _, l) when List.mem id l.ids -> ()
+  | Fun (_, _, _, _, l) ->
+      fail env loc
+        (sprintf "%s is `%s`, but its lambda set `%s` doesn't have it" what id
+           (show_lams l))
+  | t -> fail env loc (sprintf "%s has type `%s`" what (show t))
+
+(* Each lambda set of [found], the type of [what], is within the one in
+   the same place in [expected]: what [what] can be, the place it goes
+   can be too, as with a branch and the [If] it's joined in. Inference
+   unifies the two, so they're the same; this says which identity is
+   missing if not. *)
+let rec lams_within env loc what (found : Ty.ty) (expected : Ty.ty) =
+  let row (a : Ty.row) (b : Ty.row) =
+    List.iter
+      (fun (l : Ty.label) ->
+        match
+          List.find_opt (fun (k : Ty.label) -> k.name = l.name) b.labels
+        with
+        | Some k when List.length k.payload = List.length l.payload ->
+            List.iter2 (lams_within env loc what) l.payload k.payload
+        | _ -> ())
+      a.labels
+  in
+  match (reveal env found, reveal env expected) with
+  | Con (_, xs), Con (_, ys) when List.length xs = List.length ys ->
+      List.iter2 (lams_within env loc what) xs ys
+  | (Errors a | Uses a), (Errors b | Uses b) -> row a b
+  | Fun (ps, r, e, u, l), Fun (qs, r', e', u', l')
+    when List.length ps = List.length qs ->
+      (match List.find_opt (fun i -> not (List.mem i l'.ids)) l.ids with
+      | Some i when l'.lvar <> None ->
+          fail env loc
+            (sprintf
+               "%s can be `%s`, which the lambda set `%s` it's given to hasn't"
+               what i (show_lams l'))
+      | _ -> ());
+      List.iter2
+        (fun (p : Ty.param) (q : Ty.param) ->
+          lams_within env loc what p.ty q.ty)
+        ps qs;
+      lams_within env loc what r r';
+      row e e';
+      row u u'
+  | _ -> ()
 
 let same env loc what (found : Ty.ty) (expected : Ty.ty) =
   if not (equal env found expected) then
@@ -137,6 +253,7 @@ let same env loc what (found : Ty.ty) (expected : Ty.ty) =
    and row variables? A row variable can stand for more labels, and a tail. *)
 let instance_of env (s : Ty.ty) (t : Ty.ty) =
   let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
+  let lams = Hashtbl.create 8 in
   let bound table same n x =
     match Hashtbl.find_opt table n with
     | Some y -> same x y
@@ -150,12 +267,12 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
     | Con (p, a), Con (q, b)
       when p = q && List.length a = List.length b && List.for_all2 go a b ->
         true
-    | Fun (ps, r, e, u), Fun (qs, r', e', u')
+    | Fun (ps, r, e, u, l), Fun (qs, r', e', u', l')
       when List.length ps = List.length qs ->
         List.for_all2
           (fun (p : Ty.param) (q : Ty.param) -> p.mode = q.mode && go p.ty q.ty)
           ps qs
-        && go r r' && row e e' && row u u'
+        && go r r' && row e e' && row u u' && lam_set l l'
     | Errors e, Errors e' | Uses e, Uses e' -> row e e'
     | _ ->
         let s' = reveal env s and t' = reveal env t in
@@ -180,8 +297,99 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
         &&
         (Hashtbl.replace rows n ((extra, t.labels, t.tail) :: seen);
          true)
+  (* a lambda set the same way, but always open: one of its own stands for
+     any set *)
+  and lam_set (s : Ty.lams) (t : Ty.lams) =
+    match s.lvar with
+    | None -> true
+    | Some n -> (
+        List.for_all (fun i -> List.mem i t.ids) s.ids
+        &&
+        let extra = List.filter (fun i -> not (List.mem i s.ids)) t.ids in
+        match Hashtbl.find_opt lams n with
+        | Some (extra', lvar') -> extra' = extra && lvar' = t.lvar
+        | None ->
+            Hashtbl.add lams n (extra, t.lvar);
+            true)
   in
   go s t
+
+(* [s], a scheme's type, with the type arguments [a] put in (Ty.args): the
+   n-th of [a.tys] for [Var n], and for a row ending in row variable [n],
+   the n-th of [a.rows]'s labels added to the row's, ending in its tail.
+   A canonical row has each label once, so where both have a label of one
+   name, the row's own is kept. *)
+let rec apply (a : Ty.args) (s : Ty.ty) : Ty.ty =
+  match s with
+  | Var n -> List.nth a.tys n
+  | Error -> Error
+  | Con (p, args) -> Con (p, List.map (apply a) args)
+  | Errors e -> Errors (apply_row a e)
+  | Uses u -> Uses (apply_row a u)
+  | Fun (ps, r, e, u, l) ->
+      Fun
+        ( List.map (fun (p : Ty.param) -> { p with ty = apply a p.ty }) ps,
+          apply a r,
+          apply_row a e,
+          apply_row a u,
+          apply_lams a l )
+
+and apply_row a (r : Ty.row) : Ty.row =
+  let labels =
+    List.map
+      (fun (l : Ty.label) -> { l with payload = List.map (apply a) l.payload })
+      r.labels
+  in
+  match r.tail with
+  | None -> { labels; tail = None }
+  | Some n ->
+      let more : Ty.row = List.nth a.rows n in
+      let has (l : Ty.label) =
+        List.exists (fun (k : Ty.label) -> k.name = l.name) labels
+      in
+      {
+        labels =
+          Ty.sort_labels
+            (labels @ List.filter (fun l -> not (has l)) more.labels);
+        tail = more.tail;
+      }
+
+(* A lambda set ending in lambda-set variable [n] gets the n-th of
+   [a.lams]'s identities, and ends in its variable. One of its own, of a
+   type written in a declaration, stays so. *)
+and apply_lams a (l : Ty.lams) : Ty.lams =
+  match l.lvar with
+  | None -> l
+  | Some n ->
+      let more : Ty.lams = List.nth a.lams n in
+      { ids = List.sort_uniq compare (l.ids @ more.ids); lvar = more.lvar }
+
+(* A use of [name], whose scheme's type is [s], at the type arguments [a]:
+   there's one for each of [s]'s variables, none of them an error, and the
+   use's type [t] is [s] with them put in. Inference picked them where it
+   found [t] (Infer.node), so this checks the two agree. *)
+let used env loc name (s : Ty.ty) (a : Ty.args) (t : Ty.ty) =
+  let own = Ty.own_args s in
+  let ntys = List.length a.tys and nrows = List.length a.rows in
+  if ntys <> List.length own.tys || nrows <> List.length own.rows then
+    fail env loc
+      (sprintf
+         "`%s` is given %d type and %d row arguments, but `%s` has %d type and \
+          %d row variables"
+         name ntys nrows (show s) (List.length own.tys) (List.length own.rows));
+  if List.length a.lams <> List.length own.lams then
+    fail env loc
+      (sprintf
+         "`%s` is given %d lambda-set arguments, but `%s` has %d lambda-set \
+          variables"
+         name (List.length a.lams) (show s) (List.length own.lams));
+  if List.exists has_error a.tys || List.exists row_has_error a.rows then
+    fail env loc (sprintf "`%s` is given an error type as a type argument" name);
+  let expected = apply a s in
+  if not (equal env t expected) then
+    fail env loc
+      (sprintf "`%s` is used at `%s`, but its type arguments make it `%s`" name
+         (show t) (show expected))
 
 let decl env loc p =
   match Hashtbl.find_opt env.types p with
@@ -259,7 +467,7 @@ let available env loc what (p : Path.t) =
       (sprintf
          "%s uses `%s`, which is neither used here, by `%s`, nor installed" what
          (Path.full p)
-         (show (Fun ([], Ty.unit, Ty.closed, env.uses))))
+         (show (Fun ([], Ty.unit, Ty.closed, env.uses, Ty.any_lams))))
 
 (* The scope inside a function or lambda that takes the evidence [v] and
    uses [uses]: nothing installed yet. *)
@@ -279,9 +487,183 @@ let in_scope env sc loc (v : var) =
 
 let add (v : var) sc = Scope.add v.id v sc
 
+(* The type [d] describes (core.ml, [desc]), in the type variables of the
+   function being checked: each hidden type parameter it's built from is
+   in scope, and is the function's own for [Var n], and a [Known] type has
+   no type variables in it. *)
+let rec described env sc loc (d : desc) : Ty.ty =
+  let row r : Ty.row =
+    {
+      labels =
+        List.map
+          (fun (name, ds) ->
+            ({ name; payload = List.map (described env sc loc) ds } : Ty.label))
+          r.dlabels;
+      tail = r.dtail;
+    }
+  in
+  match d with
+  | Known t ->
+      if has_param env.ntys t then
+        fail env loc
+          (sprintf
+             "the descriptor of `%s`, which has the function's type variables, \
+              is known"
+             (show t));
+      t
+  | Param v ->
+      in_scope env sc loc v;
+      let n = -1 - v.id in
+      if n < 0 || n >= env.ntys || v <> type_param n then
+        fail env loc
+          (sprintf
+             "a descriptor is built from `%s` (%d), which isn't a hidden type \
+              parameter of `%s`"
+             v.name v.id env.fn);
+      Var n
+  | Applied (p, ds) -> Con (p, List.map (described env sc loc) ds)
+  | Fn (ps, r, e, u) ->
+      (* a descriptor has no lambda sets: they say nothing at runtime *)
+      Fun
+        ( List.map
+            (fun (mode, d) : Ty.param -> { mode; ty = described env sc loc d })
+            ps,
+          described env sc loc r,
+          row e,
+          u,
+          Ty.any_lams )
+  | Errs e -> Errors (row e)
+
+(* [d] describes [t], which [what] has. *)
+and describes env sc loc what d (t : Ty.ty) =
+  let found = described env sc loc d in
+  if Ty.without_lams found <> Ty.without_lams t then
+    fail env loc
+      (sprintf "%s is described as `%s`, but is `%s`" what (show found) (show t))
+
+(* [ds] are the descriptors of the type arguments [a] of a use of [name]:
+   one for each, which describes it. *)
+and descs env sc loc name (a : Ty.args) ds =
+  if List.length ds <> List.length a.tys then
+    fail env loc
+      (sprintf "`%s` is given %d type arguments, but %d descriptors" name
+         (List.length a.tys) (List.length ds));
+  List.iteri
+    (fun i (d, t) ->
+      describes env sc loc (sprintf "type argument %d of `%s`" (i + 1) name) d t)
+    (List.combine ds a.tys)
+
+(* Whether [t] has `eq`, by its structure, as inference decides it
+   (infer_reqs.ml): a function hasn't, nor an implementation of a
+   dependency or a handler of several, nor a type with one in it. A type
+   variable is taken to have it: one of the function's has a dictionary
+   of its own. [seen] are the declarations being looked into, so a
+   recursive one is looked into once. *)
+let rec has_eq env seen (t : Ty.ty) =
+  let row (r : Ty.row) =
+    List.for_all
+      (fun (l : Ty.label) -> List.for_all (has_eq env seen) l.payload)
+      r.labels
+  in
+  match t with
+  | Fun _ -> false
+  | Var _ | Error | Uses _ -> true
+  | Errors r -> row r
+  | Con (p, args) ->
+      List.for_all (has_eq env seen) args
+      && (List.mem p seen
+         ||
+         let field (f : Iface.field) = has_eq env (p :: seen) f.fty in
+         match Hashtbl.find_opt env.types p with
+         | None -> true
+         | Some td -> (
+             match td.body with
+             | Builtin | Errors _ -> true
+             | Opaque (Hidden { eq }) -> eq
+             | Record fs -> List.for_all field fs
+             | Sum cs ->
+                 List.for_all
+                   (fun (c : Iface.ctor) -> List.for_all field c.cfields)
+                   cs
+             | Opaque (Rep rep) -> has_eq env (p :: seen) rep
+             | Dep _ | Handler _ -> false))
+
+(* The requirement a dictionary (core.ml, [dict]) is for, and the type, in
+   the type variables of the function being checked: one of its own
+   dictionary parameters, in scope, or one derived for a type that isn't
+   one of its type variables and has what it's derived for, built from the
+   function's own dictionaries for each of its type variables in it. *)
+let dict_of env sc loc (d : dict) =
+  let own (v : var) =
+    in_scope env sc loc v;
+    match List.find_opt (fun (_, w) -> w = v) env.own with
+    | Some (r, _) -> r
+    | None ->
+        fail env loc
+          (sprintf
+             "a dictionary is built from `%s` (%d), which isn't a hidden \
+              dictionary parameter of `%s`"
+             v.name v.id env.fn)
+  in
+  match d with
+  | Dict_param v ->
+      let n, req = own v in
+      (req, Ty.Var n)
+  | Derived { req; dty; from } ->
+      (match dty with
+      | Var n when n < env.ntys ->
+          fail env loc
+            (sprintf "a dictionary for `%s` is derived, not the function's own"
+               (show dty))
+      | _ -> ());
+      if req <> "eq" then
+        fail env loc
+          (sprintf "a dictionary for `%s`, which isn't a requirement" req);
+      if not (has_eq env [] dty) then
+        fail env loc (sprintf "`%s` has no `eq` to derive" (show dty));
+      if List.map fst from <> params_in env.ntys dty then
+        fail env loc
+          (sprintf
+             "the dictionary for `%s` isn't built from one dictionary for each \
+              of the function's type variables in it"
+             (show dty));
+      List.iter
+        (fun (n, v) ->
+          if own v <> (n, req) then
+            fail env loc
+              (sprintf "the dictionary for `%s` is built from `%s`, for another"
+                 (show dty) v.name))
+        from;
+      (req, dty)
+
+(* [d] is [req]'s dictionary for [t], which [what] needs. *)
+let gives env sc loc what d req (t : Ty.ty) =
+  let r, found = dict_of env sc loc d in
+  if r <> req || found <> t then
+    fail env loc
+      (sprintf "%s is given the `%s` dictionary of `%s`, but needs `%s` of `%s`"
+         what r (show found) req (show t))
+
+(* [ds] are the dictionaries a use of [name], of scheme [s], at the type
+   arguments [a] is given: one for each of its requirements, for the type
+   argument it's on. *)
+let dicts env sc loc name (s : Ty.scheme) (a : Ty.args) ds =
+  if List.length ds <> List.length s.reqs then
+    fail env loc
+      (sprintf "`%s` has %d requirements, but is given %d dictionaries" name
+         (List.length s.reqs) (List.length ds));
+  List.iter2
+    (fun (n, req) d ->
+      match List.nth_opt a.tys n with
+      | Some t -> gives env sc loc (sprintf "`%s`" name) d req t
+      | None ->
+          fail env loc (sprintf "`%s` needs something of a type it hasn't" name))
+    s.reqs ds
+
 let rec expr env sc (e : expr) =
   let loc = e.loc in
   if has_error e.ty then fail env loc "a node has an error type";
+  canonical_lams env loc "a node" e.ty;
   let is what t = same env loc what e.ty t in
   match e.kind with
   | Int _ -> is "an `Int`" Ty.int
@@ -291,27 +673,36 @@ let rec expr env sc (e : expr) =
   | Local v ->
       in_scope env sc loc v;
       is ("`" ^ v.name ^ "`") v.ty
-  | Global p -> (
+  | Global (p, a, ds, dicts_given) -> (
+      descs env sc loc (Path.local p) a ds;
+      (match e.ty with
+      | Fun _ ->
+          has_identity env loc
+            (sprintf "`%s`, used as a value," (Path.local p))
+            (Ty.global_id p) e.ty
+      | _ -> ());
       match Hashtbl.find_opt env.schemes p with
-      | Some s when instance_of env s.ty e.ty -> ()
       | Some s ->
-          fail env loc
-            (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
-               p.name (show e.ty) (show s.ty))
-      | None -> fail env loc (sprintf "there's no function `%s`" p.name))
-  | Global_value p -> (
+          used env loc (Path.local p) s.ty a e.ty;
+          dicts env sc loc (Path.local p) s a dicts_given
+      | None -> fail env loc (sprintf "there's no function `%s`" (Path.local p))
+      )
+  | Global_value (p, a) -> (
       match Hashtbl.find_opt env.values p with
-      | Some s when instance_of env s.ty e.ty -> ()
-      | Some s ->
-          fail env loc
-            (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
-               p.name (show e.ty) (show s.ty))
-      | None -> fail env loc (sprintf "there's no value `%s`" p.name))
-  | Intrinsic x -> (
-      match Prelude.find_fn x with
-      | Some b when instance_of env b.scheme.ty e.ty -> ()
-      | Some _ -> fail env loc (sprintf "`%s` is used at the wrong type" x)
-      | None -> fail env loc (sprintf "there's no built-in `%s`" x))
+      | Some s -> used env loc (Path.local p) s.ty a e.ty
+      | None -> fail env loc (sprintf "there's no value `%s`" (Path.local p)))
+  | Intrinsic (x, a, ds) ->
+      descs env sc loc (Intrinsic.name x) a ds;
+      has_identity env loc
+        (sprintf "`%s`, used as a value," (Intrinsic.name x))
+        (Ty.global_id (Intrinsic.path x))
+        e.ty;
+      (* an intrinsic is given no dictionaries, so it can't need any *)
+      if (Prelude.scheme x).reqs <> [] then
+        fail env loc
+          (sprintf "`%s` needs something, but an intrinsic is given nothing"
+             (Intrinsic.name x));
+      used env loc (Intrinsic.name x) (Prelude.scheme x).ty a e.ty
   | Dep_call { dep = p; op; fty; ev; args } -> (
       (* the operation as declared, using its dependency, and whatever the
          caller does *)
@@ -324,17 +715,17 @@ let rec expr env sc (e : expr) =
       current env loc what ev;
       available env loc what p;
       match declared with
-      | Some { fty = Fun (ps, r, errs, _); _ } -> (
+      | Some { fty = Fun (ps, r, errs, _, l); _ } -> (
           let uses : Ty.row =
             { labels = [ Ty.label (Ty.dep_label p) ]; tail = Some 0 }
           in
-          if not (instance_of env (Fun (ps, r, errs, uses)) fty) then
+          if not (instance_of env (Fun (ps, r, errs, uses, l)) fty) then
             fail env loc
               (sprintf "`%s.%s` is used at `%s`, which isn't its type, `%s`"
                  p.name op (show fty)
-                 (show (Fun (ps, r, errs, uses))));
+                 (show (Fun (ps, r, errs, uses, l))));
           match fty with
-          | Fun (ps, ret, _, _) when List.length ps = List.length args ->
+          | Fun (ps, ret, _, _, _) when List.length ps = List.length args ->
               List.iter2
                 (fun (p : Ty.param) (a : expr) ->
                   expr env sc a;
@@ -461,6 +852,8 @@ let rec expr env sc (e : expr) =
       is "an assignment" Ty.unit
   | If (c, t, f) ->
       List.iter (expr env sc) [ c; t; f ];
+      lams_within env t.loc "the `then` branch" t.ty e.ty;
+      lams_within env f.loc "the `else` branch" f.ty e.ty;
       same env loc "an `if` condition" c.ty Ty.bool;
       same env loc "the `then` branch" t.ty e.ty;
       same env loc "the `else` branch" f.ty e.ty
@@ -475,6 +868,7 @@ let rec expr env sc (e : expr) =
               same env g.loc "a guard" g.ty Ty.bool)
             a.guard;
           expr env sc a.body;
+          lams_within env a.body.loc "an arm" a.body.ty e.ty;
           same env a.body.loc "an arm" a.body.ty e.ty)
         arms
   | While (c, body) ->
@@ -488,15 +882,36 @@ let rec expr env sc (e : expr) =
       is "a sequence" b.ty
   | Call (f, args, ev) -> (
       expr env sc f;
+      (* whatever its set says it can be takes as many arguments *)
+      (match reveal env f.ty with
+      | Fun (_, _, _, _, l) ->
+          List.iter
+            (fun id ->
+              match Hashtbl.find_opt env.identities id with
+              | Some n when n = List.length args -> ()
+              | Some n ->
+                  fail env loc
+                    (sprintf
+                       "a call passes %d arguments to what can be `%s`, which \
+                        takes %d"
+                       (List.length args) id n)
+              | None ->
+                  fail env loc
+                    (sprintf
+                       "a call's callee can be `%s`, which no function or \
+                        lambda here is"
+                       id))
+            l.ids
+      | _ -> ());
       (* every function takes the same: the evidence where it's called *)
       let what =
         match f.kind with
-        | Global p -> sprintf "a call of `%s`" p.name
+        | Global (p, _, _, _) -> sprintf "a call of `%s`" (Path.local p)
         | _ -> "a call"
       in
       current env loc what ev;
       match reveal env f.ty with
-      | Fun (ps, ret, _, uses) ->
+      | Fun (ps, ret, _, uses, _) ->
           (* what it uses is in the evidence it's passed: each dependency
              declared, that is, which has implementations *)
           List.iter
@@ -524,7 +939,8 @@ let rec expr env sc (e : expr) =
             ps args;
           is "a call" ret
       | t -> fail env loc (sprintf "a call to a `%s`" (show t)))
-  | Lambda { params; ev; captures; body } -> (
+  | Lambda { name; params; ev; captures; body } -> (
+      has_identity env loc "a lambda" name e.ty;
       List.iter (in_scope env sc loc) captures;
       (* the body sees only what it captures, its parameters, and its own
          evidence: a lambda never keeps the evidence where it's made, which
@@ -536,11 +952,11 @@ let rec expr env sc (e : expr) =
           params
       in
       let uses =
-        match reveal env e.ty with Fun (_, _, _, u) -> u | _ -> Ty.closed
+        match reveal env e.ty with Fun (_, _, _, u, _) -> u | _ -> Ty.closed
       in
       expr (inside env loc "a lambda's evidence" ev uses) inner body;
       match reveal env e.ty with
-      | Fun (ps, ret, _, _) when List.length ps = List.length params ->
+      | Fun (ps, ret, _, _, _) when List.length ps = List.length params ->
           List.iter2
             (fun (p : Ty.param) (q : param) ->
               if p.mode <> q.mode then fail env loc "a lambda parameter's mode";
@@ -574,8 +990,8 @@ let rec expr env sc (e : expr) =
           (* an implementation's operation uses what it needs *)
           let expected : Ty.ty =
             match (targs, declared, td.body) with
-            | [ Uses needs ], Fun (ps, r, errs, _), Dep _ ->
-                Fun (ps, r, errs, needs)
+            | [ Uses needs ], Fun (ps, r, errs, _, l), Dep _ ->
+                Fun (ps, r, errs, needs, l)
             | _ -> declared
           in
           same env v.loc ("the field `" ^ f ^ "`") v.ty expected)
@@ -642,10 +1058,12 @@ let rec expr env sc (e : expr) =
       expr env sc a;
       same env a.loc "what an `Assert` checks" a.ty Ty.bool;
       is "an `Assert`" Ty.unit
-  | Assert_equal (a, b) ->
+  | Assert_equal (a, b, d, dict) ->
       expr env sc a;
       expr env sc b;
       same env b.loc "the right side of an `Assert_equal`" b.ty a.ty;
+      describes env sc loc "what an `Assert_equal` compares" d a.ty;
+      gives env sc loc "an `Assert_equal`" dict "eq" a.ty;
       is "an `Assert_equal`" Ty.unit
 
 (* The error set an error of type [t] is in. *)
@@ -676,8 +1094,11 @@ and prim env sc (e : expr) op args =
   | Binop (And | Or), _ ->
       fail env loc "`&&` or `||` that wasn't lowered to an `if`"
   | Binop Orelse, _ -> fail env loc "an `orelse` that wasn't lowered"
-  | Binop (Eq | Neq), [ a; b ] ->
+  | Binop (Eq | Neq), _ ->
+      fail env loc "`==` or `!=` without the dictionary it compares by"
+  | (Equal d | Not_equal d), [ a; b ] ->
       same env loc "the right side of a comparison" b.ty a.ty;
+      gives env sc loc "a comparison" d "eq" a.ty;
       is "a comparison" Ty.bool
   | Binop (Add | Sub | Mul | Div | Mod), [ a; b ] ->
       int a;
@@ -714,6 +1135,9 @@ and held env (c : expr) =
 (* Check [p] against the type [t] of what it matches; the scope it binds. *)
 and pattern env sc (p : pattern) t =
   let loc = p.ploc in
+  (* as for an expression; a tag's subpattern whose payload isn't known
+     is checked only against itself, below *)
+  if has_error p.pty then fail env loc "a pattern has an error type";
   same env loc "a pattern" p.pty t;
   match p.pkind with
   | PWild -> sc
@@ -758,10 +1182,38 @@ and pattern env sc (p : pattern) t =
         rest;
       first_sc
 
+(* An installed handler instance is never a value (compiler.md, "No
+   cycles"): an [Instance] is only ever the end of a [Handler]'s body,
+   after the [Let]s and statements that make its state, which is where a
+   [With] gets it from. Anywhere else, a program could hold one, and a
+   handler's state could reach its own instance. *)
+let rec instances env (e : expr) =
+  match e.kind with
+  | Handler { body; _ } -> handler_end env body
+  | Instance _ ->
+      fail env e.loc "an instance that isn't the end of a handler's body"
+  | _ -> List.iter (instances env) (children e)
+
+and handler_end env (e : expr) =
+  match e.kind with
+  | Let (_, a, b) | Seq (a, b) ->
+      instances env a;
+      handler_end env b
+  | Instance impls -> List.iter (fun (_, i) -> instances env i) impls
+  | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
+
 let fn_def env (f : fn_def) =
-  let env = { env with fn = f.path.name } in
+  let env = { env with fn = Path.local f.path; ntys = List.length f.tys } in
+  instances env f.body;
+  if f.tys <> type_params f.scheme then
+    fail env f.loc
+      "its hidden type parameters aren't one for each of its type variables";
+  if f.dicts <> dict_params f.scheme then
+    fail env f.loc
+      "its hidden dictionary parameters aren't one for each of its requirements";
+  let env = { env with own = List.combine f.scheme.reqs f.dicts } in
   match f.scheme.ty with
-  | Fun (ps, ret, _, uses) when List.length ps = List.length f.params ->
+  | Fun (ps, ret, _, uses, _) when List.length ps = List.length f.params ->
       let env = inside env f.loc "the function's evidence" f.ev uses in
       List.iter2
         (fun (p : Ty.param) (q : param) ->
@@ -769,7 +1221,10 @@ let fn_def env (f : fn_def) =
           same env f.loc ("the parameter `" ^ q.var.name ^ "`") q.var.ty p.ty)
         ps f.params;
       let sc =
-        List.fold_left (fun sc (p : param) -> add p.var sc) Scope.empty f.params
+        List.fold_left
+          (fun sc (p : param) -> add p.var sc)
+          (List.fold_left (fun sc v -> add v sc) Scope.empty (f.tys @ f.dicts))
+          f.params
       in
       expr env sc f.body;
       same env f.loc "the body" f.body.ty ret
@@ -778,7 +1233,7 @@ let fn_def env (f : fn_def) =
 (* The functions and values [e] names, in the order written. *)
 let rec globals (e : expr) =
   match e.kind with
-  | Global p | Global_value p -> [ p ]
+  | Global (p, _, _, _) | Global_value (p, _) -> [ p ]
   | Int _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
   | Prim (_, es)
   | Array es
@@ -795,7 +1250,7 @@ let rec globals (e : expr) =
   | Seq (a, b)
   | Update (a, _, b)
   | Finally (a, b)
-  | Assert_equal (a, b) ->
+  | Assert_equal (a, b, _, _) ->
       globals a @ globals b
   | Assign (_, a)
   | Field (a, _, _)
@@ -822,11 +1277,15 @@ let rec globals (e : expr) =
    when the program starts. A lambda's body is followed too, as inference
    does. *)
 let value_order (prog : program) =
-  let body p =
-    Option.map
-      (fun (f : fn_def) -> f.body)
-      (List.find_opt (fun (f : fn_def) -> f.path = p) prog.fns)
+  (* each function's body by its path, found once rather than by a walk
+     of every function each time; folded from the right, so the first of
+     two with one path is the one kept, as [List.find_opt] would *)
+  let bodies =
+    List.fold_right
+      (fun (f : fn_def) m -> Path.Map.add f.path f.body m)
+      prog.fns Path.Map.empty
   in
+  let body p = Path.Map.find_opt p bodies in
   let rec walk ~seen ~made v p =
     if not (Hashtbl.mem seen p) then (
       Hashtbl.replace seen p ();
@@ -834,7 +1293,7 @@ let value_order (prog : program) =
         failwith
           (sprintf
              "Core Lint: the value `%s` is made before `%s`, which it uses"
-             v.name p.name);
+             (Path.local v) (Path.local p));
       Option.iter
         (fun b -> List.iter (walk ~seen ~made v) (globals b))
         (if p = v || not (List.mem p prog.values) then body p else None))
@@ -845,6 +1304,67 @@ let value_order (prog : program) =
          walk ~seen:(Hashtbl.create 8) ~made v v;
          v :: made)
        [] prog.values)
+
+(* Each type [prog] says shows its values through its own `show` method
+   is one it declares, and that method one of its functions, of the type
+   the interpreter calls it at: taking only a value of the type, with the
+   type's parameters as its type variables, in order, and giving a `Str`
+   without failing or using anything. *)
+let shows env (prog : program) =
+  List.iter
+    (fun (p, m) ->
+      let env = { env with fn = Path.local m } in
+      match
+        ( List.find_opt (fun (d : Iface.type_decl) -> d.path = p) prog.types,
+          List.find_opt (fun (f : fn_def) -> f.path = m) prog.fns )
+      with
+      | Some d, Some f -> (
+          let own = List.init (List.length d.params) (fun n -> Ty.Var n) in
+          match f.scheme.ty with
+          | Fun ([ { mode = Read; ty = Con (q, args) } ], ret, errs, uses, _)
+            when q = p && args = own && ret = Ty.str && errs.labels = []
+                 && uses.labels = [] ->
+              ()
+          | t ->
+              fail env f.loc
+                (sprintf "`%s` shows a `%s`, but has type `%s`" (Path.local m)
+                   (Path.full p) (show t)))
+      | None, _ ->
+          failwith
+            (sprintf
+               "Core Lint: `%s` is said to show `%s`, which isn't declared here"
+               (Path.local m) (Path.full p))
+      | _, None ->
+          failwith
+            (sprintf
+               "Core Lint: `%s` is said to show `%s`, but isn't a function here"
+               (Path.local m) (Path.full p)))
+    prog.shows
+
+(* The identities a lambda set of [prog] can have, each with how many
+   parameters what it names takes. Inference puts one in a set only where
+   a lambda is, or a function, a member, an intrinsic or an operation is
+   used (Infer_lookup.named), and an interface has none (Ty.forget_lams),
+   so each is one of [prog]'s [Lambda]s, [Global]s, [Intrinsic]s or
+   operations called. *)
+let identities (prog : program) =
+  let found = Hashtbl.create 32 in
+  let arity (t : Ty.ty) =
+    match t with Fun (ps, _, _, _, _) -> Some (List.length ps) | _ -> None
+  in
+  let add id = Option.iter (Hashtbl.replace found id) in
+  let rec go (e : expr) =
+    (match e.kind with
+    | Lambda { name; params; _ } -> add name (Some (List.length params))
+    | Global (p, _, _, _) -> add (Ty.global_id p) (arity e.ty)
+    | Intrinsic (x, _, _) -> add (Ty.global_id (Intrinsic.path x)) (arity e.ty)
+    | Dep_call { dep; op; args; _ } ->
+        add (Ty.global_id (Path.member dep op)) (Some (List.length args))
+    | _ -> ());
+    List.iter go (children e)
+  in
+  List.iter (fun (f : fn_def) -> go f.body) prog.fns;
+  found
 
 (* Lint module [prog], which sees the interfaces [imports]: every one
    reachable through its imports, since a type from any of them can turn
@@ -865,6 +1385,9 @@ let program ~imports ~linked (prog : program) =
       ev = None;
       uses = Ty.closed;
       installed = [];
+      ntys = 0;
+      own = [];
+      identities = identities prog;
     }
   in
   List.iter
@@ -872,9 +1395,8 @@ let program ~imports ~linked (prog : program) =
       List.iter
         (fun (td : Iface.type_decl) ->
           Hashtbl.replace env.types td.path td;
-          List.iter
-            (fun (o : Iface.op) ->
-              let p = Path.make td.path.home (td.path.name ^ "." ^ o.oname) in
+          Path.Map.iter
+            (fun p (o : Iface.op) ->
               Hashtbl.replace
                 (if o.okind = Value then env.values else env.schemes)
                 p o.oscheme)
@@ -897,6 +1419,13 @@ let program ~imports ~linked (prog : program) =
   List.iter
     (fun (td : Iface.type_decl) -> Hashtbl.replace env.types td.path td)
     prog.types;
+  (* another module's function is used as its interface states it, if it
+     has one: its own scheme has the lambda sets its body found, which
+     the interface leaves out (Ty.forget_lams) *)
+  let add table (m : program) path s =
+    if m == prog || not (Hashtbl.mem table path) then
+      Hashtbl.replace table path s
+  in
   List.iter
     (fun (m : program) ->
       List.iter
@@ -905,10 +1434,12 @@ let program ~imports ~linked (prog : program) =
              result is the value, which is all the rest of the module sees
              of it *)
           match f.scheme with
-          | { ty = Fun ([], t, _, _); names } when List.mem f.path m.values ->
-              Hashtbl.replace env.values f.path { ty = t; names }
-          | _ -> Hashtbl.replace env.schemes f.path f.scheme)
+          | { ty = Fun ([], t, _, _, _); _ } as s when List.mem f.path m.values
+            ->
+              add env.values m f.path { s with ty = t }
+          | _ -> add env.schemes m f.path f.scheme)
         m.fns)
     (linked @ [ prog ]);
   value_order prog;
+  shows env prog;
   List.iter (fn_def env) prog.fns

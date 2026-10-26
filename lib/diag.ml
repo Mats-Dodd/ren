@@ -62,23 +62,49 @@ let recover sink ~default f =
    Some code is checked more than once: a group's parameters and `with`,
    and a run's arguments, are part of the function made for each of its
    tests (test_items.ml). The same error at the same place is shown once:
-   [=] on two diagnostics compares every field, so only an exact copy of
-   one reported earlier is dropped. *)
+   the table of those already kept compares every field, as [=] does, so
+   only an exact copy of one reported earlier is dropped. It's only looked
+   up, never walked, so its order never shows. *)
 let reported sink =
   let pos d = (d.loc.file, d.loc.start.line, d.loc.start.col) in
+  let seen = Hashtbl.create 16 in
   let once =
     List.fold_left
-      (fun kept d -> if List.mem d kept then kept else d :: kept)
+      (fun kept d ->
+        if Hashtbl.mem seen d then kept
+        else (
+          Hashtbl.replace seen d ();
+          d :: kept))
       [] (List.rev sink.reported)
   in
   List.stable_sort (fun a b -> compare (pos a) (pos b)) (List.rev once)
 
 (* ---- rendering ---- *)
 
-let line_text src n =
-  match List.nth_opt (String.split_on_char '\n' src) (n - 1) with
-  | Some l -> l
-  | None -> ""
+(* A file's lines, split once, so that each can be found by its number
+   without splitting the whole file again. *)
+let lines src = Array.of_list (String.split_on_char '\n' src)
+
+(* Line [n] of [lines], counting from 1; empty if there's no such line. *)
+let line lines n =
+  if n >= 1 && n <= Array.length lines then lines.(n - 1) else ""
+
+(* Line [n] of the text [src]. It splits all of [src], so code that shows
+   several lines of one file splits it once with [lines] instead. *)
+let line_text src n = line (lines src) n
+
+(* The source map [sources], with each file's lines split the first time
+   they're asked for and kept for the next time. Keyed by file name and
+   only ever looked up, so the table's order never shows. *)
+let indexed (sources : string -> string option) =
+  let split = Hashtbl.create 4 in
+  fun file ->
+    match Hashtbl.find_opt split file with
+    | Some ls -> ls
+    | None ->
+        let ls = Option.map lines (sources file) in
+        Hashtbl.replace split file ls;
+        ls
 
 (* [sources] is the source map: the text of each file a diagnostic can
    point into, by its name. A label in a file it doesn't have (the
@@ -91,10 +117,13 @@ let line_text src n =
        │ ^^^^^^^^
        ┌─ a.ren:1:1
      1 │ import b
-       │ -------- `a` imports `b` here *)
-let render ~(sources : string -> string option) (d : t) =
+       │ -------- `a` imports `b` here
+
+   [lines_of] is the source map [indexed]: each file's lines, split once
+   (see [render] and [render_all]). *)
+let render_indexed ~(lines_of : string -> string array option) (d : t) =
   let shown, elsewhere =
-    List.partition (fun ((l : Loc.t), _) -> sources l.file <> None) d.labels
+    List.partition (fun ((l : Loc.t), _) -> lines_of l.file <> None) d.labels
   in
   let spans = (d.loc, None) :: List.map (fun (l, s) -> (l, Some s)) shown in
   (* the files in the order they come up, the error's own first *)
@@ -115,7 +144,7 @@ let render ~(sources : string -> string option) (d : t) =
   Printf.bprintf b "error: %s\n" d.msg;
   List.iter
     (fun file ->
-      let src = Option.value (sources file) ~default:"" in
+      let src = Option.value (lines_of file) ~default:(lines "") in
       (* Each span in line order, the source line printed once above its
          underlines: `^` for the error itself, `-` and the text for a
          label. *)
@@ -133,7 +162,7 @@ let render ~(sources : string -> string option) (d : t) =
       let last = ref 0 in
       List.iter
         (fun ((l : Loc.t), label) ->
-          let text = line_text src l.start.line in
+          let text = line src l.start.line in
           if l.start.line <> !last then
             Printf.bprintf b "%*d │ %s\n" width l.start.line text;
           last := l.start.line;
@@ -165,5 +194,11 @@ let render ~(sources : string -> string option) (d : t) =
   Option.iter (fun h -> Printf.bprintf b "%s help: %s\n" pad h) d.help;
   Buffer.contents b
 
-(* Several diagnostics, a blank line between each. *)
-let render_all ~sources ds = String.concat "\n" (List.map (render ~sources) ds)
+(* One diagnostic, with the source map [sources]. *)
+let render ~sources d = render_indexed ~lines_of:(indexed sources) d
+
+(* Several diagnostics, a blank line between each. Each file is split into
+   lines once, for all of them. *)
+let render_all ~sources ds =
+  let lines_of = indexed sources in
+  String.concat "\n" (List.map (render_indexed ~lines_of) ds)

@@ -9,11 +9,13 @@
    public functions, all in
    canonical form (ty.ml). Nothing private is in it: a dependent can't
    tell a private name from one that doesn't exist, and changing one can't
-   change the interface. It's made from the module's declarations alone
-   ([of_module]), never from its bodies. The one thing it holds that a cached interface shouldn't is
+   change the interface. It's made from the module's declarations
+   ([of_module]), and from one thing inference found in its bodies: what
+   each public function needs of its type parameters, which is never
+   written. The one thing it holds that a cached interface shouldn't is
    where each type and constructor was declared, so an error can point at
    the declaration it clashes with; those move out when interfaces are
-   cached (stage 11). *)
+   cached (stage 13). *)
 
 type field = { fname : string; fty : Ty.ty }
 
@@ -27,11 +29,11 @@ type body =
   | Builtin  (** built into the compiler, like [Int] *)
   | Record of field list
   | Sum of ctor list
-  | Opaque of Ty.ty option
+  | Opaque of opaque
       (** an opaque type, [type UserId = opaque Int]: what it's represented as
           ([Int]), which only its own module sees. That module's view of it has
-          [Some] representation; its interface has [None], so no other module
-          can make one, look inside one or use one as an [Int]. *)
+          the representation; its interface hides it, so no other module can
+          make one, look inside one or use one as an [Int]. *)
   | Errors of error list
       (** a named error set, [type Refusal = ! Short(by: Money) | Frozen], which
           is no type of values *)
@@ -48,12 +50,24 @@ type body =
           is what it needs. A handler of one dependency has that dependency's
           type ([handler_type]) *)
 
+(* An opaque type's representation, [Rep], in its own module's view of
+   it, or in its interface, [Hidden]: all another module learns of it is
+   whether it has `==`, which comparing two needs to know (operators.md,
+   "Equality, hashing and `show`"). [eq] is false if what it's
+   represented as has a function in it, whatever its type arguments.
+   [Hidden of { eq : bool }] is an inline record: a constructor whose
+   argument has named fields, matched as [Hidden { eq }]. *)
+and opaque = Rep of Ty.ty | Hidden of { eq : bool }
+
 (* A member of a type (ast.ml): a method, which has `self`,
    an associated function, which doesn't, or an associated value. *)
 type op_kind = Method | Function | Value
 
 type op = {
   oname : string;  (** as it's written: [push] *)
+  onum : int;
+      (** its place among its type's members, counting from 0 in source order,
+          which messages list them in *)
   opub : bool;
   okind : op_kind;
   oscheme : Ty.scheme;
@@ -68,9 +82,9 @@ type type_decl = {
       (** the type parameters' names; field types refer to the [i]th as [Var i]
       *)
   body : body;
-  members : op list;
-      (** its members, in source order: every item in its own module's view of
-          it, only the public ones in its interface *)
+  members : op Path.Map.t;
+      (** its members, each by its path (path.ml): every item in its own
+          module's view of it, only the public ones in its interface *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
@@ -86,6 +100,19 @@ let find_type iface name =
   List.find_opt (fun d -> d.path.name = name) iface.types
 
 let find_value iface name = List.find_opt (fun v -> v.vname = name) iface.values
+
+(* The member [name] of the type [d], if it has one. *)
+let find_member d name = Path.Map.find_opt (Path.member d.path name) d.members
+
+(* The members of [d], in source order. *)
+let members d =
+  List.sort
+    (fun a b -> compare a.onum b.onum)
+    (List.map snd (Path.Map.bindings d.members))
+
+(* The members [ops] of the type at [path], each by its own path. *)
+let members_of path ops =
+  Path.Map.of_list (List.map (fun o -> (Path.member path o.oname, o)) ops)
 
 (* ---- named error sets ---- *)
 
@@ -156,7 +183,8 @@ let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
         ( List.map (of_written_param ~rows ~sets) ps,
           ret,
           written_errors ~rows ~sets errs,
-          written_uses ~rows u )
+          written_uses ~rows u,
+          Ty.any_lams )
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
@@ -288,12 +316,13 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
       | Some (TyFn (_, _, written_e, written_u, _) as t)
         when not (Ast.names_row t) -> (
           match of_written ~rows ~sets t with
-          | Fun (ps, r, e, u) ->
+          | Fun (ps, r, e, u, l) ->
               Fun
                 ( ps,
                   r,
                   (if written_e = None then errs else e),
-                  if written_u = None then deps else u )
+                  (if written_u = None then deps else u),
+                  l )
           | _ -> assert false)
       | Some (TyImpl ({ tref = Named d; _ }, None, _)) -> Con (d, [ Uses deps ])
       | Some t -> of_written ~rows ~sets t
@@ -307,8 +336,10 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   in
   Ty.canonical
     {
-      ty = Fun (ps, ret, errs, deps);
+      ty = Fun (ps, ret, errs, deps, Ty.any_lams);
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
+      reqs = [];
+      row_reqs = [];
     }
 
 (* A type declared in module [home]. *)
@@ -329,35 +360,36 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
                  cloc = c.ctor_name.loc;
                })
              cs)
-    | Opaque t -> Opaque (Some (of_written ~sets t))
+    | Opaque t -> Opaque (Rep (of_written ~sets t))
     | Errors es -> Errors (declared_errors ~sets es)
     | Dep ops -> Dep (List.map field ops)
   in
-  let op (o : Ast.Resolved.op) =
+  let op onum (o : Ast.Resolved.op) =
     let f = o.op_fn in
     let okind, oscheme =
       match (o.op_kind, f.params) with
       | Op_value, _ when f.ret = None ->
           (* a public one without a type is an error, which inference
              reports with the type it finds *)
-          (Value, { Ty.ty = Error; names = [] })
+          (Value, { Ty.ty = Error; names = []; reqs = []; row_reqs = [] })
       | Op_value, _ -> (
           (* a function of no parameters, whose result is the value *)
           match signature ~sets f with
-          | { ty = Fun ([], t, _, _); names } ->
-              (Value, Ty.canonical { ty = t; names })
+          | { ty = Fun ([], t, _, _, _); _ } as s ->
+              (Value, Ty.canonical { s with ty = t })
           | _ -> assert false)
       | Op_fn, p :: _ when p.pname.ident.name = "self" ->
           (Method, signature ~sets f)
       | Op_fn, _ -> (Function, signature ~sets f)
     in
-    { oname = Ast.short_name f.name.name; opub = f.pub; okind; oscheme }
+    { oname = f.name.name; onum; opub = f.pub; okind; oscheme }
   in
+  let path = Path.make home td.type_name.name in
   {
-    path = Path.make home td.type_name.name;
+    path;
     params = List.map (fun (p : Ast.ident) -> p.name) td.type_params;
     body;
-    members = List.map op td.type_ops;
+    members = members_of path (List.mapi op td.type_ops);
     loc = Some td.type_name.loc;
   }
 
@@ -395,22 +427,49 @@ let of_handler ~home (f : Ast.Resolved.fn_def) =
           path = Path.make home f.name.name;
           params = [];
           body = Handler deps;
-          members = [];
+          members = Path.Map.empty;
           loc = Some f.name.loc;
         }
 
-(* The interface of module [home], from its declarations alone, never its
-   bodies (module-build.md, "Interface summaries"): every public type it
-   declares, with its public members, and the signature of every
-   public function. A public one
-   never mentions a private one (resolve.ml checks), so a dependent never
-   meets a type that isn't in some interface. An opaque type is listed
-   without its representation. [sets] are the named error sets it can
-   see. *)
-let of_module ~home ~sets (prog : Ast.Resolved.program) =
+(* The interface of module [home] (module-build.md, "Interface
+   summaries"): every public type it declares, with its public members,
+   and the signature of every public function. A public one never
+   mentions a private one (resolve.ml checks), so a dependent never meets
+   a type that isn't in some interface. An opaque type is listed without
+   its representation. [sets] are the named error sets it can see.
+
+   All of it comes from declarations but what a public function or member
+   needs of its type parameters, which isn't written (operators.md,
+   "Generic code"): [needs] gives what inference found, by the function's
+   path, as its scheme's [reqs] and [row_reqs]. And whether an opaque type
+   has `==` depends on what it's represented as, which the interface
+   hides, so [has_eq] says, by the type's path, as inference found it. *)
+let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
+  (* [canonical] keeps a scheme's numbering, and drops what it needs of a
+     variable its type hasn't: an associated value's type is its
+     function's result, without the rows *)
+  let needed path (s : Ty.scheme) =
+    match s.ty with
+    | Error -> s
+    | _ ->
+        let reqs, row_reqs = needs path in
+        Ty.canonical { s with reqs; row_reqs }
+  in
   let public (td : type_decl) =
-    let td = { td with members = List.filter (fun o -> o.opub) td.members } in
-    match td.body with Opaque _ -> { td with body = Opaque None } | _ -> td
+    let td =
+      {
+        td with
+        members =
+          Path.Map.filter_map
+            (fun path o ->
+              if o.opub then Some { o with oscheme = needed path o.oscheme }
+              else None)
+            td.members;
+      }
+    in
+    match td.body with
+    | Opaque _ -> { td with body = Opaque (Hidden { eq = has_eq td.path }) }
+    | _ -> td
   in
   {
     home;
@@ -426,7 +485,12 @@ let of_module ~home ~sets (prog : Ast.Resolved.program) =
       List.filter_map
         (function
           | Ast.Fn (f : Ast.Resolved.fn_def) when f.pub ->
-              Some { vname = f.name.name; scheme = signature ~sets f }
+              let scheme = signature ~sets f in
+              Some
+                {
+                  vname = f.name.name;
+                  scheme = needed (Path.make home f.name.name) scheme;
+                }
           | _ -> None)
         prog;
   }

@@ -1,0 +1,7 @@
+// A tail-recursive loop of a million iterations: what a long-running
+// loop written as recursion costs the interpreter.
+
+fn count(n: Int, acc: Int) -> Int =
+  if n == 0 then acc else count(n - 1, acc + n)
+
+fn main() -> Int = count(1000000, 0)

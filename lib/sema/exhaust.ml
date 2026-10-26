@@ -78,13 +78,13 @@ let rec simplify env (p : pattern) =
   | PCon (c, ps) ->
       let node = Infer.Nodes.find p.pnode env.nodes in
       let owner =
-        match (node.ty, node.found) with
-        | (Errors _ as t), _ -> (
+        match node.found with
+        | Some Error_tag -> (
             (* a tag, of a set inference settled: every tag it can hold *)
-            match set_of t with
+            match set_of node.ty with
             | Some tags -> Of_set tags
             | None -> No_list)
-        | _, Some (Ctor_of (path, _)) -> Of_type path
+        | Some (Ctor_of (path, _)) -> Of_type path
         | _ -> assert false (* inference found it, or reported an error *)
       in
       Ctor ({ name = c.name.name; owner }, List.map (simplify env) ps)
@@ -230,9 +230,12 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
   in
   (* With `fail` arms, each row is an outcome (see [owner]), and the error
      set they match is in each `fail` pattern's type *)
-  let handles = Infer_expr.handles arms in
+  let found id = (Infer.Nodes.find id env.nodes).found in
+  let handles = found e.node = Some Infer.Handles in
   let errors =
-    match List.find_opt (fun a -> Infer_expr.is_fail a.arm_pat) arms with
+    match
+      List.find_opt (fun a -> found a.arm_pat.pnode = Some Infer.Fail_arm) arms
+    with
     | Some a -> Some (Infer.Nodes.find a.arm_pat.pnode env.nodes).ty
     | None -> None
   in
@@ -415,6 +418,6 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
     (List.concat_map (fun (iface : Iface.t) -> iface.types) reachable @ r.types);
   List.iter
     (fun (f : fn_def) ->
-      let nodes = List.assoc f.name.name inferred.nodes in
+      let nodes = Path.Map.find (Ast.fn_path r.home f) inferred.nodes in
       check_expr { types; nodes; names = Resolve.type_name r; sink } f.body)
     (Ast.functions r.prog)

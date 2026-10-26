@@ -25,7 +25,7 @@ let run_start files body =
       let linked = Driver.linked ~lint:true ~load ~file src in
       let entry = List.nth linked (List.length linked - 1) in
       let fn_ name =
-        List.find (fun (f : Core.fn_def) -> f.path.name = name) entry.fns
+        List.find (fun (f : Core.fn_def) -> Path.local f.path = name) entry.fns
       in
       let start = fn_ Lower.start_name in
       let body = body ~fn_ ~loc:start.loc in
@@ -34,7 +34,19 @@ let run_start files body =
         {
           start with
           body;
-          scheme = { ty = Fun ([], body.ty, Ty.closed, Ty.closed); names = [] };
+          scheme =
+            {
+              ty =
+                Fun
+                  ( [],
+                    body.ty,
+                    Ty.closed,
+                    Ty.closed,
+                    { ids = []; lvar = Some 0 } );
+              names = [];
+              reqs = [];
+              row_reqs = [];
+            };
         }
       in
       let entry =
@@ -54,9 +66,13 @@ let run_start files body =
 
 (* Core for a call of [f], of no parameters, with the evidence [ev]. *)
 let call ~loc (f : Ren.Core.fn_def) ev =
-  let ret = match f.scheme.ty with Fun (_, t, _, _) -> t | t -> t in
+  let ret = match f.scheme.ty with Fun (_, t, _, _, _) -> t | t -> t in
+  let args, ty = Ren.Core.own_use f.path f.scheme.ty in
   Ren.Core.mk
-    (Call (Ren.Core.mk (Global f.path) f.scheme.ty loc, [], Ren.Core.evidence ev))
+    (Call
+       ( Ren.Core.mk (Global (f.path, args, [], [])) ty loc,
+         [],
+         Ren.Core.evidence ev ))
     ret loc
 
 (* Core Lint checks the evidence is threaded: a module with a dependency
@@ -66,7 +82,7 @@ let lint_evidence body =
   let open Ren in
   let loc = Loc.point ~file 1 1 in
   let d = Path.make "test" "D" in
-  let int_fn : Ty.ty = Fun ([], Ty.int, Ty.closed, Ty.closed) in
+  let int_fn : Ty.ty = Fun ([], Ty.int, Ty.closed, Ty.closed, Ty.any_lams) in
   let uses_d : Ty.row =
     { labels = [ Ty.label (Ty.dep_label d) ]; tail = None }
   in
@@ -76,7 +92,7 @@ let lint_evidence body =
          {
            dep = d;
            op = "op";
-           fty = Fun ([], Ty.int, Ty.closed, uses_d);
+           fty = Fun ([], Ty.int, Ty.closed, uses_d, Ty.any_lams);
            ev = Core.evidence ev;
            args = [];
          })
@@ -84,8 +100,20 @@ let lint_evidence body =
   in
   let lambda ?(uses = Ty.closed) ev body =
     Core.mk
-      (Lambda { params = []; ev = Core.evidence ev; captures = []; body })
-      (Fun ([], Ty.int, Ty.closed, uses))
+      (Lambda
+         {
+           name = "test.main#1";
+           params = [];
+           ev = Core.evidence ev;
+           captures = [];
+           body;
+         })
+      (Fun
+         ( [],
+           Ty.int,
+           Ty.closed,
+           uses,
+           { ids = [ "test.main#1" ]; lvar = Some 0 } ))
       loc
   in
   let call f ev = Core.mk (Call (f, [], Core.evidence ev)) Ty.int loc in
@@ -94,7 +122,15 @@ let lint_evidence body =
       path = Path.make "test" "main";
       params = [];
       ev = Core.evidence 1;
-      scheme = { ty = Fun ([], Ty.int, Ty.closed, uses_d); names = [] };
+      tys = [];
+      dicts = [];
+      scheme =
+        {
+          ty = Fun ([], Ty.int, Ty.closed, uses_d, { ids = []; lvar = Some 0 });
+          names = [];
+          reqs = [];
+          row_reqs = [];
+        };
       body = body ~loc ~op ~lambda ~call ~uses_d;
       loc;
     }
@@ -110,12 +146,13 @@ let lint_evidence body =
                     path = d;
                     params = [];
                     body = Dep [ { fname = "op"; fty = int_fn } ];
-                    members = [];
+                    members = Path.Map.empty;
                     loc = None;
                   };
                 ];
               fns = [ main ];
               values = [];
+              shows = [];
             }))
 
 (* deps.md's handler of two dependencies sharing one state, and a function
@@ -2000,15 +2037,15 @@ fn main() uses Console =
   [%expect
     {|
     (fn flaky (n/1) ev/2 (if (< n/1 3) (fail (tag Boom)) n/1))
-    (fn retry (n/1 body/2) ev/5
-      (let r/3
-        (handle (call ev/5 body/2) ($value/6 => (con Ok $value/6))
-          (fail $error/7 => (con Err $error/7)))
+    (fn retry (n/1 body/2) ev/3
+      (let r/4
+        (handle (call ev/3 body/2) ($value/5 => (con Ok $value/5))
+          (fail $error/6 => (con Err $error/6)))
         (if (<= n/1 1)
-          (match r/3 ((Ok $value/8) => $value/8)
-            ((Err $error/9) => (fail $error/9)))
-          (match r/3 ((Ok v/4) => v/4)
-            ((Err _) => (call ev/5 retry (- n/1 1) body/2))))))
+          (match r/4 ((Ok $value/7) => $value/7)
+            ((Err $error/8) => (fail $error/8)))
+          (match r/4 ((Ok v/9) => v/9)
+            ((Err _) => (call ev/3 retry (- n/1 1) body/2))))))
     (fn twice (body/1) ev/2 (+ (call ev/2 body/1) (call ev/2 body/1)))
     (fn safe () ev/1 (call ev/1 retry 3 (lambda () (captures) ev/2 1)))
     (fn main () ev/1
@@ -2626,10 +2663,10 @@ fn main() -> Int = convert(both())
 |};
   [%expect
     {|
-    (fn both () ev/2
-      (handler (captures) ev/3
+    (fn both () ev/1
+      (handler (captures) ev/2
         (instance
-          (test.Rates: (record (usd_to: (lambda (c/1) (captures) ev/4 c/1))))
+          (test.Rates: (record (usd_to: (lambda (c/3) (captures) ev/4 c/3))))
           (test.RateCalls: (record (count: (lambda () (captures) ev/5 0)))))))
     (fn convert (r/1) ev/2
       (with ev/3 (extend ev/2 test.Rates r/1) (dep-call ev/3 test.Rates.usd_to 1)))
@@ -2780,6 +2817,11 @@ fn main() -> Bool =
   [%expect {| true |}]
 
 let%expect_test "where nothing says which, a handler of several is its own" =
+  (* `later`'s `h` stays the handler, and `run(r)` takes it as a `Rates`
+     there; `make` and `some` return the handler, which a public function
+     can't without saying which dependency it gives. An `if` whose other
+     branch is a `Rates` says which, as "an `if` takes a handler of
+     several as one in either branch" shows *)
   types
     {|
 pub dep Rates =
@@ -2791,9 +2833,6 @@ pub dep RateCalls =
 handler counting_rates(rate: Int) for Rates, RateCalls =
   usd_to(c) => c * rate
   count() => 0
-
-fn pick(b: Bool) =
-  if b then counting_rates(1) else Rates { usd_to: fn(c) => c }
 
 fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
 
@@ -2811,23 +2850,16 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: this `else` branch is a `Rates`, but the `then` branch is a `counting_rates`
-       ┌─ test.ren:12:36
-    12 │   if b then counting_rates(1) else Rates { usd_to: fn(c) => c }
-       │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       │             ----------------- the `then` branch is a `counting_rates`
-       = both branches of an `if` have to produce the same type
-
     error: expected `Unit`, found `counting_rates`
-       ┌─ test.ren:22:17
-    22 │ pub fn make() = counting_rates(1)
+       ┌─ test.ren:19:17
+    19 │ pub fn make() = counting_rates(1)
        │                 ^^^^^^^^^^^^^^^^^
        = a public function without `->` returns `Unit`
        help: say which of its dependencies it gives an implementation of, `-> Rates`: the type of a handler of several can't be written
 
     error: expected `Unit`, found `Option<counting_rates>`
-       ┌─ test.ren:24:17
-    24 │ pub fn some() = Some(counting_rates(1))
+       ┌─ test.ren:21:17
+    21 │ pub fn some() = Some(counting_rates(1))
        │                 ^^^^^^^^^^^^^^^^^^^^^^^
        = a public function without `->` returns `Unit`
        help: say which of its dependencies `counting_rates` gives an implementation of, `-> Option<Rates>`: the type of a handler of several can't be written
@@ -2909,8 +2941,6 @@ fn f() = counting_rates(1)
 fn main() =
   let r: Clock = counting_rates(1)
   let g: fn() -> Rates = f
-  let o = Some(counting_rates(1))
-  let p: Option<Rates> = o
   let zs = [counting_rates(1), Clock.frozen(Time.epoch)]
   ()
 |};
@@ -2930,19 +2960,640 @@ fn main() =
        = `counting_rates` implements `Rates` and `RateCalls`, so it's taken as just `Rates` only where `Rates` is wanted as it's made
        help: say so where it's made: `let x: Rates = counting_rates(...)`
 
-    error: expected `Option<Rates>`, found `Option<counting_rates>`
-       ┌─ test.ren:17:26
-    17 │   let p: Option<Rates> = o
-       │                          ^
-       = `counting_rates` implements `Rates` and `RateCalls`, so it's taken as just `Rates` only where `Rates` is wanted as it's made
-       help: say so where it's made: `let x: Rates = counting_rates(...)`
-
     error: this element is a `counting_rates`, but the others are a `Clock`
-       ┌─ test.ren:18:13
-    18 │   let zs = [counting_rates(1), Clock.frozen(Time.epoch)]
+       ┌─ test.ren:16:13
+    16 │   let zs = [counting_rates(1), Clock.frozen(Time.epoch)]
        │             ^^^^^^^^^^^^^^^^^
        = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
        help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
+    |}]
+
+let%expect_test "taken as one whichever comes first" =
+  (* B3: what a handler of several is taken as doesn't depend on whether
+     it comes before what says what's wanted or after it. [same]'s `T` is
+     a `Rates` in both calls, and so is what's in `o`, which `p` says
+     after it's made. Where nothing says, it's the handler, which a `with`
+     installs both of *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn same(a, b) = if true then a else b
+
+fn id(a) = a
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() uses Console =
+  with id(counting_rates(5)) in print(RateCalls.count() + Rates.usd_to(1))
+  let x = same(Rates { usd_to: fn(c) => c + 1 }, counting_rates(2))
+  let y = same(counting_rates(3), Rates { usd_to: fn(c) => c + 1 })
+  print(run(x) + run(y))
+  let o = Some(counting_rates(4))
+  let p: Option<Rates> = o
+  match p
+    Some(r) => print(run(r))
+    None => ()
+|}
+  in
+  run src;
+  [%expect {|
+    5
+    5
+    4
+    ()
+    |}]
+
+let%expect_test "an `if` takes a handler of several as one in either branch" =
+  (* B3: a `then` branch that's a handler waits for the `else`, as an
+     element of an array waits for the others, so it's a `Rates` here
+     whichever branch it's in. Where it can't be what the other branch
+     is, the branch given second is blamed, and the note says what the
+     handler implements either way *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() uses Console =
+  let x = if true then Rates { usd_to: fn(c) => c + 1 } else counting_rates(2)
+  let y = if true then counting_rates(3) else Rates { usd_to: fn(c) => c + 1 }
+  print(run(x) + run(y))
+|}
+  in
+  run src;
+  [%expect {|
+    5
+    ()
+    |}];
+  check_error
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn main() =
+  let x = if true then Clock.frozen(Time.epoch) else counting_rates(2)
+  let y = if true then counting_rates(3) else Clock.frozen(Time.epoch)
+  ()
+|};
+  [%expect {|
+    error: this `else` branch is a `counting_rates`, but the `then` branch is a `Clock`
+       ┌─ test.ren:12:54
+    12 │   let x = if true then Clock.frozen(Time.epoch) else counting_rates(2)
+       │                                                      ^^^^^^^^^^^^^^^^^
+       │                        ------------------------ the `then` branch is a `Clock`
+       = both branches of an `if` have to produce the same type
+       = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
+       help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
+
+    error: this `else` branch is a `Clock`, but the `then` branch is a `counting_rates`
+       ┌─ test.ren:13:47
+    13 │   let y = if true then counting_rates(3) else Clock.frozen(Time.epoch)
+       │                                               ^^^^^^^^^^^^^^^^^^^^^^^^
+       │                        ----------------- the `then` branch is a `counting_rates`
+       = both branches of an `if` have to produce the same type
+       = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
+       help: give an implementation of `Clock` where the `counting_rates(...)` is: a `Clock { ... }`, or a handler for `Clock`
+    |}]
+
+let%expect_test "a `with` or a method before what's wanted is said" =
+  (* B3: what's in `o` is a `Rates`, which `p` says only after the `with`
+     and the method call that look into it: the `with` installs just that,
+     whichever comes first, and the method is `Rates`'s, the one of the
+     handler's dependencies that has it. So `RateCalls` isn't installed in
+     the second program, before or after the `p` *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+  fn twice(self, c: Int) -> Int = (with self in Rates.usd_to(c)) * 2
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(r) =>
+      print(with r in Rates.usd_to(5))
+      print(r.twice(5))
+    None => ()
+  let p: Option<Rates> = o
+  ()
+|}
+  in
+  run src;
+  [%expect {|
+    10
+    20
+    ()
+    |}];
+  check_error
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(r) => print(with r in RateCalls.count())
+    None => ()
+  let p: Option<Rates> = o
+  ()
+|};
+  [%expect {|
+    error: nothing installs `RateCalls` before `main`
+       ┌─ test.ren:11:4
+    11 │ fn main() uses Console =
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+    14 │     Some(r) => print(with r in RateCalls.count())
+       │                                ----------------- this call uses `RateCalls`
+       help: install one inside `main`: `with counting_rates(...) in ...`
+    |}];
+  check_error
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  let p: Option<Rates> = o
+  match o
+    Some(r) => print(with r in RateCalls.count())
+    None => ()
+  ()
+|};
+  [%expect {|
+    error: nothing installs `RateCalls` before `main`
+       ┌─ test.ren:11:4
+    11 │ fn main() uses Console =
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+    15 │     Some(r) => print(with r in RateCalls.count())
+       │                                ----------------- this call uses `RateCalls`
+       help: install one inside `main`: `with counting_rates(...) in ...`
+    |}]
+
+let%expect_test "a handler of several passed on inside its own `with`" =
+  (* nothing says what's in `o` is one of the handler's dependencies, so
+     it's the handler itself: `with r` installs both, and `run(r)`, inside
+     it, takes it as a `Rates` there. What `r` needs is then copied where
+     it's passed, as it is for a handler whose type is known: joined to
+     what `run` uses, it would be what the `with`'s body uses, `Rates`
+     included, and `main` would have to install the `Rates` the `with`
+     installs. `k` gets nothing from outside *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn k() =
+  let o = Some(counting_rates(2))
+  match o
+    Some(r) => with r in RateCalls.count() + run(r)
+    None => 0
+
+fn ap2(x, f) = f(x)
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(r) => print(with r in Rates.usd_to(5) + run(r))
+    None => ()
+  print(ap2(counting_rates(3), fn(r) => with r in Rates.usd_to(1) + run(r)))
+|}
+  in
+  types src;
+  [%expect {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    pub dep RateCalls
+      count: fn() -> Int
+    handler counting_rates(rate: Int) for Rates, RateCalls
+    fn run(r: Rates) -> Int
+    fn k() -> Int
+    fn ap2<T, U>(x: T, f: fn(T) -> U uses ..d) -> U uses ..d
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    12
+    6
+    ()
+    |}]
+
+let%expect_test "a value holding a handler of several, taken as each of them" =
+  (* passing a value a handler of several was given to, where one of its
+     dependencies is wanted, takes it as that one there, and no more: the
+     value is still the handler, so another use can take it as the other
+     dependency, or install both with `with`. Each of these compiled
+     before R3, and R3's first fix rejected them, having made the value
+     that one dependency everywhere *)
+  run
+    (rates
+   ^ {|
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn run2(c: RateCalls) -> Int = with c in RateCalls.count()
+
+fn id(x) = x
+
+fn ap(x, f) = f(x)
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(h) => print(run(h) + run2(h))
+    None => print(0)
+  let h = id(counting_rates(3))
+  print(run(h))
+  with h in
+    print(RateCalls.count())
+  let hs = [counting_rates(4), counting_rates(5)]
+  let a = hs[1]
+  print(run(a))
+  with a in
+    print(RateCalls.count())
+  let b = if hs.len() > 1 then counting_rates(6) else counting_rates(7)
+  print(run(b))
+  with b in
+    print(Rates.usd_to(1) + RateCalls.count())
+  print(ap(counting_rates(8), fn(r) => run(r) + (with r in RateCalls.count())))
+|}
+    );
+  [%expect {|
+    2
+    3
+    0
+    5
+    0
+    6
+    7
+    8
+    ()
+    |}]
+
+let%expect_test "a value holding a handler of several, taken as one elsewhere" =
+  (* once something says the value is one of the handler's dependencies,
+     it's that one everywhere, and can't be passed as the other, whether
+     that's said before it's passed or after *)
+  check_error
+    (rates
+   ^ {|
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(h) => print(run(h))
+    None => ()
+  let p: Option<RateCalls> = o
+  print(0)
+|}
+    );
+  [%expect
+    {|
+    error: expected `Rates`, found `RateCalls`
+       ┌─ test.ren:21:26
+    21 │     Some(h) => print(run(h))
+       │                          ^
+       = this holds a `counting_rates`, which implements `Rates` and `RateCalls`, but something else here takes it as just `RateCalls`, so it's that everywhere: a handler of several stays its own only where nothing says which it is
+       help: make another for this one, `counting_rates(...)`, or leave out what says it's a `RateCalls`
+    |}];
+  check_error
+    (rates
+   ^ {|
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  let p: Option<RateCalls> = o
+  match o
+    Some(h) => print(run(h))
+    None => ()
+|}
+    );
+  [%expect
+    {|
+    error: expected `Rates`, found `RateCalls`
+       ┌─ test.ren:22:26
+    22 │     Some(h) => print(run(h))
+       │                          ^
+       = this holds a `counting_rates`, which implements `Rates` and `RateCalls`, but something else here takes it as just `RateCalls`, so it's that everywhere: a handler of several stays its own only where nothing says which it is
+       help: make another for this one, `counting_rates(...)`, or leave out what says it's a `RateCalls`
+    |}]
+
+let%expect_test "many handlers of several given early check in time" =
+  (* each variable a handler of several was given to remembers which, and
+     what it can still become, in a map shared, not copied, by each
+     unification tried first. So neither another value given a handler,
+     nor another use of one, nor another call costs more for each such
+     value already made: each program checks in about half a second, not
+     the 20 to 30 it took when the handler was looked for among the
+     group's constraints and the map copied. The bound is far from both,
+     as in test_infer.ml's "a group of many calls checks in time linear in
+     them" *)
+  let lines n f = String.concat "\n" (List.init n (fun i -> f (i + 1))) in
+  let timed what body =
+    let src =
+      String.concat "\n"
+        [
+          rates;
+          "fn run(r: Rates) -> Int = with r in Rates.usd_to(1)";
+          "fn id(x) = x";
+          "fn f(i: Int) -> Int ! Bad = if i > 0 then i else fail Bad";
+          "fn main() uses Console =";
+          body;
+        ]
+    in
+    let start = Sys.time () in
+    ignore (Ren.Driver.check ~file src);
+    let took = Sys.time () -. start in
+    Printf.printf "%s: %s\n" what
+      (if took < 10. then "in time" else Printf.sprintf "%.1fs" took)
+  in
+  timed "a value each"
+    (lines 6_000 (fun _ -> "  print(run(id(counting_rates(2))))"));
+  timed "one value, used again and again"
+    ("  let h = id(counting_rates(3))\n"
+    ^ lines 16_000 (fun _ -> "  print(run(h))"));
+  timed "values, then other calls"
+    (lines 8_000 (fun i ->
+         Printf.sprintf "  let o%d = Some(counting_rates(%d))" i i)
+    ^ "\n"
+    ^ lines 8_000 (Printf.sprintf "  print(try f(%d))"));
+  [%expect
+    {|
+    a value each: in time
+    one value, used again and again: in time
+    values, then other calls: in time
+    |}]
+
+let%expect_test "an operation read from a value holding a handler of several" =
+  (* only `Rates` has `usd_to`, so that's what the value is taken as, and
+     the message is the one for any value of `Rates` *)
+  check_error
+    (rates
+   ^ {|
+fn id(x) = x
+
+fn main() uses Console =
+  let h = id(counting_rates(3))
+  print(h.usd_to(1))
+|}
+    );
+  [%expect
+    {|
+    error: `usd_to` is an operation of `Rates`, so it isn't read from a value
+       ┌─ test.ren:20:11
+    20 │   print(h.usd_to(1))
+       │           ^^^^^^
+       = a value of `Rates` is an implementation of it: it's used by installing it, with `with`, and then `Rates.usd_to` calls it
+       help: call the installed one: `Rates.usd_to(...)`
+    |}]
+
+let%expect_test "a handler of several, then said to be something else" =
+  (* what the handler is given to is decided after it, so it's what says
+     so after that's blamed, as the constraint met second always is: not
+     the handler, with a message about what isn't there. And there's one
+     error, whichever comes first, the mistake or a use as one of its
+     dependencies *)
+  let fns =
+    {|
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn id(x) = x
+|}
+  in
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let b = if true then counting_rates(3) else counting_rates(4)
+  print(b + 1)
+|});
+  [%expect
+    {|
+    error: expected `Int`, found `counting_rates`
+       ┌─ test.ren:22:9
+    22 │   print(b + 1)
+       │         ^
+       = `+` works on `Int`s
+    |}];
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let o = [counting_rates(3)]
+  let n: Array<Int> = o
+  ()
+|});
+  [%expect
+    {|
+    error: expected `Array<Int>`, found `Array<counting_rates>`
+       ┌─ test.ren:22:23
+    22 │   let n: Array<Int> = o
+       │                       ^
+    |}];
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let o = Some(counting_rates(3))
+  let n: Option<Int> = o
+  ()
+|});
+  [%expect
+    {|
+    error: expected `Option<Int>`, found `Option<counting_rates>`
+       ┌─ test.ren:22:24
+    22 │   let n: Option<Int> = o
+       │                        ^
+    |}];
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let h = id(counting_rates(3))
+  print(run(h))
+  let n: Int = h
+  ()
+|});
+  [%expect
+    {|
+    error: expected `Int`, found `counting_rates`
+       ┌─ test.ren:23:16
+    23 │   let n: Int = h
+       │                ^
+    |}];
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let h = id(counting_rates(3))
+  let n: Int = h
+  print(run(h))
+|});
+  [%expect
+    {|
+    error: expected `Int`, found `counting_rates`
+       ┌─ test.ren:22:16
+    22 │   let n: Int = h
+       │                ^
+    |}]
+
+let%expect_test "a closure called inside a `with` and outside it (B4)" =
+  (* [run] installs `Rates` around its call of [k], and [twice] calls [k]
+     itself too, outside any `with`: so [k] uses `Rates` and what [run]
+     uses, and [twice] uses both too. The two rows end in the same
+     variable, so they can't be unified; what [k]'s call uses is added to
+     [twice]'s instead, and [k]'s row then holds `Rates` twice, which shows
+     as once *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+fn run(k: fn() -> Int uses Rates, ..d) -> Int uses ..d =
+  with Rates { usd_to: fn(c) => c * 2 } in k()
+
+fn twice(k) =
+  let a = run(k)
+  a + k()
+
+fn main() uses Console =
+  with Rates { usd_to: fn(c) => c * 3 } in
+    print(twice(fn() => Rates.usd_to(1)))
+|}
+  in
+  types src;
+  run src;
+  [%expect {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    fn run(k: fn() -> Int uses Rates, ..d) -> Int uses ..d
+    fn twice(k: fn() -> Int uses Rates, ..d) -> Int uses Rates, ..d
+    fn main() uses Console
+    5
+    ()
+    |}];
+  (* the same with [run]'s type inferred, as the plan writes it *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+fn run(k) =
+  with Rates { usd_to: fn(c) => c * 2 } in k()
+
+fn twice(k) =
+  let a = run(k)
+  a + k()
+
+fn main() uses Console =
+  with Rates { usd_to: fn(c) => c * 3 } in
+    print(twice(fn() => Rates.usd_to(1)))
+|}
+  in
+  types src;
+  run src;
+  [%expect {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    fn run<T>(k: fn() -> T uses Rates, ..d) -> T uses ..d
+    fn twice(k: fn() -> Int uses Rates, ..d) -> Int uses Rates, ..d
+    fn main() uses Console
+    5
+    ()
+    |}]
+
+let%expect_test "a call or a `with` that uses more than a stored function can" =
+  (* storing [f] as a [Box]'s [r] says it uses nothing, and storing the
+     lambda does the same: each message names the dependency once, as the
+     module writes it, and says where to add it, since neither type it's
+     in is written where it's defined *)
+  check_error
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+type Box = { r: fn(Int) -> Int }
+
+fn f(n: Int) -> Int =
+  let b = Box { r: f }
+  if n > 0 then b.r(n - 1) else Rates.usd_to(n)
+
+fn g() =
+  let b = Box { r: fn(n) => with Rates { usd_to: fn(c) => c } in n + Clock.instant().since(Instant.zero).in_ms() }
+  b.r(1)
+
+fn main() = ()
+|};
+  [%expect {|
+    error: this call uses `Rates`, which what it's in can't
+      ┌─ test.ren:8:33
+    8 │   if n > 0 then b.r(n - 1) else Rates.usd_to(n)
+      │                                 ^^^^^^^^^^^^^^^
+      = a function or lambda uses everything its calls use, and everything the implementations its `with`s install need, and the type of what this is in says it can't use all of that
+      help: add `Rates` to the `uses` of the type it's used as, like a stored `fn()`'s, or install it around this, with `with`
+
+    error: this `with`'s body uses `Clock`, which what's outside it can't
+       ┌─ test.ren:11:34
+    11 │   let b = Box { r: fn(n) => with Rates { usd_to: fn(c) => c } in n + Clock.instant().since(Instant.zero).in_ms() }
+       │                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = a function or lambda uses everything its `with`s' bodies use, but what they install, and the type of what this is in says it can't use all of that
+       help: add `Clock` to the `uses` of the type it's used as, like a stored `fn()`'s, or install it around this, with `with`
     |}]
 
 let%expect_test "a handler given too few arguments in a `with`" =
@@ -5146,7 +5797,7 @@ fn main() = 1
       │         ------- `through` implements `N`
     7 │   next() => via()
       │             ^^^^^ this call uses `N`
-      = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+      = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
       help: call it outside the handler, install an implementation of `N` around the call with `with`, or implement `N` with a record of functions instead
 
     error: a handler for `N` can't use `N`
@@ -5155,14 +5806,14 @@ fn main() = 1
        │         ------ `direct` implements `N`
     10 │   next() => N.next()
        │             ^^^^^^^^ this call uses `N`
-       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
        help: call it outside the handler, install an implementation of `N` around the call with `with`, or implement `N` with a record of functions instead
 
     error: a handler for `N` can't use `N`
        ┌─ test.ren:12:9
     12 │ handler declared() for N uses N =
        │         ^^^^^^^^
-       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 9)
+       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
        help: remove `N` from its `uses`
     |}]
 
@@ -5261,10 +5912,10 @@ fn main() uses Clock, Console =
     {|
     (fn stamp () ev/1 (dep-call ev/1 Clock.now))
     (fn double (n/1) ev/2 (* n/1 2))
-    (fn main () ev/2
-      (let t/1 (call ev/2 stamp)
-        (seq (call ev/2 print (call ev/2 Time.after t/1 Time.epoch))
-          (call ev/2 print (call ev/2 double 2)))))
+    (fn main () ev/1
+      (let t/2 (call ev/1 stamp)
+        (seq (call ev/1 print (call ev/1 Time.after t/2 Time.epoch))
+          (call ev/1 print (call ev/1 double 2)))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Clock Clock.real)
         (with ev/3 (extend ev/2 Console Console.real) (call ev/3 main))))
@@ -5282,10 +5933,10 @@ fn main() uses Clock =
 |};
   [%expect
     {|
-    (fn later () ev/2
-      (let _/1 (dep-call ev/2 Clock.now)
+    (fn later () ev/1
+      (let _/2 (dep-call ev/1 Clock.now)
         (lambda () (captures) ev/3 (dep-call ev/3 Clock.now))))
-    (fn main () ev/2 (let f/1 (call ev/2 later) (call ev/2 f/1)))
+    (fn main () ev/1 (let f/2 (call ev/1 later) (call ev/1 f/2)))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Clock Clock.real) (call ev/2 main)))
     |}]
@@ -5370,11 +6021,11 @@ fn main() uses Console =
     {|
     (fn one () ev/1 1)
     (fn apply (f/1) ev/2 (call ev/2 f/1))
-    (fn main () ev/2
-      (seq (call ev/2 print (call ev/2 apply one))
-        (let write/1
+    (fn main () ev/1
+      (seq (call ev/1 print (call ev/1 apply one))
+        (let write/2
           (lambda ($x/3) (captures) ev/4 (dep-call ev/4 Console.write $x/3))
-          (call ev/2 write/1 "written"))))
+          (call ev/1 write/2 "written"))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
     |}];
@@ -5404,7 +6055,7 @@ fn main() uses Console =
   [%expect
     {|
     (fn T.one () ev/1 (lambda () (captures) ev/2 1))
-    (fn T.f () ev/2 (lambda (g/1) (captures) ev/3 (call ev/3 g/1)))
+    (fn T.f () ev/1 (lambda (g/2) (captures) ev/3 (call ev/3 g/2)))
     (fn twice (g/1) ev/2 (+ (call ev/2 g/1) (call ev/2 g/1)))
     (fn main () ev/1
       (seq (call ev/1 print (call ev/1 T.one))
@@ -5499,10 +6150,10 @@ pub fn twice(f: fn() -> Int) -> Int =
   [%expect
     {|
     -- lib
-    (fn twice (f/1) ev/3 (let _/2 (call ev/3 f/1) (call ev/3 f/1)))
+    (fn twice (f/1) ev/2 (let _/3 (call ev/2 f/1) (call ev/2 f/1)))
 
     -- main
-    (fn users () ev/2 (record (get: (lambda (id/1) (captures) ev/3 (* id/1 10)))))
+    (fn users () ev/1 (record (get: (lambda (id/2) (captures) ev/3 (* id/2 10)))))
     (fn look () ev/1
       (call ev/1 twice
         (lambda () (captures) ev/2 (dep-call ev/2 main.Users.get 1))))
@@ -5537,17 +6188,17 @@ fn main() uses Console =
   core src;
   [%expect
     {|
-    (fn later () ev/2
-      (let _/1 (dep-call ev/2 Clock.now)
+    (fn later () ev/1
+      (let _/2 (dep-call ev/1 Clock.now)
         (lambda () (captures) ev/3 (dep-call ev/3 Clock.now))))
     (fn frozen_at (minutes/1) ev/2
       (call ev/2 Clock.frozen
         (call ev/2 Time.plus Time.epoch (call ev/2 Duration.minutes minutes/1))))
-    (fn main () ev/2
-      (let f/1
-        (with ev/3 (extend ev/2 Clock (call ev/2 frozen_at 0)) (call ev/3 later))
-        (call ev/2 print
-          (with ev/4 (extend ev/2 Clock (call ev/2 frozen_at 5)) (call ev/4 f/1)))))
+    (fn main () ev/1
+      (let f/2
+        (with ev/3 (extend ev/1 Clock (call ev/1 frozen_at 0)) (call ev/3 later))
+        (call ev/1 print
+          (with ev/4 (extend ev/1 Clock (call ev/1 frozen_at 5)) (call ev/4 f/2)))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
     |}];
@@ -5593,7 +6244,9 @@ fn main() uses Clock = stamp()
         let linked = Driver.linked ~file src in
         let entry = List.nth linked (List.length linked - 1) in
         let fn_ name =
-          List.find (fun (f : Core.fn_def) -> f.path.name = name) entry.fns
+          List.find
+            (fun (f : Core.fn_def) -> Path.local f.path = name)
+            entry.fns
         in
         let start = fn_ Lower.start_name in
         let start = { start with body = body ~fn_ ~loc:start.loc } in
@@ -5694,23 +6347,23 @@ fn main() uses Console = with counting_rates(3) in print(convert(2))
     );
   [%expect
     {|
-    (fn counting_rates (rate/1) ev/4
-      (handler (captures rate/1) ev/5
-        (let calls/2 0
-          (let $calls/6 (cell calls/2)
+    (fn counting_rates (rate/1) ev/2
+      (handler (captures rate/1) ev/3
+        (let calls/4 0
+          (let $calls/5 (cell calls/4)
             (instance
               (test.Rates:
                 (record
                   (usd_to:
-                    (lambda (_/3) (captures rate/1 $calls/6) ev/7
-                      (let calls/2 (get-cell $calls/6)
-                        (let $result/8 (seq (= calls/2 (+ calls/2 1)) rate/1)
-                          (seq (set-cell $calls/6 calls/2) $result/8)))))))
+                    (lambda (_/6) (captures rate/1 $calls/5) ev/7
+                      (let calls/4 (get-cell $calls/5)
+                        (let $result/8 (seq (= calls/4 (+ calls/4 1)) rate/1)
+                          (seq (set-cell $calls/5 calls/4) $result/8)))))))
               (test.RateCalls:
                 (record
                   (count:
-                    (lambda () (captures $calls/6) ev/9
-                      (let calls/2 (get-cell $calls/6) calls/2))))))))))
+                    (lambda () (captures $calls/5) ev/9
+                      (let calls/4 (get-cell $calls/5) calls/4))))))))))
     (fn convert (n/1) ev/2 (* n/1 (dep-call ev/2 test.Rates.usd_to 1)))
     (fn main () ev/1
       (with ev/2

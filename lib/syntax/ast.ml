@@ -195,7 +195,7 @@ and ('v, 'b, 't) expr_kind =
       (** [fail Short(self.id, by)]: stop with that error. A tag isn't a value,
           so it's only ever written here, after `!`, in a pattern, and as the
           error an `Err(...)` holds, where it's a [Con] that inference tells
-          apart (infer_expr.ml, [err_row]) *)
+          apart (infer_rows.ml, [err_row]) *)
   | Try of ('v, 'b, 't) expr
       (** [try e]: pass on the errors of every call in [e]. [try match] is a
           [Try] of a [Match] *)
@@ -276,6 +276,9 @@ type ('v, 'b, 't) fn_def = {
       (** the dependencies after `uses`, if it's written: [Clock], or another
           module's, [store.Users] *)
   body : ('v, 'b, 't) expr;
+  owner : ident option;
+      (** the type it's a member of, [Stack] for [push]; [None] for a top-level
+          function *)
   loc : Loc.t;
 }
 
@@ -292,11 +295,11 @@ type ('v, 'b, 't) fn_def = {
    kept as a function of no parameters whose body is the value, so every
    pass checks it as one; only [op_kind] tells them apart.
 
-   The parser names each item as it's written, `push`. Resolve gives it
-   its type's name in front, `Stack.push`, its path's name in the module
-   (path.ml), so passes after it know it apart from a top-level `push`;
-   and it puts the type's parameters first in its [tparams], and gives
-   `self` its type, `Stack<T>`. *)
+   The parser names each item as it's written, `push`, and gives it its
+   type as its [owner], so its path ([fn_path]) is a member's (path.ml),
+   which passes after it know apart from a top-level `push`. Resolve puts
+   the type's parameters first in its [tparams], and gives `self` its
+   type, `Stack<T>`. *)
 type op_kind = Op_fn | Op_value
 type ('v, 'b, 't) op = { op_kind : op_kind; op_fn : ('v, 'b, 't) fn_def }
 
@@ -382,6 +385,20 @@ let functions (prog : ('v, 'b, 't) program) =
       | Import _ | Testing _ -> [])
     prog
 
+(* The path of [f], declared in module [home]: a member's is its type's,
+   and which member it is (path.ml). *)
+let fn_path home (f : ('v, 'b, 't) fn_def) =
+  match f.owner with
+  | Some t -> Path.member (Path.make home t.name) f.name.name
+  | None -> Path.make home f.name.name
+
+(* How [f] is written in its own module, for a message: `Stack.push` for a
+   member, after its type. *)
+let fn_name (f : ('v, 'b, 't) fn_def) =
+  match f.owner with
+  | Some t -> t.name ^ "." ^ f.name.name
+  | None -> f.name.name
+
 (* Whether [f]'s signature is written out in full, so that its declaration
    says everything about its type: it's public, so no `->` means Unit and
    no `uses` means none, and every parameter has a type (once resolved, a
@@ -451,12 +468,6 @@ let children (e : ('v, 'b, 't) expr) =
   | Handler { state; arms; _ } ->
       List.map stmt state @ List.map (fun a -> a.arm_impl) arms
 
-(* A member's name as it's written: `push` for `Stack.push`. *)
-let short_name name =
-  match String.rindex_opt name '.' with
-  | Some i -> String.sub name (i + 1) (String.length name - i - 1)
-  | None -> name
-
 (* ---- names, once resolved ----
 
    What Resolve (resolve.ml) finds each name refers to. *)
@@ -490,8 +501,8 @@ type name =
   | Global_value of Path.t
       (** an associated value, [Stack.empty]: made once, when the program starts
       *)
-  | Intrinsic of string
-      (** a function built into the compiler: [print], or a method, [Array.push]
+  | Intrinsic of Intrinsic.t
+      (** a function built into the compiler: [show], or a method, [Array.push]
       *)
   | Dep_op of Path.t * string
       (** an operation of the dependency at the path, [Clock.now]: calling it
@@ -863,7 +874,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Unit -> "()"
     | Var (Local b) -> b.ident.name
     | Var (Global p | Global_value p) -> value_name p
-    | Var (Intrinsic x) -> x
+    | Var (Intrinsic x) -> Intrinsic.name x
     | Var (Dep_op (p, op)) -> type_name p ^ "." ^ op
     | Unop (Neg, a) -> "-" ^ operand 7 a
     | Unop (Not, a) -> "not " ^ operand 3 a

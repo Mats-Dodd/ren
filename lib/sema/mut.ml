@@ -67,8 +67,8 @@ let guard cx f = Diag.recover cx.sink ~default:() f
 
 let name_of = function
   | Local b -> b.ident.name
-  | Global p | Global_value p -> p.name
-  | Intrinsic x -> x
+  | Global p | Global_value p -> Path.local p
+  | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
 
 let rec place_of (e : expr) =
@@ -393,7 +393,7 @@ and exclusive args =
               else
                 (* the one that isn't changed reads part of it, `xs[0]`: a
                    plain value read like that will be allowed once RC can
-                   tell plain values apart (stage 12) *)
+                   tell plain values apart (stage 11) *)
                 let part = if changed then p'.path <> [] else p.path <> [] in
                 Diag.error a.loc ~labels
                   ~notes:

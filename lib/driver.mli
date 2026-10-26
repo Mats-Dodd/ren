@@ -30,9 +30,9 @@ val file_in : dir:string -> string -> string
    it imports, once each module it imports has been. *)
 val check : ?load:loader -> file:string -> string -> Ast.Parsed.program
 
-(* Every function of the entry module, and its inferred type scheme, in
-   canonical form. *)
-val schemes : ?load:loader -> file:string -> string -> (string * Ty.scheme) list
+(* Every function of the entry module, by its path, and its inferred type
+   scheme, in canonical form. *)
+val schemes : ?load:loader -> file:string -> string -> Ty.scheme Path.Map.t
 
 (* What inference found in the entry module: every function's type
    scheme, and the types of its expressions and patterns. *)
@@ -41,6 +41,10 @@ val inferred : ?load:loader -> file:string -> string -> Infer.t
 (* The entry module's interface (iface.ml): what it would tell a module
    that imports it. *)
 val interface : ?load:loader -> file:string -> string -> Iface.t
+
+(* The rest of its summary, the implementation tier (impl.ml): the typed
+   Core of its public functions that are generic or higher-order. *)
+val implementation : ?load:loader -> file:string -> string -> Impl.t
 
 (* The entry module, checked and lowered to Core, with `$start` if it has
    a `main`. With [lint] (off by default), Core Lint checks every module, and a problem is an

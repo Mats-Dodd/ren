@@ -10,12 +10,17 @@
    is for `main`. [bodies] are the functions whose body is a test's,
    which has to be `Unit`. *)
 
-(* What a lookup through a type found. *)
+(* What a lookup through a type found, or what else inference decided
+   about an expression or pattern that a later pass needs, so it never
+   decides it again. *)
 type found =
   | Field_of of Path.t  (** a field access: the record type the field is in *)
   | Ctor_of of Path.t * string
       (** a constructor, in an expression or a pattern: its type, and its name
       *)
+  | Error_tag
+      (** a tag inside `Err(...)`, written as a value or matched: one of the
+          errors a [Result] holds, not a constructor *)
   | Method_of of Path.t
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
@@ -26,6 +31,15 @@ type found =
       (** a `with` whose item describes a handler of these dependencies, all of
           which it installs *)
   | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
+  | Handles  (** a `match` that handles errors: one with `fail` arms *)
+  | Fail_arm
+      (** a `fail` arm's pattern, which matches an error rather than a value *)
+  | Unwraps
+      (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
+          it's `Err`, its error again *)
+  | Lambda_id of string
+      (** a lambda, or the body a `with` passes to a wrapper: its identity in
+          lambda sets (Ty.lambda_id), which its type's set has *)
 
 (* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
    that takes a module (here [Int], which says how to compare keys) and
@@ -40,21 +54,34 @@ type node = {
   as_dep : Path.t option;
       (** a handler of several dependencies where a value of one of their types
           is wanted: that one, which it's taken as a description of *)
+  targs : Ty.args option;
+      (** a use of a top-level function, a member, an associated value or an
+          intrinsic: the type arguments it picked, the n-th for its scheme's
+          [Var n] (Ty.args) *)
+  needs : (int * string) list;
+      (** what the function used there needs of its type arguments: its scheme's
+          requirements, [(0, "eq")] for [Var 0] having `==`, sorted. Lowering
+          passes a dictionary for each (core.ml, [dict]) *)
 }
 
 (* What inference found, in canonical form (ty.ml). A function's scheme and
    its nodes' types number their variables together. *)
 type t = {
-  schemes : (string * Ty.scheme) list;
-      (** each function's type scheme, in source order *)
-  values : string list;
+  schemes : Ty.scheme Path.Map.t;
+      (** each function's type scheme, by its path: a member's is its type's,
+          and which member it is (path.ml) *)
+  values : Path.t list;
       (** the module's associated values, in the order they're made when the
           program starts: each after every value it uses *)
-  nodes : (string * node Nodes.t) list;
-      (** each function's expressions and patterns, by node id *)
+  nodes : node Nodes.t Path.Map.t;
+      (** each function's expressions and patterns, by its path, then node id *)
   in_scope : Path.t list;
-      (** the types step 2 of a lookup through a type found (infer_expr.ml),
+      (** the types step 2 of a lookup through a type found (infer_lookup.ml),
           sorted: the import by name of each one is used *)
+  opaque_eq : Path.t list;
+      (** the module's opaque types that have `==` whatever their type
+          arguments, since what each is represented as has no function in it:
+          its interface says so, since it hides the representation *)
 }
 
 val program :

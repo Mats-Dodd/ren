@@ -240,7 +240,7 @@ pub fn touch(id: UserId) ! NotFound | Conflict
 
 A dependency call takes no marker: the capitalised `Users.` already shows it. Its errors are marked as any call's, `try Users.save(u)`. A private function's `uses` is inferred, and a public one's is checked against its body, with the error pointing at the call that uses what the signature leaves out. `Users.x` means exactly one thing: an operation and a member can't share a name.
 
-The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` today, then `Net` and `Async` (stage 9), `Alloc` (stage 13) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`. Stage 8 gives it methods, and `Bytes` and `Path` with it.
+The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` today, then `Net` and `Async` (stage 12), `Alloc` (stage 14) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`. Stage 8 gives it methods, and `Bytes` and `Path` with it.
 
 The runtime installs exactly the built-ins `main` lists in its `uses`, outermost. Any other dependency has to be installed inside `main`, and leaving it out is a compile error, `nothing installs Users before main`, with a help that says how.
 
@@ -350,7 +350,7 @@ handler counting_rates(rate: Decimal) for Rates, RateCalls =
 
 Calling `counting_rates(r)` describes a handler, a value of the dependency's type like any implementation, and each `with` creates a fresh instance with its own state: two `with`s never share it. Handlers resume at most once, which keeps them as cheap as function calls. Inside a handler for `Users`, writing `Users.get` is an error.
 
-A handler forwarding calls to the next implementation out, through `outer`, comes in stage 9:
+A handler forwarding calls to the next implementation out, through `outer`, comes in stage 10:
 
 ```ren
 handler cached(ttl: Duration) for Users
@@ -398,7 +398,7 @@ let n = try Fs.read(fd, &buf)          // the kernel gets exclusive access to bu
 swap(&a, &a)                           // error: `a` passed as inout twice
 ```
 
-An argument passed with `&` has to be the only way the call can reach that value, so no other argument of the call can use it: `f(&xs, xs)` is an error. If it were allowed, the read would either point into a buffer the call is changing in place, or make that buffer shared and force a hidden copy. For now that also covers reading a part of it, as in `&xs.push(xs[0])`: read it into a `let` first. Once reference counting arrives (stage 12), reading a plain value out of it, such as an `Int` element, will be allowed, because that read copies the value before the call starts. Reading something that is itself counted, like an array element or a `T`, will stay an error.
+An argument passed with `&` has to be the only way the call can reach that value, so no other argument of the call can use it: `f(&xs, xs)` is an error. If it were allowed, the read would either point into a buffer the call is changing in place, or make that buffer shared and force a hidden copy. For now that also covers reading a part of it, as in `&xs.push(xs[0])`: read it into a `let` first. Once reference counting arrives (stage 11), reading a plain value out of it, such as an `Int` element, will be allowed, because that read copies the value before the call starts. Reading something that is itself counted, like an array element or a `T`, will stay an error.
 
 A function body uses exactly two markers: `try` means a call can fail, and `&` means a call changes something.
 
@@ -450,7 +450,7 @@ pub type UserId = opaque Int
   pub fn raw(self) -> Int = self
 ```
 
-Operators go in the same place, written with `=>`, and are public whenever their type is. They arrive in stage 10:
+Operators go in the same place, written with `=>`, and are public whenever their type is. They arrive in stage 9 ([operators.md](operators.md)):
 
 ```ren
 type Vec3 = { x: f32, y: f32, z: f32 }
@@ -468,7 +468,7 @@ pub fn sum<T>(xs: Array<T>) -> T where T has add, zero =
 
 `==`, `hash`, `compare`, and `show` are derived structurally for every type, except that types containing functions get no `==` or `hash`. To change what "equal" means, override `key`, so equality, hashing, and ordering always agree. Overriding `eq` alone is an error. Only the module that declares a type can write its members. To extend a type you don't own, write a function in your own module or wrap it in an `opaque` type. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
 
-An opaque number type, like `type Meters = opaque f64`, will get a shorthand that gives it its arithmetic, planned for stage 10. Its spelling isn't settled: a member line like `derive numeric`, or something on the type line like `opaque f64 with numeric`, which is the current lean. What it gives comes first, though. All of `f64`'s operators would make `Meters * Meters` a `Meters`, which is dimensionally wrong. So it should probably give only `+`, `-`, negation, zero, comparison, and scaling by a plain `f64`, and leave anything else (`Meters * Meters -> Area`) to be written by hand.
+An opaque number type, like `type Meters = opaque f64`, will get a shorthand that gives it its arithmetic, planned for stage 9. Its spelling isn't settled: a member line like `derive numeric`, or something on the type line like `opaque f64 with numeric`, which is the current lean. What it gives comes first, though. All of `f64`'s operators would make `Meters * Meters` a `Meters`, which is dimensionally wrong. So it should probably give only `+`, `-`, negation, zero, comparison, and scaling by a plain `f64`, and leave anything else (`Meters * Meters -> Area`) to be written by hand.
 
 ---
 
@@ -851,6 +851,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 - The compiler is written in **OCaml**.
 - The backend emits **C**: `tcc` for fast debug builds, `clang -O2` (or `zig cc`) for release builds, and Wasm through the same path.
 - Every function takes the implementations installed where it's called as one hidden parameter, an evidence vector, which a dependency call searches by the dependency's identity ([deps.md](deps.md#how-it-runs)). Release builds specialize implementations known at compile time using lambda sets, so dependency calls become direct, inlinable calls, within a specialization budget.
+- How the compiler is laid out, the passes and the languages between them, what each promises and what checks it, and the rules every pass keeps, is in [compiler.md](compiler.md).
 - Modules, name lookup, interface summaries, and the content-addressed build are designed in [module-build.md](module-build.md). Every compiler pass is a pure function of one module or call-graph group plus the interfaces of its imports.
 - Golden tests cover every example and every error message from day one. All generated C runs under ASan and UBSan, and the interpreter and native backend are differentially tested against each other.
 
@@ -869,17 +870,18 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 6 | `!`, `try`, `fail`, `match` on errors, `attempt`, `orelse`; `&&`, `\|\|`, `not` ([errors.md](errors.md)) | the shop, the VM and the bank fail with errors, not values (done) |
 | 7 | `dep`, `uses`, `with`, `handler`, `Clock`, `Random` and `Console`; `test`, `group`, `assert`, `ren test` ([deps.md](deps.md)) | the bank's tests run on the test implementations, with no `with` (done) |
 | 8 | `Str` and `Bytes`, `Fs`, `Os`, `Proc`, `Path`, each with real and in-memory implementations | a small [just](https://github.com/casey/just) runs, and its tests run on `mem_fs` and a fake `Os` and `Proc` (done, as a slice: `Os` has only `args`, and `Proc.run` doesn't capture output) |
-| 9 | handler `outer`, `Async`, `Net`, `par_map`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
-| 10 | operators, derived equality and hashing, arithmetic for opaque number types | `Map<Email, User>` works |
+| 9 | operators, derived equality and hashing, arithmetic for opaque number types ([operators.md](operators.md)) | `Map<Email, User>` works |
+| 10 | handler `outer`, **the effect journal** | caching handlers wrap real ones; calls are journaled |
+| 11 | memory: specialization, defunctionalization, the Mem IR, borrow inference, reference counting with reuse, run by an instrumented interpreter ([compiler.md](compiler.md)) | `map` reuses memory in place; `&xs.push(xs[0])` is allowed when the element is a plain value |
+| 12 | `Async`, `Net`, `par_map`, on the memory stage's interpreter, from a design written first | a handler can wait on the network, and `par_map` runs its calls at once |
 | **↑** | **interpreted Ren** | **a small web service and its tests run** |
-| 11 | C backend, packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
-| 12 | reference counting with reuse | `map` reuses memory in place; `&xs.push(xs[0])` is allowed when the element is a plain value |
-| 13 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
-| 14 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
-| 15 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
+| 13 | C backend, emitting the Mem IR; packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally |
+| 14 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
+| 15 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
+| 16 | simulation scheduler, flight recorder, replay, profiler | a failing seed replays exactly |
 | **↑** | **Ren 1.0** | **flottning, rewritten in Ren, passes 10,000 simulation seeds** |
 
-The **effect journal** in stage 9, the record of every dependency call, is the most important design artifact after the type system. Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
+The **effect journal** in stage 10, the record of every dependency call, is the most important design artifact after the type system. Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
 
 ---
 

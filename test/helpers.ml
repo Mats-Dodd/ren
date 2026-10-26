@@ -95,25 +95,72 @@ type Plan =
 type User = { id: Int, plan: Plan }
 |}
 
+(* A function in Core, as [Core.show_fn] prints it, but with each binder
+   numbered by where it first appears, from 1: [p/1], [ev/2]. How lowering
+   numbers its binders is its own business, and a snapshot shouldn't
+   change when that does; which uses are of the same binder still shows.
+   They're renumbered before the lines are broken, so how they're broken
+   doesn't depend on the old numbers either. [types] prints it typed
+   (Core.fn_sexp), and [lams] with its lambda sets too. *)
+let show_fn ?types ?lams f =
+  let ids = Hashtbl.create 16 in
+  let number id =
+    match Hashtbl.find_opt ids id with
+    | Some n -> n
+    | None ->
+        let n = Hashtbl.length ids + 1 in
+        Hashtbl.add ids id n;
+        n
+  in
+  let digit c = c >= '0' && c <= '9' in
+  (* each `/` and the id after it, in an atom: a binder is a name, a `/`
+     and its id, and can be inside an atom, as in [&x/3] *)
+  let atom s =
+    let b = Buffer.create (String.length s) in
+    let n = String.length s in
+    let i = ref 0 in
+    while !i < n do
+      if s.[!i] = '/' && !i > 0 && !i + 1 < n && digit s.[!i + 1] then (
+        let j = ref (!i + 1) in
+        while !j < n && digit s.[!j] do
+          incr j
+        done;
+        let id = int_of_string (String.sub s (!i + 1) (!j - !i - 1)) in
+        Buffer.add_string b ("/" ^ string_of_int (number id));
+        i := !j)
+      else (
+        Buffer.add_char b s.[!i];
+        incr i)
+    done;
+    Buffer.contents b
+  in
+  let rec go : Core.sexp -> Core.sexp = function
+    | Atom a when String.starts_with ~prefix:"\"" a -> Atom a (* a string *)
+    | Atom a -> Atom (atom a)
+    | List xs -> List (List.map go xs)
+  in
+  Core.render 0 (go (Core.fn_sexp ?types ?lams f))
+
 (* The program lowered to Core (core.ml), one function per line, after
-   Core Lint has checked it. *)
-let core src =
+   Core Lint has checked it; [types] prints it typed, as `ren core --types`
+   does, and [lams] with lambda sets, as `ren core --lambdas` does. *)
+let core ?types ?lams src =
   let src = clean src in
   report src (fun () ->
       List.iter
-        (fun f -> print_endline (Core.show_fn f))
+        (fun f -> print_endline (show_fn ?types ?lams f))
         (Driver.core ~lint:true ~file src).fns)
 
 (* Every module of the program in Core, but the prelude, each after its
-   name. *)
-let core_files files =
+   name; with [lams], with lambda sets. *)
+let core_files ?lams files =
   let files, file, src, load = program files in
   report_files files (fun () ->
       List.iteri
         (fun i (m : Core.program) ->
           if i > 0 then print_newline ();
           print_endline ("-- " ^ m.home);
-          List.iter (fun f -> print_endline (Core.show_fn f)) m.fns)
+          List.iter (fun f -> print_endline (show_fn ?lams f)) m.fns)
         (List.tl (Driver.linked ~lint:true ~load ~file src)))
 
 (* ---- tests ----
@@ -139,3 +186,48 @@ let test_files ?(path = ".") ?only ?(exact = false) ?seed ?(list = false) files
 (* The same, for a program that is the one file [src]. *)
 let test ?only ?exact ?seed ?list src =
   test_files ~path:file ?only ?exact ?seed ?list [ (file, src) ]
+
+(* ---- negative tests ----
+
+   A test that a program is refused prints the error in its [%expect]
+   block, and `dune promote` accepts whatever is printed. If a change made
+   the program check, the error would vanish from the block and promote
+   would accept that silently. These helpers fail the test outright
+   instead when nothing is reported, so a lost error can't be promoted
+   away: ppx_expect reports an exception the test raises, and accepting it
+   takes writing [@@expect.uncaught_exn] by hand. *)
+
+exception No_error of string
+
+(* Run [f], which should report an error, printing it; fail if it
+   doesn't. *)
+let expecting_error files f =
+  let reported = ref false in
+  (try f ()
+   with e -> (
+     match Driver.render_error ~sources:(fun f -> List.assoc_opt f files) e with
+     | Some msg ->
+         reported := true;
+         print_string msg
+     | None -> raise e));
+  if not !reported then
+    raise (No_error "expected an error, but the program checked")
+
+(* The entry module, which should be refused: what `ren check` says. *)
+let check_error src =
+  let src = clean src in
+  expecting_error [ (file, src) ] (fun () -> ignore (Driver.check ~file src))
+
+(* The same, for a program of several files, the entry first. *)
+let check_error_files files =
+  let files, file, src, load = program files in
+  expecting_error files (fun () -> ignore (Driver.check ~load ~file src))
+
+(* A program that should panic, or fail with an error nothing handles,
+   when it runs: what `ren run` says. *)
+let run_error ?args src =
+  let src = clean src in
+  expecting_error
+    [ (file, src) ]
+    (fun () ->
+      print_endline (Value.show (Driver.run ~lint:true ?args ~file src)))

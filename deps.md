@@ -129,7 +129,7 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   takes it as a type parameter, `type Button<F> = { on_click: F }`, and a
   signature writes `Button<fn() ! ..e uses ..d>`.
 - A handler forwarding to the next implementation out, `outer`, comes
-  later (stage 9).
+  later (stage 10).
 
 ## `with`
 
@@ -187,19 +187,19 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   `test_proc(exits: Array<Exit>)` keeps each `Command { cmd, args }`, and
   says it exited with the code of its `Exit { command, code }`, or 0.
 - `Time`, `Instant` and `Duration` are opaque, with methods only until
-  operators arrive (stage 10). A `Duration` is made with `ms`, `seconds`
+  operators arrive (stage 9). A `Duration` is made with `ms`, `seconds`
   or `minutes`, added to with `plus` and `times`, compared with `before`
   and `after`, and read back with `in_ms`.
 - For now the real `instant` reads the same wall clock as `now`, which the
   system can set back (NTP, a manual change). A monotonic source needs a
   primitive OCaml's standard library doesn't have; it comes with the
-  runtime's own system calls (stage 11).
+  runtime's own system calls (stage 13).
 - These six are the prelude's, named in every module, and so are their
   types and test implementations: `Time`, `Instant`, `Duration`, `Path`,
   `Bytes`, `File`, `Command`, `Exit`, `TestClock`, `TestProc` and the
   rest. A program's own `type Time`, `type Command` or `dep Clock` is an
   error: it chooses another name.
-- `Net` comes with `Async` in stage 9 ([runtime-io.md](runtime-io.md)).
+- `Net` comes with `Async` in stage 12 ([runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.
@@ -352,7 +352,7 @@ its implementation in the vector by the dependency's identity, never by
 a name at runtime; for now that's a short search, and when the row is
 closed the compiler can make it a fixed index (rule 6). Each call keeps
 its shape, dependency, operation and arguments, which is what the effect
-journal (stage 9) will record.
+journal (stage 10) will record.
 
 A closure gets the evidence of whoever calls it, not of where it was
 made, so one that outlives its `with` uses what's installed where it's
@@ -426,7 +426,7 @@ stage, or settled something the plan left open:
   inside a handler for `Rates`, nor through a function it calls that
   uses `Rates`, even though its operations run with what's installed
   outside it: reaching the next implementation out is `outer`'s (stage
-  9), and the README's section 7 already says it's an error. It's
+  10), and the README's section 7 already says it's an error. It's
   checked on what the handler needs, so an arm can still install
   another `Rates`, even the same handler, `with counting_rates(r) in
   ...`, around a call that uses one.
@@ -437,17 +437,21 @@ stage, or settled something the plan left open:
   has its dependency's type, so `pub fn mem() -> Rates = counting(1)`
   and `fn run(r: Rates) = with r in ...` take either kind of
   implementation. Where a value of one of a handler's several
-  dependencies' types is wanted as it's made, a parameter, an annotation,
-  a function's result or a field, it's taken as a description of an
-  implementation of just that one, and installing it makes a fresh
-  instance and installs only that: `clock_conforms(test_clock(t))` with
-  `c: Clock`. Where nothing says which, `let h = counting_rates(1)`, it
-  keeps its own type: `with h in` installs all of them, sharing one
-  state, and `run(h)` takes it as a `Rates`, inside that `with` too. So
-  a value of a dependency's type is a record or a handler's description,
-  and `with` tells which as it runs. A handler that keeps a closure names
-  its row in its own signature, `handler h(f: fn() -> Int uses ..d) for N
-  uses ..d`.
+  dependencies' types is wanted, a parameter, an annotation, a function's
+  result or a field, it's taken as a description of an implementation
+  of just that one, and installing it makes a fresh instance and installs
+  only that: `clock_conforms(test_clock(t))` with `c: Clock`. What's
+  wanted can be said before the handler is given or after, in the same
+  function: `same(test_clock(t), c)` takes it as a `Clock` as
+  `same(c, test_clock(t))` does. A `with` that installs it, or a call of
+  a method of one of them, can come before what says which as well as
+  after (compiler.md's Deviations has the one exception). Where nothing
+  says which, `let h = counting_rates(1)`, it keeps its own type: `with
+  h in` installs all of them, sharing one state, and `run(h)` takes it
+  as a `Rates`, inside that `with` too. So a value of a dependency's
+  type is a record or a handler's description, and `with` tells which as
+  it runs. A handler that keeps a closure names its row in its own
+  signature, `handler h(f: fn() -> Int uses ..d) for N uses ..d`.
 - **A handler's name starts with a lowercase letter,** as a function's
   does, which is now an error for both: a capitalized name is a type's.
 - **A handler's parameters are written in parentheses even if it has
@@ -585,7 +589,8 @@ stage, or settled something the plan left open:
 
 ## Later
 
-- `outer` and forwarding handlers, `Async`, `Net`, the journal (stage 9).
+- `outer` and forwarding handlers, and the journal (stage 10).
+- `Async` and `Net` (stage 12).
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.
@@ -593,4 +598,4 @@ stage, or settled something the plan left open:
   prints.
 - The rest of `Str` and `Path`: `Path.parent` and `extension`, listing a
   folder.
-- A monotonic `Clock.instant` (stage 11).
+- A monotonic `Clock.instant` (stage 13).

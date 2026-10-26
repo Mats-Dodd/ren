@@ -49,7 +49,7 @@ fn main() -> Int =
   [%expect {| 6 |}]
 
 let%expect_test "division by zero panics" =
-  run {|
+  run_error {|
 fn main() = 10 / (5 - 5)
 |};
   [%expect
@@ -508,12 +508,11 @@ fn main() =
 (* No program can make bytes that aren't UTF-8 yet, until `Fs` reads
    them, so this asks the built-in itself. *)
 let%expect_test "from_utf8 fails with InvalidUtf8" =
-  let from_utf8 = Option.get (Ren.Prelude.find_fn "Str.from_utf8") in
   List.iter
     (fun b ->
-      match from_utf8.eval [ Ren.Value.VBytes b ] with
+      match Ren.Builtins.run Ren.Intrinsic.Str_from_utf8 [ Ren.Value.VBytes b ] with
       | v, _ -> print_endline (Ren.Value.show v)
-      | exception Ren.Prelude.Fail err ->
+      | exception Ren.Builtins.Fail err ->
           print_endline ("fails: " ^ Ren.Value.show err))
     [ "caf\xc3\xa9"; "caf\xc3"; "\xff"; "\xed\xa0\x80" ];
   [%expect {|
@@ -588,4 +587,405 @@ fn main() =
       │                 ^^^^^
       = `Path`'s representation is private to `prelude`
       help: use a function from `prelude` to make or read one
+    |}]
+
+(* ---- calls, deep and long ---- *)
+
+let%expect_test "a loop written as recursion runs in constant stack" =
+  run {|
+fn count(n: Int, acc: Int) -> Int =
+  if n == 0 then acc else count(n - 1, acc + n)
+fn main() -> Int = count(1000000, 0)
+|};
+  [%expect {| 500000500000 |}]
+
+let%expect_test "recursion with no end panics, and soon" =
+  run_error {|
+fn down(n: Int) -> Int = 1 + down(n + 1)
+fn main() -> Int = down(0)
+|};
+  [%expect {|
+    error: panic: the stack overflowed: a function called itself too deeply
+      ┌─ test.ren:2:4
+    2 │ fn main() -> Int = down(0)
+      │    ^^^^
+    |}]
+
+let%expect_test "an associated value that calls too deeply panics" =
+  run_error {|
+fn deep(n: Int) -> Int = if n == 0 then 0 else 1 + deep(n - 1)
+type Box = { v: Int }
+  let big: Box = Box { v: deep(200000) }
+fn main() -> Int = Box.big.v
+|};
+  [%expect {|
+    error: panic: the stack overflowed: a function called itself too deeply
+      ┌─ test.ren:3:7
+    3 │   let big: Box = Box { v: deep(200000) }
+      │       ^^^
+    |}]
+
+let%expect_test "`ren test` reports a value that calls too deeply as a panic" =
+  (* its values are made before any test runs, outside them all *)
+  test {|
+fn deep(n: Int) -> Int = if n == 0 then 0 else 1 + deep(n - 1)
+type Box = { v: Int }
+  let big: Box = Box { v: deep(200000) }
+test "uses big" =
+  assert Box.big.v == 0
+|};
+  [%expect {|
+    error: panic: the stack overflowed: a function called itself too deeply
+      ┌─ test.ren:3:7
+    3 │   let big: Box = Box { v: deep(200000) }
+      │       ^^^
+    |}]
+
+let%expect_test "a call that ends a function still writes back what it changed" =
+  run {|
+fn len_of(xs: Array<Int>) -> Int = xs.len()
+fn add_two(inout xs: Array<Int>) -> Int =
+  &xs.push(1)
+  &xs.push(2)
+  len_of(xs)
+fn main() =
+  var xs = [0]
+  print(add_two(&xs))
+  print(xs)
+|};
+  [%expect {|
+    3
+    [0, 1, 2]
+    ()
+    |}]
+
+let%expect_test "a panic in a built-in called last is where it's called" =
+  run_error {|
+fn cut(s: Str) -> Str = s.slice(3, 1)
+fn main() = print(cut("abc"))
+|};
+  [%expect {|
+    error: panic: slice 3 to 1 ends before it starts
+      ┌─ test.ren:1:25
+    1 │ fn cut(s: Str) -> Str = s.slice(3, 1)
+      │                         ^^^^^^^^^^^^^
+    |}]
+
+(* Overflow panics in stage 9 (operators.md, "`Int` and `Float`"); until
+   then an `Int` is OCaml's, 63 bits, and wraps. *)
+let%expect_test "an Int wraps at 63 bits, for now" =
+  run {|
+fn main() =
+  print(4611686018427387903 + 1)
+  print(0 - 4611686018427387903 - 2)
+|};
+  [%expect {|
+    -4611686018427387904
+    4611686018427387903
+    ()
+    |}]
+
+let%expect_test "a generic function shows what its type variables stand for" =
+  (* each is passed, hidden, by its caller: through a closure it makes, a
+     function used as a value, a record of lambdas it installs, and a
+     type's own `show`, of a type that's generic too *)
+  run
+    {|
+type Acc = { id: Int }
+type Box<T> = { v: T }
+  fn show(self) -> Str = show(["box", show(self.v)])
+dep Log =
+  put: fn(s: Str)
+
+fn sh<T>(x: T) -> Str = show(x)
+fn later<T>(x: T) -> fn() -> Str = fn() => show([x])
+fn apply<A, B>(f: fn(A) -> B, x: A) -> B = try f(x)
+fn logged<T>(x: T) uses Console =
+  with Log { put: fn(s) => print([show(x), s]) } in
+    Log.put("put")
+
+fn main() uses Console =
+  let a = Acc { id: 1 }
+  print(sh(a))
+  print(later(a)())
+  print(apply(sh, Some(a)))
+  logged(a)
+  print(Box { v: a })
+  print(sh(Box { v: Box { v: "s" } }))
+|};
+  [%expect
+    {|
+    Acc { id: 1 }
+    [Acc { id: 1 }]
+    Some(Acc { id: 1 })
+    ["Acc { id: 1 }", "put"]
+    ["box", "Acc { id: 1 }"]
+    ["box", "Box { v: \"s\" }"]
+    ()
+    |}]
+
+let%expect_test "an `assert` in a generic function shows its sides by their type" =
+  run
+    {|
+type Acc = { id: Int }
+fn same<T>(x: T, y: T) = assert x == y
+fn main() = same(Some(Acc { id: 3 }), Some(Acc { id: 4 }))
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:2:33
+    2 │ fn same<T>(x: T, y: T) = assert x == y
+      │                                 ^^^^^^
+      = left:  Some(Acc { id: 3 })
+      = right: Some(Acc { id: 4 })
+    |}]
+
+let%expect_test "a generic associated value knows nothing of its type" =
+  (* it's made once, when the program starts, with nothing to say what
+     `T` stands for, so a value of it is shown by its shape alone, whether
+     through `show` itself or a lambda that calls it (compiler.md,
+     "Deviations") *)
+  run
+    {|
+type Acc = { id: Int }
+type Box<T> = { v: T }
+  pub let lam: fn(T) -> Str = fn(x) => show(x)
+  pub let shower: fn(T) -> Str = show
+
+fn main() uses Console =
+  print(Box.lam(Acc { id: 1 }))
+  print(Box.shower(Acc { id: 1 }))
+|};
+  [%expect {|
+    { id: 1 }
+    { id: 1 }
+    ()
+    |}]
+
+(* ---- equality, through requirements' dictionaries ---- *)
+
+let%expect_test "a generic function compares through the dictionary it's given" =
+  (* `same` is compiled once, and given `eq` of whatever it's used at:
+     `Int`'s, `Str`'s, or one derived from a type's declaration, which
+     `both` builds from the one it was given for its own `U` *)
+  run
+    {|
+type Box<T> = { v: T }
+fn same(a, b) = a == b
+fn differ(a, b) = a != b
+fn both<U>(a: U, b: U) -> Bool = same(a, b) && same(Box { v: b }, Box { v: a })
+fn main() uses Console =
+  print([same(1, 1), same(1, 2), same("a", "a"), same(true, false)])
+  print([same((), ()), differ("a", "b"), differ(3, 3)])
+  print([both(1, 1), both(1, 2), both(Box { v: "a" }, Box { v: "a" })])
+  print([both([1, 2], [1, 2]), both([1, 2], [1]), both([[1]], [[2]])])
+  let f = same
+  print([f(Some(1), Some(1)), f(Some(1), None)])
+|};
+  [%expect
+    {|
+    [true, false, true, false]
+    [true, true, false]
+    [true, false, true]
+    [true, false, false]
+    [true, false]
+    ()
+    |}]
+
+let%expect_test "nested records, sums and arrays are compared field by field" =
+  run
+    {|
+type Point = { x: Int, y: Int }
+type Shape =
+  | Dot(at: Point)
+  | Line(from: Point, to: Point)
+  | Many(shapes: Array<Shape>)
+type Tree<T> =
+  | Leaf
+  | Node(left: Tree<T>, value: T, right: Tree<T>)
+type Tagged<T> = { tag: Str, items: Array<Option<T>> }
+fn same(a, b) = a == b
+fn leaf(x) = Node(Leaf, x, Leaf)
+fn main() uses Console =
+  let p = Point { x: 1, y: 2 }
+  let q = Point { x: 1, y: 3 }
+  print([same(Dot(p), Dot(p)), same(Dot(p), Dot(q)), same(Dot(p), Line(p, p))])
+  let many = Many([Dot(p), Many([Line(p, q)])])
+  print(same(many, Many([Dot(p), Many([Line(p, q)])])))
+  print(same(many, Many([Dot(p), Many([Line(q, p)])])))
+  let left = Node(leaf(1), 2, Leaf)
+  print([same(leaf(p), leaf(p)), same(left, Node(Leaf, 2, leaf(1)))])
+  let t = Tagged { tag: "a", items: [Some(leaf("x")), None] }
+  let u = Tagged { tag: "a", items: [Some(leaf("y")), None] }
+  print([same(t, t), same(t, u)])
+  let b = Tagged { tag: "b", items: [Some(1)] }
+  print(b == Tagged { tag: "b", items: [Some(1)] })
+|};
+  [%expect
+    {|
+    [true, false, false]
+    true
+    false
+    [true, false]
+    [true, false]
+    true
+    ()
+    |}]
+
+let%expect_test "Results are compared with their errors' payloads" =
+  run
+    {|
+type Point = { x: Int, y: Int }
+fn find(n: Int) -> Int ! Short(Point) | Gone =
+  if n > 1 then fail Short(Point { x: n, y: 0 })
+  else if n == 1 then fail Gone
+  else 0
+fn same(a, b) = a == b
+fn count<T>(xs: Array<T>, x: T) -> Int =
+  let is = fn(y: T) => y == x
+  var n = 0
+  for y in xs
+    if is(y) then n += 1
+  n
+fn main() uses Console =
+  let short2 = attempt find(2)
+  let gone = attempt find(1)
+  print([same(short2, attempt find(2)), same(short2, attempt find(3))])
+  print([same(gone, short2), same(attempt find(0), attempt find(0))])
+  print(short2 != gone)
+  print(count([short2, gone, short2, attempt find(0)], attempt find(2)))
+|};
+  [%expect
+    {|
+    [true, false]
+    [false, true]
+    true
+    2
+    ()
+    |}]
+
+let%expect_test "an `assert ==` in a generic function uses its dictionary" =
+  run_error
+    {|
+type Box<T> = { v: T }
+fn check<T>(a: T, b: T) =
+  assert a == b
+fn main() =
+  check(Box { v: [Some(1)] }, Box { v: [Some(1)] })
+  check(Box { v: [Some(1)] }, Box { v: [None] })
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:3:10
+    3 │   assert a == b
+      │          ^^^^^^
+      = left:  Box { v: [Some(1)] }
+      = right: Box { v: [None] }
+    |}]
+
+let%expect_test "where nothing says what T is, values compare by shape" =
+  (* a generic associated value is made once, with no dictionary for its
+     `T` (core.ml, [Global_value]), and so is given one that compares by
+     the values' shape, which only an opaque type of another module can
+     make reach a function: inference rules out anything else *)
+  run
+    {|
+type Point = { x: Int, y: Int }
+type Box<T> = { v: T }
+  pub let eqf: fn(T, T) -> Bool = fn(a, b) => a == b
+fn main() uses Console =
+  print([Box.eqf(1, 1), Box.eqf(Point { x: 1, y: 2 }, Point { x: 1, y: 2 })])
+  print([Box.eqf([Some("a")], [Some("b")]), Box.eqf(Ok(1), Err(Oops))])
+|};
+  [%expect
+    {|
+    [true, true]
+    [false, false]
+    ()
+    |}]
+
+let%expect_test "== can't panic" =
+  (* comparing anything with a function in it, a handler, or an
+     implementation of a dependency, directly or through a generic
+     function, is an error before the program runs, so the interpreter
+     never meets one *)
+  let lacks src =
+    match Ren.Driver.check ~file src with
+    | _ -> raise (No_error "expected `==` to be refused")
+    | exception e
+      when Ren.Driver.render_error ~sources:(fun _ -> None) e <> None ->
+        print_endline "refused"
+  in
+  lacks "fn inc(x: Int) -> Int = x + 1\nfn main() = inc == inc";
+  lacks
+    "fn same(a, b) = a == b\n\
+     fn inc(x: Int) -> Int = x + 1\n\
+     fn main() = same([Some(inc)], [None])";
+  lacks
+    "type R = { f: fn() -> Int }\n\
+     fn same(a, b) = a == b\n\
+     fn main() = same(Ok(R { f: fn() => 1 }), Err(Gone))";
+  lacks
+    "dep D =\n\
+    \  get: fn() -> Int\n\
+     fn d() = D { get: fn() => 1 }\n\
+     fn main() = d() == d()";
+  (* and a tag holding one, in the errors of a function given to one that
+     compares what it fails with *)
+  lacks
+    "fn same(a, b) = a == b\n\
+     fn bad() = if true then fail Bad(fn() => 1) else 1\n\
+     fn twice(g) = same(attempt g(), attempt g())\n\
+     fn main() = twice(bad)";
+  lacks
+    "fn cmp(g) = (attempt g()) == (attempt g())\n\
+     fn bad() = if true then fail Bad(fn() => 1) else 1\n\
+     fn main() = cmp(bad)";
+  [%expect {|
+    refused
+    refused
+    refused
+    refused
+    refused
+    refused
+    |}];
+  (* nor an opaque type of another module that's represented as one,
+     which its interface says, though it hides the representation *)
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import a
+fn same(x, y) = x == y
+fn main() = same(a.mk(), a.mk()) || a.Id.of(1) == a.Id.of(1)
+|}
+      );
+      ( "a.ren",
+        {|
+pub type F = opaque fn(Int) -> Int
+pub fn mk() -> F = fn(x: Int) => x
+pub type Pair = { n: Int, f: F }
+pub type Id = opaque Pair
+  pub fn of(n: Int) -> Id = Pair { n: n, f: mk() }
+|}
+      );
+    ];
+  [%expect {|
+    error: `a.F` has no `==`, which `same` needs
+      ┌─ main.ren:3:18
+    3 │ fn main() = same(a.mk(), a.mk()) || a.Id.of(1) == a.Id.of(1)
+      │                  ^^^^^^
+      = a type with a function in it has no `==` or `hash`
+      = `a.F` is opaque, and its module represents it with a function in it
+      help: give `same` something it can compare, without a function in it
+
+    error: `a.Id` has no `==`
+      ┌─ main.ren:3:37
+    3 │ fn main() = same(a.mk(), a.mk()) || a.Id.of(1) == a.Id.of(1)
+      │                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+      = a type with a function in it has no `==` or `hash`
+      = `a.Id` is opaque, and its module represents it with a function in it
+      help: compare something its module's functions tell you about it instead
     |}]

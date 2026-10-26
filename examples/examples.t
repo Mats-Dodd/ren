@@ -66,6 +66,50 @@ on (deps.md, "How it runs"):
   (fn $start () ev/1
     (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
 
+`ren core --types` also prints each function's type, and the type arguments
+each use of a generic function picks, `(inst f ...)`: `first_or` is used at
+`Int`, then at `Bool`. A row argument, in braces, is what a row variable of
+the callee's stands for there: `seats` uses nothing itself, so its `uses` is
+all of `main`'s, `Console` and the rest, `..d`, and it fails with nothing,
+`{}`.
+
+  $ ren core --types infer.ren
+  -- infer
+  (fn seats : fn(infer.User) -> Int ! ..e uses ..d (u/1) ev/3
+    (match (. u/1 plan) (Free => 1) ((Pro n/2) => n/2)))
+  (fn first_or : fn(Option<T>, T) -> T ! ..e uses ..d (o/1 fallback/2) ev/4
+    (match o/1 ((Some v/3) => v/3) (None => fallback/2)))
+  (fn map_option :
+    fn(Option<T>, fn(T) -> U uses ..d) -> Option<U> ! ..e uses ..d
+    (o/1 f/2)
+    ev/4
+    (match o/1 ((Some v/3) => (con Some (call ev/4 f/2 v/3)))
+      (None => (con None))))
+  (fn twice : fn(fn() -> T uses ..d) -> T ! ..e uses ..d (f/1) ev/3
+    (let _/2 (call ev/3 f/1) (call ev/3 f/1)))
+  (fn main : fn() ! ..e uses Console, ..d () ev/3
+    (let alice/1 (record (id: 1) (plan: (con Pro 5)))
+      (seq
+        (call ev/3 (inst print Int {} {..d})
+          (call ev/3 (inst seats {} {Console | ..d}) alice/1))
+        (seq
+          (call ev/3 (inst print Int {} {..d})
+            (call ev/3 (inst first_or Int {} {Console | ..d})
+              (call ev/3 (inst map_option Int Int {Console | ..d} {})
+                (con Some 20)
+                (lambda (n/2) (captures) ev/4 (+ n/2 1)))
+              0))
+          (seq
+            (call ev/3 (inst print Bool {} {..d})
+              (call ev/3 (inst first_or Bool {} {Console | ..d}) (con None)
+                true))
+            (call ev/3 (inst twice Unit {Console | ..d} {})
+              (lambda () (captures alice/1) ev/5
+                (call ev/5 (inst print Int {} {..d}) (. alice/1 id)))))))))
+  (fn $start : fn() ! ..e () ev/1
+    (with ev/2 (extend ev/1 Console Console.real)
+      (call ev/2 (inst main {..e} {..r}))))
+
 A program of several modules is a folder; its entry imports the rest:
 
   $ ren run two/main.ren
@@ -917,3 +961,22 @@ rate limiter guards (prices/README.md). Each piece is a dependency, and
     ✓ main prints each price, or what stopped it
   
   10 passed
+
+`ren --help` is asked for, so it's printed to stdout and exits 0, and
+`--version` says which Ren this is. A folder with no tests is more likely
+the wrong folder than a pass, so `ren test` on one exits 1:
+
+  $ ren --help | head -2
+  usage: ren <command> <file.ren>
+         ren run <file.ren> [-- <args>...]
+  $ ren -h > /dev/null
+  $ ren --version
+  ren 0.1.0
+  $ mkdir -p untested
+  $ cat > untested/main.ren <<'END'
+  > fn main() = print(1)
+  > END
+  $ ren test untested
+  no tests: nothing in untested declares a `test`
+    = help: write one, `test "it works" = assert 1 + 1 == 2`, or give `ren test` the folder that has them
+  [1]

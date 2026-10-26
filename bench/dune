@@ -1,0 +1,12 @@
+; `dune build @bench` times the benchmarks (run.sh). It isn't part of
+; `dune runtest`: timings differ from one machine to the next.
+
+(rule
+ (alias bench)
+ (deps
+  run.sh
+  (glob_files *.ren)
+  (glob_files vm/*.ren)
+  (glob_files %{project_root}/examples/vm/*.ren))
+ (action
+  (run sh %{dep:run.sh} %{bin:ren})))
