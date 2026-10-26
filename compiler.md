@@ -261,3 +261,13 @@ Where the work forced a change to the plan above:
   Each message reads exactly as before, oddities included: the doubled
   backticks of B4, which R3 fixes, and "`` `an index` works on `Int`s ``",
   which a step that may change messages can reword.
+- **R1, recording what inference decides.** The decisions lower.ml made
+  again are kept as more kinds of `Infer.found`, which now says what
+  inference decided at a node, not only what a lookup through a type
+  found: a `match` that handles errors (`Handles`), a `fail` arm's
+  pattern (`Fail_arm`), a `try` that unwraps a `Result` (`Unwraps`) and
+  a tag inside `Err(...)` (`Error_tag`). The last two weren't named in
+  the plan, but lower.ml worked them out again from the types inference
+  left, and so did exhaust.ml for the first two and the last, so it reads
+  them too. The interpreter still works types out at runtime; R2 is the
+  step that stops it.
