@@ -744,15 +744,25 @@ let user = function
   | Passing -> "passing this needs"
   | With_body -> "this `with`'s body uses"
 
-(* [what] uses [labels], which what it's in can't, at [loc]. *)
-let cant_use loc what labels =
+(* The help when what a function or lambda uses can't take the
+   dependencies [deps], as its type says: it's used as a value of a type
+   that lists what it uses, like a stored `fn()`, since one whose own type
+   is written, or a lambda's checked against one, isn't closed until it's
+   checked. *)
+let closed_uses_help deps =
+  sprintf
+    "add %s to the `uses` of the type it's used as, like a stored `fn()`'s, or \
+     install %s around this, with `with`"
+    (and_list deps)
+    (match deps with [ _ ] -> "it" | _ -> "them")
+
+(* [what] uses the dependencies [deps], as a message names them, which
+   what it's in can't, at [loc]. *)
+let cant_use loc what deps =
   let shown =
-    match labels with
+    match deps with
     | [] -> "more than what it's in can"
-    | ns ->
-        (* this quotes each name twice (B4 in the stage's plan), which is
-           kept while restructuring changes no message *)
-        and_list (List.map code ns) ^ ", which what it's in can't"
+    | ns -> and_list ns ^ ", which what it's in can't"
   in
   Diag.make loc
     ~notes:
@@ -762,8 +772,10 @@ let cant_use loc what labels =
          this is in says it can't use all of that";
       ]
     ~help:
-      "say what it uses where its type is written, with `uses`, or leave the \
-       type out and let it be inferred"
+      (if deps = [] then
+         "add what it uses to the `uses` of the type it's used as, like a \
+          stored `fn()`'s"
+       else closed_uses_help deps)
     (sprintf "%s %s" (user what) shown)
 
 (* Code that can fail with [shown] where nothing can; [in_state] if it's a
@@ -1209,22 +1221,35 @@ let named_errors_undeclared loc n ~fn =
       (sprintf "add `..%s` to what `%s` declares it fails with, after `!`" n fn)
     (sprintf "this can fail with `..%s`, which `%s` doesn't declare" n fn)
 
-(* A `with`'s body uses [deps], which what's outside it can't. *)
-let with_body_uses loc deps =
-  Diag.make loc
-    ~notes:
-      [
-        "a closure called in a `with`'s body is called with what's installed \
-         outside it too, and this one is called where more is installed than \
-         outside";
-      ]
-    ~help:
-      "call the closure only inside the `with`, or install what it uses \
-       outside it too"
-    (sprintf "this `with`'s body uses %s, which what's outside it can't"
-       (* this quotes each name twice (B4 in the stage's plan), which is kept
-          while restructuring changes no message *)
-       (and_list (List.map code deps)))
+(* A `with`'s body uses the dependencies [deps], as a message names them,
+   which what's outside it can't: a closure called both in it and outside
+   it, which uses the outside's row ([same_row]), or what the `with` is in
+   was closed by its type. *)
+let with_body_uses loc ~same_row deps =
+  if same_row then
+    Diag.make loc
+      ~notes:
+        [
+          "a closure called in a `with`'s body is called with what's installed \
+           outside it too, and this one is called where more is installed than \
+           outside";
+        ]
+      ~help:
+        "call the closure only inside the `with`, or install what it uses \
+         outside it too"
+      (sprintf "this `with`'s body uses %s, which what's outside it can't"
+         (and_list deps))
+  else
+    Diag.make loc
+      ~notes:
+        [
+          "a function or lambda uses everything its `with`s' bodies use, but \
+           what they install, and the type of what this is in says it can't \
+           use all of that";
+        ]
+      ~help:(closed_uses_help deps)
+      (sprintf "this `with`'s body uses %s, which what's outside it can't"
+         (and_list deps))
 
 (* ---- implementations (solve.ml) ---- *)
 

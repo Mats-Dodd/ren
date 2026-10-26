@@ -477,6 +477,10 @@ let in_params params tail =
 let rec row_end r =
   match repr_row r with RExtend (_, rest) -> row_end rest | r -> r
 
+(* The dependencies of the row [r], as the module names them. *)
+let dep_names env r =
+  List.map (fun n -> env.names (Ty.dep_path n)) (row_names r)
+
 (* Leave [c] for the solver, once the group is done. *)
 let defer env c = env.pending <- c :: env.pending
 

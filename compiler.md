@@ -465,3 +465,28 @@ Where the work forced a change to the plan above:
   of several is its own"). A `then` branch that can't be what the `else`
   is is now blamed itself, "this `then` branch is ...", since the fix
   goes there.
+- **R3, rows that hold a label twice (B4).** A call joins what its callee
+  uses to what its caller does by unifying the two rows, which works as
+  long as they don't already end in the same variable. In `fn twice(k) =
+  { let a = run(k); a + k() }`, where `run` installs `Rates` around its
+  call of `k`, they do: `k` uses `Rates` and whatever `run` uses, and
+  `twice`, after the first call, only the latter, in the same variable.
+  Unified, the two would have to be equal, and Rémy's rule refuses that,
+  so a function that's fine was rejected. Now a call whose row ends in
+  the caller's adds the labels the caller lacks to that variable
+  (infer_rows.ml, `join_uses`), which is all that has to hold: the caller
+  uses everything its calls do. The callee's row then holds those labels
+  twice, once as its own and once from the variable. A row can hold a
+  label twice, as Koka's can, but where Koka keeps both, for a set of
+  dependencies or errors two of one label mean what one does: listing a
+  row's labels lists each once (types.ml, `row_parts`), unifying matches
+  every copy of a label at once (unify.ml, `strip`), and canonical form
+  had always kept one. So `twice` is inferred as `fn twice(k: fn() -> Int
+  uses Rates, ..d) -> Int uses Rates, ..d`, which is right: its own call
+  of `k` needs a `Rates` from its caller. The plan suggested Koka's rows;
+  only the doubling was needed, not keeping the copies apart. The message
+  for a call that uses what what it's in can't, and for a `with`'s body
+  that does, named each dependency by its full path in doubled backticks,
+  and told the reader to leave a type out that wasn't written: both now
+  name it as the module does, and say to add it to the type the function
+  is used as, which is what closed its row, or to install it.

@@ -3053,6 +3053,80 @@ fn main() =
        help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
     |}]
 
+let%expect_test "a closure called inside a `with` and outside it (B4)" =
+  (* [run] installs `Rates` around its call of [k], and [twice] calls [k]
+     itself too, outside any `with`: so [k] uses `Rates` and what [run]
+     uses, and [twice] uses both too. The two rows end in the same
+     variable, so they can't be unified; what [k]'s call uses is added to
+     [twice]'s instead, and [k]'s row then holds `Rates` twice, which shows
+     as once *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+fn run(k: fn() -> Int uses Rates, ..d) -> Int uses ..d =
+  with Rates { usd_to: fn(c) => c * 2 } in k()
+
+fn twice(k) =
+  let a = run(k)
+  a + k()
+
+fn main() uses Console =
+  with Rates { usd_to: fn(c) => c * 3 } in
+    print(twice(fn() => Rates.usd_to(1)))
+|}
+  in
+  types src;
+  run src;
+  [%expect {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    fn run(k: fn() -> Int uses Rates, ..d) -> Int uses ..d
+    fn twice(k: fn() -> Int uses Rates, ..d) -> Int uses Rates, ..d
+    fn main() uses Console
+    5
+    ()
+    |}]
+
+let%expect_test "a call or a `with` that uses more than a stored function can" =
+  (* storing [f] as a [Box]'s [r] says it uses nothing, and storing the
+     lambda does the same: each message names the dependency once, as the
+     module writes it, and says where to add it, since neither type it's
+     in is written where it's defined *)
+  check_error
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+type Box = { r: fn(Int) -> Int }
+
+fn f(n: Int) -> Int =
+  let b = Box { r: f }
+  if n > 0 then b.r(n - 1) else Rates.usd_to(n)
+
+fn g() =
+  let b = Box { r: fn(n) => with Rates { usd_to: fn(c) => c } in n + Clock.instant().since(Instant.zero).in_ms() }
+  b.r(1)
+
+fn main() = ()
+|};
+  [%expect {|
+    error: this call uses `Rates`, which what it's in can't
+      ┌─ test.ren:8:33
+    8 │   if n > 0 then b.r(n - 1) else Rates.usd_to(n)
+      │                                 ^^^^^^^^^^^^^^^
+      = a function or lambda uses everything its calls use, and everything the implementations its `with`s install need, and the type of what this is in says it can't use all of that
+      help: add `Rates` to the `uses` of the type it's used as, like a stored `fn()`'s, or install it around this, with `with`
+
+    error: this `with`'s body uses `Clock`, which what's outside it can't
+       ┌─ test.ren:11:34
+    11 │   let b = Box { r: fn(n) => with Rates { usd_to: fn(c) => c } in n + Clock.instant().since(Instant.zero).in_ms() }
+       │                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = a function or lambda uses everything its `with`s' bodies use, but what they install, and the type of what this is in says it can't use all of that
+       help: add `Clock` to the `uses` of the type it's used as, like a stored `fn()`'s, or install it around this, with `with`
+    |}]
+
 let%expect_test "a handler given too few arguments in a `with`" =
   (* what's missing is an argument, not the `with`'s body *)
   types

@@ -208,11 +208,34 @@ let rec use_row env cx ~loc ?(needs = false) ?callee uses =
 
 (* Join [joined], what's used at [loc], to [into], what the function or
    lambda it's in uses, or say it can't use all of that. [what] says what
-   uses it: a call, a `with`. *)
+   uses it: a call, a `with`.
+
+   The two can already end in the same variable, with labels [into]
+   doesn't have: `fn twice(k) = { let a = run(k); a + k() }`, where [run]
+   installs `Rates` around its call of [k], so [k] uses `Rates` and
+   whatever [run] uses, and [twice] so far only the latter. Unified, they'd
+   have to be equal, which they can't be, sharing a tail (unify.ml), but
+   all that has to hold is that [into] has what [joined] has. So the labels
+   it lacks are added to their tail, and [joined] then holds them twice:
+   once as its own, once from the tail. A row can hold a label twice, as
+   Koka's can, and for a set of dependencies or errors that means what
+   holding it once does (Types.row_parts, Unify.unify_row). A named row,
+   `..d`, can't gain a label, so that's still an error. *)
 and join_uses env ~loc ~what joined into =
-  try Unify.unify_row env.st joined into
-  with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
-    report env (cant_use loc what (row_names joined))
+  let labels, tail = row_parts joined in
+  match row_end joined with
+  | RVar _ as t when tail = row_tail into ->
+      let have = row_names into in
+      let missing =
+        List.filter (fun (l : label) -> not (List.mem l.name have)) labels
+      in
+      (* a variable still unbound takes any row, so this can't fail *)
+      if missing <> [] then
+        Unify.unify_row env.st t (extend missing (fresh_row env.st))
+  | _ -> (
+      try Unify.unify_row env.st joined into
+      with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
+        report env (cant_use loc what (dep_names env joined)))
 
 (* A call adds the callee's dependencies to the caller's, and its errors
    to whatever marks it (errors.md, "Marking"): the innermost marker's

@@ -142,11 +142,16 @@ let rec repr_row r =
 
 (* A row's labels and, if it's open, the id of its tail: a variable, or a
    named row, which stands for more labels too, only not ones inference
-   can add. *)
+   can add. A row can hold a label twice, which means what holding it once
+   does (Infer_rows.join_uses), so a label is listed once, where it first
+   is. *)
 let rec row_parts r =
   let rec go acc r =
     match repr_row r with
     | REmpty -> (List.rev acc, None)
+    | RExtend (l, rest)
+      when List.exists (fun (k : label) -> k.name = l.name) acc ->
+        go acc rest
     | RExtend (l, rest) -> go (l :: acc) rest
     | RVar { contents = RUnbound (id, _) } | RSkol (id, _) ->
         (List.rev acc, Some id)

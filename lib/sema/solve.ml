@@ -198,7 +198,7 @@ let copy env k =
              Unify.unify_row st (c.row joined) (c.row k.kdst))
        with
       | Ok () -> ()
-      | Error _ -> report env (cant_use k.kloc k.kwhat (row_names joined)));
+      | Error _ -> report env (cant_use k.kloc k.kwhat (dep_names env joined)));
       true
 
 (* ---- what a `with` installs (deps.md, "`with`") ---- *)
@@ -270,7 +270,9 @@ let install env ~shared w =
   in
   if not ok then
     report env
-      (with_body_uses w.wloc (List.map (fun (l : label) -> l.name) rest));
+      (with_body_uses w.wloc
+         ~same_row:(tail <> None && tail = row_tail w.wouter)
+         (List.map (fun (l : label) -> env.names (Ty.dep_path l.name)) rest));
   ( Option.map (fun hnote -> { hfn = w.wself; hdep = w.wdep; hnote }) withheld,
     due )
 

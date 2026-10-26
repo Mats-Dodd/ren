@@ -82,7 +82,9 @@ let rec unify st a b =
 (* Rows are equal when they have the same labels, in any order. To unify
    `<l | rest1>` with a row, rewrite that row so it starts with `l`, then
    unify what remains. An open tail can always grow to supply a missing
-   label; a closed row can't. *)
+   label; a closed row can't. A row can hold a label twice, which means
+   what holding it once does (Infer_rows.join_uses), so once `l` is
+   matched, what remains of either row has it no more. *)
 and unify_row st a b =
   match (repr_row a, repr_row b) with
   | REmpty, REmpty -> ()
@@ -100,7 +102,7 @@ and unify_row st a b =
       (match (tail1, snd (row_parts rest1)) with
       | Some before, after when after <> Some before -> raise Mismatch
       | _ -> ());
-      unify_row st rest1 rest2
+      unify_row st (strip st rest1 label) (strip st rest2 label)
   (* a named row has no labels inference can see, and gets none *)
   | RSkol _, RExtend _ -> unify_row st b a
   | (REmpty | RSkol _), (REmpty | RSkol _) | REmpty, RExtend _ -> raise Mismatch
@@ -113,11 +115,7 @@ and rewrite st row (label : label) =
   match repr_row row with
   | REmpty | RSkol _ -> raise Mismatch
   | RExtend (l, rest) when l.name = label.name ->
-      (try
-         if List.length l.payload <> List.length label.payload then
-           raise Mismatch;
-         List.iter2 (unify st) l.payload label.payload
-       with Mismatch | Infinite -> raise (Two_shapes label.name));
+      same_shape st l label;
       rest
   | RExtend (l, rest) -> RExtend (l, rewrite st rest label)
   | RVar ({ contents = RUnbound (_, level) } as cell) ->
@@ -125,6 +123,24 @@ and rewrite st row (label : label) =
       cell := RLink (RExtend (label, rest));
       rest
   | RVar { contents = RLink _ } -> assert false
+
+(* [row] with no more of [label] among the labels it has now: a row that
+   holds it twice, matched once. *)
+and strip st row (label : label) =
+  match repr_row row with
+  | RExtend (l, rest) when l.name = label.name ->
+      same_shape st l label;
+      strip st rest label
+  | RExtend (l, rest) -> RExtend (l, strip st rest label)
+  | r -> r
+
+(* Two labels of one name have the same payload, or it's two shapes of a
+   tag. *)
+and same_shape st (l : label) (label : label) =
+  try
+    if List.length l.payload <> List.length label.payload then raise Mismatch;
+    List.iter2 (unify st) l.payload label.payload
+  with Mismatch | Infinite -> raise (Two_shapes label.name)
 
 (* ---- trying a unification first ----
 
