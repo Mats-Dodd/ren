@@ -250,6 +250,79 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       = this is a bug in the Ren compiler, not in your program
     |}]
 
+(* `fn id<T>(x: T) -> T`, and a `main` that calls it with 1, using it with
+   the type arguments [targs] at `fn(Int) -> Int` *)
+let id_program targs =
+  let loc = Ren.Loc.point ~file 1 1 in
+  let fn path params ty body : Ren.Core.fn_def =
+    {
+      path = Ren.Path.make "test" path;
+      params;
+      ev = Ren.Core.evidence 9;
+      scheme = { ty; names = []; reqs = [] };
+      body;
+      loc;
+    }
+  in
+  let x : Ren.Core.var = { id = 1; name = "x"; ty = Var 0 } in
+  let open_row n : Ren.Ty.row = { labels = []; tail = Some n } in
+  let id =
+    fn "id"
+      [ { mode = Read; var = x } ]
+      (Fun ([ Ren.Ty.read (Var 0) ], Var 0, open_row 0, open_row 1))
+      (Ren.Core.local x loc)
+  in
+  let int_fn : Ren.Ty.ty =
+    Fun ([ Ren.Ty.read Ren.Ty.int ], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed)
+  in
+  let call =
+    Ren.Core.mk
+      (Call
+         ( Ren.Core.mk (Global (id.path, targs)) int_fn loc,
+           [ Value (Ren.Core.mk (Int 1) Ren.Ty.int loc) ],
+           Ren.Core.evidence 9 ))
+      Ren.Ty.int loc
+  in
+  let main =
+    fn "main" [] (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed)) call
+  in
+  report "" (fun () ->
+      Ren.Driver.pass "lint" (fun () ->
+          Ren.Core_lint.program ~imports:[] ~linked:[]
+            { home = "test"; types = []; fns = [ id; main ]; values = [] });
+      print_endline "ok")
+
+let%expect_test "Core Lint reports a use at the wrong type arguments" =
+  (* at `Int`, with rows of nothing, it's clean *)
+  id_program { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] };
+  [%expect {| ok |}];
+  (* at `Bool`, its type would be `fn(Bool) -> Bool` *)
+  id_program { tys = [ Ren.Ty.bool ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] };
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `id` is used at `fn(Int) -> Int`, but its type arguments make it `fn(Bool) -> Bool`")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* a row of `Short`, which `fn(Int) -> Int` doesn't fail with *)
+  id_program
+    {
+      tys = [ Ren.Ty.int ];
+      rows =
+        [ { labels = [ Ren.Ty.label "Short" ]; tail = None }; Ren.Ty.closed ];
+    };
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `id` is used at `fn(Int) -> Int`, but its type arguments make it `fn(Int) -> Int ! Short`")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* and too few *)
+  id_program { tys = [ Ren.Ty.int ]; rows = [] };
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `id` is given 1 type and 0 row arguments, but `fn(T) -> T ! ..e uses ..d` has 1 type and 2 row variables")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
 let%expect_test "Core Lint reports a fail of something that isn't an error" =
   let loc = Ren.Loc.point ~file 1 1 in
   let body =
