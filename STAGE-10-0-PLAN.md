@@ -46,10 +46,11 @@ each step did, its commits, what changed, and what's still open.
 R3's blocking issue has since been fixed (`ad47c20`..`4d968ac`; the
 report's R3 section says how), with three of its minor issues, and so
 have the two blocking issues R3's next review found (`435e869`..`11cbbe0`),
-and the slowdown the review after that found (`11ae913`).
+and the slowdown the review after that found (`11ae913`). The owner
+decided B5's open half should be fixed, and it is (`4037992`).
 
-**Next:** have R3 reviewed again, settle B5's open question with the
-owner, then do R4. Delete this file once the stage is done.
+**Next:** have R3 reviewed again, then do R4. Delete this file once the
+stage is done.
 
 ## Context
 

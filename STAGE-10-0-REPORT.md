@@ -216,7 +216,8 @@ shower: fn(T) -> Str = show`, now shows a record by its shape, `{ id: 1
 minor ones, `ad47c20`..`4d968ac`, 5 commits; the two blocking issues
 its next review found, `435e869`..`11cbbe0`, 3 commits; and the one the
 review after that found, with a test for one of its minor issues,
-`11ae913`..`18a55bb`, 2 commits.
+`11ae913`..`18a55bb`, 2 commits; and B5's other half, once the owner
+decided it should be fixed, `4037992`.
 
 **What was done.**
 
@@ -241,10 +242,13 @@ review after that found, with a test for one of its minor issues,
 - **B4 fixed**: a call whose row ends in its caller's is accepted, and
   both its messages are right, with no doubled backticks and no advice to
   leave out a type that is already left out.
-- **B5 fixed**: a set of tags written in `Err` is closed once its group is
-  done, so `mk2` is what `ren types` prints, the comparison that can never
-  be true doesn't compile, and a `match` with exactly the printed arms
-  needs no `Err(_)`.
+- **B5 fixed**, both halves: a set of tags written in `Err` is closed once
+  its group is done, so `mk2` is what `ren types` prints, the comparison
+  that can never be true doesn't compile, and a `match` with exactly the
+  printed arms needs no `Err(_)`. And since `4037992` what an `attempt`
+  keeps can't take such a set's tags in a later group either, or through
+  a generic function of another module: the tags carry where they were
+  written.
 
 **Deviations**, all in `compiler.md`:
 
@@ -257,9 +261,11 @@ review after that found, with a test for one of its minor issues,
   looked up before anything says which is wanted.
 - B4 doubles a label as Koka's rows do, without keeping the copies apart:
   for a set of dependencies or errors, two copies mean one.
-- B5 closes a written set when its group is done, after which it is a
-  type like any other, so a kept set in a later group can still take its
-  tags (see below).
+- B5 closes a written set when its group is done, and marks its tags,
+  not its row as the report suggested, as written in `Err`, so a kept set
+  in a later group that takes one none of its calls fail with is an
+  error. Interfaces carry no mark: a public function declares its type,
+  so such a set never leaves its module.
 
 **Test outputs that changed.**
 
@@ -292,6 +298,14 @@ review after that found, with a test for one of its minor issues,
 
 - B5's closing is broader than the bug's example: `fn mk() = Err(A)` used
   where a `Result<Int, ! A | B>` is wanted is now rejected.
+- `4037992`: `fn kept(c) = if c then mk2(c) else attempt g()`, where `g`
+  fails only with `Left(Int)`, is an error, "this `attempt` can't keep
+  `Right`", with a label at the `Err(Right)` in `mk2`. So is the same
+  through a function that passes `mk2`'s `Result` on, or a generic one,
+  here or in another module. A declared `Result`'s extra tags are still
+  taken, as `worth_retrying` needs. No existing output changed; a
+  `fail` now adds its tag by inclusion, as a call does, which changes no
+  message.
 - Until `435e869`, a mismatch with a handler of several given where
   what's wanted wasn't known blamed the handler, met first, with a message
   about the other side that wasn't true (see below). Now it blames what's
@@ -322,13 +336,26 @@ review after that found, with a test for one of its minor issues,
     and through an `if` of two handlers
   - `ap(counting_rates(3), fn(r) => run(r) + (with r in
     RateCalls.count()))`
-- **B5, the half that needs a decision.** A set kept by `attempt` can
-  still take the tags of a written set from an earlier group: `fn kept(c)
-  = if c then mk2(c) else attempt g()` gives `! Left(Int) | Right`, though
-  errors.md says a kept set doesn't gain tags across groups. Rejecting it
-  means keeping where tags came from in schemes and interfaces, while
-  still letting a declared `Result`'s extra tags in, which the existing
-  `worth_retrying` test needs. That's the owner's call.
+- **Fixed since (`4037992`), was the half of B5 that needed a decision.**
+  A set kept by `attempt` could still take the tags of a written set from
+  an earlier group: `fn kept(c) = if c then mk2(c) else attempt g()` gave
+  `! Left(Int) | Right`, though errors.md says a kept set doesn't gain
+  tags no call fails with. The owner decided it should be fixed, and it's
+  an error now, as the same `Err`s written in place were already. A tag
+  the solver puts in a set of its own carries where it was written
+  (`Types.label`'s `written`); instantiation and unification keep it,
+  inclusion drops it, and a kept set holding such a tag that none of the
+  inclusions into it brought in is reported (`solve.ml`,
+  `written_kept`). A declared `Result`'s tags aren't marked, so
+  `worth_retrying(attempt busy())` is still accepted. Interfaces needn't
+  carry the mark, since a public function declares its type; such a set
+  reaches another module's code only through its generic functions,
+  which instantiation follows. compiler.md's B5 entry says how, and
+  errors.md says the rule; tests: test_errors.ml, "a kept set doesn't
+  take tags written in an earlier group", "... in another module", and
+  "a kept set takes a declared Result's tags". As before, where a
+  declared `Result` is met first, `h(if c then mk2(c) else attempt g())`,
+  the kept set takes its tags from that.
 - Fixed since the stop (`73a710d`): the worklist was quadratic, and so
   was finding where a set's errors came from at every call, though only
   a message about a tag of two shapes needs it. 12,000 `try f(i)` calls
@@ -423,7 +450,7 @@ Not started.
 
 - **Finish R3 first.** The blocking issues above are fixed, with their
   repros as tests; get R3 an independent review, then do R4 as the plan
-  describes. The B5 question needs the owner.
+  describes. B5 is fully fixed (`4037992`).
 - **R4 has its pieces in place.** Schemes have the `reqs` slot, uses carry
   type arguments, and generic functions already take hidden descriptor
   parameters, which dictionaries can follow: an `eq` dictionary is a
