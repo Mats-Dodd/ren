@@ -1245,7 +1245,7 @@ let canonical env so_far (f : fn_def) =
     }
   in
   let ty = canon_ty c ~all:false (Hashtbl.find so_far.schemes path) in
-  let scheme : Ty.scheme = { ty; names = canon_names c; reqs = [] } in
+  let scheme : Ty.scheme = { ty; names = canon_names c; reqs = canon_reqs c } in
   let cx = Hashtbl.find so_far.tables path in
   let ids =
     Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes [] |> List.sort compare

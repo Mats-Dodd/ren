@@ -118,6 +118,11 @@ type state = {
           generalized, by the parameter's id *)
   skolem_rows : (int, row) Hashtbl.t;
       (** and the generic row variable each named row became *)
+  needs : (int, string list) Hashtbl.t;
+      (** what each variable needs of the type it stands for, `eq` for `==`, by
+          its id: a generic variable's are its scheme's requirements, and a type
+          parameter's, while its function is checked, what its body found
+          (Infer_reqs). Only looked up, never walked *)
   reps : (Path.t, Ty.ty) Hashtbl.t;
       (** what each opaque type of the module being checked is represented as:
           in its own module, an opaque type is its representation (see [reveal])
@@ -136,6 +141,7 @@ let new_state () =
     hints = Hashtbl.create 16;
     skolem_vars = Hashtbl.create 16;
     skolem_rows = Hashtbl.create 8;
+    needs = Hashtbl.create 8;
     reps = Hashtbl.create 4;
     watched = Ids.empty;
     given = 0;
@@ -253,6 +259,17 @@ let join_marks a b =
         b := Mark_link a
     | _ -> assert false
 
+(* What the variable or type parameter [id] needs, sorted. *)
+let needs st id = Option.value (Hashtbl.find_opt st.needs id) ~default:[]
+
+(* Say that [id] needs [req]. Whether that's new. *)
+let add_need st id req =
+  let have = needs st id in
+  if List.mem req have then false
+  else (
+    Hashtbl.replace st.needs id (List.sort compare (req :: have));
+    true)
+
 (* A row of [labels], ending in [tail]. *)
 let extend labels tail =
   List.fold_right (fun l rest -> RExtend (l, rest)) labels tail
@@ -277,9 +294,11 @@ let generalize st ~skolems ?(row_skolems = []) t =
           | Some v -> v
           | None ->
               let v = generic_var st in
+              (* it's named after the parameter, and needs what it does *)
               (match v with
               | TVar { contents = Unbound (vid, _) } ->
-                  Hashtbl.replace st.hints vid name
+                  Hashtbl.replace st.hints vid name;
+                  List.iter (fun r -> ignore (add_need st vid r)) (needs st id)
               | _ -> ());
               Hashtbl.add table id v;
               Hashtbl.replace st.skolem_vars id v;
@@ -569,11 +588,19 @@ and canon_row c ~all r : Ty.row =
 (* What [canon] has numbered so far, as a scheme's [names]. *)
 let canon_names c = List.sort compare c.names
 
+(* And what the variables it has numbered need, as a scheme's [reqs]: a
+   [Hashtbl.fold] visits them in no particular order, so they're sorted. *)
+let canon_reqs c =
+  List.sort compare
+    (Hashtbl.fold
+       (fun id n acc -> List.map (fun r -> (n, r)) (needs c.cst id) @ acc)
+       c.tys [])
+
 (* A type scheme in canonical form, numbered on its own. *)
 let to_scheme st t : Ty.scheme =
   let c = canon st in
   let ty = canon_ty c ~all:false t in
-  { ty; names = canon_names c; reqs = [] }
+  { ty; names = canon_names c; reqs = canon_reqs c }
 
 (* A canonical type from an interface, with [vars] standing for its
    variables and [tails] for its row variables. *)
@@ -687,7 +714,8 @@ let matching st s t =
   }
 
 (* An interface's type scheme as a scheme of this compilation: generic
-   variables of its own, which [instantiate] copies at each use. *)
+   variables of its own, which [instantiate] copies at each use, each
+   needing what the scheme says it does. *)
 let of_scheme st (s : Ty.scheme) =
   let memo table make n =
     match Hashtbl.find_opt table n with
@@ -700,9 +728,12 @@ let of_scheme st (s : Ty.scheme) =
   let vars =
     memo (Hashtbl.create 8) (fun n ->
         let v = generic_var st in
-        (match (v, List.assoc_opt n s.names) with
-        | TVar { contents = Unbound (id, _) }, Some h ->
-            Hashtbl.replace st.hints id h
+        (match v with
+        | TVar { contents = Unbound (id, _) } ->
+            Option.iter (Hashtbl.replace st.hints id) (List.assoc_opt n s.names);
+            List.iter
+              (fun (m, r) -> if m = n then ignore (add_need st id r))
+              s.reqs
         | _ -> ());
         v)
   in
@@ -795,3 +826,24 @@ let rec skolems t =
   | TVar _ | TError | TErrors _ | TUses _ -> []
   | TCon (_, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)
+
+(* Whether [v], a variable still unbound, is in [t]: a call says which of
+   its arguments a variable of its callee's is in. *)
+let mentions v t =
+  match repr v with
+  | TVar { contents = Unbound (id, _) } ->
+      let rec go t =
+        match repr t with
+        | TVar { contents = Unbound (i, _) } -> i = id
+        | TVar _ | TSkol _ | TError -> false
+        | TCon (_, args) -> List.exists go args
+        | TErrors e | TUses e -> row e
+        | TFun (ps, r, e, u) ->
+            List.exists go (r :: param_tys ps) || row e || row u
+      and row r =
+        List.exists
+          (fun (l : label) -> List.exists go l.payload)
+          (fst (row_parts r))
+      in
+      go t
+  | _ -> false

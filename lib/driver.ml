@@ -91,25 +91,41 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
                (show said) (show found);
          })
   in
-  List.iter
-    (fun (v : Iface.value) ->
-      let found = Path.Map.find (Path.make home v.vname) inferred.schemes in
-      if found <> v.scheme then mismatch v.vname v.scheme found)
-    iface.values;
+  (* What a function needs of its type parameters isn't written, so the
+     declarations don't say it (operators.md, "Generic code"): it's what
+     inference found, which the interface takes. *)
+  let check name (said : Ty.scheme) (found : Ty.scheme) =
+    if { found with reqs = [] } <> said then mismatch name said found;
+    { said with reqs = found.reqs }
+  in
+  let values =
+    List.map
+      (fun (v : Iface.value) ->
+        let found = Path.Map.find (Path.make home v.vname) inferred.schemes in
+        { v with scheme = check v.vname v.scheme found })
+      iface.values
+  in
   (* and so was each public member's, which is in its type's entry *)
-  List.iter
-    (fun (td : Iface.type_decl) ->
-      Path.Map.iter
-        (fun path (o : Iface.op) ->
-          let found =
-            match (o.okind, Path.Map.find path inferred.schemes) with
-            | Value, ({ ty = Fun ([], t, _, _); _ } as s) ->
-                Ty.canonical { s with ty = t }
-            | _, s -> s
-          in
-          if found <> o.oscheme then mismatch (Path.local path) o.oscheme found)
-        td.members)
-    iface.types;
+  let types =
+    List.map
+      (fun (td : Iface.type_decl) ->
+        {
+          td with
+          members =
+            Path.Map.mapi
+              (fun path (o : Iface.op) ->
+                let found =
+                  match (o.okind, Path.Map.find path inferred.schemes) with
+                  | Value, ({ ty = Fun ([], t, _, _); _ } as s) ->
+                      Ty.canonical { s with ty = t }
+                  | _, s -> s
+                in
+                { o with oscheme = check (Path.local path) o.oscheme found })
+              td.members;
+        })
+      iface.types
+  in
+  let iface = { iface with values; types } in
   (* Another module runs a public group's tests by calling them, so they're
      in the interface too, with the types inference found: they have no
      signature to declare one. *)

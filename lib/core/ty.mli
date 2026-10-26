@@ -135,11 +135,12 @@ val show_label : printer -> label -> string
    nothing for an empty row. *)
 val show_effects : printer -> row -> row -> string
 
-(* How `ren types` prints a function: `pub fn name<T>(x: T) -> T`.
+(* How `ren types` prints a function: `pub fn name<T>(x: T) -> T`, and
+   `fn same<T has eq>(a: T, b: T) -> Bool` for one with requirements.
    [params] are its parameters' names. A row tail is shown only where it
    links two places. For a member of a type, [outer] are the type's
-   parameters, which aren't listed after the name, and `self` is shown
-   without its type. Fails with [Invalid_argument] if the scheme isn't a
+   parameters, which aren't listed after the name unless it needs
+   something of one, and `self` is shown without its type. Fails with [Invalid_argument] if the scheme isn't a
    function's. *)
 val signature :
   ?outer:string list ->

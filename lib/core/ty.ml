@@ -392,10 +392,16 @@ and show_effects pr e u =
    `f: fn(Int)` or `c: Clock`: the function's `!` and `uses` already say
    what's in it.
 
+   What it needs of a type parameter follows the parameter's name,
+   `same<T has eq>`, `sum<T has add, zero>` (operators.md, "Generic
+   code"); a parameter without a written name is named as everywhere
+   else, `T`, `U`, ...
+
    A member of a type is printed under its type, so [outer]
    are the type's parameters, which aren't the function's own and aren't
-   listed after its name, and `self` is printed without its type, which is
-   always the type's. *)
+   listed after its name, unless the member needs something of one,
+   `fn has<T has eq>(self, x: T)`, which the type doesn't say; and `self`
+   is printed without its type, which is always the type's. *)
 let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
   match s.ty with
   | Fun (ps, ret, errs, uses) ->
@@ -471,7 +477,25 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
       in
       let ret = show_ret pr ret in
       let effects = show_effects pr errs uses in
-      (* the names of the type's own parameters, among those handed out *)
+      (* what the variable named [n] needs, `T has eq`, or just `T` *)
+      let needs n =
+        match
+          Hashtbl.fold
+            (fun id m found -> if m = n then Some id else found)
+            pr.names None
+        with
+        | None -> []
+        | Some id ->
+            List.filter_map
+              (fun (v, r) -> if v = id then Some r else None)
+              s.reqs
+      in
+      let param n =
+        match needs n with [] -> n | rs -> n ^ " has " ^ String.concat ", " rs
+      in
+      (* the names of the type's own parameters, among those handed out,
+         which aren't listed unless the function needs something of one,
+         which the type doesn't say *)
       let outer =
         List.filter_map
           (fun (id, n) ->
@@ -480,10 +504,12 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
       in
       let tparams =
         match
-          List.filter (fun n -> not (List.mem n outer)) (List.rev pr.order)
+          List.filter
+            (fun n -> (not (List.mem n outer)) || needs n <> [])
+            (List.rev pr.order)
         with
         | [] -> ""
-        | names -> "<" ^ String.concat ", " names ^ ">"
+        | names -> "<" ^ String.concat ", " (List.map param names) ^ ">"
       in
       Printf.sprintf "%sfn %s%s(%s)%s%s"
         (if pub then "pub " else "")
