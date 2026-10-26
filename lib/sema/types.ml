@@ -68,7 +68,16 @@ and rvar = RUnbound of int * int  (** id, level *) | RLink of row
 
 (* A row's label: an error's tag and its payload's types, or a dependency,
    whose payload is empty (ty.ml). *)
-and label = { name : string; payload : ty list }
+and label = {
+  name : string;
+  payload : ty list;
+  written : Loc.t option;
+      (** where the tag was written inside `Err(...)`, if it's in a set of its
+          own, made of tags written so (solve.ml, [value_tag]). Such a set holds
+          exactly those, so what an `attempt` keeps can't take the tag from it
+          (B5). It's the same label either way: only the solver's check of kept
+          sets reads it, and canonical form drops it *)
+}
 
 let generic_level = max_int
 
@@ -144,7 +153,7 @@ let str = TCon (Path.prelude "Str", [])
 let array t = TCon (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let param_tys ps = List.map (fun p -> p.ty) ps
-let dep name = { name; payload = [] }
+let dep name = { name; payload = []; written = None }
 
 (* Follow links to the type a variable currently stands for, shortening the
    chain as it goes so later lookups are quick. *)
@@ -203,6 +212,10 @@ let rec close_row r =
   | RExtend (_, rest) -> close_row rest
   | RVar ({ contents = RUnbound _ } as cell) -> cell := RLink REmpty
   | RVar { contents = RLink _ } | REmpty | RSkol _ -> ()
+
+(* [l] as a set gets it by inclusion, from what's failed with: not
+   written, wherever it was before. *)
+let unwritten l = { l with written = None }
 
 (* A row of [labels], ending in [tail]. *)
 let extend labels tail =
@@ -542,7 +555,11 @@ and of_row ~vars ~tails (r : Ty.row) =
   extend
     (List.map
        (fun (l : Ty.label) ->
-         { name = l.name; payload = List.map (of_ty ~vars ~tails) l.payload })
+         {
+           name = l.name;
+           payload = List.map (of_ty ~vars ~tails) l.payload;
+           written = None;
+         })
        r.labels)
     tail
 

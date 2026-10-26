@@ -529,12 +529,44 @@ Where the work forced a change to the plan above:
   something else. That comparison's message is the plain mismatch of two
   types, which says nothing about why they differ, so a mismatch between
   two `Result`s, one of which holds a tag the other's closed set can't,
-  now says so in a note (`Infer_msg.Holds_beyond`). Once its group is
-  done, such a set is a type like any other, the one `ren types` prints:
-  what an `attempt` keeps can meet it and take its tags, as it can a
-  declared `Result` that holds more (test_errors.ml, "attempt keeps the
-  outcome, and try fails with it again", passes `attempt busy()` where
-  `NotFound(Int) | Busy` is wanted). Only a tag written in the group
-  where it meets a kept set is checked against it. Telling a set made of
-  written tags from a declared one in a later group, or another module,
-  would need where its tags came from kept in schemes and interfaces.
+  now says so in a note (`Infer_msg.Holds_beyond`).
+
+  Once its group is done, such a set is a type, the one `ren types`
+  prints, and a kept set that meets it in a later group takes its tags
+  by unification, as it takes a declared `Result`'s (test_errors.ml,
+  "attempt keeps the outcome, and try fails with it again", passes
+  `attempt busy()` where `NotFound(Int) | Busy` is wanted, which
+  errors.md allows: a declared `Result` says what it can hold). So the
+  two have to be told apart, which needs where the tags came from. The
+  report suggested marking a row as written in schemes and interfaces;
+  marking the tags is simpler, and enough. A label carries where it was
+  written inside `Err`, if the solver put it in a set of its own
+  (`Types.label`'s `written`, set in `value_tag`). Instantiating a
+  scheme copies labels, so the mark goes wherever the set does, through
+  a function that passes the `Result` on or a generic one; unification
+  keeps the labels it's given, so a kept set that meets the set holds
+  marked ones; and a label added by inclusion, what a call or a `fail`
+  brings in, is unmarked (`Types.unwritten`). Once the group's
+  inclusions are done, a kept set with a marked tag that none of the
+  inclusions into it brought in has taken it from a written set, and
+  that's an error (`solve.ml`, `written_kept`): `fn kept(c) = if c then
+  mk2(c) else attempt g()`, where `g` fails only with `Left(Int)`, is
+  rejected, as the same tags written in the same group, `if c then (if
+  c then Err(Left(1)) else Err(Right)) else attempt g()`, already were.
+  It's an error rather than a set that doesn't gain the tag, which
+  can't be: both branches are one type. The message points at the `attempt` and where `Right` is
+  written, and suggests declaring the type of the function that makes
+  it, which makes it a declared `Result`. Only that check reads the
+  mark: canonical form drops it, so Core, Core Lint and `ren types` are
+  as they were. Interfaces don't need it: a public function writes its
+  type in full, so a set of tags written in `Err` never leaves its
+  module, and a `Result` from another module is always a declared one.
+  So to meet a kept set from another module, such a set goes through
+  that module's generic functions, which instantiation follows
+  (test_errors.ml, "a kept set doesn't take tags written in another
+  module"). A `fail` now adds its tag by inclusion, as a call does,
+  only so the check knows what it brings in. As before, where a declared
+  `Result` is met first, `h(if c then mk2(c) else attempt g())` for an
+  `h` that takes a `Result<Int, ! Left(Int) | Right>`, the kept set
+  takes its tags from that, as it would from tags written in its own
+  group.

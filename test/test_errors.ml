@@ -971,6 +971,122 @@ fn main() = ()
       help: check the spelling: a tag that's written wrong is a different error
     |}]
 
+let%expect_test "a kept set doesn't take tags written in an earlier group (B5)" =
+  (* [mk2]'s set is a type by the time [kept] is checked, but its tags
+     are still ones written in `Err`: the `attempt`'s set can't take
+     `Right` from it, which `g` doesn't fail with, as it couldn't from an
+     `Err(Right)` written in [kept] itself. So too through a function that
+     passes [mk2]'s `Result` on, and through a generic one *)
+  check_error
+    {|
+fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+fn g() -> Int ! Left(Int) = fail Left(2)
+fn kept(c: Bool) = if c then mk2(c) else attempt g()
+fn mk4(c: Bool) = mk2(c)
+fn passed(c: Bool) = if c then attempt g() else mk4(c)
+fn pick<T>(c: Bool, a: T, b: T) -> T = if c then a else b
+fn generic(c: Bool) = pick(c, mk2(c), attempt g())
+fn main() = ()
+|};
+  [%expect {|
+    error: this `attempt` can't keep `Right`: nothing it covers fails with it
+      ┌─ test.ren:3:42
+    1 │ fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+      │                                                   ----- `Right` is written here, in a `Result` that holds exactly the tags written in it
+    3 │ fn kept(c: Bool) = if c then mk2(c) else attempt g()
+      │                                          ^^^^^^^
+      = its `Result` is used as one made with `Err`, which holds `Left(Int)` and `Right`, but what an `attempt` keeps is what the calls it covers fail with, `Left(Int)`, and nothing more
+      help: keep the two `Result`s apart, or write the type of the function that makes the one with `Err`, with `! Left(Int) | Right` in its `Result`: what an `attempt` keeps can be a declared `Result`, which can hold more
+
+    error: this `attempt` can't keep `Right`: nothing it covers fails with it
+      ┌─ test.ren:5:32
+    1 │ fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+      │                                                   ----- `Right` is written here, in a `Result` that holds exactly the tags written in it
+    5 │ fn passed(c: Bool) = if c then attempt g() else mk4(c)
+      │                                ^^^^^^^
+      = its `Result` is used as one made with `Err`, which holds `Left(Int)` and `Right`, but what an `attempt` keeps is what the calls it covers fail with, `Left(Int)`, and nothing more
+      help: keep the two `Result`s apart, or write the type of the function that makes the one with `Err`, with `! Left(Int) | Right` in its `Result`: what an `attempt` keeps can be a declared `Result`, which can hold more
+
+    error: this `attempt` can't keep `Right`: nothing it covers fails with it
+      ┌─ test.ren:7:39
+    1 │ fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+      │                                                   ----- `Right` is written here, in a `Result` that holds exactly the tags written in it
+    7 │ fn generic(c: Bool) = pick(c, mk2(c), attempt g())
+      │                                       ^^^^^^^
+      = its `Result` is used as one made with `Err`, which holds `Left(Int)` and `Right`, but what an `attempt` keeps is what the calls it covers fail with, `Left(Int)`, and nothing more
+      help: keep the two `Result`s apart, or write the type of the function that makes the one with `Err`, with `! Left(Int) | Right` in its `Result`: what an `attempt` keeps can be a declared `Result`, which can hold more
+    |}]
+
+let%expect_test "a kept set doesn't take tags written in another module (B5)" =
+  (* a public function declares its type, so a set of tags written in
+     `Err` never leaves its module: here the `Result`s meet in a generic
+     function of another one, which can't make the kept set take them *)
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import util
+fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+fn kept(c: Bool) = util.pick(c, mk2(c), attempt util.g())
+fn main() = ()
+|}
+      );
+      ( "util.ren",
+        {|
+pub fn g() -> Int ! Left(Int) = fail Left(2)
+pub fn pick<T>(c: Bool, a: T, b: T) -> T = if c then a else b
+|}
+      );
+    ];
+  [%expect {|
+    error: this `attempt` can't keep `Right`: nothing it covers fails with it
+      ┌─ main.ren:3:41
+    2 │ fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+      │                                                   ----- `Right` is written here, in a `Result` that holds exactly the tags written in it
+    3 │ fn kept(c: Bool) = util.pick(c, mk2(c), attempt util.g())
+      │                                         ^^^^^^^
+      = its `Result` is used as one made with `Err`, which holds `Left(Int)` and `Right`, but what an `attempt` keeps is what the calls it covers fail with, `Left(Int)`, and nothing more
+      help: keep the two `Result`s apart, or write the type of the function that makes the one with `Err`, with `! Left(Int) | Right` in its `Result`: what an `attempt` keeps can be a declared `Result`, which can hold more
+    |}]
+
+let%expect_test "a kept set takes a declared Result's tags (B5)" =
+  (* a declared `Result` says what it can hold, more than a call fails
+     with if it likes, so a kept set can be one: as a parameter's type,
+     as a function's result, here or in another module, and where the
+     type of what's made with `Err` is said *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import util
+fn mk2<T>(c: Bool) -> Result<T, ! Left(Int) | Right> =
+  if c then Err(Left(1)) else Err(Right)
+fn kept(c: Bool) = if c then mk2(c) else attempt util.g()
+fn there(c: Bool) = if c then util.made(c) else attempt util.g()
+fn retry(r: Result<Int, ! Left(Int) | Right>) -> Bool =
+  match r
+    Ok(_) => false
+    Err(Left(_)) => true
+    Err(Right) => false
+fn main() =
+  print([kept(true), kept(false), there(false)])
+  print(retry(attempt util.g()))
+|}
+      );
+      ( "util.ren",
+        {|
+pub fn g() -> Int ! Left(Int) = fail Left(2)
+pub fn made(c: Bool) -> Result<Int, ! Left(Int) | Right> =
+  if c then Err(Left(1)) else Err(Right)
+|}
+      );
+    ];
+  [%expect {|
+    [Err(Left(1)), Err(Left(2)), Err(Left(2))]
+    true
+    ()
+    |}]
+
 let%expect_test "a tag inside Err has to be one the Result can hold" =
   (* compared with what an `attempt` kept, or given where a declared
      `Result` is wanted, it's checked as a tag in a pattern is *)

@@ -96,7 +96,11 @@ let value_tag env ~kept t =
          && (not (in_params t.tin tl))
          && not (List.exists (fun (l : label) -> l.name = t.ttag.name) labels)
     -> (
-      let l = { name = t.ttag.name; payload = t.tpayload } in
+      (* marked as written, so a kept set it meets in a later group is
+         known to have it from here (see [written_kept]) *)
+      let l =
+        { name = t.ttag.name; payload = t.tpayload; written = Some t.ttag.loc }
+      in
       (* a named row can't learn a tag: it's checked with the patterns,
          and isn't one of the errors *)
       match
@@ -304,10 +308,59 @@ let install env ~shared w =
    matched in it later is checked against exactly that. One of a call of a
    function it was passed keeps whatever that function fails with, so it
    stays open, like the function's. *)
-let kept (k, params) =
+let kept (k, params, _) =
   match row_tail k with
   | Some t when in_params params t -> ()
   | _ -> close_row k
+
+(* What an `attempt` keeps holds no tag written inside `Err` that no call
+   it covers fails with (errors.md, "Keeping an error"). In its own group
+   such a tag is checked where it meets the kept set ([value_tag]), but a
+   set of them from an earlier group is a type like any other by then, and
+   meeting it gave the kept set its tags: those are marked as written
+   ([Types.label]), so the ones none of its calls fail with are reported
+   here. A declared `Result`'s tags aren't marked, so a kept set can still
+   take those. [into] are the group's inclusions, by which the calls and
+   `fail`s add what they fail with. A `match`'s set, which no value holds,
+   has no [at]. *)
+let written_kept env ~into (k, _, at) =
+  let labels = fst (row_parts k) in
+  match at with
+  | Some at when List.exists (fun (l : label) -> l.written <> None) labels -> (
+      (* what the calls fail with, looked for only here, since it goes
+         through all the group's inclusions: those into this very row,
+         the one the `attempt` made ([==]), not another that's equal *)
+      let fails =
+        List.concat_map
+          (fun i ->
+            if i.idst == k then
+              List.filter
+                (fun n -> not (List.mem n i.iwithout))
+                (row_names i.isrc)
+            else [])
+          into
+      in
+      match
+        List.filter_map
+          (fun (l : label) ->
+            match l.written with
+            | Some w when not (List.mem l.name fails) -> Some (l.name, w)
+            | _ -> None)
+          labels
+      with
+      | [] -> ()
+      | extra ->
+          let shown = List.map (show_label (printer env)) in
+          (* it's closed, as the set it met is, so it holds what that
+             holds *)
+          report env
+            (kept_written at ~extra ~written:(shown labels)
+               ~fails:
+                 (shown
+                    (List.filter
+                       (fun (l : label) -> List.mem l.name fails)
+                       labels))))
+  | _ -> ()
 
 (* A tag matched in a set that was still open (see [Infer_env.tag_pattern])
    is one of its tags, with as many payloads; or else it's a tag written
@@ -733,19 +786,24 @@ let solve env ~is_value ~withheld =
     (function Own_errors c -> Infer_declared.own_errors env c | _ -> ())
     cs;
   let kept_sets =
-    List.filter_map (function Kept (k, p) -> Some (k, p) | _ -> None) cs
+    List.filter_map
+      (function Kept (k, p, at) -> Some (k, p, at) | _ -> None)
+      cs
   in
   (* the tags that went in are no longer checked with the patterns *)
   let added =
     List.filter_map
       (function
-        | Value_tag t when value_tag env ~kept:(List.map fst kept_sets) t ->
+        | Value_tag t
+          when value_tag env ~kept:(List.map (fun (k, _, _) -> k) kept_sets) t
+          ->
             Some t
         | _ -> None)
       cs
   in
-  worklist ~awake ~decide:(include_ env)
-    (List.filter_map (function Include i -> Some i | _ -> None) cs);
+  let into = List.filter_map (function Include i -> Some i | _ -> None) cs in
+  worklist ~awake ~decide:(include_ env) into;
+  List.iter (written_kept env ~into) kept_sets;
   List.iter kept kept_sets;
   (* a set the tags written as values went in, one of their own, holds
      those and no more, as a kept set does: `if c then Err(Left(1)) else

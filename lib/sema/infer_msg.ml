@@ -2026,6 +2026,43 @@ let not_an_error (c : Ast.ident) ?(arm = false) tags =
           "check the spelling: a tag that's written wrong is a different error")
     (sprintf "`%s` isn't one of the errors this can %s" c.name holds)
 
+(* What the `attempt` at [loc] keeps holds tags written inside `Err` in
+   another function, in a `Result` of their own, that nothing it covers
+   fails with (B5): its `Result` met that one, and the two became one
+   type. [extra] are those tags, as shown, each with where it's written;
+   [written] all the tags that `Result` holds, and [fails] what the calls
+   the `attempt` covers fail with. *)
+let kept_written loc ~extra ~written ~fails =
+  let names = List.map fst extra in
+  Diag.make loc
+    ~labels:
+      (List.map
+         (fun (tag, at) ->
+           ( at,
+             sprintf
+               "`%s` is written here, in a `Result` that holds exactly the \
+                tags written in it"
+               tag ))
+         extra)
+    ~notes:
+      [
+        sprintf
+          "its `Result` is used as one made with `Err`, which holds %s, but \
+           what an `attempt` keeps is what the calls it covers fail with%s, \
+           and nothing more"
+          (and_list written)
+          (if fails = [] then "" else ", " ^ and_list fails);
+      ]
+    ~help:
+      (sprintf
+         "keep the two `Result`s apart, or write the type of the function that \
+          makes the one with `Err`, with %s in its `Result`: what an `attempt` \
+          keeps can be a declared `Result`, which can hold more"
+         (code ("! " ^ String.concat " | " written)))
+    (sprintf "this `attempt` can't keep %s: nothing it covers fails with %s"
+       (and_list names)
+       (if List.length names = 1 then "it" else "them"))
+
 (* [c] matched, or written as a value ([value]), in an error set that's
    open: it holds whatever the function passed as [param] fails with,
    which no name can be checked against. *)

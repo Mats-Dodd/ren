@@ -270,11 +270,12 @@ and constr =
       (** a tag written as a value, `Err(Right)`, is in its error set, if the
           set is one of its own *)
   | Include of inclusion  (** one row of errors is in another *)
-  | Kept of row * (string * ty) list
+  | Kept of row * (string * ty) list * Loc.t option
       (** the errors an `attempt` keeps in its [Result], or a `match` with
           `fail` arms handles, with the parameters of the function and lambdas
           it's in: it holds no more than what it has once the group's error sets
-          have all their tags *)
+          have all their tags. For an `attempt`, where its keyword is: its
+          [Result] is a value, which can meet a set of tags written in `Err` *)
   | Tag_pattern of tag_pattern
       (** a tag matched in an error set that was still open is one of its tags
       *)
@@ -535,7 +536,7 @@ let defer env c = env.pending <- c :: env.pending
    keeps, or a `match` handles, of those met so far. *)
 let kept env tail =
   List.exists
-    (function Kept (k, _) -> row_tail k = Some tail | _ -> false)
+    (function Kept (k, _, _) -> row_tail k = Some tail | _ -> false)
     env.pending
 
 (* Inside the function, an `inout` parameter is an ordinary variable. *)

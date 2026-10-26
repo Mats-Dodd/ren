@@ -100,11 +100,12 @@ let sources_later cx ~this () =
   let sources, origin = sources_of cx in
   (List.filter (fun s -> not (this s)) sources, origin)
 
-(* [r]'s labels, without the tags [names]. *)
+(* [r]'s labels, without the tags [names], as what's failed with. *)
 let without names r =
   extend
-    (List.filter
-       (fun (l : label) -> not (List.mem l.name names))
+    (List.filter_map
+       (fun (l : label) ->
+         if List.mem l.name names then None else Some (unwritten l))
        (fst (row_parts r)))
     REmpty
 
@@ -148,7 +149,9 @@ let add_errors env ~loc ~here ~sources ~fix errs into =
   (* only [errs]'s labels, with a fresh tail: unified with its own tail,
      [errs] would become [into], and fail with everything [into] does.
      Tried on copies first, so if it fails, nothing changes *)
-  let added = extend (fst (row_parts errs)) (fresh_row env.st) in
+  let added =
+    extend (List.map unwritten (fst (row_parts errs))) (fresh_row env.st)
+  in
   match
     Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
         Unify.unify_row st (c.row added) (c.row into))
@@ -475,7 +478,7 @@ let pass_on env cx m (subject : expr) arms errs =
   | None -> m.hint <- Some All_handled
   | Some names ->
       let rest = fresh_row env.st in
-      defer env (Kept (rest, cx.params));
+      defer env (Kept (rest, cx.params, None));
       (* what's added to these sources as the rest of the function is
          checked is still there to say where a tag came from *)
       let sources () = sources_of cx in

@@ -336,11 +336,12 @@ and synth env cx (e : expr) : ty =
       dropped env cx (result_of body) (infer env cx body);
       unit
   | Fail (tag, args) ->
-      (* the error joins whatever handles the code here; a field's name in
-         the payload only documents it *)
+      (* the error joins whatever handles the code here, by inclusion, as
+         a call's do, so the solver knows what an `attempt` around it
+         fails with; a field's name in the payload only documents it *)
       let payload = List.map (fun (_, a) -> infer env cx a) args in
-      let l = { name = tag.name; payload } in
-      add_errors env ~loc:e.loc ~here:(This "fail")
+      let l = { name = tag.name; payload; written = None } in
+      include_errors env cx ~loc:e.loc ~here:(This "fail")
         ~sources:(fun () -> sources_of cx)
         ~fix:rename_fail (extend [ l ] REmpty) cx.handler;
       Option.iter (fun s -> s := Failed (e.loc, l) :: !s) cx.sources;
@@ -394,9 +395,10 @@ and synth env cx (e : expr) : ty =
   | Attempt a ->
       (* the calls it covers fail into its [Result] instead, and so does a
          `fail` *)
-      let m = marker env Mattempt (keyword e.loc 7) in
+      let at = keyword e.loc 7 in
+      let m = marker env Mattempt at in
       let kept = fresh_row env.st in
-      defer env (Kept (kept, cx.params));
+      defer env (Kept (kept, cx.params, Some at));
       let t =
         infer env { cx with handler = kept; markers = [ m ]; sources = None } a
       in
@@ -895,7 +897,7 @@ and infer_match env cx ?passed node subject arms ~want =
       let first = List.find (fun a -> is_fail a.arm_pat) arms in
       let m = marker env Mmatch first.arm_pat.ploc in
       let errs = fresh_row env.st in
-      defer env (Kept (errs, cx.params));
+      defer env (Kept (errs, cx.params, None));
       let ts =
         infer env
           { cx with handler = errs; markers = [ m ]; sources = None }

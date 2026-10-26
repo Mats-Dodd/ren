@@ -172,7 +172,14 @@ error rather than a comparison that's never true. That's so on either side
 of `==`, through a `let` or inside another value, `Some(Err(...))`, and a
 kept set never gains a tag no call fails with. Otherwise it makes a set of
 its own: `if c then Err(Left(1)) else Err(Right)` is a
-`Result<T, ! Left(Int) | Right>`. Only a tag can go inside `Err`, so an
+`Result<T, ! Left(Int) | Right>`. Its tags are still ones written in
+`Err` wherever the `Result` goes, so with `fn mk2(c: Bool)` returning
+that, `if c then mk2(c) else attempt g()` is an error if `g` can't fail
+with `Right`, as it would be with the `Err`s written in place. A
+declared `Result` is different: its type says what it can hold, more
+than any call fails with if it likes, so what an `attempt` keeps can be
+one, as in `worth_retrying(attempt busy())` for a `fn
+worth_retrying(r: Result<Int, ! NotFound(Int) | Busy>)`. Only a tag can go inside `Err`, so an
 error is never a value outside a `Result`. A name there is always a tag,
 as in a pattern, even where a type in scope has a constructor of that
 name. `try` passes on what such a `Result` holds as it does any
