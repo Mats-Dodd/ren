@@ -32,7 +32,13 @@
    And the evidence (core.ml) is threaded: each function and lambda takes
    its own, each call passes the one in scope, and a call of an
    operation, `Clock.now()`, is a [Dep_call] on it. An operation used as a
-   value, `let write = Console.write`, is a lambda that calls it. *)
+   value, `let write = Console.write`, is a lambda that calls it.
+
+   So are types' descriptors (core.ml, [desc]): each function takes one
+   for each of its type variables, and each use of a generic function, and
+   each `assert a == b`, gets the descriptors of its types, built from
+   them. Which types show their values through a `show` method of their
+   own is decided here too, once. *)
 
 open Ast
 open Ast.Resolved
@@ -55,6 +61,7 @@ type cx = {
   mutable ev : C.var;
       (** the evidence in scope: the function's, or the lambda's whose body is
           being lowered *)
+  tys : C.var list;  (** the function's hidden type parameters (core.ml) *)
 }
 
 let node cx id =
@@ -70,6 +77,10 @@ let targs_of cx id =
   match (node cx id).targs with
   | Some a -> a
   | None -> bug (Printf.sprintf "no type arguments for node %d" id)
+
+(* The descriptors a use at the type arguments [a] is passed (core.ml,
+   [desc]), built from the function's own hidden type parameters. *)
+let descs cx (a : Ty.args) = List.map (C.describe cx.tys) a.tys
 
 (* Whether inference found [id] to be a `match` with `fail` arms, or a
    `fail` arm's pattern (Infer.found). *)
@@ -228,9 +239,13 @@ and expr_of cx (e : expr) : C.expr =
   | Str s -> here (Str s)
   | Unit -> here Unit
   | Var (Local b) -> local (var_of cx b) e.loc
-  | Var (Global p) -> here (Global (p, targs_of cx e.node))
+  | Var (Global p) ->
+      let a = targs_of cx e.node in
+      here (Global (p, a, descs cx a))
   | Var (Global_value p) -> here (Global_value (p, targs_of cx e.node))
-  | Var (Intrinsic x) -> here (Intrinsic (x, targs_of cx e.node))
+  | Var (Intrinsic x) ->
+      let a = targs_of cx e.node in
+      here (Intrinsic (x, a, descs cx a))
   | Var (Dep_op (dep, op)) -> (
       (* used as a value: a lambda that calls it, with the evidence it's
          given where it's called *)
@@ -310,7 +325,8 @@ and expr_of cx (e : expr) : C.expr =
       (* both sides, so a failure can show them, and where the comparison
          is, which it points at *)
       let a = expr cx a in
-      mk (Assert_equal (a, expr cx b)) Ty.unit cmp.loc
+      let b = expr cx b in
+      mk (Assert_equal (a, b, C.describe cx.tys a.ty)) Ty.unit cmp.loc
   | Assert a -> here (Assert (expr cx a))
   | Attempt a ->
       (* `Ok` of its value, or `Err` of its error *)
@@ -668,8 +684,8 @@ and plain_call cx ~changed ?last (e : expr) f args =
         let callee : C.kind =
           let a = targs_of cx f.node in
           match Prelude.find p with
-          | Some x -> Intrinsic (x, a)
-          | _ -> Global (p, a)
+          | Some x -> Intrinsic (x, a, descs cx a)
+          | _ -> Global (p, a, descs cx a)
         in
         (mk callee (ty_of cx f.node) f.loc, [ recv ])
     | _ -> (expr cx f, [])
@@ -811,8 +827,10 @@ and free (e : C.expr) =
   let bind (v : C.var) = bound := Ids.add v.id !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Bool _ | Str _ | Unit | Global _ | Global_value _ | Intrinsic _ ->
-        ()
+    | Int _ | Bool _ | Str _ | Unit | Global_value _ -> ()
+    | Global (_, _, ds) | Intrinsic (_, _, ds) ->
+        (* the hidden type parameters its descriptors are built from *)
+        List.iter use (List.concat_map C.desc_vars ds)
     | Local v -> use v
     | Prim (_, args)
     | Array args
@@ -830,9 +848,13 @@ and free (e : C.expr) =
     | Instance impls -> List.iter (fun (_, i) -> go i) impls
     | Handler { captures; _ } -> List.iter use captures
     | Fail a | As_dep (_, a) | Assert a -> go a
-    | Finally (a, b) | Assert_equal (a, b) ->
+    | Finally (a, b) ->
         go a;
         go b
+    | Assert_equal (a, b, d) ->
+        go a;
+        go b;
+        List.iter use (C.desc_vars d)
     | Handle { body; value; on_value; error; on_error } ->
         go body;
         bind value;
@@ -952,6 +974,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
       vars = Hashtbl.create 16;
       next = next + 1;
       ev = C.evidence next;
+      tys = C.type_params scheme;
     }
   in
   let ps =
@@ -965,14 +988,50 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
         { mode = p.pmode; var = bind cx p.pname t.ty })
       f.params ps
   in
-  { path; params; ev = cx.ev; scheme; body = expr cx f.body; loc = f.name.loc }
+  {
+    path;
+    params;
+    ev = cx.ev;
+    tys = cx.tys;
+    scheme;
+    body = expr cx f.body;
+    loc = f.name.loc;
+  }
+
+(* The types among [types] that show their values through their own
+   `show` method (shown.ml), each with its function, one of [fns]: a
+   method that takes only its `self`, of the type with its parameters in
+   order, and gives a `Str` without failing or using a dependency. Decided
+   here, once, so the interpreter never looks for a member by its name. *)
+let shows (types : Iface.type_decl list) (fns : C.fn_def list) =
+  List.filter_map
+    (fun (d : Iface.type_decl) ->
+      let own = List.init (List.length d.params) (fun n -> Ty.Var n) in
+      match Iface.find_member d "show" with
+      | Some
+          {
+            okind = Method;
+            oscheme =
+              { ty = Fun ([ { ty = Con (p, args); _ } ], ret, errs, uses); _ };
+            _;
+          }
+        when p = d.path && args = own && ret = Ty.str && errs.labels = []
+             && uses.labels = [] ->
+          let m = Path.member d.path "show" in
+          if List.exists (fun (f : C.fn_def) -> f.path = m) fns then
+            Some (d.path, m)
+          else None
+      | _ -> None)
+    types
 
 let program (r : Resolve.t) (inferred : Infer.t) : C.program =
+  let fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog) in
   {
     home = r.home;
     types = r.types;
-    fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog);
+    fns;
     values = inferred.values;
+    shows = shows r.types fns;
   }
 
 (* ---- starting ---- *)
@@ -991,13 +1050,16 @@ let start (main : C.fn_def) : C.fn_def =
     | _ -> bug "a `main` whose type isn't a function's"
   in
   let deps = List.map (fun (l : Ty.label) -> Ty.dep_path l.name) uses.labels in
+  let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) } in
+  let tys = C.type_params scheme in
   (* each install's evidence is numbered after the one it extends *)
   let rec install n = function
     | [] ->
+        let own = Ty.own_args main.scheme.ty in
         mk
           (Call
              ( mk
-                 (Global (main.path, Ty.own_args main.scheme.ty))
+                 (Global (main.path, own, List.map (C.describe tys) own.tys))
                  main.scheme.ty loc,
                [],
                C.evidence n ))
@@ -1024,7 +1086,8 @@ let start (main : C.fn_def) : C.fn_def =
     path = Path.make main.path.home start_name;
     params = [];
     ev = C.evidence 1;
-    scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) };
+    tys;
+    scheme;
     body = install 1 deps;
     loc;
   }

@@ -26,12 +26,12 @@
    operation finds its dependency's implementation in it by the
    dependency's path, never by a name the program spells.
 
-   A value is shown through its type (shown.ml), which at runtime only a
-   call knows for a generic function: `print<T>`'s `T` is whatever the
-   caller passes. So each call works out what its callee's type variables
-   stand for, from the type the callee has at the call, and the callee
-   runs with them, [ctx.tys], as a compiler that makes a copy of each
-   generic function for each type it's called at would. *)
+   A value is shown through its type (shown.ml), which for a generic
+   function only its caller knows: `print<T>`'s `T` is whatever the caller
+   passes. So a generic function is given a descriptor of the type each of
+   its type variables stands for, as a hidden parameter, which lowering
+   made explicit (core.ml, [desc]), and the interpreter only evaluates
+   them, as it does evidence: it never works a type out. *)
 
 open Core
 open Value
@@ -69,18 +69,18 @@ let rec equal loc a b =
   | _ -> a = b
 
 (* The program's top-level functions, by path, its associated values
-   once they're made, and its types. Nothing else is global: what's
-   installed is evidence (core.ml), held in a variable like any value.
-   [tys] is what the type variables of the function running stand for, by
-   number, as far as its caller knew, and [showing] the types whose own
-   `show` method it's inside. [depth] is how many calls deep the program
-   is, not counting tail calls: one cell, shared by every copy of the
-   [ctx] made with [{ cx with ... }]. *)
+   once they're made, and its types, with the function that shows each
+   type that has a `show` method of its own (Core.program). Nothing else
+   is global: what's installed is evidence (core.ml), held in a variable
+   like any value. [showing] are the types whose own `show` method the
+   program is inside. [depth] is how many calls deep the program is, not
+   counting tail calls: one cell, shared by every copy of the [ctx] made
+   with [{ cx with ... }]. *)
 type ctx = {
   fns : (Path.t, fn_def) Hashtbl.t;
   values : (Path.t, Value.t) Hashtbl.t;
   types : Shown.types;
-  tys : Ty.ty Env.t;
+  shows : (Path.t, Path.t) Hashtbl.t;
   showing : Path.t list;
   depth : int ref;
 }
@@ -105,65 +105,10 @@ type step =
   | Done of Value.t
   | Tail of {
       loc : Loc.t;  (** where the call is *)
-      fty : Ty.ty;  (** the callee's type at the call, resolved *)
       f : Value.t;
       args : Value.t list;
       ev : Value.t;  (** the evidence it's passed *)
     }
-
-(* [t], with each type variable [tys] knows replaced by what it stands for.
-   One it doesn't know stays a variable: a value of that type is shown by
-   its shape alone. *)
-let rec resolve tys (t : Ty.ty) : Ty.ty =
-  let row (r : Ty.row) =
-    {
-      r with
-      labels =
-        List.map
-          (fun (l : Ty.label) ->
-            { l with payload = List.map (resolve tys) l.payload })
-          r.labels;
-    }
-  in
-  match t with
-  | Var i -> Option.value (Env.find_opt i tys) ~default:t
-  | Con (p, ts) -> Con (p, List.map (resolve tys) ts)
-  | Fun (ps, r, e, u) ->
-      Fun
-        ( List.map (fun (p : Ty.param) -> { p with ty = resolve tys p.ty }) ps,
-          resolve tys r,
-          row e,
-          u )
-  | Errors e -> Errors (row e)
-  | Uses _ | Error -> t
-
-(* What a function's type variables stand for in a call: its type as it's
-   declared, [declared], matched against the type it has at the call,
-   [actual], added to [tys]. *)
-let rec bind tys (declared : Ty.ty) (actual : Ty.ty) =
-  let all tys ds xs =
-    if List.length ds = List.length xs then List.fold_left2 bind tys ds xs
-    else tys
-  in
-  match (declared, actual) with
-  | _, Var _ -> tys
-  | Var i, t -> if Env.mem i tys then tys else Env.add i t tys
-  | Con (p, ds), Con (q, xs) when p = q -> all tys ds xs
-  | Fun (dps, dr, de, _), Fun (xps, xr, xe, _) ->
-      let ty (p : Ty.param) = p.ty in
-      let tys = all tys (List.map ty dps) (List.map ty xps) in
-      bind (bind tys dr xr) (Errors de) (Errors xe)
-  | Errors d, Errors x ->
-      (* a tag's payload, matched by the tag's name *)
-      List.fold_left
-        (fun tys (l : Ty.label) ->
-          match
-            List.find_opt (fun (m : Ty.label) -> m.name = l.name) x.labels
-          with
-          | Some m -> all tys l.payload m.payload
-          | None -> tys)
-        tys d.labels
-  | _ -> tys
 
 let binop loc (op : Ast.binop) a b =
   match (op, a, b) with
@@ -236,8 +181,8 @@ let cell env (v : var) =
 
 (* What [f] is, for a bug report. *)
 let describe = function
-  | VFn p -> "`" ^ Path.local p ^ "`"
-  | VBuiltin x -> "`" ^ Intrinsic.name x ^ "`"
+  | VFn (p, _) -> "`" ^ Path.local p ^ "`"
+  | VBuiltin (x, _) -> "`" ^ Intrinsic.name x ^ "`"
   | VClosure { body; _ } ->
       Printf.sprintf "a lambda (its body at %s:%d)" body.loc.file
         body.loc.start.line
@@ -251,6 +196,35 @@ let evidence_in env (v : var) what =
   | Some _ -> bug (what ^ " with something that isn't evidence")
   | None -> bug (what ^ " with evidence that isn't in scope")
 
+(* The type [d] describes (core.ml, [desc]): built from its parts, with
+   what the hidden type parameters it names hold, as a constructor's value
+   is. *)
+let rec type_of env (d : desc) : Ty.ty =
+  let row r : Ty.row =
+    {
+      labels =
+        List.map
+          (fun (name, ds) : Ty.label ->
+            { name; payload = List.map (type_of env) ds })
+          r.dlabels;
+      tail = r.dtail;
+    }
+  in
+  match d with
+  | Known t -> t
+  | Param v -> (
+      match !(cell env v) with
+      | VType t -> t
+      | _ -> bug ("a descriptor built from `" ^ v.name ^ "`, which isn't one"))
+  | Applied (p, ds) -> Con (p, List.map (type_of env) ds)
+  | Fn (ps, r, e, u) ->
+      Fun
+        ( List.map (fun (mode, d) : Ty.param -> { mode; ty = type_of env d }) ps,
+          type_of env r,
+          row e,
+          u )
+  | Errs e -> Errors (row e)
+
 let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
@@ -258,13 +232,13 @@ let rec eval cx env (e : expr) =
   | Str s -> VStr s
   | Unit -> VUnit
   | Local v -> !(cell env v)
-  | Global (p, _) -> VFn p
+  | Global (p, _, ds) -> VFn (p, List.map (type_of env) ds)
   | Global_value (p, _) -> (
       match Hashtbl.find_opt cx.values p with
       | Some v -> v
       | None -> bug ("the value `" ^ Path.local p ^ "` used before it's made"))
-  | Intrinsic (x, _) -> VBuiltin x
-  | Dep_call { dep; op; ev; args; fty; _ } -> (
+  | Intrinsic (x, _, ds) -> VBuiltin (x, List.map (type_of env) ds)
+  | Dep_call { dep; op; ev; args; _ } -> (
       (* the innermost implementation of [dep]: a record of functions, the
          operation's run with what was installed where it was *)
       let args = eval_all cx env args in
@@ -276,9 +250,7 @@ let rec eval cx env (e : expr) =
       with
       | Some { impl = VRecord ops; outer; _ } -> (
           match List.assoc_opt op ops with
-          | Some f ->
-              let fty = resolve cx.tys fty in
-              ok (fst (call_at cx e.loc ~fty f args (VEvidence outer)))
+          | Some f -> ok (fst (call_at cx e.loc f args (VEvidence outer)))
           | None -> bug (what ^ " on an implementation without it"))
       | Some _ -> bug (what ^ " on an implementation that isn't a record")
       | None -> bug (what ^ " where nothing installs `" ^ dep.name ^ "`"))
@@ -306,7 +278,7 @@ let rec eval cx env (e : expr) =
           (fun inner (v : var) -> Env.add v.id (ref !(cell env v)) inner)
           Env.empty captures
       in
-      VHandler { ev = ev.id; body; env; tys = cx.tys }
+      VHandler { ev = ev.id; body; env }
   | Instance impls ->
       let values = eval_all cx env (List.map snd impls) in
       VInstance (List.combine (List.map fst impls) values)
@@ -345,7 +317,6 @@ let rec eval cx env (e : expr) =
       ignore (eval cx env a);
       eval cx env b
   | Call (f, args, ev) ->
-      let fty = resolve cx.tys f.ty in
       let f = eval cx env f in
       (* an `inout` argument is a local: read it now, and write the
          parameter's final value back once the call returns *)
@@ -354,7 +325,7 @@ let rec eval cx env (e : expr) =
           (List.map (function Value a -> a | Ref v -> local v e.loc) args)
       in
       let ev = evidence_in env ev ("a call of " ^ describe f) in
-      let result, finals = call_at cx e.loc ~fty f values (VEvidence ev) in
+      let result, finals = call_at cx e.loc f values (VEvidence ev) in
       (* written back whether the call failed or not: failing doesn't undo
          what it changed (errors.md, "Failure and `&`") *)
       List.iter2
@@ -376,7 +347,6 @@ let rec eval cx env (e : expr) =
           ev = ev.id;
           body;
           env;
-          tys = cx.tys;
         }
   | Con (p, c, args) -> VCon { ty = p; name = c; args = eval_all cx env args }
   | Record (_, fields) ->
@@ -412,7 +382,7 @@ let rec eval cx env (e : expr) =
       if not (truth (eval cx env a)) then
         raise (Assert_failed { loc = a.loc; sides = None });
       VUnit
-  | Assert_equal (a, b) ->
+  | Assert_equal (a, b, d) ->
       let x = eval cx env a in
       let y = eval cx env b in
       if not (equal e.loc x y) then
@@ -422,8 +392,7 @@ let rec eval cx env (e : expr) =
                loc = e.loc;
                sides =
                  Some
-                   (Shown.sides ~own:(own_show cx) cx.types
-                      (resolve cx.tys a.ty) x y);
+                   (Shown.sides ~own:(own_show cx) cx.types (type_of env d) x y);
              });
       VUnit
   | Finally (body, after) -> (
@@ -455,14 +424,13 @@ and tail cx env (e : expr) =
       tail cx env body
   | Call (f, args, ev)
     when List.for_all (function Value _ -> true | Ref _ -> false) args ->
-      let fty = resolve cx.tys f.ty in
       let f = eval cx env f in
       let args =
         eval_all cx env
           (List.filter_map (function Value a -> Some a | Ref _ -> None) args)
       in
       let ev = evidence_in env ev ("a call of " ^ describe f) in
-      Tail { loc = e.loc; fty; f; args; ev = VEvidence ev }
+      Tail { loc = e.loc; f; args; ev = VEvidence ev }
   | _ -> Done (eval cx env e)
 
 (* Make the call [step] ends in, then the one that ends in, and so on,
@@ -493,7 +461,7 @@ and finish cx at step =
   | Tail t ->
       let at = if t.loc.file <> Prelude.file then Some t.loc else at in
       let next =
-        try enter cx ~fty:t.fty t.f t.args t.ev with
+        try enter cx t.f t.args t.ev with
         | Builtins.Panic msg -> panic (Option.value at ~default:t.loc) msg
         | Panic (l, msg) when l.file = Prelude.file && at <> None ->
             panic (Option.get at) msg
@@ -507,7 +475,6 @@ and ok = function Ok v -> v | Error err -> raise (Failed err)
    installed where it's installed, which its operations then run with: its
    implementation of each of its dependencies. *)
 and instance cx (h : handler) outer what =
-  let cx = { cx with tys = h.tys } in
   match eval cx (Env.add h.ev (ref (VEvidence outer)) h.env) h.body with
   | VInstance impls -> impls
   | _ -> bug (what ^ " whose description doesn't make an instance")
@@ -520,21 +487,20 @@ and eval_all cx env = function
       v :: eval_all cx env rest
 
 (* [apply], from a call at [loc]. *)
-and call_at cx loc ~fty f args ev =
-  try apply cx ~fty f args ev with
+and call_at cx loc f args ev =
+  try apply cx f args ev with
   | Builtins.Panic msg -> panic loc msg
   | Panic (l, msg) when l.file = Prelude.file && loc.file <> Prelude.file ->
       (* the prelude's source can't be shown, so a panic inside it is the
          program's call that reached it *)
       panic loc msg
 
-(* Call [f], of type [fty] at the call, passing it the evidence [ev].
-   Returns its result, or the error it failed with, and the final value of
-   every parameter, so the caller can write back the ones passed `inout`.
-   A call that doesn't know [f]'s type passes [Ty.Error]. *)
-and apply cx ~fty f args ev =
+(* Call [f], passing it the evidence [ev]. Returns its result, or the
+   error it failed with, and the final value of every parameter, so the
+   caller can write back the ones passed `inout`. *)
+and apply cx f args ev =
   match f with
-  | VBuiltin _ -> builtin cx ~fty f args
+  | VBuiltin _ -> builtin cx f args
   | _ ->
       (* the function's parameters are cells, whose final values are
          returned, to be written back to the arguments passed `inout`. The
@@ -545,7 +511,7 @@ and apply cx ~fty f args ev =
       if !(cx.depth) >= max_depth then raise Too_deep;
       incr cx.depth;
       let result =
-        match finish cx None (start cx ~fty f cells ev) with
+        match finish cx None (start cx f cells ev) with
         | v -> Ok v
         | exception Failed err -> Error err
         | exception e ->
@@ -557,8 +523,9 @@ and apply cx ~fty f args ev =
 
 (* Begin a call of [f], a function of the program, whose parameters are
    [cells]: evaluate its body as far as the call it ends in, if it ends in
-   one. *)
-and start cx ~fty f cells ev =
+   one. A top-level function's hidden type parameters hold what its value
+   was given for them where it was used. *)
+and start cx f cells ev =
   let run cx params ev_id body env =
     (match ev with
     | VEvidence _ -> ()
@@ -572,75 +539,60 @@ and start cx ~fty f cells ev =
     tail cx env body
   in
   match f with
-  | VFn p ->
+  | VFn (p, tys) ->
       let f =
         match Hashtbl.find_opt cx.fns p with
         | Some f -> f
         | None -> bug ("a call of `" ^ Path.local p ^ "`, which doesn't exist")
       in
-      let tys = bind Env.empty f.scheme.ty fty in
-      run { cx with tys }
+      if List.length tys <> List.length f.tys then
+        bug
+          ("a call of `" ^ Path.local p
+         ^ "` with the wrong number of type descriptors");
+      let env =
+        List.fold_left2
+          (fun env (v : var) t -> Env.add v.id (ref (VType t)) env)
+          Env.empty f.tys tys
+      in
+      run cx
         (List.map (fun (p : param) -> p.var.id) f.params)
-        f.ev.id f.body Env.empty
-  | VClosure { params; ev; body; env; tys } ->
-      run { cx with tys } params ev body env
+        f.ev.id f.body env
+  | VClosure { params; ev; body; env } -> run cx params ev body env
   | _ -> bug "a call to something that isn't a function"
 
 (* A call in tail position, which [finish] makes: a built-in's value, or
    its error, or the callee's body as far as the call it ends in. *)
-and enter cx ~fty f args ev =
+and enter cx f args ev =
   match f with
-  | VBuiltin _ -> Done (ok (fst (builtin cx ~fty f args)))
-  | _ -> start cx ~fty f (List.map ref args) ev
+  | VBuiltin _ -> Done (ok (fst (builtin cx f args)))
+  | _ -> start cx f (List.map ref args) ev
 
 (* A call of a built-in function, which [apply] returns. *)
-and builtin cx ~fty f args =
+and builtin cx f args =
   match f with
-  | VBuiltin Show -> (
-      (* the one built-in that needs its argument's type *)
-      match (fty, args) with
-      | _, [ v ] ->
-          let t =
-            match fty with Fun ([ p ], _, _, _) -> p.ty | _ -> Ty.Error
-          in
+  | VBuiltin (Show, tys) -> (
+      (* the one built-in that needs its argument's type, which is what its
+         type variable stands for *)
+      match (tys, args) with
+      | [ t ], [ v ] ->
           (Ok (VStr (Shown.shown ~own:(own_show cx) cx.types t v)), args)
       | _ -> bug "a call of `show` with the wrong number of arguments")
-  | VBuiltin x -> (
+  | VBuiltin (x, _) -> (
       match Builtins.run x args with
       | v, finals -> (Ok v, finals)
       | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"
 
-(* [v], of type [t] in the function running, as `show` and a failed
-   `assert` show it (shown.ml). *)
-and show_value cx t v =
-  Shown.value ~own:(own_show cx) cx.types (resolve cx.tys t) v
-
-(* How the type [p], given [args], shows [v] (Shown.own): through its own
-   method `show`, if it has one that takes only its `self` and gives a
-   `Str` without failing or using a dependency, unless that's where this
-   is. *)
+(* How the type [p], given [args], shows [v] (Shown.own): through the
+   `show` method of its own that lowering found for it (Core.program), if
+   it has one, unless that's where this is. The method's type variables
+   are the type's parameters, in order, so it's given [args] for them. *)
 and own_show cx (p : Path.t) args v : Shown.own =
-  let own (d : Iface.type_decl) =
-    match Iface.find_member d "show" with
-    | Some
-        {
-          okind = Method;
-          oscheme = { ty = Fun ([ _ ], ret, errs, uses); _ };
-          _;
-        }
-      when ret = Ty.str && errs.labels = [] && uses.labels = [] ->
-        Some (Path.member p "show")
-    | _ -> None
-  in
-  match Option.bind (Hashtbl.find_opt cx.types p) own with
+  match Hashtbl.find_opt cx.shows p with
   | Some _ when List.mem p cx.showing -> Inside
   | Some m when Hashtbl.mem cx.fns m -> (
-      let fty =
-        Ty.Fun ([ Ty.read (Con (p, args)) ], Ty.str, Ty.closed, Ty.closed)
-      in
       let cx = { cx with showing = p :: cx.showing } in
-      match apply cx ~fty (VFn m) [ v ] (VEvidence []) with
+      match apply cx (VFn (m, args)) [ v ] (VEvidence []) with
       | Ok (VStr s), _ -> Itself s
       | _ -> Declared)
   | _ -> Declared
@@ -651,8 +603,18 @@ let error_of cx p err =
   match
     Option.map (fun (f : fn_def) -> f.scheme.ty) (Hashtbl.find_opt cx.fns p)
   with
-  | Some (Fun (_, _, errs, _)) -> show_value cx (Errors errs) err
+  | Some (Fun (_, _, errs, _)) ->
+      Shown.value ~own:(own_show cx) cx.types (Errors errs) err
   | _ -> Value.show err
+
+(* The top-level function [p], as the runtime calls it, from outside the
+   program: nothing there knows what its type variables stand for, so its
+   value is given each as a type variable nothing decided, and a value of
+   that type is shown by its shape alone (shown.ml). *)
+let from_outside cx (p : Path.t) =
+  match Hashtbl.find_opt cx.fns p with
+  | Some f -> VFn (p, List.mapi (fun n _ -> Ty.Var n) f.tys)
+  | None -> bug ("a call of `" ^ Path.local p ^ "`, which doesn't exist")
 
 (* The panic, to raise, for a program that called too deeply, past
    [max_depth] or past OCaml's own stack, from the function [p] it
@@ -677,20 +639,21 @@ let load (modules : program list) =
       values = Hashtbl.create 16;
       types =
         Shown.types (List.concat_map (fun (m : program) -> m.types) modules);
-      tys = Env.empty;
+      shows = Hashtbl.create 16;
       showing = [];
       depth = ref 0;
     }
   in
   List.iter
     (fun (m : program) ->
-      List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns)
+      List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns;
+      List.iter (fun (p, m) -> Hashtbl.replace cx.shows p m) m.shows)
     modules;
   List.iter
     (fun (m : program) ->
       List.iter
         (fun p ->
-          match fst (apply cx ~fty:Ty.Error (VFn p) [] (VEvidence [])) with
+          match fst (apply cx (from_outside cx p) [] (VEvidence [])) with
           | Ok v -> Hashtbl.replace cx.values p v
           | Error err -> raise (Uncaught (error_of cx p err))
           (* caught here, not by whoever called [load], so that `ren test`,
@@ -709,7 +672,7 @@ let run (modules : program list) =
   let start = Path.make entry.home Lower.start_name in
   let cx = load modules in
   if not (Hashtbl.mem cx.fns start) then bug "a program with no `main`";
-  match fst (apply cx ~fty:Ty.Error (VFn start) [] (VEvidence [])) with
+  match fst (apply cx (from_outside cx start) [] (VEvidence [])) with
   | Ok v -> v
   | Error err -> raise (Uncaught (error_of cx start err))
   | exception (Stack_overflow | Too_deep) -> raise (overflowed cx start)
@@ -739,7 +702,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
   (* the instance of the prelude's handler [name], given [args] *)
   let instance_of name args =
     match
-      apply cx ~fty:Ty.Error (VFn (Path.prelude name)) args (VEvidence [])
+      apply cx (from_outside cx (Path.prelude name)) args (VEvidence [])
     with
     | Ok (VHandler h), _ -> instance cx h [] what
     | _ -> bug (what ^ " with `" ^ name ^ "`, which isn't a handler")
@@ -772,7 +735,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
   in
   let outcome =
     try
-      match fst (apply cx ~fty:Ty.Error (VFn fn) [] (VEvidence installed)) with
+      match fst (apply cx (from_outside cx fn) [] (VEvidence installed)) with
       | Ok _ -> Passed
       | Error err -> Failed (error_of cx fn err)
     with
@@ -785,9 +748,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
       (fun (i : installed) ->
         match i.impl with
         | VRecord ops when i.dep = Path.prelude "TestConsole" -> (
-            match
-              apply cx ~fty:Ty.Error (List.assoc "output" ops) [] (VEvidence [])
-            with
+            match apply cx (List.assoc "output" ops) [] (VEvidence []) with
             | Ok (VArray lines), _ ->
                 Some
                   (Array.to_list

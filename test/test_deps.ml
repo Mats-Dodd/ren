@@ -63,7 +63,7 @@ let call ~loc (f : Ren.Core.fn_def) ev =
   Ren.Core.mk
     (Call
        ( Ren.Core.mk
-           (Global (f.path, Ren.Ty.own_args f.scheme.ty))
+           (Global (f.path, Ren.Ty.own_args f.scheme.ty, []))
            f.scheme.ty loc,
          [],
          Ren.Core.evidence ev ))
@@ -104,6 +104,7 @@ let lint_evidence body =
       path = Path.make "test" "main";
       params = [];
       ev = Core.evidence 1;
+      tys = [];
       scheme =
         { ty = Fun ([], Ty.int, Ty.closed, uses_d); names = []; reqs = [] };
       body = body ~loc ~op ~lambda ~call ~uses_d;
@@ -127,6 +128,7 @@ let lint_evidence body =
                 ];
               fns = [ main ];
               values = [];
+              shows = [];
             }))
 
 (* deps.md's handler of two dependencies sharing one state, and a function

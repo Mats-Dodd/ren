@@ -230,6 +230,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       path = Ren.Path.make "test" "main";
       params = [];
       ev = Ren.Core.evidence 2;
+      tys = [];
       scheme =
         {
           ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
@@ -243,7 +244,13 @@ let%expect_test "Core Lint reports a node of the wrong type" =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
-            { home = "test"; types = []; fns = [ main ]; values = [] }));
+            {
+              home = "test";
+              types = [];
+              fns = [ main ];
+              values = [];
+              shows = [];
+            }));
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: the value of `x` has type `Bool`, but should have `Int`")
@@ -259,6 +266,7 @@ let id_program targs =
       path = Ren.Path.make "test" path;
       params;
       ev = Ren.Core.evidence 9;
+      tys = Ren.Core.type_params { ty; names = []; reqs = [] };
       scheme = { ty; names = []; reqs = [] };
       body;
       loc;
@@ -278,7 +286,9 @@ let id_program targs =
   let call =
     Ren.Core.mk
       (Call
-         ( Ren.Core.mk (Global (id.path, targs)) int_fn loc,
+         ( Ren.Core.mk
+             (Global (id.path, targs, List.map (Ren.Core.describe []) targs.tys))
+             int_fn loc,
            [ Value (Ren.Core.mk (Int 1) Ren.Ty.int loc) ],
            Ren.Core.evidence 9 ))
       Ren.Ty.int loc
@@ -289,7 +299,13 @@ let id_program targs =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
-            { home = "test"; types = []; fns = [ id; main ]; values = [] });
+            {
+              home = "test";
+              types = [];
+              fns = [ id; main ];
+              values = [];
+              shows = [];
+            });
       print_endline "ok")
 
 let%expect_test "Core Lint reports a use at the wrong type arguments" =
@@ -348,6 +364,7 @@ let%expect_test "Core Lint reports a pattern of an error type" =
       path = Ren.Path.make "test" "f";
       params = [ { mode = Read; var = e } ];
       ev = Ren.Core.evidence 2;
+      tys = [];
       scheme =
         {
           ty =
@@ -362,7 +379,7 @@ let%expect_test "Core Lint reports a pattern of an error type" =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
-            { home = "test"; types = []; fns = [ f ]; values = [] }));
+            { home = "test"; types = []; fns = [ f ]; values = []; shows = [] }));
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `f`, at test.ren:1:1: a pattern has an error type")
@@ -379,6 +396,7 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
       path = Ren.Path.make "test" "main";
       params = [];
       ev = Ren.Core.evidence 2;
+      tys = [];
       scheme =
         {
           ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
@@ -392,7 +410,13 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
-            { home = "test"; types = []; fns = [ main ]; values = [] }));
+            {
+              home = "test";
+              types = [];
+              fns = [ main ];
+              values = [];
+              shows = [];
+            }));
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: what `fail` fails with has type `Int`, which isn't an error set")
@@ -414,6 +438,7 @@ let%expect_test "Core Lint reports an instance that is a value" =
       path = Ren.Path.make "test" "main";
       params = [];
       ev = Ren.Core.evidence 2;
+      tys = [];
       scheme =
         {
           ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
@@ -427,7 +452,13 @@ let%expect_test "Core Lint reports an instance that is a value" =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
-            { home = "test"; types = []; fns = [ main ]; values = [] }));
+            {
+              home = "test";
+              types = [];
+              fns = [ main ];
+              values = [];
+              shows = [];
+            }));
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: an instance that isn't the end of a handler's body")
@@ -448,6 +479,7 @@ let values_program ~uses_b ~values =
       path = path name;
       params = [];
       ev = Ren.Core.evidence 2;
+      tys = [];
       scheme = { ty = int_fn; names = []; reqs = [] };
       body;
       loc;
@@ -463,6 +495,7 @@ let values_program ~uses_b ~values =
               types = [];
               fns = [ a; b ];
               values = List.map path values;
+              shows = [];
             }))
 
 let%expect_test "Core Lint reports a value named as a function" =
@@ -470,7 +503,7 @@ let%expect_test "Core Lint reports a value named as a function" =
     ~uses_b:
       (Call
          ( Ren.Core.mk
-             (Global (t_member "b", Ren.Ty.own_args Ren.Ty.int))
+             (Global (t_member "b", Ren.Ty.own_args Ren.Ty.int, []))
              (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed))
              (Ren.Loc.point ~file 1 1),
            [],

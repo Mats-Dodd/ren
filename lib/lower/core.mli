@@ -5,8 +5,10 @@
    Every node says its type, in canonical form (ty.ml), and keeps the
    location of the code it came from. Failing is explicit: [Fail],
    [Handle] and [Finally], and a call fails only if its callee's type says
-   it can. So is the evidence every function and lambda takes. Core Lint
-   (core_lint.ml) checks that all of this fits together. *)
+   it can. So is the evidence every function and lambda takes, and the
+   descriptors of types a generic function takes, to show a value of one
+   of its type variables by. Core Lint (core_lint.ml) checks that all of
+   this fits together. *)
 
 type mode = Ty.mode = Read | Inout
 
@@ -34,6 +36,30 @@ type prim =
 
 type param = { mode : mode; var : var }
 
+(* A type as the running program knows it: what a generic function is
+   given for each of its type variables, as a hidden parameter, so it can
+   show a value of that type (shown.ml) without working the type out. A
+   descriptor is built where it's passed, from what's known there: a type
+   with none of the function's type variables in it is [Known], and one of
+   them is what the function was itself given for it, the way a
+   requirement's dictionary will be (compiler.md, "Specialization"). *)
+type desc =
+  | Known of Ty.ty
+      (** a type with none of the function's type variables in it, though maybe
+          one inference left undecided (see [has_param]) *)
+  | Param of var
+      (** what one of the function's type variables stands for: the hidden type
+          parameter it was given that in (see [fn_def]) *)
+  | Applied of Path.t * desc list
+      (** a named type, given its arguments: [Option<T>] *)
+  | Fn of (mode * desc) list * desc * desc_row * Ty.row
+      (** a function's type: its parameters, result and errors, and its uses
+          row, which has no types in it to describe *)
+  | Errs of desc_row  (** an error set as a type argument *)
+
+(* An error row's tags, each with its payload, and its tail (Ty.row). *)
+and desc_row = { dlabels : (string * desc list) list; dtail : int option }
+
 type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
 
 and kind =
@@ -42,19 +68,22 @@ and kind =
   | Str of string
   | Unit
   | Local of var
-  | Global of Path.t * Ty.args
+  | Global of Path.t * Ty.args * desc list
       (** a top-level function, or a member's, [Stack.push], and the type
           arguments it's used at (Ty.args): [ty] is its scheme with them put in.
           They're on the use, not on a [Call], since a function can be used
           without being called, `let f = id`. A method call, [s.push(1)], is a
-          call of its function, with [s] first. *)
+          call of its function, with [s] first. The [desc]s describe the types
+          of the type arguments, one each, and are what it's passed for its
+          hidden type parameters *)
   | Global_value of Path.t * Ty.args
       (** an associated value, [Stack.empty], which the program makes once when
           it starts: its function of no parameters, called then. [ty] is its
           type with the type arguments put in *)
-  | Intrinsic of Intrinsic.t * Ty.args
+  | Intrinsic of Intrinsic.t * Ty.args * desc list
       (** a function built into the compiler: [show], or a method, [Array.push],
-          and the type arguments it's used at, as a [Global]'s *)
+          and the type arguments it's used at, and their descriptors, as a
+          [Global]'s *)
   | Dep_call of {
       dep : Path.t;
       op : string;
@@ -145,9 +174,9 @@ and kind =
   | Assert of expr
       (** panic if this [Bool] is false: `assert e` (deps.md, "`assert`"). A
           [Unit] *)
-  | Assert_equal of expr * expr
+  | Assert_equal of expr * expr * desc
       (** panic if these two, of the same type, differ, showing both: `assert a
-          == b`. A [Unit] *)
+          == b`, through the descriptor of their type. A [Unit] *)
   | Finally of expr * expr
       (** [body], then [after], a [Unit], which runs whether [body] fails or
           not, and doesn't change what [body] did: its value, or its error,
@@ -175,6 +204,10 @@ type fn_def = {
   path : Path.t;
   params : param list;
   ev : var;  (** its evidence, the hidden parameter every function takes *)
+  tys : var list;
+      (** its hidden type parameters, one for each of its scheme's type
+          variables: the n-th holds the descriptor of what [Var n] stands for
+          ([desc]), and is the local [type_param n] *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
   loc : Loc.t;  (** its name, where it's declared *)
@@ -188,6 +221,12 @@ type program = {
   values : Path.t list;
       (** its associated values, in the order they're made, each after every
           value it uses; each is one of [fns], of no parameters *)
+  shows : (Path.t * Path.t) list;
+      (** the types it declares that show their values through a `show` method
+          of their own (shown.ml), each with that method's function, which takes
+          only a value of the type, with the type's parameters as its type
+          variables, in order, and gives a [Str] without failing or using a
+          dependency *)
 }
 
 (* ---- building ---- *)
@@ -201,6 +240,28 @@ val evidence_ty : Ty.ty
 (* The evidence a function or lambda takes, or a [With] binds, as the
    local with this id. *)
 val evidence : int -> var
+
+(* The type of a type's descriptor ([desc]), which no type in Ren source
+   can name either. *)
+val type_ty : Ty.ty
+
+(* A function's hidden type parameter for its type variable [n], a local
+   of [type_ty] whose id, [-1 - n], is apart from every other local's. *)
+val type_param : int -> var
+
+(* The hidden type parameters of a function of this scheme, in order. *)
+val type_params : Ty.scheme -> var list
+
+(* Whether a type has any of a function's [n] type variables in it,
+   [Var 0] to [Var (n - 1)]. Any other is one inference left undecided. *)
+val has_param : int -> Ty.ty -> bool
+
+(* The descriptor of a type written in the type variables of a function
+   whose hidden type parameters are these: [Var n] is the n-th. *)
+val describe : var list -> Ty.ty -> desc
+
+(* The hidden type parameters a descriptor uses. *)
+val desc_vars : desc -> var list
 
 (* The type of a cell holding a value of this type (see [New_cell]). *)
 val cell_ty : Ty.ty -> Ty.ty

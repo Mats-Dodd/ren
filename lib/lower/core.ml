@@ -32,7 +32,14 @@
    its body, and a [Dep_call] finds its dependency's implementation in it,
    by the dependency's path, never by a name the program spells. A
    lambda's evidence is its own, passed where it's called, so it never
-   keeps the implementation that was installed where it was made. *)
+   keeps the implementation that was installed where it was made.
+
+   So are types, where the running program needs one: to show a value
+   (shown.ml). A generic function takes a hidden parameter for each of its
+   type variables, holding a descriptor of what it stands for ([desc]),
+   and each use of it passes descriptors built from its type arguments, as
+   an `assert a == b` keeps one of its sides' type. The interpreter only
+   evaluates them: it never works a type out. *)
 
 type mode = Ty.mode = Read | Inout
 
@@ -60,6 +67,30 @@ type prim =
 
 type param = { mode : mode; var : var }
 
+(* A type as the running program knows it: what a generic function is
+   given for each of its type variables, as a hidden parameter, so it can
+   show a value of that type (shown.ml) without working the type out. A
+   descriptor is built where it's passed, from what's known there: a type
+   with none of the function's type variables in it is [Known], and one of
+   them is what the function was itself given for it, the way a
+   requirement's dictionary will be (compiler.md, "Specialization"). *)
+type desc =
+  | Known of Ty.ty
+      (** a type with none of the function's type variables in it, though maybe
+          one inference left undecided (see [has_param]) *)
+  | Param of var
+      (** what one of the function's type variables stands for: the hidden type
+          parameter it was given that in (see [fn_def]) *)
+  | Applied of Path.t * desc list
+      (** a named type, given its arguments: [Option<T>] *)
+  | Fn of (mode * desc) list * desc * desc_row * Ty.row
+      (** a function's type: its parameters, result and errors, and its uses
+          row, which has no types in it to describe *)
+  | Errs of desc_row  (** an error set as a type argument *)
+
+(* An error row's tags, each with its payload, and its tail (Ty.row). *)
+and desc_row = { dlabels : (string * desc list) list; dtail : int option }
+
 type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
 
 and kind =
@@ -68,19 +99,22 @@ and kind =
   | Str of string
   | Unit
   | Local of var
-  | Global of Path.t * Ty.args
+  | Global of Path.t * Ty.args * desc list
       (** a top-level function, or a member's, [Stack.push], and the type
           arguments it's used at (Ty.args): [ty] is its scheme with them put in.
           They're on the use, not on a [Call], since a function can be used
           without being called, `let f = id`. A method call, [s.push(1)], is a
-          call of its function, with [s] first. *)
+          call of its function, with [s] first. The [desc]s describe the types
+          of the type arguments, one each, and are what it's passed for its
+          hidden type parameters *)
   | Global_value of Path.t * Ty.args
       (** an associated value, [Stack.empty], which the program makes once when
           it starts: its function of no parameters, called then. [ty] is its
           type with the type arguments put in *)
-  | Intrinsic of Intrinsic.t * Ty.args
+  | Intrinsic of Intrinsic.t * Ty.args * desc list
       (** a function built into the compiler: [show], or a method, [Array.push],
-          and the type arguments it's used at, as a [Global]'s *)
+          and the type arguments it's used at, and their descriptors, as a
+          [Global]'s *)
   | Dep_call of {
       dep : Path.t;
       op : string;
@@ -171,9 +205,9 @@ and kind =
   | Assert of expr
       (** panic if this [Bool] is false: `assert e` (deps.md, "`assert`"). A
           [Unit] *)
-  | Assert_equal of expr * expr
+  | Assert_equal of expr * expr * desc
       (** panic if these two, of the same type, differ, showing both: `assert a
-          == b`. A [Unit] *)
+          == b`, through the descriptor of their type. A [Unit] *)
   | Finally of expr * expr
       (** [body], then [after], a [Unit], which runs whether [body] fails or
           not, and doesn't change what [body] did: its value, or its error,
@@ -201,6 +235,10 @@ type fn_def = {
   path : Path.t;
   params : param list;
   ev : var;  (** its evidence, the hidden parameter every function takes *)
+  tys : var list;
+      (** its hidden type parameters, one for each of its scheme's type
+          variables: the n-th holds the descriptor of what [Var n] stands for
+          ([desc]), and is the local [type_param n] *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
   loc : Loc.t;  (** its name, where it's declared *)
@@ -214,6 +252,12 @@ type program = {
   values : Path.t list;
       (** its associated values, in the order they're made, each after every
           value it uses; each is one of [fns], of no parameters *)
+  shows : (Path.t * Path.t) list;
+      (** the types it declares that show their values through a `show` method
+          of their own (shown.ml), each with that method's function, which takes
+          only a value of the type, with the type's parameters as its type
+          variables, in order, and gives a [Str] without failing or using a
+          dependency *)
 }
 
 (* ---- building ---- *)
@@ -226,6 +270,78 @@ let evidence_ty = Ty.Con (Path.prelude "$Evidence", [])
 
 (* The evidence a function or lambda takes, or a [With] binds. *)
 let evidence id = { id; name = "ev"; ty = evidence_ty }
+
+(* The type of a type's descriptor, which, like evidence, no type in Ren
+   source can name. *)
+let type_ty = Ty.Con (Path.prelude "$Type", [])
+
+(* A function's hidden type parameter for its type variable [n]. Its id is
+   negative, apart from every local's, so adding them didn't change how
+   any local is numbered. *)
+let type_param n = { id = -1 - n; name = "$ty" ^ string_of_int n; ty = type_ty }
+
+(* The hidden type parameters of a function of scheme [s]. *)
+let type_params (s : Ty.scheme) =
+  List.mapi (fun n _ -> type_param n) (Ty.own_args s.ty).tys
+
+(* Whether [t] has any of the type variables [Var 0] to [Var (n - 1)] in
+   it: one of a function's, if it has [n]. A type in its body can have
+   others, which inference left undecided, since nothing depends on them:
+   the type of what `Ok` holds in `Err(Gone(1))`, say. *)
+let rec has_param n (t : Ty.ty) =
+  let row (r : Ty.row) =
+    List.exists
+      (fun (l : Ty.label) -> List.exists (has_param n) l.payload)
+      r.labels
+  in
+  match t with
+  | Var m -> m < n
+  | Con (_, args) -> List.exists (has_param n) args
+  | Fun (ps, r, e, u) ->
+      List.exists (fun (p : Ty.param) -> has_param n p.ty) ps
+      || has_param n r || row e || row u
+  | Errors r | Uses r -> row r
+  | Error -> false
+
+(* The descriptor of [t], a type written in the type variables of a
+   function whose hidden type parameters are [tys]: [Var n] is the n-th.
+   A type variable inference left undecided is known to be just that: a
+   value of its type is shown by its shape alone (shown.ml). *)
+let rec describe tys (t : Ty.ty) =
+  let row (r : Ty.row) =
+    {
+      dlabels =
+        List.map
+          (fun (l : Ty.label) -> (l.name, List.map (describe tys) l.payload))
+          r.labels;
+      dtail = r.tail;
+    }
+  in
+  match t with
+  | _ when not (has_param (List.length tys) t) -> Known t
+  | Var n -> Param (List.nth tys n)
+  | Con (p, args) -> Applied (p, List.map (describe tys) args)
+  | Fun (ps, r, e, u) ->
+      Fn
+        ( List.map (fun (p : Ty.param) -> (p.mode, describe tys p.ty)) ps,
+          describe tys r,
+          row e,
+          u )
+  | Errors e -> Errs (row e)
+  | Uses _ | Error -> Known t
+
+(* The hidden type parameters a descriptor uses. *)
+let rec desc_vars = function
+  | Known _ -> []
+  | Param v -> [ v ]
+  | Applied (_, ds) -> List.concat_map desc_vars ds
+  | Fn (ps, r, e, _) ->
+      List.concat_map (fun (_, d) -> desc_vars d) ps
+      @ desc_vars r @ desc_row_vars e
+  | Errs e -> desc_row_vars e
+
+and desc_row_vars r =
+  List.concat_map (fun (_, ds) -> List.concat_map desc_vars ds) r.dlabels
 
 (* The type of a cell holding a [t] (see [New_cell]). *)
 let cell_ty t = Ty.Con (Path.prelude "$Cell", [ t ])
@@ -267,7 +383,7 @@ let children (e : expr) =
   | Seq (a, b)
   | Update (a, _, b)
   | Finally (a, b)
-  | Assert_equal (a, b) ->
+  | Assert_equal (a, b, _) ->
       [ a; b ]
   | Assign (_, a)
   | Assert a
@@ -342,6 +458,11 @@ let show_prim = function
 let atom a = Atom a
 let var v = Atom (show_var v)
 
+(* What a lambda or handler captures, as printed: its hidden type
+   parameters aren't, like the descriptors passed to a use, since the type
+   arguments a typed print shows say what they are. *)
+let shown_captures = List.filter (fun (v : var) -> v.ty <> type_ty)
+
 let rec pattern_sexp p =
   match p.pkind with
   | PWild -> Atom "_"
@@ -380,8 +501,8 @@ let rec sexp_with pr e =
   | Str s -> Atom (Ast.show_str s)
   | Unit -> Atom "()"
   | Local v -> var v
-  | Global (p, a) | Global_value (p, a) -> used pr (Path.local p) a
-  | Intrinsic (x, a) -> used pr (Intrinsic.name x) a
+  | Global (p, a, _) | Global_value (p, a) -> used pr (Path.local p) a
+  | Intrinsic (x, a, _) -> used pr (Intrinsic.name x) a
   | Dep_call { dep; op; ev; args; _ } ->
       List
         (atom "dep-call" :: var ev
@@ -399,7 +520,7 @@ let rec sexp_with pr e =
       List
         [
           atom "handler";
-          List (atom "captures" :: List.map var captures);
+          List (atom "captures" :: List.map var (shown_captures captures));
           var ev;
           sexp body;
         ]
@@ -447,7 +568,7 @@ let rec sexp_with pr e =
         [
           atom "lambda";
           List (List.map param params);
-          List (atom "captures" :: List.map var captures);
+          List (atom "captures" :: List.map var (shown_captures captures));
           var ev;
           sexp body;
         ]
@@ -471,7 +592,7 @@ let rec sexp_with pr e =
         ]
   | Finally (body, after) -> List [ atom "finally"; sexp body; sexp after ]
   | Assert a -> List [ atom "assert"; sexp a ]
-  | Assert_equal (a, b) -> List [ atom "assert"; atom "=="; sexp a; sexp b ]
+  | Assert_equal (a, b, _) -> List [ atom "assert"; atom "=="; sexp a; sexp b ]
 
 and arm_sexp_with pr a =
   let guard =

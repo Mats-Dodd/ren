@@ -13,7 +13,11 @@
    that every call passes the evidence in scope, a lambda's own inside it
    and never one it could have kept from where it was made, and that each
    dependency an operation or a callee uses is one the function it's in
-   uses too, or a [With] around it installs. Which errors code can fail with isn't checked: inference
+   uses too, or a [With] around it installs. And that each descriptor of
+   a type (core.ml, [desc]) describes the type argument it's passed for,
+   built only from the hidden type parameters of the function it's in, and
+   that each type said to show itself has a `show` method the interpreter
+   can call. Which errors code can fail with isn't checked: inference
    has, and Core has no use for them.
 
    Lint finding anything is a bug in the compiler, never in the program,
@@ -35,6 +39,7 @@ type env = {
   ev : var option;  (** the evidence in scope, the innermost *)
   uses : Ty.row;  (** what the function or lambda being checked uses *)
   installed : Path.t list;  (** what the [With]s around here in it install *)
+  ntys : int;  (** how many hidden type parameters the function has *)
 }
 
 let show t =
@@ -342,6 +347,71 @@ let in_scope env sc loc (v : var) =
 
 let add (v : var) sc = Scope.add v.id v sc
 
+(* The type [d] describes (core.ml, [desc]), in the type variables of the
+   function being checked: each hidden type parameter it's built from is
+   in scope, and is the function's own for [Var n], and a [Known] type has
+   no type variables in it. *)
+let rec described env sc loc (d : desc) : Ty.ty =
+  let row r : Ty.row =
+    {
+      labels =
+        List.map
+          (fun (name, ds) ->
+            ({ name; payload = List.map (described env sc loc) ds } : Ty.label))
+          r.dlabels;
+      tail = r.dtail;
+    }
+  in
+  match d with
+  | Known t ->
+      if has_param env.ntys t then
+        fail env loc
+          (sprintf
+             "the descriptor of `%s`, which has the function's type variables, \
+              is known"
+             (show t));
+      t
+  | Param v ->
+      in_scope env sc loc v;
+      let n = -1 - v.id in
+      if n < 0 || n >= env.ntys || v <> type_param n then
+        fail env loc
+          (sprintf
+             "a descriptor is built from `%s` (%d), which isn't a hidden type \
+              parameter of `%s`"
+             v.name v.id env.fn);
+      Var n
+  | Applied (p, ds) -> Con (p, List.map (described env sc loc) ds)
+  | Fn (ps, r, e, u) ->
+      Fun
+        ( List.map
+            (fun (mode, d) : Ty.param -> { mode; ty = described env sc loc d })
+            ps,
+          described env sc loc r,
+          row e,
+          u )
+  | Errs e -> Errors (row e)
+
+(* [d] describes [t], which [what] has. *)
+and describes env sc loc what d (t : Ty.ty) =
+  let found = described env sc loc d in
+  if found <> t then
+    fail env loc
+      (sprintf "%s is described as `%s`, but is a `%s`" what (show found)
+         (show t))
+
+(* [ds] are the descriptors of the type arguments [a] of a use of [name]:
+   one for each, which describes it. *)
+and descs env sc loc name (a : Ty.args) ds =
+  if List.length ds <> List.length a.tys then
+    fail env loc
+      (sprintf "`%s` is given %d type arguments, but %d descriptors" name
+         (List.length a.tys) (List.length ds));
+  List.iteri
+    (fun i (d, t) ->
+      describes env sc loc (sprintf "type argument %d of `%s`" (i + 1) name) d t)
+    (List.combine ds a.tys)
+
 let rec expr env sc (e : expr) =
   let loc = e.loc in
   if has_error e.ty then fail env loc "a node has an error type";
@@ -354,7 +424,8 @@ let rec expr env sc (e : expr) =
   | Local v ->
       in_scope env sc loc v;
       is ("`" ^ v.name ^ "`") v.ty
-  | Global (p, a) -> (
+  | Global (p, a, ds) -> (
+      descs env sc loc (Path.local p) a ds;
       match Hashtbl.find_opt env.schemes p with
       | Some s -> used env loc (Path.local p) s.ty a e.ty
       | None -> fail env loc (sprintf "there's no function `%s`" (Path.local p))
@@ -363,7 +434,8 @@ let rec expr env sc (e : expr) =
       match Hashtbl.find_opt env.values p with
       | Some s -> used env loc (Path.local p) s.ty a e.ty
       | None -> fail env loc (sprintf "there's no value `%s`" (Path.local p)))
-  | Intrinsic (x, a) ->
+  | Intrinsic (x, a, ds) ->
+      descs env sc loc (Intrinsic.name x) a ds;
       used env loc (Intrinsic.name x) (Prelude.scheme x).ty a e.ty
   | Dep_call { dep = p; op; fty; ev; args } -> (
       (* the operation as declared, using its dependency, and whatever the
@@ -544,7 +616,7 @@ let rec expr env sc (e : expr) =
       (* every function takes the same: the evidence where it's called *)
       let what =
         match f.kind with
-        | Global (p, _) -> sprintf "a call of `%s`" (Path.local p)
+        | Global (p, _, _) -> sprintf "a call of `%s`" (Path.local p)
         | _ -> "a call"
       in
       current env loc what ev;
@@ -695,10 +767,11 @@ let rec expr env sc (e : expr) =
       expr env sc a;
       same env a.loc "what an `Assert` checks" a.ty Ty.bool;
       is "an `Assert`" Ty.unit
-  | Assert_equal (a, b) ->
+  | Assert_equal (a, b, d) ->
       expr env sc a;
       expr env sc b;
       same env b.loc "the right side of an `Assert_equal`" b.ty a.ty;
+      describes env sc loc "what an `Assert_equal` compares" d a.ty;
       is "an `Assert_equal`" Ty.unit
 
 (* The error set an error of type [t] is in. *)
@@ -835,8 +908,11 @@ and handler_end env (e : expr) =
   | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
 
 let fn_def env (f : fn_def) =
-  let env = { env with fn = Path.local f.path } in
+  let env = { env with fn = Path.local f.path; ntys = List.length f.tys } in
   instances env f.body;
+  if f.tys <> type_params f.scheme then
+    fail env f.loc
+      "its hidden type parameters aren't one for each of its type variables";
   match f.scheme.ty with
   | Fun (ps, ret, _, uses) when List.length ps = List.length f.params ->
       let env = inside env f.loc "the function's evidence" f.ev uses in
@@ -846,7 +922,10 @@ let fn_def env (f : fn_def) =
           same env f.loc ("the parameter `" ^ q.var.name ^ "`") q.var.ty p.ty)
         ps f.params;
       let sc =
-        List.fold_left (fun sc (p : param) -> add p.var sc) Scope.empty f.params
+        List.fold_left
+          (fun sc (p : param) -> add p.var sc)
+          (List.fold_left (fun sc v -> add v sc) Scope.empty f.tys)
+          f.params
       in
       expr env sc f.body;
       same env f.loc "the body" f.body.ty ret
@@ -855,7 +934,7 @@ let fn_def env (f : fn_def) =
 (* The functions and values [e] names, in the order written. *)
 let rec globals (e : expr) =
   match e.kind with
-  | Global (p, _) | Global_value (p, _) -> [ p ]
+  | Global (p, _, _) | Global_value (p, _) -> [ p ]
   | Int _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
   | Prim (_, es)
   | Array es
@@ -872,7 +951,7 @@ let rec globals (e : expr) =
   | Seq (a, b)
   | Update (a, _, b)
   | Finally (a, b)
-  | Assert_equal (a, b) ->
+  | Assert_equal (a, b, _) ->
       globals a @ globals b
   | Assign (_, a)
   | Field (a, _, _)
@@ -927,6 +1006,42 @@ let value_order (prog : program) =
          v :: made)
        [] prog.values)
 
+(* Each type [prog] says shows its values through its own `show` method
+   is one it declares, and that method one of its functions, of the type
+   the interpreter calls it at: taking only a value of the type, with the
+   type's parameters as its type variables, in order, and giving a `Str`
+   without failing or using anything. *)
+let shows env (prog : program) =
+  List.iter
+    (fun (p, m) ->
+      let env = { env with fn = Path.local m } in
+      match
+        ( List.find_opt (fun (d : Iface.type_decl) -> d.path = p) prog.types,
+          List.find_opt (fun (f : fn_def) -> f.path = m) prog.fns )
+      with
+      | Some d, Some f -> (
+          let own = List.init (List.length d.params) (fun n -> Ty.Var n) in
+          match f.scheme.ty with
+          | Fun ([ { mode = Read; ty = Con (q, args) } ], ret, errs, uses)
+            when q = p && args = own && ret = Ty.str && errs.labels = []
+                 && uses.labels = [] ->
+              ()
+          | t ->
+              fail env f.loc
+                (sprintf "`%s` shows a `%s`, but has type `%s`" (Path.local m)
+                   (Path.full p) (show t)))
+      | None, _ ->
+          failwith
+            (sprintf
+               "Core Lint: `%s` is said to show `%s`, which isn't declared here"
+               (Path.local m) (Path.full p))
+      | _, None ->
+          failwith
+            (sprintf
+               "Core Lint: `%s` is said to show `%s`, but isn't a function here"
+               (Path.local m) (Path.full p)))
+    prog.shows
+
 (* Lint module [prog], which sees the interfaces [imports]: every one
    reachable through its imports, since a type from any of them can turn
    up in its code. [linked] are the program's modules, [prog] among them:
@@ -946,6 +1061,7 @@ let program ~imports ~linked (prog : program) =
       ev = None;
       uses = Ty.closed;
       installed = [];
+      ntys = 0;
     }
   in
   List.iter
@@ -991,4 +1107,5 @@ let program ~imports ~linked (prog : program) =
         m.fns)
     (linked @ [ prog ]);
   value_order prog;
+  shows env prog;
   List.iter (fn_def env) prog.fns
