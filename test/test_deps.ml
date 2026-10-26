@@ -2922,8 +2922,6 @@ fn f() = counting_rates(1)
 fn main() =
   let r: Clock = counting_rates(1)
   let g: fn() -> Rates = f
-  let o = Some(counting_rates(1))
-  let p: Option<Rates> = o
   let zs = [counting_rates(1), Clock.frozen(Time.epoch)]
   ()
 |};
@@ -2943,19 +2941,56 @@ fn main() =
        = `counting_rates` implements `Rates` and `RateCalls`, so it's taken as just `Rates` only where `Rates` is wanted as it's made
        help: say so where it's made: `let x: Rates = counting_rates(...)`
 
-    error: expected `Option<Rates>`, found `Option<counting_rates>`
-       ┌─ test.ren:17:26
-    17 │   let p: Option<Rates> = o
-       │                          ^
-       = `counting_rates` implements `Rates` and `RateCalls`, so it's taken as just `Rates` only where `Rates` is wanted as it's made
-       help: say so where it's made: `let x: Rates = counting_rates(...)`
-
     error: this element is a `counting_rates`, but the others are a `Clock`
-       ┌─ test.ren:18:13
-    18 │   let zs = [counting_rates(1), Clock.frozen(Time.epoch)]
+       ┌─ test.ren:16:13
+    16 │   let zs = [counting_rates(1), Clock.frozen(Time.epoch)]
        │             ^^^^^^^^^^^^^^^^^
        = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
        help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
+    |}]
+
+let%expect_test "taken as one whichever comes first" =
+  (* B3: what a handler of several is taken as doesn't depend on whether
+     it comes before what says what's wanted or after it. [same]'s `T` is
+     a `Rates` in both calls, and so is what's in `o`, which `p` says
+     after it's made. Where nothing says, it's the handler, which a `with`
+     installs both of *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn same(a, b) = if true then a else b
+
+fn id(a) = a
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() uses Console =
+  with id(counting_rates(5)) in print(RateCalls.count() + Rates.usd_to(1))
+  let x = same(Rates { usd_to: fn(c) => c + 1 }, counting_rates(2))
+  let y = same(counting_rates(3), Rates { usd_to: fn(c) => c + 1 })
+  print(run(x) + run(y))
+  let o = Some(counting_rates(4))
+  let p: Option<Rates> = o
+  match p
+    Some(r) => print(run(r))
+    None => ()
+|}
+  in
+  run src;
+  [%expect {|
+    5
+    5
+    4
+    ()
     |}]
 
 let%expect_test "a handler given too few arguments in a `with`" =

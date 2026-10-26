@@ -65,6 +65,16 @@ type call = {
   callee : Path.t option;  (** the top-level function called, if it's one *)
 }
 
+(* How to explain a mismatch with an expected type (Infer_report.why,
+   where it's described): kept here, since a constraint can carry one. *)
+type why = {
+  msg : (string -> string -> string) option;
+  notes : string list;
+  help : (string -> string -> string) option;
+  help_of : (Types.printer -> Types.ty -> string) option;
+  labels : string -> string -> (Loc.t * string) list;
+}
+
 type env = {
   st : Types.state;
   sink : Diag.sink;
@@ -251,6 +261,24 @@ and constr =
       (** a function does what it declares: it uses, and fails with, no more *)
   | Needs of handler_needs
       (** a handler needs no more than it declares, and not itself *)
+  | Coerce of coerce
+      (** a handler of several dependencies is taken as one of them where a
+          value of its type is wanted *)
+
+(* A value [cvalue] of type [cfound], a handler of several dependencies,
+   given where a value of type [cwanted] is wanted, which wasn't known
+   yet: whether it's one of those dependencies, which the handler is then
+   taken as (Infer_coerce.as_one), or something else, which the handler's
+   own type has to be, is decided once it's known, so it doesn't depend on
+   which came first. [cas_dep] is where that's recorded, by node id, and
+   [cwhy] explains a mismatch. *)
+and coerce = {
+  cvalue : expr;
+  cfound : ty;
+  cwanted : ty;
+  cwhy : why;
+  cas_dep : (int, Path.t) Hashtbl.t;
+}
 
 (* A function of the group, [ffn], and what checking its body found,
    [fcx]. Once the group's other constraints are decided, the rows it names
@@ -375,8 +403,8 @@ and ctx = {
   found : (int, found) Hashtbl.t;  (** what each lookup found, by node id *)
   as_dep : (int, Path.t) Hashtbl.t;
       (** each expression that gives a handler of several dependencies where a
-          value of one of their types is wanted, by node id, with that one (see
-          [as_one]) *)
+          value of one of their types is wanted, by node id, with that one
+          (Infer_coerce.as_one) *)
   targs : (int, targs) Hashtbl.t;
       (** the type arguments of each use of a top-level function, by node id *)
   errs : row;  (** the errors of the innermost function or lambda *)

@@ -1,6 +1,5 @@
 (* Handlers and `with` (see infer_expr.ml; deps.md): a handler's body,
-   a `with` that installs an implementation or wraps its body, and a
-   handler of several dependencies taken as one of them. *)
+   and a `with` that installs an implementation or wraps its body. *)
 
 open Ast
 open Ast.Resolved
@@ -11,6 +10,7 @@ open Infer_report
 open Infer_written
 open Infer_lookup
 open Infer_rows
+open Infer_coerce
 
 (* The core of inference, from infer_expr.ml, which a handler's state and
    arms and a `with`'s item and body are checked with. infer_expr.ml calls
@@ -42,37 +42,12 @@ type core = {
 let handler_type cx (deps : tname list) =
   match deps with [ { tref = Named p; _ } ] -> p | _ -> cx.self
 
-(* A value of type [t] taken as one of type [expected]: a handler of
-   several dependencies, `test_clock(t)` for `Clock, TestClock`, where a
-   value of one of their types is wanted, `Clock`, describes an
-   implementation of that one, which needs what the handler does. Its
-   type is then that dependency's, and installing it installs only that
-   one (deps.md, "Implementations"). Only where the type wanted is known
-   as the value is made: anywhere else it's the handler's own. *)
-let as_one env t expected =
-  match (repr t, reveal env.st expected) with
-  | TCon (h, [ TUses needs ]), TCon (d, [ TUses _ ]) -> (
-      match Hashtbl.find_opt env.types h with
-      | Some { body = Handler deps; _ } when List.mem d deps ->
-          Some (d, TCon (d, [ TUses needs ]))
-      | _ -> None)
-  | _ -> None
-
-(* The type [e], of type [t], has where a value of type [expected] is
-   wanted: [as_one]'s, which lowering is told, or [t]. *)
-let taken_as env cx (e : expr) t expected =
-  match as_one env t expected with
-  | Some (d, one) ->
-      Hashtbl.replace cx.as_dep e.node d;
-      one
-  | None -> t
-
 (* What the parameters [tvars] of [td], a type being made, stand for
    where a value of type [expected] is wanted, as far as they're
    implementations: in an `Option<Rates>`, the `T` of `Some(...)` is a
    `Rates`, so a handler of several dependencies given there is taken as
-   that one ([as_one]). The rest is unified once the value is made, so a
-   mismatch is still reported at the whole value. *)
+   that one (Infer_coerce.as_one). The rest is unified once the value is
+   made, so a mismatch is still reported at the whole value. *)
 let hint env (td : Iface.type_decl) tvars expected =
   match reveal env.st expected with
   | TCon (p, xs) when p = td.path && List.length xs = List.length tvars ->
@@ -185,6 +160,7 @@ and with_ core env cx (e : expr) item body lam =
   match item.kind with
   | Call (({ kind = Field (r, m); _ } as f), args) -> (
       let tr = core.infer env cx r in
+      settle env tr;
       (* a method is a wrapper if it takes one more argument, besides its
          `self`, than it's given *)
       let wrapper =
@@ -216,6 +192,7 @@ and with_ core env cx (e : expr) item body lam =
           install core env cx e item t body)
   | Call (f, args) -> (
       let tf = core.infer env cx f in
+      settle env tf;
       (* a handler, or a function that makes an implementation, given too
          few arguments: what's missing isn't its body *)
       let short ps ret =
@@ -246,6 +223,7 @@ and with_ core env cx (e : expr) item body lam =
           install core env cx e item t body)
   | _ -> (
       let t = core.infer env cx item in
+      settle env t;
       match reveal env.st t with
       | TFun ([ _ ], _, _, _) ->
           wrap core env cx e ~call:item ~f:item ~args:[] t body lam
@@ -299,6 +277,7 @@ and install core env cx (e : expr) item t body =
     ignore
       (core.infer env { cx with uses = fresh_row env.st; calls = ref [] } body)
   in
+  settle env t;
   match reveal env.st t with
   | TCon (d, [ TUses needs ]) ->
       (* what it needs it needs here, outside: its operations run with what's

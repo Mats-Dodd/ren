@@ -57,8 +57,10 @@ let rec binders (p : pattern) =
    other code, each given both types printed (the one found, then the one
    expected); [notes] say where the expectation comes from. A help that
    the printed types don't tell, [help_of], is given the type found, and
-   the printer the message prints it with. *)
-type why = {
+   the printer the message prints it with. It's defined in infer_env.ml,
+   since a constraint can carry one: [= Infer_env.why] says it's that type,
+   not a new one with the same fields. *)
+type why = Infer_env.why = {
   msg : (string -> string -> string) option;
   notes : string list;
   help : (string -> string -> string) option;
@@ -70,6 +72,59 @@ let explain ?msg ?(notes = []) ?help ?help_of ?(labels = fun _ _ -> []) () =
   { msg; notes; help; help_of; labels }
 
 let plain = explain ()
+
+(* ---- a handler of several, given before what's wanted is known ---- *)
+
+(* Whether the variable [v] is in [t]. *)
+let rec has_var v t =
+  match repr t with
+  | TVar v' -> v' == v
+  | TCon (_, args) -> List.exists (has_var v) args
+  | TFun (ps, r, e, u) ->
+      List.exists (fun (p : param) -> has_var v p.ty) ps
+      || has_var v r || row_has_var v e || row_has_var v u
+  | TErrors r | TUses r -> row_has_var v r
+  | TSkol _ | TError -> false
+
+and row_has_var v r =
+  List.exists
+    (fun (l : label) -> List.exists (has_var v) l.payload)
+    (fst (row_parts r))
+
+(* A handler of several dependencies given where what's wanted isn't known
+   yet is left to the solver (Infer_env.coerce, Infer_coerce), which takes
+   it as one of them if that's what's wanted, and as itself if what's
+   wanted is still unknown then. If something has to be done with what's
+   wanted before that, looking into it or showing it in a message, it's
+   the handler's own type now, which is what the solver would decide if
+   nothing else said. [is] says which variables those are: the first
+   handler given to each is its type, and any other given to it is left to
+   the solver, which takes it as that type, or reports it isn't. *)
+let settle env is =
+  let first = ref [] in
+  let now, later =
+    List.partition
+      (function
+        | Coerce { cwanted; _ } -> (
+            match repr cwanted with
+            | TVar v when is v && not (List.memq v !first) ->
+                first := v :: !first;
+                true
+            | _ -> false)
+        | _ -> false)
+      (List.rev env.pending)
+  in
+  env.pending <- List.rev later;
+  List.iter
+    (function
+      | Coerce k ->
+          (* a variable still unbound takes any type that doesn't hold it,
+             and a handler's type holds only what it needs *)
+          Unify.unify env.st k.cwanted k.cfound
+      | _ -> ())
+    now
+
+(* ---- reporting ---- *)
 
 (* Report that [found] (what the code has) didn't unify with [expected]
    (what it needs), which failed with [failure], explained with [why]. *)
@@ -182,8 +237,8 @@ let mismatch env why loc ~found ~expected failure =
       in
       (* a handler of several dependencies where an implementation is
          wanted, at the top or inside the types (`Option<Rates>`): one of
-         its own somewhere it wasn't known as it was made (see [as_one]),
-         or another one *)
+         its own somewhere it wasn't known what's wanted
+         (Infer_coerce.as_one), or another one *)
       let rec handler_pair f x =
         match (repr f, repr x) with
         | TCon (h, _), TCon (d, [ TUses _ ]) when h <> d -> (
@@ -216,12 +271,15 @@ let mismatch env why loc ~found ~expected failure =
            ~found ~expected ~f ~x
            (needs_more @ errors @ private_ @ handler))
 
-(* Unify [found] with [expected], and say whether that worked. *)
+(* Unify [found] with [expected], and say whether that worked. The message
+   shows a handler given to a variable in either as that handler, as it
+   is if nothing else says what it is ([settle]). *)
 let unifies env why loc ~found ~expected =
   match Unify.unify env.st found expected with
   | () -> true
   | exception
       ((Unify.Mismatch | Unify.Two_shapes _ | Unify.Infinite) as failure) ->
+      settle env (fun v -> has_var v found || has_var v expected);
       mismatch env why loc ~found ~expected failure;
       false
 

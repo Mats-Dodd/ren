@@ -41,20 +41,21 @@ open Infer_report
    all of that; a handler's needs with its function's. *)
 let rank = function
   | Join _ -> 0
-  | Drop _ -> 1
-  | Install _ -> 2
-  | Copy _ -> 3
-  | Own_errors _ -> 4
-  | Value_tag _ -> 5
-  | Include _ -> 6
-  | Kept _ -> 7
-  | Tag_pattern _ -> 8
-  | Unmarked _ -> 9
-  | Marker _ -> 10
-  | Impl_op _ -> 11
-  | Row_due _ -> 12
-  | Own_rows _ -> 13
-  | Declared _ | Needs _ -> 14
+  | Coerce _ -> 1
+  | Drop _ -> 2
+  | Install _ -> 3
+  | Copy _ -> 4
+  | Own_errors _ -> 5
+  | Value_tag _ -> 6
+  | Include _ -> 7
+  | Kept _ -> 8
+  | Tag_pattern _ -> 9
+  | Unmarked _ -> 10
+  | Marker _ -> 11
+  | Impl_op _ -> 12
+  | Row_due _ -> 13
+  | Own_rows _ -> 14
+  | Declared _ | Needs _ -> 15
 
 (* ---- deciding one ---- *)
 
@@ -675,23 +676,26 @@ let solve env ~is_value ~withheld =
     List.filter_map (function Declared c -> Some c | _ -> None) cs
   in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) (of_rank 0);
-  List.iter (function Drop d -> drop env d | _ -> ()) (of_rank 1);
-  let held, dues = installs env ~copies:(of_rank 3) (of_rank 2) in
-  copies_of env (of_rank 3);
+  List.iter
+    (function Coerce k -> Infer_coerce.coerce env k | _ -> ())
+    (of_rank 1);
+  List.iter (function Drop d -> drop env d | _ -> ()) (of_rank 2);
+  let held, dues = installs env ~copies:(of_rank 4) (of_rank 3) in
+  copies_of env (of_rank 4);
   (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
      implementation needs only what it has: a transparent parameter's
      row closes with it, which Infer_declared.check_open_rows reports *)
   List.iter
     (function
       | Copy k -> if row_end k.kdst = REmpty then close_row k.ksrc | _ -> ())
-    (of_rank 3);
+    (of_rank 4);
   List.iter
     (function Own_errors c -> Infer_declared.own_errors env c | _ -> ())
-    (of_rank 4);
+    (of_rank 5);
   let kept_sets =
     List.filter_map
       (function Kept (k, p) -> Some (k, p) | _ -> None)
-      (of_rank 7)
+      (of_rank 8)
   in
   (* the tags that went in are no longer checked with the patterns *)
   let added =
@@ -700,10 +704,10 @@ let solve env ~is_value ~withheld =
         | Value_tag t when value_tag env ~kept:(List.map fst kept_sets) t ->
             Some t
         | _ -> None)
-      (of_rank 5)
+      (of_rank 6)
   in
   worklist ~awake ~decide:(include_ env)
-    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 6));
+    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 7));
   List.iter kept kept_sets;
   (* the patterns, and the tags written as values that didn't go in, in
      the order they were met *)
@@ -715,9 +719,9 @@ let solve env ~is_value ~withheld =
     cs;
   List.iter
     (function Unmarked (c, r) -> unmarked env c r | _ -> ())
-    (of_rank 9);
-  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 10);
-  List.iter (function Impl_op o -> impl_op env o | _ -> ()) (of_rank 11);
+    (of_rank 10);
+  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 11);
+  List.iter (function Impl_op o -> impl_op env o | _ -> ()) (of_rank 12);
   (* the uses of named rows, with those the `with`s made last, given the
      group's functions that declare what they use, by the variable their
      row ends in *)
@@ -729,13 +733,13 @@ let solve env ~is_value ~withheld =
            then Option.map (fun t -> (t, c.ffn)) (row_tail c.fcx.uses)
            else None)
          checked)
-    (List.filter_map (function Row_due d -> Some d | _ -> None) (of_rank 12)
+    (List.filter_map (function Row_due d -> Some d | _ -> None) (of_rank 13)
     @ dues);
   List.iter
     (function
       | Own_rows c -> Infer_declared.own_rows env ~is_value:is_fn_value c
       | _ -> ())
-    (of_rank 13);
+    (of_rank 14);
   let needs = List.filter_map (function Needs n -> Some n | _ -> None) cs in
   List.iter
     (function
@@ -743,5 +747,5 @@ let solve env ~is_value ~withheld =
           Infer_declared.check_declared env ~is_value:is_fn_value
             ~withheld:(withheld @ held) ~needs c
       | _ -> ())
-    (of_rank 14);
+    (of_rank 15);
   held

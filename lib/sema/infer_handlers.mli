@@ -42,12 +42,6 @@ type core = {
    own, named after it. *)
 val handler_type : ctx -> Ast.tname list -> Path.t
 
-(* The type an expression of the first type has where a value of the
-   second is wanted: a handler of several dependencies, where one of
-   theirs is wanted, is taken as that one, which lowering is told. *)
-val taken_as :
-  env -> ctx -> Ast.Resolved.expr -> Types.ty -> Types.ty -> Types.ty
-
 (* What the parameters of a type being made, its declaration's, stand for
    where a value of the last type is wanted, as far as they're
    implementations. *)

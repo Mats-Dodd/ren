@@ -509,7 +509,7 @@ type node = {
   found : found option;
   as_dep : Path.t option;
       (** a handler of several dependencies, where one of them is wanted: that
-          one, which it's taken as a description of (Infer_handlers.as_one) *)
+          one, which it's taken as a description of (Infer_coerce.as_one) *)
   targs : Ty.args option;
       (** a use of a top-level function, a member, an associated value or an
           intrinsic: the type arguments it's used at *)

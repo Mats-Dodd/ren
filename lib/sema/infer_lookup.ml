@@ -218,6 +218,7 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
         report env (needs_record f (show (printer env) t));
         TError
       in
+      Infer_coerce.settle env tr;
       match reveal env.st tr with
       | TError -> TError
       | TCon (p, args) as t -> (

@@ -39,6 +39,7 @@ open Infer_written
 open Infer_lookup
 open Infer_rows
 open Infer_handlers
+open Infer_coerce
 
 (* ---- expressions ---- *)
 
@@ -91,10 +92,7 @@ and check env cx ?(why = plain) (e : expr) expected =
   let leaf () =
     let t = synth env cx e in
     Hashtbl.replace cx.nodes e.node t;
-    ignore
-      (unifies env why (result_loc e)
-         ~found:(taken_as env cx e t expected)
-         ~expected)
+    give env cx why e t expected
   in
   let fits () = Hashtbl.replace cx.nodes e.node expected in
   match (e.kind, reveal env.st expected) with
@@ -251,23 +249,17 @@ and synth env cx (e : expr) : ty =
       (* the first element says what the others have to be. One that's a
          handler of several dependencies waits for one that isn't, which
          may be an implementation of one of them, `[counting_rates(1),
-         Rates { ... }]`: then it's taken as that one ([as_one]) *)
+         Rates { ... }]`: then it's taken as that one (Infer_coerce). If
+         every one is, what they are is decided once it's known what the
+         array's elements are *)
       let elem = fresh_var env.st in
-      let several t =
-        match repr t with
-        | TCon (h, [ TUses _ ]) -> (
-            match Hashtbl.find_opt env.types h with
-            | Some { body = Handler _; _ } -> true
-            | _ -> false)
-        | _ -> false
-      in
       let waiting =
         List.fold_left
           (fun waiting (x : expr) ->
             match repr elem with
             | TVar _ ->
                 let t = infer env cx x in
-                if several t then (x, t) :: waiting
+                if several env t then (x, t) :: waiting
                 else (
                   ignore
                     (unifies env plain (result_loc x) ~found:t ~expected:elem);
@@ -279,10 +271,7 @@ and synth env cx (e : expr) : ty =
       in
       List.iter
         (fun ((x : expr), t) ->
-          ignore
-            (unifies env
-               (explain ~msg:element_others ())
-               (result_loc x) ~found:(taken_as env cx x t elem) ~expected:elem))
+          give env cx (explain ~msg:element_others ()) x t elem)
         (List.rev waiting);
       array elem
   | Index (a, i) ->
@@ -440,6 +429,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
   | Field (r, m) -> (
       (* [tr] is the receiver's type, if it's inferred already *)
       let tr = match tr with Some t -> t | None -> infer env cx r in
+      settle env tr;
       (* `r.m` is a field holding a function *)
       let field_call () =
         Option.iter
@@ -585,6 +575,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
    [callee] which top-level function it is, if it's one. *)
 and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
   let ename = Option.value name ~default:"this" in
+  settle env tf;
   match reveal env.st tf with
   | TFun (ps, ret, errs, uses) ->
       let n = List.length ps and given = List.length args in
