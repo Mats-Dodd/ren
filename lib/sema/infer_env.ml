@@ -333,12 +333,15 @@ and compared = { qty : ty; qloc : Loc.t; qop : string }
    function or another module's, or a type parameter of a function of the
    group, whose needs are known only once the group's bodies are, so the
    solver decides them all together. A call points at the argument each
-   is passed in, [uat], as the message's location. [udone] are the
-   requirements passed on so far, by the variable's id. *)
+   is passed in, [uat], as the message's location. [urows] are the same
+   for its row variables, which can need what a type variable can of the
+   tags they stand for. [udone] are the requirements passed on so far, by
+   the variable's id. *)
 and required = {
   uname : string;
   uloc : Loc.t;
   uinst : (int * ty) list;
+  urows : (int * row) list;
   mutable uat : (int * Loc.t) list;
   mutable udone : (int * string) list;
 }

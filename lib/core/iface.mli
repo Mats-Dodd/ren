@@ -136,11 +136,11 @@ val of_handler : home:string -> Ast.Resolved.fn_def -> type_decl option
    out, and every public function's signature. [sets] are the named error
    sets it can see. What a public function or member needs of its type
    parameters isn't declared, so [needs] gives what inference found, by
-   its path, as its scheme's [reqs]. *)
+   its path, as its scheme's [reqs] and [row_reqs]. *)
 val of_module :
   home:string ->
   sets:sets ->
-  needs:(Path.t -> (int * string) list) ->
+  needs:(Path.t -> (int * string) list * (int * string) list) ->
   Ast.Resolved.program ->
   t
 

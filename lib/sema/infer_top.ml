@@ -348,7 +348,9 @@ let check_written sink ~sets ~names (prog : program) =
           args
     | TyName _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ -> ()
   in
-  let pr = Ty.printer ~names { ty = Error; names = []; reqs = [] } in
+  let pr =
+    Ty.printer ~names { ty = Error; names = []; reqs = []; row_reqs = [] }
+  in
   let errors (es : Resolved.errors) =
     let tags = Iface.tags ~sets (Iface.declared_errors ~sets es) in
     let reported = ref [] in
@@ -1271,7 +1273,14 @@ let canonical env so_far (f : fn_def) =
     (args, needs)
   in
   let ty = canon_ty c ~all:false (Hashtbl.find so_far.schemes path) in
-  let scheme : Ty.scheme = { ty; names = canon_names c; reqs = canon_reqs c } in
+  let scheme : Ty.scheme =
+    {
+      ty;
+      names = canon_names c;
+      reqs = canon_reqs c;
+      row_reqs = canon_row_reqs c;
+    }
+  in
   let cx = Hashtbl.find so_far.tables path in
   let ids =
     Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes [] |> List.sort compare

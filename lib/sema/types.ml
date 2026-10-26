@@ -334,6 +334,11 @@ let generalize st ~skolems ?(row_skolems = []) t =
           | Some v -> v
           | None ->
               let v = generic_row st in
+              (* it needs what the named row does *)
+              (match v with
+              | RVar { contents = RUnbound (vid, _) } ->
+                  List.iter (fun r -> ignore (add_need st vid r)) (needs st id)
+              | _ -> ());
               Hashtbl.add rows id v;
               Hashtbl.replace st.skolem_rows id v;
               v)
@@ -677,17 +682,27 @@ let canon_names c = List.sort compare c.names
 
 (* And what the variables it has numbered need, as a scheme's [reqs]: a
    [Hashtbl.fold] visits them in no particular order, so they're sorted. *)
-let canon_reqs c =
+let needs_of c table =
   List.sort compare
     (Hashtbl.fold
        (fun id n acc -> List.map (fun r -> (n, r)) (needs c.cst id) @ acc)
-       c.tys [])
+       table [])
+
+let canon_reqs c = needs_of c c.tys
+
+(* And what the row variables it has numbered need, as its [row_reqs]. *)
+let canon_row_reqs c = needs_of c c.rows
 
 (* A type scheme in canonical form, numbered on its own. *)
 let to_scheme st t : Ty.scheme =
   let c = canon st in
   let ty = canon_ty c ~all:false t in
-  { ty; names = canon_names c; reqs = canon_reqs c }
+  {
+    ty;
+    names = canon_names c;
+    reqs = canon_reqs c;
+    row_reqs = canon_row_reqs c;
+  }
 
 (* A canonical type from an interface, with [vars] standing for its
    variables, [tails] for its row variables, and [lams] for its lambda-set
@@ -809,7 +824,7 @@ let matching st s t =
 
 (* An interface's type scheme as a scheme of this compilation: generic
    variables of its own, which [instantiate] copies at each use, each
-   needing what the scheme says it does. *)
+   needing what the scheme says it does, row variables too. *)
 let of_scheme st (s : Ty.scheme) =
   let memo table make n =
     match Hashtbl.find_opt table n with
@@ -831,7 +846,17 @@ let of_scheme st (s : Ty.scheme) =
         | _ -> ());
         v)
   in
-  let tails = memo (Hashtbl.create 8) (fun _ -> generic_row st) in
+  let tails =
+    memo (Hashtbl.create 8) (fun n ->
+        let r = generic_row st in
+        (match r with
+        | RVar { contents = RUnbound (id, _) } ->
+            List.iter
+              (fun (m, req) -> if m = n then ignore (add_need st id req))
+              s.row_reqs
+        | _ -> ());
+        r)
+  in
   let lams =
     let numbered = memo (Hashtbl.create 8) (fun _ -> generic_row st) in
     function Some n -> numbered n | None -> generic_row st
@@ -867,7 +892,9 @@ let printer ?(show_tail = fun _ -> false) ~names (st : state) =
          c.rows false
   in
   (* the scheme's names start empty: [to_ty] adds them as they're found *)
-  let scheme : Ty.scheme = { ty = Error; names = []; reqs = [] } in
+  let scheme : Ty.scheme =
+    { ty = Error; names = []; reqs = []; row_reqs = [] }
+  in
   { canon = c; ty_printer = Ty.printer ~show_tail:numbered ~names scheme }
 
 (* Bring the Ty printer up to date with what conversion has learned:

@@ -47,12 +47,15 @@ and lams = { ids : string list; lvar : int option }
 (* A function's type, for every choice of its variables. [names] are the
    names its variables were declared with, like the `T` of `fn id<T>`.
    [reqs] are what it needs of its variables, [(0, "eq")] for variable 0
-   having `==`, which inference finds in the function's body. Both are
-   sorted. *)
+   having `==`, which inference finds in the function's body. [row_reqs]
+   are what it needs of its row variables, [(0, "eq")] for every tag row
+   variable 0 stands for having `==`, which no dictionary is passed for:
+   it's only checked where the function is used. All are sorted. *)
 type scheme = {
   ty : ty;
   names : (int * string) list;
   reqs : (int * string) list;
+  row_reqs : (int * string) list;
 }
 
 (* What one use of a scheme picks for its variables, its type arguments:
@@ -113,9 +116,9 @@ val own_args : ty -> args
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, type, row and lambda-set variables separately,
    and its rows' labels and lambda sets' identities sorted. A lambda set
-   of its own ([any_lams]) gets a variable of its own. Its [names] and
-   [reqs] follow their variables, and those of a variable the type doesn't
-   have are dropped. *)
+   of its own ([any_lams]) gets a variable of its own. Its [names],
+   [reqs] and [row_reqs] follow their variables, and those of a variable
+   the type doesn't have are dropped. *)
 val canonical : scheme -> scheme
 
 (* A scheme with each of its lambda sets one of its own, numbered apart,

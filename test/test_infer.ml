@@ -1863,6 +1863,7 @@ let%expect_test "instantiate gives its fresh variables in variable order" =
               any_lams );
         names = [];
         reqs = [];
+        row_reqs = [];
       }
   in
   let st = Types.new_state () in
@@ -2345,6 +2346,79 @@ pub type Bag<T> = { items: Array<T> }
       │          ^^^^^^^^^^^^^
       = a type with a function in it has no `==` or `hash`
       help: give `Bag.has` something it can compare, without a function in it
+    |}]
+
+let%expect_test "comparing what something given fails with needs == of it" =
+  (* a function's errors are a row, whose tail is whatever a function
+     it's given fails with: comparing two `attempt g()`s needs `==` of
+     every tag that can be, which is checked where the row is decided, as
+     a type parameter's is, not left to panic at runtime *)
+  let src =
+    {|
+fn same(a, b) = a == b
+fn twice(g) = same(attempt g(), attempt g())
+fn cmp(g) = (attempt g()) == (attempt g())
+fn good() = if true then fail Good(1) else 1
+fn main() = twice(good) && cmp(good)
+|}
+  in
+  types src;
+  [%expect {|
+    fn same<T has eq>(a: T, b: T) -> Bool
+    fn twice<T has eq, ..e has eq>(g: fn() -> T ! ..e uses ..d) -> Bool uses ..d
+    fn cmp<T has eq, ..e has eq>(g: fn() -> T ! ..e uses ..d) -> Bool uses ..d
+    fn good() -> Int ! Good(Int)
+    fn main() -> Bool
+    |}];
+  check_error
+    (src ^ "fn bad() = if true then fail Bad(fn() => 1) else 1\n"
+   ^ "fn wrong() = twice(bad) || cmp(bad)\n");
+  [%expect {|
+    error: `Bad(fn() -> Int)` has no `==`, which `twice` needs
+      ┌─ test.ren:7:20
+    7 │ fn wrong() = twice(bad) || cmp(bad)
+      │                    ^^^
+      = `twice` compares what something it's given fails with
+      = a type with a function in it has no `==` or `hash`
+      = it has `fn() -> Int` in it
+      help: give `twice` something it can compare, without a function in it
+
+    error: `Bad(fn() -> Int)` has no `==`, which `cmp` needs
+      ┌─ test.ren:7:32
+    7 │ fn wrong() = twice(bad) || cmp(bad)
+      │                                ^^^
+      = `cmp` compares what something it's given fails with
+      = a type with a function in it has no `==` or `hash`
+      = it has `fn() -> Int` in it
+      help: give `cmp` something it can compare, without a function in it
+    |}]
+
+let%expect_test "another module's function needs == of what's failed with" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import util
+fn bad() = if true then fail Bad(fn() => 1) else 1
+fn good() = if true then fail Good(1) else 1
+fn main() = util.cmp(good) && util.cmp(bad)
+|}
+      );
+      ( "util.ren",
+        {|
+pub fn cmp<T>(g: fn() -> T ! ..e) -> Bool = (attempt g()) == (attempt g())
+|}
+      );
+    ];
+  [%expect {|
+    error: `Bad(fn() -> Int)` has no `==`, which `cmp` needs
+      ┌─ main.ren:4:40
+    4 │ fn main() = util.cmp(good) && util.cmp(bad)
+      │                                        ^^^
+      = `cmp` compares what something it's given fails with
+      = a type with a function in it has no `==` or `hash`
+      = it has `fn() -> Int` in it
+      help: give `cmp` something it can compare, without a function in it
     |}]
 
 let%expect_test "a generic method called before it's checked" =

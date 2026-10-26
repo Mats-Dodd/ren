@@ -330,6 +330,7 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
       ty = Fun (ps, ret, errs, deps, Ty.any_lams);
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
       reqs = [];
+      row_reqs = [];
     }
 
 (* A type declared in module [home]. *)
@@ -361,7 +362,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
       | Op_value, _ when f.ret = None ->
           (* a public one without a type is an error, which inference
              reports with the type it finds *)
-          (Value, { Ty.ty = Error; names = []; reqs = [] })
+          (Value, { Ty.ty = Error; names = []; reqs = []; row_reqs = [] })
       | Op_value, _ -> (
           (* a function of no parameters, whose result is the value *)
           match signature ~sets f with
@@ -431,7 +432,7 @@ let of_handler ~home (f : Ast.Resolved.fn_def) =
    All of it comes from declarations but what a public function or member
    needs of its type parameters, which isn't written (operators.md,
    "Generic code"): [needs] gives what inference found, by the function's
-   path, as its scheme's [reqs]. *)
+   path, as its scheme's [reqs] and [row_reqs]. *)
 let of_module ~home ~sets ~needs (prog : Ast.Resolved.program) =
   (* [canonical] keeps a scheme's numbering, and drops what it needs of a
      variable its type hasn't: an associated value's type is its
@@ -439,7 +440,9 @@ let of_module ~home ~sets ~needs (prog : Ast.Resolved.program) =
   let needed path (s : Ty.scheme) =
     match s.ty with
     | Error -> s
-    | _ -> Ty.canonical { s with reqs = needs path }
+    | _ ->
+        let reqs, row_reqs = needs path in
+        Ty.canonical { s with reqs; row_reqs }
   in
   let public (td : type_decl) =
     let td =

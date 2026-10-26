@@ -45,6 +45,7 @@ let run_start files body =
                     { ids = []; lvar = Some 0 } );
               names = [];
               reqs = [];
+              row_reqs = [];
             };
         }
       in
@@ -128,6 +129,7 @@ let lint_evidence body =
           ty = Fun ([], Ty.int, Ty.closed, uses_d, { ids = []; lvar = Some 0 });
           names = [];
           reqs = [];
+          row_reqs = [];
         };
       body = body ~loc ~op ~lambda ~call ~uses_d;
       loc;

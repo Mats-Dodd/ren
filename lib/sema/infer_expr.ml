@@ -605,19 +605,25 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
    parameter's type and the argument's location, before they're checked
    (Infer_env.required). A method's receiver comes first. *)
 and blame_args cx (f : expr) args =
+  (* the first argument whose type [is_in] says has it *)
+  let blame r is_in vars =
+    List.filter_map
+      (fun (id, v) ->
+        if List.mem_assoc id r.uat then None
+        else
+          List.find_map
+            (fun (t, loc) -> if is_in v t then Some (id, loc) else None)
+            args)
+      vars
+  in
+  (* a row variable is in a type if its tail is one of the type's *)
+  let row_in r t =
+    match row_tail r with Some id -> List.mem id (row_vars t) | None -> false
+  in
   Option.iter
     (fun r ->
-      r.uat <-
-        r.uat
-        @ List.filter_map
-            (fun (id, v) ->
-              if List.mem_assoc id r.uat then None
-              else
-                List.find_map
-                  (fun (t, loc) ->
-                    if mentions v t then Some (id, loc) else None)
-                  args)
-            r.uinst)
+      r.uat <- r.uat @ blame r mentions r.uinst;
+      r.uat <- r.uat @ blame r row_in r.urows)
     (Hashtbl.find_opt cx.required f.node)
 
 (* The call [e] of [f], a function of type [tf]; [name] says which, for

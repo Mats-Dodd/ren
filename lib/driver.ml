@@ -72,7 +72,10 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
   (* what a public function needs of its type parameters isn't written,
      so the interface takes it from inference (operators.md, "Generic
      code") *)
-  let needs path = (Path.Map.find path inferred.schemes).reqs in
+  let needs path =
+    let s = Path.Map.find path inferred.schemes in
+    (s.reqs, s.row_reqs)
+  in
   let iface = Iface.of_module ~home ~sets ~needs r.prog in
   (* A public function's body was checked against its signature, so the
      type inference found for it is the one its interface states, with
@@ -91,6 +94,12 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
       let ty = Ty.show pr s.ty in
       let needs =
         List.map (fun (n, req) -> Ty.show pr (Var n) ^ " has " ^ req) s.reqs
+        @ List.map
+            (fun (n, req) ->
+              Ty.show_row pr ~prefix:"" ~sep:"" ~kind:"e"
+                { labels = []; tail = Some n }
+              ^ " has " ^ req)
+            s.row_reqs
       in
       String.concat ", " (ty :: needs)
     in
@@ -598,7 +607,12 @@ let types ?(lint = false) ?load ~file src =
                         (fun (o : Iface.field) ->
                           let pr =
                             Ty.printer ~names
-                              { ty = o.fty; names = []; reqs = [] }
+                              {
+                                ty = o.fty;
+                                names = [];
+                                reqs = [];
+                                row_reqs = [];
+                              }
                           in
                           sprintf "  %s: %s" o.fname (Ty.show pr o.fty))
                         ops
@@ -626,7 +640,8 @@ let types ?(lint = false) ?load ~file src =
                 (* a named error set, as it's declared, each tag with its
                    payload's types *)
                 let pr =
-                  Ty.printer ~names { ty = Error; names = []; reqs = [] }
+                  Ty.printer ~names
+                    { ty = Error; names = []; reqs = []; row_reqs = [] }
                 in
                 let errors =
                   match (decl td).body with

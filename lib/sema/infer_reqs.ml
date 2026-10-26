@@ -11,7 +11,8 @@
    functions, so neither has it either. A type variable has it if
    whatever it stands for does: one of the group being checked passes the
    requirement on to the function it's in, which then needs it of
-   whatever it's given, at every use.
+   whatever it's given, at every use. A row variable at the end of an
+   error set is the same, for every tag it stands for.
 
    Each `==` and each use of a function that needs something is a
    constraint (Infer_env.compared and Infer_env.required), decided once
@@ -66,7 +67,8 @@ let rec decl_lacks env seen p : Infer_msg.no_eq option =
           | Some Is_function ->
               (* represented as a function: say which *)
               let pr =
-                Ty.printer ~names:env.names { ty = rep; names = []; reqs = [] }
+                Ty.printer ~names:env.names
+                  { ty = rep; names = []; reqs = []; row_reqs = [] }
               in
               Some (Has_function (Ty.show pr rep))
           | w -> w)
@@ -89,9 +91,10 @@ and lacks_in env seen (t : Ty.ty) : Infer_msg.no_eq option =
       | None -> List.find_map (lacks_in env seen) args)
 
 (* Whether [t] has `eq`. An error set's tail, what a function it was
-   passed fails with, is taken to have it: no tag of a set holds a
-   function in any program so far, and a requirement on a row would be
-   one of its own (compiler.md, "Deviations"). *)
+   passed fails with, has it if every tag it stands for does, so it's
+   among the variables that have to have it, by its id, which is never a
+   type variable's: a function that compares two `attempt g()`s needs it
+   of `g`'s errors, at every use (Ty.scheme's [row_reqs]). *)
 let rec has env t =
   let all ts =
     List.fold_left
@@ -106,8 +109,11 @@ let rec has env t =
   | TVar { contents = Link _ } -> assert false (* [repr] followed it *)
   | TError | TUses _ -> Has []
   | TFun _ as f -> Lacks (Fn f)
-  | TErrors e ->
-      all (List.concat_map (fun (l : label) -> l.payload) (fst (row_parts e)))
+  | TErrors e -> (
+      let labels, tail = row_parts e in
+      match all (List.concat_map (fun (l : label) -> l.payload) labels) with
+      | Has ids -> Has (ids @ Option.to_list tail)
+      | lacks -> lacks)
   | TCon (p, args) -> (
       match decl_lacks env [] p with
       | Some w -> Lacks (Decl w)
@@ -117,14 +123,20 @@ let rec has env t =
    function [by] needs it to. *)
 let lacking env loc ~op ~by t lack =
   let pr = printer env in
-  let shown = show pr t in
+  (* an error set is only ever checked whole for a row variable, the
+     errors something given to [by] fails with: its tags are shown *)
+  let shown, failed =
+    match repr t with
+    | TErrors e -> (show_row pr ~prefix:"" ~sep:" | " ~kind:"e" e, true)
+    | _ -> (show pr t, false)
+  in
   let why : Infer_msg.no_eq =
     match lack with
     | Fn f when f == repr t -> Is_function
     | Fn f -> Has_function (show pr f)
     | Decl w -> w
   in
-  report env (Infer_msg.no_eq loc ~shown ~op ~by why)
+  report env (Infer_msg.no_eq loc ~shown ~op ~by ~failed why)
 
 (* [t] has `eq`, at [loc]: each variable in it needs it, or it's
    reported. *)
@@ -134,8 +146,11 @@ let require env loc ~op ~by t =
   | Lacks l -> lacking env loc ~op ~by t l
 
 (* Pass on what [r]'s function needs of each variable, that it hasn't
-   yet, to what the use put in its place. Whether it passed on any. *)
+   yet, to what the use put in its place. Whether it passed on any. A row
+   variable stands for an error set's tags, so it's what the use put in
+   its place as a set that has to have it. *)
 let pass env r =
+  let rows = List.map (fun (id, row) -> (id, TErrors row)) r.urows in
   List.fold_left
     (fun did (id, t) ->
       List.fold_left
@@ -148,7 +163,7 @@ let pass env r =
             require env loc ~op:"==" ~by:(Some r.uname) t;
             true))
         did (needs env.st id))
-    false r.uinst
+    false (r.uinst @ rows)
 
 (* Decide the group's `==`s and uses of functions with requirements
    ([cs]), once its types are known. Each `==` first, which is what finds

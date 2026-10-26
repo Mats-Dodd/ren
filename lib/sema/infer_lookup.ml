@@ -312,11 +312,21 @@ let group_call env p =
 
 (* The use of [p] at [node], [loc], which put [inst] in place of its
    variables, needs what [p] does of them, whichever of them it is: it's
-   decided once the group's types are known (see [Infer_env.required]). *)
-let require env cx ~node loc p inst =
-  if inst <> [] then (
+   decided once the group's types are known (see [Infer_env.required]).
+   Its row variables are among them, since they can need something of the
+   tags they stand for. *)
+let require env cx ~node loc p (inst : subst) =
+  let tys = inst.tys and rows = inst.rows in
+  if tys <> [] || rows <> [] then (
     let r =
-      { uname = Path.local p; uloc = loc; uinst = inst; uat = []; udone = [] }
+      {
+        uname = Path.local p;
+        uloc = loc;
+        uinst = tys;
+        urows = rows;
+        uat = [];
+        udone = [];
+      }
     in
     Hashtbl.replace cx.required node r;
     defer env (Required r))
@@ -329,8 +339,9 @@ let fresh env cx ~node loc p =
   Hashtbl.replace cx.targs node
     { tcallee = p; tvalue = false; tpicked = Fresh s };
   (* only a variable that needs something can make the use need it *)
+  let needing l = List.filter (fun (id, _) -> needs env.st id <> []) l in
   require env cx ~node loc p
-    (List.filter (fun (id, _) -> needs env.st id <> []) s.tys);
+    { s with tys = needing s.tys; rows = needing s.rows };
   t
 
 (* [p], a function of the group being checked, is used at [node] at the
@@ -402,12 +413,12 @@ let rec lookup env cx ~node loc = function
          its rows, like storing it as a `fn()`, closes only the instance's *)
       let g = List.assoc p env.group in
       let inst = own_instance env g in
-      require env cx ~node loc p inst.tys;
+      require env cx ~node loc p inst;
       in_group cx ~node p (named env p (replace inst (g.declared ())))
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let g = List.assoc p env.group in
       let jinst = own_instance env g in
-      require env cx ~node loc p jinst.tys;
+      require env cx ~node loc p jinst;
       let used = named env p (replace jinst (g.declared ())) in
       defer env
         (Join { jloc = loc; jname = Path.local p; used; target = p; jinst });

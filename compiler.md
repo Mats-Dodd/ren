@@ -721,18 +721,30 @@ Where the work forced a change to the plan above:
   in it has none. An implementation of a dependency, and a handler of
   several, are their operations, which are functions, so they have none
   either, and neither does a type with one in it: comparing two `Clock`s
-  is an error, not a comparison of what's inside. Three things are taken
+  is an error, not a comparison of what's inside. Two things are taken
   to have `eq` that the plan doesn't decide. An opaque type of another
   module, whose interface hides what it's represented as, since saying
   it had none would make `UserId == UserId` an error in every module but
   its own; one represented as a function still panics when compared,
-  until an interface says what its types have. A tag of an
-  error set the set's tail may still bring in, what a function it was
-  passed fails with, since a requirement on a row would be a kind of
-  its own, and no tag holds a function in any program so far. And a
-  type's type arguments all have to have it, even one the type doesn't
-  hold a value of, `Tag<fn()>` for a `type Tag<T> = opaque Int`, which is
-  what "a type with a function in it" reads as.
+  until an interface says what its types have. And a type's type
+  arguments all have to have it, even one the type doesn't hold a value
+  of, `Tag<fn()>` for a `type Tag<T> = opaque Int`, which is what "a
+  type with a function in it" reads as.
+- **R4, requirements on rows.** The plan puts requirements on type
+  parameters only. But a function's errors are a row, and a function
+  that compares what something it's given fails with, `fn cmp(g) =
+  (attempt g()) == (attempt g())`, compares tags its row's tail stands
+  for, which only a use decides: `cmp(bad)`, where `bad` fails with
+  `Bad(fn() -> Int)`, would compare two functions. So a row variable
+  can need `eq` as a type variable can, of every tag it stands for: the
+  scheme keeps it (`Ty.scheme`'s `row_reqs`), an interface too, a use
+  checks it of what it puts in the row's place, as of a type argument
+  (infer_reqs.ml, `pass`), and `ren types` prints it after the type
+  parameters, `cmp<T has eq, ..e has eq>`. It's a check only: nothing is
+  passed for it at runtime, since a dictionary compares a tag a set's
+  tail brought in by its shape, which can't meet a function once every
+  use is checked. An earlier fix took such a tag to have `eq`, which
+  let `cmp(bad)` panic.
 - **R4, dictionaries beside descriptors.** The plan leaves open whether a
   requirement's dictionary is a hidden parameter of its own or carried
   in the type's descriptor, which a generic function already takes for

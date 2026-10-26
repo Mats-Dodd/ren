@@ -59,7 +59,7 @@ let show t =
     (Ty.printer
        ~show_tail:(fun _ -> true)
        ~names:Path.full
-       { ty = t; names = []; reqs = [] })
+       { ty = t; names = []; reqs = []; row_reqs = [] })
     t
 
 let fail env (loc : Loc.t) msg =
@@ -169,7 +169,7 @@ let show_lams l =
   String.trim
     (Ty.show_lams
        (Ty.printer ~show_lams:true ~names:Path.full
-          { ty = Error; names = []; reqs = [] })
+          { ty = Error; names = []; reqs = []; row_reqs = [] })
        l)
 
 (* Each lambda set in [t] is in canonical form: its identities sorted,

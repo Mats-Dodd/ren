@@ -75,11 +75,20 @@ and label = { name : string; payload : ty list }
    `same<T has eq>` (operators.md, "Generic code"). They're sorted, as
    [names] are, so equal schemes are equal values. They're never written:
    inference finds them in the function's body, and an interface keeps
-   them (iface.ml). *)
+   them (iface.ml).
+
+   [row_reqs] are the same for its row variables: [(0, "eq")] says every
+   tag row variable 0 stands for must have `==`, since the function
+   compares what something it's given fails with, `same(attempt g(),
+   attempt g())`. Nothing is passed for one at runtime (core.ml): it's
+   only checked where the function is used, as a type variable's is, so a
+   tag that holds a function never reaches its `==`. `ren types` prints
+   it as `..e has eq`. *)
 type scheme = {
   ty : ty;
   names : (int * string) list;
   reqs : (int * string) list;
+  row_reqs : (int * string) list;
 }
 
 (* What one use of a scheme picks for its variables: its type arguments.
@@ -209,9 +218,9 @@ let own_args t =
 
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, as inference numbers them: type variables, row
-   variables and lambda-set variables separately. [names] and [reqs]
-   follow their variables. A lambda set of its own ([any_lams]) gets a
-   variable nothing else has. *)
+   variables and lambda-set variables separately. [names], [reqs] and
+   [row_reqs] follow their variables. A lambda set of its own
+   ([any_lams]) gets a variable nothing else has. *)
 let canonical (s : scheme) =
   let number table n =
     match List.assoc_opt n !table with
@@ -258,13 +267,18 @@ let canonical (s : scheme) =
   in
   let ty = go s.ty in
   (* a name or requirement whose variable the type no longer has goes *)
-  let renumber pairs =
+  let renumber table pairs =
     List.sort compare
       (List.filter_map
-         (fun (n, h) -> Option.map (fun m -> (m, h)) (List.assoc_opt n !tys))
+         (fun (n, h) -> Option.map (fun m -> (m, h)) (List.assoc_opt n !table))
          pairs)
   in
-  { ty; names = renumber s.names; reqs = renumber s.reqs }
+  {
+    ty;
+    names = renumber tys s.names;
+    reqs = renumber tys s.reqs;
+    row_reqs = renumber rows s.row_reqs;
+  }
 
 (* A scheme without its lambda sets: each one of its own, numbered apart.
    It's what an interface states (iface.ml): a function type written in a
@@ -506,7 +520,9 @@ and show_lams pr l =
    What it needs of a type parameter follows the parameter's name,
    `same<T has eq>`, `sum<T has add, zero>` (operators.md, "Generic
    code"); a parameter without a written name is named as everywhere
-   else, `T`, `U`, ...
+   else, `T`, `U`, ... What it needs of the tags an error row stands for
+   follows them, `twice<T has eq, ..e has eq>`, with the row's tail
+   shown wherever it is.
 
    A member of a type is printed under its type, so [outer]
    are the type's parameters, which aren't the function's own and aren't
@@ -574,8 +590,13 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
         | Var _ | Error | Errors _ | Uses _ | Fun _ -> []
       in
       let kept = kept @ needs ret in
+      (* and so is one the function needs something of, which is listed
+         with its type parameters *)
       let pr =
-        printer ~show_tail:(fun id -> links id || List.mem id kept) ~names s
+        printer
+          ~show_tail:(fun id ->
+            links id || List.mem id kept || List.mem_assoc id s.row_reqs)
+          ~names s
       in
       pr.reserved <- outer;
       reserve pr s.ty;
@@ -614,14 +635,29 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
             if List.mem n outer then Hashtbl.find_opt pr.names id else None)
           s.names
       in
+      (* what it needs of a row, `..e has eq`, after the type
+         parameters: an error set's tail is only ever named `..e` *)
+      let rows =
+        List.map
+          (fun (id, reqs) ->
+            ".." ^ tail_name pr id "e" ^ " has " ^ String.concat ", " reqs)
+          (List.fold_right
+             (fun (id, r) acc ->
+               match acc with
+               | (id', rs) :: rest when id' = id -> (id, r :: rs) :: rest
+               | _ -> (id, [ r ]) :: acc)
+             s.row_reqs [])
+      in
       let tparams =
         match
-          List.filter
-            (fun n -> (not (List.mem n outer)) || needs n <> [])
-            (List.rev pr.order)
+          List.map param
+            (List.filter
+               (fun n -> (not (List.mem n outer)) || needs n <> [])
+               (List.rev pr.order))
+          @ rows
         with
         | [] -> ""
-        | names -> "<" ^ String.concat ", " (List.map param names) ^ ">"
+        | parts -> "<" ^ String.concat ", " parts ^ ">"
       in
       Printf.sprintf "%sfn %s%s(%s)%s%s"
         (if pub then "pub " else "")

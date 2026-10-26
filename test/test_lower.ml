@@ -243,6 +243,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
                 { ids = []; lvar = Some 0 } );
           names = [];
           reqs = [];
+          row_reqs = [];
         };
       body;
       loc;
@@ -272,14 +273,16 @@ let%expect_test "Core Lint reports a node of the wrong type" =
 let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
   let loc = Ren.Loc.point ~file 1 1 in
   let fn path params ty body : Ren.Core.fn_def =
-    let own = Ren.Core.type_params { ty; names = []; reqs = [] } in
+    let own =
+      Ren.Core.type_params { ty; names = []; reqs = []; row_reqs = [] }
+    in
     {
       path = Ren.Path.make "test" path;
       params;
       ev = Ren.Core.evidence 9;
       tys = (if path = "id" then Option.value tys ~default:own else own);
       dicts = [];
-      scheme = { ty; names = []; reqs = [] };
+      scheme = { ty; names = []; reqs = []; row_reqs = [] };
       body;
       loc;
     }
@@ -415,6 +418,7 @@ let%expect_test "Core Lint reports a pattern of an error type" =
                 Ren.Ty.any_lams );
           names = [];
           reqs = [];
+          row_reqs = [];
         };
       body;
       loc;
@@ -453,6 +457,7 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
                 { ids = []; lvar = Some 0 } );
           names = [];
           reqs = [];
+          row_reqs = [];
         };
       body;
       loc;
@@ -502,6 +507,7 @@ let%expect_test "Core Lint reports an instance that is a value" =
                 { ids = []; lvar = Some 0 } );
           names = [];
           reqs = [];
+          row_reqs = [];
         };
       body;
       loc;
@@ -541,7 +547,7 @@ let values_program ~uses_b ~values =
       ev = Ren.Core.evidence 2;
       tys = [];
       dicts = [];
-      scheme = { ty = int_fn; names = []; reqs = [] };
+      scheme = { ty = int_fn; names = []; reqs = []; row_reqs = [] };
       body;
       loc;
     }

@@ -227,7 +227,12 @@ let representation ~names (td : Iface.type_decl) =
   match td.body with
   | Opaque (Some rep) ->
       let s : Ty.scheme =
-        { ty = rep; names = List.mapi (fun i n -> (i, n)) td.params; reqs = [] }
+        {
+          ty = rep;
+          names = List.mapi (fun i n -> (i, n)) td.params;
+          reqs = [];
+          row_reqs = [];
+        }
       in
       Ty.show (Ty.printer ~names s) rep
   | _ -> invalid_arg "Infer_msg.representation: not an opaque type"
@@ -1605,8 +1610,9 @@ type no_eq =
 
 (* [shown] has no `==`, at [loc]: compared there with [op], `==` or `!=`,
    or given to [by], which compares what it's given (operators.md,
-   "Generic code"). *)
-let no_eq loc ~shown ~op ~by why =
+   "Generic code"). If [failed], [shown] are the errors something given to
+   [by] fails with, which it compares, kept by `attempt`. *)
+let no_eq loc ~shown ~op ~by ~failed why =
   let msg =
     match by with
     | None -> sprintf "`%s` has no `%s`" shown op
@@ -1636,8 +1642,15 @@ let no_eq loc ~shown ~op ~by why =
         "compare what its operations return instead"
     | None, _ -> "compare the parts of it that have no function in them"
   in
+  let kept =
+    match by with
+    | Some f when failed ->
+        [ sprintf "`%s` compares what something it's given fails with" f ]
+    | _ -> []
+  in
   Diag.make loc ~help
-    ~notes:("a type with a function in it has no `==` or `hash`" :: inside)
+    ~notes:
+      (kept @ ("a type with a function in it has no `==` or `hash`" :: inside))
     msg
 
 (* The public value [fn], named [name] where it's declared, without a

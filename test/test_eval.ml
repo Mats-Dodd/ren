@@ -934,7 +934,20 @@ let%expect_test "== can't panic, but through another module's opaque type" =
     \  get: fn() -> Int\n\
      fn d() = D { get: fn() => 1 }\n\
      fn main() = d() == d()";
+  (* and a tag holding one, in the errors of a function given to one that
+     compares what it fails with *)
+  lacks
+    "fn same(a, b) = a == b\n\
+     fn bad() = if true then fail Bad(fn() => 1) else 1\n\
+     fn twice(g) = same(attempt g(), attempt g())\n\
+     fn main() = twice(bad)";
+  lacks
+    "fn cmp(g) = (attempt g()) == (attempt g())\n\
+     fn bad() = if true then fail Bad(fn() => 1) else 1\n\
+     fn main() = cmp(bad)";
   [%expect {|
+    refused
+    refused
     refused
     refused
     refused
