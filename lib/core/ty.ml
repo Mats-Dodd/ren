@@ -269,8 +269,8 @@ let canonical (s : scheme) =
 (* A scheme without its lambda sets: each one of its own, numbered apart.
    It's what an interface states (iface.ml): a function type written in a
    declaration says nothing of which lambdas flow to it, and inference's
-   sets depend on the module's bodies, which an interface mustn't (compiler.md,
-   "Lambda sets in schemes and interfaces"). *)
+   sets depend on the module's bodies, which an interface mustn't
+   (compiler.md, "Lambda sets"). *)
 let forget_lams (s : scheme) = canonical { s with ty = without_lams s.ty }
 
 (* ---- printing ----
