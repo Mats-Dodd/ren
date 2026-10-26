@@ -55,6 +55,10 @@ type node = {
       (** a use of a top-level function, a member, an associated value or an
           intrinsic: the type arguments it picked, the n-th for its scheme's
           [Var n] (Ty.args) *)
+  needs : (int * string) list;
+      (** what the function used there needs of its type arguments: its scheme's
+          requirements, [(0, "eq")] for [Var 0] having `==`, sorted. Lowering
+          passes a dictionary for each (core.ml, [dict]) *)
 }
 
 (* What inference found, in canonical form (ty.ml). A function's scheme and

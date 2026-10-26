@@ -77,6 +77,7 @@ type node = Infer_top.node = {
   found : found option;
   as_dep : Path.t option;
   targs : Ty.args option;
+  needs : (int * string) list;
 }
 
 type t = Infer_top.t = {

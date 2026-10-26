@@ -513,6 +513,9 @@ type node = {
   targs : Ty.args option;
       (** a use of a top-level function, a member, an associated value or an
           intrinsic: the type arguments it's used at *)
+  needs : (int * string) list;
+      (** what the function used there needs of its type arguments, its scheme's
+          requirements: a dictionary for each (core.ml) *)
 }
 
 type t = {
@@ -1231,10 +1234,10 @@ let canonical env so_far (f : fn_def) =
   let path = Ast.fn_path env.home f in
   let c = canon env.st in
   (* a use's type arguments (Infer_env.targs), what each variable of the
-     callee's scheme stands for. A function of the group being checked is
-     generic now, so what each of its variables stands for in the type it
-     was used at is known. *)
-  let type_args (u : Infer_env.targs) : Ty.args =
+     callee's scheme stands for, and what the callee needs of them. A
+     function of the group being checked is generic now, so what each of
+     its variables stands for in the type it was used at is known. *)
+  let type_args (u : Infer_env.targs) =
     let s =
       match u.tpicked with
       | Fresh s -> s
@@ -1245,10 +1248,21 @@ let canonical env so_far (f : fn_def) =
           | TFun ([], r, _, _) when u.tvalue -> restrict s (generics r)
           | _ -> s)
     in
-    {
-      tys = List.map (fun (_, t) -> canon_ty c ~all:true t) s.tys;
-      rows = List.map (fun (_, r) -> canon_row c ~all:true r) s.rows;
-    }
+    let args : Ty.args =
+      {
+        tys = List.map (fun (_, t) -> canon_ty c ~all:true t) s.tys;
+        rows = List.map (fun (_, r) -> canon_row c ~all:true r) s.rows;
+      }
+    in
+    (* and what the callee needs of each, its scheme's requirements, by
+       the variable each is of, as [Ty.canonical] numbers them *)
+    let needs =
+      List.concat
+        (List.mapi
+           (fun n (id, _) -> List.map (fun req -> (n, req)) (needs env.st id))
+           s.tys)
+    in
+    (args, needs)
   in
   let ty = canon_ty c ~all:false (Hashtbl.find so_far.schemes path) in
   let scheme : Ty.scheme = { ty; names = canon_names c; reqs = canon_reqs c } in
@@ -1262,12 +1276,14 @@ let canonical env so_far (f : fn_def) =
   let nodes =
     List.fold_left2
       (fun acc id ty ->
+        let used = Option.map type_args (Hashtbl.find_opt cx.targs id) in
         Nodes.add id
           {
             ty;
             found = Hashtbl.find_opt cx.found id;
             as_dep = Hashtbl.find_opt cx.as_dep id;
-            targs = Option.map type_args (Hashtbl.find_opt cx.targs id);
+            targs = Option.map fst used;
+            needs = Option.fold ~none:[] ~some:snd used;
           }
           acc)
       Nodes.empty ids tys
