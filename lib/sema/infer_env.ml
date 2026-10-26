@@ -100,9 +100,6 @@ type env = {
       (** each statement that threw away a value of a type still unknown, which
           the solver made `Unit`, with the function it's in: a later mismatch at
           a call of that function points back at it *)
-  mutable handler_needs : handler_needs list;
-      (** the group's handlers, whose needs are checked once it's done (see
-          [handler_needs]) *)
   mutable in_state : bool;
       (** whether the code being checked is a handler's state, which can't fail,
           for a message when something in it does *)
@@ -145,8 +142,8 @@ and row_due = {
    never more (deps.md, "Implementations"). Its errors [ierrs] start as
    [ideclared] with room for more, and once the group is done (when it's
    known what its calls fail with), anything more is reported and the room
-   closed, by the solver. [ivalue] is what's given for it, and [inodes] the types of the
-   expressions of the function it's in, for a message. *)
+   closed, by the solver. [ivalue] is what's given for it, and [inodes]
+   the types of the expressions of the function it's in, for a message. *)
 and impl_op = {
   idep : Path.t;
   iop : string;
@@ -194,8 +191,8 @@ and copy = {
    (the next one out is `outer`'s, stage 10). If its needs are written,
    `for N uses Console`, or it's public, which needs nothing if it says
    nothing, they're [ndeclared], and [nrow] has to be no more than that.
-   It's checked once the group is done, as a function's `uses` is
-   (infer_top.ml), and then a written row is closed. *)
+   It's checked once the group is done, with its function's `uses`, by the
+   solver, and then a written row is closed. *)
 and handler_needs = {
   nself : Path.t;
   ndeclared : string list option;
@@ -206,7 +203,7 @@ and handler_needs = {
 (* A dependency [hdep] that a function [hfn] calls inside a `with` of it
    still gets from outside, and why ([hnote]), which the solver finds as
    it decides what each `with` installs: a message that says its callers
-   have to install it explains with this (infer_top.ml). *)
+   have to install it explains with this (infer_declared.ml). *)
 and withheld = { hfn : Path.t; hdep : string; hnote : Infer_msg.withheld }
 
 (* Something that has to hold of the group's types and rows, which can be
@@ -245,6 +242,23 @@ and constr =
       (** an implementation's operation fails with no more than its dependency
           declares *)
   | Row_due of row_due  (** a row that a named row is added to ends in it *)
+  | Own_errors of checked
+      (** a function that names its own errors' row, `! ..e`, fails with it *)
+  | Own_rows of checked
+      (** a function that names its own `uses` row ends it in that, and one that
+          declares its errors names the row a closure it calls fails with *)
+  | Declared of checked
+      (** a function does what it declares: it uses, and fails with, no more *)
+  | Needs of handler_needs
+      (** a handler needs no more than it declares, and not itself *)
+
+(* A function of the group, [ffn], and what checking its body found,
+   [fcx]. Once the group's other constraints are decided, the rows it names
+   are its own rows' ends, and what it declares it uses and fails with is
+   checked against what its body does (infer_declared.ml). [fmain] says
+   it's the program's `main`, a dependency of which that the runtime
+   doesn't install is reported once every group is done (infer_top.ml). *)
+and checked = { ffn : fn_def; fcx : ctx; fmain : bool }
 
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their
@@ -342,25 +356,17 @@ and inclusion = {
 
 (* Something that adds to a top-level function's errors: a call its `try`
    passes on, a `fail`, a [Result] it fails with again, or the errors a
-   `try match` doesn't handle. A function
-   that writes its errors is checked against them (infer_top.ml), with a
-   label at the first of these that brings in an error it doesn't
-   declare. *)
+   `try match` doesn't handle. A function that writes its errors is
+   checked against them (infer_declared.ml), with a label at the first of
+   these that brings in an error it doesn't declare. *)
 and source =
   | Passed of ecall
   | Failed of Loc.t * label
   | Unwrapped of Loc.t * row
   | Unhandled of Loc.t * row
 
-(* A dot call that turned out to call [callee], a method of the module
-   not checked yet, from [caller]. Which method `s.size()` calls is found
-   only by checking it, after the call graph has put the functions in
-   order, so the call graph was missing this edge: infer_top.ml adds it
-   and checks the module again. *)
-exception Unchecked of { caller : Path.t; callee : Path.t }
-
 (* What the expression being inferred can see. *)
-type ctx = {
+and ctx = {
   self : Path.t;  (** the top-level function being checked *)
   locals : (int, ty) Hashtbl.t;
       (** the type of each local of the top-level function, by binder id *)
@@ -397,6 +403,13 @@ type ctx = {
   named : (string * row) list;
       (** the rows the function's signature names, `..d`, by name (ast.ml) *)
 }
+
+(* A dot call that turned out to call [callee], a method of the module
+   not checked yet, from [caller]. Which method `s.size()` calls is found
+   only by checking it, after the call graph has put the functions in
+   order, so the call graph was missing this edge: infer_top.ml adds it
+   and checks the module again. *)
+exception Unchecked of { caller : Path.t; callee : Path.t }
 
 (* Does a row ending in [tail] belong to one of [params]? Then it stands
    for whatever the function passed there fails with. *)

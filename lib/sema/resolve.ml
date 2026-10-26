@@ -760,8 +760,8 @@ let item env sc (t : tyname) (f : ident) =
       | _ when List.mem f.name ops ->
           (* `Clock.now`: an operation, which calls the implementation
              installed where it's called (one a handler calls of what it
-             implements is reported by infer_top.ml); resolve.ml reports
-             one that's also a member's name *)
+             implements is reported by infer_declared.ml); resolve.ml
+             reports one that's also a member's name *)
           Dep_op (p, f.name)
       | Some _, Some x -> Intrinsic x
       | Some kind, None ->

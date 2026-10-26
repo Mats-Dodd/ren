@@ -47,8 +47,8 @@ let withheld_notes withheld dep (c : call option) =
    the caller uses. Only if there's none, which happens when the callee is
    in [f]'s group and its uses were found at the join, is it the first
    call whose row has it now. For the program's `main` ([main]), one the
-   runtime doesn't install is left to [check_main]: adding it to `uses`
-   wouldn't help. *)
+   runtime doesn't install is left to infer_top.ml's [check_main]: adding
+   it to `uses` wouldn't help. *)
 let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let calls =
@@ -292,12 +292,13 @@ let check_open_rows env (f : fn_def) cx =
         (kept_closed p.pname.ident.loc ~name ~fn:(Ast.fn_name f) kept closed)
 
 (* Once the group is done, and the uses of named rows have ended the rows
-   they're added to (solve.ml), each function that names its own, `uses
-   ..d` or `! ..e`, ends its own in it. One that declares what it fails
-   with, but not a named row a call of a closure it was passed fails with,
-   is reported. [fns] are the group's functions, each with what checking it
-   found and whether it declares what it fails with. *)
-let own_named_rows env (fns : (fn_def * ctx * bool) list) =
+   they're added to (solve.ml), a function that names its own, `uses ..d`
+   or `! ..e`, ends its own in it. One that declares what it fails with,
+   but not a named row a call of a closure it was passed fails with, is
+   reported. [c] is the function, with what checking it found, and
+   [is_value] says whether a function is an associated value. *)
+let own_rows env ~is_value c =
+  let f = c.ffn and cx = c.fcx in
   let own_tail (es : Resolved.errors option) =
     Option.map
       (fun (n : ident) -> n.name)
@@ -307,57 +308,71 @@ let own_named_rows env (fns : (fn_def * ctx * bool) list) =
       (fun (n : ident) -> n.name)
       (Option.bind u (fun (u : Resolved.uses) -> u.dtail))
   in
-  List.iter
-    (fun ((f : fn_def), cx, errors) ->
-      let named n =
-        match List.assoc_opt n cx.named with
-        | Some (RSkol (id, n)) -> Some (id, n)
-        | _ -> None
-      in
-      (match Option.bind (own_dtail f.uses) named with
-      | Some (id, n) -> (
-          match row_end cx.uses with
-          | RVar _ as t ->
-              (* a variable still unbound takes any row, so this can't
-                 fail *)
-              Unify.unify_row env.st t (RSkol (id, n))
-          | _ -> ())
-      | None -> ());
-      let declared = own_tail f.errors in
-      match row_end cx.errs with
-      | RSkol (id, n) when errors && declared <> Some n ->
-          (* a call of a closure it was passed, which fails with [..n] *)
-          let from =
-            List.find_map
-              (function
-                | Passed c when row_tail c.erow = Some id -> Some c.eloc
-                | _ -> None)
-              (Option.fold ~none:[] ~some:( ! ) cx.sources)
-          in
-          report env
-            (named_errors_undeclared
-               (Option.value from ~default:f.name.loc)
-               n ~fn:(Ast.fn_name f))
+  let named n =
+    match List.assoc_opt n cx.named with
+    | Some (RSkol (id, n)) -> Some (id, n)
+    | _ -> None
+  in
+  (match Option.bind (own_dtail f.uses) named with
+  | Some (id, n) -> (
+      match row_end cx.uses with
+      | RVar _ as t ->
+          (* a variable still unbound takes any row, so this can't fail *)
+          Unify.unify_row env.st t (RSkol (id, n))
       | _ -> ())
-    fns
+  | None -> ());
+  let errors = declared_errors env ~is_value ~tparams:cx.tparams f <> None in
+  let declared = own_tail f.errors in
+  match row_end cx.errs with
+  | RSkol (id, n) when errors && declared <> Some n ->
+      (* a call of a closure it was passed, which fails with [..n] *)
+      let from =
+        List.find_map
+          (function
+            | Passed c when row_tail c.erow = Some id -> Some c.eloc | _ -> None)
+          (Option.fold ~none:[] ~some:( ! ) cx.sources)
+      in
+      report env
+        (named_errors_undeclared
+           (Option.value from ~default:f.name.loc)
+           n ~fn:(Ast.fn_name f))
+  | _ -> ()
 
 (* A function that names its own errors' row, `! ..e`, fails with that
    row: its calls of itself do, and a call of a closure that fails with
    [..e] passes on what it can. That's known before the group's markers
    are checked, which need it, and its labels are all there by then. *)
-let own_error_rows env (fns : (fn_def * ctx) list) =
-  List.iter
-    (fun ((f : fn_def), cx) ->
-      match
-        ( Option.bind f.errors (fun (es : Resolved.errors) -> es.etail),
-          row_end cx.errs )
-      with
-      | Some (n : ident), (RVar _ as tail) -> (
-          match List.assoc_opt n.name cx.named with
-          | Some r ->
-              (* a variable still unbound takes any row, so this can't
-                 fail *)
-              Unify.unify_row env.st tail r
-          | None -> ())
-      | _ -> ())
-    fns
+let own_errors env c =
+  match
+    ( Option.bind c.ffn.errors (fun (es : Resolved.errors) -> es.etail),
+      row_end c.fcx.errs )
+  with
+  | Some (n : ident), (RVar _ as tail) -> (
+      match List.assoc_opt n.name c.fcx.named with
+      | Some r ->
+          (* a variable still unbound takes any row, so this can't fail *)
+          Unify.unify_row env.st tail r
+      | None -> ())
+  | _ -> ()
+
+(* ---- all of it ---- *)
+
+(* The function [c] does what it declares, once its group is solved: it
+   uses no more than it declares, a public one's transparent parameters
+   keep their rows open, a handler needs no more than it declares
+   ([needs] are the group's handlers'), and it fails with exactly what it
+   declares, and is seen as failing with that from then on. [withheld]
+   says why a function still gets a dependency from outside. *)
+let check_declared env ~is_value ~withheld ~needs c =
+  let f = c.ffn and cx = c.fcx in
+  let path = Ast.fn_path env.home f in
+  Option.iter
+    (check_uses env ~is_value ~withheld ~main:c.fmain f cx)
+    (declared_uses ~is_value f);
+  if f.pub && not (is_value f) then check_open_rows env f cx;
+  List.iter (fun n -> if n.nself = path then check_needs env f n) needs;
+  Option.iter
+    (fun declared ->
+      check_errors env ~is_value f cx declared;
+      as_declared env path cx declared)
+    (declared_errors env ~is_value ~tparams:cx.tparams f)

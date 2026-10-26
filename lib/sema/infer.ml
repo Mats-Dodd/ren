@@ -13,7 +13,7 @@
    use, and calling a dependency's operation, `Console.write(s)`, adds the
    dependency. `print` uses `Console`, so `main` does too, unless it
    declares its dependencies: a function that writes `uses`, and every
-   public function, can use only what it lists (infer_top.ml).
+   public function, can use only what it lists (infer_declared.ml).
 
    Errors (errors.md) are rows too, whose labels are tags with payloads,
    `Short(Int)`, but a call's errors go only where a marker says: a `try`
@@ -22,7 +22,7 @@
    whatever handles the code it's in. Whether each call can fail is known
    only once its group is done, so the markers' rules, and that a function
    that writes its errors (every public one does) fails with exactly
-   those, are checked then (infer_top.ml).
+   those, are checked then (solve.ml, infer_declared.ml).
 
    Top-level functions are checked in dependency order: callees before
    callers, with mutually recursive functions checked together (a strongly

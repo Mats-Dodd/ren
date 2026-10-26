@@ -167,9 +167,14 @@ let rec handler core env cx state arms ~needs ~declared =
           ignore (core.infer env hcx a.arm_impl)
       | _ -> ignore (core.infer env hcx a.arm_impl))
     arms;
-  env.handler_needs <-
-    { nself = cx.self; ndeclared = declared; nrow = needs; ncalls = hcx.calls }
-    :: env.handler_needs
+  defer env
+    (Needs
+       {
+         nself = cx.self;
+         ndeclared = declared;
+         nrow = needs;
+         ncalls = hcx.calls;
+       })
 
 (* `with item in body` (deps.md, "`with`"), the expression [e]. A call
    whose callee takes one more argument than it's given is a wrapper,

@@ -21,61 +21,40 @@ open Infer_msg
 open Infer_env
 open Infer_report
 
-(* Which constraints the solver decides now. Other passes still run
-   between them, so the solver is run in parts: [Equalities], the uses of
-   the group's functions joined and the values thrown away checked;
-   [Needs], what each `with` installs and what each place an
-   implementation is used needs;
-   [Error_rows], what each error set holds, the rules of markers, and
-   what implementations' operations fail with; and
-   [Named_rows], the rows that end in a named row, given the group's
-   functions that declare what they use, by the variable their row ends
-   in. *)
-type stage =
-  | Equalities
-  | Needs
-  | Error_rows
-  | Named_rows of (int * Ast.Resolved.fn_def) list
-
 (* A constraint's rank: those of a lower one are decided first. A value
    thrown away is checked after the group's uses of each other are joined,
    since a call of another function of the group learns only then what it
    returns. What a `with` installs is decided once every use is joined,
    and each `with` brings the copies of what an implementation needs up
-   to date before it's decided, since what its body uses includes them.
-   A set gets the tags written in it before what it includes
-   from other sets, so a tag of two shapes is blamed on the inclusion. A
-   kept set is closed once it has every tag it gets, and only then are the
-   tags matched in a set checked against it. The rules of markers read
-   what every set holds, so they're checked after them, and so is what an
-   operation fails with, which has every error its calls bring in by then;
-   and a row is ended in a named row only once it has every label it gets,
-   since that stops it getting more. *)
+   to date before it's decided, since what its body uses includes them. A
+   function that names its own errors' row fails with it before the error
+   sets are decided, which need it. A set gets the tags written in it
+   before what it includes from other sets, so a tag of two shapes is
+   blamed on the inclusion. A kept set is closed once it has every tag it
+   gets, and only then are the tags matched in a set checked against it.
+   The rules of markers read what every set holds, so they're checked
+   after them, and so is what an operation fails with, which has every
+   error its calls bring in by then. A row is ended in a named row only
+   once it has every label it gets, since that stops it getting more, and
+   a function's own rows after every use of a named row has ended the row
+   it's added to. What each function declares is checked last, against
+   all of that; a handler's needs with its function's. *)
 let rank = function
   | Join _ -> 0
   | Drop _ -> 1
   | Install _ -> 2
   | Copy _ -> 3
-  | Value_tag _ -> 4
-  | Include _ -> 5
-  | Kept _ -> 6
-  | Tag_pattern _ -> 7
-  | Unmarked _ -> 8
-  | Marker _ -> 9
-  | Impl_op _ -> 10
-  | Row_due _ -> 11
-
-(* Whether [stage] decides [c]. *)
-let decides stage c =
-  match (stage, c) with
-  | Equalities, (Join _ | Drop _)
-  | Needs, (Install _ | Copy _)
-  | ( Error_rows,
-      ( Value_tag _ | Include _ | Kept _ | Tag_pattern _ | Unmarked _ | Marker _
-      | Impl_op _ ) )
-  | Named_rows _, Row_due _ ->
-      true
-  | _ -> false
+  | Own_errors _ -> 4
+  | Value_tag _ -> 5
+  | Include _ -> 6
+  | Kept _ -> 7
+  | Tag_pattern _ -> 8
+  | Unmarked _ -> 9
+  | Marker _ -> 10
+  | Impl_op _ -> 11
+  | Row_due _ -> 12
+  | Own_rows _ -> 13
+  | Declared _ | Needs _ -> 14
 
 (* ---- deciding one ---- *)
 
@@ -661,49 +640,58 @@ let copies_of env cs =
    implementation needs, [copies], are up to date, since what its body
    uses includes what an implementation used in it needs. Why each
    function of the group still gets a dependency from outside, the first
-   reason found for each. *)
+   reason found for each, and the uses of named rows they make. *)
 let installs env ~copies cs =
   let ws = List.filter_map (function Install w -> Some w | _ -> None) cs in
   (* how many bodies end in each row that's still open *)
   let tails = List.filter_map (fun w -> row_tail w.wbody) ws in
   let shared id = List.length (List.filter (( = ) id) tails) > 1 in
   List.fold_left
-    (fun withheld w ->
+    (fun (withheld, dues) w ->
       copies_of env copies;
       let held, due = install env ~shared w in
-      Option.iter (fun d -> defer env (Row_due d)) due;
+      let dues = dues @ Option.to_list due in
       match held with
       | Some h
         when not
                (List.exists
                   (fun h' -> h'.hfn = h.hfn && h'.hdep = h.hdep)
                   withheld) ->
-          withheld @ [ h ]
-      | _ -> withheld)
-    [] ws
+          (withheld @ [ h ], dues)
+      | _ -> (withheld, dues))
+    ([], []) ws
 
-(* Decide every pending constraint of [stage], rank by rank. [is_value]
-   says whether a function is an associated value, which a use joins by
-   its result. *)
-let solve env ~is_value stage =
-  let mine, rest = List.partition (decides stage) (List.rev env.pending) in
-  env.pending <- List.rev rest;
-  let of_rank r = List.filter (fun c -> rank c = r) mine in
+(* Decide every pending constraint, rank by rank, and take them off the
+   environment's list. [is_value] says whether a function is an associated
+   value, which a use joins by its result, and [withheld] why each
+   function of an earlier group still gets a dependency from outside. It
+   returns why each function of this group does. *)
+let solve env ~is_value ~withheld =
+  let cs = List.rev env.pending in
+  env.pending <- [];
+  let of_rank r = List.filter (fun c -> rank c = r) cs in
+  let is_fn_value f = is_value (Ast.fn_path env.home f) in
+  let checked =
+    List.filter_map (function Declared c -> Some c | _ -> None) cs
+  in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) (of_rank 0);
   List.iter (function Drop d -> drop env d | _ -> ()) (of_rank 1);
-  let withheld = installs env ~copies:(of_rank 3) (of_rank 2) in
+  let held, dues = installs env ~copies:(of_rank 3) (of_rank 2) in
   copies_of env (of_rank 3);
   (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
      implementation needs only what it has: a transparent parameter's
-     row closes with it, which infer_top.ml's [check_open_rows] reports *)
+     row closes with it, which Infer_declared.check_open_rows reports *)
   List.iter
     (function
       | Copy k -> if row_end k.kdst = REmpty then close_row k.ksrc | _ -> ())
     (of_rank 3);
+  List.iter
+    (function Own_errors c -> Infer_declared.own_errors env c | _ -> ())
+    (of_rank 4);
   let kept_sets =
     List.filter_map
       (function Kept (k, p) -> Some (k, p) | _ -> None)
-      (of_rank 6)
+      (of_rank 7)
   in
   (* the tags that went in are no longer checked with the patterns *)
   let added =
@@ -712,10 +700,10 @@ let solve env ~is_value stage =
         | Value_tag t when value_tag env ~kept:(List.map fst kept_sets) t ->
             Some t
         | _ -> None)
-      (of_rank 4)
+      (of_rank 5)
   in
   worklist ~awake ~decide:(include_ env)
-    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 5));
+    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 6));
   List.iter kept kept_sets;
   (* the patterns, and the tags written as values that didn't go in, in
      the order they were met *)
@@ -724,17 +712,36 @@ let solve env ~is_value stage =
       | Tag_pattern t -> tag_pattern env t
       | Value_tag t when not (List.memq t added) -> tag_pattern env t
       | _ -> ())
-    mine;
+    cs;
   List.iter
     (function Unmarked (c, r) -> unmarked env c r | _ -> ())
-    (of_rank 8);
-  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 9);
-  List.iter (function Impl_op o -> impl_op env o | _ -> ()) (of_rank 10);
-  (match stage with
-  | Named_rows declaring ->
-      rows_due env ~declaring
-        (List.filter_map
-           (function Row_due d -> Some d | _ -> None)
-           (of_rank 11))
-  | _ -> ());
-  withheld
+    (of_rank 9);
+  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 10);
+  List.iter (function Impl_op o -> impl_op env o | _ -> ()) (of_rank 11);
+  (* the uses of named rows, with those the `with`s made last, given the
+     group's functions that declare what they use, by the variable their
+     row ends in *)
+  rows_due env
+    ~declaring:
+      (List.filter_map
+         (fun c ->
+           if Infer_declared.declared_uses ~is_value:is_fn_value c.ffn <> None
+           then Option.map (fun t -> (t, c.ffn)) (row_tail c.fcx.uses)
+           else None)
+         checked)
+    (List.filter_map (function Row_due d -> Some d | _ -> None) (of_rank 12)
+    @ dues);
+  List.iter
+    (function
+      | Own_rows c -> Infer_declared.own_rows env ~is_value:is_fn_value c
+      | _ -> ())
+    (of_rank 13);
+  let needs = List.filter_map (function Needs n -> Some n | _ -> None) cs in
+  List.iter
+    (function
+      | Declared c ->
+          Infer_declared.check_declared env ~is_value:is_fn_value
+            ~withheld:(withheld @ held) ~needs c
+      | _ -> ())
+    (of_rank 14);
+  held

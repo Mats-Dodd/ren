@@ -1,7 +1,7 @@
 (* Rows and effects (see infer_rows.ml): what code fails with, `!`, and
    what it uses, `uses`, as calls, `fail`s, markers and implementations add
-   to them. What a row learns only once its group is done is kept in the
-   environment, for infer_top.ml to finish. *)
+   to them. What a row learns only once its group is done is left to the
+   constraint solver (solve.ml). *)
 
 open Infer_env
 

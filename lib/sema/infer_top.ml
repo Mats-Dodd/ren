@@ -841,7 +841,6 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       spelled = [];
       pending = [];
       forced = [];
-      handler_needs = [];
       in_state = false;
       in_scope = [];
     }
@@ -1050,55 +1049,23 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
               Hashtbl.replace cx.nodes f.body.node ret
           | _ -> check env cx ~why f.body ret)
         setups;
-      (* every use of a function by another of its group, joined with the
-         type its own body gave it, and then the values thrown away *)
-      ignore (Solve.solve env ~is_value:is_value_path Equalities);
-      (* what each `with` installs, and what each place an implementation
-         is used needs *)
-      withheld := !withheld @ Solve.solve env ~is_value:is_value_path Needs;
-      (* only now, with the group's uses of each other joined, is it known
-         everything each function uses and fails with *)
-      own_error_rows env (List.map (fun (f, _, cx, _, _) -> (f, cx)) setups);
-      (* what each error set holds, and then the rules of markers *)
-      ignore (Solve.solve env ~is_value:is_value_path Error_rows);
-      (* the uses of named rows, ending the rows they're added to, and
-         then each function's own *)
-      ignore
-      @@ Solve.solve env ~is_value:is_value_path
-           (Named_rows
-              (List.filter_map
-                 (fun ((f : fn_def), _, cx, _, _) ->
-                   if declared_uses ~is_value f <> None then
-                     Option.map (fun t -> (t, f)) (row_tail cx.uses)
-                   else None)
-                 setups));
-      own_named_rows env
-        (List.map
-           (fun ((f : fn_def), _, cx, _, _) ->
-             (f, cx, declared_errors env ~is_value ~tparams:cx.tparams f <> None))
-           setups);
+      (* what each function names and declares, which holds of what its
+         body does once the group's other constraints are decided *)
+      List.iter
+        (fun ((f : fn_def), _, cx, _, _) ->
+          let c =
+            {
+              ffn = f;
+              fcx = cx;
+              fmain = entry <> None && path f = Path.make home "main";
+            }
+          in
+          List.iter (defer env) [ Own_errors c; Own_rows c; Declared c ])
+        setups;
+      withheld :=
+        !withheld @ Solve.solve env ~is_value:is_value_path ~withheld:!withheld;
       env.group <- [];
       env.spelled <- [];
-      List.iter
-        (fun ((f : fn_def), skolems, cx, _, _) ->
-          Option.iter
-            (check_uses env ~is_value ~withheld:!withheld
-               ~main:(entry <> None && path f = Path.make home "main")
-               f cx)
-            (declared_uses ~is_value f);
-          if f.pub && not (is_value f) then check_open_rows env f cx;
-          List.iter
-            (fun n -> if n.nself = path f then check_needs env f n)
-            env.handler_needs;
-          Option.iter
-            (fun declared ->
-              check_errors env ~is_value f cx declared;
-              as_declared env (path f) cx declared)
-            (declared_errors env ~is_value
-               ~tparams:(List.map (fun (id, n) -> TSkol (id, n)) skolems)
-               f))
-        setups;
-      env.handler_needs <- [];
       leave_level env.st;
       List.iter
         (fun ((f : fn_def), skolems, cx, _, _) ->
