@@ -238,3 +238,14 @@ Where the work forced a change to the plan above:
   are a map by that path, and each also keeps its place in source order
   (`Iface.op.onum`), since messages and the tests that print an
   interface list them in that order.
+- **R1, splitting `infer_expr.ml`.** It's split into seven modules, not
+  the four of the plan's findings: besides rows and effects
+  (`infer_rows.ml`), handlers and `with` (`infer_handlers.ml`), lookups
+  through a type (`infer_lookup.ml`) and the core (`infer_expr.ml`), the
+  shared types are `infer_env.ml`, reporting and explaining a mismatch
+  `infer_report.ml`, and written types `infer_written.ml`, since each is
+  used by several of the others. The names keep the `infer_` prefix,
+  because every module of the library shares one namespace. Handlers
+  check their parts with the core, which calls them, so the core passes
+  its functions to them in a record (`Infer_handlers.core`) rather than
+  through a recursive module or a mutable forward reference.
