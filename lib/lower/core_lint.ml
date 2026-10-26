@@ -767,6 +767,9 @@ and held env (c : expr) =
 (* Check [p] against the type [t] of what it matches; the scope it binds. *)
 and pattern env sc (p : pattern) t =
   let loc = p.ploc in
+  (* as for an expression; a tag's subpattern whose payload isn't known
+     is checked only against itself, below *)
+  if has_error p.pty then fail env loc "a pattern has an error type";
   same env loc "a pattern" p.pty t;
   match p.pkind with
   | PWild -> sc

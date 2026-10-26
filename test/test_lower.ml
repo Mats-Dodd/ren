@@ -323,6 +323,52 @@ let%expect_test "Core Lint reports a use at the wrong type arguments" =
       = this is a bug in the Ren compiler, not in your program
     |}]
 
+let%expect_test "Core Lint reports a pattern of an error type" =
+  (* a tag that a set which may hold more doesn't list: its subpattern's
+     type is checked only against itself *)
+  let loc = Ren.Loc.point ~file 1 1 in
+  let set : Ren.Ty.ty = Errors { labels = []; tail = Some 0 } in
+  let e : Ren.Core.var = { id = 1; name = "e"; ty = set } in
+  let pat pkind pty : Ren.Core.pattern = { pkind; pty; ploc = loc } in
+  let body =
+    Ren.Core.mk
+      (Match
+         ( Ren.Core.local e loc,
+           [
+             {
+               pat = pat (PTag ("Short", [ pat PWild Error ])) set;
+               guard = None;
+               body = Ren.Core.unit loc;
+             };
+           ] ))
+      Ren.Ty.unit loc
+  in
+  let f : Ren.Core.fn_def =
+    {
+      path = Ren.Path.make "test" "f";
+      params = [ { mode = Read; var = e } ];
+      ev = Ren.Core.evidence 2;
+      scheme =
+        {
+          ty =
+            Fun ([ Ren.Ty.read set ], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
+          names = [];
+          reqs = [];
+        };
+      body;
+      loc;
+    }
+  in
+  report "" (fun () ->
+      Ren.Driver.pass "lint" (fun () ->
+          Ren.Core_lint.program ~imports:[] ~linked:[]
+            { home = "test"; types = []; fns = [ f ]; values = [] }));
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `f`, at test.ren:1:1: a pattern has an error type")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
 let%expect_test "Core Lint reports a fail of something that isn't an error" =
   let loc = Ren.Loc.point ~file 1 1 in
   let body =
