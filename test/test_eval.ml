@@ -684,3 +684,81 @@ fn main() =
     4611686018427387903
     ()
     |}]
+
+let%expect_test "a generic function shows what its type variables stand for" =
+  (* each is passed, hidden, by its caller: through a closure it makes, a
+     function used as a value, a record of lambdas it installs, and a
+     type's own `show`, of a type that's generic too *)
+  run
+    {|
+type Acc = { id: Int }
+type Box<T> = { v: T }
+  fn show(self) -> Str = show(["box", show(self.v)])
+dep Log =
+  put: fn(s: Str)
+
+fn sh<T>(x: T) -> Str = show(x)
+fn later<T>(x: T) -> fn() -> Str = fn() => show([x])
+fn apply<A, B>(f: fn(A) -> B, x: A) -> B = try f(x)
+fn logged<T>(x: T) uses Console =
+  with Log { put: fn(s) => print([show(x), s]) } in
+    Log.put("put")
+
+fn main() uses Console =
+  let a = Acc { id: 1 }
+  print(sh(a))
+  print(later(a)())
+  print(apply(sh, Some(a)))
+  logged(a)
+  print(Box { v: a })
+  print(sh(Box { v: Box { v: "s" } }))
+|};
+  [%expect
+    {|
+    Acc { id: 1 }
+    [Acc { id: 1 }]
+    Some(Acc { id: 1 })
+    ["Acc { id: 1 }", "put"]
+    ["box", "Acc { id: 1 }"]
+    ["box", "Box { v: \"s\" }"]
+    ()
+    |}]
+
+let%expect_test "an `assert` in a generic function shows its sides by their type" =
+  run
+    {|
+type Acc = { id: Int }
+fn same<T>(x: T, y: T) = assert x == y
+fn main() = same(Some(Acc { id: 3 }), Some(Acc { id: 4 }))
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:2:33
+    2 │ fn same<T>(x: T, y: T) = assert x == y
+      │                                 ^^^^^^
+      = left:  Some(Acc { id: 3 })
+      = right: Some(Acc { id: 4 })
+    |}]
+
+let%expect_test "a generic associated value knows nothing of its type" =
+  (* it's made once, when the program starts, with nothing to say what
+     `T` stands for, so a value of it is shown by its shape alone, whether
+     through `show` itself or a lambda that calls it (compiler.md,
+     "Deviations") *)
+  run
+    {|
+type Acc = { id: Int }
+type Box<T> = { v: T }
+  pub let lam: fn(T) -> Str = fn(x) => show(x)
+  pub let shower: fn(T) -> Str = show
+
+fn main() uses Console =
+  print(Box.lam(Acc { id: 1 }))
+  print(Box.shower(Acc { id: 1 }))
+|};
+  [%expect {|
+    { id: 1 }
+    { id: 1 }
+    ()
+    |}]
