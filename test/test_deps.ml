@@ -2793,6 +2793,11 @@ fn main() -> Bool =
   [%expect {| true |}]
 
 let%expect_test "where nothing says which, a handler of several is its own" =
+  (* `later`'s `h` stays the handler, and `run(r)` takes it as a `Rates`
+     there; `make` and `some` return the handler, which a public function
+     can't without saying which dependency it gives. An `if` whose other
+     branch is a `Rates` says which, as "an `if` takes a handler of
+     several as one in either branch" shows *)
   types
     {|
 pub dep Rates =
@@ -2804,9 +2809,6 @@ pub dep RateCalls =
 handler counting_rates(rate: Int) for Rates, RateCalls =
   usd_to(c) => c * rate
   count() => 0
-
-fn pick(b: Bool) =
-  if b then counting_rates(1) else Rates { usd_to: fn(c) => c }
 
 fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
 
@@ -2825,15 +2827,15 @@ fn main() = 1
   [%expect
     {|
     error: expected `Unit`, found `counting_rates`
-       ┌─ test.ren:22:17
-    22 │ pub fn make() = counting_rates(1)
+       ┌─ test.ren:19:17
+    19 │ pub fn make() = counting_rates(1)
        │                 ^^^^^^^^^^^^^^^^^
        = a public function without `->` returns `Unit`
        help: say which of its dependencies it gives an implementation of, `-> Rates`: the type of a handler of several can't be written
 
     error: expected `Unit`, found `Option<counting_rates>`
-       ┌─ test.ren:24:17
-    24 │ pub fn some() = Some(counting_rates(1))
+       ┌─ test.ren:21:17
+    21 │ pub fn some() = Some(counting_rates(1))
        │                 ^^^^^^^^^^^^^^^^^^^^^^^
        = a public function without `->` returns `Unit`
        help: say which of its dependencies `counting_rates` gives an implementation of, `-> Option<Rates>`: the type of a handler of several can't be written

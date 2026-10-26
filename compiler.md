@@ -472,7 +472,7 @@ Where the work forced a change to the plan above:
   counting_rates(1) else Rates { ... }` is a `Rates`, as it is with the
   branches the other way round, as deps.md says it should be; it was
   rejected, and a test pinned that ("where nothing says which, a handler
-  of several is its own"). A `then` branch that can't be what the `else`
+  of several is its own", which no longer holds it). A `then` branch that can't be what the `else`
   is is now blamed itself, "this `then` branch is ...", since the fix
   goes there. A variable a handler was given to, passed as an argument
   where one of the handler's dependencies is wanted, is taken as that
