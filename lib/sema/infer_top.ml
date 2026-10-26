@@ -10,6 +10,7 @@ open Infer_msg
 open Infer_env
 open Infer_report
 open Infer_written
+open Infer_handlers
 open Infer_expr
 
 (* ---- the call graph ---- *)
@@ -1574,7 +1575,7 @@ type node = {
   found : found option;
   as_dep : Path.t option;
       (** a handler of several dependencies, where one of them is wanted: that
-          one, which it's taken as a description of (Infer_expr.as_one) *)
+          one, which it's taken as a description of (Infer_handlers.as_one) *)
 }
 
 type t = {
@@ -2201,7 +2202,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
           | Handler { state; arms; _ }, TCon (_, [ TUses needs ])
             when f.ret = None ->
               (* its needs are what its state and arms use *)
-              handler env cx state arms ~needs ~declared:None;
+              handler core env cx state arms ~needs ~declared:None;
               Hashtbl.replace cx.nodes f.body.node ret
           | _ -> check env cx ~why f.body ret)
         setups;
