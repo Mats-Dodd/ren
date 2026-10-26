@@ -172,30 +172,81 @@ and unify_row st a b =
       assert false
 
 (* Two lambda sets are one (ty.ml): each gets the identities the other
-   lists, by adding them to its tail, a fresh variable then ending both. A
-   set is always open, so this doesn't fail, and unlike two rows of errors,
-   two sets that end in one variable but list different identities can be
-   made one too: that variable gets what either lists, and a set that
-   lists an identity twice means what listing it once does. *)
+   lists, and a fresh variable then ends both. A set is always open, so
+   this doesn't fail, and unlike two rows of errors, two sets that end in
+   one variable but list different identities can be made one too: that
+   variable gets what either lists. A set may list an identity twice,
+   which means what listing it once does (Types.row_parts), and that's what
+   makes it quick when one set has many: rather than given a copy of what
+   the big one lists, the other's end is linked to the whole of it. An
+   array of thousands of lambdas, each unified with the set of all of them
+   so far, then costs a walk of that set each, not a copy of it. *)
 and unify_lams st a b =
-  let ids_a = row_names a and ids_b = row_names b in
+  (* how many identities a set lists, and its end *)
+  let rec count n r =
+    match repr_row r with RExtend (_, rest) -> count (n + 1) rest | r -> (n, r)
+  in
+  let rec names acc r =
+    match repr_row r with
+    | RExtend (l, rest) -> names (l.name :: acc) rest
+    | _ -> acc
+  in
+  let rec lists r n =
+    match repr_row r with
+    | RExtend (l, rest) -> l.name = n || lists rest n
+    | _ -> false
+  in
+  (* what [from] lists that [have] doesn't, each once. A set can have
+     thousands: a few are looked for in [have] itself, and more in a table
+     of it, so it takes time proportional to the two, not their product.
+     The tables are only looked up, never walked *)
   let missing have from =
-    List.map lam (List.filter (fun n -> not (List.mem n have)) from)
+    let from = names [] from in
+    let few = List.compare_length_with from 8 <= 0 in
+    let has =
+      if few then lists have
+      else
+        let t = Hashtbl.create 16 in
+        List.iter (fun n -> Hashtbl.replace t n ()) (names [] have);
+        Hashtbl.mem t
+    in
+    let seen = Hashtbl.create 16 in
+    List.filter_map
+      (fun n ->
+        if has n || Hashtbl.mem seen n then None
+        else (
+          Hashtbl.replace seen n ();
+          Some (lam n)))
+      from
   in
-  let rec ends r =
-    match repr_row r with RExtend (_, rest) -> ends rest | r -> r
-  in
-  match (ends a, ends b) with
+  let na, end_a = count 0 a and nb, end_b = count 0 b in
+  match (end_a, end_b) with
   | RVar ({ contents = RUnbound (_, l) } as c1), RVar c2 when c1 == c2 -> (
-      match missing ids_a ids_b @ missing ids_b ids_a with
+      match missing a b @ missing b a with
       | [] -> ()
       | more ->
           c1 := RLink (extend more (RVar (ref (RUnbound (fresh_id st, l))))))
   | ( RVar ({ contents = RUnbound (_, l1) } as c1),
-      RVar ({ contents = RUnbound (_, l2) } as c2) ) ->
+      RVar ({ contents = RUnbound (_, l2) } as c2) )
+    when max na nb <= 32 ->
+      (* each gets what the other has that it hasn't, as rows do *)
       let rest = RVar (ref (RUnbound (fresh_id st, min l1 l2))) in
-      c1 := RLink (extend (missing ids_a ids_b) rest);
-      c2 := RLink (extend (missing ids_b ids_a) rest)
+      let for_a = missing a b and for_b = missing b a in
+      c1 := RLink (extend for_a rest);
+      c2 := RLink (extend for_b rest)
+  | ( RVar ({ contents = RUnbound (_, l1) } as c1),
+      RVar ({ contents = RUnbound (_, l2) } as c2) ) ->
+      (* a big one: it gets what the other has that it hasn't, and the
+         other all of it, by linking its end to it, so the big one isn't
+         copied. The other's variable, a type argument perhaps, then lists
+         some of what it had too *)
+      let big, small, big_end, small_end =
+        if na >= nb then (a, b, c1, c2) else (b, a, c2, c1)
+      in
+      let more = missing big small in
+      let rest = RVar (ref (RUnbound (fresh_id st, min l1 l2))) in
+      big_end := RLink (extend more rest);
+      small_end := RLink big
   | _ ->
       (* a set that isn't open, which nothing makes *)
       unify_row st a b

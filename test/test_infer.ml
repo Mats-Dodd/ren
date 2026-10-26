@@ -2049,6 +2049,29 @@ let%expect_test "a group of many calls checks in time linear in them" =
   print_endline (if took < 10. then "in time" else Printf.sprintf "%.1fs" took);
   [%expect {| in time |}]
 
+let%expect_test "many lambdas in one lambda set check in time" =
+  (* an array of 4,000 lambdas makes one set of all of them, which each
+     element's set is unified with in turn: the one with fewer identities
+     is linked to the other whole, rather than given a copy of them
+     (Unify.unify_lams), and each set is converted once (Types.canon_lams),
+     so it checks in about half a second, where copying took minutes *)
+  let src =
+    String.concat "\n"
+      [
+        "fn main() =";
+        "  let fs = ["
+        ^ String.concat ", "
+            (List.init 4_000 (Printf.sprintf "fn(x: Int) => x + %d"))
+        ^ "]";
+        "  print(fs.len())";
+      ]
+  in
+  let start = Sys.time () in
+  ignore (Driver.check ~file src);
+  let took = Sys.time () -. start in
+  print_endline (if took < 10. then "in time" else Printf.sprintf "%.1fs" took);
+  [%expect {| in time |}]
+
 (* ---- requirements (operators.md, "Generic code") ---- *)
 
 let%expect_test "comparing functions is an error, not a panic (B2)" =

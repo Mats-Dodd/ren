@@ -107,6 +107,10 @@ type watch = {
    makes a new map, sharing most of the old, so keeping the old is free. *)
 module Ids = Map.Make (Int)
 
+(* A set of strings, the same way: finding one is quick however many
+   there are. *)
+module Names = Set.Make (String)
+
 (* What inference changes as it goes. Each compilation makes its own and
    passes it to everything that needs it, so there are no global counters
    and two compilations in one process can't affect each other. *)
@@ -202,18 +206,18 @@ let rec repr_row r =
    does (Infer_rows.join_uses), so a label is listed once, where it first
    is. *)
 let rec row_parts r =
-  let rec go acc r =
+  (* [seen] are the names in [acc], so a row of many labels, a lambda set
+     of many lambdas, is listed in time proportional to them *)
+  let rec go acc seen r =
     match repr_row r with
     | REmpty -> (List.rev acc, None)
-    | RExtend (l, rest)
-      when List.exists (fun (k : label) -> k.name = l.name) acc ->
-        go acc rest
-    | RExtend (l, rest) -> go (l :: acc) rest
+    | RExtend (l, rest) when Names.mem l.name seen -> go acc seen rest
+    | RExtend (l, rest) -> go (l :: acc) (Names.add l.name seen) rest
     | RVar { contents = RUnbound (id, _) } | RSkol (id, _) ->
         (List.rev acc, Some id)
     | RVar { contents = RLink _ } -> assert false (* repr_row followed it *)
   in
-  go [] r
+  go [] Names.empty r
 
 (* Just the labels' names. *)
 and row_names r = List.map (fun l -> l.name) (fst (row_parts r))
@@ -498,6 +502,10 @@ type canon = {
   rows : (int, int) Hashtbl.t;  (** row variable id -> its number *)
   lams : (int, int) Hashtbl.t;
       (** lambda-set variable id -> its number, apart from the rows' *)
+  mutable lam_links : (row * (string list * Names.t * int option)) list;
+      (** the last few sets a lambda set's end was linked to whole
+          (Unify.unify_lams), each with its identities, sorted and as a set, and
+          the variable it ends in (see [canon_lams]) *)
   mutable names : (int * string) list;
       (** the declared names of the numbered variables *)
   for_message : bool;
@@ -516,6 +524,7 @@ let canon st =
     tys = Hashtbl.create 8;
     rows = Hashtbl.create 8;
     lams = Hashtbl.create 8;
+    lam_links = [];
     names = [];
     for_message = false;
     params = [];
@@ -616,15 +625,52 @@ and canon_row c ~all r : Ty.row =
    not, since what a function value can be is never all known (ty.ml); one
    that was closed, which nothing does, gets a variable of its own. *)
 and canon_lams c l : Ty.lams =
-  let ids = List.sort_uniq compare (row_names l) in
-  let rec tail r =
-    match repr_row r with
-    | RVar { contents = RUnbound (id, _) } -> number c.lams id
-    | RExtend (_, rest) -> tail rest
-    | REmpty | RSkol _ -> number c.lams (-1 - Hashtbl.length c.lams)
-    | RVar { contents = RLink _ } -> assert false
+  (* the identities it lists up to its end, or up to where its end is
+     linked to another set whole (Unify.unify_lams), and that link *)
+  let rec own acc r =
+    match r with
+    | RExtend (k, rest) -> own (k.name :: acc) rest
+    | RVar { contents = RLink target } -> (acc, Some target, None)
+    | RVar { contents = RUnbound (id, _) } -> (acc, None, Some id)
+    | REmpty | RSkol _ -> (acc, None, None)
   in
-  { ids; lvar = Some (tail l) }
+  (* every identity it lists, and its end *)
+  let rec all acc r =
+    match repr_row r with
+    | RExtend (k, rest) -> all (k.name :: acc) rest
+    | RVar { contents = RUnbound (id, _) } -> (acc, Some id)
+    | REmpty | RSkol _ | RVar { contents = RLink _ } -> (acc, None)
+  in
+  (* a set linked to: often many sets are linked to one big one, so the
+     last few are remembered, by what they are, not what they equal
+     ([List.assq_opt] compares with [==]) *)
+  let linked target =
+    match List.assq_opt target c.lam_links with
+    | Some seen -> seen
+    | None ->
+        let names, end_id = all [] target in
+        let ids = List.sort_uniq String.compare names in
+        let seen = (ids, Names.of_list ids, end_id) in
+        c.lam_links <-
+          (target, seen) :: List.filteri (fun i _ -> i < 7) c.lam_links;
+        seen
+  in
+  let ids, end_id =
+    match own [] l with
+    | names, Some target, _ ->
+        let ids, set, end_id = linked target in
+        if List.for_all (fun n -> Names.mem n set) names then (ids, end_id)
+        else (List.sort_uniq String.compare (names @ ids), end_id)
+    | names, None, end_id -> (List.sort_uniq String.compare names, end_id)
+  in
+  (* a set is always open: one that was closed, which nothing does, gets
+     a variable of its own *)
+  let n =
+    match end_id with
+    | Some id -> number c.lams id
+    | None -> number c.lams (-1 - Hashtbl.length c.lams)
+  in
+  { Ty.ids; lvar = Some n }
 
 (* What [canon] has numbered so far, as a scheme's [names]. *)
 let canon_names c = List.sort compare c.names
