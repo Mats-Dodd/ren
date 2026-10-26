@@ -94,51 +94,19 @@ let check_transparent sink (f : fn_def) =
   List.iter
     (fun ((param : binder), dep) ->
       let name = param.ident.name in
-      let fail loc what =
-        match dep with
-        | None ->
-            Diag.error loc
-              ~notes:
-                [
-                  "a parameter whose type is written `fn(...)` can only be \
-                   called, or passed straight to another function";
-                ]
-              ~help:
-                (sprintf
-                   "to keep it, name its rows, `%s: fn(...) ! ..e uses ..d`, \
-                    or remove the type and let it be inferred"
-                   name)
-              (sprintf "`%s` %s, so it isn't transparent" name what)
-        | Some (d : Path.t) ->
-            Diag.error loc
-              ~notes:
-                [
-                  sprintf
-                    "a parameter whose type is a dependency's, `%s`, can only \
-                     be installed, with `with`, or passed straight to another \
-                     function, so what it needs is what its function uses"
-                    d.name;
-                ]
-              ~help:
-                (match f.body.kind with
-                | Handler { deps; _ } ->
-                    (* what it needs, the handler needs where it's
-                       installed *)
-                    sprintf
-                      "to keep it, name what it needs, `%s: %s uses ..d`, and \
-                       say the handler needs that: `for %s uses ..d`"
-                      name d.name
-                      (String.concat ", "
-                         (List.filter_map
-                            (fun (d : tname) ->
-                              match d.tref with
-                              | Named p -> Some p.name
-                              | _ -> None)
-                            deps))
-                | _ ->
-                    sprintf "to keep it, name what it needs: `%s: %s uses ..d`"
-                      name d.name)
-              (sprintf "`%s` %s, so it isn't transparent" name what)
+      let fail loc escape =
+        let handler_deps =
+          match f.body.kind with
+          | Handler { deps; _ } ->
+              Some
+                (List.filter_map
+                   (fun (d : tname) ->
+                     match d.tref with Named p -> Some p.name | _ -> None)
+                   deps)
+          | _ -> None
+        in
+        let dep = Option.map (fun (d : Path.t) -> d.name) dep in
+        raise (Diag.Error (not_transparent loc ~name ~dep ~handler_deps escape))
       in
       let is_param = function Local b -> b.id = param.id | _ -> false in
       (* does [e] use the parameter anywhere? *)
@@ -191,8 +159,7 @@ let check_transparent sink (f : fn_def) =
       let rec walk ~ok (e : expr) =
         let walk_all = List.iter (walk ~ok:false) in
         match e.kind with
-        | Var x when is_param x ->
-            if not ok then fail e.loc "is used as a value here"
+        | Var x when is_param x -> if not ok then fail e.loc As_value
         | Field ({ kind = Var x; _ }, _) when is_param x && dep <> None ->
             (* `c.now()`: inference reports it isn't how an operation is
                called *)
@@ -202,8 +169,7 @@ let check_transparent sink (f : fn_def) =
             walk ~ok:true callee;
             List.iter (walk ~ok:true) args
         | Lambda (_, body) ->
-            if (not ok) && mentions body then
-              fail e.loc "is captured by a lambda that outlives the call"
+            if (not ok) && mentions body then fail e.loc Captured
             else walk ~ok:false body
         | Unop (_, a) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
             walk_all [ a ]
@@ -254,8 +220,7 @@ let check_transparent sink (f : fn_def) =
                     in
                     fail
                       (Option.value (use body) ~default:a.arm_impl.loc)
-                      "is kept by the handler, whose operations run where a \
-                       `with` installs it"
+                      Kept_by_handler
                 | _ -> walk ~ok:false a.arm_impl)
               arms
       in
@@ -372,27 +337,12 @@ let check_written sink ~sets ~names (prog : program) =
     | TyName ({ tref = Named p; _ }, [ _; arg ]) when p = result -> (
         match arg with
         | TyErrors _ -> ()
-        | arg ->
-            report
-              (Diag.make (written_loc arg)
-                 ~notes:
-                   [
-                     "a `Result` holds a value or an error, which `attempt` \
-                      keeps there";
-                   ]
-                 ~help:
-                   "write an error set, after `!`: `Result<Int, ! NotFound>`"
-                 "`Result`'s second argument is an error set"))
+        | arg -> report (result_needs_set (written_loc arg)))
     | TyName ({ tref = Named p; _ }, args) ->
         List.iter
           (function
             | TyErrors (es : Resolved.errors) ->
-                report
-                  (Diag.make es.eloc
-                     ~help:
-                       "an error set goes after `!` in a signature or a \
-                        function type, or in `Result<T, ! ...>`"
-                     (sprintf "`%s` doesn't take an error set" (names p)))
+                report (set_not_taken es.eloc (names p))
             | _ -> ())
           args
     | TyName _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ -> ()
@@ -419,7 +369,7 @@ let check_written sink ~sets ~names (prog : program) =
             in
             report
               (two_shapes es.eloc l.name ~old:(from l via) ~new_:(from m via')
-                 ~help:"rename one of them")
+                 ~help:rename_one)
         | _ -> ())
       tags
   in
@@ -519,9 +469,7 @@ let check_uses env ~is_value ~main (f : fn_def) cx declared =
         let why = withheld_notes env dep call in
         let call =
           Option.map
-            (fun c ->
-              ( c.cloc,
-                if c.needs then "installing this needs" else "this call uses" ))
+            (fun c -> (c.cloc, if c.needs then Installing else Call_uses))
             call
         in
         let dep = env.names (Ty.dep_path dep) in
@@ -547,8 +495,7 @@ let check_needs env (f : fn_def) n =
       | None -> List.find_opt (fun c -> List.mem dep (row_names c.row)) calls
     in
     Option.map
-      (fun c ->
-        (c.cloc, if c.needs then "installing this needs" else "this call uses"))
+      (fun c -> (c.cloc, if c.needs then Installing else Call_uses))
       call
   in
   let own =
@@ -650,13 +597,7 @@ let settle_inclusions env =
             in
             try Unify.unify_row env.st a b
             with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
-              report env
-                (Diag.make i.iloc
-                   ~help:
-                     "write what the function passed can fail with in its \
-                      parameter's type, after `!`"
-                   "this can fail with whatever a function it was passed fails \
-                    with, which isn't allowed here"))
+              report env (param_fails_here i.iloc))
         | _ -> ())
       (List.rev env.includes)
   done;
@@ -820,10 +761,10 @@ let check_errors env ~is_value (f : fn_def) cx declared =
     | Unwrapped (_, r) | Unhandled (_, r) -> row_names r
   in
   let what = function
-    | Passed _ -> "this call can fail with"
-    | Failed _ -> "this fails with"
-    | Unwrapped _ -> "this `Result` holds"
-    | Unhandled _ -> "no arm of this `match` handles"
+    | Passed _ -> Call_fails
+    | Failed _ -> Fails
+    | Unwrapped _ -> Result_holds
+    | Unhandled _ -> Match_leaves
   in
   List.iter
     (fun (l : label) ->
@@ -935,55 +876,26 @@ let check_open_rows env (f : fn_def) cx =
             let e = errs_closed && e = None and u = uses_closed && u = None in
             match (e, u) with
             | false, false -> None
-            | true, false -> Some (p, None, "fail")
-            | false, true -> Some (p, None, "use anything")
-            | true, true -> Some (p, None, "fail or use anything"))
+            | true, false -> Some (p, None, Cant_fail)
+            | false, true -> Some (p, None, Cant_use)
+            | true, true -> Some (p, None, Cant_fail_or_use))
         | Some (TyImpl ({ tref = Named d; _ }, None, _)) when uses_closed ->
-            Some (p, Some d, "need anything")
+            Some (p, Some d, Cant_need)
         | _ -> None)
       f.params
   in
   match blamed with
   | None -> ()
-  | Some (p, dep, what) ->
+  | Some (p, dep, closed) ->
       let name = p.pname.ident.name in
-      let fn = Ast.fn_name f in
-      let note, help =
+      let kept =
         match dep with
-        | None ->
-            ( sprintf
-                "a parameter whose type is written `fn(...)` passes what it \
-                 fails with and uses on to `%s`'s callers, but here it's \
-                 passed to something that keeps it as a function that can't %s"
-                fn what,
-              sprintf
-                "to keep it, name its rows, `%s: fn(...) ! ..e uses ..d`, and \
-                 write them where it's kept"
-                name )
-        | Some d when name = "self" ->
-            ( sprintf
-                "a dependency's `self` needs what its method uses, but here \
-                 it's kept as `%s`, which needs nothing"
-                (env.names d),
-              sprintf
-                "to keep it, name what it needs where it's kept, `(%s uses \
-                 ..d)`, and add `uses ..d` to `%s`"
-                (env.names d) fn )
-        | Some d ->
-            ( sprintf
-                "a parameter whose type is a dependency's, `%s`, needs what \
-                 its function uses, but here it's passed to something that \
-                 keeps it as an implementation that needs nothing"
-                (env.names d),
-              sprintf
-                "to keep it, name what it needs, `%s: %s uses ..d`, and write \
-                 it where it's kept"
-                name (env.names d) )
+        | None -> Fn_param
+        | Some d when name = "self" -> Dep_self (env.names d)
+        | Some d -> Dep_param (env.names d)
       in
       report env
-        (Diag.make p.pname.ident.loc ~notes:[ note ] ~help
-           (sprintf "`%s` is kept where it can't %s, so it isn't transparent"
-              name what))
+        (kept_closed p.pname.ident.loc ~name ~fn:(Ast.fn_name f) kept closed)
 
 (* `uses Clock, ..d`, what [f] would write to use [n] as well. *)
 let uses_with env (f : fn_def) n =
@@ -996,7 +908,7 @@ let uses_with env (f : fn_def) n =
           u.deps
     | None -> []
   in
-  "uses " ^ String.concat ", " (deps @ [ ".." ^ n ])
+  uses_written deps n
 
 (* Once the group is done, when every row has all its labels: each use of
    a named row (see [row_due]) ends the row it's added to in that row, and
@@ -1029,22 +941,7 @@ let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
   in
   (* a row can end in only one named row *)
   let two d other =
-    let n = snd d.rnamed in
-    report env
-      (Diag.make d.rloc
-         ~notes:
-           [
-             sprintf
-               "a row ends in at most one named row, and what this is in \
-                already uses `..%s`, so `..%s` can't be added"
-               other n;
-           ]
-         ~help:
-           (sprintf
-              "name the two rows alike, `..%s`, if they can stand for the same"
-              other)
-         (sprintf "%s `..%s`, but what this is in already uses `..%s`" (user d.rwhat) n
-            other))
+    report env (two_named_rows d.rloc d.rwhat ~other (snd d.rnamed))
   in
   (* the uses checked once every other is, ending a row that's still open:
      ending it before would hide what the function doesn't declare *)
@@ -1061,45 +958,11 @@ let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
           with
           | Some f when own_dtail f.uses <> Some n ->
               report env
-                (Diag.make d.rloc
-                   ~notes:
-                     [
-                       sprintf
-                         "`..%s` stands for whatever the closure or \
-                          implementation it names uses, and a function that \
-                          declares its dependencies declares that too"
-                         n;
-                     ]
-                   ~help:
-                     (match own_dtail f.uses with
-                     | Some other ->
-                         sprintf
-                           "`%s` names one row, `..%s`, which is all it can \
-                            name: name this one `..%s` too, where it's written"
-                           (Ast.fn_name f) other other
-                     | None ->
-                         sprintf "add it to what `%s` uses: `%s`"
-                           (Ast.fn_name f) (uses_with env f n))
-                   (sprintf "%s `..%s`, which `%s` doesn't declare" (user d.rwhat) n
-                      (Ast.fn_name f)))
+                (named_row_undeclared d.rloc d.rwhat n ~fn:(Ast.fn_name f)
+                   ~other:(own_dtail f.uses) ~uses:(uses_with env f n))
           | _ -> later := d :: !later)
       | REmpty | RExtend _ ->
-          report env
-            (Diag.make d.rloc
-               ~notes:
-                 [
-                   sprintf
-                     "`..%s` stands for whatever the closure or implementation \
-                      it names uses, and what this is in can't use more than \
-                      it lists"
-                     n;
-                 ]
-               ~help:
-                 (sprintf
-                    "use it where `..%s` can go: in the function that names \
-                     it, or in a lambda whose type isn't written"
-                    n)
-               (sprintf "%s `..%s`, which isn't allowed here" (user d.rwhat) n)))
+          report env (named_row_not_allowed d.rloc d.rwhat n))
     (List.rev env.rows_due);
   List.iter
     (fun d ->
@@ -1132,22 +995,9 @@ let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
               (Option.fold ~none:[] ~some:( ! ) cx.sources)
           in
           report env
-            (Diag.make
+            (named_errors_undeclared
                (Option.value from ~default:f.name.loc)
-               ~notes:
-                 [
-                   sprintf
-                     "`..%s` stands for whatever the closure it names fails \
-                      with, and a function that declares its errors declares \
-                      that too"
-                     n;
-                 ]
-               ~help:
-                 (sprintf
-                    "add `..%s` to what `%s` declares it fails with, after `!`"
-                    n (Ast.fn_name f))
-               (sprintf "this can fail with `..%s`, which `%s` doesn't declare"
-                  n (Ast.fn_name f)))
+               n ~fn:(Ast.fn_name f))
       | _ -> ())
     fns
 
@@ -1238,13 +1088,7 @@ let settle_installs env =
         match row_end w.wbody with
         | _ when tail <> None && tail = row_tail w.wouter ->
             (* the same row: everything it uses but [wdep] is outside too *)
-            withhold w
-              (sprintf
-                 "in `%s`, what's called inside the `with` that installs `%s` \
-                  uses what `%s` itself does: a parameter whose type is \
-                  written `fn(...)`, or a closure that's called outside the \
-                  `with` too, gets only what's installed outside it"
-                 (Path.local w.wself) (dep_name w) (Path.local w.wself));
+            withhold w (Same_row { fn = Path.local w.wself; dep = dep_name w });
             let outer = row_names w.wouter in
             List.for_all (fun (l : label) -> List.mem l.name outer) rest
         | RVar _ as t
@@ -1257,11 +1101,7 @@ let settle_installs env =
         | RVar _ as t ->
             if List.length rest = List.length labels then
               withhold w
-                (sprintf
-                   "`%s` calls a closure inside more than one `with`, so the \
-                    closure gets only what's installed outside all of them, \
-                    not the `%s` one of them installs"
-                   (Path.local w.wself) (dep_name w));
+                (Several_withs { fn = Path.local w.wself; dep = dep_name w });
             into (extend rest t)
         | RSkol (id, n) ->
             (* a named row: what's outside ends in it too *)
@@ -1278,20 +1118,7 @@ let settle_installs env =
       in
       if not ok then
         report env
-          (Diag.make w.wloc
-             ~notes:
-               [
-                 "a closure called in a `with`'s body is called with what's \
-                  installed outside it too, and this one is called where more \
-                  is installed than outside";
-               ]
-             ~help:
-               "call the closure only inside the `with`, or install what it \
-                uses outside it too"
-             (sprintf
-                "this `with`'s body uses %s, which what's outside it can't"
-                (and_list
-                   (List.map (fun (l : label) -> sprintf "`%s`" l.name) rest)))))
+          (with_body_uses w.wloc (List.map (fun (l : label) -> l.name) rest)))
     ws;
   settle_copies env;
   (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
@@ -1585,14 +1412,10 @@ type t = {
    test. *)
 type runner = {
   installs : Path.t -> bool;  (** whether it installs this dependency *)
-  missing : string -> string;  (** the error, for one it doesn't install *)
-  only : string;  (** what it installs, said beside the error's own `^`s *)
-  inside : string;  (** where the help installs one: "inside `main`" *)
-  why : Path.t -> string list;
-      (** notes on why it doesn't install this one, if there's more to say *)
-  fix : Path.t -> maker:string option -> string option;
-      (** the help for this one, if it isn't to install one [inside]: [maker] is
-          what makes one, if something does *)
+  real_of : Path.t -> string option;
+      (** the built-in this dependency controls the test one of, if the test
+          gets the real one, which it can't control *)
+  kind : Infer_msg.runner;  (** which it is, for the error *)
   at : Loc.t;  (** where the error points, if no `uses` lists it *)
 }
 
@@ -1633,7 +1456,6 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
         | _ -> None)
     | _ -> None
   in
-  let call name n = if n = 0 then name ^ "()" else name ^ "(...)" in
   (* the module's associated values, which aren't called *)
   let values =
     List.concat_map
@@ -1669,7 +1491,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
                 Option.map
                   (fun n ->
                     let name = Resolve.value_name r path in
-                    if List.mem path values then name else call name n)
+                    if List.mem path values then name else call_written name n)
                   (makes p t)))
         fns
     in
@@ -1690,7 +1512,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
                   Some name
               | Function, Fun (ps, Con (q, args), _, _)
                 when q = p && not (itself args) ->
-                  Some (call name (List.length ps))
+                  Some (call_written name (List.length ps))
               | _ -> None)
             (if p.home = env.home then [] else Iface.members td))
     in
@@ -1723,36 +1545,15 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
             | None -> None
           with
           | Some c ->
-              ( [
-                  ( c.cloc,
-                    sprintf "%s `%s`"
-                      (if c.needs then "installing this needs"
-                       else "this call uses")
-                      d );
-                ],
+              ( [ (c.cloc, if c.needs then Installing else Call_uses) ],
                 withheld_notes env dep (Some c) )
           | None -> ([], [])
         in
         let needs, why = needs in
         let loc = match written with Some t -> t.tloc | None -> run.at in
-        let help =
-          let m = maker p in
-          match (run.fix p ~maker:m, m, Hashtbl.find_opt env.types p) with
-          | Some fix, _, _ -> fix
-          | None, Some m, _ ->
-              sprintf "install one %s: `with %s in ...`" run.inside m
-          | None, None, Some _ ->
-              sprintf
-                "install one %s, with `with`: an implementation is a `%s { ... \
-                 }` that gives each of its operations"
-                run.inside d
-          | None, None, None ->
-              sprintf "remove it: nothing can implement `%s` yet" d
-        in
         report env
-          (Diag.make loc ~labels:needs
-             ~notes:(run.why p @ why)
-             ~help ~says:run.only (run.missing d)))
+          (not_installed loc run.kind ~dep:d ~short:p.name ~real:(run.real_of p)
+             ~maker:(maker p) ~declared:(Hashtbl.mem env.types p) ~needs ~why))
     (List.sort_uniq String.compare uses)
 
 (* The runtime installs exactly the built-in dependencies `main` uses, as
@@ -1762,12 +1563,8 @@ let check_main env r ~fns ~schemes (f : fn_def) ty cx =
     ~run:
       {
         installs = runtime_dep;
-        missing = sprintf "nothing installs `%s` before `main`";
-        only =
-          sprintf "the runtime installs only %s" (and_list Prelude.runtime_deps);
-        inside = "inside `main`";
-        why = (fun _ -> []);
-        fix = (fun _ ~maker:_ -> None);
+        real_of = (fun _ -> None);
+        kind = Main Prelude.runtime_deps;
         at = f.name.loc;
       }
 
@@ -1806,63 +1603,15 @@ let check_test env r ~fns ~schemes (t : Test_items.test) (f : fn_def) ty cx =
     ~run:
       {
         installs;
-        missing =
-          (fun d ->
-            sprintf "nothing installs `%s` in the test %s" d
-              (Ast.show_str (Test_items.full_name t)));
-        only =
-          (match (t.real, faked) with
-          | [], _ ->
-              sprintf "a test gets only the test %s, and what controls them"
-                (and_list faked)
-          | real, [] ->
-              sprintf "this test gets only the real %s" (and_list real)
-          | real, faked ->
-              sprintf
-                "this test gets only the real %s, and the test %s, and what \
-                 controls %s"
-                (and_list real) (and_list faked)
-                (if List.length faked = 1 then "it" else "them"));
-        inside = "inside the test";
-        why =
-          (fun p ->
-            match real_of p with
-            | Some d ->
-                [
-                  sprintf
-                    "the test asks for the real `%s`, which `%s` can't control"
-                    d p.name;
-                ]
-            | None -> []);
-        fix =
-          (fun p ~maker ->
-            match (real_of p, t.group) with
-            | Some d, _ ->
-                Some
-                  (sprintf
-                     "remove `%s` from the test's `uses`, to get the test one" d)
-            | None, None -> None
-            | None, Some (None, g) ->
-                (* a group's test is installed in the group's `with` *)
-                Some
-                  (sprintf
-                     "install one around each of its tests, in the group's \
-                      `with`: `group %s(...) with %s =`%s"
-                     g
-                     (match maker with
-                     | Some m -> m
-                     | None -> env.names p ^ " { ... }")
-                     (if maker = None then
-                        ", an implementation that gives each of its operations"
-                      else ""))
-            | None, Some (Some m, g) ->
-                (* another module's group, which this one can't change *)
-                Some
-                  (sprintf
-                     "`%s.%s` is another module's group, so pass one in: give \
-                      the group a parameter of type `%s` that its `with` \
-                      installs, and pass an implementation to it here"
-                     m g (env.names p)));
+        real_of;
+        kind =
+          Test
+            {
+              name = Ast.show_str (Test_items.full_name t);
+              real = t.real;
+              faked;
+              group = t.group;
+            };
         at = t.loc;
       }
 

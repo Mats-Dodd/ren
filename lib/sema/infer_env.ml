@@ -203,7 +203,7 @@ and handler_needs = {
 (* A dependency [hdep] that a closure [hfn] calls inside a `with` of it
    still gets from outside, and why ([hnote]): a message that says its
    callers have to install it explains with this (infer_top.ml). *)
-and withheld = { hfn : Path.t; hdep : string; hnote : string }
+and withheld = { hfn : Path.t; hdep : string; hnote : Infer_msg.withheld }
 
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their

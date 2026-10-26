@@ -792,6 +792,15 @@ let rename_call_tag ~call ~callee ~arity tag =
         tag args
   | None -> rename_where_in tag
 
+(* What brings an error into a function, for a label at it. *)
+type error_source = Call_fails | Fails | Result_holds | Match_leaves
+
+let error_source = function
+  | Call_fails -> "this call can fail with"
+  | Fails -> "this fails with"
+  | Result_holds -> "this `Result` holds"
+  | Match_leaves -> "no arm of this `match` handles"
+
 (* Why a `try` may cover nothing (Infer_rows.try_hint), for its help. *)
 type try_hint =
   | Maybe_result of string
@@ -948,16 +957,477 @@ let body_changes_outer loc ~wrapper ~var =
        "the body of this `with` can't change `%s`, a variable from outside it"
        var)
 
+(* ---- what a module writes (infer_top.ml) ---- *)
+
+(* How a transparent parameter would outlive its call. *)
+type escape = As_value | Captured | Kept_by_handler
+
+(* The transparent parameter [name] escapes. [dep] is the dependency it's
+   an implementation of, if it's one, and [handler_deps] what the
+   function's body implements, if it's a handler. *)
+let not_transparent loc ~name ~dep ~handler_deps escape =
+  let what =
+    match escape with
+    | As_value -> "is used as a value here"
+    | Captured -> "is captured by a lambda that outlives the call"
+    | Kept_by_handler ->
+        "is kept by the handler, whose operations run where a `with` installs \
+         it"
+  in
+  let msg = sprintf "`%s` %s, so it isn't transparent" name what in
+  match dep with
+  | None ->
+      Diag.make loc
+        ~notes:
+          [
+            "a parameter whose type is written `fn(...)` can only be called, \
+             or passed straight to another function";
+          ]
+        ~help:
+          (sprintf
+             "to keep it, name its rows, `%s: fn(...) ! ..e uses ..d`, or \
+              remove the type and let it be inferred"
+             name)
+        msg
+  | Some d ->
+      Diag.make loc
+        ~notes:
+          [
+            sprintf
+              "a parameter whose type is a dependency's, `%s`, can only be \
+               installed, with `with`, or passed straight to another function, \
+               so what it needs is what its function uses"
+              d;
+          ]
+        ~help:
+          (match handler_deps with
+          | Some deps ->
+              (* what it needs, the handler needs where it's installed *)
+              sprintf
+                "to keep it, name what it needs, `%s: %s uses ..d`, and say \
+                 the handler needs that: `for %s uses ..d`"
+                name d (String.concat ", " deps)
+          | None ->
+              sprintf "to keep it, name what it needs: `%s: %s uses ..d`" name d)
+        msg
+
+(* `Result<Int, Int>`, at [loc]: its second argument isn't an error set. *)
+let result_needs_set loc =
+  Diag.make loc
+    ~notes:
+      [ "a `Result` holds a value or an error, which `attempt` keeps there" ]
+    ~help:"write an error set, after `!`: `Result<Int, ! NotFound>`"
+    "`Result`'s second argument is an error set"
+
+(* An error set written as an argument of [t], which isn't `Result`. *)
+let set_not_taken loc t =
+  Diag.make loc
+    ~help:
+      "an error set goes after `!` in a signature or a function type, or in \
+       `Result<T, ! ...>`"
+    (sprintf "`%s` doesn't take an error set" t)
+
+(* The help for a tag with two shapes in one written set. *)
+let rename_one = "rename one of them"
+
+(* ---- what a group leaves to be checked (infer_top.ml) ---- *)
+
+(* Why a call brings in a dependency it seems not to: the function it
+   calls calls a closure inside a `with` of the dependency, [dep], that
+   still gets it from outside (Infer_top.settle_installs). [fn] is that
+   function. *)
+type withheld =
+  | Same_row of { fn : string; dep : string }
+      (** what's called inside the `with` uses what [fn] itself does *)
+  | Several_withs of { fn : string; dep : string }
+      (** the closure is called inside more than one `with` *)
+
+let withheld = function
+  | Same_row { fn; dep } ->
+      sprintf
+        "in `%s`, what's called inside the `with` that installs `%s` uses what \
+         `%s` itself does: a parameter whose type is written `fn(...)`, or a \
+         closure that's called outside the `with` too, gets only what's \
+         installed outside it"
+        fn dep fn
+  | Several_withs { fn; dep } ->
+      sprintf
+        "`%s` calls a closure inside more than one `with`, so the closure gets \
+         only what's installed outside all of them, not the `%s` one of them \
+         installs"
+        fn dep
+
+(* A row that includes a parameter's errors, at [loc], where it can't. *)
+let param_fails_here loc =
+  Diag.make loc
+    ~help:
+      "write what the function passed can fail with in its parameter's type, \
+       after `!`"
+    "this can fail with whatever a function it was passed fails with, which \
+     isn't allowed here"
+
+(* What a public function's rows can't do, kept where they're closed. *)
+type closed = Cant_fail | Cant_use | Cant_fail_or_use | Cant_need
+
+(* The transparent parameter that's kept so: one written `fn(...)`, the
+   `self` of a dependency's method, or another of a dependency's type. *)
+type kept = Fn_param | Dep_self of string | Dep_param of string
+
+(* The transparent parameter [name] of [fn] is kept where its rows are
+   closed. *)
+let kept_closed loc ~name ~fn kept closed =
+  let what =
+    match closed with
+    | Cant_fail -> "fail"
+    | Cant_use -> "use anything"
+    | Cant_fail_or_use -> "fail or use anything"
+    | Cant_need -> "need anything"
+  in
+  let note, help =
+    match kept with
+    | Fn_param ->
+        ( sprintf
+            "a parameter whose type is written `fn(...)` passes what it fails \
+             with and uses on to `%s`'s callers, but here it's passed to \
+             something that keeps it as a function that can't %s"
+            fn what,
+          sprintf
+            "to keep it, name its rows, `%s: fn(...) ! ..e uses ..d`, and \
+             write them where it's kept"
+            name )
+    | Dep_self d ->
+        ( sprintf
+            "a dependency's `self` needs what its method uses, but here it's \
+             kept as `%s`, which needs nothing"
+            d,
+          sprintf
+            "to keep it, name what it needs where it's kept, `(%s uses ..d)`, \
+             and add `uses ..d` to `%s`"
+            d fn )
+    | Dep_param d ->
+        ( sprintf
+            "a parameter whose type is a dependency's, `%s`, needs what its \
+             function uses, but here it's passed to something that keeps it as \
+             an implementation that needs nothing"
+            d,
+          sprintf
+            "to keep it, name what it needs, `%s: %s uses ..d`, and write it \
+             where it's kept"
+            name d )
+  in
+  Diag.make loc ~notes:[ note ] ~help
+    (sprintf "`%s` is kept where it can't %s, so it isn't transparent" name what)
+
+(* `uses Clock, ..d`: what a function that lists [deps] would write to use
+   the named row [n] as well. *)
+let uses_written deps n = "uses " ^ String.concat ", " (deps @ [ ".." ^ n ])
+
+(* [what] uses the named row [n], at [loc], but what it's in ends in
+   [other] already. *)
+let two_named_rows loc what ~other n =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "a row ends in at most one named row, and what this is in already \
+           uses `..%s`, so `..%s` can't be added"
+          other n;
+      ]
+    ~help:
+      (sprintf "name the two rows alike, `..%s`, if they can stand for the same"
+         other)
+    (sprintf "%s `..%s`, but what this is in already uses `..%s`" (user what) n
+       other)
+
+(* [what] uses the named row [n] in [fn], which declares what it uses but
+   not [n]: it names [other], or else would write [uses]. *)
+let named_row_undeclared loc what n ~fn ~other ~uses =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`..%s` stands for whatever the closure or implementation it names \
+           uses, and a function that declares its dependencies declares that \
+           too"
+          n;
+      ]
+    ~help:
+      (match other with
+      | Some other ->
+          sprintf
+            "`%s` names one row, `..%s`, which is all it can name: name this \
+             one `..%s` too, where it's written"
+            fn other other
+      | None -> sprintf "add it to what `%s` uses: `%s`" fn uses)
+    (sprintf "%s `..%s`, which `%s` doesn't declare" (user what) n fn)
+
+(* [what] uses the named row [n] where nothing can end in it. *)
+let named_row_not_allowed loc what n =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`..%s` stands for whatever the closure or implementation it names \
+           uses, and what this is in can't use more than it lists"
+          n;
+      ]
+    ~help:
+      (sprintf
+         "use it where `..%s` can go: in the function that names it, or in a \
+          lambda whose type isn't written"
+         n)
+    (sprintf "%s `..%s`, which isn't allowed here" (user what) n)
+
+(* A call of a closure that fails with the named row [n], in [fn], which
+   declares its errors but not [n]. *)
+let named_errors_undeclared loc n ~fn =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`..%s` stands for whatever the closure it names fails with, and a \
+           function that declares its errors declares that too"
+          n;
+      ]
+    ~help:
+      (sprintf "add `..%s` to what `%s` declares it fails with, after `!`" n fn)
+    (sprintf "this can fail with `..%s`, which `%s` doesn't declare" n fn)
+
+(* A `with`'s body uses [deps], which what's outside it can't. *)
+let with_body_uses loc deps =
+  Diag.make loc
+    ~notes:
+      [
+        "a closure called in a `with`'s body is called with what's installed \
+         outside it too, and this one is called where more is installed than \
+         outside";
+      ]
+    ~help:
+      "call the closure only inside the `with`, or install what it uses \
+       outside it too"
+    (sprintf "this `with`'s body uses %s, which what's outside it can't"
+       (* this quotes each name twice (B4 in the stage's plan), which is kept
+          while restructuring changes no message *)
+       (and_list (List.map code deps)))
+
+(* ---- implementations (infer_top.ml) ---- *)
+
+(* How an implementation's operation could fail with no more than the
+   operation [op] declares, for the help when it does. *)
+type impl_fix =
+  | Map_call of {
+      try_ : bool;
+      call : string option;
+      tag : string;
+      into : string;
+    }
+      (** a call, as written, that fails with [tag]: map it to [into] with
+          `match`, with `try` if the call fails with more *)
+  | Give_value  (** a `fail`, where [op] can't fail *)
+  | Fail_instead of string  (** a `fail`, where [op] can fail with this *)
+  | Wrap of { given : string option; tag : string; into : string option }
+      (** a function given by name, as written: a lambda that calls it, and maps
+          [tag] to [into], if [op] can fail, or else handles it *)
+  | Handle_inside
+  | Map_inside of string
+
+(* The implementation of [op] can fail with [shown], which [op] can't: it
+   can fail only with [declared], the tags' names. *)
+let impl_fails_more loc ~op ~shown ~declared fix =
+  let help =
+    match fix with
+    | Map_call { try_; call; tag; into } ->
+        sprintf "map it: `%smatch %s` with the arm `fail %s => fail %s`"
+          (if try_ then "try " else "")
+          (Option.value call ~default:"...")
+          tag into
+    | Give_value -> sprintf "`%s` can't fail: give a value here instead" op
+    | Fail_instead d ->
+        sprintf "fail with what `%s` can instead: `fail %s`" op d
+    | Wrap { given; tag; into } -> (
+        let given = match given with Some s -> code s | None -> "it" in
+        match into with
+        | None ->
+            sprintf
+              "give a lambda that calls %s and handles what it fails with, \
+               with `match` and `fail` arms"
+              given
+        | Some d ->
+            sprintf
+              "give a lambda that calls %s and maps what it fails with, with \
+               `match` and `fail` arms, to what `%s` can: `fail %s => fail %s`"
+              given op tag d)
+    | Handle_inside ->
+        "handle what it fails with inside it, with `match` and `fail` arms"
+    | Map_inside d ->
+        sprintf
+          "map what it fails with inside it, with `match` and `fail` arms, to \
+           what it can: `fail %s`"
+          d
+  in
+  Diag.make loc
+    ~says:(sprintf "fails with %s" shown)
+    ~notes:
+      [
+        (match declared with
+        | [] -> sprintf "`%s` can't fail" op
+        | ds -> sprintf "`%s` can fail only with %s" op (and_list ds));
+      ]
+    ~help
+    (sprintf "this implementation can fail with %s, and `%s` can't" shown op)
+
+(* The implementation of [op] fails with [tag], whose payload [op]
+   declares as [shape]. *)
+let impl_other_shape loc ~op ~tag ~shape =
+  Diag.make loc
+    ~notes:[ sprintf "`%s` declares `%s`'s payload as `%s`" op tag shape ]
+    ~help:(sprintf "fail with `%s` as the operation declares it" tag)
+    (sprintf "this implementation fails with a different `%s`" tag)
+
+(* The implementation of [op], which can fail only with [declared], fails
+   with whatever the named row [n] stands for. *)
+let impl_fails_named loc ~op ~declared n =
+  Diag.make loc
+    ~notes:
+      [
+        (match declared with
+        | [] -> sprintf "`%s` can't fail" op
+        | ds -> sprintf "`%s` can fail only with %s" op (and_list ds));
+      ]
+    ~help:"handle what it passes on inside it, with `match` and `fail` arms"
+    (sprintf
+       "this implementation can fail with anything `..%s` stands for, and `%s` \
+        can't"
+       n op)
+
+(* ---- associated values, `main` and tests (infer_top.ml) ---- *)
+
+(* The associated value [name] is made from itself, through [chain], which
+   starts and ends with it. *)
+let made_from_itself loc name chain =
+  Diag.make loc
+    ~notes:
+      [
+        "an associated value is made once, when the program starts, so it \
+         can't need itself to be made";
+      ]
+    ~help:
+      (if List.length chain = 2 then "make it without using itself"
+       else "make one of them without the other")
+    (sprintf "`%s` is made from itself: %s" name (String.concat " → " chain))
+
+(* How to write a call of [name], of [arity] parameters, in a help. *)
+let call_written name arity = if arity = 0 then name ^ "()" else name ^ "(...)"
+
+(* What the runtime calls, installing exactly some dependencies around it:
+   `main`, around which it installs [runtime], or the test [name]. *)
+type runner =
+  | Main of string list
+  | Test of {
+      name : string;  (** as it's written, quoted *)
+      real : string list;  (** the built-ins it gets the real one of *)
+      faked : string list;  (** and those it gets the test one of *)
+      group : (string option * string) option;
+          (** the group it's in, if it's a group's test: the module, if it's
+              another one's, and the group's name *)
+    }
+
+(* [runner] uses [dep], which it isn't given, at [loc], or as [needs] say.
+   [real] is the built-in whose test one [dep] controls, if the test gets
+   the real one, which it can't control. [maker] makes an implementation of
+   [dep], if something does, and [declared] says whether [dep] is declared
+   at all, so something could implement it. [short] is [dep]'s own name. *)
+let not_installed loc runner ~dep ~short ~real ~maker ~declared ~needs ~why =
+  let inside, missing, only =
+    match runner with
+    | Main runtime ->
+        ( "inside `main`",
+          sprintf "nothing installs `%s` before `main`" dep,
+          sprintf "the runtime installs only %s" (and_list runtime) )
+    | Test t ->
+        ( "inside the test",
+          sprintf "nothing installs `%s` in the test %s" dep t.name,
+          match (t.real, t.faked) with
+          | [], faked ->
+              sprintf "a test gets only the test %s, and what controls them"
+                (and_list faked)
+          | real, [] ->
+              sprintf "this test gets only the real %s" (and_list real)
+          | real, faked ->
+              sprintf
+                "this test gets only the real %s, and the test %s, and what \
+                 controls %s"
+                (and_list real) (and_list faked)
+                (if List.length faked = 1 then "it" else "them") )
+  in
+  let notes =
+    match (runner, real) with
+    | Test _, Some d ->
+        [
+          sprintf "the test asks for the real `%s`, which `%s` can't control" d
+            short;
+        ]
+    | _ -> []
+  in
+  let fix =
+    match runner with
+    | Main _ -> None
+    | Test t -> (
+        match (real, t.group) with
+        | Some d, _ ->
+            Some
+              (sprintf "remove `%s` from the test's `uses`, to get the test one"
+                 d)
+        | None, None -> None
+        | None, Some (None, g) ->
+            (* a group's test is installed in the group's `with` *)
+            Some
+              (sprintf
+                 "install one around each of its tests, in the group's `with`: \
+                  `group %s(...) with %s =`%s"
+                 g
+                 (match maker with Some m -> m | None -> dep ^ " { ... }")
+                 (if maker = None then
+                    ", an implementation that gives each of its operations"
+                  else ""))
+        | None, Some (Some m, g) ->
+            (* another module's group, which this one can't change *)
+            Some
+              (sprintf
+                 "`%s.%s` is another module's group, so pass one in: give the \
+                  group a parameter of type `%s` that its `with` installs, and \
+                  pass an implementation to it here"
+                 m g dep))
+  in
+  let help =
+    match (fix, maker, declared) with
+    | Some fix, _, _ -> fix
+    | None, Some m, _ -> sprintf "install one %s: `with %s in ...`" inside m
+    | None, None, true ->
+        sprintf
+          "install one %s, with `with`: an implementation is a `%s { ... }` \
+           that gives each of its operations"
+          inside dep
+    | None, None, false ->
+        sprintf "remove it: nothing can implement `%s` yet" dep
+  in
+  Diag.make loc
+    ~labels:
+      (List.map (fun (l, what) -> (l, sprintf "%s `%s`" (user what) dep)) needs)
+    ~notes:(notes @ List.map withheld why)
+    ~help ~says:only missing
+
 (* ---- dependencies ---- *)
 
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
-   call that uses it. *)
+   call that uses it, and [why] why, if it's one of [withheld]. *)
 let undeclared_use ?(why = []) (f : Ast.Resolved.fn_def) dep call =
+  let why = List.map withheld why in
   let name = Ast.fn_name f in
   Diag.make f.name.loc
     ~labels:
       (match call with
-      | Some (l, what) -> [ (l, sprintf "%s `%s`" what dep) ]
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" (user what) dep) ]
       | None -> [])
     ~notes:
       ((if f.uses = None then
@@ -977,7 +1447,7 @@ let undeclared_need ~written (f : Ast.Resolved.fn_def) dep call =
   Diag.make f.name.loc
     ~labels:
       (match call with
-      | Some (l, what) -> [ (l, sprintf "%s `%s`" what dep) ]
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" (user what) dep) ]
       | None -> [])
     ~notes:
       [
@@ -1000,7 +1470,7 @@ let undeclared_need ~written (f : Ast.Resolved.fn_def) dep call =
 let handler_uses_itself (f : Ast.Resolved.fn_def) dep call =
   Diag.make
     (match call with Some (l, _) -> l | None -> f.name.loc)
-    ?says:(Option.map (fun (_, what) -> sprintf "%s `%s`" what dep) call)
+    ?says:(Option.map (fun (_, what) -> sprintf "%s `%s`" (user what) dep) call)
     ~labels:
       (match call with
       | Some _ ->
@@ -1170,7 +1640,7 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
   Diag.make f.name.loc
     ~labels:
       (match call with
-      | Some (l, what) -> [ (l, sprintf "%s `%s`" what dep) ]
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" (user what) dep) ]
       | None -> [])
     ~notes:
       [
@@ -1190,7 +1660,7 @@ let value_fails (f : Ast.Resolved.fn_def) ~tag ~shape from =
   Diag.make f.name.loc
     ~labels:
       (match from with
-      | Some (l, what) -> [ (l, sprintf "%s `%s`" what tag) ]
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" (error_source what) tag) ]
       | None -> [])
     ~notes:
       [
@@ -1458,7 +1928,7 @@ let undeclared_error (f : Ast.Resolved.fn_def) ~tag ~shape from =
   Diag.make f.name.loc
     ~labels:
       (match from with
-      | Some (l, what) -> [ (l, sprintf "%s `%s`" what tag) ]
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" (error_source what) tag) ]
       | None -> [])
     ~notes:
       [
