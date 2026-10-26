@@ -9,8 +9,10 @@
    public functions, all in
    canonical form (ty.ml). Nothing private is in it: a dependent can't
    tell a private name from one that doesn't exist, and changing one can't
-   change the interface. It's made from the module's declarations alone
-   ([of_module]), never from its bodies. The one thing it holds that a cached interface shouldn't is
+   change the interface. It's made from the module's declarations
+   ([of_module]), and from one thing inference found in its bodies: what
+   each public function needs of its type parameters, which is never
+   written. The one thing it holds that a cached interface shouldn't is
    where each type and constructor was declared, so an error can point at
    the declaration it clashes with; those move out when interfaces are
    cached (stage 13). *)
@@ -417,18 +419,37 @@ let of_handler ~home (f : Ast.Resolved.fn_def) =
           loc = Some f.name.loc;
         }
 
-(* The interface of module [home], from its declarations alone, never its
-   bodies (module-build.md, "Interface summaries"): every public type it
-   declares, with its public members, and the signature of every
-   public function. A public one
-   never mentions a private one (resolve.ml checks), so a dependent never
-   meets a type that isn't in some interface. An opaque type is listed
-   without its representation. [sets] are the named error sets it can
-   see. *)
-let of_module ~home ~sets (prog : Ast.Resolved.program) =
+(* The interface of module [home] (module-build.md, "Interface
+   summaries"): every public type it declares, with its public members,
+   and the signature of every public function. A public one never
+   mentions a private one (resolve.ml checks), so a dependent never meets
+   a type that isn't in some interface. An opaque type is listed without
+   its representation. [sets] are the named error sets it can see.
+
+   All of it comes from declarations but what a public function or member
+   needs of its type parameters, which isn't written (operators.md,
+   "Generic code"): [needs] gives what inference found, by the function's
+   path, as its scheme's [reqs]. *)
+let of_module ~home ~sets ~needs (prog : Ast.Resolved.program) =
+  (* [canonical] keeps a scheme's numbering, and drops what it needs of a
+     variable its type hasn't: an associated value's type is its
+     function's result, without the rows *)
+  let needed path (s : Ty.scheme) =
+    match s.ty with
+    | Error -> s
+    | _ -> Ty.canonical { s with reqs = needs path }
+  in
   let public (td : type_decl) =
     let td =
-      { td with members = Path.Map.filter (fun _ o -> o.opub) td.members }
+      {
+        td with
+        members =
+          Path.Map.filter_map
+            (fun path o ->
+              if o.opub then Some { o with oscheme = needed path o.oscheme }
+              else None)
+            td.members;
+      }
     in
     match td.body with Opaque _ -> { td with body = Opaque None } | _ -> td
   in
@@ -446,7 +467,12 @@ let of_module ~home ~sets (prog : Ast.Resolved.program) =
       List.filter_map
         (function
           | Ast.Fn (f : Ast.Resolved.fn_def) when f.pub ->
-              Some { vname = f.name.name; scheme = signature ~sets f }
+              let scheme = signature ~sets f in
+              Some
+                {
+                  vname = f.name.name;
+                  scheme = needed (Path.make home f.name.name) scheme;
+                }
           | _ -> None)
         prog;
   }

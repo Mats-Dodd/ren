@@ -970,9 +970,9 @@ fn main() =
     |}]
 
 let%expect_test "editing a body leaves the interface as it was" =
-  (* the interface comes from declarations alone (module-build.md,
-     "Interface summaries"), so changing what a function's body does, even
-     what it uses, can't change what dependents see *)
+  (* the interface comes from declarations (module-build.md, "Interface
+     summaries"), so changing what a function's body does, even what it
+     uses, can't change what dependents see *)
   let iface src =
     let src = clean src in
     let i = Ren.Driver.interface ~file src in
@@ -1013,6 +1013,35 @@ fn main() = load(1)
     load: fn(Int) -> test.Row uses Console
     load: fn(Int) -> test.Row uses Console
     the same
+    |}]
+
+let%expect_test "editing a body changes the interface only by what it needs" =
+  (* the one thing the interface takes from a body is what a public
+     function needs of its type parameters, which isn't written
+     (module-build.md, "Interface summaries"): an edit that keeps it keeps
+     the interface, and one that changes it is seen by dependents *)
+  let iface src =
+    let i = Ren.Driver.interface ~file (src ^ "\nfn main() = 1\n") in
+    List.iter
+      (fun (v : Ren.Iface.value) ->
+        print_endline
+          (Ren.Ty.signature ~names:Ren.Path.full ~pub:true ~name:v.vname
+             ~params:[ "a"; "b" ] v.scheme))
+      i.values;
+    i
+  in
+  let compares = iface "pub fn same<T>(a: T, b: T) -> Bool = a == b" in
+  let swapped = iface "pub fn same<T>(a: T, b: T) -> Bool = b == a" in
+  let not_any = iface "pub fn same<T>(a: T, b: T) -> Bool = true" in
+  print_endline (if compares = swapped then "the same" else "different");
+  print_endline (if compares = not_any then "the same" else "different");
+  [%expect
+    {|
+    pub fn same<T has eq>(a: T, b: T) -> Bool
+    pub fn same<T has eq>(a: T, b: T) -> Bool
+    pub fn same<T>(a: T, b: T) -> Bool
+    the same
+    different
     |}]
 
 (* ---- opaque types ---- *)

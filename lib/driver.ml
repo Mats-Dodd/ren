@@ -69,17 +69,30 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
     Iface.sets_of
       (List.concat_map (fun (i : Iface.t) -> i.types) reachable @ r.types)
   in
-  let iface = Iface.of_module ~home ~sets r.prog in
+  (* what a public function needs of its type parameters isn't written,
+     so the interface takes it from inference (operators.md, "Generic
+     code") *)
+  let needs path = (Path.Map.find path inferred.schemes).reqs in
+  let iface = Iface.of_module ~home ~sets ~needs r.prog in
   (* A public function's body was checked against its signature, so the
-     type inference found for it is the one its interface states. Other
-     modules see only the interface, so if the two ever differ, that's a
-     bug in the compiler, and it's caught here rather than in whichever
-     module trips over it. *)
+     type inference found for it is the one its interface states, with
+     what it needs of its type parameters. Other modules see only the
+     interface, so if the two ever differ, that's a bug in the compiler,
+     and it's caught here rather than in whichever module trips over
+     it. *)
   let mismatch name (said : Ty.scheme) (found : Ty.scheme) =
+    (* the type, then what it needs of each variable, `T has eq` *)
     let show (s : Ty.scheme) =
-      Ty.show
-        (Ty.printer ~show_tail:(fun _ -> true) ~names:(Resolve.type_name r) s)
-        s.ty
+      let pr =
+        Ty.printer ~show_tail:(fun _ -> true) ~names:(Resolve.type_name r) s
+      in
+      (* the type first, so its variables are named in the order they
+         appear *)
+      let ty = Ty.show pr s.ty in
+      let needs =
+        List.map (fun (n, req) -> Ty.show pr (Var n) ^ " has " ^ req) s.reqs
+      in
+      String.concat ", " (ty :: needs)
     in
     raise
       (Internal_error
@@ -91,41 +104,28 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
                (show said) (show found);
          })
   in
-  (* What a function needs of its type parameters isn't written, so the
-     declarations don't say it (operators.md, "Generic code"): it's what
-     inference found, which the interface takes. *)
   let check name (said : Ty.scheme) (found : Ty.scheme) =
-    if { found with reqs = [] } <> said then mismatch name said found;
-    { said with reqs = found.reqs }
+    if found <> said then mismatch name said found
   in
-  let values =
-    List.map
-      (fun (v : Iface.value) ->
-        let found = Path.Map.find (Path.make home v.vname) inferred.schemes in
-        { v with scheme = check v.vname v.scheme found })
-      iface.values
-  in
+  List.iter
+    (fun (v : Iface.value) ->
+      check v.vname v.scheme
+        (Path.Map.find (Path.make home v.vname) inferred.schemes))
+    iface.values;
   (* and so was each public member's, which is in its type's entry *)
-  let types =
-    List.map
-      (fun (td : Iface.type_decl) ->
-        {
-          td with
-          members =
-            Path.Map.mapi
-              (fun path (o : Iface.op) ->
-                let found =
-                  match (o.okind, Path.Map.find path inferred.schemes) with
-                  | Value, ({ ty = Fun ([], t, _, _); _ } as s) ->
-                      Ty.canonical { s with ty = t }
-                  | _, s -> s
-                in
-                { o with oscheme = check (Path.local path) o.oscheme found })
-              td.members;
-        })
-      iface.types
-  in
-  let iface = { iface with values; types } in
+  List.iter
+    (fun (td : Iface.type_decl) ->
+      Path.Map.iter
+        (fun path (o : Iface.op) ->
+          let found =
+            match (o.okind, Path.Map.find path inferred.schemes) with
+            | Value, ({ ty = Fun ([], t, _, _); _ } as s) ->
+                Ty.canonical { s with ty = t }
+            | _, s -> s
+          in
+          check (Path.local path) o.oscheme found)
+        td.members)
+    iface.types;
   (* Another module runs a public group's tests by calling them, so they're
      in the interface too, with the types inference found: they have no
      signature to declare one. *)

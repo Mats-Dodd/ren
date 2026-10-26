@@ -37,7 +37,7 @@ and label = { name : string; payload : ty list }
 (* A function's type, for every choice of its variables. [names] are the
    names its variables were declared with, like the `T` of `fn id<T>`.
    [reqs] are what it needs of its variables, [(0, "eq")] for variable 0
-   having `==`; always empty until inference infers them (R4). Both are
+   having `==`, which inference finds in the function's body. Both are
    sorted. *)
 type scheme = {
   ty : ty;

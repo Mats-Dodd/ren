@@ -681,12 +681,16 @@ Where the work forced a change to the plan above:
   a b)`, so the two typed snapshots that have an `==` changed
   (test_lower.ml, test_infer.ml).
 - **R4, interfaces.** The interface is still made from declarations, but
-  what a public function needs of its type parameters isn't declared, so
-  the driver, which checks that inference found what the interface says,
-  now ignores requirements in that check and puts inference's in the
-  interface. That's the "Interfaces" part of R4 done early, as far as
-  `eq` goes: without it, a public generic function that compares would
-  fail that check.
+  what a public function or member needs of its type parameters isn't
+  declared, so it's given what inference found, by path, as it's made
+  (`Iface.of_module`'s `needs`). The driver's check that a public
+  function's inferred scheme is the one its interface states then
+  compares whole schemes, requirements too, and says what each needs if
+  they differ. A module that imports it checks a call's requirements
+  against the interface, as it does its own functions' (test_infer.ml,
+  "another module's function needs what it needs"), and a body edit
+  changes the interface only when it changes them (test_modules.ml,
+  "editing a body changes the interface only by what it needs").
 - **R4, a generic method used before it's checked.** A method whose
   signature is written out in full had its declared type before its body
   was checked, so a dot call of it needn't come after it. A generic one

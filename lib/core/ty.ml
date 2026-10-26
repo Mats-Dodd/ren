@@ -54,11 +54,11 @@ and label = { name : string; payload : ty list }
    `ren types` can print them back.
 
    [reqs] are what the function needs of its variables: [(0, "eq")] says
-   variable 0 must have `==`, which `ren types` will print as
+   variable 0 must have `==`, which `ren types` prints as
    `same<T has eq>` (operators.md, "Generic code"). They're sorted, as
-   [names] are, so equal schemes are equal values. Nothing adds one yet:
-   inference infers them in a later step, so for now [reqs] is always
-   empty. *)
+   [names] are, so equal schemes are equal values. They're never written:
+   inference finds them in the function's body, and an interface keeps
+   them (iface.ml). *)
 type scheme = {
   ty : ty;
   names : (int * string) list;

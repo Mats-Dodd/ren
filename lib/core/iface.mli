@@ -5,7 +5,8 @@
    An interface holds a module's public types, with their constructors,
    fields and public members, and the type scheme of each of its public
    functions, all in canonical form (ty.ml). Nothing private is in it. It's
-   made from the module's declarations alone ([of_module]). *)
+   made from the module's declarations, and from what inference found each
+   public function needs of its type parameters ([of_module]). *)
 
 type field = { fname : string; fty : Ty.ty }
 
@@ -130,11 +131,18 @@ val handler_type : home:string -> Ast.Resolved.fn_def -> Path.t option
    of one dependency, or any other function. *)
 val of_handler : home:string -> Ast.Resolved.fn_def -> type_decl option
 
-(* The interface of module [home], from its declarations alone, never its
-   bodies: every public type, with its public members and an opaque
-   type's representation left out, and every public function's
-   signature. [sets] are the named error sets it can see. *)
-val of_module : home:string -> sets:sets -> Ast.Resolved.program -> t
+(* The interface of module [home], from its declarations: every public
+   type, with its public members and an opaque type's representation left
+   out, and every public function's signature. [sets] are the named error
+   sets it can see. What a public function or member needs of its type
+   parameters isn't declared, so [needs] gives what inference found, by
+   its path, as its scheme's [reqs]. *)
+val of_module :
+  home:string ->
+  sets:sets ->
+  needs:(Path.t -> (int * string) list) ->
+  Ast.Resolved.program ->
+  t
 
 (* Two interfaces of the same module as one: the prelude is part Ren
    source, part built into the compiler. *)
