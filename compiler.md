@@ -218,7 +218,10 @@ The constraints:
   doesn't always wait: something that has to look into the type before
   the group is done, a `with`, a field, a method, a call, or a mismatch
   that shows it, makes it the handler's own type first, as the solver
-  would if nothing else said (infer_coerce.ml).
+  would if nothing else said (infer_coerce.ml). Meanwhile the variable
+  it was given to can only become the handler's type or one of its
+  dependencies': anything else said of it is a mismatch where it's said
+  (unify.ml, `watch`), so the handler, met first, isn't blamed for it.
 - **A value a statement throws away** is `Unit` (errors.md, "Nothing is
   dropped"). One whose type is still unknown becomes `Unit`, and a later
   mismatch at a call of its function points back at it.
@@ -472,9 +475,10 @@ Where the work forced a change to the plan above:
   counting_rates(1) else Rates { ... }` is a `Rates`, as it is with the
   branches the other way round, as deps.md says it should be; it was
   rejected, and a test pinned that ("where nothing says which, a handler
-  of several is its own", which no longer holds it). A `then` branch that can't be what the `else`
-  is is now blamed itself, "this `then` branch is ...", since the fix
-  goes there. A variable a handler was given to, passed as an argument
+  of several is its own", which no longer holds it). A branch that
+  can't be what the other is is blamed if it's the second, as before R3,
+  and the note says what the handler implements, whichever branch it's
+  in. A variable a handler was given to, passed as an argument
   where one of the handler's dependencies is wanted, is taken as that
   one at that argument only, needing what the handler needs, which is
   copied where it's passed as for a handler whose type is known

@@ -2991,8 +2991,9 @@ fn main() uses Console =
 let%expect_test "an `if` takes a handler of several as one in either branch" =
   (* B3: a `then` branch that's a handler waits for the `else`, as an
      element of an array waits for the others, so it's a `Rates` here
-     whichever branch it's in. One that can't be what the other branch is
-     is blamed where it's given *)
+     whichever branch it's in. Where it can't be what the other branch
+     is, the branch given second is blamed, and the note says what the
+     handler implements either way *)
   let src =
     {|
 pub dep Rates =
@@ -3045,14 +3046,14 @@ fn main() =
        = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
        help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
 
-    error: this `then` branch is a `counting_rates`, but the `else` branch is a `Clock`
-       ┌─ test.ren:13:24
+    error: this `else` branch is a `Clock`, but the `then` branch is a `counting_rates`
+       ┌─ test.ren:13:47
     13 │   let y = if true then counting_rates(3) else Clock.frozen(Time.epoch)
-       │                        ^^^^^^^^^^^^^^^^^
-       │                                               ------------------------ the `else` branch is a `Clock`
+       │                                               ^^^^^^^^^^^^^^^^^^^^^^^^
+       │                        ----------------- the `then` branch is a `counting_rates`
        = both branches of an `if` have to produce the same type
        = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
-       help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
+       help: give an implementation of `Clock` where the `counting_rates(...)` is: a `Clock { ... }`, or a handler for `Clock`
     |}]
 
 let%expect_test "a `with` or a method before what's wanted is said" =
@@ -3307,6 +3308,96 @@ fn main() uses Console =
        │                          ^
        = this holds a `counting_rates`, which implements `Rates` and `RateCalls`, but something else here takes it as just `RateCalls`, so it's that everywhere: a handler of several stays its own only where nothing says which it is
        help: make another for this one, `counting_rates(...)`, or leave out what says it's a `RateCalls`
+    |}]
+
+let%expect_test "a handler of several, then said to be something else" =
+  (* what the handler is given to is decided after it, so it's what says
+     so after that's blamed, as the constraint met second always is: not
+     the handler, with a message about what isn't there. And there's one
+     error, whichever comes first, the mistake or a use as one of its
+     dependencies *)
+  let fns =
+    {|
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn id(x) = x
+|}
+  in
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let b = if true then counting_rates(3) else counting_rates(4)
+  print(b + 1)
+|});
+  [%expect
+    {|
+    error: expected `Int`, found `counting_rates`
+       ┌─ test.ren:22:9
+    22 │   print(b + 1)
+       │         ^
+       = `+` works on `Int`s
+    |}];
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let o = [counting_rates(3)]
+  let n: Array<Int> = o
+  ()
+|});
+  [%expect
+    {|
+    error: expected `Array<Int>`, found `Array<counting_rates>`
+       ┌─ test.ren:22:23
+    22 │   let n: Array<Int> = o
+       │                       ^
+    |}];
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let o = Some(counting_rates(3))
+  let n: Option<Int> = o
+  ()
+|});
+  [%expect
+    {|
+    error: expected `Option<Int>`, found `Option<counting_rates>`
+       ┌─ test.ren:22:24
+    22 │   let n: Option<Int> = o
+       │                        ^
+    |}];
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let h = id(counting_rates(3))
+  print(run(h))
+  let n: Int = h
+  ()
+|});
+  [%expect
+    {|
+    error: expected `Int`, found `counting_rates`
+       ┌─ test.ren:23:16
+    23 │   let n: Int = h
+       │                ^
+    |}];
+  check_error
+    (rates ^ fns
+   ^ {|
+fn main() uses Console =
+  let h = id(counting_rates(3))
+  let n: Int = h
+  print(run(h))
+|});
+  [%expect
+    {|
+    error: expected `Int`, found `counting_rates`
+       ┌─ test.ren:22:16
+    22 │   let n: Int = h
+       │                ^
     |}]
 
 let%expect_test "a closure called inside a `with` and outside it (B4)" =

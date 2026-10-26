@@ -90,6 +90,10 @@ type state = {
       (** what each opaque type of the module being checked is represented as:
           in its own module, an opaque type is its representation (see [reveal])
       *)
+  watched : (int, Path.t list) Hashtbl.t;
+      (** the types each variable a handler of several dependencies was given to
+          can still become, by the variable's id: the handler's own, or one of
+          its dependencies' (Unify.watch). Only looked up, never walked *)
 }
 
 let new_state () =
@@ -100,6 +104,7 @@ let new_state () =
     skolem_vars = Hashtbl.create 16;
     skolem_rows = Hashtbl.create 8;
     reps = Hashtbl.create 4;
+    watched = Hashtbl.create 4;
   }
 
 let enter_level st = st.level <- st.level + 1

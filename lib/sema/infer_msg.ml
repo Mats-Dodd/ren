@@ -459,9 +459,15 @@ type behind =
   | Taken_as_one of { handler : string; deps : string list; dep : string }
       (** a handler of [deps] where an implementation of [dep], one of them, is
           wanted, somewhere that wasn't known as it was made *)
-  | Other_handler of { handler : string; deps : string list; dep : string }
+  | Other_handler of {
+      handler : string;
+      deps : string list;
+      dep : string;
+      here : bool;
+    }
       (** a handler of [deps], where an implementation of [dep], which isn't one
-          of them, is wanted *)
+          of them, is wanted; or, if not [here], an implementation of [dep]
+          where that handler, given first, is *)
   | Taken_elsewhere of { handler : string; deps : string list; other : string }
       (** a value a handler of [deps] was given to, which something else takes
           as [other], one of them, passed where another of them is wanted *)
@@ -525,17 +531,23 @@ let behind_note = function
             handler (and_list deps) dep dep;
         ],
         sprintf "say so where it's made: `let x: %s = %s(...)`" dep handler )
-  | Other_handler { handler; deps; dep } ->
+  | Other_handler { handler; deps; dep; here } ->
       ( [
           sprintf
             "`%s` is a handler for %s, so what its call describes implements \
              those, not `%s`"
             handler (and_list deps) dep;
         ],
-        sprintf
-          "give an implementation of `%s` here: a `%s { ... }`, or a handler \
-           for `%s`"
-          dep dep dep )
+        if here then
+          sprintf
+            "give an implementation of `%s` here: a `%s { ... }`, or a handler \
+             for `%s`"
+            dep dep dep
+        else
+          sprintf
+            "give an implementation of `%s` where the `%s(...)` is: a `%s { \
+             ... }`, or a handler for `%s`"
+            dep handler dep dep )
   | Taken_elsewhere { handler; deps; other } ->
       ( [
           sprintf

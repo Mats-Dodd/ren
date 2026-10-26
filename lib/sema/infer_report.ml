@@ -248,11 +248,21 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
          wanted, at the top or inside the types (`Option<Rates>`): one of
          its own somewhere it wasn't known what's wanted
          (Infer_coerce.as_one), or another one *)
+      let is_handler p =
+        match Hashtbl.find_opt env.types p with
+        | Some { body = Handler deps; _ } -> Some deps
+        | _ -> None
+      in
+      (* the handler, its dependencies, the one wanted or found, and
+         whether the handler is what's here: it can be what's wanted, given
+         first where an implementation is given now, `if c then
+         counting_rates(3) else Clock.frozen(t)` *)
       let rec handler_pair f x =
         match (repr f, repr x) with
-        | TCon (h, _), TCon (d, [ TUses _ ]) when h <> d -> (
-            match Hashtbl.find_opt env.types h with
-            | Some { body = Handler deps; _ } -> Some (h, deps, d)
+        | TCon (a, fs), TCon (b, [ TUses _ ]) when a <> b -> (
+            match (is_handler a, is_handler b, fs) with
+            | Some deps, _, _ -> Some (a, deps, b, true)
+            | None, Some deps, [ TUses _ ] -> Some (b, deps, a, false)
             | _ -> None)
         | TCon (p, fs), TCon (q, xs)
           when p = q && List.length fs = List.length xs ->
@@ -266,13 +276,13 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
       in
       let handler =
         match handler_pair found expected with
-        | Some (h, deps, d) ->
+        | Some (h, deps, d, here) ->
             let handler = type_name env h
             and deps' = List.map (type_name env) deps
             and dep = type_name env d in
             if List.mem d deps then
               [ Taken_as_one { handler; deps = deps'; dep } ]
-            else [ Other_handler { handler; deps = deps'; dep } ]
+            else [ Other_handler { handler; deps = deps'; dep; here } ]
         | None -> []
       in
       report env

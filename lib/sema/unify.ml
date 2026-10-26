@@ -48,12 +48,45 @@ and occurs_row ?(ty = -1) id level r =
       List.iter (occurs ty level) label.payload;
       occurs_row ~ty id level rest
 
+(* A handler of several dependencies given to a variable before what's
+   wanted is known (Infer_coerce.give) makes the variable one of [allowed]:
+   the handler's own type, which it is if nothing else says, or one of its
+   dependencies', which it's taken as. Anything else is a mismatch where
+   it's said, not later at the handler, so the message is about what said
+   it: `let n: Int = h` is "expected `Int`, found `counting_rates`". *)
+let watch st t allowed =
+  match repr t with
+  | TVar { contents = Unbound (id, _) } ->
+      let before = Option.value ~default:[] (Hashtbl.find_opt st.watched id) in
+      Hashtbl.replace st.watched id (List.sort_uniq compare (allowed @ before))
+  | _ -> ()
+
+(* Whether [t] is a variable [watch] was given. *)
+let watched st t =
+  match repr t with
+  | TVar { contents = Unbound (id, _) } -> Hashtbl.mem st.watched id
+  | _ -> false
+
+(* Before binding variable [id] to [t]: fail if [id] is watched and [t]
+   is none of what it can be. Another variable can be any of it, so it's
+   watched for all of that too. *)
+let check_watch st id t =
+  match Hashtbl.find_opt st.watched id with
+  | None -> ()
+  | Some allowed -> (
+      match t with
+      | TVar _ -> watch st t allowed
+      | TCon (p, _) when List.mem p allowed -> ()
+      | TError -> ()
+      | _ -> raise Mismatch)
+
 let rec unify st a b =
   match (repr a, repr b) with
   | TVar r1, TVar r2 when r1 == r2 -> ()
   | TVar ({ contents = Unbound (id, l) } as r), t
   | t, TVar ({ contents = Unbound (id, l) } as r) ->
       occurs id l t;
+      check_watch st id t;
       r := Link t
   (* code with an error, already reported, fits anywhere; a variable unified
      with it becomes an error too, so the mistake isn't reported again *)
@@ -204,9 +237,15 @@ let originals = { ty = Fun.id; row = Fun.id }
    which then can't fail. If it failed, it says how, and nothing but the
    copies changed: [c] gives them back, as far as it got, for a message.
    [{ st with level = st.level }] is a new record with the same fields,
-   whose counters change without changing [st]'s. *)
+   whose counters change without changing [st]'s; its [watched] is a copy
+   too, if it has anything in it, since unifying two variables can add to
+   it. *)
 let atomically st c f =
-  match f { st with level = st.level } c with
+  let watched =
+    if Hashtbl.length st.watched = 0 then st.watched
+    else Hashtbl.copy st.watched
+  in
+  match f { st with level = st.level; watched } c with
   | () ->
       f st originals;
       Ok ()

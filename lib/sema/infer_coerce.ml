@@ -150,10 +150,13 @@ let coerce env k =
                       other = type_name env other;
                     };
                 ]
-          | _ -> ())
+          | _ ->
+              (* another handler given to the variable too, which the
+                 variable's own coercion, decided first, reported *)
+              ())
       | Some _, _ ->
-          (* the handler couldn't be what the variable is, which its own
-             coercion, decided first, reported *)
+          (* the variable became what no handler is, which was reported
+             where that was said (Unify.watch) *)
           ())
 
 (* [e], of type [t], is given where a value of type [expected] is wanted,
@@ -163,6 +166,13 @@ let coerce env k =
 let give env cx why (e : expr) t expected =
   match reveal env.st expected with
   | TVar _ when several env t ->
+      (match repr t with
+      | TCon (h, _) -> (
+          match Hashtbl.find_opt env.types h with
+          | Some { body = Handler deps; _ } ->
+              Unify.watch env.st expected (h :: deps)
+          | _ -> ())
+      | _ -> ());
       defer env
         (Coerce
            {
