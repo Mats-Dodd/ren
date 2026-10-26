@@ -10,7 +10,10 @@ independent review. R3's work is all in, but its last review still found
 one blocking issue after the two fix rounds the plan allows, so, as the
 plan says, R4 wasn't started. The owner then asked for that issue to be
 fixed and the stage to go on: it's fixed now (`ad47c20`..`4d968ac`, see
-R3), with three of R3's minor issues, and R3 waits for its review again. The branch is green: `dune build` and
+R3), with three of R3's minor issues. R3's review of that found two more
+blocking issues, a slowdown `4d968ac` brought back and messages that
+blamed a handler falsely; they're fixed too (`435e869`..`11cbbe0`), and
+R3 waits for its review again. The branch is green: `dune build` and
 `dune runtest` pass at every commit, run as a user that isn't root (see
 "For whoever runs the tests", below).
 
@@ -19,7 +22,7 @@ R3), with three of R3's minor issues, and R3 waits for its review again. The bra
 | R0, foundations and safety nets | `849e97f`..`dbf55cd` (19) | passed after two fix rounds |
 | R1, restructure with no change in behaviour | `86ccbb1`..`9637c56` (34) | passed first time |
 | R2, typed Core | `0e1d896`..`6e8ca0b` (16) | passed first time |
-| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then `ad47c20`..`4d968ac` (5) | one blocking issue left after two fix rounds, **fixed since**, to be reviewed again |
+| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then `ad47c20`..`4d968ac` (5), then `435e869`..`11cbbe0` (3) | one blocking issue left after two fix rounds, **fixed since**; its review found two more, fixed; to be reviewed again |
 | R4, requirements and lambda sets | none | not started |
 
 `STAGE-10-0-PLAN.md` is kept, since the stage isn't finished: it's what
@@ -273,14 +276,22 @@ minor ones, `ad47c20`..`4d968ac`, 5 commits.
   no longer holds `pick`, which B3 accepts, and the "an `if` takes a
   handler of several as one in either branch" test covers; its two errors
   are three lines higher.
+- `435e869`: "an `if` takes a handler of several as one in either
+  branch": for `if true then counting_rates(3) else Clock.frozen(...)`
+  the `else` branch is blamed, as at `6e8ca0b`, since it's met second,
+  and keeps the note on what the handler implements, with help that says
+  to change the `counting_rates(...)`. The error for the branches the
+  other way round is unchanged.
 
 **Behaviour that changed**, besides the bugs:
 
 - B5's closing is broader than the bug's example: `fn mk() = Err(A)` used
   where a `Result<Int, ! A | B>` is wanted is now rejected.
-- Some mismatches blame another place: `same(counting_rates(2), 3)` blames
-  the handler, and an `if` whose `then` is a handler of several blames the
-  `then` branch.
+- Until `435e869`, a mismatch with a handler of several given where
+  what's wanted wasn't known blamed the handler, met first, with a message
+  about the other side that wasn't true (see below). Now it blames what's
+  met second again, as at `6e8ca0b`: `same(counting_rates(2), 3)` blames
+  the `3`.
 
 **Issues still open.**
 
@@ -316,7 +327,9 @@ minor ones, `ad47c20`..`4d968ac`, 5 commits.
 - Fixed since the stop (`73a710d`): the worklist was quadratic, and so
   was finding where a set's errors came from at every call, though only
   a message about a tag of two shapes needs it. 12,000 `try f(i)` calls
-  in one group took 8.4s to check, against 0.4s at `6e8ca0b`; now 0.4s.
+  in one group took 8.4s to check, against 0.4s at `6e8ca0b`; `73a710d`
+  made it 0.4s again, but `4d968ac` brought the slowdown back, which the
+  report said nothing of, and `51c9950` fixed it again (below).
   The worklist looks for what's woken once a round, not after every
   item, rather than watching row tails by variable: it's simpler, and the
   rounds go through what's awake in the order it was met, as before. A
@@ -330,6 +343,38 @@ minor ones, `ad47c20`..`4d968ac`, 5 commits.
   payloads again.
 - Fixed since the stop (`0ce6468`): "where nothing says which, a handler
   of several is its own" no longer holds `pick`.
+- **Fixed since R3's review after the stop (`51c9950`), was blocking:
+  `4d968ac` made every argument look through the group's constraints.**
+  `taken_as` looked for a handler given to the argument's type for
+  nearly every argument, which goes through the group's constraints, so
+  a group of calls checked in time quadratic in them: 24,000 `try f(i)`
+  lines took 18s, against 0.6s at `6e8ca0b`. Now only an argument whose
+  type is a variable a handler was given to, or another dependency than
+  the one wanted, looks, and a variable a handler was given to is known
+  at once (`Unify.watch`, below). The 24,000 lines take 0.7s, and 12,000
+  `a + f2(i)` 0.3s, as at `6e8ca0b`. test_infer.ml, "a group of many calls
+  checks in time linear in them", checks 36,000 calls in under 10s of
+  processor time; they take about 1s now, and 45s at `4d968ac`.
+- **Fixed since R3's review after the stop (`435e869`), was blocking: a
+  later mismatch blamed a handler of several with a false message.** A
+  handler given where what's wanted wasn't known yet waits for the
+  solver, so when `b + 1` or `let n: Int = h` decided the variable first,
+  the handler's coercion was what failed: "this element is a
+  `counting_rates`, but the others are an `Int`" for an array of one, and
+  the number of errors depended on the order of the statements. It dated
+  from the first fix round. Now the variable a handler is given to is
+  watched (`Unify.watch`): it can become only the handler or one of its
+  dependencies, and anything else is a mismatch where it's said, which is
+  then reported as at `6e8ca0b`. Every repro gives `6e8ca0b`'s output and
+  is a test (test_deps.ml, "a handler of several, then said to be
+  something else").
+- Fixed since R3's review after the stop (`11cbbe0`): each `with` the
+  solver installed picked the copies out of all the group's constraints
+  again and recounted its shared rows, so 12,000 `with`s took 34s,
+  against 6.2s at `6e8ca0b`. Now 4.3s. Deciding the copies before each
+  `with` still goes through all of them, so it's still quadratic, as it
+  was at `6e8ca0b`; deciding only the copies a `with` can wake would fix
+  it.
 - A mismatch between two different handlers of several suggests writing a
   `counting_rates { ... }`, a type that can't be written. It predates R3.
 
