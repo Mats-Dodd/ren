@@ -38,6 +38,11 @@ open Ast
 open Ast.Resolved
 module C = Core
 
+(* Sets of binder ids. [Set.Make] is a functor: it makes a module of sets
+   whose elements are compared with [Int.compare], so looking one up takes
+   a few steps, not a walk of every element. *)
+module Ids = Set.Make (Int)
+
 (* The type checker and mut.ml rule these out, so reaching one is a
    compiler bug. *)
 let bug what = failwith ("bug: lowering found " ^ what)
@@ -343,9 +348,9 @@ and expr_of cx (e : expr) : C.expr =
       cx.ev <- ev;
       let body = expr cx body in
       cx.ev <- outer;
-      let own = List.map (fun (p : C.param) -> p.var.id) params in
+      let own = Ids.of_list (List.map (fun (p : C.param) -> p.var.id) params) in
       let captures =
-        List.filter (fun (v : C.var) -> not (List.mem v.id own)) (free body)
+        List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
       in
       here (Lambda { params; ev; captures; body })
   | Block (stmts, last) -> block cx stmts last
@@ -495,11 +500,11 @@ and arm_impl cx cells (a : handler_arm) =
             List.exists (fun (w : C.var) -> w.id = v.id) captures)
           cells
       in
-      let changed = assigned body in
+      let changed = assigned Ids.empty body in
       let writes =
         List.filter_map
           (fun ((v : C.var), (c : C.var)) ->
-            if List.mem v.id changed then
+            if Ids.mem v.id changed then
               Some
                 (mk (Prim (Set_cell, [ local c loc; local v loc ])) Ty.unit loc)
             else None)
@@ -522,24 +527,27 @@ and arm_impl cx cells (a : handler_arm) =
              used)
           body
       in
-      let own = List.map (fun (p : C.param) -> p.var.id) params in
+      let own = Ids.of_list (List.map (fun (p : C.param) -> p.var.id) params) in
       let captures =
-        List.filter (fun (v : C.var) -> not (List.mem v.id own)) (free body)
+        List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
       in
       { lam with kind = Lambda { params; ev; captures; body } }
   | _ -> bug "a handler's arm that isn't a lambda"
 
-(* The locals [e] changes: those it assigns to, and those it passes to a
-   call with `&`, which the call writes back to. *)
-and assigned (e : C.expr) =
-  let own =
+(* The ids of the locals [e] changes, added to [acc]: those it assigns to,
+   and those it passes to a call with `&`, which the call writes back to. *)
+and assigned acc (e : C.expr) =
+  let acc =
     match e.kind with
-    | Assign (v, _) -> [ v.id ]
+    | Assign (v, _) -> Ids.add v.id acc
     | Call (_, args, _) ->
-        List.filter_map (function C.Ref v -> Some v.id | Value _ -> None) args
-    | _ -> []
+        List.fold_left
+          (fun acc -> function
+            | C.Ref (v : C.var) -> Ids.add v.id acc | Value _ -> acc)
+          acc args
+    | _ -> acc
   in
-  own @ List.concat_map assigned (C.children e)
+  List.fold_left assigned acc (C.children e)
 
 and arm cx (a : arm) : C.arm =
   let pat = pattern cx a.arm_pat in
@@ -788,9 +796,9 @@ and pattern cx (p : pattern) : C.pattern =
    function has its own id, so that's every local used, minus every local
    bound. *)
 and free (e : C.expr) =
-  let used = ref [] and bound = ref [] in
+  let used = ref [] and bound = ref Ids.empty in
   let use (v : C.var) = used := v :: !used in
-  let bind (v : C.var) = bound := v.id :: !bound in
+  let bind (v : C.var) = bound := Ids.add v.id !bound in
   let rec go (e : C.expr) =
     match e.kind with
     | Int _ | Bool _ | Str _ | Unit | Global _ | Global_value _ | Intrinsic _ ->
@@ -855,7 +863,7 @@ and free (e : C.expr) =
     | PWild | PInt _ | PBool _ -> ()
   in
   go e;
-  List.filter (fun (v : C.var) -> not (List.mem v.id !bound)) !used
+  List.filter (fun (v : C.var) -> not (Ids.mem v.id !bound)) !used
   |> List.sort_uniq (fun (a : C.var) (b : C.var) -> compare a.id b.id)
 
 (* ---- top-level functions ---- *)
