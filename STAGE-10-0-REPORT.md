@@ -343,8 +343,10 @@ decided it should be fixed, `4037992`.
   tags no call fails with. The owner decided it should be fixed, and it's
   an error now, as the same `Err`s written in place were already. A tag
   the solver puts in a set of its own carries where it was written
-  (`Types.label`'s `written`); instantiation and unification keep it,
-  inclusion drops it, and a kept set holding such a tag that none of the
+  (`Types.label`'s `written`); instantiation keeps it, inclusion drops
+  it, unification joins two labels' marks, so a tag is marked only if
+  every label it's been unified with was, and a kept set holding such a
+  tag that none of the
   inclusions into it brought in is reported (`solve.ml`,
   `written_kept`). A declared `Result`'s tags aren't marked, so
   `worth_retrying(attempt busy())` is still accepted. Interfaces needn't
@@ -353,9 +355,12 @@ decided it should be fixed, `4037992`.
   which instantiation follows. compiler.md's B5 entry says how, and
   errors.md says the rule; tests: test_errors.ml, "a kept set doesn't
   take tags written in an earlier group", "... in another module", and
-  "a kept set takes a declared Result's tags". As before, where a
-  declared `Result` is met first, `h(if c then mk2(c) else attempt g())`,
-  the kept set takes its tags from that.
+  "a kept set takes a declared Result's tags". A kept set equal both to
+  a written set and to a declared `Result` takes the tags, whichever it
+  meets first: R3's fourth review found that at first it depended on
+  that order, since unification kept one side's labels, and the marks
+  are joined now (test: "a kept set equal to a declared Result too takes
+  its tags").
 - Fixed since the stop (`73a710d`): the worklist was quadratic, and so
   was finding where a set's errors came from at every call, though only
   a message about a tag of two shapes needs it. 12,000 `try f(i)` calls

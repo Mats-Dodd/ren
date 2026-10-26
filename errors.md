@@ -179,13 +179,15 @@ with `Right`, as it would be with the `Err`s written in place. A
 declared `Result` is different: its type says what it can hold, more
 than any call fails with if it likes, so what an `attempt` keeps can be
 one, as in `worth_retrying(attempt busy())` for a `fn
-worth_retrying(r: Result<Int, ! NotFound(Int) | Busy>)`. Only a tag can go inside `Err`, so an
-error is never a value outside a `Result`. A name there is always a tag,
-as in a pattern, even where a type in scope has a constructor of that
-name. `try` passes on what such a `Result` holds as it does any
-`Result`'s, so `let r = Err(Gone(1))` then `try r` fails with `Gone(1)`;
-`fail` is the way to fail with an error written in place, and `try
-Err(X)`, written directly, is an error whose help says `fail X`.
+worth_retrying(r: Result<Int, ! NotFound(Int) | Busy>)`, and so can one
+equal to both a declared `Result` and one made with `Err`. Only a tag
+can go inside `Err`, so an error is never a value outside a `Result`. A
+name there is always a tag, as in a pattern, even where a type in scope
+has a constructor of that name. `try` passes on what such a `Result`
+holds as it does any `Result`'s, so `let r = Err(Gone(1))` then `try
+r` fails with `Gone(1)`; `fail` is the way to fail with an error written
+in place, and `try Err(X)`, written directly, is an error whose help
+says `fail X`.
 
 It's shorthand for `match f()` with `v => Ok(v)` and `fail e => Err(e)`, but
 that `match` can't be written: a `fail` pattern destructures a payload and

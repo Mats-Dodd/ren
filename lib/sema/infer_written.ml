@@ -18,7 +18,7 @@ let error_labels env ~tvars (es : Resolved.errors) =
           List.map
             (of_ty ~vars:(List.nth tvars) ~tails:(fun _ -> REmpty))
             l.payload;
-        written = None;
+        written = unmarked ();
       })
     (Iface.of_errors ~sets:env.sets es)
 

@@ -99,7 +99,11 @@ let value_tag env ~kept t =
       (* marked as written, so a kept set it meets in a later group is
          known to have it from here (see [written_kept]) *)
       let l =
-        { name = t.ttag.name; payload = t.tpayload; written = Some t.ttag.loc }
+        {
+          name = t.ttag.name;
+          payload = t.tpayload;
+          written = ref (Mark (Some t.ttag.loc));
+        }
       in
       (* a named row can't learn a tag: it's checked with the patterns,
          and isn't one of the errors *)
@@ -319,14 +323,15 @@ let kept (k, params, _) =
    set of them from an earlier group is a type like any other by then, and
    meeting it gave the kept set its tags: those are marked as written
    ([Types.label]), so the ones none of its calls fail with are reported
-   here. A declared `Result`'s tags aren't marked, so a kept set can still
-   take those. [into] are the group's inclusions, by which the calls and
+   here. A declared `Result`'s tags aren't marked, and a tag unified with
+   one isn't either ([Types.join_marks]), so a kept set can still take
+   those, whichever it met first. [into] are the group's inclusions, by which the calls and
    `fail`s add what they fail with. A `match`'s set, which no value holds,
    has no [at]. *)
 let written_kept env ~into (k, _, at) =
   let labels = fst (row_parts k) in
   match at with
-  | Some at when List.exists (fun (l : label) -> l.written <> None) labels -> (
+  | Some at when List.exists (fun l -> written_at l <> None) labels -> (
       (* what the calls fail with, looked for only here, since it goes
          through all the group's inclusions: those into this very row,
          the one the `attempt` made ([==]), not another that's equal *)
@@ -343,7 +348,7 @@ let written_kept env ~into (k, _, at) =
       match
         List.filter_map
           (fun (l : label) ->
-            match l.written with
+            match written_at l with
             | Some w when not (List.mem l.name fails) -> Some (l.name, w)
             | _ -> None)
           labels

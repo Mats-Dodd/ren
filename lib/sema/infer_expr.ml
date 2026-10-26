@@ -340,7 +340,7 @@ and synth env cx (e : expr) : ty =
          a call's do, so the solver knows what an `attempt` around it
          fails with; a field's name in the payload only documents it *)
       let payload = List.map (fun (_, a) -> infer env cx a) args in
-      let l = { name = tag.name; payload; written = None } in
+      let l = { name = tag.name; payload; written = unmarked () } in
       include_errors env cx ~loc:e.loc ~here:(This "fail")
         ~sources:(fun () -> sources_of cx)
         ~fix:rename_fail (extend [ l ] REmpty) cx.handler;

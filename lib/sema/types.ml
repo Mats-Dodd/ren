@@ -71,13 +71,19 @@ and rvar = RUnbound of int * int  (** id, level *) | RLink of row
 and label = {
   name : string;
   payload : ty list;
-  written : Loc.t option;
+  written : mark;
       (** where the tag was written inside `Err(...)`, if it's in a set of its
           own, made of tags written so (solve.ml, [value_tag]). Such a set holds
           exactly those, so what an `attempt` keeps can't take the tag from it
           (B5). It's the same label either way: only the solver's check of kept
           sets reads it, and canonical form drops it *)
 }
+
+(* Two labels unified are one tag, so they share one mark, the way a
+   variable linked to another shares its type ([join_marks]): a mark is
+   where it was written, or a link to the mark it was joined with. *)
+and mark = mark_cell ref
+and mark_cell = Mark of Loc.t option | Mark_link of mark
 
 let generic_level = max_int
 
@@ -153,7 +159,11 @@ let str = TCon (Path.prelude "Str", [])
 let array t = TCon (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let param_tys ps = List.map (fun p -> p.ty) ps
-let dep name = { name; payload = []; written = None }
+
+(* A label's mark when it isn't written inside `Err`: one of its own,
+   since a mark is changed when it's joined with another. *)
+let unmarked () = ref (Mark None)
+let dep name = { name; payload = []; written = unmarked () }
 
 (* Follow links to the type a variable currently stands for, shortening the
    chain as it goes so later lookups are quick. *)
@@ -215,7 +225,33 @@ let rec close_row r =
 
 (* [l] as a set gets it by inclusion, from what's failed with: not
    written, wherever it was before. *)
-let unwritten l = { l with written = None }
+let unwritten l = { l with written = unmarked () }
+
+(* The mark [m] stands for, at the end of its links. *)
+let rec mark_root m = match !m with Mark _ -> m | Mark_link m -> mark_root m
+
+(* Where [l] was written inside `Err`, if every label it's been unified
+   with was too. *)
+let written_at (l : label) =
+  match !(mark_root l.written) with Mark w -> w | Mark_link _ -> assert false
+
+(* Join the marks of two labels just unified. A tag that's anywhere
+   other than in a set of tags written in `Err` (declared, or failed
+   with) is unmarked, so a kept set can take it, as it could if the tags
+   were written in place; of two places it was written, the first in the
+   file is kept. Joined, not just set on the two, so a label unified with
+   one of them earlier sees it too, whatever order they meet in (R3). *)
+let join_marks a b =
+  let a = mark_root a and b = mark_root b in
+  if a != b then
+    match (!a, !b) with
+    | Mark (Some x), Mark (Some y) ->
+        a := Mark (Some (min x y));
+        b := Mark_link a
+    | Mark _, Mark _ ->
+        a := Mark None;
+        b := Mark_link a
+    | _ -> assert false
 
 (* A row of [labels], ending in [tail]. *)
 let extend labels tail =
@@ -362,7 +398,15 @@ let instantiate st t =
             v)
     | (REmpty | RVar _ | RSkol _) as r -> r
     | RExtend (l, rest) ->
-        RExtend ({ l with payload = List.map go l.payload }, row rest)
+        (* a mark of its own, so what the copy is unified with doesn't
+           change the scheme's *)
+        RExtend
+          ( {
+              l with
+              payload = List.map go l.payload;
+              written = ref (Mark (written_at l));
+            },
+            row rest )
   in
   let copy = go t in
   (* each generic variable, in order, with the fresh one [go] made for
@@ -558,7 +602,7 @@ and of_row ~vars ~tails (r : Ty.row) =
          {
            name = l.name;
            payload = List.map (of_ty ~vars ~tails) l.payload;
-           written = None;
+           written = unmarked ();
          })
        r.labels)
     tail

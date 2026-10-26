@@ -543,20 +543,30 @@ Where the work forced a change to the plan above:
   written inside `Err`, if the solver put it in a set of its own
   (`Types.label`'s `written`, set in `value_tag`). Instantiating a
   scheme copies labels, so the mark goes wherever the set does, through
-  a function that passes the `Result` on or a generic one; unification
-  keeps the labels it's given, so a kept set that meets the set holds
-  marked ones; and a label added by inclusion, what a call or a `fail`
-  brings in, is unmarked (`Types.unwritten`). Once the group's
-  inclusions are done, a kept set with a marked tag that none of the
-  inclusions into it brought in has taken it from a written set, and
-  that's an error (`solve.ml`, `written_kept`): `fn kept(c) = if c then
-  mk2(c) else attempt g()`, where `g` fails only with `Left(Int)`, is
-  rejected, as the same tags written in the same group, `if c then (if
-  c then Err(Left(1)) else Err(Right)) else attempt g()`, already were.
-  It's an error rather than a set that doesn't gain the tag, which
-  can't be: both branches are one type. The message points at the `attempt` and where `Right` is
-  written, and suggests declaring the type of the function that makes
-  it, which makes it a declared `Result`. Only that check reads the
+  a function that passes the `Result` on or a generic one; and a label
+  added by inclusion, what a call or a `fail` brings in, is unmarked
+  (`Types.unwritten`), as a declared `Result`'s are. Two labels unified
+  are one tag, so they share one mark, joined as a variable is linked
+  (`Types.join_marks`): the tag is written only if every label it's
+  been unified with was. So whether a kept set may hold it doesn't
+  depend on the order the `Result`s meet in, or which one the kept set
+  happens to hold: one that's equal both to a written set and to a
+  declared `Result`, directly or through other `Result`s, takes the
+  tag, as it would with the `Err`s written in place. Once the group's
+  inclusions are done, a kept set with a tag that's still marked and
+  that none of the inclusions into it brought in has taken it from a
+  written set, and that's an error (`solve.ml`, `written_kept`): `fn
+  kept(c) = if c then mk2(c) else attempt g()`, where `g` fails only
+  with `Left(Int)`, is rejected, as the same tags written in the same
+  group, `if c then (if c then Err(Left(1)) else Err(Right)) else
+  attempt g()`, already were. It's an error rather than a set that
+  doesn't gain the tag, which can't be: both branches are one type. The
+  message points at the `attempt` and where `Right` is written, and
+  suggests declaring the type of the function that makes it, which
+  makes it a declared `Result`. Only the sets an `attempt` keeps are
+  checked: what a `match` with `fail` arms handles, or passes on, is
+  only ever what code inside it fails with, never a `Result`'s type, so
+  it can't meet a written set. Only that check reads the
   mark: canonical form drops it, so Core, Core Lint and `ren types` are
   as they were. Interfaces don't need it: a public function writes its
   type in full, so a set of tags written in `Err` never leaves its
@@ -565,8 +575,8 @@ Where the work forced a change to the plan above:
   that module's generic functions, which instantiation follows
   (test_errors.ml, "a kept set doesn't take tags written in another
   module"). A `fail` now adds its tag by inclusion, as a call does,
-  only so the check knows what it brings in. As before, where a declared
-  `Result` is met first, `h(if c then mk2(c) else attempt g())` for an
-  `h` that takes a `Result<Int, ! Left(Int) | Right>`, the kept set
-  takes its tags from that, as it would from tags written in its own
-  group.
+  only so the check knows what it brings in. So `h(if c then mk2(c)
+  else attempt g())`, for an `h` that takes a `Result<Int, ! Left(Int) |
+  Right>`, is accepted, and so is giving `h` that `if` through a `let`,
+  before or after the kept set meets `mk2`'s (test_errors.ml, "a kept
+  set equal to a declared Result too takes its tags").

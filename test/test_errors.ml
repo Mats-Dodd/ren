@@ -1087,6 +1087,43 @@ pub fn made(c: Bool) -> Result<Int, ! Left(Int) | Right> =
     ()
     |}]
 
+let%expect_test "a kept set equal to a declared Result too takes its tags (B5)" =
+  (* the `attempt`'s set is equal both to [mk2]'s, of tags written in
+     `Err`, and to [h]'s declared one, so it can hold `Right`, as it could
+     with the `Err`s written in place: whichever it meets first, and
+     whether it meets the declared one itself or through another `Result`
+     that has *)
+  run
+    {|
+fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+fn g() -> Int ! Left(Int) = fail Left(2)
+fn h(r: Result<Int, ! Left(Int) | Right>) -> Bool =
+  match r
+    Err(Right) => true
+    _ => false
+fn declared_last(c: Bool) =
+  let r = if c then mk2(c) else attempt g()
+  h(r)
+fn declared_first(c: Bool) =
+  let k = attempt g()
+  let x = h(k)
+  let r = if c then k else mk2(c)
+  x
+fn through_another(c: Bool) =
+  let k = attempt g()
+  let a = mk2(c)
+  let b = mk2(c)
+  let r = if c then a else b
+  let s = if c then k else a
+  h(b)
+fn main() =
+  print([declared_last(false), declared_first(false), through_another(false)])
+|};
+  [%expect {|
+    [false, false, true]
+    ()
+    |}]
+
 let%expect_test "a tag inside Err has to be one the Result can hold" =
   (* compared with what an `attempt` kept, or given where a declared
      `Result` is wanted, it's checked as a tag in a pattern is *)

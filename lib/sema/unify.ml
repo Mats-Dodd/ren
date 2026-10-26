@@ -199,7 +199,8 @@ and strip st row (label : label) =
 and same_shape st (l : label) (label : label) =
   try
     if List.length l.payload <> List.length label.payload then raise Mismatch;
-    List.iter2 (unify st) l.payload label.payload
+    List.iter2 (unify st) l.payload label.payload;
+    join_marks l.written label.written
   with Mismatch | Infinite -> raise (Two_shapes label.name)
 
 (* ---- trying a unification first ----
@@ -250,7 +251,15 @@ let copier () =
             c)
     | RVar { contents = RLink _ } -> assert false
     | RExtend (l, rest) ->
-        RExtend ({ l with payload = List.map ty l.payload }, row rest)
+        (* a mark of its own too, so unifying the copies leaves the
+           originals' marks as they were *)
+        RExtend
+          ( {
+              l with
+              payload = List.map ty l.payload;
+              written = ref (Mark (written_at l));
+            },
+            row rest )
     | (REmpty | RSkol _) as r -> r
   in
   { ty; row }
