@@ -117,8 +117,7 @@ let rec reveal env (t : Ty.ty) : Ty.ty =
   match t with
   | Con (p, args) -> (
       match Hashtbl.find_opt env.types p with
-      | Some { Iface.body = Opaque (Some rep); _ } ->
-          reveal env (subst args rep)
+      | Some { Iface.body = Opaque (Rep rep); _ } -> reveal env (subst args rep)
       | _ -> t)
   | Fun _ | Var _ | Errors _ | Uses _ | Error -> t
 
@@ -579,13 +578,14 @@ let rec has_eq env seen (t : Ty.ty) =
          | None -> true
          | Some td -> (
              match td.body with
-             | Builtin | Errors _ | Opaque None -> true
+             | Builtin | Errors _ -> true
+             | Opaque (Hidden { eq }) -> eq
              | Record fs -> List.for_all field fs
              | Sum cs ->
                  List.for_all
                    (fun (c : Iface.ctor) -> List.for_all field c.cfields)
                    cs
-             | Opaque (Some rep) -> has_eq env (p :: seen) rep
+             | Opaque (Rep rep) -> has_eq env (p :: seen) rep
              | Dep _ | Handler _ -> false))
 
 (* The requirement a dictionary (core.ml, [dict]) is for, and the type, in

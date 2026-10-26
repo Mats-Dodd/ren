@@ -76,7 +76,8 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
     let s = Path.Map.find path inferred.schemes in
     (s.reqs, s.row_reqs)
   in
-  let iface = Iface.of_module ~home ~sets ~needs r.prog in
+  let has_eq p = List.mem p inferred.opaque_eq in
+  let iface = Iface.of_module ~home ~sets ~needs ~has_eq r.prog in
   (* A public function's body was checked against its signature, so the
      type inference found for it is the one its interface states, with
      what it needs of its type parameters. Other modules see only the

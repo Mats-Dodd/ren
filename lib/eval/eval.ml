@@ -40,7 +40,7 @@
    values as the type's declaration says, and wherever that has the
    function's type variable, through the dictionary the function was given
    for it. Inference makes sure nothing compared has a function in it, so
-   none is ever reached, with one exception ([opaque_function]). *)
+   none is ever reached. *)
 
 open Core
 open Value
@@ -215,39 +215,30 @@ let rec type_of env (d : desc) : Ty.ty =
 
 (* ---- equality ---- *)
 
-(* `==` reached a function. Inference makes sure nothing it compares has
-   one in it, with one exception: an opaque type of another module, which
-   it takes to have `==` since its interface hides what it's represented
-   as (compiler.md, "Deviations"). So that's the one way here. *)
-let opaque_function loc =
-  panic loc
-    "these can't be compared: they're of an opaque type from another module \
-     that's represented as a function, or holds one, and a function has no \
-     `==`. Compare something else about them instead"
-
 (* [a] and [b] compared by their shape alone, where nothing says what
    type they are: a type variable inference left undecided, or one of a
    function the runtime calls from outside, which nothing gave a
-   dictionary for ([from_outside]). Nothing but an opaque type's value can
-   hold a function here either. *)
-let rec by_shape loc a b =
+   dictionary for ([from_outside]). Inference made sure nothing compared
+   holds a function, an opaque type's value or an error's payload
+   included. *)
+let rec by_shape a b =
   match (a, b) with
   | VCon x, VCon y ->
       x.ty = y.ty && x.name = y.name
       && List.length x.args = List.length y.args
-      && List.for_all2 (by_shape loc) x.args y.args
+      && List.for_all2 by_shape x.args y.args
   | VTag x, VTag y ->
       x.name = y.name
       && List.length x.args = List.length y.args
-      && List.for_all2 (by_shape loc) x.args y.args
+      && List.for_all2 by_shape x.args y.args
   | VRecord xs, VRecord ys ->
       List.length xs = List.length ys
-      && List.for_all2 (fun (_, x) (_, y) -> by_shape loc x y) xs ys
+      && List.for_all2 (fun (_, x) (_, y) -> by_shape x y) xs ys
   | VArray xs, VArray ys ->
-      Array.length xs = Array.length ys && Array.for_all2 (by_shape loc) xs ys
+      Array.length xs = Array.length ys && Array.for_all2 by_shape xs ys
   | (VInt _ | VBool _ | VStr _ | VBytes _ | VUnit), _ -> a = b
   | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _), _ ->
-      opaque_function loc
+      bug "a comparison of functions"
   | (VCon _ | VTag _ | VRecord _ | VArray _), _ -> false
   | (VType _ | VDict _ | VCell _ | VEvidence _), _ ->
       bug "a comparison of something a program never sees"
@@ -256,13 +247,12 @@ let rec by_shape loc a b =
    structure does (core.ml, [Derived]): a record field by field as its
    declaration says, a constructor's fields, an array's elements and an
    error's payload each as the type it's declared with, and a value of the
-   function's type variable [Var n] through [var n], its dictionary. At
-   [loc], which a panic points at. *)
-let rec derived cx loc var (t : Ty.ty) a b =
-  let at = derived cx loc var in
+   function's type variable [Var n] through [var n], its dictionary. *)
+let rec derived cx var (t : Ty.ty) a b =
+  let at = derived cx var in
   match (t, a, b) with
   | Var n, _, _ -> (
-      match var n with Some eq -> eq loc a b | None -> by_shape loc a b)
+      match var n with Some eq -> eq a b | None -> by_shape a b)
   | _, (VInt _ | VBool _ | VStr _ | VBytes _ | VUnit), _ -> a = b
   | Con (p, [ elem ]), VArray xs, VArray ys when p = Path.prelude "Array" ->
       Array.length xs = Array.length ys && Array.for_all2 (at elem) xs ys
@@ -292,8 +282,8 @@ let rec derived cx loc var (t : Ty.ty) a b =
                 c.cfields
                 (List.combine x.args y.args)
           | _ -> bug "a constructor of the wrong type")
-      | Some (Opaque (Some rep)), _, _ -> at (Shown.subst args rep) a b
-      | _ -> by_shape loc a b)
+      | Some (Opaque (Rep rep)), _, _ -> at (Shown.subst args rep) a b
+      | _ -> by_shape a b)
   | Errors row, VTag x, VTag y -> (
       x.name = y.name
       &&
@@ -309,9 +299,9 @@ let rec derived cx loc var (t : Ty.ty) a b =
             (List.combine x.args y.args)
       | _ ->
           (* a tag the set's tail brought in, which says nothing of it *)
-          by_shape loc a b)
-  | Fun _, _, _ -> opaque_function loc
-  | _ -> by_shape loc a b
+          by_shape a b)
+  | Fun _, _, _ -> bug "a comparison of functions"
+  | _ -> by_shape a b
 
 (* The dictionary the hidden dictionary parameter [v] holds. *)
 let dict_in env (v : var) =
@@ -326,18 +316,14 @@ let dict cx env (d : Core.dict) : Value.dict =
   | Dict_param v -> dict_in env v
   | Derived { dty; from; _ } ->
       let vars = List.map (fun (n, v) -> (n, (dict_in env v).eq)) from in
-      {
-        eq =
-          (fun loc a b ->
-            derived cx loc (fun n -> List.assoc_opt n vars) dty a b);
-      }
+      { eq = (fun a b -> derived cx (fun n -> List.assoc_opt n vars) dty a b) }
 
 (* `eq`'s dictionary for [t], a type the running program knows, which a
    function given nothing else is given: one the runtime calls from
    outside, or a type's own `show` method, which is given the types its
    value's type was given. *)
 let known cx (t : Ty.ty) : Value.dict =
-  { eq = (fun loc a b -> derived cx loc (fun _ -> None) t a b) }
+  { eq = (fun a b -> derived cx (fun _ -> None) t a b) }
 
 (* What a function of [f]'s scheme is given for its requirements, for the
    types [tys] its type variables stand for: each one's dictionary, as
@@ -426,7 +412,7 @@ let rec eval cx env (e : expr) =
   | Prim (((Equal d | Not_equal d) as op), [ a; b ]) ->
       let x = eval cx env a in
       let y = eval cx env b in
-      let same = (dict cx env d).eq e.loc x y in
+      let same = (dict cx env d).eq x y in
       VBool (match op with Not_equal _ -> not same | _ -> same)
   | Prim (op, args) -> prim e.loc op (eval_all cx env args)
   | Let (v, value, body) ->
@@ -514,7 +500,7 @@ let rec eval cx env (e : expr) =
   | Assert_equal (a, b, d, eq) ->
       let x = eval cx env a in
       let y = eval cx env b in
-      if not ((dict cx env eq).eq e.loc x y) then
+      if not ((dict cx env eq).eq x y) then
         raise
           (Assert_failed
              {

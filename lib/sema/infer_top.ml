@@ -529,6 +529,10 @@ type t = {
       (** each function's expressions and patterns, by its path, then node id *)
   in_scope : Path.t list;
       (** the types step 2 of a lookup through a type found, sorted *)
+  opaque_eq : Path.t list;
+      (** the module's opaque types that have `==`, whatever their type
+          arguments, in the order they're declared: what each is represented as
+          has no function in it *)
 }
 
 (* ---- what's installed around `main`, and around a test ---- *)
@@ -813,7 +817,7 @@ let new_env sink ~reachable (r : Resolve.t) =
   List.iter
     (fun (td : Iface.type_decl) ->
       match td.body with
-      | Opaque (Some rep) -> Hashtbl.replace st.reps td.path rep
+      | Opaque (Rep rep) -> Hashtbl.replace st.reps td.path rep
       | _ -> ())
     r.types;
   (* the types step 2 of a lookup through a type looks in: those the
@@ -1364,6 +1368,14 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
     values;
     nodes = Path.Map.of_list nodes;
     in_scope = List.sort compare env.in_scope;
+    opaque_eq =
+      List.filter_map
+        (fun (td : Iface.type_decl) ->
+          match td.body with
+          | Opaque (Rep _) when Infer_reqs.opaque_has_eq env td.path ->
+              Some td.path
+          | _ -> None)
+        r.types;
   }
 
 (* Which method a dot call like `s.size()` calls is found only by checking

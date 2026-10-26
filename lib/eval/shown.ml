@@ -76,11 +76,11 @@ let rec value ~own (types : types) (t : Ty.ty) (v : Value.t) =
                          k.cfields c.args)
                   ^ ")"
               | _ -> Value.show v)
-          | Some (Opaque (Some rep)), _ when how = Inside ->
+          | Some (Opaque (Rep rep)), _ when how = Inside ->
               value (subst args rep) v
-          | Some (Opaque (Some rep)), _ ->
+          | Some (Opaque (Rep rep)), _ ->
               p.name ^ "(" ^ value (subst args rep) v ^ ")"
-          | Some (Opaque None), _ -> p.name ^ "(" ^ Value.show v ^ ")"
+          | Some (Opaque (Hidden _)), _ -> p.name ^ "(" ^ Value.show v ^ ")"
           | _ -> Value.show v))
   | Errors row, VTag { name; args } -> (
       (* an error, through its tag's payload's types in the set *)

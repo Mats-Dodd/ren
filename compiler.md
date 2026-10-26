@@ -721,15 +721,14 @@ Where the work forced a change to the plan above:
   in it has none. An implementation of a dependency, and a handler of
   several, are their operations, which are functions, so they have none
   either, and neither does a type with one in it: comparing two `Clock`s
-  is an error, not a comparison of what's inside. Two things are taken
-  to have `eq` that the plan doesn't decide. An opaque type of another
-  module, whose interface hides what it's represented as, since saying
-  it had none would make `UserId == UserId` an error in every module but
-  its own; one represented as a function still panics when compared,
-  until an interface says what its types have. And a type's type
-  arguments all have to have it, even one the type doesn't hold a value
-  of, `Tag<fn()>` for a `type Tag<T> = opaque Int`, which is what "a
-  type with a function in it" reads as.
+  is an error, not a comparison of what's inside. An opaque type has it
+  if what it's represented as does, in another module too: its
+  interface hides the representation, but says whether it has `eq`
+  (`Iface.Hidden`'s `eq`), which inference worked out in its own module.
+  The plan doesn't decide one thing: a type's type arguments all have to
+  have it, even one the type doesn't hold a value of, `Tag<fn()>` for a
+  `type Tag<T> = opaque Int`, which is what "a type with a function in
+  it" reads as.
 - **R4, requirements on rows.** The plan puts requirements on type
   parameters only. But a function's errors are a row, and a function
   that compares what something it's given fails with, `fn cmp(g) =
@@ -769,15 +768,14 @@ Where the work forced a change to the plan above:
   (shown.ml), and goes through the function's dictionaries where the
   type has its type variables. That's what a backend would generate,
   interpreted.
-- **R4, the one comparison that can still panic.** An opaque type of
-  another module is taken to have `eq` (above), so a value of one
-  represented as a function, or holding one, can still be compared, and
-  the dictionary derived for it meets the function. The interpreter
-  panics there, saying why, which is the one way left for `==` to reach
-  a function (eval.ml, `opaque_function`); every other comparison of a
-  function, a handler or an implementation is refused before the program
-  runs. It goes once an interface says which of its opaque types have
-  `eq`.
+- **R4, no comparison panics.** An earlier fix let two comparisons
+  through to the interpreter, which panicked when the derived dictionary
+  met a function: a value of another module's opaque type represented
+  with a function in it, and a tag holding one that an error row's tail
+  brought in. Both are refused before the program runs now (above), so
+  the interpreter's `==` treats meeting a function as a compiler bug,
+  and a dictionary no longer takes the comparison's location, which was
+  there only for the panic.
 - **R4, printing dictionaries.** `ren core` prints as before. `ren core
   --types` prints what a function needs after its type, `(needs (eq
   T))`, the dictionaries a use passes after its type arguments, `(inst
@@ -794,7 +792,12 @@ Where the work forced a change to the plan above:
   against the interface, as it does its own functions' (test_infer.ml,
   "another module's function needs what it needs"), and a body edit
   changes the interface only when it changes them (test_modules.ml,
-  "editing a body changes the interface only by what it needs").
+  "editing a body changes the interface only by what it needs"). An
+  opaque type in the interface hides what it's represented as, but says
+  whether it has `eq`, which inference works out from the representation
+  (`Iface.of_module`'s `has_eq`), so another module can't compare two
+  values of one represented with a function in it (test_eval.ml, "==
+  can't panic").
 - **R4, a generic method used before it's checked.** A method whose
   signature is written out in full had its declared type before its body
   was checked, so a dot call of it needn't come after it. A generic one

@@ -41,8 +41,8 @@ and lack =
    type arguments aside, which [has] looks into on its own: the field
    that has, if one does. [seen] are the declarations being looked into
    already, so a recursive type is looked into once. An opaque type of
-   another module hides what it's represented as, so it's taken to have
-   `eq` (compiler.md, "Deviations"). *)
+   another module hides what it's represented as, but its interface says
+   whether that has a function in it ([Iface.Hidden]). *)
 let rec decl_lacks env seen p : Infer_msg.no_eq option =
   match Hashtbl.find_opt env.types p with
   | _ when List.mem p seen -> None
@@ -56,13 +56,14 @@ let rec decl_lacks env seen p : Infer_msg.no_eq option =
           (lacks_in env seen f.fty)
       in
       match td.body with
-      | Builtin | Errors _ | Opaque None -> None
+      | Builtin | Errors _ | Opaque (Hidden { eq = true }) -> None
+      | Opaque (Hidden { eq = false }) -> Some (Opaque_hidden (env.names p))
       | Record fs -> List.find_map (field (env.names p)) fs
       | Sum cs ->
           List.find_map
             (fun (c : Iface.ctor) -> List.find_map (field c.cname) c.cfields)
             cs
-      | Opaque (Some rep) -> (
+      | Opaque (Rep rep) -> (
           match lacks_in env seen rep with
           | Some Is_function ->
               (* represented as a function: say which *)
@@ -89,6 +90,10 @@ and lacks_in env seen (t : Ty.ty) : Infer_msg.no_eq option =
       match decl_lacks env seen q with
       | Some w -> Some w
       | None -> List.find_map (lacks_in env seen) args)
+
+(* Whether the module's own opaque type at [p] has `eq`, for its
+   interface, which hides what it's represented as. *)
+let opaque_has_eq env p = decl_lacks env [] p = None
 
 (* Whether [t] has `eq`. An error set's tail, what a function it was
    passed fails with, has it if every tag it stands for does, so it's

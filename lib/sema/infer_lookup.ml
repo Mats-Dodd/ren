@@ -77,7 +77,7 @@ let find_ctor env (c : ctor_ref) ~expected =
   | None -> (
       let c = c.name in
       match known_decl env expected with
-      | Some ({ body = Opaque None; _ } as td) ->
+      | Some ({ body = Opaque (Hidden _); _ } as td) ->
           (* another module's opaque type has no constructors here *)
           report env (opaque_private c.loc td);
           None
@@ -238,12 +238,16 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
       | TError -> TError
       | TCon (p, args) as t -> (
           let td = Hashtbl.find env.types p in
+          (* another module's opaque type, whose fields are hidden *)
+          let hidden =
+            match td.body with Opaque (Hidden _) -> true | _ -> false
+          in
           match (record_fields td, field_of td) with
           | _, Some fd -> found td fd args
           | Some decl, None ->
               report env (no_such_field ~names:env.names f p decl);
               TError
-          | None, None when td.body = Opaque None ->
+          | None, None when hidden ->
               report env (opaque_private f.loc td);
               TError
           | None, None -> (

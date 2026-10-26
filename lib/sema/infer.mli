@@ -78,6 +78,10 @@ type t = {
   in_scope : Path.t list;
       (** the types step 2 of a lookup through a type found (infer_lookup.ml),
           sorted: the import by name of each one is used *)
+  opaque_eq : Path.t list;
+      (** the module's opaque types that have `==` whatever their type
+          arguments, since what each is represented as has no function in it:
+          its interface says so, since it hides the representation *)
 }
 
 val program :

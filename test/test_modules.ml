@@ -1243,8 +1243,9 @@ let%expect_test "an opaque type's interface hides its representation" =
     (fun (td : Ren.Iface.type_decl) ->
       Printf.printf "%s: %s\n" td.path.name
         (match td.body with
-        | Opaque None -> "opaque"
-        | Opaque (Some _) -> "opaque, with its representation"
+        | Opaque (Hidden { eq = true }) -> "opaque"
+        | Opaque (Hidden { eq = false }) -> "opaque, without `==`"
+        | Opaque (Rep _) -> "opaque, with its representation"
         | Record _ -> "a record"
         | Sum _ -> "a sum type"
         | Builtin -> "built in"
@@ -1256,6 +1257,33 @@ let%expect_test "an opaque type's interface hides its representation" =
     UserId: opaque
     Token: opaque
     Switch: opaque
+    |}]
+
+let%expect_test "an opaque type's interface says whether it has ==" =
+  (* the representation is hidden, but another module comparing two needs
+     to know if they'd meet a function *)
+  let src =
+    clean
+      {|
+pub type Id = opaque Int
+pub type F = opaque fn(Int) -> Int
+pub type Box<T> = opaque Array<T>
+pub type Held = opaque Box<F>
+fn main() = 1
+|}
+  in
+  let i = Ren.Driver.interface ~file:"a.ren" src in
+  List.iter
+    (fun (td : Ren.Iface.type_decl) ->
+      match td.body with
+      | Opaque (Hidden { eq }) -> Printf.printf "%s: %b\n" td.path.name eq
+      | _ -> ())
+    i.types;
+  [%expect {|
+    Id: true
+    F: false
+    Box: true
+    Held: false
     |}]
 
 let%expect_test "outside its module, an opaque type can't be looked inside" =

@@ -19,9 +19,7 @@ type body =
   | Builtin  (** built into the compiler, like [Int] *)
   | Record of field list
   | Sum of ctor list
-  | Opaque of Ty.ty option
-      (** an opaque type, [type UserId = opaque Int]: [Some] representation in
-          its own module's view of it, [None] in its interface *)
+  | Opaque of opaque  (** an opaque type, [type UserId = opaque Int] *)
   | Errors of error list
       (** a named error set, [type Refusal = ! Short(by: Money) | Frozen], which
           is no type of values *)
@@ -34,6 +32,11 @@ type body =
           `handler` declaration whose function gives one: a description of an
           implementation of each of these dependencies. Its one argument is what
           it needs (deps.md, "Implementations") *)
+
+(* An opaque type's representation in its own module's view of it, or
+   in its interface, hidden but for whether it has `==`: it hasn't if what
+   it's represented as has a function in it. *)
+and opaque = Rep of Ty.ty | Hidden of { eq : bool }
 
 (* A member of a type (ast.ml): a method, which has `self`, an associated
    function, which doesn't, or an associated value. *)
@@ -136,11 +139,13 @@ val of_handler : home:string -> Ast.Resolved.fn_def -> type_decl option
    out, and every public function's signature. [sets] are the named error
    sets it can see. What a public function or member needs of its type
    parameters isn't declared, so [needs] gives what inference found, by
-   its path, as its scheme's [reqs] and [row_reqs]. *)
+   its path, as its scheme's [reqs] and [row_reqs]; and [has_eq] whether
+   each opaque type has `==`, which its hidden representation decides. *)
 val of_module :
   home:string ->
   sets:sets ->
   needs:(Path.t -> (int * string) list * (int * string) list) ->
+  has_eq:(Path.t -> bool) ->
   Ast.Resolved.program ->
   t
 

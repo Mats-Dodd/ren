@@ -29,11 +29,11 @@ type body =
   | Builtin  (** built into the compiler, like [Int] *)
   | Record of field list
   | Sum of ctor list
-  | Opaque of Ty.ty option
+  | Opaque of opaque
       (** an opaque type, [type UserId = opaque Int]: what it's represented as
           ([Int]), which only its own module sees. That module's view of it has
-          [Some] representation; its interface has [None], so no other module
-          can make one, look inside one or use one as an [Int]. *)
+          the representation; its interface hides it, so no other module can
+          make one, look inside one or use one as an [Int]. *)
   | Errors of error list
       (** a named error set, [type Refusal = ! Short(by: Money) | Frozen], which
           is no type of values *)
@@ -49,6 +49,15 @@ type body =
           (deps.md, "Implementations"). Like an implementation, its one argument
           is what it needs. A handler of one dependency has that dependency's
           type ([handler_type]) *)
+
+(* An opaque type's representation, [Rep], in its own module's view of
+   it, or in its interface, [Hidden]: all another module learns of it is
+   whether it has `==`, which comparing two needs to know (operators.md,
+   "Equality, hashing and `show`"). [eq] is false if what it's
+   represented as has a function in it, whatever its type arguments.
+   [Hidden of { eq : bool }] is an inline record: a constructor whose
+   argument has named fields, matched as [Hidden { eq }]. *)
+and opaque = Rep of Ty.ty | Hidden of { eq : bool }
 
 (* A member of a type (ast.ml): a method, which has `self`,
    an associated function, which doesn't, or an associated value. *)
@@ -351,7 +360,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
                  cloc = c.ctor_name.loc;
                })
              cs)
-    | Opaque t -> Opaque (Some (of_written ~sets t))
+    | Opaque t -> Opaque (Rep (of_written ~sets t))
     | Errors es -> Errors (declared_errors ~sets es)
     | Dep ops -> Dep (List.map field ops)
   in
@@ -432,8 +441,10 @@ let of_handler ~home (f : Ast.Resolved.fn_def) =
    All of it comes from declarations but what a public function or member
    needs of its type parameters, which isn't written (operators.md,
    "Generic code"): [needs] gives what inference found, by the function's
-   path, as its scheme's [reqs] and [row_reqs]. *)
-let of_module ~home ~sets ~needs (prog : Ast.Resolved.program) =
+   path, as its scheme's [reqs] and [row_reqs]. And whether an opaque type
+   has `==` depends on what it's represented as, which the interface
+   hides, so [has_eq] says, by the type's path, as inference found it. *)
+let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
   (* [canonical] keeps a scheme's numbering, and drops what it needs of a
      variable its type hasn't: an associated value's type is its
      function's result, without the rows *)
@@ -456,7 +467,9 @@ let of_module ~home ~sets ~needs (prog : Ast.Resolved.program) =
             td.members;
       }
     in
-    match td.body with Opaque _ -> { td with body = Opaque None } | _ -> td
+    match td.body with
+    | Opaque _ -> { td with body = Opaque (Hidden { eq = has_eq td.path }) }
+    | _ -> td
   in
   {
     home;

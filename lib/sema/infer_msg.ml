@@ -225,7 +225,7 @@ let opaque_private loc (td : Iface.type_decl) =
    writes it. *)
 let representation ~names (td : Iface.type_decl) =
   match td.body with
-  | Opaque (Some rep) ->
+  | Opaque (Rep rep) ->
       let s : Ty.scheme =
         {
           ty = rep;
@@ -281,10 +281,10 @@ let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
         ( sprintf "`%s` is built in, and has no constructors" t,
           Some "its values are written directly, like `1`, `true` or `[1, 2]`"
         )
-    | Opaque None ->
+    | Opaque (Hidden _) ->
         let msg, help = representation_private td.path in
         (msg, Some help)
-    | Opaque (Some _) ->
+    | Opaque (Rep _) ->
         ( sprintf "`%s` is opaque, so it has no constructors of its own" t,
           Some
             (sprintf "here %s is %s, so write one of those instead" (article t)
@@ -317,8 +317,8 @@ let wrong_label (l : Ast.ident) (f : Iface.field) =
 (* `Plan { ... }`, where `Plan` isn't a record *)
 let not_a_record ~names loc (td : Iface.type_decl) =
   match td.body with
-  | Opaque None -> opaque_private loc td
-  | Opaque (Some _) -> opaque_own ~names loc td "has no fields"
+  | Opaque (Hidden _) -> opaque_private loc td
+  | Opaque (Rep _) -> opaque_own ~names loc td "has no fields"
   | _ ->
       let help =
         match td.body with
@@ -1607,6 +1607,9 @@ type no_eq =
   | Handler of string
       (** it's, or there's in it, a handler of several dependencies, named after
           its `handler` *)
+  | Opaque_hidden of string
+      (** it's, or there's in it, another module's opaque type, named, that's
+          represented as something with a function in it *)
 
 (* [shown] has no `==`, at [loc]: compared there with [op], `==` or `!=`,
    or given to [by], which compares what it's given (operators.md,
@@ -1631,6 +1634,12 @@ let no_eq loc ~shown ~op ~by ~failed why =
         ]
     | Handler h ->
         [ sprintf "a `%s` handler is its operations, which are functions" h ]
+    | Opaque_hidden t ->
+        [
+          sprintf
+            "`%s` is opaque, and its module represents it with a function in it"
+            t;
+        ]
   in
   let help =
     match (by, why) with
@@ -1640,6 +1649,8 @@ let no_eq loc ~shown ~op ~by ~failed why =
         "a function can't be compared: compare what it returns instead"
     | None, (Implementation _ | Handler _) ->
         "compare what its operations return instead"
+    | None, Opaque_hidden _ ->
+        "compare something its module's functions tell you about it instead"
     | None, _ -> "compare the parts of it that have no function in them"
   in
   let kept =

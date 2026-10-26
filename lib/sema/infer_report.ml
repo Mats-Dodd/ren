@@ -210,7 +210,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
         match t with
         | TCon (p, _) -> (
             match Hashtbl.find_opt env.types p with
-            | Some { body = Opaque None; _ } -> Some p
+            | Some { body = Opaque (Hidden _); _ } -> Some p
             | _ -> None)
         | _ -> None
       in

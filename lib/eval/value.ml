@@ -56,9 +56,8 @@ type t =
           never sees one *)
 
 (* A dictionary: the operations a type has that a requirement names, as
-   functions of the interpreter's own. [eq] is `eq`'s `==`, given where
-   the comparison is, which a panic would point at. *)
-and dict = { eq : Loc.t -> t -> t -> bool }
+   functions of the interpreter's own. [eq] is `eq`'s `==`. *)
+and dict = { eq : t -> t -> bool }
 
 (* A handler's description: its body makes an instance, given the
    evidence [ev] where it's installed, with the variables it captured. *)

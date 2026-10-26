@@ -906,13 +906,11 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "== can't panic, but through another module's opaque type" =
+let%expect_test "== can't panic" =
   (* comparing anything with a function in it, a handler, or an
      implementation of a dependency, directly or through a generic
      function, is an error before the program runs, so the interpreter
-     never meets one; the one way it still can is an opaque type of
-     another module that's represented as one, which inference can't look
-     inside (compiler.md, "Deviations") *)
+     never meets one *)
   let lacks src =
     match Ren.Driver.check ~file src with
     | _ -> raise (No_error "expected `==` to be refused")
@@ -953,23 +951,41 @@ let%expect_test "== can't panic, but through another module's opaque type" =
     refused
     refused
     |}];
-  run_files
+  (* nor an opaque type of another module that's represented as one,
+     which its interface says, though it hides the representation *)
+  check_error_files
     [
       ( "main.ren",
         {|
 import a
 fn same(x, y) = x == y
-fn main() = same(a.mk(), a.mk())
+fn main() = same(a.mk(), a.mk()) || a.Id.of(1) == a.Id.of(1)
 |}
       );
-      ("a.ren", {|
+      ( "a.ren",
+        {|
 pub type F = opaque fn(Int) -> Int
 pub fn mk() -> F = fn(x: Int) => x
-|});
+pub type Pair = { n: Int, f: F }
+pub type Id = opaque Pair
+  pub fn of(n: Int) -> Id = Pair { n: n, f: mk() }
+|}
+      );
     ];
   [%expect {|
-    error: panic: these can't be compared: they're of an opaque type from another module that's represented as a function, or holds one, and a function has no `==`. Compare something else about them instead
-      ┌─ main.ren:2:17
-    2 │ fn same(x, y) = x == y
-      │                 ^^^^^^
+    error: `a.F` has no `==`, which `same` needs
+      ┌─ main.ren:3:18
+    3 │ fn main() = same(a.mk(), a.mk()) || a.Id.of(1) == a.Id.of(1)
+      │                  ^^^^^^
+      = a type with a function in it has no `==` or `hash`
+      = `a.F` is opaque, and its module represents it with a function in it
+      help: give `same` something it can compare, without a function in it
+
+    error: `a.Id` has no `==`
+      ┌─ main.ren:3:37
+    3 │ fn main() = same(a.mk(), a.mk()) || a.Id.of(1) == a.Id.of(1)
+      │                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+      = a type with a function in it has no `==` or `hash`
+      = `a.Id` is opaque, and its module represents it with a function in it
+      help: compare something its module's functions tell you about it instead
     |}]
