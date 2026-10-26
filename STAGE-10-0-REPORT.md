@@ -12,8 +12,10 @@ plan says, R4 wasn't started. The owner then asked for that issue to be
 fixed and the stage to go on: it's fixed now (`ad47c20`..`4d968ac`, see
 R3), with three of R3's minor issues. R3's review of that found two more
 blocking issues, a slowdown `4d968ac` brought back and messages that
-blamed a handler falsely; they're fixed too (`435e869`..`11cbbe0`), and
-R3 waits for its review again. The branch is green: `dune build` and
+blamed a handler falsely; they're fixed too (`435e869`..`11cbbe0`). Its
+next review found that `435e869` made checking quadratic in the number
+of handlers of several given before what's wanted was known; that's
+fixed too (`11ae913`), and R3 waits for its review again. The branch is green: `dune build` and
 `dune runtest` pass at every commit, run as a user that isn't root (see
 "For whoever runs the tests", below).
 
@@ -22,7 +24,7 @@ R3 waits for its review again. The branch is green: `dune build` and
 | R0, foundations and safety nets | `849e97f`..`dbf55cd` (19) | passed after two fix rounds |
 | R1, restructure with no change in behaviour | `86ccbb1`..`9637c56` (34) | passed first time |
 | R2, typed Core | `0e1d896`..`6e8ca0b` (16) | passed first time |
-| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then `ad47c20`..`4d968ac` (5), then `435e869`..`11cbbe0` (3) | one blocking issue left after two fix rounds, **fixed since**; its review found two more, fixed; to be reviewed again |
+| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then `ad47c20`..`4d968ac` (5), then `435e869`..`11cbbe0` (3), then `11ae913`..`18a55bb` (2) | one blocking issue left after two fix rounds, **fixed since**; its reviews found three more, fixed; to be reviewed again |
 | R4, requirements and lambda sets | none | not started |
 
 `STAGE-10-0-PLAN.md` is kept, since the stage isn't finished: it's what
@@ -211,7 +213,10 @@ shower: fn(T) -> Str = show`, now shows a record by its shape, `{ id: 1
 `d811c1a`..`2968732`, the bugs in `b718670` (B1), `4275156` (B3),
 `3ecabd4` (B4) and `0fd217b` (B5), and the two fix rounds,
 `9efe477`..`3f381d1`. Then, after the stop, the blocking issue and three
-minor ones, `ad47c20`..`4d968ac`, 5 commits.
+minor ones, `ad47c20`..`4d968ac`, 5 commits; the two blocking issues
+its next review found, `435e869`..`11cbbe0`, 3 commits; and the one the
+review after that found, with a test for one of its minor issues,
+`11ae913`..`18a55bb`, 2 commits.
 
 **What was done.**
 
@@ -375,6 +380,38 @@ minor ones, `ad47c20`..`4d968ac`, 5 commits.
   `with` still goes through all of them, so it's still quadratic, as it
   was at `6e8ca0b`; deciding only the copies a `with` can wake would fix
   it.
+- **Fixed since R3's third review after the stop (`11ae913`), was
+  blocking: `Unify.watch` made checking quadratic in the handlers of
+  several a group gives before what's wanted is known.** Each
+  unification tried first copied the table of watched variables, and
+  each use of such a variable as an argument looked for its handler
+  among all the group's constraints. 8,000 `print(run(id(
+  counting_rates(2))))` lines took 53s, against 0.5s at `6e8ca0b`;
+  8,000 `Some(counting_rates(i))` and then 8,000 `try f(i)` 27s. The
+  earlier timing test had no handler in it, so couldn't see it, and the
+  report said the slowdown was fixed. Now the watched variables are an
+  immutable `Map`, which a tried unification shares instead of copying,
+  and each remembers the first handler given to it, so finding that
+  handler, or settling the variable as it, costs the same however many
+  there are. Only a value taken as two dependencies, which is an error,
+  still looks through the constraints, once for that error. Each repro
+  checks in about half a second, with the same output, and test_deps.ml,
+  "many handlers of several given early check in time", checks three of
+  them in under 10s of processor time each (23 to 27s before).
+- **The rules for a held handler of several are uneven** (R3's third
+  review, minor). A method only one of its dependencies has fixes the
+  value to that one everywhere (`Infer_coerce.settle_for_member`, as
+  deps.md says), while an argument takes it as one only there: with a
+  method `twice` on `Rates`, `let h = id(counting_rates(3))`, then
+  `h.twice()` and `run2(h)` is rejected, and `h.twice()` then `with h in
+  RateCalls.count()` says nothing installs `RateCalls`; `let h =
+  counting_rates(3); h.twice()` is rejected, but through `id(...)` it's
+  accepted. Nothing that compiled at `6e8ca0b` is broken. `h.usd_to(1)`
+  on such a value says `usd_to` is an operation of `Rates` (pinned by a
+  test since `18a55bb`), which also fixes `h` to `Rates`, so a `run2(h)`
+  elsewhere gets a second error that follows from the first. Making a
+  member lookup take the value as one dependency only there would even
+  them out.
 - A mismatch between two different handlers of several suggests writing a
   `counting_rates { ... }`, a type that can't be written. It predates R3.
 
@@ -384,8 +421,8 @@ Not started.
 
 ## Notes for the next stage
 
-- **Finish R3 first.** The blocking issue above is fixed, with its repros
-  as tests; get R3 an independent review, then do R4 as the plan
+- **Finish R3 first.** The blocking issues above are fixed, with their
+  repros as tests; get R3 an independent review, then do R4 as the plan
   describes. The B5 question needs the owner.
 - **R4 has its pieces in place.** Schemes have the `reqs` slot, uses carry
   type arguments, and generic functions already take hidden descriptor
