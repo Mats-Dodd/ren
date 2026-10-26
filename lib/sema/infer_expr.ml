@@ -357,8 +357,7 @@ and synth env cx (e : expr) : ty =
           (* `fail` is the way to fail with a tag written in place. A
              `Result` made with `Err` and kept in a `let` is passed on like
              any other (deps.md, "Deviations") *)
-          report env
-            (try_err e.loc (Option.value (env.source tag) ~default:"..."))
+          report env (try_err e.loc (env.source tag))
       | _ -> ());
       (* `try r`, where [r] is a [Result]: what's in [r] if it's `Ok`, and
          if it's `Err`, its error again *)

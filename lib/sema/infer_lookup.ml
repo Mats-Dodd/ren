@@ -160,13 +160,11 @@ let field_in name (td : Iface.type_decl) =
     (List.find_opt (fun (d : Iface.field) -> d.fname = name))
 
 (* What [name] is in the type [p], which has a field or a member of
-   that name, as an error says it: "a field", "a method", ... *)
+   that name, for an error: the kind of member, or [None] for a field. *)
 let member_kind env name p =
-  match op_in name (Hashtbl.find env.types p) with
-  | Some { okind = Method; _ } -> "a method"
-  | Some { okind = Function; _ } -> "an associated function"
-  | Some { okind = Value; _ } -> "an associated value"
-  | None -> "a field"
+  Option.map
+    (fun (o : Iface.op) -> o.okind)
+    (op_in name (Hashtbl.find env.types p))
 
 (* The member [name] of [t]'s type, if [t] is already known to be a
    named type that has one. In its own module, an opaque type is also what

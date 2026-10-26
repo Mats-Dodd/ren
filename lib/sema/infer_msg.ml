@@ -1691,10 +1691,19 @@ let item_not_field (m : Ast.ident) (kind : Iface.op_kind) ~item =
        | Value -> "an associated value"
        | Method | Function -> "an associated function"))
 
+(* What a member is, by its kind, or a field if it has none. *)
+let member_kind (kind : Iface.op_kind option) =
+  match kind with
+  | Some Method -> "a method"
+  | Some Function -> "an associated function"
+  | Some Value -> "an associated value"
+  | None -> "a field"
+
 (* `s.size()`, where `s`'s type isn't known yet, and several types the
    module can name have a `size`. [members] are those types, each with
-   what its `size` is: "a field", "a method", ... *)
+   what its `size` is (see [member_kind]). *)
 let several_have_member ~names loc ?what (m : Ast.ident) members =
+  let members = List.map (fun (p, k) -> (p, member_kind k)) members in
   let paths = List.map fst members in
   let what, help, extra =
     say_which ~names ~can_name:(fun _ -> true) ?what (List.hd paths)
@@ -1836,8 +1845,9 @@ let err_made loc =
        with: `attempt f()`"
     "`Err` holds an error, written as its tag"
 
-(* `try Err(X)`, which would fail with [X]: that's `fail X`. *)
+(* `try Err(X)`, which would fail with [X], as written: that's `fail X`. *)
 let try_err loc tag =
+  let tag = Option.value tag ~default:"..." in
   Diag.make loc
     ~notes:
       [

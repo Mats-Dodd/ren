@@ -44,7 +44,7 @@ val field_in : string -> Iface.type_decl -> Iface.field option
 
 (* What a name is in a type, as an error says it: "a field", "a method",
    ... *)
-val member_kind : env -> string -> Path.t -> string
+val member_kind : env -> string -> Path.t -> Iface.op_kind option
 
 (* The member of that name of a type already known, and the function a
    member is: [Stack.push]. *)
