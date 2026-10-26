@@ -38,27 +38,14 @@ last commit, once `STAGE-10-0-REPORT.md` replaces it.
 
 ## Where it stands
 
-R0's work is done, and it is in review. These commits are on the branch:
+R0, R1 and R2 are done. R3's work is in, but its last review left one
+blocking issue after two fix rounds, so the run stopped there, as "How to
+run it" says, and R4 wasn't started. `STAGE-10-0-REPORT.md` says what
+each step did, its commits, what changed, and what's still open.
 
-- `849e97f` `--help` goes to stdout, there's `--version`, and `ren test`
-  fails on a folder with no tests.
-- `bef1802` Test helpers that fail when an expected error doesn't come.
-- `42e1496` Tail calls are a loop, call depth is limited to 100,000, and
-  there are benchmarks in `bench/` (`dune build @bench`). The
-  1M-iteration loop went from 12.75s to 0.38s, and runaway recursion
-  from 96s to 0.36s.
-- `97d8710` CI on Linux and macOS (`.github/workflows/ci.yml`), green.
-- `e8ce6c9`, `85a2b10` Stages renumbered for the new order, everywhere,
-  and the roadmap in `README.md` in that order, with the new rows.
-- `9e6c255` `compiler.md`, linked from `README.md`.
-- `b3fdf02` `module-build.md` amended for inferred requirements.
-- `a656dfc` Core Lint checks that a handler's instance is never a value.
-- `73fb8f9` Core binders numbered by first appearance in test snapshots.
-- `8d360b7` The Zed extension points at the grammar's latest commit.
-- Fixes from R0's first review: `compiler.md` says which of its promises
-  are still to come, and a test shows the instance check firing.
-
-**Next:** finish R0's review, then go on to R1.
+**Next:** fix R3's blocking issue (the report's R3 section has it and its
+repros), have R3 reviewed again, settle B5's open question with the
+owner, then do R4. Delete this file once the stage is done.
 
 ## Context
 
