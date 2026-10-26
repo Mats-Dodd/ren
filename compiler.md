@@ -112,11 +112,9 @@ falls short it says so.
 
 - **The resolved AST** names every local by its binder's id, and every
   top-level entity by its path (path.ml): a module and a name in it.
-  Nothing after resolve looks a name up in a scope. From R1, a type's
-  member is its type's path and its name. Today it's a path whose name
-  has a dot in it, `Stack.push` in `Stack`'s module, which later passes
-  split again (Ast.short_name), and the interpreter builds to find a
-  `show` method.
+  Nothing after resolve looks a name up in a scope. A type's member is
+  its type's path and which member it is, its name and an overload
+  index, so no pass builds a member's name from strings or splits one.
 - **Inference's result** gives every expression and pattern a type and,
   where something was found through a type, what (infer.mli). It decides
   every question once: which constructor, which method, whether a call
@@ -231,3 +229,12 @@ Where the work forced a change to the plan above:
   `Value`, `Unix` and `builtins.ml` appear only in `eval/` and the
   driver. Separate libraries would make the linker enforce that, which
   can wait until it's worth the build files.
+- **R1, a member's identity.** A member isn't a record of its own,
+  `{owner; name; overload}`, but a path with a member part
+  (`Path.member`): its type's home and name, and its own name and
+  overload index. Everything that names a function, a call in the AST or
+  Core, a scheme, a call-graph edge, already holds a path, so a member
+  fits in each without a second kind of name beside it. Interface members
+  are a map by that path, and each also keeps its place in source order
+  (`Iface.op.onum`), since messages and the tests that print an
+  interface list them in that order.
