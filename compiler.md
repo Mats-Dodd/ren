@@ -93,8 +93,9 @@ it, each fact says so, and which step fixes it.
   Carried in the scheme, the interface, and as hidden dictionary
   parameters in Core. Inferred since R4, and carried in schemes and
   interfaces (infer_reqs.ml): `==` on a type with a function in it is a
-  compile error. Core doesn't pass dictionaries yet, so the interpreter
-  still compares values by walking them.
+  compile error. Each use of a function records what it needs
+  (`Infer.node`), and lowering passes a dictionary for each, so `==` in
+  a generic function compares through the one its caller gave it.
 - **Lambda sets.** From R4. Which lambdas and functions a value of a
   function type can be. Inference, in the same solver, as a hidden third
   row of a function type beside `!` and `uses`. Carried in Core's types,
@@ -134,7 +135,11 @@ falls short it says so.
   its scheme's with them put in. `ren core --types` prints them. A
   generic function takes a descriptor of each of its type variables, as
   a hidden parameter, and Lint checks each descriptor a use passes
-  describes its type argument.
+  describes its type argument. It takes a dictionary for each of its
+  requirements too, and Lint checks each use passes one for each, for
+  the type argument it's on, as each `==` has one for what it compares,
+  built only from the function's own dictionaries, and derived only for
+  a type that has what it's derived for.
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -177,9 +182,22 @@ called:
   debug build does.
 
 Both mean the same: specialization only makes code faster (rule 1). The
-interpreter runs the debug strategy. Evidence is passed this way today
-(deps.md, "How it runs"); dictionaries come with requirements, in R4,
-where `eq` is the first.
+interpreter runs the debug strategy. Evidence is passed this way (deps.md,
+"How it runs"), and so are dictionaries, since R4, where `eq` is the
+first requirement.
+
+A dictionary is built where it's passed, from the use's type arguments
+(core.ml, `dict`): for one of the caller's own type variables, it's the
+dictionary the caller was itself given for it; for any other type, it's
+derived from the type's structure, given the caller's dictionaries for
+its type variables in it. So `both<U has eq>` passes `same` its own `U`
+dictionary, and for `Box<U>` one derived from `Box`'s declaration and
+that. Each `==` compares through the dictionary of what it compares, the
+same way, so one in `same` uses the one `same` was given. The
+interpreter makes a derived dictionary a function of its own, which
+compares two values as the type's declaration says: never a function,
+since inference makes sure there's none in what's compared, with one
+exception (Deviations).
 
 So are types, where the running program needs one. Showing a value
 depends on its type, `Account { id: 1 }` rather than `{ id: 1 }`, and
@@ -615,14 +633,53 @@ Where the work forced a change to the plan above:
   to have `eq` that the plan doesn't decide. An opaque type of another
   module, whose interface hides what it's represented as, since saying
   it had none would make `UserId == UserId` an error in every module but
-  its own; one represented as a function would still panic when
-  compared, until an interface says what its types have. A tag of an
+  its own; one represented as a function still panics when compared,
+  until an interface says what its types have. A tag of an
   error set the set's tail may still bring in, what a function it was
   passed fails with, since a requirement on a row would be a kind of
   its own, and no tag holds a function in any program so far. And a
   type's type arguments all have to have it, even one the type doesn't
   hold a value of, `Tag<fn()>` for a `type Tag<T> = opaque Int`, which is
   what "a type with a function in it" reads as.
+- **R4, dictionaries beside descriptors.** The plan leaves open whether a
+  requirement's dictionary is a hidden parameter of its own or carried
+  in the type's descriptor, which a generic function already takes for
+  each type variable. It's a parameter of its own (core.ml, `dict`), one
+  for each requirement, after the descriptors: a function with none
+  takes none, Lint can check each use passes exactly what the callee's
+  scheme says it needs, and a release build specializes the two apart,
+  since showing a value needs its type but comparing two needs only `eq`.
+  An associated value is made once, when the program starts, and given
+  neither, as before: one that compares values of its `T`, `pub let eqf:
+  fn(T, T) -> Bool = fn(a, b) => a == b`, compares them by their shape,
+  and so does `main`, a test, or a type's own `show` method for a type
+  variable nothing decided. Inference already checked that whatever it's
+  used at has `eq`, so that never meets a function either.
+- **R4, what a use needs.** Lowering knows a function of another module
+  only by its path, so inference records at each use the requirements of
+  the scheme it used, by type variable (`Infer.node`'s `needs`), beside
+  its type arguments, rather than lowering looking the scheme up again.
+- **R4, a derived dictionary at runtime.** The interpreter has no code
+  generated for a type's `eq`, so a derived dictionary compares two
+  values by walking the type's declaration, as it shows one by it
+  (shown.ml), and goes through the function's dictionaries where the
+  type has its type variables. That's what a backend would generate,
+  interpreted.
+- **R4, the one comparison that can still panic.** An opaque type of
+  another module is taken to have `eq` (above), so a value of one
+  represented as a function, or holding one, can still be compared, and
+  the dictionary derived for it meets the function. The interpreter
+  panics there, saying why, which is the one way left for `==` to reach
+  a function (eval.ml, `opaque_function`); every other comparison of a
+  function, a handler or an implementation is refused before the program
+  runs. It goes once an interface says which of its opaque types have
+  `eq`.
+- **R4, printing dictionaries.** `ren core` prints as before. `ren core
+  --types` prints what a function needs after its type, `(needs (eq
+  T))`, the dictionaries a use passes after its type arguments, `(inst
+  same Int (eq Int))`, and the one each `==` compares with, `(== (eq Int)
+  a b)`, so the two typed snapshots that have an `==` changed
+  (test_lower.ml, test_infer.ml).
 - **R4, interfaces.** The interface is still made from declarations, but
   what a public function needs of its type parameters isn't declared, so
   the driver, which checks that inference found what the interface says,
