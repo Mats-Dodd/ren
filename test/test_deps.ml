@@ -3239,6 +3239,35 @@ fn main() uses Console =
     fn main() uses Console
     5
     ()
+    |}];
+  (* the same with [run]'s type inferred, as the plan writes it *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+fn run(k) =
+  with Rates { usd_to: fn(c) => c * 2 } in k()
+
+fn twice(k) =
+  let a = run(k)
+  a + k()
+
+fn main() uses Console =
+  with Rates { usd_to: fn(c) => c * 3 } in
+    print(twice(fn() => Rates.usd_to(1)))
+|}
+  in
+  types src;
+  run src;
+  [%expect {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    fn run<T>(k: fn() -> T uses Rates, ..d) -> T uses ..d
+    fn twice(k: fn() -> Int uses Rates, ..d) -> Int uses Rates, ..d
+    fn main() uses Console
+    5
+    ()
     |}]
 
 let%expect_test "a call or a `with` that uses more than a stored function can" =
