@@ -101,9 +101,9 @@ type env = {
   mutable withheld : withheld list;
       (** the module's functions that call a closure in a `with` that doesn't
           install what the closure uses (see [withheld]) *)
-  mutable cant_fail : string option;
-      (** why the code being checked can't fail, if it's a handler's state, for
-          a message when something in it does *)
+  mutable in_state : bool;
+      (** whether the code being checked is a handler's state, which can't fail,
+          for a message when something in it does *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
@@ -130,12 +130,12 @@ and tag_pattern = {
    function or lambda it's in has to end in [rnamed]. Ending a row in one
    would stop it getting any more labels, so that's done once the group is
    done, when it has all of them (infer_top.ml). [rwhat] says what needs
-   it, for a message: "this call uses". *)
+   it, for a message: a call, a `with`. *)
 and row_due = {
   rloc : Loc.t;
   rinto : row;
   rnamed : int * string;
-  rwhat : string;
+  rwhat : Infer_msg.user;
 }
 
 (* An operation of an implementation, `usd_to: fn(c) => ...` in a `Rates
@@ -182,7 +182,7 @@ and copy = {
   kloc : Loc.t;
   ksrc : row;
   kdst : row;
-  kwhat : string;  (** what needs it, for a message: "installing this needs" *)
+  kwhat : Infer_msg.user;  (** what needs it, for a message: a `with` *)
   mutable kpassed : string list;
 }
 
@@ -262,8 +262,8 @@ and marker = {
   mutable unwrapped : row list;
       (** for `try r`: the errors of the [Result] it fails with again; for `try
           match`, the errors no arm handles *)
-  mutable hint : string option;
-      (** for `try`: a help that explains why it may cover nothing *)
+  mutable hint : Infer_msg.try_hint option;
+      (** for `try`: why it may cover nothing, for a help *)
   mutable failed : bool;
       (** for `attempt` and `match`: whether a `fail` is inside it *)
 }

@@ -412,24 +412,14 @@ let check_written sink ~sets ~names (prog : program) =
         | Some (m, via') when not (List.mem l.name !reported) ->
             reported := l.name :: !reported;
             let from (l : Ty.label) via =
-              let where =
-                match via with
-                | Some (p : Path.t) -> sprintf "from `%s`" (names p)
-                | None -> "written here"
-              in
-              sprintf "%s: `%s`" where (Ty.show_label pr l)
+              ( (match via with
+                | Some (p : Path.t) -> From (names p)
+                | None -> Written_here),
+                Ty.show_label pr l )
             in
             report
-              (Diag.make es.eloc
-                 ~notes:
-                   [
-                     from l via;
-                     from m via';
-                     "a tag is its name and its payload's types, so these are \
-                      two errors with one name";
-                   ]
-                 ~help:"rename one of them"
-                 (sprintf "`%s` has two shapes here" l.name))
+              (two_shapes es.eloc l.name ~old:(from l via) ~new_:(from m via')
+                 ~help:"rename one of them")
         | _ -> ())
       tags
   in
@@ -794,8 +784,8 @@ let settle_errors env =
       then
         report env
           (match m.mkind with
-          | Mtry -> covers_nothing m.mloc ?help:m.hint "try"
-          | Mattempt -> covers_nothing m.mloc ?help:m.hint "attempt"
+          | Mtry -> covers_nothing m.mloc ?hint:m.hint "try"
+          | Mattempt -> covers_nothing m.mloc ?hint:m.hint "attempt"
           | Mmatch -> cannot_fail_arm m.mloc))
     (List.rev env.all_markers);
   env.kept <- [];
@@ -1053,7 +1043,7 @@ let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
            (sprintf
               "name the two rows alike, `..%s`, if they can stand for the same"
               other)
-         (sprintf "%s `..%s`, but what this is in already uses `..%s`" d.rwhat n
+         (sprintf "%s `..%s`, but what this is in already uses `..%s`" (user d.rwhat) n
             other))
   in
   (* the uses checked once every other is, ending a row that's still open:
@@ -1090,7 +1080,7 @@ let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
                      | None ->
                          sprintf "add it to what `%s` uses: `%s`"
                            (Ast.fn_name f) (uses_with env f n))
-                   (sprintf "%s `..%s`, which `%s` doesn't declare" d.rwhat n
+                   (sprintf "%s `..%s`, which `%s` doesn't declare" (user d.rwhat) n
                       (Ast.fn_name f)))
           | _ -> later := d :: !later)
       | REmpty | RExtend _ ->
@@ -1109,7 +1099,7 @@ let settle_rows env (fns : (fn_def * ctx * bool * bool) list) =
                     "use it where `..%s` can go: in the function that names \
                      it, or in a lambda whose type isn't written"
                     n)
-               (sprintf "%s `..%s`, which isn't allowed here" d.rwhat n)))
+               (sprintf "%s `..%s`, which isn't allowed here" (user d.rwhat) n)))
     (List.rev env.rows_due);
   List.iter
     (fun d ->
@@ -1280,7 +1270,7 @@ let settle_installs env =
                 rloc = w.wloc;
                 rinto = w.wouter;
                 rnamed = (id, n);
-                rwhat = "this `with`'s body uses";
+                rwhat = With_body;
               }
               :: env.rows_due;
             into (extend rest (fresh_row env.st))
@@ -1937,7 +1927,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       installs = [];
       copies = [];
       withheld = [];
-      cant_fail = None;
+      in_state = false;
       in_scope = [];
     }
   in

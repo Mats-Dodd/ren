@@ -7,7 +7,8 @@ open Infer_env
 
 (* What an implementation needs, copied for one place it's used, which
    [what] says (see [Infer_env.copy]). *)
-val copy_needs : env -> loc:Loc.t -> what:string -> Types.row -> Types.row
+val copy_needs :
+  env -> loc:Loc.t -> what:Infer_msg.user -> Types.row -> Types.row
 
 (* A type, or if it's an implementation, one that may need more than it
    does: where one that needs more is allowed, one that needs less will
@@ -15,9 +16,9 @@ val copy_needs : env -> loc:Loc.t -> what:string -> Types.row -> Types.row
 val widen : env -> loc:Loc.t -> Types.ty -> Types.ty
 
 (* What the code a context is in has already added to its handler, for a
-   message about an error that's there, and what to say if it's none of
-   them. *)
-val sources_of : ctx -> source list * string
+   message about an error that's there, and where it came from if it's
+   none of them. *)
+val sources_of : ctx -> source list * Infer_msg.origin
 
 (* Add the errors of the first row, what's new here, to the second. One
    error with two shapes is reported: [here] says where the new one comes
@@ -26,8 +27,8 @@ val sources_of : ctx -> source list * string
 val add_errors :
   env ->
   loc:Loc.t ->
-  here:string ->
-  sources:source list * string ->
+  here:Infer_msg.origin ->
+  sources:source list * Infer_msg.origin ->
   fix:(string -> string) ->
   Types.row ->
   Types.row ->
@@ -52,10 +53,10 @@ val use_row :
   env -> ctx -> loc:Loc.t -> ?needs:bool -> ?callee:Path.t -> Types.row -> unit
 
 (* Join what's used at [loc] to what the function or lambda it's in uses,
-   or say it can't use all of that. [what] says what uses it: "this call
-   uses". *)
+   or say it can't use all of that. [what] says what uses it: a call, a
+   `with`. *)
 val join_uses :
-  env -> loc:Loc.t -> what:string -> Types.row -> Types.row -> unit
+  env -> loc:Loc.t -> what:Infer_msg.user -> Types.row -> Types.row -> unit
 
 (* A call, [call], of [fn], named [ename] in messages: it adds the callee's
    errors, the first row, to whatever marks it, and its dependencies, the
@@ -82,7 +83,8 @@ val marker : env -> marker_kind -> Loc.t -> marker
 
 (* Why a `try` of an expression of a type that isn't a [Result] may cover
    nothing, if there's something to say. *)
-val try_hint : env -> ctx -> Ast.Resolved.expr -> Types.ty -> string option
+val try_hint :
+  env -> ctx -> Ast.Resolved.expr -> Types.ty -> Infer_msg.try_hint option
 
 (* Whether a pattern is a `fail` pattern, which matches an error, and
    whether a `match` handles errors: whether it has a `fail` arm. *)

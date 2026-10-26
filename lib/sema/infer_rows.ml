@@ -57,7 +57,7 @@ let copy_needs env ~loc ~what needs =
 let widen env ~loc t =
   match repr t with
   | TCon (d, [ TUses u ]) ->
-      TCon (d, [ TUses (copy_needs env ~loc ~what:"passing this needs" u) ])
+      TCon (d, [ TUses (copy_needs env ~loc ~what:Passing u) ])
   | t -> t
 
 (* Where an error that's already in [row] came from, for a message about
@@ -76,10 +76,10 @@ let shape_from (sources : source list) name =
   List.find_opt has
     (List.sort (fun a b -> compare (pos (loc a)) (pos (loc b))) sources)
   |> Option.map (function
-    | Passed c -> sprintf "from `%s`" c.ewritten
-    | Failed (l, _) -> sprintf "from the `fail` on line %d" l.start.line
-    | Unwrapped (l, _) -> sprintf "from the `Result` on line %d" l.start.line
-    | Unhandled (l, _) -> sprintf "from the `match` on line %d" l.start.line)
+    | Passed c -> From c.ewritten
+    | Failed (l, _) -> On_line ("fail", l.start.line)
+    | Unwrapped (l, _) -> On_line ("Result", l.start.line)
+    | Unhandled (l, _) -> On_line ("match", l.start.line))
 
 (* What the code [cx] is in has already added to its handler, for a
    message about an error that's there: in the function itself, what adds
@@ -88,10 +88,9 @@ let shape_from (sources : source list) name =
    the function's signature, or else an earlier call. *)
 let sources_of cx =
   match (cx.sources, cx.markers) with
-  | Some s, _ -> (!s, "from the signature")
-  | None, m :: _ ->
-      (List.map (fun c -> Passed c) m.covered, "from an earlier call")
-  | None, [] -> ([], "from an earlier call")
+  | Some s, _ -> (!s, Signature)
+  | None, m :: _ -> (List.map (fun c -> Passed c) m.covered, Earlier_call)
+  | None, [] -> ([], Earlier_call)
 
 (* Add [errs], what's new here (a call's, a `fail`'s), to [into]. One error
    with two shapes is reported: [here] says where the new one comes from,
@@ -122,17 +121,9 @@ let add_errors env ~loc ~here ~sources:(sources, elsewhere) ~fix errs into =
            ~new_:(here, Option.value (shape new_) ~default:name)
            ~help:(fix name))
   | exception (Unify.Mismatch | Unify.Infinite) ->
-      ignore
-        (fail env loc
-           ?notes:(Option.map (fun n -> [ n ]) env.cant_fail)
-           ?help:
-             (Option.map
-                (fun _ ->
-                  "handle it here, with `attempt` or a `match` with `fail` \
-                   arms, or make the value in an operation instead")
-                env.cant_fail)
-           (sprintf "this can fail with %s, which isn't allowed here"
-              (show_row (printer env) ~prefix:"" ~sep:" | " ~kind:"e" errs)))
+      report env
+        (cant_fail_here loc ~in_state:env.in_state
+           (show_row (printer env) ~prefix:"" ~sep:" | " ~kind:"e" errs))
 
 (* Add [errs] to [into] by inclusion (see [inclusion]): its labels now,
    with [add] (an [add_errors] waiting for its two rows), and what it
@@ -170,7 +161,7 @@ let rec use_row env cx ~loc ?(needs = false) ?callee uses =
   cx.calls :=
     { cloc = loc; own = row_names uses; row = uses; needs; callee }
     :: !(cx.calls);
-  let what = if needs then "installing this needs" else "this call uses" in
+  let what = if needs then Installing else Call_uses in
   let joined =
     match row_skolem uses with
     | Some named ->
@@ -190,28 +181,11 @@ let rec use_row env cx ~loc ?(needs = false) ?callee uses =
 
 (* Join [joined], what's used at [loc], to [into], what the function or
    lambda it's in uses, or say it can't use all of that. [what] says what
-   uses it: "this call uses". *)
+   uses it: a call, a `with`. *)
 and join_uses env ~loc ~what joined into =
   try Unify.unify_row env.st joined into
   with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
-    let shown =
-      match row_names joined with
-      | [] -> "more than what it's in can"
-      | ns ->
-          and_list (List.map (sprintf "`%s`") ns) ^ ", which what it's in can't"
-    in
-    ignore
-      (fail env loc
-         ~notes:
-           [
-             "a function or lambda uses everything its calls use, and \
-              everything the implementations its `with`s install need, and the \
-              type of what this is in says it can't use all of that";
-           ]
-         ~help:
-           "say what it uses where its type is written, with `uses`, or leave \
-            the type out and let it be inferred"
-         (sprintf "%s %s" what shown))
+    report env (cant_use loc what (row_names joined))
 
 (* A call adds the callee's dependencies to the caller's, and its errors
    to whatever marks it (errors.md, "Marking"): the innermost marker's
@@ -251,7 +225,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
     }
   in
   let sources = sources_of cx in
-  let here = sprintf "from `%s`" ewritten in
+  let here = From ewritten in
   (* rename the one this call brings in: `fail Timeout(a) => fail
      LockTimeout(a)` *)
   let fix tag =
@@ -260,20 +234,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
       | Some l -> List.length l.payload
       | None -> 0
     in
-    let args =
-      match List.init arity (fun i -> String.make 1 "abcdefgh".[i mod 8]) with
-      | [] -> ""
-      | xs -> "(" ^ String.concat ", " xs ^ ")"
-    in
-    match env.source call with
-    | Some c ->
-        sprintf
-          "rename one where it comes in: `try match %s` with the arm `fail \
-           %s%s => fail %s%s%s`"
-          c tag args
-          (String.capitalize_ascii (short_callee fn))
-          tag args
-    | None -> "rename one of them where it comes in"
+    rename_call_tag ~call:(env.source call) ~callee:(short_callee fn) ~arity tag
   in
   (* In a public function, a transparent parameter's errors are the
      function's own, passed on to its caller, as its signature says: an
@@ -325,23 +286,12 @@ let try_hint env cx (a : expr) t =
     match e.kind with Binop (_, l, _) -> leftmost l | _ -> e
   in
   match (a.kind, reveal env.st t) with
-  | Var x, TVar _ ->
-      Some
-        (sprintf
-           "if `%s` is a `Result`, say so where it's declared, as in `%s: \
-            Result<Int, ! E>`: `try` fails with a `Result`'s error only once \
-            its type is known"
-           (name_of x) (name_of x))
+  | Var x, TVar _ -> Some (Maybe_result (name_of x))
   | Binop _, _ -> (
       let l = leftmost a in
       match Hashtbl.find_opt cx.nodes l.node with
       | Some lt when is_result lt ->
-          Some
-            (sprintf
-               "`try` covers everything to its right, so this is `try (%s)`: \
-                to fail with the `Result`'s error first, write `(try %s)`"
-               (Option.value (env.source a) ~default:"...")
-               (Option.value (env.source l) ~default:"..."))
+          Some (Covers_right (env.source a, env.source l))
       | _ -> None)
   | _ -> None
 
@@ -442,10 +392,8 @@ let err_row env cx (tag : ident) args ~expected =
           List.iter2
             (fun (found, (a : expr)) expected ->
               unify_at env (result_loc a) ~found ~expected
-                ~msg:(fun f x ->
-                  sprintf "this is %s, but `%s` holds %s here" (article f)
-                    tag.name (article x))
-                ~notes:[ sprintf "it's `%s`" (show_label (printer env) l) ])
+                ~msg:(tag_holds tag.name)
+                ~notes:[ its_shape (show_label (printer env) l) ])
             args l.payload;
           row
       | Some l, _ ->
@@ -467,19 +415,13 @@ let err_row env cx (tag : ident) args ~expected =
    [m] covers nothing. *)
 let pass_on env cx m (subject : expr) arms errs =
   match handled_tags arms with
-  | None ->
-      m.hint <-
-        Some
-          "every error is handled here, so nothing is passed on: remove the \
-           `try`"
+  | None -> m.hint <- Some All_handled
   | Some names ->
       let rest = fresh_row env.st in
       env.kept <- (rest, cx.params) :: env.kept;
       let add r into =
-        add_errors env ~loc:subject.loc ~here:"from this `match`"
-          ~sources:(sources_of cx)
-          ~fix:(fun _ -> "rename one of them where it comes in")
-          r into
+        add_errors env ~loc:subject.loc ~here:(This "match")
+          ~sources:(sources_of cx) ~fix:rename_where_in r into
       in
       include_errors env cx ~loc:subject.loc
         (fun r into -> add (without names r) into)

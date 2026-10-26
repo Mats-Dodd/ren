@@ -331,7 +331,7 @@ and synth env cx (e : expr) : ty =
          the payload only documents it *)
       let payload = List.map (fun (_, a) -> infer env cx a) args in
       let l = { name = tag.name; payload } in
-      add_errors env ~loc:e.loc ~here:from_fail ~sources:(sources_of cx)
+      add_errors env ~loc:e.loc ~here:(This "fail") ~sources:(sources_of cx)
         ~fix:rename_fail (extend [ l ] REmpty) cx.handler;
       Option.iter (fun s -> s := Failed (e.loc, l) :: !s) cx.sources;
       List.iter (fun m -> if m.mkind <> Mtry then m.failed <- true) cx.markers;
@@ -367,7 +367,7 @@ and synth env cx (e : expr) : ty =
           match repr errs with
           | TErrors errs ->
               include_errors env cx ~loc:a.loc
-                (add_errors env ~loc:a.loc ~here:from_result
+                (add_errors env ~loc:a.loc ~here:(This "Result")
                    ~sources:(sources_of cx) ~fix:rename_where_in)
                 errs cx.handler;
               m.unwrapped <- errs :: m.unwrapped;

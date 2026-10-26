@@ -99,11 +99,9 @@ let hint env (td : Iface.type_decl) tvars expected =
    is (see [handler_needs]). *)
 let rec handler core env cx state arms ~needs ~declared =
   let hcx = lambda_cx cx [] [] ~errs:REmpty ~uses:needs in
-  env.cant_fail <-
-    Some
-      "a handler's state is made where a `with` installs it, which can't fail";
+  env.in_state <- true;
   List.iter (core.stmt env hcx) state;
-  env.cant_fail <- None;
+  env.in_state <- false;
   List.iter
     (fun (a : handler_arm) ->
       let op =
@@ -341,7 +339,7 @@ and install core env cx (e : expr) item t body =
       (* what it needs it needs here, outside: its operations run with what's
          installed where it's installed *)
       use_row env cx ~loc:item.loc ~needs:true
-        (copy_needs env ~loc:item.loc ~what:"installing this needs" needs);
+        (copy_needs env ~loc:item.loc ~what:Installing needs);
       around cx (installs d)
   | TFun ([], ret, _, _) as tf
     when match reveal env.st ret with

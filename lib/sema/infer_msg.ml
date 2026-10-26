@@ -612,11 +612,9 @@ let assigned f x =
 let not_iterable f _ =
   sprintf "a `for` loop goes over an `Array`, but this is %s" (article f)
 
-(* Where an error came in, for a message about two shapes of it, and the
-   help, given the tag: a `fail`, or a `Result` passed on with `try`. *)
-let from_fail = "from this `fail`"
+(* The help for an error with two shapes, given the tag: one that comes
+   from a `fail`, or from a `Result` or a `match` that passes it on. *)
 let rename_fail _ = "give one of them another name"
-let from_result = "from this `Result`"
 let rename_where_in _ = "rename one of them where it comes in"
 
 (* ---- calls ----
@@ -719,6 +717,111 @@ let thrown_away_help ~implementation =
   if implementation then
     "install it with `with`, or write `let _ = ...` if you mean to drop it"
   else "use it, or write `let _ = ...` if you mean to drop it"
+
+(* ---- rows ---- *)
+
+(* What uses a row of dependencies, for a message about it: "this call
+   uses". *)
+type user = Call_uses | Installing | Passing | With_body
+
+let user = function
+  | Call_uses -> "this call uses"
+  | Installing -> "installing this needs"
+  | Passing -> "passing this needs"
+  | With_body -> "this `with`'s body uses"
+
+(* [what] uses [labels], which what it's in can't, at [loc]. *)
+let cant_use loc what labels =
+  let shown =
+    match labels with
+    | [] -> "more than what it's in can"
+    | ns ->
+        (* this quotes each name twice (B4 in the stage's plan), which is
+           kept while restructuring changes no message *)
+        and_list (List.map code ns) ^ ", which what it's in can't"
+  in
+  Diag.make loc
+    ~notes:
+      [
+        "a function or lambda uses everything its calls use, and everything \
+         the implementations its `with`s install need, and the type of what \
+         this is in says it can't use all of that";
+      ]
+    ~help:
+      "say what it uses where its type is written, with `uses`, or leave the \
+       type out and let it be inferred"
+    (sprintf "%s %s" (user what) shown)
+
+(* Code that can fail with [shown] where nothing can; [in_state] if it's a
+   handler's state. *)
+let cant_fail_here loc ~in_state shown =
+  Diag.make loc
+    ?notes:
+      (if in_state then
+         Some
+           [
+             "a handler's state is made where a `with` installs it, which \
+              can't fail";
+           ]
+       else None)
+    ?help:
+      (if in_state then
+         Some
+           "handle it here, with `attempt` or a `match` with `fail` arms, or \
+            make the value in an operation instead"
+       else None)
+    (sprintf "this can fail with %s, which isn't allowed here" shown)
+
+(* The help for a tag a call brings in that's already in the set with
+   another shape: rename it where it comes in. [call] is the call as it's
+   written, [callee] its name, and [arity] how many values the tag's
+   payload has. *)
+let rename_call_tag ~call ~callee ~arity tag =
+  let args =
+    match List.init arity (fun i -> String.make 1 "abcdefgh".[i mod 8]) with
+    | [] -> ""
+    | xs -> "(" ^ String.concat ", " xs ^ ")"
+  in
+  match call with
+  | Some c ->
+      sprintf
+        "rename one where it comes in: `try match %s` with the arm `fail %s%s \
+         => fail %s%s%s`"
+        c tag args
+        (String.capitalize_ascii callee)
+        tag args
+  | None -> rename_where_in tag
+
+(* Why a `try` may cover nothing (Infer_rows.try_hint), for its help. *)
+type try_hint =
+  | Maybe_result of string
+      (** the variable it's applied to, a [Result] whose type isn't known *)
+  | Covers_right of string option * string option
+      (** it covers everything to its right: all of that, and the [Result] on
+          its left, as written *)
+  | All_handled  (** a `try match` whose arms handle every error *)
+
+let hint_help = function
+  | Maybe_result x ->
+      sprintf
+        "if `%s` is a `Result`, say so where it's declared, as in `%s: \
+         Result<Int, ! E>`: `try` fails with a `Result`'s error only once its \
+         type is known"
+        x x
+  | Covers_right (all, left) ->
+      sprintf
+        "`try` covers everything to its right, so this is `try (%s)`: to fail \
+         with the `Result`'s error first, write `(try %s)`"
+        (Option.value all ~default:"...")
+        (Option.value left ~default:"...")
+  | All_handled ->
+      "every error is handled here, so nothing is passed on: remove the `try`"
+
+(* `Err(T(a))`, where [a] is [f] and `T` holds [x] *)
+let tag_holds tag f x =
+  sprintf "this is %s, but `%s` holds %s here" (article f) tag (article x)
+
+let its_shape shown = sprintf "it's `%s`" shown
 
 (* ---- dependencies ---- *)
 
@@ -976,6 +1079,23 @@ let value_fails (f : Ast.Resolved.fn_def) ~tag ~shape from =
          f.name.name shape)
     (sprintf "the associated value `%s` can fail with `%s`" (Ast.fn_name f) tag)
 
+(* Where an error came from, for a message about another shape of it. *)
+type origin =
+  | From of string  (** a call, as it's written, or a named error set *)
+  | This of string  (** this `fail`, `Result` or `match` *)
+  | On_line of string * int  (** the `fail`, `Result` or `match` on a line *)
+  | Signature  (** the function's signature *)
+  | Earlier_call
+  | Written_here  (** written in the error set itself *)
+
+let origin = function
+  | From x -> sprintf "from `%s`" x
+  | This k -> sprintf "from this `%s`" k
+  | On_line (k, n) -> sprintf "from the `%s` on line %d" k n
+  | Signature -> "from the signature"
+  | Earlier_call -> "from an earlier call"
+  | Written_here -> "written here"
+
 (* One error set would hold two shapes of the tag [name]: [old] is where
    the one already there came from and its shape, and [new_] the same for
    the one coming in. *)
@@ -984,8 +1104,8 @@ let two_shapes loc name ~old:(old_from, old_shape) ~new_:(new_from, new_shape)
   Diag.make loc
     ~notes:
       [
-        sprintf "%s: `%s`" old_from old_shape;
-        sprintf "%s: `%s`" new_from new_shape;
+        sprintf "%s: `%s`" (origin old_from) old_shape;
+        sprintf "%s: `%s`" (origin new_from) new_shape;
         "a tag is its name and its payload's types, so these are two errors \
          with one name";
       ]
@@ -1180,8 +1300,10 @@ let kept_passed_on loc ~name_loc callee ~fn ~handled =
        sprintf "`match` can't handle what `%s` fails with here" callee
      else sprintf "`attempt` can't keep what `%s` fails with here" callee)
 
-(* A `try` or `attempt`, at [loc], that covers nothing that can fail. *)
-let covers_nothing ?help loc keyword =
+(* A `try` or `attempt`, at [loc], that covers nothing that can fail;
+   [hint] is why it may not, if something's known. *)
+let covers_nothing ?hint loc keyword =
+  let help = Option.map hint_help hint in
   Diag.make loc
     ~notes:
       [
