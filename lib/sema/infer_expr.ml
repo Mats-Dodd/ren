@@ -61,7 +61,7 @@ let forced_why env callee expected =
   let rec has_unit t =
     match repr t with
     | TCon (p, args) -> p = Path.prelude "Unit" || List.exists has_unit args
-    | TFun (ps, ret, _, _) ->
+    | TFun (ps, ret, _, _, _) ->
         List.exists (fun (p : param) -> has_unit p.ty) ps || has_unit ret
     | _ -> false
   in
@@ -113,7 +113,7 @@ and check env cx ?(why = plain) (e : expr) expected =
       fits ();
       ignore
         (infer_match env cx e.node subject arms ~want:(Some (expected, why)))
-  | Lambda (params, body), TFun (eps, eret, _, _)
+  | Lambda (params, body), TFun (eps, eret, _, _, _)
     when List.length eps = List.length params
          && List.for_all2
               (fun (p : Resolved.param) (ep : Types.param) -> p.pmode = ep.mode)
@@ -137,7 +137,7 @@ and check env cx ?(why = plain) (e : expr) expected =
         ~why:
           (explain ~notes:why.notes ?help:why.help ?help_of:why.help_of
              ~labels:why.labels ~msg:lambda_produces ());
-      let t = TFun (ps, eret, errs, uses) in
+      let t = TFun (ps, eret, errs, uses, fresh_row env.st) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
   | Con (c, args), _ ->
@@ -257,7 +257,7 @@ and synth env cx (e : expr) : ty =
       let errs = fresh_row env.st and uses = fresh_row env.st in
       bind_params cx params ps;
       let tb = infer env (lambda_cx cx params ps ~errs ~uses) body in
-      TFun (ps, tb, errs, uses)
+      TFun (ps, tb, errs, uses, fresh_row env.st)
   | Block (stmts, last) ->
       List.iter (stmt env cx) stmts;
       infer env cx last
@@ -580,7 +580,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       Hashtbl.replace cx.nodes f.node tm;
       Hashtbl.replace cx.found f.node (Method_of path);
       match repr tm with
-      | TFun (self :: ps, ret, errs, uses) ->
+      | TFun (self :: ps, ret, errs, uses, lams) ->
           blame_args cx f [ (self.ty, r.loc) ];
           (* a dependency's method takes an implementation that needs less
              than its `self` allows, as an argument does *)
@@ -593,7 +593,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
           apply env cx e ~name:(Some o.oname)
             ?target:(if group_call env path then Some path else None)
             ~callee:path f
-            (TFun (ps, ret, errs, uses))
+            (TFun (ps, ret, errs, uses, lams))
             args
       | _ -> nothing ())
 
@@ -624,7 +624,7 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
   let ename = Option.value name ~default:"this" in
   settle env tf;
   match reveal env.st tf with
-  | TFun (ps, ret, errs, uses) ->
+  | TFun (ps, ret, errs, uses, _) ->
       let n = List.length ps and given = List.length args in
       if n <> given then (
         (* still check the arguments, for errors of their own *)
@@ -645,7 +645,8 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
       let ps = List.map (infer_arg env cx) args in
       let ret = fresh_var env.st in
       let errs = fresh_row env.st and uses = fresh_row env.st in
-      unify_at env f.loc ~found:tf ~expected:(TFun (ps, ret, errs, uses));
+      unify_at env f.loc ~found:tf
+        ~expected:(TFun (ps, ret, errs, uses, fresh_row env.st));
       absorb env cx ~call:e ~ename ~fn:f errs uses;
       ret
   | TError ->
@@ -756,7 +757,7 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
       if ctor_shape env e.loc c ctor (List.map fst args) then
         List.iter2
           (fun (f : Iface.field) (_, (a : expr)) ->
-            check env cx a (field_type ~tvars f)
+            check env cx a (field_type env ~tvars f)
               ~why:(explain ~notes:[ part_of c.name "field" f.fname ] ()))
           ctor.cfields args
       else
@@ -825,14 +826,14 @@ and infer_record env cx (e : expr) name fields ~expected =
             List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl
           with
           | Some fd ->
-              let ft = field_type ~tvars fd in
+              let ft = field_type env ~tvars fd in
               (* a closure whose errors end in a named row, `! ..e`, could
                  fail with anything, which an operation can't *)
               let named_errors () =
                 match v.kind with
                 | Var (Local b) -> (
                     match Option.map repr (Hashtbl.find_opt cx.locals b.id) with
-                    | Some (TFun (_, _, errs, _)) -> (
+                    | Some (TFun (_, _, errs, _, _)) -> (
                         let rec tail r =
                           match repr_row r with
                           | RExtend (_, rest) -> tail rest
@@ -840,7 +841,7 @@ and infer_record env cx (e : expr) name fields ~expected =
                           | _ -> None
                         in
                         match (tail errs, ft) with
-                        | Some n, TFun (_, _, declared, _) ->
+                        | Some n, TFun (_, _, declared, _, _) ->
                             let declared =
                               List.map
                                 (fun (l : label) -> l.name)
@@ -854,7 +855,7 @@ and infer_record env cx (e : expr) name fields ~expected =
               in
               let ft =
                 match (t, ft) with
-                | TCon (_, [ TUses needs ]), TFun (ps, r, errs, _) ->
+                | TCon (_, [ TUses needs ]), TFun (ps, r, errs, _, lams) ->
                     (* an operation uses what the implementation needs, and
                        can fail with less than it's declared to: what more
                        it fails with is reported once the group is done *)
@@ -878,7 +879,7 @@ and infer_record env cx (e : expr) name fields ~expected =
                            ivalue = v;
                            inodes = cx.nodes;
                          });
-                    TFun (ps, r, open_errs, needs)
+                    TFun (ps, r, open_errs, needs, lams)
                 | _ -> ft
               in
               let help = Option.map (fun h _ _ -> h) (named_errors ()) in
@@ -1022,7 +1023,8 @@ and bind_pattern env cx t (p : pattern) =
               check tc;
               if ctor_shape env p.ploc c ctor (List.map (fun _ -> None) ps) then
                 List.iter2
-                  (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
+                  (fun fd sub ->
+                    bind_pattern env cx (field_type env ~tvars fd) sub)
                   ctor.cfields ps
               else unknown ())
       | PFail _ | PFail_any | POr _ ->

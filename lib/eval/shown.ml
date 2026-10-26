@@ -23,12 +23,13 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   match t with
   | Var i -> ( match List.nth_opt args i with Some a -> a | None -> t)
   | Con (p, ts) -> Con (p, List.map (subst args) ts)
-  | Fun (ps, r, e, u) ->
+  | Fun (ps, r, e, u, l) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
           subst args r,
           e,
-          u )
+          u,
+          l )
   | Errors _ | Uses _ | Error -> t
 
 (* How a type shows its values: as its own `show` method made [v] look,

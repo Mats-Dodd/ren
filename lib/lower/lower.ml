@@ -269,7 +269,7 @@ and expr_of cx (e : expr) : C.expr =
       (* used as a value: a lambda that calls it, with the evidence it's
          given where it's called *)
       match ty () with
-      | Fun (ps, ret, _, _) as fty ->
+      | Fun (ps, ret, _, _, _) as fty ->
           let params = List.map (fun (p : Ty.param) -> temp cx "x" p.ty) ps in
           let ev = evidence cx in
           let args = List.map (fun v -> local v e.loc) params in
@@ -384,7 +384,7 @@ and expr_of cx (e : expr) : C.expr =
   | Lambda (params, body) ->
       let ps =
         match ty () with
-        | Fun (ps, _, _, _) -> ps
+        | Fun (ps, _, _, _, _) -> ps
         | _ -> bug "a lambda whose type isn't a function"
       in
       let params =
@@ -1014,7 +1014,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
   in
   let ps =
     match scheme.ty with
-    | Fun (ps, _, _, _) -> ps
+    | Fun (ps, _, _, _, _) -> ps
     | _ -> bug "a function whose type isn't a function"
   in
   let params =
@@ -1048,7 +1048,10 @@ let shows (types : Iface.type_decl list) (fns : C.fn_def list) =
           {
             okind = Method;
             oscheme =
-              { ty = Fun ([ { ty = Con (p, args); _ } ], ret, errs, uses); _ };
+              {
+                ty = Fun ([ { ty = Con (p, args); _ } ], ret, errs, uses, _);
+                _;
+              };
             _;
           }
         when p = d.path && args = own && ret = Ty.str && errs.labels = []
@@ -1080,13 +1083,13 @@ let start_name = "$start"
    (infer_top.ml, [check_main]). It starts from no evidence at all. *)
 let start (main : C.fn_def) : C.fn_def =
   let loc = main.loc in
-  let ret, errs, uses =
+  let ret, errs, uses, lams =
     match main.scheme.ty with
-    | Fun (_, ret, errs, uses) -> (ret, errs, uses)
+    | Fun (_, ret, errs, uses, lams) -> (ret, errs, uses, lams)
     | _ -> bug "a `main` whose type isn't a function's"
   in
   let deps = List.map (fun (l : Ty.label) -> Ty.dep_path l.name) uses.labels in
-  let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) } in
+  let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed, lams) } in
   let tys = C.type_params scheme in
   let dicts = C.dict_params scheme in
   (* each install's evidence is numbered after the one it extends *)
@@ -1116,7 +1119,7 @@ let start (main : C.fn_def) : C.fn_def =
                (* of a type with no variables *)
                impl =
                  mk
-                   (Global_value (real, { tys = []; rows = [] }))
+                   (Global_value (real, { tys = []; rows = []; lams = [] }))
                    (Con (dep, [ Uses Ty.closed ]))
                    loc;
                body = install (n + 1) rest;

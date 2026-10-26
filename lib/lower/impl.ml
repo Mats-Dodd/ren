@@ -109,7 +109,7 @@ let recorded (f : Core.fn_def) =
   f.tys <> []
   ||
   match f.scheme.ty with
-  | Fun (ps, r, _, _) ->
+  | Fun (ps, r, _, _, _) ->
       List.exists (fun (p : Ty.param) -> has_fn p.ty) ps || has_fn r
   | _ -> false
 

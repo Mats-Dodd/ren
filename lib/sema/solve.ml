@@ -57,7 +57,7 @@ let join env ~is_value j =
       (Hashtbl.find env.globals j.target)
   in
   match (repr j.used, repr expected) with
-  | TFun ([], used, _, _), TFun ([], made, _, _) when is_value j.target ->
+  | TFun ([], used, _, _, _), TFun ([], made, _, _, _) when is_value j.target ->
       (* an associated value, a function of no parameters (ast.ml), is
          used as its result, which is what's shown *)
       equal env j.jloc ~found:used ~expected:made ~msg
@@ -487,7 +487,7 @@ let fails_more env o extra =
      lambda *)
   let brings (f : Ast.Resolved.expr) =
     match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
-    | Some (TFun (_, _, errs, _)) ->
+    | Some (TFun (_, _, errs, _, _)) ->
         List.exists (fun (l : label) -> List.mem l.name (row_names errs)) extra
     | _ -> false
   in
@@ -515,7 +515,7 @@ let fails_more env o extra =
            at its end, whatever a closure fails with, is more *)
         let more =
           match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
-          | Some (TFun (_, _, errs, _)) -> (
+          | Some (TFun (_, _, errs, _, _)) -> (
               List.exists (fun n -> n <> l.name) (row_names errs)
               || match row_end errs with RSkol _ -> true | _ -> false)
           | _ -> true

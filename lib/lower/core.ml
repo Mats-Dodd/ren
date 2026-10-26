@@ -349,7 +349,7 @@ let rec has_param n (t : Ty.ty) =
   match t with
   | Var m -> m < n
   | Con (_, args) -> List.exists (has_param n) args
-  | Fun (ps, r, e, u) ->
+  | Fun (ps, r, e, u, _) ->
       List.exists (fun (p : Ty.param) -> has_param n p.ty) ps
       || has_param n r || row e || row u
   | Errors r | Uses r -> row r
@@ -373,7 +373,8 @@ let rec describe tys (t : Ty.ty) =
   | _ when not (has_param (List.length tys) t) -> Known t
   | Var n -> Param (List.nth tys n)
   | Con (p, args) -> Applied (p, List.map (describe tys) args)
-  | Fun (ps, r, e, u) ->
+  | Fun (ps, r, e, u, _) ->
+      (* a lambda set says nothing of a value at runtime *)
       Fn
         ( List.map (fun (p : Ty.param) -> (p.mode, describe tys p.ty)) ps,
           describe tys r,
@@ -395,7 +396,7 @@ let params_in n (t : Ty.ty) =
     | Var m when m < n -> m :: acc
     | Var _ | Error -> acc
     | Con (_, args) -> List.fold_left go acc args
-    | Fun (ps, r, e, u) ->
+    | Fun (ps, r, e, u, _) ->
         row
           (row
              (go
@@ -457,7 +458,7 @@ let elem_ty (t : Ty.ty) =
    row has a tag, or may have more than it says. *)
 let fails (t : Ty.ty) =
   match t with
-  | Fun (_, _, errs, _) -> errs.labels <> [] || errs.tail <> None
+  | Fun (_, _, errs, _, _) -> errs.labels <> [] || errs.tail <> None
   | _ -> false
 
 (* The expressions directly inside [e], in the order they're evaluated (a

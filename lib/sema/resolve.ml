@@ -853,7 +853,7 @@ let lookup env sc loc ~what x =
                      more than its receiver *)
                   let amp, rest =
                     match scheme.ty with
-                    | Fun (self :: ps, _, _, _) ->
+                    | Fun (self :: ps, _, _, _, _) ->
                         ( (if self.mode = Inout then "&" else ""),
                           if ps = [] then "" else "..." )
                     | _ -> ("", "")

@@ -180,7 +180,10 @@ let rec op_of env t name =
           | Some o, _ -> Some (td, o)
           | None, Some rep ->
               op_of env
-                (of_ty ~vars:(List.nth args) ~tails:(fun _ -> REmpty) rep)
+                (of_ty ~vars:(List.nth args)
+                   ~tails:(fun _ -> REmpty)
+                   ~lams:(fun _ -> fresh_row env.st)
+                   rep)
                 name
           | None, None -> None))
   | _ -> None
@@ -214,7 +217,7 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
         | Method ->
             let changes =
               match o.oscheme.ty with
-              | Fun ({ mode = Inout; _ } :: _, _, _, _) -> true
+              | Fun ({ mode = Inout; _ } :: _, _, _, _, _) -> true
               | _ -> false
             in
             method_not_called f ~recv:(env.source r) ~item ~changes
@@ -223,7 +226,7 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
   | None -> (
       let found (td : Iface.type_decl) fd tvars =
         Hashtbl.replace cx.found e.node (Field_of td.path);
-        field_type ~tvars fd
+        field_type env ~tvars fd
       in
       let needs_record t =
         report env (needs_record f (show (printer env) t));
@@ -346,6 +349,7 @@ let own_instance env (g : group_fn) : subst =
   {
     tys = List.map (fun id -> (id, fresh_var env.st)) g.gparams;
     rows = List.map (fun id -> (id, fresh_row env.st)) g.grows;
+    lams = [];
   }
 
 (* A name's type, at the expression [node]. A top-level function's is a
@@ -366,12 +370,12 @@ let rec lookup env cx ~node loc = function
       let used = Hashtbl.find cx.targs node in
       let picked =
         match (used.tpicked, repr (Hashtbl.find env.globals p)) with
-        | Fresh s, TFun ([], r, _, _) -> Fresh (restrict s (generics r))
+        | Fresh s, TFun ([], r, _, _, _) -> Fresh (restrict s (generics r))
         | picked, _ -> picked
       in
       Hashtbl.replace cx.targs node
         { used with tvalue = true; tpicked = picked };
-      match repr t with TFun ([], t, _, _) -> t | _ -> TError)
+      match repr t with TFun ([], t, _, _, _) -> t | _ -> TError)
   | Global p when List.mem p env.spelled ->
       (* its declaration says everything about it, so even in its own body
          it's an instance of that, joined with nothing: a use that closes
@@ -400,9 +404,13 @@ let rec lookup env cx ~node loc = function
          adds it to the caller's `uses` *)
       match Option.bind (Hashtbl.find_opt env.types p) (dep_op_in op) with
       | Some o -> (
-          match field_type ~tvars:[] o with
-          | TFun (ps, ret, errs, _) ->
+          match field_type env ~tvars:[] o with
+          | TFun (ps, ret, errs, _, l) ->
               TFun
-                (ps, ret, errs, RExtend (dep (Ty.dep_label p), fresh_row env.st))
+                ( ps,
+                  ret,
+                  errs,
+                  RExtend (dep (Ty.dep_label p), fresh_row env.st),
+                  l )
           | _ -> TError)
       | None -> TError)

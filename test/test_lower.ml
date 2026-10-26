@@ -234,7 +234,13 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       dicts = [];
       scheme =
         {
-          ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
+          ty =
+            Fun
+              ( [],
+                Ren.Ty.unit,
+                Ren.Ty.closed,
+                Ren.Ty.closed,
+                { ids = []; lvar = Some 0 } );
           names = [];
           reqs = [];
         };
@@ -283,11 +289,21 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
   let id =
     fn "id"
       [ { mode = Read; var = x } ]
-      (Fun ([ Ren.Ty.read (Var 0) ], Var 0, open_row 0, open_row 1))
+      (Fun
+         ( [ Ren.Ty.read (Var 0) ],
+           Var 0,
+           open_row 0,
+           open_row 1,
+           Ren.Ty.any_lams ))
       (Ren.Core.local x loc)
   in
   let int_fn : Ren.Ty.ty =
-    Fun ([ Ren.Ty.read Ren.Ty.int ], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed)
+    Fun
+      ( [ Ren.Ty.read Ren.Ty.int ],
+        Ren.Ty.int,
+        Ren.Ty.closed,
+        Ren.Ty.closed,
+        Ren.Ty.any_lams )
   in
   let call =
     Ren.Core.mk
@@ -305,7 +321,9 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
       Ren.Ty.int loc
   in
   let main =
-    fn "main" [] (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed)) call
+    fn "main" []
+      (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed, Ren.Ty.any_lams))
+      call
   in
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
@@ -315,10 +333,16 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
 
 let%expect_test "Core Lint reports a use at the wrong type arguments" =
   (* at `Int`, with rows of nothing, it's clean *)
-  id_program { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] };
+  id_program
+    { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ]; lams = [] };
   [%expect {| ok |}];
   (* at `Bool`, its type would be `fn(Bool) -> Bool` *)
-  id_program { tys = [ Ren.Ty.bool ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] };
+  id_program
+    {
+      tys = [ Ren.Ty.bool ];
+      rows = [ Ren.Ty.closed; Ren.Ty.closed ];
+      lams = [];
+    };
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `id` is used at `fn(Int) -> Int`, but its type arguments make it `fn(Bool) -> Bool`")
@@ -330,6 +354,7 @@ let%expect_test "Core Lint reports a use at the wrong type arguments" =
       tys = [ Ren.Ty.int ];
       rows =
         [ { labels = [ Ren.Ty.label "Short" ]; tail = None }; Ren.Ty.closed ];
+      lams = [];
     };
   [%expect
     {|
@@ -337,7 +362,7 @@ let%expect_test "Core Lint reports a use at the wrong type arguments" =
       = this is a bug in the Ren compiler, not in your program
     |}];
   (* and too few *)
-  id_program { tys = [ Ren.Ty.int ]; rows = [] };
+  id_program { tys = [ Ren.Ty.int ]; rows = []; lams = [] };
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `id` is given 1 type and 0 row arguments, but `fn(T) -> T ! ..e uses ..d` has 1 type and 2 row variables")
@@ -374,7 +399,12 @@ let%expect_test "Core Lint reports a pattern of an error type" =
       scheme =
         {
           ty =
-            Fun ([ Ren.Ty.read set ], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
+            Fun
+              ( [ Ren.Ty.read set ],
+                Ren.Ty.unit,
+                Ren.Ty.closed,
+                Ren.Ty.closed,
+                Ren.Ty.any_lams );
           names = [];
           reqs = [];
         };
@@ -406,7 +436,13 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
       dicts = [];
       scheme =
         {
-          ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
+          ty =
+            Fun
+              ( [],
+                Ren.Ty.unit,
+                Ren.Ty.closed,
+                Ren.Ty.closed,
+                { ids = []; lvar = Some 0 } );
           names = [];
           reqs = [];
         };
@@ -449,7 +485,13 @@ let%expect_test "Core Lint reports an instance that is a value" =
       dicts = [];
       scheme =
         {
-          ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
+          ty =
+            Fun
+              ( [],
+                Ren.Ty.unit,
+                Ren.Ty.closed,
+                Ren.Ty.closed,
+                { ids = []; lvar = Some 0 } );
           names = [];
           reqs = [];
         };
@@ -481,7 +523,9 @@ let t_member = Ren.Path.member (Ren.Path.make "test" "T")
 let values_program ~uses_b ~values =
   let loc = Ren.Loc.point ~file 1 1 in
   let path = t_member in
-  let int_fn : Ren.Ty.ty = Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed) in
+  let int_fn : Ren.Ty.ty =
+    Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed, Ren.Ty.any_lams)
+  in
   let value name body : Ren.Core.fn_def =
     {
       path = path name;
@@ -513,7 +557,7 @@ let%expect_test "Core Lint reports a value named as a function" =
       (Call
          ( Ren.Core.mk
              (Global (t_member "b", Ren.Ty.own_args Ren.Ty.int, [], []))
-             (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed))
+             (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed, Ren.Ty.any_lams))
              (Ren.Loc.point ~file 1 1),
            [],
            Ren.Core.evidence 2 ))
@@ -684,7 +728,7 @@ fn each(inout grid: Array<Array<Int>>) =
 let%expect_test "Core Lint reports a descriptor that doesn't describe its type"
     =
   let targs : Ren.Ty.args =
-    { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] }
+    { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ]; lams = [] }
   in
   (* `id` at `Int`, passed `Bool`'s *)
   id_program ~descs:[ Known Ren.Ty.bool ] targs;
@@ -717,7 +761,7 @@ let%expect_test "Core Lint reports a descriptor that doesn't describe its type"
 
 let%expect_test "Core Lint reports a type said to show itself that can't" =
   let targs : Ren.Ty.args =
-    { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] }
+    { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ]; lams = [] }
   in
   let box = Ren.Path.make "test" "Box" in
   let decl : Ren.Iface.type_decl =
@@ -850,7 +894,12 @@ let%expect_test "Core Lint checks requirements' dictionaries" =
     |}];
   (* or one derived for a function's type, which has none *)
   let inc : Ren.Ty.ty =
-    Fun ([ Ren.Ty.read Ren.Ty.int ], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed)
+    Fun
+      ( [ Ren.Ty.read Ren.Ty.int ],
+        Ren.Ty.int,
+        Ren.Ty.closed,
+        Ren.Ty.closed,
+        Ren.Ty.any_lams )
   in
   lint_same (given [ eq inc [] ]);
   [%expect

@@ -418,7 +418,7 @@ let transparent_rows (params : Resolved.param list) ps =
     (List.map2
        (fun (p : Resolved.param) (t : Types.param) ->
          match (p.pty, repr t.ty) with
-         | Some (TyFn (_, _, None, _, _) as w), TFun (_, _, e, _)
+         | Some (TyFn (_, _, None, _, _) as w), TFun (_, _, e, _, _)
            when not (names_row w) ->
              [ e ]
          | _ -> [])
@@ -556,7 +556,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
   let uses =
     (match (declared_uses ~is_value:(fun _ -> false) f, repr ty) with
       | Some ds, _ -> ds
-      | None, TFun (_, _, _, u) -> row_names u
+      | None, TFun (_, _, _, u, _) -> row_names u
       | None, _ -> [])
     @ row_names cx.uses
   in
@@ -571,7 +571,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
       | _ -> false
     in
     match repr t with
-    | TFun (ps, ret, _, _) -> (
+    | TFun (ps, ret, _, _, _) -> (
         match repr ret with
         | TCon (q, [ TUses needs ])
           when implements q && not (List.mem (Ty.dep_label p) (row_names needs))
@@ -634,7 +634,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
               match (o.okind, o.oscheme.ty) with
               | Value, Con (q, args) when q = p && not (itself args) ->
                   Some name
-              | Function, Fun (ps, Con (q, args), _, _)
+              | Function, Fun (ps, Con (q, args), _, _, _)
                 when q = p && not (itself args) ->
                   Some (call_written name (List.length ps))
               | _ -> None)
@@ -753,7 +753,7 @@ let result_help env pr found =
           | Some { body = Handler deps; _ } -> [ (type_name env p, deps) ]
           | _ -> [])
         @ List.concat_map handlers args
-    | TFun (ps, r, e, u) ->
+    | TFun (ps, r, e, u, _) ->
         List.concat_map handlers (r :: param_tys ps) @ in_row e @ in_row u
     | TErrors r | TUses r -> in_row r
     | TVar _ | TSkol _ | TError -> []
@@ -773,14 +773,15 @@ let result_help env pr found =
             | TCon (p, args) ->
                 TCon
                   ((if type_name env p = h then d else p), List.map rename args)
-            | TFun (ps, r, e, u) ->
+            | TFun (ps, r, e, u, l) ->
                 TFun
                   ( List.map
                       (fun (p : Types.param) -> { p with ty = rename p.ty })
                       ps,
                     rename r,
                     rename_row e,
-                    rename_row u )
+                    rename_row u,
+                    l )
             | TErrors r -> TErrors (rename_row r)
             | TUses r -> TUses (rename_row r)
             | t -> t
@@ -868,7 +869,9 @@ let add_globals env ~imports ~reachable fns =
             (fun path (o : Iface.op) ->
               let t = of_scheme env.st o.oscheme in
               Hashtbl.replace env.globals path
-                (if o.okind = Value then TFun ([], t, REmpty, REmpty) else t))
+                (if o.okind = Value then
+                   TFun ([], t, REmpty, REmpty, generic_row env.st)
+                 else t))
             td.members)
         iface.types)
     reachable;
@@ -1005,10 +1008,11 @@ let setup env ~is_value (f : fn_def) =
       named;
     }
   in
-  Hashtbl.replace env.globals path (TFun (ps, ret, errs, uses));
+  Hashtbl.replace env.globals path
+    (TFun (ps, ret, errs, uses, fresh_row env.st));
   let declared () =
     let ps, ret, errs, uses = signature ~seen:true () in
-    TFun (ps, ret, errs, uses)
+    TFun (ps, ret, errs, uses, fresh_row env.st)
   in
   (* its errors and uses, if it names the row each ends in, `! ..e`, and
      they don't end in it yet: the variable each ends in, and the named
@@ -1105,7 +1109,7 @@ let check_spelled env ~is_value so_far ms =
       let f = m.fn in
       if f.pub && is_value f && f.ret = None then
         match Hashtbl.find so_far.schemes m.cx.self with
-        | TFun (_, t, _, _) as scheme ->
+        | TFun (_, t, _, _, _) as scheme ->
             let pr = printer env in
             reserve pr scheme;
             report env
@@ -1118,7 +1122,7 @@ let check_spelled env ~is_value so_far ms =
       let f = m.fn in
       if f.pub && not (is_value f) then
         match Hashtbl.find so_far.schemes m.cx.self with
-        | TFun (ps, _, _, _) as scheme ->
+        | TFun (ps, _, _, _, _) as scheme ->
             List.iter2
               (fun (p : Resolved.param) (t : Types.param) ->
                 if p.pty = None then (
@@ -1186,7 +1190,7 @@ let check_test_body env so_far ~bodies (f : fn_def) =
           Hashtbl.find_opt cx.nodes (last f.body).node)
     in
     match (own, repr (Hashtbl.find so_far.schemes path)) with
-    | Some ret, _ | None, TFun (_, ret, _, _) ->
+    | Some ret, _ | None, TFun (_, ret, _, _, _) ->
         unify_at env (last f.body).loc ~found:ret ~expected:unit ~msg:test_body
           ~notes:[ test_passes ]
           ~help:(test_body_help ~is_bool:(repr ret = bool))
@@ -1245,13 +1249,14 @@ let canonical env so_far (f : fn_def) =
           let scheme = Hashtbl.find env.globals u.tcallee in
           let s = matching env.st scheme t in
           match repr scheme with
-          | TFun ([], r, _, _) when u.tvalue -> restrict s (generics r)
+          | TFun ([], r, _, _, _) when u.tvalue -> restrict s (generics r)
           | _ -> s)
     in
     let args : Ty.args =
       {
         tys = List.map (fun (_, t) -> canon_ty c ~all:true t) s.tys;
         rows = List.map (fun (_, r) -> canon_row c ~all:true r) s.rows;
+        lams = List.map (fun (_, l) -> canon_lams c l) s.lams;
       }
     in
     (* and what the callee needs of each, its scheme's requirements, by

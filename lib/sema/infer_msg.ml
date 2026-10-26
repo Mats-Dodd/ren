@@ -36,7 +36,7 @@ let article name =
    the two types can otherwise look alike. *)
 let rec mode_clash found expected =
   match (repr found, repr expected) with
-  | TFun (p1, r1, _, _), TFun (p2, r2, _, _)
+  | TFun (p1, r1, _, _, _), TFun (p2, r2, _, _, _)
     when List.length p1 = List.length p2 ->
       let here =
         List.find_map
@@ -60,7 +60,7 @@ let rec errors_clash found expected =
     else None
   in
   match (repr found, repr expected) with
-  | TFun (p1, r1, e1, _), TFun (p2, r2, e2, _) -> (
+  | TFun (p1, r1, e1, _, _), TFun (p2, r2, e2, _, _) -> (
       let wanted = row_names e2 in
       match
         List.filter
@@ -104,7 +104,7 @@ let rec labels_named name t =
     List.filter (fun (l : label) -> l.name = name) (fst (row_parts r))
   in
   match repr t with
-  | TFun (ps, r, e, _) ->
+  | TFun (ps, r, e, _, _) ->
       row e @ List.concat_map (labels_named name) (r :: param_tys ps)
   | TCon (_, args) -> List.concat_map (labels_named name) args
   | TErrors e -> row e

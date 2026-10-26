@@ -1848,10 +1848,14 @@ let%expect_test "instantiate gives its fresh variables in variable order" =
       {
         ty =
           Fun
-            ( [ read (Var 0); read (Fun ([], Var 1, row [] 0, closed)) ],
+            ( [
+                read (Var 0);
+                read (Fun ([], Var 1, row [] 0, closed, any_lams));
+              ],
               array (Var 2),
               row [ tag "B" [ Var 3 ]; tag "A" [ Var 4 ] ] 1,
-              row [] 2 );
+              row [] 2,
+              any_lams );
         names = [];
         reqs = [];
       }

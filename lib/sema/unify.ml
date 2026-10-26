@@ -29,10 +29,11 @@ let rec occurs id level t =
   | TSkol _ | TError -> ()
   | TCon (_, args) -> List.iter (occurs id level) args
   | TErrors e | TUses e -> occurs_row ~ty:id (-1) level e
-  | TFun (ps, r, e, u) ->
+  | TFun (ps, r, e, u, l) ->
       List.iter (occurs id level) (r :: param_tys ps);
       occurs_row ~ty:id (-1) level e;
-      occurs_row ~ty:id (-1) level u
+      occurs_row ~ty:id (-1) level u;
+      occurs_row (-1) level l
 
 (* The same for row variables. Type and row ids never clash, so passing -1
    as [id] just adjusts levels. A label's payload is made of types, which
@@ -124,7 +125,7 @@ let rec unify st a b =
   (* in its own module, an opaque type is what it's represented as *)
   | (TCon (p, _) as t), u when Hashtbl.mem st.reps p -> unify st (reveal st t) u
   | t, (TCon (p, _) as u) when Hashtbl.mem st.reps p -> unify st t (reveal st u)
-  | TFun (p1, r1, e1, u1), TFun (p2, r2, e2, u2)
+  | TFun (p1, r1, e1, u1, l1), TFun (p2, r2, e2, u2, l2)
     when List.length p1 = List.length p2 ->
       List.iter2
         (fun a b ->
@@ -134,7 +135,8 @@ let rec unify st a b =
         p1 p2;
       unify st r1 r2;
       unify_row st e1 e2;
-      unify_row st u1 u2
+      unify_row st u1 u2;
+      unify_lams st l1 l2
   | TErrors e1, TErrors e2 | TUses e1, TUses e2 -> unify_row st e1 e2
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
@@ -168,6 +170,35 @@ and unify_row st a b =
   | (REmpty | RSkol _), (REmpty | RSkol _) | REmpty, RExtend _ -> raise Mismatch
   | RVar { contents = RLink _ }, _ | _, RVar { contents = RLink _ } ->
       assert false
+
+(* Two lambda sets are one (ty.ml): each gets the identities the other
+   lists, by adding them to its tail, a fresh variable then ending both. A
+   set is always open, so this doesn't fail, and unlike two rows of errors,
+   two sets that end in one variable but list different identities can be
+   made one too: that variable gets what either lists, and a set that
+   lists an identity twice means what listing it once does. *)
+and unify_lams st a b =
+  let ids_a = row_names a and ids_b = row_names b in
+  let missing have from =
+    List.map lam (List.filter (fun n -> not (List.mem n have)) from)
+  in
+  let rec ends r =
+    match repr_row r with RExtend (_, rest) -> ends rest | r -> r
+  in
+  match (ends a, ends b) with
+  | RVar ({ contents = RUnbound (_, l) } as c1), RVar c2 when c1 == c2 -> (
+      match missing ids_a ids_b @ missing ids_b ids_a with
+      | [] -> ()
+      | more ->
+          c1 := RLink (extend more (RVar (ref (RUnbound (fresh_id st, l))))))
+  | ( RVar ({ contents = RUnbound (_, l1) } as c1),
+      RVar ({ contents = RUnbound (_, l2) } as c2) ) ->
+      let rest = RVar (ref (RUnbound (fresh_id st, min l1 l2))) in
+      c1 := RLink (extend (missing ids_a ids_b) rest);
+      c2 := RLink (extend (missing ids_b ids_a) rest)
+  | _ ->
+      (* a set that isn't open, which nothing makes *)
+      unify_row st a b
 
 (* [row] with [label] removed, extending an open tail if the label isn't
    there yet. A label of the same name has to have the same payload. *)
@@ -231,12 +262,13 @@ let copier () =
             c)
     | TVar { contents = Link _ } -> assert false
     | TCon (p, args) -> TCon (p, List.map ty args)
-    | TFun (ps, r, e, u) ->
+    | TFun (ps, r, e, u, l) ->
         TFun
           ( List.map (fun (p : param) -> { p with ty = ty p.ty }) ps,
             ty r,
             row e,
-            row u )
+            row u,
+            row l )
     | TErrors r -> TErrors (row r)
     | TUses r -> TUses (row r)
     | (TSkol _ | TError) as t -> t

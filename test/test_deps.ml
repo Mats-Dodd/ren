@@ -36,7 +36,13 @@ let run_start files body =
           body;
           scheme =
             {
-              ty = Fun ([], body.ty, Ty.closed, Ty.closed);
+              ty =
+                Fun
+                  ( [],
+                    body.ty,
+                    Ty.closed,
+                    Ty.closed,
+                    { ids = []; lvar = Some 0 } );
               names = [];
               reqs = [];
             };
@@ -59,7 +65,7 @@ let run_start files body =
 
 (* Core for a call of [f], of no parameters, with the evidence [ev]. *)
 let call ~loc (f : Ren.Core.fn_def) ev =
-  let ret = match f.scheme.ty with Fun (_, t, _, _) -> t | t -> t in
+  let ret = match f.scheme.ty with Fun (_, t, _, _, _) -> t | t -> t in
   Ren.Core.mk
     (Call
        ( Ren.Core.mk
@@ -76,7 +82,7 @@ let lint_evidence body =
   let open Ren in
   let loc = Loc.point ~file 1 1 in
   let d = Path.make "test" "D" in
-  let int_fn : Ty.ty = Fun ([], Ty.int, Ty.closed, Ty.closed) in
+  let int_fn : Ty.ty = Fun ([], Ty.int, Ty.closed, Ty.closed, Ty.any_lams) in
   let uses_d : Ty.row =
     { labels = [ Ty.label (Ty.dep_label d) ]; tail = None }
   in
@@ -86,7 +92,7 @@ let lint_evidence body =
          {
            dep = d;
            op = "op";
-           fty = Fun ([], Ty.int, Ty.closed, uses_d);
+           fty = Fun ([], Ty.int, Ty.closed, uses_d, Ty.any_lams);
            ev = Core.evidence ev;
            args = [];
          })
@@ -95,7 +101,7 @@ let lint_evidence body =
   let lambda ?(uses = Ty.closed) ev body =
     Core.mk
       (Lambda { params = []; ev = Core.evidence ev; captures = []; body })
-      (Fun ([], Ty.int, Ty.closed, uses))
+      (Fun ([], Ty.int, Ty.closed, uses, Ty.any_lams))
       loc
   in
   let call f ev = Core.mk (Call (f, [], Core.evidence ev)) Ty.int loc in
@@ -107,7 +113,11 @@ let lint_evidence body =
       tys = [];
       dicts = [];
       scheme =
-        { ty = Fun ([], Ty.int, Ty.closed, uses_d); names = []; reqs = [] };
+        {
+          ty = Fun ([], Ty.int, Ty.closed, uses_d, Ty.any_lams);
+          names = [];
+          reqs = [];
+        };
       body = body ~loc ~op ~lambda ~call ~uses_d;
       loc;
     }

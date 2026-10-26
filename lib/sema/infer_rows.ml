@@ -187,7 +187,7 @@ let include_errors env cx ~loc ~here ~sources ~fix ?without:handled errs into =
    a lambda in it: its errors are the function's own. *)
 let in_own_body env cx =
   match Option.map repr (Hashtbl.find_opt env.globals cx.self) with
-  | Some (TFun (_, _, errs, _)) -> row_tail errs = row_tail cx.errs
+  | Some (TFun (_, _, errs, _, _)) -> row_tail errs = row_tail cx.errs
   | _ -> false
 
 (* Add [uses], what a call's callee uses, or what an implementation a

@@ -174,7 +174,8 @@ let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
         ( List.map (of_written_param ~rows ~sets) ps,
           ret,
           written_errors ~rows ~sets errs,
-          written_uses ~rows u )
+          written_uses ~rows u,
+          Ty.any_lams )
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
@@ -306,12 +307,13 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
       | Some (TyFn (_, _, written_e, written_u, _) as t)
         when not (Ast.names_row t) -> (
           match of_written ~rows ~sets t with
-          | Fun (ps, r, e, u) ->
+          | Fun (ps, r, e, u, l) ->
               Fun
                 ( ps,
                   r,
                   (if written_e = None then errs else e),
-                  if written_u = None then deps else u )
+                  (if written_u = None then deps else u),
+                  l )
           | _ -> assert false)
       | Some (TyImpl ({ tref = Named d; _ }, None, _)) -> Con (d, [ Uses deps ])
       | Some t -> of_written ~rows ~sets t
@@ -325,7 +327,7 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   in
   Ty.canonical
     {
-      ty = Fun (ps, ret, errs, deps);
+      ty = Fun (ps, ret, errs, deps, Ty.any_lams);
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
       reqs = [];
     }
@@ -363,7 +365,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
       | Op_value, _ -> (
           (* a function of no parameters, whose result is the value *)
           match signature ~sets f with
-          | { ty = Fun ([], t, _, _); _ } as s ->
+          | { ty = Fun ([], t, _, _, _); _ } as s ->
               (Value, Ty.canonical { s with ty = t })
           | _ -> assert false)
       | Op_fn, p :: _ when p.pname.ident.name = "self" ->

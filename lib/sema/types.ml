@@ -8,7 +8,9 @@
    answer, and every function here looks at types through it.
 
    Function types carry two rows: the errors the function can fail with and
-   the dependencies it uses. A row is a list of labels ending either in
+   the dependencies it uses; and a third, hidden one, its lambda set: which
+   lambdas and functions a value of the type can be (ty.ml), a row of their
+   identities, which has no payloads and always ends in a variable. A row is a list of labels ending either in
    [REmpty] (closed: exactly these labels) or in a row variable (open: these
    labels and possibly more). Rows are unified the way OCaml unifies
    polymorphic variants, after Rémy; see unify.ml.
@@ -31,7 +33,8 @@ type mode = Ast.mode = Read | Inout
 
 type ty =
   | TCon of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
-  | TFun of param list * ty * row * row  (** params, result, errors, uses *)
+  | TFun of param list * ty * row * row * row
+      (** params, result, errors, uses, and its lambda set *)
   | TVar of tvar ref
   | TErrors of row
       (** an error set as a type argument, which only [Result<T, ! ...>] takes
@@ -171,6 +174,10 @@ let param_tys ps = List.map (fun p -> p.ty) ps
 let unmarked () = ref (Mark None)
 let dep name = { name; payload = []; written = unmarked () }
 
+(* An identity in a lambda set (ty.ml): a label with no payload, as a
+   dependency's is. *)
+let lam name = { name; payload = []; written = unmarked () }
+
 (* Follow links to the type a variable currently stands for, shortening the
    chain as it goes so later lookups are quick. *)
 let rec repr t =
@@ -306,7 +313,8 @@ let generalize st ~skolems ?(row_skolems = []) t =
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
     | TUses u -> TUses (row u)
-    | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
+    | TFun (ps, r, e, u, l) ->
+        TFun (List.map param ps, go r, row e, row u, row l)
     | TError -> TError
   and param p = { p with ty = go p.ty }
   and row r =
@@ -336,8 +344,13 @@ let generalize st ~skolems ?(row_skolems = []) t =
    row variables apart. They're in the order canonical form numbers them
    (ty.ml), by where they first appear reading left to right, so the n-th
    of [tys] is what [Var n] of the function's [Ty.scheme] became at this
-   use: its n-th type argument. *)
-type subst = { tys : (int * ty) list; rows : (int * row) list }
+   use: its n-th type argument. Lambda-set variables are apart from row
+   variables, in [lams], as canonical form numbers them. *)
+type subst = {
+  tys : (int * ty) list;
+  rows : (int * row) list;
+  lams : (int * row) list;
+}
 
 (* The generic variables of a scheme, each standing for itself, in the
    order canonical form numbers them: walked as [canon_ty] walks a type, a
@@ -346,7 +359,7 @@ type subst = { tys : (int * ty) list; rows : (int * row) list }
    itself, the type arguments of a function used at its own type, as in
    its own body. *)
 let generics t =
-  let seen_tys = ref [] and seen_rows = ref [] in
+  let seen_tys = ref [] and seen_rows = ref [] and seen_lams = ref [] in
   let see seen id v =
     if not (List.mem_assoc id !seen) then seen := (id, v) :: !seen
   in
@@ -357,33 +370,39 @@ let generics t =
     | TVar _ | TSkol _ | TError -> ()
     | TCon (_, args) -> List.iter walk args
     | TErrors e | TUses e -> walk_row e
-    | TFun (ps, r, e, u) ->
+    | TFun (ps, r, e, u, l) ->
         List.iter (fun p -> walk p.ty) ps;
         walk r;
         walk_row e;
-        walk_row u
+        walk_row u;
+        walk_tail seen_lams l
   and walk_row r =
     List.iter
       (fun l -> List.iter walk l.payload)
       (List.sort_uniq
          (fun (a : label) b -> String.compare a.name b.name)
          (fst (row_parts r)));
-    walk_tail r
-  and walk_tail r =
+    walk_tail seen_rows r
+  and walk_tail seen r =
     match repr_row r with
     | RVar { contents = RUnbound (id, l) } as v when l = generic_level ->
-        see seen_rows id v
-    | RExtend (_, rest) -> walk_tail rest
+        see seen id v
+    | RExtend (_, rest) -> walk_tail seen rest
     | REmpty | RVar _ | RSkol _ -> ()
   in
   walk t;
-  { tys = List.rev !seen_tys; rows = List.rev !seen_rows }
+  {
+    tys = List.rev !seen_tys;
+    rows = List.rev !seen_rows;
+    lams = List.rev !seen_lams;
+  }
 
 (* Only those of [s]'s variables that are among [keep]'s, in [s]'s order. *)
 let restrict s keep =
   {
     tys = List.filter (fun (id, _) -> List.mem_assoc id keep.tys) s.tys;
     rows = List.filter (fun (id, _) -> List.mem_assoc id keep.rows) s.rows;
+    lams = List.filter (fun (id, _) -> List.mem_assoc id keep.lams) s.lams;
   }
 
 (* A copy of a type scheme with fresh variables in place of the generic
@@ -404,7 +423,8 @@ let instantiate st t =
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
     | TUses u -> TUses (row u)
-    | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
+    | TFun (ps, r, e, u, l) ->
+        TFun (List.map param ps, go r, row e, row u, row l)
   and param p = { p with ty = go p.ty }
   and row r =
     match repr_row r with
@@ -436,6 +456,7 @@ let instantiate st t =
     {
       tys = List.map (fun (id, _) -> (id, Hashtbl.find tys id)) g.tys;
       rows = List.map (fun (id, _) -> (id, Hashtbl.find rows id)) g.rows;
+      lams = List.map (fun (id, _) -> (id, Hashtbl.find rows id)) g.lams;
     } )
 
 (* A copy of [t] with [s]'s types in place of the type parameters (as
@@ -452,7 +473,8 @@ let replace (s : subst) t =
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
     | TUses u -> TUses (row u)
-    | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
+    | TFun (ps, r, e, u, l) ->
+        TFun (List.map param ps, go r, row e, row u, row l)
   and param p = { p with ty = go p.ty }
   and row r =
     match repr_row r with
@@ -474,6 +496,8 @@ type canon = {
   cst : state;
   tys : (int, int) Hashtbl.t;  (** variable id -> its number *)
   rows : (int, int) Hashtbl.t;  (** row variable id -> its number *)
+  lams : (int, int) Hashtbl.t;
+      (** lambda-set variable id -> its number, apart from the rows' *)
   mutable names : (int * string) list;
       (** the declared names of the numbered variables *)
   for_message : bool;
@@ -491,6 +515,7 @@ let canon st =
     cst = st;
     tys = Hashtbl.create 8;
     rows = Hashtbl.create 8;
+    lams = Hashtbl.create 8;
     names = [];
     for_message = false;
     params = [];
@@ -537,7 +562,7 @@ let rec canon_ty c ~all t : Ty.ty =
   | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
   | TErrors e -> Errors (canon_row c ~all e)
   | TUses u -> Uses (canon_row c ~all u)
-  | TFun (ps, r, e, u) ->
+  | TFun (ps, r, e, u, l) ->
       (* `let`s fix the order of first appearance: OCaml evaluates a
          constructor's arguments right to left *)
       let ps =
@@ -546,7 +571,8 @@ let rec canon_ty c ~all t : Ty.ty =
       let r = canon_ty c ~all r in
       let e = canon_row c ~all e in
       let u = canon_row c ~all u in
-      Fun (ps, r, e, u)
+      let l = canon_lams c l in
+      Fun (ps, r, e, u, l)
 
 and canon_row c ~all r : Ty.row =
   (* only a generic tail stands for "and possibly more", in a scheme. The
@@ -585,6 +611,21 @@ and canon_row c ~all r : Ty.row =
   in
   { labels; tail = tail r }
 
+(* A lambda set in canonical form: its identities, sorted, and its
+   variable, numbered apart from rows'. A set is always open, generic or
+   not, since what a function value can be is never all known (ty.ml); one
+   that was closed, which nothing does, gets a variable of its own. *)
+and canon_lams c l : Ty.lams =
+  let ids = List.sort_uniq compare (row_names l) in
+  let rec tail r =
+    match repr_row r with
+    | RVar { contents = RUnbound (id, _) } -> number c.lams id
+    | RExtend (_, rest) -> tail rest
+    | REmpty | RSkol _ -> number c.lams (-1 - Hashtbl.length c.lams)
+    | RVar { contents = RLink _ } -> assert false
+  in
+  { ids; lvar = Some (tail l) }
+
 (* What [canon] has numbered so far, as a scheme's [names]. *)
 let canon_names c = List.sort compare c.names
 
@@ -603,32 +644,32 @@ let to_scheme st t : Ty.scheme =
   { ty; names = canon_names c; reqs = canon_reqs c }
 
 (* A canonical type from an interface, with [vars] standing for its
-   variables and [tails] for its row variables. *)
-let rec of_ty ~vars ~tails (t : Ty.ty) =
+   variables, [tails] for its row variables, and [lams] for its lambda-set
+   variables: [None] for a set of its own, written in a declaration. *)
+let rec of_ty ~vars ~tails ~lams (t : Ty.ty) =
+  let go = of_ty ~vars ~tails ~lams in
   match t with
-  | Con (p, args) -> TCon (p, List.map (of_ty ~vars ~tails) args)
-  | Errors e -> TErrors (of_row ~vars ~tails e)
-  | Uses u -> TUses (of_row ~vars ~tails u)
-  | Fun (ps, r, e, u) ->
+  | Con (p, args) -> TCon (p, List.map go args)
+  | Errors e -> TErrors (of_row ~vars ~tails ~lams e)
+  | Uses u -> TUses (of_row ~vars ~tails ~lams u)
+  | Fun (ps, r, e, u, l) ->
       TFun
-        ( List.map
-            (fun (p : Ty.param) ->
-              { mode = p.mode; ty = of_ty ~vars ~tails p.ty })
-            ps,
-          of_ty ~vars ~tails r,
-          of_row ~vars ~tails e,
-          of_row ~vars ~tails u )
+        ( List.map (fun (p : Ty.param) -> { mode = p.mode; ty = go p.ty }) ps,
+          go r,
+          of_row ~vars ~tails ~lams e,
+          of_row ~vars ~tails ~lams u,
+          extend (List.map lam l.ids) (lams l.lvar) )
   | Var n -> vars n
   | Error -> TError
 
-and of_row ~vars ~tails (r : Ty.row) =
+and of_row ~vars ~tails ~lams (r : Ty.row) =
   let tail = match r.tail with Some n -> tails n | None -> REmpty in
   extend
     (List.map
        (fun (l : Ty.label) ->
          {
            name = l.name;
-           payload = List.map (of_ty ~vars ~tails) l.payload;
+           payload = List.map (of_ty ~vars ~tails ~lams) l.payload;
            written = unmarked ();
          })
        r.labels)
@@ -644,7 +685,11 @@ let rec reveal st t =
   | TCon (p, args) as t -> (
       match Hashtbl.find_opt st.reps p with
       | Some rep ->
-          reveal st (of_ty ~vars:(List.nth args) ~tails:(fun _ -> REmpty) rep)
+          reveal st
+            (of_ty ~vars:(List.nth args)
+               ~tails:(fun _ -> REmpty)
+               ~lams:(fun _ -> fresh_row st)
+               rep)
       | None -> t)
   | t -> t
 
@@ -659,6 +704,7 @@ let rec reveal st t =
    for [TError], or a row of nothing. *)
 let matching st s t =
   let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
+  let lams = Hashtbl.create 8 in
   (* a row's labels, and the row it ends in *)
   let rec split acc r =
     match repr_row r with
@@ -671,20 +717,21 @@ let matching st s t =
         if not (Hashtbl.mem tys id) then Hashtbl.add tys id t
     | TCon (p, a), TCon (q, b) when p = q && List.length a = List.length b ->
         List.iter2 go a b
-    | TFun (ps, r, e, u), TFun (qs, r', e', u')
+    | TFun (ps, r, e, u, l), TFun (qs, r', e', u', l')
       when List.length ps = List.length qs ->
         List.iter2 (fun p q -> go p.ty q.ty) ps qs;
         go r r';
-        row e e';
-        row u u'
-    | TErrors e, TErrors e' | TUses e, TUses e' -> row e e'
+        row rows e e';
+        row rows u u';
+        row lams l l'
+    | TErrors e, TErrors e' | TUses e, TUses e' -> row rows e e'
     | (TCon _ as s), (TCon _ as t) ->
         (* one of the module's opaque types, and what it's represented
            as: [!=] says [reveal] made something else of one *)
         let s' = reveal st s and t' = reveal st t in
         if s' != s || t' != t then go s' t'
     | _ -> ()
-  and row s t =
+  and row table s t =
     let ls, s_end = split [] s and lt, t_end = split [] t in
     let named (l : label) =
       List.find_opt (fun (k : label) -> k.name = l.name)
@@ -698,8 +745,8 @@ let matching st s t =
       ls;
     match s_end with
     | RVar { contents = RUnbound (id, l) } when l = generic_level ->
-        if not (Hashtbl.mem rows id) then
-          Hashtbl.add rows id
+        if not (Hashtbl.mem table id) then
+          Hashtbl.add table id
             (extend (List.filter (fun k -> named k ls = None) lt) t_end)
     | _ -> ()
   in
@@ -711,6 +758,7 @@ let matching st s t =
   {
     tys = List.map (find tys TError) g.tys;
     rows = List.map (find rows REmpty) g.rows;
+    lams = List.map (find lams REmpty) g.lams;
   }
 
 (* An interface's type scheme as a scheme of this compilation: generic
@@ -738,7 +786,11 @@ let of_scheme st (s : Ty.scheme) =
         v)
   in
   let tails = memo (Hashtbl.create 8) (fun _ -> generic_row st) in
-  of_ty ~vars ~tails s.ty
+  let lams =
+    let numbered = memo (Hashtbl.create 8) (fun _ -> generic_row st) in
+    function Some n -> numbered n | None -> generic_row st
+  in
+  of_ty ~vars ~tails ~lams s.ty
 
 (* ---- printing ---- *)
 
@@ -816,7 +868,7 @@ let rec row_vars t =
   | TVar _ | TSkol _ | TError -> []
   | TCon (_, args) -> List.concat_map row_vars args
   | TErrors e | TUses e -> row e
-  | TFun (ps, r, e, u) ->
+  | TFun (ps, r, e, u, _) ->
       List.concat_map row_vars (r :: param_tys ps) @ row e @ row u
 
 (* Does the type mention a type parameter? Error messages explain those. *)
@@ -825,7 +877,7 @@ let rec skolems t =
   | TSkol (id, n) -> [ (id, n) ]
   | TVar _ | TError | TErrors _ | TUses _ -> []
   | TCon (_, args) -> List.concat_map skolems args
-  | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)
+  | TFun (ps, r, _, _, _) -> List.concat_map skolems (r :: param_tys ps)
 
 (* Whether [v], a variable still unbound, is in [t]: a call says which of
    its arguments a variable of its callee's is in. *)
@@ -838,7 +890,7 @@ let mentions v t =
         | TVar _ | TSkol _ | TError -> false
         | TCon (_, args) -> List.exists go args
         | TErrors e | TUses e -> row e
-        | TFun (ps, r, e, u) ->
+        | TFun (ps, r, e, u, _) ->
             List.exists go (r :: param_tys ps) || row e || row u
       and row r =
         List.exists

@@ -209,7 +209,8 @@ let rec type_of env (d : desc) : Ty.ty =
         ( List.map (fun (mode, d) : Ty.param -> { mode; ty = type_of env d }) ps,
           type_of env r,
           row e,
-          u )
+          u,
+          Ty.any_lams )
   | Errs e -> Errors (row e)
 
 (* ---- equality ---- *)
@@ -741,7 +742,7 @@ let error_of cx p err =
   match
     Option.map (fun (f : fn_def) -> f.scheme.ty) (Hashtbl.find_opt cx.fns p)
   with
-  | Some (Fun (_, _, errs, _)) ->
+  | Some (Fun (_, _, errs, _, _)) ->
       Shown.value ~own:(own_show cx) cx.types (Errors errs) err
   | _ -> Value.show err
 

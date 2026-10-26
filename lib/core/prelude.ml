@@ -307,7 +307,8 @@ pub handler test_proc(exits: Array<Exit>) for Proc, TestProc =
 
 (* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
    [n]th row variable, numbered by first appearance (ty.ml). *)
-let scheme_of ty : Ty.scheme = { ty; names = []; reqs = [] }
+(* canonical numbers each function type's lambda set *)
+let scheme_of ty : Ty.scheme = Ty.canonical { ty; names = []; reqs = [] }
 let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])
 
@@ -319,7 +320,9 @@ let scheme (x : Intrinsic.t) =
   let open Ty in
   (* most fail with nothing and use nothing: open rows, which any row
      fits *)
-  let fn params ret = scheme_of (Fun (params, ret, open_row 0, open_row 1)) in
+  let fn params ret =
+    scheme_of (Fun (params, ret, open_row 0, open_row 1, any_lams))
+  in
   match x with
   (* fn<T>(T) -> Str, which the interpreter runs itself, since it shows a
      value through its type (eval.ml) *)
@@ -381,7 +384,8 @@ let scheme (x : Intrinsic.t) =
            ( [ read bytes ],
              str,
              { labels = [ label "InvalidUtf8" ]; tail = None },
-             open_row 0 ))
+             open_row 0,
+             any_lams ))
   (* fn(self: Bytes) -> Int *)
   | Bytes_len -> fn [ read bytes ] int
 

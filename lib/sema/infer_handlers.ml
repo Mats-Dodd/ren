@@ -84,14 +84,14 @@ let rec handler core env cx state arms ~needs ~declared =
         | Dep_op (p, op) -> (
             match dep_op_in op (Hashtbl.find env.types p) with
             | Some fd -> (
-                match field_type ~tvars:[] fd with
-                | TFun (ps, r, errs, _) -> Some (p, op, ps, r, errs)
+                match field_type env ~tvars:[] fd with
+                | TFun (ps, r, errs, _, l) -> Some (p, op, ps, r, errs, l)
                 | _ -> None)
             | None -> None)
         | _ -> None
       in
       match (op, a.arm_impl.kind) with
-      | Some (p, op, ps, r, errs), Lambda (params, body)
+      | Some (p, op, ps, r, errs, l), Lambda (params, body)
         when List.length params = List.length ps ->
           let declared = fst (row_parts errs) in
           (* what it fails with, which is its own until the group is done:
@@ -130,12 +130,12 @@ let rec handler core env cx state arms ~needs ~declared =
             }
           in
           core.check env acx body r ~why:result_why;
-          let t = TFun (qs, r, open_errs, needs) in
+          let t = TFun (qs, r, open_errs, needs, fresh_row env.st) in
           Hashtbl.replace cx.nodes a.arm_impl.node t;
           ignore
             (unifies env why a.arm_impl.loc ~found:t
-               ~expected:(TFun (ps, r, open_errs, needs)))
-      | Some (p, op, ps, _, _), Lambda (params, _) ->
+               ~expected:(TFun (ps, r, open_errs, needs, l)))
+      | Some (p, op, ps, _, _, _), Lambda (params, _) ->
           report env
             (arm_arity a.arm_name.loc ~dep:(type_name env p) ~op
                (List.length ps) (List.length params));
@@ -170,9 +170,9 @@ and with_ core env cx (e : expr) item body lam =
             if path.home = env.home && not (Hashtbl.mem env.globals path) then
               raise (Unchecked { caller = cx.self; callee = path });
             match repr (lookup env cx ~node:f.node f.loc (Global path)) with
-            | TFun (self :: ps, ret, errs, uses) as tm
+            | TFun (self :: ps, ret, errs, uses, l) as tm
               when List.length ps = List.length args + 1 ->
-                Some (path, tm, self, TFun (ps, ret, errs, uses))
+                Some (path, tm, self, TFun (ps, ret, errs, uses, l))
             | _ -> None)
         | _ -> None
       in
@@ -206,7 +206,7 @@ and with_ core env cx (e : expr) item body lam =
         | _ -> true
       in
       match reveal env.st tf with
-      | TFun (ps, ret, _, _) when short ps ret ->
+      | TFun (ps, ret, _, _, _) when short ps ret ->
           let name = callee_name f in
           report env
             (with_too_few item.loc name
@@ -215,7 +215,7 @@ and with_ core env cx (e : expr) item body lam =
           List.iter (fun a -> ignore (core.infer env cx a)) args;
           Hashtbl.replace cx.nodes item.node ret;
           install core env cx e item ret body
-      | TFun (ps, _, _, _) when List.length ps = List.length args + 1 ->
+      | TFun (ps, _, _, _, _) when List.length ps = List.length args + 1 ->
           wrap core env cx e ~call:item ~f ~args tf body lam
       | _ ->
           let t = core.call_with env cx item f tf args in
@@ -226,7 +226,7 @@ and with_ core env cx (e : expr) item body lam =
       (* a handler given before what's wanted was known isn't a function
          either way, and [install] leaves what it is to the solver *)
       match reveal env.st t with
-      | TFun ([ _ ], _, _, _) ->
+      | TFun ([ _ ], _, _, _, _) ->
           wrap core env cx e ~call:item ~f:item ~args:[] t body lam
       | _ -> install core env cx e item t body)
 
@@ -319,7 +319,7 @@ and install core env cx (e : expr) item t body =
           use_row env cx ~loc:item.loc ~needs:true
             (copy_needs env ~loc:item.loc ~what:Installing needs);
           now ~deps:(installs d)
-      | TFun ([], ret, _, _) as tf
+      | TFun ([], ret, _, _, _) as tf
         when match reveal env.st ret with
              | TCon (_, [ TUses _ ]) -> true
              | _ -> false -> (
@@ -352,7 +352,7 @@ and install core env cx (e : expr) item t body =
    written to fail with what the body does. *)
 and wrap core env cx (e : expr) ~call ~f ~args ?target ?callee tf body lam =
   match reveal env.st tf with
-  | TFun (ps, ret, errs, uses) ->
+  | TFun (ps, ret, errs, uses, _) ->
       Hashtbl.replace cx.found e.node Wraps;
       let name = callee_name f in
       let n = List.length args in
@@ -369,12 +369,12 @@ and wrap core env cx (e : expr) ~call ~f ~args ?target ?callee tf body lam =
       let bcx = lambda_cx cx [] [] ~errs:berrs ~uses:buses in
       let tb =
         match repr last.ty with
-        | TFun ([], r, _, _) ->
+        | TFun ([], r, _, _, _) ->
             core.check env bcx body r;
             r
         | _ -> core.infer env bcx body
       in
-      let tl = TFun ([], tb, berrs, buses) in
+      let tl = TFun ([], tb, berrs, buses, fresh_row env.st) in
       Hashtbl.replace cx.nodes lam tl;
       if last.mode = Inout then report env (wrapper_changes_body call.loc name)
       else

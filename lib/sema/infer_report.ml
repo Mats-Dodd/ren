@@ -80,7 +80,7 @@ let rec has_var v t =
   match repr t with
   | TVar v' -> v' == v
   | TCon (_, args) -> List.exists (has_var v) args
-  | TFun (ps, r, e, u) ->
+  | TFun (ps, r, e, u, _) ->
       List.exists (fun (p : param) -> has_var v p.ty) ps
       || has_var v r || row_has_var v e || row_has_var v u
   | TErrors r | TUses r -> row_has_var v r
@@ -235,7 +235,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
             | _, _, _, Some x -> blame f x
             | None, None, None, None -> (
                 match (f, x) with
-                | TFun (ps, r, _, _), TFun (qs, s, _, _) ->
+                | TFun (ps, r, _, _, _), TFun (qs, s, _, _, _) ->
                     pairs
                       (r :: List.map (fun p -> p.ty) ps)
                       (s :: List.map (fun p -> p.ty) qs)
@@ -267,7 +267,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
         | TCon (p, fs), TCon (q, xs)
           when p = q && List.length fs = List.length xs ->
             List.find_map Fun.id (List.map2 handler_pair fs xs)
-        | TFun (ps, r, _, _), TFun (qs, r', _, _)
+        | TFun (ps, r, _, _, _), TFun (qs, r', _, _, _)
           when List.length ps = List.length qs ->
             List.find_map Fun.id
               (handler_pair r r'

@@ -104,8 +104,10 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
                (show said) (show found);
          })
   in
+  (* without lambda sets: the interface's are each one of its own, and
+     inference's say which lambdas flow where, which the body decides *)
   let check name (said : Ty.scheme) (found : Ty.scheme) =
-    if found <> said then mismatch name said found
+    if Ty.forget_lams found <> Ty.forget_lams said then mismatch name said found
   in
   List.iter
     (fun (v : Iface.value) ->
@@ -119,7 +121,7 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
         (fun path (o : Iface.op) ->
           let found =
             match (o.okind, Path.Map.find path inferred.schemes) with
-            | Value, ({ ty = Fun ([], t, _, _); _ } as s) ->
+            | Value, ({ ty = Fun ([], t, _, _, _); _ } as s) ->
                 Ty.canonical { s with ty = t }
             | _, s -> s
           in
@@ -138,7 +140,9 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
               let vname = Test_items.group_fn g.gname (i + 1) in
               {
                 Iface.vname;
-                scheme = Path.Map.find (Path.make home vname) inferred.schemes;
+                scheme =
+                  Ty.forget_lams
+                    (Path.Map.find (Path.make home vname) inferred.schemes);
               })
             g.gtests
         else [])
@@ -558,7 +562,7 @@ let types ?(lint = false) ?load ~file src =
         | Op_value -> (
             (* a function of no parameters (ast.ml) *)
             match Path.Map.find (Ast.fn_path home f) inferred.schemes with
-            | { ty = Fun ([], t, _, _); _ } as s ->
+            | { ty = Fun ([], t, _, _, _); _ } as s ->
                 "  "
                 ^ Ty.value_signature ~names ~pub:f.pub ~name { s with ty = t }
             | _ -> assert false)
