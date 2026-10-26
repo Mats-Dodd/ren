@@ -532,16 +532,16 @@ third row, open and unused), `303f393` (identities, and Core Lint),
 **Deviations**, all in `compiler.md`:
 
 - Requirements: kept by variable in inference's state rather than in
-  inference's schemes; three kinds of type taken to have `eq` that the
-  plan doesn't decide (another module's opaque type, a tag a set's tail
-  may bring in, every type argument of a type); a dictionary a hidden
-  parameter of its own rather than part of a descriptor; what a use
-  needs recorded by inference for lowering; a derived dictionary
-  interpreted by walking the type's declaration; one comparison that can
-  still panic (an opaque type of another module represented as a
-  function); how they're printed; a generic method now found by checking
-  before it's called, like any other; where a call that can't have a
-  requirement is reported; the implementation tier a type of its own.
+  inference's schemes; every type argument of a type has to have `eq`,
+  which the plan doesn't decide; a row variable can need `eq` too, of
+  the tags it stands for (below); an interface says whether each opaque
+  type has `eq`; a dictionary a hidden parameter of its own rather than
+  part of a descriptor; what a use needs recorded by inference for
+  lowering; a derived dictionary interpreted by walking the type's
+  declaration; how they're printed; a generic method now found by
+  checking before it's called, like any other; where a call that can't
+  have a requirement is reported; the implementation tier a type of its
+  own, which doesn't yet hold everything a specializer will need.
 - Lambda sets unify and don't include: wherever a function value flows
   its type is unified, so an inclusion would have nothing to add, and a
   set is always open, so unifying never fails.
@@ -559,6 +559,30 @@ third row, open and unused), `303f393` (identities, and Core Lint),
   when unified, so a type argument for a set's variable can list some of
   the scheme's own identities too.
 
+**Fixes after review.** The first review found two ways `==` still
+reached a function at runtime and panicked, against B2's "a compile
+error, never a runtime panic"; this report had called the second the
+only one, which was wrong.
+
+- A tag holding a function, brought in by an error row's tail:
+  `fn cmp(g) = (attempt g()) == (attempt g())` took the tags `g` may
+  fail with to have `eq`, so `cmp(bad)`, for a `bad` that fails with
+  `Bad(fn() -> Int)`, panicked, blaming an opaque type the program
+  didn't have. Now a row variable can need `eq` of every tag it stands
+  for, kept in schemes and interfaces (`Ty.scheme`'s `row_reqs`) and
+  checked at each use, as a type variable's is, and `ren types` prints
+  it, `cmp<T has eq, ..e has eq>` (`86e1a97`).
+- Another module's opaque type represented with a function in it: its
+  interface hid whether it had `eq`, so it was taken to. Now the
+  interface says (`Iface.Hidden`'s `eq`), and comparing two is refused
+  (`75835e2`).
+
+Nothing compared at runtime can meet a function now, so the
+interpreter's panic for it is a compiler bug. The review's cheap minor
+notes are in compiler.md and module-build.md: the implementation tier
+is worked out only when asked for and doesn't hold everything a
+specializer will need; the rest are under "Issues still open".
+
 **Test outputs that changed**, all from requirements; lambda sets
 changed none:
 
@@ -568,6 +592,10 @@ changed none:
 - `test_infer.ml` and `test_lower.ml`, two `ren core --types` snapshots:
   each `==` shows the dictionary it compares through, `(== (eq Int) n/2
   0)`.
+- `test_eval.ml`, "== can't panic": comparing two values of another
+  module's opaque type represented as a function panicked at runtime;
+  it's refused before the program runs, with the reason in a note (the
+  review's fix). The other new outputs are new tests.
 - No expect block or cram output changed because of lambda sets. Test
   code did, not its output: hand-built Core in the Lint tests gives its
   function types sets, and its uses lambda-set arguments, and
@@ -589,9 +617,21 @@ makes one set of all of them, checked in 0.04s before and 0.14s now
 
 **Issues still open.**
 
-- **R4 hasn't had its independent review.** The plan asks for one; this
-  session did the work in four parts, each by another agent, and none
-  reviewed the whole.
+- **R4's first review found two blocking issues,** both fixed (above);
+  it hasn't been reviewed again since.
+- The implementation tier holds only public bodies, so a private generic
+  helper a public one calls isn't in it, and it tells a higher-order
+  function only by its signature's function types, so one taking a
+  record with a function field isn't either. It's worked out when asked
+  for, not kept by the build. Nothing reads it yet.
+- A requirement's message can name a part of the argument while
+  underlining all of it: `k(fn(x) => fn() => x)`, for a `k` that
+  compares what its argument returns, says "`fn() -> Int` has no `==`"
+  under the outer lambda. Saying which part, "what it returns", would be
+  clearer.
+- The dictionaries a lambda uses aren't listed among its captures in
+  Core, as descriptors already aren't: closure conversion will have to
+  add them.
 - A lambda set of thousands still costs a walk of it at each
   unification: 8,000 lambdas in one array take 1.5s to check, against
   0.2s before lambda sets. Keeping a set's size and end with it would

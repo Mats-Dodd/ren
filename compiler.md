@@ -833,7 +833,12 @@ Where the work forced a change to the plan above:
   "what the implementation tier records"), or, since the lambda sets in
   it, which specialization will read, come from the module's other
   bodies too, when an edit elsewhere in the module changes which lambdas
-  reach one.
+  reach one. It isn't yet all a specializer will need. It holds only
+  public bodies, so a private generic helper a public one calls isn't
+  in it; and it tells a higher-order function only by the function
+  types its signature writes, so one that takes a record with a function
+  field, or an implementation of a dependency, isn't either. Both wait
+  for the stage that reads it, which knows what it has to copy.
 - **R4, lambda sets unify, and don't include.** The plan has sets unify
   and include as rows do. They only unify: everywhere a function value
   flows, inference unifies its type with the type of where it goes, as it
