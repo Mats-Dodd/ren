@@ -33,7 +33,8 @@ type stage = Equalities | Error_rows
    returns; and a set gets the tags written in it before what it includes
    from other sets, so a tag of two shapes is blamed on the inclusion. A
    kept set is closed once it has every tag it gets, and only then are the
-   tags matched in a set checked against it. *)
+   tags matched in a set checked against it. The rules of markers read
+   what every set holds, so they're checked last. *)
 let rank = function
   | Join _ -> 0
   | Drop _ -> 1
@@ -41,6 +42,8 @@ let rank = function
   | Include _ -> 3
   | Kept _ -> 4
   | Tag_pattern _ -> 5
+  | Unmarked _ -> 6
+  | Marker _ -> 7
 
 let stage_of c = if rank c <= 1 then Equalities else Error_rows
 
@@ -189,6 +192,23 @@ let include_ env i =
       true
   | _ -> added
 
+(* ---- the rules of markers ----
+
+   Checked once the group's functions are joined, when it's known what
+   each call fails with (errors.md, "Marking"):
+
+   1. each `attempt` keeps exactly what the calls it covers fail with, and
+      each `match` with `fail` arms handles exactly that
+   2. each tag matched in those errors is one of them
+   3. each `try r` of a [Result] fails with what [r] holds, and each
+      `try match` with what its arms don't handle
+   4. a call no marker covers can't fail
+   5. every marker covers something that can fail: a `match`'s `fail`
+      arms match something
+
+   The first three are inclusions and the kept sets closed after them, and
+   the tags matched checked against them; the last two read the result. *)
+
 (* An `attempt`'s set, or a `match`'s with `fail` arms, holds what the
    calls it covers fail with, and nothing more: it's closed, so a tag
    matched in it later is checked against exactly that. One of a call of a
@@ -210,7 +230,7 @@ let tag_pattern env t =
   match List.find_opt (fun (l : label) -> l.name = c.name) labels with
   | _ when arm && labels = [] && tail = None ->
       (* a `fail` arm of a `match` whose subject can't fail, which is
-         reported once, with the markers (infer_top.ml) *)
+         reported once, with the markers ([marker]) *)
       ()
   | Some l when List.length l.payload = List.length payload ->
       List.iter2
@@ -229,6 +249,57 @@ let tag_pattern env t =
       | Some (param, _) ->
           report env (tag_in_open_set c ~arm ~value:t.tvalue ~param tags)
       | None -> report env (not_an_error c ~arm tags))
+
+(* Whether the call [c] can fail, now that its group is done: its callee
+   fails with something, which for a function of the group is known only
+   now, or its errors are those of a function the caller was passed. *)
+let can_fail (c : ecall) =
+  row_names c.erow <> []
+  ||
+  match row_tail c.erow with
+  | Some t -> in_params c.eparams t
+  | None -> false
+
+(* A call no marker covers can't fail (errors.md, "Marking"): what it
+   fails with went to [unhandled], a row of its own, which ends up empty
+   unless it's reported. *)
+let unmarked env (c : ecall) unhandled =
+  let labels, tail = row_parts unhandled in
+  let own t = List.exists (fun e -> row_tail e = Some t) c.eselves in
+  match tail with
+  | Some t when own t && in_params c.eparams t ->
+      (* the call's errors are its caller's own, those of a function it
+         was passed *)
+      let param, _ =
+        List.find (fun (_, ty) -> List.mem t (row_vars ty)) c.eparams
+      in
+      report env (unhandled_param c.eloc ~name_loc:c.ename_loc c.ename param)
+  | _ when labels <> [] ->
+      report env
+        (unhandled_call c.eloc ~name_loc:c.ename_loc c.ename
+           (List.map (show_label (printer env)) labels))
+  | Some t when own t ->
+      (* the caller's own errors, which it doesn't pass on: it fails with
+         none, or this is reported where it does *)
+      ()
+  | _ -> close_row unhandled
+
+(* Every marker covers something that can fail, and a `match`'s `fail`
+   arms match something (errors.md, "Marking"). *)
+let marker env m =
+  if
+    not
+      (m.failed
+      || List.exists can_fail m.covered
+      || List.exists
+           (fun r -> row_names r <> [] || row_tail r <> None)
+           m.unwrapped)
+  then
+    report env
+      (match m.mkind with
+      | Mtry -> covers_nothing m.mloc ?hint:m.hint "try"
+      | Mattempt -> covers_nothing m.mloc ?hint:m.hint "attempt"
+      | Mmatch -> cannot_fail_arm m.mloc)
 
 (* ---- the worklist ---- *)
 
@@ -297,4 +368,8 @@ let solve env ~is_value stage =
       | Tag_pattern t -> tag_pattern env t
       | Value_tag t when not (List.memq t added) -> tag_pattern env t
       | _ -> ())
-    mine
+    mine;
+  List.iter
+    (function Unmarked (c, r) -> unmarked env c r | _ -> ())
+    (of_rank 6);
+  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 7)

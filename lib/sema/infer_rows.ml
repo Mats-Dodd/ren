@@ -219,7 +219,7 @@ and join_uses env ~loc ~what joined into =
    to whatever marks it (errors.md, "Marking"): the innermost marker's
    handler, the caller's own errors for a `try` or the `attempt`'s. A call
    no marker covers can't fail: its errors go to a row of their own, which
-   has to end up empty once the group is done (infer_top.ml). [ename] and
+   has to end up empty once the group is done (solve.ml). [ename] and
    [fn] are the callee, as a message names it and as it's written, and
    [target] the function of the group it calls, if it does. *)
 let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
@@ -283,7 +283,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
       (* the callee's own row, which an inferred parameter's is too: if
          nothing else says it fails, it's closed at the end, and the
          parameter can't fail *)
-      env.unmarked <- (ec, reopen env errs) :: env.unmarked
+      defer env (Unmarked (ec, reopen env errs))
   | markers ->
       List.iter (fun m -> m.covered <- ec :: m.covered) markers;
       include_errors env cx ~loc:call.loc ~here
@@ -300,7 +300,7 @@ let marker env mkind mloc =
   let m =
     { mkind; mloc; covered = []; unwrapped = []; hint = None; failed = false }
   in
-  env.all_markers <- m :: env.all_markers;
+  defer env (Marker m);
   m
 
 (* Why a `try` of [a], of type [t], which isn't a [Result], may cover

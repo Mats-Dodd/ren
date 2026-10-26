@@ -543,73 +543,6 @@ let declared_errors env ~is_value ~tparams (f : fn_def) =
   | None when f.pub -> Some []
   | None -> None
 
-(* Whether the call [c] can fail, now that its group is done: its callee
-   fails with something, which for a function of the group is known only
-   now, or its errors are those of a function the caller was passed. *)
-let can_fail (c : ecall) =
-  row_names c.erow <> []
-  ||
-  match row_tail c.erow with
-  | Some t -> in_params c.eparams t
-  | None -> false
-
-(* The rules of markers, checked once the group's functions are joined,
-   when it's known what each call fails with (errors.md, "Marking"):
-
-   1. each `attempt` keeps exactly what the calls it covers fail with, and
-      each `match` with `fail` arms handles exactly that
-   2. each tag matched in those errors is one of them
-   3. each `try r` of a [Result] fails with what [r] holds, and each
-      `try match` with what its arms don't handle
-   4. a call no marker covers can't fail
-   5. every marker covers something that can fail: a `match`'s `fail`
-      arms match something *)
-let settle_errors env ~is_value =
-  let pr = printer env in
-  (* first, what each error set holds *)
-  Solve.solve env ~is_value Error_rows;
-  List.iter
-    (fun ((c : ecall), unhandled) ->
-      let labels, tail = row_parts unhandled in
-      let own t = List.exists (fun e -> row_tail e = Some t) c.eselves in
-      match tail with
-      | Some t when own t && in_params c.eparams t ->
-          (* the call's errors are its caller's own, those of a function
-             it was passed *)
-          let param, _ =
-            List.find (fun (_, ty) -> List.mem t (row_vars ty)) c.eparams
-          in
-          report env
-            (unhandled_param c.eloc ~name_loc:c.ename_loc c.ename param)
-      | _ when labels <> [] ->
-          report env
-            (unhandled_call c.eloc ~name_loc:c.ename_loc c.ename
-               (List.map (show_label pr) labels))
-      | Some t when own t ->
-          (* the caller's own errors, which it doesn't pass on: it fails
-             with none, or this is reported where it does *)
-          ()
-      | _ -> close_row unhandled)
-    (List.rev env.unmarked);
-  List.iter
-    (fun m ->
-      if
-        not
-          (m.failed
-          || List.exists can_fail m.covered
-          || List.exists
-               (fun r -> row_names r <> [] || row_tail r <> None)
-               m.unwrapped)
-      then
-        report env
-          (match m.mkind with
-          | Mtry -> covers_nothing m.mloc ?hint:m.hint "try"
-          | Mattempt -> covers_nothing m.mloc ?hint:m.hint "attempt"
-          | Mmatch -> cannot_fail_arm m.mloc))
-    (List.rev env.all_markers);
-  env.unmarked <- [];
-  env.all_markers <- []
-
 (* Check that [f], which declares its errors, [declared], fails with
    exactly those: nothing else, reported at the first place that brings
    it in, and each of them, reported where it's written. [cx] is what
@@ -1541,8 +1474,6 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       spelled = [];
       pending = [];
       forced = [];
-      unmarked = [];
-      all_markers = [];
       rows_due = [];
       impl_ops = [];
       handler_needs = [];
@@ -1761,7 +1692,8 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       (* only now, with the group's uses of each other joined, is it known
          everything each function uses and fails with *)
       own_error_rows env (List.map (fun (f, _, cx, _, _) -> (f, cx)) setups);
-      settle_errors env ~is_value:is_value_path;
+      (* what each error set holds, and then the rules of markers *)
+      Solve.solve env ~is_value:is_value_path Error_rows;
       settle_impls env;
       settle_rows env
         (List.map

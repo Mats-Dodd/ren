@@ -100,11 +100,6 @@ type env = {
       (** each statement that threw away a value of a type still unknown, which
           the solver made `Unit`, with the function it's in: a later mismatch at
           a call of that function points back at it *)
-  mutable unmarked : (ecall * row) list;
-      (** the group's calls that no marker covers, each with the row its errors
-          went to, which has to end up empty *)
-  mutable all_markers : marker list;
-      (** the group's `try`s, `attempt`s and `match`es with `fail` arms *)
   mutable rows_due : row_due list;
       (** the group's uses of a named row (see [row_due]) *)
   mutable impl_ops : impl_op list;
@@ -245,6 +240,12 @@ and constr =
   | Tag_pattern of tag_pattern
       (** a tag matched in an error set that was still open is one of its tags
       *)
+  | Unmarked of ecall * row
+      (** a call that no marker covers can't fail: the row its errors went to
+          ends up empty *)
+  | Marker of marker
+      (** a `try`, an `attempt` or a `match` with `fail` arms covers something
+          that can fail *)
 
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their
@@ -265,8 +266,8 @@ and drop = { dloc : Loc.t; dty : ty; callee : string option; dself : Path.t }
 (* A call, and the errors its callee can fail with (errors.md, "Marking").
    Whether it can fail at all is known only once its group is done: a
    function of the group learns what it fails with only then. So each
-   call is kept, and the markers' rules are checked at the end
-   (infer_top.ml). *)
+   call is kept, and the markers' rules are checked at the end, by the
+   solver. *)
 and ecall = {
   eloc : Loc.t;  (** the call *)
   ename_loc : Loc.t;  (** the callee, as written: `acme.debit` *)
