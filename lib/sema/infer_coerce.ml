@@ -36,6 +36,16 @@ let as_one env t expected =
       | _ -> None)
   | _ -> None
 
+(* A handler of several dependencies' type: that handler, its
+   dependencies, and what it needs. *)
+let handler_of env t =
+  match repr t with
+  | TCon (h, [ TUses needs ]) -> (
+      match Hashtbl.find_opt env.types h with
+      | Some { body = Handler deps; _ } -> Some (h, deps, needs)
+      | _ -> None)
+  | _ -> None
+
 (* If [t] is a variable that a handler of several dependencies was given
    to, and nothing has said what it is since: that handler, its
    dependencies, and what it needs. The first handler given to it is the
@@ -44,35 +54,26 @@ let as_one env t expected =
    as it yet. *)
 let given ?(said = false) env t =
   let t = repr t in
-  (* a variable no handler was given to has no coercion to look for, which
-     is most of them, so most never look through [env.pending] *)
   match t with
-  | TVar _ when not (Unify.watched env.st t) -> None
-  | TCon _ when not said -> None
-  | _ ->
-      (* whether [w] is [t]: the same variable, or with [said], the same
-         type a variable became, which [==] says is the same one in memory *)
-      let same w =
-        match (repr w, t) with
-        | TVar v', TVar v -> v' == v
-        | w, TCon _ -> said && w == t
-        | _ -> false
-      in
+  | TVar _ ->
+      (* the variable's watch knows (Unify.watch), so a value used many
+         times costs no more each time *)
+      Option.bind (Unify.first_given env.st t) (handler_of env)
+  | TCon (d, [ TUses _ ]) when said ->
+      (* this looks through the group's constraints, for a coercion of a
+         variable that has become [t], which [==] says is the same type in
+         memory. Only a value taken as two dependencies gets here, which is
+         an error, so it's looked for once for each error *)
       List.find_map
         (function
-          | Coerce { cwanted; cfound; _ } when same cwanted -> (
-              match (repr cfound, t) with
-              | TCon (h, [ TUses needs ]), t -> (
-                  match (Hashtbl.find_opt env.types h, t) with
-                  | Some { body = Handler deps; _ }, TVar _ ->
-                      Some (h, deps, needs)
-                  | Some { body = Handler deps; _ }, TCon (d, [ TUses _ ])
-                    when List.mem d deps ->
-                      Some (h, deps, needs)
-                  | _ -> None)
+          | Coerce { cwanted; cfound; _ } when repr cwanted == t -> (
+              match handler_of env cfound with
+              | Some (h, deps, needs) when List.mem d deps ->
+                  Some (h, deps, needs)
               | _ -> None)
           | _ -> None)
         (List.rev env.pending)
+  | _ -> None
 
 (* The same, without the handler. *)
 let pending env t =
@@ -187,7 +188,7 @@ let give env cx why (e : expr) t expected =
       | TCon (h, _) -> (
           match Hashtbl.find_opt env.types h with
           | Some { body = Handler deps; _ } ->
-              Unify.watch env.st expected (h :: deps)
+              Unify.watch env.st expected ~handler:t (h :: deps)
           | _ -> ())
       | _ -> ());
       defer env
@@ -209,12 +210,15 @@ let give env cx why (e : expr) t expected =
 (* What [t] is, where it's about to be looked into: if it's a variable
    that a handler of several dependencies was given to, and nothing has
    said what it is since, that handler's type (Infer_report.settle), so
-   whatever is about to be done with it can be. *)
+   whatever is about to be done with it can be. Its coercion is left to
+   the solver, which then finds it's that already. *)
 let settle env t =
-  match repr t with
-  | TVar v when Unify.watched env.st t ->
-      Infer_report.settle env (fun v' -> v' == v)
-  | _ -> ()
+  match Unify.first_given env.st t with
+  | Some handler ->
+      (* a variable still unbound takes any type that doesn't hold it, and
+         a handler's type holds only what it needs *)
+      Unify.unify env.st t handler
+  | None -> ()
 
 (* The same as [settle], where a member or a field is about to be looked
    up in [t]: if just one of the handler's dependencies has it, [has] says,

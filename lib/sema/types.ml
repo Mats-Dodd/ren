@@ -72,6 +72,23 @@ and label = { name : string; payload : ty list }
 
 let generic_level = max_int
 
+(* What a variable that a handler of several dependencies was given to,
+   before what's wanted was known, can still become (Unify.watch). *)
+type watch = {
+  allowed : Path.t list;
+      (** the handler's own type, or one of its dependencies' *)
+  handler : ty;
+      (** the type of the first handler given to it, which it is if nothing else
+          says *)
+  order : int;
+      (** how many handlers had been given by then, so when two such variables
+          become one, the handler given first is still the first *)
+}
+
+(* A map with int keys. Unlike a [Hashtbl] it never changes: adding to one
+   makes a new map, sharing most of the old, so keeping the old is free. *)
+module Ids = Map.Make (Int)
+
 (* What inference changes as it goes. Each compilation makes its own and
    passes it to everything that needs it, so there are no global counters
    and two compilations in one process can't affect each other. *)
@@ -90,10 +107,11 @@ type state = {
       (** what each opaque type of the module being checked is represented as:
           in its own module, an opaque type is its representation (see [reveal])
       *)
-  watched : (int, Path.t list) Hashtbl.t;
-      (** the types each variable a handler of several dependencies was given to
-          can still become, by the variable's id: the handler's own, or one of
-          its dependencies' (Unify.watch). Only looked up, never walked *)
+  mutable watched : watch Ids.t;
+      (** what each variable a handler of several dependencies was given to can
+          still become, by the variable's id (Unify.watch). Only looked up,
+          never walked *)
+  mutable given : int;  (** how many handlers have been given so, ever *)
 }
 
 let new_state () =
@@ -104,7 +122,8 @@ let new_state () =
     skolem_vars = Hashtbl.create 16;
     skolem_rows = Hashtbl.create 8;
     reps = Hashtbl.create 4;
-    watched = Hashtbl.create 4;
+    watched = Ids.empty;
+    given = 0;
   }
 
 let enter_level st = st.level <- st.level + 1

@@ -3310,6 +3310,52 @@ fn main() uses Console =
        help: make another for this one, `counting_rates(...)`, or leave out what says it's a `RateCalls`
     |}]
 
+let%expect_test "many handlers of several given early check in time" =
+  (* each variable a handler of several was given to remembers which, and
+     what it can still become, in a map shared, not copied, by each
+     unification tried first. So neither another value given a handler,
+     nor another use of one, nor another call costs more for each such
+     value already made: each program checks in about half a second, not
+     the 20 to 30 it took when the handler was looked for among the
+     group's constraints and the map copied. The bound is far from both,
+     as in test_infer.ml's "a group of many calls checks in time linear in
+     them" *)
+  let lines n f = String.concat "\n" (List.init n (fun i -> f (i + 1))) in
+  let timed what body =
+    let src =
+      String.concat "\n"
+        [
+          rates;
+          "fn run(r: Rates) -> Int = with r in Rates.usd_to(1)";
+          "fn id(x) = x";
+          "fn f(i: Int) -> Int ! Bad = if i > 0 then i else fail Bad";
+          "fn main() uses Console =";
+          body;
+        ]
+    in
+    let start = Sys.time () in
+    ignore (Ren.Driver.check ~file src);
+    let took = Sys.time () -. start in
+    Printf.printf "%s: %s\n" what
+      (if took < 10. then "in time" else Printf.sprintf "%.1fs" took)
+  in
+  timed "a value each"
+    (lines 6_000 (fun _ -> "  print(run(id(counting_rates(2))))"));
+  timed "one value, used again and again"
+    ("  let h = id(counting_rates(3))\n"
+    ^ lines 16_000 (fun _ -> "  print(run(h))"));
+  timed "values, then other calls"
+    (lines 8_000 (fun i ->
+         Printf.sprintf "  let o%d = Some(counting_rates(%d))" i i)
+    ^ "\n"
+    ^ lines 8_000 (Printf.sprintf "  print(try f(%d))"));
+  [%expect
+    {|
+    a value each: in time
+    one value, used again and again: in time
+    values, then other calls: in time
+    |}]
+
 let%expect_test "a handler of several, then said to be something else" =
   (* what the handler is given to is decided after it, so it's what says
      so after that's blamed, as the constraint met second always is: not

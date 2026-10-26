@@ -707,7 +707,7 @@ let solve env ~is_value ~withheld =
   List.iter (function Join j -> join env ~is_value j | _ -> ()) cs;
   List.iter (function Coerce k -> Infer_coerce.coerce env k | _ -> ()) cs;
   (* each variable a handler was given to is decided now *)
-  Hashtbl.reset env.st.watched;
+  env.st.watched <- Ids.empty;
   (* a `with` of a handler given before what's wanted was known is the
      `with`s of what it installs, now that that's known *)
   let cs =

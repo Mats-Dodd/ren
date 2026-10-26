@@ -48,35 +48,62 @@ and occurs_row ?(ty = -1) id level r =
       List.iter (occurs ty level) label.payload;
       occurs_row ~ty id level rest
 
-(* A handler of several dependencies given to a variable before what's
-   wanted is known (Infer_coerce.give) makes the variable one of [allowed]:
-   the handler's own type, which it is if nothing else says, or one of its
-   dependencies', which it's taken as. Anything else is a mismatch where
-   it's said, not later at the handler, so the message is about what said
-   it: `let n: Int = h` is "expected `Int`, found `counting_rates`". *)
-let watch st t allowed =
+(* [w] is what variable [id] can become, as well as anything it could
+   already: any of what's allowed, and the handler given first is the one
+   it is if nothing else says. [Ids.update] gives the old entry, if there
+   is one, and keeps what it returns. *)
+let add_watch st id (w : watch) =
+  st.watched <-
+    Ids.update id
+      (fun before ->
+        let w =
+          match before with
+          | Some b when b.order < w.order ->
+              { b with allowed = b.allowed @ w.allowed }
+          | Some b -> { w with allowed = w.allowed @ b.allowed }
+          | None -> w
+        in
+        Some { w with allowed = List.sort_uniq compare w.allowed })
+      st.watched
+
+(* A handler of several dependencies, of type [handler], given to a
+   variable before what's wanted is known (Infer_coerce.give) makes the
+   variable one of [allowed]: the handler's own type, which it is if
+   nothing else says, or one of its dependencies', which it's taken as.
+   Anything else is a mismatch where it's said, not later at the handler,
+   so the message is about what said it: `let n: Int = h` is "expected
+   `Int`, found `counting_rates`". *)
+let watch st t ~handler allowed =
   match repr t with
   | TVar { contents = Unbound (id, _) } ->
-      let before = Option.value ~default:[] (Hashtbl.find_opt st.watched id) in
-      Hashtbl.replace st.watched id (List.sort_uniq compare (allowed @ before))
+      st.given <- st.given + 1;
+      add_watch st id { allowed; handler; order = st.given }
   | _ -> ()
 
 (* Whether [t] is a variable [watch] was given. *)
 let watched st t =
   match repr t with
-  | TVar { contents = Unbound (id, _) } -> Hashtbl.mem st.watched id
+  | TVar { contents = Unbound (id, _) } -> Ids.mem id st.watched
   | _ -> false
+
+(* If [t] is a variable [watch] was given, the type of the first handler
+   given to it. *)
+let first_given st t =
+  match repr t with
+  | TVar { contents = Unbound (id, _) } ->
+      Option.map (fun (w : watch) -> w.handler) (Ids.find_opt id st.watched)
+  | _ -> None
 
 (* Before binding variable [id] to [t]: fail if [id] is watched and [t]
    is none of what it can be. Another variable can be any of it, so it's
    watched for all of that too. *)
 let check_watch st id t =
-  match Hashtbl.find_opt st.watched id with
+  match Ids.find_opt id st.watched with
   | None -> ()
-  | Some allowed -> (
+  | Some w -> (
       match t with
-      | TVar _ -> watch st t allowed
-      | TCon (p, _) when List.mem p allowed -> ()
+      | TVar { contents = Unbound (id', _) } -> add_watch st id' w
+      | TCon (p, _) when List.mem p w.allowed -> ()
       | TError -> ()
       | _ -> raise Mismatch)
 
@@ -237,15 +264,11 @@ let originals = { ty = Fun.id; row = Fun.id }
    which then can't fail. If it failed, it says how, and nothing but the
    copies changed: [c] gives them back, as far as it got, for a message.
    [{ st with level = st.level }] is a new record with the same fields,
-   whose counters change without changing [st]'s; its [watched] is a copy
-   too, if it has anything in it, since unifying two variables can add to
-   it. *)
+   whose counters and [watched] change without changing [st]'s. [watched]
+   is a map that never changes, only replaced by a bigger one, so sharing
+   it costs nothing, however much is in it. *)
 let atomically st c f =
-  let watched =
-    if Hashtbl.length st.watched = 0 then st.watched
-    else Hashtbl.copy st.watched
-  in
-  match f { st with level = st.level; watched } c with
+  match f { st with level = st.level } c with
   | () ->
       f st originals;
       Ok ()
