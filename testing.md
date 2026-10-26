@@ -1,0 +1,385 @@
+# Testing
+
+How Ren tests a program: at its boundaries, with tests that are
+specifications, data generated from the domain's own types, and a console
+for everything that isn't a specification. What runs today, `test`,
+`group`, `assert` and `ren test` on test implementations, is in
+[deps.md](deps.md#tests). This doc is where that's going.
+
+> **Status:** designed. Stage 9c makes tests specifications and adds test
+> items and a first `ren console`. Stage 10 adds what needs the journal.
+> Property tests come with the standard library in stage 12. See
+> [Roadmap](#roadmap).
+
+## What it has to do
+
+The truth about a program lives at its boundaries: a type's, a module's,
+and the program's own, where it meets the world. Ren makes each of them
+explicit and narrow ([module-build.md](module-build.md#private-unless-pub)),
+and tests them there.
+
+1. **A test is a specification.** It says what an interface does, as a
+   client sees it, so changing what's behind the interface never breaks
+   it. Refactoring is free, and a red test means behaviour changed.
+2. **Exploring isn't testing.** Poking at a private function while writing
+   it is real work, but it's done in the [console](#the-console), not left
+   behind in the suite, where it would hold the implementation in place.
+3. **The fakes are held to the real thing.** A test implementation of a
+   dependency runs the same conformance suite as the real one, so a test
+   that passes against the fake means something.
+4. **Generating data is free, and stays valid.** Any type can be
+   generated without writing anything, a value its module wouldn't allow
+   is never generated, and a failure shrinks to its smallest case without
+   a shrinker.
+5. **One mechanism.** Generated data, saved failures, recorded runs,
+   fuzzing and, later, simulation schedules are all a sequence of choices
+   read through dependencies, so one runner replays all of them.
+
+## Tests are specifications
+
+**A test sees what an importer sees.** Tests live in the module they test,
+next to the code, but they're its clients: they see its `pub` items, and
+its opaque types are opaque to them.
+
+```ren
+pub type Account = opaque { id: AccountId, balance: Money, frozen: Bool, statement: Array<Entry> }
+  pub fn open(id: AccountId) -> Account = ...
+  pub fn balance(self) -> Money = self.balance
+  pub fn freeze(inout self) = self.frozen = true
+  pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) uses Clock = ...
+  fn stamp(inout self, e: Entry) = ...
+
+test "a frozen account takes nothing in" =
+  var a = Account.open(AccountId.of(1))
+  &a.freeze()
+  assert attempt &a.credit(Money.dollars(5), Deposit) == Err(Frozen(AccountId.of(1)))
+```
+
+A test that reaches past the interface is an error:
+
+```
+error: `stamp` is private, and a test sees what an importer sees
+  ┌─ account.ren:22:5
+  │
+22 │   &a.stamp(e)
+  │      ^^^^^
+  │
+  = a test is a specification of `account`'s interface
+  help: explore it in the console: `ren console account`
+```
+
+- **What it costs:** a private helper isn't tested on its own. It's tested
+  through what uses it. A helper tricky enough to want its own tests has
+  earned its own module, which is one file away.
+- **A program's interface is its `pub` items too.** Nothing imports
+  `main.ren`, but its tests do, so a script marks what it wants tested
+  `pub`. A larger program ends up with a thin `main` and its work in
+  modules it imports.
+- **Why other languages give in:** Java's `@VisibleForTesting`, Swift's
+  `@testable import`, C#'s `InternalsVisibleTo`, Go's `export_test.go` and
+  Rust's inline `mod tests` all exist because there tests are the only
+  tool for poking at internals. Ren gives exploring its own tool, so tests
+  don't need the hole.
+
+### Test items
+
+Tests need helpers: a handler that keeps accounts in memory, a builder for
+a sample user. Making them `pub` would fill the interface with
+scaffolding, so `test` before an item makes it a test item:
+
+```ren
+test handler mem_accounts(init: Array<Account>) for Accounts =
+  var table: Map<AccountId, Account> = Map.of(init.map(fn(a) => (a.id(), a)))
+  get(id) => table.get(id)
+  save(a) => &table.set(a.id(), a)
+
+test fn alice() -> Account = Account.open(AccountId.of(1))
+```
+
+- **Only tests see a test item,** in its own module and in any module
+  that imports it. It's never part of the interface, and `ren run` drops
+  it, as it drops tests.
+- **A test item sees what an importer sees, too.** Otherwise
+  `test fn peek(a) = a.balance` would bring the internals back in through
+  a helper.
+
+### Conformance groups
+
+A [group](deps.md#groups) is a function over implementations, so one suite
+runs against each of them. That's a specification of an interface, run
+against everything that claims to meet it:
+
+```ren
+pub group accounts_conform(a: Accounts) with a =
+  test "what's saved is what's got" (acc: Account) =
+    try Accounts.save(acc)
+    assert Accounts.get(acc.id()) == Some(acc)
+
+group "in memory" = accounts_conform(mem_accounts([]))
+group "sql" uses Sql = accounts_conform(sql_accounts())
+```
+
+- **Every `dep` should ship a `pub group`,** and every implementation of
+  it, test or real, should run it. That's how a fake is kept honest: the
+  usual weakness of mocks is that they drift from what they stand for,
+  and here they fail the same suite the real one passes.
+- **`ren test` reports an implementation that runs no group for its
+  dependency.** It's a report, not an error: a one-off fake in a single
+  test doesn't need a suite.
+- **A group with parameters is a property test** (below), so a conformance
+  suite can check every implementation against generated data.
+
+## Property tests
+
+**A test with parameters is a property test.** Its parameters are
+generated, the test runs for each set, and a failure shrinks to the
+smallest one:
+
+```ren
+test "a transfer never changes the total" (a: Account, b: Account, m: Money) =
+  var bank = Bank.of([a, b])
+  let before = bank.total()
+  let _ = attempt &bank.transfer(Transfer { from: a.id(), to: b.id(), amount: m })
+  assert bank.total() == before
+```
+
+```
+✗ a transfer never changes the total, failed after 37 cases, shrunk in 112 steps:
+    a = Account(id: AccountId(1), balance: Money(0))
+    b = Account(id: AccountId(1), balance: Money(0))     ← the same key twice
+    m = Money(1)
+  saved: replayed first, every run, until it passes
+  rerun: ren test bank --only "a transfer" --seed 8812
+```
+
+There's no new keyword, no library and no strategy language. Four layers,
+each optional.
+
+### 1. Every type generates itself
+
+- **A record or a sum type** is built field by field. Constructors are
+  tried in the order they're written, and the ones that don't recur come
+  first, so generating always ends.
+- **Generation leans toward what breaks code:** `0`, `1`, `-1`, the
+  largest and smallest `Int`, `-0.0` and infinity (there's no `NaN` to
+  generate), `""`, text with combining characters, an empty array, one
+  element, and **two elements with the same key**, since a map is wrong
+  exactly where keys collide.
+- **Sizes grow over a run,** small first, so the first failure is already
+  small.
+
+### 2. An opaque type is built through its constructors
+
+Code outside a module can't build an `Email` from its representation, and
+neither can generation. A derived generator for an opaque type calls the
+type's `pub` functions that return one, `Email.parse` or `Money.cents`,
+with generated arguments, and drops the calls that fail. **A value the
+module wouldn't allow is never generated,** which is the deep module's
+rule applied to test data.
+
+A random string rarely has an `@`. Two things make this work anyway:
+
+- **The constructor's source is known.** The literals it compares with,
+  `"@"` or the ends of `0..120`, become a dictionary for generating its
+  arguments. Fuzzers learn these by watching comparisons at run time
+  (AFL++'s CmpLog). Ren reads them before the test starts.
+- **A refusal is typed.** `parse` failing with `Invalid` is a rejection,
+  not a crash, so the search can lean toward arguments that get through,
+  and the report says how often they did.
+
+### 3. A type can write its own, as plain Ren
+
+When the derived one isn't good enough, a type writes `arbitrary`, a
+reserved member like `key` and `show`:
+
+```ren
+pub type Email = opaque Str
+  pub fn parse(s: Str) -> Email ! Invalid = ...
+  fn arbitrary() -> Email uses Random =
+    Random.pick(["ann", "bo", "x.y"]) + "@" + Random.pick(["a.com", "b.org"])
+```
+
+- **It's ordinary code that `uses Random`.** No combinators: `if`, `for`,
+  `match` and function calls are the language for generating, as for
+  everything else.
+- **It can be private,** as a `key` can: it still generates `Email`s in
+  every module's tests, but nothing else can call it.
+- **Other types' generators are in reach:** `User.arbitrary()`,
+  `Array<Item>.arbitrary()`, derived or written.
+- **Put the simplest choice first.** A failure shrinks toward the first
+  option of a `pick`.
+
+### 4. A test can shape its own data
+
+Different tests want different data. A parameter can be given an
+expression instead of a type, and a later parameter sees the earlier
+ones:
+
+```ren
+test "withdrawing within the balance always works"
+    (a: Account, m = Money.cents(Random.between(0, a.balance().in_cents()))) =
+  var acc = a
+  assert attempt &acc.debit(m, Withdrawal) is Ok(_)
+```
+
+Two forms, `name: Type` or `name = expression`, and generating one value
+from another is only scope. Hypothesis needs `st.data()` for that, and
+Hedgehog a `flatMap`. There's no `assume`: build what you want rather than
+filtering for it.
+
+### Shrinking replays the choices
+
+Every random choice a generator makes goes through the `Random`
+dependency, and the test implementation of `Random` records them. That
+sequence of choices **is** the test's input; the values are what the
+generators make of it. Shrinking makes the sequence smaller (shorter,
+numbers toward 0, picks toward the first option) and runs the same
+generators again.
+
+- **Any generator shrinks,** derived or hand-written, with no shrinker to
+  write. This is Hypothesis's idea, and in Ren it needs no library:
+  `Random` is already a dependency a test controls.
+- **A shrunk value is still valid.** It's rebuilt by the same
+  constructors, so a shrunk `Email` is an `Email` its module would make.
+- **A failure is saved as its sequence** and replayed first on every run
+  until it passes. Keep it as a regression test with `ren test --keep`.
+
+### What was tested
+
+Ren knows the domain's sum types and every function's errors, so it can
+say what the generated data actually exercised:
+
+```
+✓ a transfer never changes the total, 100 cases
+    Plan:     Free 41 · Pro 38 · Team 21
+    outcome:  ok 12 · Overdrawn 88
+    ⚠ 88 of 100 cases ended in `Overdrawn`: generate amounts within the balance
+    Email:    built by `arbitrary`
+```
+
+- **The outcome line catches the most common silent failure:** a property
+  test that spends its cases on the error path.
+- **So does a constructor that never came up,** and a constructor that
+  refused most of what it was given: "`Email.parse` accepted 2% of its
+  inputs. help: write `fn arbitrary`."
+
+### Fuzzing is the same test, for longer
+
+`ren fuzz bank --only "a transfer"` runs the same test with
+coverage-guided mutation of its choice sequence, as Go's fuzzing does,
+for as long as it's given. There's no second kind of test. What it finds
+is saved and shrunk like any other failure.
+
+## The journal is a test
+
+Every effect goes through a dependency, and `ren run --record` writes the
+journal of a run ([handlers.md](handlers.md#the-journal)). A journal is
+already a test: replaying it gives the same output, and replaying it
+against a changed program stops at the first call that differs.
+
+- **`ren test` runs journals** kept in a module's `tests/` folder,
+  comparing the output and the calls.
+- **A bug report is a file.** Record the run that went wrong, drop the
+  journal in `tests/`, fix the bug, and it stays fixed.
+
+## The console
+
+`ren console` is Rails' console with what dependencies make possible. It's
+where exploring happens, so tests don't have to:
+
+```
+$ ren console bank/account
+account> let a = Account.open(AccountId.of(1))
+account> &a.stamp(Entry { at: Time.epoch, what: Deposit })     // private: fine here
+account> a
+Account { id: AccountId(1), balance: Money(0), frozen: false, statement: [...] } : Account
+account> :t a.credit
+fn(inout Account, Money, Movement) ! Frozen(account: AccountId) uses Clock
+```
+
+- **It opens inside a module.** Its private items, and its opaque types'
+  representations, are in reach. That's the difference from a test.
+- **Every result shows its type,** and `:t` shows an expression's type
+  without running it.
+- **You choose the world.** It starts on test implementations: the clock
+  stopped, the file system in memory, `Random` seeded. Real ones are
+  named, `ren console bank --real Clock,Fs`, so the console is safe by
+  default and never touches the world by surprise. Rails' console is
+  powerful and dangerous for the same reason, the real database. Here
+  it's a choice you can see.
+- **Every effect is shown as it happens:**
+
+  ```
+  bank> try &bank.transfer(t)
+    Clock.now() → 1970-01-01T00:00:00Z
+  ok : Unit
+  ```
+
+- **`:reload` keeps your state.** It compiles again after an edit and
+  replays the session's journal to rebuild what you had. Rails' `reload!`
+  loses it.
+- **`:spec` turns a session into a test.** It keeps the calls to `pub`
+  items and an `assert` for each result you looked at, writes them as a
+  `test` in the module, and shows it to you to edit or delete. Whatever
+  the session did through private items is left out: if a behaviour can
+  only be reached that way, it isn't part of the interface, and `:spec`
+  says so.
+- **Later, read-only attaching to a running program** through its
+  journal: what did this request do?
+
+## Later
+
+- **Generated call sequences.** The compiler knows a module's interface,
+  so `ren test` can call it in generated orders and check a property
+  after each call, or compare it with a simple model. That's QuickCheck's
+  state machine testing, derived from the interface rather than written
+  by hand: a deep module, tested at its boundary, automatically.
+- **Schedules in the same sequence.** The simulation scheduler's choices
+  (stage 17) join the choice sequence, so a failing interleaving shrinks
+  to the shortest schedule that still fails, and generated data and
+  generated schedules shrink together.
+- **Programs as properties.** Generate a world, files, clock jumps,
+  network failures, run `main` under simulation, and check the journal.
+- **Swarm testing:** each run leaves out some constructors and some
+  operations entirely, which finds bugs that need a rare mix.
+
+## Roadmap
+
+Stage numbers match the [README roadmap](README.md#roadmap).
+
+| Stage | What |
+|---|---|
+| **9c** | tests see what an importer sees; test items; a type that keeps rules is opaque ([module-build.md](module-build.md#private-unless-pub)); `ren console` with types, private items and the choice of world |
+| **10** | the journal: effects shown in the console, `:reload`, `:spec`, journals as tests |
+| **12** | property tests: derived generation, generation through constructors, `arbitrary`, shaped parameters, shrinking by replay, saved failures, the report, `ren fuzz` |
+| **17** | schedules in the choice sequence |
+| **Later** | generated call sequences, programs as properties, swarm testing, attaching the console |
+
+## Borrowed from
+
+- **QuickCheck:** properties, and generating from types.
+- **Hypothesis:** generating from a recorded choice sequence and shrinking
+  that sequence; a database of failures replayed first.
+- **Hedgehog and proptest:** shrinking that comes with the generator.
+- **Rust's `arbitrary` crate and Go's fuzzing:** structured data from
+  bytes, so fuzzing and property tests are one test.
+- **AFL++ (CmpLog) and Redqueen:** learning the constants a parser
+  compares with.
+- **Swarm testing, and Tyche:** varying the mix; showing what was
+  generated.
+- **FoundationDB, TigerBeetle's VOPR and Antithesis:** deterministic
+  simulation, where every failure replays.
+- **Go's `package foo_test`:** tests written as clients.
+- **Rails' console:** a live, loaded program to poke at.
+- **John Ousterhout, *A Philosophy of Software Design*:** deep modules.
+
+## Open questions
+
+- **The cost of specifications for small files.** If writing tests for a
+  small file becomes a chore of marking things `pub`, the rule is too
+  strict. [examples/just](examples/just) is the one to watch: its
+  `plan.ren` does its work in a private recursive `visit`.
+- **How `:spec` picks its asserts,** from the results looked at, without
+  writing brittle ones.
+- **How a saved failure is named and kept** in the repository, so it
+  survives renaming the test.

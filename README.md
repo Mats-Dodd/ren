@@ -72,17 +72,21 @@ The goal is one language for the whole range: everyday backend services at one e
 These are ranked. When two of them conflict, the one higher on the list wins.
 
 1. **The signature is the truth.** Everything a function touches, returns, or fails with is in its type.
-2. **The world is a dependency.** Code reaches outside itself (network, disk, clock, memory) only through dependencies listed in `uses`.
-3. **Nothing is found behind your back.** There's no trait search, no overloading, and no implicit conversion. Implementations are installed or attached to a type, never searched for.
-4. **Values never change under you.** You can write `x.field = y`, but nobody else can observe it. The only state that outlives a call lives inside handlers, and a handler's state can only change between dependency calls.
-5. **Costs that matter can be pinned.** A function that doesn't list `Alloc` doesn't allocate, and the compiler proves it.
-6. **One mechanism, many uses.** Dependency injection, test fakes, allocators, middleware, simulation, and tracing all use the same `uses` / `with` mechanism.
-7. **The compiler explains itself.** Every error explains why it happened and suggests a concrete fix.
-8. **Enough out of the box.** One formatter, one test runner, one build tool, and a stdlib you can ship with.
+2. **The world is a dependency.** Code reaches outside itself (network, disk, clock, memory) only through dependencies listed in `uses`, at run time and at build time. Tests swap them, the journal records them, and replay answers them.
+3. **Boundaries are narrow, and tested there.** A type that keeps rules is opaque, a module shows only what's `pub`, and a test sees what an importer sees, so a test is a specification and refactoring never breaks one ([testing.md](testing.md)).
+4. **Nothing is found behind your back.** There's no trait search, no overloading, and no implicit conversion. Implementations are installed or attached to a type, never searched for.
+5. **Values never change under you.** You can write `x.field = y`, but nobody else can observe it. The only state that outlives a call lives inside handlers, which one task touches at a time, and a handler's state can only change between dependency calls.
+6. **One way, one mechanism.** When two features overlap, one goes. Dependency injection, test fakes, allocators, middleware, simulation, and tracing all use the same `uses` / `with` mechanism.
+7. **Nothing is lost silently.** A dropped value is written `let _`. Errors are checked. Cancellation can't be swallowed, and a second failure goes to the trace.
+8. **Everything has a limit.** Tasks, queues, retries, stacks and build time are all bounded, and running into a limit is an error that says where.
+9. **Costs that matter can be pinned.** A function that doesn't list `Alloc` doesn't allocate, and the compiler proves it.
+10. **Guarantees never depend on optimizations.** A program means the same thing in a debug build and a release build.
+11. **Least surprise, and the compiler explains itself.** When in doubt, do what a reader would expect. When that isn't possible, make it an error rather than behaviour to learn, and every error explains why it happened and suggests a concrete fix.
+12. **Enough out of the box.** One formatter, one test runner, one console, one build tool, and a stdlib you can ship with.
 
 A useful filter for any proposed feature: does it make function bodies read more like a script, or signatures more like a proof? If it does neither, cut it.
 
-The three bars Ren is measured against (within 2× of Rust, debug builds faster than Go, replay byte for byte) and the principles that follow from them are in [vision.md](vision.md).
+The three bars Ren is measured against (within 2× of Rust, debug builds faster than Go, replay byte for byte) are in [vision.md](vision.md), with two more principles for how the compiler is built.
 
 ---
 
@@ -309,7 +313,7 @@ test "a deposit is stamped with the time" =
   assert s[0].at == Time.epoch + Duration.minutes(5)
 ```
 
-Tests sit next to the code they test, so they can reach private functions, and `ren run` ignores them. Every test gets test implementations of the built-ins without a `with`: a `Clock` stopped at `Time.epoch` until `TestClock.advance` moves it, a `Random` seeded from the test's name, and a `Console` that keeps what it's given, `TestConsole.output()`. So a test that uses no real dependency gives the same result on every run. A test asks for a real one in its `uses`, `test "the system clock moves" uses Clock =`, so going outside is visible. Any other dependency needs a `with`, and forgetting one is a compile error naming the test and the call that needs it.
+Tests sit next to the code they test, and `ren run` ignores them. A test sees what an importer sees, the module's `pub` items, so it's a specification of the interface, and its helpers are test items, `test fn` and `test handler`, which only tests see (from stage 9c; today tests can still reach private functions). Exploring a module's insides is what `ren console` is for ([testing.md](testing.md)). Every test gets test implementations of the built-ins without a `with`: a `Clock` stopped at `Time.epoch` until `TestClock.advance` moves it, a `Random` seeded from the test's name, and a `Console` that keeps what it's given, `TestConsole.output()`. So a test that uses no real dependency gives the same result on every run. A test asks for a real one in its `uses`, `test "the system clock moves" uses Clock =`, so going outside is visible. Any other dependency needs a `with`, and forgetting one is a compile error naming the test and the call that needs it.
 
 A group is a function over implementations, so one suite runs against every implementation of a dependency, each test with a fresh one:
 
@@ -706,6 +710,27 @@ Every interaction with the outside world is a typed dependency call that the com
 
 *All planned.*
 
+### Specifications, and data from your types
+
+A test sees what an importer sees, so it's a specification, and a test with parameters is a property test. Every type generates itself, an opaque one only through its own constructors, so a value its module wouldn't allow never appears. A failure shrinks without a shrinker, because shrinking replays the `Random` dependency's choices with smaller ones:
+
+```ren
+test "a transfer never changes the total" (a: Account, b: Account, m: Money) =
+  var bank = Bank.of([a, b])
+  let before = bank.total()
+  let _ = attempt &bank.transfer(Transfer { from: a.id(), to: b.id(), amount: m })
+  assert bank.total() == before
+```
+
+```
+✗ a transfer never changes the total, failed after 37 cases, shrunk in 112 steps:
+    a = Account(id: AccountId(1), balance: Money(0))
+    b = Account(id: AccountId(1), balance: Money(0))     ← the same key twice
+    m = Money(1)
+```
+
+Ren knows the sum types and the errors, so the report says what was exercised (`outcome: ok 12 · Overdrawn 88`) and warns when most cases took the error path. Exploring is `ren console`: inside a module, on test implementations unless you name real ones, showing each effect, and `:spec` turns a session into a test. The design is in [testing.md](testing.md).
+
 ### Deterministic simulation testing
 
 Run your system under a seeded fake scheduler, clock, network, and disk. Every failure replays exactly.
@@ -918,7 +943,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 - The compiler is written in **OCaml**.
 - The backend emits **C**: `tcc` for fast debug builds, `clang -O2` (or `zig cc`) for release builds, and Wasm through the same path. A naive C backend comes before the memory stage, so Ren runs natively early and every later stage is measured.
 - Every function takes the implementations installed where it's called as one hidden parameter, an evidence vector, which a dependency call searches by the dependency's identity ([deps.md](deps.md#how-it-runs)). Release builds specialize implementations known at compile time using lambda sets, so dependency calls become direct, inlinable calls, within a specialization budget.
-- What Ren is measured against and the principles behind it are in [vision.md](vision.md). The stages ahead are designed in [handlers.md](handlers.md) (wrapping and the journal), [async.md](async.md) (concurrency), [shapes.md](shapes.md) (shapes and build time), [stdlib.md](stdlib.md) and [runtime-io.md](runtime-io.md).
+- What Ren is measured against is in [vision.md](vision.md). How it tests, specifications, test items, conformance groups, property tests and the console, is in [testing.md](testing.md). The stages ahead are designed in [handlers.md](handlers.md) (wrapping and the journal), [async.md](async.md) (concurrency), [shapes.md](shapes.md) (shapes and build time), [stdlib.md](stdlib.md) and [runtime-io.md](runtime-io.md).
 - How the compiler is laid out, the passes and the languages between them, what each promises and what checks it, and the rules every pass keeps, is in [compiler.md](compiler.md).
 - Modules, name lookup, interface summaries, and the content-addressed build are designed in [module-build.md](module-build.md). Every compiler pass is a pure function of one module or call-graph group plus the interfaces of its imports.
 - Golden tests cover every example and every error message from day one. All generated C runs under ASan and UBSan, and the interpreter and native backend are differentially tested against each other.
@@ -939,10 +964,11 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 7 | `dep`, `uses`, `with`, `handler`, `Clock`, `Random` and `Console`; `test`, `group`, `assert`, `ren test` ([deps.md](deps.md)) | the bank's tests run on the test implementations, with no `with` (done) |
 | 8 | `Str` and `Bytes`, `Fs`, `Os`, `Proc`, `Path`, each with real and in-memory implementations | a small [just](https://github.com/casey/just) runs, and its tests run on `mem_fs` and a fake `Os` and `Proc` (done, as a slice: `Os` has only `args`, and `Proc.run` doesn't capture output) |
 | 9 | operators, derived equality and hashing, arithmetic for opaque number types, `Map` and `Set`, tuples, ranges and the collection methods ([operators.md](operators.md)) | `Map<Email, User>` works (done: 9a, operators, `key`, `with numeric`, `Int` and `Float`; 9b, tuples, ranges, `Map`, `Set` and `Enumerable`'s methods, and the bank keeps its accounts in a `Map`) |
+| 9c | boundaries: a type that keeps rules is opaque; a test sees what an importer sees, with test items; `ren console` ([testing.md](testing.md), [module-build.md](module-build.md#private-unless-pub)) | the bank's `Account` and `Bank` are opaque, and its tests are specifications |
 | 10.0 | one constraint solver, typed Core, requirements passed as dictionaries, lambda sets in function types ([compiler.md](compiler.md)) | every stage-10.0 step passes its check (done) |
-| 10 | `over` and `next`, `with` as a set, `finally`, **the journal**: `ren run --record`, `ren replay`, `--trace` ([handlers.md](handlers.md)) | a cache wraps a real implementation, and the `just` replays byte for byte |
+| 10 | `over` and `next`, `with` as a set, `finally`, **the journal**: `ren run --record`, `ren replay`, `--trace`, journals as tests, and the console's `:reload` and `:spec` ([handlers.md](handlers.md), [testing.md](testing.md)) | a cache wraps a real implementation, and the `just` replays byte for byte |
 | 11 | `Async` and `Net`: structured concurrency, cancellation, tasks in handlers, deterministic tests on virtual time ([async.md](async.md)) | a server shuts down gracefully, and `ren test --seeds` finds the `cached` race |
-| 12 | the standard library for a web service and the compiler: `http`, `json` and `cli` over shapes, top-level `let` and `assert` ([stdlib.md](stdlib.md), [shapes.md](shapes.md)) | a small web service and its tests run, interpreted |
+| 12 | the standard library for a web service and the compiler: `http`, `json` and `cli` over shapes, top-level `let` and `assert`; property tests and `ren fuzz` ([stdlib.md](stdlib.md), [shapes.md](shapes.md), [testing.md](testing.md)) | a small web service and its tests, specifications and properties, run interpreted |
 | 13 | a naive C backend, emitting Core with reference counting and no optimizations; packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally; debug builds measured against Go ([vision.md](vision.md)) |
 | 14 | memory: specialization, defunctionalization, borrow inference, reference counting with reuse ([compiler.md](compiler.md)) | `map` reuses memory in place; the benchmarks measured against Rust ([vision.md](vision.md)) |
 | **↑** | **native Ren** | **the web service runs natively, within the bars** |

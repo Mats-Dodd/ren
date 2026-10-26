@@ -16,7 +16,8 @@ This doc covers how Ren code is organized into files and packages, how names are
  values are always qualified   you can always see where a call comes from
  the type is the other home    Red, user.plan, a + b, &xs.push(x): found through a type
  no wildcards, no cycles       nothing found behind your back
- private unless `pub`          internal/ for package-private
+ private unless `pub`          a test sees what an importer sees
+ a type that keeps rules       is opaque
  builds are pure functions     same inputs, same outputs, cached forever
 ```
 
@@ -50,13 +51,11 @@ shop/                       ← a package (it has ren.toml)
   billing/
     stripe.ren              ← shop/billing/stripe
     invoice.ren             ← shop/billing/invoice
-  internal/
-    retry.ren               ← only importable from inside shop
   deps/
     json/                   ← a vendored dependency
 ```
 
-A directory is only a folder. It isn't a module, and it isn't a privacy boundary, except for `internal/`.
+A directory is only a folder. It isn't a module, and it isn't a privacy boundary. A boundary bigger than a file, a package's, waits for a workspace design ([Open questions](#open-questions)).
 
 ### No import cycles
 
@@ -193,9 +192,30 @@ pub fn load(id: UserId) -> User ! NotFound ...   // exported
 fn helper() = ...                                // this module only
 ```
 
-There are two levels and no third keyword. For "shared inside my package but not with my users," put the module under `internal/`, the way Go does. Only the module that declares an `opaque` type can see its representation.
+There are two levels and no third keyword. Only the module that declares an `opaque` type can see its representation.
 
-Tests are written in the module they test (`test "..." =`), can see its private items, and never appear in its interface.
+A file is the boundary that matters most, because it's the cheapest: a 14-line `Money` gets a real one for free, and opaque means opaque outside that file, which is the size of the abstraction. Two rules keep the boundaries honest.
+
+**A type that keeps rules is opaque.** A public type that isn't opaque, a record or a sum type, is open: anyone can build one and change its fields. So it can have neither of these:
+
+- **a method that changes it,** `inout self`. Since anyone can already change its fields, such a method is either a second way to do that, or a rule nobody else has to follow: `transfer` keeps the total, but `a.balance = ...` walks past it.
+- **a constructor that can fail,** a function under it that returns one with `!`. It's checking something, and `Transfer { amount: Money.cents(-5), ... }` skips the check.
+
+```
+error: `Bank` is open, so `transfer` can't change it
+  ┌─ bank.ren:37:10
+  │
+37 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
+  │          ^^^^^^^^
+  │
+  = anyone can change an open type's fields, so a method that changes it
+    is either a second way to do that, or a rule nobody else has to follow
+  help: hide its fields: `pub type Bank = opaque { accounts: ..., next: Int }`
+```
+
+Data stays open: plain records and sum types, with pure methods and constructors that can't fail, `Account.open(id)`. Anything that keeps rules is closed, and the compiler can tell which from the type's own members. A state machine, `Draft | Placed | Shipped`, becomes opaque and shows its state as a plain sum with no fields, `pub fn status(self) -> Status`, which callers can match on and can't forge. What it costs is a few methods that read: an interface that's behaviour, `balance()` and `statement()`, rather than a data structure. There's no third, read-only kind of field.
+
+**A test sees what an importer sees.** Tests are written in the module they test (`test "..." =`), but they're its clients: they see its `pub` items, and its opaque types are opaque to them. Test helpers are test items, `test fn` and `test handler`, which only tests see. So a test is a specification of the module's interface, and changing what's behind it never breaks one. Exploring a module's insides is done in `ren console`, which sees everything and keeps nothing. Both are in [testing.md](testing.md).
 
 ### Naming is enforced
 
@@ -376,7 +396,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 |---|---|
 | **Today** (stages 5a, 5b, 6, 7) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, the "two shapes" error, dependency types imported like other types, and public groups imported to run their tests. Every compiler pass is a pure function of its inputs |
 | **Stage 5b, left over** | `dbg` |
-| **Stage 13** | Packages (`ren.toml`, vendoring, `allow`, `internal/`), and `ren build` with a local content-addressed cache and `--verify` |
+| **Stage 9c** | A type that keeps rules is opaque, and `opaque { ... }` over a record; tests see what an importer sees; test items ([testing.md](testing.md)) |
+| **Stage 13** | Packages (`ren.toml`, vendoring, `allow`), and `ren build` with a local content-addressed cache and `--verify` |
 | **Stage 17** | Cached simulation-test results |
 | **After 1.0** | `build.ren`, sandboxed tools, remote cache and execution |
 
@@ -384,6 +405,6 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 ## Open questions
 
-- Should modules be able to re-export imported types (`pub import`)? We're leaning no until a real need shows up.
+- **What's the boundary bigger than a file?** Inside a package, a `pub` item is visible to every module, and so is a helper shared by two of them. The answer will come with a workspace design, packages small and cheap enough to use as walls inside a program, as Rust's crates are. Until then there's no `internal/`, no export list and no re-exports (`pub import`).
 - How do vendored dependencies get updated? Probably `ren deps update json --from <git url>`.
 - Where does the boundary between the prelude and `std` sit? `Map` and `Set` are in the prelude, but `json` isn't. The test should be what nearly every module needs.

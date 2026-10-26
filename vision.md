@@ -16,39 +16,19 @@ written down now so the stages that get there are judged by them.
 
 ## Principles
 
-The bars say where Ren is going. These say how it gets there. A new
-feature should follow from them. If one needs a principle that isn't
-here, that's the signal to slow down.
+The bars say where Ren is going. The principles say how it gets there, and
+they're the [README's](README.md#principles), ranked: one list, so two
+can't disagree. A new feature should follow from them. If one needs a
+principle that isn't there, that's the signal to slow down.
 
-1. **The compiler knows where the world comes in.** Every effect goes
-   through a dependency, at run time and at build time. Tests swap them,
-   the journal records them, replay answers them, and asserts check them
-   ([deps.md](deps.md), [handlers.md](handlers.md),
-   [shapes.md](shapes.md)).
-2. **Values never change once they're shared.** Mutable state has one
-   owner, or lives in a handler, which one task touches at a time
-   ([async.md](async.md)).
-3. **There's one way to do each thing.** When two features overlap, one
-   goes. `over` replaced `outer` and `forwards`, and the top level replaced
-   a `const` keyword.
-4. **Nothing is lost silently.** A dropped value is written `let _`.
-   Errors are checked. Cancellation can't be swallowed, a timeout never
-   reports work that finished as timed out, and a second failure goes to
-   the trace.
-5. **Everything has a limit.** Tasks, queues, retries, stacks and build
-   time are all bounded, and running into a limit is an error that says
-   where.
-6. **Guarantees never depend on optimizations.** A program means the same
-   thing in a debug build and a release build. Optimizations make it
-   faster, never more correct.
-7. **Each fact is computed once and carried.** Types, requirements,
+Two more are about how the compiler is built
+([compiler.md](compiler.md)):
+
+1. **Each fact is computed once and carried.** Types, requirements,
    shapes and top-level values are worked out once, cached by hash, and
    never derived again.
-8. **Every IR has a checker.** Each stage of the compiler can be verified
-   on its own ([compiler.md](compiler.md)).
-9. **Least surprise.** When in doubt, do what a reader would expect, and
-   when that isn't possible, make it an error with a help line rather than
-   behaviour to learn.
+2. **Every IR has a checker.** Each stage of the compiler can be verified
+   on its own.
 
 ## Within 2× of Rust
 

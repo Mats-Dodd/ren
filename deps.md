@@ -248,8 +248,10 @@ test "main prints the balances, and every refusal" =
   ]
 ```
 
-- Tests sit next to the code, so they can reach private functions. `ren run`
-  ignores them.
+- Tests sit next to the code, and `ren run` ignores them. Today they can
+  reach private functions. From stage 9c a test sees what an importer
+  sees, and its helpers are test items, `test fn` and `test handler`
+  ([testing.md](testing.md#tests-are-specifications)).
 - **Every test gets the test `Clock`, `Random`, `Console`, `Fs`, `Os`
   and `Proc`, and their controls, implicitly.** No `with`, no fixtures. A test without real
   dependencies gives the same result on every run.
@@ -280,6 +282,11 @@ group "test clock" = clock_conforms(test_clock(Time.epoch))
 The group's `with` applies to each test separately: every test gets a fresh
 instance. A `pub group` can be imported, so a library ships the conformance
 suite for the dependencies it defines ([stdlib.md](stdlib.md#three-implementations-one-conformance-suite)).
+
+Every `dep` should ship one, and every implementation of it, test or real,
+should run it: that's what keeps a fake from drifting away from what it
+stands for. `ren test` reports an implementation that runs no group for
+its dependency ([testing.md](testing.md#conformance-groups)).
 
 ### `assert`
 
