@@ -625,10 +625,11 @@ let worklist ~awake ~decide items =
   in
   round items
 
-(* The copies among [cs], decided until none has anything to add. *)
-let copies_of env cs =
-  worklist ~awake:copy_awake ~decide:(copy env)
-    (List.filter_map (function Copy k -> Some k | _ -> None) cs)
+(* The copies among [cs]. *)
+let copies cs = List.filter_map (function Copy k -> Some k | _ -> None) cs
+
+(* The copies [ks], decided until none has anything to add. *)
+let copies_of env ks = worklist ~awake:copy_awake ~decide:(copy env) ks
 
 (* The `with`s among [cs] that install, each once the copies of what an
    implementation needs, [copies], are up to date, since what its body
@@ -637,23 +638,36 @@ let copies_of env cs =
    reason found for each, and the uses of named rows they make. *)
 let installs env ~copies cs =
   let ws = List.filter_map (function Install w -> Some w | _ -> None) cs in
-  (* how many bodies end in each row that's still open *)
-  let tails = List.filter_map (fun w -> row_tail w.wbody) ws in
-  let shared id = List.length (List.filter (( = ) id) tails) > 1 in
-  List.fold_left
-    (fun (withheld, dues) w ->
-      copies_of env copies;
-      let held, due = install env ~shared w in
-      let dues = dues @ Option.to_list due in
-      match held with
-      | Some h
-        when not
-               (List.exists
-                  (fun h' -> h'.hfn = h.hfn && h'.hdep = h.hdep)
-                  withheld) ->
-          (withheld @ [ h ], dues)
-      | _ -> (withheld, dues))
-    ([], []) ws
+  (* how many bodies end in each row that's still open, counted once, not
+     for each `with`; only looked up, so its order never shows *)
+  let tails = Hashtbl.create 16 in
+  List.iter
+    (fun w ->
+      Option.iter
+        (fun id ->
+          Hashtbl.replace tails id
+            (1 + Option.value ~default:0 (Hashtbl.find_opt tails id)))
+        (row_tail w.wbody))
+    ws;
+  let shared id = Option.value ~default:0 (Hashtbl.find_opt tails id) > 1 in
+  let withheld, dues =
+    List.fold_left
+      (fun (withheld, dues) w ->
+        copies_of env copies;
+        let held, due = install env ~shared w in
+        (* most recent first, reversed once they're all in *)
+        let dues = Option.to_list due @ dues in
+        match held with
+        | Some h
+          when not
+                 (List.exists
+                    (fun h' -> h'.hfn = h.hfn && h'.hdep = h.hdep)
+                    withheld) ->
+            (withheld @ [ h ], dues)
+        | _ -> (withheld, dues))
+      ([], []) ws
+  in
+  (withheld, List.rev dues)
 
 (* Decide every pending constraint, and take them off the environment's
    list. [is_value] says whether a function is an associated value, which
@@ -705,8 +719,9 @@ let solve env ~is_value ~withheld =
       cs
   in
   List.iter (function Drop d -> drop env d | _ -> ()) cs;
-  let held, dues = installs env ~copies:cs cs in
-  copies_of env cs;
+  let ks = copies cs in
+  let held, dues = installs env ~copies:ks cs in
+  copies_of env ks;
   (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
      implementation needs only what it has: a transparent parameter's
      row closes with it, which Infer_declared.check_open_rows reports *)
