@@ -65,6 +65,7 @@
               |  "fn" "(" ["inout"] [IDENT ":"] type, ... ")" ["->" type]
                  [errors] [uses]           (the innermost function type's)
               |  "(" type ")"
+              |  "(" type "," type ["," type] ")"   (a tuple's)
               |  errors                     (an error set: only `Result`'s
                                              second type argument, resolve.ml)
      tyname   := [IDENT "."] UIDENT                (`stripe.Client`: another
@@ -75,7 +76,10 @@
      body     := INDENT block | line
      block    := stmt { NEWLINE stmt } DEDENT       (last stmt is the value)
      stmt     := ("let" | "var") IDENT [":" type] "=" body
-              |  "for" IDENT "in" expr INDENT block
+              |  "let" "(" pattern, ... ")" "=" body (a tuple taken apart:
+                                                     names, `_` and tuples)
+              |  "for" (IDENT | tuple_pat) "in" (expr | expr ".." expr)
+                 INDENT block                       (a range only here)
               |  line
      line     := expr [("=" | "+=" | "-=" | "*=") body]
                                                     (an assignment's target
@@ -102,6 +106,7 @@
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
               |  tyname "." IDENT               (a member: `Stack.of`)
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
+              |  "(" expr "," expr ["," expr] ")"   (a tuple)
               |  "if" expr "then" body [[NEWLINE] "else" body]
               |  "with" expr, ... "in" body
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
@@ -114,6 +119,7 @@
                                                     lexer opens its block)
      pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
               |  ctor_ref ["(" pattern, ... ")"]
+              |  "(" pattern "," pattern ["," pattern] ")"
 
    UIDENT is an IDENT starting with a capital letter: types and constructors
    are capitalized, variables, functions and modules are not. That's how
@@ -249,6 +255,19 @@ let cmp_op = function
   | GE -> Some Ge
   | _ -> None
 
+(* A tuple has two parts or three (operators.md, "Tuples"): [loc] is
+   where one with [n] is written, and [what] says whether it's a value, a
+   type or a pattern. *)
+let tuple_size loc n =
+  if n < 2 then
+    Diag.error loc ~help:"write the value on its own, without a `,`"
+      "a tuple has two parts or three, but this has one"
+  else if n > 3 then
+    Diag.error loc
+      ~help:
+        "use a record, which names its parts: `type T = { a: A, b: B, ... }`"
+      (Printf.sprintf "a tuple has two parts or three, but this has %d" n)
+
 (* ---- types ---- *)
 
 (* A type's name: `Plan`, or `stripe.Client`, with its module's alias in
@@ -294,11 +313,21 @@ let parse_ctor_ref p : ctor_ref =
    comma ends the argument rather than going on with the `uses`. *)
 let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
   match peek p with
-  | LPAREN ->
+  | LPAREN -> (
+      let start = loc p in
       advance p;
       let t = parse_ty p in
-      expect p RPAREN;
-      t
+      match peek p with
+      | COMMA ->
+          (* a tuple's type, `(Str, Int)` *)
+          advance p;
+          let ts = t :: sep_list p ~close:RPAREN parse_ty in
+          let l = Loc.span start (last_loc p) in
+          tuple_size l (List.length ts);
+          TyTuple (ts, l)
+      | _ ->
+          expect p RPAREN;
+          t)
   | FN ->
       let start = loc p in
       advance p;
@@ -551,8 +580,12 @@ let parse_ctors p =
   in
   loop []
 
-let parse_type_body p =
+let parse_type_body ~prelude p =
   match peek p with
+  | IDENT "builtin" when prelude ->
+      (* a built-in type, whose members follow (ast.ml, [Builtin]) *)
+      advance p;
+      Builtin
   | LBRACE ->
       advance p;
       Fields (sep_list p ~close:RBRACE parse_field_decl)
@@ -633,7 +666,46 @@ let rec parse_pattern p : pattern =
       Diag.error (loc p)
         ~help:"match the error in an arm of its own, `fail Tag(...) => ...`"
         "a `fail` pattern can't be inside another pattern"
+  | LPAREN ->
+      advance p;
+      let ps = sep_list p ~close:RPAREN parse_pattern in
+      tuple_size (Loc.span start (last_loc p)) (List.length ps);
+      finish (PTuple ps)
   | _ -> fail_expected p "a pattern"
+
+(* A pattern that always matches, which a `let` or a `for` can take a
+   tuple apart with: names, `_`, and tuples of them. *)
+let rec irrefutable (pat : pattern) =
+  match pat.pkind with
+  | PVar _ | PWild -> true
+  | PTuple ps -> List.for_all irrefutable ps
+  | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | POr _ -> false
+
+(* A pattern after a `let` or a `for` ([what]) that might not match: a
+   constructor's is taken apart by a `match`, which says what happens
+   when it doesn't. *)
+let might_not_match (q : pattern) ~what =
+  Diag.error q.ploc
+    ~help:
+      "take it apart with a `match`, which says what happens when it doesn't \
+       match"
+    (Printf.sprintf
+       "a `%s` takes apart only a tuple, of names and `_`, which always \
+        matches, but `%s` might not"
+       what (show_pattern q))
+
+(* The tuple pattern after a `let` or a `for`, which has to always
+   match. *)
+let binding_pattern p ~what =
+  let pat = parse_pattern p in
+  let rec refutable (q : pattern) =
+    match q.pkind with
+    | PTuple ps -> List.find_map refutable ps
+    | _ when irrefutable q -> None
+    | _ -> Some q
+  in
+  Option.iter (might_not_match ~what) (refutable pat);
+  pat
 
 (* An arm's pattern: an ordinary one, or `fail` patterns, which match an
    error (errors.md, "Handling: `match`"), one or several combined with
@@ -734,11 +806,35 @@ and parse_block p =
         ~help:"add the value this block should produce as its last line"
         (Printf.sprintf "this block ends with a `%s`, so it has no value"
            (if mut then "var" else "let"))
+  | Let_tuple { pat; _ } :: _ ->
+      Diag.error pat.ploc
+        ~help:"add the value this block should produce as its last line"
+        "this block ends with a `let`, so it has no value"
   | [] -> assert false (* parse_stmt always returns a statement *)
 
 and parse_stmt p =
-  match peek p with
-  | (LET | VAR) as kw ->
+  match (peek p, peek2 p) with
+  | LET, LPAREN ->
+      advance p;
+      let pat = binding_pattern p ~what:"let" in
+      if peek p = COLON then
+        Diag.error (loc p)
+          ~help:"write the type on the value: `let (a, b): (A, B)` isn't Ren"
+          "a `let` that takes a tuple apart has no type written";
+      expect p EQ;
+      Let_tuple { pat; value = parse_body p }
+  | LET, IDENT c when is_upper c && (peek3 p = LPAREN || peek3 p = DOT) ->
+      (* `let Some(x) = o` *)
+      advance p;
+      might_not_match (parse_pattern p) ~what:"let"
+  | VAR, LPAREN ->
+      Diag.error (loc p)
+        ~help:
+          "take it apart with `let`, then make a `var` of each part that \
+           changes: `var x = a`"
+        "a `var` can't take a tuple apart"
+  | (LET | VAR), _ ->
+      let kw = peek p in
       advance p;
       let name = ident p in
       let ty =
@@ -749,24 +845,70 @@ and parse_stmt p =
       in
       expect p EQ;
       Let { name; ty; value = parse_body p; mut = kw = VAR }
-  | FOR -> Expr (parse_for p)
+  | FOR, _ -> Expr (parse_for p)
   | _ -> Expr (parse_line p)
 
 and parse_for p =
   let start = loc p in
   expect p FOR;
-  let var = ident p in
+  let pat =
+    match peek p with
+    | LPAREN -> binding_pattern p ~what:"for"
+    | _ ->
+        let l = loc p in
+        let x = ident p in
+        mk_pattern p l (PVar x)
+  in
   expect p IN;
-  let iter = parse_expr p in
+  let iter = parse_orelse p in
+  let over =
+    match peek p with
+    | DOTDOT ->
+        (* `0..n`, from the first up to, but not including, the second *)
+        advance p;
+        (match peek p with
+        | EQ ->
+            Diag.error (loc p)
+              ~help:"write `a..b + 1` for the `Int`s up to and including `b`"
+              "there's no `..=`: a range is from the first number up to, but \
+               not including, the second"
+        | DOT ->
+            Diag.error (loc p) ~help:"write `a..b`"
+              "a range is written with two dots, `a..b`, from the first number \
+               up to, but not including, the second"
+        | _ -> ());
+        Range (iter, parse_orelse p)
+    | _ -> Each iter
+  in
+  (match (pat.pkind, over) with
+  | PTuple _, Each { kind = Ref _; _ } ->
+      Diag.error pat.ploc
+        ~help:
+          "write `for x in &xs`, and change `x`; to read its parts, take it \
+           apart inside the loop"
+        "a `for` that changes each element names it, and can't take it apart"
+  | _ -> ());
   if peek p <> INDENT then
     Diag.error (loc p) ~help:"put the loop's body on the lines below, indented"
       (Printf.sprintf "expected the body of the `for` loop, found %s"
          (describe (peek p)));
   advance p;
   let body = parse_block p in
-  mk (For { var; iter; body }) start p
+  mk (For { pat; over; body }) start p
 
 and parse_expr p =
+  let e = parse_orelse p in
+  if peek p = DOTDOT then
+    Diag.error (loc p)
+      ~help:
+        "a range is for counting, `for i in 0..n`; to keep some of an array, \
+         use `take` and `drop`"
+      "a range, `a..b`, is written only after a `for`'s `in`: it isn't a value";
+  e
+
+(* An expression that may be followed by `..`, which only a `for` reads
+   ([parse_for]). *)
+and parse_orelse p =
   let start = loc p in
   let lhs = parse_or p in
   if peek p = ORELSE then (
@@ -874,10 +1016,19 @@ and parse_postfix p =
   let start = loc p in
   let rec loop e =
     match peek p with
-    | DOT ->
+    | DOT -> (
         advance p;
-        let f = ident p in
-        loop (mk (Field (e, f)) start p)
+        match peek p with
+        | INT _ | FLOAT _ ->
+            (* `t.0` (and `t.0.1`, which is read as a number) *)
+            Diag.error (loc p)
+              ~help:
+                "take it apart with a pattern, `let (a, b) = t`; if its parts \
+                 want names, make it a record"
+              "a tuple's parts have no names or numbers"
+        | _ ->
+            let f = ident p in
+            loop (mk (Field (e, f)) start p))
     | LBRACKET ->
         advance p;
         let i = parse_expr p in
@@ -975,11 +1126,19 @@ and parse_primary p =
       advance p;
       let xs = sep_list p ~close:RBRACKET parse_expr in
       mk (Array xs) start p
-  | LPAREN ->
+  | LPAREN -> (
       advance p;
       let e = parse_expr p in
-      expect p RPAREN;
-      e
+      match peek p with
+      | COMMA ->
+          (* a tuple, `(k, v)` *)
+          advance p;
+          let xs = e :: sep_list p ~close:RPAREN parse_expr in
+          tuple_size (Loc.span start (last_loc p)) (List.length xs);
+          mk (Tuple xs) start p
+      | _ ->
+          expect p RPAREN;
+          e)
   | IF -> parse_if p
   | MATCH -> parse_match p
   | WITH -> parse_with p
@@ -1390,7 +1549,7 @@ let owned_by type_name ops =
   in
   go [] ops
 
-let parse_type p ~pub =
+let parse_type ~prelude p ~pub =
   expect p TYPE;
   let type_name = upper_ident p "a type name" in
   let type_params =
@@ -1406,7 +1565,7 @@ let parse_type p ~pub =
       (* the body indented under `type X =`, and its members on the lines
          after it, at the same indentation *)
       advance p;
-      let b = parse_type_body p in
+      let b = parse_type_body ~prelude p in
       let members =
         if peek p = NEWLINE then (
           advance p;
@@ -1416,7 +1575,7 @@ let parse_type p ~pub =
       expect p DEDENT;
       (b, members))
     else
-      let b = parse_type_body p in
+      let b = parse_type_body ~prelude p in
       if peek p = INDENT then (
         (* the members indented under a one-line body *)
         advance p;
@@ -1801,13 +1960,13 @@ let parse_group p ~pub =
              group_tests;
            })
 
-let parse_item p =
+let parse_item ~prelude p =
   p.node <- 0;
   let pub = peek p = PUB in
   if pub then advance p;
   match peek p with
   | FN -> Fn (parse_fn p ~pub)
-  | TYPE -> Type (parse_type p ~pub)
+  | TYPE -> Type (parse_type ~prelude p ~pub)
   | DEP -> Type (parse_dep p ~pub)
   | HANDLER -> Fn (parse_handler p ~pub)
   | GROUP -> parse_group p ~pub
@@ -1853,14 +2012,14 @@ let skip_to_item p ~start =
       advance p
     done)
 
-let parse_program sink toks =
+let parse_program ?(prelude = false) sink toks =
   let p = { toks; i = 0; node = 0; sink } in
   let rec loop acc =
     if peek p = EOF then List.rev acc
     else
       let start = p.i in
       match
-        let item = parse_item p in
+        let item = parse_item ~prelude p in
         if peek p = NEWLINE then advance p
         else if peek p <> EOF then fail_expected p "a new line";
         item

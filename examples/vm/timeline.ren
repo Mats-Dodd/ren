@@ -10,13 +10,11 @@ pub type Timeline = { frames: Array<Vm> }
 
   pub fn record(inout self, vm: Vm) = &self.frames.push(vm)
 
-  pub fn size(self) -> Int = self.frames.len()
+  pub fn len(self) -> Int = self.frames.len()
 
   // the machine as it was `n` steps before the last state recorded
   pub fn back(self, n: Int) -> Vm ! NotRecorded(n: Int) =
-    let i = self.frames.len() - 1 - n
-    if i < 0 then fail NotRecorded(n)
-    self.frames[i]
+    self.frames.get(self.frames.len() - 1 - n) orelse fail NotRecorded(n)
 
   // Run `vm` like `Vm.run`, recording every state it passes through,
   // the last one too. Two things change, so the call has two `&`s:

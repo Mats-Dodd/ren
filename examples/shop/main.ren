@@ -24,10 +24,10 @@ fn main() =
   &c.put(Free)
   &c.put(Pro(seats: 3))
   print(c.owner.raw())
-  print(c.size())
+  print(c.len())
   print(c.total())
-  print(Cart.guest.size())
+  print(Cart.guest.len())
   &c.clear()
-  print(c.size())
+  print(c.len())
   print(checkout(Pro(seats: 20)))   // declined: over the card's limit
   checkout(Pro(seats: 3))

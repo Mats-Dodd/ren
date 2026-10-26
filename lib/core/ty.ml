@@ -111,6 +111,14 @@ let bool = Con (Path.prelude "Bool", [])
 let unit = Con (Path.prelude "Unit", [])
 let str = Con (Path.prelude "Str", [])
 let array t = Con (Path.prelude "Array", [ t ])
+let option t = Con (Path.prelude "Option", [ t ])
+
+(* A tuple's type is a built-in type of its own for each size, named by
+   its shape, which no program can write: `(Str, Int)` is
+   [Con ("(,)", [str; int])] (operators.md, "Tuples"). *)
+let tuple_path n = Path.prelude (if n = 2 then "(,)" else "(,,)")
+let tuple ts = Con (tuple_path (List.length ts), ts)
+let is_tuple p = p = tuple_path 2 || p = tuple_path 3
 let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
 let label name = { name; payload = [] }
@@ -449,6 +457,7 @@ and show pr t =
       (* one of several, `Clock & TestClock uses Os` *)
       String.concat " & " (List.map pr.type_name ds)
       ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
+  | Con (p, args) when is_tuple p -> "(" ^ show_list pr args ^ ")"
   | Con (p, []) -> pr.type_name p
   | Con (p, args) -> pr.type_name p ^ "<" ^ show_list pr args ^ ">"
   | Errors e -> (

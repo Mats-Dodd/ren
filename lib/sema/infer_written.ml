@@ -83,6 +83,7 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
       assert false
   | TyErrors es ->
       TErrors (extend (error_labels env ~tvars es) (named_row ~named es.etail))
+  | TyTuple (ts, _) -> TCon (Ty.tuple_path (List.length ts), List.map go ts)
 
 and convert_param env ~tvars ~named ~row = function
   | TyInout (t, _) -> { mode = Inout; ty = convert env ~tvars ~named ~row t }

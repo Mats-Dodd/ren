@@ -15,4 +15,5 @@ val args : string list ref
    parameter, which the interpreter writes back for the arguments passed
    with `&`. `show` isn't run here: the interpreter shows a value through
    its type itself. *)
-val run : Intrinsic.t -> Value.t list -> Value.t * Value.t list
+val run :
+  Intrinsic.t -> dicts:Value.dict list -> Value.t list -> Value.t * Value.t list

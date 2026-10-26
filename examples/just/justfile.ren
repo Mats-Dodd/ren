@@ -8,7 +8,7 @@ pub type Justfile = { recipes: Array<Recipe> }
   // `name: deps`, and an indented one is a line of the recipe above it.
   // Blank lines and comments, after `#`, are skipped, and two recipes
   // can't share a name. Indices into a string are byte offsets, so
-  // `slice` cuts where `find` found.
+  // `slice` cuts where `index` found.
   pub fn parse(text: Str) -> Justfile ! BadLine(number: Int) | DuplicateRecipe(name: Str) =
     var recipes: Array<Recipe> = []
     var number = 0
@@ -20,14 +20,13 @@ pub type Justfile = { recipes: Array<Recipe> }
         if recipes.len() == 0 then fail BadLine(number)
         &recipes[recipes.len() - 1].lines.push(t)
       else
-        let colon = t.find(":") orelse fail BadLine(number)
+        let colon = t.index(":") orelse fail BadLine(number)
         let name = t.slice(0, colon).trim()
         if name == "" then fail BadLine(number)
-        for r in recipes
-          if r.name == name then fail DuplicateRecipe(name)
+        if recipes.any(fn(r) => r.name == name) then fail DuplicateRecipe(name)
         // the dependencies, up to a comment, between spaces or tabs
         let rest = t.slice(colon + 1, t.len())
-        let end = rest.find("#").unwrap_or(rest.len())
+        let end = rest.index("#").unwrap_or(rest.len())
         var deps: Array<Str> = []
         for word in rest.slice(0, end).split(" ")
           for d in word.split("\t")
@@ -37,10 +36,7 @@ pub type Justfile = { recipes: Array<Recipe> }
 
   // the recipe called `name`
   pub fn recipe(self, name: Str) -> Recipe ! UnknownRecipe(name: Str) =
-    var found = None
-    for r in self.recipes
-      if r.name == name then found = Some(r)
-    found orelse fail UnknownRecipe(name)
+    self.recipes.find(fn(r) => r.name == name) orelse fail UnknownRecipe(name)
 
 test "a recipe has a name, dependencies and lines" =
   let j = try Justfile.parse("# build it\nbuild: fmt  gen\n  cc -c a.c\n\n\tcc -o a a.o\nfmt:\n")

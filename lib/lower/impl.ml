@@ -67,6 +67,7 @@ let rec unplaced (e : Core.expr) : Core.expr =
     | Field (r, t, f) -> Field (go r, t, f)
     | Update (r, f, e) -> Update (go r, f, go e)
     | Array es -> Array (List.map go es)
+    | Tuple es -> Tuple (List.map go es)
     | Tag (t, es, ds) -> Tag (t, List.map go es, ds)
     | Fail e -> Fail (go e)
     | Handle h ->
@@ -90,6 +91,7 @@ and pattern (p : Core.pattern) : Core.pattern =
     | PCon (t, c, ps) -> PCon (t, c, List.map pattern ps)
     | PTag (t, ps) -> PTag (t, List.map pattern ps)
     | POr ps -> POr (List.map pattern ps)
+    | PTuple ps -> PTuple (List.map pattern ps)
   in
   { p with pkind; ploc = nowhere }
 

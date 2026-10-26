@@ -339,7 +339,7 @@ inclusive one): one spelling, and nobody has to remember which it is.
 
 ## Conditions are `Bool`
 
-`if`, `while`, `&&`, `||` and `not` take a `Bool`, and nothing else. An
+`if`, `&&`, `||` and `not` take a `Bool`, and nothing else. An
 empty array, `0`, `""` and `None` aren't false: `if xs.len() > 0`, not
 `if xs`. This was already so. It's written down because every one of
 Python, Ruby and JavaScript chose otherwise.
@@ -422,7 +422,20 @@ is.
 | `take(n)`, `drop(n)`, `reverse()` | |
 
 A `Map` has `get`, `set`, `remove`, `includes(k)`, `keys()`, `values()`
-and `len()`, and the methods above over its `(k, v)` pairs.
+and `len()`, and the methods above over its `(k, v)` pairs, in order:
+those that keep some of its pairs, `select`, `reject`, `partition`,
+`take`, `drop` and `reverse`, give a `Map`, and the rest an array or a
+value. A `Set` has `add`, `remove`, `includes(x)` and `len()`, and the
+methods above over its members, the same way, giving a `Set` where a
+`Map` gives a `Map`. Neither has `index`, `uniq` or `tally`, which mean
+nothing without repeats or places, and a `Map` has no `sum`. A lambda's
+parameter can't be a tuple pattern yet, so a function given a `Map`'s
+pairs takes one apart inside: `m.select(fn(p) => let (k, v) = p ...)`.
+
+`len`, `push` and `sort` are built into the compiler, as `Map`'s and
+`Set`'s hashing is; the rest are written in Ren, in the prelude, under
+`pub type Array<T> = builtin`, a declaration only the prelude can write,
+which adds members to a built-in type.
 
 - Names that end in `?` in Ruby lose it: `any`, `includes`.
 - `Str.find(s)`, from stage 8, is renamed `Str.index(s)`, as `Array.index`
@@ -435,7 +448,8 @@ and `len()`, and the methods above over its `(k, v)` pairs.
 
 - **What a function needs of a type parameter is a hidden parameter,** as
   a dependency is: one copy of `sum`, given `Int`'s `add` and `zero`
-  where it's called. The C backend can make a copy for each type later,
+  where it's called. A `hash` dictionary carries the `==` it agrees
+  with, so a `Map` is given both of its keys' as one. The C backend can make a copy for each type later,
   as an optimisation that changes nothing.
 - **Derived operations are made when they're used,** one structural walk
   over a type, with `key` where a type has one.

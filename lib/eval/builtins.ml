@@ -221,7 +221,19 @@ let lower s = String.map Char.lowercase_ascii s
    values it was given as their final values. *)
 let pure f args = (f args, args)
 
-let run (x : Intrinsic.t) =
+(* The one dictionary a built-in that needs a requirement is given: a
+   `Map`'s `hash` of its keys, `sort`'s order. *)
+let one_dict x (dicts : Value.dict list) =
+  match dicts with [ d ] -> d | _ -> bug x
+
+(* ---- tables ---- *)
+
+let table x = function VTable t -> t | _ -> bug x
+
+(* The pair a `Map.of` is given, `(k, v)`. *)
+let pair x = function VTuple [ k; v ] -> (k, v) | _ -> bug x
+
+let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
   match x with
   | Show -> fun _ -> failwith "bug: `show` is run by the interpreter"
   (* the real `Clock.now` and `Clock.instant` *)
@@ -289,25 +301,89 @@ let run (x : Intrinsic.t) =
             else
               raise (Panic (Printf.sprintf "argument %d isn't UTF-8" (i + 1)))
           in
-          VArray (Array.of_list (List.mapi str !args)))
+          array_of_list (List.mapi str !args))
   (* the real `Proc.run` *)
   | Proc_run ->
       pure (function
         | [ VStr cmd; VArray xs ] -> (
             let strs =
-              Array.to_list (Array.map (function VStr s -> s | _ -> bug x) xs)
+              Array.to_list
+                (Array.map (function VStr s -> s | _ -> bug x) (items xs))
             in
             match find_program cmd with
             | Some path -> run_program path cmd strs
             | None -> proc_outcome "ProcMissing" [])
         | _ -> bug x)
-  | Array_len ->
-      pure (function [ VArray xs ] -> int (Array.length xs) | _ -> bug x)
+  | Array_len -> pure (function [ VArray xs ] -> int xs.len | _ -> bug x)
   (* the one that changes a parameter: its receiver, `inout` *)
   | Array_push -> (
+      function [ VArray xs; x ] -> (VUnit, [ push xs x; x ]) | _ -> bug x)
+  (* by the elements' order, a merge sort, which keeps equal ones in the
+     order they were *)
+  | Array_sort ->
+      pure (function
+        | [ VArray xs ] -> (
+            match one_dict x dicts with
+            | Ord compare ->
+                array_of_list
+                  (List.stable_sort compare (Array.to_list (items xs)))
+            | _ -> bug x)
+        | _ -> bug x)
+  (* ---- `Map` and `Set`, by the `hash` of their keys (table.ml) ---- *)
+  | Map_empty | Set_empty -> pure (fun _ -> VTable Table.empty)
+  | Map_of ->
+      pure (function
+        | [ VArray pairs ] ->
+            VTable
+              (Table.of_list (one_dict x dicts)
+                 (List.map (pair x) (Array.to_list (items pairs))))
+        | _ -> bug x)
+  | Set_of ->
+      pure (function
+        | [ VArray xs ] ->
+            VTable
+              (Table.of_list (one_dict x dicts)
+                 (List.map (fun v -> (v, VUnit)) (Array.to_list (items xs))))
+        | _ -> bug x)
+  | Map_get ->
+      pure (function
+        | [ m; k ] -> (
+            match Table.get (one_dict x dicts) (table x m) k with
+            | Some v -> option "Some" [ v ]
+            | None -> option "None" [])
+        | _ -> bug x)
+  | Map_includes | Set_includes ->
+      pure (function
+        | [ m; k ] -> VBool (Table.find (one_dict x dicts) (table x m) k <> None)
+        | _ -> bug x)
+  (* the ones that change their receiver, `inout` *)
+  | Map_set -> (
       function
-      | [ VArray xs; x ] -> (VUnit, [ VArray (Array.append xs [| x |]); x ])
+      | [ m; k; v ] ->
+          ( VUnit,
+            [ VTable (Table.set (one_dict x dicts) (table x m) k v); k; v ] )
       | _ -> bug x)
+  | Set_add -> (
+      function
+      | [ m; k ] ->
+          ( VUnit,
+            [ VTable (Table.set (one_dict x dicts) (table x m) k VUnit); k ] )
+      | _ -> bug x)
+  | Map_remove | Set_remove -> (
+      function
+      | [ m; k ] ->
+          (VUnit, [ VTable (Table.remove (one_dict x dicts) (table x m) k); k ])
+      | _ -> bug x)
+  | Map_keys ->
+      pure (function
+        | [ m ] -> array_of_list (List.map fst (Table.to_list (table x m)))
+        | _ -> bug x)
+  | Map_values ->
+      pure (function
+        | [ m ] -> array_of_list (List.map snd (Table.to_list (table x m)))
+        | _ -> bug x)
+  | Map_len | Set_len ->
+      pure (function [ m ] -> int (Table.len (table x m)) | _ -> bug x)
   (* in bytes *)
   | Str_len ->
       pure (function [ VStr s ] -> int (String.length s) | _ -> bug x)
@@ -317,7 +393,7 @@ let run (x : Intrinsic.t) =
         | [ VStr s; VInt from; VInt to_ ] -> VStr (slice s from to_)
         | _ -> bug x)
   (* where [s] first starts *)
-  | Str_find ->
+  | Str_index ->
       pure (function
         | [ VStr s; VStr sub ] -> (
             match find_from s sub 0 with
@@ -328,7 +404,7 @@ let run (x : Intrinsic.t) =
   | Str_split ->
       pure (function
         | [ VStr s; VStr sep ] ->
-            VArray (Array.of_list (List.map (fun p -> VStr p) (split s sep)))
+            array_of_list (List.map (fun p -> VStr p) (split s sep))
         | _ -> bug x)
   (* without the spaces, tabs and newlines at either end *)
   | Str_trim ->

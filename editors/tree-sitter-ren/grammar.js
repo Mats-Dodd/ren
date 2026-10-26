@@ -46,6 +46,10 @@ const PREC = {
 // `a, b, c`, with a trailing comma allowed, and possibly empty
 const commaSep = (rule) => optional(commaSep1(rule));
 const commaSep1 = (rule) => seq(rule, repeat(seq(',', rule)), optional(','));
+// a tuple's parts, `(a, b)` or `(a, b, c)`: two or three, as the compiler
+// allows, with a trailing comma
+const tupleOf = (rule) =>
+  seq('(', rule, ',', rule, optional(seq(',', rule)), optional(','), ')');
 const sep1 = (rule, separator) => seq(rule, repeat(seq(separator, rule)));
 
 module.exports = grammar({
@@ -411,6 +415,7 @@ module.exports = grammar({
         $.named_type,
         $.function_type,
         $.parenthesized_type,
+        $.tuple_type,
         $.error_set,
         alias('!', $.error_set),
         alias($._joined, $.implementation_type),
@@ -434,6 +439,9 @@ module.exports = grammar({
 
     parenthesized_type: ($) => seq('(', $._type, ')'),
 
+    // (Str, Int): a tuple's type, of two parts or three
+    tuple_type: ($) => tupleOf($._type),
+
     // Int, Option<Int>, stripe.Client
     named_type: ($) =>
       seq(
@@ -450,6 +458,7 @@ module.exports = grammar({
       choice(
         $.named_type,
         $.parenthesized_type,
+        $.tuple_type,
         $.error_set,
         alias('!', $.error_set),
         alias($._argument_function_type, $.function_type),
@@ -462,6 +471,7 @@ module.exports = grammar({
         $.named_type,
         alias($._argument_function_type, $.function_type),
         $.parenthesized_type,
+        $.tuple_type,
         $.error_set,
         alias('!', $.error_set),
         alias($._joined, $.implementation_type),
@@ -537,22 +547,41 @@ module.exports = grammar({
 
     _statement: ($) => choice($.let_statement, $.for_statement, $._line),
 
+    // and `let (k, v) = pair`, a tuple taken apart, whose pattern the
+    // compiler checks always matches: names, `_` and tuples
     let_statement: ($) =>
-      seq(
-        choice('let', 'var'),
-        field('name', $.identifier),
-        optional(seq(':', field('type', $._type))),
-        '=',
-        field('value', $._body),
+      choice(
+        seq(
+          choice('let', 'var'),
+          field('name', $.identifier),
+          optional(seq(':', field('type', $._type))),
+          '=',
+          field('value', $._body),
+        ),
+        seq(
+          'let',
+          field('pattern', $.tuple_pattern),
+          '=',
+          field('value', $._body),
+        ),
       ),
 
+    // for x in xs, for (k, v) in m, for i in 0..n
     for_statement: ($) =>
       seq(
         'for',
-        field('variable', $.identifier),
+        field('variable', choice($.identifier, $.tuple_pattern)),
         'in',
-        field('iterable', $._expression),
+        field('iterable', choice($._expression, $.range)),
         field('body', $.block),
+      ),
+
+    // 0..n: the `Int`s from the first up to, but not including, the
+    // second; only a `for` goes over one
+    range: ($) =>
+      prec.left(
+        PREC.prefix - 1,
+        seq(field('start', $._expression), '..', field('end', $._expression)),
       ),
 
     // a lambda's body takes an assignment after it, as the parser does
@@ -704,6 +733,7 @@ module.exports = grammar({
         $.record_expression,
         $.item_expression,
         $.array_expression,
+        $.tuple_expression,
         $.parenthesized_expression,
         $.if_expression,
         $.match_expression,
@@ -805,6 +835,10 @@ module.exports = grammar({
 
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
 
+    // (k, v): two or three values passed together, taken apart only by
+    // patterns
+    tuple_expression: ($) => tupleOf($._expression),
+
     // `if c then x = 1` assigns inside the `then`, as the parser does,
     // rather than to the whole `if`
     if_expression: ($) =>
@@ -860,6 +894,7 @@ module.exports = grammar({
         $.negative_number,
         $.boolean,
         $.constructor_pattern,
+        $.tuple_pattern,
       ),
 
     wildcard: (_) => '_',
@@ -881,6 +916,9 @@ module.exports = grammar({
     or_pattern: ($) => seq($.fail_pattern, repeat1(seq('|', $.fail_pattern))),
 
     negative_number: ($) => seq('-', $.number),
+
+    // (k, v), (_, Some(x))
+    tuple_pattern: ($) => tupleOf($._pattern),
 
     constructor_pattern: ($) =>
       seq(

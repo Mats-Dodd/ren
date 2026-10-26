@@ -1,11 +1,13 @@
-// The bank: every account, and the only way to change them.
+// The bank: every account, by its id, and the only way to change them.
 //
-// A transfer changes two accounts, and either change can fail. So it works
-// on a copy of the bank, `var draft = self`, and only if nothing failed
-// does the copy become the bank, `self = draft`. A failure halfway leaves
-// the bank as it was, with nothing to undo: what the failed call changed
-// stays changed, but only in the draft. `batch` does the same for many
-// transfers: all of them, or none.
+// An account is changed the way any value in a `Map` is: get it, change
+// the copy, and set it back. A transfer changes two accounts, and either
+// change can fail, so it sets them back only once both went through. A
+// failure halfway leaves the bank as it was, with nothing to undo: what
+// the failed call changed stays changed, but only in the copy. `batch`
+// does the same for many transfers, on a copy of the whole bank, `var
+// draft = self`, which becomes the bank, `self = draft`, only if nothing
+// failed: all of them, or none.
 
 import money.{Money}
 import account.{Account, AccountId, Refusal, Entry}
@@ -15,31 +17,32 @@ pub type Transfer = { from: AccountId, to: AccountId, amount: Money }
 // every way a transfer can fail
 pub type TransferError = ! Refusal | NoSuchAccount(account: AccountId) | NotPositive(amount: Money) | SameAccount
 
-pub type Bank = { accounts: Array<Account>, next: Int }
-  pub let empty: Bank = Bank { accounts: [], next: 1 }
+pub type Bank = { accounts: Map<AccountId, Account>, next: Int }
+  pub let empty: Bank = Bank { accounts: Map.empty, next: 1 }
 
   pub fn open(inout self) -> AccountId =
     let id = AccountId.of(self.next)
     self.next += 1
-    &self.accounts.push(Account.open(id))
+    &self.accounts.set(id, Account.open(id))
     id
 
   // A deposit can't be short, so it doesn't say it can: its signature
   // lists exactly what it fails with.
   pub fn deposit(inout self, to: AccountId, m: Money) ! Frozen(account: AccountId) | NoSuchAccount(account: AccountId) | NotPositive(amount: Money) uses Clock =
     if not m.positive() then fail NotPositive(m)
-    let i = try self.find(to)
-    try &self.accounts[i].credit(m, Deposited(m))
+    var a = try self.get(to)
+    try &a.credit(m, Deposited(m))
+    &self.accounts.set(to, a)
 
   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
     if t.from == t.to then fail SameAccount
     if not t.amount.positive() then fail NotPositive(t.amount)
-    let i = try self.find(t.from)
-    let j = try self.find(t.to)
-    var draft = self
-    try &draft.accounts[i].debit(t.amount, Sent(t.amount, t.to))
-    try &draft.accounts[j].credit(t.amount, Received(t.amount, t.from))
-    self = draft
+    var from = try self.get(t.from)
+    var to = try self.get(t.to)
+    try &from.debit(t.amount, Sent(t.amount, t.to))
+    try &to.credit(t.amount, Received(t.amount, t.from))
+    &self.accounts.set(t.from, from)
+    &self.accounts.set(t.to, to)
 
   // every transfer, or, if one fails, none of them
   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
@@ -49,33 +52,25 @@ pub type Bank = { accounts: Array<Account>, next: Int }
     self = draft
 
   pub fn freeze(inout self, id: AccountId) ! NoSuchAccount(account: AccountId) =
-    let i = try self.find(id)
-    self.accounts[i].frozen = true
+    var a = try self.get(id)
+    a.frozen = true
+    &self.accounts.set(id, a)
 
   pub fn balance(self, id: AccountId) -> Money ! NoSuchAccount(account: AccountId) =
-    let i = try self.find(id)
-    self.accounts[i].balance
+    let a = try self.get(id)
+    a.balance
 
   pub fn statement(self, id: AccountId) -> Array<Entry> ! NoSuchAccount(account: AccountId) =
-    let i = try self.find(id)
-    self.accounts[i].statement
+    let a = try self.get(id)
+    a.statement
 
   // all the money in the bank: only deposits change it
-  pub fn total(self) -> Money =
-    var sum = Money.zero
-    for a in self.accounts
-      sum = sum + a.balance
-    sum
+  pub fn total(self) -> Money = self.accounts.values().map(fn(a) => a.balance).sum()
 
-  // where the account is in `accounts`. It's private, so what it fails
-  // with is worked out, not written.
-  fn find(self, id: AccountId) -> Int =
-    var found = None
-    var i = 0
-    for a in self.accounts
-      if a.id == id then found = Some(i)
-      i += 1
-    found orelse fail NoSuchAccount(id)
+  // the account `id`, a copy. It's private, so what it fails with is
+  // worked out, not written.
+  fn get(self, id: AccountId) -> Account =
+    self.accounts.get(id) orelse fail NoSuchAccount(id)
 
 // The tests get the test `Clock`, stopped at `Time.epoch` until a test
 // moves it, and the test `Console`, without a `with`. Each refusal is kept

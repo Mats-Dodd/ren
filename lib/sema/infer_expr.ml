@@ -50,7 +50,12 @@ let want_int env use (e : expr) t =
   unify_at env e.loc ~found:t ~expected:int ~notes:[ int_note use ]
 
 let want_bool env use (e : expr) t =
-  unify_at env e.loc ~found:t ~expected:bool ~notes:[ bool_note use ]
+  let help =
+    match repr t with
+    | TCon (p, _) -> not_bool_help p ~written:(env.source e)
+    | _ -> None
+  in
+  unify_at env e.loc ~found:t ~expected:bool ~notes:[ bool_note use ] ?help
 
 (* How to explain a mismatch with [expected], the type of a parameter of
    [callee]: when a statement of [callee] threw away a value whose type
@@ -211,6 +216,15 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
       let needs = extend labels (fresh_row env.st) in
       handler core env cx state arms ~needs
         ~declared:(Some (List.map (fun (l : label) -> l.name) labels))
+  | Tuple xs, TCon (p, parts)
+    when p = Ty.tuple_path (List.length xs)
+         && List.length parts = List.length xs ->
+      (* each part where it's made, as an array's elements *)
+      fits ();
+      List.iter2
+        (fun x part ->
+          check env cx ~why:{ plain with notes = why.notes } x part)
+        xs parts
   | Array xs, TCon (p, [ elem ]) when p = Path.prelude "Array" ->
       fits ();
       List.iter
@@ -319,15 +333,25 @@ and synth env cx (e : expr) : ty =
   | Field (r, f) -> infer_field env cx e r f
   | Match (subject, arms) -> infer_match env cx e.node subject arms ~want:None
   | Array xs -> infer_array env cx xs
-  | Index (a, i) ->
-      let elem = fresh_var env.st in
-      let ok =
-        unifies env
-          (explain ~msg:not_indexable ())
-          (result_loc a) ~found:(infer env cx a) ~expected:(array elem)
-      in
-      want_int env Indexing i (infer env cx i);
-      if ok then elem else TError
+  | Tuple xs -> TCon (Ty.tuple_path (List.length xs), List.map (infer env cx) xs)
+  | Index (a, i) -> (
+      let ta = infer env cx a in
+      match reveal env.st ta with
+      | TCon (p, [ _; _ ]) when p = Path.prelude "Map" ->
+          (* a key that isn't there is ordinary, so there's no `m[k]`
+             (operators.md, "`Map` and `Set`") *)
+          ignore (infer env cx i);
+          report env (map_indexed e.loc ~map:(env.source a) ~key:(env.source i));
+          TError
+      | _ ->
+          let elem = fresh_var env.st in
+          let ok =
+            unifies env
+              (explain ~msg:not_indexable ())
+              (result_loc a) ~found:ta ~expected:(array elem)
+          in
+          want_int env Indexing i (infer env cx i);
+          if ok then elem else TError)
   | Ref ({ kind = Call (f, args); _ } as call) ->
       (* `&s.push(1)`: a method call that changes its receiver *)
       let t = infer_call env cx ~changed:e.loc call f args in
@@ -376,17 +400,42 @@ and synth env cx (e : expr) : ty =
             ?written:(if written_place cx target then Some tt else None)
             ~why:(explain ~msg:assigned ?narrowed_help ()));
       unit
-  | For { var; iter; body } ->
-      let array_of = match iter.kind with Ref a -> a | _ -> iter in
-      let ta = infer env cx array_of in
-      Hashtbl.replace cx.nodes iter.node ta;
-      let elem = fresh_var env.st in
-      let ok =
-        unifies env
-          (explain ~msg:not_iterable ())
-          (result_loc array_of) ~found:ta ~expected:(array elem)
+  | For { pat; over; body } ->
+      let elem =
+        match over with
+        | Range (lo, hi) ->
+            (* `0..n`: each `Int` from the first up to the second *)
+            want_int env Ranging lo (infer env cx lo);
+            want_int env Ranging hi (infer env cx hi);
+            int
+        | Each iter -> (
+            let array_of = match iter.kind with Ref a -> a | _ -> iter in
+            let ta = infer env cx array_of in
+            Hashtbl.replace cx.nodes iter.node ta;
+            (* a `Map` gives its entries, each a `(k, v)`, and a `Set` its
+               members; anything else is an array *)
+            let map_path = Path.prelude "Map"
+            and set_path = Path.prelude "Set" in
+            match (reveal env.st ta, iter.kind) with
+            | TCon (p, [ _; _ ]), Ref _ when p = map_path ->
+                report env (changes_entries iter.loc ~what:"map");
+                TError
+            | TCon (p, [ _ ]), Ref _ when p = set_path ->
+                report env (changes_entries iter.loc ~what:"set");
+                TError
+            | TCon (p, [ k; v ]), _ when p = map_path ->
+                TCon (Ty.tuple_path 2, [ k; v ])
+            | TCon (p, [ x ]), _ when p = set_path -> x
+            | _ ->
+                let elem = fresh_var env.st in
+                let ok =
+                  unifies env
+                    (explain ~msg:not_iterable ())
+                    (result_loc array_of) ~found:ta ~expected:(array elem)
+                in
+                if ok then elem else TError)
       in
-      Hashtbl.replace cx.locals var.id (if ok then elem else TError);
+      bind_pattern env cx elem pat;
       (* each time round, the body's value is thrown away, as a
          statement's is *)
       dropped env cx (result_of body) (infer env cx body);
@@ -538,6 +587,7 @@ and stmt env cx = function
         | None, _ -> infer env cx value
       in
       Hashtbl.replace cx.locals name.id t
+  | Let_tuple { pat; value } -> bind_pattern env cx (infer env cx value) pat
   | Expr e -> dropped env cx e (infer env cx e)
 
 (* Keep [t], the type of a value [e] throws away, to be checked later
@@ -1516,7 +1566,7 @@ and bind_fail env cx errs (p : pattern) =
               | _ -> ())
             before)
         rest
-  | PWild | PVar _ | PInt _ | PBool _ | PCon _ ->
+  | PWild | PVar _ | PInt _ | PBool _ | PCon _ | PTuple _ ->
       (* the parser combines only `fail` patterns *)
       bind_pattern env cx TError p
 
@@ -1557,6 +1607,10 @@ and bind_pattern env cx t (p : pattern) =
                     bind_pattern env cx (field_type env ~tvars fd) sub)
                   ctor.cfields ps
               else unknown ())
+      | PTuple ps ->
+          let parts = List.map (fun _ -> fresh_var env.st) ps in
+          check (TCon (Ty.tuple_path (List.length ps), parts));
+          List.iter2 (bind_pattern env cx) parts ps
       | PFail _ | PFail_any | POr _ ->
           (* a `fail` pattern is a whole arm's (the parser says so), and
              [infer_match] binds it with [bind_fail] *)

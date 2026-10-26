@@ -77,6 +77,13 @@ val bool : ty
 val unit : ty
 val str : ty
 val array : ty -> ty
+val option : ty -> ty
+
+(* A tuple's type, of two parts or three, `(Str, Int)`: a built-in type
+   for each size, named by its shape, ["(,)"] and ["(,,)"]. *)
+val tuple_path : int -> Path.t
+val tuple : ty list -> ty
+val is_tuple : Path.t -> bool
 
 (* A parameter that isn't `inout`. *)
 val read : ty -> param

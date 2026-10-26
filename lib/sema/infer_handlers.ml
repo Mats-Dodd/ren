@@ -413,9 +413,12 @@ and outer_changes env (body : expr) name =
         changed r;
         all args
     | Ref a -> changed a
-    | For { var; iter; body } ->
-        (match iter.kind with Ref a -> changed a | _ -> walk iter);
-        bind var;
+    | For { pat; over; body } ->
+        (match over with
+        | Each { kind = Ref a; _ } -> changed a
+        | Each iter -> walk iter
+        | Range (lo, hi) -> all [ lo; hi ]);
+        List.iter (fun (b, _) -> bind b) (binders pat);
         walk body
     | Block (stmts, last) ->
         List.iter
@@ -423,6 +426,9 @@ and outer_changes env (body : expr) name =
             | Let { name; value; _ } ->
                 walk value;
                 bind name
+            | Let_tuple { pat; value } ->
+                walk value;
+                List.iter (fun (b, _) -> bind b) (binders pat)
             | Expr e -> walk e)
           stmts;
         walk last
@@ -440,7 +446,7 @@ and outer_changes env (body : expr) name =
     | Call (f, args) -> all (f :: args)
     | Con (_, args) | Fail (_, args) -> all (List.map snd args)
     | Record (_, fields) -> all (List.map snd fields)
-    | Array xs -> all xs
+    | Array xs | Tuple xs -> all xs
     | With { item; body; _ } -> all [ item; body ]
     | Handler _ -> () (* only ever a handler's function's body *)
   in

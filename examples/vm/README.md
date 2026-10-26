@@ -74,8 +74,11 @@ candidates for what comes next:
   default, `Program.check` fails with what's wrong instead of `main`
   turning a bad program into one that does nothing, and a fault fails the
   run instead of being a status to check.
-- **No `while`, ranges, `break` or early `return`.** `Vm.run` loops by
-  recursing with a `fuel` count.
+- **No `while`, `break` or early `return`.** `Vm.run` loops by
+  recursing with a `fuel` count. Stage 9b brought ranges, and the
+  collection methods: `lands` goes over `ops.with_index()` instead of
+  counting `pc` by hand, and `back` is `frames.get(i) orelse fail
+  NotRecorded(n)`.
 - **Strings are minimal.** Stage 7 brought string literals and `show`,
   but nothing joins two strings, so output is still bare values:
   `main.ren` comments what each printed line means, and jumps name

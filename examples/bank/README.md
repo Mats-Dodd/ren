@@ -18,7 +18,7 @@ ren test bank              # every module's tests
 |---|---|
 | `money.ren` | `Money`, opaque cents `with numeric`, so `Money.dollars(5)`, `a + b` and `a < b` |
 | `account.ren` | `AccountId`, opaque; `Refusal`, the errors an account fails with; `Movement` and `Entry`, a line of a statement and its time; `Account`, with `credit` and `debit` |
-| `bank.ren` | `Bank`: `open`, `deposit`, `transfer`, `batch`, `freeze`, and reading balances; `TransferError`; a test for each way it says no |
+| `bank.ren` | `Bank`, its accounts a `Map<AccountId, Account>`: `open`, `deposit`, `transfer`, `batch`, `freeze`, reading balances and `total`; `TransferError`; a test for each way it says no |
 | `main.ren` | three customers, and every way a transfer can go; a test of what it prints |
 | `clocks.ren` | `clock_conforms`, a group of tests any `Clock` should pass, run against `Clock.frozen` and `test_clock` |
 
@@ -33,21 +33,29 @@ either. A caller of `deposit` never has to handle `Short`. `Refusal` and
 written out.
 
 **Passing an error on is one word.** `transfer` is a list of steps, each
-of which can fail: `let i = try self.find(t.from)`, then
-`try &draft.accounts[i].debit(...)`. There's no nested `match` and no
-glue between `Refusal` and `TransferError`: tags are structural, so a
-`Frozen` from `credit` is the same `Frozen` in `transfer`'s set. `find`
-is private, so what it fails with is inferred; it turns its `Option`
-into an error with `found orelse fail NoSuchAccount(id)`.
+of which can fail: `var from = try self.get(t.from)`, then
+`try &from.debit(...)`. There's no nested `match` and no glue between
+`Refusal` and `TransferError`: tags are structural, so a `Frozen` from
+`credit` is the same `Frozen` in `transfer`'s set. `get` is private, so
+what it fails with is inferred; it turns the `Option` the map gives into
+an error with `self.accounts.get(id) orelse fail NoSuchAccount(id)`.
 
-**A transaction is a copy.** `transfer` takes money out of one account and
-puts it into the other, and the second step can fail after the first went
-through. There's nothing to undo: both steps run on `var draft = self`,
-and the bank becomes the draft, `self = draft`, only if neither failed.
-When a call fails, what it changed stays changed, but here that's only the
-draft, which is thrown away. `batch` uses the same three lines for any
-number of transfers. In `main.ren`, `acme == before` after a failed batch
-holds: nothing moved.
+**A transaction is a copy.** The accounts are a `Map` by id, and an
+account is changed the way any value in one is: get it, change the copy,
+set it back. `transfer` takes money out of one account and puts it into
+the other, and the second step can fail after the first went through.
+There's nothing to undo: both steps change copies, and they're set back,
+`&self.accounts.set(t.from, from)`, only if neither failed. When a call
+fails, what it changed stays changed, but here that's only a copy, which
+is thrown away. `batch` does the same for any number of transfers with a
+copy of the whole bank, `var draft = self`, which becomes the bank,
+`self = draft`, only if none failed. In `main.ren`, `acme == before`
+after a failed batch holds: nothing moved. Two maps are equal when they
+have the same keys with the same values, in any order.
+
+**The total is one line.** `self.accounts.values().map(fn(a) =>
+a.balance).sum()`: `sum` needs `+` and `zero` of what it adds, and
+`Money` is `with numeric`, so it has both.
 
 **Three ways to deal with an error.** `main` passes most of them on with
 `try`, so `main` itself can fail, and `ren types` shows what with. It
@@ -64,8 +72,8 @@ its own, `with numeric`: two add up, `a + b`, and compare, `a < b`, but
 `Money * Money` isn't a `Money`.
 
 **`&` shows what changes.** `&acme.transfer(...)` changes the bank, and
-`acme.balance(alice)` doesn't. Inside, `&draft.accounts[i].debit(...)` changes
-one account in place, inside one draft, inside one call.
+`acme.balance(alice)` doesn't. Inside, `&from.debit(...)` changes one
+copy of an account, and `&self.accounts.set(...)` puts it back.
 
 **Statements are stamped with `Clock.now()`.** `credit` and `debit` read
 the clock into each `Entry`'s `at`, so their signatures say `uses Clock`,
@@ -147,9 +155,17 @@ What stage 7 found, writing the tests:
 
 - **A bank was one long line.** A failed `assert acme == before`
   printed each bank on one line, hundreds of characters wide. Now it
-  leaves out what the two share, `Bank { accounts: [Account { ...,
-  balance: Money(-100), ... }, ...], ... }`, with the marker under the
-  first difference.
+  leaves out what the two share, `Bank { accounts: Map.of([(AccountId(1),
+  Account { ..., balance: Money(-100), ... }), ...]), ... }`, with the
+  marker under the first difference.
 - **Printing showed an opaque payload,** `"Err(Short(2, 45000))"`, where
   `ren test` showed `Money(-100)`. Now `print` shows a value through its
   type too, `"Err(Short(AccountId(2), Money(45000)))"`.
+
+What stage 9b changed:
+
+- **The accounts were an array,** found by a private `find`, a loop that
+  gave an account's index, and changed in place through it,
+  `&draft.accounts[i].debit(...)`. Now they're a `Map<AccountId,
+  Account>`, `find` is gone, and `total` is a `map` and a `sum` instead
+  of a loop.

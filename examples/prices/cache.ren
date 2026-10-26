@@ -14,22 +14,20 @@ pub dep Supplier =
 pub dep Prices =
   price: fn(item: Str) -> Int ! Unknown(item: Str) | Throttled(until: Instant)
 
-type Entry = { item: Str, price: Int, until: Instant }
+// a price, and until when it's kept
+type Entry = { price: Int, until: Instant }
 
 // at most `ttl` old, and the supplier asked only past the limiter
 pub handler cached(ttl: Duration) for Prices uses Supplier, Limiter, Clock =
-  var entries: Array<Entry> = []
+  var entries: Map<Str, Entry> = Map.empty
   price(item) =>
     let now = Clock.instant()
-    var found = None
-    for e in entries
-      if e.item == item && now < e.until then found = Some(e.price)
-    match found
-      Some(p) => p
-      None =>
+    match entries.get(item)
+      Some(e) if now < e.until => e.price
+      _ =>
         try Limiter.take()
         let p = try Supplier.quote(item)
-        &entries.push(Entry { item, price: p, until: now + ttl })
+        &entries.set(item, Entry { price: p, until: now + ttl })
         p
 
 // ---- tests ----

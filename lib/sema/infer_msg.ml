@@ -298,6 +298,14 @@ let ctor_arity loc (c : Ast.ident) (ctor : Iface.ctor) given =
   let help =
     match ctor.cfields with
     | [] -> sprintf "write `%s` with no parentheses" c.name
+    | [ { fty = Var _; _ } ] when given = 2 || given = 3 ->
+        (* `Some(k, v)`, meant as a tuple (operators.md, "Tuples"), for a
+           field of any type *)
+        sprintf
+          "to give it a tuple, put the tuple in parentheses of its own: \
+           `%s((%s))`"
+          c.name
+          (if given = 2 then "a, b" else "a, b, c")
     | fs -> sprintf "its field%s: %s" (plural n) (quote (field_names fs))
   in
   Diag.make loc ~help
@@ -588,13 +596,15 @@ let contains_itself loc ~found ~expected =
    A mismatch is worded by a function given both types as they're printed:
    the one found, [f], then the one expected, [x] (Infer_report.why). *)
 
-(* What an `Int` is wanted for: a side of the operator [op], or an index. *)
-type int_use = Operator of string | Indexing
+(* What an `Int` is wanted for: a side of the operator [op], an index, or
+   an end of a range. *)
+type int_use = Operator of string | Indexing | Ranging
 
 let int_note = function
   | Operator op -> sprintf "`%s` works on `Int`s" op
   (* this reads oddly, but restructuring changes no message *)
   | Indexing -> "`an index` works on `Int`s"
+  | Ranging -> "a range, `a..b`, counts from one `Int` up to another"
 
 (* What a `Bool` is wanted for. *)
 type bool_use = Condition | Negated | Side of string | Guard | Asserted
@@ -607,6 +617,25 @@ let bool_note use =
     | Side op -> sprintf "each side of `%s`" op
     | Guard -> "a guard"
     | Asserted -> "what an `assert` checks")
+
+(* The help for [written], code of the type [p], where a `Bool` has to
+   be, which nothing else stands for (operators.md, "Conditions are
+   `Bool`"): what to ask of it instead, if anything can be said. *)
+let not_bool_help (p : Path.t) ~written =
+  let w = Option.value written ~default:"x" in
+  (* `(a + b).len()`, for a method called on an operator's result *)
+  let w = if String.contains w ' ' then "(" ^ w ^ ")" else w in
+  if
+    p = Path.prelude "Array"
+    || p = Path.prelude "Map"
+    || p = Path.prelude "Set"
+    || p = Path.prelude "Str"
+  then
+    Some
+      (sprintf "to ask whether it has anything in it, write `%s.len() > 0`" w)
+  else if p = Path.prelude "Option" then
+    Some (sprintf "to ask whether it holds a value, write `%s.is_some()`" w)
+  else None
 
 (* A statement of the function [c] threw away a value whose type wasn't
    known, which made it `Unit`: the label at the statement, and the
@@ -671,6 +700,18 @@ let element_before f x =
 let not_indexable f _ =
   sprintf "only an `Array` can be indexed, but this is %s" (article f)
 
+(* `m[k]`, where [m] is a `Map`: [map] and [key] as they're written, if
+   they can be printed. *)
+let map_indexed loc ~map ~key =
+  Diag.make loc
+    ~notes:[ "a key that isn't there is ordinary, so it's asked for" ]
+    ~help:
+      (match (map, key) with
+      | Some m, Some k ->
+          sprintf "write `%s.get(%s)`, which gives an `Option`" m k
+      | _ -> "use `get`, which gives an `Option`")
+    "a `Map` isn't indexed with `[]`"
+
 let assigned f x =
   sprintf "this is %s, but it's being assigned to %s" (article f) (article x)
 
@@ -681,7 +722,20 @@ let assigned_var var part =
     part
 
 let not_iterable f _ =
-  sprintf "a `for` loop goes over an `Array`, but this is %s" (article f)
+  sprintf
+    "a `for` loop goes over an `Array`, a `Map` or a `Set`, but this is %s"
+    (article f)
+
+(* `for x in &m`, of a [what], a map or a set: its entries aren't places,
+   since a key that changed would be in the wrong place. *)
+let changes_entries loc ~what =
+  Diag.make loc
+    ~help:
+      (if what = "map" then
+         "go over a copy, `for (k, v) in m`, and `&m.set(k, ...)` what changes"
+       else "go over a copy, `for x in s`, and `&s.add(...)` what changes")
+    (sprintf "a `for` can't change a %s's %s in place" what
+       (if what = "map" then "entries" else "members"))
 
 (* The help for an error with two shapes, given the tag: one that comes
    from a `fail`, or from a `Result` or a `match` that passes it on. *)
@@ -1661,11 +1715,13 @@ type no_eq =
    or given to [by], which compares what it's given (operators.md,
    "Generic code"). If [failed], [shown] are the errors something given to
    [by] fails with, which it compares, kept by `attempt`. *)
-let no_eq loc ~shown ~op ~by ~failed why =
+let no_eq loc ~shown ~req ~op ~by ~failed why =
+  (* `==`, or `hash`, which a `Map`'s key needs *)
+  let needed = if req = "hash" then "hash" else "==" in
   let msg =
     match by with
     | None -> sprintf "`%s` has no `%s`" shown op
-    | Some f -> sprintf "`%s` has no `==`, which `%s` needs" shown f
+    | Some f -> sprintf "`%s` has no `%s`, which `%s` needs" shown needed f
   in
   let inside =
     match why with
@@ -1687,18 +1743,19 @@ let no_eq loc ~shown ~op ~by ~failed why =
   in
   let help =
     match (by, why) with
+    | _, Field_function (t, _, _) ->
+        sprintf
+          "give `%s` a key, which says what makes two the same: `fn key(self) \
+           -> K = ...`"
+          t
     | Some f, _ ->
-        sprintf "give `%s` something it can compare, without a function in it" f
+        sprintf "give `%s` something it can %s, without a function in it" f
+          (if req = "hash" then "hash" else "compare")
     | None, Is_function ->
         "a function can't be compared: compare what it returns instead"
     | None, Implementation _ -> "compare what its operations return instead"
     | None, Opaque_hidden _ ->
         "compare something its module's functions tell you about it instead"
-    | None, Field_function (t, _, _) ->
-        sprintf
-          "give `%s` a key, which says what makes two the same: `fn key(self) \
-           -> K = ...`"
-          t
     | None, _ -> "compare the parts of it that have no function in them"
   in
   let kept =
@@ -1744,6 +1801,7 @@ type no_ord =
       (** another module's opaque type, named, without a key *)
   | Unordered_key of string * string
       (** a type, named, with a key, whose type, shown, has no order *)
+  | Unordered_table of string  (** a `Map` or a `Set` *)
   | Unordered  (** anything else: an array, `Unit`, `Bytes`, a function *)
 
 (* What a generic function [f] does with what it's given, for the note
@@ -1805,7 +1863,32 @@ let no_ord loc ~shown ~op ~by ~uses why =
             (sprintf
                "make `%s`'s key something ordered, such as an `Int` or a `Str`"
                t) )
+    | Unordered_table t ->
+        ( [
+            sprintf
+              "a `%s` keeps the order its %s were added in, but two aren't \
+               ordered"
+              t
+              (if t = "Map" then "keys" else "members");
+          ],
+          None )
     | Unordered -> ([], None)
+  in
+  (* `sort`, `min` and `max` of what has no order: `sort_by` sorts by
+     something it has, which is the help, or a note beside a key's *)
+  let by_ =
+    match Option.map (String.split_on_char '.') by with
+    | Some [ ("Array" | "Map" | "Set"); (("sort" | "min" | "max") as m) ] ->
+        Some
+          (sprintf "`%s_by`, which %s by what a function gives each" m
+             (if m = "sort" then "sorts" else "compares"))
+    | _ -> None
+  in
+  let help, note =
+    match (help, by_) with
+    | None, Some b -> (Some (sprintf "use %s" b), note)
+    | Some _, Some b -> (help, note @ [ sprintf "or use %s" b ])
+    | _, None -> (help, note)
   in
   Diag.make loc ?help ~notes:(Option.to_list uses @ note) msg
 
@@ -1830,6 +1913,17 @@ let no_op ?hidden ?(other = false) loc ~shown ~op ~by ~uses =
         let note, help = representation_private p in
         ([ note ], Some help)
     | None, "Str", "+" -> ([], Some "join two strings with `a.concat(b)`")
+    (* `sum` of what has no `+`: `count` and `reduce` say what adding
+       them up would mean *)
+    | None, "Bool", ("+" | "zero")
+      when Option.fold ~none:false ~some:(String.ends_with ~suffix:".sum") by ->
+        ([], Some "to count those that are `true`, use `count(fn(b) => b)`")
+    | None, _, ("+" | "zero")
+      when Option.fold ~none:false ~some:(String.ends_with ~suffix:".sum") by ->
+        ( [],
+          Some
+            "add up something each one has with `reduce(init, fn(acc, x) => \
+             ...)`, or `map` them to numbers first" )
     | None, _, _ when other ->
         ( [
             sprintf
@@ -2116,15 +2210,46 @@ let no_public_method (m : Ast.ident) ~shown (p : Path.t) =
     ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
     (sprintf "`%s` has no public `%s`" shown m.name)
 
+(* Names other languages give a collection's methods, each with the one
+   Ren gives it: there's one name for each (operators.md, "The collection
+   methods"). `find` takes a function, and `index` finds where a value is,
+   so `s.find(":")` means `index`. *)
+let other_names =
+  [
+    ("filter", "select");
+    ("inject", "reduce");
+    ("fold", "reduce");
+    ("length", "len");
+    ("size", "len");
+    ("contains", "includes");
+    ("include", "includes");
+    ("has", "includes");
+    ("detect", "find");
+    ("collect", "map");
+    ("find", "index");
+    ("index_of", "index");
+  ]
+
 (* `s.grow()`, where `s`'s type [shown] is the module's own, or built in,
    and has no `grow`. [methods] are the ones it has. *)
 let no_method (m : Ast.ident) ~shown ~own ~type_name methods =
+  let renamed =
+    List.find_opt
+      (fun (other, ren) -> other = m.name && List.mem ren methods)
+      other_names
+  in
   let help =
-    match methods with
-    | _ :: _ -> Some (sprintf "its methods: %s" (quote methods))
-    | [] when own ->
+    match (renamed, methods) with
+    | Some ("find", ren), _ ->
+        Some
+          (sprintf
+             "to find where something is, use `%s`; a `find` takes a function"
+             ren)
+    | Some (_, ren), _ -> Some (sprintf "Ren calls it `%s`" ren)
+    | None, _ :: _ -> Some (sprintf "its methods: %s" (quote methods))
+    | None, [] when own ->
         Some (sprintf "declare it under `type %s`, with `self` first" type_name)
-    | [] -> None
+    | None, [] -> None
   in
   Diag.make m.loc ?help (sprintf "`%s` has no method named `%s`" shown m.name)
 
@@ -2180,8 +2305,17 @@ let member_kind (kind : Iface.op_kind option) =
 let several_have_member ~names loc ?what (m : Ast.ident) members =
   let members = List.map (fun (p, k) -> (p, member_kind k)) members in
   let paths = List.map fst members in
+  (* the module's own type, if one has it, sooner than a built-in one,
+     which says less *)
+  let example =
+    match
+      List.find_opt (fun (p : Path.t) -> p.home <> Path.prelude_home) paths
+    with
+    | Some p -> p
+    | None -> List.hd paths
+  in
   let what, help, extra =
-    say_which ~names ~can_name:(fun _ -> true) ?what (List.hd paths)
+    say_which ~names ~can_name:(fun _ -> true) ?what example
   in
   let types ps = String.concat " and " (List.map (sprintf "`%s`") ps) in
   let has =

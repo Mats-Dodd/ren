@@ -617,11 +617,12 @@ and has_eq env seen (t : Ty.ty) =
                  | Dep _ -> false)))
 
 (* An order: a number's, a `Str`'s or a `Bool`'s, a sum type's with no
-   fields, a `with numeric` type's, or by its key; and in its own module
-   an opaque type's representation's. *)
+   fields, a tuple's whose parts have one, a `with numeric` type's, or by
+   its key; and in its own module an opaque type's representation's. *)
 and has_ord env (t : Ty.ty) =
   match t with
   | Var _ | Error -> true
+  | Con (p, args) when Ty.is_tuple p -> List.for_all (has_ord env) args
   | Con (p, args) -> (
       match (key_ty env p args, Hashtbl.find_opt env.types p) with
       | Some k, _ -> has_req env "ord" k
@@ -763,18 +764,15 @@ let rec expr env sc (e : expr) =
       match Hashtbl.find_opt env.values p with
       | Some s -> used env loc (Path.local p) s.ty a e.ty
       | None -> fail env loc (sprintf "there's no value `%s`" (Path.local p)))
-  | Intrinsic (x, a, ds) ->
+  | Intrinsic (x, a, ds, dicts_given) ->
       descs env sc loc (Intrinsic.name x) a ds;
       has_identity env loc
         (sprintf "`%s`, used as a value," (Intrinsic.name x))
         (Ty.global_id (Intrinsic.path x))
         e.ty;
-      (* an intrinsic is given no dictionaries, so it can't need any *)
-      if (Prelude.scheme x).reqs <> [] then
-        fail env loc
-          (sprintf "`%s` needs something, but an intrinsic is given nothing"
-             (Intrinsic.name x));
-      used env loc (Intrinsic.name x) (Prelude.scheme x).ty a e.ty
+      let s = Prelude.scheme x in
+      used env loc (Intrinsic.name x) s.ty a e.ty;
+      dicts env sc loc (Intrinsic.name x) s a dicts_given
   | Dep_call { dep = p; op; fty; ev; args } -> (
       (* the operation as declared, using its dependency, and whatever the
          caller does *)
@@ -1081,6 +1079,19 @@ let rec expr env sc (e : expr) =
       | Con (p, [ elem ]) when p = Path.prelude "Array" ->
           List.iter (fun (x : expr) -> same env x.loc "an element" x.ty elem) xs
       | t -> fail env loc (sprintf "an array literal has type `%s`" (show t)))
+  | Tuple xs -> (
+      List.iter (expr env sc) xs;
+      match reveal env e.ty with
+      | Con (p, parts)
+        when (List.length xs = 2 || List.length xs = 3)
+             && p = Ty.tuple_path (List.length xs)
+             && List.length parts = List.length xs ->
+          List.iter2
+            (fun (x : expr) part -> same env x.loc "a tuple's part" x.ty part)
+            xs parts
+      | t ->
+          fail env loc
+            (sprintf "a tuple of %d has type `%s`" (List.length xs) (show t)))
   | Tag (t, args, ds) -> (
       List.iter (expr env sc) args;
       if List.length ds <> List.length args then
@@ -1238,6 +1249,16 @@ and prim env sc (e : expr) op args =
   | Get_index, [ a; i ] ->
       int i;
       is "an element" (elem a)
+  | Entries, [ m ] -> (
+      match reveal env m.ty with
+      | Con (p, [ k; v ]) when p = Path.prelude "Map" ->
+          is "a map's entries" (Ty.array (Ty.tuple [ k; v ]))
+      | t -> fail env loc (sprintf "a map's entries of a `%s`" (show t)))
+  | Members, [ s ] -> (
+      match reveal env s.ty with
+      | Con (p, [ t ]) when p = Path.prelude "Set" ->
+          is "a set's members" (Ty.array t)
+      | t -> fail env loc (sprintf "a set's members of a `%s`" (show t)))
   | Set_index, [ a; i; v ] ->
       int i;
       same env v.loc "a new element" v.ty (elem a);
@@ -1294,6 +1315,18 @@ and pattern env sc (p : pattern) t =
           List.fold_left (fun sc sub -> pattern env sc sub sub.pty) sc ps
       | None ->
           fail env loc (sprintf "`%s` isn't in the set it's matched in" tag))
+  | PTuple ps -> (
+      match reveal env t with
+      | Con (p, parts)
+        when p = Ty.tuple_path (List.length ps)
+             && List.length parts = List.length ps ->
+          List.fold_left2
+            (fun sc part sub -> pattern env sc sub part)
+            sc parts ps
+      | t' ->
+          fail env loc
+            (sprintf "a tuple pattern of %d matches a `%s`" (List.length ps)
+               (show t')))
   | POr [] -> fail env loc "an or-pattern of nothing"
   | POr (first :: rest) ->
       let first_sc = pattern env sc first t in
@@ -1361,6 +1394,7 @@ let rec globals (e : expr) =
   | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
   | Prim (_, es)
   | Array es
+  | Tuple es
   | Con (_, _, es)
   | Tag (_, es, _)
   | Dep_call { args = es; _ } ->
@@ -1553,7 +1587,8 @@ let identities (prog : program) =
     (match e.kind with
     | Lambda { name; params; _ } -> add name (Some (List.length params))
     | Global (p, _, _, _) -> add (Ty.global_id p) (arity e.ty)
-    | Intrinsic (x, _, _) -> add (Ty.global_id (Intrinsic.path x)) (arity e.ty)
+    | Intrinsic (x, _, _, _) ->
+        add (Ty.global_id (Intrinsic.path x)) (arity e.ty)
     | Dep_call { dep; op; args; _ } ->
         add (Ty.global_id (Path.member dep op)) (Some (List.length args))
     | _ -> ());

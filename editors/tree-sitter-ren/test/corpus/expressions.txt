@@ -315,3 +315,58 @@ fn main() = [1.5, 1_000.25, 2.0.sqrt(), 1.show(), -0.5 * x]
         (unary_expression
           (float))
         (identifier)))))
+
+================================================================================
+tuples, and tuple patterns
+================================================================================
+
+fn f(a, b) =
+  match (a, Some(b),)
+    (0, _) => ("zero", 0)
+    (_, Some((x, y))) => (x, y, a)
+    _ => (b, a)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)))
+    (block
+      (match_expression
+        (tuple_expression
+          (identifier)
+          (constructor_expression
+            (constructor_ref
+              (type_identifier))
+            (constructor_arguments
+              (identifier))))
+        (match_arm
+          (tuple_pattern
+            (number)
+            (wildcard))
+          (tuple_expression
+            (string)
+            (number)))
+        (match_arm
+          (tuple_pattern
+            (wildcard)
+            (constructor_pattern
+              (constructor_ref
+                (type_identifier))
+              (tuple_pattern
+                (identifier)
+                (identifier))))
+          (tuple_expression
+            (identifier)
+            (identifier)
+            (identifier)))
+        (match_arm
+          (wildcard)
+          (tuple_expression
+            (identifier)
+            (identifier)))))))

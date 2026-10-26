@@ -33,6 +33,306 @@ pub type Result<T, E> =
   | Ok(value: T)
   | Err(error: E)
 
+// ---- collections (operators.md, "The collection methods") ----
+//
+// `len`, `push` and `sort` are built into the compiler, as `Map`'s and
+// `Set`'s finding by hash is; the rest are written here. A method that
+// changes nothing gives a new collection. One that takes a function only
+// calls it, so whatever it can fail with and uses, the call can too, and
+// one that stops early, `find`, `any` and `all`, calls it no more once it
+// knows.
+
+pub type Array<T> = builtin
+  // the element at `i`, if there is one: `xs[i]` says it's there, and
+  // panics if it isn't; `get` asks
+  pub fn get(self, i: Int) -> Option<T> =
+    if i >= 0 && i < self.len() then Some(self[i]) else None
+  pub fn first(self) -> Option<T> = self.get(0)
+  pub fn last(self) -> Option<T> = self.get(self.len() - 1)
+  // each element through `f`
+  pub fn map<U>(self, f: fn(T) -> U) -> Array<U> =
+    var out: Array<U> = []
+    for x in self
+      &out.push(try f(x))
+    out
+  // each element through `f`, which gives an array, all of them joined
+  pub fn flat_map<U>(self, f: fn(T) -> Array<U>) -> Array<U> =
+    var out: Array<U> = []
+    for x in self
+      for y in try f(x)
+        &out.push(y)
+    out
+  // the elements `f` is true of
+  pub fn select(self, f: fn(T) -> Bool) -> Array<T> =
+    var out: Array<T> = []
+    for x in self
+      if try f(x) then &out.push(x)
+    out
+  // the elements `f` is false of
+  pub fn reject(self, f: fn(T) -> Bool) -> Array<T> =
+    var out: Array<T> = []
+    for x in self
+      if not (try f(x)) then &out.push(x)
+    out
+  // the first element `f` is true of
+  pub fn find(self, f: fn(T) -> Bool) -> Option<T> =
+    var found = None
+    for x in self
+      if not found.is_some() then
+        if try f(x) then found = Some(x)
+    found
+  // where `x` first is
+  pub fn index(self, x: T) -> Option<Int> =
+    var found = None
+    var i = 0
+    for y in self
+      if not found.is_some() && y == x then found = Some(i)
+      i += 1
+    found
+  // whether `f` is true of any element
+  pub fn any(self, f: fn(T) -> Bool) -> Bool =
+    var yes = false
+    for x in self
+      if not yes then
+        if try f(x) then yes = true
+    yes
+  // whether `f` is true of every element
+  pub fn all(self, f: fn(T) -> Bool) -> Bool =
+    var yes = true
+    for x in self
+      if yes then
+        if not (try f(x)) then yes = false
+    yes
+  // how many elements `f` is true of
+  pub fn count(self, f: fn(T) -> Bool) -> Int =
+    var n = 0
+    for x in self
+      if try f(x) then n += 1
+    n
+  // whether `x` is in it
+  pub fn includes(self, x: T) -> Bool =
+    var yes = false
+    for y in self
+      if y == x then yes = true
+    yes
+  // `f` over each element in turn, from `init`
+  pub fn reduce<A>(self, init: A, f: fn(A, T) -> A) -> A =
+    var acc = init
+    for x in self
+      acc = try f(acc, x)
+    acc
+  // every element added up, from `T.zero`
+  pub fn sum(self) -> T =
+    var total = T.zero
+    for x in self
+      total = total + x
+    total
+  // the least element, the first of those equal
+  pub fn min(self) -> Option<T> =
+    var best = None
+    for x in self
+      match best
+        Some(b) => if x < b then best = Some(x)
+        None => best = Some(x)
+    best
+  // the greatest element, the first of those equal
+  pub fn max(self) -> Option<T> =
+    var best = None
+    for x in self
+      match best
+        Some(b) => if x > b then best = Some(x)
+        None => best = Some(x)
+    best
+  // the element `f` gives the least of, the first of those equal; `f`
+  // is called once for each
+  pub fn min_by<K>(self, f: fn(T) -> K) -> Option<T> =
+    var best = None
+    for x in self
+      let k = try f(x)
+      match best
+        Some((b, _)) => if k < b then best = Some((k, x))
+        None => best = Some((k, x))
+    match best
+      Some((_, x)) => Some(x)
+      None => None
+  // the element `f` gives the greatest of, the first of those equal
+  pub fn max_by<K>(self, f: fn(T) -> K) -> Option<T> =
+    var best = None
+    for x in self
+      let k = try f(x)
+      match best
+        Some((b, _)) => if k > b then best = Some((k, x))
+        None => best = Some((k, x))
+    match best
+      Some((_, x)) => Some(x)
+      None => None
+  // in the order of what `f` gives each, called once for each; equal ones
+  // stay in the order they were
+  pub fn sort_by<K>(self, f: fn(T) -> K) -> Array<T> =
+    var keyed: Array<(K, Int)> = []
+    for (i, x) in self.with_index()
+      &keyed.push((try f(x), i))
+    var out: Array<T> = []
+    for (_, i) in keyed.sort()
+      &out.push(self[i])
+    out
+  // each thing `f` gives, with the elements that gave it, in order
+  pub fn group_by<K>(self, f: fn(T) -> K) -> Map<K, Array<T>> =
+    var groups: Map<K, Array<T>> = Map.empty
+    for x in self
+      let k = try f(x)
+      var xs = groups.get(k).unwrap_or([])
+      &xs.push(x)
+      &groups.set(k, xs)
+    groups
+  // the elements `f` is true of, and the rest
+  pub fn partition(self, f: fn(T) -> Bool) -> (Array<T>, Array<T>) =
+    var yes: Array<T> = []
+    var no: Array<T> = []
+    for x in self
+      if try f(x) then &yes.push(x) else &no.push(x)
+    (yes, no)
+  // each element, with how many times it's there
+  pub fn tally(self) -> Map<T, Int> =
+    var counts: Map<T, Int> = Map.empty
+    for x in self
+      &counts.set(x, counts.get(x).unwrap_or(0) + 1)
+    counts
+  // without repeats, the first of each kept
+  pub fn uniq(self) -> Array<T> =
+    var seen: Set<T> = Set.empty
+    var out: Array<T> = []
+    for x in self
+      if not seen.includes(x) then
+        &seen.add(x)
+        &out.push(x)
+    out
+  // each element with the one at its place in `ys`, as long as both have
+  // one
+  pub fn zip<U>(self, ys: Array<U>) -> Array<(T, U)> =
+    var out: Array<(T, U)> = []
+    for i in 0..(if self.len() < ys.len() then self.len() else ys.len())
+      &out.push((self[i], ys[i]))
+    out
+  // each element with where it is, counting from 0
+  pub fn with_index(self) -> Array<(Int, T)> =
+    var out: Array<(Int, T)> = []
+    for i in 0..self.len()
+      &out.push((i, self[i]))
+    out
+  // the first `n` elements, or all of them if there are fewer
+  pub fn take(self, n: Int) -> Array<T> =
+    assert n >= 0
+    var out: Array<T> = []
+    for i in 0..(if n < self.len() then n else self.len())
+      &out.push(self[i])
+    out
+  // all but the first `n` elements
+  pub fn drop(self, n: Int) -> Array<T> =
+    assert n >= 0
+    var out: Array<T> = []
+    for i in n..self.len()
+      &out.push(self[i])
+    out
+  // last first
+  pub fn reverse(self) -> Array<T> =
+    var out: Array<T> = []
+    for i in 0..self.len()
+      &out.push(self[self.len() - 1 - i])
+    out
+
+// Keys and their values, found by the key's hash, in the order each key
+// was first set. Besides what's built in, `get`, `set`, `remove`,
+// `includes(k)`, `keys`, `values` and `len`, it has `Array`'s methods,
+// over its `(k, v)` pairs: those that keep some of them give a `Map`.
+pub type Map<K, V> = builtin
+  pub let empty: Map<K, V> = map_empty()
+  // its pairs, in order, as `for` goes over them
+  fn pairs(self) -> Array<(K, V)> =
+    var out: Array<(K, V)> = []
+    for p in self
+      &out.push(p)
+    out
+  pub fn first(self) -> Option<(K, V)> = self.pairs().first()
+  pub fn last(self) -> Option<(K, V)> = self.pairs().last()
+  pub fn map<U>(self, f: fn((K, V)) -> U) -> Array<U> = try self.pairs().map(f)
+  pub fn flat_map<U>(self, f: fn((K, V)) -> Array<U>) -> Array<U> =
+    try self.pairs().flat_map(f)
+  pub fn select(self, f: fn((K, V)) -> Bool) -> Map<K, V> =
+    Map.of(try self.pairs().select(f))
+  pub fn reject(self, f: fn((K, V)) -> Bool) -> Map<K, V> =
+    Map.of(try self.pairs().reject(f))
+  pub fn find(self, f: fn((K, V)) -> Bool) -> Option<(K, V)> =
+    try self.pairs().find(f)
+  pub fn any(self, f: fn((K, V)) -> Bool) -> Bool = try self.pairs().any(f)
+  pub fn all(self, f: fn((K, V)) -> Bool) -> Bool = try self.pairs().all(f)
+  pub fn count(self, f: fn((K, V)) -> Bool) -> Int = try self.pairs().count(f)
+  pub fn reduce<A>(self, init: A, f: fn(A, (K, V)) -> A) -> A =
+    try self.pairs().reduce(init, f)
+  pub fn min(self) -> Option<(K, V)> = self.pairs().min()
+  pub fn max(self) -> Option<(K, V)> = self.pairs().max()
+  pub fn min_by<B>(self, f: fn((K, V)) -> B) -> Option<(K, V)> =
+    try self.pairs().min_by(f)
+  pub fn max_by<B>(self, f: fn((K, V)) -> B) -> Option<(K, V)> =
+    try self.pairs().max_by(f)
+  pub fn sort(self) -> Array<(K, V)> = self.pairs().sort()
+  pub fn sort_by<B>(self, f: fn((K, V)) -> B) -> Array<(K, V)> =
+    try self.pairs().sort_by(f)
+  pub fn group_by<B>(self, f: fn((K, V)) -> B) -> Map<B, Array<(K, V)>> =
+    try self.pairs().group_by(f)
+  pub fn partition(self, f: fn((K, V)) -> Bool) -> (Map<K, V>, Map<K, V>) =
+    let (yes, no) = try self.pairs().partition(f)
+    (Map.of(yes), Map.of(no))
+  pub fn zip<U>(self, ys: Array<U>) -> Array<((K, V), U)> = self.pairs().zip(ys)
+  pub fn with_index(self) -> Array<(Int, (K, V))> = self.pairs().with_index()
+  pub fn take(self, n: Int) -> Map<K, V> = Map.of(self.pairs().take(n))
+  pub fn drop(self, n: Int) -> Map<K, V> = Map.of(self.pairs().drop(n))
+  pub fn reverse(self) -> Map<K, V> = Map.of(self.pairs().reverse())
+
+// Each value once, found by its hash, in the order each was first added.
+// Besides what's built in, `add`, `remove`, `includes` and `len`, it has
+// `Array`'s methods: those that keep some of its members give a `Set`.
+pub type Set<T> = builtin
+  pub let empty: Set<T> = set_empty()
+  // its members, in order, as `for` goes over them
+  fn members(self) -> Array<T> =
+    var out: Array<T> = []
+    for x in self
+      &out.push(x)
+    out
+  pub fn first(self) -> Option<T> = self.members().first()
+  pub fn last(self) -> Option<T> = self.members().last()
+  pub fn map<U>(self, f: fn(T) -> U) -> Array<U> = try self.members().map(f)
+  pub fn flat_map<U>(self, f: fn(T) -> Array<U>) -> Array<U> =
+    try self.members().flat_map(f)
+  pub fn select(self, f: fn(T) -> Bool) -> Set<T> =
+    Set.of(try self.members().select(f))
+  pub fn reject(self, f: fn(T) -> Bool) -> Set<T> =
+    Set.of(try self.members().reject(f))
+  pub fn find(self, f: fn(T) -> Bool) -> Option<T> = try self.members().find(f)
+  pub fn any(self, f: fn(T) -> Bool) -> Bool = try self.members().any(f)
+  pub fn all(self, f: fn(T) -> Bool) -> Bool = try self.members().all(f)
+  pub fn count(self, f: fn(T) -> Bool) -> Int = try self.members().count(f)
+  pub fn reduce<A>(self, init: A, f: fn(A, T) -> A) -> A =
+    try self.members().reduce(init, f)
+  pub fn sum(self) -> T = self.members().sum()
+  pub fn min(self) -> Option<T> = self.members().min()
+  pub fn max(self) -> Option<T> = self.members().max()
+  pub fn min_by<B>(self, f: fn(T) -> B) -> Option<T> = try self.members().min_by(f)
+  pub fn max_by<B>(self, f: fn(T) -> B) -> Option<T> = try self.members().max_by(f)
+  pub fn sort(self) -> Array<T> = self.members().sort()
+  pub fn sort_by<B>(self, f: fn(T) -> B) -> Array<T> = try self.members().sort_by(f)
+  pub fn group_by<B>(self, f: fn(T) -> B) -> Map<B, Array<T>> =
+    try self.members().group_by(f)
+  pub fn partition(self, f: fn(T) -> Bool) -> (Set<T>, Set<T>) =
+    let (yes, no) = try self.members().partition(f)
+    (Set.of(yes), Set.of(no))
+  pub fn zip<U>(self, ys: Array<U>) -> Array<(T, U)> = self.members().zip(ys)
+  pub fn with_index(self) -> Array<(Int, T)> = self.members().with_index()
+  pub fn take(self, n: Int) -> Set<T> = Set.of(self.members().take(n))
+  pub fn drop(self, n: Int) -> Set<T> = Set.of(self.members().drop(n))
+  pub fn reverse(self) -> Set<T> = Set.of(self.members().reverse())
+
 // ---- time ----
 //
 // Inside the prelude each is a number of milliseconds. A `Duration` is a
@@ -254,26 +554,10 @@ pub handler test_console() for Console, TestConsole =
 // files kept in memory, starting with `files`. A test gets an empty one,
 // and reads back what it wrote through `Fs` itself.
 pub handler mem_fs(files: Array<File>) for Fs =
-  var kept = files
-  read(p) =>
-    var found = None
-    for f in kept
-      if f.path == p then found = Some(f.data)
-    found orelse fail NoSuchFile(p)
-  write(p, b) =>
-    var at = None
-    var i = 0
-    for f in kept
-      if f.path == p then at = Some(i)
-      i += 1
-    match at
-      Some(j) => kept[j].data = b
-      None => &kept.push(File { path: p, data: b })
-  exists(p) =>
-    var found = false
-    for f in kept
-      if f.path == p then found = true
-    found
+  var kept: Map<Path, Bytes> = Map.of(files.map(fn(f) => (f.path, f.data)))
+  read(p) => kept.get(p) orelse fail NoSuchFile(p)
+  write(p, b) => &kept.set(p, b)
+  exists(p) => kept.includes(p)
 
 // a system whose program was given `args`
 pub handler test_os(args: Array<Str>) for Os =
@@ -308,11 +592,13 @@ pub handler test_proc(exits: Array<Exit>) for Proc, TestProc =
 (* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
    [n]th row variable, numbered by first appearance (ty.ml). *)
 (* canonical numbers each function type's lambda set *)
-let scheme_of ty : Ty.scheme =
-  Ty.canonical { ty; names = []; reqs = []; row_reqs = [] }
+let scheme_of ?(reqs = []) ty : Ty.scheme =
+  Ty.canonical { ty; names = []; reqs; row_reqs = [] }
 
 let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])
+let map k v = Ty.Con (Path.prelude "Map", [ k; v ])
+let set t = Ty.Con (Path.prelude "Set", [ t ])
 
 (* Each built-in function's type scheme, by its id. Each parameter's mode
    ([inout] or not) is part of the type. A built-in type's method has its
@@ -322,9 +608,14 @@ let scheme (x : Intrinsic.t) =
   let open Ty in
   (* most fail with nothing and use nothing: open rows, which any row
      fits *)
-  let fn params ret =
-    scheme_of (Fun (params, ret, open_row 0, open_row 1, any_lams))
+  let fn ?reqs params ret =
+    scheme_of ?reqs (Fun (params, ret, open_row 0, open_row 1, any_lams))
   in
+  let inout ty = { mode = Inout; ty } in
+  (* a key, or a member of a set, is found by its hash, with the `==` it
+     agrees with: what `hash` of [Var 0] is *)
+  let hashed = [ (0, "hash") ] in
+  let k = Var 0 and v = Var 1 in
   match x with
   (* fn<T>(T) -> Str, which the interpreter runs itself, since it shows a
      value through its type (eval.ml) *)
@@ -359,6 +650,42 @@ let scheme (x : Intrinsic.t) =
   | Array_len -> fn [ read (array (Var 0)) ] int
   (* fn<T>(inout self: Array<T>, x: T) *)
   | Array_push -> fn [ { mode = Inout; ty = array (Var 0) }; read (Var 0) ] unit
+  (* fn<T>(self: Array<T>) -> Array<T>, by `T`'s order, equal ones in the
+     order they were *)
+  | Array_sort ->
+      fn ~reqs:[ (0, "ord") ] [ read (array (Var 0)) ] (array (Var 0))
+  (* A `Map` and a `Set` keep insertion order (operators.md, "`Map` and
+     `Set`"), and find a key by its `hash`. *)
+  (* fn<K, V>() -> Map<K, V>, which `Map.empty` is *)
+  | Map_empty -> fn [] (map k v)
+  (* fn<K, V>(pairs: Array<(K, V)>) -> Map<K, V>: a key given twice has
+     the last value, in the first one's place *)
+  | Map_of -> fn ~reqs:hashed [ read (array (tuple [ k; v ])) ] (map k v)
+  (* fn<K, V>(self: Map<K, V>, k: K) -> Option<V> *)
+  | Map_get -> fn ~reqs:hashed [ read (map k v); read k ] (option v)
+  (* fn<K, V>(inout self: Map<K, V>, k: K, v: V): a key already there
+     keeps its place *)
+  | Map_set -> fn ~reqs:hashed [ inout (map k v); read k; read v ] unit
+  (* fn<K, V>(inout self: Map<K, V>, k: K), which may not be there *)
+  | Map_remove -> fn ~reqs:hashed [ inout (map k v); read k ] unit
+  (* fn<K, V>(self: Map<K, V>, k: K) -> Bool *)
+  | Map_includes -> fn ~reqs:hashed [ read (map k v); read k ] bool
+  (* fn<K, V>(self: Map<K, V>) -> Array<K>, and its values, in order *)
+  | Map_keys -> fn [ read (map k v) ] (array k)
+  | Map_values -> fn [ read (map k v) ] (array v)
+  (* fn<K, V>(self: Map<K, V>) -> Int *)
+  | Map_len -> fn [ read (map k v) ] int
+  (* fn<T>() -> Set<T>, which `Set.empty` is *)
+  | Set_empty -> fn [] (set k)
+  (* fn<T>(xs: Array<T>) -> Set<T>, each once, in the first one's place *)
+  | Set_of -> fn ~reqs:hashed [ read (array k) ] (set k)
+  (* fn<T>(inout self: Set<T>, x: T), and taken out, which may not be
+     there *)
+  | Set_add | Set_remove -> fn ~reqs:hashed [ inout (set k); read k ] unit
+  (* fn<T>(self: Set<T>, x: T) -> Bool *)
+  | Set_includes -> fn ~reqs:hashed [ read (set k); read k ] bool
+  (* fn<T>(self: Set<T>) -> Int *)
+  | Set_len -> fn [ read (set k) ] int
   (* A `Str` is UTF-8, always, and `Bytes` are any bytes at all
      (builtins.ml, "strings and bytes"). *)
   (* fn(self: Str) -> Int, in bytes *)
@@ -367,7 +694,8 @@ let scheme (x : Intrinsic.t) =
      to, but not including, [to] *)
   | Str_slice -> fn [ read str; read int; read int ] str
   (* fn(self: Str, s: Str) -> Option<Int>: where [s] first starts *)
-  | Str_find -> fn [ read str; read str ] (Con (Path.prelude "Option", [ int ]))
+  | Str_index ->
+      fn [ read str; read str ] (Con (Path.prelude "Option", [ int ]))
   (* fn(self: Str, sep: Str) -> Array<Str>: the parts between each [sep] *)
   | Str_split -> fn [ read str; read str ] (array str)
   (* fn(self: Str) -> Str, without the spaces, tabs and newlines at
@@ -414,9 +742,13 @@ let runtime (x : Intrinsic.t) =
   match x with
   | Clock_now | Clock_instant | Clock_sleep | Random_int | Seeded_next
   | Seeded_int | Console_write | Console_error | Fs_read | Fs_write | Fs_exists
-  | Os_args | Proc_run ->
+  | Os_args | Proc_run | Map_empty | Set_empty ->
       true
-  | Show | Array_len | Array_push | Str_len | Str_slice | Str_find | Str_split
+  | Array_sort | Map_of | Map_get | Map_set | Map_remove | Map_includes
+  | Map_keys | Map_values | Map_len | Set_of | Set_add | Set_remove
+  | Set_includes | Set_len ->
+      false
+  | Show | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
   | Bytes_len | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
   | Int_wrapping_neg | Float_of | Float_round | Float_truncate | Float_sqrt
@@ -441,6 +773,8 @@ let fns : Intrinsic.t list =
     Fs_exists;
     Os_args;
     Proc_run;
+    Map_empty;
+    Set_empty;
   ]
 
 (* ---- built-in types ----
@@ -472,13 +806,13 @@ let types =
       ~functions:[ Float_of ];
     t "Bool";
     t "Unit";
-    t "Array" ~arity:1 ~methods:[ Array_len; Array_push ];
+    t "Array" ~arity:1 ~methods:[ Array_len; Array_push; Array_sort ];
     t "Str"
       ~methods:
         [
           Str_len;
           Str_slice;
-          Str_find;
+          Str_index;
           Str_split;
           Str_trim;
           Str_starts_with;
@@ -488,6 +822,25 @@ let types =
         ]
       ~functions:[ Str_from_utf8 ];
     t "Bytes" ~methods:[ Bytes_len ];
+    t "Map" ~arity:2
+      ~methods:
+        [
+          Map_get;
+          Map_set;
+          Map_remove;
+          Map_includes;
+          Map_keys;
+          Map_values;
+          Map_len;
+        ]
+      ~functions:[ Map_of ];
+    t "Set" ~arity:1
+      ~methods:[ Set_add; Set_remove; Set_includes; Set_len ]
+      ~functions:[ Set_of ];
+    (* a tuple's type, of two parts and of three, named by its shape,
+       which no program can write (Ty.tuple) *)
+    t "(,)" ~arity:2;
+    t "(,,)" ~arity:3;
   ]
 
 (* ---- built-in dependencies ----

@@ -18,15 +18,11 @@ pub type Program = opaque Array<Op>
   pub fn at(self, pc: Int) -> Op =
     if pc < self.len() then self[pc] else Halt
 
-  pub fn size(self) -> Int = self.len()
-
 // Fail at the first jump that lands outside the program.
 fn lands(ops: Array<Op>) =
-  var pc = 0
-  for o in ops
+  for (pc, o) in ops.with_index()
     match o.target()
       Some(to) => if not inside(to, ops.len()) then fail Outside(pc, to)
       None => ()
-    pc += 1
 
 fn inside(i: Int, n: Int) -> Bool = i >= 0 && i < n

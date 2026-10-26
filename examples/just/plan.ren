@@ -14,20 +14,14 @@ pub fn order(j: Justfile, name: Str) -> Array<Str> ! UnknownRecipe(name: Str) | 
 // that's started but not done is being visited further up, so reaching it
 // again is a cycle.
 fn visit(j: Justfile, name: Str, inout started: Array<Str>, inout done: Array<Str>) =
-  if has(done, name) then ()
+  if done.includes(name) then ()
   else
-    if has(started, name) then fail Cycle(name)
+    if started.includes(name) then fail Cycle(name)
     &started.push(name)
     let r = try j.recipe(name)
     for d in r.deps
       try visit(j, d, &started, &done)
     &done.push(name)
-
-fn has(names: Array<Str>, name: Str) -> Bool =
-  var found = false
-  for n in names
-    if n == name then found = true
-  found
 
 test "dependencies come first, in the order they're written" =
   let j = try Justfile.parse("all: build test\nbuild: fmt\ntest:\nfmt:\n")

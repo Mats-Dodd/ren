@@ -160,30 +160,32 @@ let render_indexed ~(lines_of : string -> string array option) (d : t) =
       Printf.bprintf b "%s ┌─ %s:%d:%d\n" pad file first.start.line
         first.start.col;
       let last = ref 0 in
-      List.iter
-        (fun ((l : Loc.t), label) ->
-          let text = line src l.start.line in
-          if l.start.line <> !last then
-            Printf.bprintf b "%*d │ %s\n" width l.start.line text;
-          last := l.start.line;
-          (* Underline to the end of the span, or to the end of the line if
+      (* a file the map doesn't have, the prelude's, has only its header *)
+      if lines_of file <> None then
+        List.iter
+          (fun ((l : Loc.t), label) ->
+            let text = line src l.start.line in
+            if l.start.line <> !last then
+              Printf.bprintf b "%*d │ %s\n" width l.start.line text;
+            last := l.start.line;
+            (* Underline to the end of the span, or to the end of the line if
              the span continues onto later lines. *)
-          let stop_col =
-            if l.stop.line = l.start.line then l.stop.col
-            else String.length text + 1
-          in
-          let n = max 1 (stop_col - l.start.col) in
-          let mark, text =
-            match label with
-            | None ->
-                ( String.make n '^',
-                  match d.says with Some s -> " " ^ s | None -> "" )
-            | Some s -> (String.make n '-', " " ^ s)
-          in
-          Printf.bprintf b "%s │ %s%s%s\n" pad
-            (String.make (l.start.col - 1) ' ')
-            mark text)
-        by_line)
+            let stop_col =
+              if l.stop.line = l.start.line then l.stop.col
+              else String.length text + 1
+            in
+            let n = max 1 (stop_col - l.start.col) in
+            let mark, text =
+              match label with
+              | None ->
+                  ( String.make n '^',
+                    match d.says with Some s -> " " ^ s | None -> "" )
+              | Some s -> (String.make n '-', " " ^ s)
+            in
+            Printf.bprintf b "%s │ %s%s%s\n" pad
+              (String.make (l.start.col - 1) ' ')
+              mark text)
+          by_line)
     files;
   List.iter
     (fun ((l : Loc.t), s) ->

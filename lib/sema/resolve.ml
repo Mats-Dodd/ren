@@ -312,7 +312,8 @@ let tyname_loc (t : tyname) =
 (* Where a type is written: where it starts, for a named one. *)
 let written_loc : Parsed.ty -> Loc.t = function
   | TyName (t, _) -> tyname_loc t
-  | TyFn (_, _, _, _, l) | TyImpl (_, _, l) | TyInout (_, l) -> l
+  | TyFn (_, _, _, _, l) | TyImpl (_, _, l) | TyInout (_, l) | TyTuple (_, l) ->
+      l
   | TyErrors es -> es.eloc
 
 (* An error set's name, `Refusal`, written where only a type of values
@@ -517,6 +518,7 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
       let errs = Option.map (errors env ~params ~rows) errs in
       TyFn (ps, ret, errs, Option.map (uses_of env ~rows) u, l)
   | TyInout (t, l) -> TyInout (ty env ~params ~rows t, l)
+  | TyTuple (ts, l) -> TyTuple (List.map (ty env ~params ~rows) ts, l)
   | TyImpl ((_ :: _ :: _ as ts), u, l) -> (
       (* several dependencies joined, `Clock & TestClock`: each has to be
          one, and each is written once *)
@@ -976,7 +978,7 @@ let rec pattern_vars (p : Parsed.pattern) =
   match p.pkind with
   | PWild | PInt _ | PBool _ | PFail_any -> []
   | PVar x -> [ x ]
-  | PCon (_, ps) | PFail (_, ps) -> List.concat_map pattern_vars ps
+  | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map pattern_vars ps
   | POr ps ->
       (* each alternative binds the same names (see [pattern]) *)
       Option.fold ~none:[] ~some:pattern_vars (List.nth_opt ps 0)
@@ -1024,6 +1026,9 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
     | PFail (t, ps) ->
         let ps, sc = patterns sc ps in
         (PFail (t, ps), sc)
+    | PTuple ps ->
+        let ps, sc = patterns sc ps in
+        (PTuple ps, sc)
     | POr [] -> assert false (* the parser makes one of two or more *)
     | POr (first :: rest) ->
         let first', inner = pattern env sc first in
@@ -1063,6 +1068,31 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
             ([], inner) rest
         in
         (POr (first' :: List.rev rest), inner)
+  in
+  ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
+
+(* The pattern of a `let` or a `for`, of names, `_` and tuples (the
+   parser sees to that), whose names are bound as [bound] says: a loop's
+   are its loop variables. *)
+let rec binding env sc bound (p : Parsed.pattern) : Resolved.pattern * scope =
+  let kind, sc =
+    match p.pkind with
+    | PVar x ->
+        let b, sc = bind env sc x bound in
+        (PVar b, sc)
+    | PTuple ps ->
+        let ps, sc =
+          List.fold_left
+            (fun (acc, sc) p ->
+              let p, sc = binding env sc bound p in
+              (p :: acc, sc))
+            ([], sc) ps
+        in
+        (PTuple (List.rev ps), sc)
+    | PWild -> (PWild, sc)
+    | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | POr _ ->
+        (* the parser lets only names, `_` and tuples through *)
+        assert false
   in
   ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
 
@@ -1173,6 +1203,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
                 { arm_pat; arm_guard; arm_body = expr env sc a.arm_body })
               arms )
     | Array xs -> Array (List.map go xs)
+    | Tuple xs -> Tuple (List.map go xs)
     | Index (a, i) ->
         let a = go a in
         Index (a, go i)
@@ -1196,13 +1227,22 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Assign { target; op; value; onode } ->
         let target = go target in
         Assign { target; op; value = go value; onode }
-    | For { var; iter; body } ->
+    | For { pat; over; body } ->
         let bound =
-          match iter.kind with Ref _ -> By_ref_loop | _ -> By_loop
+          match over with
+          | Each { kind = Ref _; _ } -> By_ref_loop
+          | Each _ | Range _ -> By_loop
         in
-        let iter = go iter in
-        let b, inner = bind env sc var bound in
-        For { var = b; iter; body = expr env inner body }
+        let over : Resolved.over =
+          match over with
+          | Each iter -> Each (go iter)
+          | Range (lo, hi) ->
+              let lo = go lo in
+              Range (lo, go hi)
+        in
+        no_duplicates env "loop variables" (pattern_vars pat);
+        let pat, inner = binding env sc bound pat in
+        For { pat; over; body = expr env inner body }
     | Fail (t, args) ->
         (match Hashtbl.find_opt env.types t.name with
         | Some (p, _) when is_set env p ->
@@ -1249,6 +1289,11 @@ and block_stmts env sc (stmts : Parsed.stmt list) =
                 note_type sc b (Some (TyName (n, [])))
             | _ -> note_type sc b t);
             (Let { name = b; ty = t; value; mut } :: acc, sc)
+        | Let_tuple { pat; value } ->
+            let value = expr env sc value in
+            no_duplicates env "variables" (pattern_vars pat);
+            let pat, sc = binding env sc By_let pat in
+            (Let_tuple { pat; value } :: acc, sc)
         | Expr e -> (Expr (expr env sc e) :: acc, sc))
       ([], sc) stmts
   in
@@ -1594,7 +1639,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
               (* a dependency's `self` is an implementation, which needs what
                  its method uses, as `c: Clock` does *)
               TyImpl ([ { tref = Named owner; tloc = loc } ], None, loc)
-          | Fields _ | Ctors _ | Opaque _ | Errors _ ->
+          | Fields _ | Ctors _ | Opaque _ | Errors _ | Builtin ->
               TyName
                 ( { tref = Named owner; tloc = loc },
                   List.mapi
@@ -1876,7 +1921,7 @@ let type_def env (td : Parsed.type_def) :
   | Dep ops ->
       no_duplicates env "operations"
         (List.map (fun (f : Parsed.field) -> f.field_name) ops)
-  | Opaque _ | Errors _ -> ());
+  | Opaque _ | Errors _ | Builtin -> ());
   let params = List.map (fun (p : ident) -> p.name) td.type_params in
   let field (f : Parsed.field) : Resolved.field =
     { field_name = f.field_name; field_ty = ty env ~params f.field_ty }
@@ -1907,6 +1952,7 @@ let type_def env (td : Parsed.type_def) :
         Opaque { rep; numeric }
     | Errors es -> Errors (errors env ~params es)
     | Dep ops -> Dep (List.map field ops)
+    | Builtin -> Builtin
   in
   let tname = td.type_name.name in
   (* each item has a name of its own, which isn't a field's: `s.items`
@@ -1957,7 +2003,7 @@ let type_def env (td : Parsed.type_def) :
                       tname id.name))
           | None -> ())
         td.type_ops
-  | Fields _ | Ctors _ | Opaque _ | Errors _ -> ());
+  | Fields _ | Ctors _ | Opaque _ | Errors _ | Builtin -> ());
   (match td.type_body with
   | Fields fs ->
       List.iter
@@ -1984,7 +2030,7 @@ let type_def env (td : Parsed.type_def) :
                    id.name)
           | None -> ())
         td.type_ops
-  | Ctors _ | Opaque _ | Errors _ | Dep _ -> ());
+  | Ctors _ | Opaque _ | Errors _ | Dep _ | Builtin -> ());
   let type_ops, calls =
     List.split
       (List.map
@@ -2025,6 +2071,7 @@ let rec named_in (t : Resolved.ty) =
         ds
       @ Option.fold ~none:[] ~some:named_in_uses u
   | TyInout (t, _) -> named_in t
+  | TyTuple (ts, _) -> List.concat_map named_in ts
   | TyErrors es -> named_in_errors es
 
 (* The dependencies a `uses` lists. *)
@@ -2204,7 +2251,7 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
                       (sprintf "`pub dep %s`'s operation `%s` mentions `%s`" t
                          fd.field_name.name))
                 ops
-          | Opaque _ ->
+          | Opaque _ | Builtin ->
               (* its representation isn't in the interface, so it can be a
                  private type *)
               ()
@@ -2377,7 +2424,7 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
             match td.type_body with
             | Fields fs ->
                 List.map (fun (f : Parsed.field) -> f.field_name.name) fs
-            | Ctors _ | Opaque _ | Errors _ | Dep _ -> []
+            | Ctors _ | Opaque _ | Errors _ | Dep _ | Builtin -> []
           in
           (match td.type_body with
           | Errors _ -> Hashtbl.replace env.own_sets td.type_name.name ()
@@ -2387,12 +2434,23 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
               if not (Hashtbl.mem env.own_deps td.type_name.name) then
                 Hashtbl.replace env.own_deps td.type_name.name
                   (List.map (fun (f : Parsed.field) -> f.field_name.name) ops)
-          | Fields _ | Ctors _ | Opaque _ -> ());
+          | Fields _ | Ctors _ | Opaque _ | Builtin -> ());
+          (* a built-in type's members are its intrinsics, then those its
+             declaration writes *)
+          let built_in =
+            match (td.type_body, imported_type td.type_name.name) with
+            | Builtin, Some d ->
+                List.map
+                  (fun (o : Iface.op) -> (o.oname, o.okind))
+                  (Iface.members d)
+            | _ -> []
+          in
           if not (Hashtbl.mem env.own_ops td.type_name.name) then
             Hashtbl.replace env.own_ops td.type_name.name
-              ( List.map
-                  (fun (o : Parsed.op) -> (o.op_fn.name.name, kind o))
-                  td.type_ops,
+              ( built_in
+                @ List.map
+                    (fun (o : Parsed.op) -> (o.op_fn.name.name, kind o))
+                    td.type_ops,
                 fields )
       | Fn _ | Import _ | Testing _ -> ())
     prog;
@@ -2404,6 +2462,12 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
           match
             (imported_type name.name, Hashtbl.find_opt first_local name.name)
           with
+          | Some { body = Builtin; params; _ }, _
+            when home = Path.prelude_home && td.type_body = Builtin
+                 && List.length params = List.length td.type_params ->
+              (* the prelude's source writes a built-in type's other
+                 members: `pub type Array<T> = builtin` (ast.ml) *)
+              ()
           | Some { body = Builtin; _ }, _ ->
               report env name.loc ~help:"choose another name"
                 (sprintf "`%s` is a built-in type" name.name)
@@ -2524,7 +2588,16 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
   let types =
     List.filter_map
       (function
-        | Type td -> Some (Iface.of_type_def ~home ~sets:(sets env items) td)
+        | Type td ->
+            let d = Iface.of_type_def ~home ~sets:(sets env items) td in
+            (* a built-in type the prelude writes members of has its
+               intrinsics too *)
+            Some
+              (match (td.type_body, imported_type td.type_name.name) with
+              | Builtin, Some (intrinsic : Iface.type_decl)
+                when intrinsic.body = Builtin ->
+                  Iface.join intrinsic d
+              | _ -> d)
         | Fn _ | Import _ | Testing _ -> None)
       items
   in

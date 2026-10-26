@@ -47,6 +47,9 @@ type 't ty =
   | TyErrors of 't errors
       (** [! Short | Frozen], an error set as a type argument, which only
           [Result<T, ! ...>] takes (errors.md, "Keeping an error") *)
+  | TyTuple of 't ty list * Loc.t
+      (** [(Str, Int)]: a tuple's type, of two or three (operators.md, "Tuples")
+      *)
 
 (* What a function can fail with, written after `!` (errors.md):
 
@@ -139,6 +142,8 @@ and ('b, 't) pattern_kind =
   | POr of ('b, 't) pattern list
       (** [fail Short(_, _) | fail Frozen(_)]: any of them. So far only `fail`
           patterns are combined, and each binds the same names *)
+  | PTuple of ('b, 't) pattern list
+      (** [(k, v)]: a tuple of two or three, taken apart *)
 
 (* How a parameter is passed: read-only (the default), or [inout], which
    updates the caller's value. *)
@@ -185,6 +190,9 @@ and ('v, 'b, 't) expr_kind =
   | Field of ('v, 'b, 't) expr * ident  (** [user.plan] *)
   | Match of ('v, 'b, 't) expr * ('v, 'b, 't) arm list
   | Array of ('v, 'b, 't) expr list  (** [[1, 2, 3]] *)
+  | Tuple of ('v, 'b, 't) expr list
+      (** [(k, v)]: two or three values passed together, taken apart only by
+          patterns (operators.md, "Tuples") *)
   | Index of ('v, 'b, 't) expr * ('v, 'b, 't) expr  (** [xs[i]] *)
   | Ref of ('v, 'b, 't) expr
       (** [&scores]: an argument the call changes, or the array a [for] loop
@@ -196,8 +204,14 @@ and ('v, 'b, 't) expr_kind =
       value : ('v, 'b, 't) expr;
       onode : int;  (** the method [op] uses, as [Binop]'s *)
     }  (** [x = 1], [user.plan = Free], [xs[i] += 1]; the target is a place *)
-  | For of { var : 'b; iter : ('v, 'b, 't) expr; body : ('v, 'b, 't) expr }
-      (** [for x in xs], or [for p in &ps] to change each element *)
+  | For of {
+      pat : ('b, 't) pattern;
+          (** a name, [x], or a tuple taken apart, [(k, v)] *)
+      over : ('v, 'b, 't) over;
+      body : ('v, 'b, 't) expr;
+    }
+      (** [for x in xs], [for (k, v) in m], [for i in 0..n], or [for p in &ps]
+          to change each element *)
   | Fail of ident * (ident option * ('v, 'b, 't) expr) list
       (** [fail Short(self.id, by)]: stop with that error. A tag isn't a value,
           so it's only ever written here, after `!`, in a pattern, and as the
@@ -244,6 +258,14 @@ and ('v, 'b, 't) arm = {
   arm_body : ('v, 'b, 't) expr;
 }
 
+(* What a [for] loop goes over: each element of an array, a [Map] or a
+   [Set], or the [Int]s of a range, [0..n], from the first up to, but not
+   including, the second (operators.md, "Ranges"). A range is written only
+   here: it isn't a value. *)
+and ('v, 'b, 't) over =
+  | Each of ('v, 'b, 't) expr
+  | Range of ('v, 'b, 't) expr * ('v, 'b, 't) expr
+
 and ('v, 'b, 't) stmt =
   | Let of {
       name : 'b;
@@ -251,6 +273,9 @@ and ('v, 'b, 't) stmt =
       value : ('v, 'b, 't) expr;
       mut : bool;
     }  (** [let], or [var] when [mut] *)
+  | Let_tuple of { pat : ('b, 't) pattern; value : ('v, 'b, 't) expr }
+      (** [let (k, v) = pair]: a tuple taken apart, by a pattern that always
+          matches, of names, [_] and tuples *)
   | Expr of ('v, 'b, 't) expr
 
 (* Type declarations. *)
@@ -271,6 +296,10 @@ type 't type_body =
       (** a dependency's operations, [now: fn() -> Time], each a function type
           (deps.md, "Declaring one"). A value of the type is an implementation,
           a record of them *)
+  | Builtin
+      (** [builtin]: a type built into the compiler, [Array<T>], whose members
+          written here join its built-in ones. Only the prelude's source can
+          write one (Parser.parse_program's [prelude]) *)
 
 type ('v, 'b, 't) fn_def = {
   pub : bool;
@@ -435,7 +464,7 @@ let names_row (t : 't ty) =
   | TyFn (_, _, e, u, _) ->
       Option.bind e (fun e -> e.etail) <> None
       || Option.bind u (fun u -> u.dtail) <> None
-  | TyName _ | TyImpl _ | TyInout _ | TyErrors _ -> false
+  | TyName _ | TyImpl _ | TyInout _ | TyErrors _ | TyTuple _ -> false
 
 (* `&s.push(1)`: a method call whose `&` marks the receiver it changes,
    as opposed to `&xs`, a place passed `inout`. A call's result is never a
@@ -450,7 +479,10 @@ let changed_receiver (e : ('v, 'b, 't) expr) =
 (* The expressions directly inside [e], in source order: a statement's
    value, a guard and an arm's body, a handler's state and arms too. *)
 let children (e : ('v, 'b, 't) expr) =
-  let stmt = function Let { value; _ } -> value | Expr e -> e in
+  let stmt = function
+    | Let { value; _ } | Let_tuple { value; _ } -> value
+    | Expr e -> e
+  in
   match e.kind with
   | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> []
   | Unop (_, a, _)
@@ -465,8 +497,9 @@ let children (e : ('v, 'b, 't) expr) =
       [ a; b ]
   | If (c, t, f) -> c :: t :: Option.to_list f
   | Call (f, args) -> f :: args
-  | Array xs -> xs
-  | For { iter; body; _ } -> [ iter; body ]
+  | Array xs | Tuple xs -> xs
+  | For { over = Each iter; body; _ } -> [ iter; body ]
+  | For { over = Range (lo, hi); body; _ } -> [ lo; hi; body ]
   | Con (_, args) | Fail (_, args) -> List.map snd args
   | Record (_, fields) -> List.map snd fields
   | Block (stmts, last) -> List.map stmt stmts @ [ last ]
@@ -543,6 +576,7 @@ module Parsed = struct
   type nonrec arm = (vname, ident, tyname) arm
   type nonrec handler_arm = (vname, ident, tyname) handler_arm
   type nonrec stmt = (vname, ident, tyname) stmt
+  type nonrec over = (vname, ident, tyname) over
   type nonrec field = tyname field
   type nonrec ctor = tyname ctor
   type nonrec op = (vname, ident, tyname) op
@@ -568,6 +602,7 @@ module Resolved = struct
   type nonrec arm = (name, binder, tname) arm
   type nonrec handler_arm = (name, binder, tname) handler_arm
   type nonrec stmt = (name, binder, tname) stmt
+  type nonrec over = (name, binder, tname) over
   type nonrec field = tname field
   type nonrec ctor = tname ctor
   type nonrec op = (name, binder, tname) op
@@ -649,6 +684,7 @@ let rec show_ty : ty -> string = function
       "(" ^ show_joined names ^ " " ^ show_uses u ^ ")"
   | TyImpl (names, None, _) -> show_joined names
   | TyErrors es -> show_errors es
+  | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show_ty ts) ^ ")"
 
 (* `Clock & TestClock` *)
 and show_joined names = String.concat " & " (List.map show_tyname names)
@@ -692,6 +728,7 @@ let rec show_pattern (p : pattern) =
       ^ ")"
   | PFail_any -> "fail _"
   | POr ps -> String.concat " | " (List.map show_pattern ps)
+  | PTuple ps -> "(" ^ String.concat ", " (List.map show_pattern ps) ^ ")"
 
 let rec show_expr (e : expr) =
   match e.kind with
@@ -727,6 +764,7 @@ let rec show_expr (e : expr) =
   | Match (subject, arms) ->
       parens ("match" :: show_expr subject :: List.map show_arm arms)
   | Array xs -> parens ("array" :: List.map show_expr xs)
+  | Tuple xs -> parens ("tuple" :: List.map show_expr xs)
   | Index (a, i) -> parens [ "index"; show_expr a; show_expr i ]
   | Ref a -> parens [ "&"; show_expr a ]
   | Assign { target; op; value; _ } ->
@@ -734,8 +772,16 @@ let rec show_expr (e : expr) =
         match op with Some o -> binop_to_string o ^ "=" | None -> "="
       in
       parens [ op; show_expr target; show_expr value ]
-  | For { var; iter; body } ->
-      parens [ "for"; var.name; show_expr iter; show_expr body ]
+  | For { pat; over = Each iter; body } ->
+      parens [ "for"; show_pattern pat; show_expr iter; show_expr body ]
+  | For { pat; over = Range (lo, hi); body } ->
+      parens
+        [
+          "for";
+          show_pattern pat;
+          parens [ ".."; show_expr lo; show_expr hi ];
+          show_expr body;
+        ]
   | Fail (t, args) ->
       let show_arg = function
         | Some (l : ident), a -> l.name ^ "=" ^ show_expr a
@@ -773,6 +819,8 @@ and show_param (p : param) =
 and show_stmt : stmt -> string = function
   | Let { name; value; mut; _ } ->
       parens [ (if mut then "var" else "let"); name.name; show_expr value ]
+  | Let_tuple { pat; value } ->
+      parens [ "let"; show_pattern pat; show_expr value ]
   | Expr e -> show_expr e
 
 let show_fn (f : fn_def) =
@@ -816,6 +864,7 @@ let show_type_def (td : type_def) =
         [ parens [ "opaque"; show_ty rep; "numeric" ] ]
     | Errors es -> [ parens [ show_errors es ] ]
     | Dep ops -> [ parens ("ops" :: List.map show_field ops) ]
+    | Builtin -> [ "builtin" ]
   in
   let show_op (o : op) =
     let f = o.op_fn in
@@ -932,6 +981,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Field (r, f) -> left 8 r ^ "." ^ f.name
     | Index (a, i) -> left 8 a ^ "[" ^ go i ^ "]"
     | Array xs -> "[" ^ list xs ^ "]"
+    | Tuple xs -> "(" ^ list xs ^ ")"
     | Ref a -> "&" ^ go a
     | Con (c, []) -> ctor c
     | Con (c, args) -> ctor c ^ "(" ^ con_args args ^ ")"

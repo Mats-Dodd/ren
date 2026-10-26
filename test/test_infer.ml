@@ -1184,7 +1184,7 @@ fn main() =
 |};
   [%expect
     {|
-    error: a `for` loop goes over an `Array`, but this is an `Int`
+    error: a `for` loop goes over an `Array`, a `Map` or a `Set`, but this is an `Int`
       ┌─ test.ren:2:12
     2 │   for x in 3
       │            ^

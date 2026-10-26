@@ -134,15 +134,17 @@ let check_transparent sink (f : fn_def) =
         | Assign { target = a; value = b; _ } ->
             any [ a; b ]
         | If (c, t, f) -> any (c :: t :: Option.to_list f)
-        | Array xs -> any xs
-        | For { iter; body; _ } -> any [ iter; body ]
+        | Array xs | Tuple xs -> any xs
+        | For _ -> any (Ast.children e)
         | Call (f, args) -> any (f :: args)
         | Con (_, args) -> any (List.map snd args)
         | Record (_, fields) -> any (List.map snd fields)
         | Block (stmts, last) ->
             any
               (List.map
-                 (function Let { value; _ } -> value | Expr e -> e)
+                 (function
+                   | Let { value; _ } | Let_tuple { value; _ } -> value
+                   | Expr e -> e)
                  stmts
               @ [ last ])
         | Match (s, arms) ->
@@ -156,7 +158,9 @@ let check_transparent sink (f : fn_def) =
         | Handler { state; arms; _ } ->
             any
               (List.map
-                 (function Let { value; _ } -> value | Expr e -> e)
+                 (function
+                   | Let { value; _ } | Let_tuple { value; _ } -> value
+                   | Expr e -> e)
                  state
               @ List.map (fun (a : handler_arm) -> a.arm_impl) arms)
       in
@@ -186,14 +190,15 @@ let check_transparent sink (f : fn_def) =
         | Assign { target = a; value = b; _ } ->
             walk_all [ a; b ]
         | If (c, t, f) -> walk_all (c :: t :: Option.to_list f)
-        | Array xs -> walk_all xs
-        | For { iter; body; _ } -> walk_all [ iter; body ]
+        | Array xs | Tuple xs -> walk_all xs
+        | For _ -> walk_all (Ast.children e)
         | Con (_, args) -> walk_all (List.map snd args)
         | Record (_, fields) -> walk_all (List.map snd fields)
         | Block (stmts, last) ->
             List.iter
               (function
-                | Let { value; _ } -> walk ~ok:false value
+                | Let { value; _ } | Let_tuple { value; _ } ->
+                    walk ~ok:false value
                 | Expr e -> walk ~ok:false e)
               stmts;
             walk ~ok:false last
@@ -212,7 +217,8 @@ let check_transparent sink (f : fn_def) =
             (* its state and arms are kept by each instance *)
             List.iter
               (function
-                | Let { value; _ } -> walk ~ok:false value
+                | Let { value; _ } | Let_tuple { value; _ } ->
+                    walk ~ok:false value
                 | Expr e -> walk ~ok:false e)
               state;
             List.iter
@@ -252,6 +258,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
         Option.iter errors_ errs
     | TyImpl _ -> ()
     | TyInout (t, _) -> ty_ t
+    | TyTuple (ts, _) -> List.iter ty_ ts
     | TyErrors es -> errors_ es
   and errors_ (es : Resolved.errors) =
     errors es;
@@ -267,7 +274,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
     pattern p;
     match p.pkind with
     | PWild | PVar _ | PInt _ | PBool _ | PFail_any -> ()
-    | PCon (_, ps) | PFail (_, ps) | POr ps -> List.iter pattern_ ps
+    | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pattern_ ps
   in
   let rec expr (e : expr) =
     let go = List.iter expr in
@@ -298,12 +305,17 @@ let walk ~ty ~errors ~pattern (prog : program) =
             Option.iter expr a.arm_guard;
             expr a.arm_body)
           arms
-    | Array xs -> go xs
-    | For { iter; body; _ } -> go [ iter; body ]
+    | Array xs | Tuple xs -> go xs
+    | For { pat; _ } ->
+        pattern_ pat;
+        go (Ast.children e)
     | With { item; body; _ } -> go [ item; body ]
   and stmt = function
     | Let { ty = t; value; _ } ->
         Option.iter ty_ t;
+        expr value
+    | Let_tuple { pat; value } ->
+        pattern_ pat;
         expr value
     | Expr e -> expr e
   in
@@ -322,7 +334,8 @@ let walk ~ty ~errors ~pattern (prog : program) =
           | Fields fs | Dep fs -> List.iter field fs
           | Ctors cs -> List.iter (fun c -> List.iter field c.ctor_fields) cs
           | Opaque { rep; _ } -> ty_ rep
-          | Errors es -> errors_ es);
+          | Errors es -> errors_ es
+          | Builtin -> ());
           List.iter (fun (o : op) -> fn_ o.op_fn) td.type_ops
       | Import _ | Testing _ -> ())
     prog
@@ -334,7 +347,8 @@ let walk ~ty ~errors ~pattern (prog : program) =
    says how it writes a type's name. *)
 let written_loc : Resolved.ty -> Loc.t = function
   | TyName ({ tloc; _ }, _) -> tloc
-  | TyFn (_, _, _, _, l) | TyImpl (_, _, l) | TyInout (_, l) -> l
+  | TyFn (_, _, _, _, l) | TyImpl (_, _, l) | TyInout (_, l) | TyTuple (_, l) ->
+      l
   | TyErrors es -> es.eloc
 
 let check_written sink ~sets ~names (prog : program) =
@@ -353,7 +367,7 @@ let check_written sink ~sets ~names (prog : program) =
                 report (set_not_taken es.eloc (names p))
             | _ -> ())
           args
-    | TyName _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ -> ()
+    | TyName _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ | TyTuple _ -> ()
   in
   let pr =
     Ty.printer ~names { ty = Error; names = []; reqs = []; row_reqs = [] }
@@ -412,6 +426,7 @@ let rows_named (f : fn_def) =
         uses u
     | TyImpl (_, u, _) -> uses u
     | TyInout (t, _) -> ty t
+    | TyTuple (ts, _) -> List.iter ty ts
     | TyErrors es -> errs (Some es)
   in
   List.iter (fun (p : Resolved.param) -> Option.iter ty p.pty) f.params;

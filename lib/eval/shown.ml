@@ -32,6 +32,20 @@ let rec value ~own (types : types) (t : Ty.ty) (v : Value.t) =
   | Itself s, _ -> s
   | _, Elems (elem, xs) ->
       "[" ^ list (Array.to_list (Array.map (value elem) xs)) ^ "]"
+  | _, Parts parts ->
+      "(" ^ list (List.map (fun (t, x) -> value t x) parts) ^ ")"
+  | _, Entries (k, v, t) ->
+      (* as it's made, in order *)
+      "Map.of(["
+      ^ list
+          (List.map
+             (fun (a, b) -> "(" ^ value k a ^ ", " ^ value v b ^ ")")
+             (Table.to_list t))
+      ^ "])"
+  | _, Members (elem, t) ->
+      "Set.of(["
+      ^ list (List.map (fun (a, _) -> value elem a) (Table.to_list t))
+      ^ "])"
   | _, Record (name, fields) ->
       (* the fields in the order they're declared *)
       name ^ " { "
@@ -179,6 +193,69 @@ let sides ~own types (t : Ty.ty) (a : Value.t) (b : Value.t) =
               (List.map snd c.fields) (List.map snd d.fields)
           in
           (c.name ^ "(" ^ l ^ ")", c.name ^ "(" ^ r ^ ")")
+      | Parts xs, Parts ys ->
+          let l, r =
+            both (List.map fst xs)
+              (fun _ s -> s)
+              (List.map snd xs) (List.map snd ys)
+          in
+          ("(" ^ l ^ ")", "(" ^ r ^ ")")
+      | Entries (k, v, xs), Entries (_, _, ys) ->
+          (* two maps, each key's value against the other's, in the left
+             side's order, a key written whole; then a key only the right
+             side has. Keys are matched by how they're shown, which is
+             only for the message *)
+          let key a = value k a in
+          let ys = Table.to_list ys in
+          let entry ka s =
+            if s = "..." then s else "(" ^ key ka ^ ", " ^ s ^ ")"
+          in
+          let pairs =
+            each
+              (fun (ka, va) ->
+                match List.find_opt (fun (kb, _) -> key kb = key ka) ys with
+                | Some (_, vb) ->
+                    let l, r = go v va vb in
+                    (entry ka l, entry ka r)
+                | None when !shown -> ("...", "...")
+                | None ->
+                    shown := true;
+                    ("(" ^ key ka ^ ", " ^ value v va ^ ")", "..."))
+              (Table.to_list xs)
+          in
+          let only_right =
+            List.filter
+              (fun (kb, _) ->
+                not
+                  (List.exists
+                     (fun (ka, _) -> key ka = key kb)
+                     (Table.to_list xs)))
+              ys
+          in
+          let l, r = List.split pairs in
+          let r =
+            match only_right with
+            | (kb, vb) :: _ when not !shown ->
+                shown := true;
+                r @ [ "(" ^ key kb ^ ", " ^ value v vb ^ ")" ]
+            | _ :: _ -> r @ [ "..." ]
+            | [] -> r
+          in
+          ("Map.of([" ^ parts l ^ "])", "Map.of([" ^ parts r ^ "])")
+      | Members (elem, xs), Members (_, ys) ->
+          (* two sets: on each side, the first member the other side
+             doesn't have *)
+          let shown_of t =
+            List.map (fun (a, _) -> value elem a) (Table.to_list t)
+          in
+          let xs = shown_of xs and ys = shown_of ys in
+          let side mine theirs =
+            let first = List.find_opt (fun x -> not (List.mem x theirs)) mine in
+            List.map (fun x -> if Some x = first then x else "...") mine
+          in
+          let l = side xs ys and r = side ys xs in
+          shown := true;
+          ("Set.of([" ^ parts l ^ "])", "Set.of([" ^ parts r ^ "])")
       | Tag (x, xs), Tag (y, ys) when x = y && xs <> [] ->
           let l, r =
             both (List.map fst xs)

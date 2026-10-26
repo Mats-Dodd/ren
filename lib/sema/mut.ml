@@ -287,7 +287,9 @@ let rec walk cx (e : expr) =
   | Handler { state; arms; _ } ->
       let cx = { cx with in_handler = true } in
       List.iter
-        (function Let { value; _ } -> walk cx value | Expr e -> walk cx e)
+        (function
+          | Let { value; _ } | Let_tuple { value; _ } -> walk cx value
+          | Expr e -> walk cx e)
         state;
       (* an arm is a lambda that can change the handler's state: resolve.ml
          binds the state as deep as the arms' bodies, so only a lambda inside
@@ -302,18 +304,20 @@ let rec walk cx (e : expr) =
         arms
   | Block (stmts, last) ->
       List.iter
-        (function Let { value; _ } -> walk cx value | Expr e -> walk cx e)
+        (function
+          | Let { value; _ } | Let_tuple { value; _ } -> walk cx value
+          | Expr e -> walk cx e)
         stmts;
       walk cx last
   | Con (_, args) -> List.iter (fun (_, a) -> walk cx a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> walk cx v) fields
-  | Array xs -> List.iter (walk cx) xs
+  | Array xs | Tuple xs -> List.iter (walk cx) xs
   | Assign { target; value; _ } ->
       guard cx (fun () ->
           writable cx target ~what:"this can't be assigned to" ());
       walk_indices cx target;
       walk cx value
-  | For { var; iter = { kind = Ref a; loc = iter_loc; _ }; body } ->
+  | For { pat; over = Each { kind = Ref a; loc = iter_loc; _ }; body } ->
       guard cx (fun () ->
           writable cx a ~what:"`&` needs a variable it can change" ());
       walk_indices cx a;
@@ -321,13 +325,21 @@ let rec walk cx (e : expr) =
       let locks =
         match place_of a with
         | Some { root = Local b; path; _ } ->
-            { lid = b.id; lpath = path; elem = var.ident.name; lloc = iter_loc }
-            :: cx.locks
+            (* the parser lets a loop that changes each element only name
+               it *)
+            let elem =
+              match pat.pkind with PVar x -> x.ident.name | _ -> "_"
+            in
+            { lid = b.id; lpath = path; elem; lloc = iter_loc } :: cx.locks
         | _ -> cx.locks
       in
       walk { cx with locks } body
-  | For { iter; body; _ } ->
+  | For { over = Each iter; body; _ } ->
       walk cx iter;
+      walk cx body
+  | For { over = Range (lo, hi); body; _ } ->
+      walk cx lo;
+      walk cx hi;
       walk cx body
   | Match (subject, arms) ->
       walk cx subject;

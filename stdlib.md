@@ -319,7 +319,7 @@ Decoding comes from the type, with validation on the type that needs it:
 ```ren
 type Email = opaque Str
   pub fn parse(s: Str) -> Email ! Invalid =
-    if s.contains("@") then s else fail Invalid
+    if s.index("@").is_some() then s else fail Invalid
 
 type Signup = { email: Email, name: Str, plan: Plan = Free }
 

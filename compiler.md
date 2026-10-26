@@ -90,15 +90,20 @@ it, each fact says so, and which step fixes it.
 - **Requirements.** From R4. What a generic function needs of a type
   parameter: `eq` for `==`, `ord` for `<`, `add`, `sub`, `mul`, `div`,
   `rem` and `neg` for the operators, and `zero` and `one` for `T.zero`
-  and `T.one` (stage 9a), with `hash`, which agrees with `eq`, kept for
-  `Map` and `Set`. Inference, in the same solver; never
+  and `T.one` (stage 9a), and `hash` for a `Map`'s keys and a `Set`'s
+  members (9b), whose dictionary carries the `==` it agrees with, so a
+  table is given both as one. Inference, in the same solver; never
   written, on a public function either (operators.md, "Generic code").
   Carried in the scheme, the interface, and as hidden dictionary
   parameters in Core. Inferred since R4, and carried in schemes and
   interfaces (infer_reqs.ml): `==` on a type with a function in it is a
   compile error. Each use of a function records what it needs
   (`Infer.node`), and lowering passes a dictionary for each, so `==` in
-  a generic function compares through the one its caller gave it.
+  a generic function compares through the one its caller gave it. A
+  built-in function's scheme lists what it needs too, and since 9b each
+  use of one is passed a dictionary for each, as a function's is:
+  `Map.get` is given its keys' `hash`, and `Array.sort` its elements'
+  order.
 - **Lambda sets.** From R4. Which lambdas and functions a value of a
   function type can be. Inference, by unification, as a hidden third
   row of a function type beside `!` and `uses` (Lambda sets, below).
@@ -153,7 +158,12 @@ falls short it says so.
   `with numeric` type, `*` of which takes what it's represented as; and
   each type a module says has a `key`, or an operator or associated
   value for a requirement (`Core.program`'s `keys` and `ops`), has that
-  member, of the type the interpreter calls it at. Every function type has a
+  member, of the type the interpreter calls it at. Since 9b an
+  intrinsic's use passes a dictionary for each of its scheme's
+  requirements, checked as a function's are; a tuple, and a tuple
+  pattern, is checked part by part; and a `Map`'s `Entries` and a
+  `Set`'s `Members`, the arrays a `for` goes over, are of the table's
+  own type's parts. Every function type has a
   lambda set in canonical form, and Lint checks that a lambda's type's
   set has the lambda's identity, and a function's, member's or
   intrinsic's used as a value its own; that a use's set is its scheme's
@@ -989,6 +999,98 @@ differed from its plan:
   not a `Neg` of it, which would overflow.
 - **A `Float` is shown without an exponent**, `100000000000000000000.0`,
   not `1e+20`: a literal has none, so what's shown reads back as Ren.
-- **Tuples are 9b.** The spec's `Name` key, `(Str, Str)`, and ordering
-  tuples element by element wait for them.
+- **Tuples were 9b.** The spec's `Name` key, `(Str, Str)`, and ordering
+  tuples element by element waited for them, and work now.
 
+## Stage 9b
+
+Tuples, ranges, `Map` and `Set`, and the collection methods
+(operators.md, 9b). Each fact is where it was, and gains a case:
+
+- **Tuples** are a built-in type of each size, `(,)` and `(,,)`
+  (`Ty.tuple`), which no program can name, so a tuple's type is a
+  `Con` like any other's, and inference, the requirements, Core Lint
+  and the walk each have one case for it: its parts, in order. It's
+  ordered when its parts are, lexicographically, and hashed and compared
+  part by part. A `let` or a `for` takes one apart with a pattern that
+  always matches (the parser checks: names, `_` and tuples of them), and
+  lowering makes it a `match` of one arm, so exhaust and Lint check it
+  as any other. A `var` can't take one apart.
+- **A range** is a `for`'s, not a value: `For`'s `over` is `Each` or
+  `Range`, and lowering makes a range a counting `while`, its end
+  evaluated once.
+- **`Map` and `Set`** are built-in types whose values are a table
+  (value.ml, `VTable`; table.ml): entries in the order each key was
+  first set, and each entry's number by its key's hash. Each operation
+  is an intrinsic whose scheme needs `hash` of the key, and is given its
+  dictionary, the hash with the `==` it agrees with (Requirements,
+  above). A key set again keeps its place and its first spelling, as
+  `uniq` keeps the first of equal ones: setting `Email.of("ANN@x")`
+  after `Email.of("ann@x")` changes only the value. Every hash is mixed
+  with a seed chosen when the interpreter starts (walk.ml, `mix`), so
+  which keys share a bucket changes from run to run, and nothing can
+  observe it: iteration is in insertion order, and `==` and
+  `hash` of two tables ignore it, so two maps with the same pairs set in
+  another order are equal. A `for` over one goes over an array of its
+  entries, `(k, v)`, or members, made by `Core.Entries` and
+  `Core.Members`; inference decides which from the iterable's type,
+  which is carried at its node, so lowering reads it and decides
+  nothing.
+- **The collection methods** are Ren, in the prelude's source, under
+  `pub type Array<T> = builtin`, `Map<K, V>` and `Set<T>`: a declaration
+  that adds members to a built-in type, which only the prelude can
+  parse (`Parser.parse_program ~prelude`). Resolve accepts it only for a
+  built-in type of the same arity, and its own members' names, as the
+  rest of the module sees them, are the intrinsics' then the written
+  ones (`Iface.join`), so `xs.len()` is still `Intrinsic Array_len`,
+  and `xs.map(f)` is a call of `Array.map`, a function of the prelude
+  like any other. What each needs of its type parameters is inferred,
+  as for any generic function: `sum` needs `add` and `zero`. Written
+  in Ren, each builds its result by `&out.push(x)`, which is why `push`
+  is cheap (below). What's an intrinsic is what Ren can't say yet:
+  `len`, `push`, `sort` (a merge sort given the `ord` dictionary) and
+  the hash table.
+- **`push` doesn't copy.** An array (value.ml, `vec`) is the first
+  `len` items of a store other arrays may share, and an item below an
+  array's `len` is never changed. Pushing onto an array that ends where
+  its store's used items do writes into the store's spare room and
+  gives a longer array of the same store; pushing onto any other copies
+  it, with room to spare. So a loop of pushes is linear, where a copy
+  each time made `map` over 40,000 elements take seconds, and the
+  arrays that share a store still see only their own items: value
+  semantics hold without knowing who else holds an array.
+
+Where it differed from its plan:
+
+- **No tuple parameters in a lambda.** `fn((k, v)) => ...` isn't
+  parsed: operators.md lists it as optional, and a lambda given a
+  `Map`'s pairs takes one apart inside, `let (k, v) = p`.
+- **A written `Map<K, V>` doesn't check `K` has `hash`.** Requirements
+  are checked where a value is used, so `Map<Sub, Int>`, with a
+  function in `Sub`, is an error at its first `set` or `of`, with help
+  to give `Sub` a key, not where it's written. Checking written types
+  would need requirements on type arguments, which nothing else has.
+- **A `for` over `&m`, a `Map` or a `Set`, is an error,** with help to
+  go over a copy and `set` what changes: a key changed in place would
+  be in the wrong bucket.
+- **`Map` and `Set` have most of `Array`'s methods, not all.** Neither
+  has `index`, `uniq` or `tally`, and a `Map` has no `sum`. The methods
+  that keep some of a table's entries give a table of the same kind;
+  the rest an array or a value. `Map.first()` and the rest are written
+  over its pairs, by a private `pairs()`, an array of them.
+- **Each method that stops early is a loop that stops calling.**
+  There's no `break` or early return, so `find`, `any` and `all` go
+  over every element but call the function no more once they know.
+- **`take` and `drop` of a negative count panic**, through an `assert`
+  in the prelude. A failed `assert` in the prelude is a panic, said to
+  be at the program's call that reached it, as any panic in the prelude
+  is, and showing the condition, which the prelude's source can't:
+  "this call needs `n >= 0`, and it isn't so".
+- **A failed `assert` on two maps** leaves out the entries they share,
+  matched by how their keys are shown, and keeps a key whole beside its
+  differing value: `Map.of([(AccountId(1), Account { ..., balance:
+  Money(-100), ... }), ...])`.
+- **Help for names Ren doesn't use** (operators.md, "There's one name
+  for each") is a table in infer_msg.ml, `other_names`, consulted only
+  when the receiver's type lacks the name but has Ren's:
+  `xs.filter(f)` says `select`, `s.find(":")` says `index`.

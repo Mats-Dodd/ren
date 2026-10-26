@@ -200,7 +200,7 @@ it. [runtime-io.md](runtime-io.md#three-rules) says a call is a value, and
 
 ```ren
 assert handle_request.uses <= [Sql, Clock, Console]
-assert not ledger.uses.contains(Fs)
+assert not ledger.uses.includes(Fs)
 ```
 
 The compiler knows what every function uses, so architecture rules can be

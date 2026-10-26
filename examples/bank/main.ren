@@ -26,8 +26,8 @@ fn main() =
   print(worth_retrying(r))                        // true
 
   // Carol's account is frozen, so it can't take money in. Alice's side
-  // went through on the draft, but the draft was thrown away. The `match`
-  // handles every way the transfer can fail.
+  // went through on a copy of her account, which was never set back. The
+  // `match` handles every way the transfer can fail.
   try &acme.freeze(carol)
   match &acme.transfer(send(alice, carol, 10))
     _ => print(0)

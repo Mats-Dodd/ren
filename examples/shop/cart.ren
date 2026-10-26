@@ -11,18 +11,8 @@ pub type Cart = { owner: UserId, plans: Array<Plan> }
 
   pub fn put(inout self, p: Plan) = &self.plans.push(p)
   pub fn clear(inout self) = self.plans = []
-  pub fn size(self) -> Int = self.plans.len()
-  pub fn total(self) -> Int = sum(self.prices())
+  pub fn len(self) -> Int = self.plans.len()
+  pub fn total(self) -> Int = self.prices().sum()
 
   // Private: only this module can call `cart.prices()`.
-  fn prices(self) -> Array<Int> =
-    var out = []
-    for p in self.plans
-      &out.push(plan.price(p))
-    out
-
-fn sum(xs: Array<Int>) -> Int =
-  var total = 0
-  for x in xs
-    total += x
-  total
+  fn prices(self) -> Array<Int> = self.plans.map(fn(p) => plan.price(p))

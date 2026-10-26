@@ -248,6 +248,7 @@ let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
   | TyErrors es -> Errors (written_errors ~rows ~sets (Some es))
+  | TyTuple (ts, _) -> Ty.tuple (List.map go ts)
 
 and of_written_param ~rows ~sets = function
   | Ast.TyInout (t, _) -> { mode = Inout; ty = of_written ~rows ~sets t }
@@ -426,6 +427,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
     | Opaque { rep; _ } -> Opaque (Rep (of_written ~sets rep))
     | Errors es -> Errors (declared_errors ~sets es)
     | Dep ops -> Dep (List.map field ops)
+    | Builtin -> Builtin
   in
   let op onum (o : Ast.Resolved.op) =
     let f = o.op_fn in
@@ -535,7 +537,30 @@ let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
         prog;
   }
 
+(* A built-in type [a] with the members [b], its declaration in the
+   prelude's source, writes (`pub type Array<T> = builtin`): [a]'s
+   intrinsics first, then [b]'s, numbered after them. *)
+let join a b =
+  let n = Path.Map.cardinal a.members in
+  {
+    a with
+    members =
+      Path.Map.union
+        (fun _ x _ -> Some x)
+        a.members
+        (Path.Map.map (fun o -> { o with onum = o.onum + n }) b.members);
+  }
+
 (* Two interfaces of the same module as one: the prelude is part Ren
-   source, part built into the compiler. *)
+   source, part built into the compiler. A type in both is a built-in
+   type whose source writes some of its members, and is [join]ed. *)
 let union a b =
-  { home = a.home; types = a.types @ b.types; values = a.values @ b.values }
+  let in_b d = find_type b d.path.name in
+  let joined d = match in_b d with Some e -> join d e | None -> d in
+  {
+    home = a.home;
+    types =
+      List.map joined a.types
+      @ List.filter (fun d -> find_type a d.path.name = None) b.types;
+    values = a.values @ b.values;
+  }

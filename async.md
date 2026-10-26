@@ -120,7 +120,7 @@ dep Seen =
 handler seen_set() for Seen =
   var seen: Set<Url> = Set.empty
   claim(url) =>
-    if seen.contains(url) then false
+    if seen.includes(url) then false
     else
       &seen.add(url)
       true

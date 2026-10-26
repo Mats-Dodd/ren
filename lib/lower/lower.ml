@@ -15,7 +15,10 @@
      receiver first, `Stack.size(s)`; with `&`, `&s.push(1)`, the receiver
      is passed `inout`, `Stack.push(&s, 1)`, like any argument with `&`
    - `for x in xs` and `for p in &ps` become `while` loops over an index;
-     the second writes each element back after each pass
+     the second writes each element back after each pass. `for i in a..b`
+     counts in a `while` loop of its own
+   - `let (a, b) = t`, and a loop's tuple, `for (k, v) in ...`, are a
+     `match` of one arm
    - an `if` without `else` gets `else ()`
    - a block becomes nested [Let]s and [Seq]s
    - a lambda lists the variables it captures
@@ -283,7 +286,7 @@ and expr_of cx (e : expr) : C.expr =
   | Var (Global_value p) -> here (Global_value (p, targs_of cx e.node))
   | Var (Intrinsic x) ->
       let a = targs_of cx e.node in
-      here (Intrinsic (x, a, descs cx a))
+      here (Intrinsic (x, a, descs cx a, dicts_of cx e.node))
   | Var (Dep_op (dep, op)) -> (
       (* used as a value: a lambda that calls it, with the evidence it's
          given where it's called *)
@@ -467,13 +470,15 @@ and expr_of cx (e : expr) : C.expr =
       let subject = expr cx subject in
       here (Match (subject, List.map (arm cx) arms))
   | Array xs -> here (Array (List.map (expr cx) xs))
+  | Tuple xs -> here (Tuple (List.map (expr cx) xs))
   | Index (a, i) ->
       let a = expr cx a in
       here (Prim (Get_index, [ a; expr cx i ]))
   | Ref ({ kind = Call (f, args); _ } as c) -> call cx ~changed:true c f args
   | Ref _ -> bug "`&` outside a call or a `for` loop"
   | Assign { target; op; value; onode } -> assign cx e ~onode target op value
-  | For { var; iter; body } -> for_loop cx e var iter body
+  | For { pat; over = Each iter; body } -> for_loop cx e pat iter body
+  | For { pat; over = Range (lo, hi); body } -> range_loop cx e pat lo hi body
   | With { item; body; lam } -> (
       (* the body sees evidence of its own: the [With]'s, which extends
          what's installed around it, or the lambda's, which a wrapper
@@ -544,6 +549,8 @@ and handler cx (e : expr) deps state arms =
         let v = bind cx name value.ty in
         let body = state_lets rest in
         mk (Let (v, value, body)) body.ty value.loc
+    | Let_tuple { pat; value } :: rest ->
+        take_apart cx pat (expr cx value) (fun () -> state_lets rest)
     | Expr s :: rest -> seq (expr cx s) (state_lets rest)
   and instance () =
     let cells =
@@ -552,7 +559,7 @@ and handler cx (e : expr) deps state arms =
           | Let { name; mut = true; _ } ->
               let v = var_of cx name in
               Some (v, temp cx v.name (C.cell_ty v.ty))
-          | Let _ | Expr _ -> None)
+          | Let _ | Let_tuple _ | Expr _ -> None)
         state
     in
     let impl (d : tname) : Path.t * C.expr =
@@ -741,7 +748,7 @@ and operator cx ~onode ~meth prim ty loc (args : C.expr list) =
       let a = targs_of cx onode in
       let callee : C.kind =
         match Prelude.find p with
-        | Some x -> Intrinsic (x, a, descs cx a)
+        | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx onode)
         | None -> Global (p, a, descs cx a, dicts_of cx onode)
       in
       mk
@@ -796,7 +803,7 @@ and plain_call cx ~changed ?last (e : expr) f args =
         let callee : C.kind =
           let a = targs_of cx f.node in
           match Prelude.find p with
-          | Some x -> Intrinsic (x, a, descs cx a)
+          | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx f.node)
           | _ -> Global (p, a, descs cx a, dicts_of cx f.node)
         in
         (mk callee (ty_of cx f.node) f.loc, [ recv ])
@@ -856,58 +863,104 @@ and block cx stmts last =
       let v = bind cx name value.ty in
       let body = block cx rest last in
       mk (Let (v, value, body)) body.ty value.loc
+  | Let_tuple { pat; value } :: rest ->
+      let value = expr cx value in
+      take_apart cx pat value (fun () -> block cx rest last)
   | Expr e :: rest ->
       let e = expr cx e in
       seq e (block cx rest last)
 
-(* `for x in xs` holds the array, then goes over its indices.
+(* [body ()] with [pat], a name or a tuple of them (the parser sees to
+   that), bound to [value]: a [Let], or a [match] of one arm, which always
+   matches. *)
+and take_apart cx (pat : pattern) (value : C.expr) body =
+  match pat.pkind with
+  | PVar b ->
+      let v = bind cx b value.ty in
+      let body = body () in
+      mk (Let (v, value, body)) body.ty value.loc
+  | _ ->
+      let pat = pattern cx pat in
+      let body = body () in
+      mk (Match (value, [ { pat; guard = None; body } ])) body.ty value.loc
+
+(* `for i in a..b` holds both ends, then counts from the first up to the
+   second, which it never reaches: when it starts there, the body never
+   runs. *)
+and range_loop cx (e : expr) (pat : pattern) lo hi body =
+  let loc = e.loc in
+  let lo = expr cx lo in
+  let hi = expr cx hi in
+  let stop = temp cx "stop" Ty.int and i = temp cx "i" Ty.int in
+  let index = local i loc in
+  let binop op a b ty = mk (Prim (Binop op, [ a; b ])) ty loc in
+  let step =
+    mk (Assign (i, binop Add index (int_lit 1L loc) Ty.int)) Ty.unit loc
+  in
+  let pass = take_apart cx pat index (fun () -> seq (expr cx body) step) in
+  lets
+    [ (i, lo); (stop, hi) ]
+    (mk (While (binop Lt index (local stop loc) Ty.bool, pass)) Ty.unit loc)
+
+(* `for x in xs` holds the array, then goes over its indices; a `Map`'s
+   entries and a `Set`'s members are made an array first, in order.
    `for p in &ps` finds the place (once), then each pass copies the element
    into `p` and writes it back afterwards. mut.ml makes sure the body can't
    change the array itself, so its length can't change. *)
-and for_loop cx (e : expr) var (iter : expr) body =
+and for_loop cx (e : expr) (pat : pattern) (iter : expr) body =
   let loc = e.loc in
-  let array_ty = ty_of cx iter.node in
+  let iter_ty = ty_of cx iter.node in
+  (* what's gone over, as an array, from the value of [iter] *)
+  let array_ty, elements =
+    match iter_ty with
+    | Con (p, [ k; v ]) when p = Path.prelude "Map" ->
+        let t = Ty.array (Ty.tuple [ k; v ]) in
+        (t, fun m -> mk (Prim (Entries, [ m ])) t iter.loc)
+    | Con (p, [ x ]) when p = Path.prelude "Set" ->
+        let t = Ty.array x in
+        (t, fun s -> mk (Prim (Members, [ s ])) t iter.loc)
+    | t -> (t, Fun.id)
+  in
   let elem = C.elem_ty array_ty in
   let n = temp cx "n" Ty.int and i = temp cx "i" Ty.int in
   let index = local i iter.loc in
   let binop op a b ty = mk (Prim (Binop op, [ a; b ])) ty loc in
-  (* [after] makes what to do after the body, given the loop variable *)
-  let loop ~start ~element ~after =
-    let x = bind cx var elem in
-    let body = expr cx body in
-    let step =
-      mk (Assign (i, binop Add index (int_lit 1L loc) Ty.int)) Ty.unit loc
-    in
-    (* what's written back after the body is written back even if the
-       body fails *)
-    let rest =
-      match after x with
-      | writes when writes <> [] && C.can_fail body ->
-          seq (mk (Finally (body, seq_all loc writes)) body.ty loc) step
-      | writes -> seq body (List.fold_right seq writes step)
-    in
-    let pass = mk (Let (x, element, rest)) Ty.unit loc in
+  let step =
+    mk (Assign (i, binop Add index (int_lit 1L loc) Ty.int)) Ty.unit loc
+  in
+  (* [pass] makes each pass, given each element *)
+  let loop ~start ~pass =
     lets
       [ (n, mk (Prim (Length, [ start ])) Ty.int loc); (i, int_lit 0L loc) ]
       (mk (While (binop Lt index (local n loc) Ty.bool, pass)) Ty.unit loc)
   in
-  match iter.kind with
-  | Ref p ->
+  match (iter.kind, pat.pkind) with
+  | Ref p, PVar b ->
       let binds, pl = place cx p in
       let at =
         { pl with steps = pl.steps @ [ SIndex (index, elem, iter.loc) ] }
       in
+      let x = bind cx b elem in
+      let body = expr cx body in
+      (* the element is written back after the body, even if it fails *)
+      let write = write at (local x loc) loc in
+      let rest =
+        if C.can_fail body then
+          seq (mk (Finally (body, write)) body.ty loc) step
+        else seq body (seq write step)
+      in
       lets binds
-        (loop ~start:(read pl iter.loc) ~element:(read at iter.loc)
-           ~after:(fun x -> [ write at (local x loc) loc ]))
+        (loop ~start:(read pl iter.loc)
+           ~pass:(mk (Let (x, read at iter.loc, rest)) Ty.unit loc))
+  | Ref _, _ -> bug "a `for` with `&` that takes its element apart"
   | _ ->
       let xs = temp cx "xs" array_ty in
       let xs_e = local xs iter.loc in
+      let element = mk (Prim (Get_index, [ xs_e; index ])) elem iter.loc in
       lets
-        [ (xs, expr cx iter) ]
+        [ (xs, elements (expr cx iter)) ]
         (loop ~start:xs_e
-           ~element:(mk (Prim (Get_index, [ xs_e; index ])) elem iter.loc)
-           ~after:(fun _ -> []))
+           ~pass:(take_apart cx pat element (fun () -> seq (expr cx body) step)))
 
 and pattern cx (p : pattern) : C.pattern =
   let pty = ty_of cx p.pnode in
@@ -927,6 +980,7 @@ and pattern cx (p : pattern) : C.pattern =
     | PFail (t, ps) -> PTag (t.name, List.map (pattern cx) ps)
     | PFail_any -> PWild
     | POr ps -> POr (List.map (pattern cx) ps)
+    | PTuple ps -> PTuple (List.map (pattern cx) ps)
   in
   { pkind; pty; ploc = p.ploc }
 
@@ -940,12 +994,11 @@ and free (e : C.expr) =
   let rec go (e : C.expr) =
     match e.kind with
     | Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ -> ()
-    | Global (_, _, ds, dicts) ->
+    | Global (_, _, ds, dicts) | Intrinsic (_, _, ds, dicts) ->
         (* the hidden type and dictionary parameters its descriptors and
            dictionaries are built from *)
         List.iter use (List.concat_map C.desc_vars ds);
         List.iter use (List.concat_map C.dict_vars dicts)
-    | Intrinsic (_, _, ds) -> List.iter use (List.concat_map C.desc_vars ds)
     | Local v -> use v
     | Prim
         ( (Equal d | Not_equal d | Compare (_, d) | Op (_, d) | Value_of (_, d)),
@@ -955,7 +1008,11 @@ and free (e : C.expr) =
     | Tag (_, args, ds) ->
         List.iter use (List.concat_map C.desc_vars ds);
         List.iter go args
-    | Prim (_, args) | Array args | Con (_, _, args) | Dep_call { args; _ } ->
+    | Prim (_, args)
+    | Array args
+    | Tuple args
+    | Con (_, _, args)
+    | Dep_call { args; _ } ->
         List.iter go args
     | With { impl; body; _ } ->
         (* its evidence isn't a local: nothing captures it *)
@@ -1011,7 +1068,7 @@ and free (e : C.expr) =
   and pat (p : C.pattern) =
     match p.pkind with
     | PVar v -> bind v
-    | PCon (_, _, ps) | PTag (_, ps) | POr ps -> List.iter pat ps
+    | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps -> List.iter pat ps
     | PWild | PInt _ | PBool _ -> ()
   in
   go e;
@@ -1045,6 +1102,9 @@ let max_binder (f : fn_def) =
             | Let { name; value; _ } ->
                 see name;
                 go value
+            | Let_tuple { pat = p; value } ->
+                pat p;
+                go value
             | Expr e -> go e)
           stmts;
         go last
@@ -1058,11 +1118,10 @@ let max_binder (f : fn_def) =
             Option.iter go a.arm_guard;
             go a.arm_body)
           arms
-    | Array xs -> List.iter go xs
-    | For { var; iter; body } ->
-        see var;
-        go iter;
-        go body
+    | Array xs | Tuple xs -> List.iter go xs
+    | For { pat = p; _ } ->
+        pat p;
+        List.iter go (Ast.children e)
     | With { item; body; _ } ->
         go item;
         go body
@@ -1072,13 +1131,16 @@ let max_binder (f : fn_def) =
             | Let { name; value; _ } ->
                 see name;
                 go value
+            | Let_tuple { pat = p; value } ->
+                pat p;
+                go value
             | Expr e -> go e)
           state;
         List.iter (fun (a : handler_arm) -> go a.arm_impl) arms
   and pat (p : pattern) =
     match p.pkind with
     | PVar b -> see b
-    | PCon (_, ps) | PFail (_, ps) | POr ps -> List.iter pat ps
+    | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
     | PWild | PInt _ | PBool _ | PFail_any -> ()
   in
   List.iter (fun (p : Resolved.param) -> see p.pname) f.params;

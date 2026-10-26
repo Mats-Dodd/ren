@@ -18,7 +18,8 @@
 
    A type has `ord` only where its order is obvious: `Int`, `Float`, `Str`
    and `Bool`, a sum type with no fields, by the order of its variants, a
-   `with numeric` type, and anything with a `key`, by its key. In its own
+   tuple whose parts have one, part by part, a `with numeric` type, and
+   anything with a `key`, by its key. In its own
    module an opaque type is what it's represented as, so it's ordered as
    that is. A record, or a sum type with fields, is ordered only by its
    key, so that reordering its fields can't change a sort.
@@ -323,6 +324,7 @@ and has_eq env req t =
 and has_ord env t =
   let unordered why = Lacks (Unordered why) in
   match t with
+  | TCon (p, args) when Ty.is_tuple p -> all env "ord" args
   | TCon (p, args) -> (
       match keyed env "ord" p args with
       | Some h -> h
@@ -345,6 +347,8 @@ and has_ord env t =
               has env "ord" (with_args args rep)
           | Some { body = Opaque (Hidden _); _ } ->
               unordered (Unordered_opaque (env.names p))
+          | _ when p = Path.prelude "Map" || p = Path.prelude "Set" ->
+              unordered (Unordered_table p.name)
           | _ -> unordered Unordered))
   | _ -> unordered Unordered
 
@@ -389,7 +393,7 @@ let lacking env loc ~req ~op ~by ~uses t lack =
         | Decl w -> w
         | Unordered _ | No_op -> assert false
       in
-      report env (Infer_msg.no_eq loc ~shown ~op ~by ~failed why)
+      report env (Infer_msg.no_eq loc ~shown ~req ~op ~by ~failed why)
   | Unordered why -> report env (Infer_msg.no_ord loc ~shown ~op ~by ~uses why)
   | No_op ->
       (* it has [req], but not one that takes its own type: one for

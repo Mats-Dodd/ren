@@ -43,7 +43,8 @@ type env = {
    error: [Outcome] is its two constructors, [value] and [fail], each with
    one field, the value or the error (errors.md, "Handling: `match`"). A
    value pattern, `_` too, is [value] of it, so `_` never matches an
-   error; `fail _` is [fail] of anything. *)
+   error; `fail _` is [fail] of anything. A tuple of [n] parts is the one
+   constructor of [Tuple n], with [n] fields. *)
 type head = { name : string; owner : owner }
 
 and owner =
@@ -51,6 +52,7 @@ and owner =
   | Of_set of (string * int) list
   | No_list
   | Outcome
+  | Tuple of int
 
 type space = Any | Ctor of head * space list
 
@@ -88,6 +90,9 @@ let rec simplify env (p : pattern) =
         | _ -> assert false (* inference found it, or reported an error *)
       in
       Ctor ({ name = c.name.name; owner }, List.map (simplify env) ps)
+  | PTuple ps ->
+      let n = List.length ps in
+      Ctor ({ name = "(,)"; owner = Tuple n }, List.map (simplify env) ps)
   | PFail _ | PFail_any | POr _ ->
       (* a whole arm's, which [outcomes] simplifies *)
       invalid_arg "Exhaust.simplify: a `fail` pattern inside another"
@@ -115,6 +120,8 @@ let rec show_space = function
   | Any -> "_"
   | Ctor ({ owner = Outcome; name = "value" }, [ v ]) -> show_space v
   | Ctor ({ owner = Outcome; _ }, [ e ]) -> "fail " ^ show_space e
+  | Ctor ({ owner = Tuple _; _ }, args) ->
+      "(" ^ String.concat ", " (List.map show_space args) ^ ")"
   | Ctor (c, []) -> c.name
   | Ctor (c, args) ->
       c.name ^ "(" ^ String.concat ", " (List.map show_space args) ^ ")"
@@ -140,6 +147,7 @@ let siblings env c =
   | Of_set tags ->
       Some (List.map (fun (t, n) -> ({ name = t; owner = c.owner }, n)) tags)
   | Outcome -> Some [ (value, 1); (failed, 1) ]
+  | Tuple n -> Some [ (c, n) ]
   | No_list -> None
 
 (* The rows that still apply once we know the first value was built with
@@ -225,6 +233,12 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
   (* the type of the value being matched, for the message *)
   let column =
     match (Infer.Nodes.find subject.node env.nodes).ty with
+    | Con (p, _) as t when Ty.is_tuple p ->
+        Some
+          (Ty.show
+             (Ty.printer ~names:env.names
+                { ty = t; names = []; reqs = []; row_reqs = [] })
+             t)
     | Con (p, _) -> Some (env.names p)
     | Var _ | Fun _ | Errors _ | Uses _ | All _ | Error -> None
   in
@@ -355,7 +369,8 @@ let rec no_bound_errors env (p : pattern) =
       | Errors _ ->
           Diag.report env.sink (Infer_msg.bound_error p.ploc b.ident.name)
       | _ -> ())
-  | PCon (_, ps) | PFail (_, ps) | POr ps -> List.iter (no_bound_errors env) ps
+  | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
+      List.iter (no_bound_errors env) ps
   | PWild | PInt _ | PBool _ | PFail_any -> ()
 
 (* ---- walking the program ---- *)
@@ -375,15 +390,15 @@ let rec check_expr env (e : expr) =
       check_expr env a;
       check_expr env b
   | If (c, t, f) -> List.iter (check_expr env) (c :: t :: Option.to_list f)
-  | Array xs -> List.iter (check_expr env) xs
+  | Array xs | Tuple xs -> List.iter (check_expr env) xs
   | Assign { target; value; _ } -> List.iter (check_expr env) [ target; value ]
-  | For { iter; body; _ } -> List.iter (check_expr env) [ iter; body ]
+  | For _ -> List.iter (check_expr env) (children e)
   | Call (f, args) -> List.iter (check_expr env) (f :: args)
   | Lambda (_, body) -> check_expr env body
   | Block (stmts, last) ->
       List.iter
         (function
-          | Let { value; _ } -> check_expr env value
+          | Let { value; _ } | Let_tuple { value; _ } -> check_expr env value
           | Expr e -> check_expr env e)
         stmts;
       check_expr env last
@@ -394,7 +409,7 @@ let rec check_expr env (e : expr) =
   | Handler { state; arms; _ } ->
       List.iter
         (function
-          | Let { value; _ } -> check_expr env value
+          | Let { value; _ } | Let_tuple { value; _ } -> check_expr env value
           | Expr e -> check_expr env e)
         state;
       List.iter (fun (a : handler_arm) -> check_expr env a.arm_impl) arms

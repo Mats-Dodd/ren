@@ -146,3 +146,14 @@ pub type Money = opaque Int with numeric
 fn half() = 0.5 * 3.0
 //          ^ number
 //                ^ number
+
+fn pairs(xs: Array<Int>) -> Array<(Int, Int)> =
+  var out = []
+  for i in 0..xs.len() - 1
+//^ keyword
+//      ^ keyword
+//          ^ operator
+    let (a, b) = (xs[i], xs[i + 1])
+//  ^ keyword
+    &out.push((a, b))
+  out

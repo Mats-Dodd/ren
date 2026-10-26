@@ -200,10 +200,9 @@ it. Since stage 6 a charge over the card's limit is declined, which
     pub let guest: Cart
     pub fn put(inout self, p: Plan)
     pub fn clear(inout self)
-    pub fn size(self) -> Int
+    pub fn len(self) -> Int
     pub fn total(self) -> Int
     fn prices(self) -> Array<Int>
-  fn sum(xs: Array<Int>) -> Int
   
   -- billing/stripe
   pub fn charge(amount: Int) -> ChargeId ! Declined(Int) uses Console
@@ -284,12 +283,12 @@ A method that changes its receiver is called with `&`:
 
 and one that doesn't change it is called without:
 
-  $ printf 'import cart.{Cart}\nimport users.{UserId}\nfn main() =\n  var c = Cart.of(UserId.new(1))\n  &c.size()\n' > broken/extra_amp.ren
+  $ printf 'import cart.{Cart}\nimport users.{UserId}\nfn main() =\n  var c = Cart.of(UserId.new(1))\n  &c.len()\n' > broken/extra_amp.ren
   $ ren check broken/extra_amp.ren
-  error: `size` doesn't change `c`
+  error: `len` doesn't change `c`
     ┌─ broken/extra_amp.ren:5:3
-  5 │   &c.size()
-    │   ^^^^^^^^^
+  5 │   &c.len()
+    │   ^^^^^^^^
     help: remove the `&`
   [1]
 
@@ -330,7 +329,6 @@ changes:
   pub type Program
     pub fn check(ops: Array<Op>) -> Program ! Empty | NoHalt | Outside(Int, Int)
     pub fn at(self, pc: Int) -> Op
-    pub fn size(self) -> Int
   fn lands(ops: Array<Op>) ! Outside(Int, Int)
   fn inside(i: Int, n: Int) -> Bool
   
@@ -356,7 +354,7 @@ changes:
   pub type Timeline
     pub let empty: Timeline
     pub fn record(inout self, vm: Vm)
-    pub fn size(self) -> Int
+    pub fn len(self) -> Int
     pub fn back(self, n: Int) -> Vm ! NotRecorded(Int)
     pub fn run(inout self, inout vm: Vm, p: Program, fuel: Int) ! Underflow(Int)
   
@@ -434,8 +432,8 @@ A call that changes `self` can't also read part of it in an argument:
 The bank is the milestone of stage 6: accounts, transfers that can fail,
 and batches that go through whole or not at all (bank/README.md). Its
 functions fail with error tags, `main` passes them on with `try`, keeps
-them with `attempt` and handles them with `match`. A transfer works on a
-copy of the bank and keeps it only if nothing failed:
+them with `attempt` and handles them with `match`. A transfer changes
+copies of two accounts and sets them back only if neither failed:
 
   $ ren run bank/main.ren
   7000
@@ -482,7 +480,7 @@ copy of the bank and keeps it only if nothing failed:
     pub fn balance(self, id: AccountId) -> Money ! NoSuchAccount(AccountId)
     pub fn statement(self, id: AccountId) -> Array<Entry> ! NoSuchAccount(AccountId)
     pub fn total(self) -> Money
-    fn find(self, id: AccountId) -> Int ! NoSuchAccount(AccountId)
+    fn get(self, id: AccountId) -> Account ! NoSuchAccount(AccountId)
   
   -- main
   fn main() ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Clock, Console
@@ -527,7 +525,7 @@ A new way for a transfer to fail has to be handled wherever its errors
 are told apart. The compiler points at each place that has to decide what
 to do about it:
 
-  $ cp -r bank b4 && perl -0pi -e 's/( \| SameAccount)\n/$1 | TooLarge(amount: Money)\n/; s/(    let i = try self.find\(t.from\))/    if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)\n$1/' b4/bank.ren
+  $ cp -r bank b4 && perl -0pi -e 's/( \| SameAccount)\n/$1 | TooLarge(amount: Money)\n/; s/(    var from = try self.get\(t.from\))/    if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)\n$1/' b4/bank.ren
   $ ren check b4/main.ren
   error: this `match` doesn't handle every error it can fail with
      ┌─ b4/main.ren:32:3
@@ -549,18 +547,18 @@ A public function can't take a type other modules can't name:
   $ cp -r bank b5 && perl -0pi -e 's/pub type Transfer/type Transfer/' b5/bank.ren
   $ ren check b5/main.ren
   error: `pub fn Bank.transfer` takes `Transfer`, which is private to this module
-     ┌─ b5/bank.ren:34:34
-  13 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
+     ┌─ b5/bank.ren:37:34
+  15 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  34 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
+  37 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
      │                                  ^^^^^^^^
      help: mark `Transfer` `pub`
   
   error: `pub fn Bank.batch`'s signature mentions `Transfer`, which is private to this module
-     ┌─ b5/bank.ren:45:38
-  13 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
+     ┌─ b5/bank.ren:48:38
+  15 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  45 │   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
+  48 │   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
      │                                      ^^^^^^^^
      help: mark `Transfer` `pub`
   [1]
@@ -568,13 +566,13 @@ A public function can't take a type other modules can't name:
 The same new failure, left out of `TransferError`: a public function's
 signature lists exactly what it can fail with, so `transfer` is wrong now:
 
-  $ cp -r bank b6 && perl -0pi -e 's/(    let i = try self.find\(t.from\))/    if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)\n$1/' b6/bank.ren
+  $ cp -r bank b6 && perl -0pi -e 's/(    var from = try self.get\(t.from\))/    if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)\n$1/' b6/bank.ren
   $ ren check b6/main.ren
   error: `pub fn Bank.transfer` can fail with `TooLarge`, but its signature doesn't say so
-     ┌─ b6/bank.ren:34:10
-  34 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
+     ┌─ b6/bank.ren:37:10
+  37 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
      │          ^^^^^^^^
-  37 │     if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)
+  40 │     if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)
      │                                           ----------------------- this fails with `TooLarge`
      = `Bank.transfer` can only fail with what's after its `!`
      help: add `TooLarge(Money)` after `!`, or handle it here with `match`
@@ -876,25 +874,25 @@ below zero. The tests that check nothing moved show the two banks, and
   main.ren
     ✗ main prints the balances, and every refusal
   
-  ──── an overdraft is refused, and nothing moves ── bank.ren:114
+  ──── an overdraft is refused, and nothing moves ── bank.ren:109
       │
-  114 │   assert acme == before
+  109 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
-      left:  Bank { accounts: [Account { ..., balance: Money(-100), ... }, ...], ... }
-      right: Bank { accounts: [Account { ..., balance: Money(1000), ... }, ...], ... }
-                                                             ^ differs here
+      left:  Bank { accounts: Map.of([(AccountId(1), Account { ..., balance: Money(-100), ... }), ...]), ... }
+      right: Bank { accounts: Map.of([(AccountId(1), Account { ..., balance: Money(1000), ... }), ...]), ... }
+                                                                                   ^ differs here
   
       seed 3529 · rerun: ren test b12 --only "an overdraft" --seed 3529
   
-  ──── a batch that fails moves nothing ── bank.ren:152
+  ──── a batch that fails moves nothing ── bank.ren:147
       │
-  152 │   assert acme == before
+  147 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
-      left:  Bank { accounts: [Account { ..., balance: Money(1100), ... }, ...], ... }
-      right: Bank { accounts: [Account { ..., balance: Money(1000), ... }, ...], ... }
-                                                              ^ differs here
+      left:  Bank { accounts: Map.of([(AccountId(1), Account { ..., balance: Money(1100), ... }), ...]), ... }
+      right: Bank { accounts: Map.of([(AccountId(1), Account { ..., balance: Money(1000), ... }), ...]), ... }
+                                                                                    ^ differs here
   
       seed 119 · rerun: ren test b12 --only "a batch" --seed 119
   

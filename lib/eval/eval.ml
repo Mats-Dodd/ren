@@ -205,12 +205,12 @@ let neg ~at loc = function
   | VFloat f -> VFloat (Float.neg f)
   | _ -> bug "`-` on the wrong type"
 
-let element loc xs i =
-  if i < 0L || i >= Int64.of_int (Array.length xs) then
+let element loc (xs : vec) i =
+  if i < 0L || i >= Int64.of_int xs.len then
     panic loc
       (Printf.sprintf "index %Ld is out of bounds for an array of length %d" i
-         (Array.length xs))
-  else xs.(Int64.to_int i)
+         xs.len)
+  else nth xs (Int64.to_int i)
 
 (* [op] on [args], whose expressions are [at]. *)
 let prim loc op args (at : expr list) =
@@ -218,13 +218,16 @@ let prim loc op args (at : expr list) =
   | Neg, [ v ] -> neg ~at loc v
   | Not, [ VBool b ] -> VBool (not b)
   | Binop op, [ x; y ] -> binop ~at loc op x y
-  | Length, [ VArray xs ] -> VInt (Int64.of_int (Array.length xs))
+  | Length, [ VArray xs ] -> VInt (Int64.of_int xs.len)
   | Get_index, [ VArray xs; VInt i ] -> element loc xs i
+  | Entries, [ VTable t ] ->
+      array_of_list (List.map (fun (k, v) -> VTuple [ k; v ]) (Table.to_list t))
+  | Members, [ VTable t ] -> array_of_list (List.map fst (Table.to_list t))
   | Set_index, [ VArray xs; VInt i; x ] ->
       ignore (element loc xs i);
-      let ys = Array.copy xs in
+      let ys = items xs in
       ys.(Int64.to_int i) <- x;
-      VArray ys
+      array ys
   | New_cell, [ v ] -> VCell (ref v)
   | Get_cell, [ VCell c ] -> !c
   | Set_cell, [ VCell c; v ] ->
@@ -246,6 +249,7 @@ let rec match_pattern p v env =
       match_all ps args env
   | PTag (t, ps), VTag { name; args; _ } when t = name -> match_all ps args env
   | POr ps, _ -> List.find_map (fun p -> match_pattern p v env) ps
+  | PTuple ps, VTuple xs -> match_all ps xs env
   | _ -> None
 
 and match_all ps vs env =
@@ -260,9 +264,18 @@ let cell env (v : var) =
   | None -> bug ("`" ^ v.name ^ "` used outside its scope")
 
 (* What [f] is, for a bug report. *)
+(* The prelude's source at [loc], which is on one line. *)
+let prelude_text (loc : Loc.t) =
+  let line =
+    List.nth
+      (String.split_on_char '\n' (String.trim Prelude.source))
+      (loc.start.line - 1)
+  in
+  String.sub line (loc.start.col - 1) (loc.stop.col - loc.start.col)
+
 let describe = function
   | VFn (p, _, _) -> "`" ^ Path.local p ^ "`"
-  | VBuiltin (x, _) -> "`" ^ Intrinsic.name x ^ "`"
+  | VBuiltin (x, _, _) -> "`" ^ Intrinsic.name x ^ "`"
   | VClosure { body; _ } ->
       Printf.sprintf "a lambda (its body at %s:%d)" body.loc.file
         body.loc.start.line
@@ -352,7 +365,11 @@ let rec eval cx env (e : expr) =
       match Hashtbl.find_opt cx.values p with
       | Some v -> v
       | None -> bug ("the value `" ^ Path.local p ^ "` used before it's made"))
-  | Intrinsic (x, _, ds) -> VBuiltin (x, List.map (type_of env) ds)
+  | Intrinsic (x, _, ds, dicts) ->
+      VBuiltin
+        ( x,
+          List.map (type_of env) ds,
+          List.map (fun d -> VDict (dict cx env d)) dicts )
   | Dep_call { dep; op; ev; args; _ } -> (
       (* the innermost implementation of [dep]: a record of functions, the
          operation's run with what was installed where it was *)
@@ -510,7 +527,8 @@ let rec eval cx env (e : expr) =
           VRecord
             (List.map (fun (g, w) -> if g = f then (g, v) else (g, w)) fields)
       | _ -> bug "an update of a non-record")
-  | Array xs -> VArray (Array.of_list (eval_all cx env xs))
+  | Array xs -> array_of_list (eval_all cx env xs)
+  | Tuple xs -> VTuple (eval_all cx env xs)
   | Match (subject, arms) ->
       let env, body = arm_for cx env e.loc (eval cx env subject) arms in
       eval cx env body
@@ -531,7 +549,14 @@ let rec eval cx env (e : expr) =
           eval cx (Env.add error.id (ref err) env) on_error)
   | Assert a ->
       if not (truth (eval cx env a)) then
-        raise (Assert_failed { loc = a.loc; sides = None });
+        if a.loc.file = Prelude.file then
+          (* the prelude's, on what it was given, `n >= 0` in `take`: a
+             panic, which [call_at] says is at the program's call, with the
+             condition, since the prelude's source can't be shown *)
+          panic a.loc
+            (Printf.sprintf "this call needs `%s`, and it isn't so"
+               (prelude_text a.loc))
+        else raise (Assert_failed { loc = a.loc; sides = None });
       VUnit
   | Assert_equal (a, b, d, eq) ->
       let x = eval cx env a in
@@ -731,15 +756,18 @@ and enter cx f args ev =
 (* A call of a built-in function, which [apply] returns. *)
 and builtin cx f args =
   match f with
-  | VBuiltin (Show, tys) -> (
+  | VBuiltin (Show, tys, _) -> (
       (* the one built-in that needs its argument's type, which is what its
          type variable stands for *)
       match (tys, args) with
       | [ t ], [ v ] ->
           (Ok (VStr (Shown.shown ~own:(own_show cx) cx.types t v)), args)
       | _ -> bug "a call of `show` with the wrong number of arguments")
-  | VBuiltin (x, _) -> (
-      match Builtins.run x args with
+  | VBuiltin (x, _, dicts) -> (
+      let dicts =
+        List.map (function VDict d -> d | _ -> bug "a dictionary") dicts
+      in
+      match Builtins.run x ~dicts args with
       | v, finals -> (Ok v, finals)
       | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"
@@ -796,7 +824,8 @@ and key_of cx (p : Path.t) args v =
 and known cx req (t : Ty.ty) : Value.dict =
   match req with
   | "eq" -> Eq (Walk.equal (walk cx) t)
-  | "hash" -> Hash (Walk.hash (walk cx) t)
+  | "hash" ->
+      Hash { hash = Walk.hash (walk cx) t; equal = Walk.equal (walk cx) t }
   | "ord" -> Ord (Walk.compare (walk cx) t)
   | "zero" | "one" -> Const (constant cx req t)
   | _ -> Op (operator cx req t)
@@ -997,9 +1026,9 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
           [ value (Path.member (Path.prelude "Time") "epoch") ] );
         ("Random", "test_random", [ VInt (Int64.of_int seed) ]);
         ("Console", "test_console", []);
-        ("Fs", "mem_fs", [ VArray [||] ]);
-        ("Os", "test_os", [ VArray [||] ]);
-        ("Proc", "test_proc", [ VArray [||] ]);
+        ("Fs", "mem_fs", [ array [||] ]);
+        ("Os", "test_os", [ array [||] ]);
+        ("Proc", "test_proc", [ array [||] ]);
       ]
   in
   let outcome =
@@ -1023,7 +1052,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
                   (Array.to_list
                      (Array.map
                         (function VStr s -> s | v -> Value.show v)
-                        lines))
+                        (items lines)))
             | _ -> bug "a test `Console` whose output isn't an array")
         | _ -> None)
       installed

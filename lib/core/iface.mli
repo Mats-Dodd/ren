@@ -171,6 +171,10 @@ val of_module :
   Ast.Resolved.program ->
   t
 
+(* The built-in type [a] with the members its declaration in the
+   prelude's source, [b], writes: `pub type Array<T> = builtin`. *)
+val join : type_decl -> type_decl -> type_decl
+
 (* Two interfaces of the same module as one: the prelude is part Ren
-   source, part built into the compiler. *)
+   source, part built into the compiler. A type in both is [join]ed. *)
 val union : t -> t -> t

@@ -42,8 +42,8 @@ prints to this one's stdout itself. `run` uses only `Console` and
 of that out.
 
 **A string's indices are bytes.** `parse` splits the text on `"\n"`, and
-cuts a recipe's line at the offset `find(":")` gives, with `slice`. There's
-no way to land inside a character: `find` gives where a whole match starts.
+cuts a recipe's line at the offset `index(":")` gives, with `slice`. There's
+no way to land inside a character: `index` gives where a whole match starts.
 Bytes come in only at the edge: `Fs.read_str` reads them and turns them
 into a `Str` with `Str.from_utf8`, which fails with `InvalidUtf8`, so
 `main` can.
@@ -59,9 +59,16 @@ everything `Proc.run` can fail with.
 
 **Each recipe once, in order.** `order` is depth first, and keeps two
 lists, `inout`: the recipes it's started and the ones it's done. A recipe
-two others depend on is done after the first, so the second skips it. One
-that's started but not done is further up, so reaching it again is a
-cycle.
+two others depend on is done after the first, so the second skips it,
+`done.includes(name)`. One that's started but not done is further up, so
+reaching it again is a cycle.
+
+**The recipes are an array.** A justfile has a handful, in the order
+they're written, which is what the first one, the default, and the tests
+depend on. `recipe` finds one with `find`, and `parse` refuses a second
+of one name with `any`. A `Map` by name would keep that order too, but
+it would make `parse` check one thing two ways and buys nothing at this
+size.
 
 **Tests need no setup.** Each test of `main` gets an empty `mem_fs`, no
 args and a `test_proc` that runs nothing, without a `with`. A test that
@@ -90,6 +97,8 @@ recipes print, in order, and how it fails.
   clashed with `import justfile`, and became `files(text)`.
 - **A function can't be imported by name,** only a type, so it's
   `plan.order(...)`.
-- **No `contains`, `filter` or `map` on arrays.** `has` is a loop, and
-  `split(" ")` gives an empty string between two spaces, which `parse`
-  drops by hand.
+- ~~**No `contains`, `filter` or `map` on arrays.**~~ Stage 9b gave
+  arrays `Enumerable`'s methods, so `has` became `includes`, and the
+  loops in `recipe` and the duplicate check became `find` and `any`.
+  `split(" ")` still gives an empty string between two spaces, which
+  `parse` drops by hand.

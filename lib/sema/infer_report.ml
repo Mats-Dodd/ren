@@ -50,7 +50,7 @@ let result_loc (e : expr) = (result_of e).loc
 let rec binders (p : pattern) =
   match p.pkind with
   | PVar b -> [ (b, p.ploc) ]
-  | PCon (_, ps) | PFail (_, ps) -> List.concat_map binders ps
+  | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map binders ps
   | POr ps -> List.concat_map binders ps
   | PWild | PInt _ | PBool _ | PFail_any -> []
 

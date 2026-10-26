@@ -1022,7 +1022,7 @@ type Empty = { n: Int }
 fn main() =
   let b = Bag { items: [] }
   let e = Empty { n: 0 }
-  [b.count(), e.count(), [1].count()]
+  [b.count(), e.count(), [1].size()]
 |};
   run
     {|
@@ -1035,21 +1035,21 @@ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
     {|
     error: `Bag` has no method named `count`
       ┌─ test.ren:9:6
-    9 │   [b.count(), e.count(), [1].count()]
+    9 │   [b.count(), e.count(), [1].size()]
       │      ^^^^^
       help: its methods: `size`
 
     error: `Empty` has no method named `count`
       ┌─ test.ren:9:17
-    9 │   [b.count(), e.count(), [1].count()]
+    9 │   [b.count(), e.count(), [1].size()]
       │                 ^^^^^
       help: declare it under `type Empty`, with `self` first
 
-    error: `Array<Int>` has no method named `count`
+    error: `Array<Int>` has no method named `size`
       ┌─ test.ren:9:30
-    9 │   [b.count(), e.count(), [1].count()]
-      │                              ^^^^^
-      help: its methods: `len`, `push`
+    9 │   [b.count(), e.count(), [1].size()]
+      │                              ^^^^
+      help: Ren calls it `len`
     error: `Bag` has no member named `count`
       ┌─ test.ren:4:18
     4 │ fn main() = [Bag.count(Bag { items: [] }), Bag.items]
@@ -1136,7 +1136,7 @@ fn main() = 1
       ┌─ test.ren:9:14
     9 │ fn five(x) = x.get
       │              ^
-      = `B` and `C` each have a method `get`
+      = `Array` and `B` and `C` and `Map` each have a method `get`
       = a method is found through its receiver's type, which has to be known where it's called
       help: annotate `x` where it's defined, like `x: B`
     |}]
@@ -1209,7 +1209,7 @@ fn main() = [Int.foo, Array.foo]
       ┌─ test.ren:1:29
     1 │ fn main() = [Int.foo, Array.foo]
       │                             ^^^
-      help: its members: `len`, `push`
+      help: its members: `len`, `push`, `sort`, `get`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `take`, `drop`, `reverse`
     |}]
 
 let%expect_test "a value of the wrong type, in a cycle of values" =

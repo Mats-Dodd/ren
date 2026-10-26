@@ -19,7 +19,7 @@ fn main() =
   var tl = Timeline.empty
   var rec = Vm.fresh
   try &tl.run(&rec, p, 1000)
-  print(tl.size())                    // 65 states: 64 steps, and the start
+  print(tl.len())                    // 65 states: 64 steps, and the start
   print(try tl.back(0) == rec)        // true
 
   // Back in time: start again from 10 steps before the end, and the run
@@ -36,15 +36,15 @@ fn main() =
   var f = Vm.fresh
   try &ftl.run(&f, fib, 1000)
   print(f.out)                        // [0, 1, 1, 2, 3]
-  let early = try ftl.back(ftl.size() - 3)
+  let early = try ftl.back(ftl.len() - 3)
   var fork = early
   fork.locals[0] = 10
   try &fork.run(fib, 1000)
   print(fork.out)                     // [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
-  print(try ftl.back(ftl.size() - 3) == early)  // true: untouched
+  print(try ftl.back(ftl.len() - 3) == early)  // true: untouched
 
   // There's no state before the first.
-  print(attempt ftl.back(ftl.size()))           // Err(NotRecorded(85))
+  print(attempt ftl.back(ftl.len()))           // Err(NotRecorded(85))
 
   // A program that runs out of stack fails, and says where. What it did
   // before it failed stays done: it had taken one step, and is on the next.

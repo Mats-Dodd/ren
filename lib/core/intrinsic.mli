@@ -19,9 +19,25 @@ type t =
   | Proc_run
   | Array_len
   | Array_push
+  | Array_sort
+  | Map_empty
+  | Map_of
+  | Map_get
+  | Map_set
+  | Map_remove
+  | Map_includes
+  | Map_keys
+  | Map_values
+  | Map_len
+  | Set_empty
+  | Set_of
+  | Set_add
+  | Set_remove
+  | Set_includes
+  | Set_len
   | Str_len
   | Str_slice
-  | Str_find
+  | Str_index
   | Str_split
   | Str_trim
   | Str_starts_with

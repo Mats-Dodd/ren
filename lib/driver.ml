@@ -32,9 +32,16 @@ let checked name f =
 
 let tokens ~file src = checked "lex" (fun _ -> Lexer.tokenize ~file src)
 
-let parse ~file src =
+let parse ?prelude ~file src =
   let toks = tokens ~file src in
-  checked "parse" (fun sink -> Parser.parse_program sink toks)
+  checked "parse" (fun sink -> Parser.parse_program ?prelude sink toks)
+
+(* every other caller parses a program's module, which can't write a
+   built-in type's declaration *)
+let parse_prelude () =
+  parse ~prelude:true ~file:Prelude.file (String.trim Prelude.source)
+
+let parse ~file src = parse ~file src
 
 (* Check one module against the interfaces it imports, before anything
    runs: first what its names refer to (found through scope), then what may
@@ -195,7 +202,7 @@ let link_lowered ?(lint = false) ~imports modules =
    that costs nothing per program. *)
 let prelude =
   lazy
-    (let prog = parse ~file:Prelude.file (String.trim Prelude.source) in
+    (let prog = parse_prelude () in
      let imports = [ Prelude.intrinsics ] in
      let r, iface, inferred, _ =
        check_module ~home:Path.prelude_home ~imports ~reachable:imports prog

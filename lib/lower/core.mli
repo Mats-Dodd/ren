@@ -95,6 +95,10 @@ type prim =
           operands *)
   | Length  (** an array's length *)
   | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
+  | Entries
+      (** a [Map]'s keys and values, as an array of pairs, in the order each key
+          was first set: what a `for` goes over *)
+  | Members  (** a [Set]'s members, as an array, in order *)
   | Set_index  (** [xs] with element [i] replaced: a new array *)
   | New_cell
       (** a new cell holding a value: a `var` of a handler's state, which its
@@ -130,10 +134,11 @@ and kind =
           type with the type arguments put in. Being made once, it's given no
           descriptors or dictionaries: what its type variables stand for isn't
           known when it's made *)
-  | Intrinsic of Intrinsic.t * Ty.args * desc list
+  | Intrinsic of Intrinsic.t * Ty.args * desc list * dict list
       (** a function built into the compiler: [show], or a method, [Array.push],
-          and the type arguments it's used at, and their descriptors, as a
-          [Global]'s *)
+          and the type arguments it's used at, their descriptors and the
+          dictionaries for its requirements, as a [Global]'s: [Map.get] needs
+          `hash` of its keys' type *)
   | Dep_call of {
       dep : Path.t;
       op : string;
@@ -212,6 +217,7 @@ and kind =
   | Update of expr * string * expr
       (** the record with one field replaced: a new record *)
   | Array of expr list
+  | Tuple of expr list  (** [(k, v)]: two parts, or three *)
   | Tag of string * expr list * desc list
       (** an error, [Short(id, 5)]: its tag, its payload in order, and the
           descriptor of each of the payload's types. Its type is [Errors] of the
@@ -260,6 +266,7 @@ and pattern_kind =
   | PBool of bool
   | PCon of Path.t * string * pattern list
   | PTag of string * pattern list  (** an error with this tag, destructured *)
+  | PTuple of pattern list  (** [(k, v)]: a tuple, taken apart *)
   | POr of pattern list
       (** any of these; each binds the same variables (the same [var]s) *)
 

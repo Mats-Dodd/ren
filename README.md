@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4, 5a, 5b, 6, 7, 8 and 9a of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9a: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, and `Float`s with no `NaN` (see [examples/bank](examples/bank)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
+> **Status:** early. Stages 1–4, 5a, 5b and 6–9 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, `hash`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, `Float`s with no `NaN`, tuples, ranges in `for`, `Map` and `Set` in insertion order, and `Enumerable`'s methods on `Array`, `Map` and `Set` (see [examples/bank](examples/bank)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
 
 ---
 
@@ -332,10 +332,10 @@ A failed `assert` is a panic: it's a bug, not an error. `assert a == b` shows bo
 Stateless implementations are plain values, like `Clock.frozen` above. An implementation needs a `handler` when it holds state:
 
 ```ren
-handler mem_users(init: List<User>) for Users =
-  var table = init.index_by(.id)
+handler mem_users(init: Array<User>) for Users =
+  var table = Map.of(init.map(fn(u) => (u.id, u)))
   get(id) => table.get(id)
-  save(u) => table[u.id] = u
+  save(u) => &table.set(u.id, u)
 ```
 
 A handler can implement several dependencies that share one state:
@@ -421,7 +421,7 @@ pub type Stack<T> = { items: Array<T> }
   pub fn peek(self) -> Option<T> =
     let n = self.items.len()
     if n == 0 then None else Some(self.items[n - 1])
-  pub fn size(self) -> Int = self.items.len()
+  pub fn len(self) -> Int = self.items.len()
   pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
   pub let empty: Stack<T> = Stack { items: [] }
   fn grow(inout self) = ...                     // private to this module
@@ -431,7 +431,7 @@ fn main() uses Console =
   &s.push(1)                                    // Stack.push(&s, 1)
   print(s.peek())                               // Some(1)
   let t = Stack.of([7, 8, 9])                   // an associated function
-  print(t.size())                               // 3
+  print(t.len())                                // 3
 ```
 
 Each member is written like an ordinary function or `let`, and a `pub` one spells out its signature like any public function. A first parameter named `self` makes it a method, with the type it's declared under as its type, and `x.m(args)` means `Type.m(x, args)`. `m` is found through `x`'s type, the same way a field is. A method that changes its receiver takes `inout self`, and the call marks it: `&s.push(1)`, just as `&xs.push(x)` means `Array.push(&xs, x)`. Leaving out that `&`, or writing it before a method that doesn't change its receiver, is an error. Without `self` it's an associated function, called as `Stack.of(...)`. A `pub let` is an associated value: it's pure, and it's made once when the program starts. A member is private unless it's marked `pub`.
@@ -515,9 +515,23 @@ pub fn sum<T>(xs: Array<T>) -> T =
   acc
 ```
 
-`ren types` shows it as `sum<T has add, zero>`, and `sum([true, false])` is an error where it's called: `` `Bool` has no `+`, which `sum` needs ``. In generic code an operator is the one of the same type on both sides.
+`ren types` shows it as `sum<T has add, zero>`, and `sum([true, false])` is an error where it's called: `` `Bool` has no `+`, which `sum` needs ``, whose help says to count them with `count`. In generic code an operator is the one of the same type on both sides.
 
 Numbers follow a few rules, so nothing surprises at runtime. `Int` is 64 bits everywhere and overflow panics in every build, as an out-of-bounds index does; wrapping is a method, `n.wrapping_add(1)`. `/` and `%` round toward zero. `Float` is a 64-bit double, and a literal's type is read from its spelling: `1.5` is a `Float` and `1` an `Int`, always. Numbers never convert by themselves, so `Float.of(n)`, `f.round()` and `f.truncate()` say where they do. There's no `NaN`: `0.0 / 0.0` panics, so `Float` is ordered and hashed. And a condition is a `Bool`, always.
+
+A `Map` and a `Set` find a key by its `hash` and `==`, so a key is any type without a function in it, `Map<Email, User>` included, equal by its `key`. Both keep insertion order: going over one gives what was set first, first, so output never depends on a hash seed, and the seed is the runtime's own. A key that isn't there is ordinary, so `m.get(k)` gives an `Option`, and there's no `m[k]`. There's no literal syntax either: `Map.of([(k, v)])` and `Set.of([x])`, which leaves `{ }` to records.
+
+```ren
+var users: Map<Email, User> = Map.empty
+&users.set(u.email, u)
+let ann = users.get(Email.of("ann@example.com")) orelse fail NoSuchUser
+for (email, u) in users
+  print(u.name)
+```
+
+`(a, b)` and `(a, b, c)` are tuples: two or three values passed together, taken apart only by patterns, `let (k, v) = pair`, `for (i, x) in xs.with_index()`, or a `match`. There's no `.0`: what wants names is a record. A range, `a..b`, is counted by a `for`, from `a` up to, but not including, `b`, and there's one kind: `for i in 0..xs.len()`.
+
+`Array`, `Map` and `Set` take their method names from Ruby's `Enumerable`: `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `first`, `last`, `take`, `drop` and `reverse`, and `xs.get(i)` for an index that may not be there. A method that changes nothing gives a new collection, `xs.sort()`, and there's one name for each: no `filter` beside `select`, and `xs.filter(...)` is an error whose help says `select`. A function a method takes is only called, so what it fails with and uses, the call does: `try xs.map(load)`.
 
 Only the module that declares a type can write its members. To extend a type you don't own, write a function in your own module or wrap it in an `opaque` type. Because lookup only ever checks the type's own definition, there are no orphan rules, no coherence puzzles, and no slow search.
 
@@ -788,7 +802,7 @@ Ren can also profile things other languages can't see:
 ```
 $ ren profile --reuse            # where in-place updates failed, and why
   pricing.ren:44   map over `rows`   reuse hit 2%   shared with `snapshot` (line 41)
-  feed.ren:19      buf.push          COW copy 12×   shared by slice `head` (line 17)
+  feed.ren:19      buf.push          COW copy 12×   shared by `head` (line 17)
 ```
 
 Performance tests are deterministic, so they're never flaky:
@@ -828,13 +842,13 @@ error: `dashboard` doesn't declare `Clock`
 ```
 
 ```
-warning: `buf` is shared by the slice `head`, so `push` copies the buffer
+warning: `buf` is shared by `head`, so `push` copies the buffer
    ┌─ src/frame.ren:14:1
-13 │ let head = buf[0..16]
-   │            --- slice keeps `buf` shared
+13 │ let head = buf
+   │            --- `head` keeps `buf` shared
 14 │ &buf.push(0)
    │ ^^^^^^^^^^^^ copies
-   help: copy the slice instead:  let head = buf[0..16].copy()
+   help: keep only what `head` needs:  let head = buf.take(16)
 ```
 
 Every error points to the code that caused it, explains why, and offers a concrete fix. An error message that doesn't do all three counts as a bug.
@@ -924,7 +938,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 6 | `!`, `try`, `fail`, `match` on errors, `attempt`, `orelse`; `&&`, `\|\|`, `not` ([errors.md](errors.md)) | the shop, the VM and the bank fail with errors, not values (done) |
 | 7 | `dep`, `uses`, `with`, `handler`, `Clock`, `Random` and `Console`; `test`, `group`, `assert`, `ren test` ([deps.md](deps.md)) | the bank's tests run on the test implementations, with no `with` (done) |
 | 8 | `Str` and `Bytes`, `Fs`, `Os`, `Proc`, `Path`, each with real and in-memory implementations | a small [just](https://github.com/casey/just) runs, and its tests run on `mem_fs` and a fake `Os` and `Proc` (done, as a slice: `Os` has only `args`, and `Proc.run` doesn't capture output) |
-| 9 | operators, derived equality and hashing, arithmetic for opaque number types ([operators.md](operators.md)) | `Map<Email, User>` works (9a done: operators, `key`, `with numeric`, `Int` and `Float`) |
+| 9 | operators, derived equality and hashing, arithmetic for opaque number types, `Map` and `Set`, tuples, ranges and the collection methods ([operators.md](operators.md)) | `Map<Email, User>` works (done: 9a, operators, `key`, `with numeric`, `Int` and `Float`; 9b, tuples, ranges, `Map`, `Set` and `Enumerable`'s methods, and the bank keeps its accounts in a `Map`) |
 | 10.0 | one constraint solver, typed Core, requirements passed as dictionaries, lambda sets in function types ([compiler.md](compiler.md)) | every stage-10.0 step passes its check (done) |
 | 10 | `over` and `next`, `with` as a set, `finally`, **the journal**: `ren run --record`, `ren replay`, `--trace` ([handlers.md](handlers.md)) | a cache wraps a real implementation, and the `just` replays byte for byte |
 | 11 | `Async` and `Net`: structured concurrency, cancellation, tasks in handlers, deterministic tests on virtual time ([async.md](async.md)) | a server shuts down gracefully, and `ren test --seeds` finds the `cached` race |

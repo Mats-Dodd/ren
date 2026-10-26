@@ -120,6 +120,7 @@
 (assignment operator: _ @operator)
 (unary_expression "-" @operator)
 (negative_number "-" @operator)
+(range ".." @operator)
 ["=" "=>" "->" "|"] @operator
 
 ["." "," ":"] @punctuation.delimiter

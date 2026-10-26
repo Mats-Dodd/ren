@@ -26,9 +26,25 @@ type t =
   | Proc_run
   | Array_len
   | Array_push
+  | Array_sort
+  | Map_empty
+  | Map_of
+  | Map_get
+  | Map_set
+  | Map_remove
+  | Map_includes
+  | Map_keys
+  | Map_values
+  | Map_len
+  | Set_empty
+  | Set_of
+  | Set_add
+  | Set_remove
+  | Set_includes
+  | Set_len
   | Str_len
   | Str_slice
-  | Str_find
+  | Str_index
   | Str_split
   | Str_trim
   | Str_starts_with
@@ -67,9 +83,25 @@ let path x =
   | Proc_run -> fn "proc_run"
   | Array_len -> member "Array" "len"
   | Array_push -> member "Array" "push"
+  | Array_sort -> member "Array" "sort"
+  | Map_empty -> fn "map_empty"
+  | Map_of -> member "Map" "of"
+  | Map_get -> member "Map" "get"
+  | Map_set -> member "Map" "set"
+  | Map_remove -> member "Map" "remove"
+  | Map_includes -> member "Map" "includes"
+  | Map_keys -> member "Map" "keys"
+  | Map_values -> member "Map" "values"
+  | Map_len -> member "Map" "len"
+  | Set_empty -> fn "set_empty"
+  | Set_of -> member "Set" "of"
+  | Set_add -> member "Set" "add"
+  | Set_remove -> member "Set" "remove"
+  | Set_includes -> member "Set" "includes"
+  | Set_len -> member "Set" "len"
   | Str_len -> member "Str" "len"
   | Str_slice -> member "Str" "slice"
-  | Str_find -> member "Str" "find"
+  | Str_index -> member "Str" "index"
   | Str_split -> member "Str" "split"
   | Str_trim -> member "Str" "trim"
   | Str_starts_with -> member "Str" "starts_with"

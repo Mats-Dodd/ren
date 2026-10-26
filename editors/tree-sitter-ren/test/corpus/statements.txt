@@ -215,3 +215,57 @@ fn f() =
             (constructor_arguments
               (identifier)))))
       (identifier))))
+
+================================================================================
+a tuple taken apart by let and for, and a range
+================================================================================
+
+fn f(p, m) =
+  let (a, (b, _)) = p
+  for (k, v) in m
+    print(k)
+  for i in 0..n - 1
+    print(i)
+  a
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)))
+    (block
+      (let_statement
+        (tuple_pattern
+          (identifier)
+          (tuple_pattern
+            (identifier)
+            (wildcard)))
+        (identifier))
+      (for_statement
+        (tuple_pattern
+          (identifier)
+          (identifier))
+        (identifier)
+        (block
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))))
+      (for_statement
+        (identifier)
+        (range
+          (number)
+          (binary_expression
+            (identifier)
+            (number)))
+        (block
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))))
+      (identifier))))

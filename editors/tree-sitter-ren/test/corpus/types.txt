@@ -583,3 +583,52 @@ fn g(t: Clock & TestClock uses Os) = ()
             (dependency
               (type_identifier))))))
     (unit)))
+
+================================================================================
+tuple types
+================================================================================
+
+fn f(p: (Int, Str), m: Map<Str, (Int, Bool, Str)>) -> (Str, Int) = p
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (tuple_type
+          (named_type
+            (type_name
+              (type_identifier)))
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))
+            (tuple_type
+              (named_type
+                (type_name
+                  (type_identifier)))
+              (named_type
+                (type_name
+                  (type_identifier)))
+              (named_type
+                (type_name
+                  (type_identifier))))))))
+    (tuple_type
+      (named_type
+        (type_name
+          (type_identifier)))
+      (named_type
+        (type_name
+          (type_identifier))))
+    (identifier)))

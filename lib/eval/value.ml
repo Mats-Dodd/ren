@@ -7,6 +7,11 @@
    module (Int) to a module (Env). *)
 module Env = Map.Make (Int)
 
+(* Maps keyed by an [int] and by an [Int64.t], for a table's entries and
+   its hashes (see [table]). *)
+module Ints = Map.Make (Int)
+module Hashes = Map.Make (Int64)
+
 type t =
   | VInt of Int64.t
   | VFloat of float
@@ -18,7 +23,14 @@ type t =
       (** [Pro(5)]: the type it belongs to, the constructor, its fields *)
   | VRecord of (string * t) list
       (** fields sorted by name, so structural equality ignores field order *)
-  | VArray of t array  (** never changed in place: an update copies it *)
+  | VArray of vec
+      (** never changed as a program sees it: an update makes a new one, and
+          `push` shares what it can (see [vec]) *)
+  | VTuple of t list  (** [(k, v)]: two parts, or three *)
+  | VTable of table
+      (** a [Map]'s entries, or a [Set]'s members, each a key whose value is
+          [VUnit]. Never changed in place: setting a key makes a new table,
+          which shares most of the old one *)
   | VClosure of {
       params : int list;  (** the parameters' binder ids *)
       ev : int;  (** its evidence's id: what it's passed where it's called *)
@@ -33,9 +45,10 @@ type t =
           it was used (core.ml, [desc]), and for its hidden dictionary
           parameters, a [VDict] for each of its requirements (core.ml, [dict])
       *)
-  | VBuiltin of Intrinsic.t * Ty.ty list
+  | VBuiltin of Intrinsic.t * Ty.ty list * t list
       (** a function built into the prelude, [show], with the types its type
-          variables stand for, as a [VFn]'s *)
+          variables stand for and a [VDict] for each of its requirements, as a
+          [VFn]'s: [Map.get] is given its keys' `hash` *)
   | VType of Ty.ty
       (** a type's descriptor, built where it's passed (core.ml, [desc]): what a
           hidden type parameter holds. A program never sees one *)
@@ -59,15 +72,39 @@ type t =
 
 (* A dictionary: what a type has that a requirement names, as the
    interpreter's own functions (core.ml, [dict]): `eq`'s `==`, `ord`'s
-   comparison, negative, 0 or positive, `hash`'s hash, an operator, `add`,
+   comparison, negative, 0 or positive, `hash`'s hash, with the `==` it
+   agrees with, since a `Map` needs both of its keys, an operator, `add`,
    given where it's used and where its operands are, for a panic, and an
    associated value, `zero`. *)
 and dict =
   | Eq of (t -> t -> bool)
   | Ord of (t -> t -> int)
-  | Hash of (t -> int64)
+  | Hash of { hash : t -> int64; equal : t -> t -> bool }
   | Op of (Loc.t -> Loc.t list -> t list -> t)
   | Const of t
+
+(* A table of keys and their values, in the order each key was first set
+   (operators.md, "`Map` and `Set`"): [entries] by that order's number,
+   the next of which is [next], and [buckets], each entry's number by its
+   key's hash, which finds a key without looking at every one. Two keys
+   with one hash share a bucket. table.ml has what's done with one. *)
+and table = {
+  entries : (t * t) Ints.t;
+  buckets : int list Hashes.t;
+  next : int;
+}
+
+(* An array: the first [len] items of a [store], which other arrays may
+   share. An item below an array's [len] is never changed, so sharing is
+   safe. What it buys is `push`, which an array is built by: pushing onto
+   an array that ends where its store's used items do writes the item
+   into the store's spare room, in place, and gives a longer array of the
+   same store, while the one pushed onto still sees its own [len] items.
+   Pushing onto any other array copies it. So a loop of `&out.push(x)` is
+   linear, not quadratic, as each push would be if it copied (compiler.md,
+   "Stage 9b"). [push] below is the only thing that writes a store. *)
+and vec = { store : store; len : int }
+and store = { mutable items : t array; mutable used : int }
 
 (* A handler's description: its body makes an instance, given the
    evidence [ev] where it's installed, with the variables it captured. *)
@@ -76,6 +113,34 @@ and handler = { ev : int; body : Core.expr; env : t ref Env.t }
 (* An implementation of the dependency [dep], installed: it runs with the
    evidence [outer], what was installed where it was. *)
 and installed = { dep : Path.t; impl : t; outer : installed list }
+
+(* An array of [xs], which it takes: nothing else may change [xs]. *)
+let array xs =
+  VArray
+    { store = { items = xs; used = Array.length xs }; len = Array.length xs }
+
+let array_of_list xs = array (Array.of_list xs)
+
+(* [v]'s items, as an array of their own. *)
+let items v = Array.sub v.store.items 0 v.len
+let nth v i = v.store.items.(i)
+
+(* [v] with [x] after its items: in [v]'s store, if [v] ends where the
+   store's used items do and there's room, or with room made, by doubling
+   it; or else in a copy. *)
+let push v x =
+  let s = v.store in
+  if v.len = s.used && v.len < Array.length s.items then begin
+    s.items.(v.len) <- x;
+    s.used <- v.len + 1;
+    VArray { store = s; len = v.len + 1 }
+  end
+  else begin
+    let items = Array.make (max 8 (2 * (v.len + 1))) VUnit in
+    Array.blit s.items 0 items 0 v.len;
+    items.(v.len) <- x;
+    VArray { store = { items; used = v.len + 1 }; len = v.len + 1 }
+  end
 
 let rec show = function
   | VInt n -> Int64.to_string n
@@ -93,11 +158,20 @@ let rec show = function
   | VRecord fields ->
       let show_field (f, v) = f ^ ": " ^ show v in
       "{ " ^ String.concat ", " (List.map show_field fields) ^ " }"
-  | VArray xs ->
-      "[" ^ String.concat ", " (Array.to_list (Array.map show xs)) ^ "]"
+  | VArray v ->
+      "[" ^ String.concat ", " (Array.to_list (Array.map show (items v))) ^ "]"
+  | VTuple xs -> "(" ^ String.concat ", " (List.map show xs) ^ ")"
+  | VTable t ->
+      (* shown through its type, shown.ml, which knows a `Set` from a `Map` *)
+      "{"
+      ^ String.concat ", "
+          (List.map
+             (fun (_, (k, v)) -> show k ^ ": " ^ show v)
+             (Ints.bindings t.entries))
+      ^ "}"
   | VClosure _ -> "<fn>"
   | VFn (p, _, _) -> "<fn " ^ Path.local p ^ ">"
-  | VBuiltin (x, _) -> "<fn " ^ Intrinsic.name x ^ ">"
+  | VBuiltin (x, _, _) -> "<fn " ^ Intrinsic.name x ^ ">"
   | VHandler _ -> "<handler>"
   | VInstance _ -> "<instance>"
   | VCell _ -> "<cell>"

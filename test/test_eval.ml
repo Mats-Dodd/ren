@@ -144,8 +144,8 @@ let%expect_test "a hash agrees with ==" =
   same Ty.float (VFloat 0.0) (VFloat (-0.0));
   same Ty.float (VFloat 1.5) (VFloat 2.5);
   same (Ty.array Ty.int)
-    (VArray [| VInt 1L; VInt 2L |])
-    (VArray [| VInt 1L; VInt 2L |]);
+    (Value.array [| VInt 1L; VInt 2L |])
+    (Value.array [| VInt 1L; VInt 2L |]);
   same (Ty.Con (email, [])) (VStr "Ann@X") (VStr "ann@x");
   same (Ty.Con (email, [])) (VStr "Ann@X") (VStr "bob@x");
   (* an error says its payload's types itself, whatever type it's
@@ -497,10 +497,10 @@ fn main() =
   print(s.slice(0, 3))
   print(s.slice(8, 14))
   print(s.slice(4, 4) == "")
-  print(s.find("w"))
-  print(s.find("ö"))
-  print(s.find(""))
-  s.find("z")
+  print(s.index("w"))
+  print(s.index("ö"))
+  print(s.index(""))
+  s.index("z")
 |};
   [%expect
     {|
@@ -637,7 +637,8 @@ let%expect_test "from_utf8 fails with InvalidUtf8" =
   List.iter
     (fun b ->
       match
-        Ren.Builtins.run Ren.Intrinsic.Str_from_utf8 [ Ren.Value.VBytes b ]
+        Ren.Builtins.run Ren.Intrinsic.Str_from_utf8 ~dicts:[]
+          [ Ren.Value.VBytes b ]
       with
       | v, _ -> print_endline (Ren.Value.show v)
       | exception Ren.Builtins.Fail err ->
