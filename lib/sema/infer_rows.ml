@@ -5,8 +5,7 @@
    inclusion, so a callee never fails with what its caller does, and an
    implementation's needs are copied to each place it's used. What a row
    learns only once its group is done is left to the constraint solver
-   (solve.ml), and the rest in the environment, for infer_top.ml to finish
-   then. *)
+   (solve.ml). *)
 
 open Ast
 open Ast.Resolved

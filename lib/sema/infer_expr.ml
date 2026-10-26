@@ -15,7 +15,9 @@
    module-build.md. Nothing waits: a question that can't be answered where
    it's asked is an error that says which annotation would answer it, so
    the result never depends on the order inference happens to learn things
-   in.
+   in. (What a handler of several dependencies is taken as can wait, until
+   its group is done or something looks into it, infer_coerce.ml: it
+   isn't a question an annotation should have to answer.)
 
    As it goes, inference records every expression's and pattern's type by
    its node id, and what each lookup found. infer_top.ml hands the table on
@@ -26,8 +28,9 @@
    share, infer_report.ml reports a mismatch and explains it,
    infer_written.ml turns written types into the checker's,
    infer_lookup.ml finds things through a type, infer_rows.ml keeps
-   track of what code fails with and uses, and infer_handlers.ml checks
-   handlers and `with`. *)
+   track of what code fails with and uses, infer_handlers.ml checks
+   handlers and `with`, and infer_coerce.ml takes a handler of several
+   dependencies as one of them. *)
 
 open Ast
 open Ast.Resolved

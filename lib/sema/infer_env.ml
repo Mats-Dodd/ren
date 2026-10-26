@@ -1,7 +1,8 @@
 (* What inference of expressions works with (infer_expr.ml and the
    modules beside it): the environment of the module being checked, with
-   the work each group of functions leaves for infer_top.ml to finish once
-   the group is done, and the context of the expression being inferred.
+   the constraints each group of functions leaves for the solver
+   (solve.ml) to decide once the group is done, and the context of the
+   expression being inferred.
    These types are shared by every part of the pass, so they're kept apart
    from any one of them. There's no .mli: it would only repeat them. *)
 
