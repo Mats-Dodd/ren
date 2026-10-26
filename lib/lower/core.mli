@@ -7,7 +7,8 @@
    [Handle] and [Finally], and a call fails only if its callee's type says
    it can. So is the evidence every function and lambda takes, and the
    descriptors of types a generic function takes, to show a value of one
-   of its type variables by. Core Lint (core_lint.ml) checks that all of
+   of its type variables by, and the dictionaries of what it needs of
+   them, to compare two by. Core Lint (core_lint.ml) checks that all of
    this fits together. *)
 
 type mode = Ty.mode = Read | Inout
@@ -15,15 +16,39 @@ type mode = Ty.mode = Read | Inout
 (* A local variable. Every use of it carries the same record. *)
 type var = { id : int; name : string; ty : Ty.ty }
 
+(* A requirement's dictionary: how a type does what a function needs of
+   one of its type variables, `eq` for `==` (compiler.md,
+   "Specialization"). A generic function with requirements takes one for
+   each, as hidden parameters, and each use of it passes one built from its
+   type arguments, as a descriptor is built ([desc]): one of the caller's
+   own type variables is the dictionary the caller was itself given for
+   it, and any other type's is derived from its structure, given those of
+   the caller's type variables in it. Each [==] in a function is done by
+   the dictionary of what it compares too. *)
+type dict =
+  | Dict_param of var
+      (** one of the function's own hidden dictionary parameters (see [fn_def]):
+          what it was given for one of its requirements *)
+  | Derived of { req : string; dty : Ty.ty; from : (int * var) list }
+      (** [req] of [dty], a type that isn't one of the function's type
+          variables, from its structure: for each of the function's type
+          variables in it, [Var n], [from] has the dictionary parameter it was
+          given for [n]'s [req], in order of [n]. A type variable inference left
+          undecided has no dictionary: no value of its type is ever made *)
+
 (* Operations built into the language. Each one's operands are listed in
    the order they're evaluated. *)
 type prim =
   | Neg
   | Not  (** on a [Bool] *)
   | Binop of Ast.binop
-      (** [==] and [!=] on any two values of the same type, the others on
-          [Int]s. Never [&&] or [||]: lowering makes those [If]s, so their right
-          side is evaluated only when it's needed *)
+      (** on [Int]s. Never [&&] or [||]: lowering makes those [If]s, so their
+          right side is evaluated only when it's needed; and never [==] or [!=],
+          which are [Equal] and [Not_equal] *)
+  | Equal of dict
+      (** [==] on two values of the same type, through that type's `eq`
+          dictionary *)
+  | Not_equal of dict  (** [!=], the same way *)
   | Length  (** an array's length *)
   | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
   | Set_index  (** [xs] with element [i] replaced: a new array *)
@@ -68,18 +93,22 @@ and kind =
   | Str of string
   | Unit
   | Local of var
-  | Global of Path.t * Ty.args * desc list
+  | Global of Path.t * Ty.args * desc list * dict list
       (** a top-level function, or a member's, [Stack.push], and the type
           arguments it's used at (Ty.args): [ty] is its scheme with them put in.
           They're on the use, not on a [Call], since a function can be used
           without being called, `let f = id`. A method call, [s.push(1)], is a
           call of its function, with [s] first. The [desc]s describe the types
           of the type arguments, one each, and are what it's passed for its
-          hidden type parameters *)
+          hidden type parameters. The [dict]s are what it's passed for its
+          hidden dictionary parameters: one for each of its scheme's
+          requirements, in order, for the type argument it's on *)
   | Global_value of Path.t * Ty.args
       (** an associated value, [Stack.empty], which the program makes once when
           it starts: its function of no parameters, called then. [ty] is its
-          type with the type arguments put in *)
+          type with the type arguments put in. Being made once, it's given no
+          descriptors or dictionaries: what its type variables stand for isn't
+          known when it's made *)
   | Intrinsic of Intrinsic.t * Ty.args * desc list
       (** a function built into the compiler: [show], or a method, [Array.push],
           and the type arguments it's used at, and their descriptors, as a
@@ -174,9 +203,10 @@ and kind =
   | Assert of expr
       (** panic if this [Bool] is false: `assert e` (deps.md, "`assert`"). A
           [Unit] *)
-  | Assert_equal of expr * expr * desc
+  | Assert_equal of expr * expr * desc * dict
       (** panic if these two, of the same type, differ, showing both: `assert a
-          == b`, through the descriptor of their type. A [Unit] *)
+          == b`, compared through the `eq` dictionary of their type and shown
+          through its descriptor. A [Unit] *)
   | Finally of expr * expr
       (** [body], then [after], a [Unit], which runs whether [body] fails or
           not, and doesn't change what [body] did: its value, or its error,
@@ -208,6 +238,11 @@ type fn_def = {
       (** its hidden type parameters, one for each of its scheme's type
           variables: the n-th holds the descriptor of what [Var n] stands for
           ([desc]), and is the local [type_param n] *)
+  dicts : var list;
+      (** its hidden dictionary parameters, one for each of its scheme's
+          requirements, in order: the j-th, for [(n, req)], holds [req]'s
+          dictionary for what [Var n] stands for ([dict]), and is the local
+          [dict_params]'s j-th *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
   loc : Loc.t;  (** its name, where it's declared *)
@@ -263,6 +298,29 @@ val describe : var list -> Ty.ty -> desc
 (* The hidden type parameters a descriptor uses. *)
 val desc_vars : desc -> var list
 
+(* The type of a requirement's dictionary ([dict]), which no type in Ren
+   source can name either. *)
+val dict_ty : Ty.ty
+
+(* The hidden dictionary parameters of a function of this scheme, one for
+   each of its requirements, in order: [$eq0] for [(0, "eq")]. Their ids
+   are negative, after its hidden type parameters'. *)
+val dict_params : Ty.scheme -> var list
+
+(* The type variables among a function's [n], [Var 0] to [Var (n - 1)],
+   that a type has in it, each once, in order. *)
+val params_in : int -> Ty.ty -> int list
+
+(* [dict_for n own req t] is [req]'s dictionary for [t], a type written in
+   the type variables of a function of [n] of them, whose own dictionary
+   parameters are [own], by the requirement each is for: [Var m]'s is its
+   own, and any other type's is derived. Fails with [Not_found] if the
+   function hasn't a requirement that takes. *)
+val dict_for : int -> ((int * string) * var) list -> string -> Ty.ty -> dict
+
+(* The hidden dictionary parameters a dictionary uses. *)
+val dict_vars : dict -> var list
+
 (* The type of a cell holding a value of this type (see [New_cell]). *)
 val cell_ty : Ty.ty -> Ty.ty
 
@@ -303,9 +361,11 @@ val show_prim : prim -> string
 val sexp : expr -> sexp
 val show : expr -> string
 
-(* [types] prints a function typed: its type after its name, and each use
-   of a top-level function that has type arguments with them, as
-   [(inst first_or Int)], a row argument in braces, [{Short | ..e}]. A
-   plain print, the default, shows neither. *)
+(* [types] prints a function typed: its type after its name, and what it
+   needs, [(needs (eq T))], if anything; each use of a top-level function
+   that has type arguments with them, as [(inst first_or Int)], a row
+   argument in braces, [{Short | ..e}], and the dictionaries it's given
+   after them; and the dictionary each [==] compares with, [(== (eq Int) a
+   b)]. A plain print, the default, shows none of these. *)
 val fn_sexp : ?types:bool -> fn_def -> sexp
 val show_fn : ?types:bool -> fn_def -> string

@@ -39,12 +39,35 @@
    type variables, holding a descriptor of what it stands for ([desc]),
    and each use of it passes descriptors built from its type arguments, as
    an `assert a == b` keeps one of its sides' type. The interpreter only
-   evaluates them: it never works a type out. *)
+   evaluates them: it never works a type out. And so are requirements: a
+   generic function that needs `eq` of a type variable takes a hidden
+   dictionary parameter for it ([dict]), each use of it passes one built
+   from its type arguments, and each [==] compares through one. *)
 
 type mode = Ty.mode = Read | Inout
 
 (* A local variable. Every use of it carries the same record. *)
 type var = { id : int; name : string; ty : Ty.ty }
+
+(* A requirement's dictionary: how a type does what a function needs of
+   one of its type variables, `eq` for `==` (compiler.md,
+   "Specialization"). A generic function with requirements takes one for
+   each, as hidden parameters, and each use of it passes one built from its
+   type arguments, as a descriptor is built ([desc]): one of the caller's
+   own type variables is the dictionary the caller was itself given for
+   it, and any other type's is derived from its structure, given those of
+   the caller's type variables in it. Each [==] in a function is done by
+   the dictionary of what it compares too. *)
+type dict =
+  | Dict_param of var
+      (** one of the function's own hidden dictionary parameters (see [fn_def]):
+          what it was given for one of its requirements *)
+  | Derived of { req : string; dty : Ty.ty; from : (int * var) list }
+      (** [req] of [dty], a type that isn't one of the function's type
+          variables, from its structure: for each of the function's type
+          variables in it, [Var n], [from] has the dictionary parameter it was
+          given for [n]'s [req], in order of [n]. A type variable inference left
+          undecided has no dictionary: no value of its type is ever made *)
 
 (* Operations built into the language. Each one's operands are listed in
    the order they're evaluated. *)
@@ -52,9 +75,13 @@ type prim =
   | Neg
   | Not  (** on a [Bool] *)
   | Binop of Ast.binop
-      (** [==] and [!=] on any two values of the same type, the others on
-          [Int]s. Never [&&] or [||]: lowering makes those [If]s, so their right
-          side is evaluated only when it's needed *)
+      (** on [Int]s. Never [&&] or [||]: lowering makes those [If]s, so their
+          right side is evaluated only when it's needed; and never [==] or [!=],
+          which are [Equal] and [Not_equal] *)
+  | Equal of dict
+      (** [==] on two values of the same type, through that type's `eq`
+          dictionary *)
+  | Not_equal of dict  (** [!=], the same way *)
   | Length  (** an array's length *)
   | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
   | Set_index  (** [xs] with element [i] replaced: a new array *)
@@ -99,18 +126,22 @@ and kind =
   | Str of string
   | Unit
   | Local of var
-  | Global of Path.t * Ty.args * desc list
+  | Global of Path.t * Ty.args * desc list * dict list
       (** a top-level function, or a member's, [Stack.push], and the type
           arguments it's used at (Ty.args): [ty] is its scheme with them put in.
           They're on the use, not on a [Call], since a function can be used
           without being called, `let f = id`. A method call, [s.push(1)], is a
           call of its function, with [s] first. The [desc]s describe the types
           of the type arguments, one each, and are what it's passed for its
-          hidden type parameters *)
+          hidden type parameters. The [dict]s are what it's passed for its
+          hidden dictionary parameters: one for each of its scheme's
+          requirements, in order, for the type argument it's on *)
   | Global_value of Path.t * Ty.args
       (** an associated value, [Stack.empty], which the program makes once when
           it starts: its function of no parameters, called then. [ty] is its
-          type with the type arguments put in *)
+          type with the type arguments put in. Being made once, it's given no
+          descriptors or dictionaries: what its type variables stand for isn't
+          known when it's made *)
   | Intrinsic of Intrinsic.t * Ty.args * desc list
       (** a function built into the compiler: [show], or a method, [Array.push],
           and the type arguments it's used at, and their descriptors, as a
@@ -205,9 +236,10 @@ and kind =
   | Assert of expr
       (** panic if this [Bool] is false: `assert e` (deps.md, "`assert`"). A
           [Unit] *)
-  | Assert_equal of expr * expr * desc
+  | Assert_equal of expr * expr * desc * dict
       (** panic if these two, of the same type, differ, showing both: `assert a
-          == b`, through the descriptor of their type. A [Unit] *)
+          == b`, compared through the `eq` dictionary of their type and shown
+          through its descriptor. A [Unit] *)
   | Finally of expr * expr
       (** [body], then [after], a [Unit], which runs whether [body] fails or
           not, and doesn't change what [body] did: its value, or its error,
@@ -239,6 +271,11 @@ type fn_def = {
       (** its hidden type parameters, one for each of its scheme's type
           variables: the n-th holds the descriptor of what [Var n] stands for
           ([desc]), and is the local [type_param n] *)
+  dicts : var list;
+      (** its hidden dictionary parameters, one for each of its scheme's
+          requirements, in order: the j-th, for [(n, req)], holds [req]'s
+          dictionary for what [Var n] stands for ([dict]), and is the local
+          [dict_params]'s j-th *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
   loc : Loc.t;  (** its name, where it's declared *)
@@ -283,6 +320,21 @@ let type_param n = { id = -1 - n; name = "$ty" ^ string_of_int n; ty = type_ty }
 (* The hidden type parameters of a function of scheme [s]. *)
 let type_params (s : Ty.scheme) =
   List.mapi (fun n _ -> type_param n) (Ty.own_args s.ty).tys
+
+(* The type of a requirement's dictionary ([dict]), which no type in Ren
+   source can name either. *)
+let dict_ty = Ty.Con (Path.prelude "$Dict", [])
+
+(* The hidden dictionary parameters of a function of scheme [s], one for
+   each of its requirements, in order, named after it: [$eq0] for
+   [(0, "eq")]. Their ids are negative too, after its hidden type
+   parameters'. *)
+let dict_params (s : Ty.scheme) =
+  let ntys = List.length (Ty.own_args s.ty).tys in
+  List.mapi
+    (fun j (n, req) ->
+      { id = -1 - ntys - j; name = "$" ^ req ^ string_of_int n; ty = dict_ty })
+    s.reqs
 
 (* Whether [t] has any of the type variables [Var 0] to [Var (n - 1)] in
    it: one of a function's, if it has [n]. A type in its body can have
@@ -329,6 +381,53 @@ let rec describe tys (t : Ty.ty) =
           u )
   | Errors e -> Errs (row e)
   | Uses _ | Error -> Known t
+
+(* The type variables among [Var 0] to [Var (n - 1)] that [t] has in it,
+   each once, in order. *)
+let params_in n (t : Ty.ty) =
+  let rec go acc (t : Ty.ty) =
+    let row acc (r : Ty.row) =
+      List.fold_left
+        (fun acc (l : Ty.label) -> List.fold_left go acc l.payload)
+        acc r.labels
+    in
+    match t with
+    | Var m when m < n -> m :: acc
+    | Var _ | Error -> acc
+    | Con (_, args) -> List.fold_left go acc args
+    | Fun (ps, r, e, u) ->
+        row
+          (row
+             (go
+                (List.fold_left (fun acc (p : Ty.param) -> go acc p.ty) acc ps)
+                r)
+             e)
+          u
+    | Errors r | Uses r -> row acc r
+  in
+  List.sort_uniq compare (go [] t)
+
+(* [req]'s dictionary for [t], a type written in the type variables of a
+   function of [n] of them, whose own dictionary parameters are [own], by
+   the requirement each is for: [Var m]'s is its own, and any other type's
+   is derived. Fails with [Not_found] if the function hasn't a requirement
+   that takes. *)
+let dict_for n own req (t : Ty.ty) =
+  match t with
+  | Var m when m < n -> Dict_param (List.assoc (m, req) own)
+  | _ ->
+      Derived
+        {
+          req;
+          dty = t;
+          from =
+            List.map (fun m -> (m, List.assoc (m, req) own)) (params_in n t);
+        }
+
+(* The hidden dictionary parameters a dictionary uses. *)
+let dict_vars = function
+  | Dict_param v -> [ v ]
+  | Derived { from; _ } -> List.map snd from
 
 (* The hidden type parameters a descriptor uses. *)
 let rec desc_vars = function
@@ -383,7 +482,7 @@ let children (e : expr) =
   | Seq (a, b)
   | Update (a, _, b)
   | Finally (a, b)
-  | Assert_equal (a, b, _) ->
+  | Assert_equal (a, b, _, _) ->
       [ a; b ]
   | Assign (_, a)
   | Assert a
@@ -448,6 +547,8 @@ let show_prim = function
   | Neg -> "neg"
   | Not -> "not"
   | Binop op -> Ast.binop_to_string op
+  | Equal _ -> "=="
+  | Not_equal _ -> "!="
   | Length -> "length"
   | Get_index -> "get"
   | Set_index -> "set"
@@ -458,10 +559,30 @@ let show_prim = function
 let atom a = Atom a
 let var v = Atom (show_var v)
 
-(* What a lambda or handler captures, as printed: its hidden type
-   parameters aren't, like the descriptors passed to a use, since the type
-   arguments a typed print shows say what they are. *)
-let shown_captures = List.filter (fun (v : var) -> v.ty <> type_ty)
+(* What a lambda or handler captures, as printed: its hidden type and
+   dictionary parameters aren't, like the descriptors passed to a use,
+   since the type arguments a typed print shows say what they are. *)
+let shown_captures =
+  List.filter (fun (v : var) -> v.ty <> type_ty && v.ty <> dict_ty)
+
+(* What a typed print prints with: [pr] names the function's type
+   variables, and [own] are its dictionary parameters, by the requirement
+   each is for. *)
+type typed = { pr : Ty.printer; own : ((int * string) * var) list }
+
+(* A dictionary, as a typed print shows it: the requirement and the type
+   it's for, [(eq Option<T>)], whether it's derived or the function's
+   own. *)
+let dict_sexp t d =
+  let req, ty =
+    match d with
+    | Derived { req; dty; _ } -> (req, dty)
+    | Dict_param v -> (
+        match List.find_opt (fun (_, w) -> w = v) t.own with
+        | Some ((n, req), _) -> (req, Ty.Var n)
+        | None -> ("?", Ty.Error))
+  in
+  List [ Atom req; Atom (Ty.show t.pr ty) ]
 
 let rec pattern_sexp p =
   match p.pkind with
@@ -476,12 +597,13 @@ let rec pattern_sexp p =
   | POr ps -> List (atom "or" :: List.map pattern_sexp ps)
 
 (* A use of a top-level function, [name], printed bare; or, by a typed
-   printer [pr], with the type arguments [a] if it has any, as
-   [(inst first_or Int)]. A row argument is its labels and its tail, in
-   braces: [{Short | ..e}]. *)
-let used pr name (a : Ty.args) =
-  match pr with
-  | Some pr when a.tys <> [] || a.rows <> [] ->
+   print [t], with the type arguments [a] if it has any, as
+   [(inst first_or Int)], and the dictionaries [ds] it's given, if any,
+   after them. A row argument is its labels and its tail, in braces:
+   [{Short | ..e}]. *)
+let used t name (a : Ty.args) ds =
+  match t with
+  | Some ({ pr; _ } as t) when a.tys <> [] || a.rows <> [] ->
       let row r =
         "{" ^ Ty.show_row pr ~prefix:"" ~sep:" | " ~kind:"r" r ^ "}"
       in
@@ -489,20 +611,26 @@ let used pr name (a : Ty.args) =
          constructor's arguments right to left *)
       let tys = List.map (fun t -> Atom (Ty.show pr t)) a.tys in
       let rows = List.map (fun r -> Atom (row r)) a.rows in
-      List ((atom "inst" :: Atom name :: tys) @ rows)
+      let ds = List.map (dict_sexp t) ds in
+      List ((atom "inst" :: Atom name :: tys) @ rows @ ds)
   | _ -> Atom name
 
-(* [pr] is the printer of a typed print, [None] for a plain one. *)
-let rec sexp_with pr e =
-  let sexp = sexp_with pr and arm_sexp = arm_sexp_with pr in
+(* [t] is what a typed print prints with, [None] for a plain one. *)
+let rec sexp_with t e =
+  let sexp = sexp_with t and arm_sexp = arm_sexp_with t in
+  (* the dictionary [d], before what's after it, in a typed print only *)
+  let dict d rest =
+    match t with Some t -> dict_sexp t d :: rest | None -> rest
+  in
   match e.kind with
   | Int n -> Atom (string_of_int n)
   | Bool b -> Atom (string_of_bool b)
   | Str s -> Atom (Ast.show_str s)
   | Unit -> Atom "()"
   | Local v -> var v
-  | Global (p, a, _) | Global_value (p, a) -> used pr (Path.local p) a
-  | Intrinsic (x, a, _) -> used pr (Intrinsic.name x) a
+  | Global (p, a, _, ds) -> used t (Path.local p) a ds
+  | Global_value (p, a) -> used t (Path.local p) a []
+  | Intrinsic (x, a, _) -> used t (Intrinsic.name x) a []
   | Dep_call { dep; op; ev; args; _ } ->
       List
         (atom "dep-call" :: var ev
@@ -545,6 +673,8 @@ let rec sexp_with pr e =
             ];
           sexp body;
         ]
+  | Prim (((Equal d | Not_equal d) as op), args) ->
+      List (Atom (show_prim op) :: dict d (List.map sexp args))
   | Prim (op, args) -> List (Atom (show_prim op) :: List.map sexp args)
   | Let (v, value, body) -> List [ atom "let"; var v; sexp value; sexp body ]
   | Assign (v, value) -> List [ atom "="; var v; sexp value ]
@@ -592,29 +722,46 @@ let rec sexp_with pr e =
         ]
   | Finally (body, after) -> List [ atom "finally"; sexp body; sexp after ]
   | Assert a -> List [ atom "assert"; sexp a ]
-  | Assert_equal (a, b, _) -> List [ atom "assert"; atom "=="; sexp a; sexp b ]
+  | Assert_equal (a, b, _, d) ->
+      List (atom "assert" :: atom "==" :: dict d [ sexp a; sexp b ])
 
-and arm_sexp_with pr a =
+and arm_sexp_with t a =
   let guard =
-    match a.guard with Some g -> [ atom "if"; sexp_with pr g ] | None -> []
+    match a.guard with Some g -> [ atom "if"; sexp_with t g ] | None -> []
   in
-  List ((pattern_sexp a.pat :: guard) @ [ atom "=>"; sexp_with pr a.body ])
+  List ((pattern_sexp a.pat :: guard) @ [ atom "=>"; sexp_with t a.body ])
 
 let sexp e = sexp_with None e
 let show e = render 0 (sexp e)
 
 (* A typed print also shows the function's type after its name, whose
    variables its uses' type arguments are written in, with every row
-   tail. *)
+   tail, and what it needs, the dictionaries it takes, if anything:
+   [(needs (eq T))]. *)
 let fn_sexp ?(types = false) f =
-  let pr =
+  let t =
     if types then
-      Some (Ty.printer ~show_tail:(fun _ -> true) ~names:Path.full f.scheme)
+      Some
+        {
+          pr = Ty.printer ~show_tail:(fun _ -> true) ~names:Path.full f.scheme;
+          own = List.combine f.scheme.reqs f.dicts;
+        }
     else None
   in
   let ty =
-    match pr with
-    | Some pr -> [ atom ":"; Atom (Ty.show pr f.scheme.ty) ]
+    match t with
+    | Some t ->
+        let needs =
+          match t.own with
+          | [] -> []
+          | own ->
+              [
+                List
+                  (atom "needs"
+                  :: List.map (fun (_, v) -> dict_sexp t (Dict_param v)) own);
+              ]
+        in
+        [ atom ":"; Atom (Ty.show t.pr f.scheme.ty) ] @ needs
     | None -> []
   in
   List
@@ -622,7 +769,7 @@ let fn_sexp ?(types = false) f =
     @ [
         List (List.map (fun p -> var p.var) f.params);
         var f.ev;
-        sexp_with pr f.body;
+        sexp_with t f.body;
       ])
 
 let show_fn ?types f = render 0 (fn_sexp ?types f)

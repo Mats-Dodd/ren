@@ -37,8 +37,11 @@
    So are types' descriptors (core.ml, [desc]): each function takes one
    for each of its type variables, and each use of a generic function, and
    each `assert a == b`, gets the descriptors of its types, built from
-   them. Which types show their values through a `show` method of their
-   own is decided here too, once. *)
+   them. And requirements' dictionaries (core.ml, [dict]): each function
+   takes one for each of its requirements, and each use of a function
+   that has some, and each `==`, gets the dictionaries it needs, built
+   from them. Which types show their values through a `show` method of
+   their own is decided here too, once. *)
 
 open Ast
 open Ast.Resolved
@@ -62,6 +65,8 @@ type cx = {
       (** the evidence in scope: the function's, or the lambda's whose body is
           being lowered *)
   tys : C.var list;  (** the function's hidden type parameters (core.ml) *)
+  dicts : ((int * string) * C.var) list;
+      (** its hidden dictionary parameters, by the requirement each is for *)
 }
 
 let node cx id =
@@ -81,6 +86,20 @@ let targs_of cx id =
 (* The descriptors a use at the type arguments [a] is passed (core.ml,
    [desc]), built from the function's own hidden type parameters. *)
 let descs cx (a : Ty.args) = List.map (C.describe cx.tys) a.tys
+
+(* [req]'s dictionary for [t] (core.ml, [dict]), built from the function's
+   own dictionary parameters. Inference passed on to the function each
+   requirement a type variable of it in [t] has to meet, so it has one
+   for each. *)
+let dict cx req t =
+  try C.dict_for (List.length cx.tys) cx.dicts req t
+  with Not_found -> bug "a requirement inference didn't pass on"
+
+(* The dictionaries the use at node [id] is passed: one for each of the
+   requirements of the function it uses, for the type argument it's on. *)
+let dicts_of cx id =
+  let a = targs_of cx id in
+  List.map (fun (n, req) -> dict cx req (List.nth a.tys n)) (node cx id).needs
 
 (* Whether inference found [id] to be a `match` with `fail` arms, or a
    `fail` arm's pattern (Infer.found). *)
@@ -241,7 +260,7 @@ and expr_of cx (e : expr) : C.expr =
   | Var (Local b) -> local (var_of cx b) e.loc
   | Var (Global p) ->
       let a = targs_of cx e.node in
-      here (Global (p, a, descs cx a))
+      here (Global (p, a, descs cx a, dicts_of cx e.node))
   | Var (Global_value p) -> here (Global_value (p, targs_of cx e.node))
   | Var (Intrinsic x) ->
       let a = targs_of cx e.node in
@@ -326,7 +345,9 @@ and expr_of cx (e : expr) : C.expr =
          is, which it points at *)
       let a = expr cx a in
       let b = expr cx b in
-      mk (Assert_equal (a, b, C.describe cx.tys a.ty)) Ty.unit cmp.loc
+      mk
+        (Assert_equal (a, b, C.describe cx.tys a.ty, dict cx "eq" a.ty))
+        Ty.unit cmp.loc
   | Assert a -> here (Assert (expr cx a))
   | Attempt a ->
       (* `Ok` of its value, or `Err` of its error *)
@@ -345,6 +366,12 @@ and expr_of cx (e : expr) : C.expr =
              on_error =
                mk (Con (result_path, "Err", [ local error e.loc ])) t e.loc;
            })
+  | Binop (((Eq | Neq) as op), a, b) ->
+      (* through the `eq` dictionary of what it compares *)
+      let a = expr cx a in
+      let d = dict cx "eq" a.ty in
+      let op : C.prim = if op = Eq then Equal d else Not_equal d in
+      here (Prim (op, [ a; expr cx b ]))
   | Binop (op, a, b) ->
       let a = expr cx a in
       here (Prim (Binop op, [ a; expr cx b ]))
@@ -685,7 +712,7 @@ and plain_call cx ~changed ?last (e : expr) f args =
           let a = targs_of cx f.node in
           match Prelude.find p with
           | Some x -> Intrinsic (x, a, descs cx a)
-          | _ -> Global (p, a, descs cx a)
+          | _ -> Global (p, a, descs cx a, dicts_of cx f.node)
         in
         (mk callee (ty_of cx f.node) f.loc, [ recv ])
     | _ -> (expr cx f, [])
@@ -828,10 +855,16 @@ and free (e : C.expr) =
   let rec go (e : C.expr) =
     match e.kind with
     | Int _ | Bool _ | Str _ | Unit | Global_value _ -> ()
-    | Global (_, _, ds) | Intrinsic (_, _, ds) ->
-        (* the hidden type parameters its descriptors are built from *)
-        List.iter use (List.concat_map C.desc_vars ds)
+    | Global (_, _, ds, dicts) ->
+        (* the hidden type and dictionary parameters its descriptors and
+           dictionaries are built from *)
+        List.iter use (List.concat_map C.desc_vars ds);
+        List.iter use (List.concat_map C.dict_vars dicts)
+    | Intrinsic (_, _, ds) -> List.iter use (List.concat_map C.desc_vars ds)
     | Local v -> use v
+    | Prim ((Equal d | Not_equal d), args) ->
+        List.iter use (C.dict_vars d);
+        List.iter go args
     | Prim (_, args)
     | Array args
     | Con (_, _, args)
@@ -851,10 +884,11 @@ and free (e : C.expr) =
     | Finally (a, b) ->
         go a;
         go b
-    | Assert_equal (a, b, d) ->
+    | Assert_equal (a, b, d, dict) ->
         go a;
         go b;
-        List.iter use (C.desc_vars d)
+        List.iter use (C.desc_vars d);
+        List.iter use (C.dict_vars dict)
     | Handle { body; value; on_value; error; on_error } ->
         go body;
         bind value;
@@ -975,6 +1009,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
       next = next + 1;
       ev = C.evidence next;
       tys = C.type_params scheme;
+      dicts = List.combine scheme.reqs (C.dict_params scheme);
     }
   in
   let ps =
@@ -993,6 +1028,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
     params;
     ev = cx.ev;
     tys = cx.tys;
+    dicts = List.map snd cx.dicts;
     scheme;
     body = expr cx f.body;
     loc = f.name.loc;
@@ -1052,6 +1088,7 @@ let start (main : C.fn_def) : C.fn_def =
   let deps = List.map (fun (l : Ty.label) -> Ty.dep_path l.name) uses.labels in
   let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) } in
   let tys = C.type_params scheme in
+  let dicts = C.dict_params scheme in
   (* each install's evidence is numbered after the one it extends *)
   let rec install n = function
     | [] ->
@@ -1059,7 +1096,11 @@ let start (main : C.fn_def) : C.fn_def =
         mk
           (Call
              ( mk
-                 (Global (main.path, own, List.map (C.describe tys) own.tys))
+                 (Global
+                    ( main.path,
+                      own,
+                      List.map (C.describe tys) own.tys,
+                      List.map (fun v -> C.Dict_param v) dicts ))
                  main.scheme.ty loc,
                [],
                C.evidence n ))
@@ -1087,6 +1128,7 @@ let start (main : C.fn_def) : C.fn_def =
     params = [];
     ev = C.evidence 1;
     tys;
+    dicts;
     scheme;
     body = install 1 deps;
     loc;

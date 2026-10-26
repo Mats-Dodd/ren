@@ -15,9 +15,13 @@
    dependency an operation or a callee uses is one the function it's in
    uses too, or a [With] around it installs. And that each descriptor of
    a type (core.ml, [desc]) describes the type argument it's passed for,
-   built only from the hidden type parameters of the function it's in, and
-   that each type said to show itself has a `show` method the interpreter
-   can call. Which errors code can fail with isn't checked: inference
+   built only from the hidden type parameters of the function it's in;
+   that each function takes a dictionary for each of its requirements
+   (core.ml, [dict]), and each use of one passes one for each, for the
+   type argument it's on, as does each [==], built only from the
+   function's own dictionaries and derived only for a type that has what
+   it's derived for; and that each type said to show itself has a `show`
+   method the interpreter can call. Which errors code can fail with isn't checked: inference
    has, and Core has no use for them.
 
    Lint finding anything is a bug in the compiler, never in the program,
@@ -40,6 +44,9 @@ type env = {
   uses : Ty.row;  (** what the function or lambda being checked uses *)
   installed : Path.t list;  (** what the [With]s around here in it install *)
   ntys : int;  (** how many hidden type parameters the function has *)
+  own : ((int * string) * var) list;
+      (** the function's hidden dictionary parameters, by the requirement each
+          is for *)
 }
 
 let show t =
@@ -411,6 +418,112 @@ and descs env sc loc name (a : Ty.args) ds =
       describes env sc loc (sprintf "type argument %d of `%s`" (i + 1) name) d t)
     (List.combine ds a.tys)
 
+(* Whether [t] has `eq`, by its structure, as inference decides it
+   (infer_reqs.ml): a function hasn't, nor an implementation of a
+   dependency or a handler of several, nor a type with one in it. A type
+   variable is taken to have it: one of the function's has a dictionary
+   of its own. [seen] are the declarations being looked into, so a
+   recursive one is looked into once. *)
+let rec has_eq env seen (t : Ty.ty) =
+  let row (r : Ty.row) =
+    List.for_all
+      (fun (l : Ty.label) -> List.for_all (has_eq env seen) l.payload)
+      r.labels
+  in
+  match t with
+  | Fun _ -> false
+  | Var _ | Error | Uses _ -> true
+  | Errors r -> row r
+  | Con (p, args) ->
+      List.for_all (has_eq env seen) args
+      && (List.mem p seen
+         ||
+         let field (f : Iface.field) = has_eq env (p :: seen) f.fty in
+         match Hashtbl.find_opt env.types p with
+         | None -> true
+         | Some td -> (
+             match td.body with
+             | Builtin | Errors _ | Opaque None -> true
+             | Record fs -> List.for_all field fs
+             | Sum cs ->
+                 List.for_all
+                   (fun (c : Iface.ctor) -> List.for_all field c.cfields)
+                   cs
+             | Opaque (Some rep) -> has_eq env (p :: seen) rep
+             | Dep _ | Handler _ -> false))
+
+(* The requirement a dictionary (core.ml, [dict]) is for, and the type, in
+   the type variables of the function being checked: one of its own
+   dictionary parameters, in scope, or one derived for a type that isn't
+   one of its type variables and has what it's derived for, built from the
+   function's own dictionaries for each of its type variables in it. *)
+let dict_of env sc loc (d : dict) =
+  let own (v : var) =
+    in_scope env sc loc v;
+    match List.find_opt (fun (_, w) -> w = v) env.own with
+    | Some (r, _) -> r
+    | None ->
+        fail env loc
+          (sprintf
+             "a dictionary is built from `%s` (%d), which isn't a hidden \
+              dictionary parameter of `%s`"
+             v.name v.id env.fn)
+  in
+  match d with
+  | Dict_param v ->
+      let n, req = own v in
+      (req, Ty.Var n)
+  | Derived { req; dty; from } ->
+      (match dty with
+      | Var n when n < env.ntys ->
+          fail env loc
+            (sprintf "a dictionary for `%s` is derived, not the function's own"
+               (show dty))
+      | _ -> ());
+      if req <> "eq" then
+        fail env loc
+          (sprintf "a dictionary for `%s`, which isn't a requirement" req);
+      if not (has_eq env [] dty) then
+        fail env loc (sprintf "`%s` has no `eq` to derive" (show dty));
+      if List.map fst from <> params_in env.ntys dty then
+        fail env loc
+          (sprintf
+             "the dictionary for `%s` isn't built from one dictionary for each \
+              of the function's type variables in it"
+             (show dty));
+      List.iter
+        (fun (n, v) ->
+          if own v <> (n, req) then
+            fail env loc
+              (sprintf "the dictionary for `%s` is built from `%s`, for another"
+                 (show dty) v.name))
+        from;
+      (req, dty)
+
+(* [d] is [req]'s dictionary for [t], which [what] needs. *)
+let gives env sc loc what d req (t : Ty.ty) =
+  let r, found = dict_of env sc loc d in
+  if r <> req || found <> t then
+    fail env loc
+      (sprintf "%s is given the `%s` dictionary of `%s`, but needs `%s` of `%s`"
+         what r (show found) req (show t))
+
+(* [ds] are the dictionaries a use of [name], of scheme [s], at the type
+   arguments [a] is given: one for each of its requirements, for the type
+   argument it's on. *)
+let dicts env sc loc name (s : Ty.scheme) (a : Ty.args) ds =
+  if List.length ds <> List.length s.reqs then
+    fail env loc
+      (sprintf "`%s` has %d requirements, but is given %d dictionaries" name
+         (List.length s.reqs) (List.length ds));
+  List.iter2
+    (fun (n, req) d ->
+      match List.nth_opt a.tys n with
+      | Some t -> gives env sc loc (sprintf "`%s`" name) d req t
+      | None ->
+          fail env loc (sprintf "`%s` needs something of a type it hasn't" name))
+    s.reqs ds
+
 let rec expr env sc (e : expr) =
   let loc = e.loc in
   if has_error e.ty then fail env loc "a node has an error type";
@@ -423,10 +536,12 @@ let rec expr env sc (e : expr) =
   | Local v ->
       in_scope env sc loc v;
       is ("`" ^ v.name ^ "`") v.ty
-  | Global (p, a, ds) -> (
+  | Global (p, a, ds, dicts_given) -> (
       descs env sc loc (Path.local p) a ds;
       match Hashtbl.find_opt env.schemes p with
-      | Some s -> used env loc (Path.local p) s.ty a e.ty
+      | Some s ->
+          used env loc (Path.local p) s.ty a e.ty;
+          dicts env sc loc (Path.local p) s a dicts_given
       | None -> fail env loc (sprintf "there's no function `%s`" (Path.local p))
       )
   | Global_value (p, a) -> (
@@ -435,6 +550,11 @@ let rec expr env sc (e : expr) =
       | None -> fail env loc (sprintf "there's no value `%s`" (Path.local p)))
   | Intrinsic (x, a, ds) ->
       descs env sc loc (Intrinsic.name x) a ds;
+      (* an intrinsic is given no dictionaries, so it can't need any *)
+      if (Prelude.scheme x).reqs <> [] then
+        fail env loc
+          (sprintf "`%s` needs something, but an intrinsic is given nothing"
+             (Intrinsic.name x));
       used env loc (Intrinsic.name x) (Prelude.scheme x).ty a e.ty
   | Dep_call { dep = p; op; fty; ev; args } -> (
       (* the operation as declared, using its dependency, and whatever the
@@ -615,7 +735,7 @@ let rec expr env sc (e : expr) =
       (* every function takes the same: the evidence where it's called *)
       let what =
         match f.kind with
-        | Global (p, _, _) -> sprintf "a call of `%s`" (Path.local p)
+        | Global (p, _, _, _) -> sprintf "a call of `%s`" (Path.local p)
         | _ -> "a call"
       in
       current env loc what ev;
@@ -766,11 +886,12 @@ let rec expr env sc (e : expr) =
       expr env sc a;
       same env a.loc "what an `Assert` checks" a.ty Ty.bool;
       is "an `Assert`" Ty.unit
-  | Assert_equal (a, b, d) ->
+  | Assert_equal (a, b, d, dict) ->
       expr env sc a;
       expr env sc b;
       same env b.loc "the right side of an `Assert_equal`" b.ty a.ty;
       describes env sc loc "what an `Assert_equal` compares" d a.ty;
+      gives env sc loc "an `Assert_equal`" dict "eq" a.ty;
       is "an `Assert_equal`" Ty.unit
 
 (* The error set an error of type [t] is in. *)
@@ -801,8 +922,11 @@ and prim env sc (e : expr) op args =
   | Binop (And | Or), _ ->
       fail env loc "`&&` or `||` that wasn't lowered to an `if`"
   | Binop Orelse, _ -> fail env loc "an `orelse` that wasn't lowered"
-  | Binop (Eq | Neq), [ a; b ] ->
+  | Binop (Eq | Neq), _ ->
+      fail env loc "`==` or `!=` without the dictionary it compares by"
+  | (Equal d | Not_equal d), [ a; b ] ->
       same env loc "the right side of a comparison" b.ty a.ty;
+      gives env sc loc "a comparison" d "eq" a.ty;
       is "a comparison" Ty.bool
   | Binop (Add | Sub | Mul | Div | Mod), [ a; b ] ->
       int a;
@@ -912,6 +1036,10 @@ let fn_def env (f : fn_def) =
   if f.tys <> type_params f.scheme then
     fail env f.loc
       "its hidden type parameters aren't one for each of its type variables";
+  if f.dicts <> dict_params f.scheme then
+    fail env f.loc
+      "its hidden dictionary parameters aren't one for each of its requirements";
+  let env = { env with own = List.combine f.scheme.reqs f.dicts } in
   match f.scheme.ty with
   | Fun (ps, ret, _, uses) when List.length ps = List.length f.params ->
       let env = inside env f.loc "the function's evidence" f.ev uses in
@@ -923,7 +1051,7 @@ let fn_def env (f : fn_def) =
       let sc =
         List.fold_left
           (fun sc (p : param) -> add p.var sc)
-          (List.fold_left (fun sc v -> add v sc) Scope.empty f.tys)
+          (List.fold_left (fun sc v -> add v sc) Scope.empty (f.tys @ f.dicts))
           f.params
       in
       expr env sc f.body;
@@ -933,7 +1061,7 @@ let fn_def env (f : fn_def) =
 (* The functions and values [e] names, in the order written. *)
 let rec globals (e : expr) =
   match e.kind with
-  | Global (p, _, _) | Global_value (p, _) -> [ p ]
+  | Global (p, _, _, _) | Global_value (p, _) -> [ p ]
   | Int _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
   | Prim (_, es)
   | Array es
@@ -950,7 +1078,7 @@ let rec globals (e : expr) =
   | Seq (a, b)
   | Update (a, _, b)
   | Finally (a, b)
-  | Assert_equal (a, b, _) ->
+  | Assert_equal (a, b, _, _) ->
       globals a @ globals b
   | Assign (_, a)
   | Field (a, _, _)
@@ -1061,6 +1189,7 @@ let program ~imports ~linked (prog : program) =
       uses = Ty.closed;
       installed = [];
       ntys = 0;
+      own = [];
     }
   in
   List.iter

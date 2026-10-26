@@ -31,7 +31,16 @@
    passes. So a generic function is given a descriptor of the type each of
    its type variables stands for, as a hidden parameter, which lowering
    made explicit (core.ml, [desc]), and the interpreter only evaluates
-   them, as it does evidence: it never works a type out. *)
+   them, as it does evidence: it never works a type out.
+
+   [==] is the same: what `T` stands for decides how two values of it are
+   compared, so a generic function that compares them is given `T`'s `eq`
+   dictionary (core.ml, [dict]). A dictionary is a function of the
+   interpreter's: for a type known where it's built, it compares two
+   values as the type's declaration says, and wherever that has the
+   function's type variable, through the dictionary the function was given
+   for it. Inference makes sure nothing compared has a function in it, so
+   none is ever reached, with one exception ([opaque_function]). *)
 
 open Core
 open Value
@@ -47,26 +56,6 @@ exception Failed of Value.t
 
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug what = failwith ("bug: checking or lowering let through " ^ what)
-
-(* Structural equality. Functions have no meaningful equality, so comparing
-   them panics; stage 9's operators will turn that into a type error. *)
-let rec equal loc a b =
-  match (a, b) with
-  | VCon x, VCon y ->
-      x.ty = y.ty && x.name = y.name && List.for_all2 (equal loc) x.args y.args
-  | VTag x, VTag y ->
-      x.name = y.name
-      && List.length x.args = List.length y.args
-      && List.for_all2 (equal loc) x.args y.args
-  | VRecord xs, VRecord ys ->
-      List.for_all2 (fun (_, x) (_, y) -> equal loc x y) xs ys
-  | VArray xs, VArray ys ->
-      Array.length xs = Array.length ys && Array.for_all2 (equal loc) xs ys
-  | (VClosure _ | VFn _ | VBuiltin _), _ | _, (VClosure _ | VFn _ | VBuiltin _)
-    ->
-      panic loc "functions can't be compared"
-  | VHandler _, _ | _, VHandler _ -> panic loc "handlers can't be compared"
-  | _ -> a = b
 
 (* The program's top-level functions, by path, its associated values
    once they're made, and its types, with the function that shows each
@@ -122,8 +111,6 @@ let binop loc (op : Ast.binop) a b =
   | Le, VInt x, VInt y -> VBool (x <= y)
   | Gt, VInt x, VInt y -> VBool (x > y)
   | Ge, VInt x, VInt y -> VBool (x >= y)
-  | Eq, x, y -> VBool (equal loc x y)
-  | Neq, x, y -> VBool (not (equal loc x y))
   | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on the wrong types")
 
 let element loc xs i =
@@ -181,7 +168,7 @@ let cell env (v : var) =
 
 (* What [f] is, for a bug report. *)
 let describe = function
-  | VFn (p, _) -> "`" ^ Path.local p ^ "`"
+  | VFn (p, _, _) -> "`" ^ Path.local p ^ "`"
   | VBuiltin (x, _) -> "`" ^ Intrinsic.name x ^ "`"
   | VClosure { body; _ } ->
       Printf.sprintf "a lambda (its body at %s:%d)" body.loc.file
@@ -225,6 +212,138 @@ let rec type_of env (d : desc) : Ty.ty =
           u )
   | Errs e -> Errors (row e)
 
+(* ---- equality ---- *)
+
+(* `==` reached a function. Inference makes sure nothing it compares has
+   one in it, with one exception: an opaque type of another module, which
+   it takes to have `==` since its interface hides what it's represented
+   as (compiler.md, "Deviations"). So that's the one way here. *)
+let opaque_function loc =
+  panic loc
+    "these can't be compared: they're of an opaque type from another module \
+     that's represented as a function, or holds one, and a function has no \
+     `==`. Compare something else about them instead"
+
+(* [a] and [b] compared by their shape alone, where nothing says what
+   type they are: a type variable inference left undecided, or one of a
+   function the runtime calls from outside, which nothing gave a
+   dictionary for ([from_outside]). Nothing but an opaque type's value can
+   hold a function here either. *)
+let rec by_shape loc a b =
+  match (a, b) with
+  | VCon x, VCon y ->
+      x.ty = y.ty && x.name = y.name
+      && List.length x.args = List.length y.args
+      && List.for_all2 (by_shape loc) x.args y.args
+  | VTag x, VTag y ->
+      x.name = y.name
+      && List.length x.args = List.length y.args
+      && List.for_all2 (by_shape loc) x.args y.args
+  | VRecord xs, VRecord ys ->
+      List.length xs = List.length ys
+      && List.for_all2 (fun (_, x) (_, y) -> by_shape loc x y) xs ys
+  | VArray xs, VArray ys ->
+      Array.length xs = Array.length ys && Array.for_all2 (by_shape loc) xs ys
+  | (VInt _ | VBool _ | VStr _ | VBytes _ | VUnit), _ -> a = b
+  | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _), _ ->
+      opaque_function loc
+  | (VCon _ | VTag _ | VRecord _ | VArray _), _ -> false
+  | (VType _ | VDict _ | VCell _ | VEvidence _), _ ->
+      bug "a comparison of something a program never sees"
+
+(* [a] and [b], of type [t], compared as [t]'s `eq` derived from its
+   structure does (core.ml, [Derived]): a record field by field as its
+   declaration says, a constructor's fields, an array's elements and an
+   error's payload each as the type it's declared with, and a value of the
+   function's type variable [Var n] through [var n], its dictionary. At
+   [loc], which a panic points at. *)
+let rec derived cx loc var (t : Ty.ty) a b =
+  let at = derived cx loc var in
+  match (t, a, b) with
+  | Var n, _, _ -> (
+      match var n with Some eq -> eq loc a b | None -> by_shape loc a b)
+  | _, (VInt _ | VBool _ | VStr _ | VBytes _ | VUnit), _ -> a = b
+  | Con (p, [ elem ]), VArray xs, VArray ys when p = Path.prelude "Array" ->
+      Array.length xs = Array.length ys && Array.for_all2 (at elem) xs ys
+  | Con (p, args), _, _ -> (
+      let field (f : Iface.field) = Shown.subst args f.fty in
+      match
+        ( Option.map
+            (fun (d : Iface.type_decl) -> d.body)
+            (Hashtbl.find_opt cx.types p),
+          a,
+          b )
+      with
+      | Some (Record fs), VRecord xs, VRecord ys ->
+          List.for_all
+            (fun (f : Iface.field) ->
+              at (field f) (List.assoc f.fname xs) (List.assoc f.fname ys))
+            fs
+      | Some (Sum cs), VCon x, VCon y -> (
+          x.name = y.name
+          &&
+          match List.find_opt (fun (c : Iface.ctor) -> c.cname = x.name) cs with
+          | Some c
+            when List.length c.cfields = List.length x.args
+                 && List.length x.args = List.length y.args ->
+              List.for_all2
+                (fun f (x, y) -> at (field f) x y)
+                c.cfields
+                (List.combine x.args y.args)
+          | _ -> bug "a constructor of the wrong type")
+      | Some (Opaque (Some rep)), _, _ -> at (Shown.subst args rep) a b
+      | _ -> by_shape loc a b)
+  | Errors row, VTag x, VTag y -> (
+      x.name = y.name
+      &&
+      match
+        List.find_opt (fun (l : Ty.label) -> l.name = x.name) row.labels
+      with
+      | Some l
+        when List.length l.payload = List.length x.args
+             && List.length x.args = List.length y.args ->
+          List.for_all2
+            (fun t (x, y) -> at t x y)
+            l.payload
+            (List.combine x.args y.args)
+      | _ ->
+          (* a tag the set's tail brought in, which says nothing of it *)
+          by_shape loc a b)
+  | Fun _, _, _ -> opaque_function loc
+  | _ -> by_shape loc a b
+
+(* The dictionary the hidden dictionary parameter [v] holds. *)
+let dict_in env (v : var) =
+  match !(cell env v) with
+  | VDict d -> d
+  | _ -> bug ("a dictionary built from `" ^ v.name ^ "`, which isn't one")
+
+(* The dictionary [d] stands for (core.ml, [dict]), with what the hidden
+   dictionary parameters it's built from hold. *)
+let dict cx env (d : Core.dict) : Value.dict =
+  match d with
+  | Dict_param v -> dict_in env v
+  | Derived { dty; from; _ } ->
+      let vars = List.map (fun (n, v) -> (n, (dict_in env v).eq)) from in
+      {
+        eq =
+          (fun loc a b ->
+            derived cx loc (fun n -> List.assoc_opt n vars) dty a b);
+      }
+
+(* `eq`'s dictionary for [t], a type the running program knows, which a
+   function given nothing else is given: one the runtime calls from
+   outside, or a type's own `show` method, which is given the types its
+   value's type was given. *)
+let known cx (t : Ty.ty) : Value.dict =
+  { eq = (fun loc a b -> derived cx loc (fun _ -> None) t a b) }
+
+(* What a function of [f]'s scheme is given for its requirements, for the
+   types [tys] its type variables stand for: each one's dictionary, as
+   [known]. *)
+let known_dicts cx (f : fn_def) tys =
+  List.map (fun (n, _) -> VDict (known cx (List.nth tys n))) f.scheme.reqs
+
 let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
@@ -232,7 +351,11 @@ let rec eval cx env (e : expr) =
   | Str s -> VStr s
   | Unit -> VUnit
   | Local v -> !(cell env v)
-  | Global (p, _, ds) -> VFn (p, List.map (type_of env) ds)
+  | Global (p, _, ds, dicts) ->
+      VFn
+        ( p,
+          List.map (type_of env) ds,
+          List.map (fun d -> VDict (dict cx env d)) dicts )
   | Global_value (p, _) -> (
       match Hashtbl.find_opt cx.values p with
       | Some v -> v
@@ -299,6 +422,11 @@ let rec eval cx env (e : expr) =
           | _ ->
               bug (what ^ " whose instance doesn't implement its dependencies"))
       | _ -> bug (what ^ " with something that isn't a handler"))
+  | Prim (((Equal d | Not_equal d) as op), [ a; b ]) ->
+      let x = eval cx env a in
+      let y = eval cx env b in
+      let same = (dict cx env d).eq e.loc x y in
+      VBool (match op with Not_equal _ -> not same | _ -> same)
   | Prim (op, args) -> prim e.loc op (eval_all cx env args)
   | Let (v, value, body) ->
       let x = eval cx env value in
@@ -382,10 +510,10 @@ let rec eval cx env (e : expr) =
       if not (truth (eval cx env a)) then
         raise (Assert_failed { loc = a.loc; sides = None });
       VUnit
-  | Assert_equal (a, b, d) ->
+  | Assert_equal (a, b, d, eq) ->
       let x = eval cx env a in
       let y = eval cx env b in
-      if not (equal e.loc x y) then
+      if not ((dict cx env eq).eq e.loc x y) then
         raise
           (Assert_failed
              {
@@ -539,7 +667,7 @@ and start cx f cells ev =
     tail cx env body
   in
   match f with
-  | VFn (p, tys) ->
+  | VFn (p, tys, dicts) ->
       let f =
         match Hashtbl.find_opt cx.fns p with
         | Some f -> f
@@ -549,10 +677,19 @@ and start cx f cells ev =
         bug
           ("a call of `" ^ Path.local p
          ^ "` with the wrong number of type descriptors");
+      if List.length dicts <> List.length f.dicts then
+        bug
+          ("a call of `" ^ Path.local p
+         ^ "` with the wrong number of dictionaries");
       let env =
         List.fold_left2
           (fun env (v : var) t -> Env.add v.id (ref (VType t)) env)
           Env.empty f.tys tys
+      in
+      let env =
+        List.fold_left2
+          (fun env (v : var) d -> Env.add v.id (ref d) env)
+          env f.dicts dicts
       in
       run cx
         (List.map (fun (p : param) -> p.var.id) f.params)
@@ -592,7 +729,8 @@ and own_show cx (p : Path.t) args v : Shown.own =
   | Some _ when List.mem p cx.showing -> Inside
   | Some m when Hashtbl.mem cx.fns m -> (
       let cx = { cx with showing = p :: cx.showing } in
-      match apply cx (VFn (m, args)) [ v ] (VEvidence []) with
+      let dicts = known_dicts cx (Hashtbl.find cx.fns m) args in
+      match apply cx (VFn (m, args, dicts)) [ v ] (VEvidence []) with
       | Ok (VStr s), _ -> Itself s
       | _ -> Declared)
   | _ -> Declared
@@ -613,7 +751,9 @@ let error_of cx p err =
    that type is shown by its shape alone (shown.ml). *)
 let from_outside cx (p : Path.t) =
   match Hashtbl.find_opt cx.fns p with
-  | Some f -> VFn (p, List.mapi (fun n _ -> Ty.Var n) f.tys)
+  | Some f ->
+      let tys = List.mapi (fun n _ -> Ty.Var n) f.tys in
+      VFn (p, tys, known_dicts cx f tys)
   | None -> bug ("a call of `" ^ Path.local p ^ "`, which doesn't exist")
 
 (* The panic, to raise, for a program that called too deeply, past

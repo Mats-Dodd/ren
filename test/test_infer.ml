@@ -1974,7 +1974,7 @@ fn main() = print(attempt g(1))
     (fn call : fn(fn() -> Int ! ..e, Int) -> Int ! ..e uses ..d (f/1 n/2) ev/3
       (if (> n/2 0)
         (if
-          (==
+          (== (eq Result<Int, ! Bad>)
             (handle (call ev/3 (inst g {..r} {..d}) 0)
               ($value/4 => (con Ok $value/4))
               (fail $error/5 => (con Err $error/5)))

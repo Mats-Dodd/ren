@@ -205,7 +205,7 @@ fn main() =
   [%expect
     {|
     (fn walk : fn(T, Int) -> T uses ..d (x/1 n/2) ev/3
-      (if (== n/2 0) x/1 (call ev/3 (inst back T {..d}) x/1 (- n/2 1))))
+      (if (== (eq Int) n/2 0) x/1 (call ev/3 (inst back T {..d}) x/1 (- n/2 1))))
     (fn back : fn(T, Int) -> T uses ..d (x/1 n/2) ev/3
       (call ev/3 (inst walk T {..d}) x/1 n/2))
     (fn f : fn() ! ..e uses ..d () ev/1 (let k/2 (record (h: (inst f {} {}))) ()))
@@ -231,6 +231,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       params = [];
       ev = Ren.Core.evidence 2;
       tys = [];
+      dicts = [];
       scheme =
         {
           ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
@@ -271,6 +272,7 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
       params;
       ev = Ren.Core.evidence 9;
       tys = (if path = "id" then Option.value tys ~default:own else own);
+      dicts = [];
       scheme = { ty; names = []; reqs = [] };
       body;
       loc;
@@ -295,7 +297,8 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
                 ( id.path,
                   targs,
                   Option.value descs
-                    ~default:(List.map (Ren.Core.describe []) targs.tys) ))
+                    ~default:(List.map (Ren.Core.describe []) targs.tys),
+                  [] ))
              int_fn loc,
            [ Value (Ren.Core.mk (Int 1) Ren.Ty.int loc) ],
            Ren.Core.evidence 9 ))
@@ -367,6 +370,7 @@ let%expect_test "Core Lint reports a pattern of an error type" =
       params = [ { mode = Read; var = e } ];
       ev = Ren.Core.evidence 2;
       tys = [];
+      dicts = [];
       scheme =
         {
           ty =
@@ -399,6 +403,7 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
       params = [];
       ev = Ren.Core.evidence 2;
       tys = [];
+      dicts = [];
       scheme =
         {
           ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
@@ -441,6 +446,7 @@ let%expect_test "Core Lint reports an instance that is a value" =
       params = [];
       ev = Ren.Core.evidence 2;
       tys = [];
+      dicts = [];
       scheme =
         {
           ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
@@ -482,6 +488,7 @@ let values_program ~uses_b ~values =
       params = [];
       ev = Ren.Core.evidence 2;
       tys = [];
+      dicts = [];
       scheme = { ty = int_fn; names = []; reqs = [] };
       body;
       loc;
@@ -505,7 +512,7 @@ let%expect_test "Core Lint reports a value named as a function" =
     ~uses_b:
       (Call
          ( Ren.Core.mk
-             (Global (t_member "b", Ren.Ty.own_args Ren.Ty.int, []))
+             (Global (t_member "b", Ren.Ty.own_args Ren.Ty.int, [], []))
              (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed))
              (Ren.Loc.point ~file 1 1),
            [],
@@ -734,5 +741,137 @@ let%expect_test "Core Lint reports a type said to show itself that can't" =
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: `id` is said to show `test.Box`, which isn't declared here")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
+(* ---- requirements' dictionaries ---- *)
+
+let%expect_test "a typed print shows the dictionaries a function takes" =
+  (* `same` takes `T`'s `eq`, which its `==` compares with; `both` passes
+     its own on for `U`, and one it derives for `Box<U>` from it; `main`
+     passes `Int`'s. A plain print shows none of them *)
+  let src =
+    {|
+type Box<T> = { v: T }
+fn same(a, b) = a == b
+fn both<U>(a: U, b: U) -> Bool = same(a, b) && same(Box { v: b }, Box { v: a })
+fn main() =
+  assert both(1, 1)
+  assert 1 != 2
+|}
+  in
+  core ~types:true src;
+  [%expect
+    {|
+    (fn same : fn(T, T) -> Bool ! ..e uses ..d (needs (eq T)) (a/1 b/2) ev/3
+      (== (eq T) a/1 b/2))
+    (fn both : fn(U, U) -> Bool ! ..e uses ..d (needs (eq U)) (a/1 b/2) ev/3
+      (if (call ev/3 (inst same U {} {..d} (eq U)) a/1 b/2)
+        (call ev/3 (inst same test.Box<U> {} {..d} (eq test.Box<U>))
+          (record (v: b/2))
+          (record (v: a/1)))
+        false))
+    (fn main : fn() ! ..e uses ..d () ev/1
+      (seq (assert (call ev/1 (inst both Int {} {..d} (eq Int)) 1 1))
+        (assert (!= (eq Int) 1 2))))
+    (fn $start : fn() ! ..e () ev/1 (call ev/1 (inst main {..e} {..r})))
+    |}];
+  core src;
+  [%expect
+    {|
+    (fn same (a/1 b/2) ev/3 (== a/1 b/2))
+    (fn both (a/1 b/2) ev/3
+      (if (call ev/3 same a/1 b/2)
+        (call ev/3 same (record (v: b/2)) (record (v: a/1)))
+        false))
+    (fn main () ev/1 (seq (assert (call ev/1 both 1 1)) (assert (!= 1 2))))
+    (fn $start () ev/1 (call ev/1 main))
+    |}]
+
+(* `same`, which needs `T`'s `eq`, and `main`, which uses it at `Int`,
+   lowered, with [change] made to each of the module's functions, then
+   linted *)
+let lint_same change =
+  let src = clean {|
+fn same(a, b) = a == b
+fn main() = same(1, 2)
+|} in
+  report src (fun () ->
+      let linked = Ren.Driver.linked ~file src in
+      let entry = List.nth linked (List.length linked - 1) in
+      let entry = { entry with fns = List.map change entry.fns } in
+      let linked = List.rev (entry :: List.tl (List.rev linked)) in
+      Ren.Driver.pass "lint" (fun () ->
+          Ren.Core_lint.program ~imports:[] ~linked entry);
+      print_endline "ok")
+
+let%expect_test "Core Lint checks requirements' dictionaries" =
+  let open Ren.Core in
+  let named name (f : fn_def) = Ren.Path.local f.path = name in
+  (* [main]'s call of `same`, given [dicts] instead *)
+  let given dicts (f : fn_def) =
+    match f.body.kind with
+    | Call (({ kind = Global (p, a, ds, _); _ } as g), args, ev)
+      when named "main" f ->
+        let g = { g with kind = Global (p, a, ds, dicts) } in
+        { f with body = { f.body with kind = Call (g, args, ev) } }
+    | _ -> f
+  in
+  (* [same]'s `==` made [kind] from its dictionary *)
+  let compared kind (f : fn_def) =
+    match f.body.kind with
+    | Prim (Equal d, args) when named "same" f ->
+        { f with body = { f.body with kind = kind d args } }
+    | _ -> f
+  in
+  let eq dty from = Derived { req = "eq"; dty; from } in
+  lint_same Fun.id;
+  [%expect {| ok |}];
+  (* `same` without its dictionary parameter *)
+  lint_same (fun f -> if named "same" f then { f with dicts = [] } else f);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `same`, at test.ren:1:4: its hidden dictionary parameters aren't one for each of its requirements")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* a use that passes none *)
+  lint_same (given []);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:2:13: `same` has 1 requirements, but is given 0 dictionaries")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* or `Str`'s for `Int` *)
+  lint_same (given [ eq Ren.Ty.str [] ]);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:2:13: `same` is given the `eq` dictionary of `Str`, but needs `eq` of `Int`")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* or one derived for a function's type, which has none *)
+  let inc : Ren.Ty.ty =
+    Fun ([ Ren.Ty.read Ren.Ty.int ], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed)
+  in
+  lint_same (given [ eq inc [] ]);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:2:13: `fn(Int) -> Int` has no `eq` to derive")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* `same`'s `==` through one derived for its own `T`, not its own *)
+  lint_same
+    (compared (fun d args ->
+         let own = List.map (fun v -> (0, v)) (dict_vars d) in
+         Prim (Equal (eq (Var 0) own), args)));
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `same`, at test.ren:1:17: a dictionary for `T` is derived, not the function's own")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* or with none at all *)
+  lint_same (compared (fun _ args -> Prim (Binop Eq, args)));
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `same`, at test.ren:1:17: `==` or `!=` without the dictionary it compares by")
       = this is a bug in the Ren compiler, not in your program
     |}]
