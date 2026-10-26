@@ -31,12 +31,16 @@ type stage = Equalities | Error_rows
    thrown away is checked after the group's uses of each other are joined,
    since a call of another function of the group learns only then what it
    returns; and a set gets the tags written in it before what it includes
-   from other sets, so a tag of two shapes is blamed on the inclusion. *)
+   from other sets, so a tag of two shapes is blamed on the inclusion. A
+   kept set is closed once it has every tag it gets, and only then are the
+   tags matched in a set checked against it. *)
 let rank = function
   | Join _ -> 0
   | Drop _ -> 1
   | Value_tag _ -> 2
   | Include _ -> 3
+  | Kept _ -> 4
+  | Tag_pattern _ -> 5
 
 let stage_of c = if rank c <= 1 then Equalities else Error_rows
 
@@ -94,9 +98,9 @@ let drop env d =
    one of its own, not what an `attempt` kept or a parameter fails with:
    `if c then Err(Left(1)) else Err(Right)` holds both
    ([Infer_rows.err_row]). Whether it went in: if not, it's checked with
-   the tags in patterns, once the kept sets are closed (infer_top.ml). *)
-let value_tag env t =
-  let kept tl = List.exists (fun (k, _) -> row_tail k = Some tl) env.kept in
+   the tags in patterns, once the kept sets, [kept], are closed. *)
+let value_tag env ~kept t =
+  let kept tl = List.exists (fun k -> row_tail k = Some tl) kept in
   let labels, tail = row_parts t.tset in
   match tail with
   | Some tl
@@ -185,6 +189,47 @@ let include_ env i =
       true
   | _ -> added
 
+(* An `attempt`'s set, or a `match`'s with `fail` arms, holds what the
+   calls it covers fail with, and nothing more: it's closed, so a tag
+   matched in it later is checked against exactly that. One of a call of a
+   function it was passed keeps whatever that function fails with, so it
+   stays open, like the function's. *)
+let kept (k, params) =
+  match row_tail k with
+  | Some t when in_params params t -> ()
+  | _ -> close_row k
+
+(* A tag matched in a set that was still open (see [Infer_env.tag_pattern])
+   is one of its tags, with as many payloads; or else it's a tag written
+   as a value that didn't go in a set of its own. *)
+let tag_pattern env t =
+  let pr = printer env in
+  let c = t.ttag and payload = t.tpayload and arm = t.tarm in
+  let labels, tail = row_parts t.tset in
+  let tags = List.map (fun (l : label) -> (l.name, show_label pr l)) labels in
+  match List.find_opt (fun (l : label) -> l.name = c.name) labels with
+  | _ when arm && labels = [] && tail = None ->
+      (* a `fail` arm of a `match` whose subject can't fail, which is
+         reported once, with the markers (infer_top.ml) *)
+      ()
+  | Some l when List.length l.payload = List.length payload ->
+      List.iter2
+        (fun found expected -> unify_at env c.loc ~found ~expected)
+        payload l.payload
+  | Some l ->
+      report env
+        (tag_arity ~value:t.tvalue c.loc c (List.length l.payload)
+           (List.length payload))
+  | None -> (
+      (* a set still open holds what a function it was passed fails with *)
+      match
+        Option.bind tail (fun tl ->
+            List.find_opt (fun (_, ty) -> List.mem tl (row_vars ty)) t.tin)
+      with
+      | Some (param, _) ->
+          report env (tag_in_open_set c ~arm ~value:t.tvalue ~param tags)
+      | None -> report env (not_an_error c ~arm tags))
+
 (* ---- the worklist ---- *)
 
 (* Decide the inclusions [is], in the order they were met, until none is
@@ -228,14 +273,28 @@ let solve env ~is_value stage =
   let of_rank r = List.filter (fun c -> rank c = r) mine in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) (of_rank 0);
   List.iter (function Drop d -> drop env d | _ -> ()) (of_rank 1);
+  let kept_sets =
+    List.filter_map
+      (function Kept (k, p) -> Some (k, p) | _ -> None)
+      (of_rank 4)
+  in
   (* the tags that went in are no longer checked with the patterns *)
   let added =
     List.filter_map
-      (function Value_tag t when value_tag env t -> Some t | _ -> None)
+      (function
+        | Value_tag t when value_tag env ~kept:(List.map fst kept_sets) t ->
+            Some t
+        | _ -> None)
       (of_rank 2)
   in
-  if added <> [] then
-    env.tag_patterns <-
-      List.filter (fun t -> not (List.memq t added)) env.tag_patterns;
   includes env
-    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 3))
+    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 3));
+  List.iter kept kept_sets;
+  (* the patterns, and the tags written as values that didn't go in, in
+     the order they were met *)
+  List.iter
+    (function
+      | Tag_pattern t -> tag_pattern env t
+      | Value_tag t when not (List.memq t added) -> tag_pattern env t
+      | _ -> ())
+    mine

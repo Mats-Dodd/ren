@@ -381,9 +381,7 @@ let err_row env cx (tag : ident) args ~expected =
         | TErrors row -> (
             match row_tail row with
             | None -> Some row
-            | Some t
-              when List.exists (fun (k, _) -> row_tail k = Some t) env.kept ->
-                Some row
+            | Some t when kept env t -> Some row
             | Some _ -> None)
         | _ -> None)
     | _ -> None
@@ -401,7 +399,6 @@ let err_row env cx (tag : ident) args ~expected =
     in
     (* checked with the tags in patterns, unless the solver adds it to a
        set of its own *)
-    env.tag_patterns <- t :: env.tag_patterns;
     defer env (Value_tag t);
     row
   in
@@ -442,7 +439,7 @@ let pass_on env cx m (subject : expr) arms errs =
   | None -> m.hint <- Some All_handled
   | Some names ->
       let rest = fresh_row env.st in
-      env.kept <- (rest, cx.params) :: env.kept;
+      defer env (Kept (rest, cx.params));
       (* what's added to these sources as the rest of the function is
          checked is still there to say where a tag came from *)
       let sources () = sources_of cx in

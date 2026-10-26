@@ -385,7 +385,7 @@ and synth env cx (e : expr) : ty =
          `fail` *)
       let m = marker env Mattempt (keyword e.loc 7) in
       let kept = fresh_row env.st in
-      env.kept <- (kept, cx.params) :: env.kept;
+      defer env (Kept (kept, cx.params));
       let t =
         infer env { cx with handler = kept; markers = [ m ]; sources = None } a
       in
@@ -882,7 +882,7 @@ and infer_match env cx ?passed node subject arms ~want =
       let first = List.find (fun a -> is_fail a.arm_pat) arms in
       let m = marker env Mmatch first.arm_pat.ploc in
       let errs = fresh_row env.st in
-      env.kept <- (errs, cx.params) :: env.kept;
+      defer env (Kept (errs, cx.params));
       let ts =
         infer env
           { cx with handler = errs; markers = [ m ]; sources = None }
@@ -1011,16 +1011,16 @@ and tag_pattern env cx ?(arm = false) (p : pattern) (c : ident) ps errs =
       List.iter (bind_pattern env cx TError) ps
   | None, Some _ ->
       let payload = List.map (fun _ -> fresh_var env.st) ps in
-      env.tag_patterns <-
-        {
-          ttag = c;
-          tpayload = payload;
-          tset = errs;
-          tin = cx.params;
-          tarm = arm;
-          tvalue = false;
-        }
-        :: env.tag_patterns;
+      defer env
+        (Tag_pattern
+           {
+             ttag = c;
+             tpayload = payload;
+             tset = errs;
+             tin = cx.params;
+             tarm = arm;
+             tvalue = false;
+           });
       bind payload
 
 (* What infer_handlers.ml calls back, from the functions above (see

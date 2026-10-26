@@ -105,12 +105,6 @@ type env = {
           went to, which has to end up empty *)
   mutable all_markers : marker list;
       (** the group's `try`s, `attempt`s and `match`es with `fail` arms *)
-  mutable kept : (row * (string * ty) list) list;
-      (** the errors each `attempt` of the group keeps in its [Result], and each
-          `match` with `fail` arms handles, each with the parameters of the
-          function and lambdas it's in *)
-  mutable tag_patterns : tag_pattern list;
-      (** tags matched in an error set that was still open *)
   mutable rows_due : row_due list;
       (** the group's uses of a named row (see [row_due]) *)
   mutable impl_ops : impl_op list;
@@ -243,6 +237,14 @@ and constr =
       (** a tag written as a value, `Err(Right)`, is in its error set, if the
           set is one of its own *)
   | Include of inclusion  (** one row of errors is in another *)
+  | Kept of row * (string * ty) list
+      (** the errors an `attempt` keeps in its [Result], or a `match` with
+          `fail` arms handles, with the parameters of the function and lambdas
+          it's in: it holds no more than what it has once the group's error sets
+          have all their tags *)
+  | Tag_pattern of tag_pattern
+      (** a tag matched in an error set that was still open is one of its tags
+      *)
 
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their
@@ -403,6 +405,13 @@ let in_params params tail =
 
 (* Leave [c] for the solver, once the group is done. *)
 let defer env c = env.pending <- c :: env.pending
+
+(* Whether the error set ending in [tail] is one an `attempt` of the group
+   keeps, or a `match` handles, of those met so far. *)
+let kept env tail =
+  List.exists
+    (function Kept (k, _) -> row_tail k = Some tail | _ -> false)
+    env.pending
 
 (* Inside the function, an `inout` parameter is an ordinary variable. *)
 let bind_params cx params ps =

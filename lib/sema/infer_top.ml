@@ -568,45 +568,6 @@ let settle_errors env ~is_value =
   let pr = printer env in
   (* first, what each error set holds *)
   Solve.solve env ~is_value Error_rows;
-  (* an `attempt` of a call of a function it was passed keeps whatever
-     that function fails with: its set stays open, like the function's *)
-  List.iter
-    (fun (kept, params) ->
-      match row_tail kept with
-      | Some t when in_params params t -> ()
-      | _ -> close_row kept)
-    env.kept;
-  List.iter
-    (fun t ->
-      let c = t.ttag and payload = t.tpayload and arm = t.tarm in
-      let labels, tail = row_parts t.tset in
-      let tags =
-        List.map (fun (l : label) -> (l.name, show_label pr l)) labels
-      in
-      match List.find_opt (fun (l : label) -> l.name = c.name) labels with
-      | _ when arm && labels = [] && tail = None ->
-          (* a `fail` arm of a `match` whose subject can't fail, which is
-             reported once, below *)
-          ()
-      | Some l when List.length l.payload = List.length payload ->
-          List.iter2
-            (fun found expected -> unify_at env c.loc ~found ~expected)
-            payload l.payload
-      | Some l ->
-          report env
-            (tag_arity ~value:t.tvalue c.loc c (List.length l.payload)
-               (List.length payload))
-      | None -> (
-          (* a set still open holds what a function it was passed fails
-             with *)
-          match
-            Option.bind tail (fun tl ->
-                List.find_opt (fun (_, ty) -> List.mem tl (row_vars ty)) t.tin)
-          with
-          | Some (param, _) ->
-              report env (tag_in_open_set c ~arm ~value:t.tvalue ~param tags)
-          | None -> report env (not_an_error c ~arm tags)))
-    (List.rev env.tag_patterns);
   List.iter
     (fun ((c : ecall), unhandled) ->
       let labels, tail = row_parts unhandled in
@@ -646,8 +607,6 @@ let settle_errors env ~is_value =
           | Mattempt -> covers_nothing m.mloc ?hint:m.hint "attempt"
           | Mmatch -> cannot_fail_arm m.mloc))
     (List.rev env.all_markers);
-  env.kept <- [];
-  env.tag_patterns <- [];
   env.unmarked <- [];
   env.all_markers <- []
 
@@ -1584,8 +1543,6 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       forced = [];
       unmarked = [];
       all_markers = [];
-      kept = [];
-      tag_patterns = [];
       rows_due = [];
       impl_ops = [];
       handler_needs = [];
