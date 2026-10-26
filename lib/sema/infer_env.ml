@@ -3,7 +3,7 @@
    the work each group of functions leaves for infer_top.ml to finish once
    the group is done, and the context of the expression being inferred.
    These types are shared by every part of the pass, so they're kept apart
-   from any one of them. *)
+   from any one of them. There's no .mli: it would only repeat them. *)
 
 open Ast
 open Ast.Resolved
