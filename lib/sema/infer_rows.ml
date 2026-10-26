@@ -92,6 +92,14 @@ let sources_of cx =
   | None, m :: _ -> (List.map (fun c -> Passed c) m.covered, Earlier_call)
   | None, [] -> ([], Earlier_call)
 
+(* The same, read when it's needed, which can be once the group is done:
+   then it has what's added after the code being checked too, a `fail`
+   later in the function, say. [this] is what that code adds itself,
+   which isn't where its own errors come from. *)
+let sources_later cx ~this () =
+  let sources, origin = sources_of cx in
+  (List.filter (fun s -> not (this s)) sources, origin)
+
 (* [r]'s labels, without the tags [names]. *)
 let without names r =
   extend
@@ -274,7 +282,9 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
       eselves = cx.selves;
     }
   in
-  let sources = sources_of cx in
+  let sources =
+    sources_later cx ~this:(function Passed c -> c == ec | _ -> false)
+  in
   let here = From ewritten in
   (* rename the one this call brings in: `fail Timeout(a) => fail
      LockTimeout(a)` *)
@@ -308,9 +318,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
       defer env (Unmarked (ec, reopen env errs))
   | markers ->
       List.iter (fun m -> m.covered <- ec :: m.covered) markers;
-      include_errors env cx ~loc:call.loc ~here
-        ~sources:(fun () -> sources)
-        ~fix errs cx.handler;
+      include_errors env cx ~loc:call.loc ~here ~sources ~fix errs cx.handler;
       Option.iter (fun s -> s := Passed ec :: !s) cx.sources
 
 (* The first [n] characters of [loc], a keyword at its start. *)

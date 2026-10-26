@@ -1670,7 +1670,8 @@ fn main() = ()
 
 let%expect_test "a tag of two shapes, learned once the group is done" =
   (* what [a] and [b] fail with is known only once their group is: the
-     constraint solver adds each to the other's, and finds the clash *)
+     constraint solver adds each to the other's, and finds the clash. The
+     `Bad(Int)` in [a] is its `fail`'s, though that comes after the `try` *)
   check_error
     {|
 fn a(n: Int) -> Int = if n > 0 then try b(n - 1) else fail Bad(1)
@@ -1684,7 +1685,7 @@ fn main() = ()
       ┌─ test.ren:1:41
     1 │ fn a(n: Int) -> Int = if n > 0 then try b(n - 1) else fail Bad(1)
       │                                         ^^^^^^^^
-      = from the signature: `Bad(Int)`
+      = from the `fail` on line 1: `Bad(Int)`
       = from `b`: `Bad(Bool)`
       = a tag is its name and its payload's types, so these are two errors with one name
       help: rename one where it comes in: `try match b(n - 1)` with the arm `fail Bad => fail BBad`

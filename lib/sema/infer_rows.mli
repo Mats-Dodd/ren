@@ -20,6 +20,11 @@ val widen : env -> loc:Loc.t -> Types.ty -> Types.ty
    none of them. *)
 val sources_of : ctx -> source list * Infer_msg.origin
 
+(* The same, read when it's called, which can be once the group is done,
+   without what the function says the code being checked adds itself. *)
+val sources_later :
+  ctx -> this:(source -> bool) -> unit -> source list * Infer_msg.origin
+
 (* Add the errors of the first row, what's new here, to the second. One
    error with two shapes is reported: [here] says where the new one comes
    from, [sources] where the old one may have, and [fix] is the help, given

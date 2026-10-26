@@ -375,9 +375,11 @@ and synth env cx (e : expr) : ty =
           match repr errs with
           | TErrors errs ->
               Hashtbl.replace cx.found e.node Unwraps;
-              let sources = sources_of cx in
               include_errors env cx ~loc:a.loc ~here:(This "Result")
-                ~sources:(fun () -> sources)
+                ~sources:
+                  (sources_later cx ~this:(function
+                    | Unwrapped (_, r) -> r == errs
+                    | _ -> false))
                 ~fix:rename_where_in errs cx.handler;
               m.unwrapped <- errs :: m.unwrapped;
               Option.iter
