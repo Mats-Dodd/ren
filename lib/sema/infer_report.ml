@@ -190,7 +190,16 @@ let mismatch env why loc ~found ~expected failure =
               Fails_beyond
                 (List.map (show_label pr) extra, List.map (show_label pr) wanted);
             ]
-        | _ -> []
+        | _ -> (
+            (* or a `Result` that holds what another can't *)
+            match sets_clash found expected with
+            | Some (extra, wanted) ->
+                [
+                  Holds_beyond
+                    ( List.map (show_label pr) extra,
+                      List.map (show_label pr) wanted );
+                ]
+            | None -> [])
       in
       (* another module's opaque type can't stand in for what it's
          represented as, or the other way round. [blame] looks for one

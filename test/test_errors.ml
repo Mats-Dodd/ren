@@ -906,6 +906,71 @@ test "a refusal shows what came back" =
     [exit 1]
     |}]
 
+let%expect_test "a set of tags written inside Err is closed after its group (B5)" =
+  (* [mk2]'s set is its own, made of the two tags: once its group is done
+     it holds those and no more, as `ren types` says, and as its type in
+     Core says, with no tail. So a `match` with exactly those arms
+     handles every `Result` it returns *)
+  let src =
+    {|
+fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+fn pick(c: Bool) -> Int =
+  match mk2(c)
+    Ok(_) => 0
+    Err(Left(n)) => n
+    Err(Right) => 2
+fn main() =
+  print(pick(true))
+  print(pick(false))
+|}
+  in
+  types src;
+  run src;
+  core ~types:true
+    {|
+fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+fn main() = ()
+|};
+  [%expect {|
+    fn mk2<T>(c: Bool) -> Result<T, ! Left(Int) | Right>
+    fn pick(c: Bool) -> Int
+    fn main() uses Console
+    1
+    2
+    ()
+    (fn mk2 : fn(Bool) -> Result<T, ! Left(Int) | Right> ! ..e uses ..d (c/1) ev/2
+      (if c/1 (con Err (tag Left 1)) (con Err (tag Right))))
+    (fn main : fn() ! ..e uses ..d () ev/1 ())
+    (fn $start : fn() ! ..e () ev/1 (call ev/1 (inst main {..e} {..r})))
+    |}];
+  (* and a set met in a later group can't add to it: a kept set that
+     holds another tag isn't the same type, and nor is a tag written in
+     another `Err` *)
+  check_error
+    {|
+fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
+fn g() -> Int ! Oops = fail Oops
+fn same() -> Bool = mk2(true) == attempt g()
+fn mk3(c: Bool) = if c then mk2(c) else Err(Third)
+fn main() = ()
+|};
+  [%expect {|
+    error: `==` compares two values of the same type, but this is a `Result<Int, ! Oops>` and the left side is a `Result<Int, ! Left(Int) | Right>`
+      ┌─ test.ren:3:34
+    3 │ fn same() -> Bool = mk2(true) == attempt g()
+      │                                  ^^^^^^^^^^^
+      │                     --------- this is a `Result<Int, ! Left(Int) | Right>`
+      = a `Result` can hold `Oops` here, and the other only `Left(Int)` and `Right`: what one can hold is fixed once what made it is checked, so neither stands for the other
+      help: use `Result`s that can hold the same errors here, or `match` on one instead
+
+    error: `Third` isn't one of the errors this can hold
+      ┌─ test.ren:4:45
+    4 │ fn mk3(c: Bool) = if c then mk2(c) else Err(Third)
+      │                                             ^^^^^
+      = it can hold `Left(Int)` and `Right`
+      help: check the spelling: a tag that's written wrong is a different error
+    |}]
+
 let%expect_test "a tag inside Err has to be one the Result can hold" =
   (* compared with what an `attempt` kept, or given where a declared
      `Result` is wanted, it's checked as a tag in a pattern is *)

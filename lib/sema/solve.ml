@@ -703,6 +703,11 @@ let solve env ~is_value ~withheld =
   worklist ~awake ~decide:(include_ env)
     (List.filter_map (function Include i -> Some i | _ -> None) cs);
   List.iter kept kept_sets;
+  (* a set the tags written as values went in, one of their own, holds
+     those and no more, as a kept set does: `if c then Err(Left(1)) else
+     Err(Right)` is `! Left(Int) | Right`, and a set met later, in another
+     group, can't add to it *)
+  List.iter (fun t -> close_row t.tset) added;
   (* the patterns, and the tags written as values that didn't go in, in
      the order they were met *)
   List.iter

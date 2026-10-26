@@ -73,6 +73,31 @@ let rec errors_clash found expected =
   | TCon (n1, a1), TCon (n2, a2) when n1 = n2 -> pairs a1 a2
   | _ -> None
 
+(* Two error sets of `Result`s inside [found] and [expected], where one
+   holds tags the other can't, being closed: those tags, and what the
+   other holds. *)
+let rec sets_clash found expected =
+  let pairs a b =
+    if List.length a = List.length b then
+      List.find_map (fun (x, y) -> sets_clash x y) (List.combine a b)
+    else None
+  in
+  let beyond e1 e2 =
+    let have = row_names e2 in
+    match
+      List.filter
+        (fun (l : label) -> not (List.mem l.name have))
+        (fst (row_parts e1))
+    with
+    | _ :: _ as extra when row_tail e2 = None -> Some (extra, fst (row_parts e2))
+    | _ -> None
+  in
+  match (repr found, repr expected) with
+  | TErrors e1, TErrors e2 -> (
+      match beyond e1 e2 with Some c -> Some c | None -> beyond e2 e1)
+  | TCon (n1, a1), TCon (n2, a2) when n1 = n2 -> pairs a1 a2
+  | _ -> None
+
 (* The labels named [name] in the error rows inside [t]. *)
 let rec labels_named name t =
   let row r =
@@ -427,6 +452,9 @@ type behind =
       (** a function that fails with these where nothing can fail *)
   | Fails_beyond of string list * string list
       (** a function that fails with the first where only the second can *)
+  | Holds_beyond of string list * string list
+      (** a `Result` that can hold the first, where one that holds only the
+          second, and no more, is wanted *)
   | Private of Path.t  (** another module's opaque type *)
   | Taken_as_one of { handler : string; deps : string list; dep : string }
       (** a handler of [deps] where an implementation of [dep], one of them, is
@@ -472,6 +500,17 @@ let behind_note = function
             (and_list extra) (and_list wanted);
         ],
         "handle the others inside it with `match`" )
+  | Holds_beyond (extra, wanted) ->
+      ( [
+          sprintf
+            "a `Result` can hold %s here, and the other %s: what one can hold \
+             is fixed once what made it is checked, so neither stands for the \
+             other"
+            (and_list extra)
+            (if wanted = [] then "no error" else "only " ^ and_list wanted);
+        ],
+        "use `Result`s that can hold the same errors here, or `match` on one \
+         instead" )
   | Private p ->
       let note, help = representation_private p in
       ([ note ], help)

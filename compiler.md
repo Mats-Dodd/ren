@@ -230,7 +230,7 @@ The constraints:
 - **A function that names its own errors' row,** `! ..e`, fails with it.
 - **A tag written as a value,** `Err(Right)`, is in its error set, if
   the set is one of its own: `if c then Err(Left(1)) else Err(Right)`
-  holds both.
+  holds both, and once every set has its tags, no more, as a kept set.
 - **One row of errors is included in another:** a call's errors in what
   marks it, a `Result`'s in the `try` that fails with it again. The row
   included from stays as it is, so a callee never fails with what its
@@ -490,3 +490,15 @@ Where the work forced a change to the plan above:
   and told the reader to leave a type out that wasn't written: both now
   name it as the module does, and say to add it to the type the function
   is used as, which is what closed its row, or to install it.
+- **R3, a set of tags written in `Err` (B5).** Such a set is closed with
+  the kept sets, once the group's sets have their tags, so a function
+  that makes one, `fn mk2(c: Bool) = if c then Err(Left(1)) else
+  Err(Right)`, is generalized with exactly those tags, as `ren types`
+  printed it already. So a `match` with an arm for each needs no
+  `Err(_)`, and a later group can't add a tag to it: `if c then mk2(c)
+  else Err(Third)` is an error now, as a tag written where a kept set is
+  met is, and so is `mk2(true) == attempt g()` when `g` fails with
+  something else. That comparison's message is the plain mismatch of two
+  types, which says nothing about why they differ, so a mismatch between
+  two `Result`s, one of which holds a tag the other's closed set can't,
+  now says so in a note (`Infer_msg.Holds_beyond`).
