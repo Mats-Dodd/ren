@@ -1289,6 +1289,7 @@ fn main() = print(Some(true))
       | Some Fail_arm -> print_endline "a `fail` arm"
       | Some Error_tag -> print_endline "an error's tag"
       | Some Unwraps -> print_endline "unwraps a result"
+      | Some (Lambda_id id) -> print_endline ("lambda " ^ id)
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect
@@ -1332,8 +1333,12 @@ fn main() = twice(fn() => say(1))
         Ty.printer ~show_tail:(fun _ -> true) ~names:Path.full v.scheme
       in
       Printf.printf "%s: %s (%s)\n" v.vname (Ty.show pr v.scheme.ty)
-        (if Path.Map.find (Path.make "test" v.vname) schemes = v.scheme then
-           "as inferred"
+        (* but for lambda sets, which an interface leaves out: `app`'s
+           `f` is given the lambda in its body *)
+        (if
+           Ty.forget_lams (Path.Map.find (Path.make "test" v.vname) schemes)
+           = v.scheme
+         then "as inferred"
          else "differs from inference"))
     iface.values;
   [%expect

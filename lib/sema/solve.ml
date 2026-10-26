@@ -56,6 +56,13 @@ let join env ~is_value j =
       { j.jinst with rows = j.jinst.rows @ ends }
       (Hashtbl.find env.globals j.target)
   in
+  (* what flows to the use, its lambda set, isn't what can flow to the
+     function itself (Infer_lookup.own_set) *)
+  let expected =
+    match (repr j.used, repr expected) with
+    | TFun (_, _, _, _, l), TFun (ps, r, e, u, _) -> TFun (ps, r, e, u, l)
+    | _, t -> t
+  in
   match (repr j.used, repr expected) with
   | TFun ([], used, _, _, _), TFun ([], made, _, _, _) when is_value j.target ->
       (* an associated value, a function of no parameters (ast.ml), is

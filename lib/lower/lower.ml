@@ -83,6 +83,13 @@ let targs_of cx id =
   | Some a -> a
   | None -> bug (Printf.sprintf "no type arguments for node %d" id)
 
+(* The identity inference gave the lambda at node [id] (Ty.lambda_id),
+   which its type's lambda set has. *)
+let lambda_name cx id =
+  match (node cx id).found with
+  | Some (Lambda_id name) -> name
+  | _ -> bug (Printf.sprintf "no identity for the lambda at node %d" id)
+
 (* The descriptors a use at the type arguments [a] is passed (core.ml,
    [desc]), built from the function's own hidden type parameters. *)
 let descs cx (a : Ty.args) = List.map (C.describe cx.tys) a.tys
@@ -276,6 +283,7 @@ and expr_of cx (e : expr) : C.expr =
           here
             (Lambda
                {
+                 name = Ty.global_id (Path.member dep op);
                  params =
                    List.map (fun var : C.param -> { mode = Read; var }) params;
                  ev;
@@ -402,7 +410,7 @@ and expr_of cx (e : expr) : C.expr =
       let captures =
         List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
       in
-      here (Lambda { params; ev; captures; body })
+      here (Lambda { name = lambda_name cx e.node; params; ev; captures; body })
   | Block (stmts, last) -> block cx stmts last
   | Con (tag, args) -> (
       match (node cx e.node).found with
@@ -463,7 +471,14 @@ and expr_of cx (e : expr) : C.expr =
           let ev, _, b = inner () in
           let lam =
             mk
-              (Lambda { params = []; ev; captures = free b; body = b })
+              (Lambda
+                 {
+                   name = lambda_name cx lam;
+                   params = [];
+                   ev;
+                   captures = free b;
+                   body = b;
+                 })
               (ty_of cx lam) body.loc
           in
           match item.kind with
@@ -542,7 +557,7 @@ and handler cx (e : expr) deps state arms =
 and arm_impl cx cells (a : handler_arm) =
   let lam = expr cx a.arm_impl in
   match lam.kind with
-  | Lambda { params; ev; captures; body } ->
+  | Lambda { name; params; ev; captures; body } ->
       let loc = a.arm_impl.loc in
       let used =
         List.filter
@@ -581,7 +596,7 @@ and arm_impl cx cells (a : handler_arm) =
       let captures =
         List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
       in
-      { lam with kind = Lambda { params; ev; captures; body } }
+      { lam with kind = Lambda { name; params; ev; captures; body } }
   | _ -> bug "a handler's arm that isn't a lambda"
 
 (* The ids of the locals [e] changes, added to [acc]: those it assigns to,
@@ -1095,7 +1110,7 @@ let start (main : C.fn_def) : C.fn_def =
   (* each install's evidence is numbered after the one it extends *)
   let rec install n = function
     | [] ->
-        let own = Ty.own_args main.scheme.ty in
+        let own, ty = C.own_use main.path main.scheme.ty in
         mk
           (Call
              ( mk
@@ -1104,7 +1119,7 @@ let start (main : C.fn_def) : C.fn_def =
                       own,
                       List.map (C.describe tys) own.tys,
                       List.map (fun v -> C.Dict_param v) dicts ))
-                 main.scheme.ty loc,
+                 ty loc,
                [],
                C.evidence n ))
           ret loc

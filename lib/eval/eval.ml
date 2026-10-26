@@ -461,7 +461,7 @@ let rec eval cx env (e : expr) =
         (fun a v -> match a with Ref x -> cell env x := v | Value _ -> ())
         args finals;
       ok result
-  | Lambda { params; ev; captures; body } ->
+  | Lambda { params; ev; captures; body; _ } ->
       (* copy the captured variables' values now, into cells of the
          lambda's own: assigning to a variable later doesn't change what
          the lambda sees *)

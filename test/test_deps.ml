@@ -66,11 +66,10 @@ let run_start files body =
 (* Core for a call of [f], of no parameters, with the evidence [ev]. *)
 let call ~loc (f : Ren.Core.fn_def) ev =
   let ret = match f.scheme.ty with Fun (_, t, _, _, _) -> t | t -> t in
+  let args, ty = Ren.Core.own_use f.path f.scheme.ty in
   Ren.Core.mk
     (Call
-       ( Ren.Core.mk
-           (Global (f.path, Ren.Ty.own_args f.scheme.ty, [], []))
-           f.scheme.ty loc,
+       ( Ren.Core.mk (Global (f.path, args, [], [])) ty loc,
          [],
          Ren.Core.evidence ev ))
     ret loc
@@ -100,8 +99,20 @@ let lint_evidence body =
   in
   let lambda ?(uses = Ty.closed) ev body =
     Core.mk
-      (Lambda { params = []; ev = Core.evidence ev; captures = []; body })
-      (Fun ([], Ty.int, Ty.closed, uses, Ty.any_lams))
+      (Lambda
+         {
+           name = "test.main#1";
+           params = [];
+           ev = Core.evidence ev;
+           captures = [];
+           body;
+         })
+      (Fun
+         ( [],
+           Ty.int,
+           Ty.closed,
+           uses,
+           { ids = [ "test.main#1" ]; lvar = Some 0 } ))
       loc
   in
   let call f ev = Core.mk (Call (f, [], Core.evidence ev)) Ty.int loc in
@@ -114,7 +125,7 @@ let lint_evidence body =
       dicts = [];
       scheme =
         {
-          ty = Fun ([], Ty.int, Ty.closed, uses_d, Ty.any_lams);
+          ty = Fun ([], Ty.int, Ty.closed, uses_d, { ids = []; lvar = Some 0 });
           names = [];
           reqs = [];
         };

@@ -994,6 +994,7 @@ let setup env ~is_value (f : fn_def) =
       errs;
       uses;
       calls = ref [];
+      lambdas = ref 0;
       tparams;
       handler = errs;
       markers = [];

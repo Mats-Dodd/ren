@@ -130,6 +130,8 @@ and check env cx ?(why = plain) (e : expr) expected =
           params eps
       in
       let errs = fresh_row env.st and uses = fresh_row env.st in
+      (* numbered before the lambdas in its body, as when it's inferred *)
+      let lams = lambda_set env cx e.node in
       bind_params cx params ps;
       check env
         (lambda_cx cx params ps ~errs ~uses)
@@ -137,7 +139,7 @@ and check env cx ?(why = plain) (e : expr) expected =
         ~why:
           (explain ~notes:why.notes ?help:why.help ?help_of:why.help_of
              ~labels:why.labels ~msg:lambda_produces ());
-      let t = TFun (ps, eret, errs, uses, fresh_row env.st) in
+      let t = TFun (ps, eret, errs, uses, lams) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
   | Con (c, args), _ ->
@@ -255,9 +257,10 @@ and synth env cx (e : expr) : ty =
         List.map (param_type env ~tparams:cx.tparams ~named:cx.named) params
       in
       let errs = fresh_row env.st and uses = fresh_row env.st in
+      let lams = lambda_set env cx e.node in
       bind_params cx params ps;
       let tb = infer env (lambda_cx cx params ps ~errs ~uses) body in
-      TFun (ps, tb, errs, uses, fresh_row env.st)
+      TFun (ps, tb, errs, uses, lams)
   | Block (stmts, last) ->
       List.iter (stmt env cx) stmts;
       infer env cx last

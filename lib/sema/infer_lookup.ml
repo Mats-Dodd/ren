@@ -352,6 +352,26 @@ let own_instance env (g : group_fn) : subst =
     lams = [];
   }
 
+(* [t], the type a top-level function, a member, an intrinsic or an
+   operation [p] is used at, with [p]'s identity in its lambda set: a
+   value of it can be [p], as well as whatever else it meets. *)
+let named env p t =
+  (match repr t with
+  | TFun (_, _, _, _, l) ->
+      Unify.unify_lams env.st l
+        (extend [ lam (Ty.global_id p) ] (fresh_row env.st))
+  | _ -> ());
+  t
+
+(* The type of a function of the group being checked, [t], with a lambda
+   set of its own, for one use of it: what flows to the use, [named] it,
+   isn't what the function's own type says it can be, which nothing in
+   its group constrains, so it's generic once the group is done. *)
+let own_set env t =
+  match repr t with
+  | TFun (ps, r, e, u, _) -> TFun (ps, r, e, u, fresh_row env.st)
+  | t -> t
+
 (* A name's type, at the expression [node]. A top-level function's is a
    fresh instance of its scheme, so each use can pick its own types;
    another function of the group being checked has the type its
@@ -383,22 +403,25 @@ let rec lookup env cx ~node loc = function
       let g = List.assoc p env.group in
       let inst = own_instance env g in
       require env cx ~node loc p inst.tys;
-      in_group cx ~node p (replace inst (g.declared ()))
+      in_group cx ~node p (named env p (replace inst (g.declared ())))
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let g = List.assoc p env.group in
       let jinst = own_instance env g in
       require env cx ~node loc p jinst.tys;
-      let used = replace jinst (g.declared ()) in
+      let used = named env p (replace jinst (g.declared ())) in
       defer env
         (Join { jloc = loc; jname = Path.local p; used; target = p; jinst });
       in_group cx ~node p used
   | Global p when p = cx.self ->
       (* its own type, not generic until its group is done, so the copy
-         is the same type *)
+         is the same type, but for its lambda set ([own_set]) *)
       in_group cx ~node p
-        (fst (instantiate env.st (Hashtbl.find env.globals p)))
-  | Global p -> fresh env cx ~node loc p
-  | Intrinsic x -> fresh env cx ~node loc (Intrinsic.path x)
+        (named env p
+           (own_set env (fst (instantiate env.st (Hashtbl.find env.globals p)))))
+  | Global p -> named env p (fresh env cx ~node loc p)
+  | Intrinsic x ->
+      let p = Intrinsic.path x in
+      named env p (fresh env cx ~node loc p)
   | Dep_op (p, op) -> (
       (* the operation as declared, which uses its dependency: a call
          adds it to the caller's `uses` *)
@@ -406,11 +429,14 @@ let rec lookup env cx ~node loc = function
       | Some o -> (
           match field_type env ~tvars:[] o with
           | TFun (ps, ret, errs, _, l) ->
-              TFun
-                ( ps,
-                  ret,
-                  errs,
-                  RExtend (dep (Ty.dep_label p), fresh_row env.st),
-                  l )
+              (* used as a value, it's a lambda that calls it, of its
+                 identity (Lower) *)
+              named env (Path.member p op)
+                (TFun
+                   ( ps,
+                     ret,
+                     errs,
+                     RExtend (dep (Ty.dep_label p), fresh_row env.st),
+                     l ))
           | _ -> TError)
       | None -> TError)

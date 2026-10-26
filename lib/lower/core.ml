@@ -202,6 +202,7 @@ and kind =
       (** the callee, its arguments, and the evidence it's passed: always the
           caller's own, the innermost in scope *)
   | Lambda of {
+      name : string;
       params : param list;
       ev : var;
       captures : var list;
@@ -209,7 +210,10 @@ and kind =
     }
       (** [captures] are the locals from outside the lambda its body uses, in
           order of id; their values are copied when the lambda is made. Its
-          evidence [ev] is passed where it's called, never captured *)
+          evidence [ev] is passed where it's called, never captured. [name] is
+          its identity in lambda sets (Ty.lambda_id), which its type's set has:
+          one written in the program's, or, for the lambda that calls an
+          operation used as a value, the operation's (Ty.global_id) *)
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
@@ -445,6 +449,30 @@ and desc_row_vars r =
 
 (* The type of a cell holding a [t] (see [New_cell]). *)
 let cell_ty t = Ty.Con (Path.prelude "$Cell", [ t ])
+
+(* A use of the function [p], whose scheme's type is [t], at its own type,
+   as `$start` calls `main`: the type arguments that give back [t] itself,
+   but that its lambda set has [p], as every use's does, and the type
+   they give. Only the set's variable is given [p], so [t] has it nowhere
+   else, which is so for a function that takes nothing. *)
+let own_use p (t : Ty.ty) =
+  let own = Ty.own_args t in
+  let id = Ty.global_id p in
+  match t with
+  | Fun (ps, r, e, u, ({ lvar = Some n; _ } as l)) ->
+      ( {
+          own with
+          lams =
+            List.mapi
+              (fun i (k : Ty.lams) ->
+                if i = n then { k with ids = [ id ] } else k)
+              own.lams;
+        },
+        Ty.Fun
+          (ps, r, e, u, { l with ids = List.sort_uniq compare (id :: l.ids) })
+      )
+  | t -> (own, t)
+
 let unit loc = mk Unit Ty.unit loc
 let local (v : var) loc = mk (Local v) v.ty loc
 
@@ -568,8 +596,9 @@ let shown_captures =
 
 (* What a typed print prints with: [pr] names the function's type
    variables, and [own] are its dictionary parameters, by the requirement
-   each is for. *)
-type typed = { pr : Ty.printer; own : ((int * string) * var) list }
+   each is for. [lams] says to show lambda sets too, which only a debug
+   print does. *)
+type typed = { pr : Ty.printer; own : ((int * string) * var) list; lams : bool }
 
 (* A dictionary, as a typed print shows it: the requirement and the type
    it's for, [(eq Option<T>)], whether it's derived or the function's
@@ -604,7 +633,8 @@ let rec pattern_sexp p =
    [{Short | ..e}]. *)
 let used t name (a : Ty.args) ds =
   match t with
-  | Some ({ pr; _ } as t) when a.tys <> [] || a.rows <> [] ->
+  | Some ({ pr; _ } as t)
+    when a.tys <> [] || a.rows <> [] || (t.lams && a.lams <> []) ->
       let row r =
         "{" ^ Ty.show_row pr ~prefix:"" ~sep:" | " ~kind:"r" r ^ "}"
       in
@@ -612,12 +642,34 @@ let used t name (a : Ty.args) ds =
          constructor's arguments right to left *)
       let tys = List.map (fun t -> Atom (Ty.show pr t)) a.tys in
       let rows = List.map (fun r -> Atom (row r)) a.rows in
+      (* a lambda-set argument as a function type shows its set *)
+      let lams =
+        if t.lams then
+          List.map
+            (fun (l : Ty.lams) -> Atom (String.trim (Ty.show_lams pr l)))
+            a.lams
+        else []
+      in
       let ds = List.map (dict_sexp t) ds in
-      List ((atom "inst" :: Atom name :: tys) @ rows @ ds)
+      List ((atom "inst" :: Atom name :: tys) @ rows @ lams @ ds)
   | _ -> Atom name
 
-(* [t] is what a typed print prints with, [None] for a plain one. *)
+(* [t] is what a typed print prints with, [None] for a plain one. One
+   that shows lambda sets also shows the type of a local, an [If], a
+   [Match], a [Let] or a call whose type is a function's, after it, [(:
+   f/1 fn() [main.main#1 | ..l0])], and each lambda's identity and type,
+   which is where the sets come from. *)
 let rec sexp_with t e =
+  match (t, e.ty, e.kind) with
+  | ( Some ({ lams = true; pr; _ } as t'),
+      Fun _,
+      (Local _ | If _ | Match _ | Let _ | Call _) ) ->
+      List [ atom ":"; sexp_of t' e; Atom (Ty.show pr e.ty) ]
+  | _ -> sexp_of_opt t e
+
+and sexp_of t e = sexp_of_opt (Some t) e
+
+and sexp_of_opt t e =
   let sexp = sexp_with t and arm_sexp = arm_sexp_with t in
   (* the dictionary [d], before what's after it, in a typed print only *)
   let dict d rest =
@@ -689,20 +741,27 @@ let rec sexp_with t e =
         | Ref v -> Atom ("&" ^ show_var v)
       in
       List (atom "call" :: var ev :: sexp f :: List.map arg args)
-  | Lambda { params; ev; captures; body } ->
+  | Lambda { name; params; ev; captures; body } ->
       let param p =
         match p.mode with
         | Inout -> Atom ("inout " ^ show_var p.var)
         | Read -> var p.var
       in
+      let named =
+        match t with
+        | Some { lams = true; pr; _ } ->
+            [ Atom name; atom ":"; Atom (Ty.show pr e.ty) ]
+        | _ -> []
+      in
       List
-        [
-          atom "lambda";
-          List (List.map param params);
-          List (atom "captures" :: List.map var (shown_captures captures));
-          var ev;
-          sexp body;
-        ]
+        ([ atom "lambda" ]
+        @ named
+        @ [
+            List (List.map param params);
+            List (atom "captures" :: List.map var (shown_captures captures));
+            var ev;
+            sexp body;
+          ])
   | Con (_, c, args) -> List (atom "con" :: atom c :: List.map sexp args)
   | Record (_, fields) ->
       List
@@ -739,13 +798,17 @@ let show e = render 0 (sexp e)
    variables its uses' type arguments are written in, with every row
    tail, and what it needs, the dictionaries it takes, if anything:
    [(needs (eq T))]. *)
-let fn_sexp ?(types = false) f =
+let fn_sexp ?(types = false) ?(lams = false) f =
   let t =
-    if types then
+    if types || lams then
       Some
         {
-          pr = Ty.printer ~show_tail:(fun _ -> true) ~names:Path.full f.scheme;
+          pr =
+            Ty.printer
+              ~show_tail:(fun _ -> true)
+              ~show_lams:lams ~names:Path.full f.scheme;
           own = List.combine f.scheme.reqs f.dicts;
+          lams;
         }
     else None
   in
@@ -773,4 +836,4 @@ let fn_sexp ?(types = false) f =
         sexp_with t f.body;
       ])
 
-let show_fn ?types f = render 0 (fn_sexp ?types f)
+let show_fn ?types ?lams f = render 0 (fn_sexp ?types ?lams f)

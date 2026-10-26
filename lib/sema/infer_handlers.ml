@@ -122,6 +122,7 @@ let rec handler core env cx state arms ~needs ~declared =
                 else param_type env ~tparams:cx.tparams ~named:cx.named q)
               params ps
           in
+          let lams = lambda_set env cx a.arm_impl.node in
           bind_params hcx params qs;
           let acx =
             {
@@ -130,7 +131,7 @@ let rec handler core env cx state arms ~needs ~declared =
             }
           in
           core.check env acx body r ~why:result_why;
-          let t = TFun (qs, r, open_errs, needs, fresh_row env.st) in
+          let t = TFun (qs, r, open_errs, needs, lams) in
           Hashtbl.replace cx.nodes a.arm_impl.node t;
           ignore
             (unifies env why a.arm_impl.loc ~found:t
@@ -366,6 +367,7 @@ and wrap core env cx (e : expr) ~call ~f ~args ?target ?callee tf body lam =
       core.check_args env cx ~name ?callee firsts args;
       outer_changes env body name;
       let berrs = fresh_row env.st and buses = fresh_row env.st in
+      let lams = lambda_set env cx lam in
       let bcx = lambda_cx cx [] [] ~errs:berrs ~uses:buses in
       let tb =
         match repr last.ty with
@@ -374,7 +376,7 @@ and wrap core env cx (e : expr) ~call ~f ~args ?target ?callee tf body lam =
             r
         | _ -> core.infer env bcx body
       in
-      let tl = TFun ([], tb, berrs, buses, fresh_row env.st) in
+      let tl = TFun ([], tb, berrs, buses, lams) in
       Hashtbl.replace cx.nodes lam tl;
       if last.mode = Inout then report env (wrapper_changes_body call.loc name)
       else

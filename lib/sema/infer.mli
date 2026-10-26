@@ -37,6 +37,9 @@ type found =
   | Unwraps
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
+  | Lambda_id of string
+      (** a lambda, or the body a `with` passes to a wrapper: its identity in
+          lambda sets (Ty.lambda_id), which its type's set has *)
 
 (* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
    that takes a module (here [Int], which says how to compare keys) and

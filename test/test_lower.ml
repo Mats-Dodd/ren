@@ -294,16 +294,19 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
            Var 0,
            open_row 0,
            open_row 1,
-           Ren.Ty.any_lams ))
+           { ids = []; lvar = Some 0 } ))
       (Ren.Core.local x loc)
   in
+  (* a use of `id` can be `id`, and its lambda-set argument says so *)
+  let used_id : Ren.Ty.lams = { ids = [ "test.id" ]; lvar = Some 0 } in
+  let targs = { targs with lams = [ used_id ] } in
   let int_fn : Ren.Ty.ty =
     Fun
       ( [ Ren.Ty.read Ren.Ty.int ],
         Ren.Ty.int,
         Ren.Ty.closed,
         Ren.Ty.closed,
-        Ren.Ty.any_lams )
+        used_id )
   in
   let call =
     Ren.Core.mk
@@ -322,7 +325,12 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
   in
   let main =
     fn "main" []
-      (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed, Ren.Ty.any_lams))
+      (Fun
+         ( [],
+           Ren.Ty.int,
+           Ren.Ty.closed,
+           Ren.Ty.closed,
+           { ids = []; lvar = Some 0 } ))
       call
   in
   report "" (fun () ->
@@ -557,7 +565,12 @@ let%expect_test "Core Lint reports a value named as a function" =
       (Call
          ( Ren.Core.mk
              (Global (t_member "b", Ren.Ty.own_args Ren.Ty.int, [], []))
-             (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed, Ren.Ty.any_lams))
+             (Fun
+                ( [],
+                  Ren.Ty.int,
+                  Ren.Ty.closed,
+                  Ren.Ty.closed,
+                  { ids = [ "test.T.b" ]; lvar = Some 0 } ))
              (Ren.Loc.point ~file 1 1),
            [],
            Ren.Core.evidence 2 ))

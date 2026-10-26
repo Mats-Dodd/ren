@@ -34,6 +34,9 @@ type found =
   | Unwraps
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
+  | Lambda_id of string
+      (** a lambda, or the body a `with` passes to a wrapper: its identity in
+          lambda sets (Ty.lambda_id), which its type's set has *)
 
 (* The type arguments a use of a top-level function, a member, an
    associated value or an intrinsic picked, by the generic variables of
@@ -520,6 +523,10 @@ and ctx = {
       (** each call that adds to [uses], most recent first. A [ref] is a mutable
           cell, here shared by every copy of the [ctx] for the same function or
           lambda. *)
+  lambdas : int ref;
+      (** how many lambdas of the top-level function have been met, which
+          numbers each one's identity (Ty.lambda_id): shared by every copy of
+          the [ctx] for the function, its lambdas' included *)
   tparams : ty list;  (** what the type parameters in scope stand for *)
   named : (string * row) list;
       (** the rows the function's signature names, `..d`, by name (ast.ml) *)
@@ -560,6 +567,16 @@ let brings c dep =
        (List.exists
           (fun (t, deps, d) -> Ty.dep_label d = dep && installs_dep t deps d)
           c.unless)
+
+(* A new lambda's lambda set, the lambda at [node]: its identity, the next
+   of the function it's in (Ty.lambda_id), and a variable for the rest,
+   since where it goes it can meet others. The identity is recorded at
+   [node], for lowering, which gives the lambda it makes the same one. *)
+let lambda_set env cx node =
+  incr cx.lambdas;
+  let id = Ty.lambda_id cx.self !(cx.lambdas) in
+  Hashtbl.replace cx.found node (Lambda_id id);
+  extend [ lam id ] (fresh_row env.st)
 
 (* Leave [c] for the solver, once the group is done. *)
 let defer env c = env.pending <- c :: env.pending

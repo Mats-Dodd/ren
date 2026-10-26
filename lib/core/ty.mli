@@ -173,6 +173,10 @@ val show_row :
 (* An error tag and its payload's types, `Short(Int, Money)`. *)
 val show_label : printer -> label -> string
 
+(* A lambda set, with a leading space, ` [main.inc | ..l0]`, if the
+   printer shows them; otherwise nothing. *)
+val show_lams : printer -> lams -> string
+
 (* A function's `! errors` and `uses deps`, each with a leading space, or
    nothing for an empty row. *)
 val show_effects : printer -> row -> row -> string

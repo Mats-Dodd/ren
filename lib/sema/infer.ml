@@ -69,6 +69,7 @@ type found = Infer_env.found =
   | Handles
   | Fail_arm
   | Unwraps
+  | Lambda_id of string
 
 module Nodes = Infer_top.Nodes
 

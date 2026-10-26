@@ -47,6 +47,11 @@ type env = {
   own : ((int * string) * var) list;
       (** the function's hidden dictionary parameters, by the requirement each
           is for *)
+  identities : (string, int) Hashtbl.t;
+      (** how many parameters each identity a lambda set of the module can have
+          takes: each of its lambdas', and each function's, member's,
+          intrinsic's or operation's it uses (see [identities]). Only looked up
+      *)
 }
 
 let show t =
@@ -148,6 +153,96 @@ let rec equal env (a : Ty.ty) (b : Ty.ty) =
   | _ ->
       let a' = reveal env a and b' = reveal env b in
       if a' == a && b' == b then a = b else equal env a' b'
+
+(* ---- lambda sets ----
+
+   What Lint checks of them (compiler.md, "What each IR promises"): every
+   function type of a node has one in canonical form; a lambda's type's set
+   has the lambda's identity, and a function's, member's or intrinsic's
+   used as a value its own; a use's set is its scheme's with the use's
+   lambda-set arguments put in ([used]); and what an [If] or [Match] gives
+   can be whatever any of its branches can. Nothing reads them yet, so a
+   wrong one would show only once specialization does, far from where it
+   went wrong. *)
+
+let show_lams l =
+  String.trim
+    (Ty.show_lams
+       (Ty.printer ~show_lams:true ~names:Path.full
+          { ty = Error; names = []; reqs = [] })
+       l)
+
+(* Each lambda set in [t] is in canonical form: its identities sorted,
+   each once, and a variable for the rest, since a set is always open. *)
+let rec canonical_lams env loc what (t : Ty.ty) =
+  let row (r : Ty.row) =
+    List.iter
+      (fun (l : Ty.label) -> List.iter (canonical_lams env loc what) l.payload)
+      r.labels
+  in
+  match t with
+  | Var _ | Error -> ()
+  | Con (_, args) -> List.iter (canonical_lams env loc what) args
+  | Errors r | Uses r -> row r
+  | Fun (ps, r, e, u, l) ->
+      if l.ids <> List.sort_uniq compare l.ids || l.lvar = None then
+        fail env loc
+          (sprintf "%s has the lambda set `%s`, which isn't in canonical form"
+             what (show_lams l));
+      List.iter (fun (p : Ty.param) -> canonical_lams env loc what p.ty) ps;
+      canonical_lams env loc what r;
+      row e;
+      row u
+
+(* [t], the type of [what], is a function's whose lambda set has [id]: a
+   value of it can be what [id] names. *)
+let has_identity env loc what id (t : Ty.ty) =
+  match reveal env t with
+  | Fun (_, _, _, _, l) when List.mem id l.ids -> ()
+  | Fun (_, _, _, _, l) ->
+      fail env loc
+        (sprintf "%s is `%s`, but its lambda set `%s` doesn't have it" what id
+           (show_lams l))
+  | t -> fail env loc (sprintf "%s has type `%s`" what (show t))
+
+(* Each lambda set of [found], the type of [what], is within the one in
+   the same place in [expected]: what [what] can be, the place it goes
+   can be too, as with a branch and the [If] it's joined in. Inference
+   unifies the two, so they're the same; this says which identity is
+   missing if not. *)
+let rec lams_within env loc what (found : Ty.ty) (expected : Ty.ty) =
+  let row (a : Ty.row) (b : Ty.row) =
+    List.iter
+      (fun (l : Ty.label) ->
+        match
+          List.find_opt (fun (k : Ty.label) -> k.name = l.name) b.labels
+        with
+        | Some k when List.length k.payload = List.length l.payload ->
+            List.iter2 (lams_within env loc what) l.payload k.payload
+        | _ -> ())
+      a.labels
+  in
+  match (reveal env found, reveal env expected) with
+  | Con (_, xs), Con (_, ys) when List.length xs = List.length ys ->
+      List.iter2 (lams_within env loc what) xs ys
+  | (Errors a | Uses a), (Errors b | Uses b) -> row a b
+  | Fun (ps, r, e, u, l), Fun (qs, r', e', u', l')
+    when List.length ps = List.length qs ->
+      (match List.find_opt (fun i -> not (List.mem i l'.ids)) l.ids with
+      | Some i when l'.lvar <> None ->
+          fail env loc
+            (sprintf
+               "%s can be `%s`, which the lambda set `%s` it's given to hasn't"
+               what i (show_lams l'))
+      | _ -> ());
+      List.iter2
+        (fun (p : Ty.param) (q : Ty.param) ->
+          lams_within env loc what p.ty q.ty)
+        ps qs;
+      lams_within env loc what r r';
+      row e e';
+      row u u'
+  | _ -> ()
 
 let same env loc what (found : Ty.ty) (expected : Ty.ty) =
   if not (equal env found expected) then
@@ -568,6 +663,7 @@ let dicts env sc loc name (s : Ty.scheme) (a : Ty.args) ds =
 let rec expr env sc (e : expr) =
   let loc = e.loc in
   if has_error e.ty then fail env loc "a node has an error type";
+  canonical_lams env loc "a node" e.ty;
   let is what t = same env loc what e.ty t in
   match e.kind with
   | Int _ -> is "an `Int`" Ty.int
@@ -579,6 +675,12 @@ let rec expr env sc (e : expr) =
       is ("`" ^ v.name ^ "`") v.ty
   | Global (p, a, ds, dicts_given) -> (
       descs env sc loc (Path.local p) a ds;
+      (match e.ty with
+      | Fun _ ->
+          has_identity env loc
+            (sprintf "`%s`, used as a value," (Path.local p))
+            (Ty.global_id p) e.ty
+      | _ -> ());
       match Hashtbl.find_opt env.schemes p with
       | Some s ->
           used env loc (Path.local p) s.ty a e.ty;
@@ -591,6 +693,10 @@ let rec expr env sc (e : expr) =
       | None -> fail env loc (sprintf "there's no value `%s`" (Path.local p)))
   | Intrinsic (x, a, ds) ->
       descs env sc loc (Intrinsic.name x) a ds;
+      has_identity env loc
+        (sprintf "`%s`, used as a value," (Intrinsic.name x))
+        (Ty.global_id (Intrinsic.path x))
+        e.ty;
       (* an intrinsic is given no dictionaries, so it can't need any *)
       if (Prelude.scheme x).reqs <> [] then
         fail env loc
@@ -746,6 +852,8 @@ let rec expr env sc (e : expr) =
       is "an assignment" Ty.unit
   | If (c, t, f) ->
       List.iter (expr env sc) [ c; t; f ];
+      lams_within env t.loc "the `then` branch" t.ty e.ty;
+      lams_within env f.loc "the `else` branch" f.ty e.ty;
       same env loc "an `if` condition" c.ty Ty.bool;
       same env loc "the `then` branch" t.ty e.ty;
       same env loc "the `else` branch" f.ty e.ty
@@ -760,6 +868,7 @@ let rec expr env sc (e : expr) =
               same env g.loc "a guard" g.ty Ty.bool)
             a.guard;
           expr env sc a.body;
+          lams_within env a.body.loc "an arm" a.body.ty e.ty;
           same env a.body.loc "an arm" a.body.ty e.ty)
         arms
   | While (c, body) ->
@@ -773,6 +882,27 @@ let rec expr env sc (e : expr) =
       is "a sequence" b.ty
   | Call (f, args, ev) -> (
       expr env sc f;
+      (* whatever its set says it can be takes as many arguments *)
+      (match reveal env f.ty with
+      | Fun (_, _, _, _, l) ->
+          List.iter
+            (fun id ->
+              match Hashtbl.find_opt env.identities id with
+              | Some n when n = List.length args -> ()
+              | Some n ->
+                  fail env loc
+                    (sprintf
+                       "a call passes %d arguments to what can be `%s`, which \
+                        takes %d"
+                       (List.length args) id n)
+              | None ->
+                  fail env loc
+                    (sprintf
+                       "a call's callee can be `%s`, which no function or \
+                        lambda here is"
+                       id))
+            l.ids
+      | _ -> ());
       (* every function takes the same: the evidence where it's called *)
       let what =
         match f.kind with
@@ -809,7 +939,8 @@ let rec expr env sc (e : expr) =
             ps args;
           is "a call" ret
       | t -> fail env loc (sprintf "a call to a `%s`" (show t)))
-  | Lambda { params; ev; captures; body } -> (
+  | Lambda { name; params; ev; captures; body } -> (
+      has_identity env loc "a lambda" name e.ty;
       List.iter (in_scope env sc loc) captures;
       (* the body sees only what it captures, its parameters, and its own
          evidence: a lambda never keeps the evidence where it's made, which
@@ -1210,6 +1341,31 @@ let shows env (prog : program) =
                (Path.local m) (Path.full p)))
     prog.shows
 
+(* The identities a lambda set of [prog] can have, each with how many
+   parameters what it names takes. Inference puts one in a set only where
+   a lambda is, or a function, a member, an intrinsic or an operation is
+   used (Infer_lookup.named), and an interface has none (Ty.forget_lams),
+   so each is one of [prog]'s [Lambda]s, [Global]s, [Intrinsic]s or
+   operations called. *)
+let identities (prog : program) =
+  let found = Hashtbl.create 32 in
+  let arity (t : Ty.ty) =
+    match t with Fun (ps, _, _, _, _) -> Some (List.length ps) | _ -> None
+  in
+  let add id = Option.iter (Hashtbl.replace found id) in
+  let rec go (e : expr) =
+    (match e.kind with
+    | Lambda { name; params; _ } -> add name (Some (List.length params))
+    | Global (p, _, _, _) -> add (Ty.global_id p) (arity e.ty)
+    | Intrinsic (x, _, _) -> add (Ty.global_id (Intrinsic.path x)) (arity e.ty)
+    | Dep_call { dep; op; args; _ } ->
+        add (Ty.global_id (Path.member dep op)) (Some (List.length args))
+    | _ -> ());
+    List.iter go (children e)
+  in
+  List.iter (fun (f : fn_def) -> go f.body) prog.fns;
+  found
+
 (* Lint module [prog], which sees the interfaces [imports]: every one
    reachable through its imports, since a type from any of them can turn
    up in its code. [linked] are the program's modules, [prog] among them:
@@ -1231,6 +1387,7 @@ let program ~imports ~linked (prog : program) =
       installed = [];
       ntys = 0;
       own = [];
+      identities = identities prog;
     }
   in
   List.iter
