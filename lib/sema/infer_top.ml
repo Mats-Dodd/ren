@@ -792,18 +792,13 @@ let result_help env pr found =
           Say_dep_inside { handler = h; written = show pr (rename found) })
   | _ -> Write_found
 
-(* Infer every function's type, and return each function's type scheme and
-   the types of its expressions, in canonical form. [imports] are the
-   interfaces of the modules it imports, whose functions it can call, and
-   [reachable] those of every module reachable through them, whose types
-   it can meet: a field of an imported type can have a type from a module
-   this one never imported. [extra] are the dot calls of methods found so
-   far that the call graph needs besides [r]'s (see [program]). *)
-let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
-    =
+(* ---- checking the module ---- *)
+
+(* The environment the module [r] is checked in (Infer_env.env), with
+   every type it can meet: its own, and those of [reachable], the
+   interfaces of every module reachable through its imports. *)
+let new_env sink ~reachable (r : Resolve.t) =
   let st = Types.new_state () in
-  let home = r.home in
-  let bodies = List.map (Path.make home) bodies in
   let types = Hashtbl.create 16 in
   List.iter
     (fun (td : Iface.type_decl) -> Hashtbl.replace types td.path td)
@@ -819,60 +814,61 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
      module can name bare. [r.scope] is sorted by name, and two of its
      types never share one. *)
   let visible = List.map (fun (_, p) -> Hashtbl.find types p) r.scope in
-  let env =
-    {
-      st;
-      sink;
-      home;
-      names = Resolve.type_name r;
-      can_name = Resolve.can_name r;
-      source =
-        Ast.source ~type_name:(Resolve.type_name r)
-          ~value_name:(Resolve.value_name r);
-      types;
-      sets =
-        (fun p ->
-          match Hashtbl.find_opt types p with
-          | Some { body = Errors es; _ } -> Some es
-          | _ -> None);
-      visible;
-      globals = Hashtbl.create 16;
-      group = [];
-      spelled = [];
-      pending = [];
-      forced = [];
-      in_state = false;
-      in_scope = [];
-    }
-  in
-  check_written sink ~sets:env.sets ~names:env.names r.prog;
+  {
+    st;
+    sink;
+    home = r.home;
+    names = Resolve.type_name r;
+    can_name = Resolve.can_name r;
+    source =
+      Ast.source ~type_name:(Resolve.type_name r)
+        ~value_name:(Resolve.value_name r);
+    types;
+    sets =
+      (fun p ->
+        match Hashtbl.find_opt types p with
+        | Some { body = Errors es; _ } -> Some es
+        | _ -> None);
+    visible;
+    globals = Hashtbl.create 16;
+    group = [];
+    spelled = [];
+    pending = [];
+    forced = [];
+    in_state = false;
+    in_scope = [];
+  }
+
+(* The types of what the module can call before any of its own functions
+   is checked: the functions of [imports], the interfaces of the modules
+   it imports, and the members of every type of [reachable]; and those of
+   its own methods, among [fns], whose signatures are written out in
+   full. *)
+let add_globals env ~imports ~reachable fns =
   List.iter
     (fun (iface : Iface.t) ->
       List.iter
         (fun (v : Iface.value) ->
           Hashtbl.replace env.globals
             (Path.make iface.home v.vname)
-            (of_scheme st v.scheme))
+            (of_scheme env.st v.scheme))
         iface.values)
     imports;
-  (* and the members of every type the module can meet, which it can
-     call with a dot; an associated value is a function of no parameters,
-     as in its own module (ast.ml) *)
+  (* the members of every type the module can meet, which it can call
+     with a dot; an associated value is a function of no parameters, as in
+     its own module (ast.ml) *)
   List.iter
     (fun (iface : Iface.t) ->
       List.iter
         (fun (td : Iface.type_decl) ->
           Path.Map.iter
             (fun path (o : Iface.op) ->
-              let t = of_scheme st o.oscheme in
+              let t = of_scheme env.st o.oscheme in
               Hashtbl.replace env.globals path
                 (if o.okind = Value then TFun ([], t, REmpty, REmpty) else t))
             td.members)
         iface.types)
     reachable;
-  (* the module's functions, its types' members included; an associated
-     value is checked as a function of no parameters (ast.ml) *)
-  let fns = Ast.functions r.prog in
   (* a method whose signature is written out in full has the type its
      declaration gives it, as it does in its interface, even before it's
      checked: a dot call of it needn't come after it (Resolve.t.methods) *)
@@ -880,10 +876,388 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
     (fun (f : fn_def) ->
       match f.params with
       | p :: _ when p.pname.ident.name = "self" && Ast.spelled f ->
-          Hashtbl.replace env.globals (Ast.fn_path home f)
-            (of_scheme st (Iface.signature ~sets:env.sets f))
+          Hashtbl.replace env.globals (Ast.fn_path env.home f)
+            (of_scheme env.st (Iface.signature ~sets:env.sets f))
       | _ -> ())
-    fns;
+    fns
+
+(* A function of the group being checked, [fn]: its type parameters, as
+   skolems, what checking its body finds, [cx], and the types of its
+   parameters and result. *)
+type member = {
+  fn : fn_def;
+  skolems : (int * string) list;
+  cx : ctx;
+  ps : Types.param list;
+  ret : ty;
+}
+
+(* What checking the module has found so far: each function's type
+   scheme, and what checking its body found, by its path, and why each
+   function still gets a dependency from outside, which the solver finds
+   (Infer_env.withheld). A [mutable] field can be changed in place. *)
+type so_far = {
+  schemes : (Path.t, ty) Hashtbl.t;
+  tables : (Path.t, ctx) Hashtbl.t;
+  mutable withheld : withheld list;
+}
+
+(* [f]'s type within its group: its own type parameters (as skolems),
+   parameters, result and effects, and the context its body is checked
+   in. With it, a way to make the type its declaration gives it, which is
+   how the group's other functions see it until the group is done.
+   [is_value] says whether a function is an associated value. *)
+let setup env ~is_value (f : fn_def) =
+  let skolems =
+    List.map (fun (t : ident) -> (fresh_id env.st, t.name)) f.tparams
+  in
+  let tparams = List.map (fun (id, n) -> TSkol (id, n)) skolems in
+  (* the rows its signature names, which, like its type parameters, are
+     equal only to themselves while it's checked *)
+  let row_skolems = List.map (fun n -> (fresh_id env.st, n)) (rows_named f) in
+  let named = List.map (fun (id, n) -> (n, RSkol (id, n))) row_skolems in
+  let signature ~seen () =
+    (* a function that declares its dependencies starts with them: its
+       body can add to them only through a transparent parameter, whose
+       row this is too, and whatever else it adds is reported once the
+       group is done. The same goes for its errors. A row it names, `!
+       ..e`, is its own row's end once the group is done: [seen] makes the
+       type the group's other functions see, which ends in it already. *)
+    let tail (n : ident option) =
+      match Option.bind n (fun (n : ident) -> List.assoc_opt n.name named) with
+      | Some r when seen -> r
+      | _ -> fresh_row env.st
+    in
+    let errs =
+      extend
+        (Option.value (declared_errors env ~is_value ~tparams f) ~default:[])
+        (tail (Option.bind f.errors (fun (es : Resolved.errors) -> es.etail)))
+    in
+    let uses =
+      List.fold_right
+        (fun d rest -> RExtend (dep d, rest))
+        (Option.value (declared_uses ~is_value f) ~default:[])
+        (tail (Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail)))
+    in
+    (* A public function's transparent parameter fails with exactly its
+       function's errors, as its interface says. A private one's gets a
+       row of its own, which a `try` of it joins to the function's: an
+       `attempt` of it keeps its errors instead, and then the function
+       itself doesn't fail with them. *)
+    let ps =
+      List.map
+        (fun p ->
+          let own = if f.pub then errs else fresh_row env.st in
+          param_type env ~tparams ~named ~own:(own, uses) p)
+        f.params
+    in
+    let ret =
+      match f.ret with
+      | Some t -> convert env ~tvars:tparams ~named ~row:closed t
+      | None when f.pub && not (is_value f) ->
+          unit (* a public function without `->` returns Unit *)
+      | None when Ast.is_handler f ->
+          (* a handler whose needs aren't written: its type, its
+             dependency's or its own (Iface.handler_type), needs what its
+             body works out, which is known before its body is checked, so
+             the group's other functions, and its own arms, can install
+             it *)
+          TCon
+            ( Option.get (Iface.handler_type ~home:env.home f),
+              [ TUses (fresh_row env.st) ] )
+      | None -> fresh_var env.st
+    in
+    (ps, ret, errs, uses)
+  in
+  let path = Ast.fn_path env.home f in
+  let ps, ret, errs, uses = signature ~seen:false () in
+  let cx =
+    {
+      self = path;
+      locals = Hashtbl.create 16;
+      nodes = Hashtbl.create 64;
+      found = Hashtbl.create 16;
+      as_dep = Hashtbl.create 4;
+      targs = Hashtbl.create 16;
+      errs;
+      uses;
+      calls = ref [];
+      tparams;
+      handler = errs;
+      markers = [];
+      params =
+        List.map2
+          (fun (p : Resolved.param) (t : Types.param) ->
+            (p.pname.ident.name, t.ty))
+          f.params ps;
+      (* a transparent parameter's errors are the function's own *)
+      selves = errs :: transparent_rows f.params ps;
+      sources = Some (ref []);
+      named;
+    }
+  in
+  Hashtbl.replace env.globals path (TFun (ps, ret, errs, uses));
+  let declared () =
+    let ps, ret, errs, uses = signature ~seen:true () in
+    TFun (ps, ret, errs, uses)
+  in
+  ({ fn = f; skolems; cx; ps; ret }, (path, declared))
+
+(* Check the body of [m], a function of the group, against its result. *)
+let check_body env ~is_value m =
+  let f = m.fn in
+  bind_params m.cx f.params m.ps;
+  let why =
+    match f.ret with
+    | Some _ ->
+        explain
+          ~notes:
+            [
+              declared_type ~value:(is_value f) (Ast.fn_name f)
+                (show (printer env) m.ret);
+            ]
+          ()
+    | None when f.pub && not (is_value f) ->
+        explain ~notes:[ returns_unit ]
+          ~help_of:(fun pr found ->
+            write_result (show pr found) (result_help env pr found))
+          ()
+    | None -> plain
+  in
+  match (f.body.kind, m.ret) with
+  | Handler { state; arms; _ }, TCon (_, [ TUses needs ]) when f.ret = None ->
+      (* its needs are what its state and arms use *)
+      handler core env m.cx state arms ~needs ~declared:None;
+      Hashtbl.replace m.cx.nodes f.body.node m.ret
+  | _ -> check env m.cx ~why f.body m.ret
+
+(* Generalize each function of the group [ms], once it's solved, into its
+   type scheme. A function whose type holds another's type parameter, one
+   of the group whose signature names it, is reported. *)
+let generalize_group env so_far ms =
+  List.iter
+    (fun m ->
+      let f = m.fn and path = m.cx.self in
+      let mono = Hashtbl.find env.globals path in
+      (match
+         List.filter
+           (fun (id, _) -> not (List.mem_assoc id m.skolems))
+           (Types.skolems mono)
+       with
+      | (id, t) :: _ ->
+          let o = (List.find (fun o -> List.mem_assoc id o.skolems) ms).fn in
+          let declared = List.find (fun (p : ident) -> p.name = t) o.tparams in
+          report env
+            (others_param f.name.loc ~fn:(Ast.fn_name f) ~other:(Ast.fn_name o)
+               ~param:t ~declared:declared.loc)
+      | [] -> ());
+      let row_skolems =
+        List.filter_map
+          (function _, RSkol (id, n) -> Some (id, n) | _ -> None)
+          m.cx.named
+      in
+      let scheme = generalize env.st ~skolems:m.skolems ~row_skolems mono in
+      Hashtbl.replace env.globals path scheme;
+      Hashtbl.replace so_far.schemes path scheme;
+      Hashtbl.replace so_far.tables path m.cx)
+    ms
+
+(* A public function of [ms] spells out its full contract, and a public
+   value its type. *)
+let check_spelled env ~is_value so_far ms =
+  List.iter
+    (fun m ->
+      let f = m.fn in
+      if f.pub && is_value f && f.ret = None then
+        match Hashtbl.find so_far.schemes m.cx.self with
+        | TFun (_, t, _, _) as scheme ->
+            let pr = printer env in
+            reserve pr scheme;
+            report env
+              (untyped_value f.name.loc ~name:f.name.name ~fn:(Ast.fn_name f)
+                 (show pr t))
+        | _ -> assert false)
+    ms;
+  List.iter
+    (fun m ->
+      let f = m.fn in
+      if f.pub && not (is_value f) then
+        match Hashtbl.find so_far.schemes m.cx.self with
+        | TFun (ps, _, _, _) as scheme ->
+            List.iter2
+              (fun (p : Resolved.param) (t : Types.param) ->
+                if p.pty = None then (
+                  let pr = printer env in
+                  reserve pr scheme;
+                  let name = p.pname.ident in
+                  report env
+                    (untyped_param name.loc ~name:name.name ~fn:(Ast.fn_name f)
+                       (show pr t.ty))))
+              f.params ps
+        | _ -> assert false)
+    ms
+
+(* Check a group of functions that call each other: each one's body, then
+   what that leaves to decide once every body is checked, by the
+   constraint solver; then each is generalized. Each body sees the others
+   only as their declarations describe them (see [setup]). [values] are
+   the module's associated values, and [main] the program's `main`, if
+   the module is the program's entry. *)
+let check_group env ~values ~main so_far group =
+  let is_value_path p = List.mem p values in
+  let is_value f = is_value_path (Ast.fn_path env.home f) in
+  enter_level env.st;
+  let ms, declared = List.split (List.map (setup env ~is_value) group) in
+  env.group <- declared;
+  env.spelled <-
+    List.filter_map
+      (fun (f : fn_def) ->
+        if Ast.spelled f then Some (Ast.fn_path env.home f) else None)
+      group;
+  List.iter (check_body env ~is_value) ms;
+  (* what each function names and declares, which holds of what its body
+     does once the group's other constraints are decided *)
+  List.iter
+    (fun m ->
+      let c = { ffn = m.fn; fcx = m.cx; fmain = main = Some m.cx.self } in
+      List.iter (defer env) [ Own_errors c; Own_rows c; Declared c ])
+    ms;
+  so_far.withheld <-
+    so_far.withheld
+    @ Solve.solve env ~is_value:is_value_path ~withheld:so_far.withheld;
+  env.group <- [];
+  env.spelled <- [];
+  leave_level env.st;
+  generalize_group env so_far ms;
+  check_spelled env ~is_value so_far ms
+
+(* A test's body is `Unit`, so one whose value is thrown away, like a
+   comparison without its `assert`, is reported, as any other dropped
+   value is. Its value is that of the last line, inside the `with` a group
+   wraps it in. [bodies] are the functions that are tests' bodies. *)
+let check_test_body env so_far ~bodies (f : fn_def) =
+  let path = Ast.fn_path env.home f in
+  if List.mem path bodies then
+    let rec last (e : expr) =
+      match e.kind with
+      | Block (_, l) -> last l
+      | With { body; _ } -> last body
+      | _ -> e
+    in
+    (* the last line's own type: a wrapper's `with` around it has the
+       wrapper's result, which is reported where it's wrong *)
+    let own =
+      Option.bind (Hashtbl.find_opt so_far.tables path) (fun cx ->
+          Hashtbl.find_opt cx.nodes (last f.body).node)
+    in
+    match (own, repr (Hashtbl.find so_far.schemes path)) with
+    | Some ret, _ | None, TFun (_, ret, _, _) ->
+        unify_at env (last f.body).loc ~found:ret ~expected:unit ~msg:test_body
+          ~notes:[ test_passes ]
+          ~help:(test_body_help ~is_bool:(repr ret = bool))
+    | _ -> ()
+
+(* What the runtime installs around what it runs: the program's `main`,
+   if the module is the program's entry, the file [entry], and each of
+   [tests]. *)
+let check_runs env r so_far ?entry ~tests fns =
+  let find name =
+    List.find_opt
+      (fun (f : fn_def) -> Ast.fn_path env.home f = Path.make env.home name)
+      fns
+  in
+  let found (f : fn_def) =
+    let path = Ast.fn_path env.home f in
+    (Hashtbl.find so_far.schemes path, Hashtbl.find so_far.tables path)
+  in
+  let schemes = so_far.schemes and withheld = so_far.withheld in
+  (match Option.map (fun file -> (file, find "main")) entry with
+  | None -> ()
+  | Some (file, None) -> report env (no_main (Loc.point ~file 1 1))
+  | Some (_, Some f) when f.params <> [] ->
+      report env (main_params (List.hd f.params).pname.ident.loc)
+  | Some (_, Some f) ->
+      let ty, cx = found f in
+      check_main env r ~fns ~schemes ~withheld f ty cx);
+  List.iter
+    (fun (t : Test_items.test) ->
+      match find t.fn with
+      | Some f ->
+          let ty, cx = found f in
+          check_test env r ~fns ~schemes ~withheld t f ty cx
+      | None -> ())
+    tests
+
+(* What inference found of [f], in canonical form: its scheme, and its
+   nodes. Its scheme and node types share one numbering, so a variable is
+   the same [Var n] in both, and so do the type arguments its uses pick.
+   Nodes are converted in order of their ids, so the numbering doesn't
+   depend on a hash table's order, and their type arguments after all
+   their types, so those number variables just as they did before there
+   were type arguments. *)
+let canonical env so_far (f : fn_def) =
+  let path = Ast.fn_path env.home f in
+  let c = canon env.st in
+  (* a use's type arguments (Infer_env.targs), what each variable of the
+     callee's scheme stands for. A function of the group being checked is
+     generic now, so what each of its variables stands for in the type it
+     was used at is known. *)
+  let type_args (u : Infer_env.targs) : Ty.args =
+    let s =
+      match u.tpicked with
+      | Fresh s -> s
+      | Group t -> (
+          let scheme = Hashtbl.find env.globals u.tcallee in
+          let s = matching env.st scheme t in
+          match repr scheme with
+          | TFun ([], r, _, _) when u.tvalue -> restrict s (generics r)
+          | _ -> s)
+    in
+    {
+      tys = List.map (fun (_, t) -> canon_ty c ~all:true t) s.tys;
+      rows = List.map (fun (_, r) -> canon_row c ~all:true r) s.rows;
+    }
+  in
+  let ty = canon_ty c ~all:false (Hashtbl.find so_far.schemes path) in
+  let scheme : Ty.scheme = { ty; names = canon_names c; reqs = [] } in
+  let cx = Hashtbl.find so_far.tables path in
+  let ids =
+    Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes [] |> List.sort compare
+  in
+  let tys =
+    List.map (fun id -> canon_ty c ~all:true (Hashtbl.find cx.nodes id)) ids
+  in
+  let nodes =
+    List.fold_left2
+      (fun acc id ty ->
+        Nodes.add id
+          {
+            ty;
+            found = Hashtbl.find_opt cx.found id;
+            as_dep = Hashtbl.find_opt cx.as_dep id;
+            targs = Option.map type_args (Hashtbl.find_opt cx.targs id);
+          }
+          acc)
+      Nodes.empty ids tys
+  in
+  ((path, scheme), (path, nodes))
+
+(* Infer every function's type, and return each function's type scheme and
+   the types of its expressions, in canonical form. [imports] are the
+   interfaces of the modules it imports, whose functions it can call, and
+   [reachable] those of every module reachable through them, whose types
+   it can meet: a field of an imported type can have a type from a module
+   this one never imported. [extra] are the dot calls of methods found so
+   far that the call graph needs besides [r]'s (see [program]). *)
+let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
+    =
+  let env = new_env sink ~reachable r in
+  let home = r.home in
+  check_written sink ~sets:env.sets ~names:env.names r.prog;
+  (* the module's functions, its types' members included; an associated
+     value is checked as a function of no parameters (ast.ml) *)
+  let fns = Ast.functions r.prog in
+  add_globals env ~imports ~reachable fns;
   let values =
     List.concat_map
       (function
@@ -896,238 +1270,14 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
         | Fn _ | Import _ | Testing _ -> [])
       r.prog
   in
-  let path = Ast.fn_path home in
-  let is_value_path p = List.mem p values in
-  let is_value (f : fn_def) = is_value_path (path f) in
+  let is_value (f : fn_def) = List.mem (Ast.fn_path home f) values in
   List.iter (check_transparent sink) fns;
-  let schemes = Hashtbl.create 16 in
-  let tables = Hashtbl.create 16 in
-  (* why each function checked so far still gets a dependency from
-     outside, which the solver finds (Infer_env.withheld) *)
-  let withheld = ref [] in
+  let so_far =
+    { schemes = Hashtbl.create 16; tables = Hashtbl.create 16; withheld = [] }
+  in
+  let main = Option.map (fun _ -> Path.make home "main") entry in
   List.iter
-    (fun group ->
-      enter_level env.st;
-      (* each function's type within the group: its own type parameters
-         (as skolems), parameters, result and effects. [declared] makes the
-         type its declaration gives it, which is how the group's other
-         functions see it until the group is done. *)
-      let setup (f : fn_def) =
-        let skolems =
-          List.map (fun (t : ident) -> (fresh_id env.st, t.name)) f.tparams
-        in
-        let tparams = List.map (fun (id, n) -> TSkol (id, n)) skolems in
-        (* the rows its signature names, which, like its type parameters,
-           are equal only to themselves while it's checked *)
-        let row_skolems =
-          List.map (fun n -> (fresh_id env.st, n)) (rows_named f)
-        in
-        let named = List.map (fun (id, n) -> (n, RSkol (id, n))) row_skolems in
-        let signature ~seen () =
-          (* a function that declares its dependencies starts with them: its
-             body can add to them only through a transparent parameter, whose
-             row this is too, and whatever else it adds is reported once the
-             group is done. The same goes for its errors. A row it names,
-             `! ..e`, is its own row's end once the group is done: [seen]
-             makes the type the group's other functions see, which ends in
-             it already. *)
-          let tail (n : ident option) =
-            match
-              Option.bind n (fun (n : ident) -> List.assoc_opt n.name named)
-            with
-            | Some r when seen -> r
-            | _ -> fresh_row env.st
-          in
-          let errs =
-            extend
-              (Option.value
-                 (declared_errors env ~is_value ~tparams f)
-                 ~default:[])
-              (tail
-                 (Option.bind f.errors (fun (es : Resolved.errors) -> es.etail)))
-          in
-          let uses =
-            List.fold_right
-              (fun d rest -> RExtend (dep d, rest))
-              (Option.value (declared_uses ~is_value f) ~default:[])
-              (tail (Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail)))
-          in
-          (* A public function's transparent parameter fails with exactly
-             its function's errors, as its interface says. A private one's
-             gets a row of its own, which a `try` of it joins to the
-             function's: an `attempt` of it keeps its errors instead, and
-             then the function itself doesn't fail with them. *)
-          let ps =
-            List.map
-              (fun p ->
-                let own = if f.pub then errs else fresh_row env.st in
-                param_type env ~tparams ~named ~own:(own, uses) p)
-              f.params
-          in
-          let ret =
-            match f.ret with
-            | Some t -> convert env ~tvars:tparams ~named ~row:closed t
-            | None when f.pub && not (is_value f) ->
-                unit (* a public function without `->` returns Unit *)
-            | None when Ast.is_handler f ->
-                (* a handler whose needs aren't written: its type, its
-                   dependency's or its own (Iface.handler_type), needs
-                   what its body works out, which is known before its body
-                   is checked, so the group's other functions, and its own
-                   arms, can install it *)
-                TCon
-                  ( Option.get (Iface.handler_type ~home:env.home f),
-                    [ TUses (fresh_row env.st) ] )
-            | None -> fresh_var env.st
-          in
-          (ps, ret, errs, uses)
-        in
-        let ps, ret, errs, uses = signature ~seen:false () in
-        let cx =
-          {
-            self = path f;
-            locals = Hashtbl.create 16;
-            nodes = Hashtbl.create 64;
-            found = Hashtbl.create 16;
-            as_dep = Hashtbl.create 4;
-            targs = Hashtbl.create 16;
-            errs;
-            uses;
-            calls = ref [];
-            tparams;
-            handler = errs;
-            markers = [];
-            params =
-              List.map2
-                (fun (p : Resolved.param) (t : Types.param) ->
-                  (p.pname.ident.name, t.ty))
-                f.params ps;
-            (* a transparent parameter's errors are the function's own *)
-            selves = errs :: transparent_rows f.params ps;
-            sources = Some (ref []);
-            named;
-          }
-        in
-        Hashtbl.replace env.globals (path f) (TFun (ps, ret, errs, uses));
-        let declared () =
-          let ps, ret, errs, uses = signature ~seen:true () in
-          TFun (ps, ret, errs, uses)
-        in
-        ((f, skolems, cx, ps, ret), (path f, declared))
-      in
-      let setups, declared = List.split (List.map setup group) in
-      env.group <- declared;
-      env.spelled <-
-        List.filter_map
-          (fun (f : fn_def) -> if Ast.spelled f then Some (path f) else None)
-          group;
-      List.iter
-        (fun ((f : fn_def), _, cx, ps, ret) ->
-          bind_params cx f.params ps;
-          let why =
-            match f.ret with
-            | Some _ ->
-                explain
-                  ~notes:
-                    [
-                      declared_type ~value:(is_value f) (Ast.fn_name f)
-                        (show (printer env) ret);
-                    ]
-                  ()
-            | None when f.pub && not (is_value f) ->
-                explain ~notes:[ returns_unit ]
-                  ~help_of:(fun pr found ->
-                    write_result (show pr found) (result_help env pr found))
-                  ()
-            | None -> plain
-          in
-          match (f.body.kind, ret) with
-          | Handler { state; arms; _ }, TCon (_, [ TUses needs ])
-            when f.ret = None ->
-              (* its needs are what its state and arms use *)
-              handler core env cx state arms ~needs ~declared:None;
-              Hashtbl.replace cx.nodes f.body.node ret
-          | _ -> check env cx ~why f.body ret)
-        setups;
-      (* what each function names and declares, which holds of what its
-         body does once the group's other constraints are decided *)
-      List.iter
-        (fun ((f : fn_def), _, cx, _, _) ->
-          let c =
-            {
-              ffn = f;
-              fcx = cx;
-              fmain = entry <> None && path f = Path.make home "main";
-            }
-          in
-          List.iter (defer env) [ Own_errors c; Own_rows c; Declared c ])
-        setups;
-      withheld :=
-        !withheld @ Solve.solve env ~is_value:is_value_path ~withheld:!withheld;
-      env.group <- [];
-      env.spelled <- [];
-      leave_level env.st;
-      List.iter
-        (fun ((f : fn_def), skolems, cx, _, _) ->
-          let mono = Hashtbl.find env.globals (path f) in
-          (match
-             List.filter
-               (fun (id, _) -> not (List.mem_assoc id skolems))
-               (Types.skolems mono)
-           with
-          | (id, t) :: _ ->
-              let owner =
-                List.find (fun (_, sk, _, _, _) -> List.mem_assoc id sk) setups
-              in
-              let (o : fn_def), _, _, _, _ = owner in
-              let declared =
-                List.find (fun (p : ident) -> p.name = t) o.tparams
-              in
-              report env
-                (others_param f.name.loc ~fn:(Ast.fn_name f)
-                   ~other:(Ast.fn_name o) ~param:t ~declared:declared.loc)
-          | [] -> ());
-          let row_skolems =
-            List.filter_map
-              (function _, RSkol (id, n) -> Some (id, n) | _ -> None)
-              cx.named
-          in
-          let scheme = generalize env.st ~skolems ~row_skolems mono in
-          Hashtbl.replace env.globals (path f) scheme;
-          Hashtbl.replace schemes (path f) scheme;
-          Hashtbl.replace tables (path f) cx)
-        setups;
-      (* public values spell out their type *)
-      List.iter
-        (fun ((f : fn_def), _, _, _, _) ->
-          if f.pub && is_value f && f.ret = None then
-            match Hashtbl.find schemes (path f) with
-            | TFun (_, t, _, _) as scheme ->
-                let pr = printer env in
-                reserve pr scheme;
-                report env
-                  (untyped_value f.name.loc ~name:f.name.name
-                     ~fn:(Ast.fn_name f) (show pr t))
-            | _ -> assert false)
-        setups;
-      (* public functions spell out their full contract *)
-      List.iter
-        (fun ((f : fn_def), _, _, _, _) ->
-          if f.pub && not (is_value f) then
-            match Hashtbl.find schemes (path f) with
-            | TFun (ps, _, _, _) as scheme ->
-                List.iter2
-                  (fun (p : Resolved.param) (t : Types.param) ->
-                    if p.pty = None then (
-                      let pr = printer env in
-                      reserve pr scheme;
-                      let name = p.pname.ident in
-                      report env
-                        (untyped_param name.loc ~name:name.name
-                           ~fn:(Ast.fn_name f) (show pr t.ty))))
-                  f.params ps
-            | _ -> assert false)
-        setups)
+    (check_group env ~values ~main so_far)
     (components ~home
        ~calls:
          (Path.Map.mapi
@@ -1140,115 +1290,12 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
               calls @ Path.Map.find f r.methods @ found)
             r.calls)
        fns);
-  let values = value_order env r fns ~is_value ~found:tables in
-  (* A test's body is `Unit`, so one whose value is thrown away, like a
-     comparison without its `assert`, is reported, as any other dropped
-     value is. Its value is that of the last line, inside the `with` a
-     group wraps it in. *)
+  let values = value_order env r fns ~is_value ~found:so_far.tables in
   List.iter
-    (fun (f : fn_def) ->
-      if List.mem (path f) bodies then
-        let rec last (e : expr) =
-          match e.kind with
-          | Block (_, l) -> last l
-          | With { body; _ } -> last body
-          | _ -> e
-        in
-        (* the last line's own type: a wrapper's `with` around it has the
-           wrapper's result, which is reported where it's wrong *)
-        let own =
-          Option.bind
-            (Hashtbl.find_opt tables (path f))
-            (fun cx -> Hashtbl.find_opt cx.nodes (last f.body).node)
-        in
-        match (own, repr (Hashtbl.find schemes (path f))) with
-        | Some ret, _ | None, TFun (_, ret, _, _) ->
-            unify_at env (last f.body).loc ~found:ret ~expected:unit
-              ~msg:test_body ~notes:[ test_passes ]
-              ~help:(test_body_help ~is_bool:(repr ret = bool))
-        | _ -> ())
+    (check_test_body env so_far ~bodies:(List.map (Path.make home) bodies))
     fns;
-  (match
-     Option.map
-       (fun file ->
-         ( file,
-           List.find_opt
-             (fun (f : fn_def) -> path f = Path.make home "main")
-             fns ))
-       entry
-   with
-  | None -> ()
-  | Some (file, None) -> report env (no_main (Loc.point ~file 1 1))
-  | Some (_, Some f) when f.params <> [] ->
-      report env (main_params (List.hd f.params).pname.ident.loc)
-  | Some (_, Some f) ->
-      check_main env r ~fns ~schemes ~withheld:!withheld f
-        (Hashtbl.find schemes (path f))
-        (Hashtbl.find tables (path f)));
-  List.iter
-    (fun (t : Test_items.test) ->
-      match
-        List.find_opt (fun (f : fn_def) -> path f = Path.make home t.fn) fns
-      with
-      | Some f ->
-          check_test env r ~fns ~schemes ~withheld:!withheld t f
-            (Hashtbl.find schemes (path f))
-            (Hashtbl.find tables (path f))
-      | None -> ())
-    tests;
-  (* A use's type arguments (Infer_env.targs), what each variable of the
-     callee's scheme stands for. A function of the group being checked is
-     generic now, so what each of its variables stands for in the type it
-     was used at is known. *)
-  let type_args c (u : Infer_env.targs) : Ty.args =
-    let s =
-      match u.tpicked with
-      | Fresh s -> s
-      | Group t -> (
-          let scheme = Hashtbl.find env.globals u.tcallee in
-          let s = matching st scheme t in
-          match repr scheme with
-          | TFun ([], r, _, _) when u.tvalue -> restrict s (generics r)
-          | _ -> s)
-    in
-    {
-      tys = List.map (fun (_, t) -> canon_ty c ~all:true t) s.tys;
-      rows = List.map (fun (_, r) -> canon_row c ~all:true r) s.rows;
-    }
-  in
-  (* Each function's scheme and node types share one numbering, so a
-     variable is the same [Var n] in both, and so do the type arguments
-     its uses pick. Nodes are converted in order of their ids, so the
-     numbering doesn't depend on a hash table's order, and their type
-     arguments after all their types, so those number variables just as
-     they did before there were type arguments. *)
-  let canonical (f : fn_def) =
-    let c = canon st in
-    let ty = canon_ty c ~all:false (Hashtbl.find schemes (path f)) in
-    let scheme : Ty.scheme = { ty; names = canon_names c; reqs = [] } in
-    let cx = Hashtbl.find tables (path f) in
-    let ids =
-      Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes [] |> List.sort compare
-    in
-    let tys =
-      List.map (fun id -> canon_ty c ~all:true (Hashtbl.find cx.nodes id)) ids
-    in
-    let nodes =
-      List.fold_left2
-        (fun acc id ty ->
-          Nodes.add id
-            {
-              ty;
-              found = Hashtbl.find_opt cx.found id;
-              as_dep = Hashtbl.find_opt cx.as_dep id;
-              targs = Option.map (type_args c) (Hashtbl.find_opt cx.targs id);
-            }
-            acc)
-        Nodes.empty ids tys
-    in
-    ((path f, scheme), (path f, nodes))
-  in
-  let schemes, nodes = List.split (List.map canonical fns) in
+  check_runs env r so_far ?entry ~tests fns;
+  let schemes, nodes = List.split (List.map (canonical env so_far) fns) in
   {
     schemes = Path.Map.of_list schemes;
     values;
