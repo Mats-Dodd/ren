@@ -83,11 +83,10 @@ it, each fact says so, and which step fixes it.
   a value, it's given a descriptor of it (Specialization, below), so the
   interpreter never works one out.
 - **Effects.** What a function can fail with, its `!` row, and what it
-  uses, its `uses` row. Inference, carried in function types. From R3,
-  in the same solver as types. Today part of it is constraints that
-  solver decides (The constraint solver, below), and the rest is work
-  deferred into queues during inference, each settled by a pass of its
-  own after it, in an order fixed by hand (infer_top.ml).
+  uses, its `uses` row. Inference, carried in function types, in the
+  same solver as types: what can be decided only once a group of
+  functions is checked is a constraint that solver decides (The
+  constraint solver, below).
 - **Requirements.** From R4. What a generic function needs of a type
   parameter, such as `eq` for `==`. Inference, in the same solver; never
   written, on a public function either (operators.md, "Generic code").
@@ -205,13 +204,28 @@ decided only once every body is checked is a **constraint**
 (infer_env.ml, `constr`), and once the group is done the solver
 (solve.ml) decides them all.
 
-The constraints so far:
+The constraints:
 
 - **A use of another function of the group** has the type that
   function's own body gave it.
+- **A handler of several dependencies given where what's wanted isn't
+  known yet** is taken as one of them, if that's what's wanted once it's
+  known, or else as the handler itself (deps.md, "Implementations"), so
+  `same(counting_rates(2), Rates { ... })` and the same with its
+  arguments the other way round both take it as a `Rates`. Inference
+  doesn't always wait: something that has to look into the type before
+  the group is done, a `with`, a field, a method, a call, or a mismatch
+  that shows it, makes it the handler's own type first, as the solver
+  would if nothing else said (infer_coerce.ml).
 - **A value a statement throws away** is `Unit` (errors.md, "Nothing is
   dropped"). One whose type is still unknown becomes `Unit`, and a later
   mismatch at a call of its function points back at it.
+- **A `with` that installs** gives its body no more than what it
+  installs and what's installed outside it: what the body uses, but what
+  it installs, is added to what the `with` uses.
+- **What an implementation needs is needed where it's used:** each place
+  gets a copy of its row, which gains the labels it learns later.
+- **A function that names its own errors' row,** `! ..e`, fails with it.
 - **A tag written as a value,** `Err(Right)`, is in its error set, if
   the set is one of its own: `if c then Err(Left(1)) else Err(Right)`
   holds both.
@@ -228,37 +242,41 @@ The constraints so far:
   its own.
 - **The rules of markers** (errors.md, "Marking"): a call no marker
   covers can't fail, and every marker covers something that can.
-- **What an implementation needs is needed where it's used:** each place
-  gets a copy of its row, which gains the labels it learns later.
+- **An implementation's operation fails with no more than its
+  dependency declares** (deps.md, "Implementations").
 - **A row a named row is added to ends in it,** `..d`, once it has every
-  other label, since that stops it getting more.
+  other label, since that stops it getting more; and so do a function's
+  own rows, in the rows it names.
+- **A function does what it declares** (infer_declared.ml): it uses and
+  fails with what its signature says, a public one's transparent
+  parameters keep their rows open, and a handler needs no more than it
+  declares, and never itself.
 
-The rest of what inference leaves until a group is done is still kept in
-queues of their own, each settled by a pass of its own in infer_top.ml:
-what a `with` installs, implementations' operations and handlers' needs.
-R3 moves each onto the solver. Until it has, the solver runs in parts,
-since the passes for what a `with` installs, implementations'
-operations, and a function's own named error row have to come between:
-the uses and the values thrown away first; then, after what each `with`
-installs, which reads the copies as it goes, the copies; then what each
-error set holds and the rules of markers; and the named rows last.
+So a group is checked in two steps (infer_top.ml, `check_group`): every
+body, then the solver. Nothing runs between them, and after the solver
+only generalizing touches the group's types.
 
 Each constraint carries where it comes from and what a message about it
 needs, and the solver decides them like this:
 
 - **By rank.** The constraints of one kind are all decided before the
-  next kind starts, because the later one reads what the earlier decides:
-  the uses of the group's functions first, since a call of one learns
-  only then what it returns, then the values thrown away, then each set's
-  own tags, then the inclusions, then the kept sets closed and the tags
-  matched in them checked. The checks that only report, like a marker's
-  rules, read the result after all of them, and a row ends in a named row
-  last.
+  next kind starts, because the later one reads what the earlier decides
+  (solve.ml, `rank`): the uses of the group's functions first, since a
+  call of one learns only then what it returns, then the handlers taken
+  as one dependency, then the values thrown away, then what each `with`
+  installs and what each place an implementation is used needs, then a
+  function's own error row, each set's own tags, the inclusions, and the
+  kept sets closed and the tags matched in them checked. The checks that
+  only report, like a marker's rules or what an operation fails with,
+  read the result after all of them; a row ends in a named row after
+  that, and what each function declares is checked last.
 - **To a fixpoint.** A use or a value thrown away is decided once. An
   inclusion, or a copy of what an implementation needs, is a worklist
   item: whenever the row it adds from gains a label, it's woken and adds
-  that too. Rows only ever gain labels, and
-  each has finitely many to gain, so this ends.
+  that too. Rows only ever gain labels, and each has finitely many to
+  gain, so this ends. A `with` that installs is decided once, innermost
+  first, after the copies are brought up to date, since what its body
+  uses includes them.
 - **Reporting every failure, and changing nothing by one.** Each
   unification is tried first on copies of its types (unify.ml,
   `atomically`), and done for real only if that worked. So one that fails
@@ -276,6 +294,24 @@ And a constraint that fails changes nothing, so it can't change what
 another sees. What order does decide is only which of two constraints
 that can't both hold is blamed: the one met second, so a mistake is
 reported where the code reads it, after what it contradicts.
+
+One thing the solver can't do is put the groups in order. Which method
+a dot call like `s.size()` calls is found only by checking the call,
+through `s`'s type, but the groups are found from the call graph before
+anything is checked. So the graph starts with the dot calls resolve.ml
+can tell, and a dot call that turns out to call a method of the module
+not checked yet stops checking (infer_env.ml's `Unchecked`), adds the
+call to the graph, and checks the module again from the start
+(infer_top.ml, `program`). That stays, because the method's type comes
+from checking its body, which has to happen in a group before the
+caller's, or in the same one if the method calls it back: which groups
+there are is what was wrong, and only the call graph can say that. A
+constraint can wait for a type the group will find, but not for a
+function whose group hasn't been checked, or put that function in the
+caller's group once the caller is checked. Each time adds an edge the
+graph didn't have, so it ends, and a method whose signature is written
+out in full never needs it, since its type is known before it's
+checked.
 
 ## Stage 10.0
 
@@ -400,3 +436,25 @@ Where the work forced a change to the plan above:
   used to give `show` the type at each call, but a lambda in the same
   place, `fn(x) => show(x)`, already showed `{ id: 1 }`; now both do
   (test_eval.ml).
+- **R3, where the solver's work lives.** Deciding a constraint that
+  checks what a function declares, its uses, errors and named rows, and
+  a handler's needs, is in infer_declared.ml, and taking a handler of
+  several dependencies as one of them in infer_coerce.ml, beside solve.ml
+  rather than in it, since the messages they give need much of what
+  infer_top.ml had for them. Why a function still gets a dependency from
+  outside, which a message about a call of it explains with, was a list
+  in the environment; it's what the solver returns for each group, which
+  infer_top.ml keeps for the next ones and for `main` and tests.
+- **R3, a handler taken as one dependency.** The plan has it decided once
+  both sides are known. Inference can't always wait for that: a `with`,
+  a field, a method or a call has to know the type it's looking into, and
+  a mismatch shows it, so that makes a handler given to a type not known
+  yet its own type then, as the solver would if nothing said otherwise
+  (infer_coerce.ml, `settle`). What's wanted can still be said by
+  anything before that, in either order, which fixes B3, and so
+  `let o = Some(counting_rates(1))` followed by `let p: Option<Rates> =
+  o` is accepted now too: one error a test showed is gone (test_deps.ml,
+  "a handler of several where something else is wanted"). An `if` whose
+  `then` branch is a handler and whose `else` is an implementation of one
+  of its dependencies is still rejected, since its branches don't meet
+  at a type not known yet; that's left with the rest of B3.
