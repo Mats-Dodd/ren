@@ -44,28 +44,35 @@ let as_one env t expected =
    as it yet. *)
 let given ?(said = false) env t =
   let t = repr t in
-  (* whether [w] is [t]: the same variable, or with [said], the same type
-     a variable became, which [==] says is the same one in memory *)
-  let same w =
-    match (repr w, t) with
-    | TVar v', TVar v -> v' == v
-    | w, TCon _ -> said && w == t
-    | _ -> false
-  in
-  List.find_map
-    (function
-      | Coerce { cwanted; cfound; _ } when same cwanted -> (
-          match (repr cfound, t) with
-          | TCon (h, [ TUses needs ]), t -> (
-              match (Hashtbl.find_opt env.types h, t) with
-              | Some { body = Handler deps; _ }, TVar _ -> Some (h, deps, needs)
-              | Some { body = Handler deps; _ }, TCon (d, [ TUses _ ])
-                when List.mem d deps ->
-                  Some (h, deps, needs)
+  (* a variable no handler was given to has no coercion to look for, which
+     is most of them, so most never look through [env.pending] *)
+  match t with
+  | TVar _ when not (Unify.watched env.st t) -> None
+  | TCon _ when not said -> None
+  | _ ->
+      (* whether [w] is [t]: the same variable, or with [said], the same
+         type a variable became, which [==] says is the same one in memory *)
+      let same w =
+        match (repr w, t) with
+        | TVar v', TVar v -> v' == v
+        | w, TCon _ -> said && w == t
+        | _ -> false
+      in
+      List.find_map
+        (function
+          | Coerce { cwanted; cfound; _ } when same cwanted -> (
+              match (repr cfound, t) with
+              | TCon (h, [ TUses needs ]), t -> (
+                  match (Hashtbl.find_opt env.types h, t) with
+                  | Some { body = Handler deps; _ }, TVar _ ->
+                      Some (h, deps, needs)
+                  | Some { body = Handler deps; _ }, TCon (d, [ TUses _ ])
+                    when List.mem d deps ->
+                      Some (h, deps, needs)
+                  | _ -> None)
               | _ -> None)
           | _ -> None)
-      | _ -> None)
-    (List.rev env.pending)
+        (List.rev env.pending)
 
 (* The same, without the handler. *)
 let pending env t =
@@ -93,10 +100,20 @@ let taken_as env cx why (e : expr) t expected =
       Hashtbl.replace cx.as_dep e.node d;
       one
   | None -> (
-      match (given ~said:true env t, reveal env.st expected) with
-      | Some (h, deps, needs), TCon (d, [ TUses _ ])
-        when List.mem d deps
-             && match repr t with TCon (o, _) -> o <> d | _ -> true ->
+      (* only a variable a handler was given to, or another dependency
+         something said it was, can be one, where a dependency is wanted;
+         [given] is looked for only then, since it looks through the
+         group's constraints *)
+      let wanted = reveal env.st expected in
+      let handler =
+        match (repr t, wanted) with
+        | TVar _, TCon (_, [ TUses _ ]) -> given ~said:true env t
+        | TCon (o, [ TUses _ ]), TCon (d, [ TUses _ ]) when o <> d ->
+            given ~said:true env t
+        | _ -> None
+      in
+      match (handler, wanted) with
+      | Some (h, deps, needs), TCon (d, [ TUses _ ]) when List.mem d deps ->
           let one = TCon (d, [ TUses needs ]) in
           defer env
             (Coerce
@@ -195,7 +212,8 @@ let give env cx why (e : expr) t expected =
    whatever is about to be done with it can be. *)
 let settle env t =
   match repr t with
-  | TVar v -> Infer_report.settle env (fun v' -> v' == v)
+  | TVar v when Unify.watched env.st t ->
+      Infer_report.settle env (fun v' -> v' == v)
   | _ -> ()
 
 (* The same as [settle], where a member or a field is about to be looked

@@ -2012,3 +2012,30 @@ fn main() = ()
       │                         ^^^^^^^^^^^^^^^
       = `*` works on `Int`s
     |}]
+
+let%expect_test "a group of many calls checks in time linear in them" =
+  (* each argument is looked at alone: one that isn't a handler of several
+     dependencies doesn't look through the group's other constraints, so
+     36,000 calls in one function check in about a second, not 45. The
+     bound is far above the first and far below the second, so a slower
+     machine doesn't fail it; [Sys.time] is the time this process has run,
+     whatever else the machine is doing *)
+  let lines n f = String.concat "\n" (List.init n (fun i -> f (i + 1))) in
+  let src =
+    String.concat "\n"
+      [
+        "fn f(i: Int) -> Int ! Boom = if i > 0 then i else fail Boom";
+        "fn f2(i: Int) -> Int = i";
+        "fn g() =";
+        "  let a = 0";
+        lines 18_000 (Printf.sprintf "  let _ = try f(%d)");
+        lines 18_000 (Printf.sprintf "  let a = a + f2(%d)");
+        "  a";
+        "fn main() uses Console = print(attempt g())";
+      ]
+  in
+  let start = Sys.time () in
+  ignore (Driver.check ~file src);
+  let took = Sys.time () -. start in
+  print_endline (if took < 10. then "in time" else Printf.sprintf "%.1fs" took);
+  [%expect {| in time |}]
