@@ -6,7 +6,8 @@ open Types
 
 let sprintf = Printf.sprintf
 let plural n = if n = 1 then "" else "s"
-let quote names = String.concat ", " (List.map (sprintf "`%s`") names)
+let code x = sprintf "`%s`" x
+let quote names = String.concat ", " (List.map code names)
 
 (* "`Short(Int)`", "`Short(Int)` and `Frozen`", "`A`, `B` and `C`" *)
 let and_list items =
@@ -520,6 +521,205 @@ let contains_itself loc ~found ~expected =
       ]
     "this value's type would have to contain itself"
 
+(* ---- expressions ----
+
+   A mismatch is worded by a function given both types as they're printed:
+   the one found, [f], then the one expected, [x] (Infer_report.why). *)
+
+(* What an `Int` is wanted for: a side of the operator [op], or an index. *)
+type int_use = Operator of string | Indexing
+
+let int_note = function
+  | Operator op -> sprintf "`%s` works on `Int`s" op
+  (* this reads oddly, but restructuring changes no message *)
+  | Indexing -> "`an index` works on `Int`s"
+
+(* What a `Bool` is wanted for. *)
+type bool_use = Condition | Negated | Side of string | Guard | Asserted
+
+let bool_note use =
+  sprintf "%s has to be a `Bool`"
+    (match use with
+    | Condition -> "an `if` condition"
+    | Negated -> "what `not` is applied to"
+    | Side op -> sprintf "each side of `%s`" op
+    | Guard -> "a guard"
+    | Asserted -> "what an `assert` checks")
+
+(* A statement of the function [c] threw away a value whose type wasn't
+   known, which made it `Unit`: the label at the statement, and the
+   help. *)
+let forced_unit c =
+  sprintf
+    "`%s` throws this value away, and its type wasn't known, so it was taken \
+     to be `Unit`"
+    c
+
+let forced_unit_help c =
+  sprintf "if `%s` means to drop a value of any type there, write `let _ = ...`"
+    c
+
+let lambda_produces f x =
+  sprintf "this lambda produces %s, but it has to produce %s" (article f)
+    (article x)
+
+let orelse_left f _ =
+  sprintf "`orelse` takes an `Option` on its left, but this is %s" (article f)
+
+let orelse_left_help =
+  "`x orelse y` is the value in the `Option` `x`, or else `y`"
+
+let orelse_right f x =
+  sprintf "this is %s, but the `Option` on the left of `orelse` holds %s"
+    (article f) (article x)
+
+let orelse_right_help = "give a value of that type, or `fail` with an error"
+
+(* `a == b`, where [op] is `==` or `!=` *)
+let compares op f x =
+  sprintf
+    "`%s` compares two values of the same type, but this is %s and the left \
+     side is %s"
+    op (article f) (article x)
+
+let this_is x = sprintf "this is %s" (article x)
+
+let else_branch f x =
+  sprintf "this `else` branch is %s, but the `then` branch is %s" (article f)
+    (article x)
+
+let then_branch x = sprintf "the `then` branch is %s" (article x)
+let if_branches = "both branches of an `if` have to produce the same type"
+
+let no_else f _ =
+  sprintf "this `if` has no `else`, so it can't produce %s" (article f)
+
+let no_else_help = "add an `else` branch for when the condition is false"
+
+let element_before f x =
+  sprintf "this element is %s, but the elements before it are %s" (article f)
+    (article x)
+
+let element_others f x =
+  sprintf "this element is %s, but the others are %s" (article f) (article x)
+
+let not_indexable f _ =
+  sprintf "only an `Array` can be indexed, but this is %s" (article f)
+
+let assigned f x =
+  sprintf "this is %s, but it's being assigned to %s" (article f) (article x)
+
+let not_iterable f _ =
+  sprintf "a `for` loop goes over an `Array`, but this is %s" (article f)
+
+(* Where an error came in, for a message about two shapes of it, and the
+   help, given the tag: a `fail`, or a `Result` passed on with `try`. *)
+let from_fail = "from this `fail`"
+let rename_fail _ = "give one of them another name"
+let from_result = "from this `Result`"
+let rename_where_in _ = "rename one of them where it comes in"
+
+(* ---- calls ----
+
+   [name] is the callee as a message names it: "`print`", or "this". *)
+
+let wrong_arity loc name n given =
+  Diag.make loc
+    (sprintf "%s takes %d argument%s but was given %d" name n (plural n) given)
+
+(* [shown] is the type of what's called *)
+let not_a_function loc name shown =
+  Diag.make loc (sprintf "%s is %s, not a function" name (article shown))
+
+(* `take(&c.pop())`, where `take` changes its argument: the `&` is `c`'s.
+   [arg] is the argument as written, and [call] the call in it. *)
+let changes_call_result loc name ~arg ~call =
+  Diag.make loc ~help:"put it in a `var` first, and pass that"
+    ~notes:
+      [
+        sprintf
+          "the `&` in `%s` marks the receiver the call changes, not the \
+           argument"
+          (Option.value arg ~default:"&x.m()");
+      ]
+    (sprintf
+       "%s changes this argument, but %s is a call's result, not something it \
+        can change"
+       name
+       (match call with Some c -> code c | None -> "it"))
+
+(* An argument for an `inout` parameter without `&`; [var] is the variable
+   it changes, if it's one. *)
+let arg_needs_amp loc name ~var =
+  Diag.make loc
+    ~help:
+      (match var with
+      | Some x -> sprintf "write `&` before it, as in `&%s`" x
+      | None -> "pass a variable, marked with `&`")
+    ~notes:[ "`&` shows at the call that the argument is changed" ]
+    (sprintf "%s changes this argument, so it needs `&`" name)
+
+let arg_not_changed loc name =
+  Diag.make loc ~help:"remove the `&`"
+    ~notes:[ "`&` marks an argument the call changes: an `inout` parameter" ]
+    (sprintf "%s doesn't change this argument" name)
+
+(* ---- constructors and records ---- *)
+
+(* Where the type a value has to have comes from: "`Shape`'s field `w`",
+   "`Clock`'s operation `now`". *)
+let part_of owner what part = sprintf "`%s`'s %s `%s`" owner what part
+
+let two_fields (f : Ast.ident) first =
+  Diag.make f.loc ~help:"remove one of them"
+    ~labels:[ (first, sprintf "the first `%s` is here" f.name) ]
+    (sprintf "there are two fields named `%s`" f.name)
+
+(* The closure [var], given for an operation, fails with whatever its
+   named row [row] stands for; the operation fails only with [declared]. *)
+let named_row_help ~var ~row declared =
+  sprintf
+    "`%s` can fail with anything `..%s` stands for%s: write %s in place of `! \
+     ..%s`"
+    var row
+    (match declared with
+    | [] -> ", and the operation can't fail"
+    | ds -> ", and the operation only with " ^ and_list ds)
+    (match declared with
+    | [] -> "nothing"
+    | ds -> sprintf "`! %s`" (String.concat " | " ds))
+    row
+
+(* ---- `match` and patterns ---- *)
+
+let arm_after f x =
+  sprintf "this arm is %s, but the arms above it are %s" (article f) (article x)
+
+let first_arm x = sprintf "the first arm is %s" (article x)
+
+(* the variable [name] of one alternative of a pattern, `A(x) | B(x)` *)
+let alternative name f x =
+  sprintf "`%s` is %s here, but %s in the first alternative" name (article f)
+    (article x)
+
+let pattern_for f x =
+  sprintf "expected a pattern for `%s`, but this one is %s" x (article f)
+
+(* A statement's value [f], which isn't `Unit`. [callee] is the function
+   called, if it's a call, and [implementation] whether [f] is an
+   implementation, or a handler's description, which is for installing. *)
+let thrown_away ~callee ~implementation f _ =
+  match callee with
+  | Some name when implementation ->
+      sprintf "`%s` makes `%s`, and this throws it away" name f
+  | Some name -> sprintf "`%s` returns `%s`, and this throws it away" name f
+  | None -> sprintf "this is %s, and it's thrown away" (article f)
+
+let thrown_away_help ~implementation =
+  if implementation then
+    "install it with `with`, or write `let _ = ...` if you mean to drop it"
+  else "use it, or write `let _ = ...` if you mean to drop it"
+
 (* ---- dependencies ---- *)
 
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
@@ -649,8 +849,16 @@ let no_method (m : Ast.ident) ~shown ~own ~type_name methods =
   Diag.make m.loc ?help (sprintf "`%s` has no method named `%s`" shown m.name)
 
 (* `t.of([1])`, where `of` is an associated function or value of [t]'s
-   type, which is called, or used, after its type: [fix] *)
-let not_a_method (m : Ast.ident) (kind : Iface.op_kind) ~fix =
+   type, which is called, or used, after its type, as [item], `Stack.of`.
+   [args] are the call's arguments, as written, if they can be printed. *)
+let not_a_method (m : Ast.ident) (kind : Iface.op_kind) ~item args =
+  let fix =
+    match (kind, args) with
+    | Value, _ -> item
+    | _, shown when List.for_all Option.is_some shown ->
+        item ^ "(" ^ String.concat ", " (List.filter_map Fun.id shown) ^ ")"
+    | _ -> item ^ "(...)"
+  in
   Diag.make m.loc ~help:(sprintf "write `%s`" fix)
     (match kind with
     | Value -> sprintf "`%s` isn't a method (it's an associated value)" m.name

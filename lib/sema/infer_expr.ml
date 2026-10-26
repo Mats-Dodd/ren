@@ -42,13 +42,11 @@ open Infer_handlers
 
 (* ---- expressions ---- *)
 
-let want_int env op (e : expr) t =
-  unify_at env e.loc ~found:t ~expected:int
-    ~notes:[ sprintf "`%s` works on `Int`s" op ]
+let want_int env use (e : expr) t =
+  unify_at env e.loc ~found:t ~expected:int ~notes:[ int_note use ]
 
-let want_bool env what (e : expr) t =
-  unify_at env e.loc ~found:t ~expected:bool
-    ~notes:[ sprintf "%s has to be a `Bool`" what ]
+let want_bool env use (e : expr) t =
+  unify_at env e.loc ~found:t ~expected:bool ~notes:[ bool_note use ]
 
 (* How to explain a mismatch with [expected], the type of a parameter of
    [callee]: when a statement of [callee] threw away a value whose type
@@ -70,18 +68,8 @@ let forced_why env callee expected =
           (fun (f, loc) -> if f = c then Some loc else None)
           env.forced
       in
-      let label loc =
-        ( loc,
-          sprintf
-            "`%s` throws this value away, and its type wasn't known, so it was \
-             taken to be `Unit`"
-            (Path.local c) )
-      in
-      let help =
-        sprintf
-          "if `%s` means to drop a value of any type there, write `let _ = ...`"
-          (Path.local c)
-      in
+      let label loc = (loc, forced_unit (Path.local c)) in
+      let help = forced_unit_help (Path.local c) in
       if sites = [] then plain
       else
         explain
@@ -117,7 +105,7 @@ and check env cx ?(why = plain) (e : expr) expected =
       check env cx ~why last expected
   | If (c, t, Some f), _ ->
       fits ();
-      want_bool env "an `if` condition" c (infer env cx c);
+      want_bool env Condition c (infer env cx c);
       check env cx ~why t expected;
       check env cx ~why f expected
   | Match (subject, arms), _ ->
@@ -146,10 +134,7 @@ and check env cx ?(why = plain) (e : expr) expected =
         body eret
         ~why:
           (explain ~notes:why.notes ?help:why.help ~labels:why.labels
-             ~msg:(fun f x ->
-               sprintf "this lambda produces %s, but it has to produce %s"
-                 (article f) (article x))
-             ());
+             ~msg:lambda_produces ());
       let t = TFun (ps, eret, errs, uses) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
@@ -186,10 +171,10 @@ and synth env cx (e : expr) : ty =
   | Unit -> unit
   | Var x -> lookup env cx e.loc x
   | Unop (Neg, a) ->
-      want_int env "-" a (infer env cx a);
+      want_int env (Operator "-") a (infer env cx a);
       int
   | Unop (Not, a) ->
-      want_bool env "what `not` is applied to" a (infer env cx a);
+      want_bool env Negated a (infer env cx a);
       bool
   | Binop (op, a, b) -> (
       let name = binop_to_string op in
@@ -197,13 +182,12 @@ and synth env cx (e : expr) : ty =
       | Add | Sub | Mul | Div | Mod | Lt | Le | Gt | Ge ->
           let ta = infer env cx a in
           let tb = infer env cx b in
-          want_int env name a ta;
-          want_int env name b tb;
+          want_int env (Operator name) a ta;
+          want_int env (Operator name) b tb;
           if List.mem op [ Lt; Le; Gt; Ge ] then bool else int
       | And | Or ->
-          let what = sprintf "each side of `%s`" name in
-          want_bool env what a (infer env cx a);
-          want_bool env what b (infer env cx b);
+          want_bool env (Side name) a (infer env cx a);
+          want_bool env (Side name) b (infer env cx b);
           bool
       | Orelse ->
           (* the value in the `Option`, or else the right side, which is
@@ -211,20 +195,11 @@ and synth env cx (e : expr) : ty =
           let v = fresh_var env.st in
           unify_at env (result_loc a) ~found:(infer env cx a)
             ~expected:(TCon (option_path, [ v ]))
-            ~msg:(fun f _ ->
-              sprintf "`orelse` takes an `Option` on its left, but this is %s"
-                (article f))
-            ~help:"`x orelse y` is the value in the `Option` `x`, or else `y`";
+            ~msg:orelse_left ~help:orelse_left_help;
           check env cx b v
             ~why:
-              (explain
-                 ~msg:(fun f x ->
-                   sprintf
-                     "this is %s, but the `Option` on the left of `orelse` \
-                      holds %s"
-                     (article f) (article x))
-                 ~help:(fun _ _ ->
-                   "give a value of that type, or `fail` with an error")
+              (explain ~msg:orelse_right
+                 ~help:(fun _ _ -> orelse_right_help)
                  ());
           v
       | Eq | Neq ->
@@ -232,41 +207,24 @@ and synth env cx (e : expr) : ty =
           let ta = infer env cx a in
           check env cx b ta
             ~why:
-              (explain
-                 ~msg:(fun f x ->
-                   sprintf
-                     "`%s` compares two values of the same type, but this is \
-                      %s and the left side is %s"
-                     name (article f) (article x))
-                 ~labels:(fun _ x ->
-                   [ (a.loc, sprintf "this is %s" (article x)) ])
+              (explain ~msg:(compares name)
+                 ~labels:(fun _ x -> [ (a.loc, this_is x) ])
                  ());
           bool)
   | If (c, t, Some f) ->
-      want_bool env "an `if` condition" c (infer env cx c);
+      want_bool env Condition c (infer env cx c);
       let tt = infer env cx t in
       check env cx f tt
         ~why:
-          (explain
-             ~msg:(fun f x ->
-               sprintf "this `else` branch is %s, but the `then` branch is %s"
-                 (article f) (article x))
-             ~labels:(fun _ x ->
-               [ (result_loc t, sprintf "the `then` branch is %s" (article x)) ])
-             ~notes:[ "both branches of an `if` have to produce the same type" ]
-             ());
+          (explain ~msg:else_branch
+             ~labels:(fun _ x -> [ (result_loc t, then_branch x) ])
+             ~notes:[ if_branches ] ());
       tt
   | If (c, t, None) ->
-      want_bool env "an `if` condition" c (infer env cx c);
+      want_bool env Condition c (infer env cx c);
       let ok =
         unifies env
-          (explain
-             ~msg:(fun f _ ->
-               sprintf "this `if` has no `else`, so it can't produce %s"
-                 (article f))
-             ~help:(fun _ _ ->
-               "add an `else` branch for when the condition is false")
-             ())
+          (explain ~msg:no_else ~help:(fun _ _ -> no_else_help) ())
           (result_loc t) ~found:(infer env cx t) ~expected:unit
       in
       (* if it was meant to produce a value, it isn't a `Unit` *)
@@ -314,15 +272,7 @@ and synth env cx (e : expr) : ty =
                     (unifies env plain (result_loc x) ~found:t ~expected:elem);
                   waiting)
             | _ ->
-                check env cx x elem
-                  ~why:
-                    (explain
-                       ~msg:(fun f x ->
-                         sprintf
-                           "this element is %s, but the elements before it are \
-                            %s"
-                           (article f) (article x))
-                       ());
+                check env cx x elem ~why:(explain ~msg:element_before ());
                 waiting)
           [] xs
       in
@@ -330,11 +280,7 @@ and synth env cx (e : expr) : ty =
         (fun ((x : expr), t) ->
           ignore
             (unifies env
-               (explain
-                  ~msg:(fun f x ->
-                    sprintf "this element is %s, but the others are %s"
-                      (article f) (article x))
-                  ())
+               (explain ~msg:element_others ())
                (result_loc x) ~found:(taken_as env cx x t elem) ~expected:elem))
         (List.rev waiting);
       array elem
@@ -342,14 +288,10 @@ and synth env cx (e : expr) : ty =
       let elem = fresh_var env.st in
       let ok =
         unifies env
-          (explain
-             ~msg:(fun f _ ->
-               sprintf "only an `Array` can be indexed, but this is %s"
-                 (article f))
-             ())
+          (explain ~msg:not_indexable ())
           (result_loc a) ~found:(infer env cx a) ~expected:(array elem)
       in
-      want_int env "an index" i (infer env cx i);
+      want_int env Indexing i (infer env cx i);
       if ok then elem else TError
   | Ref ({ kind = Call (f, args); _ } as call) ->
       (* `&s.push(1)`: a method call that changes its receiver *)
@@ -365,16 +307,9 @@ and synth env cx (e : expr) : ty =
       (match op with
       | Some op ->
           let name = binop_to_string op ^ "=" in
-          want_int env name target tt;
-          want_int env name value (infer env cx value)
-      | None ->
-          check env cx value tt
-            ~why:
-              (explain
-                 ~msg:(fun f x ->
-                   sprintf "this is %s, but it's being assigned to %s"
-                     (article f) (article x))
-                 ()));
+          want_int env (Operator name) target tt;
+          want_int env (Operator name) value (infer env cx value)
+      | None -> check env cx value tt ~why:(explain ~msg:assigned ()));
       unit
   | For { var; iter; body } ->
       let array_of = match iter.kind with Ref a -> a | _ -> iter in
@@ -383,11 +318,7 @@ and synth env cx (e : expr) : ty =
       let elem = fresh_var env.st in
       let ok =
         unifies env
-          (explain
-             ~msg:(fun f _ ->
-               sprintf "a `for` loop goes over an `Array`, but this is %s"
-                 (article f))
-             ())
+          (explain ~msg:not_iterable ())
           (result_loc array_of) ~found:ta ~expected:(array elem)
       in
       Hashtbl.replace cx.locals var.id (if ok then elem else TError);
@@ -400,10 +331,8 @@ and synth env cx (e : expr) : ty =
          the payload only documents it *)
       let payload = List.map (fun (_, a) -> infer env cx a) args in
       let l = { name = tag.name; payload } in
-      add_errors env ~loc:e.loc ~here:"from this `fail`"
-        ~sources:(sources_of cx)
-        ~fix:(fun _ -> "give one of them another name")
-        (extend [ l ] REmpty) cx.handler;
+      add_errors env ~loc:e.loc ~here:from_fail ~sources:(sources_of cx)
+        ~fix:rename_fail (extend [ l ] REmpty) cx.handler;
       Option.iter (fun s -> s := Failed (e.loc, l) :: !s) cx.sources;
       List.iter (fun m -> if m.mkind <> Mtry then m.failed <- true) cx.markers;
       (* it never produces a value, so it can stand where any type is
@@ -438,9 +367,8 @@ and synth env cx (e : expr) : ty =
           match repr errs with
           | TErrors errs ->
               include_errors env cx ~loc:a.loc
-                (add_errors env ~loc:a.loc ~here:"from this `Result`"
-                   ~sources:(sources_of cx) ~fix:(fun _ ->
-                     "rename one of them where it comes in"))
+                (add_errors env ~loc:a.loc ~here:from_result
+                   ~sources:(sources_of cx) ~fix:rename_where_in)
                 errs cx.handler;
               m.unwrapped <- errs :: m.unwrapped;
               Option.iter
@@ -463,7 +391,7 @@ and synth env cx (e : expr) : ty =
       TCon (result_path, [ t; TErrors kept ])
   | With { item; body; lam } -> with_ core env cx e item body lam
   | Assert a ->
-      want_bool env "what an `assert` checks" a (infer env cx a);
+      want_bool env Asserted a (infer env cx a);
       unit
   | Handler { deps; state; arms; _ } ->
       let needs = fresh_row env.st in
@@ -518,7 +446,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
           changed;
         let tf = field_access env cx f r tr m in
         Hashtbl.replace cx.nodes f.node tf;
-        apply env cx e ~name:(sprintf "`%s`" m.name) f tf args
+        apply env cx e ~name:(code m.name) f tf args
       in
       let nothing () =
         List.iter (fun a -> ignore (infer_arg env cx a)) args;
@@ -625,14 +553,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
   in
   match o.okind with
   | Function | Value ->
-      let fix =
-        match (o.okind, List.map env.source args) with
-        | Value, _ -> item
-        | _, shown when List.for_all Option.is_some shown ->
-            item ^ "(" ^ String.concat ", " (List.filter_map Fun.id shown) ^ ")"
-        | _ -> item ^ "(...)"
-      in
-      report env (not_a_method m o.okind ~fix);
+      report env (not_a_method m o.okind ~item (List.map env.source args));
       nothing ()
   | Method -> (
       let path = op_path td o in
@@ -651,7 +572,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
               report env (needs_amp e.loc ~recv ~call:(env.source e) o.oname)
           | Read, Some loc -> report env (not_changed loc ~recv o.oname)
           | Inout, Some _ | Read, None -> ());
-          apply env cx e ~name:(sprintf "`%s`" o.oname)
+          apply env cx e ~name:(code o.oname)
             ?target:(if group_call env path then Some path else None)
             ~callee:path f
             (TFun (ps, ret, errs, uses))
@@ -669,9 +590,8 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
       if n <> given then (
         (* still check the arguments, for errors of their own *)
         List.iter (fun a -> ignore (infer_arg env cx a)) args;
-        fail env e.loc
-          (sprintf "%s takes %d argument%s but was given %d" name n (plural n)
-             given))
+        report env (wrong_arity e.loc name n given);
+        TError)
       else (
         check_args env cx ~name ?callee ps args;
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
@@ -690,9 +610,8 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
       TError
   | t ->
       List.iter (fun a -> ignore (infer_arg env cx a)) args;
-      fail env f.loc
-        (sprintf "%s is %s, not a function" name
-           (article (show (printer env) t)))
+      report env (not_a_function f.loc name (show (printer env) t));
+      TError
 
 (* A call's arguments [args], left to right, each against its parameter's
    type, of [ps]; [name] is the callee, for messages, and [callee] the
@@ -711,46 +630,23 @@ and check_args env cx ~name ?callee ps args =
           (* `take(&c.pop())`: the `&` is `c`'s, and the argument is
                    what the call returns *)
           ignore (infer env cx a);
-          ignore
-            (fail env a.loc ~help:"put it in a `var` first, and pass that"
-               ~notes:
-                 [
-                   sprintf
-                     "the `&` in `%s` marks the receiver the call changes, not \
-                      the argument"
-                     (Option.value (env.source a) ~default:"&x.m()");
-                 ]
-               (sprintf
-                  "%s changes this argument, but %s is a call's result, not \
-                   something it can change"
-                  name
-                  (match env.source call with
-                  | Some c -> sprintf "`%s`" c
-                  | None -> "it")))
+          report env
+            (changes_call_result a.loc name ~arg:(env.source a)
+               ~call:(env.source call))
       | Inout, _ ->
-          let help =
+          let var =
             match a.kind with
             | Var x
             | Field ({ kind = Var x; _ }, _)
             | Index ({ kind = Var x; _ }, _) ->
-                sprintf "write `&` before it, as in `&%s`" (name_of x)
-            | _ -> "pass a variable, marked with `&`"
+                Some (name_of x)
+            | _ -> None
           in
           ignore (infer env cx a);
-          ignore
-            (fail env a.loc ~help
-               ~notes:[ "`&` shows at the call that the argument is changed" ]
-               (sprintf "%s changes this argument, so it needs `&`" name))
+          report env (arg_needs_amp a.loc name ~var)
       | Read, Ref place when passed ->
           ignore (infer env cx place);
-          ignore
-            (fail env a.loc ~help:"remove the `&`"
-               ~notes:
-                 [
-                   "`&` marks an argument the call changes: an `inout` \
-                    parameter";
-                 ]
-               (sprintf "%s doesn't change this argument" name))
+          report env (arg_not_changed a.loc name)
       | Read, _ -> (
           let why = forced_why env callee p.ty in
           match repr p.ty with
@@ -817,10 +713,7 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~expected =
         List.iter2
           (fun (f : Iface.field) (_, (a : expr)) ->
             check env cx a (field_type ~tvars f)
-              ~why:
-                (explain
-                   ~notes:[ sprintf "`%s`'s field `%s`" c.name f.fname ]
-                   ()))
+              ~why:(explain ~notes:[ part_of c.name "field" f.fname ] ()))
           ctor.cfields args
       else
         (* still check the arguments, for errors of their own *)
@@ -835,11 +728,7 @@ and infer_record env cx (e : expr) name fields ~expected =
   List.iter
     (fun (f : ident) ->
       match Hashtbl.find_opt seen f.name with
-      | Some first ->
-          report env
-            (Diag.make f.loc ~help:"remove one of them"
-               ~labels:[ (first, sprintf "the first `%s` is here" f.name) ]
-               (sprintf "there are two fields named `%s`" f.name))
+      | Some first -> report env (two_fields f first)
       | None -> Hashtbl.replace seen f.name f.loc)
     ids;
   let given = sorted (List.map (fun (f : ident) -> f.name) ids) in
@@ -914,20 +803,7 @@ and infer_record env cx (e : expr) name fields ~expected =
                                 (fst (row_parts declared))
                             in
                             Some
-                              (sprintf
-                                 "`%s` can fail with anything `..%s` stands \
-                                  for%s: write %s in place of `! ..%s`"
-                                 b.ident.name n
-                                 (match declared with
-                                 | [] -> ", and the operation can't fail"
-                                 | ds ->
-                                     ", and the operation only with "
-                                     ^ and_list ds)
-                                 (match declared with
-                                 | [] -> "nothing"
-                                 | ds ->
-                                     sprintf "`! %s`" (String.concat " | " ds))
-                                 n)
+                              (named_row_help ~var:b.ident.name ~row:n declared)
                         | _ -> None)
                     | _ -> None)
                 | _ -> None
@@ -965,11 +841,7 @@ and infer_record env cx (e : expr) name fields ~expected =
               check env cx v ft
                 ~why:
                   (explain
-                     ~notes:
-                       [
-                         sprintf "`%s`'s %s `%s`" (type_name env td.path) what
-                           f.name;
-                       ]
+                     ~notes:[ part_of (type_name env td.path) what f.name ]
                      ?help ())
           | None ->
               report env (no_such_field ~names:env.names ~what f td.path decl);
@@ -1021,27 +893,15 @@ and infer_match env cx ?passed subject arms ~want =
         let first = result_loc (List.hd arms).arm_body in
         ( fresh_var env.st,
           fun i ->
-            let msg =
-              if i = 0 then None
-              else
-                Some
-                  (fun f x ->
-                    sprintf "this arm is %s, but the arms above it are %s"
-                      (article f) (article x))
-            in
-            explain ?msg
-              ~labels:(fun _ x ->
-                [ (first, sprintf "the first arm is %s" (article x)) ])
-              () )
+            let msg = if i = 0 then None else Some arm_after in
+            explain ?msg ~labels:(fun _ x -> [ (first, first_arm x) ]) () )
   in
   List.iteri
     (fun i a ->
       (match errs with
       | Some errs when is_fail a.arm_pat -> bind_fail env cx errs a.arm_pat
       | _ -> bind_pattern env cx ts a.arm_pat);
-      Option.iter
-        (fun g -> want_bool env "a guard" g (infer env cx g))
-        a.arm_guard;
+      Option.iter (fun g -> want_bool env Guard g (infer env cx g)) a.arm_guard;
       check env cx ~why:(arm_why i) a.arm_body result)
     arms;
   result
@@ -1069,9 +929,8 @@ and bind_fail env cx errs (p : pattern) =
             (fun ((b : binder), loc, t) ->
               match (t, Hashtbl.find_opt cx.locals b.id) with
               | Some first, Some here ->
-                  unify_at env loc ~found:here ~expected:first ~msg:(fun f x ->
-                      sprintf "`%s` is %s here, but %s in the first alternative"
-                        b.ident.name (article f) (article x));
+                  unify_at env loc ~found:here ~expected:first
+                    ~msg:(alternative b.ident.name);
                   Hashtbl.replace cx.locals b.id first
               | _ -> ())
             before)
@@ -1085,10 +944,7 @@ and bind_fail env cx errs (p : pattern) =
    type. *)
 and bind_pattern env cx t (p : pattern) =
   Hashtbl.replace cx.nodes p.pnode t;
-  let check found =
-    unify_at env p.ploc ~found ~expected:t ~msg:(fun f x ->
-        sprintf "expected a pattern for `%s`, but this one is %s" x (article f))
-  in
+  let check found = unify_at env p.ploc ~found ~expected:t ~msg:pattern_for in
   match (p.pkind, repr t) with
   | PCon ({ qual = None; name = c }, ps), TErrors errs ->
       (* a tag, inside `Err(...)`: one of the errors the [Result] holds *)
@@ -1178,17 +1034,7 @@ let dropped_values env =
         match repr d.dty with TCon (_, [ TUses _ ]) -> true | _ -> false
       in
       unify_at env d.dloc ~found:d.dty ~expected:unit
-        ~msg:(fun f _ ->
-          match d.callee with
-          | Some name when implementation ->
-              sprintf "`%s` makes `%s`, and this throws it away" name f
-          | Some name ->
-              sprintf "`%s` returns `%s`, and this throws it away" name f
-          | None -> sprintf "this is %s, and it's thrown away" (article f))
-        ~help:
-          (if implementation then
-             "install it with `with`, or write `let _ = ...` if you mean to \
-              drop it"
-           else "use it, or write `let _ = ...` if you mean to drop it"))
+        ~msg:(thrown_away ~callee:d.callee ~implementation)
+        ~help:(thrown_away_help ~implementation))
     (List.rev env.drops);
   env.drops <- []
