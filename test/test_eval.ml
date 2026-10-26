@@ -762,3 +762,201 @@ fn main() uses Console =
     { id: 1 }
     ()
     |}]
+
+(* ---- equality, through requirements' dictionaries ---- *)
+
+let%expect_test "a generic function compares through the dictionary it's given" =
+  (* `same` is compiled once, and given `eq` of whatever it's used at:
+     `Int`'s, `Str`'s, or one derived from a type's declaration, which
+     `both` builds from the one it was given for its own `U` *)
+  run
+    {|
+type Box<T> = { v: T }
+fn same(a, b) = a == b
+fn differ(a, b) = a != b
+fn both<U>(a: U, b: U) -> Bool = same(a, b) && same(Box { v: b }, Box { v: a })
+fn main() uses Console =
+  print([same(1, 1), same(1, 2), same("a", "a"), same(true, false)])
+  print([same((), ()), differ("a", "b"), differ(3, 3)])
+  print([both(1, 1), both(1, 2), both(Box { v: "a" }, Box { v: "a" })])
+  print([both([1, 2], [1, 2]), both([1, 2], [1]), both([[1]], [[2]])])
+  let f = same
+  print([f(Some(1), Some(1)), f(Some(1), None)])
+|};
+  [%expect
+    {|
+    [true, false, true, false]
+    [true, true, false]
+    [true, false, true]
+    [true, false, false]
+    [true, false]
+    ()
+    |}]
+
+let%expect_test "nested records, sums and arrays are compared field by field" =
+  run
+    {|
+type Point = { x: Int, y: Int }
+type Shape =
+  | Dot(at: Point)
+  | Line(from: Point, to: Point)
+  | Many(shapes: Array<Shape>)
+type Tree<T> =
+  | Leaf
+  | Node(left: Tree<T>, value: T, right: Tree<T>)
+type Tagged<T> = { tag: Str, items: Array<Option<T>> }
+fn same(a, b) = a == b
+fn leaf(x) = Node(Leaf, x, Leaf)
+fn main() uses Console =
+  let p = Point { x: 1, y: 2 }
+  let q = Point { x: 1, y: 3 }
+  print([same(Dot(p), Dot(p)), same(Dot(p), Dot(q)), same(Dot(p), Line(p, p))])
+  let many = Many([Dot(p), Many([Line(p, q)])])
+  print(same(many, Many([Dot(p), Many([Line(p, q)])])))
+  print(same(many, Many([Dot(p), Many([Line(q, p)])])))
+  let left = Node(leaf(1), 2, Leaf)
+  print([same(leaf(p), leaf(p)), same(left, Node(Leaf, 2, leaf(1)))])
+  let t = Tagged { tag: "a", items: [Some(leaf("x")), None] }
+  let u = Tagged { tag: "a", items: [Some(leaf("y")), None] }
+  print([same(t, t), same(t, u)])
+  let b = Tagged { tag: "b", items: [Some(1)] }
+  print(b == Tagged { tag: "b", items: [Some(1)] })
+|};
+  [%expect
+    {|
+    [true, false, false]
+    true
+    false
+    [true, false]
+    [true, false]
+    true
+    ()
+    |}]
+
+let%expect_test "Results are compared with their errors' payloads" =
+  run
+    {|
+type Point = { x: Int, y: Int }
+fn find(n: Int) -> Int ! Short(Point) | Gone =
+  if n > 1 then fail Short(Point { x: n, y: 0 })
+  else if n == 1 then fail Gone
+  else 0
+fn same(a, b) = a == b
+fn count<T>(xs: Array<T>, x: T) -> Int =
+  let is = fn(y: T) => y == x
+  var n = 0
+  for y in xs
+    if is(y) then n += 1
+  n
+fn main() uses Console =
+  let short2 = attempt find(2)
+  let gone = attempt find(1)
+  print([same(short2, attempt find(2)), same(short2, attempt find(3))])
+  print([same(gone, short2), same(attempt find(0), attempt find(0))])
+  print(short2 != gone)
+  print(count([short2, gone, short2, attempt find(0)], attempt find(2)))
+|};
+  [%expect
+    {|
+    [true, false]
+    [false, true]
+    true
+    2
+    ()
+    |}]
+
+let%expect_test "an `assert ==` in a generic function uses its dictionary" =
+  run_error
+    {|
+type Box<T> = { v: T }
+fn check<T>(a: T, b: T) =
+  assert a == b
+fn main() =
+  check(Box { v: [Some(1)] }, Box { v: [Some(1)] })
+  check(Box { v: [Some(1)] }, Box { v: [None] })
+|};
+  [%expect
+    {|
+    error: panic: this `assert` failed
+      ┌─ test.ren:3:10
+    3 │   assert a == b
+      │          ^^^^^^
+      = left:  Box { v: [Some(1)] }
+      = right: Box { v: [None] }
+    |}]
+
+let%expect_test "where nothing says what T is, values compare by shape" =
+  (* a generic associated value is made once, with no dictionary for its
+     `T` (core.ml, [Global_value]), and so is given one that compares by
+     the values' shape, which only an opaque type of another module can
+     make reach a function: inference rules out anything else *)
+  run
+    {|
+type Point = { x: Int, y: Int }
+type Box<T> = { v: T }
+  pub let eqf: fn(T, T) -> Bool = fn(a, b) => a == b
+fn main() uses Console =
+  print([Box.eqf(1, 1), Box.eqf(Point { x: 1, y: 2 }, Point { x: 1, y: 2 })])
+  print([Box.eqf([Some("a")], [Some("b")]), Box.eqf(Ok(1), Err(Oops))])
+|};
+  [%expect
+    {|
+    [true, true]
+    [false, false]
+    ()
+    |}]
+
+let%expect_test "== can't panic, but through another module's opaque type" =
+  (* comparing anything with a function in it, a handler, or an
+     implementation of a dependency, directly or through a generic
+     function, is an error before the program runs, so the interpreter
+     never meets one; the one way it still can is an opaque type of
+     another module that's represented as one, which inference can't look
+     inside (compiler.md, "Deviations") *)
+  let lacks src =
+    match Ren.Driver.check ~file src with
+    | _ -> raise (No_error "expected `==` to be refused")
+    | exception e
+      when Ren.Driver.render_error ~sources:(fun _ -> None) e <> None ->
+        print_endline "refused"
+  in
+  lacks "fn inc(x: Int) -> Int = x + 1\nfn main() = inc == inc";
+  lacks
+    "fn same(a, b) = a == b\n\
+     fn inc(x: Int) -> Int = x + 1\n\
+     fn main() = same([Some(inc)], [None])";
+  lacks
+    "type R = { f: fn() -> Int }\n\
+     fn same(a, b) = a == b\n\
+     fn main() = same(Ok(R { f: fn() => 1 }), Err(Gone))";
+  lacks
+    "dep D =\n\
+    \  get: fn() -> Int\n\
+     fn d() = D { get: fn() => 1 }\n\
+     fn main() = d() == d()";
+  [%expect {|
+    refused
+    refused
+    refused
+    refused
+    |}];
+  run_files
+    [
+      ( "main.ren",
+        {|
+import a
+fn same(x, y) = x == y
+fn main() = same(a.mk(), a.mk())
+|}
+      );
+      ("a.ren", {|
+pub type F = opaque fn(Int) -> Int
+pub fn mk() -> F = fn(x: Int) => x
+|});
+    ];
+  [%expect {|
+    error: panic: these can't be compared: they're of an opaque type from another module that's represented as a function, or holds one, and a function has no `==`. Compare something else about them instead
+      ┌─ main.ren:2:17
+    2 │ fn same(x, y) = x == y
+      │                 ^^^^^^
+    |}]
