@@ -74,7 +74,7 @@ let rec show = function
   | VArray xs ->
       "[" ^ String.concat ", " (Array.to_list (Array.map show xs)) ^ "]"
   | VClosure _ -> "<fn>"
-  | VFn p -> "<fn " ^ p.name ^ ">"
+  | VFn p -> "<fn " ^ Path.local p ^ ">"
   | VBuiltin x -> "<fn " ^ Intrinsic.name x ^ ">"
   | VHandler _ -> "<handler>"
   | VInstance _ -> "<instance>"

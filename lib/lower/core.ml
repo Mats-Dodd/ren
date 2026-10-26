@@ -359,7 +359,7 @@ let rec sexp e =
   | Str s -> Atom (Ast.show_str s)
   | Unit -> Atom "()"
   | Local v -> var v
-  | Global p | Global_value p -> Atom p.name
+  | Global p | Global_value p -> Atom (Path.local p)
   | Intrinsic x -> Atom (Intrinsic.name x)
   | Dep_call { dep; op; ev; args; _ } ->
       List
@@ -464,7 +464,7 @@ let fn_sexp f =
   List
     [
       atom "fn";
-      Atom f.path.name;
+      Atom (Path.local f.path);
       List (List.map (fun p -> var p.var) f.params);
       var f.ev;
       sexp f.body;

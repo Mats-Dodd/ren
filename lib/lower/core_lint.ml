@@ -298,16 +298,17 @@ let rec expr env sc (e : expr) =
       | Some s ->
           fail env loc
             (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
-               p.name (show e.ty) (show s.ty))
-      | None -> fail env loc (sprintf "there's no function `%s`" p.name))
+               (Path.local p) (show e.ty) (show s.ty))
+      | None -> fail env loc (sprintf "there's no function `%s`" (Path.local p))
+      )
   | Global_value p -> (
       match Hashtbl.find_opt env.values p with
       | Some s when instance_of env s.ty e.ty -> ()
       | Some s ->
           fail env loc
             (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
-               p.name (show e.ty) (show s.ty))
-      | None -> fail env loc (sprintf "there's no value `%s`" p.name))
+               (Path.local p) (show e.ty) (show s.ty))
+      | None -> fail env loc (sprintf "there's no value `%s`" (Path.local p)))
   | Intrinsic x ->
       if not (instance_of env (Prelude.scheme x).ty e.ty) then
         fail env loc
@@ -491,7 +492,7 @@ let rec expr env sc (e : expr) =
       (* every function takes the same: the evidence where it's called *)
       let what =
         match f.kind with
-        | Global p -> sprintf "a call of `%s`" p.name
+        | Global p -> sprintf "a call of `%s`" (Path.local p)
         | _ -> "a call"
       in
       current env loc what ev;
@@ -779,7 +780,7 @@ and handler_end env (e : expr) =
   | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
 
 let fn_def env (f : fn_def) =
-  let env = { env with fn = f.path.name } in
+  let env = { env with fn = Path.local f.path } in
   instances env f.body;
   match f.scheme.ty with
   | Fun (ps, ret, _, uses) when List.length ps = List.length f.params ->
@@ -855,7 +856,7 @@ let value_order (prog : program) =
         failwith
           (sprintf
              "Core Lint: the value `%s` is made before `%s`, which it uses"
-             v.name p.name);
+             (Path.local v) (Path.local p));
       Option.iter
         (fun b -> List.iter (walk ~seen ~made v) (globals b))
         (if p = v || not (List.mem p prog.values) then body p else None))
@@ -895,7 +896,7 @@ let program ~imports ~linked (prog : program) =
           Hashtbl.replace env.types td.path td;
           List.iter
             (fun (o : Iface.op) ->
-              let p = Path.make td.path.home (td.path.name ^ "." ^ o.oname) in
+              let p = Path.member td.path o.oname in
               Hashtbl.replace
                 (if o.okind = Value then env.values else env.schemes)
                 p o.oscheme)

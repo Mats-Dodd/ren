@@ -45,13 +45,14 @@ type node = {
 (* What inference found, in canonical form (ty.ml). A function's scheme and
    its nodes' types number their variables together. *)
 type t = {
-  schemes : (string * Ty.scheme) list;
-      (** each function's type scheme, in source order *)
-  values : string list;
+  schemes : Ty.scheme Path.Map.t;
+      (** each function's type scheme, by its path: a member's is its type's,
+          and which member it is (path.ml) *)
+  values : Path.t list;
       (** the module's associated values, in the order they're made when the
           program starts: each after every value it uses *)
-  nodes : (string * node Nodes.t) list;
-      (** each function's expressions and patterns, by node id *)
+  nodes : node Nodes.t Path.Map.t;
+      (** each function's expressions and patterns, by its path, then node id *)
   in_scope : Path.t list;
       (** the types step 2 of a lookup through a type found (infer_expr.ml),
           sorted: the import by name of each one is used *)

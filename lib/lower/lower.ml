@@ -651,9 +651,7 @@ and plain_call cx ~changed ?last (e : expr) f args =
         in
         (* a built-in method, `xs.len()`, is built into the compiler *)
         let callee : C.kind =
-          match Prelude.find p.name with
-          | Some x when p.home = Path.prelude_home -> Intrinsic x
-          | _ -> Global p
+          match Prelude.find p with Some x -> Intrinsic x | _ -> Global p
         in
         (mk callee (ty_of cx f.node) f.loc, [ recv ])
     | _ -> (expr cx f, [])
@@ -927,12 +925,12 @@ let max_binder (f : fn_def) =
   !m
 
 let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
-  let name = Ast.fn_name f in
-  let scheme = List.assoc name inferred.schemes in
+  let path = Ast.fn_path home f in
+  let scheme = Path.Map.find path inferred.schemes in
   let next = max_binder f + 1 in
   let cx =
     {
-      nodes = List.assoc name inferred.nodes;
+      nodes = Path.Map.find path inferred.nodes;
       vars = Hashtbl.create 16;
       next = next + 1;
       ev = C.evidence next;
@@ -949,21 +947,14 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
         { mode = p.pmode; var = bind cx p.pname t.ty })
       f.params ps
   in
-  {
-    path = Path.make home name;
-    params;
-    ev = cx.ev;
-    scheme;
-    body = expr cx f.body;
-    loc = f.name.loc;
-  }
+  { path; params; ev = cx.ev; scheme; body = expr cx f.body; loc = f.name.loc }
 
 let program (r : Resolve.t) (inferred : Infer.t) : C.program =
   {
     home = r.home;
     types = r.types;
     fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog);
-    values = List.map (Path.make r.home) inferred.values;
+    values = inferred.values;
   }
 
 (* ---- starting ---- *)
@@ -989,7 +980,7 @@ let start (main : C.fn_def) : C.fn_def =
           (Call (mk (Global main.path) main.scheme.ty loc, [], C.evidence n))
           ret loc
     | (dep : Path.t) :: rest ->
-        let real = Path.make dep.home (dep.name ^ ".real") in
+        let real = Path.member dep "real" in
         mk
           (With
              {

@@ -238,9 +238,11 @@ let%expect_test "Core Lint reports an instance that is a value" =
 (* An associated value, `T.a` and `T.b`, is a function of no parameters
    in Core, named only by a [Global_value] node, and made after every
    value it uses. *)
+let t_member = Ren.Path.member (Ren.Path.make "test" "T")
+
 let values_program ~uses_b ~values =
   let loc = Ren.Loc.point ~file 1 1 in
-  let path = Ren.Path.make "test" in
+  let path = t_member in
   let int_fn : Ren.Ty.ty = Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed) in
   let value name body : Ren.Core.fn_def =
     {
@@ -252,8 +254,8 @@ let values_program ~uses_b ~values =
       loc;
     }
   in
-  let a = value "T.a" (Ren.Core.mk uses_b Ren.Ty.int loc) in
-  let b = value "T.b" (Ren.Core.mk (Int 1) Ren.Ty.int loc) in
+  let a = value "a" (Ren.Core.mk uses_b Ren.Ty.int loc) in
+  let b = value "b" (Ren.Core.mk (Int 1) Ren.Ty.int loc) in
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
@@ -269,12 +271,12 @@ let%expect_test "Core Lint reports a value named as a function" =
     ~uses_b:
       (Call
          ( Ren.Core.mk
-             (Global (Ren.Path.make "test" "T.b"))
+             (Global (t_member "b"))
              (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed))
              (Ren.Loc.point ~file 1 1),
            [],
            Ren.Core.evidence 2 ))
-    ~values:[ "T.b"; "T.a" ];
+    ~values:[ "b"; "a" ];
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `T.a`, at test.ren:1:1: there's no function `T.b`")
@@ -282,13 +284,9 @@ let%expect_test "Core Lint reports a value named as a function" =
     |}]
 
 let%expect_test "Core Lint reports values made out of order" =
-  values_program
-    ~uses_b:(Global_value (Ren.Path.make "test" "T.b"))
-    ~values:[ "T.a"; "T.b" ];
+  values_program ~uses_b:(Global_value (t_member "b")) ~values:[ "a"; "b" ];
   (* and is clean on them in order *)
-  values_program
-    ~uses_b:(Global_value (Ren.Path.make "test" "T.b"))
-    ~values:[ "T.b"; "T.a" ];
+  values_program ~uses_b:(Global_value (t_member "b")) ~values:[ "b"; "a" ];
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: the value `T.a` is made before `T.b`, which it uses")

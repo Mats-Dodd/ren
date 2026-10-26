@@ -81,17 +81,17 @@ type t = {
   prog : Resolved.program;
   types : Iface.type_decl list;
       (** the types the module declares, in the order it declares them *)
-  calls : (string * Path.t list) list;
-      (** each function, and the top-level functions its body uses: the members
-          written after their type included *)
-  methods : (string * Path.t list) list;
-      (** each function, and the methods of the module's own types it calls with
-          a dot that can be told here, which inference needs to have checked
-          first: for `s.push(1)`, `Stack.push` if `s` is written to be a
-          `Stack`. The others are found through `s`'s type, by inference, which
-          adds them to the call graph as it finds them (infer_top.ml). A method
-          whose signature is written out in full ([Ast.spelled]) isn't one: its
-          declaration is its type, before it's checked. *)
+  calls : Path.t list Path.Map.t;
+      (** each function, by its path, and the top-level functions its body uses:
+          the members written after their type included *)
+  methods : Path.t list Path.Map.t;
+      (** each function, by its path, and the methods of the module's own types
+          it calls with a dot that can be told here, which inference needs to
+          have checked first: for `s.push(1)`, `Stack.push` if `s` is written to
+          be a `Stack`. The others are found through `s`'s type, by inference,
+          which adds them to the call graph as it finds them (infer_top.ml). A
+          method whose signature is written out in full ([Ast.spelled]) isn't
+          one: its declaration is its type, before it's checked. *)
   scope : (string * Path.t) list;
       (** the types written bare here, by name, sorted: the prelude's, those
           imported by name and the module's own *)
@@ -122,10 +122,8 @@ let type_name (r : t) (p : Path.t) =
    `util.double`, if not; and a member after its type, written as
    [type_name] writes it, `Stack.of` or `stack.Stack.of`. *)
 let value_name (r : t) (p : Path.t) =
-  match String.index_opt p.name '.' with
-  | Some i ->
-      type_name r { p with name = String.sub p.name 0 i }
-      ^ "." ^ Ast.short_name p.name
+  match p.member with
+  | Some m -> type_name r (Path.owner p) ^ "." ^ m.mname
   | None when p.home = r.home || p.home = Path.prelude_home -> p.name
   | None -> (
       match List.assoc_opt p.home r.aliases with
@@ -753,12 +751,12 @@ let item env sc (t : tyname) (f : ident) =
           | None -> declared ()
         else declared ()
       in
-      let path = Path.make p.home (p.name ^ "." ^ f.name) in
+      let path = Path.member p f.name in
       let ops = Option.value (dep_ops env p) ~default:[] in
       (* a built-in method, `Array.len`: built into the compiler, not a
          function of the program *)
       let builtin =
-        if p.home = Path.prelude_home then Prelude.find path.name else None
+        if p.home = Path.prelude_home then Prelude.find path else None
       in
       match (List.assoc_opt f.name items, builtin) with
       | _ when List.mem f.name ops ->
@@ -1573,11 +1571,11 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     List.sort_uniq compare sc.fn.dots )
 
 (* A type declaration, and its members: each item resolved as a
-   function (see [fn_def]), with the top-level functions it uses and the
-   names it calls with a dot. *)
+   function (see [fn_def]), with its path, the top-level functions it uses
+   and the names it calls with a dot. *)
 let type_def env (td : Parsed.type_def) :
     Resolved.type_def
-    * (string * Path.t list * (string * Path.t option) list) list =
+    * (Path.t * Path.t list * (string * Path.t option) list) list =
   no_duplicates env "type parameters" td.type_params;
   let no_duplicate_fields (fs : Parsed.field list) =
     no_duplicates env "fields"
@@ -1689,7 +1687,8 @@ let type_def env (td : Parsed.type_def) :
       (List.map
          (fun (o : Parsed.op) ->
            let f, calls, dots = fn_def env ~owner:td o.op_fn in
-           ({ op_kind = o.op_kind; op_fn = f }, (Ast.fn_name f, calls, dots)))
+           ( { op_kind = o.op_kind; op_fn = f },
+             (Ast.fn_path env.home f, calls, dots) ))
          td.type_ops)
   in
   ({ td with type_body; type_ops }, calls)
@@ -1967,8 +1966,7 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
   in
   let callees (td : Resolved.type_def) =
     match method_ td with
-    | Some o when not (Ast.spelled o.op_fn) ->
-        [ Path.make home (Ast.fn_name o.op_fn) ]
+    | Some o when not (Ast.spelled o.op_fn) -> [ Ast.fn_path home o.op_fn ]
     | Some _ | None -> []
   in
   let own (p : Path.t) =
@@ -2141,8 +2139,8 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
       List.iter
         (fun (v : Iface.value) ->
           let name =
-            match Prelude.find v.vname with
-            | Some x when iface.home = Path.prelude_home -> Intrinsic x
+            match Prelude.find (Path.make iface.home v.vname) with
+            | Some x -> Intrinsic x
             | _ -> Global (Path.make iface.home v.vname)
           in
           Hashtbl.replace env.values v.vname name)
@@ -2197,7 +2195,7 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
                (Type td, calls)
            | Fn f ->
                let f', calls, dots = fn_def env f in
-               (Fn f', [ (f.name.name, calls, dots) ])
+               (Fn f', [ (Ast.fn_path home f', calls, dots) ])
            | Import i -> (Import i, [])
            | Testing _ -> (* left out above *) assert false)
          prog)
@@ -2251,14 +2249,17 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
     home;
     prog = items;
     types;
-    calls = List.map (fun (f, calls, _) -> (f, calls)) (List.concat calls);
+    calls =
+      Path.Map.of_list
+        (List.map (fun (f, calls, _) -> (f, calls)) (List.concat calls));
     methods =
-      List.map
-        (fun (f, _, dots) ->
-          ( f,
-            List.sort_uniq compare
-              (List.concat_map (dot_callees ~home items) dots) ))
-        (List.concat calls);
+      Path.Map.of_list
+        (List.map
+           (fun (f, _, dots) ->
+             ( f,
+               List.sort_uniq compare
+                 (List.concat_map (dot_callees ~home items) dots) ))
+           (List.concat calls));
     scope;
     aliases =
       List.map (fun ((i : import), _) -> (i.path, i.alias.name)) env.imports;

@@ -468,12 +468,6 @@ let children (e : ('v, 'b, 't) expr) =
   | Handler { state; arms; _ } ->
       List.map stmt state @ List.map (fun a -> a.arm_impl) arms
 
-(* A member's name as it's written: `push` for `Stack.push`. *)
-let short_name name =
-  match String.rindex_opt name '.' with
-  | Some i -> String.sub name (i + 1) (String.length name - i - 1)
-  | None -> name
-
 (* ---- names, once resolved ----
 
    What Resolve (resolve.ml) finds each name refers to. *)

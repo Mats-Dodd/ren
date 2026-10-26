@@ -74,9 +74,9 @@ type node = Infer_top.node = {
 }
 
 type t = Infer_top.t = {
-  schemes : (string * Ty.scheme) list;
-  values : string list;
-  nodes : (string * node Nodes.t) list;
+  schemes : Ty.scheme Path.Map.t;
+  values : Path.t list;
+  nodes : node Nodes.t Path.Map.t;
   in_scope : Path.t list;
 }
 

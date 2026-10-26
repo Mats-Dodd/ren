@@ -33,9 +33,9 @@ val dependencies : string list
 (* The built-in functions that aren't a type's members. *)
 val fns : Intrinsic.t list
 
-(* A built-in function by the name its path has: [show], or a built-in
-   method after its type, [Array.push]. *)
-val find : string -> Intrinsic.t option
+(* A built-in function by its path: [show], or a built-in type's member,
+   [Array.push]. *)
+val find : Path.t -> Intrinsic.t option
 
 (* The interface of the built-in half: the built-in types and functions, as
    [source] sees them. *)

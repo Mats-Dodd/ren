@@ -93,7 +93,7 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
   in
   List.iter
     (fun (v : Iface.value) ->
-      let found = List.assoc v.vname inferred.schemes in
+      let found = Path.Map.find (Path.make home v.vname) inferred.schemes in
       if found <> v.scheme then mismatch v.vname v.scheme found)
     iface.values;
   (* and so was each public member's, which is in its type's entry *)
@@ -101,14 +101,14 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
     (fun (td : Iface.type_decl) ->
       List.iter
         (fun (o : Iface.op) ->
-          let name = td.path.name ^ "." ^ o.oname in
+          let path = Path.member td.path o.oname in
           let found =
-            match (o.okind, List.assoc name inferred.schemes) with
+            match (o.okind, Path.Map.find path inferred.schemes) with
             | Value, { ty = Fun ([], t, _, _); names } ->
                 Ty.canonical { ty = t; names }
             | _, s -> s
           in
-          if found <> o.oscheme then mismatch name o.oscheme found)
+          if found <> o.oscheme then mismatch (Path.local path) o.oscheme found)
         td.members)
     iface.types;
   (* Another module runs a public group's tests by calling them, so they're
@@ -121,7 +121,10 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
           List.mapi
             (fun i _ ->
               let vname = Test_items.group_fn g.gname (i + 1) in
-              { Iface.vname; scheme = List.assoc vname inferred.schemes })
+              {
+                Iface.vname;
+                scheme = Path.Map.find (Path.make home vname) inferred.schemes;
+              })
             g.gtests
         else [])
       items.groups
@@ -416,7 +419,8 @@ let link ?lint ?(for_tests = false) (modules : checked list) =
         core with
         fns =
           List.filter
-            (fun (f : Core.fn_def) -> not (List.mem f.path.name c.items.made))
+            (fun (f : Core.fn_def) ->
+              not (List.mem (Path.local f.path) c.items.made))
             core.fns;
       }
   in
@@ -498,7 +502,7 @@ let types ?(lint = false) ?load ~file src =
             (List.map
                (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
                f.params)
-          (List.assoc (Ast.fn_name f) inferred.schemes)
+          (Path.Map.find (Ast.fn_path home f) inferred.schemes)
       in
       (* a type's declaration, as Iface has it *)
       let decl (td : Ast.Resolved.type_def) =
@@ -514,7 +518,7 @@ let types ?(lint = false) ?load ~file src =
         | Op_fn -> "  " ^ fn_ ~outer ~name f
         | Op_value -> (
             (* a function of no parameters (ast.ml) *)
-            match List.assoc (Ast.fn_name f) inferred.schemes with
+            match Path.Map.find (Ast.fn_path home f) inferred.schemes with
             | { ty = Fun ([], t, _, _); names = tnames } ->
                 "  "
                 ^ Ty.value_signature ~names ~pub:f.pub ~name
@@ -538,7 +542,7 @@ let types ?(lint = false) ?load ~file src =
                            | Named p -> Some p
                            | Param _ -> None)
                          deps)
-                    (List.assoc (Ast.fn_name f) inferred.schemes);
+                    (Path.Map.find (Ast.fn_path home f) inferred.schemes);
                 ]
             | Ast.Fn f when List.mem f.name.name items.made -> []
             | Ast.Fn f -> [ fn_ ~name:f.name.name f ]

@@ -324,7 +324,7 @@ and source =
    only by checking it, after the call graph has put the functions in
    order, so the call graph was missing this edge: infer_top.ml adds it
    and checks the module again. *)
-exception Unchecked of { caller : string; callee : string }
+exception Unchecked of { caller : Path.t; callee : Path.t }
 
 (* What the expression being inferred can see. *)
 type ctx = {
@@ -371,9 +371,16 @@ let type_name env p = env.names p
 (* A name as it's written, for messages. *)
 let name_of = function
   | Local b -> b.ident.name
-  | Global p | Global_value p -> p.name
+  | Global p | Global_value p -> Path.local p
   | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
+
+(* The same, without its type's name if it's a member: `push`. *)
+let short_of = function
+  | Local b -> b.ident.name
+  | Global p | Global_value p -> Path.short p
+  | Intrinsic x -> Intrinsic.member_name x
+  | Dep_op (_, op) -> op
 
 let report env d = Diag.report env.sink d
 
@@ -971,9 +978,7 @@ let rec op_of env t name =
   | _ -> None
 
 (* The function a member is: [Stack.push]. *)
-let op_path (td : Iface.type_decl) (o : Iface.op) =
-  Path.make td.path.home (td.path.name ^ "." ^ o.oname)
-
+let op_path (td : Iface.type_decl) (o : Iface.op) = Path.member td.path o.oname
 let sorted names = List.sort String.compare names
 
 (* ---- expressions ---- *)
@@ -1003,12 +1008,12 @@ let rec lookup env cx loc = function
       (List.assoc p env.group) ()
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let used = (List.assoc p env.group) () in
-      env.joins <- { jloc = loc; jname = p.name; used; target = p } :: env.joins;
+      env.joins <-
+        { jloc = loc; jname = Path.local p; used; target = p } :: env.joins;
       used
   | Global p -> instantiate env.st (Hashtbl.find env.globals p)
   | Intrinsic x ->
-      instantiate env.st
-        (Hashtbl.find env.globals (Path.prelude (Intrinsic.name x)))
+      instantiate env.st (Hashtbl.find env.globals (Intrinsic.path x))
   | Dep_op (p, op) -> (
       (* the operation as declared, which uses its dependency: a call
          adds it to the caller's `uses` *)
@@ -1033,6 +1038,10 @@ let want_bool env what (e : expr) t =
    "this" if it's something else. *)
 let callee_name (f : expr) =
   match f.kind with Var x -> sprintf "`%s`" (name_of x) | _ -> "this"
+
+(* The callee [f]'s own name, without a type's in front: `push`. *)
+let short_callee (f : expr) =
+  match f.kind with Var x -> short_of x | Field (_, m) -> m.name | _ -> "this"
 
 (* An open row is unified with another as it is, which is how its tail
    picks up everything the other has. A closed one, like a stored `fn()`'s,
@@ -1237,9 +1246,10 @@ and join_uses env ~loc ~what joined into =
    handler, the caller's own errors for a `try` or the `attempt`'s. A call
    no marker covers can't fail: its errors go to a row of their own, which
    has to end up empty once the group is done (infer_top.ml). [ename] and
-   [name_loc] are the callee, and [target] the function of the group it
-   calls, if it does. *)
-let absorb env cx ~(call : expr) ~ename ~name_loc ?target ?callee errs uses =
+   [fn] are the callee, as a message names it and as it's written, and
+   [target] the function of the group it calls, if it does. *)
+let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
+  let name_loc = fn.loc in
   use_row env cx ~loc:call.loc ?callee uses;
   let ewritten =
     match call.kind with
@@ -1289,7 +1299,7 @@ let absorb env cx ~(call : expr) ~ename ~name_loc ?target ?callee errs uses =
           "rename one where it comes in: `try match %s` with the arm `fail \
            %s%s => fail %s%s%s`"
           c tag args
-          (String.capitalize_ascii (short_name ename))
+          (String.capitalize_ascii (short_callee fn))
           tag args
     | None -> "rename one of them where it comes in"
   in
@@ -1305,7 +1315,7 @@ let absorb env cx ~(call : expr) ~ename ~name_loc ?target ?callee errs uses =
   match cx.markers with
   | m :: _ when passed_on && m.mkind <> Mtry ->
       report env
-        (kept_passed_on call.loc ~name_loc ename ~fn:(short_name cx.self.name)
+        (kept_passed_on call.loc ~name_loc ename ~fn:(Path.short cx.self)
            ~handled:(m.mkind = Mmatch));
       List.iter (fun m -> m.covered <- ec :: m.covered) cx.markers
   | [] ->
@@ -1461,12 +1471,12 @@ let forced_why env callee expected =
           sprintf
             "`%s` throws this value away, and its type wasn't known, so it was \
              taken to be `Unit`"
-            c.name )
+            (Path.local c) )
       in
       let help =
         sprintf
           "if `%s` means to drop a value of any type there, write `let _ = ...`"
-          c.name
+          (Path.local c)
       in
       if sites = [] then plain
       else
@@ -2026,7 +2036,7 @@ and with_ env cx (e : expr) item body lam =
         | Some (td, ({ okind = Method; _ } as o)) -> (
             let path = op_path td o in
             if path.home = env.home && not (Hashtbl.mem env.globals path) then
-              raise (Unchecked { caller = cx.self.name; callee = path.name });
+              raise (Unchecked { caller = cx.self; callee = path });
             match repr (lookup env cx f.loc (Global path)) with
             | TFun (self :: ps, ret, errs, uses) as tm
               when List.length ps = List.length args + 1 ->
@@ -2296,7 +2306,7 @@ and wrap env cx (e : expr) ~call ~f ~args ?target ?callee tf body lam =
         { cx with markers = m :: cx.markers }
         ~call
         ~ename:(String.concat "" (String.split_on_char '`' name))
-        ~name_loc:f.loc ?target ?callee errs uses;
+        ~fn:f ?target ?callee errs uses;
       (* the call's type, unless it's the bare function, `with twice in` *)
       if call != f then Hashtbl.replace cx.nodes call.node ret;
       ret
@@ -2405,7 +2415,7 @@ and dropped env cx (e : expr) t =
     match (call e).kind with
     | Call (f, _) | Ref { kind = Call (f, _); _ } -> (
         match f.kind with
-        | Var x -> Some (short_name (name_of x))
+        | Var x -> Some (short_of x)
         | Field (_, m) -> Some m.name
         | _ -> None)
     | _ -> None
@@ -2547,7 +2557,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
   | Method -> (
       let path = op_path td o in
       if path.home = env.home && not (Hashtbl.mem env.globals path) then
-        raise (Unchecked { caller = cx.self.name; callee = path.name });
+        raise (Unchecked { caller = cx.self; callee = path });
       let tm = lookup env cx f.loc (Global path) in
       Hashtbl.replace cx.nodes f.node tm;
       Hashtbl.replace cx.found f.node (Method_of path);
@@ -2584,7 +2594,7 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
              given))
       else (
         check_args env cx ~name ?callee ps args;
-        absorb env cx ~call:e ~ename ~name_loc:f.loc ?target ?callee errs uses;
+        absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
         ret)
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
@@ -2593,7 +2603,7 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
       let ret = fresh_var env.st in
       let errs = fresh_row env.st and uses = fresh_row env.st in
       unify_at env f.loc ~found:tf ~expected:(TFun (ps, ret, errs, uses));
-      absorb env cx ~call:e ~ename ~name_loc:f.loc errs uses;
+      absorb env cx ~call:e ~ename ~fn:f errs uses;
       ret
   | TError ->
       List.iter (fun a -> ignore (infer_arg env cx a)) args;
@@ -3021,7 +3031,7 @@ and field_access env cx (e : expr) r tr (f : ident) =
             | Call ({ kind = Var (Global p); _ }, _)
               when p <> cx.self && List.mem_assoc p env.group ->
                 (* another function of the group, seen only as declared *)
-                Some (Group_result p.name)
+                Some (Group_result (Path.local p))
             | _ -> None
           in
           match through_type env ~known:None ~fits:field_of with

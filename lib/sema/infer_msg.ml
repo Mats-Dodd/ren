@@ -622,8 +622,7 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
       ]
     ~help:
       (sprintf "make it an associated function, `fn %s() uses %s = ...`"
-         (Ast.short_name (Ast.fn_name f))
-         dep)
+         f.name.name dep)
     (sprintf "the associated value `%s` uses `%s`" (Ast.fn_name f) dep)
 
 (* ---- errors (errors.md) ---- *)
@@ -645,8 +644,7 @@ let value_fails (f : Ast.Resolved.fn_def) ~tag ~shape from =
       (sprintf
          "handle it here with `match`, or make it an associated function, `fn \
           %s() ! %s = ...`"
-         (Ast.short_name (Ast.fn_name f))
-         shape)
+         f.name.name shape)
     (sprintf "the associated value `%s` can fail with `%s`" (Ast.fn_name f) tag)
 
 (* "`Short(Int)`", "`Short(Int)` and `Frozen`", "`A`, `B` and `C`" *)

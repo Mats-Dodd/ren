@@ -30,6 +30,10 @@ type t =
   | Str_from_utf8
   | Bytes_len
 
+(* Its path in the prelude: [show], or a built-in type's member,
+   [Array.push]. *)
+val path : t -> Path.t
+
 (* The name its path has in the prelude, which messages and printed Core
    show: [show], or a built-in type's member after the type, [Array.push]. *)
 val name : t -> string

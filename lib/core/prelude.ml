@@ -470,16 +470,15 @@ let runtime_deps = [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
    their stages give them operations. *)
 let dependencies = [ "Net"; "Alloc"; "Async"; "Unsafe" ]
 
-(* Every built-in function, by the name its path has. Map.Make is a
-   functor: a function from a module (String) to a module (Names). The map
-   is made once, when the compiler starts, and never changes. *)
-module Names = Map.Make (String)
-
-let by_name =
+(* Every built-in function, by its path. The map is made once, when the
+   compiler starts, and never changes. *)
+let by_path =
   let all = fns @ List.concat_map (fun t -> t.methods @ t.functions) types in
-  List.fold_left (fun m x -> Names.add (Intrinsic.name x) x m) Names.empty all
+  List.fold_left
+    (fun m x -> Path.Map.add (Intrinsic.path x) x m)
+    Path.Map.empty all
 
-let find name = Names.find_opt name by_name
+let find p = Path.Map.find_opt p by_path
 
 (* The intrinsic half of the prelude's interface, as the prelude's own
    source sees it, with what reaches the world; [public] is what every
@@ -520,6 +519,8 @@ let public =
     values =
       List.filter
         (fun (v : Iface.value) ->
-          match find v.vname with Some x -> not (runtime x) | None -> true)
+          match find (Path.prelude v.vname) with
+          | Some x -> not (runtime x)
+          | None -> true)
         intrinsics.values;
   }

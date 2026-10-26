@@ -1271,10 +1271,8 @@ fn main() = print(Some(true))
   let second = Driver.inferred ~file src in
   print_endline
     (string_of_bool
-       (List.equal
-          (fun (a, x) (b, y) -> a = b && Infer.Nodes.equal ( = ) x y)
-          first.nodes second.nodes));
-  let path (p : Path.t) = p.home ^ "." ^ p.name in
+       (Path.Map.equal (Infer.Nodes.equal ( = )) first.nodes second.nodes));
+  let path (p : Path.t) = p.home ^ "." ^ Path.local p in
   Infer.Nodes.iter
     (fun _ (n : Infer.node) ->
       match n.found with
@@ -1288,7 +1286,7 @@ fn main() = print(Some(true))
             ("installs a handler of " ^ String.concat ", " (List.map path ps))
       | Some Wraps -> print_endline "wraps"
       | None -> ())
-    (List.assoc "main" second.nodes);
+    (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect
     {|
     true
@@ -1330,7 +1328,8 @@ fn main() = twice(fn() => say(1))
         Ty.printer ~show_tail:(fun _ -> true) ~names:Path.full v.scheme
       in
       Printf.printf "%s: %s (%s)\n" v.vname (Ty.show pr v.scheme.ty)
-        (if List.assoc v.vname schemes = v.scheme then "as inferred"
+        (if Path.Map.find (Path.make "test" v.vname) schemes = v.scheme then
+           "as inferred"
          else "differs from inference"))
     iface.values;
   [%expect
@@ -1451,14 +1450,15 @@ fn other(x, y, z) = x
 fn main() = other(1, true, ())
 |}));
   let second = Driver.schemes ~file src in
-  print_endline (string_of_bool (first = second));
+  print_endline (string_of_bool (Path.Map.equal ( = ) first second));
   (* `pick` keeps the names it declared; the other variables have none *)
   List.iter
-    (fun (name, (s : Ty.scheme)) ->
+    (fun name ->
+      let s : Ty.scheme = Path.Map.find (Path.make "test" name) second in
       Printf.printf "%s: %s\n" name
         (String.concat ", "
            (List.map (fun (n, h) -> Printf.sprintf "%d=%s" n h) s.names)))
-    second;
+    [ "map_option"; "pick"; "main" ];
   [%expect {|
     true
     map_option:

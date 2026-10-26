@@ -67,7 +67,7 @@ let guard cx f = Diag.recover cx.sink ~default:() f
 
 let name_of = function
   | Local b -> b.ident.name
-  | Global p | Global_value p -> p.name
+  | Global p | Global_value p -> Path.local p
   | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
 

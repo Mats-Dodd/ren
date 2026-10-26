@@ -17,18 +17,17 @@ open Infer_expr
    functions each function uses, which resolve.ml found, and the methods
    it calls with a dot, as far as they're known (see [program]). *)
 let components ~home ~calls (fns : fn_def list) =
-  let by_name = Hashtbl.create 16 in
-  List.iter (fun (f : fn_def) -> Hashtbl.replace by_name (Ast.fn_name f) f) fns;
+  let path = Ast.fn_path home in
+  let by_path = Hashtbl.create 16 in
+  List.iter (fun (f : fn_def) -> Hashtbl.replace by_path (path f) f) fns;
   let callees (f : fn_def) =
-    List.assoc (Ast.fn_name f) calls
-    |> List.filter_map (fun (p : Path.t) ->
-        if p.home = home then Hashtbl.find_opt by_name p.name else None)
+    Path.Map.find (path f) calls |> List.filter_map (Hashtbl.find_opt by_path)
   in
   let index = Hashtbl.create 16 and low = Hashtbl.create 16 in
   let stack = ref [] and on_stack = Hashtbl.create 16 in
   let counter = ref 0 and result = ref [] in
   let rec visit (f : fn_def) =
-    let v = Ast.fn_name f in
+    let v = path f in
     Hashtbl.replace index v !counter;
     Hashtbl.replace low v !counter;
     incr counter;
@@ -36,7 +35,7 @@ let components ~home ~calls (fns : fn_def list) =
     Hashtbl.replace on_stack v ();
     List.iter
       (fun (g : fn_def) ->
-        let w = Ast.fn_name g in
+        let w = path g in
         if not (Hashtbl.mem index w) then (
           visit g;
           Hashtbl.replace low v (min (Hashtbl.find low v) (Hashtbl.find low w)))
@@ -49,8 +48,8 @@ let components ~home ~calls (fns : fn_def list) =
         match !stack with
         | g :: rest ->
             stack := rest;
-            Hashtbl.remove on_stack (Ast.fn_name g);
-            if Ast.fn_name g = v then g :: acc else pop (g :: acc)
+            Hashtbl.remove on_stack (path g);
+            if path g = v then g :: acc else pop (g :: acc)
         | [] -> assert false
       in
       let group = pop [] in
@@ -59,8 +58,7 @@ let components ~home ~calls (fns : fn_def list) =
       result := List.sort (fun a b -> compare (pos a) (pos b)) group :: !result
   in
   List.iter
-    (fun (f : fn_def) ->
-      if not (Hashtbl.mem index (Ast.fn_name f)) then visit f)
+    (fun (f : fn_def) -> if not (Hashtbl.mem index (path f)) then visit f)
     fns;
   List.rev !result
 
@@ -1252,7 +1250,7 @@ let settle_installs env =
                   uses what `%s` itself does: a parameter whose type is \
                   written `fn(...)`, or a closure that's called outside the \
                   `with` too, gets only what's installed outside it"
-                 w.wself.name (dep_name w) w.wself.name);
+                 (Path.local w.wself) (dep_name w) (Path.local w.wself));
             let outer = row_names w.wouter in
             List.for_all (fun (l : label) -> List.mem l.name outer) rest
         | RVar _ as t
@@ -1269,7 +1267,7 @@ let settle_installs env =
                    "`%s` calls a closure inside more than one `with`, so the \
                     closure gets only what's installed outside all of them, \
                     not the `%s` one of them installs"
-                   w.wself.name (dep_name w));
+                   (Path.local w.wself) (dep_name w));
             into (extend rest t)
         | RSkol (id, n) ->
             (* a named row: what's outside ends in it too *)
@@ -1493,27 +1491,25 @@ let settle_impls env =
    context each function was checked in). *)
 let value_order env (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
   let home = r.home in
-  let edges name =
+  let edges p =
     let dots =
-      match Hashtbl.find_opt found name with
+      match Hashtbl.find_opt found p with
       | Some cx ->
           Hashtbl.fold
             (fun _ f acc ->
               match f with
-              | Method_of (p : Path.t) when p.home = home -> p.name :: acc
+              | Method_of (q : Path.t) when q.home = home -> q :: acc
               | _ -> acc)
             cx.found []
       | None -> []
     in
-    List.filter_map
-      (fun (p : Path.t) -> if p.home = home then Some p.name else None)
-      (List.assoc name r.calls)
+    List.filter (fun (q : Path.t) -> q.home = home) (Path.Map.find p r.calls)
     @ dots
     |> List.sort_uniq compare
   in
   let values = List.filter is_value fns in
-  let value_named n =
-    List.find_opt (fun (f : fn_def) -> Ast.fn_name f = n) values
+  let value_named p =
+    List.find_opt (fun (f : fn_def) -> Ast.fn_path home f = p) values
   in
   (* a way from [n] back to [goal], if there is one: the functions and
      values on it, ending with [goal] *)
@@ -1532,7 +1528,7 @@ let value_order env (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
   let reported = ref [] in
   List.iter
     (fun (v : fn_def) ->
-      let n = Ast.fn_name v in
+      let n = Ast.fn_path home v in
       if not (List.mem n !reported) then
         match back ~seen:(Hashtbl.create 8) n n with
         | Some way ->
@@ -1549,8 +1545,8 @@ let value_order env (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
                  ~help:
                    (if way = [ n ] then "make it without using itself"
                     else "make one of them without the other")
-                 (sprintf "`%s` is made from itself: %s" n
-                    (String.concat " → " chain)))
+                 (sprintf "`%s` is made from itself: %s" (Path.local n)
+                    (String.concat " → " (List.map Path.local chain))))
         | None -> ())
     values;
   (* each value after every one it reaches: a depth-first walk, which adds
@@ -1562,7 +1558,7 @@ let value_order env (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
       List.iter visit (edges n);
       if value_named n <> None then order := n :: !order)
   in
-  List.iter (fun (v : fn_def) -> visit (Ast.fn_name v)) values;
+  List.iter (fun (v : fn_def) -> visit (Ast.fn_path home v)) values;
   List.rev !order
 
 (* ---- the program ---- *)
@@ -1579,12 +1575,12 @@ type node = {
 }
 
 type t = {
-  schemes : (string * Ty.scheme) list;  (** each function's, in source order *)
-  values : string list;
+  schemes : Ty.scheme Path.Map.t;  (** each function's, by its path *)
+  values : Path.t list;
       (** the module's associated values, in the order they're made when the
           program starts: each after every value it uses *)
-  nodes : (string * node Nodes.t) list;
-      (** each function's expressions and patterns, by node id *)
+  nodes : node Nodes.t Path.Map.t;
+      (** each function's expressions and patterns, by its path, then node id *)
   in_scope : Path.t list;
       (** the types step 2 of a lookup through a type found, sorted *)
 }
@@ -1651,7 +1647,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
         | Type (td : type_def) ->
             List.filter_map
               (fun (o : op) ->
-                if o.op_kind = Op_value then Some (Ast.fn_name o.op_fn)
+                if o.op_kind = Op_value then Some (Ast.fn_path r.home o.op_fn)
                 else None)
               td.type_ops
         | Fn _ | Import _ | Testing _ -> [])
@@ -1668,22 +1664,18 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
             | [] -> false
           in
           (* nor `main`, nor what a test was made *)
+          let path = Ast.fn_path env.home g in
           if
             is_method
-            || Ast.fn_name g = "main"
-            || String.contains (Ast.fn_name g) '$'
+            || path = Path.make env.home "main"
+            || String.contains g.name.name '$'
           then None
           else
-            Option.bind
-              (Hashtbl.find_opt schemes (Ast.fn_name g))
-              (fun t ->
+            Option.bind (Hashtbl.find_opt schemes path) (fun t ->
                 Option.map
                   (fun n ->
-                    let name =
-                      Resolve.value_name r (Path.make env.home (Ast.fn_name g))
-                    in
-                    if List.mem (Ast.fn_name g) values then name
-                    else call name n)
+                    let name = Resolve.value_name r path in
+                    if List.mem path values then name else call name n)
                   (makes p t)))
         fns
     in
@@ -1891,6 +1883,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
     =
   let st = Types.new_state () in
   let home = r.home in
+  let bodies = List.map (Path.make home) bodies in
   let types = Hashtbl.create 16 in
   List.iter
     (fun (td : Iface.type_decl) -> Hashtbl.replace types td.path td)
@@ -1979,8 +1972,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
     (fun (f : fn_def) ->
       match f.params with
       | p :: _ when p.pname.ident.name = "self" && Ast.spelled f ->
-          Hashtbl.replace env.globals
-            (Path.make home (Ast.fn_name f))
+          Hashtbl.replace env.globals (Ast.fn_path home f)
             (of_scheme st (Iface.signature ~sets:env.sets f))
       | _ -> ())
     fns;
@@ -1990,14 +1982,14 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
         | Type td ->
             List.filter_map
               (fun (o : op) ->
-                if o.op_kind = Op_value then Some (Ast.fn_name o.op_fn)
+                if o.op_kind = Op_value then Some (Ast.fn_path home o.op_fn)
                 else None)
               td.type_ops
         | Fn _ | Import _ | Testing _ -> [])
       r.prog
   in
-  let is_value (f : fn_def) = List.mem (Ast.fn_name f) values in
-  let path (f : fn_def) = Path.make home (Ast.fn_name f) in
+  let path = Ast.fn_path home in
+  let is_value (f : fn_def) = List.mem (path f) values in
   List.iter (check_transparent sink) fns;
   let schemes = Hashtbl.create 16 in
   let tables = Hashtbl.create 16 in
@@ -2261,7 +2253,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
         (fun ((f : fn_def), skolems, cx, _, _) ->
           Option.iter
             (check_uses env ~is_value
-               ~main:(entry <> None && Ast.fn_name f = "main")
+               ~main:(entry <> None && path f = Path.make home "main")
                f cx)
             (declared_uses ~is_value f);
           if f.pub && not (is_value f) then check_open_rows env f cx;
@@ -2320,23 +2312,21 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
           in
           let scheme = generalize env.st ~skolems ~row_skolems mono in
           Hashtbl.replace env.globals (path f) scheme;
-          Hashtbl.replace schemes (Ast.fn_name f) scheme;
-          Hashtbl.replace tables (Ast.fn_name f) cx)
+          Hashtbl.replace schemes (path f) scheme;
+          Hashtbl.replace tables (path f) cx)
         setups;
       (* public values spell out their type *)
       List.iter
         (fun ((f : fn_def), _, _, _, _) ->
           if f.pub && is_value f && f.ret = None then
-            match Hashtbl.find schemes (Ast.fn_name f) with
+            match Hashtbl.find schemes (path f) with
             | TFun (_, t, _, _) as scheme ->
                 let pr = printer env in
                 reserve pr scheme;
                 ignore
                 @@ fail env f.name.loc
                      ~help:
-                       (sprintf "write `pub let %s: %s`"
-                          (short_name (Ast.fn_name f))
-                          (show pr t))
+                       (sprintf "write `pub let %s: %s`" f.name.name (show pr t))
                      ~notes:[ "public values spell out their type" ]
                      (sprintf "the public value `%s` has no type"
                         (Ast.fn_name f))
@@ -2346,7 +2336,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       List.iter
         (fun ((f : fn_def), _, _, _, _) ->
           if f.pub && not (is_value f) then
-            match Hashtbl.find schemes (Ast.fn_name f) with
+            match Hashtbl.find schemes (path f) with
             | TFun (ps, _, _, _) as scheme ->
                 List.iter2
                   (fun (p : Resolved.param) (t : Types.param) ->
@@ -2371,15 +2361,14 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
         setups)
     (components ~home
        ~calls:
-         (List.map
-            (fun (f, calls) ->
+         (Path.Map.mapi
+            (fun f calls ->
               let found =
                 List.filter_map
-                  (fun (caller, m) ->
-                    if caller = f then Some (Path.make home m) else None)
+                  (fun (caller, m) -> if caller = f then Some m else None)
                   extra
               in
-              (f, calls @ List.assoc f r.methods @ found))
+              calls @ Path.Map.find f r.methods @ found)
             r.calls)
        fns);
   let values = value_order env r fns ~is_value ~found:tables in
@@ -2389,7 +2378,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
      group wraps it in. *)
   List.iter
     (fun (f : fn_def) ->
-      if List.mem (Ast.fn_name f) bodies then
+      if List.mem (path f) bodies then
         let rec last (e : expr) =
           match e.kind with
           | Block (_, l) -> last l
@@ -2400,10 +2389,10 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
            wrapper's result, which is reported where it's wrong *)
         let own =
           Option.bind
-            (Hashtbl.find_opt tables (Ast.fn_name f))
+            (Hashtbl.find_opt tables (path f))
             (fun cx -> Hashtbl.find_opt cx.nodes (last f.body).node)
         in
-        match (own, repr (Hashtbl.find schemes (Ast.fn_name f))) with
+        match (own, repr (Hashtbl.find schemes (path f))) with
         | Some ret, _ | None, TFun (_, ret, _, _) ->
             unify_at env (last f.body).loc ~found:ret ~expected:unit
               ~msg:(fun found _ ->
@@ -2420,7 +2409,10 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
   (match
      Option.map
        (fun file ->
-         (file, List.find_opt (fun (f : fn_def) -> Ast.fn_name f = "main") fns))
+         ( file,
+           List.find_opt
+             (fun (f : fn_def) -> path f = Path.make home "main")
+             fns ))
        entry
    with
   | None -> ()
@@ -2435,15 +2427,17 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
            ~help:"remove the parameters" "`main` can't take parameters")
   | Some (_, Some f) ->
       check_main env r ~fns ~schemes f
-        (Hashtbl.find schemes (Ast.fn_name f))
-        (Hashtbl.find tables (Ast.fn_name f)));
+        (Hashtbl.find schemes (path f))
+        (Hashtbl.find tables (path f)));
   List.iter
     (fun (t : Test_items.test) ->
-      match List.find_opt (fun (f : fn_def) -> Ast.fn_name f = t.fn) fns with
+      match
+        List.find_opt (fun (f : fn_def) -> path f = Path.make home t.fn) fns
+      with
       | Some f ->
           check_test env r ~fns ~schemes t f
-            (Hashtbl.find schemes (Ast.fn_name f))
-            (Hashtbl.find tables (Ast.fn_name f))
+            (Hashtbl.find schemes (path f))
+            (Hashtbl.find tables (path f))
       | None -> ())
     tests;
   (* Each function's scheme and node types share one numbering, so a
@@ -2451,9 +2445,9 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
      their ids, so the numbering doesn't depend on a hash table's order. *)
   let canonical (f : fn_def) =
     let c = canon st in
-    let ty = canon_ty c ~all:false (Hashtbl.find schemes (Ast.fn_name f)) in
+    let ty = canon_ty c ~all:false (Hashtbl.find schemes (path f)) in
     let scheme : Ty.scheme = { ty; names = canon_names c } in
-    let cx = Hashtbl.find tables (Ast.fn_name f) in
+    let cx = Hashtbl.find tables (path f) in
     let nodes =
       Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes []
       |> List.sort compare
@@ -2468,10 +2462,15 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
                acc)
            Nodes.empty
     in
-    ((Ast.fn_name f, scheme), (Ast.fn_name f, nodes))
+    ((path f, scheme), (path f, nodes))
   in
   let schemes, nodes = List.split (List.map canonical fns) in
-  { schemes; values; nodes; in_scope = List.sort compare env.in_scope }
+  {
+    schemes = Path.Map.of_list schemes;
+    values;
+    nodes = Path.Map.of_list nodes;
+    in_scope = List.sort compare env.in_scope;
+  }
 
 (* Which method a dot call like `s.size()` calls is found only by checking
    the call, through `s`'s type, but the call graph puts the functions in

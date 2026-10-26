@@ -236,7 +236,7 @@ let cell env (v : var) =
 
 (* What [f] is, for a bug report. *)
 let describe = function
-  | VFn p -> "`" ^ p.name ^ "`"
+  | VFn p -> "`" ^ Path.local p ^ "`"
   | VBuiltin x -> "`" ^ Intrinsic.name x ^ "`"
   | VClosure { body; _ } ->
       Printf.sprintf "a lambda (its body at %s:%d)" body.loc.file
@@ -262,7 +262,7 @@ let rec eval cx env (e : expr) =
   | Global_value p -> (
       match Hashtbl.find_opt cx.values p with
       | Some v -> v
-      | None -> bug ("the value `" ^ p.name ^ "` used before it's made"))
+      | None -> bug ("the value `" ^ Path.local p ^ "` used before it's made"))
   | Intrinsic x -> VBuiltin x
   | Dep_call { dep; op; ev; args; fty; _ } -> (
       (* the innermost implementation of [dep]: a record of functions, the
@@ -576,7 +576,7 @@ and start cx ~fty f cells ev =
       let f =
         match Hashtbl.find_opt cx.fns p with
         | Some f -> f
-        | None -> bug ("a call of `" ^ p.name ^ "`, which doesn't exist")
+        | None -> bug ("a call of `" ^ Path.local p ^ "`, which doesn't exist")
       in
       let tys = bind Env.empty f.scheme.ty fty in
       run { cx with tys }
@@ -628,7 +628,7 @@ and own_show cx (p : Path.t) args v : Shown.own =
         | Method, Fun ([ _ ], ret, errs, uses)
           when o.oname = "show" && ret = Ty.str && errs.labels = []
                && uses.labels = [] ->
-            Some (Path.make p.home (p.name ^ ".show"))
+            Some (Path.member p "show")
         | _ -> None)
       d.members
   in
@@ -660,7 +660,8 @@ let overflowed cx (p : Path.t) =
   match Hashtbl.find_opt cx.fns p with
   | Some f ->
       Panic (f.loc, "the stack overflowed: a function called itself too deeply")
-  | None -> bug ("a call too deep from `" ^ p.name ^ "`, which isn't there")
+  | None ->
+      bug ("a call too deep from `" ^ Path.local p ^ "`, which isn't there")
 
 (* A program's functions, by path, and its associated values, made in
    order: a module's after those of every module it imports, which come
@@ -732,7 +733,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
   let value p =
     match Hashtbl.find_opt cx.values p with
     | Some v -> v
-    | None -> bug (what ^ " with `" ^ p.name ^ "` not made")
+    | None -> bug (what ^ " with `" ^ Path.local p ^ "` not made")
   in
   (* the instance of the prelude's handler [name], given [args] *)
   let instance_of name args =
@@ -749,7 +750,7 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
           [
             {
               dep = Path.prelude dep;
-              impl = value (Path.prelude (dep ^ ".real"));
+              impl = value (Path.member (Path.prelude dep) "real");
               outer = [];
             };
           ]
@@ -758,7 +759,9 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
             (fun (dep, impl) -> { dep; impl; outer = [] })
             (instance_of handler args))
       [
-        ("Clock", "test_clock", [ value (Path.prelude "Time.epoch") ]);
+        ( "Clock",
+          "test_clock",
+          [ value (Path.member (Path.prelude "Time") "epoch") ] );
         ("Random", "test_random", [ VInt seed ]);
         ("Console", "test_console", []);
         ("Fs", "mem_fs", [ VArray [||] ]);

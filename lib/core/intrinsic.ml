@@ -6,8 +6,8 @@
    pass that finds one finds it with a [match], and the compiler checks
    that every pass handles every one. This is only the names: each one's
    type is the prelude's (prelude.ml), and what it does when it runs is the
-   interpreter's (builtins.ml). It's a module of its own, depending on
-   nothing, so the AST can name one too. *)
+   interpreter's (builtins.ml). It's a module of its own, depending
+   only on paths, so the AST can name one too. *)
 
 type t =
   | Show
@@ -37,37 +37,37 @@ type t =
   | Str_from_utf8
   | Bytes_len
 
-let name = function
-  | Show -> "show"
-  | Clock_now -> "clock_now"
-  | Clock_instant -> "clock_instant"
-  | Clock_sleep -> "clock_sleep"
-  | Random_int -> "random_int"
-  | Seeded_next -> "seeded_next"
-  | Seeded_int -> "seeded_int"
-  | Console_write -> "console_write"
-  | Console_error -> "console_error"
-  | Fs_read -> "fs_read"
-  | Fs_write -> "fs_write"
-  | Fs_exists -> "fs_exists"
-  | Os_args -> "os_args"
-  | Proc_run -> "proc_run"
-  | Array_len -> "Array.len"
-  | Array_push -> "Array.push"
-  | Str_len -> "Str.len"
-  | Str_slice -> "Str.slice"
-  | Str_find -> "Str.find"
-  | Str_split -> "Str.split"
-  | Str_trim -> "Str.trim"
-  | Str_starts_with -> "Str.starts_with"
-  | Str_concat -> "Str.concat"
-  | Str_bytes -> "Str.bytes"
-  | Str_from_utf8 -> "Str.from_utf8"
-  | Bytes_len -> "Bytes.len"
+(* Its path in the prelude (path.ml): a function's, [show], or a built-in
+   type's member's, [Array.push]. *)
+let path x =
+  let fn = Path.prelude and member t m = Path.member (Path.prelude t) m in
+  match x with
+  | Show -> fn "show"
+  | Clock_now -> fn "clock_now"
+  | Clock_instant -> fn "clock_instant"
+  | Clock_sleep -> fn "clock_sleep"
+  | Random_int -> fn "random_int"
+  | Seeded_next -> fn "seeded_next"
+  | Seeded_int -> fn "seeded_int"
+  | Console_write -> fn "console_write"
+  | Console_error -> fn "console_error"
+  | Fs_read -> fn "fs_read"
+  | Fs_write -> fn "fs_write"
+  | Fs_exists -> fn "fs_exists"
+  | Os_args -> fn "os_args"
+  | Proc_run -> fn "proc_run"
+  | Array_len -> member "Array" "len"
+  | Array_push -> member "Array" "push"
+  | Str_len -> member "Str" "len"
+  | Str_slice -> member "Str" "slice"
+  | Str_find -> member "Str" "find"
+  | Str_split -> member "Str" "split"
+  | Str_trim -> member "Str" "trim"
+  | Str_starts_with -> member "Str" "starts_with"
+  | Str_concat -> member "Str" "concat"
+  | Str_bytes -> member "Str" "bytes"
+  | Str_from_utf8 -> member "Str" "from_utf8"
+  | Bytes_len -> member "Bytes" "len"
 
-(* what's after the type's name and its `.` *)
-let member_name x =
-  let n = name x in
-  match String.index_opt n '.' with
-  | Some i -> String.sub n (i + 1) (String.length n - i - 1)
-  | None -> n
+let name x = Path.local (path x)
+let member_name x = Path.short (path x)

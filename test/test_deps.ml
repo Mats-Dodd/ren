@@ -25,7 +25,7 @@ let run_start files body =
       let linked = Driver.linked ~lint:true ~load ~file src in
       let entry = List.nth linked (List.length linked - 1) in
       let fn_ name =
-        List.find (fun (f : Core.fn_def) -> f.path.name = name) entry.fns
+        List.find (fun (f : Core.fn_def) -> Path.local f.path = name) entry.fns
       in
       let start = fn_ Lower.start_name in
       let body = body ~fn_ ~loc:start.loc in
@@ -5593,7 +5593,9 @@ fn main() uses Clock = stamp()
         let linked = Driver.linked ~file src in
         let entry = List.nth linked (List.length linked - 1) in
         let fn_ name =
-          List.find (fun (f : Core.fn_def) -> f.path.name = name) entry.fns
+          List.find
+            (fun (f : Core.fn_def) -> Path.local f.path = name)
+            entry.fns
         in
         let start = fn_ Lower.start_name in
         let start = { start with body = body ~fn_ ~loc:start.loc } in
