@@ -136,18 +136,10 @@ let rec handler core env cx state arms ~needs ~declared =
           (* checked as a lambda is, against the operation, but what its
              calls use is what the handler needs, and they're the
              handler's calls, so a message can point at one *)
-          let notes =
-            [ sprintf "`%s`'s operation `%s`" (type_name env p) op ]
-          in
+          let notes = [ part_of (type_name env p) "operation" op ] in
           let why = explain ~notes () in
           (* its result reads as a record implementation's lambda's does *)
-          let result_why =
-            explain ~notes
-              ~msg:(fun f x ->
-                sprintf "this arm produces %s, but it has to produce %s"
-                  (article f) (article x))
-              ()
-          in
+          let result_why = explain ~notes ~msg:arm_produces () in
           let qs =
             List.map2
               (fun (q : Resolved.param) eq ->
@@ -169,18 +161,9 @@ let rec handler core env cx state arms ~needs ~declared =
             (unifies env why a.arm_impl.loc ~found:t
                ~expected:(TFun (ps, r, open_errs, needs)))
       | Some (p, op, ps, _, _), Lambda (params, _) ->
-          let n = List.length ps in
           report env
-            (Diag.make a.arm_name.loc
-               ~help:
-                 (sprintf "give it %d parameter%s, one for each argument" n
-                    (if n = 1 then "" else "s"))
-               (sprintf
-                  "`%s.%s` takes %d argument%s, but this has %d parameter%s"
-                  (type_name env p) op n
-                  (if n = 1 then "" else "s")
-                  (List.length params)
-                  (if List.length params = 1 then "" else "s")));
+            (arm_arity a.arm_name.loc ~dep:(type_name env p) ~op
+               (List.length ps) (List.length params));
           ignore (core.infer env hcx a.arm_impl)
       | _ -> ignore (core.infer env hcx a.arm_impl))
     arms;
@@ -218,19 +201,7 @@ and with_ core env cx (e : expr) item body lam =
           Hashtbl.replace cx.found f.node (Method_of path);
           unify_at env r.loc ~found:(widen env ~loc:r.loc tr) ~expected:self.ty;
           if self.mode = Inout then
-            report env
-              (Diag.make item.loc
-                 ~notes:
-                   [
-                     "`with r.w(a) in body` calls `r.w(a, fn() => body)`, and \
-                      a `with`'s item can't change what it's called on";
-                   ]
-                 ~help:
-                   (sprintf
-                      "call `%s` outside the `with`, with all its arguments"
-                      m.name)
-                 (sprintf "`%s` changes its receiver, so it can't wrap a body"
-                    m.name));
+            report env (wrapper_changes_receiver item.loc m.name);
           wrap core env cx e ~call:item ~f ~args
             ?target:(if group_call env path then Some path else None)
             ~callee:path tf body lam
@@ -255,21 +226,10 @@ and with_ core env cx (e : expr) item body lam =
       match reveal env.st tf with
       | TFun (ps, ret, _, _) when short ps ret ->
           let name = callee_name f in
-          let n = List.length ps in
           report env
-            (Diag.make item.loc
-               ~notes:
-                 [
-                   sprintf
-                     "%s makes an implementation, `%s`, which `with` installs \
-                      once it's called with all its arguments"
-                     name
-                     (show (printer env) ret);
-                 ]
-               ~help:(sprintf "give %s all its arguments" name)
-               (sprintf "%s takes %d argument%s but was given %d" name n
-                  (if n = 1 then "" else "s")
-                  (List.length args)));
+            (with_too_few item.loc name
+               ~made:(show (printer env) ret)
+               (List.length ps) (List.length args));
           List.iter (fun a -> ignore (core.infer env cx a)) args;
           Hashtbl.replace cx.nodes item.node ret;
           install core env cx e item ret body
@@ -349,18 +309,7 @@ and install core env cx (e : expr) item t body =
          not called: the body is checked as if it were, so what it uses
          isn't reported as missing too *)
       let src = Option.value (env.source item) ~default:"f" in
-      report env
-        (Diag.make item.loc
-           ~notes:
-             [
-               sprintf
-                 "`with` installs an implementation, and `%s` makes one when \
-                  it's called"
-                 src;
-             ]
-           ~help:(sprintf "call it: `with %s() in ...`" src)
-           (sprintf "`with` installs an implementation, but this is %s"
-              (article (show (printer env) tf))));
+      report env (with_uncalled item.loc src (show (printer env) tf));
       match reveal env.st ret with
       | TCon (d, _) -> around cx (installs d)
       | _ -> TError)
@@ -369,33 +318,14 @@ and install core env cx (e : expr) item t body =
       TError
   | t ->
       unknown ();
-      let shown = show (printer env) t in
-      let is_var = match t with TVar _ -> true | _ -> false in
-      fail env item.loc
-        ~notes:
-          [
-            "`with` installs an implementation of a dependency around its \
-             body, or passes its body to a wrapper, a function whose last \
-             parameter is the body";
-          ]
-        ~help:
-          (match item.kind with
-          | Var (Local b) when is_var ->
-              sprintf "say what it is where it's declared, like `%s: Clock`"
-                b.ident.name
-          | _ when is_var ->
-              "install something whose type is known here, like \
-               `Clock.frozen(t)`, or a handler's call"
-          | _ ->
-              "give it an implementation, like `Clock.frozen(t)`, or a \
-               wrapper's call without its last argument, like `retry(3)`")
-        (if is_var then
-           "`with` can't tell what this installs: its type isn't known here"
-         else
-           sprintf
-             "`with` installs an implementation, or wraps its body, but this \
-              is %s"
-             (article shown))
+      let what =
+        match (t, item.kind) with
+        | TVar _, Var (Local b) -> Unknown_var b.ident.name
+        | TVar _, _ -> Unknown
+        | _ -> Known (show (printer env) t)
+      in
+      report env (cant_install item.loc what);
+      TError
 
 (* The wrapper call [call], `retry(3)`, of [f], of type [tf], given
    [args]: [body] is its last argument, a lambda of no parameters, whose
@@ -428,33 +358,11 @@ and wrap core env cx (e : expr) ~call ~f ~args ?target ?callee tf body lam =
       in
       let tl = TFun ([], tb, berrs, buses) in
       Hashtbl.replace cx.nodes lam tl;
-      if last.mode = Inout then
-        ignore
-          (fail env call.loc
-             ~notes:
-               [
-                 "`with w(a) in body` calls `w(a, fn() => body)`, and a lambda \
-                  isn't a place to change";
-               ]
-             ~help:
-               (sprintf "call %s outside the `with`, with all its arguments"
-                  name)
-             (sprintf "%s changes its last argument, so it can't take a body"
-                name))
+      if last.mode = Inout then report env (wrapper_changes_body call.loc name)
       else
         unify_at env call.loc ~found:tl ~expected:last.ty
-          ~notes:
-            [
-              "`with w(a) in body` calls `w(a, fn() => body)`, so the \
-               wrapper's last parameter is a function of no parameters";
-            ]
-          ~help:
-            (sprintf "call %s outside the `with`, with all its arguments" name)
-          ~msg:(fun _ x ->
-            sprintf
-              "%s's last parameter is %s, but a `with` passes it its body, a \
-               `fn()`"
-              name (article x));
+          ~notes:[ wrapper_body_note ] ~help:(call_outside name)
+          ~msg:(wrapper_last name);
       let m =
         {
           mkind = Mtry;
@@ -498,20 +406,7 @@ and outer_changes env (body : expr) name =
     match root place with
     | Some (b, _) when not (Hashtbl.mem bound b.id) ->
         report env
-          (Diag.make place.loc
-             ~notes:
-               [
-                 sprintf
-                   "`with` passes its body to %s as a lambda, `fn() => ...`, \
-                    which captures the values of the variables it uses when \
-                    it's made, so changing them would have no effect outside"
-                   name;
-               ]
-             ~help:"give the body's result back as its value instead"
-             (sprintf
-                "the body of this `with` can't change `%s`, a variable from \
-                 outside it"
-                b.ident.name))
+          (body_changes_outer place.loc ~wrapper:name ~var:b.ident.name)
     | _ -> ()
   in
   let rec walk (e : expr) =

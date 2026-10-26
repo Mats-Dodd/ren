@@ -823,6 +823,131 @@ let tag_holds tag f x =
 
 let its_shape shown = sprintf "it's `%s`" shown
 
+(* ---- handlers and `with` ---- *)
+
+let arm_produces f x =
+  sprintf "this arm produces %s, but it has to produce %s" (article f)
+    (article x)
+
+(* An arm for the operation [op] of [dep], which takes [n] arguments,
+   with [given] parameters. *)
+let arm_arity loc ~dep ~op n given =
+  Diag.make loc
+    ~help:(sprintf "give it %d parameter%s, one for each argument" n (plural n))
+    (sprintf "`%s.%s` takes %d argument%s, but this has %d parameter%s" dep op n
+       (plural n) given (plural given))
+
+let call_outside name =
+  sprintf "call %s outside the `with`, with all its arguments" name
+
+(* `with r.w(a) in body`, where the method [m] has `inout self` *)
+let wrapper_changes_receiver loc m =
+  Diag.make loc
+    ~notes:
+      [
+        "`with r.w(a) in body` calls `r.w(a, fn() => body)`, and a `with`'s \
+         item can't change what it's called on";
+      ]
+    ~help:(call_outside (code m))
+    (sprintf "`%s` changes its receiver, so it can't wrap a body" m)
+
+(* `with h(1) in`, where [name] takes [n] arguments, and makes the
+   implementation [made] *)
+let with_too_few loc name ~made n given =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "%s makes an implementation, `%s`, which `with` installs once it's \
+           called with all its arguments"
+          name made;
+      ]
+    ~help:(sprintf "give %s all its arguments" name)
+    (sprintf "%s takes %d argument%s but was given %d" name n (plural n) given)
+
+(* `with h in`, where [h], written [src], of type [shown], makes an
+   implementation when it's called *)
+let with_uncalled loc src shown =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`with` installs an implementation, and `%s` makes one when it's \
+           called"
+          src;
+      ]
+    ~help:(sprintf "call it: `with %s() in ...`" src)
+    (sprintf "`with` installs an implementation, but this is %s" (article shown))
+
+(* What a `with` was given that's neither an implementation nor a
+   wrapper. *)
+type with_item =
+  | Unknown_var of string  (** a variable whose type isn't known here *)
+  | Unknown  (** something else whose type isn't known *)
+  | Known of string  (** something of this type *)
+
+let cant_install loc item =
+  Diag.make loc
+    ~notes:
+      [
+        "`with` installs an implementation of a dependency around its body, or \
+         passes its body to a wrapper, a function whose last parameter is the \
+         body";
+      ]
+    ~help:
+      (match item with
+      | Unknown_var x ->
+          sprintf "say what it is where it's declared, like `%s: Clock`" x
+      | Unknown ->
+          "install something whose type is known here, like `Clock.frozen(t)`, \
+           or a handler's call"
+      | Known _ ->
+          "give it an implementation, like `Clock.frozen(t)`, or a wrapper's \
+           call without its last argument, like `retry(3)`")
+    (match item with
+    | Unknown_var _ | Unknown ->
+        "`with` can't tell what this installs: its type isn't known here"
+    | Known shown ->
+        sprintf
+          "`with` installs an implementation, or wraps its body, but this is %s"
+          (article shown))
+
+(* `with w(a) in body`, where [name]'s last parameter is `inout` *)
+let wrapper_changes_body loc name =
+  Diag.make loc
+    ~notes:
+      [
+        "`with w(a) in body` calls `w(a, fn() => body)`, and a lambda isn't a \
+         place to change";
+      ]
+    ~help:(call_outside name)
+    (sprintf "%s changes its last argument, so it can't take a body" name)
+
+let wrapper_body_note =
+  "`with w(a) in body` calls `w(a, fn() => body)`, so the wrapper's last \
+   parameter is a function of no parameters"
+
+let wrapper_last name _ x =
+  sprintf "%s's last parameter is %s, but a `with` passes it its body, a `fn()`"
+    name (article x)
+
+(* The body of a `with` that the wrapper [name] is given changes [var], a
+   variable from outside it. *)
+let body_changes_outer loc ~wrapper ~var =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`with` passes its body to %s as a lambda, `fn() => ...`, which \
+           captures the values of the variables it uses when it's made, so \
+           changing them would have no effect outside"
+          wrapper;
+      ]
+    ~help:"give the body's result back as its value instead"
+    (sprintf
+       "the body of this `with` can't change `%s`, a variable from outside it"
+       var)
+
 (* ---- dependencies ---- *)
 
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
