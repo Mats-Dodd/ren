@@ -45,6 +45,13 @@ type scheme = {
   reqs : (int * string) list;
 }
 
+(* What one use of a scheme picks for its variables, its type arguments:
+   the n-th of [tys] for [Var n], and the n-th of [rows] for row variable
+   [n], which stands for that row's labels, added to the scheme's, and its
+   tail. Typed Core carries them on each use of a top-level function
+   (core.ml). *)
+type args = { tys : ty list; rows : row list }
+
 (* The prelude's types: [Int], [Bool], [Unit], [Str] and [Array<t>]. *)
 val int : ty
 val bool : ty
@@ -68,6 +75,11 @@ val dep_path : string -> Path.t
 
 (* Labels sorted by name, as a row keeps them. *)
 val sort_labels : label list -> label list
+
+(* The type arguments that give back a canonical type itself, the ones
+   a function is used at its own type with: [Var n] for each type
+   variable, and for each row variable a row of no labels ending in it. *)
+val own_args : ty -> args
 
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, type variables and row variables separately,

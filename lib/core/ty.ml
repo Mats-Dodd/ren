@@ -65,6 +65,14 @@ type scheme = {
   reqs : (int * string) list;
 }
 
+(* What one use of a scheme picks for its variables: its type arguments.
+   The n-th of [tys] stands for [Var n], and the n-th of [rows] for the
+   row variable [n], whose row is that one's labels added to the scheme's,
+   ending in its tail. Typed Core puts them on each use of a polymorphic
+   function (core.ml), and Core Lint checks the use's type is the scheme's
+   with them put in. *)
+type args = { tys : ty list; rows : row list }
+
 let int = Con (Path.prelude "Int", [])
 let bool = Con (Path.prelude "Bool", [])
 let unit = Con (Path.prelude "Unit", [])
@@ -102,6 +110,30 @@ let rec tails t =
 and row_tails r =
   List.concat_map (fun l -> List.concat_map tails l.payload) r.labels
   @ Option.to_list r.tail
+
+(* The type arguments that give back a canonical type itself: [Var n]
+   for each of its type variables, and for each row variable a row of no
+   labels ending in that variable. They're how a function is used at its
+   own type, as `$start` calls `main`. A canonical type numbers its
+   variables from 0 without gaps, so how many there are is one more than
+   the largest. *)
+let own_args t =
+  let rec vars = function
+    | Var n -> [ n ]
+    | Error -> []
+    | Con (_, args) -> List.concat_map vars args
+    | Errors e | Uses e -> row_vars e
+    | Fun (ps, r, e, u) ->
+        List.concat_map (fun (p : param) -> vars p.ty) ps
+        @ vars r @ row_vars e @ row_vars u
+  and row_vars r =
+    List.concat_map (fun l -> List.concat_map vars l.payload) r.labels
+  in
+  let count ns = 1 + List.fold_left max (-1) ns in
+  {
+    tys = List.init (count (vars t)) (fun n -> Var n);
+    rows = List.init (count (tails t)) (fun n -> { labels = []; tail = Some n });
+  }
 
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, as inference numbers them: type variables and row

@@ -242,6 +242,53 @@ let generalize st ~skolems ?(row_skolems = []) t =
    use: its n-th type argument. *)
 type subst = { tys : (int * ty) list; rows : (int * row) list }
 
+(* The generic variables of a scheme, each standing for itself, in the
+   order canonical form numbers them: walked as [canon_ty] walks a type, a
+   function's parameters, result, errors and uses, and a row's labels by
+   name, then its tail. It's the substitution that gives back the scheme
+   itself, the type arguments of a function used at its own type, as in
+   its own body. *)
+let generics t =
+  let seen_tys = ref [] and seen_rows = ref [] in
+  let see seen id v =
+    if not (List.mem_assoc id !seen) then seen := (id, v) :: !seen
+  in
+  let rec walk t =
+    match repr t with
+    | TVar { contents = Unbound (id, l) } as v when l = generic_level ->
+        see seen_tys id v
+    | TVar _ | TSkol _ | TError -> ()
+    | TCon (_, args) -> List.iter walk args
+    | TErrors e | TUses e -> walk_row e
+    | TFun (ps, r, e, u) ->
+        List.iter (fun p -> walk p.ty) ps;
+        walk r;
+        walk_row e;
+        walk_row u
+  and walk_row r =
+    List.iter
+      (fun l -> List.iter walk l.payload)
+      (List.sort_uniq
+         (fun (a : label) b -> String.compare a.name b.name)
+         (fst (row_parts r)));
+    walk_tail r
+  and walk_tail r =
+    match repr_row r with
+    | RVar { contents = RUnbound (id, l) } as v when l = generic_level ->
+        see seen_rows id v
+    | RExtend (_, rest) -> walk_tail rest
+    | REmpty | RVar _ | RSkol _ -> ()
+  in
+  walk t;
+  { tys = List.rev !seen_tys; rows = List.rev !seen_rows }
+
+(* Only those of [s]'s variables that are among [keep]'s, in [s]'s order. *)
+let restrict s keep =
+  {
+    tys = List.filter (fun (id, _) -> List.mem_assoc id keep.tys) s.tys;
+    rows = List.filter (fun (id, _) -> List.mem_assoc id keep.rows) s.rows;
+  }
+
 (* A copy of a type scheme with fresh variables in place of the generic
    ones, so each use of a function can pick its own types, and which
    fresh variable took each one's place. *)
@@ -276,45 +323,15 @@ let instantiate st t =
         RExtend ({ l with payload = List.map go l.payload }, row rest)
   in
   let copy = go t in
-  (* the generic variables' ids in order of first appearance, walked as
-     [canon_ty] walks a type: a function's parameters, result, errors and
-     uses, and a row's labels by name, then its tail. [go] can't record
-     the order itself, since OCaml evaluates a constructor's arguments
-     right to left *)
-  let seen_tys = ref [] and seen_rows = ref [] in
-  let see seen id = if not (List.mem id !seen) then seen := id :: !seen in
-  let rec walk t =
-    match repr t with
-    | TVar { contents = Unbound (id, l) } when l = generic_level ->
-        see seen_tys id
-    | TVar _ | TSkol _ | TError -> ()
-    | TCon (_, args) -> List.iter walk args
-    | TErrors e | TUses e -> walk_row e
-    | TFun (ps, r, e, u) ->
-        List.iter (fun p -> walk p.ty) ps;
-        walk r;
-        walk_row e;
-        walk_row u
-  and walk_row r =
-    List.iter
-      (fun l -> List.iter walk l.payload)
-      (List.sort_uniq
-         (fun (a : label) b -> String.compare a.name b.name)
-         (fst (row_parts r)));
-    walk_tail r
-  and walk_tail r =
-    match repr_row r with
-    | RVar { contents = RUnbound (id, l) } when l = generic_level ->
-        see seen_rows id
-    | RExtend (_, rest) -> walk_tail rest
-    | REmpty | RVar _ | RSkol _ -> ()
-  in
-  walk t;
-  (* each id with the fresh variable [go] made for it *)
-  let pairs table seen =
-    List.rev_map (fun id -> (id, Hashtbl.find table id)) !seen
-  in
-  (copy, { tys = pairs tys seen_tys; rows = pairs rows seen_rows })
+  (* each generic variable, in order, with the fresh one [go] made for
+     it. [go] can't record the order itself, since OCaml evaluates a
+     constructor's arguments right to left *)
+  let g = generics t in
+  ( copy,
+    {
+      tys = List.map (fun (id, _) -> (id, Hashtbl.find tys id)) g.tys;
+      rows = List.map (fun (id, _) -> (id, Hashtbl.find rows id)) g.rows;
+    } )
 
 (* ---- canonical types ---- *)
 
@@ -487,6 +504,71 @@ let rec reveal st t =
           reveal st (of_ty ~vars:(List.nth args) ~tails:(fun _ -> REmpty) rep)
       | None -> t)
   | t -> t
+
+(* What each of the generic variables of the scheme [s] stands for in
+   [t], a type of its shape: the part of [t] in its place, or for a row
+   variable, the labels [t]'s row has besides the scheme's, ending in its
+   tail. It's the substitution [instantiate] returns, for a type that
+   isn't a copy of the scheme: a function of the group being checked is
+   used at the type its declaration gives it, or its own, and is generic
+   only once the group is done (Infer_lookup.lookup). A variable [t] has
+   nothing in the place of, which only code with an error can do, stands
+   for [TError], or a row of nothing. *)
+let matching st s t =
+  let tys = Hashtbl.create 8 and rows = Hashtbl.create 8 in
+  (* a row's labels, and the row it ends in *)
+  let rec split acc r =
+    match repr_row r with
+    | RExtend (l, rest) -> split (l :: acc) rest
+    | r -> (List.rev acc, r)
+  in
+  let rec go s t =
+    match (repr s, repr t) with
+    | TVar { contents = Unbound (id, l) }, t when l = generic_level ->
+        if not (Hashtbl.mem tys id) then Hashtbl.add tys id t
+    | TCon (p, a), TCon (q, b) when p = q && List.length a = List.length b ->
+        List.iter2 go a b
+    | TFun (ps, r, e, u), TFun (qs, r', e', u')
+      when List.length ps = List.length qs ->
+        List.iter2 (fun p q -> go p.ty q.ty) ps qs;
+        go r r';
+        row e e';
+        row u u'
+    | TErrors e, TErrors e' | TUses e, TUses e' -> row e e'
+    | (TCon _ as s), (TCon _ as t) ->
+        (* one of the module's opaque types, and what it's represented
+           as: [!=] says [reveal] made something else of one *)
+        let s' = reveal st s and t' = reveal st t in
+        if s' != s || t' != t then go s' t'
+    | _ -> ()
+  and row s t =
+    let ls, s_end = split [] s and lt, t_end = split [] t in
+    let named (l : label) =
+      List.find_opt (fun (k : label) -> k.name = l.name)
+    in
+    List.iter
+      (fun (l : label) ->
+        match named l lt with
+        | Some k when List.length k.payload = List.length l.payload ->
+            List.iter2 go l.payload k.payload
+        | _ -> ())
+      ls;
+    match s_end with
+    | RVar { contents = RUnbound (id, l) } when l = generic_level ->
+        if not (Hashtbl.mem rows id) then
+          Hashtbl.add rows id
+            (extend (List.filter (fun k -> named k ls = None) lt) t_end)
+    | _ -> ()
+  in
+  go s t;
+  let g = generics s in
+  let find table missing (id, _) =
+    (id, Option.value (Hashtbl.find_opt table id) ~default:missing)
+  in
+  {
+    tys = List.map (find tys TError) g.tys;
+    rows = List.map (find rows REmpty) g.rows;
+  }
 
 (* An interface's type scheme as a scheme of this compilation: generic
    variables of its own, which [instantiate] copies at each use. *)
