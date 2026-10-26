@@ -197,6 +197,10 @@ let module_file ~entry path = file_in ~dir:(Filename.dirname entry) path
 let imports_of (prog : Ast.Parsed.program) =
   List.filter_map (function Ast.Import i -> Some i | _ -> None) prog
 
+(* Sets of modules' homes. [Set.Make] is a functor, like [Map.Make]: it makes
+   a module of sets whose elements are compared with [String.compare]. *)
+module Homes = Set.Make (String)
+
 (* A module, loaded and parsed. *)
 type source = { home : string; file : string; parsed : Ast.Parsed.program }
 
@@ -223,9 +227,9 @@ let load_all ~(load : loader) ~dir roots =
   (* each module once it's done, the last one first. A module that didn't
      parse is done too, so it isn't reported again. *)
   let loaded = ref [] in
-  let is_loaded path =
-    List.exists (fun (m : source) -> m.home = path) !loaded
-  in
+  (* the homes in [loaded], to look one up without walking the list *)
+  let homes = ref Homes.empty in
+  let is_loaded path = Homes.mem path !homes in
   (* [path] is the way here from the entry: each module on it, and its
      import of the next one *)
   let rec visit ~path home file src =
@@ -265,7 +269,8 @@ let load_all ~(load : loader) ~dir roots =
                 (sprintf "there's no module `%s`" i.path)
           | Some isrc -> visit ~path:(path @ [ (home, i) ]) i.path ifile isrc)
       imports;
-    loaded := { home; file; parsed } :: !loaded
+    loaded := { home; file; parsed } :: !loaded;
+    homes := Homes.add home !homes
   (* [i], in module [home], imports a module on the way here: the modules
      from that one to [home] import each other in a circle *)
   and cycle ~path home (i : Ast.import) =
@@ -351,16 +356,22 @@ let check_roots ~load ~dir ~entry roots =
          (* what each import reaches, then the import itself, each module
             once, in the order first met *)
          let reachable =
-           List.fold_left
-             (fun acc (c : checked) ->
-               List.fold_left
-                 (fun acc (i : Iface.t) ->
-                   if List.exists (fun (j : Iface.t) -> j.home = i.home) acc
-                   then acc
-                   else acc @ [ i ])
-                 acc
-                 (c.reachable @ [ c.iface ]))
-             [ prelude_iface ] direct
+           (* built most recent first, with the homes already in it in a
+              set, then reversed: adding to the end of a list each time
+              would copy it each time *)
+           let rev, _ =
+             List.fold_left
+               (fun acc (c : checked) ->
+                 List.fold_left
+                   (fun (rev, seen) (i : Iface.t) ->
+                     if Homes.mem i.home seen then (rev, seen)
+                     else (i :: rev, Homes.add i.home seen))
+                   acc
+                   (c.reachable @ [ c.iface ]))
+               ([ prelude_iface ], Homes.singleton prelude_iface.home)
+               direct
+           in
+           List.rev rev
          in
          let groups =
            List.map
