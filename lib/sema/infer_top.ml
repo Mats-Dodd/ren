@@ -674,7 +674,7 @@ let settle_inclusions env =
 (* Add each tag written as a value, `Err(Right)`, to its set if the set
    is one of its own, not what an `attempt` kept or a parameter fails
    with: `if c then Err(Left(1)) else Err(Right)` holds both
-   ([Infer_expr.err_row]). That's done before the inclusions are settled,
+   ([Infer_rows.err_row]). That's done before the inclusions are settled,
    so a set that includes this one gets its tags. The rest are checked
    with the tags in patterns, once the kept sets are closed. *)
 let value_tags env =
@@ -1187,7 +1187,7 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
    to the outer row. If the body's row is the outer one already, as for a
    closure called both in the body and outside it, or another function
    of the group that calls this one back, that's all. (A function calling
-   itself gets a copy of its own row, Infer_expr.use_row.) A row that's still open stands for
+   itself gets a copy of its own row, Infer_rows.use_row.) A row that's still open stands for
    what a closure the body calls uses, an inferred parameter's, say: it
    may use what's installed too, and the rest of it is what's outside.
    Unless another `with` calls the same closure: then it's what's outside
@@ -1211,7 +1211,7 @@ let settle_copies env =
         | fresh ->
             changed := true;
             k.kpassed <- k.kpassed @ List.map (fun (l : label) -> l.name) fresh;
-            Infer_expr.join_uses env ~loc:k.kloc ~what:k.kwhat
+            Infer_rows.join_uses env ~loc:k.kloc ~what:k.kwhat
               (extend fresh (fresh_row env.st))
               k.kdst)
       (List.rev env.copies)

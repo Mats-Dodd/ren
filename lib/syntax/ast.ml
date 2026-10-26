@@ -195,7 +195,7 @@ and ('v, 'b, 't) expr_kind =
       (** [fail Short(self.id, by)]: stop with that error. A tag isn't a value,
           so it's only ever written here, after `!`, in a pattern, and as the
           error an `Err(...)` holds, where it's a [Con] that inference tells
-          apart (infer_expr.ml, [err_row]) *)
+          apart (infer_rows.ml, [err_row]) *)
   | Try of ('v, 'b, 't) expr
       (** [try e]: pass on the errors of every call in [e]. [try match] is a
           [Try] of a [Match] *)

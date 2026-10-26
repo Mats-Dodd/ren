@@ -278,7 +278,7 @@ and expr_of cx (e : expr) : C.expr =
         }
       in
       here (Fail (mk (Tag (tag.name, args)) (Errors set) e.loc))
-  | Try ({ kind = Match (subject, arms); _ } as m) when Infer_expr.handles arms
+  | Try ({ kind = Match (subject, arms); _ } as m) when Infer_rows.handles arms
     ->
       handle_match cx ~passed:true (ty_of cx m.node) e.loc subject arms
   | Try a when is_result (ty_of cx a.node) ->
@@ -370,7 +370,7 @@ and expr_of cx (e : expr) : C.expr =
       match (node cx e.node).found with
       | Some (Field_of p) -> here (Field (expr cx r, p, f.name))
       | _ -> bug "a field inference didn't find")
-  | Match (subject, arms) when Infer_expr.handles arms ->
+  | Match (subject, arms) when Infer_rows.handles arms ->
       handle_match cx ~passed:false (ty ()) e.loc subject arms
   | Match (subject, arms) ->
       let subject = expr cx subject in
@@ -553,7 +553,7 @@ and arm cx (a : arm) : C.arm =
 and handle_match cx ~passed ty loc subject arms =
   let body = expr cx subject in
   let fails, values =
-    List.partition (fun (a : arm) -> Infer_expr.is_fail a.arm_pat) arms
+    List.partition (fun (a : arm) -> Infer_rows.is_fail a.arm_pat) arms
   in
   (* every `fail` pattern's type is the set the subject fails with *)
   let errs = ty_of cx (List.hd fails).arm_pat.pnode in

@@ -121,7 +121,7 @@ falls short it says so.
   can fail, whether a `with` installs a handler or wraps its body. From
   R1, lower reads those decisions and never makes them again. Today it
   still asks inference's own functions whether a `with` installs a
-  handler and whether a call can fail (Infer_expr.handles and is_fail).
+  handler and whether a call can fail (Infer_rows.handles and is_fail).
 - **Core** has one way to change something, an assignment to a local,
   and one way each to fail, to handle an error, to install an
   implementation and to call a dependency (core.ml). Every node has its

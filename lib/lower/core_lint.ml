@@ -120,8 +120,8 @@ let rec equal env (a : Ty.ty) (b : Ty.ty) =
       && equal env r r' && e = e' && u = u'
   | Uses a, Uses b ->
       (* an implementation that needs less will do where one that needs
-         more is wanted (Infer_expr.widen); where it's used, what it needs
-         is copied, with a tail of its own (Infer_expr.copy_needs) *)
+         more is wanted (Infer_rows.widen); where it's used, what it needs
+         is copied, with a tail of its own (Infer_rows.copy_needs) *)
       List.for_all (fun l -> List.mem l b.labels) a.labels
       && (a.tail = None || b.tail <> None)
   | _ ->
