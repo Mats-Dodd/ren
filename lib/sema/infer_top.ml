@@ -7,6 +7,7 @@ open Ast
 open Ast.Resolved
 open Types
 open Infer_msg
+open Infer_env
 open Infer_expr
 
 (* ---- the call graph ---- *)
@@ -617,7 +618,7 @@ let can_fail (c : ecall) =
   | Some t -> in_params c.eparams t
   | None -> false
 
-(* Finish each inclusion of the group (see [Infer_expr.inclusion]), now
+(* Finish each inclusion of the group (see [Infer_env.inclusion]), now
    that its functions are joined: add the labels each row learned since,
    until no row learns any more, and end a row that includes a
    parameter's errors in the same tail as that parameter's. *)
@@ -1191,7 +1192,7 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
    them all, more than it needs if it uses what one installs, never
    less. *)
 (* Add to each copy of what an implementation needs (see
-   [Infer_expr.copy]) the labels it has learned since, until none learns
+   [Infer_env.copy]) the labels it has learned since, until none learns
    any more. *)
 let settle_copies env =
   let changed = ref true in
@@ -2492,7 +2493,7 @@ let program sink ~imports ~reachable ?entry ?(tests = []) ?(bodies = [])
     | t ->
         keep ();
         t
-    | exception Infer_expr.Unchecked { caller; callee } ->
+    | exception Infer_env.Unchecked { caller; callee } ->
         go ((caller, callee) :: extra)
     | exception e ->
         keep ();

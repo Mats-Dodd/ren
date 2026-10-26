@@ -54,10 +54,10 @@
    infer_top.ml works over the whole module, and infer_msg.ml words the
    errors. *)
 
-(* [type found = Infer_expr.found = ...] re-exports a type along with its
+(* [type found = Infer_env.found = ...] re-exports a type along with its
    constructors (or fields), so they can be written [Infer.Field_of] as well
-   as [Infer_expr.Field_of]. *)
-type found = Infer_expr.found =
+   as [Infer_env.Field_of]. *)
+type found = Infer_env.found =
   | Field_of of Path.t
   | Ctor_of of Path.t * string
   | Method_of of Path.t

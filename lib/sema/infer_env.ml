@@ -1,0 +1,375 @@
+(* What inference of expressions works with (infer_expr.ml and the
+   modules beside it): the environment of the module being checked, with
+   the work each group of functions leaves for infer_top.ml to finish once
+   the group is done, and the context of the expression being inferred.
+   These types are shared by every part of the pass, so they're kept apart
+   from any one of them. *)
+
+open Ast
+open Ast.Resolved
+open Types
+
+(* What a lookup through a type found. *)
+type found =
+  | Field_of of Path.t  (** a field access: the record type the field is in *)
+  | Ctor_of of Path.t * string  (** a constructor: its type, and its name *)
+  | Method_of of Path.t
+      (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
+          function, [Stack.push] *)
+  | Installs of Path.t
+      (** a `with` whose item is an implementation of this dependency *)
+  | Installs_handler of Path.t list
+      (** a `with` whose item describes a handler of these dependencies, which
+          it makes an instance of *)
+  | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
+
+(* A call that adds to a function's dependencies, or a `with` that
+   installs an implementation, which adds what it needs. [own] are the
+   labels the callee's row had just before the call joined it to the
+   caller's: what the callee brings in itself. After the join the two rows
+   are one, so [row] then also has everything the caller uses. [needs]
+   says it's a `with`. *)
+type call = {
+  cloc : Loc.t;
+  own : string list;
+  row : row;
+  needs : bool;
+  callee : Path.t option;  (** the top-level function called, if it's one *)
+}
+
+type env = {
+  st : Types.state;
+  sink : Diag.sink;
+  home : string;  (** the module being checked *)
+  names : Path.t -> string;
+      (** how the module writes each type's name (Resolve.type_name) *)
+  can_name : Path.t -> bool;
+      (** whether the module can write a type's name at all (Resolve.can_name)
+      *)
+  source : expr -> string option;
+      (** code as the module writes it, for a help that shows it (Ast.source) *)
+  types : (Path.t, Iface.type_decl) Hashtbl.t;
+      (** every type the module can meet: its own, and the public types of every
+          module reachable through its imports (iface.ml) *)
+  sets : Iface.sets;  (** the named error sets among them *)
+  visible : Iface.type_decl list;
+      (** the types it can name bare, sorted by name, which is the order an
+          error lists them in: its own, those imported by name, and the
+          prelude's *)
+  globals : (Path.t, ty) Hashtbl.t;
+      (** top-level functions: a type scheme once their group is done *)
+  mutable group : (Path.t * (unit -> ty)) list;
+      (** the functions of the group being checked, each with a way to make the
+          type its declaration gives it *)
+  mutable spelled : Path.t list;
+      (** those of [group] whose signature is written out in full, every
+          parameter's type included: public functions, mostly *)
+  mutable joins : join list;  (** most recent first *)
+  mutable drops : drop list;
+      (** the values the group's statements throw away, most recent first *)
+  mutable forced : (Path.t * Loc.t) list;
+      (** each statement that threw away a value of a type still unknown, which
+          made it `Unit`, with the function it's in: a later mismatch at a call
+          of that function points back at it *)
+  mutable unmarked : (ecall * row) list;
+      (** the group's calls that no marker covers, each with the row its errors
+          went to, which has to end up empty *)
+  mutable all_markers : marker list;
+      (** the group's `try`s, `attempt`s and `match`es with `fail` arms *)
+  mutable kept : (row * (string * ty) list) list;
+      (** the errors each `attempt` of the group keeps in its [Result], and each
+          `match` with `fail` arms handles, each with the parameters of the
+          function and lambdas it's in *)
+  mutable includes : inclusion list;
+      (** each place the group adds one row of errors to another, most recent
+          first, finished once the group is done (see [inclusion]) *)
+  mutable tag_patterns : tag_pattern list;
+      (** tags matched in an error set that was still open *)
+  mutable rows_due : row_due list;
+      (** the group's uses of a named row (see [row_due]) *)
+  mutable impl_ops : impl_op list;
+      (** the group's implementations' operations, whose errors are checked once
+          it's done (see [impl_op]) *)
+  mutable installs : install list;
+      (** the group's `with`s that install, innermost first (see [install]) *)
+  mutable copies : copy list;
+      (** the group's uses of an implementation, each with a copy of what it
+          needs (see [copy]) *)
+  mutable handler_needs : handler_needs list;
+      (** the group's handlers, whose needs are checked once it's done (see
+          [handler_needs]) *)
+  mutable withheld : withheld list;
+      (** the module's functions that call a closure in a `with` that doesn't
+          install what the closure uses (see [withheld]) *)
+  mutable cant_fail : string option;
+      (** why the code being checked can't fail, if it's a handler's state, for
+          a message when something in it does *)
+  mutable in_scope : Path.t list;
+      (** the types step 2 of a lookup found: a type imported by name may be
+          used only that way, so this says that its import is used *)
+}
+
+(* A tag matched in an error set that was still open: the tag, its
+   payload's types, the set, which has to have it once the group is done,
+   and the parameters of the function and lambdas it's in. [tarm] says
+   whether it's a `fail` arm's, which matches what a call fails with,
+   rather than a tag inside `Err(...)`, which matches what a [Result]
+   holds, and [tvalue] whether it's not a pattern at all but a tag
+   written as a value, `Err(Short(a, b))` ([err_row]). *)
+and tag_pattern = {
+  ttag : ident;
+  tpayload : ty list;
+  tset : row;
+  tin : (string * ty) list;
+  tarm : bool;
+  tvalue : bool;
+}
+
+(* A call that uses a named row, `f()` for `f: fn() uses ..d`, or a `with`
+   that installs an implementation that needs one: the row [rinto] of the
+   function or lambda it's in has to end in [rnamed]. Ending a row in one
+   would stop it getting any more labels, so that's done once the group is
+   done, when it has all of them (infer_top.ml). [rwhat] says what needs
+   it, for a message: "this call uses". *)
+and row_due = {
+  rloc : Loc.t;
+  rinto : row;
+  rnamed : int * string;
+  rwhat : string;
+}
+
+(* An operation of an implementation, `usd_to: fn(c) => ...` in a `Rates
+   { ... }`: it can fail with fewer errors than its dependency declares,
+   never more (deps.md, "Implementations"). Its errors [ierrs] start as
+   [ideclared] with room for more, and once the group is done (when it's
+   known what its calls fail with), anything more is reported and the room
+   closed. [ivalue] is what's given for it, and [inodes] the types of the
+   expressions of the function it's in, for a message. *)
+and impl_op = {
+  idep : Path.t;
+  iop : string;
+  ideclared : label list;
+  ierrs : row;
+  ivalue : expr;
+  inodes : (int, ty) Hashtbl.t;
+}
+
+(* A `with` that installs [wdep], at [wloc]: its body uses [wbody], which
+   is what the body's calls use, and that has to be no more than [wdep]
+   and what's installed outside, [wouter]. That's an inclusion, not an
+   equality: a closure called both in the body and outside it uses what
+   the outside does, which is less than the body can. It's settled once
+   the group is done (infer_top.ml), when every call of the group knows
+   what it uses. *)
+and install = {
+  wloc : Loc.t;
+  wdep : string;
+  wbody : row;
+  wouter : row;
+  wself : Path.t;  (** the function the `with` is in *)
+}
+
+(* A place an implementation is used: a `with` installs it, or it's passed
+   as a transparent parameter. What it needs, [ksrc], is needed there, in
+   [kdst], which starts with its labels and a tail of its own. [ksrc]
+   itself isn't joined to [kdst]: one implementation can be used in two
+   places, `with h in` and inside it `run(h)` under another `with`, and
+   joined to both, the two places would use the same row, so what the
+   inner `with` installs would be needed outside it too. The labels [ksrc]
+   learns later (from a function of the group, once it's joined) are added
+   once the group is done, at [kloc]; [kpassed] are those added so far. *)
+and copy = {
+  kloc : Loc.t;
+  ksrc : row;
+  kdst : row;
+  kwhat : string;  (** what needs it, for a message: "installing this needs" *)
+  mutable kpassed : string list;
+}
+
+(* A handler: [nrow] is what its state and arms use, and [ncalls] the
+   calls that add to it. That can't be a dependency it implements itself
+   (the next one out is `outer`'s, stage 10). If its needs are written,
+   `for N uses Console`, or it's public, which needs nothing if it says
+   nothing, they're [ndeclared], and [nrow] has to be no more than that.
+   It's checked once the group is done, as a function's `uses` is
+   (infer_top.ml), and then a written row is closed. *)
+and handler_needs = {
+  nself : Path.t;
+  ndeclared : string list option;
+  nrow : row;
+  ncalls : call list ref;
+}
+
+(* A dependency [hdep] that a closure [hfn] calls inside a `with` of it
+   still gets from outside, and why ([hnote]): a message that says its
+   callers have to install it explains with this (infer_top.ml). *)
+and withheld = { hfn : Path.t; hdep : string; hnote : string }
+
+(* A use of another function of the group being checked. While the group's
+   bodies are being checked, each one sees the others only as their
+   declarations describe them, so no body learns anything from another
+   body of its group, and checking them in another order would find the
+   same. Once every body is checked, each use is joined with the type that
+   function's own body gave it. *)
+and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
+
+(* A statement's value, which is thrown away, so it has to be `Unit`: a
+   value can't be dropped without a word (errors.md, "Nothing is
+   dropped"). It's checked once the group's uses of each other are joined
+   ([dropped_values]), since a call of another function of the group
+   learns only then what it returns. [callee] names the function, if the
+   statement is a call, and [dself] the function the statement is in. *)
+and drop = { dloc : Loc.t; dty : ty; callee : string option; dself : Path.t }
+
+(* A call, and the errors its callee can fail with (errors.md, "Marking").
+   Whether it can fail at all is known only once its group is done: a
+   function of the group learns what it fails with only then. So each
+   call is kept, and the markers' rules are checked at the end
+   (infer_top.ml). *)
+and ecall = {
+  eloc : Loc.t;  (** the call *)
+  ename_loc : Loc.t;  (** the callee, as written: `acme.debit` *)
+  ename : string;  (** the callee, as a message names it: [debit] *)
+  ewritten : string;
+      (** the callee as it's written, for a message that says where an error
+          comes from: [acme.debit] *)
+  eown : label list;
+      (** what the callee's errors were at the call: what it brings in itself.
+          Nothing, if its errors are the caller's own *)
+  eself : bool;
+      (** whether the callee's errors are the caller's own: a public function's
+          transparent parameter, whose row is its function's *)
+  erow : row;
+      (** the callee's errors, which the call adds to its marker's but never
+          becomes: once the group is done, exactly what the callee fails with *)
+  etarget : Path.t option;
+      (** the callee, if it's a function of the group, whose errors are known
+          only once the group is done *)
+  eparams : (string * ty) list;
+      (** the parameters of the function or lambdas the call is in *)
+  eselves : row list;  (** those functions' and lambdas' own errors *)
+}
+
+(* A `try`, an `attempt` or a `match` with `fail` arms, and the calls it
+   covers: for a `try` or an `attempt`, every call to its right in the
+   same expression, and for a `match`, every call in what it matches;
+   except inside a lambda, whose body has markers of its own. A [mutable]
+   field can be changed in place, which is how each call adds itself. *)
+and marker = {
+  mkind : marker_kind;
+  mloc : Loc.t;  (** the keyword, or a `match`'s first `fail` arm *)
+  mutable covered : ecall list;
+  mutable unwrapped : row list;
+      (** for `try r`: the errors of the [Result] it fails with again; for `try
+          match`, the errors no arm handles *)
+  mutable hint : string option;
+      (** for `try`: a help that explains why it may cover nothing *)
+  mutable failed : bool;
+      (** for `attempt` and `match`: whether a `fail` is inside it *)
+}
+
+and marker_kind = Mtry | Mattempt | Mmatch
+
+(* One row of errors added to another: a call's to its marker's handler,
+   or a [Result]'s to the handler of the `try` that fails with it again.
+   [isrc] is added to [idst] by inclusion: [idst] gets each of its labels,
+   and [isrc] stays as it was, so a callee never fails with what its
+   caller does. Labels known at the time are added then; those a row
+   learns later (a function of the group, joined at its end) are added
+   once the group is done, by [iadd], which reports a tag with two shapes
+   at [iloc] ([ipassed] are the names added so far). A row that stands for
+   whatever a parameter fails with can't be listed, so [idst] ends in the
+   same tail instead ([ilinked], once it does). *)
+and inclusion = {
+  iloc : Loc.t;
+  isrc : row;
+  idst : row;
+  iparams : (string * ty) list;
+      (** the parameters of the function and lambdas where it's added *)
+  iadd : row -> unit;
+  mutable ipassed : string list;
+  mutable ilinked : bool;
+}
+
+(* Something that adds to a top-level function's errors: a call its `try`
+   passes on, a `fail`, a [Result] it fails with again, or the errors a
+   `try match` doesn't handle. A function
+   that writes its errors is checked against them (infer_top.ml), with a
+   label at the first of these that brings in an error it doesn't
+   declare. *)
+and source =
+  | Passed of ecall
+  | Failed of Loc.t * label
+  | Unwrapped of Loc.t * row
+  | Unhandled of Loc.t * row
+
+(* A dot call that turned out to call [callee], a method of the module
+   not checked yet, from [caller]. Which method `s.size()` calls is found
+   only by checking it, after the call graph has put the functions in
+   order, so the call graph was missing this edge: infer_top.ml adds it
+   and checks the module again. *)
+exception Unchecked of { caller : Path.t; callee : Path.t }
+
+(* What the expression being inferred can see. *)
+type ctx = {
+  self : Path.t;  (** the top-level function being checked *)
+  locals : (int, ty) Hashtbl.t;
+      (** the type of each local of the top-level function, by binder id *)
+  nodes : (int, ty) Hashtbl.t;
+      (** the type of each expression and pattern of the function, by node id *)
+  found : (int, found) Hashtbl.t;  (** what each lookup found, by node id *)
+  as_dep : (int, Path.t) Hashtbl.t;
+      (** each expression that gives a handler of several dependencies where a
+          value of one of their types is wanted, by node id, with that one (see
+          [as_one]) *)
+  errs : row;  (** the errors of the innermost function or lambda *)
+  uses : row;  (** the dependencies of the innermost function or lambda *)
+  handler : row;
+      (** where a `fail`, and the errors of a call a `try` covers, go: the
+          innermost `attempt`'s errors, or else [errs] *)
+  markers : marker list;
+      (** the markers covering the expression, innermost first: none, outside
+          any `try` or `attempt` *)
+  params : (string * ty) list;
+      (** the parameters of the function and the lambdas the expression is in,
+          by name, the innermost's first *)
+  selves : row list;
+      (** the errors of the function and those lambdas, the innermost's first *)
+  sources : source list ref option;
+      (** what adds to the top-level function's errors, most recent first, when
+          [handler] is them *)
+  calls : call list ref;
+      (** each call that adds to [uses], most recent first. A [ref] is a mutable
+          cell, here shared by every copy of the [ctx] for the same function or
+          lambda. *)
+  tparams : ty list;  (** what the type parameters in scope stand for *)
+  named : (string * row) list;
+      (** the rows the function's signature names, `..d`, by name (ast.ml) *)
+}
+
+(* Inside the function, an `inout` parameter is an ordinary variable. *)
+let bind_params cx params ps =
+  List.iter2
+    (fun (p : Resolved.param) (t : Types.param) ->
+      Hashtbl.replace cx.locals p.pname.id t.ty)
+    params ps
+
+(* What a lambda's body sees: the lambda's own errors and dependencies,
+   and no marker, since the body has markers of its own. *)
+let lambda_cx cx (params : Resolved.param list) ps ~errs ~uses =
+  {
+    cx with
+    errs;
+    uses;
+    calls = ref [];
+    handler = errs;
+    markers = [];
+    params =
+      List.map2
+        (fun (p : Resolved.param) (t : Types.param) ->
+          (p.pname.ident.name, t.ty))
+        params ps
+      @ cx.params;
+    selves = errs :: cx.selves;
+    sources = None;
+  }
