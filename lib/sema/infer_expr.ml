@@ -929,7 +929,10 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
                     if o.okind = Method && not (List.mem o.oname acc) then
                       acc @ [ o.oname ]
                     else acc)
-                  [] (Iface.members td)
+                  []
+                  ((if p.home = env.home then Iface.members
+                    else Iface.public_members)
+                     td)
               in
               report env
                 (no_method m ~shown ~own:(p.home = env.home)

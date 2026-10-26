@@ -1646,9 +1646,10 @@ let others_param loc ~fn ~other ~param ~declared =
 type no_eq =
   | Is_function  (** it's a function itself *)
   | Has_function of string  (** a function type in it, shown *)
-  | Field_function of string * string
-      (** a field of a type in it, by the record's name or the constructor's,
-          and the field's, whose type has a function in it *)
+  | Field_function of string * string * string
+      (** a field of a type in it, by the type's name, the record's or the
+          constructor's, and the field's, whose type has a function in it: the
+          type can have `==` through a `key` *)
   | Implementation of string
       (** it's, or there's in it, an implementation of the dependency named, or
           of several, `Rates & RateCalls` *)
@@ -1670,7 +1671,7 @@ let no_eq loc ~shown ~op ~by ~failed why =
     match why with
     | Is_function -> []
     | Has_function f -> [ sprintf "it has `%s` in it" f ]
-    | Field_function (t, f) ->
+    | Field_function (_, t, f) ->
         [ sprintf "the field `%s` of `%s` has a function in it" f t ]
     | Implementation d ->
         [
@@ -1693,6 +1694,11 @@ let no_eq loc ~shown ~op ~by ~failed why =
     | None, Implementation _ -> "compare what its operations return instead"
     | None, Opaque_hidden _ ->
         "compare something its module's functions tell you about it instead"
+    | None, Field_function (t, _, _) ->
+        sprintf
+          "give `%s` a key, which says what makes two the same: `fn key(self) \
+           -> K = ...`"
+          t
     | None, _ -> "compare the parts of it that have no function in them"
   in
   let kept =
@@ -1703,7 +1709,13 @@ let no_eq loc ~shown ~op ~by ~failed why =
   in
   Diag.make loc ~help
     ~notes:
-      (kept @ ("a type with a function in it has no `==` or `hash`" :: inside))
+      (kept
+      @ (match why with
+        | Field_function _ ->
+            "a type with a function in it has `==` and `hash` only through its \
+             `key`"
+        | _ -> "a type with a function in it has no `==` or `hash`")
+        :: inside)
     msg
 
 (* ---- operators (operators.md) ---- *)
@@ -1758,7 +1770,7 @@ let no_ord loc ~shown ~op ~by ~uses why =
     | None -> sprintf "`%s` has no `%s`" shown op
     | Some f -> sprintf "`%s` has no `<`, which `%s` needs" shown f
   in
-  let key t = sprintf "give `%s` a key: `pub fn key(self) -> K = ...`" t in
+  let key t = sprintf "give `%s` a key: `fn key(self) -> K = ...`" t in
   let note, help =
     match why with
     | Unordered_record t ->

@@ -256,7 +256,7 @@ fn main() = ()
       ┌─ test.ren:6:10
     6 │   pub fn eq(self, b: Bag) -> Bool = true
       │          ^^
-      help: write `pub fn key(self) -> K = ...`
+      help: write `fn key(self) -> K = ...`
 
     error: `neg` is reserved for `-a`, so it takes only `self`
       ┌─ test.ren:7:10
@@ -603,6 +603,49 @@ fn main() uses Console =
     ()
     |}]
 
+let%expect_test "a private key orders and compares in every module" =
+  (* only its own module can call it: `Instant` means nothing on its own *)
+  let files rest =
+    [
+      ( "main.ren",
+        {|
+import email.{Email}
+fn main() uses Console, Clock =
+  let t = Clock.now()
+  print(Email.of("b") > Email.of("A"))
+  print(t + Duration.seconds(1) > t)
+|}
+        ^ rest );
+      ( "email.ren",
+        {|
+pub type Email = opaque Str
+  pub fn of(s: Str) -> Email = s
+  fn key(self) -> Str = self.lower()
+|}
+      );
+    ]
+  in
+  run_files (files "");
+  [%expect {|
+    true
+    true
+    ()
+    |}];
+  run_files (files "  print(Email.of(\"x\").key())\n  print(t.key())\n");
+  [%expect {|
+    error: `Email` has no public `key`
+      ┌─ main.ren:6:23
+    6 │   print(Email.of("x").key())
+      │                       ^^^
+      help: if it's defined in `email`, mark it `pub`
+
+    error: `Time` has no method named `key`
+      ┌─ main.ren:7:11
+    7 │   print(t.key())
+      │           ^^^
+      help: its methods: `add`, `sub`
+    |}]
+
 let%expect_test "a record is ordered only by its key" =
   check_error
     {|
@@ -619,7 +662,7 @@ fn main() =
     4 │   let _ = a < a
       │           ^^^^^
       = a record is ordered only by its `key`, so that reordering its fields can't change a sort
-      help: give `User` a key: `pub fn key(self) -> K = ...`
+      help: give `User` a key: `fn key(self) -> K = ...`
     |}];
   run
     {|

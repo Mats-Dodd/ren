@@ -85,10 +85,12 @@ error: `Duration` has no `+` that takes a `Time`
 
 `==`, `hash` and `show` are derived for every type, by its structure:
 
-- **A type with a function in it has no `==` or `hash`.** It's known from
-  the type, so comparing functions is a compile error, never a runtime
-  panic. An implementation of a dependency, and a handler, is its
-  operations, which are functions, so it has none either.
+- **A type with a function in it has `==` and `hash` only through its
+  `key`.** A function can't be compared, and that's known from the type,
+  so comparing one is a compile error, never a runtime panic. A record
+  that carries behaviour, a subscriber with a `notify`, says what makes
+  two the same with a key, and the error says so. An implementation of a
+  dependency, and a handler, is only its operations, so it has none.
 - **An opaque type is equal by its representation,** unless it has a
   `key`. That's right for `Money` and `UserId`. A type whose
   representation isn't unique, so that two equal values can be stored
@@ -118,6 +120,28 @@ assert Email.of("Ann@Example.com") == Email.of("ann@example.com")
 There's no writing `eq`, `hash` or `compare` by hand, so they can't
 disagree, as Java's `equals` and `hashCode` can.
 
+A key decides `==`, `hash` and order in every module, whether it's `pub`
+or not. `pub` only says whether other modules can call `.key()`. So an
+opaque type can be ordered without giving its representation away, as
+`Instant` is:
+
+```ren
+pub type Instant = opaque Int
+  fn key(self) -> Int = self    // orders instants; nobody else can read it
+```
+
+```
+error: `Sub` has no `==`
+  ┌─ main.ren:5:9
+  │
+5 │   print(a == a)
+  │         ^^^^^^
+  │
+  = a type with a function in it has `==` and `hash` only through its `key`
+  = the field `notify` of `Sub` has a function in it
+  = help: give `Sub` a key, which says what makes two the same: `fn key(self) -> K = ...`
+```
+
 ### Ordering
 
 `<` and the others come from a type's order, which is derived only where
@@ -145,7 +169,7 @@ error: `User` can't be sorted: it has no order
    │                          ^^^^^^
    │
    = a record is ordered only by its `key`, so that reordering its fields can't change a sort
-   = help: give `User` a key: `pub fn key(self) -> Time = self.joined`, or sort by one: `.sort_by(fn(u) => u.joined)`
+   = help: give `User` a key: `fn key(self) -> Time = self.joined`, or sort by one: `.sort_by(fn(u) => u.joined)`
 ```
 
 `sort_by` sorts once by something else. It isn't a second way to order a

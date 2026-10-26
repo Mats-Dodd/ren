@@ -783,7 +783,7 @@ let item env sc (t : tyname) (f : ident) =
           let declared () =
             ( List.map
                 (fun (o : Iface.op) -> (o.oname, o.okind))
-                (Option.fold ~none:[] ~some:Iface.members decl),
+                (Option.fold ~none:[] ~some:Iface.public_members decl),
               [] )
           in
           (* the prelude's own source finds a built-in type's members,
@@ -1712,7 +1712,7 @@ let reserved env (td : Parsed.type_def) =
       let shape () =
         match name with
         | "neg" -> sprintf "pub fn neg(self) -> %s = ..." own
-        | "key" -> "pub fn key(self) -> K = ..."
+        | "key" -> "fn key(self) -> K = ..."
         | "show" -> "pub fn show(self) -> Str = ..."
         | "zero" | "one" -> sprintf "pub let %s: %s = ..." name own
         | _ -> sprintf "pub fn %s(self, b: %s) -> %s = ..." name own own
@@ -1752,7 +1752,7 @@ let reserved env (td : Parsed.type_def) =
       in
       (match name with
       | "eq" | "hash" | "compare" ->
-          report env at ~help:"write `pub fn key(self) -> K = ...`"
+          report env at ~help:"write `fn key(self) -> K = ...`"
             (sprintf "`%s` can't be written: what equal means comes from `key`"
                name)
       | _ when List.mem name binary_operators -> method_with 1
@@ -1782,8 +1782,7 @@ let reserved env (td : Parsed.type_def) =
       (* a public type's are public *)
       if
         td.type_pub && (not f.pub)
-        && List.mem name
-             ("neg" :: "key" :: "show" :: "zero" :: "one" :: binary_operators)
+        && List.mem name ("neg" :: "show" :: "zero" :: "one" :: binary_operators)
       then
         report env at
           ~help:
@@ -1793,7 +1792,6 @@ let reserved env (td : Parsed.type_def) =
             [
               sprintf "it says what `%s` does in every module that uses `%s`"
                 (match name with
-                | "key" -> "=="
                 | "show" -> "show"
                 | "zero" | "one" -> tname ^ "." ^ name
                 | _ -> operator_symbol name)

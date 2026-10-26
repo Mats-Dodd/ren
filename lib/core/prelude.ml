@@ -55,7 +55,7 @@ pub type Time = opaque Int
   pub fn sub(self, t: Time) -> Duration = Duration.ms(self - t)
   pub fn sub(self, d: Duration) -> Time = self - d.in_ms()
   // ordered by when it is
-  pub fn key(self) -> Int = self
+  fn key(self) -> Int = self
 
 // a moment for measuring how long something took, on a clock that never
 // goes back: an instant means nothing on its own, only next to another
@@ -65,7 +65,7 @@ pub type Instant = opaque Int
   pub fn sub(self, i: Instant) -> Duration = Duration.ms(self - i)
   pub fn sub(self, d: Duration) -> Instant = self - d.in_ms()
   // ordered by when it is
-  pub fn key(self) -> Int = self
+  fn key(self) -> Int = self
 
 // ---- paths ----
 

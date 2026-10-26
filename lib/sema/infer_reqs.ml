@@ -189,7 +189,7 @@ let rec decl_lacks env seen p : Infer_msg.no_eq option =
       (* a record's field, or a constructor's, by its name *)
       let field owner (f : Iface.field) =
         Option.map
-          (fun _ -> Infer_msg.Field_function (owner, f.fname))
+          (fun _ -> Infer_msg.Field_function (env.names p, owner, f.fname))
           (lacks_in env seen f.fty)
       in
       match td.body with

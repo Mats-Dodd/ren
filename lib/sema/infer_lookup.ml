@@ -167,7 +167,8 @@ let member_kind env name p =
     (op_in name (Hashtbl.find env.types p))
 
 (* The member [name] of [t]'s type, if [t] is already known to be a
-   named type that has one. In its own module, an opaque type is also what
+   named type that has one, and that this module can call: another
+   module's private `key` it can't (Iface.members). In its own module, an opaque type is also what
    it's represented as, so an item of that type is found too, if the
    opaque type has none of that name. *)
 let rec op_of env t name =
@@ -177,7 +178,8 @@ let rec op_of env t name =
       | None -> None
       | Some td -> (
           match (op_in name td, Hashtbl.find_opt env.st.reps p) with
-          | Some o, _ -> Some (td, o)
+          | Some o, _ when o.opub || p.home = env.home -> Some (td, o)
+          | Some _, _ -> None
           | None, Some rep ->
               op_of env
                 (of_ty ~vars:(List.nth args)

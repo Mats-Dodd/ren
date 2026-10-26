@@ -107,6 +107,10 @@ val provider : type_decl -> string -> (Path.t * op) option
 (* A type's members, in source order. *)
 val members : type_decl -> op list
 
+(* The members of a type another module can call: all but a private
+   `key`, which an interface carries only for `==` and order. *)
+val public_members : type_decl -> op list
+
 (* ---- named error sets ---- *)
 
 (* Where to find each named error set's errors, as it declares them, by its

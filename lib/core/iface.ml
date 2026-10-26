@@ -162,6 +162,10 @@ let members d =
     (fun a b -> compare a.onum b.onum)
     (List.map snd (Path.Map.bindings d.members))
 
+(* The members of [d] another module can call: not a private `key`,
+   which an interface carries only for `==` and order. *)
+let public_members d = List.filter (fun o -> o.opub) (members d)
+
 (* The members [ops] of the type at [path], each by its own path: the
    [n]th of a name, by [Path.member_n]. *)
 let members_of path ops =
@@ -496,7 +500,10 @@ let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
         members =
           Path.Map.filter_map
             (fun path o ->
-              if o.opub then Some { o with oscheme = needed path o.oscheme }
+              (* a private `key` still says what equal means in every
+                 module, though only its own can call it (operators.md) *)
+              if o.opub || o.oname = "key" then
+                Some { o with oscheme = needed path o.oscheme }
               else None)
             td.members;
       }

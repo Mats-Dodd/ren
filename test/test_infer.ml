@@ -2135,17 +2135,17 @@ fn main() =
        ┌─ test.ren:11:9
     11 │   print(Wrap { tick: fixed(), n: 1 } == Wrap { tick: fixed(), n: 1 })
        │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       = a type with a function in it has no `==` or `hash`
+       = a type with a function in it has `==` and `hash` only through its `key`
        = the field `tick` of `Wrap` has a function in it
-       help: compare the parts of it that have no function in them
+       help: give `Wrap` a key, which says what makes two the same: `fn key(self) -> K = ...`
 
     error: `Shape` has no `==`
        ┌─ test.ren:12:9
     12 │   print(Circle(1) == Circle(2))
        │         ^^^^^^^^^^^^^^^^^^^^^^
-       = a type with a function in it has no `==` or `hash`
+       = a type with a function in it has `==` and `hash` only through its `key`
        = the field `draw` of `Drawn` has a function in it
-       help: compare the parts of it that have no function in them
+       help: give `Shape` a key, which says what makes two the same: `fn key(self) -> K = ...`
 
     error: `Option<fn() -> Int>` has no `==`
        ┌─ test.ren:13:9
