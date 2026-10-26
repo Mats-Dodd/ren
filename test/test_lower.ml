@@ -258,15 +258,19 @@ let%expect_test "Core Lint reports a node of the wrong type" =
     |}]
 
 (* `fn id<T>(x: T) -> T`, and a `main` that calls it with 1, using it with
-   the type arguments [targs] at `fn(Int) -> Int` *)
-let id_program targs =
+   the type arguments [targs] at `fn(Int) -> Int`, passing it the
+   descriptors of their types, or [descs]. [id] has its hidden type
+   parameters, or [tys]. [types] are the module's, and [shows] the types
+   it says show themselves. *)
+let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
   let loc = Ren.Loc.point ~file 1 1 in
   let fn path params ty body : Ren.Core.fn_def =
+    let own = Ren.Core.type_params { ty; names = []; reqs = [] } in
     {
       path = Ren.Path.make "test" path;
       params;
       ev = Ren.Core.evidence 9;
-      tys = Ren.Core.type_params { ty; names = []; reqs = [] };
+      tys = (if path = "id" then Option.value tys ~default:own else own);
       scheme = { ty; names = []; reqs = [] };
       body;
       loc;
@@ -287,7 +291,11 @@ let id_program targs =
     Ren.Core.mk
       (Call
          ( Ren.Core.mk
-             (Global (id.path, targs, List.map (Ren.Core.describe []) targs.tys))
+             (Global
+                ( id.path,
+                  targs,
+                  Option.value descs
+                    ~default:(List.map (Ren.Core.describe []) targs.tys) ))
              int_fn loc,
            [ Value (Ren.Core.mk (Int 1) Ren.Ty.int loc) ],
            Ren.Core.evidence 9 ))
@@ -299,13 +307,7 @@ let id_program targs =
   report "" (fun () ->
       Ren.Driver.pass "lint" (fun () ->
           Ren.Core_lint.program ~imports:[] ~linked:[]
-            {
-              home = "test";
-              types = [];
-              fns = [ id; main ];
-              values = [];
-              shows = [];
-            });
+            { home = "test"; types; fns = [ id; main ]; values = []; shows });
       print_endline "ok")
 
 let%expect_test "Core Lint reports a use at the wrong type arguments" =
@@ -670,4 +672,67 @@ fn each(inout grid: Array<Array<Int>>) =
                   (= grid/1 (set grid/1 $i/4 row/5)))
                 (= $i/4 (+ $i/4 1))))))))
     (fn $start () ev/1 (call ev/1 main))
+    |}]
+
+let%expect_test "Core Lint reports a descriptor that doesn't describe its type"
+    =
+  let targs : Ren.Ty.args =
+    { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] }
+  in
+  (* `id` at `Int`, passed `Bool`'s *)
+  id_program ~descs:[ Known Ren.Ty.bool ] targs;
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: type argument 1 of `id` is described as `Bool`, but is `Int`")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* passed none *)
+  id_program ~descs:[] targs;
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `id` is given 1 type arguments, but 0 descriptors")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* built from a hidden type parameter `main` doesn't have *)
+  id_program ~descs:[ Param (Ren.Core.type_param 0) ] targs;
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `$ty0` (-1) is used outside its scope")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* `id` without its hidden type parameter *)
+  id_program ~tys:[] targs;
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `id`, at test.ren:1:1: its hidden type parameters aren't one for each of its type variables")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
+let%expect_test "Core Lint reports a type said to show itself that can't" =
+  let targs : Ren.Ty.args =
+    { tys = [ Ren.Ty.int ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] }
+  in
+  let box = Ren.Path.make "test" "Box" in
+  let decl : Ren.Iface.type_decl =
+    {
+      path = box;
+      params = [ "T" ];
+      body = Record [ { fname = "v"; fty = Var 0 } ];
+      members = Ren.Path.Map.empty;
+      loc = None;
+    }
+  in
+  (* `id` takes a `T`, not a `Box<T>`, and doesn't give a `Str` *)
+  id_program ~types:[ decl ] ~shows:[ (box, Ren.Path.make "test" "id") ] targs;
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `id`, at test.ren:1:1: `id` shows a `test.Box`, but has type `fn(T) -> T ! ..e uses ..d`")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* a type the module doesn't declare *)
+  id_program ~shows:[ (box, Ren.Path.make "test" "id") ] targs;
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: `id` is said to show `test.Box`, which isn't declared here")
+      = this is a bug in the Ren compiler, not in your program
     |}]

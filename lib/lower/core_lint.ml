@@ -397,8 +397,7 @@ and describes env sc loc what d (t : Ty.ty) =
   let found = described env sc loc d in
   if found <> t then
     fail env loc
-      (sprintf "%s is described as `%s`, but is a `%s`" what (show found)
-         (show t))
+      (sprintf "%s is described as `%s`, but is `%s`" what (show found) (show t))
 
 (* [ds] are the descriptors of the type arguments [a] of a use of [name]:
    one for each, which describes it. *)
