@@ -3149,6 +3149,62 @@ fn main() uses Console =
        help: install one inside `main`: `with counting_rates(...) in ...`
     |}]
 
+let%expect_test "a handler of several passed on inside its own `with`" =
+  (* what's in `o` is a `Rates`, which only `run(r)`, inside the `with r`,
+     says. What `r` needs is then copied where it's passed, as it is for a
+     handler whose type is known: joined to what `run` uses, it would be
+     what the `with`'s body uses, `Rates` included, and `main` would have
+     to install the `Rates` the `with` installs. Only `Rates` is
+     installed, so `k` still gets `RateCalls` from outside *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn k() =
+  let o = Some(counting_rates(2))
+  match o
+    Some(r) => with r in RateCalls.count() + run(r)
+    None => 0
+
+fn ap2(x, f) = f(x)
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  match o
+    Some(r) => print(with r in Rates.usd_to(5) + run(r))
+    None => ()
+  print(ap2(counting_rates(3), fn(r) => with r in Rates.usd_to(1) + run(r)))
+|}
+  in
+  types src;
+  [%expect {|
+    pub dep Rates
+      usd_to: fn(Int) -> Int
+    pub dep RateCalls
+      count: fn() -> Int
+    handler counting_rates(rate: Int) for Rates, RateCalls
+    fn run(r: Rates) -> Int
+    fn k() -> Int uses RateCalls
+    fn ap2<T, U>(x: T, f: fn(T) -> U uses ..d) -> U uses ..d
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    12
+    6
+    ()
+    |}]
+
 let%expect_test "a closure called inside a `with` and outside it (B4)" =
   (* [run] installs `Rates` around its call of [k], and [twice] calls [k]
      itself too, outside any `with`: so [k] uses `Rates` and what [run]

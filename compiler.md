@@ -473,7 +473,12 @@ Where the work forced a change to the plan above:
   rejected, and a test pinned that ("where nothing says which, a handler
   of several is its own"). A `then` branch that can't be what the `else`
   is is now blamed itself, "this `then` branch is ...", since the fix
-  goes there.
+  goes there. Passed as an argument where one of the handler's
+  dependencies is wanted, it's that one there and then, needing what the
+  handler needs, which is copied where it's passed as for a handler
+  whose type is known (`taken_as`): joined to what the callee uses, it
+  would have been what a `with` of it around the call uses, and the
+  dependency the `with` installs would have been needed outside it.
 - **R3, rows that hold a label twice (B4).** A call joins what its callee
   uses to what its caller does by unifying the two rows, which works as
   long as they don't already end in the same variable. In `fn twice(k) =

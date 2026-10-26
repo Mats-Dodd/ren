@@ -36,14 +36,49 @@ let as_one env t expected =
       | _ -> None)
   | _ -> None
 
+(* If [t] is a variable that a handler of several dependencies was given
+   to, and nothing has said what it is since: that handler's
+   dependencies, and what it needs. The first handler given to it is the
+   one, as for [settle]. *)
+let pending env t =
+  match repr t with
+  | TVar v ->
+      List.find_map
+        (function
+          | Coerce { cwanted; cfound; _ } -> (
+              match (repr cwanted, repr cfound) with
+              | TVar v', TCon (h, [ TUses needs ]) when v' == v -> (
+                  match Hashtbl.find_opt env.types h with
+                  | Some { body = Handler deps; _ } -> Some (deps, needs)
+                  | _ -> None)
+              | _ -> None)
+          | _ -> None)
+        (List.rev env.pending)
+  | _ -> None
+
 (* The type [e], of type [t], has where a value of type [expected] is
-   wanted, which is known: [as_one]'s, which lowering is told, or [t]. *)
+   wanted, which is known: [as_one]'s, which lowering is told, or [t]. If
+   [t] is a variable a handler of several dependencies was given to, and
+   one of them is wanted, it's that one, needing what the handler needs:
+   the handler is taken as it once the solver decides ([coerce]), and
+   what it needs is then copied where it's passed, as for a handler whose
+   type was known (Infer_rows.widen). Unified with what's wanted as it is,
+   the variable would need what the parameter's function uses, and in a
+   `with` of it, around the call, that's what the `with`'s body uses. *)
 let taken_as env cx (e : expr) t expected =
   match as_one env t expected with
   | Some (d, one) ->
       Hashtbl.replace cx.as_dep e.node d;
       one
-  | None -> t
+  | None -> (
+      match (pending env t, reveal env.st expected) with
+      | Some (deps, needs), TCon (d, [ TUses _ ]) when List.mem d deps ->
+          (* a variable still unbound takes any type that doesn't hold
+             it *)
+          let one = TCon (d, [ TUses needs ]) in
+          Unify.unify env.st t one;
+          one
+      | _ -> t)
 
 (* Decide the coercion [k] (see [Infer_env.coerce]), now that what's
    wanted is known, or will never be: a value of a type still unknown is
@@ -97,26 +132,6 @@ let settle env t =
   match repr t with
   | TVar v -> Infer_report.settle env (fun v' -> v' == v)
   | _ -> ()
-
-(* If [t] is a variable that a handler of several dependencies was given
-   to, and nothing has said what it is since: that handler's
-   dependencies, and what it needs. The first handler given to it is the
-   one, as for [settle]. *)
-let pending env t =
-  match repr t with
-  | TVar v ->
-      List.find_map
-        (function
-          | Coerce { cwanted; cfound; _ } -> (
-              match (repr cwanted, repr cfound) with
-              | TVar v', TCon (h, [ TUses needs ]) when v' == v -> (
-                  match Hashtbl.find_opt env.types h with
-                  | Some { body = Handler deps; _ } -> Some (deps, needs)
-                  | _ -> None)
-              | _ -> None)
-          | _ -> None)
-        (List.rev env.pending)
-  | _ -> None
 
 (* The same as [settle], where a member or a field is about to be looked
    up in [t]: if just one of the handler's dependencies has it, [has] says,
