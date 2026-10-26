@@ -163,7 +163,11 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       params = [];
       ev = Ren.Core.evidence 2;
       scheme =
-        { ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed); names = [] };
+        {
+          ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
+          names = [];
+          reqs = [];
+        };
       body;
       loc;
     }
@@ -189,7 +193,11 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
       params = [];
       ev = Ren.Core.evidence 2;
       scheme =
-        { ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed); names = [] };
+        {
+          ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
+          names = [];
+          reqs = [];
+        };
       body;
       loc;
     }
@@ -220,7 +228,11 @@ let%expect_test "Core Lint reports an instance that is a value" =
       params = [];
       ev = Ren.Core.evidence 2;
       scheme =
-        { ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed); names = [] };
+        {
+          ty = Fun ([], Ren.Ty.unit, Ren.Ty.closed, Ren.Ty.closed);
+          names = [];
+          reqs = [];
+        };
       body;
       loc;
     }
@@ -249,7 +261,7 @@ let values_program ~uses_b ~values =
       path = path name;
       params = [];
       ev = Ren.Core.evidence 2;
-      scheme = { ty = int_fn; names = [] };
+      scheme = { ty = int_fn; names = []; reqs = [] };
       body;
       loc;
     }

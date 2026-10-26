@@ -103,8 +103,8 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
         (fun path (o : Iface.op) ->
           let found =
             match (o.okind, Path.Map.find path inferred.schemes) with
-            | Value, { ty = Fun ([], t, _, _); names } ->
-                Ty.canonical { ty = t; names }
+            | Value, ({ ty = Fun ([], t, _, _); _ } as s) ->
+                Ty.canonical { s with ty = t }
             | _, s -> s
           in
           if found <> o.oscheme then mismatch (Path.local path) o.oscheme found)
@@ -529,10 +529,9 @@ let types ?(lint = false) ?load ~file src =
         | Op_value -> (
             (* a function of no parameters (ast.ml) *)
             match Path.Map.find (Ast.fn_path home f) inferred.schemes with
-            | { ty = Fun ([], t, _, _); names = tnames } ->
+            | { ty = Fun ([], t, _, _); _ } as s ->
                 "  "
-                ^ Ty.value_signature ~names ~pub:f.pub ~name
-                    { ty = t; names = tnames }
+                ^ Ty.value_signature ~names ~pub:f.pub ~name { s with ty = t }
             | _ -> assert false)
       in
       ( home,
@@ -565,7 +564,8 @@ let types ?(lint = false) ?load ~file src =
                       List.map
                         (fun (o : Iface.field) ->
                           let pr =
-                            Ty.printer ~names { ty = o.fty; names = [] }
+                            Ty.printer ~names
+                              { ty = o.fty; names = []; reqs = [] }
                           in
                           sprintf "  %s: %s" o.fname (Ty.show pr o.fty))
                         ops
@@ -592,7 +592,9 @@ let types ?(lint = false) ?load ~file src =
             | Type ({ type_body = Errors _; _ } as td) ->
                 (* a named error set, as it's declared, each tag with its
                    payload's types *)
-                let pr = Ty.printer ~names { ty = Error; names = [] } in
+                let pr =
+                  Ty.printer ~names { ty = Error; names = []; reqs = [] }
+                in
                 let errors =
                   match (decl td).body with
                   | Errors es ->

@@ -51,8 +51,19 @@ and label = { name : string; payload : ty list }
 
 (* A function's type, for every choice of its variables. [names] are the
    names its variables were declared with, like the `T` of `fn id<T>`, so
-   `ren types` can print them back. *)
-type scheme = { ty : ty; names : (int * string) list }
+   `ren types` can print them back.
+
+   [reqs] are what the function needs of its variables: [(0, "eq")] says
+   variable 0 must have `==`, which `ren types` will print as
+   `same<T has eq>` (operators.md, "Generic code"). They're sorted, as
+   [names] are, so equal schemes are equal values. Nothing adds one yet:
+   inference infers them in a later step, so for now [reqs] is always
+   empty. *)
+type scheme = {
+  ty : ty;
+  names : (int * string) list;
+  reqs : (int * string) list;
+}
 
 let int = Con (Path.prelude "Int", [])
 let bool = Con (Path.prelude "Bool", [])
@@ -95,7 +106,7 @@ and row_tails r =
 
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, as inference numbers them: type variables and row
-   variables separately. [names] follow their variables. *)
+   variables separately. [names] and [reqs] follow their variables. *)
 let canonical (s : scheme) =
   let number table n =
     match List.assoc_opt n !table with
@@ -130,12 +141,14 @@ let canonical (s : scheme) =
     { labels; tail = Option.map (number rows) r.tail }
   in
   let ty = go s.ty in
-  let names =
-    List.filter_map
-      (fun (n, h) -> Option.map (fun m -> (m, h)) (List.assoc_opt n !tys))
-      s.names
+  (* a name or requirement whose variable the type no longer has goes *)
+  let renumber pairs =
+    List.sort compare
+      (List.filter_map
+         (fun (n, h) -> Option.map (fun m -> (m, h)) (List.assoc_opt n !tys))
+         pairs)
   in
-  { ty; names = List.sort compare names }
+  { ty; names = renumber s.names; reqs = renumber s.reqs }
 
 (* ---- printing ----
 

@@ -202,7 +202,7 @@ let representation ~names (td : Iface.type_decl) =
   match td.body with
   | Opaque (Some rep) ->
       let s : Ty.scheme =
-        { ty = rep; names = List.mapi (fun i n -> (i, n)) td.params }
+        { ty = rep; names = List.mapi (fun i n -> (i, n)) td.params; reqs = [] }
       in
       Ty.show (Ty.printer ~names s) rep
   | _ -> invalid_arg "Infer_msg.representation: not an opaque type"

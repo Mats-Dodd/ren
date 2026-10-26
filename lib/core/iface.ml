@@ -325,6 +325,7 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
     {
       ty = Fun (ps, ret, errs, deps);
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
+      reqs = [];
     }
 
 (* A type declared in module [home]. *)
@@ -356,12 +357,12 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
       | Op_value, _ when f.ret = None ->
           (* a public one without a type is an error, which inference
              reports with the type it finds *)
-          (Value, { Ty.ty = Error; names = [] })
+          (Value, { Ty.ty = Error; names = []; reqs = [] })
       | Op_value, _ -> (
           (* a function of no parameters, whose result is the value *)
           match signature ~sets f with
-          | { ty = Fun ([], t, _, _); names } ->
-              (Value, Ty.canonical { ty = t; names })
+          | { ty = Fun ([], t, _, _); _ } as s ->
+              (Value, Ty.canonical { s with ty = t })
           | _ -> assert false)
       | Op_fn, p :: _ when p.pname.ident.name = "self" ->
           (Method, signature ~sets f)

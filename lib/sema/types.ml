@@ -396,7 +396,7 @@ let canon_names c = List.sort compare c.names
 let to_scheme st t : Ty.scheme =
   let c = canon st in
   let ty = canon_ty c ~all:false t in
-  { ty; names = canon_names c }
+  { ty; names = canon_names c; reqs = [] }
 
 (* A canonical type from an interface, with [vars] standing for its
    variables and [tails] for its row variables. *)
@@ -492,7 +492,7 @@ let printer ?(show_tail = fun _ -> false) ~names (st : state) =
          c.rows false
   in
   (* the scheme's names start empty: [to_ty] adds them as they're found *)
-  let scheme : Ty.scheme = { ty = Error; names = [] } in
+  let scheme : Ty.scheme = { ty = Error; names = []; reqs = [] } in
   { canon = c; ty_printer = Ty.printer ~show_tail:numbered ~names scheme }
 
 (* Bring the Ty printer up to date with what conversion has learned:

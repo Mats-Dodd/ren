@@ -34,7 +34,12 @@ let run_start files body =
         {
           start with
           body;
-          scheme = { ty = Fun ([], body.ty, Ty.closed, Ty.closed); names = [] };
+          scheme =
+            {
+              ty = Fun ([], body.ty, Ty.closed, Ty.closed);
+              names = [];
+              reqs = [];
+            };
         }
       in
       let entry =
@@ -94,7 +99,8 @@ let lint_evidence body =
       path = Path.make "test" "main";
       params = [];
       ev = Core.evidence 1;
-      scheme = { ty = Fun ([], Ty.int, Ty.closed, uses_d); names = [] };
+      scheme =
+        { ty = Fun ([], Ty.int, Ty.closed, uses_d); names = []; reqs = [] };
       body = body ~loc ~op ~lambda ~call ~uses_d;
       loc;
     }

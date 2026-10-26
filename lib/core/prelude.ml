@@ -307,7 +307,7 @@ pub handler test_proc(exits: Array<Exit>) for Proc, TestProc =
 
 (* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
    [n]th row variable, numbered by first appearance (ty.ml). *)
-let scheme_of ty : Ty.scheme = { ty; names = [] }
+let scheme_of ty : Ty.scheme = { ty; names = []; reqs = [] }
 let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])
 

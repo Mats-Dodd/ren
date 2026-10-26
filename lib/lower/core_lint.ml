@@ -40,7 +40,8 @@ let show t =
   Ty.show
     (Ty.printer
        ~show_tail:(fun _ -> true)
-       ~names:Path.full { ty = t; names = [] })
+       ~names:Path.full
+       { ty = t; names = []; reqs = [] })
     t
 
 let fail env (loc : Loc.t) msg =
@@ -930,8 +931,8 @@ let program ~imports ~linked (prog : program) =
              result is the value, which is all the rest of the module sees
              of it *)
           match f.scheme with
-          | { ty = Fun ([], t, _, _); names } when List.mem f.path m.values ->
-              Hashtbl.replace env.values f.path { ty = t; names }
+          | { ty = Fun ([], t, _, _); _ } as s when List.mem f.path m.values ->
+              Hashtbl.replace env.values f.path { s with ty = t }
           | _ -> Hashtbl.replace env.schemes f.path f.scheme)
         m.fns)
     (linked @ [ prog ]);
