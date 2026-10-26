@@ -181,8 +181,13 @@ called:
   Specialization has a budget, and past it the code falls back to what a
   debug build does.
 
-Both mean the same: specialization only makes code faster (rule 1). The
-interpreter runs the debug strategy. Evidence is passed this way (deps.md,
+Both mean the same: specialization only makes code faster (rule 1). To
+specialize a function of another module, a release build needs its body,
+which the module's interface doesn't have: so its summary has a second
+tier, the implementation tier (impl.ml; module-build.md, "Interface
+summaries"), with the typed Core of each public function that's generic
+or higher-order. Nothing reads it yet. The interpreter runs the debug
+strategy. Evidence is passed this way (deps.md,
 "How it runs"), and so are dictionaries, since R4, where `eq` is the
 first requirement.
 
@@ -392,8 +397,10 @@ the next starts:
 - **R4, requirements and lambda sets.** `==` and `!=` require `eq`,
   derived structurally and absent from a type with a function in it. A
   generic function's requirements are inferred and kept in its scheme and
-  its module's interface, and passed as dictionaries. Every function type
-  gets its lambda set.
+  its module's interface, and passed as dictionaries. A module's
+  implementation tier keeps the bodies of its public generic and
+  higher-order functions, for specialization. Every function type gets
+  its lambda set.
 
 ## Deviations
 
@@ -710,3 +717,17 @@ Where the work forced a change to the plan above:
   points at `inc`, the receiver first for a method; at the function's
   name if it's in no argument, or the function is used as a value, `let
   s = same`.
+- **R4, the implementation tier.** It's a type of its own (impl.ml),
+  beside `Iface.t` rather than in it, since it holds Core, which the
+  interface, a part of every pass from resolve on, can't depend on.
+  It's made from the module's Core and its interface, once it's lowered,
+  which the driver does once for each module, when it's first needed.
+  It holds each public function's, and each public type's member
+  function's, typed Core if it has a type variable, which every member of
+  a generic type has, or a parameter or result with a function type in
+  it; row variables don't count, since every function has them. A
+  handler, whose result is an implementation of functions, isn't counted
+  as higher-order: specializing for a known handler is decided where
+  it's installed, which is later work. Its Core has no source locations,
+  so it changes only when one of those bodies does (test_modules.ml,
+  "what the implementation tier records").

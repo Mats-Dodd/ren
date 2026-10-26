@@ -1044,6 +1044,42 @@ let%expect_test "editing a body changes the interface only by what it needs" =
     different
     |}]
 
+let%expect_test "what the implementation tier records" =
+  (* only public functions and members, and of those only the ones the
+     specializer will copy into callers: a generic one, `same`, or a
+     member of a generic type, `Box.get` and `Box.size`, or one given a
+     function, `twice` (module-build.md, "Interface summaries"). Not
+     `add`, nor the private `pick` *)
+  let src =
+    {|
+pub fn same<T>(a: T, b: T) -> Bool = a == b
+pub fn twice(f: fn(Int) -> Int, x: Int) -> Int = try f(try f(x))
+pub fn add(a: Int, b: Int) -> Int = a + b
+fn pick<T>(a: T, b: T) -> T = a
+pub type Box<T> = { v: T }
+  pub fn get(self) -> T = self.v
+  pub fn size(self) -> Int = 1
+fn main() = add(1, 2)
+|}
+  in
+  let impl src = Ren.Driver.implementation ~file (clean src) in
+  print_endline (Ren.Impl.show (impl src));
+  (* it has no source locations, so moving the code doesn't change it *)
+  print_endline
+    (if impl src = impl ("\n\n" ^ src) then "the same" else "different");
+  [%expect
+    {|
+    (fn Box.get : fn(test.Box<T>) -> T ! ..e uses ..d (self/1) ev/2 (. self/1 v))
+    (fn Box.size : fn(test.Box<T>) -> Int ! ..e uses ..d (self/1) ev/2 1)
+    (fn same : fn(T, T) -> Bool ! ..e uses ..d (needs (eq T)) (a/1 b/2) ev/3
+      (== (eq T) a/1 b/2))
+    (fn twice : fn((fn(Int) -> Int ! ..e uses ..d), Int) -> Int ! ..e uses ..d
+      (f/1 x/2)
+      ev/3
+      (call ev/3 f/1 (call ev/3 f/1 x/2)))
+    the same
+    |}]
+
 (* ---- opaque types ---- *)
 
 let users =

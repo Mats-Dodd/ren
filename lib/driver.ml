@@ -345,6 +345,11 @@ type checked = {
       (** the interfaces of every module reachable through its imports, the
           prelude's first, each once *)
   items : Test_items.t;  (** its tests, and the functions they were made *)
+  core : Core.program Lazy.t;
+      (** it lowered to Core, once it's needed, and then only once *)
+  impl : Impl.t Lazy.t;
+      (** the implementation tier of its summary (impl.ml), beside its interface
+      *)
 }
 
 (* Load the program from its [roots] (see [load_all]), then check each of
@@ -403,6 +408,9 @@ let check_roots ~load ~dir ~entry roots =
              ?entry:(if entry m then Some m.file else None)
              m.parsed
          in
+         (* [lazy] delays lowering until something needs it, as for
+            [prelude]: checking a program, `ren types`, doesn't *)
+         let core = lazy (lower resolved inferred) in
          {
            home = m.home;
            file = m.file;
@@ -412,6 +420,8 @@ let check_roots ~load ~dir ~entry roots =
            inferred;
            reachable;
            items;
+           core;
+           impl = lazy (Impl.of_module iface (Lazy.force core));
          }
          :: done_)
        [] sources)
@@ -432,13 +442,16 @@ let inferred ?load ~file src = (entry_of (check_all ?load ~file src)).inferred
 let schemes ?load ~file src = (inferred ?load ~file src).schemes
 let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
 
+let implementation ?load ~file src =
+  Lazy.force (entry_of (check_all ?load ~file src)).impl
+
 (* The whole program in Core, the prelude first. The functions its tests
    were made are left out, unless it's [for_tests]: nothing else calls
    them. *)
 let link ?lint ?(for_tests = false) (modules : checked list) =
   let prelude, _, _ = Lazy.force prelude in
   let lowered c =
-    let core = lower c.resolved c.inferred in
+    let core = Lazy.force c.core in
     if for_tests then core
     else
       {

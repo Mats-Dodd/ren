@@ -42,6 +42,10 @@ val inferred : ?load:loader -> file:string -> string -> Infer.t
    that imports it. *)
 val interface : ?load:loader -> file:string -> string -> Iface.t
 
+(* The rest of its summary, the implementation tier (impl.ml): the typed
+   Core of its public functions that are generic or higher-order. *)
+val implementation : ?load:loader -> file:string -> string -> Impl.t
+
 (* The entry module, checked and lowered to Core, with `$start` if it has
    a `main`. With [lint] (off by default), Core Lint checks every module, and a problem is an
    [Internal_error]; the tests turn it on. The prelude's Core is always

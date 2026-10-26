@@ -5,7 +5,7 @@
 ;   core/    what every pass shares: identities (paths), canonical types,
 ;            interfaces, and the prelude, with its built-ins' types
 ;   lower/   Core, the typed language a checked program is lowered to, the
-;            lowering, and Core Lint
+;            lowering, Core Lint, and a module's implementation tier
 ;   eval/    the interpreter, the values it computes, and what the prelude's
 ;            built-in functions do when they run
 ; `unqualified` means the folders only organize files: every module keeps
