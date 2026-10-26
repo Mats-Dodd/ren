@@ -54,6 +54,9 @@ type op_kind = Method | Function | Value
 
 type op = {
   oname : string;  (** as it's written: [push] *)
+  onum : int;
+      (** its place among its type's members, counting from 0 in source order,
+          which messages list them in *)
   opub : bool;
   okind : op_kind;
   oscheme : Ty.scheme;
@@ -68,9 +71,9 @@ type type_decl = {
       (** the type parameters' names; field types refer to the [i]th as [Var i]
       *)
   body : body;
-  members : op list;
-      (** its members, in source order: every item in its own module's view of
-          it, only the public ones in its interface *)
+  members : op Path.Map.t;
+      (** its members, each by its path (path.ml): every item in its own
+          module's view of it, only the public ones in its interface *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
@@ -86,6 +89,19 @@ let find_type iface name =
   List.find_opt (fun d -> d.path.name = name) iface.types
 
 let find_value iface name = List.find_opt (fun v -> v.vname = name) iface.values
+
+(* The member [name] of the type [d], if it has one. *)
+let find_member d name = Path.Map.find_opt (Path.member d.path name) d.members
+
+(* The members of [d], in source order. *)
+let members d =
+  List.sort
+    (fun a b -> compare a.onum b.onum)
+    (List.map snd (Path.Map.bindings d.members))
+
+(* The members [ops] of the type at [path], each by its own path. *)
+let members_of path ops =
+  Path.Map.of_list (List.map (fun o -> (Path.member path o.oname, o)) ops)
 
 (* ---- named error sets ---- *)
 
@@ -333,7 +349,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
     | Errors es -> Errors (declared_errors ~sets es)
     | Dep ops -> Dep (List.map field ops)
   in
-  let op (o : Ast.Resolved.op) =
+  let op onum (o : Ast.Resolved.op) =
     let f = o.op_fn in
     let okind, oscheme =
       match (o.op_kind, f.params) with
@@ -351,13 +367,14 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
           (Method, signature ~sets f)
       | Op_fn, _ -> (Function, signature ~sets f)
     in
-    { oname = f.name.name; opub = f.pub; okind; oscheme }
+    { oname = f.name.name; onum; opub = f.pub; okind; oscheme }
   in
+  let path = Path.make home td.type_name.name in
   {
-    path = Path.make home td.type_name.name;
+    path;
     params = List.map (fun (p : Ast.ident) -> p.name) td.type_params;
     body;
-    members = List.map op td.type_ops;
+    members = members_of path (List.mapi op td.type_ops);
     loc = Some td.type_name.loc;
   }
 
@@ -395,7 +412,7 @@ let of_handler ~home (f : Ast.Resolved.fn_def) =
           path = Path.make home f.name.name;
           params = [];
           body = Handler deps;
-          members = [];
+          members = Path.Map.empty;
           loc = Some f.name.loc;
         }
 
@@ -409,7 +426,9 @@ let of_handler ~home (f : Ast.Resolved.fn_def) =
    see. *)
 let of_module ~home ~sets (prog : Ast.Resolved.program) =
   let public (td : type_decl) =
-    let td = { td with members = List.filter (fun o -> o.opub) td.members } in
+    let td =
+      { td with members = Path.Map.filter (fun _ o -> o.opub) td.members }
+    in
     match td.body with Opaque _ -> { td with body = Opaque None } | _ -> td
   in
   {

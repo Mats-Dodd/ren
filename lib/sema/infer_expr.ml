@@ -942,8 +942,7 @@ let dep_op_in name (td : Iface.type_decl) =
   | Dep ops -> List.find_opt (fun (o : Iface.field) -> o.fname = name) ops
   | Record _ | Sum _ | Builtin | Opaque _ | Errors _ | Handler _ -> None
 
-let op_in name (td : Iface.type_decl) =
-  List.find_opt (fun (o : Iface.op) -> o.oname = name) td.members
+let op_in name (td : Iface.type_decl) = Iface.find_member td name
 
 let field_in name (td : Iface.type_decl) =
   Option.bind (record_fields td)
@@ -2459,7 +2458,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
                 List.filter_map
                   (fun (o : Iface.op) ->
                     if o.okind = Method then Some o.oname else None)
-                  td.members
+                  (Iface.members td)
               in
               report env
                 (no_method m ~shown ~own:(p.home = env.home)

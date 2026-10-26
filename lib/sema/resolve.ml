@@ -737,9 +737,7 @@ let item env sc (t : tyname) (f : ident) =
       let declared () =
         ( List.map
             (fun (o : Iface.op) -> (o.oname, o.okind))
-            (Option.fold ~none:[]
-               ~some:(fun (d : Iface.type_decl) -> d.members)
-               decl),
+            (Option.fold ~none:[] ~some:Iface.members decl),
           [] )
       in
       (* the prelude's own source finds a built-in type's members,

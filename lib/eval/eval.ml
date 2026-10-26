@@ -622,15 +622,16 @@ and show_value cx t v =
    is. *)
 and own_show cx (p : Path.t) args v : Shown.own =
   let own (d : Iface.type_decl) =
-    List.find_map
-      (fun (o : Iface.op) ->
-        match (o.okind, o.oscheme.ty) with
-        | Method, Fun ([ _ ], ret, errs, uses)
-          when o.oname = "show" && ret = Ty.str && errs.labels = []
-               && uses.labels = [] ->
-            Some (Path.member p "show")
-        | _ -> None)
-      d.members
+    match Iface.find_member d "show" with
+    | Some
+        {
+          okind = Method;
+          oscheme = { ty = Fun ([ _ ], ret, errs, uses); _ };
+          _;
+        }
+      when ret = Ty.str && errs.labels = [] && uses.labels = [] ->
+        Some (Path.member p "show")
+    | _ -> None
   in
   match Option.bind (Hashtbl.find_opt cx.types p) own with
   | Some _ when List.mem p cx.showing -> Inside

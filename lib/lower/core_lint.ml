@@ -894,9 +894,8 @@ let program ~imports ~linked (prog : program) =
       List.iter
         (fun (td : Iface.type_decl) ->
           Hashtbl.replace env.types td.path td;
-          List.iter
-            (fun (o : Iface.op) ->
-              let p = Path.member td.path o.oname in
+          Path.Map.iter
+            (fun p (o : Iface.op) ->
               Hashtbl.replace
                 (if o.okind = Value then env.values else env.schemes)
                 p o.oscheme)

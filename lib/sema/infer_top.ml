@@ -1698,7 +1698,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
                 when q = p && not (itself args) ->
                   Some (call name (List.length ps))
               | _ -> None)
-            (if p.home = env.home then [] else td.members))
+            (if p.home = env.home then [] else Iface.members td))
     in
     match own with Some m -> Some m | None -> member ()
   in
@@ -1954,10 +1954,10 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
     (fun (iface : Iface.t) ->
       List.iter
         (fun (td : Iface.type_decl) ->
-          List.iter
-            (fun (o : Iface.op) ->
+          Path.Map.iter
+            (fun path (o : Iface.op) ->
               let t = of_scheme st o.oscheme in
-              Hashtbl.replace env.globals (op_path td o)
+              Hashtbl.replace env.globals path
                 (if o.okind = Value then TFun ([], t, REmpty, REmpty) else t))
             td.members)
         iface.types)

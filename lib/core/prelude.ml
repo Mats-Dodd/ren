@@ -494,16 +494,19 @@ let intrinsics : Iface.t =
             params = List.init t.arity (fun i -> "T" ^ string_of_int i);
             body = Builtin;
             members =
-              List.map
-                (fun (okind, x) : Iface.op ->
-                  {
-                    oname = Intrinsic.member_name x;
-                    opub = true;
-                    okind;
-                    oscheme = scheme x;
-                  })
-                (List.map (fun x -> (Iface.Method, x)) t.methods
-                @ List.map (fun x -> (Iface.Function, x)) t.functions);
+              Path.Map.of_list
+                (List.mapi
+                   (fun onum (okind, x) ->
+                     ( Intrinsic.path x,
+                       {
+                         Iface.oname = Intrinsic.member_name x;
+                         onum;
+                         opub = true;
+                         okind;
+                         oscheme = scheme x;
+                       } ))
+                   (List.map (fun x -> (Iface.Method, x)) t.methods
+                   @ List.map (fun x -> (Iface.Function, x)) t.functions));
             loc = None;
           })
         types;

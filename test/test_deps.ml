@@ -110,7 +110,7 @@ let lint_evidence body =
                     path = d;
                     params = [];
                     body = Dep [ { fname = "op"; fty = int_fn } ];
-                    members = [];
+                    members = Path.Map.empty;
                     loc = None;
                   };
                 ];

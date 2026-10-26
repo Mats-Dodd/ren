@@ -99,9 +99,8 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
   (* and so was each public member's, which is in its type's entry *)
   List.iter
     (fun (td : Iface.type_decl) ->
-      List.iter
-        (fun (o : Iface.op) ->
-          let path = Path.member td.path o.oname in
+      Path.Map.iter
+        (fun path (o : Iface.op) ->
           let found =
             match (o.okind, Path.Map.find path inferred.schemes) with
             | Value, { ty = Fun ([], t, _, _); names } ->
