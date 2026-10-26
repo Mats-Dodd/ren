@@ -249,3 +249,15 @@ Where the work forced a change to the plan above:
   check their parts with the core, which calls them, so the core passes
   its functions to them in a record (`Infer_handlers.core`) rather than
   through a recursive module or a mutable forward reference.
+- **R1, moving messages to `infer_msg.ml`.** Inference still decides
+  which explanation fits a mismatch, by looking inside the two types
+  (`Infer_report.unifies`), and passes what it found as data,
+  `Infer_msg.behind`; the wording of every message, its notes and its
+  help is `infer_msg.ml`'s. A mismatch is worded from the two types as
+  they're printed, since that's what its message shows, and one help that
+  needs more, the type to write for a public function whose body makes a
+  handler of several dependencies, is worked out from the type found
+  (`Infer_report.why.help_of`) rather than by rewriting the printed text.
+  Each message reads exactly as before, oddities included: the doubled
+  backticks of B4, which R3 fixes, and "`` `an index` works on `Int`s ``",
+  which a step that may change messages can reword.

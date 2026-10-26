@@ -1,6 +1,6 @@
 (* Reporting what inference finds wrong (see infer_expr.ml): names as a
    message writes them, and a mismatch between the type some code has and
-   the type it needs, explained. The wording of most messages is
+   the type it needs, explained. The wording of every message is
    infer_msg.ml's. *)
 
 open Ast

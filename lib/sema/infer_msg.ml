@@ -1,6 +1,9 @@
-(* The wording of inference's errors (infer_expr.ml, infer_top.ml): what
-   explains a type mismatch beyond the two types themselves, and what to
-   say when a lookup through a type finds nothing, or too much. *)
+(* The wording of inference's errors, all of it: infer_expr.ml and the
+   modules beside it, and infer_top.ml, find what's wrong and pass it here
+   as data (names, types as they're printed, locations, and variants for
+   the kinds of things), and the functions here say it, building each
+   error's message, notes and help. A mismatch's message is a function of
+   the two types as printed, which Infer_report.unifies gives it. *)
 
 open Types
 
