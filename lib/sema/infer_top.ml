@@ -543,11 +543,6 @@ let declared_errors env ~is_value ~tparams (f : fn_def) =
   | None when f.pub -> Some []
   | None -> None
 
-(* Does a row ending in [tail] belong to one of [params]? Then it stands
-   for whatever the function passed there fails with. *)
-let in_params params tail =
-  List.exists (fun (_, t) -> List.mem tail (row_vars t)) params
-
 (* Whether the call [c] can fail, now that its group is done: its callee
    fails with something, which for a function of the group is known only
    now, or its errors are those of a function the caller was passed. *)
@@ -557,84 +552,6 @@ let can_fail (c : ecall) =
   match row_tail c.erow with
   | Some t -> in_params c.eparams t
   | None -> false
-
-(* Finish each inclusion of the group (see [Infer_env.inclusion]), now
-   that its functions are joined: add the labels each row learned since,
-   until no row learns any more, and end a row that includes a
-   parameter's errors in the same tail as that parameter's. *)
-let settle_inclusions env =
-  let changed = ref true in
-  (* a row's tail, the variable at its end *)
-  let rec tail r =
-    match repr_row r with RExtend (_, rest) -> tail rest | r -> r
-  in
-  while !changed do
-    changed := false;
-    List.iter
-      (fun (i : inclusion) ->
-        let labels, src_tail = row_parts i.isrc in
-        (match
-           List.filter
-             (fun (l : label) -> not (List.mem l.name i.ipassed))
-             labels
-         with
-        | [] -> ()
-        | fresh ->
-            changed := true;
-            i.ipassed <- i.ipassed @ List.map (fun (l : label) -> l.name) fresh;
-            i.iadd (extend fresh REmpty));
-        match src_tail with
-        | Some t when (not i.ilinked) && in_params i.iparams t -> (
-            changed := true;
-            i.ilinked <- true;
-            (* an open row takes on the parameter's tail, and stays what
-               it is before it; a closed one, a lambda's whose type is
-               written, says what the parameter can fail with *)
-            let a, b =
-              match row_tail i.idst with
-              | Some _ -> (tail i.isrc, tail i.idst)
-              | None -> (i.isrc, i.idst)
-            in
-            try Unify.unify_row env.st a b
-            with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
-              report env (param_fails_here i.iloc))
-        | _ -> ())
-      (List.rev env.includes)
-  done;
-  env.includes <- []
-
-(* Add each tag written as a value, `Err(Right)`, to its set if the set
-   is one of its own, not what an `attempt` kept or a parameter fails
-   with: `if c then Err(Left(1)) else Err(Right)` holds both
-   ([Infer_rows.err_row]). That's done before the inclusions are settled,
-   so a set that includes this one gets its tags. The rest are checked
-   with the tags in patterns, once the kept sets are closed. *)
-let value_tags env =
-  let kept t = List.exists (fun (k, _) -> row_tail k = Some t) env.kept in
-  env.tag_patterns <-
-    List.rev
-      (List.filter
-         (fun t ->
-           let labels, tail = row_parts t.tset in
-           match tail with
-           | Some tl
-             when t.tvalue
-                  && (not (kept tl))
-                  && (not (in_params t.tin tl))
-                  && not
-                       (List.exists
-                          (fun (l : label) -> l.name = t.ttag.name)
-                          labels) -> (
-               let l = { name = t.ttag.name; payload = t.tpayload } in
-               (* a named row can't learn a tag: it's checked below, and
-                  isn't one of the errors *)
-               try
-                 Unify.unify_row env.st t.tset (extend [ l ] (fresh_row env.st));
-                 false
-               with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ ->
-                 true)
-           | _ -> true)
-         (List.rev env.tag_patterns))
 
 (* The rules of markers, checked once the group's functions are joined,
    when it's known what each call fails with (errors.md, "Marking"):
@@ -647,10 +564,10 @@ let value_tags env =
    4. a call no marker covers can't fail
    5. every marker covers something that can fail: a `match`'s `fail`
       arms match something *)
-let settle_errors env =
+let settle_errors env ~is_value =
   let pr = printer env in
-  value_tags env;
-  settle_inclusions env;
+  (* first, what each error set holds *)
+  Solve.solve env ~is_value Error_rows;
   (* an `attempt` of a call of a function it was passed keeps whatever
      that function fails with: its set stays open, like the function's *)
   List.iter
@@ -1663,13 +1580,11 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       globals = Hashtbl.create 16;
       group = [];
       spelled = [];
-      joins = [];
-      drops = [];
+      pending = [];
       forced = [];
       unmarked = [];
       all_markers = [];
       kept = [];
-      includes = [];
       tag_patterns = [];
       rows_due = [];
       impl_ops = [];
@@ -1733,7 +1648,8 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       r.prog
   in
   let path = Ast.fn_path home in
-  let is_value (f : fn_def) = List.mem (path f) values in
+  let is_value_path p = List.mem p values in
+  let is_value (f : fn_def) = is_value_path (path f) in
   List.iter (check_transparent sink) fns;
   let schemes = Hashtbl.create 16 in
   let tables = Hashtbl.create 16 in
@@ -1882,29 +1798,13 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
           | _ -> check env cx ~why f.body ret)
         setups;
       (* every use of a function by another of its group, joined with the
-         type its own body gave it *)
-      List.iter
-        (fun j ->
-          let msg = used_as j.jname in
-          let expected = Hashtbl.find env.globals j.target in
-          match (repr j.used, repr expected) with
-          | TFun ([], used, _, _), TFun ([], made, _, _)
-            when List.exists (fun f -> is_value f && path f = j.target) fns ->
-              (* an associated value, a function of no parameters (ast.ml),
-                 is used as its result, which is what's shown *)
-              unify_at env j.jloc ~found:used ~expected:made ~msg
-                ~notes:[ group_type ~values:true ]
-          | _ ->
-              unify_at env j.jloc ~found:j.used ~expected ~msg
-                ~notes:[ group_type ~values:false ])
-        (List.rev env.joins);
-      env.joins <- [];
-      dropped_values env;
+         type its own body gave it, and then the values thrown away *)
+      Solve.solve env ~is_value:is_value_path Equalities;
       settle_installs env;
       (* only now, with the group's uses of each other joined, is it known
          everything each function uses and fails with *)
       own_error_rows env (List.map (fun (f, _, cx, _, _) -> (f, cx)) setups);
-      settle_errors env;
+      settle_errors env ~is_value:is_value_path;
       settle_impls env;
       settle_rows env
         (List.map

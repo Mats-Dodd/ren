@@ -34,17 +34,38 @@ val add_errors :
   Types.row ->
   unit
 
-(* The same by inclusion (see [Infer_env.inclusion]): with the function
-   given, an [add_errors] waiting for its two rows, now, and with what the
-   first row learns later once the group is done. *)
+(* Report that adding the errors of the row given to another failed, with
+   the exception given (Unify), as [add_errors] does: [before] are the
+   labels the other row had. *)
+val add_failed :
+  env ->
+  loc:Loc.t ->
+  here:Infer_msg.origin ->
+  sources:source list * Infer_msg.origin ->
+  fix:(string -> string) ->
+  before:Types.label list ->
+  Types.row ->
+  exn ->
+  unit
+
+(* The same as [add_errors] by inclusion (see [Infer_env.inclusion]): now,
+   and with what the first row learns later, once the group is done, by
+   the constraint solver (solve.ml). [without] are tags it doesn't add,
+   and [sources] gives the [sources] of [add_errors] when it's called. *)
 val include_errors :
   env ->
   ctx ->
   loc:Loc.t ->
-  (Types.row -> Types.row -> unit) ->
+  here:Infer_msg.origin ->
+  sources:(unit -> source list * Infer_msg.origin) ->
+  fix:(string -> string) ->
+  ?without:string list ->
   Types.row ->
   Types.row ->
   unit
+
+(* A row of errors with only its labels, without the tags given. *)
+val without : string list -> Types.row -> Types.row
 
 (* Add what a call's callee uses, or what an implementation a `with`
    installs needs ([needs]), to the dependencies of the function or lambda

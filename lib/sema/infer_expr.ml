@@ -367,10 +367,10 @@ and synth env cx (e : expr) : ty =
           match repr errs with
           | TErrors errs ->
               Hashtbl.replace cx.found e.node Unwraps;
-              include_errors env cx ~loc:a.loc
-                (add_errors env ~loc:a.loc ~here:(This "Result")
-                   ~sources:(sources_of cx) ~fix:rename_where_in)
-                errs cx.handler;
+              let sources = sources_of cx in
+              include_errors env cx ~loc:a.loc ~here:(This "Result")
+                ~sources:(fun () -> sources)
+                ~fix:rename_where_in errs cx.handler;
               m.unwrapped <- errs :: m.unwrapped;
               Option.iter
                 (fun s -> s := Unwrapped (a.loc, errs) :: !s)
@@ -429,7 +429,7 @@ and dropped env cx (e : expr) t =
         | _ -> None)
     | _ -> None
   in
-  env.drops <- { dloc = e.loc; dty = t; callee; dself = cx.self } :: env.drops
+  defer env (Drop { dloc = e.loc; dty = t; callee; dself = cx.self })
 
 (* A call. One with a dot, `x.m(...)`, can be a method call, found through
    [x]'s type: as a field is, by [through_type], except that a method can
@@ -1027,23 +1027,3 @@ and tag_pattern env cx ?(arm = false) (p : pattern) (c : ident) ps errs =
    [Infer_handlers.core]). A [let rec] can define a record of its
    functions, as well as the functions themselves. *)
 and core = { infer; check; stmt; infer_call; call_with; check_args }
-
-(* Check every value the group threw away is `Unit` (see [drop]). One whose
-   type is still unknown, like the result of calling a parameter, becomes
-   `Unit`, and is kept in [forced]. *)
-let dropped_values env =
-  List.iter
-    (fun d ->
-      (match repr d.dty with
-      | TVar _ -> env.forced <- (d.dself, d.dloc) :: env.forced
-      | _ -> ());
-      (* an implementation, or a handler's description, which a handler's
-         call makes: it's for installing *)
-      let implementation =
-        match repr d.dty with TCon (_, [ TUses _ ]) -> true | _ -> false
-      in
-      unify_at env d.dloc ~found:d.dty ~expected:unit
-        ~msg:(thrown_away ~callee:d.callee ~implementation)
-        ~help:(thrown_away_help ~implementation))
-    (List.rev env.drops);
-  env.drops <- []

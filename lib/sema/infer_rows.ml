@@ -92,20 +92,21 @@ let sources_of cx =
   | None, m :: _ -> (List.map (fun c -> Passed c) m.covered, Earlier_call)
   | None, [] -> ([], Earlier_call)
 
-(* Add [errs], what's new here (a call's, a `fail`'s), to [into]. One error
-   with two shapes is reported: [here] says where the new one comes from,
-   and [sources] where the old one may have, for the message
-   (module-build.md, "Error tags have no home"); [fix] is the help, given
-   the tag. *)
-let add_errors env ~loc ~here ~sources:(sources, elsewhere) ~fix errs into =
-  (* the labels already there, before they're unified with the new ones *)
-  let before = fst (row_parts into) in
-  let new_ = fst (row_parts errs) in
-  (* only [errs]'s labels, with a fresh tail: unified with its own tail,
-     [errs] would become [into], and fail with everything [into] does *)
-  match Unify.unify_row env.st (extend new_ (fresh_row env.st)) into with
-  | () -> ()
-  | exception Unify.Two_shapes name ->
+(* [r]'s labels, without the tags [names]. *)
+let without names r =
+  extend
+    (List.filter
+       (fun (l : label) -> not (List.mem l.name names))
+       (fst (row_parts r)))
+    REmpty
+
+(* Report that adding [errs] to a row failed with [failure] (see
+   [add_errors]): one of its tags is there with another shape, or the row
+   can't fail with them. [before] are the labels the row had. *)
+let add_failed env ~loc ~here ~sources:(sources, elsewhere) ~fix ~before errs
+    failure =
+  match failure with
+  | Unify.Two_shapes name ->
       let pr = printer env in
       let shape ls =
         Option.map
@@ -118,29 +119,56 @@ let add_errors env ~loc ~here ~sources:(sources, elsewhere) ~fix errs into =
       report env
         (two_shapes loc name
            ~old:(old_from, Option.value (shape before) ~default:name)
-           ~new_:(here, Option.value (shape new_) ~default:name)
+           ~new_:
+             (here, Option.value (shape (fst (row_parts errs))) ~default:name)
            ~help:(fix name))
-  | exception (Unify.Mismatch | Unify.Infinite) ->
+  | _ ->
       report env
         (cant_fail_here loc ~in_state:env.in_state
            (show_row (printer env) ~prefix:"" ~sep:" | " ~kind:"e" errs))
 
+(* Add [errs], what's new here (a call's, a `fail`'s), to [into]. One error
+   with two shapes is reported: [here] says where the new one comes from,
+   and [sources] where the old one may have, for the message
+   (module-build.md, "Error tags have no home"); [fix] is the help, given
+   the tag. *)
+let add_errors env ~loc ~here ~sources ~fix errs into =
+  (* the labels already there, before they're unified with the new ones *)
+  let before = fst (row_parts into) in
+  (* only [errs]'s labels, with a fresh tail: unified with its own tail,
+     [errs] would become [into], and fail with everything [into] does *)
+  match
+    Unify.unify_row env.st
+      (extend (fst (row_parts errs)) (fresh_row env.st))
+      into
+  with
+  | () -> ()
+  | exception
+      ((Unify.Two_shapes _ | Unify.Mismatch | Unify.Infinite) as failure) ->
+      add_failed env ~loc ~here ~sources ~fix ~before errs failure
+
 (* Add [errs] to [into] by inclusion (see [inclusion]): its labels now,
-   with [add] (an [add_errors] waiting for its two rows), and what it
-   learns later once the group is done. *)
-let include_errors env cx ~loc add errs into =
-  add errs into;
-  env.includes <-
-    {
-      iloc = loc;
-      isrc = errs;
-      idst = into;
-      iparams = cx.params;
-      iadd = (fun r -> add r into);
-      ipassed = row_names errs;
-      ilinked = false;
-    }
-    :: env.includes
+   and what it learns later, once the group is done, by the constraint
+   solver (solve.ml). [without] are tags it doesn't pass on, and
+   [sources] gives the [sources] of [add_errors] when it's called. *)
+let include_errors env cx ~loc ~here ~sources ~fix ?without:handled errs into =
+  add_errors env ~loc ~here ~sources:(sources ()) ~fix
+    (match handled with Some names -> without names errs | None -> errs)
+    into;
+  defer env
+    (Include
+       {
+         iloc = loc;
+         isrc = errs;
+         idst = into;
+         iparams = cx.params;
+         ihere = here;
+         isources = sources;
+         ifix = fix;
+         iwithout = Option.value handled ~default:[];
+         ipassed = row_names errs;
+         ilinked = false;
+       })
 
 (* Whether [cx] is the body of the top-level function itself, and not of
    a lambda in it: its errors are the function's own. *)
@@ -258,9 +286,9 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
       env.unmarked <- (ec, reopen env errs) :: env.unmarked
   | markers ->
       List.iter (fun m -> m.covered <- ec :: m.covered) markers;
-      include_errors env cx ~loc:call.loc
-        (add_errors env ~loc:call.loc ~here ~sources ~fix)
-        errs cx.handler;
+      include_errors env cx ~loc:call.loc ~here
+        ~sources:(fun () -> sources)
+        ~fix errs cx.handler;
       Option.iter (fun s -> s := Passed ec :: !s) cx.sources
 
 (* The first [n] characters of [loc], a keyword at its start. *)
@@ -333,14 +361,6 @@ let handled_tags arms =
       | Some ts, None -> Option.map (( @ ) ts) (tags a.arm_pat))
     (Some []) arms
 
-(* [r]'s labels, without the tags [names]. *)
-let without names r =
-  extend
-    (List.filter
-       (fun (l : label) -> not (List.mem l.name names))
-       (fst (row_parts r)))
-    REmpty
-
 (* The error set of `Err(tag(payload))`, where a value of type [expected]
    is wanted. Where that's a `Result` whose errors are what something can
    fail with, a function's declared result or what an `attempt` kept, the
@@ -369,7 +389,7 @@ let err_row env cx (tag : ident) args ~expected =
     | _ -> None
   in
   let later row =
-    env.tag_patterns <-
+    let t =
       {
         ttag = tag;
         tpayload = payload;
@@ -378,7 +398,11 @@ let err_row env cx (tag : ident) args ~expected =
         tarm = false;
         tvalue = true;
       }
-      :: env.tag_patterns;
+    in
+    (* checked with the tags in patterns, unless the solver adds it to a
+       set of its own *)
+    env.tag_patterns <- t :: env.tag_patterns;
+    defer env (Value_tag t);
     row
   in
   match wanted with
@@ -419,13 +443,12 @@ let pass_on env cx m (subject : expr) arms errs =
   | Some names ->
       let rest = fresh_row env.st in
       env.kept <- (rest, cx.params) :: env.kept;
-      let add r into =
-        add_errors env ~loc:subject.loc ~here:(This "match")
-          ~sources:(sources_of cx) ~fix:rename_where_in r into
-      in
-      include_errors env cx ~loc:subject.loc
-        (fun r into -> add (without names r) into)
-        errs rest;
-      include_errors env cx ~loc:subject.loc add rest cx.handler;
+      (* what's added to these sources as the rest of the function is
+         checked is still there to say where a tag came from *)
+      let sources () = sources_of cx in
+      include_errors env cx ~loc:subject.loc ~here:(This "match") ~sources
+        ~fix:rename_where_in ~without:names errs rest;
+      include_errors env cx ~loc:subject.loc ~here:(This "match") ~sources
+        ~fix:rename_where_in rest cx.handler;
       m.unwrapped <- rest :: m.unwrapped;
       Option.iter (fun s -> s := Unhandled (subject.loc, rest) :: !s) cx.sources

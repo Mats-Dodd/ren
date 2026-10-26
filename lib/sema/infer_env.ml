@@ -92,13 +92,14 @@ type env = {
   mutable spelled : Path.t list;
       (** those of [group] whose signature is written out in full, every
           parameter's type included: public functions, mostly *)
-  mutable joins : join list;  (** most recent first *)
-  mutable drops : drop list;
-      (** the values the group's statements throw away, most recent first *)
+  mutable pending : constr list;
+      (** what has to hold of the group's types and rows, which the constraint
+          solver (solve.ml) decides once its bodies are checked, most recent
+          first *)
   mutable forced : (Path.t * Loc.t) list;
       (** each statement that threw away a value of a type still unknown, which
-          made it `Unit`, with the function it's in: a later mismatch at a call
-          of that function points back at it *)
+          the solver made `Unit`, with the function it's in: a later mismatch at
+          a call of that function points back at it *)
   mutable unmarked : (ecall * row) list;
       (** the group's calls that no marker covers, each with the row its errors
           went to, which has to end up empty *)
@@ -108,9 +109,6 @@ type env = {
       (** the errors each `attempt` of the group keeps in its [Result], and each
           `match` with `fail` arms handles, each with the parameters of the
           function and lambdas it's in *)
-  mutable includes : inclusion list;
-      (** each place the group adds one row of errors to another, most recent
-          first, finished once the group is done (see [inclusion]) *)
   mutable tag_patterns : tag_pattern list;
       (** tags matched in an error set that was still open *)
   mutable rows_due : row_due list;
@@ -233,6 +231,19 @@ and handler_needs = {
    callers have to install it explains with this (infer_top.ml). *)
 and withheld = { hfn : Path.t; hdep : string; hnote : Infer_msg.withheld }
 
+(* Something that has to hold of the group's types and rows, which can be
+   decided only once every body of the group is checked: a constraint. Each
+   carries where it comes from and what a message about it needs, and the
+   solver (solve.ml) decides them all together, once the group is done
+   (compiler.md, "The constraint solver"). *)
+and constr =
+  | Join of join  (** a use of a function of the group is its type *)
+  | Drop of drop  (** a value thrown away is `Unit` *)
+  | Value_tag of tag_pattern
+      (** a tag written as a value, `Err(Right)`, is in its error set, if the
+          set is one of its own *)
+  | Include of inclusion  (** one row of errors is in another *)
+
 (* A use of another function of the group being checked. While the group's
    bodies are being checked, each one sees the others only as their
    declarations describe them, so no body learns anything from another
@@ -244,7 +255,7 @@ and join = { jloc : Loc.t; jname : string; used : ty; target : Path.t }
 (* A statement's value, which is thrown away, so it has to be `Unit`: a
    value can't be dropped without a word (errors.md, "Nothing is
    dropped"). It's checked once the group's uses of each other are joined
-   ([dropped_values]), since a call of another function of the group
+   (by the solver), since a call of another function of the group
    learns only then what it returns. [callee] names the function, if the
    statement is a call, and [dself] the function the statement is in. *)
 and drop = { dloc : Loc.t; dty : ty; callee : string option; dself : Path.t }
@@ -304,17 +315,25 @@ and marker_kind = Mtry | Mattempt | Mmatch
    and [isrc] stays as it was, so a callee never fails with what its
    caller does. Labels known at the time are added then; those a row
    learns later (a function of the group, joined at its end) are added
-   once the group is done, by [iadd], which reports a tag with two shapes
-   at [iloc] ([ipassed] are the names added so far). A row that stands for
-   whatever a parameter fails with can't be listed, so [idst] ends in the
-   same tail instead ([ilinked], once it does). *)
+   once the group is done, by the solver, which reports a tag with two
+   shapes at [iloc] ([ipassed] are the names added so far). A row that
+   stands for whatever a parameter fails with can't be listed, so [idst]
+   ends in the same tail instead ([ilinked], once it does). *)
 and inclusion = {
   iloc : Loc.t;
   isrc : row;
   idst : row;
   iparams : (string * ty) list;
       (** the parameters of the function and lambdas where it's added *)
-  iadd : row -> unit;
+  iwithout : string list;
+      (** tags [isrc] has that aren't added: those a `try match` handles *)
+  ihere : Infer_msg.origin;
+      (** where a tag that comes in comes from, for a message about two shapes
+          of it (Infer_rows.add_errors) *)
+  isources : unit -> source list * Infer_msg.origin;
+      (** where the one already there may have come from, for the same message
+      *)
+  ifix : string -> string;  (** the help for that message, given the tag *)
   mutable ipassed : string list;
   mutable ilinked : bool;
 }
@@ -376,6 +395,14 @@ type ctx = {
   named : (string * row) list;
       (** the rows the function's signature names, `..d`, by name (ast.ml) *)
 }
+
+(* Does a row ending in [tail] belong to one of [params]? Then it stands
+   for whatever the function passed there fails with. *)
+let in_params params tail =
+  List.exists (fun (_, t) -> List.mem tail (row_vars t)) params
+
+(* Leave [c] for the solver, once the group is done. *)
+let defer env c = env.pending <- c :: env.pending
 
 (* Inside the function, an `inout` parameter is an ordinary variable. *)
 let bind_params cx params ps =

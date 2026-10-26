@@ -340,8 +340,7 @@ let rec lookup env cx ~node loc = function
       in_group cx ~node p ((List.assoc p env.group) ())
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let used = (List.assoc p env.group) () in
-      env.joins <-
-        { jloc = loc; jname = Path.local p; used; target = p } :: env.joins;
+      defer env (Join { jloc = loc; jname = Path.local p; used; target = p });
       in_group cx ~node p used
   | Global p when p = cx.self ->
       (* its own type, not generic until its group is done, so the copy
