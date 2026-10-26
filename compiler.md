@@ -78,9 +78,9 @@ it, each fact says so, and which step fixes it.
 
 - **Types.** Inference, by Hindley–Milner with levels (types.ml,
   unify.ml). Carried by every Core node and binder, in canonical form
-  (ty.ml). Today a call of a generic function doesn't say which types
-  it's used at, so the interpreter works them out again as it runs
-  (eval.ml); from R2 the call carries them, as its type arguments.
+  (ty.ml), and each use of a generic function carries the type
+  arguments it picks. Today the interpreter still works them out again
+  as it runs (eval.ml); R2 stops it.
 - **Effects.** What a function can fail with, its `!` row, and what it
   uses, its `uses` row. Inference, carried in function types. From R3,
   in the same solver as types. Today it's work deferred into fourteen
@@ -126,10 +126,10 @@ falls short it says so.
   and one way each to fail, to handle an error, to install an
   implementation and to call a dependency (core.ml). Every node has its
   type, and every function its evidence. Core Lint checks each of those
-  against the others, from scratch. From R2, every call of a polymorphic
-  function has its type arguments too. Today it doesn't: Lint checks
-  that the type a function is used at is some instance of its scheme,
-  and the interpreter finds which one each time it calls it.
+  against the others, from scratch. Every use of a polymorphic function
+  has its type arguments too, and Lint checks the type it's used at is
+  its scheme's with them put in. `ren core --types` prints them. Today
+  the interpreter still finds them again each time it calls one.
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -271,3 +271,13 @@ Where the work forced a change to the plan above:
   left, and so did exhaust.ml for the first two and the last, so it reads
   them too. The interpreter still works types out at runtime; R2 is the
   step that stops it.
+- **R2, type arguments.** They're on each use of a top-level function,
+  a member, an associated value or an intrinsic (Core's `Global`,
+  `Global_value` and `Intrinsic`), not on a call, since a function can
+  be used without being called, `let f = id`. A row variable of the
+  callee's scheme gets an argument too, a row, so they're `Ty.args`, a
+  list of types and a list of rows, rather than one list of types. A
+  function of the group being checked isn't generic yet where it's used,
+  so its arguments are found once the group is: what each of its
+  variables stands for in the type it was used at (`Types.matching`).
+  `ren core` prints as before, and `ren core --types` prints them.
