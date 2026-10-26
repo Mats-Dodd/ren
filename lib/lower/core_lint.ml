@@ -844,11 +844,15 @@ let rec globals (e : expr) =
    when the program starts. A lambda's body is followed too, as inference
    does. *)
 let value_order (prog : program) =
-  let body p =
-    Option.map
-      (fun (f : fn_def) -> f.body)
-      (List.find_opt (fun (f : fn_def) -> f.path = p) prog.fns)
+  (* each function's body by its path, found once rather than by a walk
+     of every function each time; folded from the right, so the first of
+     two with one path is the one kept, as [List.find_opt] would *)
+  let bodies =
+    List.fold_right
+      (fun (f : fn_def) m -> Path.Map.add f.path f.body m)
+      prog.fns Path.Map.empty
   in
+  let body p = Path.Map.find_opt p bodies in
   let rec walk ~seen ~made v p =
     if not (Hashtbl.mem seen p) then (
       Hashtbl.replace seen p ();
