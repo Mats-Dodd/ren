@@ -61,7 +61,12 @@ let run_start files body =
 let call ~loc (f : Ren.Core.fn_def) ev =
   let ret = match f.scheme.ty with Fun (_, t, _, _) -> t | t -> t in
   Ren.Core.mk
-    (Call (Ren.Core.mk (Global f.path) f.scheme.ty loc, [], Ren.Core.evidence ev))
+    (Call
+       ( Ren.Core.mk
+           (Global (f.path, Ren.Ty.own_args f.scheme.ty))
+           f.scheme.ty loc,
+         [],
+         Ren.Core.evidence ev ))
     ret loc
 
 (* Core Lint checks the evidence is threaded: a module with a dependency

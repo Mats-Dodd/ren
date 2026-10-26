@@ -3,9 +3,10 @@
    Lowering rewrites a lot (places, loops, temporaries), and a mistake in
    it would show up as the interpreter computing something wrong, far from
    the cause. Lint catches it at the node where it happened instead. It
-   checks that every node's type is the one its parts say it has, that
-   every local is used inside its scope with the type it was bound with,
-   that a lambda captures every local it uses, and that every constructor,
+   checks that every node's type is the one its parts say it has (a use
+   of a top-level function's, its scheme's at the type arguments it
+   carries), that every local is used inside its scope with the type it
+   was bound with, that a lambda captures every local it uses, and that every constructor,
    record and field is in the type it says, and that an error has the
    payload its set says, and that a handler's instance is only ever the
    end of its body. And that the evidence is threaded (core.ml):
@@ -185,6 +186,66 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
   in
   go s t
 
+(* [s], a scheme's type, with the type arguments [a] put in (Ty.args): the
+   n-th of [a.tys] for [Var n], and for a row ending in row variable [n],
+   the n-th of [a.rows]'s labels added to the row's, ending in its tail.
+   A canonical row has each label once, so where both have a label of one
+   name, the row's own is kept. *)
+let rec apply (a : Ty.args) (s : Ty.ty) : Ty.ty =
+  match s with
+  | Var n -> List.nth a.tys n
+  | Error -> Error
+  | Con (p, args) -> Con (p, List.map (apply a) args)
+  | Errors e -> Errors (apply_row a e)
+  | Uses u -> Uses (apply_row a u)
+  | Fun (ps, r, e, u) ->
+      Fun
+        ( List.map (fun (p : Ty.param) -> { p with ty = apply a p.ty }) ps,
+          apply a r,
+          apply_row a e,
+          apply_row a u )
+
+and apply_row a (r : Ty.row) : Ty.row =
+  let labels =
+    List.map
+      (fun (l : Ty.label) -> { l with payload = List.map (apply a) l.payload })
+      r.labels
+  in
+  match r.tail with
+  | None -> { labels; tail = None }
+  | Some n ->
+      let more : Ty.row = List.nth a.rows n in
+      let has (l : Ty.label) =
+        List.exists (fun (k : Ty.label) -> k.name = l.name) labels
+      in
+      {
+        labels =
+          Ty.sort_labels
+            (labels @ List.filter (fun l -> not (has l)) more.labels);
+        tail = more.tail;
+      }
+
+(* A use of [name], whose scheme's type is [s], at the type arguments [a]:
+   there's one for each of [s]'s variables, none of them an error, and the
+   use's type [t] is [s] with them put in. Inference picked them where it
+   found [t] (Infer.node), so this checks the two agree. *)
+let used env loc name (s : Ty.ty) (a : Ty.args) (t : Ty.ty) =
+  let own = Ty.own_args s in
+  let ntys = List.length a.tys and nrows = List.length a.rows in
+  if ntys <> List.length own.tys || nrows <> List.length own.rows then
+    fail env loc
+      (sprintf
+         "`%s` is given %d type and %d row arguments, but `%s` has %d type and \
+          %d row variables"
+         name ntys nrows (show s) (List.length own.tys) (List.length own.rows));
+  if List.exists has_error a.tys || List.exists row_has_error a.rows then
+    fail env loc (sprintf "`%s` is given an error type as a type argument" name);
+  let expected = apply a s in
+  if not (equal env t expected) then
+    fail env loc
+      (sprintf "`%s` is used at `%s`, but its type arguments make it `%s`" name
+         (show t) (show expected))
+
 let decl env loc p =
   match Hashtbl.find_opt env.types p with
   | Some td -> td
@@ -293,27 +354,17 @@ let rec expr env sc (e : expr) =
   | Local v ->
       in_scope env sc loc v;
       is ("`" ^ v.name ^ "`") v.ty
-  | Global p -> (
+  | Global (p, a) -> (
       match Hashtbl.find_opt env.schemes p with
-      | Some s when instance_of env s.ty e.ty -> ()
-      | Some s ->
-          fail env loc
-            (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
-               (Path.local p) (show e.ty) (show s.ty))
+      | Some s -> used env loc (Path.local p) s.ty a e.ty
       | None -> fail env loc (sprintf "there's no function `%s`" (Path.local p))
       )
-  | Global_value p -> (
+  | Global_value (p, a) -> (
       match Hashtbl.find_opt env.values p with
-      | Some s when instance_of env s.ty e.ty -> ()
-      | Some s ->
-          fail env loc
-            (sprintf "`%s` is used at `%s`, which isn't an instance of `%s`"
-               (Path.local p) (show e.ty) (show s.ty))
+      | Some s -> used env loc (Path.local p) s.ty a e.ty
       | None -> fail env loc (sprintf "there's no value `%s`" (Path.local p)))
-  | Intrinsic x ->
-      if not (instance_of env (Prelude.scheme x).ty e.ty) then
-        fail env loc
-          (sprintf "`%s` is used at the wrong type" (Intrinsic.name x))
+  | Intrinsic (x, a) ->
+      used env loc (Intrinsic.name x) (Prelude.scheme x).ty a e.ty
   | Dep_call { dep = p; op; fty; ev; args } -> (
       (* the operation as declared, using its dependency, and whatever the
          caller does *)
@@ -493,7 +544,7 @@ let rec expr env sc (e : expr) =
       (* every function takes the same: the evidence where it's called *)
       let what =
         match f.kind with
-        | Global p -> sprintf "a call of `%s`" (Path.local p)
+        | Global (p, _) -> sprintf "a call of `%s`" (Path.local p)
         | _ -> "a call"
       in
       current env loc what ev;
@@ -801,7 +852,7 @@ let fn_def env (f : fn_def) =
 (* The functions and values [e] names, in the order written. *)
 let rec globals (e : expr) =
   match e.kind with
-  | Global p | Global_value p -> [ p ]
+  | Global (p, _) | Global_value (p, _) -> [ p ]
   | Int _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
   | Prim (_, es)
   | Array es

@@ -64,6 +64,13 @@ let node cx id =
 
 let ty_of cx id = (node cx id).ty
 
+(* The type arguments inference found a use of a top-level function, a
+   member, an associated value or an intrinsic picked (Infer.node). *)
+let targs_of cx id =
+  match (node cx id).targs with
+  | Some a -> a
+  | None -> bug (Printf.sprintf "no type arguments for node %d" id)
+
 (* Whether inference found [id] to be a `match` with `fail` arms, or a
    `fail` arm's pattern (Infer.found). *)
 let handles cx id = (node cx id).found = Some Handles
@@ -221,9 +228,9 @@ and expr_of cx (e : expr) : C.expr =
   | Str s -> here (Str s)
   | Unit -> here Unit
   | Var (Local b) -> local (var_of cx b) e.loc
-  | Var (Global p) -> here (Global p)
-  | Var (Global_value p) -> here (Global_value p)
-  | Var (Intrinsic x) -> here (Intrinsic x)
+  | Var (Global p) -> here (Global (p, targs_of cx e.node))
+  | Var (Global_value p) -> here (Global_value (p, targs_of cx e.node))
+  | Var (Intrinsic x) -> here (Intrinsic (x, targs_of cx e.node))
   | Var (Dep_op (dep, op)) -> (
       (* used as a value: a lambda that calls it, with the evidence it's
          given where it's called *)
@@ -659,7 +666,10 @@ and plain_call cx ~changed ?last (e : expr) f args =
         in
         (* a built-in method, `xs.len()`, is built into the compiler *)
         let callee : C.kind =
-          match Prelude.find p with Some x -> Intrinsic x | _ -> Global p
+          let a = targs_of cx f.node in
+          match Prelude.find p with
+          | Some x -> Intrinsic (x, a)
+          | _ -> Global (p, a)
         in
         (mk callee (ty_of cx f.node) f.loc, [ recv ])
     | _ -> (expr cx f, [])
@@ -985,7 +995,12 @@ let start (main : C.fn_def) : C.fn_def =
   let rec install n = function
     | [] ->
         mk
-          (Call (mk (Global main.path) main.scheme.ty loc, [], C.evidence n))
+          (Call
+             ( mk
+                 (Global (main.path, Ty.own_args main.scheme.ty))
+                 main.scheme.ty loc,
+               [],
+               C.evidence n ))
           ret loc
     | (dep : Path.t) :: rest ->
         let real = Path.member dep "real" in
@@ -995,7 +1010,12 @@ let start (main : C.fn_def) : C.fn_def =
                ev = C.evidence (n + 1);
                outer = C.evidence n;
                dep;
-               impl = mk (Global_value real) (Con (dep, [ Uses Ty.closed ])) loc;
+               (* of a type with no variables *)
+               impl =
+                 mk
+                   (Global_value (real, { tys = []; rows = [] }))
+                   (Con (dep, [ Uses Ty.closed ]))
+                   loc;
                body = install (n + 1) rest;
              })
           ret loc

@@ -283,7 +283,7 @@ let%expect_test "Core Lint reports a value named as a function" =
     ~uses_b:
       (Call
          ( Ren.Core.mk
-             (Global (t_member "b"))
+             (Global (t_member "b", Ren.Ty.own_args Ren.Ty.int))
              (Fun ([], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed))
              (Ren.Loc.point ~file 1 1),
            [],
@@ -296,9 +296,13 @@ let%expect_test "Core Lint reports a value named as a function" =
     |}]
 
 let%expect_test "Core Lint reports values made out of order" =
-  values_program ~uses_b:(Global_value (t_member "b")) ~values:[ "a"; "b" ];
+  values_program
+    ~uses_b:(Global_value (t_member "b", Ren.Ty.own_args Ren.Ty.int))
+    ~values:[ "a"; "b" ];
   (* and is clean on them in order *)
-  values_program ~uses_b:(Global_value (t_member "b")) ~values:[ "b"; "a" ];
+  values_program
+    ~uses_b:(Global_value (t_member "b", Ren.Ty.own_args Ren.Ty.int))
+    ~values:[ "b"; "a" ];
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: the value `T.a` is made before `T.b`, which it uses")

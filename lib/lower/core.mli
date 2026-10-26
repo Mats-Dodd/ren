@@ -42,17 +42,19 @@ and kind =
   | Str of string
   | Unit
   | Local of var
-  | Global of Path.t
-      (** a top-level function, or a member's, [Stack.push]; [ty] is the type
-          it's used at here, an instance of its scheme. A method call,
-          [s.push(1)], is a call of its function, with [s] first. *)
-  | Global_value of Path.t
+  | Global of Path.t * Ty.args
+      (** a top-level function, or a member's, [Stack.push], and the type
+          arguments it's used at (Ty.args): [ty] is its scheme with them put in.
+          They're on the use, not on a [Call], since a function can be used
+          without being called, `let f = id`. A method call, [s.push(1)], is a
+          call of its function, with [s] first. *)
+  | Global_value of Path.t * Ty.args
       (** an associated value, [Stack.empty], which the program makes once when
-          it starts: its function of no parameters, called then. [ty] is an
-          instance of its type. *)
-  | Intrinsic of Intrinsic.t
-      (** a function built into the compiler: [show], or a method, [Array.push]
-      *)
+          it starts: its function of no parameters, called then. [ty] is its
+          type with the type arguments put in *)
+  | Intrinsic of Intrinsic.t * Ty.args
+      (** a function built into the compiler: [show], or a method, [Array.push],
+          and the type arguments it's used at, as a [Global]'s *)
   | Dep_call of {
       dep : Path.t;
       op : string;

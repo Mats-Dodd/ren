@@ -258,12 +258,12 @@ let rec eval cx env (e : expr) =
   | Str s -> VStr s
   | Unit -> VUnit
   | Local v -> !(cell env v)
-  | Global p -> VFn p
-  | Global_value p -> (
+  | Global (p, _) -> VFn p
+  | Global_value (p, _) -> (
       match Hashtbl.find_opt cx.values p with
       | Some v -> v
       | None -> bug ("the value `" ^ Path.local p ^ "` used before it's made"))
-  | Intrinsic x -> VBuiltin x
+  | Intrinsic (x, _) -> VBuiltin x
   | Dep_call { dep; op; ev; args; fty; _ } -> (
       (* the innermost implementation of [dep]: a record of functions, the
          operation's run with what was installed where it was *)
