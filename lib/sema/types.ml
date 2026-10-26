@@ -546,7 +546,7 @@ let printer ?(show_tail = fun _ -> false) ~names (st : state) =
 (* Bring the Ty printer up to date with what conversion has learned:
    the declared names of the variables, and the type parameters. *)
 let sync pr =
-  pr.ty_printer.hints <- pr.canon.names;
+  Ty.set_hints pr.ty_printer pr.canon.names;
   List.iter (fun (n, name) -> Ty.name pr.ty_printer n name) pr.canon.params;
   List.iter
     (fun (n, name) -> Ty.name_tail pr.ty_printer n name)

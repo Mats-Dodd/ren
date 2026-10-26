@@ -73,7 +73,6 @@ let array t = Con (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
 let label name = { name; payload = [] }
-let label_names r = List.map (fun l -> l.name) r.labels
 
 (* The label of the dependency declared at [p]: `Clock`, the prelude's, or
    `shop/store.Users`, another module's. [dep_path] reads it back: a
@@ -204,6 +203,10 @@ let var_name pr id =
       Hashtbl.add pr.names id n;
       pr.order <- n :: pr.order;
       n
+
+(* Replace the declared names the printer knows. types.ml's printer adds
+   to them as it converts types for a message. *)
+let set_hints pr hints = pr.hints <- hints
 
 (* Give variable [id] the name [n] up front. Unlike a name handed out by
    [var_name], it doesn't take [n] from other variables. types.ml uses it
