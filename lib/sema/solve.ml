@@ -3,13 +3,13 @@
    types and rows but can be decided only once every body is checked
    (Infer_env.constr). The solver decides them, once the group is done.
 
-   Each kind of constraint has a rank, and the solver decides every
-   constraint of one rank before it starts the next: a later rank reads
-   what an earlier one decides. Within a rank, it takes them in the order
-   they were met. Most are decided once; an inclusion, or a copy of what
-   an implementation needs, is decided again whenever the row it adds from
-   has gained a label, until none has: a worklist, which ends because rows
-   only ever gain labels, and each has finitely many to gain.
+   The solver decides every constraint of one kind before it starts the
+   next ([solve]): a later kind reads what an earlier one decides. Within
+   a kind, it takes them in the order they were met. Most are decided
+   once; an inclusion, or a copy of what an implementation needs, is
+   decided again whenever the row it adds from has gained a label, until
+   none has: a worklist, which ends because rows only ever gain labels,
+   and each has finitely many to gain.
 
    A constraint that fails is reported, and changes nothing: it's tried on
    copies of its types first (Unify.atomically), so a unification that
@@ -20,42 +20,6 @@ open Types
 open Infer_msg
 open Infer_env
 open Infer_report
-
-(* A constraint's rank: those of a lower one are decided first. A value
-   thrown away is checked after the group's uses of each other are joined,
-   since a call of another function of the group learns only then what it
-   returns. What a `with` installs is decided once every use is joined,
-   and each `with` brings the copies of what an implementation needs up
-   to date before it's decided, since what its body uses includes them. A
-   function that names its own errors' row fails with it before the error
-   sets are decided, which need it. A set gets the tags written in it
-   before what it includes from other sets, so a tag of two shapes is
-   blamed on the inclusion. A kept set is closed once it has every tag it
-   gets, and only then are the tags matched in a set checked against it.
-   The rules of markers read what every set holds, so they're checked
-   after them, and so is what an operation fails with, which has every
-   error its calls bring in by then. A row is ended in a named row only
-   once it has every label it gets, since that stops it getting more, and
-   a function's own rows after every use of a named row has ended the row
-   it's added to. What each function declares is checked last, against
-   all of that; a handler's needs with its function's. *)
-let rank = function
-  | Join _ -> 0
-  | Coerce _ -> 1
-  | Drop _ -> 2
-  | Install _ -> 3
-  | Copy _ -> 4
-  | Own_errors _ -> 5
-  | Value_tag _ -> 6
-  | Include _ -> 7
-  | Kept _ -> 8
-  | Tag_pattern _ -> 9
-  | Unmarked _ -> 10
-  | Marker _ -> 11
-  | Impl_op _ -> 12
-  | Row_due _ -> 13
-  | Own_rows _ -> 14
-  | Declared _ | Needs _ -> 15
 
 (* ---- deciding one ---- *)
 
@@ -662,40 +626,57 @@ let installs env ~copies cs =
       | _ -> (withheld, dues))
     ([], []) ws
 
-(* Decide every pending constraint, rank by rank, and take them off the
-   environment's list. [is_value] says whether a function is an associated
-   value, which a use joins by its result, and [withheld] why each
-   function of an earlier group still gets a dependency from outside. It
-   returns why each function of this group does. *)
+(* Decide every pending constraint, and take them off the environment's
+   list. [is_value] says whether a function is an associated value, which
+   a use joins by its result, and [withheld] why each function of an
+   earlier group still gets a dependency from outside. It returns why
+   each function of this group does.
+
+   They're decided kind by kind, every one of a kind before the next kind
+   starts, and each kind in the order they were met, since a later kind
+   reads what an earlier one decides. The uses of the group's functions
+   by each other are joined first, since a call of another function of
+   the group learns only then what it returns; then a handler given where
+   what's wanted wasn't known is taken as what's wanted, which is known
+   as far as it will be; then a value thrown away is checked. What a
+   `with` installs is decided next, each `with` once the copies of what
+   an implementation needs are up to date, since what its body uses
+   includes them. A function that names its own errors' row fails with it
+   before the error sets are decided, which need it. A set gets the tags
+   written in it before what it includes from other sets, so a tag of two
+   shapes is blamed on the inclusion. A kept set is closed once it has
+   every tag it gets, and only then are the tags matched in a set checked
+   against it. The rules of markers read what every set holds, so they're
+   checked after them, and so is what an operation fails with, which has
+   every error its calls bring in by then. A row is ended in a named row
+   only once it has every label it gets, since that stops it getting
+   more, and a function's own rows after every use of a named row has
+   ended the row it's added to. What each function declares is checked
+   last, against all of that; a handler's needs with its function's. *)
 let solve env ~is_value ~withheld =
   let cs = List.rev env.pending in
   env.pending <- [];
-  let of_rank r = List.filter (fun c -> rank c = r) cs in
   let is_fn_value f = is_value (Ast.fn_path env.home f) in
   let checked =
     List.filter_map (function Declared c -> Some c | _ -> None) cs
   in
-  List.iter (function Join j -> join env ~is_value j | _ -> ()) (of_rank 0);
-  List.iter
-    (function Coerce k -> Infer_coerce.coerce env k | _ -> ())
-    (of_rank 1);
-  List.iter (function Drop d -> drop env d | _ -> ()) (of_rank 2);
-  let held, dues = installs env ~copies:(of_rank 4) (of_rank 3) in
-  copies_of env (of_rank 4);
+  List.iter (function Join j -> join env ~is_value j | _ -> ()) cs;
+  List.iter (function Coerce k -> Infer_coerce.coerce env k | _ -> ()) cs;
+  List.iter (function Drop d -> drop env d | _ -> ()) cs;
+  let held, dues = installs env ~copies:cs cs in
+  copies_of env cs;
   (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
      implementation needs only what it has: a transparent parameter's
      row closes with it, which Infer_declared.check_open_rows reports *)
   List.iter
     (function
       | Copy k -> if row_end k.kdst = REmpty then close_row k.ksrc | _ -> ())
-    (of_rank 4);
+    cs;
   List.iter
     (function Own_errors c -> Infer_declared.own_errors env c | _ -> ())
-    (of_rank 5);
+    cs;
   let kept_sets =
-    List.filter_map
-      (function Kept (k, p) -> Some (k, p) | _ -> None)
-      (of_rank 8)
+    List.filter_map (function Kept (k, p) -> Some (k, p) | _ -> None) cs
   in
   (* the tags that went in are no longer checked with the patterns *)
   let added =
@@ -704,10 +685,10 @@ let solve env ~is_value ~withheld =
         | Value_tag t when value_tag env ~kept:(List.map fst kept_sets) t ->
             Some t
         | _ -> None)
-      (of_rank 6)
+      cs
   in
   worklist ~awake ~decide:(include_ env)
-    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 7));
+    (List.filter_map (function Include i -> Some i | _ -> None) cs);
   List.iter kept kept_sets;
   (* the patterns, and the tags written as values that didn't go in, in
      the order they were met *)
@@ -717,11 +698,9 @@ let solve env ~is_value ~withheld =
       | Value_tag t when not (List.memq t added) -> tag_pattern env t
       | _ -> ())
     cs;
-  List.iter
-    (function Unmarked (c, r) -> unmarked env c r | _ -> ())
-    (of_rank 10);
-  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 11);
-  List.iter (function Impl_op o -> impl_op env o | _ -> ()) (of_rank 12);
+  List.iter (function Unmarked (c, r) -> unmarked env c r | _ -> ()) cs;
+  List.iter (function Marker m -> marker env m | _ -> ()) cs;
+  List.iter (function Impl_op o -> impl_op env o | _ -> ()) cs;
   (* the uses of named rows, with those the `with`s made last, given the
      group's functions that declare what they use, by the variable their
      row ends in *)
@@ -733,13 +712,12 @@ let solve env ~is_value ~withheld =
            then Option.map (fun t -> (t, c.ffn)) (row_tail c.fcx.uses)
            else None)
          checked)
-    (List.filter_map (function Row_due d -> Some d | _ -> None) (of_rank 13)
-    @ dues);
+    (List.filter_map (function Row_due d -> Some d | _ -> None) cs @ dues);
   List.iter
     (function
       | Own_rows c -> Infer_declared.own_rows env ~is_value:is_fn_value c
       | _ -> ())
-    (of_rank 14);
+    cs;
   let needs = List.filter_map (function Needs n -> Some n | _ -> None) cs in
   List.iter
     (function
@@ -747,5 +725,5 @@ let solve env ~is_value ~withheld =
           Infer_declared.check_declared env ~is_value:is_fn_value
             ~withheld:(withheld @ held) ~needs c
       | _ -> ())
-    (of_rank 15);
+    cs;
   held

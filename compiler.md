@@ -261,7 +261,7 @@ needs, and the solver decides them like this:
 
 - **By rank.** The constraints of one kind are all decided before the
   next kind starts, because the later one reads what the earlier decides
-  (solve.ml, `rank`): the uses of the group's functions first, since a
+  (solve.ml, `solve`): the uses of the group's functions first, since a
   call of one learns only then what it returns, then the handlers taken
   as one dependency, then the values thrown away, then what each `with`
   installs and what each place an implementation is used needs, then a
