@@ -750,7 +750,8 @@ let installs env ~copies cs =
    every tag it gets, and only then are the tags matched in a set checked
    against it. The rules of markers read what every set holds, so they're
    checked after them, and so is what an operation fails with, which has
-   every error its calls bring in by then. A row is ended in a named row
+   every error its calls bring in by then; and the requirements, which
+   need every type of the group as it will be. A row is ended in a named row
    only once it has every label it gets, since that stops it getting
    more, and a function's own rows after every use of a named row has
    ended the row it's added to. What each function declares is checked
@@ -826,6 +827,9 @@ let solve env ~is_value ~withheld =
   List.iter (function Unmarked (c, r) -> unmarked env c r | _ -> ()) cs;
   List.iter (function Marker m -> marker env m | _ -> ()) cs;
   List.iter (function Impl_op o -> impl_op env o | _ -> ()) cs;
+  (* what's compared, and what's given to a function that compares it,
+     once every type of the group is known *)
+  Infer_reqs.decide env cs;
   (* the uses of named rows, with those the `with`s made last, given the
      group's functions that declare what they use, by the variable their
      row ends in *)

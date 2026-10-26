@@ -205,13 +205,15 @@ and synth env cx (e : expr) : ty =
                  ());
           v
       | Eq | Neq ->
-          (* the left side says what the right side has to be *)
+          (* the left side says what the right side has to be, and that
+             has to have `==`, which is known once the group's types are *)
           let ta = infer env cx a in
           check env cx b ta
             ~why:
               (explain ~msg:(compares name)
                  ~labels:(fun _ x -> [ (a.loc, this_is x) ])
                  ());
+          defer env (Compared { qty = ta; qloc = e.loc; qop = name });
           bool)
   | If (c, t, Some f) ->
       want_bool env Condition c (infer env cx c);
@@ -579,6 +581,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       Hashtbl.replace cx.found f.node (Method_of path);
       match repr tm with
       | TFun (self :: ps, ret, errs, uses) ->
+          blame_args cx f [ (self.ty, r.loc) ];
           (* a dependency's method takes an implementation that needs less
              than its `self` allows, as an argument does *)
           unify_at env r.loc ~found:(widen env ~loc:r.loc tr) ~expected:self.ty;
@@ -593,6 +596,26 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
             (TFun (ps, ret, errs, uses))
             args
       | _ -> nothing ())
+
+(* What the callee [f] of a call needs of a type argument is blamed on
+   the first of its arguments it's in, if one is, given as each one's
+   parameter's type and the argument's location, before they're checked
+   (Infer_env.required). A method's receiver comes first. *)
+and blame_args cx (f : expr) args =
+  Option.iter
+    (fun r ->
+      r.uat <-
+        r.uat
+        @ List.filter_map
+            (fun (id, v) ->
+              if List.mem_assoc id r.uat then None
+              else
+                List.find_map
+                  (fun (t, loc) ->
+                    if mentions v t then Some (id, loc) else None)
+                  args)
+            r.uinst)
+    (Hashtbl.find_opt cx.required f.node)
 
 (* The call [e] of [f], a function of type [tf]; [name] says which, for
    messages, [target] which function of the group it is, if it's one, and
@@ -609,6 +632,10 @@ and apply env cx (e : expr) ~name ?target ?callee (f : expr) tf args =
         report env (wrong_arity e.loc name n given);
         TError)
       else (
+        blame_args cx f
+          (List.map2
+             (fun (p : Types.param) (a : expr) -> (p.ty, a.loc))
+             ps args);
         check_args env cx ~name ?callee ps args;
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
         ret)

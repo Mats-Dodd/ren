@@ -1819,7 +1819,7 @@ fn main() = same(name(), label(1))
   [%expect
     {|
     fn name() -> Str
-    fn same<T>(a: T, b: T) -> Bool
+    fn same<T has eq>(a: T, b: T) -> Bool
     fn label(n: Int) -> Str
     fn main() -> Bool
     |}];
@@ -2039,3 +2039,304 @@ let%expect_test "a group of many calls checks in time linear in them" =
   let took = Sys.time () -. start in
   print_endline (if took < 10. then "in time" else Printf.sprintf "%.1fs" took);
   [%expect {| in time |}]
+
+(* ---- requirements (operators.md, "Generic code") ---- *)
+
+let%expect_test "comparing functions is an error, not a panic (B2)" =
+  (* it type-checked, and panicked when it ran *)
+  check_error
+    {|
+fn inc(x: Int) -> Int = x + 1
+fn main() = print(inc == inc)
+|};
+  [%expect {|
+    error: `fn(Int) -> Int` has no `==`
+      ┌─ test.ren:2:19
+    2 │ fn main() = print(inc == inc)
+      │                   ^^^^^^^^^^
+      = a type with a function in it has no `==` or `hash`
+      help: a function can't be compared: compare what it returns instead
+    |}];
+  check_error
+    {|
+fn inc(x: Int) -> Int = x + 1
+fn main() =
+  assert inc != fn(x: Int) => x
+|};
+  [%expect {|
+    error: `fn(Int) -> Int` has no `!=`
+      ┌─ test.ren:3:10
+    3 │   assert inc != fn(x: Int) => x
+      │          ^^^^^^^^^^^^^^^^^^^^^^
+      = a type with a function in it has no `==` or `hash`
+      help: a function can't be compared: compare what it returns instead
+    |}]
+
+let%expect_test "a type with a function in it has no ==" =
+  check_error
+    {|
+dep Tick =
+  now: fn() -> Int
+
+type Wrap = { tick: Tick, n: Int }
+type Shape =
+  | Circle(r: Int)
+  | Drawn(draw: fn() -> Int)
+fn fixed() -> Tick = Tick { now: fn() => 1 }
+fn main() =
+  print(fixed() == fixed())
+  print(Wrap { tick: fixed(), n: 1 } == Wrap { tick: fixed(), n: 1 })
+  print(Circle(1) == Circle(2))
+  print(Some(fn() => 1) == None)
+|};
+  [%expect {|
+    error: `Tick` has no `==`
+       ┌─ test.ren:10:9
+    10 │   print(fixed() == fixed())
+       │         ^^^^^^^^^^^^^^^^^^
+       = a type with a function in it has no `==` or `hash`
+       = an implementation of `Tick` is its operations, which are functions
+       help: compare what its operations return instead
+
+    error: `Wrap` has no `==`
+       ┌─ test.ren:11:9
+    11 │   print(Wrap { tick: fixed(), n: 1 } == Wrap { tick: fixed(), n: 1 })
+       │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = a type with a function in it has no `==` or `hash`
+       = the field `tick` of `Wrap` has a function in it
+       help: compare the parts of it that have no function in them
+
+    error: `Shape` has no `==`
+       ┌─ test.ren:12:9
+    12 │   print(Circle(1) == Circle(2))
+       │         ^^^^^^^^^^^^^^^^^^^^^^
+       = a type with a function in it has no `==` or `hash`
+       = the field `draw` of `Drawn` has a function in it
+       help: compare the parts of it that have no function in them
+
+    error: `Option<fn() -> Int>` has no `==`
+       ┌─ test.ren:13:9
+    13 │   print(Some(fn() => 1) == None)
+       │         ^^^^^^^^^^^^^^^^^^^^^^^
+       = a type with a function in it has no `==` or `hash`
+       = it has `fn() -> Int` in it
+       help: compare the parts of it that have no function in them
+    |}]
+
+let%expect_test "everything else has ==, when what's in it does" =
+  run
+    {|
+type Point = { x: Int, y: Int }
+type Shape =
+  | Dot
+  | Line(from: Point, to: Point)
+fn main() =
+  assert Line(Point { x: 1, y: 2 }, Point { x: 3, y: 4 }) != Dot
+  assert [Some("a"), None] == [Some("a"), None]
+  assert Ok(1) != Err(Gone)
+  [Point { x: 1, y: 2 }] == [Point { x: 1, y: 2 }]
+|};
+  [%expect {| true |}]
+
+let%expect_test "a generic function that compares works with Ints" =
+  run
+    {|
+fn same(a, b) = a == b
+fn main() = [same(1, 1), same(1, 2), same("a", "a")]
+|};
+  [%expect {| [true, false, true] |}]
+
+let%expect_test "a generic function that compares, given functions" =
+  (* operators.md's example, word for word *)
+  check_error
+    {|
+fn inc(x: Int) -> Int = x + 1
+fn same(a, b) = a == b
+fn main() =
+  same(inc, inc)
+|};
+  [%expect {|
+    error: `fn(Int) -> Int` has no `==`, which `same` needs
+      ┌─ test.ren:4:8
+    4 │   same(inc, inc)
+      │        ^^^
+      = a type with a function in it has no `==` or `hash`
+      help: give `same` something it can compare, without a function in it
+    |}]
+
+let%expect_test "a requirement goes through two generic functions" =
+  let src =
+    {|
+type Box<T> = { v: T }
+fn same(a, b) = a == b
+fn both<U>(a: U, b: U) -> Bool = same(a, b) && same(b, a)
+fn boxes(a, b) = both(Box { v: a }, Box { v: b })
+fn inc(x: Int) -> Int = x + 1
+fn main() = boxes(1, 2)
+|}
+  in
+  types src;
+  [%expect {|
+    fn same<T has eq>(a: T, b: T) -> Bool
+    fn both<U has eq>(a: U, b: U) -> Bool
+    fn boxes<T has eq>(a: T, b: T) -> Bool
+    fn inc(x: Int) -> Int
+    fn main() -> Bool
+    |}];
+  check_error (src ^ "fn wrong() = boxes(inc, inc)\n");
+  [%expect {|
+    error: `fn(Int) -> Int` has no `==`, which `boxes` needs
+      ┌─ test.ren:7:20
+    7 │ fn wrong() = boxes(inc, inc)
+      │                    ^^^
+      = a type with a function in it has no `==` or `hash`
+      help: give `boxes` something it can compare, without a function in it
+    |}]
+
+let%expect_test "a requirement inside a group that calls itself" =
+  (* `f` compares nothing itself, but passes its `T` to `g`, which does,
+     and `g` its `U` back to `f`: whichever is checked first, both need
+     it *)
+  let src =
+    {|
+fn f<T>(x: T, n: Int) -> Bool = if n == 0 then g(x, x, n) else f(x, n - 1)
+fn g<U>(a: U, b: U, n: Int) -> Bool = if n > 0 then f(a, n - 1) else a == b
+fn h(a, b) = a == b || k(a, b)
+fn k(a, b) = h(b, a)
+fn inc(x: Int) -> Int = x + 1
+fn main() = f(1, 3) && k("a", "b")
+|}
+  in
+  types src;
+  [%expect {|
+    fn f<T has eq>(x: T, n: Int) -> Bool
+    fn g<U has eq>(a: U, b: U, n: Int) -> Bool
+    fn h<T has eq>(a: T, b: T) -> Bool
+    fn k<T has eq>(a: T, b: T) -> Bool
+    fn inc(x: Int) -> Int
+    fn main() -> Bool
+    |}];
+  check_error (src ^ "fn wrong() = f(inc, 3)\n");
+  [%expect {|
+    error: `fn(Int) -> Int` has no `==`, which `f` needs
+      ┌─ test.ren:7:16
+    7 │ fn wrong() = f(inc, 3)
+      │                ^^^
+      = a type with a function in it has no `==` or `hash`
+      help: give `f` something it can compare, without a function in it
+    |}]
+
+let%expect_test "ren types shows what a function needs" =
+  types
+    {|
+pub fn same<T>(a: T, b: T) -> Bool = a == b
+fn two(a, b, c, d) = a == b && c == d
+fn pick(a, b, c) = if a == b then c else c
+fn main() = ()
+|};
+  [%expect {|
+    pub fn same<T has eq>(a: T, b: T) -> Bool
+    fn two<T has eq, U has eq>(a: T, b: T, c: U, d: U) -> Bool
+    fn pick<T has eq, U>(a: T, b: T, c: U) -> U
+    fn main()
+    |}]
+
+let%expect_test "a member needs something of its type's parameter" =
+  types_files
+    [
+      ("main.ren", {|
+import bag.{Bag}
+fn main() = Bag.of([1]).has(1)
+|});
+      ( "bag.ren",
+        {|
+pub type Bag<T> = { items: Array<T> }
+  pub fn of(xs: Array<T>) -> Bag<T> = Bag { items: xs }
+  pub fn has(self, x: T) -> Bool =
+    var found = false
+    for y in self.items
+      if y == x then found = true
+    found
+|}
+      );
+    ];
+  [%expect {|
+    -- bag
+    pub type Bag<T>
+      pub fn of(xs: Array<T>) -> Bag<T>
+      pub fn has<T has eq>(self, x: T) -> Bool
+
+    -- main
+    fn main() -> Bool
+    |}]
+
+let%expect_test "another module's function needs what it needs" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import util
+import bag.{Bag}
+fn inc(x: Int) -> Int = x + 1
+fn main() =
+  assert util.same(1, 1)
+  assert util.same(inc, inc)
+  assert Bag.of([inc]).has(inc)
+|}
+      );
+      ("util.ren", {|
+pub fn same<T>(a: T, b: T) -> Bool = a == b
+|});
+      ( "bag.ren",
+        {|
+pub type Bag<T> = { items: Array<T> }
+  pub fn of(xs: Array<T>) -> Bag<T> = Bag { items: xs }
+  pub fn has(self, x: T) -> Bool =
+    var found = false
+    for y in self.items
+      if y == x then found = true
+    found
+|}
+      );
+    ];
+  [%expect {|
+    error: `fn(Int) -> Int` has no `==`, which `same` needs
+      ┌─ main.ren:6:20
+    6 │   assert util.same(inc, inc)
+      │                    ^^^
+      = a type with a function in it has no `==` or `hash`
+      help: give `same` something it can compare, without a function in it
+
+    error: `fn(Int) -> Int` has no `==`, which `Bag.has` needs
+      ┌─ main.ren:7:10
+    7 │   assert Bag.of([inc]).has(inc)
+      │          ^^^^^^^^^^^^^
+      = a type with a function in it has no `==` or `hash`
+      help: give `Bag.has` something it can compare, without a function in it
+    |}]
+
+let%expect_test "a generic method called before it's checked" =
+  (* resolve.ml can't tell `mk().has` is `Bag.has`, so `main` could be
+     checked first; a generic method's type isn't known before its body
+     is, since what it needs of `T` isn't written *)
+  check_error
+    {|
+fn inc(x: Int) -> Int = x + 1
+fn mk() = Bag.of([inc])
+fn main() = mk().has(inc)
+type Bag<T> = { items: Array<T> }
+  pub fn of(xs: Array<T>) -> Bag<T> = Bag { items: xs }
+  pub fn has(self, x: T) -> Bool =
+    var found = false
+    for y in self.items
+      if y == x then found = true
+    found
+|};
+  [%expect {|
+    error: `fn(Int) -> Int` has no `==`, which `Bag.has` needs
+      ┌─ test.ren:3:13
+    3 │ fn main() = mk().has(inc)
+      │             ^^^^
+      = a type with a function in it has no `==` or `hash`
+      help: give `Bag.has` something it can compare, without a function in it
+    |}]

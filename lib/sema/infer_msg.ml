@@ -1587,6 +1587,59 @@ let others_param loc ~fn ~other ~param ~declared =
     (sprintf "`%s` would have to use `%s`, the type parameter of `%s`" fn param
        other)
 
+(* ---- requirements (operators.md, "Equality, hashing and `show`") ---- *)
+
+(* Why a type has no `==` (Infer_reqs): what in it is a function, as far
+   as a message says. *)
+type no_eq =
+  | Is_function  (** it's a function itself *)
+  | Has_function of string  (** a function type in it, shown *)
+  | Field_function of string * string
+      (** a field of a type in it, by the record's name or the constructor's,
+          and the field's, whose type has a function in it *)
+  | Implementation of string
+      (** it's, or there's in it, an implementation of the dependency named *)
+  | Handler of string
+      (** it's, or there's in it, a handler of several dependencies, named after
+          its `handler` *)
+
+(* [shown] has no `==`, at [loc]: compared there with [op], `==` or `!=`,
+   or given to [by], which compares what it's given (operators.md,
+   "Generic code"). *)
+let no_eq loc ~shown ~op ~by why =
+  let msg =
+    match by with
+    | None -> sprintf "`%s` has no `%s`" shown op
+    | Some f -> sprintf "`%s` has no `==`, which `%s` needs" shown f
+  in
+  let inside =
+    match why with
+    | Is_function -> []
+    | Has_function f -> [ sprintf "it has `%s` in it" f ]
+    | Field_function (t, f) ->
+        [ sprintf "the field `%s` of `%s` has a function in it" f t ]
+    | Implementation d ->
+        [
+          sprintf
+            "an implementation of `%s` is its operations, which are functions" d;
+        ]
+    | Handler h ->
+        [ sprintf "a `%s` handler is its operations, which are functions" h ]
+  in
+  let help =
+    match (by, why) with
+    | Some f, _ ->
+        sprintf "give `%s` something it can compare, without a function in it" f
+    | None, Is_function ->
+        "a function can't be compared: compare what it returns instead"
+    | None, (Implementation _ | Handler _) ->
+        "compare what its operations return instead"
+    | None, _ -> "compare the parts of it that have no function in them"
+  in
+  Diag.make loc ~help
+    ~notes:("a type with a function in it has no `==` or `hash`" :: inside)
+    msg
+
 (* The public value [fn], named [name] where it's declared, without a
    type: it's [shown]. *)
 let untyped_value loc ~name ~fn shown =

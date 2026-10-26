@@ -81,7 +81,8 @@ error: `Duration` has no `+` that takes a `Time`
 
 - **A type with a function in it has no `==` or `hash`.** It's known from
   the type, so comparing functions is a compile error, never a runtime
-  panic.
+  panic. An implementation of a dependency, and a handler, is its
+  operations, which are functions, so it has none either.
 - **A type with a `Float` in it has `==` but no `hash`,** so it can't be a
   map key: `NaN` isn't equal to itself, and a key that's `NaN` could never
   be found again.

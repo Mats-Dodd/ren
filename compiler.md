@@ -91,8 +91,10 @@ it, each fact says so, and which step fixes it.
   parameter, such as `eq` for `==`. Inference, in the same solver; never
   written, on a public function either (operators.md, "Generic code").
   Carried in the scheme, the interface, and as hidden dictionary
-  parameters in Core. Today there are none: `==` takes two values of any
-  one type, and panics at runtime on functions.
+  parameters in Core. Inferred since R4, and carried in schemes and
+  interfaces (infer_reqs.ml): `==` on a type with a function in it is a
+  compile error. Core doesn't pass dictionaries yet, so the interpreter
+  still compares values by walking them.
 - **Lambda sets.** From R4. Which lambdas and functions a value of a
   function type can be. Inference, in the same solver, as a hidden third
   row of a function type beside `!` and `uses`. Carried in Core's types,
@@ -256,6 +258,17 @@ The constraints:
   fails with what its signature says, a public one's transparent
   parameters keep their rows open, and a handler needs no more than it
   declares, and never itself.
+- **What `==` and `!=` compare has `eq`** (infer_reqs.ml): the type of
+  their sides, once it's known. A type variable that has to have it
+  passes that on to the function it's in, which then needs it of its
+  type parameter, `same<T has eq>`; a type with a function in it is an
+  error where it's compared.
+- **A use of a function that needs something of its type parameters**
+  needs it of what it puts in their place: an error at the argument it's
+  in, if that can't have it, or passed on again, if it's a type variable
+  too. A function of the group needs what its body is found to, which
+  can grow as the others' uses of each other are decided, so these are
+  decided in rounds until one finds nothing new.
 
 So a group is checked in two steps (infer_top.ml, `check_group`): every
 body, then the solver. Nothing runs between them, and after the solver
@@ -274,7 +287,8 @@ needs, and the solver decides them like this:
   row, each set's own tags, the inclusions, and the kept sets closed and
   the tags matched in them checked. The checks that only report, like a
   marker's rules or what an operation fails with, read the result after
-  all of them; a row ends in a named row after that, and what each
+  all of them, and so do the requirements, which need every type the
+  group will have; a row ends in a named row after that, and what each
   function declares is checked last.
 - **To a fixpoint.** A use or a value thrown away is decided once. An
   inclusion, or a copy of what an implementation needs, is a worklist
@@ -295,7 +309,9 @@ The answer doesn't depend on the order the constraints were met, which
 is the order their bodies were checked in. Unification finds the most
 general solution whatever order it's given the equalities in. An
 inclusion only adds labels, so each row ends up with the union of what's
-included in it, whatever order they're added in. A check that reads a
+included in it, whatever order they're added in, and a requirement only
+adds to what a variable needs, so each needs what any use or `==` says
+it does. A check that reads a
 result is decided after whatever decides it, so it never sees half of it.
 And a constraint that fails changes nothing, so it can't change what
 another sees. What order does decide is only which of two constraints
@@ -318,7 +334,9 @@ function whose group hasn't been checked, or put that function in the
 caller's group once the caller is checked. Each time adds an edge the
 graph didn't have, so it ends, and a method whose signature is written
 out in full never needs it, since its type is known before it's
-checked.
+checked, unless it's generic: what it needs of its type parameters
+isn't written, so a generic method is known only once its body is
+checked, like any other function.
 
 ## Stage 10.0
 
@@ -580,3 +598,54 @@ Where the work forced a change to the plan above:
   Right>`, is accepted, and so is giving `h` that `if` through a `let`,
   before or after the kept set meets `mk2`'s (test_errors.ml, "a kept
   set equal to a declared Result too takes its tags").
+- **R4, where a requirement is kept.** Inference's schemes are types
+  with generic variables (types.ml), not `Ty.scheme`s, so what a
+  variable needs is kept by the variable's id, in the state every part
+  of inference shares (`Types.needs`), as a type parameter's name is: a
+  generic variable's are its scheme's requirements, which canonical form
+  puts in `Ty.scheme.reqs`, and an interface's scheme read back gives its
+  variables theirs. A type parameter, while its function is checked,
+  keeps what its body is found to need, which its generic variable takes
+  when the function is generalized.
+- **R4, which types have `eq`.** operators.md says a type with a function
+  in it has none. An implementation of a dependency, and a handler of
+  several, are their operations, which are functions, so they have none
+  either, and neither does a type with one in it: comparing two `Clock`s
+  is an error, not a comparison of what's inside. Three things are taken
+  to have `eq` that the plan doesn't decide. An opaque type of another
+  module, whose interface hides what it's represented as, since saying
+  it had none would make `UserId == UserId` an error in every module but
+  its own; one represented as a function would still panic when
+  compared, until an interface says what its types have. A tag of an
+  error set the set's tail may still bring in, what a function it was
+  passed fails with, since a requirement on a row would be a kind of
+  its own, and no tag holds a function in any program so far. And a
+  type's type arguments all have to have it, even one the type doesn't
+  hold a value of, `Tag<fn()>` for a `type Tag<T> = opaque Int`, which is
+  what "a type with a function in it" reads as.
+- **R4, interfaces.** The interface is still made from declarations, but
+  what a public function needs of its type parameters isn't declared, so
+  the driver, which checks that inference found what the interface says,
+  now ignores requirements in that check and puts inference's in the
+  interface. That's the "Interfaces" part of R4 done early, as far as
+  `eq` goes: without it, a public generic function that compares would
+  fail that check.
+- **R4, a generic method used before it's checked.** A method whose
+  signature is written out in full had its declared type before its body
+  was checked, so a dot call of it needn't come after it. A generic one
+  no longer does: what it needs of its type parameters is known only
+  from its body, so a dot call of it that resolve.ml couldn't tell is
+  found by checking, as for any other method (`Unchecked`), and checked
+  after it (test_infer.ml, "a generic method called before it's
+  checked").
+- **R4, printing requirements.** `ren types` prints each type parameter
+  with what it needs, `<T has eq, U>`, named as it was before, so one
+  without a written name is `T`, `U`, ... in the order it appears. A
+  member of a type doesn't list its type's parameters, but one that
+  needs something of one lists that one, `fn has<T has eq>(self, x: T)`,
+  since nothing else would say it.
+- **R4, where a call that can't have a requirement is reported.** At the
+  first argument the type parameter is in, as operators.md's example
+  points at `inc`, the receiver first for a method; at the function's
+  name if it's in no argument, or the function is used as a value, `let
+  s = same`.

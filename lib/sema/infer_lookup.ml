@@ -307,13 +307,27 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
 let group_call env p =
   List.mem_assoc p env.group && not (List.mem p env.spelled)
 
+(* The use of [p] at [node], [loc], which put [inst] in place of its
+   variables, needs what [p] does of them, whichever of them it is: it's
+   decided once the group's types are known (see [Infer_env.required]). *)
+let require env cx ~node loc p inst =
+  if inst <> [] then (
+    let r =
+      { uname = Path.local p; uloc = loc; uinst = inst; uat = []; udone = [] }
+    in
+    Hashtbl.replace cx.required node r;
+    defer env (Required r))
+
 (* A fresh instance of the scheme of [p], a function of an earlier group
    or another module, or an intrinsic, recording the type arguments it
-   picked at [node]. *)
-let fresh env cx ~node p =
+   picked at [node], [loc]. *)
+let fresh env cx ~node loc p =
   let t, s = instantiate env.st (Hashtbl.find env.globals p) in
   Hashtbl.replace cx.targs node
     { tcallee = p; tvalue = false; tpicked = Fresh s };
+  (* only a variable that needs something can make the use need it *)
+  require env cx ~node loc p
+    (List.filter (fun (id, _) -> needs env.st id <> []) s.tys);
   t
 
 (* [p], a function of the group being checked, is used at [node] at the
@@ -363,10 +377,13 @@ let rec lookup env cx ~node loc = function
          it's an instance of that, joined with nothing: a use that closes
          its rows, like storing it as a `fn()`, closes only the instance's *)
       let g = List.assoc p env.group in
-      in_group cx ~node p (replace (own_instance env g) (g.declared ()))
+      let inst = own_instance env g in
+      require env cx ~node loc p inst.tys;
+      in_group cx ~node p (replace inst (g.declared ()))
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let g = List.assoc p env.group in
       let jinst = own_instance env g in
+      require env cx ~node loc p jinst.tys;
       let used = replace jinst (g.declared ()) in
       defer env
         (Join { jloc = loc; jname = Path.local p; used; target = p; jinst });
@@ -376,8 +393,8 @@ let rec lookup env cx ~node loc = function
          is the same type *)
       in_group cx ~node p
         (fst (instantiate env.st (Hashtbl.find env.globals p)))
-  | Global p -> fresh env cx ~node p
-  | Intrinsic x -> fresh env cx ~node (Intrinsic.path x)
+  | Global p -> fresh env cx ~node loc p
+  | Intrinsic x -> fresh env cx ~node loc (Intrinsic.path x)
   | Dep_op (p, op) -> (
       (* the operation as declared, which uses its dependency: a call
          adds it to the caller's `uses` *)

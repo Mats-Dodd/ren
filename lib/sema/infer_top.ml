@@ -871,13 +871,18 @@ let add_globals env ~imports ~reachable fns =
     reachable;
   (* a method whose signature is written out in full has the type its
      declaration gives it, as it does in its interface, even before it's
-     checked: a dot call of it needn't come after it (Resolve.t.methods) *)
+     checked: a dot call of it needn't come after it (Resolve.t.methods).
+     Unless it's generic: what it needs of its type parameters is known
+     only once its body is checked, so a call of it has to come after
+     that, or be in its group (Infer_env.Unchecked) *)
   List.iter
     (fun (f : fn_def) ->
       match f.params with
       | p :: _ when p.pname.ident.name = "self" && Ast.spelled f ->
-          Hashtbl.replace env.globals (Ast.fn_path env.home f)
-            (of_scheme env.st (Iface.signature ~sets:env.sets f))
+          let s = Iface.signature ~sets:env.sets f in
+          if (Ty.own_args s.ty).tys = [] then
+            Hashtbl.replace env.globals (Ast.fn_path env.home f)
+              (of_scheme env.st s)
       | _ -> ())
     fns
 
@@ -979,6 +984,7 @@ let setup env ~is_value (f : fn_def) =
       found = Hashtbl.create 16;
       as_dep = Hashtbl.create 4;
       targs = Hashtbl.create 16;
+      required = Hashtbl.create 4;
       errs;
       uses;
       calls = ref [];

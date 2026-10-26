@@ -310,6 +310,35 @@ and constr =
   | Coerce of coerce
       (** a handler of several dependencies is taken as one of them where a
           value of its type is wanted *)
+  | Compared of compared  (** the type of what `==` compares has `eq` *)
+  | Required of required
+      (** a use of a function that needs something of its type parameters: what
+          it puts in their place has it *)
+
+(* `a == b` or `a != b`, at [qloc]: both sides are of type [qty], which has
+   to have `eq` (operators.md, "Equality, hashing and `show`"). It's
+   decided once the group's types are known, by the solver: a type
+   variable of the group then passes the requirement on to the function
+   it's in, which needs it of whatever it's given (Infer_reqs). [qop] is
+   the operator, for a message. *)
+and compared = { qty : ty; qloc : Loc.t; qop : string }
+
+(* A use, at [uloc], of the function [uname], which may need something of
+   its type parameters, `eq` of its `T`: whatever the use put in their
+   place has to have it. [uinst] is what it put there, by the id of the
+   variable each replaced, a generic variable of an earlier group's
+   function or another module's, or a type parameter of a function of the
+   group, whose needs are known only once the group's bodies are, so the
+   solver decides them all together. A call points at the argument each
+   is passed in, [uat], as the message's location. [udone] are the
+   requirements passed on so far, by the variable's id. *)
+and required = {
+  uname : string;
+  uloc : Loc.t;
+  uinst : (int * ty) list;
+  mutable uat : (int * Loc.t) list;
+  mutable udone : (int * string) list;
+}
 
 (* A value [cvalue] of type [cfound], a handler of several dependencies,
    given where a value of type [cwanted] is wanted, which wasn't known
@@ -468,6 +497,9 @@ and ctx = {
           (Infer_coerce.as_one) *)
   targs : (int, targs) Hashtbl.t;
       (** the type arguments of each use of a top-level function, by node id *)
+  required : (int, required) Hashtbl.t;
+      (** what each use of a top-level function needs of its type arguments, by
+          node id, so a call of it can say which argument each is in *)
   errs : row;  (** the errors of the innermost function or lambda *)
   uses : row;  (** the dependencies of the innermost function or lambda *)
   handler : row;
