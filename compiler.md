@@ -515,4 +515,12 @@ Where the work forced a change to the plan above:
   something else. That comparison's message is the plain mismatch of two
   types, which says nothing about why they differ, so a mismatch between
   two `Result`s, one of which holds a tag the other's closed set can't,
-  now says so in a note (`Infer_msg.Holds_beyond`).
+  now says so in a note (`Infer_msg.Holds_beyond`). Once its group is
+  done, such a set is a type like any other, the one `ren types` prints:
+  what an `attempt` keeps can meet it and take its tags, as it can a
+  declared `Result` that holds more (test_errors.ml, "attempt keeps the
+  outcome, and try fails with it again", passes `attempt busy()` where
+  `NotFound(Int) | Busy` is wanted). Only a tag written in the group
+  where it meets a kept set is checked against it. Telling a set made of
+  written tags from a declared one in a later group, or another module,
+  would need where its tags came from kept in schemes and interfaces.
