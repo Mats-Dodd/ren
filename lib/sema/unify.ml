@@ -125,3 +125,73 @@ and rewrite st row (label : label) =
       cell := RLink (RExtend (label, rest));
       rest
   | RVar { contents = RLink _ } -> assert false
+
+(* ---- trying a unification first ----
+
+   Unification changes types as it goes, so one that fails partway leaves
+   them half changed: a variable bound, the next label refused. The
+   constraint solver (solve.ml) never lets that happen. It tries a
+   unification on copies of the types first, and does it for real only if
+   that worked, so a failure changes nothing anything else sees. *)
+
+(* A way to copy types: each variable still unbound gets a cell of its own,
+   with the same id, so the copies are unified exactly as the originals
+   would be, and print the same. A variable met twice gets the one copy,
+   since the copies have to share what the originals share. *)
+type copy = { ty : ty -> ty; row : row -> row }
+
+let copier () =
+  (* only looked up, by id, never walked, so their order never shows *)
+  let tys = Hashtbl.create 16 and rows = Hashtbl.create 16 in
+  let rec ty t =
+    match repr t with
+    | TVar { contents = Unbound (id, l) } -> (
+        match Hashtbl.find_opt tys id with
+        | Some c -> c
+        | None ->
+            let c = TVar (ref (Unbound (id, l))) in
+            Hashtbl.replace tys id c;
+            c)
+    | TVar { contents = Link _ } -> assert false
+    | TCon (p, args) -> TCon (p, List.map ty args)
+    | TFun (ps, r, e, u) ->
+        TFun
+          ( List.map (fun (p : param) -> { p with ty = ty p.ty }) ps,
+            ty r,
+            row e,
+            row u )
+    | TErrors r -> TErrors (row r)
+    | TUses r -> TUses (row r)
+    | (TSkol _ | TError) as t -> t
+  and row r =
+    match repr_row r with
+    | RVar { contents = RUnbound (id, l) } -> (
+        match Hashtbl.find_opt rows id with
+        | Some c -> c
+        | None ->
+            let c = RVar (ref (RUnbound (id, l))) in
+            Hashtbl.replace rows id c;
+            c)
+    | RVar { contents = RLink _ } -> assert false
+    | RExtend (l, rest) ->
+        RExtend ({ l with payload = List.map ty l.payload }, row rest)
+    | (REmpty | RSkol _) as r -> r
+  in
+  { ty; row }
+
+(* The types themselves, for doing it for real. *)
+let originals = { ty = Fun.id; row = Fun.id }
+
+(* Run [f], which unifies what it's given through a [copy], first on the
+   copies [c] makes, with a state of its own, so the new variables it
+   makes don't count; and if that worked, again on the types themselves,
+   which then can't fail. If it failed, it says how, and nothing but the
+   copies changed: [c] gives them back, as far as it got, for a message.
+   [{ st with level = st.level }] is a new record with the same fields,
+   whose counters change without changing [st]'s. *)
+let atomically st c f =
+  match f { st with level = st.level } c with
+  | () ->
+      f st originals;
+      Ok ()
+  | exception ((Mismatch | Infinite | Two_shapes _) as failure) -> Error failure

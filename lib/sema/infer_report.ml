@@ -71,12 +71,15 @@ let explain ?msg ?(notes = []) ?help ?help_of ?(labels = fun _ _ -> []) () =
 
 let plain = explain ()
 
-(* Unify [found] (what the code has) with [expected] (what it needs), and
-   say whether that worked. *)
-let unifies env why loc ~found ~expected =
-  match Unify.unify env.st found expected with
-  | () -> true
-  | exception ((Unify.Mismatch | Unify.Two_shapes _) as failure) ->
+(* Report that [found] (what the code has) didn't unify with [expected]
+   (what it needs), which failed with [failure], explained with [why]. *)
+let mismatch env why loc ~found ~expected failure =
+  match failure with
+  | Unify.Infinite ->
+      let pr = printer env in
+      report env
+        (contains_itself loc ~found:(show pr found) ~expected:(show pr expected))
+  | failure ->
       let pr = printer env in
       let f = show pr found and x = show pr expected in
       (* two types that print the same differ in a row's tail, which is
@@ -211,12 +214,15 @@ let unifies env why loc ~found ~expected =
       report env
         (mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
            ~found ~expected ~f ~x
-           (needs_more @ errors @ private_ @ handler));
-      false
-  | exception Unify.Infinite ->
-      let pr = printer env in
-      report env
-        (contains_itself loc ~found:(show pr found) ~expected:(show pr expected));
+           (needs_more @ errors @ private_ @ handler))
+
+(* Unify [found] with [expected], and say whether that worked. *)
+let unifies env why loc ~found ~expected =
+  match Unify.unify env.st found expected with
+  | () -> true
+  | exception
+      ((Unify.Mismatch | Unify.Two_shapes _ | Unify.Infinite) as failure) ->
+      mismatch env why loc ~found ~expected failure;
       false
 
 let unify_at env ?msg ?notes ?help ?labels loc ~found ~expected =

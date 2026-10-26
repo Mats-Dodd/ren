@@ -54,9 +54,14 @@ val explain :
 (* No explanation beyond the types themselves. *)
 val plain : why
 
-(* Unify [found] (what the code has) with [expected] (what it needs), and
-   say whether that worked; if not, the mismatch is reported at the
-   location given, explained with [why]. *)
+(* Report that [found] (what the code has) didn't unify with [expected]
+   (what it needs), at the location given, explained with [why]: the
+   exception is how unifying them failed (Unify). *)
+val mismatch :
+  env -> why -> Loc.t -> found:Types.ty -> expected:Types.ty -> exn -> unit
+
+(* Unify [found] with [expected], and say whether that worked; if not, the
+   mismatch is reported, as [mismatch] does. *)
 val unifies : env -> why -> Loc.t -> found:Types.ty -> expected:Types.ty -> bool
 
 (* The same, explained with these, whatever came of it. *)
