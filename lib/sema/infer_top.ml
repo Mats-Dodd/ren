@@ -429,13 +429,13 @@ let runtime_dep (p : Path.t) =
 
 (* Why the call [c], which brings in the dependency [dep], does: the
    function it calls calls a closure inside a `with` of [dep] that still
-   gets it from outside (see [settle_installs]). *)
-let withheld_notes env dep (c : call option) =
+   gets it from outside, which [withheld] says (Infer_env.withheld). *)
+let withheld_notes withheld dep (c : call option) =
   match c with
   | Some { callee = Some p; _ } ->
       List.filter_map
         (fun w -> if w.hfn = p && w.hdep = dep then Some w.hnote else None)
-        env.withheld
+        withheld
   | _ -> []
 
 (* Report each dependency [f]'s body uses that it doesn't declare, at the
@@ -447,7 +447,7 @@ let withheld_notes env dep (c : call option) =
    call whose row has it now. For the program's `main` ([main]), one the
    runtime doesn't install is left to [check_main]: adding it to `uses`
    wouldn't help. *)
-let check_uses env ~is_value ~main (f : fn_def) cx declared =
+let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
   let pos (l : Loc.t) = (l.start.line, l.start.col) in
   let calls =
     List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(cx.calls)
@@ -466,7 +466,7 @@ let check_uses env ~is_value ~main (f : fn_def) cx declared =
           | Some c -> Some c
           | None -> first (fun c -> List.mem dep (row_names c.row))
         in
-        let why = withheld_notes env dep call in
+        let why = withheld_notes withheld dep call in
         let call =
           Option.map
             (fun c -> (c.cloc, if c.needs then Installing else Call_uses))
@@ -773,83 +773,6 @@ let own_error_rows env (fns : (fn_def * ctx) list) =
       | _ -> ())
     fns
 
-(* Each `with` of the group that installs (see [install]): its body uses
-   no more than what it installs and what's installed outside it. Inner
-   `with`s are settled first, since what their bodies use is part of what
-   the outer ones' do. Each body's labels but the one installed are added
-   to the outer row. If the body's row is the outer one already, as for a
-   closure called both in the body and outside it, or another function
-   of the group that calls this one back, that's all. (A function calling
-   itself gets a copy of its own row, Infer_rows.use_row.) A row that's still open stands for
-   what a closure the body calls uses, an inferred parameter's, say: it
-   may use what's installed too, and the rest of it is what's outside.
-   Unless another `with` calls the same closure: then it's what's outside
-   them all, more than it needs if it uses what one installs, never
-   less. *)
-let settle_installs env =
-  let ws = List.rev env.installs in
-  let dep_name w = env.names (Ty.dep_path w.wdep) in
-  (* the `with` [w] doesn't give what's called inside it [w.wdep] *)
-  let withhold w hnote =
-    (* the first reason found is the one given *)
-    if
-      not
-        (List.exists (fun h -> h.hfn = w.wself && h.hdep = w.wdep) env.withheld)
-    then env.withheld <- { hfn = w.wself; hdep = w.wdep; hnote } :: env.withheld
-  in
-  (* how many bodies end in each row that's still open *)
-  let tails = List.filter_map (fun w -> row_tail w.wbody) ws in
-  let shared id = List.length (List.filter (( = ) id) tails) > 1 in
-  List.iter
-    (fun w ->
-      (* what the body learns from an implementation used in it, first *)
-      Solve.copies env;
-      let labels, tail = row_parts w.wbody in
-      let rest = List.filter (fun (l : label) -> l.name <> w.wdep) labels in
-      let into r =
-        try
-          Unify.unify_row env.st r w.wouter;
-          true
-        with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ -> false
-      in
-      let ok =
-        match row_end w.wbody with
-        | _ when tail <> None && tail = row_tail w.wouter ->
-            (* the same row: everything it uses but [wdep] is outside too *)
-            withhold w (Same_row { fn = Path.local w.wself; dep = dep_name w });
-            let outer = row_names w.wouter in
-            List.for_all (fun (l : label) -> List.mem l.name outer) rest
-        | RVar _ as t
-          when List.length rest = List.length labels
-               && not (shared (Option.get tail)) ->
-            (* it may use [wdep] too, as a closure the body calls may *)
-            let t' = fresh_row env.st in
-            Unify.unify_row env.st t (RExtend (dep w.wdep, t'));
-            into (extend rest t')
-        | RVar _ as t ->
-            if List.length rest = List.length labels then
-              withhold w
-                (Several_withs { fn = Path.local w.wself; dep = dep_name w });
-            into (extend rest t)
-        | RSkol (id, n) ->
-            (* a named row: what's outside ends in it too *)
-            defer env
-              (Row_due
-                 {
-                   rloc = w.wloc;
-                   rinto = w.wouter;
-                   rnamed = (id, n);
-                   rwhat = With_body;
-                 });
-            into (extend rest (fresh_row env.st))
-        | REmpty | RExtend _ -> into (extend rest (fresh_row env.st))
-      in
-      if not ok then
-        report env
-          (with_body_uses w.wloc (List.map (fun (l : label) -> l.name) rest)))
-    ws;
-  env.installs <- []
-
 (* ---- associated values ----
 
    An associated value is made once, when the program starts, before
@@ -972,7 +895,8 @@ type runner = {
    install one, with a function that makes an implementation if there is
    one: one of the module's own functions, [fns], whose type [schemes]
    has, or a member of the dependency. *)
-let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
+let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
+    (f : fn_def) ty cx =
   (* what it lists, if it lists any, and what its body uses: [check_uses]
      leaves a dependency the runtime doesn't install to this *)
   let uses =
@@ -1092,7 +1016,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
           with
           | Some c ->
               ( [ (c.cloc, if c.needs then Installing else Call_uses) ],
-                withheld_notes env dep (Some c) )
+                withheld_notes withheld dep (Some c) )
           | None -> ([], [])
         in
         let needs, why = needs in
@@ -1104,8 +1028,8 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~run (f : fn_def) ty cx =
 
 (* The runtime installs exactly the built-in dependencies `main` uses, as
    the outermost implementations (deps.md, "`main`"). *)
-let check_main env r ~fns ~schemes (f : fn_def) ty cx =
-  check_installed env r ~fns ~schemes f ty cx
+let check_main env r ~fns ~schemes ~withheld (f : fn_def) ty cx =
+  check_installed env r ~fns ~schemes ~withheld f ty cx
     ~run:
       {
         installs = runtime_dep;
@@ -1117,7 +1041,8 @@ let check_main env r ~fns ~schemes (f : fn_def) ty cx =
 (* A test gets the test implementation of each built-in dependency, and
    the dependency that controls it, unless it gets the real one (deps.md,
    "Tests"): [t] says which, and [f] is its function (test_items.ml). *)
-let check_test env r ~fns ~schemes (t : Test_items.test) (f : fn_def) ty cx =
+let check_test env r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
+    ty cx =
   (* the built-in dependency the prelude's [c] controls: `Clock` for
      `TestClock` *)
   let control c =
@@ -1145,7 +1070,7 @@ let check_test env r ~fns ~schemes (t : Test_items.test) (f : fn_def) ty cx =
       (fun (d, _) -> if List.mem d t.real then None else Some d)
       Test_items.defaults
   in
-  check_installed env r ~fns ~schemes f ty cx
+  check_installed env r ~fns ~schemes ~withheld f ty cx
     ~run:
       {
         installs;
@@ -1266,8 +1191,6 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       pending = [];
       forced = [];
       handler_needs = [];
-      installs = [];
-      withheld = [];
       in_state = false;
       in_scope = [];
     }
@@ -1329,6 +1252,9 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
   List.iter (check_transparent sink) fns;
   let schemes = Hashtbl.create 16 in
   let tables = Hashtbl.create 16 in
+  (* why each function checked so far still gets a dependency from
+     outside, which the solver finds (Infer_env.withheld) *)
+  let withheld = ref [] in
   List.iter
     (fun group ->
       enter_level env.st;
@@ -1475,24 +1401,26 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
         setups;
       (* every use of a function by another of its group, joined with the
          type its own body gave it, and then the values thrown away *)
-      Solve.solve env ~is_value:is_value_path Equalities;
-      settle_installs env;
-      Solve.solve env ~is_value:is_value_path Needs;
+      ignore (Solve.solve env ~is_value:is_value_path Equalities);
+      (* what each `with` installs, and what each place an implementation
+         is used needs *)
+      withheld := !withheld @ Solve.solve env ~is_value:is_value_path Needs;
       (* only now, with the group's uses of each other joined, is it known
          everything each function uses and fails with *)
       own_error_rows env (List.map (fun (f, _, cx, _, _) -> (f, cx)) setups);
       (* what each error set holds, and then the rules of markers *)
-      Solve.solve env ~is_value:is_value_path Error_rows;
+      ignore (Solve.solve env ~is_value:is_value_path Error_rows);
       (* the uses of named rows, ending the rows they're added to, and
          then each function's own *)
-      Solve.solve env ~is_value:is_value_path
-        (Named_rows
-           (List.filter_map
-              (fun ((f : fn_def), _, cx, _, _) ->
-                if declared_uses ~is_value f <> None then
-                  Option.map (fun t -> (t, f)) (row_tail cx.uses)
-                else None)
-              setups));
+      ignore
+      @@ Solve.solve env ~is_value:is_value_path
+           (Named_rows
+              (List.filter_map
+                 (fun ((f : fn_def), _, cx, _, _) ->
+                   if declared_uses ~is_value f <> None then
+                     Option.map (fun t -> (t, f)) (row_tail cx.uses)
+                   else None)
+                 setups));
       own_named_rows env
         (List.map
            (fun ((f : fn_def), _, cx, _, _) ->
@@ -1503,7 +1431,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
       List.iter
         (fun ((f : fn_def), skolems, cx, _, _) ->
           Option.iter
-            (check_uses env ~is_value
+            (check_uses env ~is_value ~withheld:!withheld
                ~main:(entry <> None && path f = Path.make home "main")
                f cx)
             (declared_uses ~is_value f);
@@ -1636,7 +1564,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
   | Some (_, Some f) when f.params <> [] ->
       report env (main_params (List.hd f.params).pname.ident.loc)
   | Some (_, Some f) ->
-      check_main env r ~fns ~schemes f
+      check_main env r ~fns ~schemes ~withheld:!withheld f
         (Hashtbl.find schemes (path f))
         (Hashtbl.find tables (path f)));
   List.iter
@@ -1645,7 +1573,7 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
         List.find_opt (fun (f : fn_def) -> path f = Path.make home t.fn) fns
       with
       | Some f ->
-          check_test env r ~fns ~schemes t f
+          check_test env r ~fns ~schemes ~withheld:!withheld t f
             (Hashtbl.find schemes (path f))
             (Hashtbl.find tables (path f))
       | None -> ())

@@ -100,14 +100,9 @@ type env = {
       (** each statement that threw away a value of a type still unknown, which
           the solver made `Unit`, with the function it's in: a later mismatch at
           a call of that function points back at it *)
-  mutable installs : install list;
-      (** the group's `with`s that install, innermost first (see [install]) *)
   mutable handler_needs : handler_needs list;
       (** the group's handlers, whose needs are checked once it's done (see
           [handler_needs]) *)
-  mutable withheld : withheld list;
-      (** the module's functions that call a closure in a `with` that doesn't
-          install what the closure uses (see [withheld]) *)
   mutable in_state : bool;
       (** whether the code being checked is a handler's state, which can't fail,
           for a message when something in it does *)
@@ -165,8 +160,8 @@ and impl_op = {
    is what the body's calls use, and that has to be no more than [wdep]
    and what's installed outside, [wouter]. That's an inclusion, not an
    equality: a closure called both in the body and outside it uses what
-   the outside does, which is less than the body can. It's settled once
-   the group is done (infer_top.ml), when every call of the group knows
+   the outside does, which is less than the body can. It's decided once
+   the group is done, by the solver, when every call of the group knows
    what it uses. *)
 and install = {
   wloc : Loc.t;
@@ -208,9 +203,10 @@ and handler_needs = {
   ncalls : call list ref;
 }
 
-(* A dependency [hdep] that a closure [hfn] calls inside a `with` of it
-   still gets from outside, and why ([hnote]): a message that says its
-   callers have to install it explains with this (infer_top.ml). *)
+(* A dependency [hdep] that a function [hfn] calls inside a `with` of it
+   still gets from outside, and why ([hnote]), which the solver finds as
+   it decides what each `with` installs: a message that says its callers
+   have to install it explains with this (infer_top.ml). *)
 and withheld = { hfn : Path.t; hdep : string; hnote : Infer_msg.withheld }
 
 (* Something that has to hold of the group's types and rows, which can be
@@ -242,6 +238,9 @@ and constr =
   | Copy of copy
       (** what an implementation needs is needed where it's used: what it learns
           later as well *)
+  | Install of install
+      (** a `with` that installs: its body uses no more than what it installs
+          and what's installed outside it *)
   | Impl_op of impl_op
       (** an implementation's operation fails with no more than its dependency
           declares *)

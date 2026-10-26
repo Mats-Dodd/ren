@@ -24,7 +24,8 @@ open Infer_report
 (* Which constraints the solver decides now. Other passes still run
    between them, so the solver is run in parts: [Equalities], the uses of
    the group's functions joined and the values thrown away checked;
-   [Needs], what each place an implementation is used needs;
+   [Needs], what each `with` installs and what each place an
+   implementation is used needs;
    [Error_rows], what each error set holds, the rules of markers, and
    what implementations' operations fail with; and
    [Named_rows], the rows that end in a named row, given the group's
@@ -39,7 +40,10 @@ type stage =
 (* A constraint's rank: those of a lower one are decided first. A value
    thrown away is checked after the group's uses of each other are joined,
    since a call of another function of the group learns only then what it
-   returns; and a set gets the tags written in it before what it includes
+   returns. What a `with` installs is decided once every use is joined,
+   and each `with` brings the copies of what an implementation needs up
+   to date before it's decided, since what its body uses includes them.
+   A set gets the tags written in it before what it includes
    from other sets, so a tag of two shapes is blamed on the inclusion. A
    kept set is closed once it has every tag it gets, and only then are the
    tags matched in a set checked against it. The rules of markers read
@@ -50,21 +54,22 @@ type stage =
 let rank = function
   | Join _ -> 0
   | Drop _ -> 1
-  | Copy _ -> 2
-  | Value_tag _ -> 3
-  | Include _ -> 4
-  | Kept _ -> 5
-  | Tag_pattern _ -> 6
-  | Unmarked _ -> 7
-  | Marker _ -> 8
-  | Impl_op _ -> 9
-  | Row_due _ -> 10
+  | Install _ -> 2
+  | Copy _ -> 3
+  | Value_tag _ -> 4
+  | Include _ -> 5
+  | Kept _ -> 6
+  | Tag_pattern _ -> 7
+  | Unmarked _ -> 8
+  | Marker _ -> 9
+  | Impl_op _ -> 10
+  | Row_due _ -> 11
 
 (* Whether [stage] decides [c]. *)
 let decides stage c =
   match (stage, c) with
   | Equalities, (Join _ | Drop _)
-  | Needs, Copy _
+  | Needs, (Install _ | Copy _)
   | ( Error_rows,
       ( Value_tag _ | Include _ | Kept _ | Tag_pattern _ | Unmarked _ | Marker _
       | Impl_op _ ) )
@@ -240,6 +245,79 @@ let copy env k =
       | Ok () -> ()
       | Error _ -> report env (cant_use k.kloc k.kwhat (row_names joined)));
       true
+
+(* ---- what a `with` installs (deps.md, "`with`") ---- *)
+
+(* A `with` that installs (see [Infer_env.install]): its body uses no
+   more than what it installs and what's installed outside it. Inner
+   `with`s are decided first, since what their bodies use is part of what
+   the outer ones' do. Each body's labels but the one installed are added
+   to the outer row. If the body's row is the outer one already, as for a
+   closure called both in the body and outside it, or another function of
+   the group that calls this one back, that's all. (A function calling
+   itself gets a copy of its own row, Infer_rows.use_row.) A row that's
+   still open stands for what a closure the body calls uses, an inferred
+   parameter's, say: it may use what's installed too, and the rest of it
+   is what's outside. Unless another `with` calls the same closure,
+   [shared] says: then it's what's outside them all, more than it needs if
+   it uses what one installs, never less. What it adds to the outer row is
+   tried on copies first, so if it can't, that's reported and nothing
+   changes.
+
+   It returns why the function it's in still gets [w.wdep] from outside, if
+   it does, and the uses of a named row it makes, which are decided with
+   the others, last. *)
+let install env ~shared w =
+  let dep_name = env.names (Ty.dep_path w.wdep) in
+  let labels, tail = row_parts w.wbody in
+  let rest = List.filter (fun (l : label) -> l.name <> w.wdep) labels in
+  (* add [r] to what's outside: whether it could *)
+  let into r =
+    Result.is_ok
+      (Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
+           Unify.unify_row st (c.row r) (c.row w.wouter)))
+  in
+  let withheld, due, ok =
+    match row_end w.wbody with
+    | _ when tail <> None && tail = row_tail w.wouter ->
+        (* the same row: everything it uses but [wdep] is outside too *)
+        let outer = row_names w.wouter in
+        ( Some (Same_row { fn = Path.local w.wself; dep = dep_name }),
+          None,
+          List.for_all (fun (l : label) -> List.mem l.name outer) rest )
+    | RVar _ as t
+      when List.length rest = List.length labels
+           && not (shared (Option.get tail)) ->
+        (* it may use [wdep] too, as a closure the body calls may; a
+           variable still unbound takes any row, so this can't fail *)
+        let t' = fresh_row env.st in
+        Unify.unify_row env.st t (RExtend (dep w.wdep, t'));
+        (None, None, into (extend rest t'))
+    | RVar _ as t ->
+        let withheld =
+          if List.length rest = List.length labels then
+            Some (Several_withs { fn = Path.local w.wself; dep = dep_name })
+          else None
+        in
+        (withheld, None, into (extend rest t))
+    | RSkol (id, n) ->
+        (* a named row: what's outside ends in it too *)
+        let due =
+          {
+            rloc = w.wloc;
+            rinto = w.wouter;
+            rnamed = (id, n);
+            rwhat = With_body;
+          }
+        in
+        (None, Some due, into (extend rest (fresh_row env.st)))
+    | REmpty | RExtend _ -> (None, None, into (extend rest (fresh_row env.st)))
+  in
+  if not ok then
+    report env
+      (with_body_uses w.wloc (List.map (fun (l : label) -> l.name) rest));
+  ( Option.map (fun hnote -> { hfn = w.wself; hdep = w.wdep; hnote }) withheld,
+    due )
 
 (* ---- the rules of markers ----
 
@@ -579,10 +657,30 @@ let copies_of env cs =
   worklist ~awake:copy_awake ~decide:(copy env)
     (List.filter_map (function Copy k -> Some k | _ -> None) cs)
 
-(* Bring every copy of what an implementation needs up to date, leaving
-   them for the solver: a `with` that installs reads what its body needs
-   (infer_top.ml), until that's a constraint too. *)
-let copies env = copies_of env (List.rev env.pending)
+(* The `with`s among [cs] that install, each once the copies of what an
+   implementation needs, [copies], are up to date, since what its body
+   uses includes what an implementation used in it needs. Why each
+   function of the group still gets a dependency from outside, the first
+   reason found for each. *)
+let installs env ~copies cs =
+  let ws = List.filter_map (function Install w -> Some w | _ -> None) cs in
+  (* how many bodies end in each row that's still open *)
+  let tails = List.filter_map (fun w -> row_tail w.wbody) ws in
+  let shared id = List.length (List.filter (( = ) id) tails) > 1 in
+  List.fold_left
+    (fun withheld w ->
+      copies_of env copies;
+      let held, due = install env ~shared w in
+      Option.iter (fun d -> defer env (Row_due d)) due;
+      match held with
+      | Some h
+        when not
+               (List.exists
+                  (fun h' -> h'.hfn = h.hfn && h'.hdep = h.hdep)
+                  withheld) ->
+          withheld @ [ h ]
+      | _ -> withheld)
+    [] ws
 
 (* Decide every pending constraint of [stage], rank by rank. [is_value]
    says whether a function is an associated value, which a use joins by
@@ -593,18 +691,19 @@ let solve env ~is_value stage =
   let of_rank r = List.filter (fun c -> rank c = r) mine in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) (of_rank 0);
   List.iter (function Drop d -> drop env d | _ -> ()) (of_rank 1);
-  copies_of env (of_rank 2);
+  let withheld = installs env ~copies:(of_rank 3) (of_rank 2) in
+  copies_of env (of_rank 3);
   (* a copy kept where nothing more can be needed, `Box<Rates>`, says the
      implementation needs only what it has: a transparent parameter's
      row closes with it, which infer_top.ml's [check_open_rows] reports *)
   List.iter
     (function
       | Copy k -> if row_end k.kdst = REmpty then close_row k.ksrc | _ -> ())
-    (of_rank 2);
+    (of_rank 3);
   let kept_sets =
     List.filter_map
       (function Kept (k, p) -> Some (k, p) | _ -> None)
-      (of_rank 5)
+      (of_rank 6)
   in
   (* the tags that went in are no longer checked with the patterns *)
   let added =
@@ -613,10 +712,10 @@ let solve env ~is_value stage =
         | Value_tag t when value_tag env ~kept:(List.map fst kept_sets) t ->
             Some t
         | _ -> None)
-      (of_rank 3)
+      (of_rank 4)
   in
   worklist ~awake ~decide:(include_ env)
-    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 4));
+    (List.filter_map (function Include i -> Some i | _ -> None) (of_rank 5));
   List.iter kept kept_sets;
   (* the patterns, and the tags written as values that didn't go in, in
      the order they were met *)
@@ -628,13 +727,14 @@ let solve env ~is_value stage =
     mine;
   List.iter
     (function Unmarked (c, r) -> unmarked env c r | _ -> ())
-    (of_rank 7);
-  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 8);
-  List.iter (function Impl_op o -> impl_op env o | _ -> ()) (of_rank 9);
-  match stage with
+    (of_rank 8);
+  List.iter (function Marker m -> marker env m | _ -> ()) (of_rank 9);
+  List.iter (function Impl_op o -> impl_op env o | _ -> ()) (of_rank 10);
+  (match stage with
   | Named_rows declaring ->
       rows_due env ~declaring
         (List.filter_map
            (function Row_due d -> Some d | _ -> None)
-           (of_rank 10))
-  | _ -> ()
+           (of_rank 11))
+  | _ -> ());
+  withheld

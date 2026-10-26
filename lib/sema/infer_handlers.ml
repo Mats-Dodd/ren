@@ -255,19 +255,19 @@ and install core env cx (e : expr) item t body =
     | [] -> core.infer env cx body
     | d :: rest ->
         let label = Ty.dep_label d in
-        (* the body's own row, which [settle_installs] relates to the outer
-           one once the group is done *)
+        (* the body's own row, which the solver relates to the outer one
+           once the group is done *)
         let inner = { cx with uses = fresh_row env.st; calls = ref [] } in
         let tb = around inner rest in
-        env.installs <-
-          {
-            wloc = item.loc;
-            wdep = label;
-            wbody = inner.uses;
-            wouter = cx.uses;
-            wself = cx.self;
-          }
-          :: env.installs;
+        defer env
+          (Install
+             {
+               wloc = item.loc;
+               wdep = label;
+               wbody = inner.uses;
+               wouter = cx.uses;
+               wself = cx.self;
+             });
         (* the body's calls bring in what they bring in, but [d] *)
         cx.calls :=
           List.map
