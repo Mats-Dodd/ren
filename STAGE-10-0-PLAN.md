@@ -49,8 +49,14 @@ have the two blocking issues R3's next review found (`435e869`..`11cbbe0`),
 and the slowdown the review after that found (`11ae913`). The owner
 decided B5's open half should be fixed, and it is (`4037992`).
 
-**Next:** have R3 reviewed again, then do R4. Delete this file once the
-stage is done.
+R4 is done (`f34e259`..`c0accc8`): `==` requires `eq`, requirements are
+inferred into schemes and interfaces and passed as dictionaries, the
+implementation tier records public generic and higher-order bodies, and
+every function type has its lambda set, inferred, carried in Core and
+checked by Core Lint. The report's R4 section says how, and what's open.
+
+**Next:** have R3 and R4 reviewed independently, and fix what the
+reviews find. Delete this file once the stage is done.
 
 ## Context
 

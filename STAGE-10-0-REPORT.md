@@ -5,8 +5,8 @@ What stage 10.0 did, step by step, and where it stopped. The brief is
 [compiler.md](compiler.md), whose Deviations section has every place the
 work left the plan, with its reasons.
 
-**The stage stopped after R3.** R0, R1 and R2 are done, each passed by an
-independent review. R3's work is all in, but its last review still found
+**The stage stopped after R3, and has since gone on through R4.** R0,
+R1 and R2 are done, each passed by an independent review. R3's work is all in, but its last review still found
 one blocking issue after the two fix rounds the plan allows, so, as the
 plan says, R4 wasn't started. The owner then asked for that issue to be
 fixed and the stage to go on: it's fixed now (`ad47c20`..`4d968ac`, see
@@ -15,7 +15,11 @@ blocking issues, a slowdown `4d968ac` brought back and messages that
 blamed a handler falsely; they're fixed too (`435e869`..`11cbbe0`). Its
 next review found that `435e869` made checking quadratic in the number
 of handlers of several given before what's wanted was known; that's
-fixed too (`11ae913`), and R3 waits for its review again. The branch is green: `dune build` and
+fixed too (`11ae913`), and R3 waits for its review again. The owner
+decided B5's open half should be fixed, and it is (`4037992`). Then R4
+was done, in four parts: `==` requiring `eq`, inferred into schemes;
+dictionaries in Core; interfaces and the implementation tier; and lambda
+sets. It waits for its independent review too. The branch is green: `dune build` and
 `dune runtest` pass at every commit, run as a user that isn't root (see
 "For whoever runs the tests", below).
 
@@ -24,8 +28,8 @@ fixed too (`11ae913`), and R3 waits for its review again. The branch is green: `
 | R0, foundations and safety nets | `849e97f`..`dbf55cd` (19) | passed after two fix rounds |
 | R1, restructure with no change in behaviour | `86ccbb1`..`9637c56` (34) | passed first time |
 | R2, typed Core | `0e1d896`..`6e8ca0b` (16) | passed first time |
-| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then `ad47c20`..`4d968ac` (5), then `435e869`..`11cbbe0` (3), then `11ae913`..`18a55bb` (2) | one blocking issue left after two fix rounds, **fixed since**; its reviews found three more, fixed; to be reviewed again |
-| R4, requirements and lambda sets | none | not started |
+| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then `ad47c20`..`4d968ac` (5), then `435e869`..`11cbbe0` (3), then `11ae913`..`18a55bb` (2), then `4037992`..`a6cdeb3` (3) | one blocking issue left after two fix rounds, **fixed since**; its reviews found three more, fixed; to be reviewed again |
+| R4, requirements and lambda sets | `f34e259`..`c0accc8` (14) | done; to be reviewed |
 
 `STAGE-10-0-PLAN.md` is kept, since the stage isn't finished: it's what
 the next session starts from, with this report beside it.
@@ -449,25 +453,189 @@ decided it should be fixed, `4037992`.
 
 ## R4: Requirements and lambda sets
 
-Not started.
+**Commits.** `f34e259`..`c0accc8`, 14 commits, and this report's.
+Requirements: `f34e259` (a variable's needs, carried into schemes),
+`10ee13a` (`==` requires `eq`, B2), `2a72c71` (each use records what it
+needs), `c3face7` and `bf4e11b` (dictionaries in Core, and the
+comparisons through them), `384ebb0` (compiler.md). Interfaces:
+`bbed0ba` (requirements in the interface, checked whole), `5307242` (the
+implementation tier), `cbcfe7f`. Lambda sets: `f89ba25` (the hidden
+third row, open and unused), `303f393` (identities, and Core Lint),
+`c3413e3` (a big set kept quick), `645f364` (tests), `c0accc8`
+(compiler.md).
+
+**What was done.**
+
+- **`==` and `!=` require `eq`** of what they compare, a constraint the
+  solver decides once the group's types are known (infer_reqs.ml). `eq`
+  is derived structurally: a function, an implementation, a handler of
+  several, or a type with one in it has none. A type variable passes the
+  requirement on to its function, `same<T has eq>`, public ones too, and
+  a use of such a function needs it of what it puts in place of `T`,
+  reported at the argument it's in: "`fn(Int) -> Int` has no `==`, which
+  `same` needs", with the note that a type with a function in it has no
+  `==` or `hash`. B2 is fixed: comparing two functions is a compile
+  error, not a panic.
+- **Requirements are kept** by variable in inference's state
+  (`Types.needs`), put in `Ty.scheme.reqs` by canonical form, and printed
+  by `ren types` as operators.md says, `same<T has eq>`. Each use records
+  what the scheme it used needs (`Infer.node`'s `needs`).
+- **Dictionaries in Core.** A generic function with a requirement takes a
+  hidden dictionary parameter for each, after its descriptors, and each
+  use passes one built from its type arguments: the caller's own for one
+  of its type variables, otherwise derived from the type's structure
+  (core.ml, `dict`). Each `==` compares through the dictionary of what it
+  compares, so the interpreter's structural walk that panicked on
+  functions is gone. Core Lint checks every function takes one per
+  requirement and every use and `==` passes the right one, built only
+  from the function's own and derived only for a type that has `eq`.
+- **Interfaces.** What a public function or member needs comes from
+  inference (`Iface.of_module`'s `needs`); the driver's check compares
+  whole schemes, requirements too. A body edit changes the interface only
+  when it changes them (test_modules.ml). The implementation tier
+  (impl.ml) records the typed Core of each public function and member
+  that's generic or higher-order, with no source locations, for
+  specialization; nothing reads it yet.
+- **Lambda sets.** Every function type has a hidden third row beside `!`
+  and `uses`, its lambda set (`Types.TFun`'s and `Ty.Fun`'s fifth part,
+  `Ty.lams`): the identities of the lambdas and functions a value of it
+  can be, and a variable for the rest. A lambda's identity is its
+  function's path and its place in it, `main.main#2`; a function's,
+  member's, intrinsic's or operation's used as a value is its path. Sets
+  are inferred by the same unification as the rest of a type, never
+  fail, and generalize like rows, numbered apart from type and row
+  variables, so `fn map(xs, f)` has a variable for `f`'s set and each
+  call fills it. Handlers' operations, implementations' lambdas, the body
+  a `with` passes a wrapper, and an operation used as a value all carry
+  them. They're in canonical form, every Core node's type, each use's
+  type arguments (`Ty.args.lams`), and each Core `Lambda`'s `name`.
+- **Core Lint checks lambda sets:** each is canonical; a lambda's
+  type's set has its identity, and a function's used as a value its
+  path; a use's set is its scheme's at the use's lambda-set arguments;
+  an `if`'s and a `match`'s sets have whatever their branches' have; and
+  every identity in a callee's set takes as many arguments as the call
+  passes. A test puts each of three mistakes in a lowered program and
+  shows Lint catching it.
+- **Invisible.** No message, `ren types` or `ren core --types` shows a
+  set. `ren core --lambdas`, a debugging aid, does, and the tests'
+  snapshots use it: a map-like function's calls, an `if` of two lambdas,
+  a recursive group passing functions, and an implementation's and a
+  handler's operations (test_lower.ml).
+- **Interfaces leave lambda sets out.** Each function type in an
+  interface has a set of its own (`Ty.forget_lams`), as written, so a
+  body edit that changes which lambdas flow where never changes it, and
+  early cutoff is as it was (test_modules.ml, "lambda sets don't change
+  an interface"). The driver's interface check compares schemes without
+  them, and Core Lint checks a use of another module's function against
+  its interface's scheme rather than that module's own.
+
+**Deviations**, all in `compiler.md`:
+
+- Requirements: kept by variable in inference's state rather than in
+  inference's schemes; three kinds of type taken to have `eq` that the
+  plan doesn't decide (another module's opaque type, a tag a set's tail
+  may bring in, every type argument of a type); a dictionary a hidden
+  parameter of its own rather than part of a descriptor; what a use
+  needs recorded by inference for lowering; a derived dictionary
+  interpreted by walking the type's declaration; one comparison that can
+  still panic (an opaque type of another module represented as a
+  function); how they're printed; a generic method now found by checking
+  before it's called, like any other; where a call that can't have a
+  requirement is reported; the implementation tier a type of its own.
+- Lambda sets unify and don't include: wherever a function value flows
+  its type is unified, so an inclusion would have nothing to add, and a
+  set is always open, so unifying never fails.
+- A use of a function of the group gets a set of its own, so the
+  function's own set isn't filled by its uses.
+- An implementation's type carries no lambda sets: its lambdas have
+  theirs, but which implementation a `Dep_call` reaches is left to
+  specializing for known handlers.
+- A set's variable is an `option` only in a type written in a
+  declaration, before canonical form numbers it.
+- Lint's "a call's callee's set is consistent" is read as every identity
+  in it taking as many arguments as the call passes.
+- `ren core --lambdas` is new, for debugging.
+- A set of more than 32 identities is linked to whole rather than copied
+  when unified, so a type argument for a set's variable can list some of
+  the scheme's own identities too.
+
+**Test outputs that changed**, all from requirements; lambda sets
+changed none:
+
+- `test_infer.ml`, a `ren types` print of a program whose `same`
+  compares its arguments: `fn same<T>(a: T, b: T) -> Bool` is `fn same<T
+  has eq>(a: T, b: T) -> Bool`, since `==` now requires `eq`.
+- `test_infer.ml` and `test_lower.ml`, two `ren core --types` snapshots:
+  each `==` shows the dictionary it compares through, `(== (eq Int) n/2
+  0)`.
+- No expect block or cram output changed because of lambda sets. Test
+  code did, not its output: hand-built Core in the Lint tests gives its
+  function types sets, and its uses lambda-set arguments, and
+  test_infer.ml's check that an interface's scheme is the one inferred
+  compares them without sets, since `app`'s inferred `f` is given the
+  lambda in its body.
+
+**Benchmarks.** `dune build @bench`, before lambda sets (`cbcfe7f`) and
+after (`c0accc8`), two runs each, on the same machine: loop 0.41s and
+0.40s against 0.41s and 0.43s, fib 0.24s and 0.49s against 0.30s and
+0.22s, deep 0.57s and 0.59s against 0.56s and 0.51s, overflow 0.51s
+against 0.47s and 0.49s, vm/main 1.07s and 1.24s against 1.13s and 1.63s:
+within the machine's noise, as expected, since the interpreter never
+reads a set. Checking costs a little more: 20,000 calls of a
+higher-order function, each given a lambda or a function, check in 1.2s
+against 1.0s; examples/vm the same. An array of 2,000 lambdas, which
+makes one set of all of them, checked in 0.04s before and 0.14s now
+(0.3s for 4,000, which a test bounds).
+
+**Issues still open.**
+
+- **R4 hasn't had its independent review.** The plan asks for one; this
+  session did the work in four parts, each by another agent, and none
+  reviewed the whole.
+- A lambda set of thousands still costs a walk of it at each
+  unification: 8,000 lambdas in one array take 1.5s to check, against
+  0.2s before lambda sets. Keeping a set's size and end with it would
+  make that constant.
+- Sets are as precise as unification makes them: `if c then f else g`
+  makes each of `f`'s and `g`'s sets list the other, and a call of
+  another module's function sees its sets as its signature has them,
+  each a variable of its own. Specialization will want the whole
+  program's sets, from the implementation tier.
+- The implementation tier's Core has lambda sets, which come from the
+  module's other bodies too, so an edit to one function can change
+  another's recorded Core. Nothing reads it yet.
+- A lambda's identity counts its place in its function, so adding a
+  lambda renumbers the ones after it in the same function.
+- `$start`'s use of `main` gets `main`'s identity from a helper that
+  assumes `main`'s set's variable is nowhere else in its type
+  (`Core.own_use`), true of a function that takes nothing.
 
 ## Notes for the next stage
 
-- **Finish R3 first.** The blocking issues above are fixed, with their
-  repros as tests; get R3 an independent review, then do R4 as the plan
-  describes. B5 is fully fixed (`4037992`).
-- **R4 has its pieces in place.** Schemes have the `reqs` slot, uses carry
-  type arguments, and generic functions already take hidden descriptor
-  parameters, which dictionaries can follow: an `eq` dictionary is a
-  descriptor that also says how to compare. Requirements are strings
-  today, `"eq"`; a variant is a one-line change if R4 wants one.
-- **The interface check in the driver** compares a public function's
-  inferred scheme with its interface's. Once requirements are inferred,
-  that check has to compare them too, and `module-build.md` already says
-  what early cutoff guarantees.
-- **The memory stage** will want the solver's order-independence to be
-  real for lambda sets, which unify and include as rows do. The kind-by-kind
-  order in `solve.ml` is the place to look first.
+- **Get R3 and R4 reviewed.** Each has its work in and its tests green,
+  but neither has had the independent review the plan asks for since its
+  last changes. Then delete `STAGE-10-0-PLAN.md`, as it says.
+- **Requirements are strings,** `"eq"`, in schemes, interfaces and Core's
+  dictionaries. Operators bring `add`, `hash`, `show` and more: a variant
+  is a small change, and each new one needs its derivation (what types
+  have it), its dictionary at runtime (eval.ml), and Lint's check of a
+  derived one (`Core_lint.has_eq` generalized).
+- **Lambda sets are ready for specialization to read**, and nothing reads
+  them yet. Each Core lambda has its identity and each use its
+  lambda-set arguments, so specializing a higher-order call is choosing
+  the identities its argument's set lists; a set's variable says "and
+  whatever else reaches here", which a whole-program pass over the
+  implementation tiers can close. The interface leaves them out, so
+  across modules the sets are only each function's own; that's the
+  place to look first for precision.
+- **A set is always open and only unified,** never included. If the
+  memory stage wants more precise sets, inclusion would go in the solver
+  as rows' inclusions do; the order-independence argument in
+  compiler.md ("The constraint solver") already covers sets that only
+  gain identities.
+- **Unifying a set of thousands walks it.** Keeping each set's size and
+  end with it would make that constant (compiler.md, "Lambda sets",
+  Cost).
 
 ## For whoever runs the tests
 
