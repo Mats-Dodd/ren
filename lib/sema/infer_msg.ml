@@ -1220,7 +1220,7 @@ let with_body_uses loc deps =
           while restructuring changes no message *)
        (and_list (List.map code deps)))
 
-(* ---- implementations (infer_top.ml) ---- *)
+(* ---- implementations (solve.ml) ---- *)
 
 (* How an implementation's operation could fail with no more than the
    operation [op] declares, for the help when it does. *)
