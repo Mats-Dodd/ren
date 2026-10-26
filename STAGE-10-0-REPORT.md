@@ -8,7 +8,9 @@ work left the plan, with its reasons.
 **The stage stopped after R3.** R0, R1 and R2 are done, each passed by an
 independent review. R3's work is all in, but its last review still found
 one blocking issue after the two fix rounds the plan allows, so, as the
-plan says, R4 wasn't started. The branch is green: `dune build` and
+plan says, R4 wasn't started. The owner then asked for that issue to be
+fixed and the stage to go on: it's fixed now (`ad47c20`..`4d968ac`, see
+R3), with three of R3's minor issues, and R3 waits for its review again. The branch is green: `dune build` and
 `dune runtest` pass at every commit, run as a user that isn't root (see
 "For whoever runs the tests", below).
 
@@ -17,7 +19,7 @@ plan says, R4 wasn't started. The branch is green: `dune build` and
 | R0, foundations and safety nets | `849e97f`..`dbf55cd` (19) | passed after two fix rounds |
 | R1, restructure with no change in behaviour | `86ccbb1`..`9637c56` (34) | passed first time |
 | R2, typed Core | `0e1d896`..`6e8ca0b` (16) | passed first time |
-| R3, one constraint solver | `d811c1a`..`3f381d1` (31) | **one blocking issue left** after two fix rounds |
+| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then `ad47c20`..`4d968ac` (5) | one blocking issue left after two fix rounds, **fixed since**, to be reviewed again |
 | R4, requirements and lambda sets | none | not started |
 
 `STAGE-10-0-PLAN.md` is kept, since the stage isn't finished: it's what
@@ -205,7 +207,8 @@ shower: fn(T) -> Str = show`, now shows a record by its shape, `{ id: 1
 **Commits.** `d811c1a`..`3f381d1`, 31 commits: the solver in
 `d811c1a`..`2968732`, the bugs in `b718670` (B1), `4275156` (B3),
 `3ecabd4` (B4) and `0fd217b` (B5), and the two fix rounds,
-`9efe477`..`3f381d1`.
+`9efe477`..`3f381d1`. Then, after the stop, the blocking issue and three
+minor ones, `ad47c20`..`4d968ac`, 5 commits.
 
 **What was done.**
 
@@ -261,6 +264,15 @@ shower: fn(T) -> Str = show`, now shows a record by its shape, `{ id: 1
 - `test_errors.ml`, "a tag of two shapes, learned once the group is done",
   a test R3 added: its note says "from the `fail` on line 1", not "from
   the signature", since the function declares no errors.
+- After the stop (`ad47c20`): `test_deps.ml`, "a handler of several passed
+  on inside its own `with`", a test the second fix round added: `k` is
+  `fn k() -> Int`, not `fn k() -> Int uses RateCalls`, as it was at
+  `6e8ca0b`. Nothing says what `o` holds is one dependency, so `with r`
+  installs both, as deps.md says; the comment says so now.
+- `0ce6468`: "where nothing says which, a handler of several is its own"
+  no longer holds `pick`, which B3 accepts, and the "an `if` takes a
+  handler of several as one in either branch" test covers; its two errors
+  are three lines higher.
 
 **Behaviour that changed**, besides the bugs:
 
@@ -272,14 +284,20 @@ shower: fn(T) -> Str = show`, now shows a record by its shape, `{ id: 1
 
 **Issues still open.**
 
-- **Blocking: a handler of several, once inside a value or a type
-  variable, is fixed to the first dependency an argument asks for.**
-  `Infer_coerce.taken_as` unifies the variable a handler of several was
-  given to with the one dependency an argument wants, so the variable is
-  that dependency everywhere, not only at that argument. Programs that
-  compiled at `6e8ca0b` are rejected now, with poor messages ("expected
-  `RateCalls`, found `Rates`", "nothing installs `RateCalls` before
-  `main`"). Each of these ran before and is rejected now:
+- **Fixed since the stop (`ad47c20`, `4d968ac`), was blocking: a handler
+  of several, once inside a value or a type variable, was fixed to the
+  first dependency an argument asked for.** `Infer_coerce.taken_as`
+  unified the variable a handler of several was given to with the one
+  dependency an argument wanted, so the variable was that dependency
+  everywhere, and programs that compiled at `6e8ca0b` were rejected. Now,
+  as the reviewer suggested, the argument is a coercion of its own and
+  the variable is left to the solver: once the variable is decided, after
+  it, the argument is taken as that one if the value is the handler, is
+  it already if something said so, or is an error whose note says what
+  took it as the other dependency, whichever was said first. Each repro
+  runs as it did at `6e8ca0b`, with the same output, and is a test
+  (test_deps.ml, "a value holding a handler of several, taken as each of
+  them"; the error, both ways round, in "..., taken as one elsewhere"):
   - `let o = Some(counting_rates(2))`, then in `match o`, `Some(h) =>
     print(run(h) + run2(h))`
   - `let h = id(counting_rates(2))`, then `run(h)` and `with h in
@@ -288,10 +306,6 @@ shower: fn(T) -> Str = show`, now shows a record by its shape, `{ id: 1
     and through an `if` of two handlers
   - `ap(counting_rates(3), fn(r) => run(r) + (with r in
     RateCalls.count()))`
-
-  The reviewer's suggested fix: coerce the argument where it's passed, and
-  leave the variable open for the solver, as is done when the handler's
-  type is already known. Each repro above should become a test.
 - **B5, the half that needs a decision.** A set kept by `attempt` can
   still take the tags of a written set from an earlier group: `fn kept(c)
   = if c then mk2(c) else attempt g()` gives `! Left(Int) | Right`, though
@@ -299,15 +313,23 @@ shower: fn(T) -> Str = show`, now shows a record by its shape, `{ id: 1
   means keeping where tags came from in schemes and interfaces, while
   still letting a declared `Result`'s extra tags in, which the existing
   `worth_retrying` test needs. That's the owner's call.
-- The worklist is quadratic: each decision rescans every waiting item.
-  12,000 `try f(i)` calls in one group take 8.7s to check, against 0.3s
-  before R3. Watching row tails by variable would fix it.
-- `solve.ml`'s tag patterns unify payloads with `unify_at`, not
-  atomically: a payload mismatch is reported, but can leave earlier
-  payloads unified.
-- The test "where nothing says which, a handler of several is its own"
-  still holds `pick`, which is accepted now, so its name no longer says
-  what it pins.
+- Fixed since the stop (`73a710d`): the worklist was quadratic, and so
+  was finding where a set's errors came from at every call, though only
+  a message about a tag of two shapes needs it. 12,000 `try f(i)` calls
+  in one group took 8.4s to check, against 0.4s at `6e8ca0b`; now 0.4s.
+  The worklist looks for what's woken once a round, not after every
+  item, rather than watching row tails by variable: it's simpler, and the
+  rounds go through what's awake in the order it was met, as before. A
+  constraint woken by one met before it in the same round is done in the
+  next round, which only changes the order things are decided in, never
+  what they come to.
+- Fixed since the stop (`1387d4c`): `solve.ml`'s tag patterns unify their
+  payloads all at once on copies first, so a mismatch changes nothing;
+  each payload that doesn't fit is still reported. No test could see the
+  difference: a mismatch stops the program before anything reads the
+  payloads again.
+- Fixed since the stop (`0ce6468`): "where nothing says which, a handler
+  of several is its own" no longer holds `pick`.
 - A mismatch between two different handlers of several suggests writing a
   `counting_rates { ... }`, a type that can't be written. It predates R3.
 
@@ -317,9 +339,9 @@ Not started.
 
 ## Notes for the next stage
 
-- **Finish R3 first.** Fix the blocking issue above, with its repros as
-  tests, get an independent review, then do R4 as the plan describes. The
-  B5 question needs the owner.
+- **Finish R3 first.** The blocking issue above is fixed, with its repros
+  as tests; get R3 an independent review, then do R4 as the plan
+  describes. The B5 question needs the owner.
 - **R4 has its pieces in place.** Schemes have the `reqs` slot, uses carry
   type arguments, and generic functions already take hidden descriptor
   parameters, which dictionaries can follow: an `eq` dictionary is a

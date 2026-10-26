@@ -43,8 +43,10 @@ blocking issue after two fix rounds, so the run stopped there, as "How to
 run it" says, and R4 wasn't started. `STAGE-10-0-REPORT.md` says what
 each step did, its commits, what changed, and what's still open.
 
-**Next:** fix R3's blocking issue (the report's R3 section has it and its
-repros), have R3 reviewed again, settle B5's open question with the
+R3's blocking issue has since been fixed (`ad47c20`..`4d968ac`; the
+report's R3 section says how), with three of its minor issues.
+
+**Next:** have R3 reviewed again, settle B5's open question with the
 owner, then do R4. Delete this file once the stage is done.
 
 ## Context
