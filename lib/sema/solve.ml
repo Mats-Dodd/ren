@@ -322,10 +322,32 @@ let tag_pattern env t =
       (* a `fail` arm of a `match` whose subject can't fail, which is
          reported once, with the markers ([marker]) *)
       ()
-  | Some l when List.length l.payload = List.length payload ->
-      List.iter2
-        (fun found expected -> unify_at env c.loc ~found ~expected)
-        payload l.payload
+  | Some l when List.length l.payload = List.length payload -> (
+      (* all the payloads, or none: if one doesn't fit, nothing changes,
+         and each that doesn't is reported, as unifying them one by one
+         on the same copies finds *)
+      let unify_all st (k : Unify.copy) =
+        List.iter2
+          (fun found expected -> Unify.unify st (k.ty found) (k.ty expected))
+          payload l.payload
+      in
+      match Unify.atomically env.st (Unify.copier ()) unify_all with
+      | Ok () -> ()
+      | Error _ ->
+          (* a state of its own, as [Unify.atomically] makes, so the new
+             variables don't count *)
+          let k = Unify.copier ()
+          and st = { env.st with level = env.st.level } in
+          List.iter2
+            (fun found expected ->
+              match Unify.unify st (k.ty found) (k.ty expected) with
+              | () -> ()
+              | exception
+                  ((Unify.Mismatch | Unify.Two_shapes _ | Unify.Infinite) as
+                   failure) ->
+                  mismatch env plain c.loc ~found:(k.ty found)
+                    ~expected:(k.ty expected) failure)
+            payload l.payload)
   | Some l ->
       report env
         (tag_arity ~value:t.tvalue c.loc c (List.length l.payload)
