@@ -6,10 +6,10 @@
    Each kind of constraint has a rank, and the solver decides every
    constraint of one rank before it starts the next: a later rank reads
    what an earlier one decides. Within a rank, it takes them in the order
-   they were met. Most are decided once; an inclusion is decided again
-   whenever the row it adds from has gained a label, until none has: a
-   worklist, which ends because rows only ever gain labels, and each has
-   finitely many to gain.
+   they were met. Most are decided once; an inclusion, or a copy of what
+   an implementation needs, is decided again whenever the row it adds from
+   has gained a label, until none has: a worklist, which ends because rows
+   only ever gain labels, and each has finitely many to gain.
 
    A constraint that fails is reported, and changes nothing: it's tried on
    copies of its types first (Unify.atomically), so a unification that

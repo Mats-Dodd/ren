@@ -220,16 +220,28 @@ The constraints so far:
   included from stays as it is, so a callee never fails with what its
   caller does. The labels it has when it's met are added then, and those
   it learns later, from a function of its group, by the solver.
+- **A kept set holds no more than it's given:** what an `attempt` keeps,
+  or a `match` with `fail` arms handles, is closed once every set has its
+  tags, unless it's what a function it was passed fails with.
+- **A tag matched in a set still open is one of its tags,** with as many
+  payloads, and so is a tag written as a value that didn't go in a set of
+  its own.
+- **The rules of markers** (errors.md, "Marking"): a call no marker
+  covers can't fail, and every marker covers something that can.
+- **What an implementation needs is needed where it's used:** each place
+  gets a copy of its row, which gains the labels it learns later.
+- **A row a named row is added to ends in it,** `..d`, once it has every
+  other label, since that stops it getting more.
 
 The rest of what inference leaves until a group is done is still kept in
 queues of their own, each settled by a pass of its own in infer_top.ml:
-what a `with` installs, the copies of what an implementation needs, the
-rules of markers, tags matched in an open set, implementations'
-operations, named rows and handlers' needs. R3 moves each onto the
-solver. Until it has, the solver runs in two parts, since two of those
-passes, what a `with` installs and a function's own named error row,
-have to come between: the uses and the values thrown away first, and
-what each error set holds after them.
+what a `with` installs, implementations' operations and handlers' needs.
+R3 moves each onto the solver. Until it has, the solver runs in parts,
+since the passes for what a `with` installs, implementations'
+operations, and a function's own named error row have to come between:
+the uses and the values thrown away first; then, after what each `with`
+installs, which reads the copies as it goes, the copies; then what each
+error set holds and the rules of markers; and the named rows last.
 
 Each constraint carries where it comes from and what a message about it
 needs, and the solver decides them like this:
@@ -238,11 +250,14 @@ needs, and the solver decides them like this:
   next kind starts, because the later one reads what the earlier decides:
   the uses of the group's functions first, since a call of one learns
   only then what it returns, then the values thrown away, then each set's
-  own tags, then the inclusions. The checks that only report, like a
-  marker's rules, read the result after all of them.
+  own tags, then the inclusions, then the kept sets closed and the tags
+  matched in them checked. The checks that only report, like a marker's
+  rules, read the result after all of them, and a row ends in a named row
+  last.
 - **To a fixpoint.** A use or a value thrown away is decided once. An
-  inclusion is a worklist item: whenever the row it adds from gains a
-  label, it's woken and adds that too. Rows only ever gain labels, and
+  inclusion, or a copy of what an implementation needs, is a worklist
+  item: whenever the row it adds from gains a label, it's woken and adds
+  that too. Rows only ever gain labels, and
   each has finitely many to gain, so this ends.
 - **Reporting every failure, and changing nothing by one.** Each
   unification is tried first on copies of its types (unify.ml,
