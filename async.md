@@ -131,6 +131,40 @@ between tasks are still possible, but only at a dependency call, because
 that's the only place another task can come in. Those are exactly the
 points the test scheduler varies (below).
 
+### State that changed during a call
+
+That's Swift's actor reentrancy problem: state read before a dependency
+call may have been changed by another task by the time the call returns.
+Swift leaves it to the programmer. Ren's compiler sees every dependency
+call in a handler, so it catches the pattern, where a value read before a
+call is written back after it:
+
+```
+warning: `cache` may have changed during `next.save`
+  ┌─ cache.ren:14:5
+  │
+12│     let old = cache.get(u.id)
+  │               --------------- read here
+13│     try next.save(u)
+  │         ------------ another task can run here
+14│     &cache.set(u.id, merge(old, u))
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ and written here, from the old read
+  │
+  = help: read it again after the call
+```
+
+The test scheduler finds the same race at runtime. The warning finds it
+before the code runs.
+
+### Tasks always run concurrently
+
+Tasks started together always run concurrently, never one after the
+other. Zig separates code that *may* run concurrently from code that
+*must*, because a producer and a consumer run one after the other
+deadlock. Ren only has the second kind, and the test scheduler keeps the
+guarantee too, so channels can be added later without a new kind of
+task.
+
 ## Cancellation
 
 Cancellation is where structured concurrency breaks in other languages,
@@ -408,6 +442,16 @@ instead is `match attempt next.all()`.
   is a message to that loop. A dependency call is already a point where
   the task waits, so no program changes, and each loop replays from its
   own journal. That's Seastar's model.
+- **A C call runs on a worker thread.** An `extern` function is assumed to
+  block, the way a C library doing synchronous I/O does, so it runs on a
+  worker and the loop carries on. `extern ... nonblocking` marks the fast
+  ones, like `crc32`, which run inline. Go does this for cgo calls, and
+  Loom's pinned virtual threads show what happens without it.
+- **Errors and panics show the task path.** In Rust, JavaScript and
+  Python, a stack trace from inside a task ends at the scheduler. Ren
+  knows the task tree, so a failure shows how it was reached:
+  `main → serve → group task 4812 → handle → Users.get`. `--trace` and
+  the journal use the same path.
 - **In the interpreter,** fibers use OCaml 5's effect handlers, through Eio
   as [runtime-io.md](runtime-io.md#the-primitive-layer) planned.
 
@@ -446,6 +490,32 @@ The rest is borrowed from elsewhere:
   never thrown away.
 - **Seastar:** the loop per core.
 - **Lean 4:** marking values shared across threads.
+- **Zig's `std.Io`:** I/O chosen by `main` and passed down, which `uses`
+  and `with` already do. Also the line between code that may run
+  concurrently and code that must.
+- **Koka:** async as a library on effect handlers, and effect
+  polymorphism. `uses` is a color, but a polymorphic one, so `map` takes
+  any lambda and libraries never split into sync and async.
+- **Eio:** direct style on OCaml 5's effects, with switches as scopes.
+  Its catchable `Cancelled` is another bug Ren rules out.
+
+## Pitfalls elsewhere
+
+| Language | Pitfall | Ren |
+|---|---|---|
+| JavaScript | colored functions; a floating promise; unhandled rejections; `AbortController` passed by hand; `Promise.all` unbounded | no colors; tasks aren't values; cancellation is automatic; `map` is bounded |
+| Python | sync and async worlds; `create_task` collected if not held; `CancelledError` swallowed; a blocking call freezes the loop | no colors; tasks aren't values; cancellation can't be caught; C calls run on workers |
+| Rust | colored; `Pin`; `'static` on spawn; cancellation safety; no async drop; competing runtimes | structured, so no `'static`; every call cancel-safe; `finally` makes calls; one runtime, and it's a handler |
+| Go | goroutine leaks; `ctx` passed by hand; channel deadlocks; data races | structured; deadlines carry down; no channels yet; no data races |
+| Kotlin | `CancellationException` swallowed; `GlobalScope` escapes | cancellation can't be caught; nothing escapes |
+| Swift | actor reentrancy; the `Sendable` migration | the reentrancy warning; nothing like `Sendable` to write |
+| Java | virtual threads pinned in `synchronized`; `ThreadLocal`'s cost | C calls run on workers; `with` is a scoped value |
+| C# | `ConfigureAwait`; sync-over-async deadlocks | no colors |
+| Erlang | unbounded mailboxes | everything has a limit |
+
+Almost all of these come from five causes: colored functions, tasks as
+values, cancellation as an exception that can be caught, queues with no
+limit, and cleanup that can't wait. Ren has none of them.
 
 ## What changes elsewhere
 
@@ -466,7 +536,9 @@ The rest is borrowed from elsewhere:
   milliseconds.
 - The `just` runs independent recipes at once, kills the rest when one
   fails, and records and replays byte for byte with `ren replay`.
-- Each of the four errors above is a one-line refusal test.
+- Each of the four errors above is a one-line refusal test, and the
+  reentrancy warning catches the README's `cached` race.
+- A failure inside a task shows its task path.
 
 ## Later
 
