@@ -432,26 +432,54 @@ stage, or settled something the plan left open:
   ...`, around a call that uses one.
 - **A handler's state is made where it's installed, and can't fail:**
   the `with` that installs it isn't a call a `try` could mark.
-- **A handler of several dependencies has a type of its own,** named
-  after it, `counting_rates`, which can't be written. A handler of one
-  has its dependency's type, so `pub fn mem() -> Rates = counting(1)`
-  and `fn run(r: Rates) = with r in ...` take either kind of
-  implementation. Where a value of one of a handler's several
-  dependencies' types is wanted, a parameter, an annotation, a function's
-  result or a field, it's taken as a description of an implementation
-  of just that one, and installing it makes a fresh instance and installs
-  only that: `clock_conforms(test_clock(t))` with `c: Clock`. What's
-  wanted can be said before the handler is given or after, in the same
-  function: `same(test_clock(t), c)` takes it as a `Clock` as
-  `same(c, test_clock(t))` does. A `with` that installs it, or a call of
-  a method of one of them, can come before what says which as well as
-  after (compiler.md's Deviations has the one exception). Where nothing
-  says which, `let h = counting_rates(1)`, it keeps its own type: `with
-  h in` installs all of them, sharing one state, and `run(h)` takes it
-  as a `Rates`, inside that `with` too. So a value of a dependency's
-  type is a record or a handler's description, and `with` tells which as
-  it runs. A handler that keeps a closure names its row in its own
-  signature, `handler h(f: fn() -> Int uses ..d) for N uses ..d`.
+- **A handler of several dependencies has a type that lists them,**
+  `Rates & RateCalls`, from the moment it's made, and it never changes.
+  The order doesn't matter: `RateCalls & Rates` is the same type. A
+  handler of one has its dependency's type.
+- **Where a written type asks for one of them, it becomes that one.**
+  A parameter, a function's result, a field, or a `let`'s or a list's
+  type: `fn run(r: Rates)`, `-> Clock`, `let cs: List<Users> = [...]`.
+  Giving more than is asked is fine, as Effect's layers allow. From
+  there on it's a `Rates`, still describing the same handler, but its
+  other dependencies can't be reached through it. A written type can
+  also ask for several of them, `c: Clock & TestClock`.
+- **`with` installs what the value's type says.** `with h in`, with `h`
+  a `Rates & RateCalls`, installs both, sharing one state. Inside `fn
+  run(r: Rates)`, `with r in` installs only `Rates`, so nothing is
+  installed that the code doesn't show.
+- **Anywhere else it keeps its full type,** and where that doesn't fit,
+  it's an error that says where to write one. That covers a generic,
+  `apply(run, counting_rates(1))`, which never narrows through an
+  inferred `A`, branches or list items that differ, and a `with` whose
+  value's type isn't known yet, `fn f(c) = with c in`. Narrowing only
+  where a type is written means whether code checks never depends on the
+  order the checker reads it in.
+- **A method called on it is the one of its dependencies that has it,**
+  `h.count()`, and it's an error if more than one does.
+
+```
+error: the items in this list have different types
+  ┌─ test.ren:3:12
+  │
+3 │   let bs = [pg_users(db), counting_users()]
+  │             ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^ is `Users & UserCalls`
+  │             is `Users`
+  │
+  = help: say what the list holds: `let bs: List<Users> = ...`
+```
+
+```
+error: `with` can't tell what `c` installs
+  ┌─ app.ren:1:18
+  │
+1 │ fn run(c) = with c in serve()
+  │                  ^ its type isn't written
+  │
+  = help: write it: `fn run(c: Clock)`
+```
+
+- **A handler that keeps a closure names its row in its own
+  signature,** `handler h(f: fn() -> Int uses ..d) for N uses ..d`.
 - **A handler's name starts with a lowercase letter,** as a function's
   does, which is now an error for both: a capitalized name is a type's.
 - **A handler's parameters are written in parentheses even if it has
