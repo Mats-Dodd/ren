@@ -1,38 +1,33 @@
 # Stage 10.0: the report
 
-What stage 10.0 did, step by step, and where it stopped. The brief is
-[STAGE-10-0-PLAN.md](STAGE-10-0-PLAN.md), and the design it built is in
+What stage 10.0 did, step by step. The brief was `STAGE-10-0-PLAN.md`
+(in the history from `86cb38f`), and the design it built is in
 [compiler.md](compiler.md), whose Deviations section has every place the
 work left the plan, with its reasons.
 
-**The stage stopped after R3, and has since gone on through R4.** R0,
-R1 and R2 are done, each passed by an independent review. R3's work is all in, but its last review still found
-one blocking issue after the two fix rounds the plan allows, so, as the
-plan says, R4 wasn't started. The owner then asked for that issue to be
-fixed and the stage to go on: it's fixed now (`ad47c20`..`4d968ac`, see
-R3), with three of R3's minor issues. R3's review of that found two more
-blocking issues, a slowdown `4d968ac` brought back and messages that
-blamed a handler falsely; they're fixed too (`435e869`..`11cbbe0`). Its
-next review found that `435e869` made checking quadratic in the number
-of handlers of several given before what's wanted was known; that's
-fixed too (`11ae913`), and R3 waits for its review again. The owner
-decided B5's open half should be fixed, and it is (`4037992`). Then R4
-was done, in four parts: `==` requiring `eq`, inferred into schemes;
-dictionaries in Core; interfaces and the implementation tier; and lambda
-sets. It waits for its independent review too. The branch is green: `dune build` and
-`dune runtest` pass at every commit, run as a user that isn't root (see
-"For whoever runs the tests", below).
+**The stage is done.** Every step, R0 to R4, passed an independent
+review in the end. R3 didn't at first: its last review left one blocking
+issue after the two fix rounds the plan allows, so the run stopped there
+and this report was first written then. The owner asked for that issue
+to be fixed, for B5's open half to be fixed too, and for the stage to go
+on, without the two-round limit. R3's later reviews found four more
+blocking issues, each fixed, before one passed; B5's fix needed one
+round; R4's first review found two ways `==` could still reach a function
+at runtime, both fixed, and its next review passed. The branch is green:
+`dune build` and `dune runtest` pass at every commit, run as a user that
+isn't root (see "For whoever runs the tests", below).
 
 | Step | Commits | Review |
 |---|---|---|
 | R0, foundations and safety nets | `849e97f`..`dbf55cd` (19) | passed after two fix rounds |
 | R1, restructure with no change in behaviour | `86ccbb1`..`9637c56` (34) | passed first time |
 | R2, typed Core | `0e1d896`..`6e8ca0b` (16) | passed first time |
-| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then `ad47c20`..`4d968ac` (5), then `435e869`..`11cbbe0` (3), then `11ae913`..`18a55bb` (2), then `4037992`..`a6cdeb3` (3) | one blocking issue left after two fix rounds, **fixed since**; its reviews found three more, fixed; to be reviewed again |
-| R4, requirements and lambda sets | `f34e259`..`c0accc8` (14) | done; to be reviewed |
+| R3, one constraint solver | `d811c1a`..`3f381d1` (31), then the owner's go-ahead: `ad47c20`..`4d968ac` (5), `435e869`..`11cbbe0` (3), `11ae913`..`ebf0d12` (3) | passed after five fix rounds in all, two before the stop and three after |
+| R3, B5's open half | `4037992`..`a6cdeb3` (3) | passed after one fix round |
+| R4, requirements and lambda sets | `f34e259`..`b8a42f7` (18) | passed after one fix round |
 
-`STAGE-10-0-PLAN.md` is kept, since the stage isn't finished: it's what
-the next session starts from, with this report beside it.
+`STAGE-10-0-PLAN.md`, the brief, is deleted in the commit that finishes
+the stage, as it asked; it's in the history at `86cb38f` and after.
 
 ## R0: Foundations and safety nets
 
@@ -617,8 +612,20 @@ makes one set of all of them, checked in 0.04s before and 0.14s now
 
 **Issues still open.**
 
-- **R4's first review found two blocking issues,** both fixed (above);
-  it hasn't been reviewed again since.
+- **R4's first review found two blocking issues,** both fixed (above).
+  Its second review found none. Its minor notes, open:
+  - `ren types` leaves out a generic associated value's requirement:
+    `pub let eqf: fn(T, T) -> Bool = fn(a, b) => a == b` under `Box<T>`
+    prints with no `has eq`, though its uses are checked.
+  - One set that collects thousands of lambdas grows worse than
+    quadratically to check: an array of 16,000 lambdas takes 8.9s, against
+    0.4s before R4. Keeping each set's size and end with it would fix it.
+  - The driver's interface check compares requirements, but the
+    interface's are copied from the same inferred schemes, so for
+    requirements it can't fail.
+  - `ren types` prints `same<T has eq>`, which isn't syntax: a user who
+    copies it gets "expected `,` or `>`, found `has`", with no word that
+    requirements are never written.
 - The implementation tier holds only public bodies, so a private generic
   helper a public one calls isn't in it, and it tells a higher-order
   function only by its signature's function types, so one taking a
@@ -652,9 +659,10 @@ makes one set of all of them, checked in 0.04s before and 0.14s now
 
 ## Notes for the next stage
 
-- **Get R3 and R4 reviewed.** Each has its work in and its tests green,
-  but neither has had the independent review the plan asks for since its
-  last changes. Then delete `STAGE-10-0-PLAN.md`, as it says.
+- **Operators (stage 9) come next,** on these foundations: a member's
+  identity has its overload index, requirements are inferred and passed
+  as dictionaries, and the solver decides a group's constraints whatever
+  order they were met in.
 - **Requirements are strings,** `"eq"`, in schemes, interfaces and Core's
   dictionaries. Operators bring `add`, `hash`, `show` and more: a variant
   is a small change, and each new one needs its derivation (what types
