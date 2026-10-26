@@ -3356,6 +3356,29 @@ let%expect_test "many handlers of several given early check in time" =
     values, then other calls: in time
     |}]
 
+let%expect_test "an operation read from a value holding a handler of several" =
+  (* only `Rates` has `usd_to`, so that's what the value is taken as, and
+     the message is the one for any value of `Rates` *)
+  check_error
+    (rates
+   ^ {|
+fn id(x) = x
+
+fn main() uses Console =
+  let h = id(counting_rates(3))
+  print(h.usd_to(1))
+|}
+    );
+  [%expect
+    {|
+    error: `usd_to` is an operation of `Rates`, so it isn't read from a value
+       ┌─ test.ren:20:11
+    20 │   print(h.usd_to(1))
+       │           ^^^^^^
+       = a value of `Rates` is an implementation of it: it's used by installing it, with `with`, and then `Rates.usd_to` calls it
+       help: call the installed one: `Rates.usd_to(...)`
+    |}]
+
 let%expect_test "a handler of several, then said to be something else" =
   (* what the handler is given to is decided after it, so it's what says
      so after that's blamed, as the constraint met second always is: not
