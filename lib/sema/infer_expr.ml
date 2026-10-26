@@ -11,14 +11,23 @@
 
    Constructors, record fields, record literals without a type name and
    methods called with a dot, `s.push(1)`, are all found through a type, by
-   one lookup ([through_type]) in the three steps of module-build.md.
-   Nothing waits: a question that can't be answered where it's asked is an
-   error that says which annotation would answer it, so the result never
-   depends on the order inference happens to learn things in.
+   one lookup (Infer_lookup.through_type) in the three steps of
+   module-build.md. Nothing waits: a question that can't be answered where
+   it's asked is an error that says which annotation would answer it, so
+   the result never depends on the order inference happens to learn things
+   in.
 
    As it goes, inference records every expression's and pattern's type by
    its node id, and what each lookup found. infer_top.ml hands the table on
-   in canonical form, for the passes after it. *)
+   in canonical form, for the passes after it.
+
+   This file is the core of it, [check] and [synth]. The rest is split by
+   concern, into modules beside it: infer_env.ml has the types they all
+   share, infer_report.ml reports a mismatch and explains it,
+   infer_written.ml turns written types into the checker's,
+   infer_lookup.ml finds things through a type, infer_rows.ml keeps
+   track of what code fails with and uses, and infer_handlers.ml checks
+   handlers and `with`. *)
 
 open Ast
 open Ast.Resolved

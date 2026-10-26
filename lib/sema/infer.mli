@@ -54,7 +54,7 @@ type t = {
   nodes : node Nodes.t Path.Map.t;
       (** each function's expressions and patterns, by its path, then node id *)
   in_scope : Path.t list;
-      (** the types step 2 of a lookup through a type found (infer_expr.ml),
+      (** the types step 2 of a lookup through a type found (infer_lookup.ml),
           sorted: the import by name of each one is used *)
 }
 

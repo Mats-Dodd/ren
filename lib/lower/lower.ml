@@ -355,7 +355,7 @@ and expr_of cx (e : expr) : C.expr =
           (* a tag, inside `Err(...)`: the error it holds *)
           here (Tag (tag.name.name, List.map (fun (_, a) -> expr cx a) args))
       | Some (Ctor_of (p, c)), _ ->
-          (* ctor_shape (infer_expr.ml) made sure the arguments are in the
+          (* ctor_shape (infer_lookup.ml) made sure the arguments are in the
              order of the fields *)
           here (Con (p, c, List.map (fun (_, a) -> expr cx a) args))
       | _ -> bug "a constructor inference didn't find")

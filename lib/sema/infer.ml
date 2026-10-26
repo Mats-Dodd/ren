@@ -50,9 +50,9 @@
    found, so later passes don't have to work it out again: exhaust.ml reads
    which constructor each pattern is.
 
-   The pass is split in three: infer_expr.ml infers expressions,
-   infer_top.ml works over the whole module, and infer_msg.ml words the
-   errors. *)
+   The pass is split in three: infer_expr.ml infers expressions, with
+   the modules beside it it names, infer_top.ml works over the whole
+   module, and infer_msg.ml words the errors. *)
 
 (* [type found = Infer_env.found = ...] re-exports a type along with its
    constructors (or fields), so they can be written [Infer.Field_of] as well

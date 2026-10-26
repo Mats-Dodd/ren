@@ -50,7 +50,7 @@
    a binder's id, mut.ml its kind.
 
    Constructors and record fields aren't found here: they're found through
-   a type (infer_expr.ml), so two types can have constructors of the same
+   a type (infer_lookup.ml), so two types can have constructors of the same
    name.
 
    Each problem is reported to the sink (diag.ml), and resolution carries
@@ -67,7 +67,7 @@ let plural n = if n = 1 then "" else "s"
    alias, or a type it imports by name. Whether a type imported by name is
    used isn't known here, though: `Red`, written bare, can be a constructor
    of an imported `Color` that step 2 of a lookup through a type finds
-   (infer_expr.ml). So this pass records what it saw used, and
+   (infer_lookup.ml). So this pass records what it saw used, and
    [unused_imports] reports the rest once inference is done. *)
 type import_use = {
   import : import;
