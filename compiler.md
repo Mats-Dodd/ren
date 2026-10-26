@@ -457,6 +457,11 @@ Where the work forced a change to the plan above:
   `let o = Some(counting_rates(1))` followed by `let p: Option<Rates> =
   o` is accepted now too: one error a test showed is gone (test_deps.ml,
   "a handler of several where something else is wanted"). An `if` whose
-  `then` branch is a handler and whose `else` is an implementation of one
-  of its dependencies is still rejected, since its branches don't meet
-  at a type not known yet; that's left with the rest of B3.
+  `then` branch is a handler of several waits for its `else`, as an
+  element of an array waits for the others, so `if c then
+  counting_rates(1) else Rates { ... }` is a `Rates`, as it is with the
+  branches the other way round, as deps.md says it should be; it was
+  rejected, and a test pinned that ("where nothing says which, a handler
+  of several is its own"). A `then` branch that can't be what the `else`
+  is is now blamed itself, "this `then` branch is ...", since the fix
+  goes there.

@@ -2824,13 +2824,6 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: this `else` branch is a `Rates`, but the `then` branch is a `counting_rates`
-       ┌─ test.ren:12:36
-    12 │   if b then counting_rates(1) else Rates { usd_to: fn(c) => c }
-       │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       │             ----------------- the `then` branch is a `counting_rates`
-       = both branches of an `if` have to produce the same type
-
     error: expected `Unit`, found `counting_rates`
        ┌─ test.ren:22:17
     22 │ pub fn make() = counting_rates(1)
@@ -2991,6 +2984,73 @@ fn main() uses Console =
     5
     4
     ()
+    |}]
+
+let%expect_test "an `if` takes a handler of several as one in either branch" =
+  (* B3: a `then` branch that's a handler waits for the `else`, as an
+     element of an array waits for the others, so it's a `Rates` here
+     whichever branch it's in. One that can't be what the other branch is
+     is blamed where it's given *)
+  let src =
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() uses Console =
+  let x = if true then Rates { usd_to: fn(c) => c + 1 } else counting_rates(2)
+  let y = if true then counting_rates(3) else Rates { usd_to: fn(c) => c + 1 }
+  print(run(x) + run(y))
+|}
+  in
+  run src;
+  [%expect {|
+    5
+    ()
+    |}];
+  check_error
+    {|
+pub dep Rates =
+  usd_to: fn(c: Int) -> Int
+
+pub dep RateCalls =
+  count: fn() -> Int
+
+handler counting_rates(rate: Int) for Rates, RateCalls =
+  usd_to(c) => c * rate
+  count() => 0
+
+fn main() =
+  let x = if true then Clock.frozen(Time.epoch) else counting_rates(2)
+  let y = if true then counting_rates(3) else Clock.frozen(Time.epoch)
+  ()
+|};
+  [%expect {|
+    error: this `else` branch is a `counting_rates`, but the `then` branch is a `Clock`
+       ┌─ test.ren:12:54
+    12 │   let x = if true then Clock.frozen(Time.epoch) else counting_rates(2)
+       │                                                      ^^^^^^^^^^^^^^^^^
+       │                        ------------------------ the `then` branch is a `Clock`
+       = both branches of an `if` have to produce the same type
+       = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
+       help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
+
+    error: this `then` branch is a `counting_rates`, but the `else` branch is a `Clock`
+       ┌─ test.ren:13:24
+    13 │   let y = if true then counting_rates(3) else Clock.frozen(Time.epoch)
+       │                        ^^^^^^^^^^^^^^^^^
+       │                                               ------------------------ the `else` branch is a `Clock`
+       = both branches of an `if` have to produce the same type
+       = `counting_rates` is a handler for `Rates` and `RateCalls`, so what its call describes implements those, not `Clock`
+       help: give an implementation of `Clock` here: a `Clock { ... }`, or a handler for `Clock`
     |}]
 
 let%expect_test "a handler given too few arguments in a `with`" =

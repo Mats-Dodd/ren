@@ -216,12 +216,28 @@ and synth env cx (e : expr) : ty =
   | If (c, t, Some f) ->
       want_bool env Condition c (infer env cx c);
       let tt = infer env cx t in
-      check env cx f tt
-        ~why:
-          (explain ~msg:else_branch
-             ~labels:(fun _ x -> [ (result_loc t, then_branch x) ])
-             ~notes:[ if_branches ] ());
-      tt
+      let else_why =
+        explain ~msg:else_branch
+          ~labels:(fun _ x -> [ (result_loc t, then_branch x) ])
+          ~notes:[ if_branches ] ()
+      in
+      if several env tt then (
+        (* a `then` branch that's a handler of several dependencies waits
+           for the `else`, which may be an implementation of one of them,
+           `if c then counting_rates(1) else Rates { ... }`: then it's
+           taken as that one, as it is with the branches the other way
+           round (Infer_coerce) *)
+        let res = fresh_var env.st in
+        give env cx
+          (explain ~msg:then_branch_other
+             ~labels:(fun _ x -> [ (result_loc f, else_branch_is x) ])
+             ~notes:[ if_branches ] ())
+          t tt res;
+        check env cx f res ~why:else_why;
+        res)
+      else (
+        check env cx f tt ~why:else_why;
+        tt)
   | If (c, t, None) ->
       want_bool env Condition c (infer env cx c);
       let ok =

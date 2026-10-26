@@ -592,6 +592,12 @@ let else_branch f x =
     (article x)
 
 let then_branch x = sprintf "the `then` branch is %s" (article x)
+
+let then_branch_other f x =
+  sprintf "this `then` branch is %s, but the `else` branch is %s" (article f)
+    (article x)
+
+let else_branch_is x = sprintf "the `else` branch is %s" (article x)
 let if_branches = "both branches of an `if` have to produce the same type"
 
 let no_else f _ =
