@@ -3261,7 +3261,8 @@ fn main() uses Console =
 
 let%expect_test "a value holding a handler of several, taken as one elsewhere" =
   (* once something says the value is one of the handler's dependencies,
-     it's that one everywhere, and can't be passed as the other *)
+     it's that one everywhere, and can't be passed as the other, whether
+     that's said before it's passed or after *)
   check_error
     (rates
    ^ {|
@@ -3281,6 +3282,28 @@ fn main() uses Console =
     error: expected `Rates`, found `RateCalls`
        ┌─ test.ren:21:26
     21 │     Some(h) => print(run(h))
+       │                          ^
+       = this holds a `counting_rates`, which implements `Rates` and `RateCalls`, but something else here takes it as just `RateCalls`, so it's that everywhere: a handler of several stays its own only where nothing says which it is
+       help: make another for this one, `counting_rates(...)`, or leave out what says it's a `RateCalls`
+    |}];
+  check_error
+    (rates
+   ^ {|
+fn run(r: Rates) -> Int = with r in Rates.usd_to(1)
+
+fn main() uses Console =
+  let o = Some(counting_rates(2))
+  let p: Option<RateCalls> = o
+  match o
+    Some(h) => print(run(h))
+    None => ()
+|}
+    );
+  [%expect
+    {|
+    error: expected `Rates`, found `RateCalls`
+       ┌─ test.ren:22:26
+    22 │     Some(h) => print(run(h))
        │                          ^
        = this holds a `counting_rates`, which implements `Rates` and `RateCalls`, but something else here takes it as just `RateCalls`, so it's that everywhere: a handler of several stays its own only where nothing says which it is
        help: make another for this one, `counting_rates(...)`, or leave out what says it's a `RateCalls`

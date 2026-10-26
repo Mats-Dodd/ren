@@ -39,22 +39,33 @@ let as_one env t expected =
 (* If [t] is a variable that a handler of several dependencies was given
    to, and nothing has said what it is since: that handler, its
    dependencies, and what it needs. The first handler given to it is the
-   one, as for [settle]. *)
-let given env t =
-  match repr t with
-  | TVar v ->
-      List.find_map
-        (function
-          | Coerce { cwanted; cfound; _ } -> (
-              match (repr cwanted, repr cfound) with
-              | TVar v', TCon (h, [ TUses needs ]) when v' == v -> (
-                  match Hashtbl.find_opt env.types h with
-                  | Some { body = Handler deps; _ } -> Some (h, deps, needs)
-                  | _ -> None)
+   one, as for [settle]. With [said], also if something has said it's one
+   of those dependencies since, but the solver hasn't taken the handler
+   as it yet. *)
+let given ?(said = false) env t =
+  let t = repr t in
+  (* whether [w] is [t]: the same variable, or with [said], the same type
+     a variable became, which [==] says is the same one in memory *)
+  let same w =
+    match (repr w, t) with
+    | TVar v', TVar v -> v' == v
+    | w, TCon _ -> said && w == t
+    | _ -> false
+  in
+  List.find_map
+    (function
+      | Coerce { cwanted; cfound; _ } when same cwanted -> (
+          match (repr cfound, t) with
+          | TCon (h, [ TUses needs ]), t -> (
+              match (Hashtbl.find_opt env.types h, t) with
+              | Some { body = Handler deps; _ }, TVar _ -> Some (h, deps, needs)
+              | Some { body = Handler deps; _ }, TCon (d, [ TUses _ ])
+                when List.mem d deps ->
+                  Some (h, deps, needs)
               | _ -> None)
           | _ -> None)
-        (List.rev env.pending)
-  | _ -> None
+      | _ -> None)
+    (List.rev env.pending)
 
 (* The same, without the handler. *)
 let pending env t =
@@ -71,17 +82,21 @@ let pending env t =
    install them all with `with`. Whether [e] is taken as that one, or is
    it already, or can't be, is decided by the solver once the variable is
    ([coerce]), which comes after, since the handler was given to it
-   first. Unified with what's wanted as it is, the variable would need
-   what the parameter's function uses, and in a `with` of it, around the
-   call, that's what the `with`'s body uses. *)
+   first. That's so, too, if something has already said it's another of
+   them, so the message is the same whichever came first. Unified with
+   what's wanted as it is, the variable would need what the parameter's
+   function uses, and in a `with` of it, around the call, that's what the
+   `with`'s body uses. *)
 let taken_as env cx why (e : expr) t expected =
   match as_one env t expected with
   | Some (d, one) ->
       Hashtbl.replace cx.as_dep e.node d;
       one
   | None -> (
-      match (given env t, reveal env.st expected) with
-      | Some (h, deps, needs), TCon (d, [ TUses _ ]) when List.mem d deps ->
+      match (given ~said:true env t, reveal env.st expected) with
+      | Some (h, deps, needs), TCon (d, [ TUses _ ])
+        when List.mem d deps
+             && match repr t with TCon (o, _) -> o <> d | _ -> true ->
           let one = TCon (d, [ TUses needs ]) in
           defer env
             (Coerce
