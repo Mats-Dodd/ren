@@ -118,10 +118,10 @@ falls short it says so.
 - **Inference's result** gives every expression and pattern a type and,
   where something was found through a type, what (infer.mli). It decides
   every question once: which constructor, which method, whether a call
-  can fail, whether a `with` installs a handler or wraps its body. From
-  R1, lower reads those decisions and never makes them again. Today it
-  still asks inference's own functions whether a `with` installs a
-  handler and whether a call can fail (Infer_rows.handles and is_fail).
+  can fail, whether a `with` installs a handler or wraps its body,
+  which `match`es handle errors and which arms are `fail` arms, whether
+  a `try` unwraps a `Result`. Lower and exhaust read those decisions
+  from it and never make them again.
 - **Core** has one way to change something, an assignment to a local,
   and one way each to fail, to handle an error, to install an
   implementation and to call a dependency (core.ml). Every node has its
