@@ -10,3 +10,20 @@
   (glob_files %{project_root}/examples/vm/*.ren))
  (action
   (run sh %{dep:run.sh} %{bin:ren})))
+
+; build.t builds every program here, and the examples, that the native
+; slice compiles, under the sanitizers, and checks each prints what
+; `ren run` does. It needs a C compiler, cc or $REN_CC.
+
+(cram
+ (applies_to build)
+ (deps
+  %{bin:ren}
+  (glob_files *.ren)
+  (glob_files native/binary-trees/*.ren)
+  (glob_files native/cfold/*.ren)
+  (glob_files native/deriv/*.ren)
+  (glob_files native/fannkuch/*.ren)
+  (glob_files native/nbody/*.ren)
+  (glob_files native/nqueens/*.ren)
+  (glob_files %{project_root}/examples/*.ren)))

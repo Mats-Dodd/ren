@@ -178,3 +178,21 @@ val render_error : sources:(string -> string option) -> exn -> string option
    method instead, called as the source writes the operands,
    `n.wrapping_add(1)`, or [None] if they can't be shown. *)
 val wrap_help : sources:(string -> string option) -> Eval.wrap -> string option
+
+(* ---- `ren build` (compiler.md, "Native slice") ---- *)
+
+(* The program, as Mem IR (mem.ml): its modules linked, and what `$start`
+   reaches lowered, then checked by Mem Lint, which runs on every build.
+   With [lint], Core Lint checks each module first. Code the native slice
+   can't compile yet is an error that says so, at that code. *)
+val mem : ?lint:bool -> ?load:loader -> file:string -> string -> Mem.program
+
+(* The same, as one C file, the runtime in it. [sources] gives the text
+   of each file a panic's message can show, by name (diag.ml). *)
+val native :
+  ?lint:bool ->
+  ?load:loader ->
+  sources:(string -> string option) ->
+  file:string ->
+  string ->
+  string

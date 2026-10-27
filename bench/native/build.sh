@@ -3,8 +3,9 @@
 # Each lands in the output folder as <name>-rust and <name>-go, and takes
 # its size as its first argument. The folder defaults to ren-bench-native
 # under $TMPDIR, outside the repository; REN_BENCH_OUT or the argument
-# moves it. Ren's own binaries come with `ren build` (native step 2), so
-# for now Ren runs in the interpreter: `ren run main.ren`.
+# moves it. Ren's own binaries aren't built here yet: `ren build
+# --release main.ren` in a folder builds those native step 2 compiles,
+# and step 6 adds them to this script.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-${REN_BENCH_OUT:-${TMPDIR:-/tmp}/ren-bench-native}}

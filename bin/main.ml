@@ -9,6 +9,8 @@ let usage =
   {|usage: ren <command> <file.ren>
        ren run [--record <file.journal>] [--trace] <file.ren> [-- <args>...]
        ren replay <file.journal> [--trace]
+       ren build <file.ren> [-o <out>] [--debug | --release] [--emit-c]
+                 [--stats]
        ren core --types <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
@@ -33,6 +35,18 @@ commands:
           nothing runs; it stops at the first call that isn't the
           recording's. Its arguments are those the journal recorded:
             --trace  print the tree of calls it made, as `ren run --trace`
+  build   compile the program to a native binary, through C, which prints
+          what `main` gives as `ren run` does. Only the native slice's
+          subset compiles yet (compiler.md, "Native slice"); anything
+          else is an error that says to use `ren run`:
+            -o <out>   the binary to write, the file's name without
+                       `.ren` if not given
+            --debug    -O0 -g, the default
+            --release  -O2, the same code until native step 5
+            --emit-c   print the C instead of building it
+            --stats    count allocations, frees and reference counting,
+                       printed to stderr when the binary exits
+          It runs $REN_CC, or cc, with $REN_CFLAGS added
   test    run the tests of every module in the folder (the current one if
           none is given) and the folders in it, but those holding a
           program of their own, with a `main`; or of the file and what
@@ -576,6 +590,82 @@ let replay args =
       print_trace trace;
       fail ~known e
 
+(* `ren build <file.ren> [-o <out>] [--debug | --release] [--emit-c]
+   [--stats]` (compiler.md, "Native slice"): the program as C, compiled
+   in a temporary folder by $REN_CC, or cc. *)
+let build args =
+  let rec parse ((out, release, emit, stats, path) as o) = function
+    | "-o" :: file :: rest -> parse (Some file, release, emit, stats, path) rest
+    | "--debug" :: rest -> parse (out, false, emit, stats, path) rest
+    | "--release" :: rest -> parse (out, true, emit, stats, path) rest
+    | "--emit-c" :: rest -> parse (out, release, true, stats, path) rest
+    | "--stats" :: rest -> parse (out, release, emit, true, path) rest
+    | flag :: _ when String.starts_with ~prefix:"-" flag ->
+        prerr_endline ("error: `ren build` has no option " ^ flag);
+        prerr_endline usage;
+        exit 2
+    | file :: rest when path = None ->
+        parse (out, release, emit, stats, Some file) rest
+    | _ :: _ ->
+        prerr_endline "error: `ren build` builds one file";
+        exit 2
+    | [] -> o
+  in
+  let out, release, emit, stats, path =
+    parse (None, false, false, false, None) args
+  in
+  let path =
+    match path with
+    | Some p -> p
+    | None ->
+        prerr_endline usage;
+        exit 2
+  in
+  let src = read path in
+  let known = [ (path, src) ] in
+  let c =
+    try
+      Driver.native ~load:(loader path) ~sources:(sources ~known) ~file:path src
+    with e -> fail ~known e
+  in
+  if emit then print_string c
+  else
+    let out =
+      match out with
+      | Some o -> o
+      | None -> Filename.remove_extension (Filename.basename path)
+    in
+    let dir = Filename.temp_dir "ren-build" "" in
+    let c_file = Filename.concat dir "main.c" in
+    Out_channel.with_open_bin c_file (fun oc -> output_string oc c);
+    let cc = Option.value (Sys.getenv_opt "REN_CC") ~default:"cc" in
+    let extra =
+      match Sys.getenv_opt "REN_CFLAGS" with
+      | Some f -> List.filter (( <> ) "") (String.split_on_char ' ' f)
+      | None -> []
+    in
+    (* -ffp-contract=off in both, so a `Float` is computed as `ren run`
+       computes it, never with a fused multiply and add *)
+    let flags =
+      (if release then [ "-O2" ] else [ "-O0"; "-g" ])
+      @ [ "-ffp-contract=off" ]
+      @ (if stats then [ "-DREN_STATS" ] else [])
+      @ extra
+    in
+    let cmd =
+      Filename.quote_command cc
+        (flags @ [ "-o"; out; c_file; "-lm"; "-lpthread" ])
+    in
+    if Sys.command cmd <> 0 then (
+      prerr_endline
+        (Printf.sprintf
+           "error: the C compiler failed on the C `ren build` wrote, which is \
+            a bug in the Ren compiler; the C is in %s"
+           c_file);
+      exit 1);
+    Sys.remove c_file;
+    try Sys.rmdir dir with Sys_error _ -> ()
+
 (* `ren console <module> [--real Clock,Fs]` (testing.md, "The console"). *)
 let console args =
   let home, real =
@@ -652,6 +742,8 @@ let () =
       run (List.tl (List.tl (Array.to_list args)))
   | args when Array.length args >= 2 && args.(1) = "replay" ->
       replay (List.tl (List.tl (Array.to_list args)))
+  | args when Array.length args >= 2 && args.(1) = "build" ->
+      build (List.tl (List.tl (Array.to_list args)))
   | args when Array.length args >= 2 && args.(1) = "console" ->
       console (List.tl (List.tl (Array.to_list args)))
   | [| _; cmd; path |] -> (

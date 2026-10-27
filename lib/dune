@@ -8,6 +8,9 @@
 ;            lowering, Core Lint, and a module's implementation tier
 ;   eval/    the interpreter, the values it computes, and what the prelude's
 ;            built-in functions do when they run
+;   native/  the native backend: Mem IR, the lowering to it and its lint,
+;            the C it's written out as, and runtime/, the C runtime every
+;            binary is built with, embedded as a string
 ; `unqualified` means the folders only organize files: every module keeps
 ; its plain name (Parser, not Syntax.Parser).
 

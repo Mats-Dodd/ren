@@ -433,6 +433,26 @@ fn(inout Account, Money, Movement) ! Frozen(AccountId) uses Clock
 - **Later, read-only attaching to a running program** through its
   journal: what did this request do?
 
+## The native backend is checked against the interpreter
+
+The interpreter is the reference for what a program does, and every
+binary `ren build` makes has to agree with it to the byte: what it
+prints to stdout and to stderr, panics included, and how it exits.
+[bench/build.t](bench/build.t) builds every program the native slice
+compiles ([compiler.md](compiler.md#native-slice)), the benchmarks and
+the examples in its subset, as a debug build with `--stats` and under
+AddressSanitizer and UndefinedBehaviorSanitizer
+(`REN_CFLAGS='-fsanitize=address,undefined'`), runs it and `ren run`,
+and compares the two. The statistics say how many objects are still
+alive when it ends, which has to be 0: a count that's never dropped is
+a leak the sanitizers don't see. A program outside the subset is in it
+too, to show the error that says so. It needs a C compiler, `cc` or
+`$REN_CC`.
+
+Under it, Mem Lint checks every program `ren build` lowers, and the
+expect tests in test/test_native.ml print the Mem IR of a few programs
+and the mistakes Lint catches, as Core Lint's tests do for Core.
+
 ## Later
 
 - **Generated call sequences.** The compiler knows a module's interface,
@@ -457,6 +477,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 |---|---|
 | **9c** | tests see what an importer sees; test items; a type that keeps rules is opaque ([module-build.md](module-build.md#private-unless-pub)); `ren console` with types, private items and the choice of world |
 | **10** | the journal: effects shown in the console, `:reload`, `:spec`, journals as tests (done, stage 10b) |
+| **native slice** | every binary `ren build` makes compared with `ren run`, under ASan and UBSan, with no object left alive (started, native step 2) |
 | **11a** | `ren test --sim --seeds` on the `sim` runtime; journals as tests with a schedule prefix |
 | **12** | property tests: derived generation, generation through constructors, `arbitrary`, shaped parameters, shrinking by replay, saved failures, the report, `ren fuzz`; schedules from 11a's `sim` in the choice sequence |
 | **Later** | generated call sequences, programs as properties, swarm testing, attaching the console |

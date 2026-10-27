@@ -1337,3 +1337,49 @@ let render_error ~sources = function
            \  = this is a bug in the Ren compiler, not in your program\n"
            pass message)
   | _ -> None
+
+(* ---- `ren build` (compiler.md, "Native slice") ---- *)
+
+(* What a panic at [s] prints around its message, which the binary fills
+   in when it panics: `ren run`'s message for a panic there, with a hole
+   where the message goes, so the two print the same bytes. An
+   `assert`'s whole message is known now. *)
+let site_text ~sources (s : Mem.site) =
+  match s.kind with
+  | Asserts -> (Diag.render ~sources (assert_failed s.loc None), "")
+  | Panics -> (
+      let wrap =
+        Option.map
+          (fun (w : Mem.wrap) : Eval.wrap ->
+            { meth = w.meth; recv = w.recv; arg = w.arg })
+          s.wrap
+      in
+      let text = Diag.render ~sources (panic_diag ~sources s.loc "\000" wrap) in
+      match String.index_opt text '\000' with
+      | Some i ->
+          ( String.sub text 0 i,
+            String.sub text (i + 1) (String.length text - i - 1) )
+      | None -> failwith "bug: a panic's message that doesn't hold its message")
+
+(* What the native slice can't compile yet, at [loc]: an error that says
+   so, and how to run the program anyway. *)
+let not_native ~file loc what =
+  Diag.Error
+    (Diag.make loc ~says:"`ren build` can't compile this yet"
+       ~help:(sprintf "run it with `ren run %s`" file)
+       (what ^ " isn't in the native slice yet"))
+
+let mem ?lint ?load ~file src =
+  let modules = linked ?lint ?load ~file src in
+  let p =
+    pass "native lowering" (fun () ->
+        try To_mem.program modules
+        with To_mem.Unsupported (loc, what) ->
+          raise (not_native ~file loc what))
+  in
+  pass "Mem Lint" (fun () -> Mem_lint.program p);
+  p
+
+let native ?lint ?load ~sources ~file src =
+  let p = mem ?lint ?load ~file src in
+  pass "C" (fun () -> Emit_c.program ~site_text:(site_text ~sources) p)

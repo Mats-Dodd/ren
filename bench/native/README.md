@@ -4,9 +4,12 @@ The programs the native slice is measured with ([vision.md](../../vision.md),
 "Within 2× of Rust" and "Debug builds faster than Go";
 [foundations.md](../../foundations.md), Staging, item 2). Each is written
 three times: in Ren, the way the docs teach it, and in Rust and Go, the
-way a good programmer in each writes it. Today the Ren runs in the
-interpreter, which checks what each computes. `ren build` comes in native
-step 2, and the timings with hyperfine in step 6.
+way a good programmer in each writes it. The interpreter checks what
+each computes. `ren build` (native step 2) compiles those in the
+first-order subset, `binary-trees`, `cfold`, `deriv`, `fannkuch` and
+`nbody`, and bench/build.t checks each binary prints what `ren run`
+does; the rest need native step 3. The timings with hyperfine come in
+step 6.
 
 ## What's here
 
@@ -75,8 +78,9 @@ sh bench/native/build.sh out/dir    # or REN_BENCH_OUT=out/dir
 
 It compiles each `rust/main.rs` with `rustc -C opt-level=3 -C
 codegen-units=1` and each `go/main.go` with `go build`, to
-`<program>-rust` and `<program>-go`, outside the repository. It skips the
-Ren until `ren build` exists. `ren run main.ren` in a folder runs the
+`<program>-rust` and `<program>-go`, outside the repository. It
+doesn't build the Ren yet: `ren build --release main.ren` in a folder
+does, for the programs in the subset, and step 6 adds them here. `ren run main.ren` in a folder runs the
 interpreter at full size, which takes from minutes to most of an hour,
 but not `cfold`'s: its recursion goes deeper than the interpreter's
 limit of 100,000 calls.

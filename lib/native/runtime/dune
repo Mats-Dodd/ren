@@ -1,0 +1,17 @@
+; The runtime, embedded in the compiler as two OCaml strings
+; (runtime_c.ml), so `ren build` writes it into each C file and a binary
+; needs no installed files.
+
+(rule
+ (targets runtime_c.ml)
+ (deps ren_rt.h ren_rt.c)
+ (action
+  (with-stdout-to
+   runtime_c.ml
+   (progn
+    (echo "(* Generated from ren_rt.h and ren_rt.c by lib/native/runtime/dune. *)\n\n")
+    (echo "let header = {ren_rt|")
+    (cat ren_rt.h)
+    (echo "|ren_rt}\n\nlet source = {ren_rt|")
+    (cat ren_rt.c)
+    (echo "|ren_rt}\n")))))

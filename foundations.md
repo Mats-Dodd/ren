@@ -447,7 +447,10 @@ dependencies where it's called.
    measured against Rust and Go, to put numbers on the memory and
    dispatch bet before tasks and many cores build on it. Landed so
    far: the benchmarks themselves (step 1), in Ren, Rust and Go, in
-   bench/native, with the Ren checked in the interpreter.
+   bench/native, with the Ren checked in the interpreter; and Mem IR,
+   the C runtime and `ren build` for the first-order subset (step 2),
+   with naive counting, each binary checked against `ren run` under
+   the sanitizers (compiler.md, "Native slice").
 3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.

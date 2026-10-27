@@ -67,9 +67,9 @@ inference every body a value goes through.
 | inferred | infer.ml | each function's scheme and each node's type and lookup | the driver: a public function's inferred scheme is the one its interface states | yes |
 | Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments from R2, requirement dictionaries from R4 | Core Lint, which the tests run on every program | yes |
 | specialized Core | the specializer | Core with type arguments and requirements chosen, and each block and known handler specialized where it's used | Core Lint | the memory stage |
-| Mem IR | memory lowering | A-normal form, layouts, a block as a code and a frame pointer | its own lint | the memory stage |
-| Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | the memory stage |
-| C | the C backend | the counted Mem IR, emitted | the C compiler, ASan and UBSan | after the memory stage |
+| Mem IR | memory lowering | A-normal form, layouts, a block as a code and a frame pointer | its own lint | the first-order subset ([Native slice](#native-slice)): to_mem.ml, checked by mem_lint.ml on every build; blocks in native step 3 |
+| Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | naive: a dup at every use and a drop at every scope's end, placed by to_mem.ml; Perceus in native step 4 |
+| C | the C backend | the counted Mem IR, emitted | the C compiler, ASan and UBSan | the first-order subset: emit_c.ml and the runtime, `ren build`, tested under ASan and UBSan against `ren run` |
 
 ## The facts
 
@@ -1437,3 +1437,154 @@ Where it differed from its plan:
 - **Blocks still can't take `inout` parameters,** and `retry(n, on:)`,
   inline handlers and generic dependencies wait for 10d. Rules B to D
   wait for 11a, which makes concurrent and spawned parameters.
+
+## Native slice
+
+A naive C backend for the sequential subset, and vision.md's benchmarks
+measured on it against Rust and Go, before tasks build on the design
+(foundations.md, Staging, item 2). Six steps: the benchmarks
+themselves (bench/native); Mem IR, the C runtime and a naive backend
+for the first-order subset, with `ren build`; the debug strategy for
+the rest of the subset, blocks, generics, handlers, errors, `show` and
+`Console`; Perceus over Mem IR; release builds that specialize; and the
+measurements. Each step extends this section.
+
+### Step 2: Mem IR, the runtime, and `ren build`
+
+`ren build file.ren [-o out] [--debug | --release] [--emit-c]
+[--stats]` links the program as `ren run` does (`Driver.linked`), lowers
+what `$start` reaches to Mem IR (to_mem.ml), checks it with Mem Lint
+(mem_lint.ml), writes it as one C file with the runtime in it
+(emit_c.ml), and runs `$REN_CC`, or `cc`, in a temporary folder, with
+`$REN_CFLAGS` added. Debug is `-O0 -g`, release `-O2`, the same code
+until step 5; both pass `-ffp-contract=off`, so a `Float` is never
+computed with a fused multiply and add the interpreter doesn't do. The
+binary prints what `main` gives as `ren run` does.
+
+**Mem IR** (mem.ml) is A-normal form: every operand is a variable or a
+constant, and each value has a layout, fixed where it's made:
+
+| Layout | What it is | In C |
+|---|---|---|
+| `Int`, `Float`, `Bool`, `Unit` | scalars | `int64_t`, `double`, `bool`, `uint8_t` |
+| `Enum` | a sum type none of whose constructors has fields: its tag | `uint32_t` |
+| `Boxed` | a counted object: a record, a tuple, a constructor with fields, an error, an array or a `Str`; a constructor without fields of a sum that has some is a small tagged scalar in the pointer, never counted, Lean's `lean_box` | `ren_obj*` |
+| `Cell` | the address of a C local: an `inout` parameter | a pointer |
+
+Allocation, `Dup`, `Drop` and `Free` are instructions. Control is `If`,
+`Switch` on a tag, `Loop` and `Break`, `Joins` and `Jump` (Lean IR's
+join points), and `Catch` and `Raise`. Mem Lint checks that every
+variable is defined before its use, in a scope around it as C's blocks
+scope it, and once; that every operand has the layout its operation
+needs; that only counted values are counted; that a call passes what
+its callee takes and a function that can fail is only called with a
+status; that a `Break`, `Jump` or `Raise` is inside what it goes to; and
+that an object's counted fields come first. The tests run it on every
+program they lower (test_native.ml), and `ren build` on every program
+it compiles.
+
+**Calling conventions.** A function whose type can fail with a tag
+returns its error, or `NULL`, and writes its value through a last
+pointer parameter, `ren_out`; `Fail` raises, a failing call checks its
+status, `Handle` is a `Catch`, and `Finally` a `Catch` whose handler
+runs the `after` and raises again, the `after` also run on the normal
+path and before a `break` that leaves it. An `inout` argument is the
+address of the caller's local. `match` switches on the subject's tag
+when it's of a sum type: each case tries, in order, only the arms that
+can match its constructor, and each arm's body is a join point after
+the tests, its pattern's variables declared before them. A subject
+written as a tuple, `match (a, b)`, isn't allocated: each arm's parts
+are matched against the parts. `while` is a C loop, and `break` a jump
+to its end. `Set_index` and `Array.push` copy the array: the naive
+semantics, which step 4's reuse makes in place.
+
+**Counting is naive,** H3's baseline: every use of a counted variable
+is a `Dup` into a fresh temporary that whatever uses it takes, a value
+only read, a `match`'s subject or a record a field is read from, is
+dropped once it's read, and every variable that owns one is dropped
+when its scope ends. A `Break` or a `Raise` drops what each scope it
+leaves holds: to_mem.ml keeps, per scope, the counted values held
+there. Step 4 keeps this as `--rc naive`.
+
+**The runtime** is lib/native/runtime, `ren_rt.h` and `ren_rt.c`,
+which a dune rule embeds as an OCaml string module (`Runtime_c`), so
+the binary needs no installed files. An object's header is its count
+and enough to free it without its type: its kind, its tag, and how many
+of its fields are counted. `ren_dup` and `ren_drop` are lean.h's
+`lean_inc_ref` and `lean_dec_ref` (lean.h:727-785) without the
+thread-shared paths, and `ren_is_unique` is `lean_is_exclusive` and
+kklib's `kk_block_is_unique` (kklib.h:306): counts are plain, since a
+program has one thread. A count of 0 is an object that's never freed,
+as Lean's, which is what a string literal is: made once in the C file.
+Freeing goes through a list rather than recursing, as
+`lean_dec_ref_cold` does (runtime/object.cpp:311-331), so dropping
+`nqueens`'s long lists won't overflow the stack. Arrays keep their
+length, capacity and whether their elements are counted. `Int`
+arithmetic is checked with `__builtin_*_overflow`, and panics, `Float`
+operations that would make a NaN, `Float`'s `show` and `sqrt`, `round`
+and `truncate` say exactly what lib/eval/arith.ml and builtins.ml say.
+`-DREN_STATS` counts allocations, frees, dups, drops, reuses, the most
+bytes live at once, and the objects still live, printed to stderr when
+the binary exits.
+
+**A panic prints what `ren run` prints.** Each place that can panic is
+a site, whose message the driver renders as `ren run` would, with a hole
+where the message goes (`Driver.site_text`), the overflow help included;
+the binary prints the parts around the message it makes. The program
+runs on a thread with a 1 GiB stack, which the system maps as it's
+used, and every function compares its frame with a limit 1 MiB above
+the end, as Go's prologues do, so recursion with no end is the
+interpreter's stack-overflow panic, at `main`.
+
+**The subset** is first-order and sequential: `Int`, `Float`, `Bool`,
+`Unit` and `Str`; records, sum types, tuples and arrays; `match` with
+guards, `if`, `var`, `inout` and `&`, `while`, `for`
+over ranges and arrays, and `break`; errors, with `fail`, `try`,
+`match` with `fail` arms and `attempt`; `assert`; `show` of a scalar or
+a `Str`, `Str`'s `concat` and `len`, `Array`'s `len` and `push`, and
+`Float`'s conversions; and `print` and `Console.write` to the real
+`Console`, which is the only implementation installed. `$start`'s
+install of `Console.real` is the only `with` it compiles, and a call of
+the prelude's `print` at a scalar or a `Str` is its `show` written to
+the console, since `print` itself is generic. Anything else, a generic
+function, a block, a handler, another dependency, `==` on a type that
+isn't a scalar or a `Str`, a `Map` or a `Set`, is an error at the code
+that needs it: `<what> isn't in the native slice yet`, with help to run
+it with `ren run`. bench/build.t builds every program in the subset,
+`fib`, `deep`, `loop` and `overflow`, `binary-trees`, `cfold`, `deriv`,
+`fannkuch` and `nbody`, and the examples `fib` and `blocks`, under ASan
+and UBSan, and checks each against `ren run`.
+
+Where it differed from its plan:
+
+- **A function returns a status only if it can fail with a tag,** not
+  whenever `Core.fails` says so of its type. Every function whose
+  errors are inferred has a row with a tail, `! ..e`, which `Core.fails`
+  counts as failing, but without a block parameter that tail can't
+  bring a tag in, so `fib` returns its `Int` (`To_mem.fn_fails`). Step 3
+  makes a function with a block parameter whose tail it shares fail.
+- **The interpreter's limit of 100,000 calls isn't the binary's.** The
+  binary overflows only when its 1 GiB stack does, so a program between
+  the two runs natively and panics in `ren run`; `cfold` at its full
+  size needs it. Tail calls aren't made into loops yet.
+- **Values a panic or an uncaught error leaves are leaked,** as
+  foundations.md's decision 8 says, so `--stats` counts them as live.
+- **`assert a == b` isn't in the subset,** since its message shows both
+  sides through their types: step 3, with `show`.
+
+What later steps need to know:
+
+- Each function's convention is `Mem.fn.fails`, computed once by
+  `To_mem.fn_fails`; a call looks it up by the callee, never from the
+  type at the call.
+- Generic code, blocks and handlers are rejected in `To_mem` at the
+  `Global` with descriptors or dictionaries, the `Lambda`, and the
+  `With`; step 3 replaces those cases, and evidence, which Mem drops
+  today, becomes a parameter.
+- `Runtime` calls borrow every argument, and a `Field` or a `Load` is
+  borrowed; everything else gives an owned value. Step 4 replaces the
+  `Dup`s and `Drop`s to_mem.ml places, and can keep their positions as
+  `--rc naive`.
+- `Free` and `ren_is_unique` exist for step 4 and nothing emits or
+  calls them yet; the stats count `reuses` as 0 until reuse exists.
+
