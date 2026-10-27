@@ -15,13 +15,13 @@ The native slice measured the first two for the first time
 ([bench/native/RESULTS.md](bench/native/RESULTS.md)), on its sequential
 subset:
 
-- **Within 2× of Rust:** not yet. Four of the seven programs are
-  (deriv, nqueens and cfold at 0.40× to 1.03×, binary-trees at 1.57×),
-  and three aren't: rbtree at 2.20×, fannkuch at 2.50× and nbody at
-  15.5×: fannkuch and nbody from one cause in the runtime, an array
-  store that's a call and copies a whole element, and rbtree from
-  allocating 12 nodes an insertion, since Perceus reuses only one level
-  of a node, each through the system `malloc`. Peak memory is within 2× on all seven, two at 1.99×.
+- **Within 2× of Rust:** on six of the seven, after the experiments
+  that followed the first measurement. Five run faster than Rust
+  (cfold 0.24×, deriv 0.42×, binary-trees 0.58×, rbtree 0.73×, nqueens
+  0.75×), fannkuch ties it, and nbody is 2.39×, for NaN checks on every
+  operation that [foundations.md](foundations.md#15-arithmetic) now
+  moves to where a NaN is observed. Peak memory is within 1.5× on all
+  seven. The first measurement had three over 2×, nbody at 15.5×.
 - **Debug builds faster than Go:** no. A clean build of 500k lines
   takes 57 s against Go's 13, 77% of it clang -O0, and a one-line edit
   rebuilds everything, since there's no build cache yet.
@@ -30,6 +30,35 @@ subset:
 
 They were written down before any of it ran, so the stages that get
 there are judged by them.
+
+## What Ren is for
+
+One language for three kinds of program, each harder on it than the
+last. They're also the order Ren proves itself in: each is built when
+the stages it needs have landed, the way someone would write it, and
+judged by the bars above.
+
+1. **A command-line tool.** The everyday language: plain loops and
+   mutation, blocks, typed errors, `Console`, `Fs` and `Os` as
+   dependencies so tests need no setup, a native binary that starts at
+   once. It needs strings and the real `Fs`.
+2. **A web server.** Structured concurrency without colored functions,
+   dependencies injected without a framework, middleware as handlers,
+   the runtime chosen in `main`, and the whole server simulated from a
+   journal recorded in production. Effect's model at native speed. It
+   needs tasks and many cores (11a, 11b), `Net`, HTTP and JSON.
+3. **A storage engine: the flagship.** A small key-value store, an LSM
+   tree or a B-tree, tested by deterministic simulation as TigerBeetle
+   and FoundationDB are: every disk and clock behind a dependency,
+   faults injected by handlers, a crash replayed from its journal. It
+   uses every decision at once: buffers changed in place under
+   exclusivity, sized integers for formats, snapshots read from frozen
+   regions, vectorized checksums, hot paths that allocate nothing. It
+   also needs four designs that don't exist yet: views into buffers,
+   explicit layouts for formats on disk, control over allocation, and
+   reads that take no lock ([foundations.md](foundations.md#open-questions)).
+   If Ren can host a credible one in idiomatic code, the ambition is
+   earned.
 
 ## Principles
 
@@ -97,6 +126,15 @@ one-line change, it rebuilds faster too.
     Ren's own. This is the bar most likely to change the backend plan.
 - **What gets it there:** the module system, the naive C backend with a
   fast C compiler, then separate compilation and caching.
+- **The goal past it: release by default.** Debug and release builds
+  have one semantics ([foundations.md](foundations.md#15-arithmetic)):
+  the same panics at the same points, the same `Float` results. So
+  which build runs is only a question of speed, and if release builds
+  are fast enough, by caching each specialization by content and
+  generating code with a fast backend of Ren's own (blocks and handlers
+  are already specialized away before it runs), the edit loop can use
+  them and there's one kind of build. Measured, specializing costs 1.1
+  to 1.2× the debug front half; the cost is clang -O2.
 
 ## Replay byte for byte
 
@@ -115,7 +153,9 @@ It never touches the disk, the network or a process.
     bar.
   - **Pure code is deterministic.** Iteration order is defined (Map and
     Set keep insertion order), hashing isn't randomized per run, and
-    floats follow IEEE exactly.
+    floats follow IEEE exactly, in program order. A `Float` sum is a
+    fixed tree of eight lanes, so it vectorizes and gives the same bits
+    on every machine: a journal recorded on one replays on another.
   - **With Async, the scheduler's decisions are recorded too.** A
     concurrent program replays exactly, or it doesn't meet the bar.
   - **The journal's format is versioned by name,** so a journal recorded

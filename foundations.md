@@ -668,6 +668,32 @@ need no native code.
 - How specialization grows on generic code that makes generic code at
   new types, which is what makes Rust's grow.
 - Whether choosing an array's layout (decision 16) pays, and when.
+- **Allocation the compiler guarantees.** Reuse and frames are
+  optimizations (decision 14): `ren build --explain-alloc` to show
+  which allocations were reused, framed or kept, and a Koka-style `fip`
+  marker that makes a function that would allocate an error, for hot
+  paths.
+
+A storage engine, the flagship in [vision.md](vision.md#what-ren-is-for),
+needs four designs that don't exist yet:
+
+- **Views into buffers.** Parsing a record out of a page without
+  copying it is where Rust's lifetimes pay. Ren's likely answer is the
+  trick blocks use, applied to data: a view (an array, an offset and a
+  length) is second-class, lent to a call and never stored or returned,
+  so it needs no lifetime. It's the same question as a cursor that
+  borrows its input, and it may touch the exclusivity rule, so it's
+  the first of the four to settle.
+- **Explicit layout** for formats on disk and on the wire: field order,
+  alignment, byte order. A type that declares one opts out of the
+  layout the compiler may choose (decision 16).
+- **Control over allocation:** arenas, memory allocated up front, and
+  the guarantee above.
+- **Reads that take no lock.** Storage engines read hot structures with
+  RCU, seqlocks and atomics. A frozen region is close to RCU's read
+  side, and publishing a new snapshot is a handler operation; whether
+  that's fast enough for a hot index is unmeasured. `trust` and C are
+  the fallback.
 
 ## Where it came from
 
