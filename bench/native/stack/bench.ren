@@ -1,0 +1,58 @@
+// H8, an object that never outlives the call that builds it lives in
+// that call's frame: four kernels of the shapes real Ren code has, each
+// `n` rounds that build a small object, use it, and let it die. Each
+// object holds a `Str` or is a sum's constructor, so a release build
+// can't keep it as a C struct (copied.ml): without stack promotion it's
+// a counted object on the heap. Each prints its checksum.
+
+type Line = { item: Str, qty: Int, cents: Int }
+
+fn subtotal(l: Line) -> Int = l.qty * l.cents + l.item.len()
+
+// a temporary record, built and used up in a loop
+pub fn records(items: Array<Str>, n: Int) -> Int =
+  var sum = 0
+  for i in 0..n
+    let l = Line { item: items[i % items.len()], qty: i % 7, cents: i % 13 }
+    sum = (sum + subtotal(l)) % 1_000_000_007
+  sum
+
+fn price_of(i: Int) -> Option<Int> = if i % 3 == 0 then None else Some(i % 101)
+
+// an `Option` from a helper
+pub fn options(n: Int) -> Int =
+  var sum = 0
+  for i in 0..n
+    match price_of(i)
+      Some(p) => sum = (sum + p) % 1_000_000_007
+      None => sum = (sum + 1) % 1_000_000_007
+  sum
+
+fn pick(items: Array<Str>, i: Int) -> (Str, Int) = (items[i % items.len()], i % 1000)
+
+// a tuple returned and taken apart
+pub fn tuples(items: Array<Str>, n: Int) -> Int =
+  var sum = 0
+  for i in 0..n
+    let (s, k) = pick(items, i)
+    sum = (sum + s.len() + k) % 1_000_000_007
+  sum
+
+fn with_line(l: Line, f: fn(Line) -> Int) -> Int = try f(l)
+
+// a small record given to a block
+pub fn blocks(items: Array<Str>, n: Int) -> Int =
+  var sum = 0
+  let markup = 3
+  for i in 0..n
+    let l = Line { item: items[i % items.len()], qty: i % 5, cents: i % 11 }
+    sum = (sum + with_line(l, fn(x) => x.qty * x.cents * markup + x.item.len())) % 1_000_000_007
+  sum
+
+pub fn items() -> Array<Str> = ["apple", "pear", "fig", "quince"]
+
+pub fn run(n: Int) uses Console =
+  print(records(items(), n))
+  print(options(n))
+  print(tuples(items(), n))
+  print(blocks(items(), n))

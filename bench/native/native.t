@@ -40,3 +40,8 @@ change here is a change in what the program computes.
   92
   == rbtree
   100
+  == stack
+  22446
+  33334
+  504000
+  34530

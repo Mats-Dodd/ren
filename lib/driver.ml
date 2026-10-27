@@ -1415,7 +1415,11 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
     | Perceus ->
         pass "Perceus" (fun () ->
             let perceus p =
-              Rc.prepare p |> Borrow.infer |> Rc.program |> Reuse.program
+              Rc.prepare p |> Borrow.infer |> Rc.program
+              (* objects that never escape kept in the frame (stack.ml),
+                 before reuse, which then leaves them alone *)
+              |> (if release then Stack.program else Fun.id)
+              |> Reuse.program
             in
             let placed = perceus p in
             (* a release build inlines the calls a reuse token was freed

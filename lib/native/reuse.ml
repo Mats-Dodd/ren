@@ -80,23 +80,27 @@ let fields_of root (f : fn) =
     f.body;
   field
 
-let is_alloc n (s : stmt) =
+(* An object stack.ml keeps in the frame is never a reuse's token, nor
+   built in one: its memory isn't the heap's. *)
+let is_alloc ~stack n (s : stmt) =
   match s with
-  | Let (_, Alloc { fields; at = None; _ }) -> List.length fields = n
+  | Let (v, Alloc { fields; at = None; _ }) ->
+      List.length fields = n && not (List.mem v.id stack)
   | _ -> false
 
 (* Whether a build of [n] fields is on some path through [b], not in a
    loop, before the path leaves the block. *)
-let rec builds n (b : block) =
+let rec builds ~stack n (b : block) =
   List.exists
     (fun s ->
-      is_alloc n s
+      is_alloc ~stack n s
       ||
       match s with
-      | If (_, t, e) -> builds n t || builds n e
+      | If (_, t, e) -> builds ~stack n t || builds ~stack n e
       | Switch (_, cases, d) ->
-          List.exists (fun (_, b) -> builds n b) cases || builds n d
-      | Joins (d, _) -> builds n d
+          List.exists (fun (_, b) -> builds ~stack n b) cases
+          || builds ~stack n d
+      | Joins (d, _) -> builds ~stack n d
       | _ -> false)
     b
 
@@ -149,6 +153,7 @@ type cx = {
   root : var -> int;
   size : (int, int) Hashtbl.t;
   field : (int, int * int) Hashtbl.t;
+  stack : int list;
 }
 
 let fresh cx name layout =
@@ -190,11 +195,11 @@ let rec take cx (t : token) (b : block) : block =
     | [] -> acc
     | s :: rest -> (
         match s with
-        | (If _ | Switch _ | Joins _) when builds t.n [ s ] || leaves [ s ] ->
+        | (If _ | Switch _ | Joins _) when builds ~stack:cx.stack t.n [ s ] || leaves [ s ] ->
             acc
         | Loop _ | Joins _ | Catch _ -> acc
         | s when Rc.ends s -> acc
-        | Let (_, Alloc a) when is_alloc t.n s ->
+        | Let (_, Alloc a) when is_alloc ~stack:cx.stack t.n s ->
             straight (i + 1) ((i, List.length (same cx t a.fields)) :: acc) rest
         | _ -> straight (i + 1) acc rest)
   in
@@ -222,11 +227,11 @@ let rec take cx (t : token) (b : block) : block =
 and branch cx t (b : block) : block =
   match b with
   | [] -> [ Free_token (Var t.tok) ]
-  | (If (c, th, e) as s) :: rest when builds t.n [ s ] || leaves [ s ] ->
+  | (If (c, th, e) as s) :: rest when builds ~stack:cx.stack t.n [ s ] || leaves [ s ] ->
       if leaves [ s ] && not (ends_all [ s ]) then
         If (c, take_open cx t th, take_open cx t e) :: take cx t rest
       else If (c, take cx t th, take cx t e) :: rest
-  | (Switch (x, cases, d) as s) :: rest when builds t.n [ s ] || leaves [ s ]
+  | (Switch (x, cases, d) as s) :: rest when builds ~stack:cx.stack t.n [ s ] || leaves [ s ]
     ->
       if leaves [ s ] && not (ends_all [ s ]) then
         Switch
@@ -240,7 +245,7 @@ and branch cx t (b : block) : block =
         :: rest
   (* a [Joins]'s first block ends by jumping, so each path through it
      takes or frees the token before it leaves *)
-  | Joins (d, js) :: rest when builds t.n d -> Joins (take cx t d, js) :: rest
+  | Joins (d, js) :: rest when builds ~stack:cx.stack t.n d -> Joins (take cx t d, js) :: rest
   | s :: rest when Rc.ends s -> Free_token (Var t.tok) :: s :: rest
   | (Loop _ | Joins _ | Catch _) :: _ -> Free_token (Var t.tok) :: b
   | s :: rest -> s :: branch cx t rest
@@ -276,7 +281,8 @@ let tree cx (u : var) (x : var) kept inner shared rest =
   let toks = ref [] and rest = ref rest in
   let reset_or (x : var) kept ~otherwise =
     match Hashtbl.find_opt cx.size (cx.root x) with
-    | Some n when builds n !rest -> (
+    | Some n when builds ~stack:cx.stack n !rest && not (List.mem x.id cx.stack)
+      -> (
         let tok = fresh cx "$reuse" Token in
         let kept_vars =
           List.filter_map
@@ -325,12 +331,13 @@ let rec block cx (b : block) : block =
   | Let (u, Is_unique (Var x))
     :: If (Var u', Free (Var x', kept) :: inner, shared)
     :: rest
-    when u.id = u'.id && x.id = x'.id ->
+    when u.id = u'.id && x.id = x'.id && not (List.mem x.id cx.stack) ->
       tree cx u x kept inner shared (block cx rest)
-  | (Drop (Var x) as s) :: rest when x.layout = Boxed -> (
+  | (Drop (Var x) as s) :: rest
+    when x.layout = Boxed && not (List.mem x.id cx.stack) -> (
       let rest = block cx rest in
       match Hashtbl.find_opt cx.size (cx.root x) with
-      | Some n when builds n rest ->
+      | Some n when builds ~stack:cx.stack n rest ->
           let u = fresh cx "$unique" Bool in
           tree cx u x [] [] [ s ] rest
       | _ -> s :: rest)
@@ -341,7 +348,11 @@ let rec block cx (b : block) : block =
 let fn (f : fn) : fn =
   let next, _ = Rc.fresh_counters f in
   let root = roots f in
-  let cx = { next; root; size = sizes root f; field = fields_of root f } in
+  let cx =
+    {
+      next; root; size = sizes root f; field = fields_of root f;
+      stack = f.stack;
+    } in
   { f with body = block cx f.body }
 
 (* The program with each object that dies where one as big is built

@@ -1700,6 +1700,8 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
       params = [ env_p; caller; args ];
       modes = [ Owned; Owned; Owned ];
       inout = [];
+      stack = [];
+      slot = None;
       words = code.words;
       result = Word 0;
       fails = true;
@@ -1857,6 +1859,8 @@ and handler fs env (e : C.expr) ~ev ~captures body =
          descriptor *)
       modes = [ Borrowed; Owned; Owned; Borrowed; Owned; Owned ];
       inout = [];
+      stack = [];
+      slot = None;
       words = code.words;
       result = Word 0;
       fails = true;
@@ -2253,6 +2257,8 @@ let fn cx here (f : C.fn_def) : Mem.fn =
           List.filter_map
             (fun ((p : C.param), m) -> if p.mode = Inout then Some m else None)
             (List.combine f.params params);
+        stack = [];
+        slot = None;
         words = fs.words;
         result;
         fails = fn_fails f;

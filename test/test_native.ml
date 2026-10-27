@@ -614,6 +614,8 @@ let fn ?(fails = false) ?(result : Mem.layout = Int) ?(params = [])
     params;
     modes;
     inout = [];
+    stack = [];
+    slot = None;
     words = [];
     result;
     fails;

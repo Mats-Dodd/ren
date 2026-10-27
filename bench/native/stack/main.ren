@@ -1,0 +1,4 @@
+import bench
+
+// fifty million rounds of each kernel
+fn main() uses Console = bench.run(50_000_000)

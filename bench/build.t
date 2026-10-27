@@ -31,7 +31,7 @@ The benchmarks of `bench`. `overflow` reaches the stack-overflow panic,
 after which AddressSanitizer warns that it can't clean up a stack that
 deep, which is left out.
 
-  $ for f in fib deep loop overflow; do same $f.ren; done
+  $ for f in fib deep loop overflow frames; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -40,6 +40,8 @@ deep, which is left out.
   loop.ren, naive: the same, exit 0, objects live at exit 0
   overflow.ren, perceus: the same, exit 1, objects live at exit 0
   overflow.ren, naive: the same, exit 1, objects live at exit 0
+  frames.ren, perceus: the same, exit 0, objects live at exit 0
+  frames.ren, naive: the same, exit 0, objects live at exit 0
 
 Every native benchmark, at its small size:
 
@@ -64,6 +66,8 @@ Every native benchmark, at its small size:
   native/nqueens/small.ren, naive: the same, exit 0, objects live at exit 0
   native/rbtree/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/rbtree/small.ren, naive: the same, exit 0, objects live at exit 0
+  native/stack/small.ren, perceus: the same, exit 0, objects live at exit 0
+  native/stack/small.ren, naive: the same, exit 0, objects live at exit 0
 
 And the examples in the subset, the single files and two of the
 folders:
@@ -180,11 +184,12 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow; do release $f.ren; done
+  $ for f in fib deep loop overflow frames; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
   overflow.ren, release: the same, exit 1, objects live at exit 0
+  frames.ren, release: the same, exit 0, objects live at exit 0
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
@@ -196,6 +201,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   native/nbody/small.ren, release: the same, exit 0, objects live at exit 0
   native/nqueens/small.ren, release: the same, exit 0, objects live at exit 0
   native/rbtree/small.ren, release: the same, exit 0, objects live at exit 0
+  native/stack/small.ren, release: the same, exit 0, objects live at exit 0
   $ for f in ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do release $f; done
   ../examples/blocks.ren, release: the same, exit 0, objects live at exit 0
   ../examples/fib.ren, release: the same, exit 0, objects live at exit 0
@@ -238,7 +244,7 @@ as its twin written as a loop, as in the debug build:
   map: allocations 13, both
   reduce: allocations 3, both
   each: allocations 3, both
-  fold: allocations 1002, both
+  fold: allocations 1001, both
   attempt: allocations 2, both
 
 Each `inout` parameter is a `restrict` pointer in the release build,
