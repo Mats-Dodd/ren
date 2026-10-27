@@ -40,8 +40,10 @@ for.
 
 ```
  per module, incremental
-   parse ─▶ resolve ─▶ infer ─▶ typed Core
-                        │
+   parse ─▶ resolve ─▶ infer ─▶ excl ─▶ typed Core
+                        │        │
+                        │        └ exclusivity, one walk per function:
+                        │          nothing is used while it's changed
                         └ one solver: types, ! rows, uses rows,
                           requirements
 
@@ -103,6 +105,22 @@ it, each fact says so, and which step fixes it.
   use of one is passed a dictionary for each, as a function's is:
   `Map.get` is given its keys' `hash`, and `Array.sort` its elements'
   order.
+- **Exclusivity.** While a place is being changed, nothing else uses
+  it (foundations.md, decision 2). Since 10c step 5, excl.ml checks it
+  after inference, since it needs types (a copied value is read in an
+  instant, a counted one for the call it's passed to), one walk per
+  function: how long an access lasts, an instant, a call or a loop,
+  comes from the syntax, a block passed to a call uses what it captures
+  for the call, and a call needs only whether each block parameter is
+  ordinary, the one mode so far. There's no dataflow, no lifetimes and
+  nothing whole-program. Rule A, that a block parameter, or a block
+  capturing one, isn't passed to a call of a block parameter, is
+  checked there too. It's a check, not a fact carried on: what it gives
+  the optimizer is that an `&` parameter aliases nothing else the callee
+  can see, not another parameter, a block's capture or handler state,
+  so copy-in, copy-out and passing by reference mean the same. That's
+  about the slot: the buffer in it can still be shared, `let a = xs;
+  f(&xs, a)`, so changing it in place keeps Perceus's uniqueness check.
 - **Ownership, lifetimes, reuse credits, provenance.** Later, each by
   its own pass over Mem IR, after specialization: a known callee's body
   says whether it borrows, consumes or keeps a value, which is what

@@ -493,12 +493,14 @@ let rec eval cx env (e : expr) =
         args finals;
       ok result
   | Lambda { params; ev; outer; given; captures; body; _ } ->
-      (* copy the captured variables' values now, into cells of the
-         block's own: assigning to a variable later doesn't change what
-         the block sees. The evidence where it's written is one of them *)
+      (* share the captured variables' cells: a block captures by
+         reference, so it reads a variable when it runs, and what it
+         assigns is seen outside it. Exclusivity (excl.ml) makes sure
+         nothing else uses a variable while a block changes it. The
+         evidence where it's written is one of them *)
       let env =
         List.fold_left
-          (fun inner (v : var) -> Env.add v.id (ref !(cell env v)) inner)
+          (fun inner (v : var) -> Env.add v.id (cell env v) inner)
           Env.empty captures
       in
       VClosure

@@ -1,4 +1,5 @@
-(* Mutability checks (mut.ml): what may change, and exclusivity. *)
+(* Mutability checks (mut.ml), what may change, and exclusivity (excl.ml),
+   that nothing is used while it's being changed. *)
 
 open Helpers
 
@@ -147,6 +148,7 @@ fn main() =
       │            ^^
       │        -- passed with `&` here
       = an argument passed with `&` has to be the only way the call can reach that value
+      help: pass `a` with `&` once; a second value it changes needs a `var` of its own
     |}]
 
 let%expect_test "an inout argument can't also be read" =
@@ -160,32 +162,81 @@ fn main() =
 |};
   [%expect
     {|
-    error: this call changes `xs`, so no other argument can use it
+    error: `xs` is passed with `&` and read by the same call
       ┌─ test.ren:5:10
     5 │   f(&xs, xs)
-      │          ^^
+      │          ^^ read for the whole call
       │     --- passed with `&` here
       = an argument passed with `&` has to be the only way the call can reach that value
-      help: copy it with `let` first if the call should see the value `xs` had before
+      help: read it into a `let` before the call, `let before = xs`, and pass that
     |}]
 
-let%expect_test "a lambda can't change a captured variable" =
-  run {|
-fn main() =
+let%expect_test "a block changes a variable it captures" =
+  (* it captures by reference: the change is seen outside it *)
+  run
+    {|
+fn main() uses Console =
   var n = 1
   let f = fn() => n = 2
   f()
+  print(n)
+|};
+  [%expect {|
+    2
+    ()
+    |}]
+
+let%expect_test "a block that changes a variable, passed beside it with &" =
+  run
+    {|
+fn bump_with(inout n: Int, f: fn()) =
+  n += 1
+  try f()
+
+fn main() =
+  var n = 1
+  let f = fn() => n = 2
+  bump_with(&n, f)
 |};
   [%expect
     {|
-    error: a lambda can't change `n`, a variable from outside it
-      ┌─ test.ren:3:19
-    3 │   let f = fn() => n = 2
-      │                   ^
-      = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+    error: `n` is changed by this block and passed with `&` to the same call
+      ┌─ test.ren:7:19
+    7 │   let f = fn() => n = 2
+      │                   ^ changed here
+    8 │   bump_with(&n, f)
+      │             -- passed with `&` here
+      │                 - the block runs here
+      = a block runs during the call it's passed to
+      help: change `n` in one place: pass the block's change as a value, or apply it after the call
     |}]
 
-let%expect_test "lambdas can't take inout parameters" =
+let%expect_test "a block that changes a variable, called inside a for & over it"
+    =
+  run
+    {|
+fn main() =
+  var xs = [1, 2]
+  let f = fn() => &xs.push(3)
+  for x in &xs
+    f()
+    x += 1
+|};
+  [%expect
+    {|
+    error: `xs` is changed by this block while the loop changes it
+      ┌─ test.ren:3:20
+    3 │   let f = fn() => &xs.push(3)
+      │                    ^^ changed here
+    4 │   for x in &xs
+      │            --- changed for the whole loop
+    5 │     f()
+      │     - the block runs here
+      = a block runs during the call it's passed to
+      help: inside the loop, use `x`
+    |}]
+
+let%expect_test "blocks can't take inout parameters" =
   run {|
 fn main() =
   let f = fn(inout x) => x
@@ -193,7 +244,7 @@ fn main() =
 |};
   [%expect
     {|
-    error: lambdas can't take `inout` parameters yet
+    error: blocks can't take `inout` parameters yet
       ┌─ test.ren:2:20
     2 │   let f = fn(inout x) => x
       │                    ^
@@ -224,8 +275,8 @@ let%expect_test "independent errors are all reported" =
 fn main() =
   let x = 1
   x = 2
-  var n = 1
-  let f = fn() => n = 2
+  let f = fn() => x
+  let b = &f
   f()
 |};
   [%expect
@@ -236,14 +287,15 @@ fn main() =
       │   ^
       help: declare it with `var` to change it
 
-    error: a lambda can't change `n`, a variable from outside it
-      ┌─ test.ren:5:19
-    5 │   let f = fn() => n = 2
-      │                   ^
-      = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+    error: `&` can't be used here
+      ┌─ test.ren:5:11
+    5 │   let b = &f
+      │           ^^
+      = `&` marks an argument a call changes, or the array a `for` loop changes
+      help: remove the `&`
     |}]
 
-let%expect_test "an inout lambda parameter is reported once" =
+let%expect_test "an inout block parameter is reported once" =
   (* the parameter is still bound as `inout`, so changing it isn't also
      reported as changing a read-only parameter *)
   run {|
@@ -253,7 +305,7 @@ fn main() =
 |};
   [%expect
     {|
-    error: lambdas can't take `inout` parameters yet
+    error: blocks can't take `inout` parameters yet
       ┌─ test.ren:2:20
     2 │   let f = fn(inout n) => n += 1
       │                    ^

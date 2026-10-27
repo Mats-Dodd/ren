@@ -882,13 +882,13 @@ fn main() =
 |};
   [%expect
     {|
-    error: this call changes `b`, so no other argument can use it
+    error: `b` is passed with `&` and read by the same call
       ┌─ test.ren:7:11
     7 │   &b.take(b)
-      │           ^
+      │           ^ read for the whole call
       │    - passed with `&` here
       = an argument passed with `&` has to be the only way the call can reach that value
-      help: copy it with `let` first if the call should see the value `b` had before
+      help: read it into a `let` before the call, `let before = b`, and pass that
     |}]
 
 let%expect_test "another module's private method" =
@@ -1207,7 +1207,7 @@ fn main() = [Int.foo, Array.foo]
       ┌─ test.ren:1:29
     1 │ fn main() = [Int.foo, Array.foo]
       │                             ^^^
-      help: its members: `len`, `push`, `sort`, `get`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `take`, `drop`, `reverse`
+      help: its members: `len`, `push`, `sort`, `get`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `each`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `take`, `drop`, `reverse`
     |}]
 
 let%expect_test "a value of the wrong type, in a cycle of values" =
@@ -1480,17 +1480,7 @@ fn main() =
   var xs = [1, 2]
   &xs.push(xs[0])
 |};
-  [%expect
-    {|
-    error: this call changes `xs`, so no other argument can use it
-      ┌─ test.ren:3:12
-    3 │   &xs.push(xs[0])
-      │            ^^^^^
-      │    -- passed with `&` here
-      = an argument passed with `&` has to be the only way the call can reach that value
-      = reading part of `xs` counts as using it
-      help: read it into a `let` before the call, and pass that
-    |}]
+  [%expect {| () |}]
 
 (* A type that keeps rules is opaque (module-build.md, "Private unless
    `pub`"): a public record or sum type can have no member that changes

@@ -49,11 +49,8 @@ pub type Vm = opaque {
     self.steps += 1
     match p.at(self.pc)
       Push(n) => &self.push(n)
-      Load(slot) =>
-        // read into a `let` first: the call changes `self`, so no
-        // argument can also reach into it
-        let v = self.locals[slot]
-        &self.push(v)
+      // the `Int` is read before the call starts changing `self`
+      Load(slot) => &self.push(self.locals[slot])
       Store(slot) =>
         let v = try &self.pop()
         self.locals[slot] = v

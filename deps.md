@@ -518,7 +518,9 @@ stage, or settled something the plan left open:
   operation of an instance reads the `var`s it uses from their cells
   when it starts and writes back the ones it changes when it ends, even
   if it fails; only the runtime holds a cell. A `let` in the state is
-  kept as a lambda keeps a value.
+  a copy the instance keeps, as it keeps its parameters. A block written
+  in an arm shares the arm's copy of a `var`, by reference, so what it
+  changes is written back when the arm ends.
 - **A handler can't use a dependency it implements,** `Rates.usd_to`
   inside a handler for `Rates`, nor through a function it calls that
   uses `Rates`, even though its operations run with what's installed

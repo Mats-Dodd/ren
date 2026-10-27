@@ -923,14 +923,9 @@ fn main() uses Console =
   print(n)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:35:28
-    35 │   each([1, 2, 3], fn(x) => n += x)
-       │                            ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    6
+    ()
     |}]
 
 let%expect_test "[s5 reject] row 2: a var passed with & and changed by a block"
@@ -947,14 +942,15 @@ fn main() uses Console =
   print(n)
 |}
     );
-  (* until s5: today's output *)
   [%expect
     {|
-    error: a lambda can't change `n`, a variable from outside it
+    error: `n` is changed by this block and passed with `&` to the same call
        ┌─ test.ren:35:25
     35 │   bump_with(&n, fn() => n += 1)
-       │                         ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+       │                         ^ changed here
+       │             -- passed with `&` here
+       = a block runs during the call it's passed to
+       help: change `n` in one place: pass the block's change as a value, or apply it after the call
     |}]
 
 let%expect_test "[s5 reject] row 3: a block reads what the call changes" =
@@ -971,10 +967,15 @@ fn main() uses Console =
   print(xs)
 |}
     );
-  (* until s5: today's output *)
-  [%expect {|
-    [1, 2, 3]
-    ()
+  [%expect
+    {|
+    error: `xs` is read by this block while the call changes it
+       ┌─ test.ren:35:28
+    35 │   retain(&xs, fn(x) => x < xs.len())
+       │                            ^^ read here
+       │          --- changed for the whole call
+       = a block runs during the call it's passed to
+       help: read it first: `let len = xs.len()`, and use `len` in the block
     |}]
 
 let%expect_test "[s5 reject] row 4: a block changes what the call borrows" =
@@ -989,14 +990,15 @@ fn main() uses Console =
   print(xs)
 |}
     );
-  (* until s5: today's output *)
   [%expect
     {|
-    error: a lambda can't change `xs`, a variable from outside it
+    error: `xs` is changed by this block while the call reads it
        ┌─ test.ren:35:26
     35 │   read_with(xs, fn() => &xs.push(3))
-       │                          ^^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+       │                          ^^ changed here
+       │             -- read for the whole call
+       = the call reads `xs` where it is, without copying it
+       help: pass a copy: `let before = xs` before the call, and pass `before`
     |}]
 
 let%expect_test "[s5 accept] row 5: a copied Int beside a block that changes it"
@@ -1015,14 +1017,10 @@ fn main() uses Console =
   print(n)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:39:24
-    39 │   show_then(n, fn() => n += 1)
-       │                        ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    1
+    1
+    ()
     |}]
 
 let%expect_test "[s5 accept] row 6: sibling blocks change the same var" =
@@ -1038,32 +1036,10 @@ fn main() uses Console =
   print(n)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:35:25
-    35 │   if_else(true, fn() => n += 1, fn() => n -= 1)
-       │                         ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
-
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:35:41
-    35 │   if_else(true, fn() => n += 1, fn() => n -= 1)
-       │                                         ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
-
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:37:26
-    37 │   if_else(false, fn() => n += 1, fn() => n -= 1)
-       │                          ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
-
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:37:42
-    37 │   if_else(false, fn() => n += 1, fn() => n -= 1)
-       │                                          ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    1
+    0
+    ()
     |}]
 
 let%expect_test
@@ -1078,20 +1054,15 @@ fn main() uses Console =
   print(n)
 |}
     );
-  (* until s5: today's output *)
   [%expect
     {|
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:35:26
-    35 │   run(fn() => bump_with(&n, fn() => n += 1))
-       │                          ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
-
-    error: a lambda can't change `n`, a variable from outside it
+    error: `n` is changed by this block and passed with `&` to the same call
        ┌─ test.ren:35:37
     35 │   run(fn() => bump_with(&n, fn() => n += 1))
-       │                                     ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+       │                                     ^ changed here
+       │                         -- passed with `&` here
+       = a block runs during the call it's passed to
+       help: change `n` in one place: pass the block's change as a value, or apply it after the call
     |}]
 
 let%expect_test
@@ -1108,10 +1079,16 @@ fn rec(f: fn(fn())) =
 
 fn main() = 1
 |};
-  (* until s5: today's output *)
-  [%expect {|
-    fn rec(f: fn(fn()))
-    fn main() -> Int
+  [%expect
+    {|
+    error: a block that calls `f` can't be passed to `f`
+      ┌─ test.ren:2:9
+    2 │   try f(fn() =>
+      │         ^^^^^^^
+    3 │     let _ = attempt f(fn() => ())
+      │                     - calls `f` here
+      = `f` is a block parameter, and a block given to one can't reach one, or it could run inside itself
+      help: write it as a named recursive function
     |}]
 
 let%expect_test
@@ -1129,11 +1106,16 @@ fn fix(f: fn(fn(Int) -> Int, Int) -> Int, n: Int) -> Int =
 
 fn main() = 1
 |};
-  (* until s5: today's output *)
   [%expect
     {|
-    fn fix(f: fn(fn(Int) -> Int, Int) -> Int, n: Int) -> Int
-    fn main() -> Int
+    error: a block that captures `f` can't be passed to `f`
+      ┌─ test.ren:2:9
+    2 │   try f(fn(k) =>
+      │         ^^^^^^^^
+    3 │     match fix(f, k)
+      │               - captures `f` here
+      = `f` is a block parameter, and a block given to one can't reach one, or it could run inside itself
+      help: write it as a named recursive function
     |}]
 
 let%expect_test
@@ -1158,14 +1140,9 @@ fn main() uses Console =
   walk(Node(Node(Leaf, 1, Leaf), 2, Node(Leaf, 3, Leaf)), fn(v) => total += v)
   print(total)
 |};
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `total`, a variable from outside it
-       ┌─ test.ren:15:68
-    15 │   walk(Node(Node(Leaf, 1, Leaf), 2, Node(Leaf, 3, Leaf)), fn(v) => total += v)
-       │                                                                    ^^^^^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    6
+    ()
     |}]
 
 let%expect_test "[s5 accept] row 12: a block can't reach its callee's variables"
@@ -1180,7 +1157,7 @@ fn inner(inout own: Int, f: fn()) =
 
 fn outer(f: fn()) uses Console =
   var own = 0
-  inner(&own, f)
+  try inner(&own, f)
   print(own)
 
 fn main() uses Console =
@@ -1189,14 +1166,10 @@ fn main() uses Console =
   print(n)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:44:17
-    44 │   outer(fn() => n += 1)
-       │                 ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    1
+    1
+    ()
     |}]
 
 let%expect_test "[s5 accept] row 13: an inout parameter and a block never alias"
@@ -1211,7 +1184,7 @@ fn h(inout k: Int, f: fn()) =
   k += 1
   try f()
 
-fn g(inout n: Int, f: fn()) = h(&n, f)
+fn g(inout n: Int, f: fn()) = try h(&n, f)
 
 fn main() uses Console =
   var n = 0
@@ -1221,14 +1194,10 @@ fn main() uses Console =
   print(m)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `m`, a variable from outside it
-       ┌─ test.ren:42:17
-    42 │   g(&n, fn() => m += 1)
-       │                 ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    1
+    1
+    ()
     |}]
 
 let%expect_test
@@ -1244,14 +1213,9 @@ fn main() uses Console =
   print(n)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:35:19
-    35 │   let f = fn() => n += 1
-       │                   ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    2
+    ()
     |}]
 
 let%expect_test "[s5 accept] row 15: a block reads a var when it runs" =
@@ -1259,14 +1223,13 @@ let%expect_test "[s5 accept] row 15: a block reads a var when it runs" =
   run
     {|
 fn main() uses Console =
-  var n = 1
+  var n = 0
   let f = fn() => n + 1
   n += 5
   print(f())
 |};
-  (* until s5: today's output *)
   [%expect {|
-    2
+    6
     ()
     |}]
 
@@ -1283,14 +1246,9 @@ fn main() uses Console =
   print(xs)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `xs`, a variable from outside it
-       ┌─ test.ren:36:18
-    36 │     run(fn() => &xs.push(x))
-       │                  ^^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    [1, 2, 1, 2]
+    ()
     |}]
 
 let%expect_test "[s5 reject] row 17: a block reads the array a for & changes" =
@@ -1306,15 +1264,15 @@ fn main() uses Console =
     p += 1
 |}
     );
-  (* until s5: today's output *)
   [%expect
     {|
-    error: `xs` is being changed by the `for` loop around this
+    error: `xs` is read by this block while the loop changes it
        ┌─ test.ren:36:23
     35 │   for p in &xs
-       │            --- the loop changes `xs` here
+       │            --- changed for the whole loop
     36 │     run(fn() => print(xs.len()))
-       │                       ^^
+       │                       ^^ read here
+       = a block runs during the call it's passed to
        help: inside the loop, use `p`
     |}]
 
@@ -1337,7 +1295,36 @@ fn main() uses Console =
 
 let%expect_test "[s5 reject] row 28: & on a record beside one of its fields" =
   (* target: "`r` is passed with `&` while `r.a` is read in the same
-     call": a place overlaps its prefixes *)
+     call": a place overlaps its prefixes. The field is an array, a
+     counted value, which the call reads where it is for the whole call;
+     an `Int` would be copied before the `&` starts (the next test) *)
+  run
+    (helpers
+   ^ {|
+type R = { a: Array<Int>, b: Int }
+
+fn set_a(inout r: R, a: Array<Int>) = r.a = a
+
+fn main() uses Console =
+  var r = R { a: [1], b: 2 }
+  set_a(&r, r.a)
+  print(r)
+|}
+    );
+  [%expect
+    {|
+    error: `r` is passed with `&` while `r.a` is read by the same call
+       ┌─ test.ren:39:13
+    39 │   set_a(&r, r.a)
+       │             ^^^ read for the whole call
+       │         -- passed with `&` here
+       = an argument passed with `&` has to be the only way the call can reach that value
+       help: read it into a `let` before the call, `let a = r.a`, and pass that
+    |}]
+
+let%expect_test "[s5 accept] row 28, with a copied field" =
+  (* an `Int` is copied as the arguments are evaluated, before the `&`
+     starts *)
   run
     (helpers
    ^ {|
@@ -1347,21 +1334,14 @@ fn set_a(inout r: R, n: Int) = r.a = n
 
 fn main() uses Console =
   var r = R { a: 1, b: 2 }
-  set_a(&r, r.a)
+  set_a(&r, r.a + 1)
+  set_a(&r, r.b)
   print(r)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: this call changes `r`, so no other argument can use it
-       ┌─ test.ren:39:13
-    39 │   set_a(&r, r.a)
-       │             ^^^
-       │         -- passed with `&` here
-       = an argument passed with `&` has to be the only way the call can reach that value
-       = reading part of `r` counts as using it
-       help: read it into a `let` before the call, and pass that
+  [%expect {|
+    R { a: 2, b: 2 }
+    ()
     |}]
 
 let%expect_test "[s5 reject] row 29: two & on indices of one array" =
@@ -1378,7 +1358,6 @@ fn main() uses Console =
   print(xs)
 |}
     );
-  (* until s5: today's output *)
   [%expect
     {|
     error: `xs` is passed with `&` twice in this call
@@ -1387,6 +1366,8 @@ fn main() uses Console =
        │                 ^^^^^^
        │         ------ passed with `&` here
        = an argument passed with `&` has to be the only way the call can reach that value
+       = `xs[i]` and `xs[j]` may be the same element
+       help: to exchange them, write `xs.swap(i, j)`; otherwise change one, then the other
     |}]
 
 let%expect_test "[s5 accept] row 30: an argument read before the & starts" =
@@ -1441,10 +1422,15 @@ fn main() uses Console =
     print(Store.load(2))
 |}
     );
-  (* until s5: today's output *)
-  [%expect {|
-    20
-    ()
+  [%expect
+    {|
+    error: `cache` is changed across a dependency call
+       ┌─ test.ren:19:32
+    19 │     update(&cache, k, fn(v) => next.load(k))
+       │                                ^^^^^^^^^^^^ a dependency call
+       │            ------ changed for the whole call
+       = other tasks can run this handler at a dependency call
+       help: make the call first, `let v = next.load(k)`, then change `cache` with `v`
     |}]
 
 let%expect_test
@@ -1492,8 +1478,17 @@ fn main() uses Console =
     Store.visit(fn() => ())
 |}
     );
-  (* until s5: today's output *)
-  [%expect {| () |}]
+  [%expect
+    {|
+    error: `items` is changed across a call of `f`
+       ┌─ test.ren:21:7
+    20 │     each_mut(&items, fn(i) =>
+       │              ------ changed for the whole call
+    21 │       f()
+       │       ^^^ `f` is called here
+       = `f` can run this handler again
+       help: call `f` before or after the change
+    |}]
 
 let%expect_test
     "[s5 accept] row 34: a block parameter called, then handler state changed" =
@@ -1532,14 +1527,9 @@ fn main() uses Console =
     print(n)
 |}
     );
-  (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `n`, a variable from outside it
-       ┌─ test.ren:51:17
-    51 │     run(fn() => n += Store.load(2))
-       │                 ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    20
+    ()
     |}]
 
 (* ---- s6: while, break, cursors, finally where it's written ---- *)
@@ -1752,14 +1742,10 @@ fn main() uses Console =
   print(&c.next())
 |}
     );
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: a lambda can't change `c`, a variable from outside it
-       ┌─ test.ren:12:22
-    12 │   run(fn() => print(&c.next()))
-       │                      ^
-       = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+  [%expect {|
+    Some(1)
+    Some(2)
+    ()
     |}]
 
 let%expect_test "[s6 accept] a finally before state that fails to start" =

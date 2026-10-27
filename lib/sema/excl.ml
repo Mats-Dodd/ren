@@ -1,0 +1,802 @@
+(* Exclusivity: while a place is being changed, nothing else may use it
+   (foundations.md, decision 2). It's what lets a block capture its
+   frame's variables by reference and change them, and lets the
+   interpreter, and later the compiler, treat every `inout` as a copy in
+   and a copy out: an `&` parameter aliases nothing else the callee can
+   see, not another parameter, a block's capture, or handler state.
+
+   It runs after inference, since it needs types: whether a value is
+   copied or counted, and which arguments are blocks. Like the type
+   checker, it checks one function at a time, in one walk over its body,
+   with no dataflow and no lifetimes: how long each access lasts comes
+   from the syntax, a call, a loop or an instant.
+
+   A place is a variable followed by fields and indices, `user.plan` or
+   `xs[i]`. Different fields don't overlap, any two indices may be the
+   same element, and a place overlaps its prefixes. The accesses, and how
+   long each lasts:
+
+   - reading a copied value, an `Int` or a record of them: an instant;
+   - a counted value passed to a parameter that only reads it, `f(xs)` or
+     `xs.len()`: a read for the call, which reads it where it is;
+   - `&p`, as an argument or a receiver: a write for the call, from after
+     the arguments are evaluated, so `&xs.push(xs.len())` is fine;
+   - `p = e` and `p += e`: a write, an instant, after `e`;
+   - `for x in p`: a read, an instant, since the loop goes over a snapshot;
+   - `for x in &p`: a write for the loop;
+   - a block passed to a call: each place it captures, read or written as
+     its body uses it, nested blocks included, for the call. A block bound
+     by `let` accesses nothing where it's bound, and acts as its captures
+     wherever it's called or passed.
+
+   Two overlapping accesses, at least one a write, are an error, but
+   blocks passed to the same call don't conflict with each other: the
+   callee runs one at a time, and rule A below keeps one from running
+   inside another. Inside a handler's arm, a dependency call, or a call of
+   a block parameter, is a write of all the handler's `var`s for that
+   call: other tasks can run the handler at a dependency call, and the
+   block can call into it again.
+
+   Rule A: a block parameter, or a block that captures one, can't be
+   passed to a call of a block parameter. Otherwise a block could run
+   inside itself, and a block that changes `n` while it calls the one
+   it's given would change it twice at once. A recursive combinator like
+   `fix` is written as a named recursive function instead.
+
+   Prior art: this is Swift's static exclusivity for non-escaping
+   closures, without the dynamic half, since a block never escapes.
+   SE-0176 (/tmp/ren-refs/swift-evolution/proposals/
+   0176-enforce-exclusive-access-to-memory.md:552-671) defines
+   non-escaping closures and the Non-Escaping Parameter Call Restriction
+   (NPCR), which is rule A. Swift's checker counts what a non-escaping
+   closure accesses at the call it's passed to, including closures passed
+   to it in turn (/tmp/ren-refs/swift/lib/SILOptimizer/Mandatory/
+   DiagnoseStaticExclusivity.cpp:814-845), as [call] does here with a
+   block's captures.
+
+   Each problem is reported to the sink, and checking carries on. *)
+
+open Ast
+open Ast.Resolved
+
+let sprintf = Printf.sprintf
+
+type kind = Read | Write
+
+(* A step of a place's path: a field, or an index, as it's written if it
+   can be shown, for messages. *)
+type step = SField of string | SIndex of string option
+
+(* Code a help can move before the call, and a name for its `let`. *)
+type hoisted = (string * string) option
+
+(* Why an access happens, which words what an error says about it. *)
+type why =
+  | Used of hoisted
+      (** read or changed where it's written; for a read, the code that reads it
+      *)
+  | Called  (** a block parameter, called *)
+  | Passed  (** `&p`, for the call *)
+  | Borrowed of hoisted
+      (** a counted value passed to a parameter that only reads it, for the call
+      *)
+  | Looped of string  (** `for x in &p`, for the loop; the element's name *)
+  | Dep_call of string option
+      (** in a handler's arm, a dependency call, which changes all its `var`s:
+          the call, as it's written *)
+  | Block_call of string
+      (** in a handler's arm, a call of the block parameter of that name, which
+          changes all its `var`s *)
+
+type access = {
+  var : binder;
+  path : step list;
+  kind : kind;
+  loc : Loc.t;
+  why : why;
+  block_param : bool;  (** [var] is a block parameter, which rule A is about *)
+}
+
+(* How a parameter runs the block it's given. Only [Ordinary] exists so
+   far: during the call, on the caller's task. Stage 11a adds a
+   concurrent mode, `Async.map`'s, and a spawned one, `s.spawn`'s, whose
+   blocks may only read, and aren't siblings (foundations.md, rules B to
+   D). *)
+type mode = Ordinary
+
+(* The mode of the [i]th parameter of the callee [f], counting a method's
+   receiver: ordinary, until 11a gives a parameter's type a mode. *)
+let mode_of (_ : expr) (_ : int) = Ordinary
+
+(* Blocks passed to the same call conflict unless both parameters are
+   ordinary. *)
+let sibling = function Ordinary -> true
+
+(* The accesses an argument makes for the whole of its call, or the
+   callee's own. *)
+type group = {
+  held : access list;
+  via : Loc.t option;  (** the block they're made through, if they are *)
+  sibling : bool;
+      (** a block passed to an ordinary parameter, which never conflicts with
+          another *)
+}
+
+let none = { held = []; via = None; sibling = false }
+
+type ctx = {
+  nodes : Infer.node Infer.Nodes.t;
+  types : (Path.t, Iface.type_decl) Hashtbl.t;
+  schemes : (Path.t, Ty.scheme) Hashtbl.t;
+      (** the scheme of each function the module can call, its own and its
+          imports', members included *)
+  sink : Diag.sink;
+  source : expr -> string option;
+      (** code as it's written, for messages (Ast.source) *)
+  depth : int;  (** how many lambdas deep *)
+  loops : access list;  (** the `for &` loops around, each a write *)
+  blocks : (int, access list) Hashtbl.t;
+      (** the blocks bound by `let`, by their binder, each with what it accesses
+          of the variables from outside it *)
+  state : binder list option;
+      (** inside a handler's arm or its `finally`: the handler's `var`s *)
+  seen : access list ref;
+      (** every access made so far, for the block around it *)
+}
+
+let ty cx (e : expr) =
+  match Infer.Nodes.find_opt e.node cx.nodes with
+  | Some n -> n.ty
+  | None -> Ty.Error
+
+let is_block cx e = match ty cx e with Fun _ -> true | _ -> false
+
+let is_method cx (f : expr) =
+  match Infer.Nodes.find_opt f.node cx.nodes with
+  | Some { found = Some (Method_of _); _ } -> true
+  | _ -> false
+
+(* Whether calling [f] is a dependency call: an operation, or a
+   function whose own signature uses a dependency. A block it's given
+   that uses one is a dependency call where the block calls it. *)
+let dep_call cx (f : expr) =
+  let uses p =
+    match Hashtbl.find_opt cx.schemes p with
+    | Some { Ty.ty = Fun (_, _, _, uses); _ } -> uses.labels <> []
+    | _ -> false
+  in
+  match f.kind with
+  | Var (Dep_op _ | Next_op _) -> true
+  | Var (Global p) -> uses p
+  | Field _ -> (
+      match Infer.Nodes.find_opt f.node cx.nodes with
+      | Some { found = Some (Method_of p); _ } -> uses p
+      | _ -> false)
+  | _ -> false
+
+(* ---- copied values ---- *)
+
+(* [t] with the type arguments [args] put in for its declaration's
+   parameters, [Var 0] the first. *)
+let rec subst args (t : Ty.ty) : Ty.ty =
+  match t with
+  | Var i -> Option.value (List.nth_opt args i) ~default:t
+  | Con (p, ts) -> Con (p, List.map (subst args) ts)
+  | Fun _ | Errors _ | Impl _ | Error -> t
+
+(* Whether a value of type [t] is copied, rather than counted: a number,
+   a `Bool` or `Unit`, or a record, tuple or enum made only of those.
+   [seen] are the types it's inside, so a recursive type, which has to be
+   counted, ends the search. A type whose representation is hidden is
+   counted, unless it's a number type. *)
+let rec copied cx seen (t : Ty.ty) =
+  match t with
+  | Con (p, args) when Ty.is_tuple p -> List.for_all (copied cx seen) args
+  | Con (p, args) -> (
+      if List.mem t seen || List.length seen > 16 then false
+      else
+        let seen = t :: seen in
+        let all tys =
+          List.for_all (fun t -> copied cx seen (subst args t)) tys
+        in
+        let fields (fs : Iface.field list) =
+          List.map (fun f -> f.Iface.fty) fs
+        in
+        match Hashtbl.find_opt cx.types p with
+        | None -> false
+        | Some td -> (
+            match td.body with
+            | Builtin -> List.mem t [ Ty.int; Ty.float; Ty.bool; Ty.unit ]
+            | Record fs -> all (fields fs)
+            | Sum cs ->
+                all
+                  (List.concat_map
+                     (fun (c : Iface.ctor) -> fields c.cfields)
+                     cs)
+            | Opaque (Rep r) -> all [ r ]
+            | Opaque (Hidden _) -> td.numeric <> None
+            | Errors _ | Dep _ -> false))
+  | Error -> true
+  | Fun _ | Var _ | Errors _ | Impl _ -> false
+
+(* ---- places ---- *)
+
+type place = { pvar : binder; ppath : step list; ploc : Loc.t }
+
+let rec place_of cx (e : expr) =
+  match e.kind with
+  | Var (Local b) -> Some { pvar = b; ppath = []; ploc = e.loc }
+  | Field (r, f) ->
+      Option.map
+        (fun p -> { p with ppath = p.ppath @ [ SField f.name ]; ploc = e.loc })
+        (place_of cx r)
+  | Index (a, i) ->
+      Option.map
+        (fun p ->
+          { p with ppath = p.ppath @ [ SIndex (cx.source i) ]; ploc = e.loc })
+        (place_of cx a)
+  | _ -> None
+
+let access ?(loc : Loc.t option) (p : place) kind why =
+  {
+    var = p.pvar;
+    path = p.ppath;
+    kind;
+    loc = Option.value loc ~default:p.ploc;
+    why;
+    block_param = false;
+  }
+
+(* One path is a prefix of the other, or they differ only in indices. *)
+let rec overlap a b =
+  match (a, b) with
+  | [], _ | _, [] -> true
+  | SIndex _ :: a, SIndex _ :: b -> overlap a b
+  | SField f :: a, SField g :: b -> f = g && overlap a b
+  | _ -> false
+
+(* A dependency call, or a block parameter's, in a handler's arm: it
+   stands for what other code might do to the state, so two of them
+   don't conflict with each other. *)
+let state_write a =
+  match a.why with Dep_call _ | Block_call _ -> true | _ -> false
+
+let clash a b =
+  a.var.id = b.var.id
+  && (a.kind = Write || b.kind = Write)
+  && overlap a.path b.path
+  && not (state_write a && state_write b)
+
+(* A place as it's written, `r.a` or `xs[i]`. *)
+let show_path x path =
+  x
+  ^ String.concat ""
+      (List.map
+         (function
+           | SField f -> "." ^ f
+           | SIndex (Some i) -> "[" ^ i ^ "]"
+           | SIndex None -> "[...]")
+         path)
+
+let show a = show_path a.var.ident.name a.path
+
+(* Code a help can move into a `let` before the call: [e], named after
+   the method it calls or the field it reads. *)
+let hoist cx (e : expr) : hoisted =
+  Option.map
+    (fun code ->
+      let name =
+        match e.kind with
+        | Call ({ kind = Field (_, m); _ }, _) -> m.name
+        | Field (_, f) -> f.name
+        | Index _ -> "item"
+        | _ -> "before"
+      in
+      (code, name))
+    (cx.source e)
+
+(* ---- messages ---- *)
+
+let report cx ?says ?help ?(notes = []) ?(labels = []) loc msg =
+  Diag.report cx.sink (Diag.make ?says ?help ~notes ~labels loc msg)
+
+let block_note = "a block runs during the call it's passed to"
+
+let only_way =
+  "an argument passed with `&` has to be the only way the call can reach that \
+   value"
+
+(* An access that holds its place for a call or a loop, made where it's
+   written. *)
+let lasting a =
+  match a.why with Passed | Borrowed _ | Looped _ -> true | _ -> false
+
+let read_or_changed a = if a.kind = Write then "changed" else "read"
+
+(* [o] happens while [f], which lasts, holds a handler's state: a
+   dependency call, or a block parameter's. *)
+let across cx f o =
+  let x = f.var.ident.name in
+  let label =
+    match f.why with
+    | Looped _ -> "changed for the whole loop"
+    | Borrowed _ -> "read for the whole call"
+    | _ -> "changed for the whole call"
+  in
+  let help ~during =
+    match f.why with
+    | Borrowed _ ->
+        sprintf
+          "pass a copy: `let before = %s` before the call, and pass `before`"
+          (show f)
+    | Looped _ -> sprintf "%s before or after the loop" during
+    | _ -> sprintf "%s before or after the change" during
+  in
+  match o.why with
+  | Block_call g ->
+      report cx o.loc
+        ~says:(sprintf "`%s` is called here" g)
+        ~labels:[ (f.loc, label) ]
+        ~notes:[ sprintf "`%s` can run this handler again" g ]
+        ~help:(help ~during:(sprintf "call `%s`" g))
+        (sprintf "`%s` is %s across a call of `%s`" x (read_or_changed f) g)
+  | _ ->
+      let help =
+        match (o.why, f.why) with
+        | Dep_call (Some code), Passed ->
+            sprintf
+              "make the call first, `let v = %s`, then change `%s` with `v`"
+              code x
+        | _ -> help ~during:"make the dependency call"
+      in
+      report cx o.loc ~says:"a dependency call"
+        ~labels:[ (f.loc, label) ]
+        ~notes:[ "other tasks can run this handler at a dependency call" ]
+        ~help
+        (sprintf "`%s` is %s across a dependency call" x (read_or_changed f))
+
+(* Two accesses that overlap, the first made in [va] (a block) if it's
+   [Some], the second in [vb]. *)
+let conflict cx (a, va) (b, vb) =
+  (* the one that lasts, made where it's written, first *)
+  let f, vf, o, vo =
+    if lasting a && va = None then (a, va, b, vb) else (b, vb, a, va)
+  in
+  let x = f.var.ident.name in
+  (* a block bound by `let` is pointed at where it runs, too *)
+  let report cx ?says ?help ?notes ?(labels = []) loc msg =
+    let pos (p : Loc.pos) = (p.line, p.col) in
+    let runs =
+      match vo with
+      | Some (l : Loc.t)
+        when pos l.start > pos o.loc.start || pos l.stop < pos o.loc.stop ->
+          [ (l, "the block runs here") ]
+      | _ -> []
+    in
+    report cx ?says ?help ?notes ~labels:(labels @ runs) loc msg
+  in
+  match (f.why, vf, o.why, vo) with
+  | _, None, (Dep_call _ | Block_call _), _ when lasting f -> across cx f o
+  | Looped elem, None, _, None ->
+      report cx o.loc
+        ~help:(sprintf "inside the loop, use `%s`" elem)
+        ~labels:[ (f.loc, sprintf "the loop changes `%s` here" x) ]
+        (sprintf "`%s` is being changed by the `for` loop around this" x)
+  | Looped elem, None, _, Some _ ->
+      report cx o.loc
+        ~says:(read_or_changed o ^ " here")
+        ~labels:[ (f.loc, "changed for the whole loop") ]
+        ~notes:[ block_note ]
+        ~help:(sprintf "inside the loop, use `%s`" elem)
+        (sprintf "`%s` is %s by this block while the loop changes it" x
+           (read_or_changed o))
+  | Passed, None, Passed, None ->
+      let indices =
+        match (List.rev f.path, List.rev o.path) with
+        | SIndex (Some i) :: before, SIndex (Some j) :: _ ->
+            Some (show_path x (List.rev before), i, j)
+        | _ -> None
+      in
+      let notes, help =
+        match indices with
+        | Some (xs, i, j) ->
+            ( [
+                only_way;
+                sprintf "`%s` and `%s` may be the same element" (show f)
+                  (show o);
+              ],
+              sprintf
+                "to exchange them, write `%s.swap(%s, %s)`; otherwise change \
+                 one, then the other"
+                xs i j )
+        | None ->
+            ( [ only_way ],
+              sprintf
+                "pass `%s` with `&` once; a second value it changes needs a \
+                 `var` of its own"
+                (show f) )
+      in
+      report cx o.loc ~notes ~help
+        ~labels:[ (f.loc, "passed with `&` here") ]
+        (sprintf "`%s` is passed with `&` twice in this call" x)
+  | Passed, None, Borrowed code, None | Borrowed code, None, Passed, None ->
+      let p, r = if f.why = Passed then (f, o) else (o, f) in
+      let help =
+        match code with
+        | Some (code, name) ->
+            sprintf
+              "read it into a `let` before the call, `let %s = %s`, and pass \
+               that"
+              name code
+        | None -> "read it into a `let` before the call, and pass that"
+      in
+      report cx r.loc ~says:"read for the whole call" ~notes:[ only_way ] ~help
+        ~labels:[ (p.loc, "passed with `&` here") ]
+        (if show p = show r then
+           sprintf "`%s` is passed with `&` and read by the same call" (show p)
+         else
+           sprintf "`%s` is passed with `&` while `%s` is read by the same call"
+             (show p) (show r))
+  | Passed, None, _, Some _ when o.kind = Write ->
+      report cx o.loc ~says:"changed here" ~notes:[ block_note ]
+        ~labels:[ (f.loc, "passed with `&` here") ]
+        ~help:
+          (sprintf
+             "change `%s` in one place: pass the block's change as a value, or \
+              apply it after the call"
+             x)
+        (sprintf
+           "`%s` is changed by this block and passed with `&` to the same call"
+           x)
+  | Passed, None, _, Some _ ->
+      let help =
+        match o.why with
+        | Used (Some (code, name)) | Borrowed (Some (code, name)) ->
+            sprintf "read it first: `let %s = %s`, and use `%s` in the block"
+              name code name
+        | _ -> sprintf "read `%s` into a `let` before the call, and use that" x
+      in
+      report cx o.loc ~says:"read here" ~notes:[ block_note ] ~help
+        ~labels:[ (f.loc, "changed for the whole call") ]
+        (sprintf "`%s` is read by this block while the call changes it" x)
+  | Borrowed _, None, _, Some _ ->
+      report cx o.loc ~says:"changed here"
+        ~labels:[ (f.loc, "read for the whole call") ]
+        ~notes:
+          [
+            sprintf "the call reads `%s` where it is, without copying it"
+              (show f);
+          ]
+        ~help:
+          (sprintf
+             "pass a copy: `let before = %s` before the call, and pass `before`"
+             (show f))
+        (sprintf "`%s` is changed by this block while the call reads it" x)
+  | _ ->
+      (* two blocks, one of them the callee *)
+      report cx o.loc
+        ~says:(read_or_changed o ^ " here")
+        ~labels:[ (f.loc, read_or_changed f ^ " here") ]
+        ~notes:[ block_note ]
+        ~help:
+          (sprintf
+             "change `%s` in only one of them, or pass the change as a value" x)
+        (sprintf
+           "`%s` is used by two blocks that run during this call, and one \
+            changes it"
+           x)
+
+(* Rule A: [arg], passed to [f], a block parameter, is one itself, or
+   captures one, [cap]. *)
+let rule_a cx (f : binder) (arg : expr) (cap : access option) =
+  let fx = f.ident.name in
+  let msg, labels =
+    match cap with
+    | None -> (
+        match arg.kind with
+        | Var (Local g) when g.id = f.id ->
+            (sprintf "`%s` can't be passed to itself" fx, [])
+        | Var (Local g) ->
+            ( sprintf "`%s`, a block parameter, can't be passed to `%s`"
+                g.ident.name fx,
+              [] )
+        | _ -> (sprintf "a block parameter can't be passed to `%s`" fx, []))
+    | Some c ->
+        let g = c.var.ident.name in
+        if c.var.id = f.id && c.why = Called then
+          ( sprintf "a block that calls `%s` can't be passed to `%s`" fx fx,
+            [ (c.loc, sprintf "calls `%s` here" fx) ] )
+        else if c.var.id = f.id then
+          ( sprintf "a block that captures `%s` can't be passed to `%s`" fx fx,
+            [ (c.loc, sprintf "captures `%s` here" fx) ] )
+        else
+          ( sprintf
+              "a block that captures `%s`, a block parameter, can't be passed \
+               to `%s`"
+              g fx,
+            [ (c.loc, sprintf "captures `%s` here" g) ] )
+  in
+  report cx arg.loc ~labels
+    ~notes:
+      [
+        sprintf
+          "`%s` is a block parameter, and a block given to one can't reach \
+           one, or it could run inside itself"
+          fx;
+      ]
+    ~help:"write it as a named recursive function" msg
+
+(* ---- the walk ---- *)
+
+let record cx a = cx.seen := a :: !(cx.seen)
+
+(* An access that lasts an instant: it only has to keep clear of the
+   loops around. *)
+let instant cx (a : access) =
+  record cx a;
+  List.iter
+    (fun l -> if clash l a then conflict cx (l, None) (a, None))
+    cx.loops
+
+(* A block parameter, [b], used at [loc]. *)
+let param_use cx (b : binder) loc why =
+  record cx { var = b; path = []; kind = Read; loc; why; block_param = true }
+
+let rec walk cx (e : expr) =
+  match e.kind with
+  | Int _ | Float _ | Bool _ | Str _ | Unit -> ()
+  | Var _ | Field _ | Index _ -> (
+      match place_of cx e with
+      | Some p ->
+          walk_indices cx e;
+          if not (is_block cx e) then
+            instant cx (access p Read (Used (hoist cx e)))
+      | None -> List.iter (walk cx) (children e))
+  | Ref { kind = Call (({ kind = Field _; _ } as f), args); _ } ->
+      call cx e f args ~changed:true
+  | Ref _ -> (* mut.ml reported it *) ()
+  | Call (f, args) -> call cx e f args ~changed:false
+  | Lambda _ -> ignore (block cx e)
+  | Block (stmts, last) ->
+      List.iter (stmt cx) stmts;
+      walk cx last
+  | Assign { target; value; _ } -> (
+      walk cx value;
+      walk_indices cx target;
+      match place_of cx target with
+      | Some p -> instant cx (access p Write (Used None))
+      | None -> ())
+  | For { pat; over = Each { kind = Ref a; loc = iter_loc; _ }; body } -> (
+      walk_indices cx a;
+      match place_of cx a with
+      | Some p ->
+          let elem = match pat.pkind with PVar x -> x.ident.name | _ -> "_" in
+          let l = access p Write (Looped elem) ~loc:iter_loc in
+          instant cx l;
+          walk { cx with loops = l :: cx.loops } body
+      | None -> walk cx body)
+  | Handler { state; arms; finally; _ } ->
+      List.iter (stmt cx) state;
+      let vars =
+        List.filter_map
+          (function Let { name; mut = true; _ } -> Some name | _ -> None)
+          state
+      in
+      let arm = { cx with state = Some vars } in
+      List.iter (fun (a : handler_arm) -> walk arm a.arm_impl) arms;
+      Option.iter (walk arm) finally
+  | Unop _ | Binop _ | If _ | Con _ | Record _ | Match _ | Array _ | Tuple _
+  | For _ | Fail _ | Try _ | Attempt _ | With _ | Assert _ ->
+      List.iter (walk cx) (children e)
+
+and stmt cx = function
+  | Let { name; value = { kind = Lambda _; _ } as value; mut = false; _ } ->
+      (* no access where it's bound: its captures are made where it's
+         called or passed *)
+      Hashtbl.replace cx.blocks name.id (block cx value)
+  | Let { value; _ } | Let_tuple { value; _ } -> walk cx value
+  | Expr e -> walk cx e
+
+(* A block, checked on its own, and what it accesses of the variables
+   from outside it, its captures, nested blocks' included. *)
+and block cx (e : expr) =
+  match e.kind with
+  | Lambda (_, body) ->
+      let inner = { cx with depth = cx.depth + 1; loops = []; seen = ref [] } in
+      walk inner body;
+      List.filter (fun a -> a.var.depth < inner.depth) !(inner.seen)
+  | _ -> []
+
+(* The index expressions inside a place, like the `i` in `xs[i].pos`. *)
+and walk_indices cx (e : expr) =
+  match e.kind with
+  | Index (a, i) ->
+      walk_indices cx a;
+      walk cx i
+  | Field (r, _) -> walk_indices cx r
+  | _ -> ()
+
+(* A call, [e], of [f] with [args]; [changed] if its receiver is passed
+   with `&`, `&s.push(1)`. Its arguments are evaluated in order, each
+   checked as it's made; then every access that lasts the call starts. *)
+and call cx (e : expr) (f : expr) args ~changed =
+  let state_writes why loc =
+    match cx.state with
+    | Some vars ->
+        List.map
+          (fun v ->
+            { var = v; path = []; kind = Write; loc; why; block_param = false })
+          vars
+    | None -> []
+  in
+  let why = Dep_call (cx.source e) in
+  (* the block parameter called, if it's one *)
+  let param =
+    match f.kind with
+    | Var (Local b) when is_block cx f && not (Hashtbl.mem cx.blocks b.id) ->
+        Some b
+    | _ -> None
+  in
+  (* the callee's own accesses, for the call *)
+  let callee, receiver =
+    match f.kind with
+    | Field (r, _) when is_method cx f ->
+        let held = if dep_call cx f then state_writes why e.loc else [] in
+        ({ none with held }, Some r)
+    | Var (Local b) when is_block cx f -> (
+        match Hashtbl.find_opt cx.blocks b.id with
+        | Some caps -> ({ none with held = caps; via = Some f.loc }, None)
+        | None ->
+            param_use cx b f.loc Called;
+            ( { none with held = state_writes (Block_call b.ident.name) e.loc },
+              None ))
+    | Lambda _ -> ({ none with held = block cx f; via = Some f.loc }, None)
+    | _ ->
+        walk cx f;
+        let held = if dep_call cx f then state_writes why e.loc else [] in
+        ({ none with held }, None)
+  in
+  (* an argument passed to a parameter that only reads it, the [i]th *)
+  let plain i (a : expr) ~code =
+    if is_block cx a then (
+      let sibling = sibling (mode_of f i) in
+      match a.kind with
+      | Lambda _ -> { held = block cx a; via = Some a.loc; sibling }
+      | Var (Local b) -> (
+          match Hashtbl.find_opt cx.blocks b.id with
+          | Some caps -> { held = caps; via = Some a.loc; sibling }
+          | None ->
+              param_use cx b a.loc (Used None);
+              none)
+      | Var (Dep_op _ | Next_op _) ->
+          {
+            held = state_writes (Dep_call (cx.source a)) a.loc;
+            via = Some a.loc;
+            sibling;
+          }
+      | _ ->
+          walk cx a;
+          none)
+    else
+      match place_of cx a with
+      | Some p when not (copied cx [] (ty cx a)) ->
+          walk_indices cx a;
+          { none with held = [ access p Read (Borrowed code) ] }
+      | _ ->
+          walk cx a;
+          none
+  in
+  (* one passed with `&` *)
+  let passed (a : expr) ~loc =
+    walk_indices cx a;
+    match place_of cx a with
+    | Some p -> { none with held = [ access p Write Passed ~loc ] }
+    | None ->
+        walk cx a;
+        none
+  in
+  let receiver =
+    match receiver with
+    | Some r when changed -> [ passed r ~loc:r.loc ]
+    | Some r -> [ plain 0 r ~code:(hoist cx e) ]
+    | None -> []
+  in
+  let first = List.length receiver in
+  let args_held =
+    List.mapi
+      (fun i (a : expr) ->
+        match a.kind with
+        | Ref p when changed_receiver a = None -> passed p ~loc:a.loc
+        | _ -> plain (first + i) a ~code:(hoist cx a))
+      args
+  in
+  (* rule A *)
+  Option.iter
+    (fun b ->
+      List.iter2
+        (fun (a : expr) (g : group) ->
+          match a.kind with
+          | Var (Local c) when is_block cx a && not (Hashtbl.mem cx.blocks c.id)
+            ->
+              rule_a cx b a None
+          | _ when g.via <> None -> (
+              match List.find_opt (fun c -> c.block_param) g.held with
+              | Some c -> rule_a cx b a (Some c)
+              | None -> ())
+          | _ -> ())
+        args args_held)
+    param;
+  let groups = (callee :: receiver) @ args_held in
+  (* each variable is reported once a call *)
+  let reported = ref [] in
+  let once (a, va) (b, vb) =
+    if not (List.mem a.var.id !reported) then (
+      reported := a.var.id :: !reported;
+      conflict cx (a, va) (b, vb))
+  in
+  let rec pairs = function
+    | [] -> ()
+    | g :: rest ->
+        List.iter
+          (fun h ->
+            if not (g.sibling && h.sibling) then
+              List.iter
+                (fun a ->
+                  List.iter
+                    (fun b -> if clash a b then once (a, g.via) (b, h.via))
+                    h.held)
+                g.held)
+          rest;
+        pairs rest
+  in
+  pairs groups;
+  List.iter
+    (fun g ->
+      List.iter
+        (fun a ->
+          List.iter
+            (fun l -> if clash l a then once (l, None) (a, g.via))
+            cx.loops;
+          record cx a)
+        g.held)
+    groups
+
+let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
+  let types = Hashtbl.create 16 and schemes = Hashtbl.create 64 in
+  List.iter
+    (fun (td : Iface.type_decl) ->
+      Hashtbl.replace types td.path td;
+      Path.Map.iter
+        (fun p (o : Iface.op) -> Hashtbl.replace schemes p o.oscheme)
+        td.members)
+    (List.concat_map (fun (i : Iface.t) -> i.types) reachable @ r.types);
+  List.iter
+    (fun (i : Iface.t) ->
+      List.iter
+        (fun (v : Iface.value) ->
+          Hashtbl.replace schemes (Path.make i.home v.vname) v.scheme)
+        i.values)
+    reachable;
+  Path.Map.iter (Hashtbl.replace schemes) inferred.schemes;
+  let source =
+    Ast.source ~type_name:(Resolve.type_name r)
+      ~value_name:(Resolve.value_name r)
+  in
+  List.iter
+    (fun (f : fn_def) ->
+      let nodes = Path.Map.find (Ast.fn_path r.home f) inferred.nodes in
+      walk
+        {
+          nodes;
+          types;
+          schemes;
+          sink;
+          source;
+          depth = 0;
+          loops = [];
+          blocks = Hashtbl.create 8;
+          state = None;
+          seen = ref [];
+        }
+        f.body)
+    (Ast.functions r.prog)

@@ -2104,28 +2104,123 @@ fn main() = 1
        help: remove the `inout`
     |}]
 
-let%expect_test "a lambda in an arm can't change the handler's state" =
-  types
+let%expect_test "a block in an arm changes the handler's state" =
+  (* it captures the arm's `n` by reference, and the arm writes it back
+     to the handler's state when it ends *)
+  run
     {|
 dep A =
   x: fn() -> Int
 
+fn twice(f: fn()) =
+  try f()
+  try f()
+
 handler h() for A =
   var n = 0
   x() =>
-    let f = fn() => n += 1
-    n += 1
+    twice(fn() => n += 1)
     n
+
+fn main() uses Console =
+  with h() in
+    print(A.x())
+    print(A.x())
+|};
+  [%expect {|
+    2
+    4
+    ()
+    |}]
+
+let%expect_test "an arm calls a block parameter, then changes its state" =
+  (* row 34 of exclusivity.md: each access is an instant, so the call
+     running the handler again in between is only recursion *)
+  run
+    {|
+dep A =
+  visit: fn(f: fn())
+  count: fn() -> Int
+
+handler h() for A =
+  var seen = [0]
+  visit(f) =>
+    f()
+    &seen.push(seen.len())
+  count() => seen.len()
+
+fn main() uses Console =
+  with h() in
+    A.visit(fn() => ())
+    A.visit(fn() => ())
+    print(A.count())
+|};
+  [%expect {|
+    3
+    ()
+    |}]
+
+let%expect_test "an arm changes its state across a dependency call" =
+  (* row 31 of exclusivity.md: the block makes a dependency call while
+     the call it's passed to changes `cache` *)
+  types
+    {|
+dep A =
+  load: fn(k: Int) -> Int
+
+fn update(inout m: Map<Int, Int>, k: Int, f: fn() -> Int) =
+  &m.set(k, try f())
+
+handler cached() over A =
+  var cache: Map<Int, Int> = Map.empty
+  load(k) =>
+    update(&cache, k, fn() => next.load(k))
+    cache.get(k) orelse 0
 
 fn main() = 1
 |};
   [%expect
     {|
-    error: a lambda can't change `n`, a variable from outside it
-      ┌─ test.ren:7:21
-    7 │     let f = fn() => n += 1
-      │                     ^
-      = a lambda captures the values of the variables it uses when it's created, so changing them would have no effect outside
+    error: `cache` is changed across a dependency call
+       ┌─ test.ren:10:31
+    10 │     update(&cache, k, fn() => next.load(k))
+       │                               ^^^^^^^^^^^^ a dependency call
+       │            ------ changed for the whole call
+       = other tasks can run this handler at a dependency call
+       help: make the call first, `let v = next.load(k)`, then change `cache` with `v`
+    |}]
+
+let%expect_test "an arm changes its state across a call of a block parameter" =
+  (* row 33 of exclusivity.md: `f` can run this handler again while
+     `each_mut` changes `items` *)
+  types
+    {|
+dep A =
+  visit: fn(f: fn())
+
+fn each_mut(inout xs: Array<Int>, f: fn(Int) -> Int) =
+  for x in &xs
+    x = try f(x)
+
+handler h() for A =
+  var items = [1, 2]
+  visit(f) =>
+    each_mut(&items, fn(i) =>
+      f()
+      i + 1)
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `items` is changed across a call of `f`
+       ┌─ test.ren:12:7
+    11 │     each_mut(&items, fn(i) =>
+       │              ------ changed for the whole call
+    12 │       f()
+       │       ^^^ `f` is called here
+       = `f` can run this handler again
+       help: call `f` before or after the change
     |}]
 
 let%expect_test "a handler's state comes before its arms" =

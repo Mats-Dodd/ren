@@ -25,7 +25,8 @@ a diff; `dune promote` accepts its output.
   13
   Point { x: 11, y: 0 }
   Point { x: 1, y: 2 }
-  1
+  2
+  13
 
 infer.ren annotates nothing; this is what inference works out:
 
@@ -390,8 +391,8 @@ A method that changes its receiver is called with `&`:
   $ cp -r vm v2 && perl -0pi -e 's/    &self.stack.push\(n\)/    self.stack.push(n)/' v2/machine.ren
   $ ren check v2/main.ren
   error: `push` changes `self.stack`, so the call needs `&`
-     ┌─ v2/machine.ren:81:5
-  81 │     self.stack.push(n)
+     ┌─ v2/machine.ren:78:5
+  78 │     self.stack.push(n)
      │     ^^^^^^^^^^^^^^^^^^
      = `&` shows at the call that `self.stack` is changed
      help: write `&self.stack.push(n)`
@@ -421,18 +422,18 @@ A `Program` is opaque, so an array of instructions isn't one until
      help: use a function from `program` to make or read one
   [1]
 
-A call that changes `self` can't also read part of it in an argument:
+A block passed to a call that changes `self` can't also read it, since
+it runs during the call:
 
-  $ cp -r vm v5 && perl -0pi -e 's/let v = self.locals\[slot\]\n *&self.push\(v\)/&self.push(self.locals[slot])/' v5/machine.ren
+  $ cp -r vm v5 && perl -pi -e 's/fn\(a, b\) => a \+ b\)/fn(a, b) => a + b + self.steps)/' v5/machine.ren
   $ ren check v5/main.ren
-  error: this call changes `self`, so no other argument can use it
-     ┌─ v5/machine.ren:55:20
-  55 │         &self.push(self.locals[slot])
-     │                    ^^^^^^^^^^^^^^^^^
-     │          ---- passed with `&` here
-     = an argument passed with `&` has to be the only way the call can reach that value
-     = reading part of `self` counts as using it
-     help: read it into a `let` before the call, and pass that
+  error: `self` is read by this block while the call changes it
+     ┌─ v5/machine.ren:58:51
+  58 │       Add => try &self.binary(fn(a, b) => a + b + self.steps)
+     │                                                   ^^^^^^^^^^ read here
+     │                   ---- changed for the whole call
+     = a block runs during the call it's passed to
+     help: read it first: `let steps = self.steps`, and use `steps` in the block
   [1]
 
 The bank is the milestone of stage 6: accounts, transfers that can fail,
@@ -999,7 +1000,8 @@ each a handler over `Prices`, and `main` chains them with `over` in one
 
 The ledger moves money inside a transaction (ledger/README.md): a
 handler over `Sql` that begins when it's installed, and in its `finally`
-commits, or rolls back when the body failed:
+commits, or rolls back when the body failed. A test retries a transfer
+with a block that counts the tries in a `var` outside it:
 
   $ ren run ledger/main.ren
   Ok(())
@@ -1010,9 +1012,10 @@ commits, or rolls back when the body failed:
     ✓ main prints each transfer, and the balances
     ✓ a transfer that leaves an account short changes nothing
     ✓ a commit that fails changes nothing
+    ✓ a transfer is tried again when its transaction can't begin
     ✓ a transaction that can't begin doesn't run its body
   
-  4 passed
+  5 passed
 
 `ren --help` is asked for, so it's printed to stdout and exits 0, and
 `--version` says which Ren this is. A folder with no tests is more likely

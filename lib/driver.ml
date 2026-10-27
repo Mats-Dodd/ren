@@ -45,7 +45,8 @@ let parse ~file src = parse ~file src
 
 (* Check one module against the interfaces it imports, before anything
    runs: first what its names refer to (found through scope), then what may
-   change, then types (and what's found through them), then whether every
+   change, then types (and what's found through them), then that nothing
+   is used while it's being changed (excl.ml), then whether every
    import is used, then whether every `match` is exhaustive. Returns the module resolved, its interface and
    what inference found. [imports] are the interfaces of the modules it
    imports, and [reachable] those of every module reachable through them,
@@ -72,6 +73,9 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
         Infer.program sink ~imports ~reachable ?entry ?console ?sees_all
           ~tests:items.tests ~bodies:items.bodies r)
   in
+  (* exclusivity needs types: which values are copied, which arguments
+     are blocks *)
+  checked "excl" (fun sink -> Excl.program sink ~reachable r inferred);
   (* only now is it known whether every import is used: a type imported
      by name can be used just by writing one of its constructors bare *)
   checked "imports" (fun sink ->

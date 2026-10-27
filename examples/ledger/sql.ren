@@ -9,9 +9,9 @@ pub dep Sql =
   commit: fn(tx: Int) ! DbDown
   rollback: fn(tx: Int)
 
-// when the database is down: never, when a transaction begins, or when
-// it commits
-pub type Outage = | Never | AtBegin | AtCommit
+// when the database is down: never, when a transaction begins, only
+// when the first one begins, or when it commits
+pub type Outage = | Never | AtBegin | AtFirstBegin | AtCommit
 
 // the balances, and those when the last transaction began, which a
 // rollback or a failed commit puts back
@@ -19,13 +19,15 @@ pub handler mem_sql(balances: Array<(Str, Int)>, down: Outage) for Sql =
   var rows = Map.of(balances)
   var kept = Map.of(balances)
   var begun = 0
+  var asked = 0
   get(name) =>
     match rows.get(name)
       Some(b) => b
       None => 0
   set(name, balance) => &rows.set(name, balance)
   begin() =>
-    if down == AtBegin then fail DbDown
+    asked += 1
+    if down == AtBegin || (down == AtFirstBegin && asked == 1) then fail DbDown
     kept = rows
     begun += 1
     begun

@@ -423,7 +423,7 @@ fn main() =
   print(q)
 
   var n = 1
-  let get = fn() => n                  // captures n's value now
+  let get = fn() => n                  // a block reads `n` when it runs
   n = 2
   print(get())
 |};
@@ -434,7 +434,7 @@ fn main() =
     13
     Point { x: 11, y: 0 }
     Point { x: 1, y: 2 }
-    1
+    2
     ()
     |}]
 

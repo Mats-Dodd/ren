@@ -62,7 +62,7 @@ try retry(3, on: DbDown) fn() =>
 ```
 
 `let f = fn() => n + 1; n += 5; f()` is 6: a block reads `n` when it
-runs. Today it's 1.
+runs. Before 10c step 5 it was 1.
 
 **What it gives the compiler.** Every block at a call site is either a
 literal or a parameter of the enclosing function, so blocks only travel
@@ -433,16 +433,20 @@ dependencies where it's called.
    none; Infer checks it after inference and Core Lint again. Lexical
    lookup (step 4): a block captures the evidence where it's written, and
    its callee provides only what its parameter's type lists, none if the
-   type isn't written; `next` in a block runs. Capture is still by value
-   until step 5.
+   type isn't written; `next` in a block runs. Capture by reference
+   (step 5): a block shares its frame's cells, and one exclusivity pass
+   after inference, one walk per function, checks the table in decision
+   2 and rule A, with ordinary the only parameter mode. Rules B to D
+   land with 11a, which makes concurrent and spawned parameters.
 2. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.
-3. **11a, tasks.** `Async.scope`, `spawn` and its handle, keyed spawn,
-   `until`, `tick`, `yield`, `timeout`, `race`, `isolate`; the runtime as
-   a handler with `single` and `sim`; the tape, poll points, task paths,
-   journal version 2, journals as tests with a schedule prefix; the
-   standard library's channel, semaphore and `Batcher`.
+3. **11a, tasks.** Rules B to D; `Async.scope`, `spawn` and its handle,
+   keyed spawn, `until`, `tick`, `yield`, `timeout`, `race`, `isolate`;
+   the runtime as a handler with `single` and `sim`; the tape, poll
+   points, task paths, journal version 2, journals as tests with a
+   schedule prefix; the standard library's channel, semaphore and
+   `Batcher`.
 4. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; handler
    locks and the shared mark; atomic counts on shared objects; immutable
    handler state read without counting.

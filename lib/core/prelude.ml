@@ -115,6 +115,11 @@ pub type Array<T> = builtin
     for y in self
       if y == x then yes = true
     yes
+  // `f` on each element, in order: a block that changes a `var` outside
+  // it, `xs.each(fn(x) => total += x)`
+  pub fn each(self, f: fn(T)) =
+    for x in self
+      try f(x)
   // `f` over each element in turn, from `init`
   pub fn reduce<A>(self, init: A, f: fn(A, T) -> A) -> A =
     var acc = init

@@ -38,6 +38,10 @@ fn main() =
   print(q)
 
   var n = 1
-  let get = fn() => n                  // captures n's value now
+  let get = fn() => n                  // a block reads `n` when it runs
   n = 2
   print(get())
+
+  var total = 0
+  scores.each(fn(x) => total += x)     // and can change a `var` outside it
+  print(total)

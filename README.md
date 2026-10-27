@@ -128,7 +128,7 @@ var user = load(id)
 user.plan = Pro(seats: 5)              // reads like mutation, means "new value"
 ```
 
-No two names ever see the same mutable thing, so Ren has no data races and no reference cycles. When a value isn't shared, the compiler updates it in place, so the copies you'd expect from immutable data mostly never happen.
+No two names ever see the same mutable thing, a block sharing its frame's variables only during its call, so Ren has no data races and no reference cycles. When a value isn't shared, the compiler updates it in place, so the copies you'd expect from immutable data mostly never happen.
 
 ### 3. Functions
 
@@ -153,6 +153,18 @@ let summaries = Async.map(users) fn(u) =>
   summarize(u, feed)
 ```
 
+A block captures the variables it uses by reference: it reads them when it runs, and can change a `var` outside it. [Exclusivity](#8--this-call-changes-it) keeps that sound:
+
+```ren
+var n = 1
+let get = fn() => n                    // reads `n` when it runs
+n = 2
+assert get() == 2
+
+var total = 0
+scores.each(fn(x) => total += x)       // changes `total`
+```
+
 Inside brackets, where line breaks are otherwise ignored, a lambda's body can be a block too: a `=>` that ends its line opens one, indented further than the line around the brackets, and it ends at a line indented less, at a `,` before the next argument, or at the closing bracket:
 
 ```ren
@@ -171,7 +183,7 @@ pub fn map<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U>
 pub fn retry<T>(n: Int, body: fn() -> T) -> T
 ```
 
-`Async.map` and `Async.timeout` take theirs the same way. Calling `Async.map` with a lambda that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError` and use `Net`. It's still transparent even though it runs `f` on other tasks, because no task outlives the call that started it ([async.md](async.md)).
+`Async.map` and `Async.timeout` take theirs the same way. Calling `Async.map` with a block that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError` and use `Net`. It's still transparent even though it runs `f` on other tasks, because no task outlives the call that started it ([async.md](async.md)).
 
 Behaviour that's kept is data, or a dependency. A button that remembers what a click does holds an enum to `match` on where the click is handled, or the code that runs is a `dep`'s implementation, installed with `with`. Writing a function type in a record field, a constructor's payload, a type argument or a return type is an error that says so.
 
@@ -426,10 +438,19 @@ for p in &particles                    // update each element in place
 
 let n = try Fs.read(fd, &buf)          // the kernel gets exclusive access to buf
 
-swap(&a, &a)                           // error: `a` passed as inout twice
+swap(&a, &a)                           // error: `a` is passed with `&` twice
 ```
 
-An argument passed with `&` has to be the only way the call can reach that value, so no other argument of the call can use it: `f(&xs, xs)` is an error. If it were allowed, the read would either point into a buffer the call is changing in place, or make that buffer shared and force a hidden copy. For now that also covers reading a part of it, as in `&xs.push(xs[0])`: read it into a `let` first. Once reference counting arrives (stage 11), reading a plain value out of it, such as an `Int` element, will be allowed, because that read copies the value before the call starts. Reading something that is itself counted, like an array element or a `T`, will stay an error.
+While a place is being changed, nothing else may use it: an `&` holds its place for the call, from after the arguments are evaluated, a `for p in &ps` for the loop, and a block passed to a call uses what it captures for that call. So `f(&xs, xs)` and `retain(&xs, fn(x) => x < xs.len())` are errors, while `&xs.push(xs.len())`, and `&xs.push(xs[0])` with an `Int` element, are fine, since a copied value is read before the call starts ([foundations.md](foundations.md#2-one-exclusivity-rule)):
+
+```
+error: `xs` is read by this block while the call changes it
+  │ retain(&xs, fn(x) => x < xs.len())
+  │                          ^^ read here
+  │        --- changed for the whole call
+  = a block runs during the call it's passed to
+  help: read it first: `let len = xs.len()`, and use `len` in the block
+```
 
 A function body uses exactly two markers: `try` means a call can fail, and `&` means a call changes something.
 
@@ -632,7 +653,7 @@ fn step(inout ps: Array<Particle, soa>, dt: Float) =
 
 **Parameters.** Read-only parameters are borrowed and cost no reference counting. For an `inout` parameter, the caller makes the value unshared before the call, so any copy is charged to the caller. A `unique` parameter transfers ownership.
 
-**Blocks.** A block is never heap-allocated. That's a language guarantee, not an optimization that might fail. A block can't be stored or returned, so it lives on the stack of the call it's passed to. (Today's interpreter still copies what a block captures when it's made.)
+**Blocks.** A block is never heap-allocated. That's a language guarantee, not an optimization that might fail. A block can't be stored or returned, so it lives on the stack of the call it's passed to, and shares the frame it was written in.
 
 **Generics.** A requirement on a type parameter, `T has add`, which the compiler infers, works like a transparent parameter. `sum<Int>` doesn't allocate; `sum<BigInt>` uses `Alloc`, because `BigInt.add` does.
 
@@ -932,6 +953,7 @@ Dependencies are vendored source, Go-style, with no package registry by default.
 Ren gives some things up on purpose:
 
 - **No shared mutable references.** Graphs, doubly linked lists, and observers use indices, generational handles, or a handler that owns the state. This is the same style serious Rust code converges on.
+- **No stored closures.** A block is only passed down and called, never kept in a record, a collection or handler state, or returned. Code that's kept is an enum with an interpreter, or a handler. In return blocks capture by reference, and never allocate.
 - **No multi-shot continuations.** Handlers resume at most once. Generators and async still work. Backtracking search is written explicitly.
 - **Error tags are structural.** Like OCaml's polymorphic variants, two `Timeout`s with the same shape are the same error, whichever library they come from, and two with different shapes can't share an error set until one is renamed. Use payloads or more specific names to tell them apart.
 - **Values from other modules are always qualified.** You write `stripe.charge`, never a bare `charge`. Methods are found through the type (`xs.map(f)`), so everyday code stays short.

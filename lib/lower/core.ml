@@ -268,8 +268,8 @@ and kind =
     }
       (** a block. [captures] are the locals from outside it its body uses, in
           order of id, and [outer], the evidence where it's written, among them;
-          their values are copied when it's made. Its body runs with the
-          evidence [ev]: [outer], with the implementations of [given] in the
+          it shares their cells, capturing them by reference. Its body runs with
+          the evidence [ev]: [outer], with the implementations of [given] in the
           evidence its caller passes put on top (foundations.md, decision 5).
           [given] are the dependencies the type of the parameter it's passed to
           lists, which the callee provides, sorted; usually none, and then [ev]
