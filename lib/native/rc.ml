@@ -730,6 +730,16 @@ let consumed fns (f : fn) =
   fun (v : var) ->
     Hashtbl.mem owned v.id || Ids.mem v.id fi.mutables || Ids.mem v.id fi.slots
 
+(* The variables [s] defines for the statements after it. *)
+let made (s : stmt) =
+  match s with
+  | Let (v, _) | Decl v -> Ids.singleton v.id
+  | Call_fails { result; _ }
+  | Call_block { result; _ }
+  | Call_handler { result; _ } ->
+      Ids.singleton result.id
+  | _ -> Ids.empty
+
 (* ---- liveness ---- *)
 
 type cx = {
@@ -737,6 +747,8 @@ type cx = {
   always : Ids.t;
       (** the slots in scope, and the owned descriptors words are counted
           through: alive until their scope ends *)
+  defined : Ids.t;
+      (** the variables in scope: what a nested drop may name ([dtree]) *)
   breaks : (int * Ids.t) list;
   jumps : (int * Ids.t) list;
   raises : (int * Ids.t) list;
@@ -804,6 +816,7 @@ let scoped cx (b : block) =
               | _ -> cx)
           | _ -> cx
         in
+        let cx' = { cx' with defined = Ids.union cx'.defined (made s) } in
         (cx', (cx, s) :: acc))
       (cx, []) b
   in
@@ -925,41 +938,123 @@ let promote pl gid ~live ~transfer =
   go gid ~direct:true;
   (!incs, !parts, !took)
 
+(* How a dying group's object is dropped, as a tree: [incs] counts again
+   the descendants that are live but aren't kept below; [parts] are the
+   live fields of its own object, by slot; and [nested] the fields that
+   die with it whose own fields the program read, so their shape is
+   known, each with its tree, to drop in turn (Koka's [specializeDrop],
+   Parc.hs:356, which drops the children in the unique branch through
+   [optimizeDupDrops] again, Parc.hs:359, so a pattern's inner nodes are
+   specialized too). A field is nested only if no other variable of the
+   same slot is used: that would hold the same object. *)
+type dtree = {
+  incs : stmt list;
+  parts : (int * var) list;
+  nested : (int * var * dtree) list;
+  took : bool;
+}
+
+let rec dtree pl gid ~scope ~live ~transfer : dtree =
+  let fi = pl.info in
+  let incs = ref [] and parts = ref [] and nested = ref [] and took = ref false in
+  let kids = (find_group fi gid).children in
+  (* another field of the same slot, used: the same object *)
+  let shared_slot c slot =
+    List.exists
+      (fun k ->
+        k <> c
+        && (match (find_group fi k).kind with
+           | Part (_, s) -> s = slot
+           | _ -> false)
+        && live_through fi live k)
+      kids
+  in
+  let known c =
+    List.exists
+      (fun k -> match (find_group fi k).kind with Part _ -> true | _ -> false)
+      (find_group fi c).children
+  in
+  let rec go gid ~direct =
+    List.iter
+      (fun c ->
+        let g = find_group fi c in
+        if not g.snap then
+          if Ids.mem c live then
+            match g.kind with
+            | View _ when transfer && direct && not !took -> took := true
+            | Part (_, slot) when direct -> (
+                match count_var g with
+                | Some v when not (List.mem_assoc slot !parts) ->
+                    parts := !parts @ [ (slot, v) ]
+                | _ -> incs := !incs @ count fi g ~dup:true)
+            | _ -> incs := !incs @ count fi g ~dup:true
+          else
+            match (g.kind, count_var g) with
+            | Part (_, slot), Some v
+              when direct && v.layout = Boxed
+                   && Ids.mem v.id scope
+                   && (not (shared_slot c slot))
+                   && known c ->
+                nested :=
+                  !nested
+                  @ [ (slot, v, dtree pl c ~scope ~live ~transfer:false) ]
+            | _ ->
+                go c
+                  ~direct:
+                    (direct && match g.kind with View _ -> true | _ -> false))
+      (find_group fi gid).children
+  in
+  go gid ~direct:true;
+  { incs = !incs; parts = !parts; nested = !nested; took = !took }
+
+(* The counting a tree's descendants need if its object isn't unique:
+   each live one counted again. *)
+let rec shared_incs fi (t : dtree) =
+  List.concat_map (fun (_, (v : var)) -> count fi (group fi v) ~dup:true) t.parts
+  @ List.concat_map (fun (_, _, t) -> t.incs @ shared_incs fi t) t.nested
+
+(* What drops the object of group [g], whose tree is [t], once [t.incs]
+   are counted: if it's unique, it's freed keeping its live fields and
+   its nested ones, which are dropped the same way in turn; if not, every
+   live descendant is counted again and it's dropped. *)
+let rec drop_tree pl (g : group) (t : dtree) : stmt list =
+  let fi = pl.info in
+  if t.took then shared_incs fi t
+  else
+    match (t.parts, t.nested, count_var g) with
+    | [], [], _ -> count fi g ~dup:false
+    | _, _, Some cv when cv.layout = Boxed ->
+        let u = fresh pl "$unique" Bool in
+        let kept =
+          List.map (fun (n, v) -> (n, Var v)) t.parts
+          @ List.map (fun (n, (v : var), _) -> (n, Var v)) t.nested
+        in
+        [
+          Let (u, Is_unique (Var cv));
+          If
+            ( Var u,
+              Free (Var cv, kept)
+              :: List.concat_map
+                   (fun (_, (v : var), sub) ->
+                     sub.incs @ drop_tree pl (group fi v) sub)
+                   t.nested,
+              shared_incs fi t @ count fi g ~dup:false );
+        ]
+    | _ -> shared_incs fi t @ count fi g ~dup:false
+
 (* What drops each of [dying], whose descendants live in [live] are
    promoted first: one more reference to each, then the drops, a
    specialized one where it keeps parts of the object (Koka's
-   [specializeDrop], Parc.hs:356). *)
-let kill pl (dying : int list) ~live : stmt list =
+   [specializeDrop], Parc.hs:356), nested where a field dying with it
+   has a known shape. *)
+let kill pl ~scope (dying : int list) ~live : stmt list =
   let fi = pl.info in
   let incs, drops =
     List.fold_left
       (fun (incs, drops) gid ->
         let g = find_group fi gid in
-        let i, parts, took = promote pl gid ~live ~transfer:true in
-        let part_incs =
-          List.concat_map
-            (fun (_, (v : var)) -> count fi (group fi v) ~dup:true)
-            parts
-        in
-        let d =
-          if took then part_incs
-          else
-            match (parts, count_var g) with
-            | [], _ -> count fi g ~dup:false
-            | _, Some cv when cv.layout = Boxed ->
-                let u = fresh pl "$unique" Bool in
-                [
-                  Let (u, Is_unique (Var cv));
-                  If
-                    ( Var u,
-                      [
-                        Free (Var cv, List.map (fun (n, v) -> (n, Var v)) parts);
-                      ],
-                      part_incs @ count fi g ~dup:false );
-                ]
-            | _ -> part_incs @ count fi g ~dup:false
-        in
-        (incs @ i, drops @ d))
+        let t = dtree pl gid ~scope ~live ~transfer:true in
+        (incs @ t.incs, drops @ drop_tree pl g t))
       ([], []) dying
   in
   incs @ drops
@@ -983,14 +1078,15 @@ let rec place_block pl cx ?(entry = []) (b : block) (out : Ids.t) :
   let fi = pl.info in
   let entry = List.filter_map (fun v -> tracked_of fi (Var v)) entry in
   let dead = List.filter (fun g -> not (Ids.mem g live)) entry in
-  (kill pl dead ~live @ stmts, Ids.diff live (Ids.of_list entry))
+  let scope = Ids.union cx.defined (Ids.of_list entry) in
+  (kill pl ~scope dead ~live @ stmts, Ids.diff live (Ids.of_list entry))
 
 (* A branch's block, which first drops what's held before it ([held],
    whose owners [owned] says) but dead in it. *)
 and branch pl cx ?(entry = []) ~held ~owned (b : block) (out : Ids.t) =
   let b, live = place_block pl cx ~entry b out in
   let dead = dying ~held ~live ~owned in
-  (kill pl dead ~live @ b, live)
+  (kill pl ~scope:cx.defined dead ~live @ b, live)
 
 and place_stmt pl cx (s : stmt) (after : Ids.t) : stmt list * Ids.t =
   let fi = pl.info in
@@ -1102,7 +1198,7 @@ and place_stmt pl cx (s : stmt) (after : Ids.t) : stmt list * Ids.t =
   let after_kills =
     if compound then []
     else
-      kill pl
+      kill pl ~scope:(Ids.union cx.defined (made s))
         (List.filter
            (fun gid -> (not (moved gid)) && not (is_snapshot_slot_unused gid))
            (dying ~held:held_after ~live:after ~owned:owned_now))
@@ -1292,7 +1388,14 @@ let place_fn fns (f : fn) : fn =
       Ids.empty f.params
   in
   let cx =
-    { fi; always = slots_in_params; breaks = []; jumps = []; raises = [] }
+    {
+      fi;
+      always = slots_in_params;
+      defined = Ids.of_list (List.map (fun (v : var) -> v.id) f.params);
+      breaks = [];
+      jumps = [];
+      raises = [];
+    }
   in
   (* liveness once first, which finds every snapshot *)
   ignore (live_block cx f.body Ids.empty);
@@ -1311,7 +1414,7 @@ let place_fn fns (f : fn) : fn =
         | _ -> None)
       f.params
   in
-  { f with body = kill pl params ~live @ body }
+  { f with body = kill pl ~scope:cx.defined params ~live @ body }
 
 (* The program with its counting placed by Perceus: [prepare]d, and its
    parameters' modes decided by borrow.ml. *)

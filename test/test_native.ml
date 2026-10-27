@@ -29,10 +29,10 @@ let mem ?rc ?release ?only src =
 
 (* The lines of the function [name]'s Mem IR that have any of [words] in
    them: what a long function shows about one thing. *)
-let mem_lines name words src =
+let mem_lines ?release name words src =
   let src = clean src in
   report src (fun () ->
-      let p = Driver.mem ~lint:true ~file src in
+      let p = Driver.mem ~lint:true ?release ~file src in
       List.iter
         (fun (f : Mem.fn) ->
           if f.name = name then
@@ -239,13 +239,8 @@ fn main() -> Bool = lookup(Node(Black, Leaf, 1, true, Leaf), 1)
     Mem Lint: ok
     |}]
 
-let%expect_test
-    "Perceus: rbtree's balance builds a node in the one it took apart, if it's \
-     unique" =
-  mem_lines "ren_test_balance_right"
-    [ "unique?"; "reset"; "(at "; "free-token" ]
-    (rbtree_types
-   ^ {|
+let rbtree_balance_right =
+  {|
 fn balance_right(l: Tree, k: Int, v: Bool, r: Tree) -> Tree =
   match r
     Node(_, Node(Red, lx, kx, vx, rx), ky, vy, ry) =>
@@ -254,7 +249,16 @@ fn balance_right(l: Tree, k: Int, v: Bool, r: Tree) -> Tree =
       Node(Red, Node(Black, l, k, v, lx), kx, vx, Node(Black, ly, ky, vy, ry))
     Node(_, lx, kx, vx, rx) => Node(Black, l, k, v, Node(Red, lx, kx, vx, rx))
     Leaf => Leaf
+|}
 
+let%expect_test
+    "Perceus: rbtree's balance builds nodes in the node it took apart and the \
+     one inside it, if they're unique, each where the most fields are \
+     already in place" =
+  mem_lines "ren_test_balance_right"
+    [ "unique?"; "reset"; "(alloc"; "(at "; "free-token" ]
+    (rbtree_types ^ rbtree_balance_right
+   ^ {|
 fn main() -> Bool =
   match balance_right(Leaf, 1, true, Node(Red, Leaf, 2, true, Leaf))
     Node(_, _, _, v, _) => v
@@ -263,15 +267,75 @@ fn main() -> Bool =
     );
   [%expect
     {|
-    (let $unique/96:Bool (unique? r/5))
-    (do (let $token/97:Token (reset r/5 4=$part/30))
-    (alloc #0 #1 l/57 k/58 v/59 lx/60 (at $reuse/95)))
-    (let $unique/99:Bool (unique? r/5))
-    (do (let $token/100:Token (reset r/5 1=$part/40))
-    (alloc #0 #1 l/70 k/71 v/72 lx/73 (at $reuse/98)))
-    (let $unique/102:Bool (unique? r/5))
-    (do (let $token/103:Token (reset r/5 1=$part/53 4=$part/56))
-    (alloc #0 #0 lx/86 kx/87 vx/88 rx/89 (at $reuse/101 =1 =4)))
+    (let $unique/95:Bool (unique? r/5))
+    (reset r/5 4=$part/30 1=$part/27))
+    (let $unique/96:Bool (unique? $part/27))
+    (reset $part/27 1=$part/34 4=$part/37))
+    (let $new/61:Boxed (alloc #0 #1 l/57 k/58 v/59 lx/60))
+    (alloc #0 #1 rx/64 ky/65 vy/66 ry/67
+    (at $reuse/99 =2 =3 =4)))
+    (alloc #0 #0 $new/61 kx/62 vx/63 $new/68
+    (at $reuse/97 =2 =3)))
+    (let $unique/93:Bool (unique? r/5))
+    (reset r/5 1=$part/40 4=$part/43))
+    (let $unique/94:Bool (unique? $part/43))
+    (reset $part/43 1=$part/47 4=$part/50))
+    (let $new/74:Boxed (alloc #0 #1 l/70 k/71 v/72 lx/73))
+    (alloc #0 #1 ly/77 ky/78 vy/79 ry/80
+    (at $reuse/101 =1 =2 =3 =4)))
+    (alloc #0 #0 $new/74 kx/75 vx/76 $new/81
+    (at $reuse/103 =2 =3)))
+    (let $unique/92:Bool (unique? r/5))
+    (do (let $token/106:Token (reset r/5 1=$part/53 4=$part/56))
+    (alloc #0 #0 lx/86 kx/87 vx/88 rx/89
+    (at $reuse/105 =1 =2 =3 =4)))
+    (let $new/91:Boxed (alloc #0 #1 l/83 k/84 v/85 $new/90))
+    Mem Lint: ok
+    |}]
+
+let%expect_test
+    "Perceus, release: rbtree's `ins` has `balance_right` inlined where it \
+     would free the token of the node it took apart, which a node is built \
+     in instead" =
+  mem_lines ~release:true "ren_test_ins_1"
+    [ "inlined"; "call"; "free-token" ]
+    (rbtree_types ^ rbtree_balance_right
+   ^ {|
+fn ins(t: Tree, k: Int, v: Bool) -> Tree =
+  match t
+    Node(Black, l, kx, vx, r) =>
+      if k > kx then
+        if is_red(r) then balance_right(l, kx, vx, ins(r, k, v))
+        else Node(Black, l, kx, vx, ins(r, k, v))
+      else Node(Black, l, k, v, r)
+    Node(Red, l, kx, vx, r) =>
+      if k > kx then Node(Red, l, kx, vx, ins(r, k, v))
+      else Node(Red, l, k, v, r)
+    Leaf => Node(Red, Leaf, k, v, Leaf)
+
+fn is_red(t: Tree) -> Bool =
+  match t
+    Node(Red, _, _, _, _) => true
+    _ => false
+
+fn main() -> Bool =
+  match ins(ins(Leaf, 1, true), 2, false)
+    Node(_, _, _, v, _) => v
+    Leaf => false
+|}
+    );
+  [%expect
+    {|
+    (let $result/35:Bool (call ren_test_is_red_1 ev/1 r/34))
+    (call ren_test_ins_1 ev/1 r/40 k/41 v/42))
+    (decl $inlined/78:Boxed)
+    (free-token $reuse/186)
+    (free-token $reuse/186)
+    (set $inlined/78 $match/79)
+    (let $result/44:Boxed $inlined/78)
+    (call ren_test_ins_1 ev/1 r/48 k/49 v/50))
+    (call ren_test_ins_1 ev/1 r/65 k/66 v/67))
+    (free-token $reuse/188)
     Mem Lint: ok
     |}]
 

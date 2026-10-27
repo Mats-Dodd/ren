@@ -197,7 +197,7 @@ void ren_free(ren_obj *o) {
 
 /* ---- reuse ---- */
 
-static void ren_drop_unkept(ren_obj *o, uint32_t kept) {
+void ren_drop_unkept(ren_obj *o, uint32_t kept) {
   ren_val *fs = ren_fields(o);
   uint32_t drop = o->objs & ~kept;
   for (uint32_t i = 0; i < o->nfields; i++)
@@ -217,11 +217,6 @@ static void ren_free_cell(ren_obj *o) {
 void ren_free_keeping(ren_obj *o, uint32_t kept) {
   ren_drop_unkept(o, kept);
   ren_free_cell(o);
-}
-
-ren_obj *ren_reset(ren_obj *o, uint32_t kept) {
-  ren_drop_unkept(o, kept);
-  return o;
 }
 
 void ren_free_token(ren_obj *tok) {
