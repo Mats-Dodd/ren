@@ -1,0 +1,4 @@
+import bench
+
+// Koka's size: the tenth derivative
+fn main() uses Console = bench.run(10)

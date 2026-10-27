@@ -1,0 +1,4 @@
+import bench
+
+// calls of `Counter.bump`, and of the plain function
+fn main() uses Console = bench.run(1_000_000_000)

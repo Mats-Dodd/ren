@@ -1,0 +1,139 @@
+// H1, blocks cost nothing once specialized: each kernel written with a
+// block, next to its twin written as a plain loop, which is what the
+// block version is compared with. Each runs `n` rounds over an array of
+// a thousand Ints, or a tree of as many, and prints the block version's
+// checksum, then the twin's, which agree.
+
+type Tree =
+  | Node(left: Tree, value: Int, right: Tree)
+  | Leaf
+
+// the numbers from `lo` up to, not including, `hi`, as a balanced tree
+fn build(lo: Int, hi: Int) -> Tree =
+  if lo >= hi then Leaf
+  else
+    let mid = (lo + hi) / 2
+    Node(build(lo, mid), mid % 1000, build(mid + 1, hi))
+
+// every value in order through `f`, from `acc`
+fn fold_tree<A>(t: Tree, acc: A, f: fn(A, Int) -> A) -> A =
+  match t
+    Node(l, v, r) => try fold_tree(r, f(fold_tree(l, acc, f), v), f)
+    Leaf => acc
+
+// the twin: `acc` plus each value times `k`
+fn sum_tree(t: Tree, acc: Int, k: Int) -> Int =
+  match t
+    Node(l, v, r) => sum_tree(r, sum_tree(l, acc, k) + v * k, k)
+    Leaf => acc
+
+// `body` until it gives something other than 0, `n` times at most: a
+// retry, without the errors
+fn attempt_n(n: Int, body: fn() -> Int) -> Int =
+  var result = 0
+  var tries = 0
+  while tries < n && result == 0
+    result = try body()
+    tries += 1
+  result
+
+fn map_blocks(xs: Array<Int>, n: Int) -> Int =
+  var total = 0
+  for round in 0..n
+    let k = round % 4
+    let ys = xs.map(fn(x) => x * k + 1)
+    total += ys[round % ys.len()]
+  total
+
+fn map_loop(xs: Array<Int>, n: Int) -> Int =
+  var total = 0
+  for round in 0..n
+    let k = round % 4
+    var ys: Array<Int> = []
+    for x in xs
+      &ys.push(x * k + 1)
+    total += ys[round % ys.len()]
+  total
+
+fn reduce_blocks(xs: Array<Int>, n: Int) -> Int =
+  var total = 0
+  for round in 0..n
+    let k = round % 4
+    total += xs.reduce(0, fn(acc, x) => acc + x * k)
+  total
+
+fn reduce_loop(xs: Array<Int>, n: Int) -> Int =
+  var total = 0
+  for round in 0..n
+    let k = round % 4
+    var acc = 0
+    for x in xs
+      acc = acc + x * k
+    total += acc
+  total
+
+fn each_blocks(xs: Array<Int>, n: Int) -> Int =
+  var total = 0
+  for round in 0..n
+    let k = round % 4
+    xs.each(fn(x) => total += x * k)
+  total
+
+fn each_loop(xs: Array<Int>, n: Int) -> Int =
+  var total = 0
+  for round in 0..n
+    let k = round % 4
+    for x in xs
+      total += x * k
+  total
+
+fn fold_blocks(t: Tree, n: Int) -> Int =
+  var total = 0
+  for round in 0..n
+    let k = round % 4
+    total += fold_tree(t, 0, fn(acc, v) => acc + v * k)
+  total
+
+fn fold_loop(t: Tree, n: Int) -> Int =
+  var total = 0
+  for round in 0..n
+    total += sum_tree(t, 0, round % 4)
+  total
+
+// a thousand calls of `attempt_n` a round, whose block fails, giving 0,
+// until its count of calls says otherwise
+fn attempt_blocks(n: Int) -> Int =
+  var total = 0
+  var calls = 0
+  for i in 0..n * 1000
+    total += attempt_n(3) fn() =>
+      calls += 1
+      (i + calls) % 3
+  total + calls
+
+fn attempt_loop(n: Int) -> Int =
+  var total = 0
+  var calls = 0
+  for i in 0..n * 1000
+    var result = 0
+    var tries = 0
+    while tries < 3 && result == 0
+      calls += 1
+      result = (i + calls) % 3
+      tries += 1
+    total += result
+  total + calls
+
+fn line(name: Str, with_blocks: Int, with_loops: Int) uses Console =
+  Console.write(name.concat(" ").concat(show(with_blocks)).concat(" ").concat(show(with_loops)))
+
+pub fn run(n: Int) uses Console =
+  var xs: Array<Int> = []
+  for i in 0..1000
+    &xs.push(i * 7 % 1000)
+  let t = build(0, 1000)
+  line("map", map_blocks(xs, n), map_loop(xs, n))
+  line("reduce", reduce_blocks(xs, n), reduce_loop(xs, n))
+  line("each", each_blocks(xs, n), each_loop(xs, n))
+  line("fold", fold_blocks(t, n), fold_loop(t, n))
+  line("attempt", attempt_blocks(n), attempt_loop(n))

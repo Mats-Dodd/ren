@@ -1,0 +1,18 @@
+; native.t runs every benchmark here at its small size, `ren run
+; small.ren`, and checks its checksum, which is the one its Rust and Go
+; twins print at that size (README.md). Each folder is listed, as in
+; examples/dune.
+
+(cram
+ (deps
+  %{bin:ren}
+  (glob_files binary-trees/*.ren)
+  (glob_files blocks/*.ren)
+  (glob_files cfold/*.ren)
+  (glob_files deriv/*.ren)
+  (glob_files fannkuch/*.ren)
+  (glob_files handlers/*.ren)
+  (glob_files inout/*.ren)
+  (glob_files nbody/*.ren)
+  (glob_files nqueens/*.ren)
+  (glob_files rbtree/*.ren)))

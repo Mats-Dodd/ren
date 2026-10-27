@@ -1,0 +1,62 @@
+// Fannkuch-redux, from the Benchmarks Game, on one thread: every
+// permutation of n, in the order the benchmark's sequential versions go
+// through them, each flipped by its first element until that's 0. It
+// measures loops over small arrays of Ints, changed in place. The
+// checksum is the alternating sum of the flip counts, and the most
+// flips any permutation took.
+
+// `p[0..=k]` the other way round
+fn flip(inout p: Array<Int>, k: Int) =
+  var i = 0
+  var j = k
+  while i < j
+    let t = p[i]
+    p[i] = p[j]
+    p[j] = t
+    i += 1
+    j -= 1
+
+pub fn run(n: Int) uses Console =
+  var perm1: Array<Int> = []
+  var perm: Array<Int> = []
+  var count: Array<Int> = []
+  for i in 0..n
+    &perm1.push(i)
+    &perm.push(i)
+    &count.push(0)
+  var max_flips = 0
+  var checksum = 0
+  var perm_count = 0
+  var r = n
+  var done = false
+  while not done
+    while r != 1
+      count[r - 1] = r
+      r -= 1
+    // copied an element at a time, so `perm` keeps its own buffer
+    for i in 0..n
+      perm[i] = perm1[i]
+    var flips = 0
+    var k = perm[0]
+    while k != 0
+      flip(&perm, k)
+      flips += 1
+      k = perm[0]
+    if flips > max_flips then max_flips = flips
+    checksum += if perm_count % 2 == 0 then flips else -flips
+    // the next permutation: rotate the first r + 1 elements, until a
+    // count is left
+    while true
+      if r == n then
+        done = true
+        break
+      let first = perm1[0]
+      for i in 0..r
+        perm1[i] = perm1[i + 1]
+      perm1[r] = first
+      count[r] -= 1
+      if count[r] > 0 then break
+      r += 1
+    perm_count += 1
+  print(checksum)
+  Console.write("Pfannkuchen(".concat(show(n)).concat(") = ").concat(show(max_flips)))

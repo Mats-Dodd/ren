@@ -445,7 +445,9 @@ dependencies where it's called.
 2. **The native slice.** A naive C backend from Core for the sequential
    subset, with no optimizations, and the benchmarks in vision.md
    measured against Rust and Go, to put numbers on the memory and
-   dispatch bet before tasks and many cores build on it.
+   dispatch bet before tasks and many cores build on it. Landed so
+   far: the benchmarks themselves (step 1), in Ren, Rust and Go, in
+   bench/native, with the Ren checked in the interpreter.
 3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.

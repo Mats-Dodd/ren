@@ -1,0 +1,4 @@
+import bench
+
+// the Benchmarks Game's size: 50,000,000 steps
+fn main() uses Console = bench.run(50_000_000)

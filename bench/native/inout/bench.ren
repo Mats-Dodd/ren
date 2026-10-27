@@ -1,0 +1,23 @@
+// H5, an `&` parameter aliases nothing else the callee can see: a kernel
+// over two arrays it changes and one it reads, in a loop. In C the two
+// could be one array, so each store would make the next load go back to
+// memory; here they can't be, which lets the compiler keep values in
+// registers and vectorize. The checksum is what's in the arrays at the
+// end.
+
+fn step(inout a: Array<Int>, inout b: Array<Int>, c: Array<Int>) =
+  for i in 0..a.len()
+    a[i] = (a[i] + b[i] * c[i]) % 65536
+    b[i] = (b[i] + a[i]) % 65536
+
+pub fn run(n: Int) uses Console =
+  var a: Array<Int> = []
+  var b: Array<Int> = []
+  var c: Array<Int> = []
+  for i in 0..1000
+    &a.push(i)
+    &b.push(1000 - i)
+    &c.push(i % 13)
+  for _ in 0..n
+    step(&a, &b, c)
+  print(a.sum() + b.sum())

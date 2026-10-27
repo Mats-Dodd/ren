@@ -1,0 +1,78 @@
+// A red-black tree, built by inserting n keys, from Koka's benchmarks
+// (test/bench/koka/rbtree.kk, after Lean's rbmap). Every insert makes a
+// new tree from the old one, which nothing else holds: Perceus can reuse
+// each node in place. The checksum is how many keys have a true value,
+// one in ten.
+
+type Color =
+  | Red
+  | Black
+
+type Tree =
+  | Node(color: Color, left: Tree, key: Int, value: Bool, right: Tree)
+  | Leaf
+
+fn is_red(t: Tree) -> Bool =
+  match t
+    Node(Red, _, _, _, _) => true
+    _ => false
+
+fn balance_left(l: Tree, k: Int, v: Bool, r: Tree) -> Tree =
+  match l
+    Node(_, Node(Red, lx, kx, vx, rx), ky, vy, ry) =>
+      Node(Red, Node(Black, lx, kx, vx, rx), ky, vy, Node(Black, ry, k, v, r))
+    Node(_, ly, ky, vy, Node(Red, lx, kx, vx, rx)) =>
+      Node(Red, Node(Black, ly, ky, vy, lx), kx, vx, Node(Black, rx, k, v, r))
+    Node(_, lx, kx, vx, rx) => Node(Black, Node(Red, lx, kx, vx, rx), k, v, r)
+    Leaf => Leaf
+
+fn balance_right(l: Tree, k: Int, v: Bool, r: Tree) -> Tree =
+  match r
+    Node(_, Node(Red, lx, kx, vx, rx), ky, vy, ry) =>
+      Node(Red, Node(Black, l, k, v, lx), kx, vx, Node(Black, rx, ky, vy, ry))
+    Node(_, lx, kx, vx, Node(Red, ly, ky, vy, ry)) =>
+      Node(Red, Node(Black, l, k, v, lx), kx, vx, Node(Black, ly, ky, vy, ry))
+    Node(_, lx, kx, vx, rx) => Node(Black, l, k, v, Node(Red, lx, kx, vx, rx))
+    Leaf => Leaf
+
+fn ins(t: Tree, k: Int, v: Bool) -> Tree =
+  match t
+    Node(Red, l, kx, vx, r) =>
+      if k < kx then Node(Red, ins(l, k, v), kx, vx, r)
+      else if k > kx then Node(Red, l, kx, vx, ins(r, k, v))
+      else Node(Red, l, k, v, r)
+    Node(Black, l, kx, vx, r) =>
+      if k < kx then
+        if is_red(l) then balance_left(ins(l, k, v), kx, vx, r)
+        else Node(Black, ins(l, k, v), kx, vx, r)
+      else if k > kx then
+        if is_red(r) then balance_right(l, kx, vx, ins(r, k, v))
+        else Node(Black, l, kx, vx, ins(r, k, v))
+      else Node(Black, l, k, v, r)
+    Leaf => Node(Red, Leaf, k, v, Leaf)
+
+fn set_black(t: Tree) -> Tree =
+  match t
+    Node(_, l, k, v, r) => Node(Black, l, k, v, r)
+    _ => t
+
+fn insert(t: Tree, k: Int, v: Bool) -> Tree = set_black(ins(t, k, v))
+
+// every key and value, in order, through `f`, from `acc`
+fn fold<A>(t: Tree, acc: A, f: fn(Int, Bool, A) -> A) -> A =
+  match t
+    Node(_, l, k, v, r) => try fold(r, f(k, v, fold(l, acc, f)), f)
+    Leaf => acc
+
+// the keys n - 1 down to 0, each true if it's a multiple of 10
+fn make_tree(n: Int) -> Tree =
+  var t = Leaf
+  var i = n
+  while i > 0
+    i -= 1
+    t = insert(t, i, i % 10 == 0)
+  t
+
+pub fn run(n: Int) uses Console =
+  let t = make_tree(n)
+  print(fold(t, 0, fn(_, v, r) => if v then r + 1 else r))

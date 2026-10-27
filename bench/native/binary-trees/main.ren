@@ -1,0 +1,4 @@
+import bench
+
+// the Benchmarks Game's size: depth 21
+fn main() uses Console = bench.run(21)

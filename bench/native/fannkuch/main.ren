@@ -1,0 +1,4 @@
+import bench
+
+// the Benchmarks Game's sizes are 7 to 12
+fn main() uses Console = bench.run(11)

@@ -1,0 +1,34 @@
+// H2, a call to a known handler costs a function call: `n` calls of a
+// dependency's operation, to a handler with state, next to the same loop
+// calling a plain function. Each prints the last count it got, which
+// agree.
+
+dep Counter =
+  bump: fn(k: Int) -> Int
+
+// adds up what it's given, and says the total so far
+handler counter() for Counter =
+  var total = 0
+  bump(k) =>
+    total += k
+    total
+
+fn count_with_handler(n: Int) -> Int uses Counter =
+  var last = 0
+  for i in 0..n
+    last = Counter.bump(i % 7)
+  last
+
+// the twin: the total so far, passed in and given back
+fn bump(total: Int, k: Int) -> Int = total + k
+
+fn count_with_function(n: Int) -> Int =
+  var total = 0
+  for i in 0..n
+    total = bump(total, i % 7)
+  total
+
+pub fn run(n: Int) uses Console =
+  let handled = with counter() in count_with_handler(n)
+  print(handled)
+  print(count_with_function(n))

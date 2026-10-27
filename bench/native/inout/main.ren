@@ -1,0 +1,4 @@
+import bench
+
+// rounds over arrays of a thousand Ints
+fn main() uses Console = bench.run(2_000_000)

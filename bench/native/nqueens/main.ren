@@ -1,0 +1,4 @@
+import bench
+
+// Koka's size: a 13 by 13 board
+fn main() uses Console = bench.run(13)
