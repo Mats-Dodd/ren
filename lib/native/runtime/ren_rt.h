@@ -192,10 +192,18 @@ static inline ren_val *ren_fields(ren_obj *o) { return ((ren_ctor *)o)->fields; 
    of a constructor that dies costs no counting. */
 void ren_free_keeping(ren_obj *o, uint32_t kept);
 
+/* The fields of [o] that hold objects and aren't in [kept], dropped. */
+void ren_drop_unkept(ren_obj *o, uint32_t kept);
+
 /* The same, but keep [o]'s memory to build a constructor of as many
    fields in: a reuse token (Lean's `reset`, kklib.h's
-   `kk_block_alloc_at`). */
-ren_obj *ren_reset(ren_obj *o, uint32_t kept);
+   `kk_block_alloc_at`). Inline, since it usually keeps every field that
+   holds an object, and then does nothing. */
+static inline ren_obj *ren_reset(ren_obj *o, uint32_t kept) {
+  if ((o->objs & ~kept) != 0)
+    ren_drop_unkept(o, kept);
+  return o;
+}
 
 /* A token's memory as a constructor of [tag] again, with a count of 1;
    the caller writes the fields that changed. */

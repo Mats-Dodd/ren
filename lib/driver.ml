@@ -1414,7 +1414,15 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
     | Naive -> p
     | Perceus ->
         pass "Perceus" (fun () ->
-            Rc.prepare p |> Borrow.infer |> Rc.program |> Reuse.program)
+            let perceus p =
+              Rc.prepare p |> Borrow.infer |> Rc.program |> Reuse.program
+            in
+            let placed = perceus p in
+            (* a release build inlines the calls a reuse token was freed
+               after, and places the counting again (inline.ml) *)
+            match if release then Inline.sites placed else [] with
+            | [] -> placed
+            | sites -> perceus (Inline.program sites p))
   in
   pass "Mem Lint" (fun () -> Mem_lint.program p);
   p

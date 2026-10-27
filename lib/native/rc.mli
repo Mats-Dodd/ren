@@ -19,6 +19,9 @@ val consumed : (string, Mem.fn) Hashtbl.t -> Mem.fn -> Mem.var -> bool
 (* Every statement of a block and the blocks in it, in order. *)
 val iter_stmts : (Mem.stmt -> unit) -> Mem.block -> unit
 
+(* The blocks in a statement. *)
+val blocks : Mem.stmt -> Mem.block list
+
 (* A statement with each block in it changed. *)
 val map_blocks : (Mem.block -> Mem.block) -> Mem.stmt -> Mem.stmt
 
