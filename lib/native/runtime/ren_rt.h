@@ -99,7 +99,7 @@ typedef struct {
    object. */
 typedef struct {
   int64_t allocs, frees, dups, drops, reuses, grows, live_bytes, peak_bytes,
-      block_calls;
+      block_calls, stack_allocs;
 } ren_stats_t;
 extern ren_stats_t ren_stats;
 #define REN_STAT(field) (ren_stats.field++)
@@ -205,6 +205,42 @@ static inline ren_obj *ren_reuse(ren_obj *tok, uint16_t tag, uint32_t objs) {
   tok->tag = tag;
   tok->objs = objs;
   return tok;
+}
+
+/* ---- objects in a frame ----
+
+   A release build keeps an object that never outlives the call that
+   builds it in that call's frame (stack.ml, after Swift's
+   StackPromotion.swift). Its count is 1 and stays 1, since nothing
+   counts it again, so it's unique as one on the heap is. Where Perceus
+   would free it, its fields that hold objects are dropped, but those in
+   [kept], and its memory, the frame's, is left alone. */
+
+/* [h], the frame's memory for a constructor of [nfields] fields, as one
+   with a count of 1. The caller fills in the fields. */
+static inline ren_obj *ren_stack_ctor(ren_obj *h, uint16_t tag,
+                                      uint32_t nfields, uint32_t objs) {
+  REN_STAT(stack_allocs);
+  h->rc = 1;
+  h->tag = tag;
+  h->kind = REN_CTOR;
+  h->boxed_elems = 0;
+  h->objs = objs;
+  h->nfields = nfields;
+  return h;
+}
+
+/* Where an object in a frame dies: its fields dropped, but those in
+   [kept]. It may be a constructor without fields, a scalar. */
+static inline void ren_stack_drop(ren_obj *o, uint32_t kept) {
+  if (ren_is_scalar(o))
+    return;
+  uint32_t drop = o->objs & ~kept;
+  ren_val *fs = ren_fields(o);
+  while (drop != 0) {
+    ren_drop(fs[__builtin_ctz(drop)].o);
+    drop &= drop - 1;
+  }
 }
 
 /* A token nothing was built in: its memory, if it has some, given back. */

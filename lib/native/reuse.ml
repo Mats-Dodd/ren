@@ -48,26 +48,35 @@ let sizes root (f : fn) =
     f.body;
   size
 
-let is_alloc n (s : stmt) =
+(* An object stack.ml keeps in the frame is never a reuse's token, nor
+   built in one: its memory isn't the heap's. *)
+let is_alloc ~stack n (s : stmt) =
   match s with
-  | Let (_, Alloc { fields; at = None; _ }) -> List.length fields = n
+  | Let (v, Alloc { fields; at = None; _ }) ->
+      List.length fields = n && not (List.mem v.id stack)
   | _ -> false
 
 (* Whether a build of [n] fields is on some path through [b], not in a
    loop, before the path leaves the block. *)
-let rec builds n (b : block) =
+let rec builds ~stack n (b : block) =
   List.exists
     (fun s ->
-      is_alloc n s
+      is_alloc ~stack n s
       ||
       match s with
-      | If (_, t, e) -> builds n t || builds n e
+      | If (_, t, e) -> builds ~stack n t || builds ~stack n e
       | Switch (_, cases, d) ->
-          List.exists (fun (_, b) -> builds n b) cases || builds n d
+          List.exists (fun (_, b) -> builds ~stack n b) cases
+          || builds ~stack n d
       | _ -> false)
     b
 
-type cx = { next : int ref; root : var -> int; size : (int, int) Hashtbl.t }
+type cx = {
+  next : int ref;
+  root : var -> int;
+  size : (int, int) Hashtbl.t;
+  stack : int list;
+}
 
 let fresh cx name layout =
   let v = { id = !(cx.next); name; layout } in
@@ -81,7 +90,7 @@ let fresh cx name layout =
 let rec take cx tok n kept (b : block) : block =
   match b with
   | [] -> [ Free_token (Var tok) ]
-  | (Let (v, Alloc a) as s) :: rest when is_alloc n s ->
+  | (Let (v, Alloc a) as s) :: rest when is_alloc ~stack:cx.stack n s ->
       let same =
         List.concat
           (List.mapi
@@ -92,10 +101,12 @@ let rec take cx tok n kept (b : block) : block =
              a.fields)
       in
       Let (v, Alloc { a with at = Some (Var tok, same) }) :: rest
-  | If (c, t, e) :: rest when builds n t || builds n e ->
+  | If (c, t, e) :: rest
+    when builds ~stack:cx.stack n t || builds ~stack:cx.stack n e ->
       If (c, take cx tok n kept t, take cx tok n kept e) :: rest
   | Switch (x, cases, d) :: rest
-    when List.exists (fun (_, b) -> builds n b) cases || builds n d ->
+    when List.exists (fun (_, b) -> builds ~stack:cx.stack n b) cases
+         || builds ~stack:cx.stack n d ->
       Switch
         ( x,
           List.map (fun (t, b) -> (t, take cx tok n kept b)) cases,
@@ -129,15 +140,18 @@ let rec block cx (b : block) : block =
   | (Let (u, Is_unique (Var x)) as s1)
     :: (If (Var u', [ Free (Var x', kept) ], shared) as s2)
     :: rest
-    when u.id = u'.id && x.id = x'.id -> (
+    when u.id = u'.id && x.id = x'.id && not (List.mem x.id cx.stack) -> (
       let rest = block cx rest in
       match Hashtbl.find_opt cx.size (cx.root x) with
-      | Some n when builds n rest -> reset cx x kept ~shared n rest
+      | Some n when builds ~stack:cx.stack n rest ->
+          reset cx x kept ~shared n rest
       | _ -> s1 :: s2 :: rest)
-  | (Drop (Var x) as s) :: rest when x.layout = Boxed -> (
+  | (Drop (Var x) as s) :: rest
+    when x.layout = Boxed && not (List.mem x.id cx.stack) -> (
       let rest = block cx rest in
       match Hashtbl.find_opt cx.size (cx.root x) with
-      | Some n when builds n rest -> reset cx x [] ~shared:[ s ] n rest
+      | Some n when builds ~stack:cx.stack n rest ->
+          reset cx x [] ~shared:[ s ] n rest
       | _ -> s :: rest)
   | s :: rest ->
       let s = Rc.map_blocks (block cx) s in
@@ -146,7 +160,7 @@ let rec block cx (b : block) : block =
 let fn (f : fn) : fn =
   let next, _ = Rc.fresh_counters f in
   let root = roots f in
-  let cx = { next; root; size = sizes root f } in
+  let cx = { next; root; size = sizes root f; stack = f.stack } in
   { f with body = block cx f.body }
 
 (* The program with each object that dies where one as big is built

@@ -1414,7 +1414,9 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
     | Naive -> p
     | Perceus ->
         pass "Perceus" (fun () ->
-            Rc.prepare p |> Borrow.infer |> Rc.program |> Reuse.program)
+            Rc.prepare p |> Borrow.infer |> Rc.program
+            |> (if release then Stack.program else Fun.id)
+            |> Reuse.program)
   in
   pass "Mem Lint" (fun () -> Mem_lint.program p);
   p

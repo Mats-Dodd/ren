@@ -238,7 +238,7 @@ as its twin written as a loop, as in the debug build:
   map: allocations 13, both
   reduce: allocations 3, both
   each: allocations 3, both
-  fold: allocations 1002, both
+  fold: allocations 1001, both
   attempt: allocations 2, both
 
 Each `inout` parameter is a `restrict` pointer in the release build,

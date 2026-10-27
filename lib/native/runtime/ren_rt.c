@@ -1094,6 +1094,9 @@ static void ren_print_stats(void) {
           ren_stats.reuses, ren_stats.grows, ren_stats.peak_bytes,
           ren_stats.block_calls,
           ren_stats.allocs - ren_stats.frees);
+  if (ren_stats.stack_allocs > 0)
+    fprintf(stderr, "ren stats: objects kept in a frame %" PRId64 "\n",
+            ren_stats.stack_allocs);
 }
 #endif
 

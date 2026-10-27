@@ -30,3 +30,6 @@ val ends : Mem.stmt -> bool
 
 (* The next fresh variable id and label of a function. *)
 val fresh_counters : Mem.fn -> int ref * int ref
+
+(* The blocks in a statement, not their statements' blocks. *)
+val blocks : Mem.stmt -> Mem.block list

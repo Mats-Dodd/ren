@@ -319,6 +319,14 @@ type fn = {
   inout : var list;
       (** its `inout` parameters, which nothing else points to what they point
           to: a release build tells C so, with `restrict` *)
+  stack : int list;
+      (** the variables whose objects a release build keeps in the function's
+          frame instead of on the heap (stack.ml): each an [Alloc] that never
+          escapes the call, or another name for one *)
+  slot : (int list * int list) option;
+      (** if it has a second version that builds its result in memory its caller
+          gives (stack.ml): the variables whose [Alloc]s are built there, no two
+          in one run, and the other names of them *)
   words : (int * var) list;
       (** the descriptor of each type variable whose values are words here, a
           parameter or a variable its body defines first *)
