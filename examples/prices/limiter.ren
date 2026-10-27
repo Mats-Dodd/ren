@@ -5,8 +5,10 @@ pub dep Limiter =
   // let one call through, or say when the next one can be made
   take: fn() ! Throttled(until: Instant)
 
-  // a limiter that lets everything through
-  pub let none: Limiter = Limiter { take: fn() => () }
+
+// a limiter that lets everything through
+pub handler none() for Limiter =
+  take() => ()
 
 // at most `limit` calls in each `window` of time; each window starts at
 // the first call after the last one ended

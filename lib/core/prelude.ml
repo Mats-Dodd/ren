@@ -393,20 +393,27 @@ pub dep Clock =
   sleep: fn(d: Duration)
 
   // a clock stopped at `at`, that never sleeps
-  pub fn frozen(at: Time) -> Clock =
-    Clock { now: fn() => at, instant: fn() => Instant.zero, sleep: fn(_) => () }
-  let real: Clock =
-    Clock {
-      now: fn() => clock_now(),
-      instant: fn() => clock_instant(),
-      sleep: fn(d) => clock_sleep(d),
-    }
+  pub fn frozen(at: Time) -> Clock = frozen_clock(at)
+  let real: Clock = real_clock()
+
+handler frozen_clock(at: Time) for Clock =
+  now() => at
+  instant() => Instant.zero
+  sleep(_) => ()
+
+handler real_clock() for Clock =
+  now() => clock_now()
+  instant() => clock_instant()
+  sleep(d) => clock_sleep(d)
 
 pub dep Random =
   // a number from 0 up to, but not including, `below`
   int: fn(below: Int) -> Int
 
-  let real: Random = Random { int: fn(below) => random_int(below) }
+  let real: Random = real_random()
+
+handler real_random() for Random =
+  int(below) => random_int(below)
 
 pub dep Console =
   write: fn(line: Str)
@@ -414,11 +421,11 @@ pub dep Console =
   // went wrong
   error: fn(line: Str)
 
-  let real: Console =
-    Console {
-      write: fn(line) => console_write(line),
-      error: fn(line) => console_error(line),
-    }
+  let real: Console = real_console()
+
+handler real_console() for Console =
+  write(line) => console_write(line)
+  error(line) => console_error(line)
 
 // what any value shows as, on a line of its own
 pub fn print<T>(x: T) uses Console = Console.write(show(x))
@@ -459,18 +466,21 @@ pub dep Fs =
   pub fn read_str(p: Path) -> Str ! FsError | InvalidUtf8 uses Fs =
     let b = try Fs.read(p)
     try Str.from_utf8(b)
-  let real: Fs =
-    Fs {
-      read: fn(p) => try fs_checked(fs_read(p), p),
-      write: fn(p, b) => try fs_checked(fs_write(p, b), p),
-      exists: fn(p) => fs_exists(p),
-    }
+  let real: Fs = real_fs()
+
+handler real_fs() for Fs =
+  read(p) => try fs_checked(fs_read(p), p)
+  write(p, b) => try fs_checked(fs_write(p, b), p)
+  exists(p) => fs_exists(p)
 
 pub dep Os =
   // what `ren run file.ren -- args` was given after the `--`
   args: fn() -> Array<Str>
 
-  let real: Os = Os { args: fn() => os_args() }
+  let real: Os = real_os()
+
+handler real_os() for Os =
+  args() => os_args()
 
 // every way the real `Proc` can fail: there's no such program, the
 // system wouldn't start it, with its reason, or it was killed before it
@@ -498,7 +508,10 @@ pub dep Proc =
   // exit code
   run: fn(cmd: Str, args: Array<Str>) -> Int ! ProcError
 
-  let real: Proc = Proc { run: fn(cmd, args) => try proc_checked(proc_run(cmd, args), cmd) }
+  let real: Proc = real_proc()
+
+handler real_proc() for Proc =
+  run(cmd, args) => try proc_checked(proc_run(cmd, args), cmd)
 
 // ---- what a test gets (deps.md, "Tests") ----
 //

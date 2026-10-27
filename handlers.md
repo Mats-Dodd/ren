@@ -450,7 +450,8 @@ submission and its completion:
   ([compiler.md](compiler.md#stage-10b)).
 - **Nothing reaches the world but through an operation:** Core Lint
   checks that each intrinsic that does is called only by its
-  dependency's real implementation, `fs_read` by `Fs.real`.
+  dependency's real implementation, `fs_read` by `real_fs`, the prelude
+  handler that `Fs.real` describes.
 
 ## What changed in deps.md and the README
 

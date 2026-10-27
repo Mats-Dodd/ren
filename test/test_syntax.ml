@@ -155,22 +155,22 @@ fn main() = fn x => x
 let%expect_test "a lambda's block inside brackets" =
   tokens {|
 fn f() =
-  R { g: fn(x) =>
+  apply(fn(x) =>
       let y = x
       y
-  }
+  )
 |};
   [%expect
-    {| FN (IDENT "f") LPAREN RPAREN EQ INDENT (IDENT "R") LBRACE (IDENT "g") COLON FN LPAREN (IDENT "x") RPAREN FATARROW INDENT LET (IDENT "y") EQ (IDENT "x") NEWLINE (IDENT "y") DEDENT RBRACE DEDENT EOF |}];
-  (* in a record's field, a call's argument and an array's element; the
-     closing bracket closes the block too *)
+    {| FN (IDENT "f") LPAREN RPAREN EQ INDENT (IDENT "apply") LPAREN FN LPAREN (IDENT "x") RPAREN FATARROW INDENT LET (IDENT "y") EQ (IDENT "x") NEWLINE (IDENT "y") DEDENT RPAREN DEDENT EOF |}];
+  (* in a call's argument, one inside a record's field, and an
+     array's element; the closing bracket closes the block too *)
   ast
     {|
 fn main() =
-  let r = R { g: fn(x) =>
+  let r = R { g: apply(fn(x) =>
       let y = x + 1
       y * 2
-  }
+  ) }
   let n = apply(fn(x) =>
       match x
         1 => 10
@@ -182,7 +182,7 @@ fn main() =
     else 2]
 |};
   [%expect
-    {| (fn main () (block (let r (record R g=(lambda (x) (block (let y (+ x 1)) (* y 2))))) (let n (call apply (lambda (x) (match x (1 => 10) (_ => 20))) 1)) (array (lambda (x) (if x 1 2))))) |}]
+    {| (fn main () (block (let r (record R g=(call apply (lambda (x) (block (let y (+ x 1)) (* y 2)))))) (let n (call apply (lambda (x) (match x (1 => 10) (_ => 20))) 1)) (array (lambda (x) (if x 1 2))))) |}]
 
 let%expect_test "a lambda's body on the next line, not indented further" =
   (* it isn't a block, so the line goes on inside the brackets, as before *)
@@ -200,11 +200,11 @@ let%expect_test "a comma after a lambda's block inside brackets ends it" =
   ast
     {|
 fn main() =
-  let r = R {
-    f: fn(x) =>
+  let r = apply(
+    fn(x) =>
       x + 1,
-    g: 2,
-  }
+    2,
+  )
   apply(fn(x) =>
         x + 1,
       9)
@@ -220,15 +220,15 @@ fn main() =
         x, 1)
 |};
   [%expect
-    {| (fn main () (block (let r (record R f=(lambda (x) (+ x 1)) g=2)) (call apply (lambda (x) (+ x 1)) 9) (call apply (lambda (x) (+ x 3)) 1) (call apply (lambda (x) (block (let y (* x 2)) y)) 2) (call apply (lambda (x) (with (call a) (call b) x)) 1))) |}]
+    {| (fn main () (block (let r (call apply (lambda (x) (+ x 1)) 2)) (call apply (lambda (x) (+ x 1)) 9) (call apply (lambda (x) (+ x 3)) 1) (call apply (lambda (x) (block (let y (* x 2)) y)) 2) (call apply (lambda (x) (with (call a) (call b) x)) 1))) |}]
 
 let%expect_test "a line of a lambda's block indented too little" =
   ast {|
 fn main() =
-  R { f: fn(x) =>
+  apply(fn(x) =>
       let y = x + 1
      y * 2
-  }
+  )
 |};
   [%expect
     {|

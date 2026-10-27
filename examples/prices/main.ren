@@ -6,13 +6,13 @@ import limiter
 import cache.{Prices}
 
 // the supplier, which takes a moment to answer
-fn catalogue() = Prices { price: fn(item) =>
+handler catalogue() for Prices uses Clock =
+  price(item) =>
     Clock.sleep(Duration.ms(20))
     if item == "apple" then 3
     else if item == "pear" then 5
     else if item == "fig" then 8
     else fail Unknown(item)
-}
 
 // a price, or what stopped it
 fn show_price(item: Str) uses Prices, Console =

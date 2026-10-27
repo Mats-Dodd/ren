@@ -62,7 +62,7 @@ test "an old entry is asked for again" =
     assert Calls.count() == 2
 
 test "an unknown item isn't kept" =
-  with Limiter.none, cached(Duration.seconds(10)) over limited() over counting() in
+  with limiter.none(), cached(Duration.seconds(10)) over limited() over counting() in
     assert attempt Prices.price("plum") == Err(Unknown("plum"))
     assert attempt Prices.price("plum") == Err(Unknown("plum"))
     assert Calls.count() == 2

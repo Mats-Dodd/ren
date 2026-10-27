@@ -1213,11 +1213,17 @@ let recorded cx h (under : installed) what =
   | None -> bug (what ^ " with a recorder that doesn't implement its dependency")
 
 (* The real implementation of each built-in dependency in [deps], as
-   `$start` installs them. *)
+   `$start` installs them: an instance of the handler its `real`
+   describes (`real_fs` for `Fs.real`), made with nothing installed. *)
 let reals cx deps what =
   List.map
     (fun (dep : Path.t) ->
-      { dep; impl = made_value cx what (Path.member dep "real"); outer = [] })
+      match made_value cx what (Path.member dep "real") with
+      | VHandler h -> (
+          match List.assoc_opt dep (fst (instance cx h [] what)) with
+          | Some impl -> { dep; impl; outer = [] }
+          | None -> bug (what ^ " with a `real` that doesn't implement it"))
+      | _ -> bug (what ^ " with a `real` that isn't a handler"))
     deps
 
 (* How `ren run` starts the program (handlers.md, "The journal"): as

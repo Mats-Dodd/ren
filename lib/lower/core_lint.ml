@@ -1724,7 +1724,8 @@ let test_code ~linked (prog : program) =
 
 (* Every intrinsic that reaches the world (Prelude.reaches) is called
    only by the real implementation of the dependency it's an operation
-   of, `fs_read` by `Fs.real`: so every call a program makes to the world
+   of, `fs_read` by `real_fs`, the prelude's handler that `Fs.real`
+   describes: so every call a program makes to the world
    is a call of an operation, which the journal records (handlers.md,
    "Recording and replaying"). And a journal's file is read only for a
    test, by `replay`, so `ren run` reads nothing but through a
@@ -1742,7 +1743,8 @@ let world (prog : program) =
         (match e.kind with
         | Intrinsic (x, _, _, _) -> (
             match Prelude.reaches x with
-            | Some (dep, _) when f.path <> Path.member (Path.prelude dep) "real"
+            | Some (dep, _)
+              when f.path <> Path.prelude ("real_" ^ String.lowercase_ascii dep)
               ->
                 wrong e
                   (sprintf

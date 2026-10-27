@@ -13,9 +13,9 @@ ren test prices            # every module's tests
 
 | File | What's in it |
 |---|---|
-| `limiter.ren` | `Limiter`, a dependency with one operation, `take`, that fails with `Throttled`; `Limiter.none`; `fixed_window`, a handler that lets `limit` calls through in each window of time; `token_bucket`, one that lets a burst through and then one call each time a token comes |
+| `limiter.ren` | `Limiter`, a dependency with one operation, `take`, that fails with `Throttled`; `none`, a handler that lets everything through; `fixed_window`, a handler that lets `limit` calls through in each window of time; `token_bucket`, one that lets a burst through and then one call each time a token comes |
 | `cache.ren` | `Prices`, what the program asks; `cached`, a handler over `Prices` that keeps answers for `ttl`, in a `Map` by item, and asks the one under it for the rest; `limited`, one over `Prices` that asks the one under it only past the limiter; tests with a supplier that counts its calls |
-| `main.ren` | `catalogue`, the real `Prices`, slow to answer; the pieces stacked with one `with`, and a test of what it prints |
+| `main.ren` | `catalogue`, the handler for the real `Prices`, slow to answer; the pieces stacked with one `with`, and a test of what it prints |
 
 ## What to look at
 
@@ -63,3 +63,9 @@ What stage 10a changed: the cache used to ask a dependency of its own,
 `Supplier`, since a handler couldn't call another implementation of
 what it implements. Now `cached` and `limited` go `over Prices`, the
 supplier is a plain `Prices`, and `Supplier` is gone.
+
+What stage 10c changed: `catalogue` and `none` were records of
+functions, `Prices { price: fn(item) => ... }`. A record can't keep a
+block under [foundations.md](../../foundations.md), so each is a
+handler, `handler catalogue() for Prices`, and `none` is installed as
+`limiter.none()`.

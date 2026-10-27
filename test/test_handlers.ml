@@ -106,16 +106,19 @@ fn main() uses Console =
     |}]
 
 let%expect_test "what a with installs is made outside it" =
-  (* [at] reads the clock when it's called: the one outside, not the
+  (* [stamped] reads the clock when it's called: the one outside, not the
      frozen one beside it *)
   run
     {|
 dep Stamp =
   at: fn() -> Bool
 
+handler stamp(early: Bool) for Stamp =
+  at() => early
+
 fn stamped() -> Stamp =
   let early = Clock.now() == Time.epoch
-  Stamp { at: fn() => early }
+  stamp(early)
 
 fn main() uses Console =
   with Clock.frozen(Time.epoch) in

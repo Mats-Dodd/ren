@@ -976,7 +976,7 @@ fn main() = print((1.0 / 0.0).round())
 
 let%expect_test "a generic function shows what its type variables stand for" =
   (* each is passed, hidden, by its caller: through a closure it makes, a
-     function used as a value, a record of lambdas it installs, and a
+     function used as a value, a handler it installs, and a
      type's own `show`, of a type that's generic too *)
   run
     {|
@@ -990,7 +990,7 @@ fn sh<T>(x: T) -> Str = show(x)
 fn later<T>(x: T) -> fn() -> Str = fn() => show([x])
 fn apply<A, B>(f: fn(A) -> B, x: A) -> B = try f(x)
 fn logged<T>(x: T) uses Console =
-  with Log { put: fn(s) => print([show(x), s]) } in
+  with logging(x) in
     Log.put("put")
 
 fn main() uses Console =
@@ -1001,6 +1001,9 @@ fn main() uses Console =
   logged(a)
   print(Box { v: a })
   print(sh(Box { v: Box { v: "s" } }))
+
+handler logging(x) for Log =
+  put(s) => print([show(x), s])
 |};
   [%expect
     {|

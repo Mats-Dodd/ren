@@ -528,21 +528,17 @@ let%expect_test "Core Lint refuses the world reached from anywhere else" =
     with Failure msg -> print_endline msg
   in
   lint [ fn (Path.make "test" "main") ~test:false (call Clock_now) ];
-  lint
-    [
-      fn
-        (Path.member (Path.prelude "Clock") "real")
-        ~test:false (call Clock_now);
-    ];
-  lint
-    [ fn (Path.member (Path.prelude "Fs") "real") ~test:false (call Clock_now) ];
+  (* `Clock.real` is `real_clock()`, so the world is reached from the
+     handler's arms *)
+  lint [ fn (Path.prelude "real_clock") ~test:false (call Clock_now) ];
+  lint [ fn (Path.prelude "real_fs") ~test:false (call Clock_now) ];
   lint [ fn (Path.make "test" "main") ~test:false (call Journal_load) ];
   lint [ fn (Path.make "test" "t") ~test:true (call Journal_load) ];
   [%expect
     {|
     Core Lint: in `main`, at test.ren:1:1: `clock_now` reaches the world, so only `Clock.real` can call it
     fine
-    Core Lint: in `Fs.real`, at test.ren:1:1: `clock_now` reaches the world, so only `Clock.real` can call it
+    Core Lint: in `real_fs`, at test.ren:1:1: `clock_now` reaches the world, so only `Clock.real` can call it
     Core Lint: in `main`, at test.ren:1:1: `journal_load` reads a file, so only test code can call it
     fine
     |}]
