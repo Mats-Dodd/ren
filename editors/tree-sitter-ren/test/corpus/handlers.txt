@@ -191,3 +191,35 @@ handler both() over A & B uses Clock =
           (identifier)))
       (try_expression
         (identifier)))))
+
+================================================================================
+handler: an arm that names its dependency
+================================================================================
+
+handler both() for Console, Fs =
+  Console.write(line) => ()
+  error(line) => ()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (handler_definition
+    (identifier)
+    (parameters)
+    (dependency
+      (type_identifier))
+    (dependency
+      (type_identifier))
+    (handler_arm
+      (type_identifier)
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)))
+      (unit))
+    (handler_arm
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)))
+      (unit))))

@@ -1019,7 +1019,7 @@ the wrong folder than a pass, so `ren test` on one exits 1:
 
   $ ren --help | head -2
   usage: ren <command> <file.ren>
-         ren run <file.ren> [-- <args>...]
+         ren run [--record <file.journal>] [--trace] <file.ren> [-- <args>...]
   $ ren -h > /dev/null
   $ ren --version
   ren 0.1.0

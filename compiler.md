@@ -176,7 +176,11 @@ falls short it says so.
   callee's set has names a function or lambda of the module, or one it
   uses, that takes as many arguments as the call passes. Since 9c, a
   function that isn't test code uses no test function, which is what
-  lets `ren run` leave test code out.
+  lets `ren run` leave test code out. Since 10b, an intrinsic that reaches the
+  world is used only by the real implementation of the dependency it's
+  an operation of, and `journal_load` only by test code (`world`), so
+  every call a program makes to the world is an operation's, which a
+  journal records.
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -1188,7 +1192,14 @@ Each fact is computed once and carried:
   `Fun.protect`, since the constraint solver runs inside it. The
   messages say "a test sees what an importer sees" when the opaque type
   is the module's own (`Infer_env.tested`), and a test item's say the
-  same, since it's test code too. While the view is swapped in,
+  same, since it's test code too. Since 10b a representation test code
+  reaches for, whether by a field, as what it's represented as, or by
+  an order an importer can't see, is reported at its first use per type
+  only, and so is a private method it calls, per method
+  (`report_test_once`, `test_reported`), as a private item is; and a call whose callee is
+  unknown, or an error already reported, marks the `try`s around it as
+  failing (`unknown_call`), so they don't also say nothing in them can
+  fail. While the view is swapped in,
   `env.hidden` holds the private types as the module declares them, so
   a bare constructor of one is reported as private, not as missing.
 - **The console** (driver.ml, `console`; console.ml) is the simplest
@@ -1199,24 +1210,22 @@ Each fact is computed once and carried:
   test is run (`Eval.run_installed`), on the test implementations but
   those `--real` names, `Random` from seed 0. A real one would make the
   run differ each time, and do its effects again, so the session keeps
-  a journal (builtins.ml, `journal`): while it runs, what each built-in
-  that touches the world gave is written down in order, and a run again
-  gives the kept lines back what they were given, without asking the
-  world; only the new line's calls reach it. So the run is the same each
-  time, `--real` or not, and only what the new line gave, and what it
-  printed past what was printed before, is shown; a line that fails or
-  panics shows what it printed before it did (`Console_failed`), as the
-  real `Console` would have. Infer checks the
+  a journal: what each built-in gave, which a run again gives the kept
+  lines back without asking the world. Since 10b that's the journal
+  (journal.ml, `Session`), through a recorder over each built-in (Stage
+  10b, below), which also shows each call as it's made; 9c's own, in
+  builtins.ml, is gone. Infer checks the
   session as it checks a test (`check_console`): a dependency nothing
   installs is reported "in the console", unless the line is `:t`,
   which doesn't run. The session is test code (`fn_def.test`), so it
   can use test items, and the program is checked with test code seeing
   every module whole (`sees_all`, Resolve and Infer): the console is
   where a test told it reaches past the interface is sent, so that error
-  can't keep it shut. Each line is lexed on its own, as line 1 of
-  `<console>`, its nodes numbered on from the line before
-  (`Parser.parse_session_line`), so a message shows that line; a `:t`
-  line's tokens are moved past the `:t`. A line that doesn't check,
+  can't keep it shut. Each line is lexed on its own, its nodes numbered
+  on from the line before (`Parser.parse_session_line`); since 10b, line
+  `i` of the session is line `i` of `<console>`, and a message shows the
+  session's lines (9c made each line 1). A `:t` line's tokens are moved
+  past the `:t`. A line that doesn't check,
   fails or panics isn't kept, and neither is what its run was given.
 
 Where it differed from its plan:
@@ -1326,3 +1335,129 @@ Where it differed from its plan:
 - **The help for a link over nothing** writes `over D` rather than naming
   a maker of `D`.
 - **`ren core` doesn't print a `With`'s `desc`.**
+
+## Stage 10b
+
+The journal (handlers.md, "The journal"; testing.md, "The journal is a
+test" and "The console"): recording a run, replaying it, a journal as a
+test, tracing, and the console's effects, `:reload` and `:spec`. Each
+fact is computed once and carried:
+
+- **What reaches the world** is said once, in prelude.ml: `reaches`
+  names every intrinsic, and gives the operation of each that reaches
+  the world, `fs_read` is `Fs.read`'s; an intrinsic's `caller`, `World`,
+  `Test`, `Journal` or anyone, is `World` exactly when `reaches` gives
+  one.
+  Core Lint's `world` checks each is used only in that dependency's
+  `real`, and `journal_load` only in test code ("What each IR
+  promises"). So everything a program does to the world is a call of an
+  operation of `Clock`, `Random`, `Console`, `Fs`, `Os` or `Proc`, which
+  is what a journal records.
+- **The recorder and the replayer are handlers in the prelude,**
+  written in Ren: `recording_clock(j) over Clock`, and one for each
+  built-in, and `replaying(j) for` all six, whose `finally` compares a
+  test's outputs. They call five intrinsics, `journal_kept`,
+  `journal_gave`, `journal_answer`, `journal_outputs` and
+  `journal_load`, each given its values' descriptors, as `show` is, so
+  the interpreter writes and reads a value through its type
+  (`Walk.view`, as `show` and `==` do). A Ren program holds a journal
+  only as its number, `Journal`, an opaque `Int`.
+- **journal.ml is the one module that knows the format:** writing a
+  value, reading one back told its type, an entry's line, the header,
+  and what each mode does with a call: recording it (`Record`),
+  answering it strictly (`Strict`, `ren replay`), answering a test's
+  inputs per dependency and keeping its outputs (`Test`), or keeping a
+  console session's (`Session`). A call that goes differently raises
+  `Journal.Differs`, without where; the interpreter makes it
+  `Eval.Went_differently` at the call (`call_at`), moved from the
+  prelude to the program's call, as a panic is. A call past the end of
+  a recording that ended in a panic raises `Journal.Recorded_panic`,
+  and the interpreter, which knows where the call was made, makes it
+  the panic if that's where the recording panicked, and otherwise a
+  replay that went differently, or, in a test of a recording that ended
+  in an error or a panic, `Journal.Went_past`, which passes the test.
+  Whether a call is an input or an output is decided once per
+  operation, by its declared type, when the program is loaded
+  (`Eval.load`, `outputs`), and looked up (`gives_nothing`) when a
+  test's journal is sorted, when a call is answered, and when a
+  recorded call's `→ gave` is left out (`Journal.write_gave ~output`).
+  Where a panic was is written and compared by `Journal.place`, so the
+  format lives in journal.ml only.
+- **`ren run --record` and `ren replay`** start the program without
+  `$start`: the runtime installs what `main` uses itself (`Eval.run`,
+  `start`), a recorder over each real implementation, or the
+  replayer's implementation of each, as it installs a test's, and calls
+  `main`. What `main` uses is derived once (`Lower.main_uses`, which
+  `$start` installs too); the driver writes it as the journal's header,
+  or checks a replayed journal's header is it, and `Eval.run` installs
+  what the header says. The last entry is how the run ended, an error
+  as the journal writes a value (`Eval.Uncaught`'s `written`), a
+  panic's place from the program's folder; a replay compares its end
+  with the recording's (`Journal.finish_replay`).
+- **`--trace`** wraps each operation call the interpreter makes
+  (`Dep_call`, but a `next` in the prelude's recorders) in `traced`,
+  which adds it to a tree (trace.ml) under the call running.
+- **`replay(file)`** is a public test item of the prelude, the only one:
+  the prelude's test items are in scope bare for test code, and only
+  for it (Resolve, `own_tests`). The prelude is checked seeing itself
+  whole (`sees_all`), since `replay`, test code, calls the private
+  `replaying`. A test is run with the folder of its file
+  (`Eval.run_test ~dir`), which the journal's name is found from.
+  `replaying` implements all six built-ins, and inference narrows a
+  `replay("...")` link of a `with` to those its journal's header names,
+  read when it's checked (`Infer_handlers.replayed`), as a handler is
+  narrowed where a written type asks for some of what it implements;
+  lowering wraps it in `Narrowed`.
+- **The console** is a journal session, with a recorder over each
+  built-in (`Eval.run_installed ~journal`): a kept line's calls are
+  checked against what it made, and a real one's answer given back; a
+  new line's are shown as they're made. `:reload` reads the module again
+  and runs the session on it; a line that doesn't check, or makes other
+  calls, is dropped with those after it (`Journal.drop_from`). `:spec`
+  (`Driver.console_spec`) checks the session as a test of the module,
+  line by line, with test code seeing what an importer sees, and keeps
+  each line that checks, an expression whose value was shown as an
+  `assert` of it if that checks, or else as `let _ = ` and the line.
+  Then it runs the test as `ren test` does (`Eval.run_test`, `Random`
+  seeded by the test's name, `Test_items.seed_of`), and where it ends,
+  an `assert` is kept as its line and another line is left out, until
+  it passes: what `:spec` writes passes, not only checks. A call shows
+  in the console as the journal writes it (`Journal.entry_text`).
+- **An arm can name its dependency,** `Console.write(line) => ...`
+  (`arm_op = Item`), for a handler of two dependencies that have an
+  operation of one name, as `replaying` is.
+
+Where it differed from its plan:
+
+- **The runtime installs the recorders and the replayer, not Core.**
+  The plan had `Lower.start` make `$record` and `$replay`, Core
+  installing the prelude's handlers as `$start` installs the real ones.
+  Instantiating their row and lambda-set arguments in Core was more
+  than it was worth, so `Eval.run` installs them, as it installs a
+  test's; the handlers themselves are checked and linted with the
+  prelude.
+- **The journal's format is the first one handlers.md sketches,
+  simplified:** one call a line, `seq Dep.op(args) → gave`, no `task`
+  and no table of names, and no size cap; an opaque value is written as
+  what it's represented as, a `Path` as its string, `Bytes` as a string
+  with `\xNN` for a byte that isn't UTF-8. A header's dependencies are
+  sorted, as `main`'s `uses` is.
+- **Qualified arms** are new syntax (parser, the tree-sitter grammar and
+  Zed's queries), which `replaying` needed: `Console` and `Fs` both
+  have `write`.
+- **`--trace` is one level:** arguments and what each call gave, cut to
+  40 characters, `Bytes` as how many, and how long it took unless
+  `REN_NO_TIMINGS` is set. There's no level 1 without arguments.
+- **A replay prints what the program printed through `Console`,** but
+  not what a process it ran printed, since nothing runs.
+- **`ren test --keep`** moves the journal into `tests/` next to the
+  program and appends the test to the program's file; `main` has to be
+  `pub`, since a test sees what an importer sees.
+
+Leftovers from the 9c and 10a reviews, done here: a representation
+reported at its first use per type, and the `try` cascade (Stage 9c,
+above); `5 + price` and `price < 5` on an opaque number help with its
+constructors, from any expression of its representation; a handler's
+parameter that goes over nothing says to write `over D` in its type;
+`h() over A` where `h` goes over `A & B` says to name both; and `outer`,
+or `next`, in a record implementation says a handler over it is how.

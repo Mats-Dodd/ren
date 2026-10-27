@@ -145,6 +145,9 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   handler transaction() over Sql ! DbDown`, and so does a written type,
   `s: Sql ! DbDown`; a type without `!` can't fail to start. See
   [handlers.md](handlers.md) and [examples/ledger](examples/ledger).
+- **An arm can name its dependency,** `Console.write(line) => ...`, and
+  has to when a handler implements two that both have an operation of
+  that name: a bare `write(line) =>` there says which to choose.
 
 ## `with`
 
@@ -283,6 +286,12 @@ test "main prints the balances, and every refusal" =
   `test "the system clock moves" uses Clock =`. Going outside is visible.
 - Any other dependency needs a `with`. Forgetting one is the missing
   implementation error, pointing at the test and the call that needs it.
+- **`replay(file)`** is every built-in at once, answered from a journal
+  `ren run --record` wrote, found from the test's folder: `with
+  replay("tests/build.journal") in try main()`. What the program reads
+  is answered from it, and what it writes is compared with it
+  ([testing.md](testing.md#the-journal-is-a-test)). Only a test can use
+  it.
 - A test that fails with an error reports it as `main` does. To check that
   something fails, keep it with `attempt` and compare it with the error
   expected, written by its tag: `assert attempt &acme.deposit(a,
@@ -373,6 +382,9 @@ main.ren
   every test's seed. `--list` lists tests, and flags the ones that use a
   real dependency.
 - It exits with status 1 if anything failed.
+- `--keep bug.journal` moves a journal `ren run --record` wrote to the
+  `tests/` folder next to its program, and adds a test that replays it
+  ([testing.md](testing.md#the-journal-is-a-test)).
 - Test output shows a value as `show` does, so an opaque type by name
   around its contents, `Money(-100)`.
 
@@ -388,8 +400,13 @@ implementation of a dependency is the one found. A dependency call finds
 its implementation in the vector by the dependency's identity, never by
 a name at runtime; for now that's a short search, and when the row is
 closed the compiler can make it a fixed index (rule 6). Each call keeps
-its shape, dependency, operation and arguments, which is what the effect
-journal (stage 10b) will record.
+its shape, dependency, operation and arguments, which is what the
+journal records (stage 10b, [handlers.md](handlers.md#the-journal)):
+`ren run --record` installs a recorder over each real implementation,
+and `ren replay` a replayer in place of them. Every intrinsic that
+reaches the world is called only by its dependency's real
+implementation, which Core Lint checks, so nothing reaches the world
+but through an operation.
 
 A closure gets the evidence of whoever calls it, not of where it was
 made, so one that outlives its `with` uses what's installed where it's
@@ -695,7 +712,6 @@ error: `with` can't tell what `c` installs
 
 ## Later
 
-- The journal (stage 10b, [handlers.md](handlers.md#the-journal)).
 - A handler that goes over some dependencies and implements others
   whole.
 - `Async` and `Net` (stage 11, [async.md](async.md)).

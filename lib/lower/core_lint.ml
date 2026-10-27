@@ -1722,6 +1722,42 @@ let test_code ~linked (prog : program) =
         | None -> ())
     prog.fns
 
+(* Every intrinsic that reaches the world (Prelude.reaches) is called
+   only by the real implementation of the dependency it's an operation
+   of, `fs_read` by `Fs.real`: so every call a program makes to the world
+   is a call of an operation, which the journal records (handlers.md,
+   "Recording and replaying"). And a journal's file is read only for a
+   test, by `replay`, so `ren run` reads nothing but through a
+   dependency. The prelude is linted whenever it's loaded, so every run
+   of the tests checks it. *)
+let world (prog : program) =
+  List.iter
+    (fun (f : fn_def) ->
+      let wrong (e : expr) msg =
+        failwith
+          (sprintf "Core Lint: in `%s`, at %s:%d:%d: %s" (Path.local f.path)
+             e.loc.file e.loc.start.line e.loc.start.col msg)
+      in
+      let rec go (e : expr) =
+        (match e.kind with
+        | Intrinsic (x, _, _, _) -> (
+            match Prelude.reaches x with
+            | Some (dep, _) when f.path <> Path.member (Path.prelude dep) "real"
+              ->
+                wrong e
+                  (sprintf
+                     "`%s` reaches the world, so only `%s.real` can call it"
+                     (Intrinsic.name x) dep)
+            | _ when x = Journal_load && not f.test ->
+                wrong e
+                  "`journal_load` reads a file, so only test code can call it"
+            | _ -> ())
+        | _ -> ());
+        List.iter go (Core.children e)
+      in
+      go f.body)
+    prog.fns
+
 (* Lint module [prog], which sees the interfaces [imports]: every one
    reachable through its imports, since a type from any of them can turn
    up in its code. [linked] are the program's modules, [prog] among them:
@@ -1801,6 +1837,7 @@ let program ~imports ~linked (prog : program) =
     (linked @ [ prog ]);
   value_order prog;
   test_code ~linked prog;
+  world prog;
   shows env prog;
   keys_and_ops env prog;
   List.iter (fn_def env) prog.fns

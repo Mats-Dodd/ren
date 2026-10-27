@@ -2373,7 +2373,7 @@ fn main() = 1
     25 │   x() => 1
        │   ^
        = an arm implements an operation by its name, so `x` could be either
-       help: implement them in two handlers
+       help: say which dependency's it is: `A.x(...) => ...` or `B.x(...) => ...`
 
     error: `T` is a type, not a dependency
        ┌─ test.ren:29:23
@@ -7667,6 +7667,46 @@ test "after its type" =
        help: mark it `pub`, or explore it in the console: `ren console test`
     |}]
 
+(* what a private method could fail with is unknown to a test, so the
+   `try` around its call isn't said to cover nothing *)
+let%expect_test "a test's call of a private method that can fail is one error" =
+  test
+    {|
+pub type Account = opaque { log: Array<Str>, frozen: Bool }
+  pub fn open() -> Account = Account { log: [], frozen: false }
+  fn stamp(inout self, e: Str) ! Frozen =
+    if self.frozen then fail Frozen
+    &self.log.push(e)
+
+test "stamps" =
+  var a = Account.open()
+  try &a.stamp("x")
+|};
+  [%expect
+    {|
+    error: `stamp` is private, and a test sees what an importer sees
+      ┌─ test.ren:9:10
+    9 │   try &a.stamp("x")
+      │          ^^^^^
+      = a test is a specification of `test`'s interface
+      help: mark it `pub`, or explore it in the console: `ren console test`
+    |}];
+  (* and so is a method that isn't there at all *)
+  types
+    {|
+type Account = { frozen: Bool }
+fn f(a: Account) = attempt a.thaw()
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Account` has no method named `thaw`
+      ┌─ test.ren:2:30
+    2 │ fn f(a: Account) = attempt a.thaw()
+      │                              ^^^^
+      help: declare it under `type Account`, with `self` first
+    |}]
+
 let%expect_test "a test sees its module's opaque types as opaque" =
   test
     (account
@@ -7696,20 +7736,6 @@ test "a representation" =
        = a test is a specification of `test`'s interface
        help: explore it in the console: `ren console test`
 
-    error: `Account` is opaque, and a test sees what an importer sees
-       ┌─ test.ren:25:11
-    25 │   let a = Account { id: AccountId.of(1), balance: 5, log: [] }
-       │           ^^^^^^^
-       = a test is a specification of `test`'s interface
-       help: explore it in the console: `ren console test`
-
-    error: `Account` is opaque, and a test sees what an importer sees
-       ┌─ test.ren:30:5
-    30 │   a.log = ["x"]
-       │     ^^^
-       = a test is a specification of `test`'s interface
-       help: explore it in the console: `ren console test`
-
     error: `==` compares two values of the same type, but this is an `Int` and the left side is an `AccountId`
        ┌─ test.ren:33:29
     33 │   assert AccountId.of(1) == 1
@@ -7717,6 +7743,84 @@ test "a representation" =
        │          --------------- this is an `AccountId`
        = `AccountId` is opaque, and a test sees what an importer sees
        help: explore it in the console: `ren console test`
+    |}]
+
+(* the fix is the same at every use, so it's said once per type, as a
+   private item's is *)
+let%expect_test
+    "a test reaching an opaque type's fields is told at the first use only" =
+  test
+    (account
+   ^ {|
+test "reads and writes" =
+  let a = Account.open(AccountId.of(1))
+  assert a.log == []
+  assert a.log.len() == 0
+  let b = Account { id: AccountId.of(2), balance: 0, log: [] }
+  assert b.balance() == 0
+|}
+    );
+  [%expect
+    {|
+    error: `Account` is opaque, and a test sees what an importer sees
+       ┌─ test.ren:22:12
+    22 │   assert a.log == []
+       │            ^^^
+       = a test is a specification of `test`'s interface
+       help: explore it in the console: `ren console test`
+    |}]
+
+(* and so is using one as what it's represented as, or comparing one an
+   importer can't order: one error for the type, at the first use *)
+let%expect_test
+    "a test using an opaque type as its representation is told at the first \
+     use only" =
+  test
+    {|
+pub type Money = opaque Int
+  pub fn cents(n: Int) -> Money =
+    let m: Money = n
+    m
+
+test "reach" =
+  let m = Money.cents(5)
+  assert m > 0
+  assert m > 1
+  assert m == 5
+  let k: Int = m
+  assert k == 5
+|};
+  [%expect
+    {|
+    error: `>` compares two values of the same type, but this is an `Int` and the left side is a `Money`
+      ┌─ test.ren:8:14
+    8 │   assert m > 0
+      │              ^
+      │          - this is a `Money`
+      = `Money` is opaque, and a test sees what an importer sees
+      help: explore it in the console: `ren console test`
+    |}]
+
+(* a private method is told once, as a private function is *)
+let%expect_test "a test calling a private method is told at the first use only"
+    =
+  test
+    (account
+   ^ {|
+test "twice" =
+  var a = Account.open(AccountId.of(1))
+  &a.stamp("x")
+  &a.stamp("y")
+|}
+    );
+  [%expect
+    {|
+    error: `stamp` is private, and a test sees what an importer sees
+       ┌─ test.ren:22:6
+    22 │   &a.stamp("x")
+       │      ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
     |}]
 
 let%expect_test "a test item, a group and a run see what an importer sees" =

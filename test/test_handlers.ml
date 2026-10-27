@@ -1752,3 +1752,130 @@ fn main() uses Console =
        = a `Users` implements every operation itself, so it can't stand in for an `over Users`, which goes over another
        help: write `Users` where its type is written, or pass a handler declared `over Users`
     |}]
+
+(* the parameter's type is where it says it goes over another *)
+let%expect_test "a parameter installed over is told to say so in its type" =
+  check_error
+    {|
+dep Users =
+  get: fn(id: Int) -> Int
+
+fn run(w: Users) -> Int uses Users =
+  with w over Users in
+    Users.get(1)
+
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `w` doesn't go over a `Users`, so nothing goes under it
+      ┌─ test.ren:5:8
+    5 │   with w over Users in
+      │        ^
+      │               ----- is under it
+      = only a handler declared `over` a dependency goes over another implementation of it
+      help: say in its type that it goes over one: `w: over Users`
+    |}]
+
+let%expect_test "a handler over two installed over one" =
+  check_error
+    {|
+dep Users =
+  get: fn(id: Int) -> Int
+dep Logs =
+  log: fn(s: Str)
+
+handler both() over Users & Logs =
+  get(id) => next.get(id) + 1
+
+fn run() -> Int uses Users, Logs =
+  with both() over Users in
+    Users.get(1)
+
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `both()` goes over `Logs` and `Users`, so it's installed over both
+       ┌─ test.ren:10:20
+    10 │   with both() over Users in
+       │                    ^^^^^ names only `Users`
+       help: write `both() over Logs & Users`
+    |}]
+
+let%expect_test "outer in a record implementation points at over and next" =
+  check_error
+    {|
+fn slow() -> Clock =
+  Clock { now: fn() => outer.now(), instant: fn() => Instant.zero, sleep: fn(_) => () }
+
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: there's no variable named `outer`
+      ┌─ test.ren:2:24
+    2 │   Clock { now: fn() => outer.now(), instant: fn() => Instant.zero, sleep: fn(_) => () }
+      │                        ^^^^^
+      help: a record implementation can't reach the one under it: write a handler declared `over Clock`, and call it through `next`: `next.now(...)`
+    |}]
+
+(* ---- an arm that names its dependency (stage 10b) ---- *)
+
+let%expect_test "an arm can say which dependency's operation it is" =
+  run
+    {|
+dep A =
+  x: fn() -> Int
+
+dep B =
+  x: fn() -> Int
+
+handler both() for A, B =
+  A.x() => 1
+  B.x() => 2
+
+fn main() -> Int =
+  with both() in
+    A.x() * 10 + B.x()
+|};
+  [%expect {| 12 |}]
+
+let%expect_test "an arm can't name a dependency its handler doesn't implement" =
+  check_error
+    {|
+dep A =
+  x: fn() -> Int
+
+dep B =
+  x: fn() -> Int
+
+handler just_a() for A =
+  B.x() => 1
+
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `just_a` doesn't implement `x`
+      ┌─ test.ren:7:9
+    7 │ handler just_a() for A =
+      │         ^^^^^^
+      = a handler implements every operation, unless it goes `over` another implementation, which then does the rest
+      help: write them, or declare it `over A` if another `A` should handle them
+
+    error: this handler doesn't implement `B`
+      ┌─ test.ren:8:3
+    8 │   B.x() => 1
+      │   ^
+      help: it implements `A`
+    |}]
+
+let%expect_test "an arm that names its dependency, parsed" =
+  ast {|
+handler h() for A, B =
+  A.x(n) => n
+  y() => 0
+|};
+  [%expect
+    {| (fn h () (handler (for A B) (A.x (lambda (n) n)) (y (lambda () 0)))) |}]

@@ -1193,11 +1193,10 @@ fn main() =
 (* every independent error, and none that follow from one already reported *)
 
 let%expect_test "independent type errors are all reported" =
-  run
-    {|
+  run {|
 fn f() = 1 + true
 fn g() = if 1 then 2 else 3
-fn main() = f() == true
+fn main() = 3 == true
 |};
   [%expect
     {|
@@ -1214,10 +1213,10 @@ fn main() = f() == true
       = an `if` condition has to be a `Bool`
 
     error: `==` compares two values of the same type, but this is a `Bool` and the left side is an `Int`
-      ┌─ test.ren:3:20
-    3 │ fn main() = f() == true
-      │                    ^^^^
-      │             --- this is an `Int`
+      ┌─ test.ren:3:18
+    3 │ fn main() = 3 == true
+      │                  ^^^^
+      │             - this is an `Int`
     |}]
 
 let%expect_test "an error isn't reported again where its value goes" =

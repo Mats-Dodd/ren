@@ -585,6 +585,90 @@ pub handler test_proc(exits: Array<Exit>) for Proc, TestProc =
       if e.command == c then code = e.code
     code
   ran() => commands
+
+// ---- the journal (handlers.md, "The journal") ----
+//
+// `ren run --record` puts a recorder over each built-in dependency `main`
+// uses, and `ren replay` puts `replaying` in place of them all; a test
+// installs one with `replay(file)`, and the console keeps its session
+// with recorders too. What a journal holds, and how it's written, is the
+// runtime's (journal.ml): a Ren program holds one only as its number.
+
+// a journal the runtime has open
+type Journal = opaque Int
+
+// A recorder over each built-in dependency: each operation gives back
+// what a line the console kept was given, if it's one of those, or else
+// calls the one under it, and writes down what it gave.
+
+handler recording_clock(j: Journal) over Clock =
+  now() => journal_kept(j, "Clock.now", ()) orelse journal_gave(j, "Clock.now", (), next.now())
+  instant() =>
+    journal_kept(j, "Clock.instant", ()) orelse journal_gave(j, "Clock.instant", (), next.instant())
+  sleep(d) => journal_kept(j, "Clock.sleep", d) orelse journal_gave(j, "Clock.sleep", d, next.sleep(d))
+
+handler recording_random(j: Journal) over Random =
+  int(below) =>
+    journal_kept(j, "Random.int", below) orelse journal_gave(j, "Random.int", below, next.int(below))
+
+handler recording_console(j: Journal) over Console =
+  write(line) =>
+    journal_kept(j, "Console.write", line) orelse journal_gave(j, "Console.write", line, next.write(line))
+  error(line) =>
+    journal_kept(j, "Console.error", line) orelse journal_gave(j, "Console.error", line, next.error(line))
+
+handler recording_fs(j: Journal) over Fs =
+  read(p) =>
+    let r = journal_kept(j, "Fs.read", p) orelse journal_gave(j, "Fs.read", p, attempt next.read(p))
+    try r
+  write(p, b) =>
+    let r = journal_kept(j, "Fs.write", (p, b)) orelse journal_gave(j, "Fs.write", (p, b), attempt next.write(p, b))
+    try r
+  exists(p) => journal_kept(j, "Fs.exists", p) orelse journal_gave(j, "Fs.exists", p, next.exists(p))
+
+handler recording_os(j: Journal) over Os =
+  args() => journal_kept(j, "Os.args", ()) orelse journal_gave(j, "Os.args", (), next.args())
+
+handler recording_proc(j: Journal) over Proc =
+  run(cmd, args) =>
+    let r = journal_kept(j, "Proc.run", (cmd, args)) orelse journal_gave(j, "Proc.run", (cmd, args), attempt next.run(cmd, args))
+    try r
+
+// In place of every built-in dependency: each operation gives back what
+// the recording says it gave. When the `with` that installed it ends, a
+// test's outputs are compared with the recording's.
+handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc =
+  now() => journal_answer(j, "Clock.now", ())
+  instant() => journal_answer(j, "Clock.instant", ())
+  sleep(d) => journal_answer(j, "Clock.sleep", d)
+  int(below) => journal_answer(j, "Random.int", below)
+  Console.write(line) => journal_answer(j, "Console.write", line)
+  error(line) => journal_answer(j, "Console.error", line)
+  read(p) =>
+    let r: Result<Bytes, ! FsError> = journal_answer(j, "Fs.read", p)
+    try r
+  Fs.write(p, b) =>
+    let r: Result<Unit, ! FsError> = journal_answer(j, "Fs.write", (p, b))
+    try r
+  exists(p) => journal_answer(j, "Fs.exists", p)
+  args() => journal_answer(j, "Os.args", ())
+  run(cmd, args) =>
+    let r: Result<Int, ! ProcError> = journal_answer(j, "Proc.run", (cmd, args))
+    try r
+  finally(r) =>
+    journal_outputs(j)
+    try r
+
+// A recorded run, `ren run --record tests/run.journal main.ren`, as each
+// built-in dependency it holds calls for, for a test (testing.md, "The
+// journal is a test"): what the program reads is answered from it, in
+// order for each dependency, and what it writes is compared with it when
+// the `with` ends, a difference failing the test with a diff. `file` is
+// found from the folder of the file the test is in. Its type lists all
+// six; the checker narrows it to those the journal's header names
+// (infer_handlers.ml, `replayed`), so the others stay the test's.
+pub test fn replay(file: Str) -> Clock & Console & Fs & Os & Proc & Random =
+  replaying(journal_load(file))
 |}
 
 (* ---- built-in functions ---- *)
@@ -599,6 +683,7 @@ let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])
 let map k v = Ty.Con (Path.prelude "Map", [ k; v ])
 let set t = Ty.Con (Path.prelude "Set", [ t ])
+let journal = Ty.Con (Path.prelude "Journal", [])
 
 (* Each built-in function's type scheme, by its id. Each parameter's mode
    ([inout] or not) is part of the type. A built-in type's method has its
@@ -646,6 +731,28 @@ let scheme (x : Intrinsic.t) =
   (* fn(Str, Array<Str>) -> ProcOutcome, the real `Proc.run` *)
   | Proc_run ->
       fn [ read str; read (array str) ] (Con (Path.prelude "ProcOutcome", []))
+  (* The journal's (handlers.md, "The journal"; journal.ml): each is given
+     the call it's for, `Fs.read`, its arguments, [A], one value, a
+     tuple of several or `()` for none, and what it gives back, [R]: the
+     operation's value, or a [Result] of it if it can fail. Each writes
+     or reads them through their types, which it's given as descriptors,
+     as `show` is. *)
+  (* fn<A, R>(j: Journal, call: Str, args: A) -> Option<R>: what a line
+     the console kept was given, if this call is one of its, which isn't
+     asked again *)
+  | Journal_kept -> fn [ read journal; read str; read (Var 0) ] (option (Var 1))
+  (* fn<A, R>(j: Journal, call: Str, args: A, result: R) -> R: writes the
+     call down, with what it gave, and gives that back *)
+  | Journal_gave ->
+      fn [ read journal; read str; read (Var 0); read (Var 1) ] (Var 1)
+  (* fn<A, R>(j: Journal, call: Str, args: A) -> R: what the recording
+     says this call gave *)
+  | Journal_answer -> fn [ read journal; read str; read (Var 0) ] (Var 1)
+  (* fn(j: Journal): in a test, the outputs compared with the
+     recording's, once the body of the `with` has run *)
+  | Journal_outputs -> fn [ read journal ] unit
+  (* fn(file: Str) -> Journal: the journal in [file], read for a test *)
+  | Journal_load -> fn [ read str ] journal
   (* fn<T>(self: Array<T>) -> Int *)
   | Array_len -> fn [ read (array (Var 0)) ] int
   (* fn<T>(inout self: Array<T>, x: T) *)
@@ -743,34 +850,60 @@ let scheme (x : Intrinsic.t) =
   (* fn(self: Str) -> Str, with `A` to `Z` made `a` to `z` *)
   | Str_lower -> fn [ read str ] str
 
-(* Who can call it. Any program can, unless only the prelude's own
-   source can: because it reaches the world, which a program does only
-   through a dependency, in the real implementation the runtime installs,
-   or it's how one of the test implementations works ([World]); or
-   because it's what one of the source's values is made with, which a
-   program uses instead: `map_empty()` is `Map.empty` ([Value]). *)
-type caller = Any | World | Value
-
-let caller (x : Intrinsic.t) =
+(* The operation of a built-in dependency that [x] is how the real one
+   does, if it reaches the world: `fs_read` is `Fs.read`'s. Each is called
+   only by its dependency's [real] (Core Lint checks it), so every call
+   the program makes to the world is a call of an operation, which the
+   journal records (handlers.md, "Recording and replaying"). This is the
+   one place that says what reaches the world, and it names every
+   intrinsic, so a new one has to be put on one side or the other. *)
+let reaches (x : Intrinsic.t) =
   match x with
-  | Clock_now | Clock_instant | Clock_sleep | Random_int | Seeded_next
-  | Seeded_int | Console_write | Console_error | Fs_read | Fs_write | Fs_exists
-  | Os_args | Proc_run ->
-      World
-  | Map_empty | Set_empty -> Value
-  | Array_sort | Map_of | Map_get | Map_set | Map_remove | Map_includes
-  | Map_keys | Map_values | Map_len | Set_of | Set_add | Set_remove
-  | Set_includes | Set_len ->
-      Any
-  | Show | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
+  | Clock_now -> Some ("Clock", "now")
+  | Clock_instant -> Some ("Clock", "instant")
+  | Clock_sleep -> Some ("Clock", "sleep")
+  | Random_int -> Some ("Random", "int")
+  | Console_write -> Some ("Console", "write")
+  | Console_error -> Some ("Console", "error")
+  | Fs_read -> Some ("Fs", "read")
+  | Fs_write -> Some ("Fs", "write")
+  | Fs_exists -> Some ("Fs", "exists")
+  | Os_args -> Some ("Os", "args")
+  | Proc_run -> Some ("Proc", "run")
+  | Seeded_next | Seeded_int | Journal_kept | Journal_gave | Journal_answer
+  | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
+  | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
+  | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
+  | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
   | Bytes_len | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
   | Int_wrapping_neg | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
   | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
   | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower ->
-      Any
+      None
 
-let runtime x = caller x = World
+(* Who can call it. Any program can, unless only the prelude's own
+   source can: because it reaches the world, which a program does only
+   through a dependency, in the real implementation the runtime installs
+   ([World], which [reaches] says); or it's how one of the test
+   implementations works ([Test]); or it's the journal's, which the
+   runtime puts over the world ([Journal]); or because it's what one of
+   the source's values is made with, which a program uses instead:
+   `map_empty()` is `Map.empty` ([Value]). *)
+type caller = Any | World | Test | Journal | Value
+
+let caller (x : Intrinsic.t) =
+  match (reaches x, x) with
+  | Some _, _ -> World
+  | None, (Seeded_next | Seeded_int) -> Test
+  | ( None,
+      ( Journal_kept | Journal_gave | Journal_answer | Journal_outputs
+      | Journal_load ) ) ->
+      Journal
+  | None, (Map_empty | Set_empty) -> Value
+  | None, _ -> Any
+
+let runtime x = caller x <> Any
 
 (* The built-in functions that aren't a type's members, in the order the
    prelude's interface lists them. *)
@@ -790,6 +923,11 @@ let fns : Intrinsic.t list =
     Fs_exists;
     Os_args;
     Proc_run;
+    Journal_kept;
+    Journal_gave;
+    Journal_answer;
+    Journal_outputs;
+    Journal_load;
     Map_empty;
     Set_empty;
   ]

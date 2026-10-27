@@ -1,6 +1,7 @@
 (* The functions built into the compiler, because they can't be written in
    Ren yet: `show`, what the built-in dependencies' real implementations
-   run on, and the built-in types' members, `Array.push`.
+   run on, what the journal's recorder and replayer run on, and the
+   built-in types' members, `Array.push`.
 
    Each is named by an id, a constructor of [t], never by a string, so a
    pass that finds one finds it with a [match], and the compiler checks
@@ -24,6 +25,11 @@ type t =
   | Fs_exists
   | Os_args
   | Proc_run
+  | Journal_kept
+  | Journal_gave
+  | Journal_answer
+  | Journal_outputs
+  | Journal_load
   | Array_len
   | Array_push
   | Array_sort
@@ -93,6 +99,11 @@ let path x =
   | Fs_exists -> fn "fs_exists"
   | Os_args -> fn "os_args"
   | Proc_run -> fn "proc_run"
+  | Journal_kept -> fn "journal_kept"
+  | Journal_gave -> fn "journal_gave"
+  | Journal_answer -> fn "journal_answer"
+  | Journal_outputs -> fn "journal_outputs"
+  | Journal_load -> fn "journal_load"
   | Array_len -> member "Array" "len"
   | Array_push -> member "Array" "push"
   | Array_sort -> member "Array" "sort"

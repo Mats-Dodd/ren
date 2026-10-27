@@ -94,6 +94,16 @@ let defaults =
 let full_name (t : test) =
   match t.label with Some l -> l ^ " / " ^ t.name | None -> t.name
 
+(* A test's own seed, from its name, so it's the same on every run and
+   every machine: FNV-1a's hash of it, kept to four digits to be easy to
+   type. [lxor] is exclusive or, and [land] keeps the low 32 bits. *)
+let seed_of name =
+  let h = ref 0x811c9dc5 in
+  String.iter
+    (fun c -> h := !h lxor Char.code c * 0x01000193 land 0xffffffff)
+    name;
+  !h mod 10000
+
 (* The function that runs the [i]th test (from 1) of the group [g], and
    what runs the [i]th of the [k]th group run. *)
 let group_fn g i = sprintf "%s$%d" g i

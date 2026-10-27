@@ -45,13 +45,27 @@
 open Core
 open Value
 
+let sprintf = Printf.sprintf
+
 type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
 
 exception Panic of { loc : Loc.t; msg : string; wrap : wrap option }
-exception Uncaught of string
+exception Uncaught of { shown : string; written : string }
 exception Assert_failed of { loc : Loc.t; sides : (string * string) option }
+exception Went_differently of { loc : Loc.t; differs : Journal.differs }
 
 let panic ?wrap loc msg = raise (Panic { loc; msg; wrap })
+
+(* A call the program made at [loc], past the end of a recording that
+   ended in a panic at [at] (Journal.Recorded_panic): the panic, if it
+   was here, and otherwise what [instead] gives, the replay having gone
+   differently here, or a test having gone past the bug's end. *)
+let recorded_panic loc ~at ~msg ~instead =
+  if Journal.at_place ~at loc then Panic { loc; msg; wrap = None }
+  else
+    match instead () with
+    | Journal.Differs differs -> Went_differently { loc; differs }
+    | e -> e
 
 (* An error on its way to the [Handle] that catches it. *)
 exception Failed of Value.t
@@ -78,6 +92,13 @@ type ctx = {
   ops : (Path.t * string, Path.t) Hashtbl.t;
   showing : Path.t list;
   depth : int ref;
+  dir : string;
+      (** the folder of the file the code running is in, which a test's
+          `replay(file)` finds its journal from *)
+  trace : Trace.t option;  (** `ren run --trace`'s tree of calls, if it's on *)
+  outputs : (string * string, unit) Hashtbl.t;
+      (** the operations of the built-in dependencies that give nothing, `()`,
+          by their dependency and name: a journal's outputs ([gives_nothing]) *)
 }
 
 (* How many calls deep a program can go before it's stopped with a panic.
@@ -340,7 +361,7 @@ let rec eval cx env (e : expr) =
         ( x,
           List.map (type_of env) ds,
           List.map (fun d -> VDict (dict cx env d)) dicts )
-  | Dep_call { dep; op; ev; args; _ } -> (
+  | Dep_call { dep; op; ev; args; next; fty } -> (
       (* the innermost implementation of [dep]: a record of functions, the
          operation's run with what was installed where it was *)
       let args = eval_all cx env args in
@@ -352,7 +373,14 @@ let rec eval cx env (e : expr) =
       with
       | Some { impl = VRecord ops; outer; _ } -> (
           match List.assoc_opt op ops with
-          | Some f -> ok (fst (call_at cx e.loc f args (VEvidence outer)))
+          | Some f -> (
+              let call () = fst (call_at cx e.loc f args (VEvidence outer)) in
+              match cx.trace with
+              (* the recorder's own call of what it's over isn't one the
+                 program made *)
+              | Some t when not (next && e.loc.file = Prelude.file) ->
+                  ok (traced cx t ~dep:dep.name ~op fty args call)
+              | _ -> ok (call ()))
           | None -> bug (what ^ " on an implementation without it"))
       | Some _ -> bug (what ^ " on an implementation that isn't a record")
       | None -> bug (what ^ " where nothing installs `" ^ dep.name ^ "`"))
@@ -618,6 +646,15 @@ and finish cx at step =
         | Builtins.Panic msg -> panic (Option.value at ~default:t.loc) msg
         | Panic { loc; msg; _ } when loc.file = Prelude.file && at <> None ->
             panic (Option.get at) msg
+        | Journal.Differs differs ->
+            raise
+              (Went_differently
+                 { loc = Option.value at ~default:t.loc; differs })
+        | Journal.Recorded_panic { at = p; msg; instead } when at <> None ->
+            raise (recorded_panic (Option.get at) ~at:p ~msg ~instead)
+        | Went_differently { loc; differs }
+          when loc.file = Prelude.file && at <> None ->
+            raise (Went_differently { loc = Option.get at; differs })
       in
       finish cx at next
 
@@ -671,6 +708,14 @@ and call_at cx loc f args ev =
       (* the prelude's source can't be shown, so a panic inside it is the
          program's call that reached it *)
       panic loc msg
+  (* and so is a replay that went differently, which the journal says
+     where the call was made *)
+  | Journal.Differs differs -> raise (Went_differently { loc; differs })
+  | Went_differently { loc = l; differs }
+    when l.file = Prelude.file && loc.file <> Prelude.file ->
+      raise (Went_differently { loc; differs })
+  | Journal.Recorded_panic { at; msg; instead } when loc.file <> Prelude.file ->
+      raise (recorded_panic loc ~at ~msg ~instead)
 
 (* Call [f], passing it the evidence [ev]. Returns its result, or the
    error it failed with, and the final value of every parameter, so the
@@ -763,6 +808,12 @@ and builtin cx f args =
       | [ t ], [ v ] ->
           (Ok (VStr (Shown.shown ~own:(own_show cx) cx.types t v)), args)
       | _ -> bug "a call of `show` with the wrong number of arguments")
+  | VBuiltin
+      ( (( Journal_kept | Journal_gave | Journal_answer | Journal_outputs
+         | Journal_load ) as x),
+        tys,
+        _ ) ->
+      (Ok (journal cx x tys args), args)
   | VBuiltin (x, _, dicts) -> (
       let dicts =
         List.map (function VDict d -> d | _ -> bug "a dictionary") dicts
@@ -771,6 +822,150 @@ and builtin cx f args =
       | v, finals -> (Ok v, finals)
       | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"
+
+(* ---- the journal (journal.ml) ----
+
+   The recorder's and the replayer's operations (prelude.ml, "the
+   journal") call these, with the journal by its number, the call,
+   `Fs.read`, its arguments, one value, and what it gave, each with its
+   type, from the descriptors they're given, as `show` is. *)
+and journal cx (x : Intrinsic.t) tys args =
+  let find = function
+    | VInt n -> Journal.find (Int64.to_int n)
+    | _ -> bug "a journal that isn't a number"
+  in
+  let made name ta a =
+    let dep, op = Journal.split_call name in
+    Journal.made ~dep ~op ~args:(Journal.write_args cx.types ta a)
+  in
+  let option name args = VCon { ty = Path.prelude "Option"; name; args } in
+  match (x, tys, args) with
+  | Journal_kept, [ ta; _ ], [ j; VStr name; a ] -> (
+      match Journal.kept (find j) (made name ta a) with
+      (* given back as it was given: an array is copied, since one can
+         be pushed onto *)
+      | Some (VArray xs) -> option "Some" [ array (items xs) ]
+      | Some v -> option "Some" [ v ]
+      | None -> option "None" [])
+  | Journal_gave, [ ta; tr ], [ j; VStr name; a; r ] ->
+      let c = made name ta a in
+      let c =
+        {
+          c with
+          gave = Journal.write_gave cx.types tr r ~output:(gives_nothing cx c);
+        }
+      in
+      Journal.gave (find j) c r ~line:(fun () ->
+          match a with VStr s -> s | v -> Value.show v);
+      r
+  | Journal_answer, [ ta; tr ], [ j; VStr name; a ] ->
+      let j = find j in
+      let c = made name ta a in
+      Journal.answer j c ~output:(gives_nothing cx c) ~read:(answered cx j tr)
+        ~print:(fun (e : Journal.call) ->
+          match (e.dep, e.op, a) with
+          | "Console", "write", VStr line -> print_endline line
+          | "Console", _, VStr line ->
+              flush stdout;
+              prerr_endline line
+          | _ -> ())
+        ~nothing:(Journal.nothing tr)
+  | Journal_outputs, [], [ j ] ->
+      Journal.outputs (find j);
+      VUnit
+  | Journal_load, [], [ VStr file ] -> load_journal cx file
+  | _ -> bug ("`" ^ Intrinsic.name x ^ "` with the wrong values")
+
+(* What the recording's call [e] gave, read as a [tr]. One that can't be
+   is said at its line of the journal's file. *)
+and answered cx (j : Journal.t) (tr : Ty.ty) (e : Journal.call) =
+  let unreadable msg =
+    raise
+      (Diag.Error
+         (Diag.make
+            (Loc.point ~file:j.file e.line 1)
+            msg
+            ~help:"record the run again, or write the value as it's recorded"))
+  in
+  let shown =
+    Ty.show
+      (Ty.printer
+         ~names:(fun (p : Path.t) -> p.name)
+         { ty = tr; names = []; reqs = []; row_reqs = [] })
+      tr
+  in
+  match e.gave with
+  | None when gives_nothing cx e -> Journal.nothing tr
+  | None ->
+      unreadable
+        (sprintf "this entry gives nothing back, but the call gives %s"
+           (Diag.article shown))
+  | Some text -> (
+      try Journal.read_all cx.types tr text with
+      | Journal.Unreadable ->
+          unreadable
+            (sprintf "this entry can't be read as %s" (Diag.article shown))
+      | Journal.Redacted ->
+          unreadable
+            "what this call gave was left out when it was recorded, so it \
+             can't be given back")
+
+(* `replay(file)` in a test: the journal in [file], from the folder of
+   the file the test is in, standing in for the world. *)
+and load_journal cx file =
+  let path =
+    if Filename.is_relative file && cx.dir <> Filename.current_dir_name then
+      Filename.concat cx.dir file
+    else file
+  in
+  match In_channel.with_open_bin path In_channel.input_all with
+  | exception Sys_error _ ->
+      raise (Builtins.Panic (sprintf "there's no journal at %s" path))
+  | text ->
+      let j = Journal.load ~file:path text in
+      let j = Journal.for_test j ~gives_nothing:(gives_nothing cx) in
+      VInt (Int64.of_int (Journal.register j))
+
+(* Whether the call [c]'s operation gives nothing, `()`, by its
+   dependency's declaration, which [load] looked at once: an output. *)
+and gives_nothing cx (c : Journal.call) = Hashtbl.mem cx.outputs (c.dep, c.op)
+
+(* A call of [dep]'s operation [op], of type [fty], with [args], made by
+   [call] and added to the trace [t] (trace.ml): its arguments and what
+   it gave as the journal writes them, but `Bytes` as how many, each cut
+   short. *)
+and traced cx t ~dep ~op (fty : Ty.ty) args call =
+  let ps, ret, errs =
+    match fty with
+    | Fun (ps, r, e, _, _) -> (List.map (fun (p : Ty.param) -> p.ty) ps, r, e)
+    | _ -> bug "an operation whose type isn't a function's"
+  in
+  let write (t : Ty.ty) v =
+    match (t, v) with
+    | Con (p, []), VBytes b when p = Path.prelude "Bytes" ->
+        sprintf "%d bytes" (String.length b)
+    | _ -> Trace.short (Journal.write cx.types t v)
+  in
+  let node =
+    Trace.enter t
+      (sprintf "%s.%s(%s)" dep op
+         (String.concat ", "
+            (if List.length ps = List.length args then List.map2 write ps args
+             else List.map Value.show args)))
+  in
+  match call () with
+  | Ok VUnit as r ->
+      Trace.leave t node ~gave:"";
+      r
+  | Ok v as r ->
+      Trace.leave t node ~gave:(write ret v);
+      r
+  | Error e as r ->
+      Trace.leave t node ~gave:("fails " ^ write (Errors errs) e);
+      r
+  | exception ex ->
+      Trace.leave t node ~gave:"";
+      raise ex
 
 (* How the type [p], given [args], shows [v] (Shown.own): through the
    `show` method of its own that lowering found for it (Core.program), if
@@ -894,6 +1089,18 @@ let error_of cx p err =
       Shown.value ~own:(own_show cx) cx.types (Errors errs) err
   | _ -> Value.show err
 
+(* The same, unhandled, as [Uncaught] says it: shown, and as a journal
+   writes it. *)
+let uncaught cx p err =
+  let written =
+    match
+      Option.map (fun (f : fn_def) -> f.scheme.ty) (Hashtbl.find_opt cx.fns p)
+    with
+    | Some (Fun (_, _, errs, _, _)) -> Journal.write cx.types (Errors errs) err
+    | _ -> Value.show err
+  in
+  Uncaught { shown = error_of cx p err; written }
+
 (* The top-level function [p], as the runtime calls it, from outside the
    program: nothing there knows what its type variables stand for, so its
    value is given each as a type variable nothing decided, and a value of
@@ -938,8 +1145,25 @@ let load (modules : program list) =
       ops = Hashtbl.create 16;
       showing = [];
       depth = ref 0;
+      dir = Filename.current_dir_name;
+      trace = None;
+      outputs = Hashtbl.create 16;
     }
   in
+  (* which operations are outputs is decided once, by their types *)
+  List.iter
+    (fun dep ->
+      match Hashtbl.find_opt cx.types (Path.prelude dep) with
+      | Some { body = Dep ops; _ } ->
+          List.iter
+            (fun (o : Iface.field) ->
+              match o.fty with
+              | Fun (_, r, _, _, _) when r = Ty.unit ->
+                  Hashtbl.replace cx.outputs (dep, o.fname) ()
+              | _ -> ())
+            ops
+      | _ -> ())
+    Prelude.runtime_deps;
   List.iter
     (fun (m : program) ->
       List.iter (fun (f : fn_def) -> Hashtbl.replace cx.fns f.path f) m.fns;
@@ -953,7 +1177,7 @@ let load (modules : program list) =
         (fun p ->
           match fst (apply cx (from_outside cx p) [] (VEvidence [])) with
           | Ok v -> Hashtbl.replace cx.values p v
-          | Error err -> raise (Uncaught (error_of cx p err))
+          | Error err -> raise (uncaught cx p err)
           (* caught here, not by whoever called [load], so that `ren test`,
              which loads outside any test, reports it as `ren run` does *)
           | exception (Stack_overflow | Too_deep) -> raise (overflowed cx p))
@@ -961,19 +1185,89 @@ let load (modules : program list) =
     modules;
   cx
 
-(* Run a program made of [modules] (the prelude, then the user's files),
-   starting from the last one's `$start`, which installs what `main` uses
-   and calls it (lower.ml). If `main`, or making a value, fails, nothing
-   handles the error: [Uncaught]. *)
-let run (modules : program list) =
+(* What's installed for a run: the evidence, built by the runtime, as
+   `$start` builds it in Core. A value made already, by its path. *)
+let made_value cx what p =
+  match Hashtbl.find_opt cx.values p with
+  | Some v -> v
+  | None -> bug (what ^ " with `" ^ Path.local p ^ "` not made")
+
+(* The instance of the prelude's handler [name], given [args], made with
+   [outer], what's installed where it's installed: its implementation of
+   each of its dependencies. *)
+let prelude_instance cx name args outer what =
+  match apply cx (from_outside cx (Path.prelude name)) args (VEvidence []) with
+  | Ok (VHandler h), _ -> fst (instance cx h outer what)
+  | _ -> bug (what ^ " with `" ^ name ^ "`, which isn't a handler")
+
+(* The recorder of the built-in dependency [dep] (prelude.ml, "the
+   journal") with the journal [h], over [under], installed for it: a
+   test implementation, or the real one. *)
+let recorded cx h (under : installed) what =
+  let name = "recording_" ^ String.lowercase_ascii under.dep.name in
+  let impls =
+    prelude_instance cx name [ VInt (Int64.of_int h) ] [ under ] what
+  in
+  match List.assoc_opt under.dep impls with
+  | Some impl -> { dep = under.dep; impl; outer = [ under ] }
+  | None -> bug (what ^ " with a recorder that doesn't implement its dependency")
+
+(* The real implementation of each built-in dependency in [deps], as
+   `$start` installs them. *)
+let reals cx deps what =
+  List.map
+    (fun (dep : Path.t) ->
+      { dep; impl = made_value cx what (Path.member dep "real"); outer = [] })
+    deps
+
+(* How `ren run` starts the program (handlers.md, "The journal"): as
+   `$start` does, on the real implementations ([Real]); recording, with
+   the journal's recorder over each of them ([Record]); or replaying it,
+   with the replayer in place of them all ([Replay]). *)
+type start = Real | Record of Journal.t | Replay of Journal.t
+
+(* Run a program made of [modules] (the prelude, then the user's files).
+   It starts from the last one's `$start`, which installs what `main`
+   uses and calls it (lower.ml), unless it's recording or replaying: then
+   the runtime installs what it uses itself, a recorder over each real
+   implementation, or the replayer in place of them, as it installs a
+   test's implementations (see [run_installed]), and calls `main`. What
+   it uses is the journal's header's, which the driver wrote, or checked
+   was what `main` uses (Lower.main_uses). With
+   [trace], each call of an operation is added to it. If `main`, or
+   making a value, fails, nothing handles the error: [Uncaught]. *)
+let run ?(start = Real) ?trace (modules : program list) =
   let entry = List.nth modules (List.length modules - 1) in
-  let start = Path.make entry.home Lower.start_name in
-  let cx = load modules in
-  if not (Hashtbl.mem cx.fns start) then bug "a program with no `main`";
-  match fst (apply cx (from_outside cx start) [] (VEvidence [])) with
+  let cx = { (load modules) with trace } in
+  let what = "starting the program" in
+  let fn, installed =
+    match start with
+    | Real -> (Path.make entry.home Lower.start_name, [])
+    | Record j ->
+        let h = Journal.register j in
+        ( Path.make entry.home "main",
+          List.map
+            (fun r -> recorded cx h r what)
+            (reals cx (List.map Path.prelude j.header.deps) what) )
+    | Replay j ->
+        let h = Journal.register j in
+        let deps = List.map Path.prelude j.header.deps in
+        let impls =
+          prelude_instance cx "replaying" [ VInt (Int64.of_int h) ] [] what
+        in
+        ( Path.make entry.home "main",
+          List.map
+            (fun dep ->
+              match List.assoc_opt dep impls with
+              | Some impl -> { dep; impl; outer = [] }
+              | None -> bug (what ^ " with a replayer that hasn't a dependency"))
+            deps )
+  in
+  if not (Hashtbl.mem cx.fns fn) then bug "a program with no `main`";
+  match fst (apply cx (from_outside cx fn) [] (VEvidence installed)) with
   | Ok v -> v
-  | Error err -> raise (Uncaught (error_of cx start err))
-  | exception (Stack_overflow | Too_deep) -> raise (overflowed cx start)
+  | Error err -> raise (uncaught cx fn err)
+  | exception (Stack_overflow | Too_deep) -> raise (overflowed cx fn)
 
 (* ---- tests ---- *)
 
@@ -981,47 +1275,36 @@ let run (modules : program list) =
 type outcome =
   | Passed
   | Failed of string  (** with this error, which nothing handled, shown *)
-  | Panicked of exn  (** a [Panic], or an [Assert_failed] *)
+  | Panicked of exn
+      (** a [Panic], an [Assert_failed], a replay that [Went_differently], or a
+          journal's entry that can't be read ([Diag.Error]) *)
 
 (* Run the function [fn], of no parameters, in a program [load] made, as
    a test is run: with the test implementation of each built-in
    dependency (deps.md, "Tests"), a fresh instance for this run, but the
    real one of those in [real]: `Random`'s seeded with [seed]. The runtime
    installs them as it does `main`'s, outermost, so they run with nothing
-   installed. Returns what it gave, or how it ended if it didn't, and
-   every line it wrote to the test `Console`, which is kept even if it
-   panicked; with the real one, it went to stdout. A test runs this way,
-   and so does a `ren console` session (driver.ml). *)
-let run_installed cx ~(fn : Path.t) ~real ~seed =
+   installed. [dir] is the folder of the file [fn] is in, which
+   `replay(file)` finds a journal from. With [journal], a console
+   session's (journal.ml), a recorder is installed over each, which keeps
+   what the session's calls gave. Returns what it gave, or how it ended
+   if it didn't, and every line it wrote to the test `Console`, which is
+   kept even if it panicked; with the real one, it went to stdout. A test
+   runs this way, and so does a `ren console` session (driver.ml). *)
+let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
+    ~real ~seed =
+  let cx = { cx with dir } in
   let what = "installing a test's implementations" in
-  let value p =
-    match Hashtbl.find_opt cx.values p with
-    | Some v -> v
-    | None -> bug (what ^ " with `" ^ Path.local p ^ "` not made")
-  in
-  (* the instance of the prelude's handler [name], given [args] *)
-  let instance_of name args =
-    match
-      apply cx (from_outside cx (Path.prelude name)) args (VEvidence [])
-    with
-    | Ok (VHandler h), _ -> fst (instance cx h [] what)
-    | _ -> bug (what ^ " with `" ^ name ^ "`, which isn't a handler")
-  in
+  let value = made_value cx what in
   let installed =
     List.concat_map
       (fun (dep, handler, args) ->
-        if List.mem dep real then
-          [
-            {
-              dep = Path.prelude dep;
-              impl = value (Path.member (Path.prelude dep) "real");
-              outer = [];
-            };
-          ]
+        let dep = Path.prelude dep in
+        if List.mem dep.name real then reals cx [ dep ] what
         else
           List.map
             (fun (dep, impl) -> { dep; impl; outer = [] })
-            (instance_of handler args))
+            (prelude_instance cx handler args [] what))
       [
         ( "Clock",
           "test_clock",
@@ -1033,13 +1316,32 @@ let run_installed cx ~(fn : Path.t) ~real ~seed =
         ("Proc", "test_proc", [ array [||] ]);
       ]
   in
+  (* a session's recorder over each built-in dependency, not over what
+     controls a test one, `TestClock` *)
+  let recorded =
+    match journal with
+    | None -> installed
+    | Some j ->
+        let h = Journal.register j in
+        List.map
+          (fun (i : installed) ->
+            if List.mem i.dep.name Prelude.runtime_deps then
+              recorded cx h i what
+            else i)
+          installed
+  in
   let outcome =
     try
-      match fst (apply cx (from_outside cx fn) [] (VEvidence installed)) with
+      match fst (apply cx (from_outside cx fn) [] (VEvidence recorded)) with
       | Ok v -> Ok v
       | Error err -> Error (Failed (error_of cx fn err))
     with
-    | (Panic _ | Assert_failed _) as e -> Error (Panicked e)
+    | (Panic _ | Assert_failed _ | Went_differently _) as e ->
+        Error (Panicked e)
+    (* a journal's entry `replay` can't read *)
+    | Diag.Error _ as e -> Error (Panicked e)
+    (* a test of a bug's recording went past where it ended *)
+    | Journal.Went_past -> Ok VUnit
     | Stack_overflow | Too_deep -> Error (Panicked (overflowed cx fn))
   in
   (* what the test `Console` kept, asked of it as the test would *)
@@ -1063,8 +1365,8 @@ let run_installed cx ~(fn : Path.t) ~real ~seed =
 
 (* Run the test whose function is [fn] (see [run_installed]): how it
    ended, and what it wrote to the test `Console`. *)
-let run_test cx ~fn ~real ~seed =
-  match run_installed cx ~fn ~real ~seed with
+let run_test ?dir cx ~fn ~real ~seed =
+  match run_installed ?dir cx ~fn ~real ~seed with
   | Ok _, console -> (Passed, console)
   | Error outcome, console -> (outcome, console)
 

@@ -19,17 +19,8 @@ let and_list items =
   | [ x ] -> x
   | last :: rest -> String.concat ", " (List.rev rest) ^ " and " ^ last
 
-(* "a `Bool`", "an `Int`", and by the sound: "a `Unit`", "a `User`", but
-   "an `Undo`", "an `Update`" *)
-let article name =
-  let starts p = String.starts_with ~prefix:p name in
-  let vowel =
-    match name.[0] with
-    | 'A' | 'E' | 'I' | 'O' -> true
-    | 'U' -> (starts "Un" && not (starts "Uni")) || starts "Up" || starts "Ul"
-    | _ -> false
-  in
-  if vowel then sprintf "an `%s`" name else sprintf "a `%s`" name
+(* "a `Bool`", "an `Int`" (diag.ml) *)
+let article = Diag.article
 
 (* Where [found] and [expected] disagree on whether a function parameter is
    `inout`, the mode [found] has there. Error messages explain that, since
@@ -1261,8 +1252,9 @@ let over_nothing loc ~link ~deps =
        (article deps))
 
 (* [link], an implementation of [deps] not declared `over` them, with
-   [under] under it, at [uloc]. *)
-let not_over loc ~link ~name ~deps ~uloc =
+   [under] under it, at [uloc]. [param] says it's a parameter whose type
+   is written, `w: Users`, which is where it would say so. *)
+let not_over ?(param = false) loc ~link ~name ~deps ~uloc =
   Diag.make loc
     ~labels:[ (uloc, "is under it") ]
     ~notes:
@@ -1270,7 +1262,11 @@ let not_over loc ~link ~name ~deps ~uloc =
         "only a handler declared `over` a dependency goes over another \
          implementation of it";
       ]
-    ~help:(sprintf "install one of them, or declare `%s` `over %s`" name deps)
+    ~help:
+      (if param then
+         sprintf "say in its type that it goes over one: `%s: over %s`" name
+           deps
+       else sprintf "install one of them, or declare `%s` `over %s`" name deps)
     (sprintf "`%s` doesn't go over %s, so nothing goes under it" link
        (article deps))
 
@@ -1280,6 +1276,15 @@ let not_one_under loc ~link ~deps ~under =
   Diag.make loc
     ~help:(sprintf "put %s under it" (article deps))
     (sprintf "`%s` goes over %s, and `%s` isn't one" link (article deps) under)
+
+(* [link] goes over all of [deps], and is installed over only [named] of
+   them, at [loc]: the rest would have nothing under them. *)
+let over_some loc ~link ~deps ~named =
+  Diag.make loc
+    ~says:(sprintf "names only %s" (and_list named))
+    ~help:(sprintf "write `%s over %s`" link (String.concat " & " deps))
+    (sprintf "`%s` goes over %s, so it's installed over %s" link (and_list deps)
+       (if List.length deps = 2 then "both" else "all of them"))
 
 (* What a link of a chain is, for [wrong_under]. *)
 type link_kind = A_wrapper | An_implementation

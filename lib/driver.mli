@@ -86,47 +86,59 @@ val suite :
 
 (* Check every module, lower each one, link them into one program and run
    its `main`, which is in the entry module, with [args] for the real
-   `Os.args`. *)
+   `Os.args`. With [record], each call to the world is written to the
+   journal as it's made, and how the run ended after them (`ren run
+   --record`); with [trace], each call of an operation is added to it
+   (`ren run --trace`). *)
 val run :
   ?lint:bool ->
   ?load:loader ->
   ?args:string list ->
+  ?record:Journal.t ->
+  ?trace:Trace.t ->
+  file:string ->
+  string ->
+  Value.t
+
+(* `ren replay`: run the program as [run] does, with each call to the
+   world answered from [journal], a recording of it (Journal.load),
+   strictly: a call that isn't the recording's next, or an end that isn't
+   its end, raises [Eval.Went_differently]. Otherwise it ends as the
+   recording did. *)
+val replay :
+  ?lint:bool ->
+  ?load:loader ->
+  ?trace:Trace.t ->
+  journal:Journal.t ->
   file:string ->
   string ->
   Value.t
 
 (* ---- `ren console` (see driver.ml) ---- *)
 
-(* The file a line typed into the console is in, for a message: each line
-   is its own, as line 1. *)
+(* The file a line typed into the console is in, for a message: line [i]
+   of the session is its line [i]. *)
 val console_file : string
 
 (* What a line gave: its value as it's written, unless the line is a
-   `let` or a `var`, or its value is `()`; its type; and every line the
-   session wrote to the test `Console`, from the start. *)
-type console_line = {
-  shown : string option;
-  ty : string;
-  printed : string list;
-}
-
-(* A line that failed or panicked when it ran: every line the session
-   wrote to the test `Console`, from the start, and what it raised. *)
-exception Console_failed of string list * exn
+   `let` or a `var`, or its value is `()`; and its type. What it did to
+   the world is shown as it happens. *)
+type console_line = { shown : string option; ty : string }
 
 (* Check, and unless [types_only] run, the console session that kept the
    lines [history] and adds the line given, inside the module [home]
    (whose file is [file], with the source [src]) of the program in the
    folder [dir], on the test implementations of the built-ins but those
-   [real] names. [journal] is the session's (Builtins.journal): what the
-   real ones gave the lines kept is given back to them, not asked again.
-   [line] starts [col] columns into what was typed, which a message
-   counts in. Raises what checking it raised, and what running it raised
-   as [Console_failed]. *)
+   [real] names. [journal] is the session's (Journal.session): each call
+   to a built-in is shown as it's made, and what a real one gave the
+   lines kept is given back to them, not asked again. [line] starts [col]
+   columns into what was typed, which a message counts in. Raises what
+   checking or running it raised: [Eval.Went_differently], at the line,
+   if the session didn't make the calls it kept. *)
 val console :
   ?types_only:bool ->
   ?col:int ->
-  journal:Builtins.journal ->
+  journal:Journal.t ->
   load:loader ->
   dir:string ->
   home:string ->
@@ -136,6 +148,24 @@ val console :
   history:string list ->
   string ->
   console_line
+
+(* `:spec`: the session's lines, each with the value it showed, if it
+   showed one, as a test named [name] of the module [home] (its file
+   [file], with the source [src]), as it's written, or [None] if no line
+   could be kept; and the lines left out, each with its number, its text
+   and why: a test sees what an importer sees. An expression's value is
+   kept as an `assert`, if one checks and passes when the test is run as
+   `ren test` runs it. Raises an error if the module has a test named
+   [name] already. *)
+val console_spec :
+  load:loader ->
+  dir:string ->
+  home:string ->
+  file:string ->
+  src:string ->
+  name:string ->
+  (string * string option) list ->
+  string option * (int * string * string) list
 
 val dump_tokens : (Token.t * Loc.t) array -> string
 

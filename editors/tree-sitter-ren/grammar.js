@@ -360,9 +360,12 @@ module.exports = grammar({
         $._dedent,
       ),
 
-    // usd_to(c) => ...: the implementation of an operation
+    // usd_to(c) => ...: the implementation of an operation; with its
+    // dependency in front, Console.write(line) => ..., when two the
+    // handler implements both have one of that name
     handler_arm: ($) =>
       seq(
+        optional(seq(field('dependency', $.type_identifier), '.')),
         field('name', $.identifier),
         field('parameters', $.parameters),
         '=>',

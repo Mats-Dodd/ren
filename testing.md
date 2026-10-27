@@ -8,8 +8,9 @@ for everything that isn't a specification. What runs today, `test`,
 
 > **Status:** partly built. Stage 9c runs: tests are specifications, test
 > items, `test fn` and `test handler`, and a first `ren console`, with
-> types, private items and the choice of world. Stage 10b adds what needs
-> the journal: effects shown as they happen, `:reload` and `:spec`.
+> types, private items and the choice of world. Stage 10b runs what needs
+> the journal: a journal as a test, `replay(file)` and `ren test --keep`,
+> and the console's effects shown as they happen, `:reload` and `:spec`.
 > Property tests come with the standard library in stage 12. See
 > [Roadmap](#roadmap).
 
@@ -292,16 +293,53 @@ Every effect goes through a dependency, and `ren run --record` writes the
 journal of a run ([handlers.md](handlers.md#the-journal)). A journal
 becomes a test one way: an ordinary test that installs `replay(file)`.
 
+```ren
+test "a recorded run of build replays" =
+  with replay("tests/build.journal") in
+    try main()
+```
+
 - **A replay answers inputs and compares outputs.** A call whose result
   the program uses, `Fs.read` or `Clock.now`, is answered from the
-  journal; a call that gives nothing back, `Console.print` or `Fs.write`,
+  journal, in order for each dependency; one that isn't the next of its
+  dependency's, or that the journal has none left for, fails the test
+  there. A call that gives nothing back, `Console.write` or `Fs.write`,
   is compared, and a difference fails the test with a diff of the
-  outputs. `ren replay`, outside tests, is strict and stops at the first
-  call that differs.
+  outputs when the `with` ends:
+
+  ```
+  ──── a recorded run of build replays ── main.ren:86
+     │
+  86 │   with replay("tests/build.journal") in
+     │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     │
+     the outputs differ from the recording's
+     - Console.error("echo base")
+     + Console.error("> echo base")
+     ...
+     help: if the change is what you meant, record the run again, or edit the journal
+  ```
+
+  `ren replay`, outside tests, is strict and stops at the first call
+  that differs. The journal is found from the folder of the test's
+  file. `replay(file)` implements only the built-ins the journal's
+  header names, so the others are the test implementations, and a
+  `with` can install them too. [examples/just](examples/just) has one,
+  `tests/build.journal`.
 - **A bug report is a file.** `ren run --record bug.journal` records the
   run that went wrong, and `ren test --keep bug.journal` moves it to
   `tests/` and writes the test for it, to read and edit like any other.
-  Fix the bug, and it stays fixed.
+  Fix the bug, and it stays fixed: a test of a journal that ended in an
+  error or a panic fails while the program still ends that way, and
+  passes once it goes on past where the recording ended, the outputs it
+  had made by then the same.
+
+  ```
+  $ ren test --keep bug.journal
+  moved bug.journal to tests/bug.journal
+  added the test "replays bug.journal" to main.ren
+  run it with `ren test main.ren --only "replays bug.journal"`: it fails while the program ends as the recording did, and passes once it goes on past there, with the same outputs to there
+  ```
 
 ## The console
 
@@ -336,23 +374,62 @@ fn(inout Account, Money, Movement) ! Frozen(AccountId) uses Clock
   kept, and given back to its line from then on, so a `let t =
   Clock.now()` stays the same time and an earlier line's file isn't
   written again.
-- **Every effect is shown as it happens:**
+- **Every effect is shown as it happens:** a line given to the test
+  `Console` as it would be printed, and any other call with what it
+  gave, as the journal writes it, an opaque value as what it's
+  represented as. A kept line's effects aren't shown again:
 
   ```
-  bank> try &bank.transfer(t)
-    Clock.now() → 1970-01-01T00:00:00Z
-  ok : Unit
+  account> Clock.now()
+    Clock.now() → 0
+  Time(0) : Time
   ```
 
-- **`:reload` keeps your state.** It compiles again after an edit and
-  replays the session's journal to rebuild what you had. Rails' `reload!`
-  loses it.
-- **`:spec` turns a session into a test.** It keeps the calls to `pub`
-  items and an `assert` for each result you looked at, writes them as a
-  `test` in the module, and shows it to you to edit or delete. Whatever
-  the session did through private items is left out: if a behaviour can
-  only be reached that way, it isn't part of the interface, and `:spec`
-  says so.
+- **`:reload` keeps your state.** It reads the module again after an
+  edit and runs the session on it, the session's journal giving each
+  real call back, to rebuild what you had. Rails' `reload!` loses it. A
+  line that doesn't check any more, or makes other calls than it made,
+  is dropped, with the lines after it, and said so:
+
+  ```
+  counter> :reload
+  error: `Counter` has no method named `count`
+    ┌─ <console>:2:3
+  2 │ c.count()
+    │   ^^^^^
+    = the session goes on from line 2, which is dropped, and those after it
+    help: its methods: `bump`, `total`
+  ```
+
+  Line `i` of the session is line `i` of `<console>` in a message.
+- **`:spec` turns a session into a test.** It keeps each line a test of
+  the module can write, and an `assert` for each result you looked at,
+  writes them as a `test` in the module, and shows it to you to edit or
+  delete. Whatever the session did through private items is left out:
+  if a behaviour can only be reached that way, it isn't part of the
+  interface, and `:spec` says so:
+
+  ```
+  counter> :spec counting
+  added to counter.ren, to edit or delete:
+
+  test "counting" =
+    let c = Counter.start().bump()
+    assert c.count() == 1
+    = left out line 3, `secret()`: `secret` is private, and a test sees what an importer sees
+  ```
+
+  An `assert` is written only if it checks, and passes: a value shown
+  that a test can't write, an opaque one's representation, is kept as
+  `let _ = ` and the line, so what the line does stays in the test. The
+  test is run as `ren test` runs it, on its own `Random` seed and the
+  test implementations, so an `assert` that held only for the session
+  is kept as its line too, and a line that fails or panics in a test is
+  left out. A line that uses a variable of one left out is left out for
+  that, and so is a `let` at the end. A name the module's tests have
+  already is refused, and a session none of whose lines a test can
+  keep adds nothing. `:spec` adds to the end of the file as the session
+  read it: if it was edited since, it says to `:reload` first.
 - **Later, read-only attaching to a running program** through its
   journal: what did this request do?
 
@@ -379,7 +456,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | Stage | What |
 |---|---|
 | **9c** | tests see what an importer sees; test items; a type that keeps rules is opaque ([module-build.md](module-build.md#private-unless-pub)); `ren console` with types, private items and the choice of world |
-| **10** | the journal: effects shown in the console, `:reload`, `:spec`, journals as tests |
+| **10** | the journal: effects shown in the console, `:reload`, `:spec`, journals as tests (done, stage 10b) |
 | **12** | property tests: derived generation, generation through constructors, `arbitrary`, shaped parameters, shrinking by replay, saved failures, the report, `ren fuzz` |
 | **17** | schedules in the choice sequence |
 | **Later** | generated call sequences, programs as properties, swarm testing, attaching the console |
@@ -415,6 +492,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
   reads. A help that writes out the whole `!` clause at once would make
   the first cheaper.
 - **How `:spec` picks its asserts,** from the results looked at, without
-  writing brittle ones.
+  writing brittle ones. 10b writes one for every value shown that a test
+  can write, which asserts more than a person would.
 - **How a saved failure is named and kept** in the repository, so it
   survives renaming the test.

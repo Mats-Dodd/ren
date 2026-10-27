@@ -252,6 +252,12 @@ let pair x = function VTuple [ k; v ] -> (k, v) | _ -> bug x
 let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
   match x with
   | Show -> fun _ -> failwith "bug: `show` is run by the interpreter"
+  (* the journal's need the types of what they're given, as `show` does,
+     and the program's types, to write and read values through *)
+  | Journal_kept | Journal_gave | Journal_answer | Journal_outputs
+  | Journal_load ->
+      fun _ ->
+        failwith ("bug: `" ^ Intrinsic.name x ^ "` is run by the interpreter")
   (* the real `Clock.now` and `Clock.instant` *)
   | Clock_now | Clock_instant -> pure (fun _ -> VInt (now_ms ()))
   | Clock_sleep ->
@@ -477,79 +483,3 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
               raise (Panic ("`sqrt` of a negative number: " ^ Ast.show_float f));
             VFloat (Float.sqrt f)
         | _ -> bug x)
-
-(* ---- the console's journal ----
-
-   `ren console` runs its session again from its first line for each new
-   one (driver.ml). On the test implementations that's the same run each
-   time; on a real one, `--real Clock`, it wouldn't be: an earlier line's
-   file would be written again, and its `let t = Clock.now()` would be a
-   new time. So while a session runs, what each built-in that touches the
-   world gave is written down, in order, and a run again gives back what
-   the earlier lines were given, without asking the world again. Only the
-   new line's calls reach the world. *)
-
-(* What the built-ins that touch the world gave, in the order they were
-   called: [kept], those of the lines the session kept; [ahead], those
-   this run hasn't given back yet; and [fresh], those this run asked the
-   world for, most recent first. *)
-type journal = {
-  mutable kept : (Intrinsic.t * Value.t) list;
-  mutable ahead : (Intrinsic.t * Value.t) list;
-  mutable fresh : (Intrinsic.t * Value.t) list;
-}
-
-let new_journal () = { kept = []; ahead = []; fresh = [] }
-
-(* The journal of the session running, if one is. *)
-let journal : journal option ref = ref None
-
-(* The built-ins that touch the world: what the real implementations of
-   the built-in dependencies are made of. *)
-let touches_world (x : Intrinsic.t) =
-  match x with
-  | Clock_now | Clock_instant | Clock_sleep | Random_int | Console_write
-  | Console_error | Fs_read | Fs_write | Fs_exists | Os_args | Proc_run ->
-      true
-  | _ -> false
-
-(* A value given back again, as it was given: an array is copied, since
-   one can be pushed onto. *)
-let again = function VArray xs -> array (items xs) | v -> v
-
-(* What [x] gives: the next one in the journal, if the run hasn't given
-   back all it holds, or else what [now] asks the world, written down. *)
-let journaled j x now =
-  match j.ahead with
-  | (y, v) :: rest when y = x ->
-      j.ahead <- rest;
-      again v
-  | _ :: _ ->
-      failwith
-        ("bug: a console session called `" ^ Intrinsic.name x
-       ^ "` where it called another before")
-  | [] ->
-      let v = now () in
-      j.fresh <- (x, again v) :: j.fresh;
-      v
-
-let run (x : Intrinsic.t) ~dicts =
-  let now = run x ~dicts in
-  fun args ->
-    match !journal with
-    | Some j when touches_world x ->
-        (journaled j x (fun () -> fst (now args)), args)
-    | _ -> now args
-
-(* Run [f], a session's run, with [j] its journal (see above). *)
-let replaying j f =
-  j.ahead <- j.kept;
-  j.fresh <- [];
-  journal := Some j;
-  Fun.protect ~finally:(fun () -> journal := None) f
-
-(* The line that ran last is kept: what it was given is given back from
-   now on. *)
-let keep j =
-  j.kept <- j.kept @ List.rev j.fresh;
-  j.fresh <- []

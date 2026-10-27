@@ -153,7 +153,8 @@ type env = {
   own_numeric : (string, unit) Hashtbl.t;
       (** the module's own `with numeric` types, by name *)
   own_tests : (string, unit) Hashtbl.t;
-      (** the module's own test items, `test fn`, by name *)
+      (** the test items in scope bare, by name: the module's own, `test fn`,
+          and the prelude's, `replay` *)
   own_private : (string, unit) Hashtbl.t;
       (** the module's own private items that aren't test items, which a test
           doesn't see: its functions by name, its types' members by `Type.name`,
@@ -201,13 +202,16 @@ type scope = {
 }
 
 (* What `next` is in the code being resolved: nothing, outside a handler;
-   in a handler for these dependencies, nothing either, but a message
-   says how to get one; in a handler over these, the implementation
-   under it. *)
+   in a handler for these dependencies, or a record implementation of
+   one, nothing either, but a message says how to get one; in a handler
+   over these, the implementation under it. *)
 and next_in =
   | No_next
   | In_for of string * Path.t list  (** the handler's name, and its `for` *)
   | In_over of string * Path.t list  (** the handler's name, and its `over` *)
+  | In_record of Path.t
+      (** a record implementation of this dependency, which can't reach the one
+          under it *)
 
 and fn_state = {
   mutable last_id : int;  (** the last binder id handed out *)
@@ -291,7 +295,7 @@ let bind env sc (id : ident) bound =
   not_an_alias env id;
   (match sc.next with
   | In_over _ when id.name = "next" -> next_bound env id.loc
-  | In_over _ | In_for _ | No_next -> ());
+  | In_over _ | In_for _ | In_record _ | No_next -> ());
   sc.fn.last_id <- sc.fn.last_id + 1;
   let b = { id = sc.fn.last_id; ident = id; bound; depth = sc.depth } in
   (* `_`, as in `let _ = ...`, names nothing: the value is dropped *)
@@ -860,12 +864,19 @@ let test_item env loc ~home written =
   report env loc
     ~notes:
       [
-        sprintf
-          "a test item isn't part of `%s`'s interface, and `ren run` leaves it \
-           out"
-          home;
+        (if home = Path.prelude_home then
+           "the prelude has it for tests only, and `ren run` leaves it out"
+         else
+           sprintf
+             "a test item isn't part of `%s`'s interface, and `ren run` leaves \
+              it out"
+             home);
       ]
-    ~help:"call it from a test, or remove `test` from its declaration"
+    ~help:
+      (if home = Path.prelude_home then
+         "call it from a test; outside one, `ren replay <file.journal>` \
+          replays a recording"
+       else "call it from a test, or remove `test` from its declaration")
     (sprintf "`%s` is a test item, so only a test can use it" written)
 
 (* The public function [f] of the imported module [iface], written
@@ -1037,7 +1048,7 @@ let lookup env sc loc ~what x =
       match Hashtbl.find_opt env.values x with
       | Some (Global p as name) ->
           if Hashtbl.mem env.own_tests x && not sc.fn.test then
-            test_item env loc ~home:env.home x;
+            test_item env loc ~home:p.home x;
           if p.home = env.home then check_private env loc ~key:x x;
           sc.fn.calls <- p :: sc.fn.calls;
           name
@@ -1066,6 +1077,7 @@ let lookup env sc loc ~what x =
               let ds =
                 match sc.next with
                 | In_for (_, ds) | In_over (_, ds) -> ds
+                | In_record d -> [ d ]
                 | No_next -> []
               in
               let call =
@@ -1088,6 +1100,12 @@ let lookup env sc loc ~what x =
                         (String.concat " & "
                            (List.map (fun (p : Path.t) -> p.name) ds))
                         call
+                  | In_record d ->
+                      sprintf
+                        "a record implementation can't reach the one under it: \
+                         write a handler declared `over %s`, and call it \
+                         through `next`: %s"
+                        d.name call
                   | In_over _ | No_next ->
                       sprintf "call the one under it with `next`: %s" call)
                 (sprintf "there's no %s named `outer`" what)
@@ -1324,6 +1342,11 @@ let no_next env sc loc =
           sprintf
             "declare it `handler %s(...) over %s`, to reach the `%s` under it" h
             ds ds
+      | In_record d ->
+          sprintf
+            "a record implementation can't reach the one under it: write a \
+             handler declared `over %s`, which can"
+            d.name
       | In_over _ | No_next ->
           "only a handler declared `over` another implementation has a `next`")
     "`next` is only in a handler declared `over` a dependency";
@@ -1426,14 +1449,14 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Var (Bare "next") when next_free env sc -> (
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ())
-        | In_for _ | No_next -> Var (no_next env sc e.loc))
+        | In_for _ | In_record _ | No_next -> Var (no_next env sc e.loc))
     | Field ({ kind = Var (Bare "next"); _ }, op)
       when next_free env sc
            && match sc.next with In_over _ -> true | _ -> false -> (
         (* `next.get` not called *)
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ~called:op.name ())
-        | In_for _ | No_next -> assert false)
+        | In_for _ | In_record _ | No_next -> assert false)
     | Var (Bare x) -> Var (lookup env sc e.loc ~what:"variable" x)
     | Var (Item (t, f)) -> Var (item env sc t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
@@ -1508,7 +1531,15 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
                   })
             name
         in
-        Record (name, List.map (fun (f, v) -> (f, go v)) fields)
+        (* the fields of a record implementation, `Clock { ... }`, outside
+           a handler: `outer` and `next` there say what to write instead *)
+        let sc =
+          match (name, sc.next) with
+          | Some { tref = Named p; _ }, No_next when dep_ops env p <> None ->
+              { sc with next = In_record p }
+          | _ -> sc
+        in
+        Record (name, List.map (fun (f, v) -> (f, expr env sc v)) fields)
     | Field ({ kind = Var (Bare m); _ }, f) when Env.mem m env.modules ->
         Var (qualified env sc (Env.find m env.modules) f)
     | Field (r, f) -> Field (go r, f)
@@ -1739,6 +1770,25 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
       let given = Hashtbl.create 8 in
       let arm (a : Parsed.handler_arm) : Resolved.handler_arm =
         let op = a.arm_name.name in
+        (* `Console.write(line) => ...` names its dependency, which has to
+           be one it implements *)
+        let deps =
+          match a.arm_op with
+          | Item (d, _) -> (
+              match
+                List.filter (fun ((p : Path.t), _) -> p.name = d.tid.name) deps
+              with
+              | [] ->
+                  report env d.tid.loc
+                    ~help:
+                      (sprintf "it implements %s"
+                         (String.concat " and "
+                            (List.map (fun (p, _) -> shown p) deps)))
+                    (sprintf "this handler doesn't implement `%s`" d.tid.name);
+                  []
+              | named -> named)
+          | Bare _ -> deps
+        in
         let arm_op =
           match
             List.filter (fun ((p : Path.t), _) -> List.mem op (ops p)) deps
@@ -1792,7 +1842,13 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
                        could be either"
                       op;
                   ]
-                ~help:"implement them in two handlers"
+                ~help:
+                  (sprintf "say which dependency's it is: %s"
+                     (String.concat " or "
+                        (List.map
+                           (fun ((p : Path.t), _) ->
+                             sprintf "`%s.%s(...) => ...`" p.name op)
+                           owners)))
                 (sprintf "%s %s have an operation named `%s`"
                    (String.concat " and "
                       (List.map (fun (p, _) -> shown p) owners))
@@ -2978,7 +3034,14 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
             | _ -> Global (Path.make iface.home v.vname)
           in
           Hashtbl.replace env.values v.vname name)
-        iface.values)
+        iface.values;
+      (* and its test items, `replay`, which only test code can use *)
+      List.iter
+        (fun (v : Iface.value) ->
+          Hashtbl.replace env.values v.vname
+            (Global (Path.make iface.home v.vname));
+          Hashtbl.replace env.own_tests v.vname ())
+        iface.tests)
     prelude;
   let fns =
     List.filter_map

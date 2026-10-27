@@ -6,8 +6,9 @@ replayed and traced. It's stage 10 of the [roadmap](README.md#roadmap),
 after operators. It builds on [deps.md](deps.md), and changes one of its
 rules: a `with` installs a set, and its order never matters.
 
-**Status:** 10a runs, as [Where 10a differed](#where-10a-differed)
-says; 10b, the journal, doesn't yet.
+**Status:** built. 10a and 10b run, as
+[Where 10a differed](#where-10a-differed) and
+[Where 10b differed](#where-10b-differed) say.
 
 It's built in two halves:
 
@@ -245,16 +246,28 @@ real `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, and later `Net`.
 ### Recording and replaying
 
 ```
-$ ren run --record run.journal just/main.ren -- build
-fmt a.c
-cc a.c
-recorded 14 calls to run.journal (Fs 1, Os 1, Proc 3, Console 9)
+$ cd examples/just
+$ ren run --record run.journal main.ren -- build
+echo base
+base
+echo building
+building
+echo built
+built
+recorded 8 calls to run.journal (Console 3, Fs 1, Os 1, Proc 3)
+warning: run.journal holds everything the program read, files and arguments included: read it before you share it
 
+$ rm justfile
 $ ren replay run.journal
-fmt a.c
-cc a.c
-replayed 14 calls: nothing touched the disk, and nothing ran
+echo base
+echo building
+echo built
+replayed 8 calls: nothing touched the disk, and nothing ran
 ```
+
+The just shows each line on stderr before `sh` runs it, and `sh` prints
+the line's output. The replay shows the first, which went through
+`Console`, and not the second, since nothing runs.
 
 - **Recording is a handler over an implementation,** which calls `next`
   and writes down the call and what it gave back. `ren run --record`
@@ -280,23 +293,27 @@ replayed 14 calls: nothing touched the disk, and nothing ran
   **nothing reaches the world except through a dependency.** Every
   intrinsic the prelude marks as reaching the world is an operation of
   `Clock`, `Random`, `Console`, `Fs`, `Os` or `Proc`, and so is recorded:
-  arguments, the environment and the working directory included, and the
-  exit code is the journal's last entry.
+  the program's arguments included, and how the run ended is the
+  journal's last entry.
 
 ### A replay that goes differently
 
 ```
 $ ren replay run.journal
-error: the replay went differently at call 3 of 14
-   ┌─ just/main.ren:24:16
-   │
-24 │     let code = try Proc.run("sh", ["-c", line])
-   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   │
-   = the recording has: Console.error("fmt a.c")
-   = this program made: Proc.run("sh", ["-c", "fmt a.c"])
-   = help: the code changed since this was recorded; record it again
+echo base
+echo building
+error: the replay went differently at call 7 of 8
+   ┌─ main.ren:27:5
+27 │     Console.error(line)
+   │     ^^^^^^^^^^^^^^^^^^^
+   = the recording has: Console.error("echo built!")
+   = this program made: Console.error("echo built")
+   help: the code changed since this was recorded; record it again
 ```
+
+That's the journal's line 7 edited by hand. A replay also stops if the
+program ends before the recording does, or goes on past its end, or
+ends differently: a panic where the recording exited, say.
 
 A call differs if its dependency, its operation or its arguments differ.
 `ren replay` is strict: it stops at the first one, says what the
@@ -329,18 +346,28 @@ for, and **it's the one way a journal becomes a test.**
 - **A bug report becomes a test with one command.** `ren run --record
   bug.journal` records the run that went wrong, and `ren test --keep
   bug.journal` moves it to `tests/` and writes the test above for it, an
-  ordinary test to read and edit. Fix the bug, and it stays fixed.
+  ordinary test to read and edit. Fix the bug, and it stays fixed: a
+  journal that ended in an error or a panic fails its test while the
+  program still ends that way, and passes once the program goes on past
+  where it ended, with the outputs it had made by then.
 
 ### Tracing
 
 ```
-$ ren run --trace just/main.ren -- build
-main                                   41ms
-├─ Fs.read("justfile")                  0.2ms  → 61 bytes
-├─ Os.args()                            0.0ms  → ["build"]
-├─ Proc.run("sh", ["-c", "fmt a.c"])   18ms   → 0
-└─ Proc.run("sh", ["-c", "cc a.c"])    22ms   → 0
+$ ren run --trace main.ren -- build
+main                                          41ms
+├─ Fs.read("justfile")                       0.0ms  → 345 bytes
+├─ Os.args()                                 0.0ms  → ["build"]
+├─ Console.error("echo base")                0.0ms
+├─ Proc.run("sh", ["-c", "echo base"])       7.8ms  → 0
+├─ Console.error("echo building")            0.0ms
+├─ Proc.run("sh", ["-c", "echo building"])   7.0ms  → 0
+├─ Console.error("echo built")               0.0ms
+└─ Proc.run("sh", ["-c", "echo built"])      6.7ms  → 0
 ```
+
+It's printed on stderr once the run ends, and `REN_NO_TIMINGS` leaves
+the times out, as it does for `ren test`.
 
 `--trace` records the same calls at a lower level: what was called, its
 arguments and how long it took. `--trace` also shows calls to the
@@ -357,12 +384,22 @@ trace is for reading, and replay doesn't need them.
 ### What an entry holds
 
 ```
-# ren journal 1 · just/main.ren · deps: Fs Os Proc Console
-1  Os.args()                         → ["build"]
-2  Fs.read("justfile")               → Ok(61 bytes: "build:\n\tfmt a.c\n...")
-3  Proc.run("sh", ["-c", "fmt a.c"]) → Ok(0)
-4  Console.error("fmt a.c")
+# ren journal 1 · main.ren · deps: Console Fs Os Proc
+1 Fs.read("justfile") → Ok("# What `ren run main.ren` runs, ...\n")
+2 Os.args() → ["build"]
+3 Console.error("echo base")
+4 Proc.run("sh", ["-c", "echo base"]) → Ok(0)
+...
+9 exit 0
 ```
+
+That's what 10b writes: a number, the call, and what it gave after `→`,
+left out when it's `()` or `Ok(())`; the last line is how the run ended,
+`exit 0`, `error` and what `main` failed with, written as a value is,
+or `panic`, where, and what it said, in quotes. The header names the
+program from the journal's folder, or absolutely if that's more than
+two folders up, and the dependencies `main` uses. What follows is where it's going;
+[Where 10b differed](#where-10b-differed) says what isn't there yet.
 
 **A journal is text,** one call a line, because journals are checked in
 as tests and read in review: a changed journal shows what changed, and a
@@ -405,6 +442,15 @@ submission and its completion:
 - **The recorder is the one privileged handler,** as the README says: only
   the runtime can install it over the real implementations. A program
   can't name them, so it can't wrap them any other way than `over Clock`.
+  The recorders, `recording_fs(j) over Fs` and one for each built-in, and
+  the replayer, `replaying(j)` for all of them, are handlers in the
+  prelude, written in Ren. Each operation calls an intrinsic that writes
+  the call down, or answers it, through its type; the runtime installs
+  them, and journal.ml is the one place that knows the format
+  ([compiler.md](compiler.md#stage-10b)).
+- **Nothing reaches the world but through an operation:** Core Lint
+  checks that each intrinsic that does is called only by its
+  dependency's real implementation, `fs_read` by `Fs.real`.
 
 ## What changed in deps.md and the README
 
@@ -487,6 +533,51 @@ it:
   naming a maker of `Users`, which the compiler can't know is the one
   meant.
 - **A panic skips `finally`, and so does a failed start.**
+
+## Where 10b differed
+
+- **The runtime installs the recorders and the replayer,** not `$start`
+  in Core: `ren run --record` and `ren replay` call `main` with them
+  installed, as a test's implementations are.
+- **The format is the simplest one:** no `task`, no table of names, no
+  size cap and no byte budget. Values are written as Ren writes them,
+  through their type, but an opaque value as what it's represented as
+  (`Clock.now() → 1793074838446`), a `Path` as its string, and `Bytes` as
+  a string with `\xNN` for a byte that isn't UTF-8. `<redacted>` reads,
+  and a replay that needs it says it can't give it back.
+- **An arm can name its dependency,** `Console.write(line) => ...`, for
+  a handler of two dependencies that both have an operation of that
+  name. The replayer needed it: `Console` and `Fs` both have `write`.
+- **`--trace` is one level,** what the table calls 2 and 3 together:
+  arguments and what each call gave, cut to 40 characters, `Bytes` as
+  how many, with the time. There's no level 1, and nothing is compiled
+  out.
+- **`ren replay` prints what went through `Console`,** and not what a
+  process the program ran printed, since none runs.
+- **`ren test --keep bug.journal`** moves the journal to `tests/` next
+  to the program it recorded, rewrites its header's path, and adds
+  `test "replays bug.journal"` to the program's file. `main` has to be
+  `pub` for that, since a test sees what an importer sees.
+- **`replay(file)`** finds the journal from the folder of the test's
+  file, and is the prelude's one test item, which only test code can
+  use. What it implements is read from the journal's header when the
+  test is checked, so the file is named by a string literal; named any
+  other way, it implements all six.
+- **`ren replay` refuses a journal whose header names other
+  dependencies** than the ones `main` uses now.
+- **The environment and the working directory aren't recorded,** since
+  no operation reads them: `Os` has only `args`. They still shape what
+  the real `Proc.run` and `Fs` do (`PATH` finds a program, and a
+  relative path is from the working directory), but a replay answers
+  those calls from the journal, so it's exact anyway. An operation that
+  reads them would be recorded as any other is.
+- **A journal has to end with how the run ended.** One without it, cut
+  short or stopped, isn't replayed: the replay couldn't say whether
+  the run ended as it did.
+- **A call past the end of a recording that ended in a panic** panics
+  there only if it's where the recording panicked, inside that call.
+  Anywhere else the program went on past the recording's end, and the
+  replay went differently.
 
 ## Later
 

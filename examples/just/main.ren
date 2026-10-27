@@ -78,3 +78,10 @@ test "a justfile with no recipes" =
 
 test "no justfile" =
   assert attempt main() == Err(NoSuchFile(Path.of("justfile")))
+
+// A real run of `ren run main.ren -- build`, recorded with `--record`
+// and checked in: the journal answers what `main` reads and runs, and
+// what it shows has to be what the recording showed.
+test "a recorded run of build replays" =
+  with replay("tests/build.journal") in
+    try main()

@@ -7,11 +7,13 @@ let version = "ren 0.1.0"
 
 let usage =
   {|usage: ren <command> <file.ren>
-       ren run <file.ren> [-- <args>...]
+       ren run [--record <file.journal>] [--trace] <file.ren> [-- <args>...]
+       ren replay <file.journal> [--trace]
        ren core --types <file.ren>
        ren core --lambdas <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
+       ren test --keep <file.journal>
        ren console <module> [--real <dependency>,...]
        ren --help | --version
 
@@ -20,7 +22,18 @@ the file's folder: `import billing/stripe` is the file billing/stripe.ren.
 
 commands:
   run     run the program's `main` function, with the <args> after `--`
-          as `Os.args()`
+          as `Os.args()`:
+            --record <file.journal>  write each call it makes to the world,
+                                     and what it gave, to the journal
+            --trace                  print the tree of calls it made to
+                                     dependencies, once it ends, with how
+                                     long each took (REN_NO_TIMINGS set
+                                     leaves that out)
+  replay  run the program a journal recorded again, each call to the world
+          answered from the journal, so nothing touches the disk and
+          nothing runs; it stops at the first call that isn't the
+          recording's. Its arguments are those the journal recorded:
+            --trace  print the tree of calls it made, as `ren run --trace`
   test    run the tests of every module in the folder (the current one if
           none is given) and the folders in it, but those holding a
           program of their own, with a `main`; or of the file and what
@@ -31,6 +44,9 @@ commands:
             --seed <n>     start every test's `Random` from <n>
             --list         list the tests, without running them, saying
                            which use a real dependency
+            --keep <file.journal>
+                           move a journal to the `tests` folder next to
+                           its program, and add a test that replays it
           REN_NO_TIMINGS set leaves out how long they took
   console a line at a time inside <module>, its file's path without
           `.ren`, whose folder is the program's (`ren console
@@ -41,6 +57,10 @@ commands:
                                      each real call is made once, and what
                                      it gave is kept for its line
             :t <expression>          its type, without running it
+            :reload                  read the module again after an edit,
+                                     and run the session on it
+            :spec [name]             add the session to the module as a
+                                     test, leaving out what a test can't do
             :q                       quit, as the end of the input does
   check   check the program and its tests without running them
   types   print every function's inferred signature, module by module,
@@ -131,8 +151,209 @@ let rec ren_files ?(top = true) dir =
         else (files, apart))
       (here, []) names
 
+(* The modules the program whose entry is [path] imports, each read from
+   its file, which is next to the entry's or in a folder below it. *)
+let loader path m =
+  try
+    Some
+      (In_channel.with_open_bin
+         (Driver.module_file ~entry:path m)
+         In_channel.input_all)
+  with Sys_error _ -> None
+
+(* [path] as a list of names, from the root, with `.` and `..` worked
+   out: [path] from the current folder if it's relative. *)
+let names path =
+  let path =
+    if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path
+    else path
+  in
+  List.fold_left
+    (fun acc name ->
+      match name with
+      | "" | "." -> acc
+      | ".." -> ( match acc with _ :: rest -> rest | [] -> [])
+      | n -> n :: acc)
+    []
+    (String.split_on_char '/' path)
+  |> List.rev
+
+(* The file [path] from the folder [dir]: what a journal's header says
+   the program is, so it's found from wherever the journal is. *)
+let relative ~dir path =
+  let rec drop a b =
+    match (a, b) with x :: a', y :: b' when x = y -> drop a' b' | _ -> (a, b)
+  in
+  let up, down = drop (names dir) (names path) in
+  String.concat "/" (List.map (fun _ -> "..") up @ down)
+
+(* [path] as a journal's header says it, from the journal's folder [dir]:
+   relative, unless that climbs more than two folders up, the journal
+   being far from the program, and then absolute. *)
+let header_path ~dir path =
+  let from = relative ~dir path in
+  if String.starts_with ~prefix:"../../../" from then
+    "/" ^ String.concat "/" (names path)
+  else from
+
+(* The file [path] in the folder [dir], as a person would write it:
+   `tests/../main.ren` is `main.ren`; [path] itself if it's absolute. *)
+let joined dir path =
+  if not (Filename.is_relative path) then path
+  else
+    let up = Filename.parent_dir_name in
+    let parts =
+      List.fold_left
+        (fun acc name ->
+          match (name, acc) with
+          | ("" | "."), _ -> acc
+          | n, m :: rest when n = up && m <> up -> rest
+          | n, _ -> n :: acc)
+        []
+        (String.split_on_char '/' (Filename.concat dir path))
+      |> List.rev
+    in
+    let root = if Filename.is_relative dir then "" else "/" in
+    match parts with [] -> "." | _ -> root ^ String.concat "/" parts
+
+(* The trace [t], drawn on stderr, once the run has ended. *)
+let print_trace = function
+  | Some t ->
+      prerr_string
+        (Trace.render ~timings:(Sys.getenv_opt "REN_NO_TIMINGS" = None) t)
+  | None -> ()
+
+(* [n] calls, or one. *)
+let calls n = if n = 1 then "1 call" else Printf.sprintf "%d calls" n
+
+(* How many calls a journal holds, to each dependency it has calls to:
+   `Fs 1, Os 1`. *)
+let counts j =
+  String.concat ", "
+    (List.filter_map
+       (fun (d, n) -> if n = 0 then None else Some (Printf.sprintf "%s %d" d n))
+       (Journal.counts j))
+
+(* The text of the journal [file], or a message that it isn't there. *)
+let read_journal file =
+  if not (Sys.file_exists file) then (
+    prerr_endline (Printf.sprintf "error: there's no journal %s" file);
+    prerr_endline
+      "  help: record one with `ren run --record <file.journal> <file.ren>`";
+    exit 1);
+  read file
+
+(* `ren test --keep <file.journal>` (handlers.md, "A journal as a test
+   fixture"): the journal, moved to the `tests` folder next to the
+   program it recorded, and a test that replays it, added to the
+   program's file. *)
+let keep file =
+  let text = read_journal file in
+  let journal =
+    try Journal.load ~file text with e -> fail ~known:[ (file, text) ] e
+  in
+  let program = joined (Filename.dirname file) journal.header.program in
+  let src =
+    try In_channel.with_open_bin program In_channel.input_all
+    with Sys_error _ ->
+      prerr_endline
+        (Printf.sprintf
+           "error: the program %s recorded, %s, isn't there: a journal's \
+            program is found from the journal's folder"
+           file program);
+      exit 1
+  in
+  let main =
+    try
+      List.find_map
+        (function
+          | Ast.Fn (f : Ast.Parsed.fn_def) when f.name.name = "main" -> Some f
+          | _ -> None)
+        (Driver.parse ~file:program src)
+    with e -> fail ~known:[ (program, src) ] e
+  in
+  let main =
+    match main with
+    | Some f -> f
+    | None ->
+        prerr_endline
+          (Printf.sprintf "error: %s has no `main` for a test to run" program);
+        exit 1
+  in
+  if not main.pub then (
+    prerr_endline
+      (Printf.sprintf
+         "error: `main` in %s is private, and a test sees what an importer sees\n\
+         \  help: make it `pub fn main()`, so the test can call it"
+         program);
+    exit 1);
+  let tests = joined (Filename.dirname program) "tests" in
+  let name = Filename.basename file in
+  let dest = Filename.concat tests name in
+  if names dest = names file then (
+    prerr_endline
+      (Printf.sprintf
+         "error: %s is in the `tests` folder already, where --keep moves a \
+          journal\n\
+         \  help: a test replays it with `with replay(\"tests/%s\") in`, then \
+          a call of `main`"
+         file name);
+    exit 1);
+  if Sys.file_exists dest then (
+    prerr_endline
+      (Printf.sprintf
+         "error: %s is already there\n\
+         \  help: give the journal another name, or remove the one there"
+         dest);
+    exit 1);
+  if not (Sys.file_exists tests) then Sys.mkdir tests 0o755;
+  (* the header says the program from the journal's new folder *)
+  let header =
+    Journal.header_text
+      { journal.header with program = header_path ~dir:tests program }
+  in
+  let rest =
+    match String.index_opt text '\n' with
+    | Some i -> String.sub text i (String.length text - i)
+    | None -> "\n"
+  in
+  let write path text =
+    try Out_channel.with_open_bin path (fun oc -> output_string oc text)
+    with Sys_error msg ->
+      prerr_endline ("error: can't write " ^ msg);
+      exit 1
+  in
+  write dest (header ^ rest);
+  Sys.remove file;
+  let label = "replays " ^ name in
+  let call = if main.errors = None then "main()" else "try main()" in
+  let test =
+    Printf.sprintf "\ntest \"%s\" =\n  with replay(\"tests/%s\") in\n    %s\n"
+      label name call
+  in
+  let src = if String.ends_with ~suffix:"\n" src then src else src ^ "\n" in
+  write program (src ^ test);
+  print_endline (Printf.sprintf "moved %s to %s" file dest);
+  print_endline (Printf.sprintf "added the test \"%s\" to %s" label program);
+  print_endline
+    (Printf.sprintf "run it with `ren test %s --only \"%s\"`: %s" program label
+       (if Journal.failing journal then
+          "it fails while the program ends as the recording did, and passes \
+           once it goes on past there, with the same outputs to there"
+        else "it replays what the journal recorded, and fails with what changed"))
+
 (* `ren test [path] [flags]` (deps.md, "`ren test`"). *)
 let test args =
+  (match args with
+  | [ "--keep"; file ] ->
+      keep file;
+      exit 0
+  | "--keep" :: _ ->
+      prerr_endline
+        "error: --keep needs the journal to keep, and nothing else, like \
+         --keep bug.journal";
+      exit 2
+  | _ -> ());
   let rec parse (opts : Test_runner.options) = function
     | [] -> opts
     | "--only" :: text :: rest -> parse { opts with only = Some text } rest
@@ -210,6 +431,155 @@ let test args =
          with e -> fail ~known:roots e)
   | exception e -> fail ~known:roots e
 
+(* `ren run [--record <file>] [--trace] <file.ren> [-- <args>...]`
+   (handlers.md, "The journal"). *)
+let run args =
+  (* the flags come before or after the file, but before `--` *)
+  let rec parse (record, trace, path) = function
+    | "--record" :: file :: rest
+      when not
+             (String.starts_with ~prefix:"-" file
+             || Filename.check_suffix file ".ren") ->
+        parse (Some file, trace, path) rest
+    | "--record" :: _ ->
+        prerr_endline
+          "error: --record needs the file to write the journal to, like \
+           --record run.journal";
+        exit 2
+    | "--trace" :: rest -> parse (record, true, path) rest
+    | ("--" :: _ | []) as rest -> (
+        let os_args = match rest with _ :: a -> a | [] -> [] in
+        match path with
+        | Some path -> (record, trace, path, os_args)
+        | None ->
+            prerr_endline usage;
+            exit 2)
+    | flag :: _ when String.starts_with ~prefix:"-" flag ->
+        prerr_endline ("error: `ren run` has no option " ^ flag);
+        prerr_endline usage;
+        exit 2
+    | file :: rest when path = None -> parse (record, trace, Some file) rest
+    | extra :: _ ->
+        prerr_endline
+          (Printf.sprintf
+             "error: `ren run` runs one file, and %s is a second\n\
+             \  help: the program's arguments go after `--`, like `ren run \
+              main.ren -- %s`"
+             extra extra);
+        exit 2
+  in
+  let record, trace, path, os_args = parse (None, false, None) args in
+  let src = read path in
+  let known = [ (path, src) ] in
+  let trace = if trace then Some (Trace.create ()) else None in
+  let record =
+    Option.map
+      (fun file ->
+        let dir = Filename.dirname file in
+        if not (Sys.file_exists dir && Sys.is_directory dir) then (
+          prerr_endline
+            (Printf.sprintf
+               "error: can't write the journal %s: there's no folder %s" file
+               dir);
+          exit 1);
+        let out =
+          try open_out_bin file
+          with Sys_error msg ->
+            prerr_endline ("error: can't write the journal: " ^ msg);
+            exit 1
+        in
+        Journal.recording ~file ~out
+          ~program:(header_path ~dir:(Filename.dirname file) path))
+      record
+  in
+  let summary () =
+    Option.iter
+      (fun (j : Journal.t) ->
+        prerr_endline
+          (Printf.sprintf "recorded %s to %s%s" (calls j.made) j.file
+             (match counts j with "" -> "" | c -> " (" ^ c ^ ")"));
+        prerr_endline
+          (Printf.sprintf
+             "warning: %s holds everything the program read, files and \
+              arguments included: read it before you share it"
+             j.file))
+      record
+  in
+  match
+    Driver.run ~load:(loader path) ~args:os_args ?record ?trace ~file:path src
+  with
+  | v ->
+      print_trace trace;
+      summary ();
+      if v <> VUnit then print_endline (Value.show v)
+  | exception ((Diag.Error _ | Diag.Errors _) as e) ->
+      (* it didn't run, so there's nothing to keep *)
+      Option.iter
+        (fun (j : Journal.t) -> try Sys.remove j.file with Sys_error _ -> ())
+        record;
+      fail ~known e
+  | exception e ->
+      print_trace trace;
+      summary ();
+      fail ~known e
+
+(* `ren replay <file.journal> [--trace]` (handlers.md, "Recording and
+   replaying"): the program it recorded, run again on what it recorded. *)
+let replay args =
+  let file, trace =
+    match args with
+    | [ file ] -> (file, None)
+    | [ file; "--trace" ] | [ "--trace"; file ] -> (file, Some (Trace.create ()))
+    | _ when List.mem "--" args ->
+        prerr_endline
+          "error: a replay runs on the arguments the journal recorded, so it \
+           can't be given others\n\
+          \  help: record the run again with the arguments you want: `ren run \
+           --record <file.journal> <file.ren> -- <args>...`";
+        exit 2
+    | _ ->
+        prerr_endline usage;
+        exit 2
+  in
+  let text = read_journal file in
+  let journal =
+    try Journal.load ~file text with e -> fail ~known:[ (file, text) ] e
+  in
+  let path = joined (Filename.dirname file) journal.header.program in
+  let src =
+    try In_channel.with_open_bin path In_channel.input_all
+    with Sys_error _ ->
+      prerr_endline
+        (Printf.sprintf
+           "error: the program %s recorded, %s, isn't there: a journal's \
+            program is found from the journal's folder"
+           file path);
+      exit 1
+  in
+  let known = [ (path, src); (file, text) ] in
+  let replayed what =
+    prerr_endline
+      (Printf.sprintf "replayed %s%s: nothing touched the disk, and nothing ran"
+         (calls journal.made) what)
+  in
+  match Driver.replay ~load:(loader path) ?trace ~journal ~file:path src with
+  | v ->
+      print_trace trace;
+      replayed "";
+      if v <> VUnit then print_endline (Value.show v)
+  | exception ((Eval.Panic _ | Eval.Assert_failed _ | Eval.Uncaught _) as e)
+    when journal.calls = [] && journal.ending <> None ->
+      (* it ended as the recording did *)
+      print_trace trace;
+      replayed
+        (match journal.ending with
+        | Some (Panicked _, _) -> ", to the panic it ended in"
+        | _ -> ", to the error it ended in");
+      fail ~known e
+  | exception e ->
+      print_trace trace;
+      fail ~known e
+
 (* `ren console <module> [--real Clock,Fs]` (testing.md, "The console"). *)
 let console args =
   let home, real =
@@ -255,7 +625,7 @@ let console args =
       file;
       src;
       real;
-      journal = Builtins.new_journal ();
+      journal = Journal.session ~real;
       sources = sources ~known:[ (file, src) ];
     }
   in
@@ -285,43 +655,17 @@ let () =
   | [| _; "--version" |] -> print_endline version
   | args when Array.length args >= 2 && args.(1) = "test" ->
       test (List.tl (List.tl (Array.to_list args)))
+  | args when Array.length args >= 2 && args.(1) = "run" ->
+      run (List.tl (List.tl (Array.to_list args)))
+  | args when Array.length args >= 2 && args.(1) = "replay" ->
+      replay (List.tl (List.tl (Array.to_list args)))
   | args when Array.length args >= 2 && args.(1) = "console" ->
       console (List.tl (List.tl (Array.to_list args)))
-  | args
-    when Array.length args >= 3 && (Array.length args = 3 || args.(3) = "--")
-    -> (
-      let cmd = args.(1) and path = args.(2) in
-      (* what follows `--`, for `ren run` *)
-      let os_args =
-        if Array.length args > 3 then
-          Array.to_list (Array.sub args 4 (Array.length args - 4))
-        else []
-      in
-      if Array.length args > 3 && cmd <> "run" then (
-        prerr_endline usage;
-        exit 2);
-      let src =
-        try In_channel.with_open_bin path In_channel.input_all
-        with Sys_error msg ->
-          prerr_endline ("error: " ^ msg);
-          exit 1
-      in
-      (* each module the program imports, read from its file, which is
-         next to the entry's or in a folder below it *)
-      let load m =
-        try
-          Some
-            (In_channel.with_open_bin
-               (Driver.module_file ~entry:path m)
-               In_channel.input_all)
-        with Sys_error _ -> None
-      in
+  | [| _; cmd; path |] -> (
+      let src = read path in
+      let load = loader path in
       try
         match cmd with
-        | "run" -> (
-            match Driver.run ~load ~args:os_args ~file:path src with
-            | VUnit -> ()
-            | v -> print_endline (Value.show v))
         | "check" -> ignore (Driver.check ~load ~file:path src)
         | "types" ->
             List.iteri

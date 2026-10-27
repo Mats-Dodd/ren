@@ -11,18 +11,30 @@ type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
 exception Panic of { loc : Loc.t; msg : string; wrap : wrap option }
 
 (* `main` failed with this error, and nothing handled it: the error, shown
-   through its type (shown.ml). *)
-exception Uncaught of string
+   through its type (shown.ml), and as a journal writes it (journal.ml). *)
+exception Uncaught of { shown : string; written : string }
 
 (* An `assert` at [loc] failed: a panic, which shows the two sides of an
    `assert a == b`, each through its type, with what they share left out
    (shown.ml, [sides]). *)
 exception Assert_failed of { loc : Loc.t; sides : (string * string) option }
 
+(* A replay went differently from its recording, at the program's call
+   [loc], as [differs] says (journal.ml). *)
+exception Went_differently of { loc : Loc.t; differs : Journal.differs }
+
+(* How `ren run` starts the program: on the real implementations of the
+   built-in dependencies; recording a journal, with its recorder over
+   each of them; or replaying one, with its replayer in place of them
+   (handlers.md, "The journal"). *)
+type start = Real | Record of Journal.t | Replay of Journal.t
+
 (* Run a lowered program's `main`, returning its result. The program is
    its modules in Core, in order: the prelude, then the user's file, whose
-   `main` it starts from. Raises [Panic], or [Uncaught]. *)
-val run : Core.program list -> Value.t
+   `main` it starts from, as [start] says ([Real] if it's not given).
+   [trace] gets each call of an operation (`ren run --trace`). Raises
+   [Panic], [Uncaught], or [Went_differently]. *)
+val run : ?start:start -> ?trace:Trace.t -> Core.program list -> Value.t
 
 (* ---- tests ---- *)
 
@@ -36,7 +48,9 @@ val load : Core.program list -> ctx
 type outcome =
   | Passed
   | Failed of string  (** with this error, which nothing handled, shown *)
-  | Panicked of exn  (** a [Panic], or an [Assert_failed] *)
+  | Panicked of exn
+      (** a [Panic], an [Assert_failed], a replay that [Went_differently], or a
+          journal's entry that can't be read ([Diag.Error]) *)
 
 (* Run the test whose function is [fn] (test_items.ml), with a fresh
    instance of the test implementation of each built-in dependency, or
@@ -44,12 +58,22 @@ type outcome =
    `Random` starts from [seed]. Returns how it ended, and what it wrote to
    the test `Console`. *)
 val run_test :
-  ctx -> fn:Path.t -> real:string list -> seed:int -> outcome * string list
+  ?dir:string ->
+  ctx ->
+  fn:Path.t ->
+  real:string list ->
+  seed:int ->
+  outcome * string list
 
 (* Run the function [fn], of no parameters, as [run_test] runs a test: what
    it gave, or, if it didn't, how it ended; and what it wrote to the test
-   `Console`. `ren console` runs its session this way (driver.ml). *)
+   `Console`. [dir] is the folder of the file [fn] is in, which a test's
+   `replay(file)` finds its journal from. `ren console` runs its session
+   this way (driver.ml), with its [journal], whose recorder is put over
+   each built-in dependency. *)
 val run_installed :
+  ?dir:string ->
+  ?journal:Journal.t ->
   ctx ->
   fn:Path.t ->
   real:string list ->

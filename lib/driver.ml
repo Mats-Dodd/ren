@@ -12,7 +12,7 @@ exception Internal_error of { pass : string; message : string }
 let pass name f =
   try f () with
   | ( Diag.Error _ | Diag.Errors _ | Eval.Panic _ | Eval.Assert_failed _
-    | Eval.Uncaught _ | Internal_error _ ) as e ->
+    | Eval.Uncaught _ | Eval.Went_differently _ | Internal_error _ ) as e ->
       raise e
   | e -> raise (Internal_error { pass = name; message = Printexc.to_string e })
 
@@ -209,8 +209,11 @@ let prelude =
   lazy
     (let prog = parse_prelude () in
      let imports = [ Prelude.intrinsics ] in
+     (* its test code, `replay`, is the runtime's, not a specification of
+        it, so it sees the prelude whole, as the console does *)
      let r, iface, inferred, _ =
-       check_module ~home:Path.prelude_home ~imports ~reachable:imports prog
+       check_module ~home:Path.prelude_home ~imports ~reachable:imports
+         ~sees_all:true prog
      in
      let core = lower r inferred in
      ignore (link_lowered ~lint:true ~imports:[ imports ] [ core ]);
@@ -708,16 +711,102 @@ let types ?(lint = false) ?load ~file src =
           resolved.prog ))
     modules
 
-(* Check every module, lower each to Core, and run them as one program: the prelude, then each module in
-   dependency order, starting from the entry's `$start`, which installs
-   what `main` uses and calls it. *)
-let run ?lint ?load ?(args = []) ~file src =
+(* [path], a file of the program in the folder [dir], from that folder:
+   where a journal says a panic was, so it reads the same wherever the
+   program was run from. *)
+let from_dir ~dir path =
+  let prefix = Filename.concat dir "" in
+  if dir <> Filename.current_dir_name && String.starts_with ~prefix path then
+    String.sub path (String.length prefix)
+      (String.length path - String.length prefix)
+  else path
+
+(* Run [run], `main`, and say how it ended, as a journal writes it: with
+   what it gave, or what it raised, to raise again. *)
+let ended ~dir run : Journal.ending * (Value.t, exn) result =
+  let at (loc : Loc.t) = Journal.place ~file:(from_dir ~dir loc.file) loc in
+  match run () with
+  | v -> (Exited, Ok v)
+  | exception (Eval.Panic { loc; msg; _ } as e) ->
+      (Panicked { at = at loc; msg }, Error e)
+  | exception (Eval.Assert_failed { loc; _ } as e) ->
+      (Panicked { at = at loc; msg = "this `assert` failed" }, Error e)
+  | exception (Eval.Uncaught { written; _ } as e) -> (Errored written, Error e)
+
+(* The built-in dependencies the entry's `main` uses, by name, as a
+   journal's header has them (Lower.main_uses). *)
+let main_uses (modules : Core.program list) =
+  let entry = List.nth modules (List.length modules - 1) in
+  match
+    List.find_opt
+      (fun (f : Core.fn_def) -> f.path = Path.make entry.home "main")
+      entry.fns
+  with
+  | Some main -> List.map (fun (p : Path.t) -> p.name) (Lower.main_uses main)
+  | None -> failwith "bug: a program with no `main`"
+
+(* Check every module, lower each to Core, and run them as one program:
+   the prelude, then each module in dependency order, starting from the
+   entry's `$start`, which installs what `main` uses and calls it. With
+   [record], a journal (journal.ml), the runtime installs a recorder
+   over each real implementation instead, and the journal gets how the
+   run ended as its last entry. With [trace], each call of an operation
+   is added to it (`ren run --trace`). *)
+let run ?lint ?load ?(args = []) ?record ?trace ~file src =
   let checked = check_all ?load ~file src in
   Builtins.args := args;
   let modules = link ?lint checked in
-  try pass "eval" (fun () -> Eval.run modules)
-  with Eval.Assert_failed { loc; sides } ->
-    raise (Diag.Error (assert_failed loc sides))
+  let start : Eval.start =
+    match record with
+    | None -> Real
+    | Some j ->
+        Journal.start j ~deps:(main_uses modules);
+        Record j
+  in
+  let ending, result =
+    ended ~dir:(Filename.dirname file) (fun () ->
+        pass "eval" (fun () -> Eval.run ~start ?trace modules))
+  in
+  Option.iter (fun j -> Journal.finish_recording j ending) record;
+  match result with Ok v -> v | Error e -> raise e
+
+(* `ren replay` (handlers.md, "Recording and replaying"): run the program
+   as [run] does, with the replayer, which answers each call from
+   [journal], in place of the real implementations, and stop at the
+   first call that isn't the recording's next. Then the run has to have
+   ended as the recording did, after the same calls; if it did, it ends
+   that way again, a panic raised as it was. *)
+let replay ?lint ?load ?trace ~(journal : Journal.t) ~file src =
+  let checked = check_all ?load ~file src in
+  let modules = link ?lint checked in
+  (* what's replayed is what `main` uses now *)
+  let uses = main_uses modules in
+  (if List.sort compare uses <> List.sort compare journal.header.deps then
+     let said = function [] -> "nothing" | ds -> Infer_msg.and_list ds in
+     raise
+       (Diag.Error
+          (Diag.make
+             (Loc.point ~file:journal.file 1 1)
+             (sprintf "%s recorded a `main` that uses %s, and this one uses %s"
+                journal.file (said journal.header.deps) (said uses))
+             ~help:Journal.recorded_again)));
+  let ending, result =
+    ended ~dir:(Filename.dirname file) (fun () ->
+        pass "eval" (fun () -> Eval.run ~start:(Replay journal) ?trace modules))
+  in
+  (* what's said is at the journal's next call, or its end *)
+  let line =
+    match (journal.calls, journal.ending) with
+    | c :: _, _ -> c.line
+    | [], Some (_, l) -> l
+    | [], None -> 1
+  in
+  (try Journal.finish_replay journal ending
+   with Journal.Differs differs ->
+     raise
+       (Eval.Went_differently
+          { loc = Loc.point ~file:journal.file line 1; differs }));
+  match result with Ok v -> v | Error e -> raise e
 
 (* ---- the console ----
 
@@ -742,33 +831,29 @@ let console_file = "<console>"
 let console_fn = "$console"
 
 (* What a line gave: its value as it's written, unless it's a `let` or
-   a `var`, or its value is `()`; its type; and every line the session
-   wrote to the test `Console`, from its first line. *)
-type console_line = {
-  shown : string option;
-  ty : string;
-  printed : string list;
-}
-
-(* A line that failed or panicked, with every line the session wrote to
-   the test `Console` before it did, from its first line, and what it
-   raised: what the line printed is shown before the error, as it is
-   with the real `Console`. *)
-exception Console_failed of string list * exn
+   a `var`, or its value is `()`; and its type. What it did to the world
+   was shown as it happened (journal.ml, [gave]). *)
+type console_line = { shown : string option; ty : string }
 
 (* Check the session [history], the lines kept so far, then [line], in
    the module [home] (its file [file], with the source [src]) of the
-   program in the folder [dir], and, unless it's [types_only], run it.
-   [line] starts [col] columns into what was typed, after `:t `, which a
-   message counts in. Raises what checking it raised, and what running it
-   raised as [Console_failed]. *)
+   program in the folder [dir], and, unless it's [types_only], run it,
+   with the session's [journal], which shows each call to a built-in as
+   it's made and gives back what a real one gave the lines kept. Line [i]
+   of the session is line [i] of `<console>`, and [line] starts [col]
+   columns into what was typed, after `:t `, which a message counts in.
+   Raises what checking or running it raised; a session that went
+   differently from what it kept, as [Eval.Went_differently], at the
+   line it went differently in. *)
 let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
     ~src ~real ~history line =
-  let shift n (l : Loc.t) =
+  (* line [i] of the session, 0 the first, is line [i + 1] of
+     `<console>`; the last starts [col] columns in *)
+  let shift (i, n) (l : Loc.t) =
     {
       l with
-      start = { l.start with col = l.start.col + n };
-      stop = { l.stop with col = l.stop.col + n };
+      start = { line = l.start.line + i; col = l.start.col + n };
+      stop = { line = l.stop.line + i; col = l.stop.col + n };
     }
   in
   let stmts, node =
@@ -790,7 +875,8 @@ let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
         in
         (stmts @ [ s ], node))
       ([], 0)
-      (List.map (fun l -> (l, 0)) history @ [ (line, col) ])
+      (List.mapi (fun i l -> (l, (i, 0))) history
+      @ [ (line, (List.length history, col)) ])
   in
   (* every line but the last is kept for what it names or does: the value
      of one that's an expression is dropped *)
@@ -859,23 +945,32 @@ let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
       ty
   in
   let unit = ty = Ty.unit in
-  if types_only then { shown = None; ty = shown_ty; printed = [] }
+  if types_only then { shown = None; ty = shown_ty }
   else
     let cx = pass "eval" (fun () -> Eval.load (link ~for_tests:true modules)) in
+    (* the session's line [n], where it went differently *)
+    let went_differently (d : Journal.differs) =
+      Eval.Went_differently
+        {
+          loc = Loc.point ~file:console_file (Option.value d.line ~default:1) 1;
+          differs = d;
+        }
+    in
+    Journal.rerun journal;
     match
       pass "eval" (fun () ->
-          Builtins.replaying journal (fun () ->
-              Eval.run_installed cx ~fn:path ~real ~seed:0))
+          fst (Eval.run_installed ~dir ~journal cx ~fn:path ~real ~seed:0))
     with
-    | Ok v, printed ->
-        Builtins.keep journal;
+    | Ok v ->
+        (try Journal.ran_all journal
+         with Journal.Differs d -> raise (went_differently d));
+        Journal.keep journal ~line:(List.length history + 1);
         {
           shown =
             (if is_expr && not unit then Some (Eval.show cx ty v) else None);
           ty = shown_ty;
-          printed;
         }
-    | Error (Failed err), printed ->
+    | Error (Failed err) ->
         (* a `try` passed it up, and the session can't: the line, with
            `attempt` in place of its `try`, shows it as a value *)
         let help =
@@ -889,15 +984,249 @@ let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
             Some (Printf.sprintf "see it as a value: `attempt %s`" shown)
         in
         raise
-          (Console_failed
-             ( printed,
-               Diag.Error
-                 (Diag.make ?help at
-                    (Printf.sprintf "the line failed with `%s`" err)) ))
-    | Error (Panicked (Eval.Assert_failed { loc; sides })), printed ->
-        raise (Console_failed (printed, Diag.Error (assert_failed loc sides)))
-    | Error (Panicked e), printed -> raise (Console_failed (printed, e))
-    | Error Passed, _ -> assert false
+          (Diag.Error
+             (Diag.make ?help at
+                (Printf.sprintf "the line failed with `%s`" err)))
+    | Error (Panicked (Eval.Assert_failed { loc; sides })) ->
+        raise (Diag.Error (assert_failed loc sides))
+    | Error
+        (Panicked
+           (Eval.Went_differently { differs = { line = Some _; _ } as d; _ }))
+      ->
+        raise (went_differently d)
+    | Error (Panicked e) -> raise e
+    | Error Passed -> assert false
+
+(* `:spec` (testing.md, "The console"): the session's lines [lines], each
+   with what it showed, as a test named [name] of the module [home] (its
+   file [file], with the source [src]), which sees what an importer sees.
+   Each line is kept if the test checks with it: an expression whose
+   value was shown as an `assert` that it's that value, if that checks,
+   and otherwise as `let _ = ` and the line, so what it does stays in the
+   test. The others are left out, each with its number, its text and
+   why. Then the test is run, as `ren test` runs it, on the test
+   implementations and `Random` seeded by its name: the session ran on
+   its own seed, and maybe on real implementations, so an `assert` that
+   fails is written as `let _ = ` and its line, and a line that fails
+   or panics is left out, until the test passes. Returns the test, as
+   it's written, or [None] if no line could be kept, and what was left
+   out. Raises an error if the module has a test named [name] already. *)
+let console_spec ~load ~dir ~home ~file ~src ~name lines =
+  let src = if String.ends_with ~suffix:"\n" src then src else src ^ "\n" in
+  let starts p l = String.starts_with ~prefix:p l in
+  (* a test's body ends in a value: `()` after a `let` *)
+  let finish body =
+    match List.rev body with
+    | last :: _ when starts "let " last || starts "var " last -> body @ [ "()" ]
+    | _ -> body
+  in
+  let header = sprintf "\ntest %S =\n" name in
+  let test body =
+    header
+    ^ String.concat "" (List.map (fun l -> "  " ^ l ^ "\n") (finish body))
+  in
+  (* the module, with the test of [body] added *)
+  let with_test body =
+    check_roots ~load ~dir
+      ~entry:(fun _ -> false)
+      [ (home, file, src ^ test body) ]
+  in
+  let its_test modules =
+    let m = List.find (fun (c : checked) -> c.home = home) modules in
+    List.find_opt
+      (fun (t : Test_items.test) -> t.name = name && t.label = None)
+      m.items.tests
+  in
+  (* a second test of the name wouldn't check, whatever its lines *)
+  (match
+     its_test
+       (check_roots ~load ~dir ~entry:(fun _ -> false) [ (home, file, src) ])
+   with
+  | Some t ->
+      raise
+        (Diag.Error
+           (Diag.make t.loc ~help:"give this one another name: `:spec <name>`"
+              (sprintf "%s has a test named %S already" file name)))
+  | None -> ());
+  (* whether the test with [body] checks, or the first thing wrong *)
+  let checks body =
+    match with_test body with
+    | _ -> None
+    | exception Diag.Errors (d :: _) -> Some d.msg
+    | exception Diag.Error d -> Some d.msg
+  in
+  (* how the test with [body] ends, run as `ren test` runs it *)
+  let ran body =
+    let modules = with_test body in
+    let t = Option.get (its_test modules) in
+    pass "eval" (fun () ->
+        let cx = Eval.load (link ~for_tests:true modules) in
+        fst
+          (Eval.run_test ~dir:(Filename.dirname file) cx
+             ~fn:(Path.make home t.fn) ~real:t.real
+             ~seed:(Test_items.seed_of name)))
+  in
+  let passed = function Eval.Passed -> true | _ -> false in
+  (* the names a line binds, and those it uses *)
+  let parsed text =
+    match
+      let toks = tokens ~file:console_file text in
+      ( toks,
+        fst
+          (checked "parse" (fun sink ->
+               Parser.parse_session_line sink toks ~node:0)) )
+    with
+    | toks, stmt -> Some (toks, stmt)
+    | exception _ -> None
+  in
+  let binds text =
+    let rec names (p : Ast.Parsed.pattern) =
+      match p.pkind with
+      | PVar b -> [ b.name ]
+      | PCon (_, ps) | PFail (_, ps) | PTuple ps | POr ps ->
+          List.concat_map names ps
+      | PWild | PInt _ | PBool _ | PFail_any -> []
+    in
+    match parsed text with
+    | Some (_, Let { name; _ }) -> [ name.name ]
+    | Some (_, Let_tuple { pat; _ }) -> names pat
+    | _ -> []
+  in
+  let uses text =
+    match parsed text with
+    | Some (toks, _) ->
+        List.filter_map
+          (function Token.IDENT n, _ -> Some n | _ -> None)
+          (Array.to_list toks)
+    | None -> []
+  in
+  (* why a line was left out once the test ran: how it ended there *)
+  let in_a_test : Eval.outcome -> string = function
+    | Failed err -> sprintf "in a test it fails with `%s`" err
+    | Panicked (Eval.Panic { msg; _ }) -> "in a test it panics: " ^ msg
+    | Panicked (Eval.Went_differently { differs; _ }) ->
+        "in a test " ^ differs.said
+    | _ -> "in a test its `assert` fails"
+  in
+  (* where the test's body starts in the file *)
+  let first = List.length (String.split_on_char '\n' (src ^ header)) in
+  (* the lines, kept or left out; [forced] are those running the test
+     showed can't be kept as they were, each with an `assert` no longer
+     tried ([None]) or left out, and why *)
+  let rec build forced =
+    let body, left, _ =
+      List.fold_left
+        (fun (body, left, gone) (i, (text, shown)) ->
+          let tries =
+            match (List.assoc_opt i forced, shown) with
+            | Some (Some _), _ -> []
+            | Some None, Some _ -> [ "let _ = " ^ text ]
+            | None, Some v ->
+                (if v = "true" then [ "assert " ^ text ] else [])
+                @ [
+                    sprintf "assert %s == %s" text v;
+                    sprintf "assert (%s) == %s" text v;
+                    "let _ = " ^ text;
+                  ]
+            | _, None -> [ text ]
+          in
+          match
+            List.find_opt
+              (fun t -> checks (body @ [ (i, t) ] |> List.map snd) = None)
+              tries
+          with
+          | Some t ->
+              let bound = binds text in
+              ( body @ [ (i, t) ],
+                left,
+                List.filter (fun (n, _) -> not (List.mem n bound)) gone )
+          | None ->
+              let why =
+                match List.assoc_opt i forced with
+                | Some (Some why) -> why
+                | _ -> (
+                    let used = uses text in
+                    match
+                      List.find_opt (fun (n, _) -> List.mem n used) gone
+                    with
+                    | Some (n, l) ->
+                        sprintf "it uses `%s`, from line %d, which is left out"
+                          n l
+                    | None ->
+                        let last = List.nth tries (List.length tries - 1) in
+                        Option.value
+                          (checks (List.map snd body @ [ last ]))
+                          ~default:"")
+              in
+              ( body,
+                left @ [ (i + 1, text, why) ],
+                List.map (fun n -> (n, i + 1)) (binds text) @ gone ))
+        ([], [], [])
+        (List.mapi (fun i l -> (i, l)) lines)
+    in
+    if body = [] then (body, left)
+    else
+      let written = List.map snd body in
+      match ran written with
+      | Passed -> (body, left)
+      | outcome ->
+          (* the line it ended at: where it says, or else the first that
+             ends it, with the lines before it *)
+          let n = List.length body in
+          let at (loc : Loc.t) =
+            let k = loc.start.line - first in
+            if loc.file = file && k >= 0 && k < n then Some k else None
+          in
+          let k =
+            match
+              match outcome with
+              | Panicked (Eval.Assert_failed { loc; _ })
+              | Panicked (Eval.Panic { loc; _ })
+              | Panicked (Eval.Went_differently { loc; _ }) ->
+                  at loc
+              | _ -> None
+            with
+            | Some k -> k
+            | None ->
+                let rec go k =
+                  if
+                    k >= n - 1
+                    || not
+                         (passed
+                            (ran (List.filteri (fun j _ -> j <= k) written)))
+                  then k
+                  else go (k + 1)
+                in
+                go 0
+          in
+          let i, t = List.nth body k in
+          let text = fst (List.nth lines i) in
+          let fate =
+            if starts "assert " t && t <> text then None
+            else Some (in_a_test outcome)
+          in
+          build ((i, fate) :: forced)
+  in
+  let body, left = build [] in
+  (* a `let` at the end binds what nothing uses, and would need a `()`
+     after it, since a test's body ends in a value: it's left out, and so
+     is a line kept as `let _ = ` and itself *)
+  let rec unused body left =
+    match List.rev body with
+    | (i, t) :: rest when starts "let " t || starts "var " t ->
+        let text = fst (List.nth lines i) in
+        let why =
+          if starts "let " text || starts "var " text then
+            "it's at the end, and a test can't end in a `let`"
+          else
+            "it's at the end, where a test can't keep it as `let _ = ` and the \
+             line"
+        in
+        unused (List.rev rest) (left @ [ (i + 1, text, why) ])
+    | _ -> (body, List.sort (fun (a, _, _) (b, _, _) -> compare a b) left)
+  in
+  let body, left = unused body left in
+  ((if body = [] then None else Some (test (List.map snd body))), left)
 
 let dump_tokens toks =
   toks |> Array.to_list
@@ -977,6 +1306,16 @@ let panic_diag ~sources loc msg wrap =
   let help = Option.bind wrap (wrap_help ~sources) in
   Diag.make ?help loc ("panic: " ^ msg)
 
+(* A replay that went differently from its recording (journal.ml), at
+   [loc]: the program's call, or the journal's line; with a test's
+   outputs as a diff, under it. *)
+let went_differently ~sources loc (d : Journal.differs) =
+  Diag.render ~sources (Diag.make loc ~notes:d.notes ?help:d.help d.said)
+  ^
+  match d.diff with
+  | None -> ""
+  | Some lines -> String.concat "" (List.map (fun l -> "   " ^ l ^ "\n") lines)
+
 (* What to print for an exception a pass raised, or [None] if it isn't one
    the compiler knows about. [sources] is the source map (diag.ml). *)
 let render_error ~sources = function
@@ -984,9 +1323,13 @@ let render_error ~sources = function
   | Diag.Errors ds -> Some (Diag.render_all ~sources ds)
   | Eval.Panic { loc; msg; wrap } ->
       Some (Diag.render ~sources (panic_diag ~sources loc msg wrap))
-  | Eval.Uncaught err ->
+  | Eval.Assert_failed { loc; sides } ->
+      Some (Diag.render ~sources (assert_failed loc sides))
+  | Eval.Went_differently { loc; differs } ->
+      Some (went_differently ~sources loc differs)
+  | Eval.Uncaught { shown; _ } ->
       (* `main` failed: its error, shown as a value is (errors.md, "`main`") *)
-      Some ("error: " ^ err ^ "\n")
+      Some ("error: " ^ shown ^ "\n")
   | Internal_error { pass; message } ->
       Some
         (Printf.sprintf

@@ -40,16 +40,7 @@ type options = {
 }
 
 let full_name = Test_items.full_name
-
-(* A test's own seed, from its name, so it's the same on every run and
-   every machine: FNV-1a's hash of it, kept to four digits to be easy to
-   type. [lxor] is exclusive or, and [land] keeps the low 32 bits. *)
-let seed_of name =
-  let h = ref 0x811c9dc5 in
-  String.iter
-    (fun c -> h := !h lxor Char.code c * 0x01000193 land 0xffffffff)
-    name;
-  !h mod 10000
+let seed_of = Test_items.seed_of
 
 (* A file, shown from the program's folder. *)
 let shown_file ~dir file =
@@ -181,7 +172,9 @@ let details b ~opts ~sources ~all f =
   let loc =
     match f.how with
     | Panicked (Eval.Panic { loc; _ })
-    | Panicked (Eval.Assert_failed { loc; _ }) ->
+    | Panicked (Eval.Assert_failed { loc; _ })
+    | Panicked (Eval.Went_differently { loc; _ })
+    | Panicked (Diag.Error { loc; _ }) ->
         loc
     | _ -> f.test.loc
   in
@@ -202,6 +195,17 @@ let details b ~opts ~sources ~all f =
       | Some h -> Printf.bprintf b "%shelp: %s\n" pad h
       | None -> ())
   | Failed err -> Printf.bprintf b "%serror: %s\n" pad err
+  | Panicked (Eval.Went_differently { differs = d; _ }) ->
+      (* a journal `replay` stood in for the world, and the test went
+         differently (journal.ml): the outputs as a diff *)
+      Printf.bprintf b "%s%s\n" pad d.said;
+      List.iter (fun n -> Printf.bprintf b "%s= %s\n" pad n) d.notes;
+      Option.iter (List.iter (fun l -> Printf.bprintf b "%s%s\n" pad l)) d.diff;
+      Option.iter (fun h -> Printf.bprintf b "%shelp: %s\n" pad h) d.help
+  | Panicked (Diag.Error d) ->
+      (* a journal's entry that can't be read *)
+      Printf.bprintf b "%serror: %s\n" pad d.msg;
+      Option.iter (fun h -> Printf.bprintf b "%shelp: %s\n" pad h) d.help
   | Panicked e -> raise e
   | Passed -> ());
   let only, exact = only_for all name in
@@ -287,7 +291,8 @@ let run ~opts ~sources (suite : Driver.suite) =
               match opts.seed with Some s -> s | None -> seed_of (full_name t)
             in
             let how, console =
-              Eval.run_test cx ~fn:(Path.make home t.fn) ~real:t.real ~seed
+              Eval.run_test ~dir:(Filename.dirname file) cx
+                ~fn:(Path.make home t.fn) ~real:t.real ~seed
             in
             (match how with
             | Passed ->

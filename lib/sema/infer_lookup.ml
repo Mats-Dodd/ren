@@ -69,7 +69,7 @@ let find_ctor env (c : ctor_ref) ~expected =
       match ctor_in c.name td with
       | Some k -> Some (td, k)
       | None ->
-          report env
+          report_rep env td
             (not_in_type ~names:env.names ~test:(tested env td) tloc c.name td);
           None)
   | Some { tref = Param _; _ } ->
@@ -96,12 +96,12 @@ let find_ctor env (c : ctor_ref) ~expected =
           None
       | Some ({ body = Opaque (Hidden _); _ } as td) ->
           (* another module's opaque type has no constructors here *)
-          report env (opaque_private ~test:(tested env td) c.loc td);
+          report_rep env td (opaque_private ~test:(tested env td) c.loc td);
           None
       | Some ({ body = Sum _; _ } as td) when ctor_in c td = None ->
           (* a sum type is expected, so no other type's constructor would
              do *)
-          report env
+          report_rep env td
             (not_in_type ~names:env.names ~expected:true ~test:(tested env td)
                c.loc c td);
           None
@@ -306,7 +306,7 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
       (* writing it can't be calling a method of the same name: what's
          wrong is that its fields are hidden *)
       let td = Option.get hidden_decl in
-      report env (opaque_private ~test:(tested env td) f.loc td);
+      report_rep env td (opaque_private ~test:(tested env td) f.loc td);
       TError
   | Some (td, o) ->
       let item = type_name env td.path ^ "." ^ o.oname in
@@ -352,7 +352,7 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
               report env (no_such_field ~names:env.names f p decl);
               TError
           | None, None when hidden ->
-              report env (opaque_private ~test:(tested env td) f.loc td);
+              report_rep env td (opaque_private ~test:(tested env td) f.loc td);
               TError
           | None, None -> (
               match td.body with

@@ -14,6 +14,10 @@ ren run main.ren              # the first recipe, `all`
 ren run main.ren -- broken    # a recipe that fails: exits with 1
 ren types main.ren            # every module's interface
 ren test .                    # every module's tests
+
+ren run --record run.journal main.ren -- build   # record a run
+ren replay run.journal        # run it again on what was recorded
+ren run --trace main.ren      # the calls it made, with their times
 ```
 
 | File | What's in it |
@@ -22,6 +26,7 @@ ren test .                    # every module's tests
 | `plan.ren` | `order`: the recipes to run, each after what it depends on, each once; it fails with `UnknownRecipe` or `Cycle` |
 | `main.ren` | `main`, which reads the justfile, picks the recipe and runs each line with `sh -c`, showing it on stderr first; its tests, on the fakes |
 | `justfile` | a few recipes that `echo`, two that share `base`, and one that fails |
+| `tests/build.journal` | a run of `ren run main.ren -- build`, recorded, which a test in `main.ren` replays |
 
 ```
 all: build test
@@ -117,3 +122,12 @@ What stage 9c changed, where a test sees what an importer sees:
 - **`Justfile` is opaque.** `parse` refuses a bad justfile, so it keeps
   a rule, and an open `Justfile` would let anyone make one `parse`
   refuses. Its recipes are read through `recipes()`.
+
+**A real run is a test** (stage 10b). `tests/build.journal` is what
+`ren run --record tests/build.journal main.ren -- build` wrote: each call
+`main` made to `Fs`, `Os`, `Proc` and `Console`, and what it gave. The
+test `a recorded run of build replays` installs `replay` of it, so what
+`main` reads and what `sh` exited with come from the journal, and what
+it shows on stderr has to be what the recording showed. It needs no
+justfile and runs nothing. A change to a line `run` shows fails it with
+the two as a diff; record it again if the change is meant.

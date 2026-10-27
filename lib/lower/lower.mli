@@ -8,3 +8,7 @@ val program : Resolve.t -> Infer.t -> Core.program
    dependency `main` uses, and calls it (deps.md, "`main`"). *)
 val start : Core.fn_def -> Core.fn_def
 val start_name : string
+
+(* The built-in dependencies a `main` uses, which the runtime installs
+   around it. *)
+val main_uses : Core.fn_def -> Path.t list

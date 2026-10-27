@@ -102,6 +102,17 @@ handler counting(rate: Int) for Rates, RateCalls uses Clock =
   count() => calls
 //^ function
 
+handler both() for Console, Fs =
+  Console.write(line) => ()
+//^ type.dependency
+//        ^ function
+  error(line) => ()
+  read(p) => Ok("".bytes())
+  Fs.write(p, b) => Ok(())
+//^ type.dependency
+//   ^ function
+  exists(p) => false
+
 test "it counts" uses Clock =
 // <- keyword
 //   ^ string

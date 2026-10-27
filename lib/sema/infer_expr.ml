@@ -108,6 +108,13 @@ let narrow env cx (e : expr) t expected =
 let branchy (e : expr) =
   match e.kind with Block _ | If (_, _, Some _) | Match _ -> true | _ -> false
 
+(* A call of something that isn't known, because finding it was reported
+   already: a name or a method that isn't there, or is private. It might
+   have failed, so the `try` or `attempt` around it isn't reported as
+   covering nothing, which would only follow from that first error, and
+   whose help, to remove it, would be wrong once that's fixed. *)
+let unknown_call cx = List.iter (fun m -> m.failed <- true) cx.markers
+
 (* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
   let t = synth env cx e in
@@ -774,11 +781,15 @@ and operator env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
       found (Generic_op meth);
       done_ ta
   | TCon (p, []) as t when Infer_reqs.is_number p ->
-      Option.iter
-        (fun (b, tb) -> numbers env e ~meth ~name a t b tb)
-        (infer_b ());
+      (* one that doesn't take the right side makes nothing, so what
+         it's used as isn't checked against it, a second error *)
+      let takes =
+        match infer_b () with
+        | Some (b, tb) -> numbers env e ~meth ~name a t b tb
+        | None -> true
+      in
       found Builtin_op;
-      done_ t
+      done_ (if takes then t else TError)
   | TCon (p, _) as t -> (
       let left = show pr t in
       let numeric = Infer_reqs.numeric env p in
@@ -838,10 +849,10 @@ and operator env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
                      ?help:(literal_scale env ~name rep a b)
                      ())
             | Some rep, ("add" | "sub"), _
-              when literal_made env ~name p rep a b <> None ->
+              when literal_made env ~name ~right:true p rep a b tb <> None ->
                 report env
                   (no_op_taking e.loc ~left ~op:name ~right ~numbers:false
-                     ?help:(literal_made env ~name p rep a b)
+                     ?help:(literal_made env ~name ~right:true p rep a b tb)
                      ())
             | _ ->
                 report env
@@ -887,7 +898,8 @@ and operator env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
 
 (* `a op b` on [Int]s or [Float]s, [ta] [a]'s type: [b], of type [tb],
    has to be the same, since numbers never convert by themselves. In its
-   own module an opaque type is what it's represented as. *)
+   own module an opaque type is what it's represented as. Whether it's
+   one the operator takes, [false] having said it isn't. *)
 and numbers env (e : expr) ~meth ~name (a : expr) ta (b : expr) tb =
   let pr = printer env in
   match (repr ta, reveal env.st tb) with
@@ -896,13 +908,21 @@ and numbers env (e : expr) ~meth ~name (a : expr) ta (b : expr) tb =
       let is_numbers = Infer_reqs.is_number q in
       let help =
         if is_numbers then numbers_help env ~name ~left a b
-        else swapped env ~meth ~name p a tb b
+        else
+          match Infer_reqs.numeric env q with
+          | Some rep when meth = "add" || meth = "sub" ->
+              (* `5 + price`: the number is made one of the right side's
+                 type *)
+              literal_made env ~name ~right:false q rep a b ta
+          | _ -> swapped env ~meth ~name p a tb b
       in
       report env
-        (no_op_taking e.loc ~left ~op:name ~right ~numbers:is_numbers ?help ())
+        (no_op_taking e.loc ~left ~op:name ~right ~numbers:is_numbers ?help ());
+      false
   | _ ->
       unify_at env b.loc ~found:tb ~expected:ta ~msg:(fun found left ->
-          sprintf "`%s` has no `%s` that takes %s" left name (code found))
+          sprintf "`%s` has no `%s` that takes %s" left name (code found));
+      true
 
 (* The help for `a op b` where [a]'s type, [p], has no [meth] taking
    [b]'s, [tb], but [tb]'s has one taking [p]'s: write it the other way
@@ -941,19 +961,20 @@ and literal_scale env ~name rep (a : expr) (b : expr) =
       Some (float_literal_help ~written:(sprintf "%s %s %Ld.0" sa name n))
   | _ -> None
 
-(* What to write for `price + 5`, where [a] is the `with numeric` type
-   [p], represented as [rep], and [b] a literal number: one of [p] made
-   by each of its public functions that takes one of [rep] and gives a
-   [p], in source order, `price + Money.cents(5)`. Choosing the unit is
-   the point, so each is given. The literal is written as [rep] is, `2.0`
-   for a `Float`. [None] if [p] has none of those functions, or the
-   literal can't be a [rep]. *)
-and literal_made env ~name p rep (a : expr) (b : expr) =
-  let literal =
+(* The ways to make one of the `with numeric` type [p], represented as
+   [rep], of [b], of type [tb]: by each of [p]'s public functions that
+   takes one of [rep] and gives a [p], in source order, `Money.cents(5)`.
+   Choosing the unit is the point, so each is given. [b] is a literal
+   number, written as [rep] is, `2.0` for a `Float`, or any other
+   expression whose type is [rep], `Money.cents(k)`. Empty if [p] has
+   none of those functions, or [b] can't be a [rep]. *)
+and made_of env p rep (b : expr) tb =
+  let written =
     match (repr (of_decl rep), b.kind) with
     | t, Int n when t = int -> Some (Int64.to_string n)
     | t, Int n when t = float -> Some (sprintf "%Ld.0" n)
     | t, Float f when t = float -> Some (Ast.show_float f)
+    | t, _ when reveal env.st tb = t -> env.source b
     | _ -> None
   in
   let makes (o : Iface.op) =
@@ -962,18 +983,29 @@ and literal_made env ~name p rep (a : expr) (b : expr) =
         o.opub && q = p && x.mode = Read && x.ty = rep
     | _ -> false
   in
-  let made =
-    match Hashtbl.find_opt env.types p with
-    | Some td -> List.filter makes (Iface.members td)
-    | None -> []
-  in
-  match (literal, env.source a, made) with
-  | Some lit, Some sa, _ :: _ ->
+  match (written, Hashtbl.find_opt env.types p) with
+  | Some w, Some td ->
+      List.map
+        (fun (o : Iface.op) -> sprintf "%s.%s(%s)" (env.names p) o.oname w)
+        (List.filter makes (Iface.members td))
+  | _ -> []
+
+(* What to write for `a op b`, where one side is of the `with numeric`
+   type [p] and the other, [b] if [right] or else [a], is what it's
+   represented as, [rep], of type [tb]: `price + 5` is `price +
+   Money.cents(5)`, `5 + price` is `Money.cents(5) + price`, and
+   `Money.cents(1) < k` is `Money.cents(1) < Money.cents(k)` ([made_of]).
+   [None] if there's no way to make one of it. *)
+and literal_made env ~name ~right p rep (a : expr) (b : expr) tb =
+  let other = if right then b else a in
+  match (made_of env p rep other tb, env.source a, env.source b) with
+  | (_ :: _ as made), Some sa, Some sb ->
       Some
         (made_help ~ty:(env.names p)
            (List.map
-              (fun (o : Iface.op) ->
-                sprintf "%s %s %s.%s(%s)" sa name (env.names p) o.oname lit)
+              (fun m ->
+                if right then sprintf "%s %s %s" sa name m
+                else sprintf "%s %s %s" m name sb)
               made))
   | _ -> None
 
@@ -1014,8 +1046,27 @@ and compared env cx ~name (a : expr) ta (b : expr) =
             (unifies env
                (why ~notes:[ "numbers never convert by themselves" ] ?help ())
                (result_loc b) ~found:tb ~expected:ta)
+      | TCon (q, []) as t when Infer_reqs.numeric env q <> None ->
+          (* `5 < price`: the number is made one of the right side's
+             type *)
+          let help =
+            literal_made env ~name ~right:false q
+              (Option.get (Infer_reqs.numeric env q))
+              a b ta
+          in
+          ignore
+            (unifies env (why ?help ()) (result_loc b) ~found:t ~expected:ta)
       | _ -> ignore (unifies env (why ()) (result_loc b) ~found:tb ~expected:ta)
       )
+  | TCon (p, []) when Infer_reqs.numeric env p <> None ->
+      (* `price < 5`: the other side is made one of [p] *)
+      let tb = infer env cx b in
+      let help =
+        literal_made env ~name ~right:true p
+          (Option.get (Infer_reqs.numeric env p))
+          a b tb
+      in
+      ignore (unifies env (why ?help ()) (result_loc b) ~found:tb ~expected:ta)
   | _ -> check env cx b ta ~why:(why ())
 
 (* The operator [e] is [path], a method of [a]'s type, `Time.sub`, used
@@ -1069,6 +1120,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
         | None -> t
       in
       let nothing () =
+        unknown_call cx;
         List.iter (fun a -> ignore (infer_arg env cx a)) args;
         TError
       in
@@ -1095,10 +1147,11 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
               in
               report env (numeric_method m ~shown ~op ~written)
           | _ when (not (own env p)) && p.home <> Path.prelude_home ->
-              report env
-                (no_public_method
-                   ~test:(env.client && op_in m.name td <> None)
-                   m ~shown p)
+              let test = env.client && op_in m.name td <> None in
+              let d = no_public_method ~test m ~shown p in
+              (* a test calling a private method: at the first use only *)
+              if test then report_test_once env (Path.member p m.name) d
+              else report env d
           | _ ->
               (* an operator written for several types on its right is
                  named once *)
@@ -1191,6 +1244,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
   let recv = env.source r in
   let item = type_name env td.path ^ "." ^ o.oname in
   let nothing () =
+    unknown_call cx;
     List.iter (fun a -> ignore (infer_arg env cx a)) args;
     TError
   in
@@ -1353,6 +1407,7 @@ and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
       absorb env cx ~call:e ~ename ~fn:f errs uses;
       ret
   | TError ->
+      unknown_call cx;
       List.iter (fun a -> ignore (infer_arg env cx a)) args;
       TError
   | t ->
@@ -1520,7 +1575,7 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
         match literal_fields td with
         | Some fs -> Some (td, fs)
         | None ->
-            report env
+            report_rep env td
               (not_a_record ~names:env.names ~test:(tested env td) tloc td);
             None)
     | Some { tref = Param _; _ } ->

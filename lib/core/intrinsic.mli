@@ -17,6 +17,11 @@ type t =
   | Fs_exists
   | Os_args
   | Proc_run
+  | Journal_kept
+  | Journal_gave
+  | Journal_answer
+  | Journal_outputs
+  | Journal_load
   | Array_len
   | Array_push
   | Array_sort

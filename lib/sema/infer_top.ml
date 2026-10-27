@@ -836,6 +836,7 @@ let new_env sink ~reachable (r : Resolve.t) =
     in_scope = [];
     client = false;
     hidden = [];
+    test_reported = Hashtbl.create 4;
   }
 
 (* The types of what the module can call before any of its own functions

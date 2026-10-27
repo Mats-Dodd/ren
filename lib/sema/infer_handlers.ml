@@ -392,7 +392,7 @@ and classify core env cx ~kw ~body (lk : with_link) : link =
       | _ ->
           let t = core.call_with env cx item f tf args in
           Hashtbl.replace cx.nodes item.node t;
-          impl t)
+          replayed cx item (impl t))
   | _ -> (
       let t = core.infer env cx item in
       match reveal env.st t with
@@ -403,6 +403,36 @@ and classify core env cx ~kw ~body (lk : with_link) : link =
                 wrap core env cx ~kw ~lk ~call:item ~f:item ~args:[] ~body t
                   inner )
       | _ -> impl t)
+
+(* `replay("tests/run.journal")`, the link [item] (handlers.md, "A journal
+   as a test fixture"): an implementation of only the built-in
+   dependencies its journal's header names, read now, from the folder of
+   the file the test is in, as the test will. So the others are still the
+   test's, and another item of the `with` can install them. It's narrowed
+   to those, as a handler is where a written type asks for some of what it
+   implements. A journal that isn't there, or can't be read, is said when
+   the test runs. *)
+and replayed cx (item : expr) link =
+  match (item.kind, link) with
+  | ( Call ({ kind = Var (Global p); _ }, [ { kind = Str file; _ } ]),
+      Implementation (lk, i) )
+    when p = Path.prelude "replay" -> (
+      let path =
+        if Filename.is_relative file then
+          Filename.concat (Filename.dirname item.loc.file) file
+        else file
+      in
+      match Journal.header_at path with
+      | Some h ->
+          let want =
+            List.filter (fun (d : Path.t) -> List.mem d.name h.deps) i.deps
+          in
+          if want = [] || List.length want = List.length i.deps then link
+          else (
+            Hashtbl.replace cx.narrowed item.node want;
+            Implementation (lk, { i with deps = want }))
+      | None -> link)
+  | _ -> link
 
 (* `with a, b over c in body`, the expression [e] (handlers.md, "A `with`
    is a set"). Each link of each item is made here, outside the `with`, and
@@ -504,14 +534,23 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                         | None -> src lk.link)
                     | _ -> src lk.link
                   in
+                  (* a parameter whose type is written, `w: Users`, which
+                     says whether it goes over another *)
+                  let param (lk : with_link) =
+                    match lk.link.kind with
+                    | Var (Local b) ->
+                        Hashtbl.mem cx.written_locals b.id
+                        && Hashtbl.find_opt cx.binders b.id <> Some Let_bound
+                    | _ -> false
+                  in
                   let rec fits = function
                     | ((a : with_link), (ai : impl)) :: ((b, bi) :: _ as rest)
                       ->
                         if not ai.over then (
                           report env
-                            (not_over a.link.loc ~link:(src a.link)
-                               ~name:(name a) ~deps:(shown ai.deps)
-                               ~uloc:b.link.loc);
+                            (not_over ~param:(param a) a.link.loc
+                               ~link:(src a.link) ~name:(name a)
+                               ~deps:(shown ai.deps) ~uloc:b.link.loc);
                           false)
                         else if
                           not
@@ -535,9 +574,18 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                         | [] -> true
                         | _ when not bi.over ->
                             report env
-                              (not_over b.link.loc ~link:(src b.link)
-                                 ~name:(name b) ~deps:(shown bi.deps)
-                                 ~uloc:(under_loc it));
+                              (not_over ~param:(param b) b.link.loc
+                                 ~link:(src b.link) ~name:(name b)
+                                 ~deps:(shown bi.deps) ~uloc:(under_loc it));
+                            false
+                        | under
+                          when List.for_all (fun d -> List.mem d bi.deps) under
+                               && under <> bi.deps ->
+                            (* `h() over A`, for an `h` over `A & B` *)
+                            report env
+                              (over_some (under_loc it) ~link:(src b.link)
+                                 ~deps:(List.map env.names bi.deps)
+                                 ~named:(List.map env.names under));
                             false
                         | under when under <> bi.deps ->
                             report env

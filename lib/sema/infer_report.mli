@@ -21,6 +21,16 @@ val short_callee : Ast.Resolved.expr -> string
 (* Report an error. *)
 val report : env -> Diag.t -> unit
 
+(* Report an error about reaching the type's representation or fields:
+   in test code, about its own module's opaque type, at the first use
+   only. *)
+val report_rep : env -> Iface.type_decl -> Diag.t -> unit
+
+(* Report an error about test code reaching for one of its module's own
+   items it can't see, by its path, an opaque type's or a private
+   method's: at the first use only. *)
+val report_test_once : env -> Path.t -> Diag.t -> unit
+
 (* An expression's last line, which produces its value, and where it is. *)
 val result_of : Ast.Resolved.expr -> Ast.Resolved.expr
 val result_loc : Ast.Resolved.expr -> Loc.t

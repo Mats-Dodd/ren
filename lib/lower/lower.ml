@@ -1447,18 +1447,27 @@ let program (r : Resolve.t) (inferred : Infer.t) : C.program =
 
 let start_name = "$start"
 
+(* The built-in dependencies [main] uses, in its row's order: what the
+   runtime installs around it, `$start` here, and the recorders or the
+   replayer, by a journal's header, which the driver writes from this. *)
+let main_uses (main : C.fn_def) =
+  match main.scheme.ty with
+  | Fun (_, _, _, uses, _) ->
+      List.map (fun (l : Ty.label) -> Ty.dep_path l.name) uses.labels
+  | _ -> bug "a `main` whose type isn't a function's"
+
 (* What the runtime runs: `$start`, which installs the real implementation
    of each built-in dependency [main] uses, the first in its row
    outermost, and calls it. The type checker made sure it uses no other
    (infer_top.ml, [check_main]). It starts from no evidence at all. *)
 let start (main : C.fn_def) : C.fn_def =
   let loc = main.loc in
-  let ret, errs, uses, lams =
+  let ret, errs, lams =
     match main.scheme.ty with
-    | Fun (_, ret, errs, uses, lams) -> (ret, errs, uses, lams)
+    | Fun (_, ret, errs, _, lams) -> (ret, errs, lams)
     | _ -> bug "a `main` whose type isn't a function's"
   in
-  let deps = List.map (fun (l : Ty.label) -> Ty.dep_path l.name) uses.labels in
+  let deps = main_uses main in
   let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed, lams) } in
   let tys = C.type_params scheme in
   let dicts = C.dict_params scheme in

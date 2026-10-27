@@ -889,7 +889,12 @@ let rec show_expr (e : expr) =
         @ needs @ List.map show_stmt state
         @ List.map
             (fun (a : handler_arm) ->
-              parens [ a.arm_name.name; show_expr a.arm_impl ])
+              let name =
+                match a.arm_op with
+                | Item (d, op) -> show_tyname d ^ "." ^ op.name
+                | Bare op -> op
+              in
+              parens [ name; show_expr a.arm_impl ])
             arms
         @ finally)
 

@@ -9,8 +9,15 @@ val file : string
 (* A built-in function's type scheme. *)
 val scheme : Intrinsic.t -> Ty.scheme
 
-(* Whether it reaches the world: only the prelude's source can call it. *)
+(* Whether only the prelude's source can call it: it reaches the world,
+   it's how a test implementation or the journal works, or it makes one
+   of the source's values. *)
 val runtime : Intrinsic.t -> bool
+
+(* The built-in dependency and operation whose real implementation [x]
+   is, if it reaches the world: `fs_read` is [("Fs", "read")]. Only that
+   dependency's [real] calls it, which Core Lint checks. *)
+val reaches : Intrinsic.t -> (string * string) option
 
 type builtin_type = {
   name : string;

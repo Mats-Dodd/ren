@@ -5,3 +5,9 @@
    [Failure]. *)
 val program :
   imports:Iface.t list -> linked:Core.program list -> Core.program -> unit
+
+(* The audit [program] makes of the world (handlers.md, "The journal"):
+   an intrinsic that reaches the world is called only by the real
+   implementation of the dependency it's an operation of, and
+   `journal_load` only by test code. *)
+val world : Core.program -> unit

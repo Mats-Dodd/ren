@@ -165,6 +165,11 @@ type env = {
   mutable hidden : Iface.type_decl list;
       (** while [client], the module's private types as it declares them, which
           test code can't see: a message names what it reached for *)
+  test_reported : (Path.t, unit) Hashtbl.t;
+      (** what test code has reached for that it can't see, which is reported at
+          the first use of each only: the module's own opaque types, whose
+          representation it used, by their paths, and its private methods, by
+          theirs *)
 }
 
 (* A function of the group being checked, as the group's functions see

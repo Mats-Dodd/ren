@@ -29,6 +29,7 @@
   name: (identifier) @name) @item
 
 (handler_arm
+  dependency: (type_identifier)? @context
   name: (identifier) @name) @item
 
 (finally_arm

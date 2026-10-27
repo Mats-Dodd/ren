@@ -1401,6 +1401,93 @@ fn main() uses Console =
       help: make a `Money` of it: `price + Money.cents(5)` or `price + Money.dollars(5)`
     |}]
 
+let%expect_test "a comparison with a number says how to make a `Money` of it" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import units.{Money}
+fn main() uses Console = print(Money.cents(1) < 5)
+|}
+      );
+      ("units.ren", units);
+    ];
+  [%expect
+    {|
+    error: `<` compares two values of the same type, but this is an `Int` and the left side is a `Money`
+      ┌─ main.ren:2:49
+    2 │ fn main() uses Console = print(Money.cents(1) < 5)
+      │                                                 ^
+      │                                -------------- this is a `Money`
+      = `Money`'s representation is private to `units`
+      help: make a `Money` of it: `Money.cents(1) < Money.cents(5)` or `Money.cents(1) < Money.dollars(5)`
+    |}]
+
+let%expect_test "`5 + price` makes a `Money` of the 5, on the left" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import units.{Money}
+fn main() uses Console = print(5 + Money.cents(1))
+|}
+      );
+      ("units.ren", units);
+    ];
+  [%expect
+    {|
+    error: `Int` has no `+` that takes a `Money`
+      ┌─ main.ren:2:32
+    2 │ fn main() uses Console = print(5 + Money.cents(1))
+      │                                ^^^^^^^^^^^^^^^^^^
+      = `+` is found on its left side's type, `Int`
+      help: make a `Money` of it: `Money.cents(5) + Money.cents(1)` or `Money.dollars(5) + Money.cents(1)`
+    |}]
+
+let%expect_test "a `+` that takes nothing makes nothing to check further" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import units.{Money}
+fn b() -> Money = 5 + Money.cents(1)
+fn main() = ()
+|}
+      );
+      ("units.ren", units);
+    ];
+  [%expect
+    {|
+    error: `Int` has no `+` that takes a `Money`
+      ┌─ main.ren:2:19
+    2 │ fn b() -> Money = 5 + Money.cents(1)
+      │                   ^^^^^^^^^^^^^^^^^^
+      = `+` is found on its left side's type, `Int`
+      help: make a `Money` of it: `Money.cents(5) + Money.cents(1)` or `Money.dollars(5) + Money.cents(1)`
+    |}]
+
+let%expect_test "an `Int` that isn't a literal is made a `Money` too" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import units.{Money}
+fn add(m: Money, k: Int) -> Money = m + k
+fn main() = ()
+|}
+      );
+      ("units.ren", units);
+    ];
+  [%expect
+    {|
+    error: `Money` has no `+` that takes an `Int`
+      ┌─ main.ren:2:37
+    2 │ fn add(m: Money, k: Int) -> Money = m + k
+      │                                     ^^^^^
+      = `+` is found on its left side's type, `Money`
+      help: make a `Money` of it: `m + Money.cents(k)` or `m + Money.dollars(k)`
+    |}]
+
 let%expect_test "a Float one is made of a Float literal" =
   check_error_files
     [

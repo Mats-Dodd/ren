@@ -1998,15 +1998,27 @@ let parse_handler p ~pub =
   let state, more = state [] in
   let arm p =
     match (peek p, peek2 p) with
-    | IDENT _, LPAREN ->
+    | IDENT _, (LPAREN | DOT) ->
         let arm_start = loc p in
+        (* `Console.write(line) => ...` says which dependency's, where two
+           it implements have an operation of that name *)
+        let dep =
+          if peek2 p = DOT then (
+            let d = ident p in
+            advance p;
+            Some { tmod = None; tid = d })
+          else None
+        in
         let arm_name = ident p in
-        advance p;
+        expect p LPAREN;
         let params = sep_list p ~close:RPAREN parse_param in
         expect p FATARROW;
         let body = parse_body p in
         {
-          arm_op = Bare arm_name.name;
+          arm_op =
+            (match dep with
+            | Some d -> Item (d, arm_name)
+            | None -> Bare arm_name.name);
           arm_name;
           arm_impl = mk (Lambda (params, body)) arm_start p;
         }

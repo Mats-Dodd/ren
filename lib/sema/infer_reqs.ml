@@ -394,7 +394,13 @@ let lacking env loc ~req ~op ~by ~uses t lack =
         | Unordered _ | No_op -> assert false
       in
       report env (Infer_msg.no_eq loc ~shown ~req ~op ~by ~failed why)
-  | Unordered why -> report env (Infer_msg.no_ord loc ~shown ~op ~by ~uses why)
+  | Unordered why -> (
+      let d = Infer_msg.no_ord loc ~shown ~op ~by ~uses why in
+      (* a test comparing its module's own opaque type: at the first use
+         only, as [report_rep] *)
+      match (why, repr t) with
+      | Unordered_opaque (_, true), TCon (p, _) -> report_test_once env p d
+      | _ -> report env d)
   | No_op ->
       (* it has [req], but not one that takes its own type: one for
          another type on its right, or a `with numeric` type's `*` *)

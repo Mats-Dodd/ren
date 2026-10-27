@@ -40,6 +40,22 @@ let short_callee (f : expr) =
 
 let report env d = Diag.report env.sink d
 
+(* Report [d], about test code reaching for [p], one of its module's own
+   items it can't see, an opaque type's representation or a private
+   method, if nothing about [p] has been reported yet: at the first use
+   only, as a private function is, since the fix is the same at every one
+   (compiler.md, "Stage 9c"). *)
+let report_test_once env (p : Path.t) d =
+  if not (Hashtbl.mem env.test_reported p) then (
+    Hashtbl.replace env.test_reported p ();
+    report env d)
+
+(* Report [d], about reaching [td]'s representation or fields: from test
+   code, past its own module's opaque type, at the first use only;
+   anything else, at each use. *)
+let report_rep env (td : Iface.type_decl) d =
+  if tested env td then report_test_once env td.path d else report env d
+
 (* The value an expression produces is its last line, which is where to
    point when that value has the wrong type. *)
 let rec result_of (e : expr) =
@@ -92,7 +108,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
       let pr = printer env in
       report env
         (contains_itself loc ~found:(show pr found) ~expected:(show pr expected))
-  | failure ->
+  | failure -> (
       let pr = printer env in
       let f = show pr found and x = show pr expected in
       (* two types that print the same differ in a row's tail, which is
@@ -305,10 +321,16 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
             ]
         | None -> []
       in
-      report env
-        (mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
-           ~type_params:why.type_params ~found ~expected ~f ~x
-           (behind @ needs_more @ errors @ private_ @ several))
+      let d =
+        mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
+          ~type_params:why.type_params ~found ~expected ~f ~x
+          (behind @ needs_more @ errors @ private_ @ several)
+      in
+      (* test code using its module's own opaque type as what it's
+         represented as: at the first use only, as [report_rep] *)
+      match private_ with
+      | [ Private (p, true) ] -> report_test_once env p d
+      | _ -> report env d)
 
 (* Unify [found] with [expected], and say whether that worked. *)
 let unifies env why loc ~found ~expected =

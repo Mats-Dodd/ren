@@ -39,6 +39,18 @@ let make ?says ?help ?(notes = []) ?(labels = []) loc msg =
 let error ?says ?help ?notes ?labels loc msg =
   raise (Error (make ?says ?help ?notes ?labels loc msg))
 
+(* "a `Bool`", "an `Int`", and by the sound: "a `Unit`", "a `User`", but
+   "an `Undo`", "an `Update`" *)
+let article name =
+  let starts p = String.starts_with ~prefix:p name in
+  let vowel =
+    match name.[0] with
+    | 'A' | 'E' | 'I' | 'O' -> true
+    | 'U' -> (starts "Un" && not (starts "Uni")) || starts "Up" || starts "Ul"
+    | _ -> false
+  in
+  if vowel then Printf.sprintf "an `%s`" name else Printf.sprintf "a `%s`" name
+
 (* ---- collecting ---- *)
 
 (* A record with a [mutable] field: [report] changes it in place, so every
