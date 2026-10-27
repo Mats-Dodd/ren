@@ -66,6 +66,7 @@ type ctx = {
   strings : (string, int) Hashtbl.t;
   mutable string_list : string list;  (** most recent first *)
   mutable sites : site list;  (** most recent first *)
+  mutable nsites : int;  (** how many [sites] has, the next one's number *)
   tags : (string, int) Hashtbl.t;
   deps : (Path.t, int) Hashtbl.t;
   descs : (bool * Ty.ty, int) Hashtbl.t;
@@ -129,8 +130,9 @@ let literal cx s =
       Lit n
 
 let new_site cx ?wrap ?(kind = Panics) loc =
-  let s = { sid = List.length cx.sites; loc; wrap; kind } in
+  let s = { sid = cx.nsites; loc; wrap; kind } in
   cx.sites <- s :: cx.sites;
+  cx.nsites <- cx.nsites + 1;
   s
 
 (* The number of [key] in [table], given the first time it's asked
@@ -2149,6 +2151,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       strings = Hashtbl.create 16;
       string_list = [];
       sites = [];
+      nsites = 0;
       tags = Hashtbl.create 16;
       deps = Hashtbl.create 16;
       descs = Hashtbl.create 64;

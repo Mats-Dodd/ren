@@ -416,7 +416,12 @@ evidence on. `with` extends it for its body, so the innermost
 implementation of a dependency is the one found. A dependency call finds
 its implementation in the vector by the dependency's identity, never by
 a name at runtime; for now that's a short search, and when the row is
-closed the compiler can make it a fixed index (rule 6). Each call keeps
+closed the compiler can make it a fixed index (rule 6). Natively, rule 6
+is measured ([bench/native/RESULTS.md](bench/native/RESULTS.md), H2):
+`ren build --release` calls an operation of a handler it knows is
+installed directly, 0.45 ns a call, the same as a plain function; the
+debug build searches the evidence and calls through a pointer, 1.24 ns
+against 0.45 compiled at -O2. Each call keeps
 its shape, dependency, operation and arguments, which is what the
 journal records (stage 10b, [handlers.md](handlers.md#the-journal)):
 `ren run --record` installs a recorder over each real implementation,

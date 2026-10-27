@@ -1422,6 +1422,16 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
 let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc ~sources
     ~file src =
   let p = mem ?lint ?load ~release ?made ?rc ~file src in
+  (* each file read once, not once for each place in it that can panic *)
+  let read = Hashtbl.create 16 in
+  let sources file =
+    match Hashtbl.find_opt read file with
+    | Some src -> src
+    | None ->
+        let src = sources file in
+        Hashtbl.replace read file src;
+        src
+  in
   pass "C" (fun () ->
       Emit_c.program ~restrict:(release && restrict)
         ~site_text:(site_text ~sources) p)

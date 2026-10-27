@@ -8,7 +8,8 @@ way a good programmer in each writes it. The interpreter checks what
 each computes. `ren build` compiles every one of them (native steps 2
 and 3), and bench/build.t checks each debug binary prints what `ren
 run` does, and that `blocks`' kernels allocate as much with blocks as
-with loops. The timings with hyperfine come in step 6.
+with loops. [RESULTS.md](RESULTS.md) holds what they measure, H1 to H7,
+and how to measure them again.
 
 ## What's here
 
@@ -68,18 +69,25 @@ twin without it, in the same file, and print both checksums:
 kernel alone, write an entry that calls the one you want: each is a plain
 function in `bench.ren`.
 
-## Building the twins
+## Building and measuring them
 
 ```sh
 sh bench/native/build.sh            # into $TMPDIR/ren-bench-native
 sh bench/native/build.sh out/dir    # or REN_BENCH_OUT=out/dir
+sh bench/native/measure.sh out/dir results/dir
+python3 -I bench/native/summarize.py results/dir
 ```
 
-It compiles each `rust/main.rs` with `rustc -C opt-level=3 -C
+`build.sh` builds every Ren program `--debug`, `--release --rc naive`
+and `--release`, each with and without `--stats`, and H5's three
+`--no-restrict` too, with the release build's C next to them; each
+kernel of `blocks` and `handlers` as a program of its own; and the
+twins, each `rust/main.rs` with `rustc -C opt-level=3 -C
 codegen-units=1` and each `go/main.go` with `go build`, to
-`<program>-rust` and `<program>-go`, outside the repository. It
-doesn't build the Ren yet: `ren build --release main.ren` in a folder
-does, for the programs in the subset, and step 6 adds them here. `ren run main.ren` in a folder runs the
+`<program>-rust` and `<program>-go`, outside the repository.
+`measure.sh` times them with hyperfine and takes peak memory and the
+`--stats` counts, and `summarize.py` prints the tables in
+[RESULTS.md](RESULTS.md). `ren run main.ren` in a folder runs the
 interpreter at full size, which takes from minutes to most of an hour,
 but not `cfold`'s: its recursion goes deeper than the interpreter's
 limit of 100,000 calls.
@@ -119,8 +127,8 @@ Two miss the range on purpose. `cfold` keeps Koka's size, so it can be
 compared with Koka's published numbers. `binary-trees` keeps the
 Benchmarks Game's and Koka's depth 21: with a `Box` per node and the
 system allocator, Rust needs 8 seconds, and Go's collector runs on other
-cores (`GOMAXPROCS=1` makes it 9.7 s). Step 6 should say which it
-reports.
+cores (`GOMAXPROCS=1` makes it 9.7 s). RESULTS.md reports Go as it
+runs by default, collector on other cores.
 
 Some things the Ren backend has to do that these programs make plain:
 

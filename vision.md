@@ -11,8 +11,24 @@ them possible, and a design that would break one needs a very good reason.
 | Debug builds faster than Go | `go build` | lines per second, clean and incremental |
 | Replay byte for byte | nothing does this today | every example, in CI |
 
-None of them can be measured yet: Ren runs in an interpreter. They're
-written down now so the stages that get there are judged by them.
+The native slice measured the first two for the first time
+([bench/native/RESULTS.md](bench/native/RESULTS.md)), on its sequential
+subset:
+
+- **Within 2× of Rust:** not yet. Four of the seven programs are
+  (deriv, nqueens and cfold at 0.40× to 1.03×, binary-trees at 1.57×),
+  and three aren't: rbtree at 2.20×, fannkuch at 2.50× and nbody at
+  15.5×, each from one cause in the runtime, an array store that's a
+  call and copies a whole element, or allocation through the system
+  `malloc`. Peak memory is within 2× on all seven, two at 1.99×.
+- **Debug builds faster than Go:** no. A clean build of 500k lines
+  takes 57 s against Go's 13, 77% of it clang -O0, and a one-line edit
+  rebuilds everything, since there's no build cache yet.
+- **Replay byte for byte:** in the interpreter, where the journal
+  runs; a native binary has no journal yet.
+
+They were written down before any of it ran, so the stages that get
+there are judged by them.
 
 ## Principles
 

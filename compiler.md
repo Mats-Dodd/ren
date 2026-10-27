@@ -1453,7 +1453,7 @@ Where it differed from its plan:
 
 ## Native slice
 
-A naive C backend for the sequential subset, and vision.md's benchmarks
+A C backend for the sequential subset, and vision.md's benchmarks
 measured on it against Rust and Go, before tasks build on the design
 (foundations.md, Staging, item 2). Six steps: the benchmarks
 themselves (bench/native); Mem IR, the C runtime and a naive backend
@@ -1961,3 +1961,56 @@ What step 6 needs to know:
   runtime's at exit.
 - `ren run --release` and `ren core --release` run and print the
   specialized Core, to tell a specializer bug from a backend one.
+
+### Step 6: the measurements
+
+bench/native/build.sh builds every benchmark `--debug`, `--release
+--rc naive` and `--release`, each with and without `--stats`, H5's
+three `--no-restrict` too, each kernel of `blocks` and `handlers` as a
+program of its own, and the Rust and Go twins. measure.sh times them
+with hyperfine, takes peak memory with `/usr/bin/time -l` and the
+`--stats` counts, and times `ren build --debug` against `go build` on
+gen.py's programs; summarize.py prints the tables in
+[bench/native/RESULTS.md](bench/native/RESULTS.md), which holds H1 to
+H7 with a verdict for each, and for each failure its cause in the
+generated C and its fix.
+
+What the slice showed: blocks and known handlers cost what a loop and a
+direct call do once specialized (H1, H2); Perceus counts 12 to 137
+times less than naive counting and allocates less (H3, H4); four of
+vision.md's seven programs run within 2× of Rust, and rbtree, fannkuch
+and nbody don't (H7), for causes in the runtime, not in the design:
+an array store is an out-of-line call that checks uniqueness each time
+and, for an array of structs, copies the whole element, and every
+object comes from the system `malloc` with a 16-byte header. `restrict`
+changes nothing yet (H5), since those calls hide the buffers it would
+be about. Debug builds are slower than `go build` (H6): 77% of the time
+is clang -O0, and there's no build cache.
+
+Measuring found two quadratic costs in `ren build`, fixed here:
+to_mem.ml numbered each panic site by the length of the list of sites
+(`new_site`, now a counter), and `Driver.native` read a module's source
+again for each site in it; together they took a 500k-line program's
+front half from 76.8 s to 12.3 s, with the same C.
+
+Where the slice as a whole differed from its plan (foundations.md,
+Staging, item 2):
+
+- **It isn't naive.** The plan was a naive backend with no
+  optimizations; measuring H1 to H5 needed Perceus, reuse,
+  specialization, unboxed records and `restrict`, so steps 4 and 5
+  built them, and `--rc naive` keeps the baseline.
+- **No tcc.** The debug build runs `cc`, clang -O0 here; `REN_CC`
+  picks another, but nothing was measured with tcc.
+- **One process, one C file, no cache.** The driver links the whole
+  program and writes one C file, so a one-line edit rebuilds it all.
+
+What later stages need to know:
+
+- The array store's fast path inline, uniqueness hoisted out of loops,
+  in-place field stores into an array of structs, and `restrict` on
+  buffers are what RESULTS.md says would move nbody, fannkuch and H5;
+  nested reuse, a small-object allocator and an 8-byte header move
+  rbtree and memory. Each should be measured again with measure.sh.
+- Stage 13's backend decides H6: a fast C compiler or a direct
+  backend, and a C file per module cached by hash.

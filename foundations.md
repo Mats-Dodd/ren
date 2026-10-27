@@ -442,20 +442,26 @@ dependencies where it's called.
    or in an operation's arm. So 10c built everything in this item but
    rules B to D, which land with 11a, since 11a makes the concurrent and
    spawned parameters they're about.
-2. **The native slice.** A naive C backend from Core for the sequential
-   subset, with no optimizations, and the benchmarks in vision.md
-   measured against Rust and Go, to put numbers on the memory and
-   dispatch bet before tasks and many cores build on it. Landed so
-   far: the benchmarks themselves (step 1), in Ren, Rust and Go, in
-   bench/native, with the Ren checked in the interpreter; and Mem IR,
-   the C runtime and `ren build` for the first-order subset (step 2),
-   with naive counting, each binary checked against `ren run` under
-   the sanitizers; and the debug strategy for the rest of the subset
-   (step 3): descriptors for generic code, blocks as a code and a
-   stack environment, evidence and handler descriptions, so every
-   benchmark builds; and Perceus over Mem IR (step 4), borrow
-   inference, precise counting, reuse and arrays changed in place, the
-   naive counting kept as `--rc naive` (compiler.md, "Native slice").
+2. **The native slice.** A C backend from Core for the sequential
+   subset, and the benchmarks in vision.md measured against Rust and
+   Go, to put numbers on the memory and dispatch bet before tasks and
+   many cores build on it. It landed with more than the naive backend
+   planned, so the hypotheses could be measured at all: the benchmarks
+   in Ren, Rust and Go (bench/native); Mem IR, the C runtime and `ren
+   build`, each binary checked against `ren run` under the sanitizers;
+   the debug strategy, descriptors for generic code, blocks as a code
+   and a stack environment, evidence and handler descriptions; Perceus,
+   borrow inference, precise counting, reuse and arrays changed in
+   place, the naive counting kept as `--rc naive`; and release builds
+   that specialize per type, block and known handler, with unboxed
+   records and `restrict` (compiler.md, "Native slice"). The numbers
+   are in [bench/native/RESULTS.md](bench/native/RESULTS.md): blocks and
+   known handlers cost what a loop and a call do, and Perceus counts
+   12 to 137 times less than naive counting; four of the seven
+   programs run within 2× of Rust and three don't, each for one cause
+   in the runtime's arrays and allocation; `restrict` changes nothing
+   yet; and debug builds are slower than `go build`, most of it clang
+   at -O0.
 3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.
