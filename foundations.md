@@ -3,7 +3,9 @@
 This is the design record for how Ren treats functions as values, how a
 call finds its code, how tasks run on many cores, and what that gives the
 compiler. It was decided on 2026-10-26, after the research and design
-rounds summarized at the end. It reverses parts of [deps.md](deps.md),
+rounds summarized at the end, and amended on 2026-10-27 with what the
+native slice measured: decisions 14 to 16 are new, and 2, 4, 8, 10 and
+13 changed. It reverses parts of [deps.md](deps.md),
 [handlers.md](handlers.md), [async.md](async.md) and
 [compiler.md](compiler.md). Those documents keep describing what's built
 today, and each is updated by the stage that implements its part of this
@@ -121,7 +123,13 @@ What the optimizer gets: an `&` parameter aliases nothing else the
 callee can see, not another parameter, a capture, or handler state.
 That's a fact about the slot. The buffer in it can still be shared
 (`let a = xs; f(&xs, a)`), so changing a buffer in place keeps Perceus's
-one-compare uniqueness check.
+one-compare uniqueness check, but **once per loop, not once per write**:
+when a loop makes no new reference to the array, the slot fact means
+nothing else can, so the check and any copy move to the loop's entry and
+the loop indexes the buffer directly. That's the measured payoff (fannkuch
+went from 2.44× Rust's cycles to 0.98×). Loads aren't reloaded across
+stores to another `&` array either, which `restrict` on the buffers
+says; that's worth about 5%, and only where a loop writes two arrays.
 
 The errors read in one sentence each:
 
@@ -202,6 +210,23 @@ the inlined arms, no allocation, and the single-handler case.
   error, as in Embedded Swift.
 - `ren build --explain-dispatch D` lists the handlers and every switch.
 
+**How far specialization goes.** Measured, it grows code linearly, a
+constant 1.25× the debug build's C, and shrinks machine code to 0.55×
+of the unspecialized program, since blocks and handlers inline away.
+So there's no per-function cap on copies: the one the native slice had
+(64) was reached at about ten modules of ordinary code, and its fallback
+was larger than what it saved. Instead:
+
+- Identical emitted functions are folded into one.
+- A generic function whose body only moves its values, with no `==`,
+  `show`, hashing or other operation that depends on the type, is
+  specialized per layout, not per type, as Go and Swift share code. One
+  that uses such an operation is specialized per type, since sharing it
+  would need a dictionary of indirect calls.
+- A whole-program size budget may make a call box its arguments
+  instead; that's a dispatch, so it's reported as a build note, never
+  silent.
+
 There are no dynamically loaded Ren plugins. C function pointers, inside
 `trust`, are the one indirect call left.
 
@@ -266,6 +291,11 @@ still ends. When a panic is contained, the `finally`s of handlers
 installed inside the task run, and its values are leaked, not dropped,
 with the leak logged. So no landing pads constrain the optimizer.
 
+An isolated block can't change a variable from outside it: it returns
+its result, and anything else it changes, it changes through a
+dependency operation. So nothing the block wrote after the fault can be
+seen, which is what lets arithmetic report its panic late (decision 15).
+
 ### 9. The runtime is a handler
 
 `Async` is a dependency, so the scheduler is installed with `with`, as
@@ -313,10 +343,30 @@ happen, with nothing to annotate.
   from its capture, the state of a shared handler, or a value written
   into it, is marked shared, as Lean does. Borrows across tasks touch no
   counts.
-- **Immutable handler state is free to read from any core.** A handler's
-  `let`s and parameters live as long as its `with`, and no task outlives
-  that, so tasks read and copy from them without counting. Only the
-  `with` body's result is copied out when it ends.
+- **The scope is the region.** What a spawned block captures lives in
+  the frame that called `Async.scope`, and a handler's `let`s and
+  parameters live as long as its `with`; no task outlives either. So
+  tasks read them as borrows, which count nothing, and that state is
+  **frozen** for the region's lifetime: its counts are set to a value
+  nothing changes (Lean's persistent objects), so a copy inside a task
+  costs nothing either. When the region ends its counts are restored.
+  What leaves it, a task's result or a value stored somewhere that
+  outlives it, is **copied out**, deep, where it points into frozen
+  state.
+- **Freezing is the runtime's job, and costs a walk.** Marking and
+  restoring walk the frozen data, so it happens only where data really
+  crosses cores: never under `single()` or `sim`, for what crosses cores
+  under `per_core()`, and when a task is stolen under `work_stealing()`,
+  not when it's spawned. Most tasks are never stolen.
+
+The native slice measured why this matters: an object counted from 8
+threads at once scales as Rust's `Arc` does, which on data hot in cache
+falls to 2 to 12% of one thread's throughput; borrowed or frozen, the
+same data scales to the machine's limit. Marking objects shared costs 1
+to 4% on one thread. What still collapses, and the documentation names
+as traps: many tasks updating one shared map by copying its path, a
+small value copied per request from state that isn't frozen, and values
+read out of a shared handler's `var` state.
 - A hot handler with state is a queue. Keyed handlers, one instance per
   key, shard it.
 
@@ -362,12 +412,116 @@ thread can reach every behaviour.
 ### 13. Two builds
 
 - **Debug builds never specialize.** Generics pass dictionaries, handlers
-  pass evidence, blocks are a pair of pointers. Each module compiles
-  alone and incrementally.
+  pass evidence, blocks are a pair of pointers, and small values
+  (decision 14) are boxed where they meet generic code. Each module
+  compiles alone and incrementally.
 - **Release specializes** in a whole-program back half, cached by
   content per function and specialization.
 - Nothing in the front half is whole-program. That's the rule that keeps
   the edit loop fast, and why lambda sets leave the type checker.
+- **The debug backend isn't clang.** Measured, Ren's front half runs at
+  about 40,000 lines a second on one core, and clang -O0 on the one C
+  file it writes is 77% of a debug build. So debug builds get tcc or a
+  backend of Ren's own, C (or code) per module compiled in parallel, and
+  a cache keyed by each module's content, so an edit rebuilds what it
+  touched. Release keeps clang, per module or partition, in parallel.
+
+### 14. Koka's memory model, Rust's generics
+
+Ren counts like Koka and Lean, Perceus with borrow inference and reuse,
+but specializes generics like Rust and Swift where they box: an `Int` in
+a `T` field is an `Int`, not a pointer.
+
+- **What it costs.** Whether a field holds an object depends on the
+  value, not the type, so an object's header carries a mask of which
+  fields are objects, not a count of them, and fields in generic types
+  can't be reordered or packed around the type parameter. Debug builds
+  need layouts passed to generic code. Release builds must specialize to
+  be fast.
+- **What it buys.** Arrays of `Int`, `Float` and small records hold them
+  unboxed, which Lean can't do for a user's type; that's why array loops
+  reach Rust's speed.
+- **Small values are values.** A type that isn't recursive and whose
+  largest variant fits in a tag and three words, the size of a handler
+  description, is passed and stored by value, as Koka does for `maybe`
+  and tuples: `Option`, `Result`, tuples and small records allocate
+  nothing and count nothing but the objects inside them. `Option` of an
+  object is a pointer that may be null. Recursive types and anything
+  larger are boxed.
+- **What never escapes lives in the frame.** In release builds, an
+  object that isn't returned, stored or raised, and is only lent to
+  parameters that keep nothing, lives in its function's frame, and a
+  function that returns one object it builds can build it in its
+  caller's. Second-class blocks make a call through a block as clear to
+  this analysis as a direct one, which Go can't see through. Measured,
+  this applies where a program has temporaries, and rarely in code that
+  builds structures, which keeps what it builds; small values as values
+  cover more.
+- **Reuse goes deep.** Reuse follows Koka: a node that dies drops and
+  reuses the nodes inside it too, a small builder (`balance`) is inlined
+  where a freed node can go into what it builds, and a rebuild writes
+  only the fields that changed. A persistent red-black tree allocates
+  one node an insertion, as a mutable one does. It's an optimization,
+  not a guarantee.
+- **Taken from Lean and Koka, still to build.** An element taken out of
+  an array while it's changed, so `grid[i][j] = x` and a `map` over
+  arrays of arrays change the inner arrays in place (Lean's swap-out);
+  scalar fields packed together after the object fields (Lean); and
+  recursion that builds a structure after its call compiled to a loop
+  (Koka's tail recursion modulo cons).
+- **The runtime:** an 8-byte header (a 32-bit count, its sign the
+  shared mark, a tag and the field mask) and an allocator with free
+  lists per size, which made every allocating benchmark faster than
+  Rust's.
+
+### 15. Arithmetic
+
+`Int` and `Float` are the only types arithmetic is done in. A fault
+still panics; the rules say where it may be reported, so loops can
+vectorize.
+
+- **Overflow is reported late, in loops with no effects.** In a loop
+  whose calls all have an empty `uses` row, an `Int` overflow may be
+  reported when the loop leaves, or at the end of each run of 1,024
+  iterations, instead of where it happens. A pending overflow is
+  reported before any other panic, so the panic is the same. Nothing
+  the loop wrote after the overflow can be seen: it made no dependency
+  calls, the program then ends, and an isolated block can't change outer
+  variables (decision 8).
+- **Wrapping operators** `+%`, `-%`, `*%` wrap at their operands'
+  width, for hashes, checksums and random number generators.
+- **A NaN is checked where it's observed, not where it's made.**
+  Arithmetic and stores carry it; comparing it, `match`ing on it,
+  converting it to an `Int` or a `Str`, hashing it, or passing it to a
+  dependency operation panics. So no program acts on a NaN, and none
+  reaches the journal. Debug and release builds check at the same points;
+  a debug build's message also says where the NaN was made. Measured,
+  checking every operation was 31% of nbody's cycles.
+- **Sized integers are for storage.** `Int8`, `Int16`, `Int32`, `UInt8`,
+  `UInt16`, `UInt32`, `UInt64` and `Float32` are types of fields and
+  array elements. Reading one gives an `Int` (or `Float`); storing into
+  one checks that it fits. The wrapping operators work at their width:
+  `h *% 16777619` on a `UInt32` wraps at 32 bits. Where the compiler
+  proves values fit, a loop computes in narrow lanes.
+- **`Float` arithmetic keeps its order.** A sum of `Float`s that a
+  vector unit adds in lanes would depend on the machine's width, and a
+  journal recorded on one machine has to replay on another. So
+  `xs.sum()` on `Float`s is defined as a fixed tree, eight lanes added
+  pairwise, the same on every machine, which also vectorizes and is
+  more accurate than adding left to right.
+
+### 16. Loops
+
+- **Loops that don't index don't check bounds.** `for x in &xs`,
+  `for i, x in &xs` (the index and the element), and `zip` over several
+  arrays, a cursor, compile to one bounds check per loop. Other indexing
+  is checked, and range analysis removes what it can.
+- **The compiler may choose an array's layout.** Arrays are values, and
+  nothing hands out a pointer into one's elements, so an array of
+  records could be stored as one array per field, which vectorizes. Not
+  built; no feature may give out such a pointer.
+- Explicit vector types, as Zig's `@Vector`, come later if loops need
+  them.
 
 ## What's given up
 
@@ -383,7 +537,13 @@ thread can reach every behaviour.
 - **Free sharing of changing data across cores.** A shared handler with
   state costs atomics and a lock; immutable handler state doesn't.
 - **Release build time.** Specializing costs what it costs in Rust, paid
-  only in release.
+  only in release. Measured, the code grows linearly and the time is
+  clang's; what grows like Rust's, generic code making generic code at
+  new types, wasn't measured yet.
+- **Arithmetic in sized types.** Sized integers are for storage; wrapping
+  operators are the only arithmetic at a width.
+- **Pointers into arrays,** and outer variables changed by an isolated
+  block.
 
 ## What it isn't
 
@@ -419,6 +579,8 @@ dependencies where it's called.
 | Preemption at loop back-edges (async.md) | None |
 | `race` takes the first to finish; `retry(n)` retries any error | First success; `retry(n, on: Tags)` |
 | The journal has no task column | A task path column, answers keyed by task |
+| An `Int` overflow panics where it happens | In a loop with no effects, it may be reported when the loop leaves |
+| A `Float` operation that makes a NaN panics | A NaN panics where it's observed |
 
 ## Staging
 
@@ -455,14 +617,23 @@ dependencies where it's called.
    place, the naive counting kept as `--rc naive`; and release builds
    that specialize per type, block and known handler, with unboxed
    records and `restrict` (compiler.md, "Native slice"). The numbers
-   are in [bench/native/RESULTS.md](bench/native/RESULTS.md): blocks and
-   known handlers cost what a loop and a call do, and Perceus counts
-   12 to 137 times less than naive counting; four of the seven
-   programs run within 2× of Rust and three don't, fannkuch and nbody
-   for the runtime's array stores and rbtree for allocation, reuse one
-   level deep in Perceus and the system `malloc`; `restrict` changes nothing
-   yet; and debug builds are slower than `go build`, most of it clang
-   at -O0.
+   are in [bench/native/RESULTS.md](bench/native/RESULTS.md). After the
+   experiments that followed (map in place, deep reuse, the header and
+   allocator, frames, hoisted array checks, counting across cores), all
+   merged: blocks and known handlers cost what a loop and a call do;
+   Perceus counts 12 to 137 times less than naive counting; six of the
+   seven programs run within 2× of Rust's time, five faster than it
+   (0.24× to 0.75×), fannkuch equal and nbody 2.39× for its NaN checks;
+   memory is within 1.5× of Rust's everywhere; and debug builds are
+   slower than `go build`, most of it clang at -O0. Decisions 2, 4, 10,
+   13 to 16 were amended from these numbers.
+   **Follow-ups, next:** the release build's four quadratic costs;
+   panic messages interned; specialization without the per-function cap
+   (decision 4); small values as values, packed scalar fields, swap-out
+   and tail recursion modulo cons (decision 14); late overflow, wrapping
+   operators, NaN where observed, sized storage integers and `Float`
+   sums (decision 15); `for i, x in &xs` and `zip` (decision 16); and
+   the loops that then vectorize, measured.
 3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.
@@ -473,11 +644,14 @@ dependencies where it's called.
    schedule prefix; the standard library's channel, semaphore and
    `Batcher`.
 5. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; handler
-   locks and the shared mark; atomic counts on shared objects; immutable
-   handler state read without counting.
+   locks and the shared mark; atomic counts on shared objects; scopes and
+   `with`s as frozen regions, frozen by the runtime, with copy-out;
+   a heap per thread.
 6. **11c, generators** and the stream library on them.
-7. **Native, stages 13 and 14.** The task frame allocator, specialization
-   per block and per handler, the dispatch switches and the build notes.
+7. **Native, stages 13 and 14.** The task frame allocator, the dispatch
+   switches over descriptions and the build notes; the debug backend
+   that isn't clang, and modules compiled in parallel and cached by
+   content. Specialization per block and per handler is built (item 2).
 
 The interpreter runs tasks on OCaml effects throughout, so 10c to 11c
 need no native code.
@@ -489,6 +663,11 @@ need no native code.
 - The size budget for cloning a `with` body per handler.
 - Whether `both` gets a "runs once" marker.
 - What a runtime written by users looks like.
+- What freezing's walks cost on a realistic shared structure, against
+  how often tasks are stolen.
+- How specialization grows on generic code that makes generic code at
+  new types, which is what makes Rust's grow.
+- Whether choosing an array's layout (decision 16) pays, and when.
 
 ## Where it came from
 
@@ -500,7 +679,11 @@ for ergonomics against Effect, what the optimizer gets, simplicity, and
 testing. Three threads then checked this record's riskiest parts:
 dispatch as tagged unions, locks on many cores, and exclusivity, with 38
 adversarial programs. Two sweeps checked what blocks lose, one against
-Effect v4's modules.
+Effect v4's modules. Then stage 10c built the blocks decisions, and the
+native slice measured the memory and dispatch bet against Rust and Go;
+six experiments on it (arrays in loops, `map`, reuse, frames, the header
+and allocator, counting across cores) and one on release builds gave
+the numbers decisions 2, 4, 10 and 13 to 16 were amended from.
 
 It leans on Effect, Koka, Effekt (second-class blocks), Roc (lambda sets
 and their split between builds), Swift (exclusivity, task allocation,
