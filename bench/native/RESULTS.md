@@ -17,9 +17,9 @@ would fix it. The programs are in this folder ([README.md](README.md));
 | H2 | a call to a known handler costs a function call | 0.45 ns against 0.45 ns, release | **holds** |
 | H3 | Perceus counts far less than naive, and that shows in time | 12× to 137× fewer dups and drops; 0.40× to 2.20× Rust, naive 0.94× to 6.31× | **holds** |
 | H4 | Perceus allocates less and peaks lower | rbtree 3.6× fewer allocations, map over a unique array 1,000×, fannkuch 10 against 2.3 billion; peak equal on rbtree | **holds**, but `map` doesn't reuse its input |
-| H5 | `restrict` on `&` parameters helps | 1.00×, 1.00×, 0.99× | **fails** (a null result): nothing it could help is reached through the pointer it marks |
+| H5 | exclusivity and Perceus's uniqueness let array loops run at Rust's speed, with `restrict` on the buffers | `restrict` 1.05× on inout, 1.00× and 1.00× on fannkuch and nbody; after the hoist, fannkuch 0.98× Rust, inout 1.84×, nbody 2.35× (cycles) | **fails** as stated: uniqueness hoisted out of loops is most of it, `restrict` 5% where it applies, and the checks Rust doesn't make keep two of three off Rust's speed |
 | H6 | debug builds faster than `go build` | 500k lines: 56.7 s against 12.6 s clean; a leaf edit 56.6 s against 0.64 s | **fails**: 77% of it is clang -O0, and Ren has no build cache yet |
-| H7 | within 2× of Rust, in time and peak memory | 4 of 7 within 2× in time (0.40× to 1.57×); rbtree 2.20×, fannkuch 2.50×, nbody 15.5×; memory all within 2×, two at 1.99× | **fails** on three programs: fannkuch and nbody on the runtime's array stores, rbtree on allocation |
+| H7 | within 2× of Rust, in time and peak memory | 5 of 7 within 2× in time (0.40× to 1.57×; fannkuch now 0.93×); rbtree 2.20×, nbody 2.74× (15.5× before H5's work); memory all within 2×, two at 1.99× | **fails** on two programs: nbody on its checked `Float` operations, rbtree on allocation |
 
 ## Setup
 
@@ -164,10 +164,147 @@ Two things it shows that are short of the plan:
   ParcReuse.hs, and the token carried into the call that builds,
   which Koka gets by inlining `balance` into `ins`.
 
-## H5: `restrict`
+## H5: arrays in loops, and `restrict`
 
-The release build with `restrict` on each `&` parameter, and with
-`--no-restrict`.
+The claim: the exclusivity rule (foundations.md, decision 2), that an
+`&` parameter's slot aliases nothing the function can see, and
+Perceus's uniqueness, a count of 1 checked at run time, together let a
+loop over arrays run at Rust's speed, with `restrict` on the arrays'
+buffers. The first measurement, kept below as "before", found
+`restrict` on the cells did nothing, since every element was reached
+through an out-of-line call. So four changes were built (compiler.md,
+"Step 7") and measured after each:
+
+| build | what it adds |
+|---|---|
+| s0 | before: commit 920456c, `restrict` on each `&` parameter's cell |
+| s1 | the array's fast paths inline in the C: the index checked, the count checked, the element read or written, a panic or a copy the only calls (lean.h's `lean_array_uset`) |
+| s2 | `a[i].f = w` writes the field, in place in a unique array, rather than building the element again and copying it in |
+| s3 | a loop that makes no new reference to an array has it made unique once, before the loop, and indexes its buffer inside (hoist.ml); built `--no-restrict` |
+| s4 | the same with `restrict` on the buffers: the release build |
+
+The machine was loaded while this ran (a load average of 8 to 13 of 16
+cores), and its wall-clock times are slower than the first
+measurement's and noisy: inout's s0 took 14.0 s ± 1.6 here and 7.69 s
+then. Each program's builds ran back to back in one hyperfine run
+(`-N --warmup 3 --runs 10`, measure.sh's), with its Rust twin, so the
+ratios compare like with like; and hyperfine's CPU cycles, which
+contention moves far less, are given beside the time, with the
+instructions retired. Ratios are of means. Every build prints what the
+Rust twin prints.
+
+| program | build | time (s) | / Rust | cycles (10⁹) | / Rust | instructions (10⁹) |
+|---|---|---|---|---|---|---|
+| inout | s0 | 14.041 ± 1.618 | 7.82× | 31.64 ± 0.69 | 8.89× | 288.1 |
+| | s1 | 5.443 ± 0.308 | 3.03× | 11.88 ± 0.01 | 3.34× | 106.1 |
+| | s2 | 5.460 ± 0.311 | 3.04× | 11.90 ± 0.06 | 3.34× | 106.1 |
+| | s3 | 2.464 ± 0.204 | 1.37× | 6.86 ± 0.03 | 1.93× | 60.1 |
+| | s4 | 2.685 ± 0.265 | 1.50× | 6.56 ± 0.04 | 1.84× | 56.1 |
+| | Rust | 1.795 ± 0.200 | | 3.56 ± 0.03 | | 27.0 |
+| fannkuch | s0 | 7.577 ± 0.229 | 2.12× | 16.91 ± 0.04 | 2.44× | 127.9 |
+| | s1 | 3.408 ± 0.095 | 0.95× | 7.41 ± 0.03 | 1.07× | 34.8 |
+| | s2 | 3.179 ± 0.134 | 0.89× | 7.43 ± 0.06 | 1.07× | 34.8 |
+| | s3 | 3.401 ± 0.272 | 0.95× | 6.77 ± 0.02 | 0.98× | 22.1 |
+| | s4 | 3.331 ± 0.203 | 0.93× | 6.77 ± 0.02 | 0.98× | 22.1 |
+| | Rust | 3.570 ± 0.144 | | 6.92 ± 0.01 | | 13.2 |
+| nbody | s0 | 32.005 ± 1.738 | 18.79× | 66.85 ± 0.46 | 15.23× | 406.7 |
+| | s1 | 9.604 ± 0.367 | 5.64× | 23.82 ± 0.18 | 5.43× | 114.6 |
+| | s2 | 5.331 ± 1.208 | 3.13× | 11.50 ± 0.21 | 2.62× | 93.7 |
+| | s3 | 4.747 ± 0.305 | 2.79× | 10.26 ± 0.20 | 2.34× | 64.9 |
+| | s4 | 4.666 ± 0.207 | 2.74× | 10.31 ± 0.27 | 2.35× | 64.9 |
+| | Rust | 1.703 ± 0.055 | | 4.39 ± 0.00 | | 14.2 |
+| rbtree | s0 | 2.731 ± 0.058 | 2.46× | 7.04 ± 0.09 | 2.12× | 39.3 |
+| | s4 | 2.458 ± 0.042 | 2.21× | 6.98 ± 0.05 | 2.10× | 39.3 |
+| | Rust | 1.112 ± 0.045 | | 3.32 ± 0.13 | | 6.4 |
+
+rbtree, which has no arrays, is the check that nothing else moved: it
+retires 39.3 billion instructions in every build, s1 to s3 too.
+
+`restrict`, without it against with it, the number H5 is about:
+
+| program | before: cells, time / cycles | after: buffers, time / cycles |
+|---|---|---|
+| inout | 1.117 / 1.008 | 0.918 / **1.046** |
+| fannkuch | 1.045 / 0.999 | 1.021 / 1.000 |
+| nbody | 0.936 / 1.000 | 1.017 / 0.995 |
+
+The times swing ±10% with the load either way; the cycles don't. On
+inout, the one program whose loop changes two arrays, `restrict` on the
+buffers saves 4.6% of the cycles, 4 billion instructions of 60: in
+`a[i] = ...; b[i] = (b[i] + a[i]) % 65536`, `b[i]` is loaded once
+rather than again after the store to `a[i]` (the assembly, below).
+fannkuch's loops change one array each and nbody's one array, and
+there `restrict` has nothing to tell C.
+
+**Verdict: fails as stated.** The parts:
+
+- **Uniqueness hoisted is most of it,** and it's sound by the
+  exclusivity rule and Perceus together: after the inline fast paths
+  (2.6× on inout, 2.3× on fannkuch, 2.8× on nbody) and the field
+  written in place (2.1× more on nbody), the hoist takes 42% off
+  inout's cycles, 9% off fannkuch's and 11% off nbody's, and fannkuch
+  runs at Rust's speed (0.98×).
+- **`restrict` on the buffers is real but small:** 1.05× on the one
+  program it applies to, with none of the vectorizing it was meant to
+  allow.
+- **Two of three aren't at Rust's speed,** for checks Rust's release
+  build doesn't make. inout is at 1.84× and nbody at 2.35×.
+
+**Do the loops vectorize? No,** not one, with or without `restrict`
+(`-Rpass=loop-vectorize`, and the assembly). inout's inner loop has
+five ways out an element besides its end: two index checks (`a`'s is
+gone, its bound being the length hoisted) and three overflow checks,
+of `*` once and `+` twice. The vectorizer of this clang won't take a
+loop with a way out like that. Rust's
+`step`, inlined into `main`, knows each slice's length is 1,000, so its
+index checks are gone, and its release build doesn't check overflow:
+it vectorizes two lanes wide. To tell what the checks cost, the
+release C was compiled again with them taken out (an experiment, not a
+build Ren makes):
+
+| program | as built | no index checks | no `Int` overflow or `Float` NaN checks | neither | Rust |
+|---|---|---|---|---|---|
+| inout, cycles (10⁹) | 6.55 | 5.88 | 6.73 | 5.42 | 3.56 |
+| nbody, cycles (10⁹) | 10.44 | 10.69 | 7.22 | 7.29 | 4.39 |
+
+nbody's checks of each `Float` operation for a NaN are 31% of its
+cycles; its index checks cost nothing measurable. With both kinds out,
+inout's loop is legal to vectorize, and clang's cost model declines
+(`-Rpass-missed`: "vectorization is not beneficial"; the M4 has no
+64-bit vector multiply), where Rust's newer LLVM does it.
+
+How `restrict` was made to count, which the first measurement couldn't
+see: clang ignores `restrict` on a pointer declared in a block, and
+keeps it on a parameter, also once the function is inlined. So
+emit_c.ml writes a hoisted loop as a function of its own, inlined,
+whose buffers are `restrict` parameters, and `--no-restrict` leaves
+only the keyword out. Even then, `restrict` reaches only the loads and
+stores in that function when clang inlines it, not those in a runtime
+function it calls and inlines later, so the buffer's accesses are
+macros. Built with plain inline functions, the inner loop still loaded
+`b[i]` twice; with the macros:
+
+```
+ldr  x2, [x10, x9, lsl #3]    ; b[i]
+ldr  x8, [x11, x9, lsl #3]    ; c[i]
+mul  x3, x2, x8 ...           ; b[i] * c[i], checked
+ldr  x8, [x23, x9, lsl #3]    ; a[i]
+adds x12, x8, x3 ...          ; checked, then % 65536
+str  x3, [x23, x9, lsl #3]    ; a[i] =
+adds x8, x2, x3               ; b[i] + a[i], b[i] not loaded again
+```
+
+**Fix,** for the rest: the index checks of a loop `for i in lo..hi`
+made once, `hi <= len`, before it, so `a[i]` needs none; and the
+`Float` NaN checks are the language's (operators.md), so what they cost
+is the price of that rule, 31% of nbody, a thing to weigh rather than
+to fix in the backend.
+
+### Before
+
+
+The first measurement: the release build with `restrict` on each `&`
+parameter, and with `--no-restrict`.
 
 | program | restrict (s) | --no-restrict (s) | without / with | Rust (s) |
 |---|---|---|---|---|
@@ -175,7 +312,7 @@ The release build with `restrict` on each `&` parameter, and with
 | fannkuch | 4.187 ± 0.008 | 4.193 ± 0.015 | 1.00× | 1.677 ± 0.006 |
 | nbody | 16.616 ± 0.620 | 16.424 ± 0.018 | 0.99× | 1.069 ± 0.001 |
 
-**Verdict: fails, a null result.** `restrict` changes nothing, and
+**Verdict then: fails, a null result.** `restrict` changes nothing, and
 the C says why. inout's `step(ren_obj** restrict a, ren_obj**
 restrict b, ren_obj* c)` promises the two cells are apart, but the
 elements are behind them: each `a[i] = v` is a call to
@@ -195,7 +332,8 @@ inline` over `lean_ensure_exclusive_array`, :1142); the uniqueness check
 hoisted out of a loop that makes no new reference to the array, so the
 loop indexes its buffer directly; and `restrict` on those buffer
 pointers, which the exclusivity rule makes true just as it does for
-the cells. H5 can only be measured again after that.
+the cells. H5 could only be measured again after that, which is what
+the part above did.
 
 ## H6: source to binary
 
@@ -262,10 +400,17 @@ stands for it until it's built natively ([README.md](README.md)).
 | nqueens | 0.623 ± 0.011 | 0.604 ± 0.011 | 0.486 ± 0.015 | 1.03× | 1.28× | 138.6 | 189.8 | 125.1 | 0.73× |
 | cfold | 0.166 ± 0.003 | 0.412 ± 0.010 | 0.310 ± 0.012 | 0.40× | 0.53× | 161.6 | 377.1 | 634.7 | 0.43× |
 | binary-trees | 13.049 ± 0.105 | 8.303 ± 0.028 | 4.339 ± 0.023 | 1.57× | 3.01× | 274.8 | 137.9 | 221.0 | 1.99× |
-| nbody | 16.616 ± 0.620 | 1.069 ± 0.001 | 1.742 ± 0.001 | 15.54× | 9.54× | 1.5 | 1.5 | 4.3 | 0.96× |
-| fannkuch | 4.187 ± 0.008 | 1.677 ± 0.006 | 1.559 ± 0.009 | 2.50× | 2.69× | 1.5 | 1.6 | 4.3 | 0.92× |
+| nbody, before | 16.616 ± 0.620 | 1.069 ± 0.001 | 1.742 ± 0.001 | 15.54× | 9.54× | 1.5 | 1.5 | 4.3 | 0.96× |
+| nbody, after H5's work | 4.666 ± 0.207 | 1.703 ± 0.055 | | 2.74× | | | | | |
+| fannkuch, before | 4.187 ± 0.008 | 1.677 ± 0.006 | 1.559 ± 0.009 | 2.50× | 2.69× | 1.5 | 1.6 | 4.3 | 0.92× |
+| fannkuch, after H5's work | 3.331 ± 0.203 | 3.570 ± 0.144 | | 0.93× | | | | | |
 
-**Verdict: fails,** on three of seven for time; memory is within 2× on
+After H5's work (H5 has the table), fannkuch is 0.93× Rust and nbody
+2.74×, measured in another session, on a loaded machine; the rows
+above say "before" for what this verdict was first written on.
+
+**Verdict: fails,** on three of seven for time before H5's work, two
+after; memory is within 2× on
 all seven, though rbtree and binary-trees are at its edge. deriv,
 nqueens and cfold, three of the Perceus set, are as fast as Rust or
 faster; cfold is 2.5 times faster, since reuse rebuilds its tree in
@@ -281,9 +426,12 @@ which only allocates and frees, is 1.57×. Each failure has one cause:
   (12 objects in all), so this is all copying and calls. **Fix:** a
   field store into a unique array's element in place, `slots[i * 7 +
   3].f -= ...`, with the stride known in a release build, and H5's
-  inline fast path and hoisting.
+  inline fast path and hoisting. **Done** (H5): 2.74× now, of which
+  the checks of each `Float` operation for a NaN are 31% of the
+  cycles.
 - **fannkuch, 2.50×: every array write is a call** to
   `ren_array_set_taking` (68% of the time), as H5 says. **Fix:** H5's.
+  **Done:** 0.93× now.
 - **rbtree, 2.20×: allocation.** 12 allocations an insertion, since
   reuse is one level deep and the token isn't carried into `balance`
   (H4), a limit of Perceus here, not of the runtime, and each goes to the system `malloc`:
@@ -301,8 +449,10 @@ which only allocates and frees, is 1.57×. Each failure has one cause:
 
 ## What would move each bar
 
-In order of what they'd change: the inline array store with hoisted
-uniqueness and in-place field stores (nbody, fannkuch, and H5's
-re-measure); tcc or a direct backend for debug builds, and modules
-compiled apart and cached (H6); nested reuse with the token carried
-into `balance`, a small-object allocator and an 8-byte header (rbtree and memory); `map` in place.
+In order of what they'd change: tcc or a direct backend for debug
+builds, and modules compiled apart and cached (H6); nested reuse with
+the token carried into `balance`, a small-object allocator and an
+8-byte header (rbtree and memory); a loop's index checks made once
+before it, and what `Float`'s NaN checks cost weighed (nbody and inout,
+H5); `map` in place. The inline array store, hoisted uniqueness and
+in-place field stores are done (H5).

@@ -221,25 +221,20 @@ void ren_free_token(ren_obj *tok) {
 
 /* ---- arrays ---- */
 
-int64_t ren_array_len(ren_obj *a) { return ((ren_array *)a)->len; }
-
-static void ren_check_index(ren_obj *a, int64_t i, const ren_site *site) {
-  int64_t len = ((ren_array *)a)->len;
-  if (i < 0 || i >= len) {
-    char msg[128];
-    snprintf(msg, sizeof msg,
-             "index %" PRId64 " is out of bounds for an array of length %" PRId64,
-             i, len);
-    ren_panic(site, msg);
-  }
+_Noreturn void ren_index_panic_len(int64_t len, int64_t i, const ren_site *site) {
+  char msg[128];
+  snprintf(msg, sizeof msg,
+           "index %" PRId64 " is out of bounds for an array of length %" PRId64,
+           i, len);
+  ren_panic(site, msg);
 }
 
-ren_val ren_array_get(ren_obj *a, int64_t i, const ren_site *site) {
-  ren_check_index(a, i, site);
-  ren_val v = ((ren_array *)a)->data[i];
-  if (a->boxed_elems)
-    ren_dup(v.o);
-  return v;
+_Noreturn void ren_index_panic(ren_obj *a, int64_t i, const ren_site *site) {
+  ren_index_panic_len(((ren_array *)a)->len, i, site);
+}
+
+static void ren_check_index(ren_obj *a, int64_t i, const ren_site *site) {
+  ren_array_check(a, i, site);
 }
 
 /* A copy of [a] with room for [extra] more, each element counted again. */
@@ -278,19 +273,10 @@ void ren_array_push(ren_obj **cell, ren_val v) {
   *cell = b;
 }
 
-ren_obj *ren_array_set_taking(ren_obj *a, int64_t i, ren_val v,
-                              const ren_site *site) {
-  ren_check_index(a, i, site);
-  if (!ren_is_unique(a)) {
-    ren_obj *b = ren_array_copy(a, 0);
-    ren_drop(a);
-    a = b;
-  }
-  ren_val *to = ren_elems(a);
-  if (a->boxed_elems)
-    ren_drop(to[i].o);
-  to[i] = v;
-  return a;
+ren_obj *ren_array_unshare(ren_obj *a) {
+  ren_obj *b = ren_array_copy(a, 0);
+  ren_drop(a);
+  return b;
 }
 
 /* Room for one element more in a unique array: its buffer doubled if
@@ -332,17 +318,20 @@ void ren_array_push_taking(ren_obj **cell, ren_val v) {
 
 /* ---- arrays of structs ---- */
 
-ren_val *ren_array_slots(ren_obj *a, int64_t i, const ren_site *site) {
-  ren_check_index(a, i, site);
-  return &((ren_array *)a)->data[i * ren_stride(a)];
-}
-
 ren_obj *ren_array_set_slots(ren_obj *a, int64_t i, const ren_val *v,
                              const ren_site *site) {
   ren_check_index(a, i, site);
   ren_obj *b = ren_array_copy(a, 0);
   int64_t k = ren_stride(a);
   memcpy(&ren_elems(b)[i * k], v, (size_t)k * sizeof(ren_val));
+  return b;
+}
+
+ren_obj *ren_array_set_field(ren_obj *a, int64_t i, int64_t off, int64_t k,
+                             ren_val v, const ren_site *site) {
+  ren_check_index(a, i, site);
+  ren_obj *b = ren_array_copy(a, 0);
+  ren_elems(b)[i * k + off] = v;
   return b;
 }
 
@@ -354,19 +343,6 @@ void ren_array_push_slots(ren_obj **cell, const ren_val *v) {
          (size_t)k * sizeof(ren_val));
   ren_drop(a);
   *cell = b;
-}
-
-ren_obj *ren_array_set_slots_taking(ren_obj *a, int64_t i, const ren_val *v,
-                                    const ren_site *site) {
-  ren_check_index(a, i, site);
-  if (!ren_is_unique(a)) {
-    ren_obj *b = ren_array_copy(a, 0);
-    ren_drop(a);
-    a = b;
-  }
-  int64_t k = ren_stride(a);
-  memcpy(&ren_elems(a)[i * k], v, (size_t)k * sizeof(ren_val));
-  return a;
 }
 
 void ren_array_push_slots_taking(ren_obj **cell, const ren_val *v) {

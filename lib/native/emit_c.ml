@@ -17,6 +17,8 @@ open Mem
 
 let sprintf = Printf.sprintf
 
+module Ids = Set.Make (Int)
+
 let rec ctype (l : layout) =
   match l with
   | Int -> "int64_t"
@@ -60,7 +62,12 @@ let c_string s =
   Buffer.add_char b '"';
   Buffer.contents b
 
-let var (v : var) =
+(* The variables of the function a loop is moved out of that the loop
+   changes, which it's given the address of: [var] writes each as what
+   its address points to. *)
+let by_address : (int, unit) Hashtbl.t = Hashtbl.create 16
+
+let c_name (v : var) =
   let name =
     String.concat ""
       (List.map (String.make 1)
@@ -70,6 +77,9 @@ let var (v : var) =
             (List.of_seq (String.to_seq v.name))))
   in
   sprintf "v%d_%s" v.id name
+
+let var (v : var) =
+  if Hashtbl.mem by_address v.id then "(*" ^ c_name v ^ ")" else c_name v
 
 let atom_layout (x : atom) : layout =
   match x with
@@ -157,6 +167,19 @@ let cmp_op = function
   | Eq -> "=="
   | Ne -> "!="
 
+(* The suffix of the runtime's array functions for elements of [l]:
+   [_s] if they're never counted. *)
+let uncounted (l : layout) =
+  match l with Int | Float | Bool | Unit | Enum -> "_s" | _ -> ""
+
+(* The suffix of the buffer functions for elements of [l]: [_o] for
+   objects, which are counted, [_s] for scalars. *)
+let buf_suffix (l : layout) =
+  match l with
+  | Int | Float | Bool | Unit | Enum -> "_s"
+  | Boxed | Desc -> "_o"
+  | _ -> bug "a buffer of words"
+
 let runtime rt args site_arg =
   let a i = atom (List.nth args i) in
   let site () =
@@ -166,34 +189,73 @@ let runtime rt args site_arg =
   in
   match rt with
   | Array_len -> sprintf "ren_array_len(%s)" (a 0)
-  (* an array of structs: each element its words *)
+  (* an array of structs: each element its words, a stride the C knows *)
   | Array_get (Struct n) ->
-      sprintf "(*(ren_struct_%d*)ren_array_slots(%s, %s, %s))" n (a 0) (a 1)
-        (site ())
+      sprintf "(*(ren_struct_%d*)ren_array_slots_k(%s, %s, %d, %s))" n (a 0)
+        (a 1) (struct_words n) (site ())
   | Array_set (Struct _) ->
       sprintf "ren_array_set_slots(%s, %s, %s.s, %s)" (a 0) (a 1) (a 2)
         (site ())
   | Array_push (Struct _) ->
       sprintf "ren_array_push_slots(%s, %s.s)" (a 0) (a 1)
-  | Array_set_taking (Struct _) ->
-      sprintf "ren_array_set_slots_taking(%s, %s, %s.s, %s)" (a 0) (a 1) (a 2)
-        (site ())
+  | Array_set_taking (Struct n) ->
+      sprintf "ren_array_set_slots_taking_k(%s, %s, %s.s, %d, %s)" (a 0) (a 1)
+        (a 2) (struct_words n) (site ())
   | Array_push_taking (Struct _) ->
       sprintf "ren_array_push_slots_taking(%s, %s.s)" (a 0) (a 1)
+  (* elements never counted skip the check of whether they are *)
   | Array_get l ->
-      of_val l (sprintf "ren_array_get(%s, %s, %s)" (a 0) (a 1) (site ()))
+      of_val l
+        (sprintf "ren_array_get%s(%s, %s, %s)" (uncounted l) (a 0) (a 1)
+           (site ()))
   | Array_set _ ->
       sprintf "ren_array_set(%s, %s, %s, %s)" (a 0) (a 1)
         (to_val (List.nth args 2))
         (site ())
   | Array_push _ ->
       sprintf "ren_array_push(%s, %s)" (a 0) (to_val (List.nth args 1))
-  | Array_set_taking _ ->
-      sprintf "ren_array_set_taking(%s, %s, %s, %s)" (a 0) (a 1)
+  | Array_set_taking l ->
+      sprintf "ren_array_set_taking%s(%s, %s, %s, %s)" (uncounted l) (a 0) (a 1)
         (to_val (List.nth args 2))
         (site ())
   | Array_push_taking _ ->
       sprintf "ren_array_push_taking(%s, %s)" (a 0) (to_val (List.nth args 1))
+  | Array_check -> sprintf "ren_array_check(%s, %s, %s)" (a 0) (a 1) (site ())
+  | Array_set_field (n, k, _) ->
+      sprintf "ren_array_set_field(%s, %s, %d, %d, %s, %s)" (a 0) (a 1) k
+        (struct_words n)
+        (to_val (List.nth args 2))
+        (site ())
+  | Array_set_field_taking (n, k, _) ->
+      sprintf "ren_array_set_field_taking(%s, %s, %d, %d, %s, %s)" (a 0) (a 1) k
+        (struct_words n)
+        (to_val (List.nth args 2))
+        (site ())
+  | Array_own -> sprintf "ren_array_own(%s)" (a 0)
+  | Array_data -> sprintf "((void*)ren_elems(%s))" (a 0)
+  (* a buffer hoist.ml found: never of [Word]s, so whether its elements
+     are counted is the layout's *)
+  | Buf_get (Struct n) ->
+      sprintf "(*(ren_struct_%d*)ren_buf_slots(%s, %s, %s, %d, %s))" n (a 0)
+        (a 1) (a 2) (struct_words n) (site ())
+  | Buf_get l ->
+      of_val l
+        (sprintf "ren_buf_get%s(%s, %s, %s, %s)" (buf_suffix l) (a 0) (a 1)
+           (a 2) (site ()))
+  | Buf_set (Struct n) ->
+      sprintf "ren_buf_set_slots(%s, %s, %s, %s.s, %d, %s)" (a 0) (a 1) (a 2)
+        (a 3) (struct_words n) (site ())
+  | Buf_set l ->
+      sprintf "ren_buf_set%s(%s, %s, %s, %s, %s)" (buf_suffix l) (a 0) (a 1)
+        (a 2)
+        (to_val (List.nth args 3))
+        (site ())
+  | Buf_set_field (n, k, _) ->
+      sprintf "ren_buf_set_field(%s, %s, %s, %d, %d, %s, %s)" (a 0) (a 1) (a 2)
+        k (struct_words n)
+        (to_val (List.nth args 3))
+        (site ())
+  | Buf_check -> sprintf "ren_buf_check(%s, %s, %s)" (a 0) (a 1) (site ())
   | Str_len -> sprintf "ren_str_len(%s)" (a 0)
   | Str_concat -> sprintf "ren_str_concat(%s, %s)" (a 0) (a 1)
   | Str_eq -> sprintf "ren_str_eq(%s, %s)" (a 0) (a 1)
@@ -232,7 +294,9 @@ let runtime rt args site_arg =
 (* Whether the runtime's [rt] gives nothing, so a [Let] of it gives [Unit]
    after calling it. *)
 let gives_nothing = function
-  | Array_push _ | Array_push_taking _ | Console_write | Console_error -> true
+  | Array_push _ | Array_push_taking _ | Console_write | Console_error
+  | Array_check | Buf_set _ | Buf_set_field _ | Buf_check ->
+      true
   | _ -> false
 
 (* The slots a [Free] or a [Reset] keeps, as a mask of bits. *)
@@ -283,7 +347,17 @@ let rhs (r : rhs) =
   | Given _ ->
       bug "an allocation on the heap or the stack outside a Let"
 
-type out = { b : Buffer.t; fails : bool; mutable catches : (int * var) list }
+type out = {
+  b : Buffer.t;
+  fails : bool;
+  mutable catches : (int * var) list;
+  fname : string;
+  bufs : (int, unit) Hashtbl.t;
+      (** the buffers hoist.ml read before a loop, [Array_data]'s *)
+  outlined : Buffer.t;  (** the loops moved out of the function, before it *)
+  inside : bool;  (** whether this is a loop moved out *)
+  restrict : bool;
+}
 
 let line o depth s =
   Buffer.add_string o.b (String.make (2 * depth) ' ');
@@ -530,6 +604,7 @@ let rec stmt o d (s : stmt) =
       block o (d + 1) default;
       line "}";
       line "}"
+  | Loop (l, b) when (not o.inside) && uses_buffer o b -> outline o d l b
   | Loop (l, b) ->
       line "for (;;) {";
       block o (d + 1) b;
@@ -580,6 +655,72 @@ let rec stmt o d (s : stmt) =
 
 and block o d b = List.iter (stmt o d) b
 
+(* Whether a loop indexes a buffer hoist.ml read before it. *)
+and uses_buffer o b =
+  let free, _ = free_vars [ Loop (0, b) ] in
+  List.exists (fun (v : var) -> Hashtbl.mem o.bufs v.id) free
+
+(* A loop hoist.ml read buffers for, as a function of its own, inlined,
+   whose parameters are the variables it uses from around it: a buffer
+   as a pointer, `restrict` unless [--no-restrict], since the clang this
+   was measured on ignores `restrict` on a local but keeps it on a
+   parameter it inlines; a variable the loop changes, or takes the
+   address of, by its address; the rest by value. hoist.ml moves a loop
+   only if control leaves it by its end. *)
+and outline o d l b =
+  let loop = [ Loop (l, b) ] in
+  let free, changed = free_vars loop in
+  let name = sprintf "%s_loop_%d" o.fname l in
+  let params =
+    List.map
+      (fun (v : var) ->
+        if Hashtbl.mem o.bufs v.id then
+          ( sprintf "ren_val*%s %s"
+              (if o.restrict then " restrict" else "")
+              (c_name v),
+            var v )
+        else if List.mem v.id changed then
+          (sprintf "%s* %s" (ctype v.layout) (c_name v), "&" ^ var v)
+        else (sprintf "%s %s" (ctype v.layout) (c_name v), var v))
+      free
+  in
+  line o d (sprintf "%s(%s);" name (String.concat ", " (List.map snd params)));
+  let o' = { o with b = Buffer.create 4096; inside = true } in
+  List.iter
+    (fun (v : var) ->
+      if List.mem v.id changed then Hashtbl.replace by_address v.id ())
+    free;
+  block o' 1 loop;
+  List.iter (fun (v : var) -> Hashtbl.remove by_address v.id) free;
+  Buffer.add_string o.outlined
+    (sprintf "static inline __attribute__((always_inline)) void %s(%s) {\n" name
+       (match params with
+       | [] -> "void"
+       | ps -> String.concat ", " (List.map fst ps)));
+  Buffer.add_buffer o.outlined o'.b;
+  Buffer.add_string o.outlined "}\n\n"
+
+(* The variables a block uses that it doesn't define, by id, and the
+   ids of those it changes or takes the address of. *)
+and free_vars (b : block) =
+  let inside, _ = Hoist.defined b in
+  let free = Hashtbl.create 16 and changed = ref [] in
+  Rc.iter_stmts
+    (fun s ->
+      List.iter
+        (fun (v : var) ->
+          if not (Ids.mem v.id inside) then Hashtbl.replace free v.id v)
+        (Hoist.mentions s);
+      match s with
+      | Set (v, _) | Let (_, Addr v) -> changed := v.id :: !changed
+      | _ -> ())
+    b;
+  let free =
+    Hashtbl.fold (fun _ v acc -> v :: acc) free []
+    |> List.sort (fun (a : var) b -> compare a.id b.id)
+  in
+  (free, !changed)
+
 (* What an indirect call does if it failed. *)
 and on_failure o d error on_error =
   match on_error with
@@ -609,10 +750,29 @@ let signature ~restrict (f : fn) =
       (match params with [] -> "void" | ps -> String.concat ", " ps)
 
 let fn ~restrict b (f : fn) =
-  let o = { b; fails = f.fails; catches = [] } in
-  Buffer.add_string b (signature ~restrict f ^ " {\n");
+  let bufs = Hashtbl.create 8 in
+  Rc.iter_stmts
+    (function
+      | Let (v, Runtime (Array_data, _, _)) -> Hashtbl.replace bufs v.id ()
+      | _ -> ())
+    f.body;
+  let o =
+    {
+      b = Buffer.create 4096;
+      fails = f.fails;
+      catches = [];
+      fname = f.name;
+      bufs;
+      outlined = Buffer.create 0;
+      inside = false;
+      restrict;
+    }
+  in
   line o 1 "REN_STACK_CHECK();";
   block o 1 f.body;
+  Buffer.add_buffer b o.outlined;
+  Buffer.add_string b (signature ~restrict f ^ " {\n");
+  Buffer.add_buffer b o.b;
   Buffer.add_string b "}\n\n"
 
 let dkind_c (k : dkind) =

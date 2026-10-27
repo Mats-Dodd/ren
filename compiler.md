@@ -2019,3 +2019,83 @@ What later stages need to know:
   rbtree and memory. Each should be measured again with measure.sh.
 - Stage 13's backend decides H6: a fast C compiler or a direct
   backend, and a C file per module cached by hash.
+
+### Step 7: arrays in loops
+
+What RESULTS.md said would move nbody, fannkuch and H5, built in four
+parts and measured after each (RESULTS.md, H5):
+
+1. **The array's fast paths inline.** `ren_array_get`,
+   `ren_array_set_taking` and their twins for arrays of structs are
+   `static inline` in ren_rt.h: the index checked with one unsigned
+   compare, the array made unique by `ren_array_own` (its count 1, else
+   `ren_array_unshare`, out of line), and the element read or written,
+   lean.h's `lean_array_uset`. emit_c.ml calls the `_s` ones for
+   elements that are never counted and the `_k` ones with a struct's
+   stride, which it knows.
+2. **A field of an array's struct written in place.** `a[i].f = w`,
+   which Core writes `a = set a i (update (get a i) f w)`, lowers to
+   `Array_set_field` when `a` and `i` are locals and `w` calls and
+   changes nothing (to_mem.ml): an `Array_check` where `get` checked,
+   so an index out of bounds panics where it did, then one word of the
+   element written. Perceus makes it `Array_set_field_taking`, which
+   writes it in place in a unique array, rather than building the
+   element again and copying it in.
+3. **Uniqueness hoisted out of a loop** (hoist.ml, release builds,
+   after Perceus). A loop that uses an array only through views of its
+   slot, given straight to an index, a length or a write stored back,
+   has it made unique once before it (`Array_own`), its length and
+   buffer read then (`Array_len`, `Array_data`), and its elements read
+   and written through them inside (`Buf_get`, `Buf_set`,
+   `Buf_set_field`, each checking the index against the length). The
+   slot is an `inout` parameter's cell, which the exclusivity rule says
+   nothing else the function can see reaches, used only by `Load` and
+   `Store` and as a call's argument outside the loop; or a local, whose
+   address, if it's taken, isn't used in the loop and the loop calls
+   nothing. Perceus's count is the number of slots that hold the object
+   (a view isn't counted only while nothing changes its slot), so after
+   `Array_own` this slot is the only one, and the loop makes no other.
+   The length can't change: nothing pushes, and every write stores the
+   same object back. hoist.ml says why at more length.
+4. **`restrict` on the buffers.** Each array a hoisted loop changes is
+   unique, so its buffer is no other array's and no other object; one
+   it only reads is never one it changes. emit_c.ml writes a hoisted
+   loop as a function of its own, `static inline` and
+   `always_inline`, whose parameters are the variables it uses from
+   around it, a buffer as a `ren_val* restrict`, a variable it changes
+   by its address, and calls it in the loop's place; `--no-restrict`
+   leaves the keyword out and changes nothing else, so the two builds
+   differ by `restrict` alone. hoist.ml moves a loop only if control
+   leaves it by its end or its own `break`, and it puts nothing on the
+   stack.
+
+bench/build.t shows the hoisted loops of a program and their
+`restrict` parameters, a shared array copied once before the loop that
+changes it while the other holder keeps its elements, a loop not
+hoisted since it passes `&p` to a call, and an index out of bounds in a
+hoisted loop panicking as `ren run` does.
+
+Where it differed from its plan:
+
+- **`restrict` on a local does nothing.** The clang measured ignores
+  `restrict` on a pointer declared in a block and keeps it on a
+  parameter, also once the function is inlined, as scopes on the loads
+  and stores in it; hence the loop as a function of its own. And only
+  on the loads and stores in the function when it's inlined: a runtime
+  function called from it, not yet inlined itself, gets none, so the
+  buffer accesses are macros (ren_rt.h).
+- **Division and `sqrt` stay as they were.** They looked like calls in
+  inout's and nbody's loops, but the runtime is in the same C file and
+  clang inlines them already: made inline by hand, the loops ran the
+  same instructions, so that change was taken out again.
+- **The length is read before the array is made unique,** from the
+  array as it was, which a copy keeps, so clang can see that a loop's
+  bound read from the same array is its length and drop that check.
+
+What later stages need to know:
+
+- RESULTS.md's H5 has the numbers and the verdict. What stops these
+  loops vectorizing now isn't aliasing: each checked `+` and `*` and
+  each index check is a way out of the loop, which the vectorizer of
+  the clang measured won't take. Rust's release build doesn't check
+  overflow, and its inout loop has no index checks once it's inlined.

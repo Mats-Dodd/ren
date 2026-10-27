@@ -249,8 +249,9 @@ which `--no-restrict` leaves out:
   static int64_t ren_bench_attempt_blocks_1_1(const ren_ev* v1_ev, int64_t* restrict v2_calls, int64_t v3_i);
   static ren_unit ren_Array_each_1(const ren_ev* v1_ev, ren_obj* v2_self, int64_t* restrict v3_total, int64_t v4_k);
   static ren_unit ren_bench_each_blocks_1_1(const ren_ev* v1_ev, int64_t* restrict v2_total, int64_t v3_k, int64_t v4_x);
-  $ ren build --release --no-restrict --emit-c small.ren | grep restrict | wc -l | tr -d ' '
+  $ ren build --release --no-restrict --emit-c small.ren | grep -c ' restrict v'
   0
+  [1]
   $ cd ../..
 
 H2: `Counter.bump`, called where its handler is known, is a direct call
@@ -399,6 +400,94 @@ where the debug build allocates a body for each change of one:
   debug: allocations 65020
   release: allocations 12
   $ cd ../..
+
+A loop that changes an array it holds, and makes no other reference to
+it, has the array made unique once, before it, and indexes its
+elements directly inside (hoist.ml); a field of a struct in an array is
+written in place. The loop is a function of its own, inlined, whose
+buffers are `restrict` parameters. `kept` shares `a` when `scale` runs,
+so `scale` copies it, once, and `kept` doesn't change; `main`'s own
+loop passes `&p` to a call, so it isn't hoisted. An index out of bounds
+in a hoisted loop panics as it would anywhere:
+
+  $ cat > hoist.ren <<'EOF'
+  > type B = { x: Float, v: Float }
+  > 
+  > fn scale(inout a: Array<Int>, k: Int) =
+  >   for i in 0..a.len()
+  >     a[i] = a[i] * k
+  > 
+  > fn mix(inout a: Array<Int>, inout b: Array<Int>, c: Array<Int>) =
+  >   for i in 0..a.len()
+  >     a[i] = a[i] + b[i] * c[i]
+  >     b[i] = b[i] + a[i]
+  > 
+  > fn nudge(inout bs: Array<B>) =
+  >   for i in 0..bs.len()
+  >     bs[i].x += bs[i].v
+  > 
+  > fn shout(inout ss: Array<Str>) =
+  >   for i in 0..ss.len()
+  >     ss[i] = ss[i].concat("!")
+  > 
+  > fn poke(inout a: Array<Int>, i: Int) =
+  >   a[i] = a[i] * 2
+  > 
+  > fn main() uses Console =
+  >   var a = [1, 2, 3]
+  >   let kept = a
+  >   scale(&a, 10)
+  >   print(kept[0] + kept[2])
+  >   print(a[0] + a[2])
+  >   var b = [4, 5, 6]
+  >   mix(&a, &b, kept)
+  >   print(a[1] + b[1])
+  >   var bs = [B { x: 1.0, v: 0.5 }, B { x: 2.0, v: 0.25 }]
+  >   let before = bs
+  >   nudge(&bs)
+  >   print(before[0].x + bs[0].x)
+  >   var ss = ["a", "b"]
+  >   let old = ss
+  >   shout(&ss)
+  >   Console.write(old[0].concat(ss[0]).concat(ss[1]))
+  >   var p = [1, 2, 3]
+  >   for i in 0..p.len()
+  >     p[i] = p[i] + 1
+  >     poke(&p, i)
+  >   print(p[0] + p[1] + p[2])
+  > EOF
+  $ cat > bounds.ren <<'EOF'
+  > fn fill(inout a: Array<Int>, n: Int) =
+  >   for i in 0..n
+  >     a[i] = i
+  > 
+  > fn main() uses Console =
+  >   var a = [0, 0]
+  >   fill(&a, 3)
+  >   print(a[0])
+  > EOF
+  $ release hoist.ren && cat native.out
+  hoist.ren, release: the same, exit 0, objects live at exit 0
+  4
+  40
+  65
+  2.5
+  aa!b!
+  18
+  $ release bounds.ren && cat native.err | grep -v '^ren stats'
+  bounds.ren, release: the same, exit 1, objects live at exit 2
+  error: panic: index 2 is out of bounds for an array of length 2
+    ┌─ bounds.ren:3:5
+  3 │     a[i] = i
+    │     ^^^^
+  $ ren build --release --emit-c hoist.ren | grep '^static inline.*_loop_'
+  static inline __attribute__((always_inline)) void ren_hoist_shout_1_loop_1(int64_t* v3_i, int64_t v6_stop, int64_t v27_len, ren_val* restrict v30_buf) {
+  static inline __attribute__((always_inline)) void ren_hoist_nudge_1_loop_1(int64_t* v3_i, int64_t v6_stop, int64_t v34_len, ren_val* restrict v37_buf) {
+  static inline __attribute__((always_inline)) void ren_hoist_mix_1_loop_1(int64_t* v5_i, int64_t v8_stop, int64_t v51_len, ren_val* restrict v54_buf, int64_t v56_len, ren_val* restrict v59_buf, int64_t v61_len, ren_val* restrict v63_buf) {
+  static inline __attribute__((always_inline)) void ren_hoist_scale_1_loop_1(int64_t v3_k, int64_t* v4_i, int64_t v7_stop, int64_t v29_len, ren_val* restrict v32_buf) {
+  $ ren build --release --no-restrict --emit-c hoist.ren | grep -c ' restrict v'
+  0
+  [1]
 
 What the native slice doesn't have says so, at the code that needs it,
 like the real `Clock`:

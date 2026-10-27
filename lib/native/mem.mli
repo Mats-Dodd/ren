@@ -110,8 +110,8 @@ type site = { sid : int; loc : Loc.t; wrap : wrap option; kind : site_kind }
 type cmp = Lt | Le | Gt | Ge | Eq | Ne
 
 (* A function of the runtime's (ren_rt.h). Each borrows its arguments,
-   and counts again what it keeps, but for the two that change an array
-   in place, which take theirs ([takes]). *)
+   and counts again what it keeps, but for those that change an array in
+   place, and [Array_own], which take theirs ([takes]). *)
 type rt =
   | Array_len
   | Array_get of layout  (** of an array whose elements have this layout *)
@@ -125,6 +125,31 @@ type rt =
   | Array_push_taking of layout
       (** [Array_push], which takes the element, and grows the array in place if
           it's unique *)
+  | Array_check
+      (** panics if an index is out of bounds for an array, as [Array_get] would
+      *)
+  | Array_set_field of int * int * layout
+      (** [Array_set] of an array of the [n]-th struct that changes only its
+          [k]-th field, of this layout: a copy *)
+  | Array_set_field_taking of int * int * layout
+      (** [Array_set_field], which takes the array and changes its element's
+          field in place if it's unique *)
+  | Array_own
+      (** an array, taken, made unique: itself if its count is 1, else a copy
+          (lean.h, [lean_ensure_exclusive_array]). hoist.ml's, before a loop *)
+  | Array_data
+      (** where an array's elements are, a [Ptr]: hoist.ml's, for a loop that
+          indexes it without going through the array again *)
+  | Buf_get of layout
+      (** an element, of this layout, of the elements a [Ptr] points at, of
+          which there are as many as its [Int]: [Array_get] once the array is
+          known *)
+  | Buf_set of layout
+      (** an element changed in place, taking the new one and dropping the old:
+          [Array_set_taking] once the array is known unique *)
+  | Buf_set_field of int * int * layout
+      (** [Array_set_field_taking] once the array is known unique *)
+  | Buf_check  (** [Array_check] of a length *)
   | Str_len
   | Str_concat
   | Str_eq
@@ -380,7 +405,8 @@ type program = {
 }
 
 (* Whether the runtime's [rt] takes its [n]-th argument's reference: the
-   array and the element of the two that change an array in place. *)
+   array and the element of those that change an array in place, the
+   element of a buffer's, and the array [Array_own] makes unique. *)
 val takes : rt -> int -> bool
 
 (* ---- printing, as s-expressions, for tests ---- *)

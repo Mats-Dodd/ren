@@ -876,6 +876,16 @@ let dict fs env (d : C.dict) : atom =
   | Dict_param v -> read fs env v
   | Derived { ddesc; _ } -> desc fs env ddesc
 
+(* Whether [e] only computes, calling and changing nothing, so whatever
+   it reads is the same before it and after. *)
+let rec pure (e : C.expr) =
+  match e.kind with
+  | Int _ | Float _ | Bool _ | Unit | Local _ -> true
+  | Prim (_, args) -> List.for_all pure args
+  | Field (r, _, _) -> pure r
+  | Update (r, _, v) -> pure r && pure v
+  | _ -> false
+
 let rec expr fs env (e : C.expr) : atom =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
@@ -1235,6 +1245,50 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       in
       drop fs env x;
       v
+  (* `a[i].f = w`, which Core writes `a = set a i (update (get a i) f w)`,
+     of an array of structs: only the field is written, in place once
+     Perceus takes the array, rather than the element built again and
+     copied in. [i]'s check runs where `get`'s would, before [w]; [w]
+     changes nothing, so [a] is read again after it as before it. *)
+  | ( Set_index,
+      [
+        ({ kind = Local av; _ } as a);
+        ({ kind = Local iv; _ } as i);
+        {
+          kind =
+            Update
+              ( ({
+                   kind =
+                     Prim
+                       ( Get_index,
+                         [ { kind = Local av'; _ }; { kind = Local iv'; _ } ] );
+                   _;
+                 } as get),
+                f,
+                w );
+          ty;
+          _;
+        };
+      ] )
+    when av.id = av'.id && iv.id = iv'.id && is_struct (lay ty) && pure w ->
+      let n = match lay ty with Struct n -> n | _ -> bug "a struct" in
+      let fields = record_fields cx (at fs e.loc) ty in
+      let sh = record_shape cx (at fs e.loc) ty in
+      let k, l = List.assoc f (List.combine (List.map fst fields) sh.slots) in
+      let at_get = new_site cx (at fs get.loc) in
+      let x = expr fs env a in
+      emit fs (Do (Runtime (Array_check, [ x; expr fs env i ], Some at_get)));
+      drop fs env x;
+      let y = expr fs env w in
+      let x = expr fs env a in
+      let r =
+        owned fs env "$set" Boxed
+          (Runtime
+             (Array_set_field (n, k, l), [ x; expr fs env i; y ], Some at_get))
+      in
+      drop fs env x;
+      drop fs env y;
+      r
   | Set_index, [ a; i; v ] ->
       let x = expr fs env a in
       let i = expr fs env i in

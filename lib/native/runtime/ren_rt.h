@@ -223,13 +223,51 @@ static inline int64_t ren_stride(ren_obj *a) {
   return a->nfields > 1 ? (int64_t)a->nfields : 1;
 }
 
-/* ---- arrays ---- */
+/* ---- arrays ----
 
-int64_t ren_array_len(ren_obj *a);
+   Reading an element and changing one in place are inline: the index
+   checked, the array made unique if it isn't, and the element read or
+   written, with what's rare, a panic or a copy, out of line. That's
+   lean.h's `lean_array_uset` over `lean_ensure_exclusive_array`
+   (lean.h:1142-1182). A function named with `_s` is for elements that
+   are never counted, a scalar's, which the compiler knows; `_k` for an
+   array of structs whose stride the compiler knows, [k] words. */
+
+static inline int64_t ren_array_len(ren_obj *a) { return ((ren_array *)a)->len; }
+
+/* Panics: [i] is out of bounds for [a], or for an array of [len]. */
+_Noreturn void ren_index_panic(ren_obj *a, int64_t i, const ren_site *site);
+_Noreturn void ren_index_panic_len(int64_t len, int64_t i, const ren_site *site);
+
+/* Panics, as `xs[i]` does, if [i] is out of bounds; one unsigned
+   compare, since a length is never below 0. */
+static inline void ren_array_check(ren_obj *a, int64_t i, const ren_site *site) {
+  if (__builtin_expect((uint64_t)i >= (uint64_t)((ren_array *)a)->len, 0))
+    ren_index_panic(a, i, site);
+}
+
+/* A copy of [a], which is shared, each element counted again; [a]'s
+   reference is dropped. */
+ren_obj *ren_array_unshare(ren_obj *a);
+
+/* [a], taken, made unique: itself if its count is 1, else a copy. */
+static inline ren_obj *ren_array_own(ren_obj *a) {
+  return __builtin_expect(a->rc == 1, 1) ? a : ren_array_unshare(a);
+}
 
 /* Element [i], counted again if it's an object: panics if [i] is out of
    bounds, as `xs[i]` does. */
-ren_val ren_array_get(ren_obj *a, int64_t i, const ren_site *site);
+static inline ren_val ren_array_get(ren_obj *a, int64_t i, const ren_site *site) {
+  ren_array_check(a, i, site);
+  ren_val v = ((ren_array *)a)->data[i];
+  if (a->boxed_elems)
+    ren_dup(v.o);
+  return v;
+}
+static inline ren_val ren_array_get_s(ren_obj *a, int64_t i, const ren_site *site) {
+  ren_array_check(a, i, site);
+  return ((ren_array *)a)->data[i];
+}
 
 /* A new array, [a] with element [i] replaced by [v]: the naive
    semantics, which copies. Neither argument is taken. */
@@ -240,23 +278,110 @@ ren_obj *ren_array_set(ren_obj *a, int64_t i, ren_val v, const ren_site *site);
 void ren_array_push(ren_obj **cell, ren_val v);
 
 /* What Perceus calls instead, which take the array and [v]: the array
-   changed in place if it's unique, and copied first if it isn't, as
-   lean.h's `lean_ensure_exclusive_array` (lean.h:1142-1182) does. A
+   changed in place if it's unique, and copied first if it isn't. A
    push grows the buffer by doubling it, so pushing n elements onto a
    unique array copies O(n) of them in all. */
-ren_obj *ren_array_set_taking(ren_obj *a, int64_t i, ren_val v,
-                              const ren_site *site);
+static inline ren_obj *ren_array_set_taking(ren_obj *a, int64_t i, ren_val v,
+                                            const ren_site *site) {
+  ren_array_check(a, i, site);
+  a = ren_array_own(a);
+  ren_val *to = ren_elems(a);
+  if (a->boxed_elems)
+    ren_drop(to[i].o);
+  to[i] = v;
+  return a;
+}
+static inline ren_obj *ren_array_set_taking_s(ren_obj *a, int64_t i, ren_val v,
+                                              const ren_site *site) {
+  ren_array_check(a, i, site);
+  a = ren_array_own(a);
+  ren_elems(a)[i] = v;
+  return a;
+}
 void ren_array_push_taking(ren_obj **cell, ren_val v);
 
 /* The same for an array of structs, each element [v], its words: [get]
    gives where element [i] is, which the caller copies. */
-ren_val *ren_array_slots(ren_obj *a, int64_t i, const ren_site *site);
+static inline ren_val *ren_array_slots(ren_obj *a, int64_t i, const ren_site *site) {
+  ren_array_check(a, i, site);
+  return &((ren_array *)a)->data[i * ren_stride(a)];
+}
+static inline ren_val *ren_array_slots_k(ren_obj *a, int64_t i, int64_t k,
+                                         const ren_site *site) {
+  ren_array_check(a, i, site);
+  return &((ren_array *)a)->data[i * k];
+}
 ren_obj *ren_array_set_slots(ren_obj *a, int64_t i, const ren_val *v,
                              const ren_site *site);
 void ren_array_push_slots(ren_obj **cell, const ren_val *v);
-ren_obj *ren_array_set_slots_taking(ren_obj *a, int64_t i, const ren_val *v,
-                                    const ren_site *site);
+static inline ren_obj *ren_array_set_slots_taking_k(ren_obj *a, int64_t i,
+                                                    const ren_val *v, int64_t k,
+                                                    const ren_site *site) {
+  ren_array_check(a, i, site);
+  a = ren_array_own(a);
+  memcpy(&ren_elems(a)[i * k], v, (size_t)k * sizeof(ren_val));
+  return a;
+}
+static inline ren_obj *ren_array_set_slots_taking(ren_obj *a, int64_t i,
+                                                  const ren_val *v,
+                                                  const ren_site *site) {
+  return ren_array_set_slots_taking_k(a, i, v, ren_stride(a), site);
+}
 void ren_array_push_slots_taking(ren_obj **cell, const ren_val *v);
+
+/* Field [off] of element [i] of an array of structs of [k] words
+   changed to [v], the rest of the element as it was: a copy, which
+   takes neither, and in place, which takes the array. */
+ren_obj *ren_array_set_field(ren_obj *a, int64_t i, int64_t off, int64_t k,
+                             ren_val v, const ren_site *site);
+static inline ren_obj *ren_array_set_field_taking(ren_obj *a, int64_t i,
+                                                  int64_t off, int64_t k,
+                                                  ren_val v,
+                                                  const ren_site *site) {
+  ren_array_check(a, i, site);
+  a = ren_array_own(a);
+  ren_elems(a)[i * k + off] = v;
+  return a;
+}
+
+/* An array's elements, once a loop knows the array is unique and won't
+   change its length: hoist.ml's. [p] is where the elements are and
+   [len] how many, read before the loop; each access checks the index
+   against [len], and the rest is a load or a store.
+
+   They're macros, not functions, so each load and store is written in
+   the function emit_c.ml moves the loop to ([outline]), whose `restrict`
+   parameters [p] are: C carries `restrict` over when it inlines that
+   function only to the loads and stores in it then, and a function of
+   the runtime's it hasn't inlined yet would get none of it. Their
+   arguments are variables and constants, so each is read once. */
+static inline void ren_buf_check(int64_t len, int64_t i, const ren_site *site) {
+  if (__builtin_expect((uint64_t)i >= (uint64_t)len, 0))
+    ren_index_panic_len(len, i, site);
+}
+static inline ren_val ren_dup_elem(ren_val v) {
+  ren_dup(v.o);
+  return v;
+}
+#define ren_buf_get_s(p, len, i, site) (ren_buf_check(len, i, site), (p)[i])
+#define ren_buf_get_o(p, len, i, site)                                         \
+  (ren_buf_check(len, i, site), ren_dup_elem((p)[i]))
+#define ren_buf_slots(p, len, i, k, site)                                      \
+  (ren_buf_check(len, i, site), &(p)[(i) * (k)])
+#define ren_buf_set_s(p, len, i, v, site)                                      \
+  (ren_buf_check(len, i, site), (void)((p)[i] = (v)))
+#define ren_buf_set_o(p, len, i, v, site)                                      \
+  ({                                                                           \
+    ren_buf_check(len, i, site);                                               \
+    ren_obj *ren_old_ = (p)[i].o;                                              \
+    (p)[i] = (v);                                                              \
+    ren_drop(ren_old_);                                                        \
+  })
+#define ren_buf_set_slots(p, len, i, v, k, site)                               \
+  (ren_buf_check(len, i, site),                                                \
+   (void)memcpy(&(p)[(i) * (k)], (v), (size_t)(k) * sizeof(ren_val)))
+#define ren_buf_set_field(p, len, i, off, k, v, site)                          \
+  (ren_buf_check(len, i, site), (void)((p)[(i) * (k) + (off)] = (v)))
 
 /* ---- strings ---- */
 

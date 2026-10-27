@@ -1416,6 +1416,11 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
         pass "Perceus" (fun () ->
             Rc.prepare p |> Borrow.infer |> Rc.program |> Reuse.program)
   in
+  (* a loop's arrays indexed directly, which needs Perceus's taking writes *)
+  let p =
+    if release && rc = Perceus then pass "hoisting" (fun () -> Hoist.program p)
+    else p
+  in
   pass "Mem Lint" (fun () -> Mem_lint.program p);
   p
 

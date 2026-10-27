@@ -181,6 +181,8 @@ let rec erase (b : block) : block =
   let taking (r : rhs) =
     match r with
     | Runtime (Array_set l, xs, s) -> Runtime (Array_set_taking l, xs, s)
+    | Runtime (Array_set_field (n, k, l), xs, s) ->
+        Runtime (Array_set_field_taking (n, k, l), xs, s)
     | Runtime (Array_push l, xs, s) -> Runtime (Array_push_taking l, xs, s)
     | r -> r
   in
