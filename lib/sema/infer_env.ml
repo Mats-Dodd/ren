@@ -46,7 +46,13 @@ type found =
   | Unwrap
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
-  | Lambda_id of string  (** a lambda: its name (Ty.lambda_id) *)
+  | Block of { name : string; given : Path.t list }
+      (** a block: a lambda, or a named function or an operation used as a
+          value, which lowering makes a lambda written where it's used. Its name
+          (Ty.lambda_id), and [given], the dependencies the type of the
+          parameter it's passed to lists, which the callee provides: every other
+          dependency it uses is found where it's written (foundations.md,
+          decision 5) *)
   | Builtin_op
       (** at an operator's own node (Ast.Binop), an operator the language does
           itself: on [Int]s or [Float]s, a `with numeric` type's, or an opaque
@@ -230,19 +236,21 @@ and impl_op = {
   inodes : (int, ty) Hashtbl.t;
 }
 
-(* A `with` that installs [wdep], at [wloc]: its body uses [wbody], which
-   is what the body's calls use, and that has to be no more than [wdep]
-   and what's installed outside, [wouter]. That's an inclusion, not an
-   equality: a closure called both in the body and outside it uses what
-   the outside does, which is less than the body can. It's decided once
+(* A `with` that installs [wdeps], at [wloc], or a block whose
+   parameter's type lists [wdeps]: its body uses [wbody], which is what
+   the body's calls use, and that has to be no more than [wdeps] and what's
+   installed outside, [wouter], where the `with` or the block is written.
+   That's an inclusion, not an equality: the body's row learns what its
+   calls use, and only what isn't in [wdeps] goes outside. It's decided once
    the group is done, by the solver, when every call of the group knows
    what it uses. *)
 and install = {
   wloc : Loc.t;
-  wdep : string;
+  wdeps : string list;
   wbody : row;
   wouter : row;
-  wself : Path.t;  (** the function the `with` is in *)
+  wself : Path.t;  (** the function the `with` or the block is in *)
+  wblock : bool;  (** whether it's a block's, for a message *)
 }
 
 (* A place an implementation is used: a `with` installs it, or it's passed
@@ -500,14 +508,6 @@ and source =
    top-level function, or of a lambda in it, or by a `let`. *)
 and bound_by = Own_param | Lambda_param | Let_bound
 
-(* Whether the code can call `next` (handlers.md, "`next`"): only while
-   one of the handler's operations runs, in its state, an arm or its
-   `finally`, not in a lambda, which can outlive the operation. A lambda
-   that called `next` would keep the evidence where the handler is
-   installed, and passed to the implementation under it and kept there,
-   would reach it: a cycle (compiler.md, "No cycles"). *)
-and next_at = Next_ok | In_lambda
-
 (* What the expression being inferred can see. *)
 and ctx = {
   self : Path.t;  (** the top-level function being checked *)
@@ -559,7 +559,6 @@ and ctx = {
   tparams : ty list;  (** what the type parameters in scope stand for *)
   named : (string * row) list;
       (** the rows the function's signature names, `..d`, by name (ast.ml) *)
-  next_at : next_at;  (** whether `next` can be called here *)
 }
 
 (* A dot call that turned out to call [callee], a method of the module
@@ -595,12 +594,14 @@ let dep_names env r =
    join, and no `with` around it installs it. *)
 let brings c dep = List.mem dep c.own
 
-(* Name the lambda at [node]: the next of the function it's in
+(* Name the block at [node]: the next of the function it's in
    (Ty.lambda_id), recorded at [node] for lowering, which gives the
-   lambda's code that name. *)
-let name_lambda cx node =
+   block's code that name, with [given], the dependencies its callee
+   provides (see [Block]). *)
+let name_lambda ?(given = []) cx node =
   incr cx.lambdas;
-  Hashtbl.replace cx.found node (Lambda_id (Ty.lambda_id cx.self !(cx.lambdas)))
+  Hashtbl.replace cx.found node
+    (Block { name = Ty.lambda_id cx.self !(cx.lambdas); given })
 
 (* Leave [c] for the solver, once the group is done. *)
 let defer env c = env.pending <- c :: env.pending
@@ -624,7 +625,10 @@ let bind_params ?(own = false) cx params ps =
     params ps
 
 (* What a lambda's body sees: the lambda's own errors and dependencies,
-   and no marker, since the body has markers of its own. *)
+   and no marker, since the body has markers of its own. Its calls are its
+   own too: a block's are added to its writer's once its body is checked
+   (Infer_expr.block_uses), and an arm's or a `finally`'s are its
+   handler's. *)
 let lambda_cx cx (params : Resolved.param list) ps ~errs ~uses =
   {
     cx with
@@ -641,5 +645,4 @@ let lambda_cx cx (params : Resolved.param list) ps ~errs ~uses =
       @ cx.params;
     selves = errs :: cx.selves;
     sources = None;
-    next_at = In_lambda;
   }

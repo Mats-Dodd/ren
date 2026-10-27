@@ -115,6 +115,33 @@ let branchy (e : expr) =
    whose help, to remove it, would be wrong once that's fixed. *)
 let unknown_call cx = List.iter (fun m -> m.failed <- true) cx.markers
 
+(* The row of a block's type that lists [listed], the dependencies its
+   callee provides, and no more. *)
+let listed_row listed = extend (List.map dep listed) REmpty
+
+(* A block written in [cx] at [loc], whose body [bcx] has been checked:
+   what its body uses but [listed], what its parameter's type lists, is
+   used where it's written, under the `with`s there, which the solver
+   decides once the group is done, as for a `with`'s body
+   (Solve.install). Its calls bring in what they bring in, but [listed]. *)
+let block_uses env cx loc ~listed (bcx : ctx) =
+  defer env
+    (Install
+       {
+         wloc = loc;
+         wdeps = listed;
+         wbody = bcx.uses;
+         wouter = cx.uses;
+         wself = cx.self;
+         wblock = true;
+       });
+  cx.calls :=
+    List.map
+      (fun c ->
+        { c with own = List.filter (fun d -> not (List.mem d listed)) c.own })
+      !(bcx.calls)
+    @ !(cx.calls)
+
 (* [e]'s type, from [e] alone. *)
 let rec infer env cx (e : expr) : ty =
   let t = synth env cx e in
@@ -175,6 +202,9 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
      payload of a constructor `Option<Rates>` is written for *)
   | (Block _ | If (_, _, Some _) | Match _), TVar _ when written <> None ->
       branches ()
+  | Var (Global _ | Intrinsic _ | Dep_op _), TVar _ ->
+      (* where it's going isn't written, so it's given nothing *)
+      named_block env cx ~why e REmpty expected
   | _, TVar _ -> leaf ()
   | Int n, (TCon (_, []) as t) when t = float && Option.is_none why.help ->
       (* an `Int` literal where a `Float` is wanted, `x.add(2)`: it's
@@ -188,15 +218,41 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
             help = Some help;
           }
   | (Block _ | If (_, _, Some _) | Match _), _ -> branches ()
-  | Lambda (params, body), TFun (eps, eret, _, _)
+  | Var (Global _ | Intrinsic _ | Dep_op _), TFun (_, _, _, eu) ->
+      named_block env cx ~why e eu expected
+  | Var (Local b), TFun (_, _, _, eu)
+    when why.help = None
+         &&
+         match Option.map (reveal env.st) (Hashtbl.find_opt cx.locals b.id) with
+         | Some (TFun (_, _, _, u)) ->
+             List.exists
+               (fun n -> not (List.mem n (row_names u)))
+               (row_names eu)
+         | _ -> false ->
+      (* a block whose type lists less than its callee gives, which it
+         can't take, since what it uses was found where it's written *)
+      let param = Hashtbl.find_opt cx.binders b.id <> Some Let_bound in
+      check env cx e expected
+        ~why:
+          {
+            why with
+            notes = why.notes @ [ block_lists_less ];
+            help =
+              Some
+                (fun _ expected ->
+                  block_lists_less_help ~name:b.ident.name ~param expected);
+          }
+  | Lambda (params, body), TFun (eps, eret, _, eu)
     when List.length eps = List.length params
          && List.for_all2
               (fun (p : Resolved.param) (ep : Types.param) -> p.pmode = ep.mode)
               params eps ->
       (* the parameters take their types from where the lambda is going,
          unless they're written; the whole type is unified with the expected
-         one at the end, which also checks what the body fails with and
-         uses *)
+         one at the end, which also checks what the body fails with. It
+         uses what the parameter's type lists, which the callee provides,
+         and what else its body uses is found where it's written
+         ([block_uses]) *)
       let ps =
         List.map2
           (fun (p : Resolved.param) ep ->
@@ -204,13 +260,13 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
             else param_type env ~tparams:cx.tparams ~named:cx.named p)
           params eps
       in
+      let listed = List.sort_uniq String.compare (row_names eu) in
       let errs = fresh_row env.st and uses = fresh_row env.st in
       (* numbered before the lambdas in its body, as when it's inferred *)
-      name_lambda cx e.node;
+      name_lambda ~given:(List.map Ty.dep_path listed) cx e.node;
       bind_params cx params ps;
-      check env
-        (lambda_cx cx params ps ~errs ~uses)
-        body eret
+      let bcx = lambda_cx cx params ps ~errs ~uses in
+      check env bcx body eret
         ?written:
           (match written with
           | Some (TFun (_, r, _, _)) when is_written r -> Some r
@@ -219,7 +275,8 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
           (explain ~notes:why.notes ?help:why.help
              ?narrowed_help:why.narrowed_help ~labels:why.labels
              ~msg:lambda_produces ());
-      let t = TFun (ps, eret, errs, uses) in
+      block_uses env cx e.loc ~listed bcx;
+      let t = TFun (ps, eret, errs, listed_row listed) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
   | Handler { deps; over; _ }, t
@@ -266,6 +323,39 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
             x elem)
         xs
   | _ -> leaf ()
+
+(* [e], a top-level function, an intrinsic or an operation, passed where
+   a block of type [expected] is wanted, which lists [eu]: it's a block
+   written here, which calls it (Lower), so what it uses but what [eu]
+   lists is found here, as for a lambda's body ([block_uses]). Its node
+   keeps the function's own type, which the call in the block has. *)
+and named_block env cx ~why (e : expr) eu expected =
+  let t = infer env cx e in
+  match reveal env.st t with
+  | TFun (ps, ret, errs, uses) ->
+      let listed = List.sort_uniq String.compare (row_names eu) in
+      name_lambda ~given:(List.map Ty.dep_path listed) cx e.node;
+      let callee = match e.kind with Var (Global p) -> Some p | _ -> None in
+      let op = match e.kind with Var (Dep_op (_, o)) -> Some o | _ -> None in
+      let calls =
+        ref
+          [
+            {
+              cloc = e.loc;
+              own = row_names uses;
+              row = uses;
+              needs = false;
+              callee;
+              op;
+            };
+          ]
+      in
+      block_uses env cx e.loc ~listed { cx with uses; calls };
+      ignore
+        (unifies env why (result_loc e)
+           ~found:(TFun (ps, ret, errs, listed_row listed))
+           ~expected)
+  | _ -> ignore (unifies env why (result_loc e) ~found:t ~expected)
 
 (* The type of [e], not yet recorded. *)
 and synth env cx (e : expr) : ty =
@@ -345,11 +435,15 @@ and synth env cx (e : expr) : ty =
       let ps =
         List.map (param_type env ~tparams:cx.tparams ~named:cx.named) params
       in
+      (* where it's going isn't known, so its callee provides nothing:
+         everything its body uses is found where it's written *)
       let errs = fresh_row env.st and uses = fresh_row env.st in
       name_lambda cx e.node;
       bind_params cx params ps;
-      let tb = infer env (lambda_cx cx params ps ~errs ~uses) body in
-      TFun (ps, tb, errs, uses)
+      let bcx = lambda_cx cx params ps ~errs ~uses in
+      let tb = infer env bcx body in
+      block_uses env cx e.loc ~listed:[] bcx;
+      TFun (ps, tb, errs, REmpty)
   | Block (stmts, last) ->
       List.iter (stmt env cx) stmts;
       infer env cx last
@@ -1394,12 +1488,13 @@ and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
         ret)
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
-         function, whose errors and dependencies are the call's *)
+         block, whose errors are the call's. Its type isn't written, so it
+         lists no dependencies: the block finds them where it's written *)
       let ps = List.map (infer_arg env cx) args in
       let ret = fresh_var env.st in
-      let errs = fresh_row env.st and uses = fresh_row env.st in
-      unify_at env f.loc ~found:tf ~expected:(TFun (ps, ret, errs, uses));
-      absorb env cx ~call:e ~ename ~fn:f errs uses;
+      let errs = fresh_row env.st in
+      unify_at env f.loc ~found:tf ~expected:(TFun (ps, ret, errs, REmpty));
+      absorb env cx ~call:e ~ename ~fn:f errs REmpty;
       ret
   | TError ->
       unknown_call cx;

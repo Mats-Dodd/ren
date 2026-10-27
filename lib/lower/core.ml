@@ -25,17 +25,18 @@
    its error, and check for one after each call that can fail.
 
    Dependencies are explicit too (deps.md, "How it runs"). Every function
-   and lambda takes one hidden parameter, its evidence: the vector of the
+   takes one hidden parameter, its evidence: the vector of the
    implementations installed where it's called, pure ones too, so no two
    places can disagree on what a function takes. Every call passes the
    caller's evidence on, a [With] extends it with an implementation for
    its body, and a [Dep_call] finds its dependency's implementation in it,
-   by the dependency's path, never by a name the program spells. A
-   lambda's evidence is its own, passed where it's called, so it never
-   keeps the implementation that was installed where it was made. The
-   one exception is `next` in a handler: a [Dep_call] through it uses
-   the evidence where the handler was installed, which a lambda in the
-   handler keeps, as it would a local (handlers.md, "How it runs").
+   by the dependency's path, never by a name the program spells. A block
+   captures the evidence where it's written, as it captures a local, and
+   takes from the evidence its caller passes only the dependencies its
+   parameter's type lists (foundations.md, decision 5). A [Dep_call]
+   through `next` in a handler uses the evidence where the handler was
+   installed, which a block in the handler captures too (handlers.md,
+   "How it runs").
 
    So are types, where the running program needs one: to show a value
    (shown.ml). A generic function takes a hidden parameter for each of its
@@ -182,8 +183,8 @@ and kind =
       next : bool;
           (** a call through `next`: [ev] is then the evidence of the [Handler]
               it's in, where it was installed, so the innermost [dep] in it is
-              the one the handler is over. A lambda in the handler keeps that
-              evidence, the one way evidence is captured *)
+              the one the handler is over. A block in the handler captures that
+              evidence, as it captures the evidence where it's written *)
       args : expr list;
     }
       (** [Clock.now()]: a call of an operation of the innermost implementation
@@ -260,16 +261,23 @@ and kind =
       name : string;
       params : param list;
       ev : var;
+      outer : var;
+      given : Path.t list;
       captures : var list;
       body : expr;
     }
-      (** [captures] are the locals from outside the lambda its body uses, in
-          order of id; their values are copied when the lambda is made. Its
-          evidence [ev] is passed where it's called, never captured. [name] is
-          its name, for printing and for the code a release build specializes
-          for it: one written in the program's (Ty.lambda_id), or, for the
-          lambda that calls an operation used as a value, the operation's path
-      *)
+      (** a block. [captures] are the locals from outside it its body uses, in
+          order of id, and [outer], the evidence where it's written, among them;
+          their values are copied when it's made. Its body runs with the
+          evidence [ev]: [outer], with the implementations of [given] in the
+          evidence its caller passes put on top (foundations.md, decision 5).
+          [given] are the dependencies the type of the parameter it's passed to
+          lists, which the callee provides, sorted; usually none, and then [ev]
+          is [outer]. [name] is its name, for printing and for the code a
+          release build specializes for it: one written in the program's
+          (Ty.lambda_id), which a named function or an operation used as a
+          value, a block that calls it, gets too; or, for an operation a handler
+          leaves to the one under it, the operation's path *)
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
@@ -386,7 +394,7 @@ let mk kind ty loc = { kind; ty; loc }
    apart from every type a program can name. *)
 let evidence_ty = Ty.Con (Path.prelude "$Evidence", [])
 
-(* The evidence a function or lambda takes, or a [With] binds. *)
+(* The evidence a function takes, or a block or a [With] binds. *)
 let evidence id = { id; name = "ev"; ty = evidence_ty }
 
 (* The type of a type's descriptor, which, like evidence, no type in Ren
@@ -804,18 +812,22 @@ let rec sexp_with t e =
         | Ref v -> Atom ("&" ^ show_var v)
       in
       List (atom "call" :: var ev :: sexp f :: List.map arg args)
-  | Lambda { params; ev; captures; body; _ } ->
+  | Lambda { params; ev; outer; given; captures; body; _ } ->
       let param p =
         match p.mode with
         | Inout -> Atom ("inout " ^ show_var p.var)
         | Read -> var p.var
       in
+      (* its evidence, as a [With]'s: [outer] with what its caller gives *)
       List
         [
           atom "lambda";
           List (List.map param params);
           List (atom "captures" :: List.map var (shown_captures captures));
           var ev;
+          List
+            (atom "extend" :: var outer
+            :: List.map (fun d -> Atom (Path.full d)) given);
           sexp body;
         ]
   | Con (_, c, args) -> List (atom "con" :: atom c :: List.map sexp args)

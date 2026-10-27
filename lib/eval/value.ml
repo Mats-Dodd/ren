@@ -33,12 +33,18 @@ type t =
           which shares most of the old one *)
   | VClosure of {
       params : int list;  (** the parameters' binder ids *)
-      ev : int;  (** its evidence's id: what it's passed where it's called *)
+      ev : int;  (** the id of the evidence its body runs with *)
+      outer : int;
+          (** the id of the evidence where it was written, which it captured *)
+      given : Path.t list;
+          (** what it takes from the evidence it's passed where it's called, on
+              top of [outer]'s (Core.Lambda) *)
       body : Core.expr;
       env : t ref Env.t;
     }
-      (** a lambda, with the variables it captured when it was created, the
-          hidden type parameters of the function it's in among them *)
+      (** a block, with the variables it captured when it was made, the evidence
+          where it was written and the hidden type parameters of the function
+          it's in among them *)
   | VFn of Path.t * Ty.ty list * t list
       (** a top-level function used as a value, with what it's given for its
           hidden type parameters, the types its type variables stand for where

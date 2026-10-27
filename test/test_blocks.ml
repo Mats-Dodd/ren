@@ -640,8 +640,7 @@ let%expect_test "[s4 accept] a helper that installs what its block's type lists"
     =
   (* `body`'s type lists `Net`, so `with_fake_net` provides it: the
      handler reaches the block's `Net` calls, and `main` uses only
-     `Console`. target: `with_fake_net`'s type is as written, `fn
-     with_fake_net(body: fn() uses Net)` *)
+     `Console`. `with_fake_net`'s type is as written *)
   let src =
     {|
 dep Net =
@@ -657,29 +656,24 @@ fn main() uses Console =
 |}
   in
   types src;
-  (* until s4: today's output *)
   [%expect
     {|
-    error: expected `fn() uses Net`, found `fn() uses Console, Net`
-       ┌─ test.ren:10:17
-    10 │   with_fake_net(fn() => print(Net.get("a")))
-       │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    dep Net
+      get: fn(Str) -> Str
+    handler fake_net() for Net
+    fn with_fake_net(body: fn() uses Net)
+    fn main() uses Console
     |}];
   run src;
-  (* until s4: today's output *)
-  [%expect
-    {|
-    error: expected `fn() uses Net`, found `fn() uses Console, Net`
-       ┌─ test.ren:10:17
-    10 │   with_fake_net(fn() => print(Net.get("a")))
-       │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  [%expect {|
+    fake a
+    ()
     |}]
 
 let%expect_test "[s4 accept] a block's Clock is charged where it's written" =
   (* `f`'s type lists nothing, so `at(1)` doesn't handle the block's
-     `Clock.now()`: the clock installed where the block is written does.
-     target: `fn run_at(f: fn() -> Time) -> Time`, and `main` prints
-     `Time(0)` *)
+     `Clock.now()`: the clock installed where the block is written does,
+     and `main` prints `Time(0)` *)
   let src =
     {|
 fn at(minutes: Int) -> Clock = Clock.frozen(Time.epoch + Duration.minutes(minutes))
@@ -699,17 +693,15 @@ fn main() uses Console =
     fn main() uses Console
     |}];
   run src;
-  (* until s4: today's output *)
   [%expect {|
-    Time(60000)
+    Time(0)
     ()
     |}]
 
 let%expect_test
     "[s4 accept] a wrapper can't handle its block's calls by accident" =
   (* `quietly` installs a console that drops what's written, for its own
-     use; the block's `print` still reaches `main`'s. target: prints
-     `hi` *)
+     use; the block's `print` still reaches `main`'s, which prints `hi` *)
   run
     {|
 handler silent() for Console =
@@ -724,12 +716,14 @@ fn quietly(body: fn()) =
 fn main() uses Console =
   quietly(fn() => print("hi"))
 |};
-  (* until s4: today's output *)
-  [%expect {| () |}]
+  [%expect {|
+    hi
+    ()
+    |}]
 
 let%expect_test "[s4 accept] next called from a block inside an arm" =
-  (* the block is written in the arm, so `next` is the arm's. target:
-     prints `30` *)
+  (* the block is written in the arm, so `next` is the arm's: 5 + 10 +
+     15 *)
   run
     {|
 dep N =
@@ -745,22 +739,16 @@ fn main() uses Console =
   with summed() over base() in
     print(N.get(5))
 |};
-  (* until s4: today's output *)
-  [%expect
-    {|
-    error: a lambda can't call `next`
-      ┌─ test.ren:8:36
-    8 │   get(k) => [1, 2, 3].map(fn(i) => next.get(k) * i).sum()
-      │                                    ^^^^^^^^
-      = `next` is the implementation under this one while an operation runs, and a lambda can be called after the operation is done
-      help: call it in the operation, and give the lambda what it returns: `let v = next.get(...)`
+  [%expect {|
+    30
+    ()
     |}]
 
 let%expect_test
     "[s4 accept] a named function passed as a value uses what's installed \
      where it's used" =
   (* `stamp` is passed where `main`'s frozen clock is installed, so its
-     `Clock.now()` is that one's, not the one `apply_at` installs. target:
+     `Clock.now()` is that one's, not the one `apply_at` installs: it
      prints `Time(0)`, and `apply_at` uses nothing *)
   let src =
     {|
@@ -782,16 +770,15 @@ fn main() uses Console =
     fn main() uses Console
     |}];
   run src;
-  (* until s4: today's output *)
   [%expect {|
-    Time(60000)
+    Time(0)
     ()
     |}]
 
 let%expect_test "[s4 accept] a block's dependencies are its writer's" =
   (* `each` lists no dependencies for `f`, so it uses none, and the
-     block's `print` makes `main` use `Console`. target: `fn each(xs:
-     Array<Int>, f: fn(Int))`, without a row *)
+     block's `print` makes `main` use `Console`: `fn each(xs: Array<Int>,
+     f: fn(Int))`, without a row *)
   types
     {|
 fn each(xs: Array<Int>, f: fn(Int)) =
@@ -804,6 +791,85 @@ fn main() uses Console = each([1, 2], fn(x) => print(x))
     {|
     fn each(xs: Array<Int>, f: fn(Int))
     fn main() uses Console
+    |}]
+
+let%expect_test
+    "[s4 accept] an operation passed as a value, given its dependency" =
+  (* `f`'s type lists `Net`, so the block `Net.get` makes is given
+     `ask`'s, and `main` uses no `Net` *)
+  run
+    {|
+dep Net =
+  get: fn(url: Str) -> Str
+
+handler fake_net() for Net =
+  get(url) => "fake ".concat(url)
+
+fn ask(f: fn(Str) -> Str uses Net) -> Str = with fake_net() in try f("a")
+
+fn main() uses Console = print(ask(Net.get))
+|};
+  [%expect {|
+    fake a
+    ()
+    |}]
+
+let%expect_test "[s4 accept] a let of a block whose written type lists Net" =
+  (* the type written on the `let` is where the block is written, so it's
+     given `Net` by whoever it's passed to *)
+  run
+    {|
+dep Net =
+  get: fn(url: Str) -> Str
+
+handler fake_net() for Net =
+  get(url) => "fake ".concat(url)
+
+fn with_fake_net(body: fn() uses Net) = with fake_net() in try body()
+
+fn main() uses Console =
+  let b: fn() uses Net = fn() => print(Net.get("let"))
+  with_fake_net(b)
+|};
+  [%expect {|
+    fake let
+    ()
+    |}]
+
+let%expect_test
+    "[s4 reject] a block whose type lists less than its callee gives" =
+  (* `b`'s and `body`'s types list nothing, so what they use is found where
+     they're written: neither can take `Net` from `with_fake_net` *)
+  types
+    {|
+dep Net =
+  get: fn(url: Str) -> Str
+
+handler fake_net() for Net =
+  get(url) => "fake ".concat(url)
+
+fn with_fake_net(body: fn() uses Net) = with fake_net() in try body()
+fn pass_on(body: fn()) = try with_fake_net(body)
+
+fn main() uses Console =
+  let b = fn() => print(1)
+  with_fake_net(b)
+|};
+  [%expect
+    {|
+    error: expected `fn() uses Net`, found `fn()`
+      ┌─ test.ren:8:44
+    8 │ fn pass_on(body: fn()) = try with_fake_net(body)
+      │                                            ^^^^
+      = a block is given only the dependencies its type lists, and this one's lists fewer than its callee gives
+      help: list them in `body`'s type: `body: fn() uses Net`
+
+    error: expected `fn() uses Net`, found `fn()`
+       ┌─ test.ren:12:17
+    12 │   with_fake_net(b)
+       │                 ^
+       = a block is given only the dependencies its type lists, and this one's lists fewer than its callee gives
+       help: write its type where it's written: `let b: fn() uses Net = fn ...`
     |}]
 
 (* ---- s5: a block captures by reference, and one rule keeps that
@@ -1044,7 +1110,7 @@ fn main() = 1
 |};
   (* until s5: today's output *)
   [%expect {|
-    fn rec(f: fn(fn()) ! ..e) ! ..e
+    fn rec(f: fn(fn()))
     fn main() -> Int
     |}]
 
@@ -1066,7 +1132,7 @@ fn main() = 1
   (* until s5: today's output *)
   [%expect
     {|
-    fn fix(f: fn(fn(Int) -> Int, Int) -> Int ! ..e, n: Int) -> Int ! ..e
+    fn fix(f: fn(fn(Int) -> Int, Int) -> Int, n: Int) -> Int
     fn main() -> Int
     |}]
 
@@ -1376,14 +1442,9 @@ fn main() uses Console =
 |}
     );
   (* until s5: today's output *)
-  [%expect
-    {|
-    error: a lambda can't call `next`
-       ┌─ test.ren:19:32
-    19 │     update(&cache, k, fn(v) => next.load(k))
-       │                                ^^^^^^^^^
-       = `next` is the implementation under this one while an operation runs, and a lambda can be called after the operation is done
-       help: call it in the operation, and give the lambda what it returns: `let v = next.load(...)`
+  [%expect {|
+    20
+    ()
     |}]
 
 let%expect_test

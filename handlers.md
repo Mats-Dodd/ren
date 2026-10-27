@@ -118,8 +118,9 @@ error: `fake_users` doesn't implement `list` or `delete`
   on, so most people already know it.
 - **It can only be called through,** never kept, passed or returned. That
   keeps the third no-cycles invariant: an installed instance is never a
-  value. Nor can a lambda call it (see [Where 10a differed](#where-10a-differed)),
-  which would keep it.
+  value. A block written in an operation can call it, as the operation
+  can: the block finds `next` where it's written, and it can't outlive
+  the call it's passed to, so it can't keep it (foundations.md).
 
 ```
 error: `next` can only be called through
@@ -431,7 +432,9 @@ submission and its completion:
 - **`next` is a lookup Ren already does.** A handler captures the evidence
   vector from where it's installed. With `over`, the implementation it's
   over is installed just outside it, so `next` is that implementation in
-  the captured vector.
+  the captured vector. A block written in an operation captures that
+  vector too, as every block captures the evidence where it's written
+  ([deps.md](deps.md#how-it-runs)).
 - **Leaving operations out** compiles to forwarding them, with no code to
   write. It's a direct call, so it costs what writing it out would.
 - **`finally`** is a lambda kept in the handler's instance. The Core
@@ -506,10 +509,11 @@ it:
 - **`next` isn't a keyword:** in a handler declared `over`, `next.op(...)`
   and `next(A).op(...)` reach the one under it, and nothing there can be
   named `next`. It can only be called through, never kept.
-- **A lambda can't call `next`:** passed to the implementation under
-  the handler and kept there, it would reach it again, a cycle. Since
-  10c a block can't be kept (foundations.md), but the rule stays for
-  now. An operation calls `next` and gives the block what it returned.
+- **A lambda couldn't call `next`** until stage 10c: passed to the
+  implementation under the handler and kept there, it would have reached
+  it again, a cycle. A block can't be kept, and it finds `next` where
+  it's written, so since 10c step 4 one can:
+  `get(k) => [1, 2, 3].map(fn(i) => next.get(k) * i).sum()`.
 - **A chain installs what its bottom installs,** with each link above
   taking the place of what it goes over: `cached(ttl) over counting()`,
   where `counting` is a `Prices & Calls`, installs both.

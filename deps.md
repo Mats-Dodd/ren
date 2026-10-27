@@ -111,8 +111,8 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   The help says `try match` instead when the call fails with more than the
   tag it maps, which the `try` passes on.
 
-- **A parameter of a dependency type is transparent, as a block is.** If
-  it's only installed, what it needs flows to the caller. One that's
+- **A parameter of a dependency type is transparent.** If it's only
+  installed, what it needs flows to the caller. One that's
   stored names its row, `Clock uses ..d`. A block's type never names one:
   a block is only called or passed on, so `fn(Int) uses ..d` is an error,
   "a block's errors and dependencies aren't named", whose help leaves the
@@ -404,8 +404,8 @@ main.ren
 
 ## How it runs
 
-Every function and lambda takes one hidden parameter in Core, its
-evidence: the vector of implementations installed where it's called.
+Every function takes one hidden parameter in Core, its evidence: the
+vector of implementations installed where it's called.
 Pure functions take it too, so every function takes the same, and
 nothing can disagree about what a call passes (the C backend can drop it
 from a function it can prove pure). Every call passes the caller's
@@ -422,12 +422,21 @@ reaches the world is called only by its dependency's real
 implementation, which Core Lint checks, so nothing reaches the world
 but through an operation.
 
-A block gets the evidence of whoever calls it, not of where it was
-made, and a function over blocks, `fn twice(f: fn())`, just passes `f`
-its own. A block never outlives the call it's passed to, so it can't be
-called somewhere a `with` has gone. An implementation keeps the evidence
-where it's installed, and its operations run with that: what it needs
-is fixed at install (rule 5). An associated value is made once, at
+A block captures the evidence where it's written, as it captures a
+local, so its dependencies are found there (foundations.md, decision 5).
+A debug build passes a block as a code pointer and a frame pointer, and
+the frame holds that evidence. The callee provides only what the
+parameter's type lists: a call of a block passes the caller's evidence,
+and the block puts the caller's implementations of those dependencies
+on top of what it captured, as Koka's `evv-insert` does. So `fn
+twice(f: fn())` gives `f` nothing, and a `with` around a call of a block
+reaches it only when the block's type lists what the `with` installs.
+A block never outlives the call it's passed to, so what it captured is
+still installed whenever it runs. A named function or an operation
+passed as a value, `each(xs, show)`, is a block written there, `fn(x)
+=> show(x)`. An implementation keeps the evidence where it's installed,
+and its operations run with that: what it needs is fixed at install
+(rule 5). An associated value is made once, at
 startup, with nothing installed, so it can't use a dependency, and it
 can't hold a block. The program starts
 in `$start`, which installs the real implementation of each built-in
@@ -435,15 +444,12 @@ in `$start`, which installs the real implementation of each built-in
 
 A handler over another is installed inside it, so the evidence where
 it's installed holds the one under it: `next.get(id)` is a dependency
-call on that evidence, which the handler's operations keep, so a `with`
-around the call still reaches the one under it, and an operation it
-leaves out is a lambda that makes that call. They're the one exception
-to a block getting its caller's evidence. A lambda can't call `next`:
-one could be passed to
-the implementation under the handler and kept there, and would reach it
-again. Its `finally` is a lambda kept in its instance, which
-the `with` calls when its body ends, with the body's result and a
-descriptor of its type.
+call on that evidence, which the handler's operations capture, and so
+does a block written in one, so a `with` around the call still reaches
+the one under it, and an operation it leaves out is a block that makes
+that call. Its `finally` is kept in its instance, as its operations are,
+and the `with` calls it when its body ends, with the body's result and
+a descriptor of its type.
 
 ## Deviations
 
@@ -466,22 +472,37 @@ stage, or settled something the plan left open:
   named row can still follow, since it can't be an argument, and several
   dependencies are written in parentheses, `Box<(Clock uses Os,
   Console)>`, as `ren types` prints them.
-- **A parameter whose type is written transparent, `f: fn() -> Int` or
-  `r: Rates`, and is called or installed inside a `with`, still passes
-  everything it uses to the caller**, even what that `with` installs: its
-  row is its function's. That's more than it needs, never less. An
-  inferred parameter, `fn run_at(f) = with at(1) in try f()`, gets
-  exactly what the `with` doesn't install.
-- **A block called inside two `with`s** gets only what's installed
-  outside both, so the same holds for it.
+- **A block's dependencies are found where it's written** (stage 10c,
+  foundations.md decision 5), except those its parameter's type lists,
+  which the callee provides:
+
+  ```ren
+  fn with_fake_net(body: fn() uses Net) = with fake_net() in try body()
+  ```
+
+  `fake_net()` reaches the block's `Net` calls, and its other
+  dependencies, a `print`, are its writer's. A type that lists nothing,
+  or a parameter whose type isn't written, gives nothing, so `fn
+  run_at(f: fn() -> Time) = with at(1) in try f()` doesn't change the
+  clock `f` sees: a wrapper can't handle a block's calls by accident,
+  and a helper that installs something for its body says so. A block
+  passed where its callee gives more than its type lists is an error,
+  whose help is to list them where it's written: `let b: fn() uses Net =
+  fn() => ...`, or in its parameter's type. Its errors stay its
+  function's: a block parameter fails with what its function does, once
+  a `try` passes it on.
+- **`ren types` prints a block parameter with what its type lists**,
+  `body: fn() uses Net`, or nothing, `f: fn() -> T`; its errors are its
+  function's, which aren't printed. Before 10c an unwritten one printed
+  its function's rows, `g: fn() -> T ! ..e uses ..d`.
+- **A parameter whose type is a dependency's, `r: Rates`, installed
+  inside a `with`, still passes everything it needs to the caller**,
+  even what that `with` installs: its row is its function's. That's more
+  than it needs, never less.
 - **A function calling itself inside a `with`** uses only what it does
   outside it, but **two functions that call each other**, one inside a
   `with`, still need what that `with` installs: each sees the other's
   `uses` as its own until the pair is checked.
-- **`ren types` prints a written block parameter without rows**, `body:
-  fn() -> Int`: its rows are its function's own. An inferred one still
-  prints them, `g: fn() -> T ! ..e uses ..d`, until blocks are found
-  lexically (foundations.md, Staging).
 - **A dependency's `self` is transparent, but can be kept.** In `fn
   scaled(self, k: Int) -> N`, `self` needs what the method uses, as `c:
   N` does, and a receiver that needs less will do. Unlike `c: N`, it can
@@ -510,7 +531,7 @@ stage, or settled something the plan left open:
   A public handler writes it, `! DbDown`, after what it implements; a
   private one's is inferred. A written implementation type without `!`
   can't fail to start, a transparent parameter's included, where a
-  transparent `f: fn()` fails with its function's errors.
+  block parameter `f: fn()` fails with its function's errors.
 - **`finally` is generic in the body's value.** It can give it back, pass
   it on or show it, but comparing, ordering or hashing it is an error,
   and it's given its result as `Ok(v)` or `Err(_)`, the error passed on

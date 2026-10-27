@@ -737,6 +737,20 @@ let forced_unit_help c =
   sprintf "if `%s` means to drop a value of any type there, write `let _ = ...`"
     c
 
+(* A block [name] passed where its callee gives it dependencies its type
+   doesn't list (Infer_expr.check): what it uses was found where it's
+   written, so it can't take them. [param] says it's a parameter, not a
+   `let`, and [expected] is the type it's passed as. *)
+let block_lists_less =
+  "a block is given only the dependencies its type lists, and this one's lists \
+   fewer than its callee gives"
+
+let block_lists_less_help ~name ~param expected =
+  if param then sprintf "list them in `%s`'s type: `%s: %s`" name name expected
+  else
+    sprintf "write its type where it's written: `let %s: %s = fn ...`" name
+      expected
+
 let lambda_produces f x =
   sprintf "this lambda produces %s, but it has to produce %s" (article f)
     (article x)
@@ -1378,21 +1392,6 @@ let changes_one_of_several loc ~recv ~all ~name ~dep =
     (sprintf "`%s` can't change `%s`, which implements more than `%s`" name recv
        dep)
 
-(* `next.op(...)` in a lambda a handler makes (Infer_env.next_at) *)
-let next_in_lambda loc op =
-  Diag.make loc
-    ~notes:
-      [
-        "`next` is the implementation under this one while an operation runs, \
-         and a lambda can be called after the operation is done";
-      ]
-    ~help:
-      (sprintf
-         "call it in the operation, and give the lambda what it returns: `let \
-          v = next.%s(...)`"
-         op)
-    "a lambda can't call `next`"
-
 (* ---- what a module writes (infer_top.ml) ---- *)
 
 (* The parameter [name], of the dependency [dep]'s type, is used as a
@@ -1597,28 +1596,19 @@ let rename_one = "rename one of them"
 (* ---- what a group leaves to be checked (solve.ml, infer_declared.ml) ---- *)
 
 (* Why a call brings in a dependency it seems not to: the function it
-   calls calls a closure inside a `with` of the dependency, [dep], that
+   calls calls something inside a `with` of the dependency, [dep], that
    still gets it from outside (Solve.install). [fn] is that function. *)
 type withheld =
   | Same_row of { fn : string; dep : string }
       (** what's called inside the `with` uses what [fn] itself does *)
-  | Several_withs of { fn : string; dep : string }
-      (** the closure is called inside more than one `with` *)
 
 let withheld = function
   | Same_row { fn; dep } ->
       sprintf
         "in `%s`, what's called inside the `with` that installs `%s` uses what \
-         `%s` itself does: a parameter whose type is written `fn(...)`, or a \
-         closure that's called outside the `with` too, gets only what's \
-         installed outside it"
-        fn dep fn
-  | Several_withs { fn; dep } ->
-      sprintf
-        "`%s` calls a closure inside more than one `with`, so the closure gets \
-         only what's installed outside all of them, not the `%s` one of them \
-         installs"
-        fn dep
+         `%s` itself does: a function that calls `%s` back gets only what's \
+         installed outside the `with`"
+        fn dep fn fn
 
 (* A row that includes a parameter's errors, at [loc], where it can't. *)
 let param_fails_here loc =
@@ -1738,35 +1728,32 @@ let named_errors_undeclared loc n ~fn =
       (sprintf "add `..%s` to what `%s` declares it fails with, after `!`" n fn)
     (sprintf "this can fail with `..%s`, which `%s` doesn't declare" n fn)
 
-(* A `with`'s body uses the dependencies [deps], as a message names them,
-   which what's outside it can't: a closure called both in it and outside
-   it, which uses the outside's row ([same_row]), or what the `with` is in
-   was closed by its type. *)
-let with_body_uses loc ~same_row deps =
+(* A `with`'s body, or a block ([block]), uses the dependencies [deps], as
+   a message names them, which what's outside it, where it's written,
+   can't: what it calls uses the row of the function it's in
+   ([same_row]), or what it's in was closed by its type. *)
+let with_body_uses loc ~block ~same_row deps =
+  let what = if block then "this block" else "this `with`'s body" in
+  let msg = sprintf "%s uses %s, which what's outside it can't" what in
   if same_row then
     Diag.make loc
       ~notes:
         [
-          "a closure called in a `with`'s body is called with what's installed \
-           outside it too, and this one is called where more is installed than \
-           outside";
+          "what's called here uses what the function it's in does, which gets \
+           only what's installed outside";
         ]
-      ~help:
-        "call the closure only inside the `with`, or install what it uses \
-         outside it too"
-      (sprintf "this `with`'s body uses %s, which what's outside it can't"
-         (and_list deps))
+      ~help:"install what it uses outside it too"
+      (msg (and_list deps))
   else
     Diag.make loc
       ~notes:
         [
-          "a function or lambda uses everything its `with`s' bodies use, but \
-           what they install, and the type of what this is in says it can't \
-           use all of that";
+          "a function or block uses everything its `with`s' bodies and its \
+           blocks use, but what they install or are given, and the type of \
+           what this is in says it can't use all of that";
         ]
       ~help:(closed_uses_help deps)
-      (sprintf "this `with`'s body uses %s, which what's outside it can't"
-         (and_list deps))
+      (msg (and_list deps))
 
 (* ---- implementations (solve.ml) ---- *)
 

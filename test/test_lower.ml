@@ -101,7 +101,8 @@ fn main() =
     (fn main () ev/1
       (let n/2 1
         (let m/3 2
-          (let f/4 (lambda (x/5) (captures n/2) ev/6 (+ x/5 n/2))
+          (let f/4
+            (lambda (x/5) (captures n/2 ev/1) ev/6 (extend ev/1) (+ x/5 n/2))
             (call ev/1 f/4 m/3)))))
     (fn $start () ev/1 (call ev/1 main))
     |}]

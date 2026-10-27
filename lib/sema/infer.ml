@@ -73,7 +73,7 @@ type found = Infer_env.found =
   | Handles
   | Fail_arm
   | Unwrap
-  | Lambda_id of string
+  | Block of { name : string; given : Path.t list }
   | Builtin_op
   | Generic_op of string
 

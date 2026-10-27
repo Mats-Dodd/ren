@@ -438,9 +438,11 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "a lambda can't call next" =
-  (* passed to the one under it, which calls it, it would reach it again *)
-  check_error
+let%expect_test "a block in an arm can call next" =
+  (* the block is written in the arm, so it finds `next` where the arm
+     does, and the one under it calls it while `put` runs: it can't keep
+     it (foundations.md, decision 1). 7 + 1 *)
+  run
     {|
 dep Store =
   put: fn(f: fn() -> Int)
@@ -461,17 +463,12 @@ fn main() uses Console =
     Store.put(fn() => 1)
     print(Store.run())
 |};
-  [%expect
-    {|
-    error: a lambda can't call `next`
-       ┌─ test.ren:13:30
-    13 │   put(f) => next.put(fn() => next.size() + f())
-       │                              ^^^^^^^^^
-       = `next` is the implementation under this one while an operation runs, and a lambda can be called after the operation is done
-       help: call it in the operation, and give the lambda what it returns: `let v = next.size(...)`
+  [%expect {|
+    8
+    ()
     |}]
 
-let%expect_test "what a lambda needs of next, the operation gives it" =
+let%expect_test "what a block needs of next, the operation can give it" =
   run
     {|
 dep Store =
@@ -574,9 +571,11 @@ fn main() = 1
           (test.N:
             (record
               (get:
-                (lambda () (captures ev/2) ev/3 (+ (next-call ev/2 test.N.get) 1)))
+                (lambda () (captures ev/2) ev/3 (extend ev/2)
+                  (+ (next-call ev/2 test.N.get) 1)))
               (put:
-                (lambda ($x/4) (captures) ev/5 (dep-call ev/5 test.N.put $x/4))))))))
+                (lambda ($x/4) (captures ev/2) ev/5 (extend ev/2)
+                  (dep-call ev/5 test.N.put $x/4))))))))
     (fn main () ev/1 1)
     (fn $start () ev/1 (call ev/1 main))
     |}]
@@ -1428,9 +1427,11 @@ fn main() = 1
             (instance
               (test.N:
                 (record
-                  (get: (lambda () (captures) ev/5 (dep-call ev/5 test.N.get)))))
+                  (get:
+                    (lambda () (captures ev/2) ev/5 (extend ev/2)
+                      (dep-call ev/5 test.N.get)))))
               (finally
-                (lambda ($ty/6 r/7) (captures $n/4) ev/8
+                (lambda ($ty/6 r/7) (captures ev/2 $n/4) ev/8 (extend ev/2)
                   (let n/3 (get-cell $n/4)
                     (finally
                       (seq (= n/3 (+ n/3 1))

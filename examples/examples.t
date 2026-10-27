@@ -33,13 +33,14 @@ infer.ren annotates nothing; this is what inference works out:
   -- infer
   fn seats(u: User) -> Int
   fn first_or<T>(o: Option<T>, fallback: T) -> T
-  fn map_option<T, U>(o: Option<T>, f: fn(T) -> U uses ..d) -> Option<U> uses ..d
-  fn twice<T>(f: fn() -> T uses ..d) -> T uses ..d
+  fn map_option<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U>
+  fn twice<T>(f: fn() -> T) -> T
   fn main() uses Console
 
 `ren core` prints the program in Core, which it runs as: every function and
-lambda takes the evidence of what's installed, `ev`, which every call passes
-on (deps.md, "How it runs"):
+block takes the evidence of what's installed, `ev`, which every call passes
+on, and a block captures the evidence where it's written, `ev/3`, and adds
+what its type lists, here nothing (deps.md, "How it runs"):
 
   $ ren core infer.ren
   -- infer
@@ -57,11 +58,11 @@ on (deps.md, "How it runs"):
           (call ev/3 print
             (call ev/3 first_or
               (call ev/3 map_option (con Some 20)
-                (lambda (n/2) (captures) ev/4 (+ n/2 1)))
+                (lambda (n/2) (captures ev/3) ev/4 (extend ev/3) (+ n/2 1)))
               0))
           (seq (call ev/3 print (call ev/3 first_or (con None) true))
             (call ev/3 twice
-              (lambda () (captures alice/1) ev/5
+              (lambda () (captures alice/1 ev/3) ev/5 (extend ev/3)
                 (call ev/5 print (. alice/1 id)))))))))
   (fn $start () ev/1
     (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
@@ -79,13 +80,12 @@ all of `main`'s, `Console` and the rest, `..d`, and it fails with nothing,
     (match (. u/1 plan) (Free => 1) ((Pro n/2) => n/2)))
   (fn first_or : fn(Option<T>, T) -> T ! ..e uses ..d (o/1 fallback/2) ev/4
     (match o/1 ((Some v/3) => v/3) (None => fallback/2)))
-  (fn map_option :
-    fn(Option<T>, fn(T) -> U uses ..d) -> Option<U> ! ..e uses ..d
+  (fn map_option : fn(Option<T>, fn(T) -> U) -> Option<U> ! ..e uses ..d
     (o/1 f/2)
     ev/4
     (match o/1 ((Some v/3) => (con Some (call ev/4 f/2 v/3)))
       (None => (con None))))
-  (fn twice : fn(fn() -> T uses ..d) -> T ! ..e uses ..d (f/1) ev/3
+  (fn twice : fn(fn() -> T) -> T ! ..e uses ..d (f/1) ev/3
     (let _/2 (call ev/3 f/1) (call ev/3 f/1)))
   (fn main : fn() ! ..e uses Console, ..d () ev/3
     (let alice/1 (record (id: 1) (plan: (con Pro 5)))
@@ -95,16 +95,16 @@ all of `main`'s, `Console` and the rest, `..d`, and it fails with nothing,
         (seq
           (call ev/3 (inst print Int {} {..d})
             (call ev/3 (inst first_or Int {} {Console | ..d})
-              (call ev/3 (inst map_option Int Int {Console | ..d} {})
+              (call ev/3 (inst map_option Int Int {} {Console | ..d})
                 (con Some 20)
-                (lambda (n/2) (captures) ev/4 (+ n/2 1)))
+                (lambda (n/2) (captures ev/3) ev/4 (extend ev/3) (+ n/2 1)))
               0))
           (seq
             (call ev/3 (inst print Bool {} {..d})
               (call ev/3 (inst first_or Bool {} {Console | ..d}) (con None)
                 true))
-            (call ev/3 (inst twice Unit {Console | ..d} {})
-              (lambda () (captures alice/1) ev/5
+            (call ev/3 (inst twice Unit {} {Console | ..d})
+              (lambda () (captures alice/1 ev/3) ev/5 (extend ev/3)
                 (call ev/5 (inst print Int {} {..d}) (. alice/1 id)))))))))
   (fn $start : fn() ! ..e () ev/1
     (with ev/2 (extend ev/1 Console Console.real)
@@ -136,7 +136,8 @@ use:
   
   -- main
   (fn main () ev/1
-    (call ev/1 twice (lambda () (captures) ev/2 (call ev/2 print 1))))
+    (call ev/1 twice
+      (lambda () (captures ev/1) ev/2 (extend ev/1) (call ev/2 print 1))))
   (fn $start () ev/1
     (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
 
@@ -353,7 +354,7 @@ changes:
     pub fn run(inout self, p: Program, fuel: Int) ! Underflow(Int)
     fn push(inout self, n: Int)
     fn pop(inout self) -> Int ! Underflow(Int)
-    fn binary(inout self, f: fn(Int, Int) -> Int ! ..e uses ..d) ! Underflow(Int) | ..e uses ..d
+    fn binary(inout self, f: fn(Int, Int) -> Int ! ..e) ! Underflow(Int) | ..e
   
   -- timeline
   pub type Timeline

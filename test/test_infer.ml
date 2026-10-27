@@ -1260,7 +1260,7 @@ fn main() = print(Some(true))
       | Some Fail_arm -> print_endline "a `fail` arm"
       | Some Error_tag -> print_endline "an error's tag"
       | Some Unwrap -> print_endline "unwraps a result"
-      | Some (Lambda_id id) -> print_endline ("lambda " ^ id)
+      | Some (Block { name; _ }) -> print_endline ("block " ^ name)
       | Some Builtin_op -> print_endline "a built-in operator"
       | Some (Generic_op r) -> print_endline ("an operator, by its " ^ r)
       | None -> ())
@@ -1308,10 +1308,10 @@ fn main() = twice(fn() => say(1))
     iface.values;
   [%expect
     {|
-    twice: fn(fn() ! ..e uses ..d) ! ..e uses ..d (as inferred)
+    twice: fn(fn() ! ..e) ! ..e uses ..d (as inferred)
     say: fn(Int) ! ..e uses Console, ..d (as inferred)
-    logged: fn(fn() ! ..e uses Console, ..d) ! ..e uses Console, ..d (as inferred)
-    app: fn(fn(fn() -> Int) -> Int ! ..e uses ..d) -> Int ! ..e uses ..d (as inferred)
+    logged: fn(fn() ! ..e) ! ..e uses Console, ..d (as inferred)
+    app: fn(fn(fn() -> Int) -> Int ! ..e) -> Int ! ..e uses ..d (as inferred)
     |}]
 
 let%expect_test "a type argument can't be a block" =
@@ -1673,7 +1673,7 @@ fn twice(f) =
 fn main() = twice() fn() => ()
 |};
   [%expect {|
-    fn twice(f: fn() uses ..d) uses ..d
+    fn twice(f: fn())
     fn main()
     |}]
 
@@ -1909,8 +1909,7 @@ fn main() = print(attempt g(1))
     {|
     Err(Bad)
     ()
-    (fn call :
-      fn((fn() -> Int ! Bad | ..e uses ..d), Int) -> Int ! Bad | ..e uses ..d
+    (fn call : fn(fn() -> Int ! Bad | ..e, Int) -> Int ! Bad | ..e uses ..d
       (f/1 n/2)
       ev/3
       (if (> n/2 0)
@@ -1925,7 +1924,8 @@ fn main() = print(attempt g(1))
         (call ev/3 f/1)))
     (fn g : fn(Int) -> Int ! Bad | ..e uses ..d (n/1) ev/2
       (call ev/2 (inst call {..r} {..d})
-        (lambda () (captures n/1) ev/3 (if (> n/1 0) (fail (tag Bad)) 1))
+        (lambda () (captures n/1 ev/2) ev/3 (extend ev/2)
+          (if (> n/1 0) (fail (tag Bad)) 1))
         n/1))
     (fn main : fn() ! ..e uses Console, ..d () ev/1
       (call ev/1 (inst print Result<Int, ! Bad> {} {..d})
@@ -2291,8 +2291,8 @@ fn main() = twice(good) && cmp(good)
   [%expect
     {|
     fn same<T has eq>(a: T, b: T) -> Bool
-    fn twice<T has eq, ..e has eq>(g: fn() -> T ! ..e uses ..d) -> Bool uses ..d
-    fn cmp<T has eq, ..e has eq>(g: fn() -> T ! ..e uses ..d) -> Bool uses ..d
+    fn twice<T has eq, ..e has eq>(g: fn() -> T ! ..e) -> Bool
+    fn cmp<T has eq, ..e has eq>(g: fn() -> T ! ..e) -> Bool
     fn good() -> Int ! Good(Int)
     fn main() -> Bool
     |}];

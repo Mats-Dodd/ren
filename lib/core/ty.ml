@@ -465,10 +465,11 @@ and show_effects pr e u =
    would write. [params] are the parameters' names. A row tail is printed
    (as `..e` / `..d`) only when it links two places, like an
    implementation kept in the result, `-> (Clock uses ..d)`, and the
-   function's own uses; a tail found only once says nothing. A transparent
-   parameter, whose row is its function's own, is printed as it's written,
-   `f: fn(Int)` or `c: Clock`: the function's `!` and `uses` already say
-   what's in it.
+   function's own uses; a tail found only once says nothing. A block
+   parameter's errors, and a transparent parameter's rows, which are its
+   function's own, are printed as they're written, `f: fn(Int)` or `c:
+   Clock`: the function's `!` and `uses` already say what's in them. A
+   block's `uses` is what its type lists, its callee provides.
 
    What it needs of a type parameter follows the parameter's name,
    `same<T has eq>`, `sum<T has add, zero>` (operators.md, "Generic
@@ -486,7 +487,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
   match s.ty with
   | Fun (ps, ret, errs, uses) ->
       (* a parameter's row that is the function's own, which isn't printed:
-         a transparent parameter, written `fn(...)`. One that ends in the
+         a block's errors, or a transparent parameter's. One that ends in the
          same tail but has fewer labels fails with less than the function,
          and is printed, so the tail shows whose it is *)
       let own (own : row) (r : row) =
@@ -497,20 +498,8 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
           (fun (p : param) ->
             match p.ty with
             | Fun (qs, r, e, u) ->
-                (* one row the function's own and the other closed and
-                   empty is a closure that's kept, `f: fn() uses ..d`,
-                   which isn't written like a transparent one, *)
-                let is_own (own : row) (r : row) = r.tail <> None && r = own in
-                let e_own = is_own errs e and u_own = is_own uses u in
-                (* and so is one with a row of its own, `fn() ! ..e`, whose
-                   other row is then written too *)
-                let kept own r = r.tail <> None && r <> own in
-                if
-                  (e_own && u = closed)
-                  || (u_own && e = closed)
-                  || kept errs e || kept uses u
-                then p
-                else { p with ty = Fun (qs, r, own errs e, own uses u) }
+                (* a block uses what its type lists, which is printed *)
+                { p with ty = Fun (qs, r, own errs e, u) }
             | Impl i ->
                 (* a transparent one needs what the function uses, and
                    fails to be installed with what it fails with *)

@@ -5,7 +5,8 @@
    Every node says its type, in canonical form (ty.ml), and keeps the
    location of the code it came from. Failing is explicit: [Fail],
    [Handle] and [Finally], and a call fails only if its callee's type says
-   it can. So is the evidence every function and lambda takes, and the
+   it can. So is the evidence every function takes and every block
+   captures, and the
    descriptors of types a generic function takes, to show a value of one
    of its type variables by, and the dictionaries of what it needs of
    them, to compare two by. Core Lint (core_lint.ml) checks that all of
@@ -146,8 +147,8 @@ and kind =
       next : bool;
           (** a call through `next`: [ev] is then the evidence of the [Handler]
               it's in, where it was installed, so the innermost [dep] in it is
-              the one the handler is over. A lambda in the handler keeps that
-              evidence, the one way evidence is captured *)
+              the one the handler is over. A block in the handler captures that
+              evidence, as it captures the evidence where it's written *)
       args : expr list;
     }
       (** [Clock.now()]: a call of an operation of the innermost implementation
@@ -223,16 +224,23 @@ and kind =
       name : string;
       params : param list;
       ev : var;
+      outer : var;
+      given : Path.t list;
       captures : var list;
       body : expr;
     }
-      (** [captures] are the locals from outside the lambda its body uses, in
-          order of id; their values are copied when the lambda is made. Its
-          evidence [ev] is passed where it's called, never captured. [name] is
-          its name, for printing and for the code a release build specializes
-          for it: one written in the program's (Ty.lambda_id), or, for the
-          lambda that calls an operation used as a value, the operation's path
-      *)
+      (** a block. [captures] are the locals from outside it its body uses, in
+          order of id, and [outer], the evidence where it's written, among them;
+          their values are copied when it's made. Its body runs with the
+          evidence [ev]: [outer], with the implementations of [given] in the
+          evidence its caller passes put on top (foundations.md, decision 5).
+          [given] are the dependencies the type of the parameter it's passed to
+          lists, which the callee provides, sorted; usually none, and then [ev]
+          is [outer]. [name] is its name, for printing and for the code a
+          release build specializes for it: one written in the program's
+          (Ty.lambda_id), which a named function or an operation used as a
+          value, a block that calls it, gets too; or, for an operation a handler
+          leaves to the one under it, the operation's path *)
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
@@ -349,7 +357,7 @@ val mk : kind -> Ty.ty -> Loc.t -> expr
 (* The type of evidence, which no type in Ren source can name. *)
 val evidence_ty : Ty.ty
 
-(* The evidence a function or lambda takes, or a [With] binds, as the
+(* The evidence a function takes, or a block or a [With] binds, as the
    local with this id. *)
 val evidence : int -> var
 

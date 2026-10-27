@@ -837,7 +837,6 @@ let setup env ~is_value (f : fn_def) =
       selves = errs :: transparent_rows f.params ps;
       sources = Some (ref []);
       named;
-      next_at = Next_ok;
     }
   in
   Hashtbl.replace env.globals path (TFun (ps, ret, errs, uses));

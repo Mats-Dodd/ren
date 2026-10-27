@@ -297,7 +297,7 @@ fn main() =
   [%expect
     {|
     fn double(x: Int) -> Int
-    fn apply<T, U>(o: Option<T>, f: fn(T) -> U uses ..d) -> Option<U> uses ..d
+    fn apply<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U>
     fn main() uses Console
     |}]
 

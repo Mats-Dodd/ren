@@ -268,7 +268,7 @@ let describe = function
   | VFn (p, _, _) -> "`" ^ Path.local p ^ "`"
   | VBuiltin (x, _, _) -> "`" ^ Intrinsic.name x ^ "`"
   | VClosure { body; _ } ->
-      Printf.sprintf "a lambda (its body at %s:%d)" body.loc.file
+      Printf.sprintf "a block (its body at %s:%d)" body.loc.file
         body.loc.start.line
   | _ -> "something that isn't a function"
 
@@ -492,10 +492,10 @@ let rec eval cx env (e : expr) =
         (fun a v -> match a with Ref x -> cell env x := v | Value _ -> ())
         args finals;
       ok result
-  | Lambda { params; ev; captures; body; _ } ->
+  | Lambda { params; ev; outer; given; captures; body; _ } ->
       (* copy the captured variables' values now, into cells of the
-         lambda's own: assigning to a variable later doesn't change what
-         the lambda sees *)
+         block's own: assigning to a variable later doesn't change what
+         the block sees. The evidence where it's written is one of them *)
       let env =
         List.fold_left
           (fun inner (v : var) -> Env.add v.id (ref !(cell env v)) inner)
@@ -505,6 +505,8 @@ let rec eval cx env (e : expr) =
         {
           params = List.map (fun (p : param) -> p.var.id) params;
           ev = ev.id;
+          outer = outer.id;
+          given;
           body;
           env;
         }
@@ -741,10 +743,12 @@ and apply cx f args ev =
    one. A top-level function's hidden type parameters hold what its value
    was given for them where it was used. *)
 and start cx f cells ev =
-  let run cx params ev_id body env =
-    (match ev with
-    | VEvidence _ -> ()
-    | _ -> bug ("a call of " ^ describe f ^ " passing something not evidence"));
+  let passed =
+    match ev with
+    | VEvidence installed -> installed
+    | _ -> bug ("a call of " ^ describe f ^ " passing something not evidence")
+  in
+  let run cx params ev_id ev body env =
     if List.length params <> List.length cells then
       bug ("a call of " ^ describe f ^ " with the wrong number of arguments");
     let env =
@@ -780,8 +784,29 @@ and start cx f cells ev =
       in
       run cx
         (List.map (fun (p : param) -> p.var.id) f.params)
-        f.ev.id f.body env
-  | VClosure { params; ev; body; env } -> run cx params ev body env
+        f.ev.id ev f.body env
+  | VClosure { params; ev = ev_id; outer; given; body; env } ->
+      (* a block runs with the evidence where it was written, with the
+         caller's implementations of what it's given on top, as a
+         [With_handler] puts its instance's on top of what's outside it:
+         Koka's `evv-insert` (koka/lib/std/core/hnd.kk:176), by path *)
+      let written =
+        match Option.map ( ! ) (Env.find_opt outer env) with
+        | Some (VEvidence installed) -> installed
+        | _ -> bug (describe f ^ " without the evidence where it was written")
+      in
+      let installed =
+        List.fold_left
+          (fun acc dep ->
+            match List.find_opt (fun (i : installed) -> i.dep = dep) passed with
+            | Some i -> i :: acc
+            | None ->
+                bug
+                  ("a call of " ^ describe f ^ " where nothing installs `"
+                 ^ dep.name ^ "`"))
+          written given
+      in
+      run cx params ev_id (VEvidence installed) body env
   | _ -> bug "a call to something that isn't a function"
 
 (* A call in tail position, which [finish] makes: a built-in's value, or

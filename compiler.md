@@ -129,8 +129,8 @@ falls short it says so.
 - **Core** has one way to change something, an assignment to a local,
   and one way each to fail, to handle an error, to install an
   implementation and to call a dependency (core.ml); a `next` call is a
-  dependency call on its handler's evidence, which a lambda in the
-  handler keeps, and an implementation's type says
+  dependency call on its handler's evidence, which a block captures
+  where it's written, as it captures any evidence, and an implementation's type says
   whether it goes over another and what it can fail to start with. Every node has its
   type, and every function its evidence. Core Lint checks each of those
   against the others, from scratch. Every use of a polymorphic function
@@ -179,15 +179,16 @@ each pass keeps it so:
 
 1. **A value never changes in place once it's shared.** `a.next =
    Some(a)` stores a copy of the old `a`, not `a`.
-2. **A block doesn't capture the evidence.** It gets its dependencies
-   where it's called (deps.md, "How it runs"), so it never holds the
-   handler that's installed where it was made. The one exception is a
-   handler's own operations and `finally`, which keep the evidence where
-   it's installed, to call through `next`; a lambda can't call `next`
-   (Infer, `next_at`), so no lambda that could be passed down to the
-   implementation under it, and kept there, holds it. Core Lint checks
-   that only an operation of an `Instance`, or its `finally`, calls
-   through `next`.
+2. **A block captures the evidence where it's written, and can't
+   outlive its call.** Since 10c step 4 it gets its dependencies where
+   it's written (deps.md, "How it runs"), and its callee gives it only
+   what its type lists. Since step 3 a block is second-class: it's
+   passed down and called, never stored or returned, so the evidence it
+   holds, and through it a handler, is never kept past the call that
+   installed it. A handler's operations and `finally`, and a block in
+   them, can call through `next`. Core Lint checks that a block captures
+   the evidence where it's written, and is given only what its type
+   lists.
 3. **An installed handler instance is never a value.** A `with` installs
    it, and no expression yields it; its own dependencies are captured
    from further out. So a handler's `var`s can't reach their own
@@ -589,7 +590,12 @@ Where the work forced a change to the plan above:
   every copy of a label at once (unify.ml, `strip`), and canonical form
   had always kept one. So `twice` is inferred as `fn twice(k: fn() -> Int
   uses Rates, ..d) -> Int uses Rates, ..d`, which is right: its own call
-  of `k` needs a `Rates` from its caller. The plan suggested Koka's rows;
+  of `k` needs a `Rates` from its caller. (Since 10c step 4 a block's
+  dependencies come from where it's written, so neither `run` nor `twice`
+  gives `k` a `Rates` and the case no longer arises there; test_deps.ml's
+  "a block called inside a `with` and outside it (B4)" now checks that.
+  `join_uses` keeps the rule for rows that still end in one variable.)
+  The plan suggested Koka's rows;
   only the doubling was needed, not keeping the copies apart. The message
   for a call that uses what what it's in can't, and for a `with`'s body
   that does, named each dependency by its full path in doubled backticks,
@@ -1129,17 +1135,17 @@ carried:
   declared `over` (Resolve, `next_op`), typed as the operation is, and
   lowered to a `Dep_call` marked `next`, on the `Handler`'s own evidence,
   what's installed where it is, so the one under it, even inside a `with`
-  in an operation. Only the handler's state, operations and `finally`
-  can call it: Infer reports a call in a lambda (`next_at`), since one could be
-  passed to the implementation under the handler and kept, a cycle
-  ("No cycles"). The operations and `finally` are the only lambdas Core
-  lets keep that evidence; Lint checks a `next` call is given its
-  handler's, in scope, in one of them or the state, and that the handler
-  needs the dependency. A handler over `D` needs `D`, joined to its needs only
+  in an operation. The handler's state, operations and `finally`, and
+  any block written in them, can call it: since 10c step 4 a block
+  captures the evidence where it's written, and since step 3 it can't be
+  kept, so passing one to the implementation under the handler makes no
+  cycle ("No cycles"). Lint checks a `next` call is given its
+  handler's evidence, in scope, and that the handler needs the
+  dependency. A handler over `D` needs `D`, joined to its needs only
   after its state, arms and `finally` are checked, so a call that names
   `D.op` brings `D` itself and is reported (with help naming `next.op`,
   or `next(D).op` when another dependency it goes over has an `op`),
-  while a call of a lambda that only shares the handler's row isn't. What an over
+  while a call that only got it from sharing the handler's row isn't. What an over
   handler leaves out, inference records at the handler,
   `Handler_facts.forwards`, each with the type of a lambda of its own,
   and lowering makes it a lambda that makes that call. Lint checks every

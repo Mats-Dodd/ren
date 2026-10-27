@@ -230,11 +230,12 @@ let rec use_row env cx ~loc ?(needs = false) ?callee ?op uses =
    uses it: a call, a `with`.
 
    The two can already end in the same variable, with labels [into]
-   doesn't have: `fn twice(k) = { let a = run(k); a + k() }`, where [run]
-   installs `Rates` around its call of [k], so [k] uses `Rates` and
-   whatever [run] uses, and [twice] so far only the latter. Unified, they'd
+   doesn't have, if an earlier join made them share it. Unified, they'd
    have to be equal, which they can't be, sharing a tail (unify.ml), but
-   all that has to hold is that [into] has what [joined] has. So the labels
+   all that has to hold is that [into] has what [joined] has. (Before
+   stage 10c a closure called both inside a `with` and outside it did
+   this, B4 in compiler.md; a block's row is closed now, and no test
+   reaches it.) So the labels
    it lacks are added to their tail, and [joined] then holds them twice:
    once as its own, once from the tail. A row can hold a label twice, as
    Koka's can, and for a set of dependencies or errors that means what

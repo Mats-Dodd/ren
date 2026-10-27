@@ -338,28 +338,26 @@ and of_errors ~sets es = labels ~sets (declared_errors ~sets es)
    without `->` returns Unit, and a parameter left without a type (an
    error, reported by inference) is [Error].
 
-   A parameter whose type is written `fn(...)`, with no `..e` or `..d`, is
-   transparent: what it fails with and uses flows into the function's own
-   errors and dependencies, so its rows are the function's: the same row,
-   labels and all, which is what inference finds too. So is one whose type
-   is a dependency's, `c: Clock`, which is installed: what it needs is
-   what the function uses. Rows are open, as they are in every scheme, so
-   a caller adds them to its own. Any other function type in the
-   signature, like the `fn()` in `f: Option<fn()>`, uses and fails with
-   nothing, as in a declaration, and so does one that names a row, `f:
-   fn() uses ..d`, but for that row, which is the same wherever the
-   signature names it (deps.md, "Implementations"). Inference reads a
-   signature the same way (Infer_expr.param_type), and the driver checks
-   that the two agree.
+   A parameter whose type is written `fn(...)` is a block. What it fails
+   with flows into the function's own errors, so its errors row is the
+   function's: the same row, labels and all, which is what inference finds
+   too. It uses exactly the dependencies its type lists, none if it lists
+   none, closed: those are what the function provides when it calls it,
+   and the block finds any other where it's written (foundations.md,
+   decision 5). A parameter whose type is a dependency's, `c: Clock`,
+   which is installed, is transparent: what it needs is what the function
+   uses. Rows are open, as they are in every scheme, so a caller adds them
+   to its own. A block's type never names a row (resolve.ml). Inference
+   reads a signature the same way (Infer_expr.param_type), and the driver
+   checks that the two agree.
 
    Its dependencies are the ones its `uses` lists, none if it has no
    `uses`, and its errors the ones written after `!`, none if there's no
    `!`, with every named set expanded; inference checks that its body
    uses and fails with exactly those. A parameter that writes what it
    fails with, `f: fn() ! Bad`, fails with just that, so its errors aren't
-   the function's own (its dependencies still are), and one that writes
-   what it uses, `f: fn() uses Clock`, uses just that. The function's own
-   `! ..e` or `uses ..d` names its own row. *)
+   the function's own. The function's own `! ..e` or `uses ..d` names its
+   own row. *)
 let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   (* row variables: 0 for the errors, 1 for the dependencies, unless the
      signature names them, and after those each named row, the same
@@ -404,14 +402,10 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   let param (p : Ast.Resolved.param) : Ty.param =
     let ty : Ty.ty =
       match p.pty with
-      | Some (TyFn (_, _, written_e, written_u, _) as t) -> (
+      | Some (TyFn (_, _, written_e, _, _) as t) -> (
           match of_written ~rows ~sets t with
           | Fun (ps, r, e, u) ->
-              Fun
-                ( ps,
-                  r,
-                  (if written_e = None then errs else e),
-                  if written_u = None then deps else u )
+              Fun (ps, r, (if written_e = None then errs else e), u)
           | _ -> assert false)
       | Some (TyImpl { impl_deps; impl_over; impl_errors; impl_uses = None; _ })
         ->

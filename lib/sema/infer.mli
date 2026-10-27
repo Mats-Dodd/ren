@@ -48,7 +48,13 @@ type found =
   | Unwrap
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
-  | Lambda_id of string  (** a lambda: its name (Ty.lambda_id) *)
+  | Block of { name : string; given : Path.t list }
+      (** a block: a lambda, or a named function or an operation used as a
+          value, which lowering makes a lambda written where it's used. Its name
+          (Ty.lambda_id), and [given], the dependencies the type of the
+          parameter it's passed to lists, which the callee provides: every other
+          dependency it uses is found where it's written (foundations.md,
+          decision 5) *)
   | Builtin_op
       (** at an operator's own node (Ast.Binop), one the language does itself:
           on [Int]s or [Float]s, a `with numeric` type's, or an opaque type's in

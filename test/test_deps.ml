@@ -93,14 +93,16 @@ let lint_evidence body =
          })
       Ty.int loc
   in
-  let lambda ?(uses = Ty.closed) ev body =
+  let lambda ?(uses = Ty.closed) ?(given = []) ?(outer = 1) ?captures ev body =
     Core.mk
       (Lambda
          {
            name = "test.main#1";
            params = [];
            ev = Core.evidence ev;
-           captures = [];
+           outer = Core.evidence outer;
+           given;
+           captures = Option.value captures ~default:[ Core.evidence outer ];
            body;
          })
       (Fun ([], Ty.int, Ty.closed, uses))
@@ -762,7 +764,10 @@ fn main() = 1
     fn main() -> Int
     |}]
 
-let%expect_test "why a closure in a with still needs what it installs" =
+let%expect_test "a block's dependency is its writer's, whatever a with installs"
+    =
+  (* `run_two` installs `N` around its calls of `f`, whose type lists
+     nothing: the block finds `N` where it's written, in `main` *)
   types
     {|
 dep N =
@@ -781,8 +786,7 @@ fn main() uses Console =
     7 │ fn main() uses Console =
       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
     8 │   print(run_two(fn() => N.get()))
-      │         ------------------------ this call uses `N`
-      = `run_two` calls a closure inside more than one `with`, so the closure gets only what's installed outside all of them, not the `N` one of them installs
+      │                         ------- this call uses `N`
       help: install one inside `main`: `with fixed(...) in ...`
     |}];
   types
@@ -805,8 +809,7 @@ fn main() uses Console =
      8 │ fn main() uses Console =
        │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
     10 │   print(a.wrap() fn() => N.get())
-       │         ------------------------ this call uses `N`
-       = in `A.wrap`, what's called inside the `with` that installs `N` uses what `A.wrap` itself does: a parameter whose type is written `fn(...)`, or a closure that's called outside the `with` too, gets only what's installed outside it
+       │                          ------- this call uses `N`
        help: install one inside `main`: `with fixed(...) in ...`
     |}]
 
@@ -1660,10 +1663,10 @@ fn main() = 1
     |}]
 
 let%expect_test "a with's body uses no more than what's outside it" =
-  (* a closure called both inside a `with` and outside it, a closure
+  (* a block called inside a `with` but written outside it, a block
      parameter called inside one, and a dependency parameter installed
-     inside another: each uses what's outside, which is less than the
-     body can *)
+     inside another: a block uses what's where it's written, never what
+     the `with` around its call installs (foundations.md, decision 5) *)
   let src =
     {|
 pub dep Rates =
@@ -1677,20 +1680,21 @@ handler timed() for Rates =
   usd_to(c) => if Clock.now() > Time.epoch then c else 0
 handler same() for Rates =
   usd_to(c) => c
-fn local() uses Console =
+fn local() uses Console, Clock =
   let k = fn() => print(Clock.now())
   with at(2) in k()
   with at(3) in
     k()
     with same() in k()
-fn main() uses Console, Clock =
-  let pure = fn() => 5
-  print(with at(1) in pure())
-  print(pure())
-  print(run_at(fn() => 6))
-  print(run_inferred(fn() => Clock.now()))
-  print(convert(timed()))
-  local()
+fn main() uses Console =
+  with Clock.frozen(Time.epoch + Duration.minutes(9)) in
+    let pure = fn() => 5
+    print(with at(1) in pure())
+    print(pure())
+    print(run_at(fn() => 6))
+    print(run_inferred(fn() => Clock.now()))
+    print(convert(timed()))
+    local()
 |}
   in
   types src;
@@ -1700,12 +1704,12 @@ fn main() uses Console, Clock =
       usd_to: fn(Int) -> Int
     fn at(minutes: Int) -> Clock
     fn run_at(f: fn() -> Int) -> Int
-    fn run_inferred<T>(f: fn() -> T ! ..e uses Clock, ..d) -> T ! ..e uses ..d
+    fn run_inferred<T>(f: fn() -> T) -> T
     fn convert(r: Rates) -> Int
     handler timed() for Rates uses Clock
     handler same() for Rates
-    fn local() uses Console
-    fn main() uses Clock, Console
+    fn local() uses Clock, Console
+    fn main() uses Console
     |}];
   run src;
   [%expect
@@ -1713,16 +1717,15 @@ fn main() uses Console, Clock =
     5
     5
     6
-    Time(60000)
+    Time(540000)
     0
-    Time(120000)
-    Time(180000)
-    Time(180000)
+    Time(540000)
+    Time(540000)
+    Time(540000)
     ()
     |}];
-  (* a closure parameter called inside a `with`: an inferred one may use
-     what it installs, and one whose type is written transparent passes
-     everything it uses on (deps.md, "Deviations") *)
+  (* a block parameter called inside a `with`, inferred or written, gets
+     none of what it installs: the block's `Clock` is its writer's *)
   types
     {|
 fn inferred(f) = with Clock.frozen(Time.epoch) in try f()
@@ -1737,10 +1740,9 @@ fn main() uses Console =
       ┌─ test.ren:3:4
     3 │ fn main() uses Console =
       │    ^^^^
-    5 │   print(written(fn() => Clock.now()))
-      │         ---------------------------- this call uses `Clock`
+    4 │   print(inferred(fn() => Clock.now()))
+      │                          ----------- this call uses `Clock`
       = `main`'s body can only use what its `uses` lists
-      = in `written`, what's called inside the `with` that installs `Clock` uses what `written` itself does: a parameter whose type is written `fn(...)`, or a closure that's called outside the `with` too, gets only what's installed outside it
       help: add `Clock` to its `uses`
     |}];
   (* a signature that says so, called where the caller uses the same
@@ -2380,8 +2382,11 @@ fn main() -> Int = convert(both())
     (fn both () ev/1
       (handler (captures) ev/2
         (instance
-          (test.Rates: (record (usd_to: (lambda (c/3) (captures) ev/4 c/3))))
-          (test.RateCalls: (record (count: (lambda () (captures) ev/5 0)))))))
+          (test.Rates:
+            (record
+              (usd_to: (lambda (c/3) (captures ev/2) ev/4 (extend ev/2) c/3))))
+          (test.RateCalls:
+            (record (count: (lambda () (captures ev/2) ev/5 (extend ev/2) 0)))))))
     (fn convert (r/1) ev/2
       (with ev/3 (extend ev/2 test.Rates r/1) (dep-call ev/3 test.Rates.usd_to 1)))
     (fn main () ev/1 (call ev/1 convert (narrowed test.Rates (call ev/1 both))))
@@ -3200,13 +3205,13 @@ fn main() uses Console =
        │                ^
     |}]
 
-let%expect_test "a closure called inside a `with` and outside it (B4)" =
+let%expect_test "a block called inside a `with` and outside it (B4)" =
   (* [run] installs `Rates` around its call of [k], and [twice] calls [k]
-     itself too, outside any `with`: so [k] uses `Rates` and what [run]
-     uses, and [twice] uses both too. The two rows end in the same
-     variable, so they can't be unified; what [k]'s call uses is added to
-     [twice]'s instead, and [k]'s row then holds `Rates` twice, which shows
-     as once *)
+     itself too, outside any `with`. [k]'s type lists nothing, so neither
+     gives it anything: its `Rates` is the one where it's written, `main`'s
+     `times(3)`, both times, 3 + 3. (Before stage 10c a closure got its
+     caller's evidence, so [run]'s `times(2)` reached it, and this tested
+     how two rows ending in the same variable were joined.) *)
   let src =
     {|
 pub dep Rates =
@@ -3234,10 +3239,10 @@ fn main() uses Console =
     pub dep Rates
       usd_to: fn(Int) -> Int
     handler times(n: Int) for Rates
-    fn run<T>(k: fn() -> T uses Rates, ..d) -> T uses ..d
-    fn twice<T has add>(k: fn() -> T uses Rates, ..d) -> T uses Rates, ..d
+    fn run<T>(k: fn() -> T) -> T
+    fn twice<T has add>(k: fn() -> T) -> T
     fn main() uses Console
-    5
+    6
     ()
     |}]
 
@@ -5516,7 +5521,7 @@ fn main() uses Clock, Console =
         (with ev/3 (extend ev/2 Console Console.real) (call ev/3 main))))
     |}]
 
-let%expect_test "a lambda takes its evidence where it's called" =
+let%expect_test "a block captures the evidence where it's written" =
   core
     {|
 fn run(f: fn() -> Time) -> Time = try f()
@@ -5528,15 +5533,17 @@ fn main() uses Clock =
     {|
     (fn run (f/1) ev/2 (call ev/2 f/1))
     (fn main () ev/1
-      (let f/2 (lambda () (captures) ev/3 (dep-call ev/3 Clock.now))
+      (let f/2
+        (lambda () (captures ev/1) ev/3 (extend ev/1) (dep-call ev/3 Clock.now))
         (call ev/1 run f/2)))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Clock Clock.real) (call ev/2 main)))
     |}]
 
-(* There are no copies of a function for what its callers' closures use:
-   `twice` passes `f` its own evidence, whatever is in it. *)
-let%expect_test "a function over closures passes them its evidence" =
+(* There are no copies of a function for what its callers' blocks use:
+   each block captures the evidence where it's written, and `twice` gives
+   `f` nothing, since its type lists nothing. *)
+let%expect_test "a function over blocks gives them only what their types list" =
   let src =
     {|
 fn twice(f: fn()) =
@@ -5552,9 +5559,12 @@ fn main() uses Console =
   [%expect
     {|
     (fn twice (f/1) ev/2 (seq (call ev/2 f/1) (call ev/2 f/1)))
-    (fn quiet () ev/1 (call ev/1 twice (lambda () (captures) ev/2 ())))
+    (fn quiet () ev/1
+      (call ev/1 twice (lambda () (captures ev/1) ev/2 (extend ev/1) ())))
     (fn main () ev/1
-      (seq (call ev/1 twice (lambda () (captures) ev/2 (call ev/2 print 1)))
+      (seq
+        (call ev/1 twice
+          (lambda () (captures ev/1) ev/2 (extend ev/1) (call ev/2 print 1)))
         (call ev/1 quiet)))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
@@ -5587,7 +5597,8 @@ pub fn twice(f: fn()) =
 
     -- main
     (fn main () ev/1
-      (call ev/1 twice (lambda () (captures) ev/2 (call ev/2 print 1))))
+      (call ev/1 twice
+        (lambda () (captures ev/1) ev/2 (extend ev/1) (call ev/2 print 1))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
     |}];
@@ -5598,7 +5609,8 @@ pub fn twice(f: fn()) =
     ()
     |}]
 
-let%expect_test "an operation used as a value calls it where it's called" =
+let%expect_test
+    "a function or an operation used as a value is a block written there" =
   let src =
     {|
 fn one() = 1
@@ -5616,9 +5628,13 @@ fn main() uses Console =
     (fn apply (f/1) ev/2 (call ev/2 f/1))
     (fn say (f/1 s/2) ev/3 (call ev/3 f/1 s/2))
     (fn main () ev/1
-      (seq (call ev/1 print (call ev/1 apply one))
+      (seq
+        (call ev/1 print
+          (call ev/1 apply
+            (lambda () (captures ev/1) ev/2 (extend ev/1) (call ev/2 one))))
         (call ev/1 say
-          (lambda ($x/2) (captures) ev/3 (dep-call ev/3 Console.write $x/2))
+          (lambda ($x/3) (captures ev/1) ev/4 (extend ev/1)
+            (dep-call ev/4 Console.write $x/3))
           "written")))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
@@ -5654,9 +5670,9 @@ fn main() uses Clock, Console, Random =
     ()
     |}]
 
-let%expect_test "a closure over another module's dependency runs" =
-  (* lib doesn't import main, where Users is declared: `twice` passes `f`
-     the evidence it's given, whatever is in it *)
+let%expect_test "a block over another module's dependency runs" =
+  (* lib doesn't import main, where Users is declared: the block captures
+     the evidence where it's written, in `look`, whatever is in it *)
   let files =
     [
       ( "main.ren",
@@ -5690,10 +5706,13 @@ pub fn twice(f: fn() -> Int) -> Int =
       (handler (captures) ev/2
         (instance
           (main.Users:
-            (record (get: (lambda (id/3) (captures) ev/4 (* id/3 10))))))))
+            (record
+              (get:
+                (lambda (id/3) (captures ev/2) ev/4 (extend ev/2) (* id/3 10))))))))
     (fn look () ev/1
       (call ev/1 twice
-        (lambda () (captures) ev/2 (dep-call ev/2 main.Users.get 1))))
+        (lambda () (captures ev/1) ev/2 (extend ev/1)
+          (dep-call ev/2 main.Users.get 1))))
     (fn main () ev/1
       (call ev/1 print
         (with ev/2 (extend ev/1 main.Users (call ev/1 users)) (call ev/2 look))))
@@ -5706,41 +5725,40 @@ pub fn twice(f: fn() -> Int) -> Int =
     ()
     |}]
 
-(* The closure is made where one clock is installed, and called where
-   another is, which it uses. *)
-let%expect_test "a closure uses the implementation installed where it's called"
-    =
+(* The block is written where one clock is installed, and called where
+   another is: it uses the one where it's written. *)
+let%expect_test "a block uses the implementation installed where it's written" =
   let src =
     {|
-fn later() uses Clock =
-  let _ = Clock.now()
-  fn() => Clock.now()
 fn frozen_at(minutes: Int) -> Clock =
   Clock.frozen(Time.epoch + Duration.minutes(minutes))
+fn later(f: fn() -> Time) -> Time = with frozen_at(5) in try f()
 fn main() uses Console =
-  let f = with frozen_at(0) in later()
-  print(with frozen_at(5) in f())
+  with frozen_at(0) in
+    print(later(fn() => Clock.now()))
 |}
   in
   core src;
   [%expect
     {|
-    error: a block can't be returned
-      ┌─ test.ren:3:3
-    3 │   fn() => Clock.now()
-      │   ^^^^^^^^^^^^^^^^^^^ a block
-      = a block lives only as long as the call it's passed to
-      help: take the block's arguments as parameters too, and return what it gives
+    (fn frozen_at (minutes/1) ev/2
+      (call ev/2 Clock.frozen
+        (call ev/2 Time.add Time.epoch (call ev/2 Duration.minutes minutes/1))))
+    (fn later (f/1) ev/2
+      (with ev/3 (extend ev/2 Clock (call ev/2 frozen_at 5)) (call ev/3 f/1)))
+    (fn main () ev/1
+      (with ev/2 (extend ev/1 Clock (call ev/1 frozen_at 0))
+        (call ev/2 print
+          (call ev/2 later
+            (lambda () (captures ev/2) ev/3 (extend ev/2)
+              (dep-call ev/3 Clock.now))))))
+    (fn $start () ev/1
+      (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
     |}];
   run src;
-  [%expect
-    {|
-    error: a block can't be returned
-      ┌─ test.ren:3:3
-    3 │   fn() => Clock.now()
-      │   ^^^^^^^^^^^^^^^^^^^ a block
-      = a block lives only as long as the call it's passed to
-      help: take the block's arguments as parameters too, and return what it gives
+  [%expect {|
+    Time(0)
+    ()
     |}]
 
 (* Evidence threaded wrongly is a bug in the compiler. Core Lint catches
@@ -5813,9 +5831,13 @@ fn main() uses Clock = stamp()
 
 let%expect_test "Core Lint checks evidence is threaded" =
   (* clean: the operation finds `D` in the function's evidence, and a
-     lambda's in its own *)
+     block's in its own, the evidence where it's written, with what its
+     caller gives it or not *)
+  lint_evidence (fun ~loc:_ ~op ~lambda ~call ~uses_d:_ ->
+      call (lambda 2 (op 2)) 1);
+  [%expect {||}];
   lint_evidence (fun ~loc:_ ~op ~lambda ~call ~uses_d ->
-      call (lambda ~uses:uses_d 2 (op 2)) 1);
+      call (lambda ~uses:uses_d ~given:[ Ren.Path.make "test" "D" ] 2 (op 2)) 1);
   [%expect {||}];
   (* evidence that isn't in scope *)
   lint_evidence (fun ~loc:_ ~op ~lambda:_ ~call:_ ~uses_d:_ -> op 2);
@@ -5832,7 +5854,7 @@ let%expect_test "Core Lint checks evidence is threaded" =
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a call is given `ev` (2), but the evidence in scope is `ev` (1)")
       = this is a bug in the Ren compiler, not in your program
     |}];
-  (* a lambda that keeps the evidence of the function it's made in *)
+  (* a block whose body uses the evidence where it's written, not its own *)
   lint_evidence (fun ~loc:_ ~op ~lambda ~call ~uses_d ->
       call (lambda ~uses:uses_d 2 (op 1)) 1);
   [%expect
@@ -5840,12 +5862,28 @@ let%expect_test "Core Lint checks evidence is threaded" =
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `D.op` is given `ev` (1), but the evidence in scope is `ev` (2)")
       = this is a bug in the Ren compiler, not in your program
     |}];
-  (* an operation of a dependency the lambda it's in doesn't use *)
+  (* a block given a dependency its type doesn't list *)
   lint_evidence (fun ~loc:_ ~op ~lambda ~call ~uses_d:_ ->
-      call (lambda 2 (op 2)) 1);
+      call (lambda ~given:[ Ren.Path.make "test" "D" ] 2 (op 2)) 1);
   [%expect
     {|
-    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `D.op` uses `test.D`, which is neither used here, by `fn()`, nor installed")
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a block is given `test.D`, which its type doesn't list")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* a block that says it's written where other evidence is in scope *)
+  lint_evidence (fun ~loc:_ ~op ~lambda ~call ~uses_d:_ ->
+      call (lambda ~outer:3 2 (op 2)) 1);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a block is given `ev` (3), but the evidence in scope is `ev` (1)")
+      = this is a bug in the Ren compiler, not in your program
+    |}];
+  (* a block that doesn't capture the evidence where it's written *)
+  lint_evidence (fun ~loc:_ ~op ~lambda ~call ~uses_d:_ ->
+      call (lambda ~captures:[] 2 (op 2)) 1);
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a block doesn't capture the evidence where it's written")
       = this is a bug in the Ren compiler, not in your program
     |}];
   (* evidence an inner `With` extends *)
@@ -5856,7 +5894,11 @@ let%expect_test "Core Lint checks evidence is threaded" =
       let ty = Ren.Ty.impl [ d ] Ren.Ty.closed in
       let record =
         Ren.Core.mk
-          (Record (d, [ ("op", lambda 3 (Ren.Core.mk (Int 1L) Ren.Ty.int loc)) ]))
+          (Record
+             ( d,
+               [
+                 ("op", lambda ~outer:4 3 (Ren.Core.mk (Int 1L) Ren.Ty.int loc));
+               ] ))
           ty loc
       in
       let instance =
@@ -5903,14 +5945,15 @@ fn main() uses Console = with counting_rates(3) in print(convert(2))
               (test.Rates:
                 (record
                   (usd_to:
-                    (lambda (_/6) (captures rate/1 $calls/5) ev/7
+                    (lambda (_/6) (captures rate/1 ev/3 $calls/5) ev/7
+                      (extend ev/3)
                       (let calls/4 (get-cell $calls/5)
                         (let $result/8 (seq (= calls/4 (+ calls/4 1)) rate/1)
                           (seq (set-cell $calls/5 calls/4) $result/8)))))))
               (test.RateCalls:
                 (record
                   (count:
-                    (lambda () (captures $calls/5) ev/9
+                    (lambda () (captures ev/3 $calls/5) ev/9 (extend ev/3)
                       (let calls/4 (get-cell $calls/5) calls/4))))))))))
     (fn convert (n/1) ev/2 (* n/1 (dep-call ev/2 test.Rates.usd_to 1)))
     (fn main () ev/1
@@ -6231,8 +6274,11 @@ fn main() uses Console =
         (instance
           (test.Rates:
             (record
-              (usd_to: (lambda (c/4) (captures rate/1) ev/5 (* c/4 rate/1)))))
-          (test.RateCalls: (record (count: (lambda () (captures) ev/6 0)))))))
+              (usd_to:
+                (lambda (c/4) (captures rate/1 ev/3) ev/5 (extend ev/3)
+                  (* c/4 rate/1)))))
+          (test.RateCalls:
+            (record (count: (lambda () (captures ev/3) ev/6 (extend ev/3) 0)))))))
     (fn main () ev/1
       (let h/2 (call ev/1 counting_rates 2)
         (call ev/1 print (call ev/1 Rates.twice (narrowed test.Rates h/2) 5))))

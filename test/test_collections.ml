@@ -344,7 +344,9 @@ fn main() =
   [%expect
     {|
     (fn main () ev/1
-      (let f/2 (lambda ($3/3) (captures) ev/4 (match $3/3 ((tuple a/5 _) => a/5)))
+      (let f/2
+        (lambda ($3/3) (captures ev/1) ev/4 (extend ev/1)
+          (match $3/3 ((tuple a/5 _) => a/5)))
         (call ev/1 f/2 (tuple 1 2))))
     (fn $start () ev/1 (call ev/1 main))
     |}]

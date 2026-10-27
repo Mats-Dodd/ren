@@ -110,9 +110,7 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
   Hashtbl.replace cx.found node (Handler_facts { forwards; body_ty = None });
   (* its state, arms and `finally` run while an operation does, or as
      one, so they can call `next` *)
-  let hcx =
-    { (lambda_cx cx [] [] ~errs:fails ~uses:needs) with next_at = Next_ok }
-  in
+  let hcx = lambda_cx cx [] [] ~errs:fails ~uses:needs in
   (* what a message says the handler is, if its state or `finally` fails
      with what it doesn't say it can *)
   let in_state =
@@ -176,7 +174,6 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
             {
               (lambda_cx hcx params qs ~errs:open_errs ~uses:needs) with
               calls = hcx.calls;
-              next_at = Next_ok;
             }
           in
           core.check env acx body r ~why:result_why;
@@ -195,7 +192,7 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
   Option.iter (finally_ core env cx hcx ~node ~in_state ~fails ~needs) finally;
   (* what it goes over it needs too, added only now: a call made before
      that brings it in, `Users.get` in an arm, names it itself, so
-     [check_needs] can tell it from a call of a lambda that only got it
+     [check_needs] can tell it from a call that only got it
      from sharing the handler's row *)
   if over then
     join_uses env ~loc ~what:Installing
@@ -236,7 +233,6 @@ and finally_ core env cx hcx ~node ~in_state ~fails ~needs (fin : expr) =
         {
           (lambda_cx hcx [ p ] qs ~errs:fails ~uses:needs) with
           calls = hcx.calls;
-          next_at = Next_ok;
         }
       in
       env.in_state <- in_state;
@@ -752,10 +748,11 @@ and install env cx (lk : with_link) (i : impl) inner =
           (Install
              {
                wloc = loc;
-               wdep = label;
+               wdeps = [ label ];
                wbody = inside.uses;
                wouter = cx.uses;
                wself = cx.self;
+               wblock = false;
              });
         (* the body's calls bring in what they bring in, but [d] *)
         cx.calls :=

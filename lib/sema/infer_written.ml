@@ -41,11 +41,12 @@ let written_uses ~named (u : Resolved.uses) =
 (* Turn a written type into a checker type. [tvars] are what the type
    parameters in scope stand for, in order, and [named] the rows the
    function's signature names (`..d`, ast.ml). [row] makes the rows of
-   written function types and implementations that aren't written: fresh
-   variables in parameters (a parameter `f: fn()` passes its dependencies
-   through to the caller), closed elsewhere, as in a dependency's
-   operation. A function type that writes what it fails with or uses,
-   `fn() ! Bad` or `fn() uses Clock`, does just that. *)
+   written function types' errors and implementations' needs that aren't
+   written: fresh variables in a lambda's parameters, closed elsewhere, as
+   in a dependency's operation. A function type uses just what it lists,
+   none if it lists none: those are what its callee provides, and a block
+   finds any other where it's written (foundations.md, decision 5). One
+   that writes what it fails with, `fn() ! Bad`, does just that. *)
 let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
   let go = convert env ~tvars ~named ~row in
   match t with
@@ -88,7 +89,7 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
         | None -> row ()
       in
       let uses =
-        match u with Some u -> written_uses ~named u | None -> row ()
+        match u with Some u -> written_uses ~named u | None -> REmpty
       in
       TFun (List.map (convert_param env ~tvars ~named ~row) ps, ret, errs, uses)
   | TyInout _ ->
@@ -106,9 +107,10 @@ and closed () = REmpty
 
 (* A parameter's type: as written, or a fresh variable. [own] are the
    rows a transparent parameter of a top-level function gets: a parameter
-   written `fn(...)` is transparent, so what it uses is exactly what its
-   function does, and what it fails with is too, once a `try` passes it on
-   (infer_top.ml).
+   written `fn(...)` is a block, which fails with what its function does,
+   once a `try` passes it on (infer_top.ml), and uses exactly the
+   dependencies its type lists, which its function provides: none, if it
+   lists none.
 
    A top-level function's signature is read exactly as its interface reads
    it (Iface.signature), so the body is checked against the type other
@@ -119,22 +121,17 @@ and closed () = REmpty
    parameters, which no interface shows, get fresh rows instead.
 
    A parameter that writes what it fails with, `f: fn() ! Bad`, fails with
-   just that, so only its dependencies are its function's; and one that
-   writes what it uses, `f: fn() uses Clock`, uses just that. A block's
-   type never names a row (resolve.ml). A parameter of a dependency's type, `c: Clock`,
-   is transparent too: what it needs is what its function uses (deps.md,
-   "Implementations"). [named] are the rows the signature names. *)
+   just that. A block's type never names a row (resolve.ml). A parameter
+   of a dependency's type, `c: Clock`, is transparent: what it needs is
+   what its function uses (deps.md, "Implementations"). [named] are the
+   rows the signature names. *)
 let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
   let t =
     match (p.pty, own) with
-    | Some (TyFn (_, _, written_e, written_u, _) as t), Some (errs, uses) -> (
+    | Some (TyFn (_, _, written_e, _, _) as t), Some (errs, _) -> (
         match convert env ~tvars:tparams ~named ~row:closed t with
         | TFun (ps, ret, e, u) ->
-            TFun
-              ( ps,
-                ret,
-                (if written_e = None then errs else e),
-                if written_u = None then uses else u )
+            TFun (ps, ret, (if written_e = None then errs else e), u)
         | _ -> assert false)
     | ( Some
           (TyImpl

@@ -228,58 +228,51 @@ let copy env k =
 
 (* ---- what a `with` installs (deps.md, "`with`") ---- *)
 
-(* A `with` that installs (see [Infer_env.install]): its body uses no
-   more than what it installs and what's installed outside it. Inner
-   `with`s are decided first, since what their bodies use is part of what
-   the outer ones' do. Each body's labels but the one installed are added
-   to the outer row. If the body's row is the outer one already, as for a
-   closure called both in the body and outside it, or another function of
-   the group that calls this one back, that's all. (A function calling
-   itself gets a copy of its own row, Infer_rows.use_row.) A row that's
-   still open stands for what a closure the body calls uses, an inferred
-   parameter's, say: it may use what's installed too, and the rest of it
-   is what's outside. Unless another `with` calls the same closure,
-   [shared] says: then it's what's outside them all, more than it needs if
-   it uses what one installs, never less. What it adds to the outer row is
-   tried on copies first, so if it can't, that's reported and nothing
-   changes.
+(* A `with` that installs, or a block (see [Infer_env.install]): its body
+   uses no more than what it installs, or what the block's parameter's
+   type lists, and what's installed outside it, where it's written. Inner
+   ones are decided first, since what their bodies use is part of what the
+   outer ones' do. Each body's labels but those installed are added to the
+   outer row. If the body's row is the outer one already, as for another
+   function of the group that calls this one back, that's all. (A function
+   calling itself gets a copy of its own row, Infer_rows.use_row.) A row
+   still open at the end of the body's, another function of the group's
+   before it's done, ends the outer row too, so what it learns later is
+   outside as well. A block parameter's row is closed, so a block never
+   reaches what a `with` installs unless its type lists it (foundations.md,
+   decision 5). What it adds to the outer row is tried on copies first, so
+   if it can't, that's reported and nothing changes.
 
-   It returns why the function it's in still gets [w.wdep] from outside, if
-   it does, and the uses of a named row it makes, which are decided with
-   the others, last. *)
-let install env ~shared w =
-  let dep_name = env.names (Ty.dep_path w.wdep) in
+   It returns why the function it's in still gets what a `with` installs
+   from outside, if it does, and the uses of a named row it makes, which
+   are decided with the others, last. *)
+let install env w =
   let labels, tail = row_parts w.wbody in
-  let rest = List.filter (fun (l : label) -> l.name <> w.wdep) labels in
+  let rest =
+    List.filter (fun (l : label) -> not (List.mem l.name w.wdeps)) labels
+  in
   (* add [r] to what's outside: whether it could *)
   let into r =
     Result.is_ok
       (Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
            Unify.unify_row st (c.row r) (c.row w.wouter)))
   in
+  let same_row = tail <> None && tail = row_tail w.wouter in
   let withheld, due, ok =
     match row_end w.wbody with
-    | _ when tail <> None && tail = row_tail w.wouter ->
-        (* the same row: everything it uses but [wdep] is outside too *)
+    | _ when same_row ->
+        (* the same row: everything it uses but [wdeps] is outside too, which
+           for a `with` is worth a note *)
         let outer = row_names w.wouter in
-        ( Some (Same_row { fn = Path.local w.wself; dep = dep_name }),
+        ( List.map
+            (fun d ->
+              ( d,
+                Same_row
+                  { fn = Path.local w.wself; dep = env.names (Ty.dep_path d) }
+              ))
+            (if w.wblock then [] else w.wdeps),
           None,
           List.for_all (fun (l : label) -> List.mem l.name outer) rest )
-    | RVar _ as t
-      when List.length rest = List.length labels
-           && not (shared (Option.get tail)) ->
-        (* it may use [wdep] too, as a closure the body calls may; a
-           variable still unbound takes any row, so this can't fail *)
-        let t' = fresh_row env.st in
-        Unify.unify_row env.st t (RExtend (dep w.wdep, t'));
-        (None, None, into (extend rest t'))
-    | RVar _ as t ->
-        let withheld =
-          if List.length rest = List.length labels then
-            Some (Several_withs { fn = Path.local w.wself; dep = dep_name })
-          else None
-        in
-        (withheld, None, into (extend rest t))
     | RSkol (id, n) ->
         (* a named row: what's outside ends in it too *)
         let due =
@@ -290,16 +283,15 @@ let install env ~shared w =
             rwhat = With_body;
           }
         in
-        (None, Some due, into (extend rest (fresh_row env.st)))
-    | REmpty | RExtend _ -> (None, None, into (extend rest (fresh_row env.st)))
+        ([], Some due, into (extend rest (fresh_row env.st)))
+    | RVar _ as t -> ([], None, into (extend rest t))
+    | REmpty | RExtend _ -> ([], None, into (extend rest (fresh_row env.st)))
   in
   if not ok then
     report env
-      (with_body_uses w.wloc
-         ~same_row:(tail <> None && tail = row_tail w.wouter)
+      (with_body_uses w.wloc ~block:w.wblock ~same_row
          (List.map (fun (l : label) -> env.names (Ty.dep_path l.name)) rest));
-  ( Option.map (fun hnote -> { hfn = w.wself; hdep = w.wdep; hnote }) withheld,
-    due )
+  (List.map (fun (hdep, hnote) -> { hfn = w.wself; hdep; hnote }) withheld, due)
 
 (* ---- the rules of markers ----
 
@@ -695,40 +687,30 @@ let copies cs = List.filter_map (function Copy k -> Some k | _ -> None) cs
 (* The copies [ks], decided until none has anything to add. *)
 let copies_of env ks = worklist ~awake:copy_awake ~decide:(copy env) ks
 
-(* The `with`s among [cs] that install, each once the copies of what an
+(* The `with`s and blocks among [cs], each once the copies of what an
    implementation needs, [copies], are up to date, since what its body
    uses includes what an implementation used in it needs. Why each
    function of the group still gets a dependency from outside, the first
    reason found for each, and the uses of named rows they make. *)
 let installs env ~copies cs =
   let ws = List.filter_map (function Install w -> Some w | _ -> None) cs in
-  (* how many bodies end in each row that's still open, counted once, not
-     for each `with`; only looked up, so its order never shows *)
-  let tails = Hashtbl.create 16 in
-  List.iter
-    (fun w ->
-      Option.iter
-        (fun id ->
-          Hashtbl.replace tails id
-            (1 + Option.value ~default:0 (Hashtbl.find_opt tails id)))
-        (row_tail w.wbody))
-    ws;
-  let shared id = Option.value ~default:0 (Hashtbl.find_opt tails id) > 1 in
   let withheld, dues =
     List.fold_left
       (fun (withheld, dues) w ->
         copies_of env copies;
-        let held, due = install env ~shared w in
+        let held, due = install env w in
         (* most recent first, reversed once they're all in *)
         let dues = Option.to_list due @ dues in
-        match held with
-        | Some h
-          when not
-                 (List.exists
-                    (fun h' -> h'.hfn = h.hfn && h'.hdep = h.hdep)
-                    withheld) ->
-            (withheld @ [ h ], dues)
-        | _ -> (withheld, dues))
+        let fresh =
+          List.filter
+            (fun h ->
+              not
+                (List.exists
+                   (fun h' -> h'.hfn = h.hfn && h'.hdep = h.hdep)
+                   withheld))
+            held
+        in
+        (withheld @ fresh, dues))
       ([], []) ws
   in
   (withheld, List.rev dues)

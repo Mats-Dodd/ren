@@ -1091,9 +1091,7 @@ fn main() = add(1, 2)
     (fn Box.size : fn(test.Box<T>) -> Int ! ..e uses ..d (self/1) ev/2 1)
     (fn same : fn(T, T) -> Bool ! ..e uses ..d (needs (eq T)) (a/1 b/2) ev/3
       (== (eq T) a/1 b/2))
-    (fn twice : fn((fn(Int) -> Int ! ..e uses ..d), Int) -> Int ! ..e uses ..d
-      (f/1 x/2)
-      ev/3
+    (fn twice : fn(fn(Int) -> Int ! ..e, Int) -> Int ! ..e uses ..d (f/1 x/2) ev/3
       (call ev/3 f/1 (call ev/3 f/1 x/2)))
     the same
     |}]

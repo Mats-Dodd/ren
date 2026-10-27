@@ -30,8 +30,11 @@ let runtime_dep (p : Path.t) =
   p.home = Path.prelude_home && List.mem p.name Prelude.runtime_deps
 
 (* Why the call [c], which brings in the dependency [dep], does: the
-   function it calls calls a closure inside a `with` of [dep] that still
-   gets it from outside, which [withheld] says (Infer_env.withheld). *)
+   function it calls calls something inside a `with` of [dep] that uses
+   what that function itself does, so it still gets [dep] from outside,
+   which [withheld] says (Infer_env.withheld). A block never gets what a
+   `with` around its call installs unless its type lists it, so it's no
+   reason: what it uses is its writer's (foundations.md, decision 5). *)
 let withheld_notes withheld dep (c : call option) =
   match c with
   | Some { callee = Some p; _ } ->

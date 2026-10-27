@@ -215,8 +215,8 @@ fn with_fake_net(body: fn() uses Net) = with fake_net() in body()
 ```
 
 So a wrapper can't handle a block's calls by accident, and a helper that
-installs something for its body says so. Today a lambda's dependencies
-are found where it's called.
+installs something for its body says so. Since 10c step 4 this is
+what runs (deps.md, "How it runs").
 
 ### 6. Dependencies can be generic
 
@@ -430,8 +430,11 @@ dependencies where it's called.
    implementations out of `with` (step 2), and blocks second-class
    (step 3): a block is only called, passed, or the value of a `let` of
    one literal `fn`; written types, generics and handler parameters hold
-   none; Infer checks it after inference and Core Lint again. Capture is
-   still by value until step 5, and lookup still dynamic until step 4.
+   none; Infer checks it after inference and Core Lint again. Lexical
+   lookup (step 4): a block captures the evidence where it's written, and
+   its callee provides only what its parameter's type lists, none if the
+   type isn't written; `next` in a block runs. Capture is still by value
+   until step 5.
 2. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.

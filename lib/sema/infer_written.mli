@@ -24,7 +24,8 @@ val closed : unit -> Types.row
 
 (* A parameter's type: as written, or a fresh variable. [own] are the rows
    a transparent parameter of a top-level function gets, its function's
-   errors and dependencies. *)
+   errors and dependencies: a block's errors are its function's, and its
+   dependencies are what its type lists. *)
 val param_type :
   env ->
   tparams:Types.ty list ->

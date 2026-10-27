@@ -156,8 +156,9 @@ val declared_errors : sets:sets -> Ast.Resolved.errors -> error list
 val of_errors : sets:sets -> Ast.Resolved.errors -> Ty.label list
 
 (* A function's type scheme from its signature alone, as inference reads
-   it too. A parameter written `fn(...)` with no named row, or with a
-   dependency's type, is transparent: its rows are the function's own. *)
+   it too. A parameter written `fn(...)`, a block, fails with what the
+   function does, and uses just what its type lists; one of a dependency's
+   type is transparent: its rows are the function's own. *)
 val signature : sets:sets -> Ast.Resolved.fn_def -> Ty.scheme
 
 (* A type declared in module [home], with all its members. *)

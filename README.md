@@ -306,7 +306,13 @@ error: `with` installs only handlers
 
 `retry` calls the block again from the top. It doesn't resume anything. It also repeats any dependency calls the body made before failing, so wrap only work that's safe to repeat.
 
-Dependencies are found when code runs, not when it's written. A function or block whose type says `uses Users` gets whatever `Users` is installed where it's called, and the type checker makes sure one is. A block never outlives the call it's passed to, so it never holds on to an old implementation.
+A function's dependencies are found when it runs: one whose type says `uses Users` gets whatever `Users` is installed where it's called, and the type checker makes sure one is. A block's are found where it's written, except those its parameter's type lists, which the function that calls it provides:
+
+```ren
+fn with_fake_net(body: fn() uses Net) = with fake_net() in try body()
+```
+
+So a wrapper can't handle a block's calls by accident, and a helper that installs something for its body says so. A block never outlives the call it's passed to, so what it found where it was written is still installed when it runs.
 
 The one exception is an implementation's own dependencies. **What an implementation needs is part of its type**, and is required at the `with` that installs it: a `Clock` whose `now` calls `Os` makes `with` that clock need `Os`, while the code inside sees only `Clock`. Its dependencies are fixed once, when it's installed, to whatever is installed further out. And **interfaces are exact**: an operation's implementation may fail with fewer errors than the interface declares, never more.
 
@@ -563,7 +569,7 @@ Ren uses compiler-managed reference counting with in-place reuse ([Perceus](http
 - There are no recursive values (no `let rec` on data).
 - Local recursive functions are compiled as top-level functions, so a block never captures itself.
 - Blocks can't be stored or returned, so no value holds one.
-- Blocks never capture handlers, because dependencies are looked up at the call site.
+- A block captures the implementations installed where it's written, but no value holds a block, so no handler's state can reach its own instance through one.
 
 In the safe subset, Ren aims for Rust-level memory safety without lifetimes. Safety comes from reference counting and value semantics at runtime rather than a borrow checker at compile time. Borrow inference, moves on last use, `unique`, and arenas eliminate most of the counting work.
 

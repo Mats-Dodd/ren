@@ -22,7 +22,7 @@ fn map_option(o, f) =
     Some(v) => Some(f(v))
     None => None
 
-fn twice(f) =                          // f's dependencies become the caller's
+fn twice(f) =                          // f's dependencies are where it's written
   let _ = f()
   f()
 

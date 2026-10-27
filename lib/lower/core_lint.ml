@@ -6,16 +6,18 @@
    checks that every node's type is the one its parts say it has (a use
    of a top-level function's, its scheme's at the type arguments it
    carries), that every local is used inside its scope with the type it
-   was bound with, that a lambda captures every local it uses, and that every constructor,
+   was bound with, that a block captures every local it uses, and that every constructor,
    record and field is in the type it says, and that an error has the
    payload its set says, and that a handler's instance is only ever the
    end of its body. And that the evidence is threaded (core.ml):
-   that every call passes the evidence in scope, a lambda's own inside it
-   and never one it could have kept from where it was made, but for a
-   call through `next` in a handler's operation or `finally`, which uses
-   its handler's, and no other lambda keeps that, and that each
-   dependency an operation or a callee uses is one the function it's in
-   uses too, or a [With] around it installs. And that each descriptor of
+   that every call passes the evidence in scope, a block's own inside it,
+   which is the evidence where it's written, which it captures as a local,
+   with what its type lists given by its caller; a call through `next`
+   uses its handler's evidence, which a block in the handler captures too;
+   and that each dependency an operation or a callee uses is one the
+   function it's in uses too, or a [With] around it installs, or, inside a
+   block, its caller gives it: a block is checked where it's written
+   (foundations.md, decision 5). And that each descriptor of
    a type (core.ml, [desc]) describes the type argument it's passed for,
    built only from the hidden type parameters of the function it's in;
    that each function takes a dictionary for each of its requirements
@@ -52,11 +54,7 @@ type env = {
   installed : Path.t list;  (** what the [With]s around here in it install *)
   handler : (var * Ty.row) option;
       (** in a handler, its evidence and what it needs: a call through `next`
-          finds what it's over there *)
-  operation : bool;
-      (** whether the expression is an operation of a handler's instance, or its
-          `finally`: the only lambdas that keep the handler's evidence, for a
-          call through `next` (compiler.md, "No cycles") *)
+          finds what it's over there, and a block in it captures that *)
   ntys : int;  (** how many hidden type parameters the function has *)
   body_ty : var option;
       (** in a handler's `finally`, its hidden parameter that holds the
@@ -326,7 +324,8 @@ let field_ty env loc (td : Iface.type_decl) args f =
   | Some d -> subst args d.fty
   | None -> fail env loc (sprintf "`%s` has no field `%s`" td.path.name f)
 
-(* [v] is evidence, which only a function, a lambda or a [With] binds. *)
+(* [v] is evidence, which only a function, a block, a handler or a [With]
+   binds: a local a block can capture, but never a value. *)
 let is_evidence env loc what (v : var) =
   if v.ty <> evidence_ty then
     fail env loc
@@ -359,7 +358,7 @@ let available env loc what (p : Path.t) =
          (Path.full p)
          (show (Fun ([], Ty.unit, Ty.closed, env.uses))))
 
-(* The scope inside a function or lambda that takes the evidence [v] and
+(* The scope inside a function or handler that takes the evidence [v] and
    uses [uses]: nothing installed yet. *)
 let inside env loc what (v : var) (uses : Ty.row) =
   is_evidence env loc what v;
@@ -713,7 +712,9 @@ let rec expr env sc (e : expr) =
           fail env impl.loc
             (sprintf "what's installed has type `%s`, but should be a `%s`"
                (show t) (Path.full p)));
-      expr { env with ev = Some ev; installed = p :: env.installed } sc body;
+      expr
+        { env with ev = Some ev; installed = p :: env.installed }
+        (add ev sc) body;
       (* a `finally` is given what its body is *)
       describes env sc loc "the body of a `With`" desc body.ty;
       is "a `With`" body.ty
@@ -743,7 +744,7 @@ let rec expr env sc (e : expr) =
           same env body.loc "a handler's body" body.ty e.ty
       | None -> fail env loc (sprintf "a handler has type `%s`" (show e.ty)))
   | Instance { impls; finally } -> (
-      Option.iter (finally_ { env with operation = true } sc) finally;
+      Option.iter (finally_ env sc) finally;
       match Ty.impl_parts e.ty with
       | Some (ds, needs)
         when List.sort compare (List.map fst impls) = ds
@@ -754,15 +755,15 @@ let rec expr env sc (e : expr) =
             (fun (d, (i : expr)) ->
               (* a record of its operations, each a lambda *)
               (match i.kind with
-              | Record (_, fs) ->
+              | Record (p, fs) ->
                   List.iter
                     (fun (_, (f : expr)) ->
                       match f.kind with
                       | Lambda _ -> ()
                       | _ -> fail env f.loc "an operation that isn't a lambda")
-                    fs
+                    fs;
+                  operations env sc i.loc p needs fs
               | _ -> fail env i.loc "an implementation that isn't a record");
-              expr { env with operation = true } sc i;
               same env i.loc
                 ("the implementation of `" ^ d.Path.name ^ "`")
                 i.ty (Ty.impl [ d ] needs))
@@ -803,7 +804,9 @@ let rec expr env sc (e : expr) =
             (sprintf "what's installed has type `%s`, but should be `%s`"
                (show t)
                (String.concat " & " (List.map Path.full deps))));
-      expr { env with ev = Some ev; installed = deps @ env.installed } sc body;
+      expr
+        { env with ev = Some ev; installed = deps @ env.installed }
+        (add ev sc) body;
       describes env sc loc "the body of a `With`" desc body.ty;
       is "a `With`" body.ty
   | Prim (op, args) -> prim env sc e op args
@@ -882,28 +885,42 @@ let rec expr env sc (e : expr) =
             ps args;
           is "a call" ret
       | t -> fail env loc (sprintf "a call to a `%s`" (show t)))
-  | Lambda { params; ev; captures; body; _ } -> (
-      (* only an operation, or a `finally`, keeps its handler's evidence:
-         any other lambda could be passed to the implementation under the
-         handler and kept there, which would reach it again *)
-      let env =
-        if env.operation then { env with operation = false }
-        else { env with handler = None }
-      in
+  | Lambda { params; ev; outer; given; captures; body; _ } -> (
+      (* a block captures the evidence where it's written, as a local *)
+      let what = "a block" in
+      current env loc what outer;
+      if not (List.mem outer captures) then
+        fail env loc "a block doesn't capture the evidence where it's written";
       List.iter (in_scope env sc loc) captures;
-      (* the body sees only what it captures, its parameters, and its own
-         evidence: a lambda never keeps the evidence where it's made, which
-         isn't a local, so it can't be captured *)
-      let inner =
-        List.fold_left
-          (fun sc (p : param) -> add p.var sc)
-          (List.fold_left (fun sc v -> add v sc) Scope.empty captures)
-          params
-      in
+      is_evidence env loc "a block's evidence" ev;
+      (* what it's given is what its type lists, which its callee provides *)
       let uses =
         match reveal env e.ty with Fun (_, _, _, u) -> u | _ -> Ty.closed
       in
-      expr (inside env loc "a lambda's evidence" ev uses) inner body;
+      List.iter
+        (fun d ->
+          if not (List.mem (Ty.label (Ty.dep_label d)) uses.labels) then
+            fail env loc
+              (sprintf "a block is given `%s`, which its type doesn't list"
+                 (Path.full d)))
+        given;
+      (* the body sees only what it captures, its parameters, and its own
+         evidence; and it's checked where it's written: it uses what's used
+         or installed here, and what it's given *)
+      let inner =
+        List.fold_left
+          (fun sc (p : param) -> add p.var sc)
+          (List.fold_left (fun sc v -> add v sc) Scope.empty (ev :: captures))
+          params
+      in
+      let given_labels = List.map (fun d -> Ty.label (Ty.dep_label d)) given in
+      expr
+        {
+          env with
+          ev = Some ev;
+          uses = { env.uses with labels = env.uses.labels @ given_labels };
+        }
+        inner body;
       match reveal env e.ty with
       | Fun (ps, ret, _, _) when List.length ps = List.length params ->
           List.iter2
@@ -929,18 +946,12 @@ let rec expr env sc (e : expr) =
       (* a record of a dependency's operations is an implementation of
          it, whose type says what it needs: only ever a handler's
          instance's ([Instance]), never a value of the program *)
-      let td, targs, needs =
-        match e.ty with
-        | Impl { deps = [ q ]; over = false; needs; _ } when q = p ->
-            if not env.operation then
-              fail env loc
-                "a record of a dependency's operations outside a handler's \
-                 instance";
-            (decl env loc p, [], Some needs)
-        | _ ->
-            let td, targs = args_of env loc "a record" p e.ty in
-            (td, targs, None)
-      in
+      (match e.ty with
+      | Impl _ ->
+          fail env loc
+            "a record of a dependency's operations outside a handler's instance"
+      | _ -> ());
+      let td, targs = args_of env loc "a record" p e.ty in
       let declared =
         List.map (fun (d : Iface.field) -> d.fname) (fields_of env loc td)
       in
@@ -949,14 +960,10 @@ let rec expr env sc (e : expr) =
       List.iter
         (fun (f, (v : expr)) ->
           expr env sc v;
-          let declared = field_ty env loc td targs f in
-          (* an implementation's operation uses what it needs *)
-          let expected : Ty.ty =
-            match (needs, declared, td.body) with
-            | Some needs, Fun (ps, r, errs, _), Dep _ -> Fun (ps, r, errs, needs)
-            | _ -> declared
-          in
-          same env v.loc ("the field `" ^ f ^ "`") v.ty expected)
+          same env v.loc
+            ("the field `" ^ f ^ "`")
+            v.ty
+            (field_ty env loc td targs f))
         fields
   | Field (r, p, f) ->
       expr env sc r;
@@ -1240,6 +1247,27 @@ and pattern env sc (p : pattern) t =
         rest;
       first_sc
 
+(* The operations [fs] of a handler's instance's implementation of [p],
+   which needs [needs]: one for each the dependency declares, each of its
+   declared type, using what the implementation needs. *)
+and operations env sc loc p needs fs =
+  let td = decl env loc p in
+  let declared =
+    List.map (fun (d : Iface.field) -> d.fname) (fields_of env loc td)
+  in
+  if List.sort compare declared <> List.sort compare (List.map fst fs) then
+    fail env loc "an implementation doesn't have its dependency's operations";
+  List.iter
+    (fun (f, (v : expr)) ->
+      expr env sc v;
+      let expected : Ty.ty =
+        match field_ty env loc td [] f with
+        | Fun (ps, r, errs, _) -> Fun (ps, r, errs, needs)
+        | t -> t
+      in
+      same env v.loc ("the operation `" ^ f ^ "`") v.ty expected)
+    fs
+
 (* An installed handler instance is never a value (compiler.md, "No
    cycles"): an [Instance] is only ever the end of a [Handler]'s body,
    after the [Let]s and statements that make its state, which is where a
@@ -1379,7 +1407,10 @@ let fn_def env (f : fn_def) =
       let sc =
         List.fold_left
           (fun sc (p : param) -> add p.var sc)
-          (List.fold_left (fun sc v -> add v sc) Scope.empty (f.tys @ f.dicts))
+          (List.fold_left
+             (fun sc v -> add v sc)
+             Scope.empty
+             ((f.ev :: f.tys) @ f.dicts))
           f.params
       in
       expr env sc f.body;
@@ -1654,7 +1685,6 @@ let program ~imports ~linked (prog : program) =
       fn = "";
       ev = None;
       handler = None;
-      operation = false;
       uses = Ty.closed;
       installed = [];
       ntys = 0;

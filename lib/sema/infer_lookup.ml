@@ -528,11 +528,9 @@ let rec lookup env cx ~node loc = function
       (* the operation of the implementation under the handler, `next.get`:
          it's only ever called (resolve.ml), on the evidence where the
          handler is installed (Lower), so it uses nothing of its caller's:
-         [p] is the handler's need, which it has already. It's called only
-         while an operation runs, never in a lambda ([next_at]). *)
-      (match cx.next_at with
-      | Next_ok -> ()
-      | In_lambda -> report env (next_in_lambda loc op));
+         [p] is the handler's need, which it has already. A block in the
+         handler can call it too: its evidence is found where it's
+         written. *)
       match Option.bind (Hashtbl.find_opt env.types p) (dep_op_in op) with
       | Some o -> (
           match field_type ~tvars:[] o with

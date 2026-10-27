@@ -32,10 +32,13 @@
    Everything is evaluated in the order it was before: the order the
    interpreter has always used, so a program prints the same things.
 
-   And the evidence (core.ml) is threaded: each function and lambda takes
-   its own, each call passes the one in scope, and a call of an
-   operation, `Clock.now()`, is a [Dep_call] on it. An operation used as a
-   value, `let write = Console.write`, is a lambda that calls it.
+   And the evidence (core.ml) is threaded: each function takes its own,
+   each call passes the one in scope, and a call of an operation,
+   `Clock.now()`, is a [Dep_call] on it. A block captures the evidence
+   where it's written, as it does a local, and takes from its caller's
+   only what its parameter's type lists (foundations.md, decision 5). A
+   named function or an operation used as a value, `each(xs, show)`, is a
+   block written there that calls it.
 
    So are types' descriptors (core.ml, [desc]): each function takes one
    for each of its type variables, and each use of a generic function, and
@@ -91,11 +94,27 @@ let targs_of cx id =
   | Some a -> a
   | None -> bug (Printf.sprintf "no type arguments for node %d" id)
 
-(* The name inference gave the lambda at node [id] (Ty.lambda_id). *)
-let lambda_name cx id =
+(* The name inference gave the block at node [id] (Ty.lambda_id), and
+   the dependencies its callee gives it (Infer.Block). *)
+let block_of cx id =
   match (node cx id).found with
-  | Some (Lambda_id name) -> name
-  | _ -> bug (Printf.sprintf "no name for the lambda at node %d" id)
+  | Some (Block { name; given }) -> (name, given)
+  | _ -> bug (Printf.sprintf "no name for the block at node %d" id)
+
+(* The type of a block that does what a function of type [t] does, given
+   [given] by its callee, which is all it uses of its caller's evidence. *)
+let block_ty (t : Ty.ty) given : Ty.ty =
+  match t with
+  | Fun (ps, ret, errs, _) ->
+      Fun
+        ( ps,
+          ret,
+          errs,
+          {
+            labels = List.map (fun p -> Ty.label (Ty.dep_label p)) given;
+            tail = None;
+          } )
+  | _ -> bug "a block whose type isn't a function's"
 
 (* The descriptors a use at the type arguments [a] is passed (core.ml,
    [desc]), built from the function's own hidden type parameters. *)
@@ -284,35 +303,19 @@ and expr_of cx (e : expr) : C.expr =
   | Str s -> here (Str s)
   | Unit -> here Unit
   | Var (Local b) -> local (var_of cx b) e.loc
-  | Var (Global p) ->
+  | Var (Global p) when (node cx e.node).found = None ->
+      (* called: a call takes it as it is *)
       let a = targs_of cx e.node in
       here (Global (p, a, descs cx a, dicts_of cx e.node))
   | Var (Global_value p) -> here (Global_value (p, targs_of cx e.node))
-  | Var (Intrinsic x) ->
+  | Var (Intrinsic x) when (node cx e.node).found = None ->
       let a = targs_of cx e.node in
       here (Intrinsic (x, a, descs cx a, dicts_of cx e.node))
-  | Var (Dep_op (dep, op)) -> (
-      (* used as a value: a lambda that calls it, with the evidence it's
-         given where it's called *)
-      match ty () with
-      | Fun (ps, ret, _, _) as fty ->
-          let params = List.map (fun (p : Ty.param) -> temp cx "x" p.ty) ps in
-          let ev = evidence cx in
-          let args = List.map (fun v -> local v e.loc) params in
-          here
-            (Lambda
-               {
-                 name = Path.full (Path.member dep op);
-                 params =
-                   List.map (fun var : C.param -> { mode = Read; var }) params;
-                 ev;
-                 captures = [];
-                 body =
-                   mk
-                     (Dep_call { dep; op; fty; ev; next = false; args })
-                     ret e.loc;
-               })
-      | _ -> bug "an operation whose type isn't a function's")
+  | Var (Global _ | Intrinsic _ | Dep_op _) ->
+      (* used as a value: a block written here that calls it, so what it
+         uses is found here, but what its callee gives it (foundations.md,
+         decision 5) *)
+      named_block cx e
   | Var (Next_op _) -> bug "`next` used other than by calling through it"
   | Var (Assoc_value (_, req)) -> value_of cx req (ty ()) e.loc
   | Unop (Neg, a, onode) ->
@@ -439,16 +442,8 @@ and expr_of cx (e : expr) : C.expr =
             { mode = p.pmode; var = bind cx p.pname t.ty })
           params ps
       in
-      (* its body sees its own evidence, never the one where it's made *)
-      let ev = evidence cx and outer = cx.ev in
-      cx.ev <- ev;
-      let body = expr cx body in
-      cx.ev <- outer;
-      let own = Ids.of_list (List.map (fun (p : C.param) -> p.var.id) params) in
-      let captures =
-        List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
-      in
-      here (Lambda { name = lambda_name cx e.node; params; ev; captures; body })
+      let name, given = block_of cx e.node in
+      block_value cx ~name ~given params (ty ()) e.loc (fun () -> expr cx body)
   | Block (stmts, last) -> block cx stmts last
   | Con (tag, args) -> (
       match (node cx e.node).found with
@@ -501,6 +496,86 @@ and expr_of cx (e : expr) : C.expr =
         List.filter (fun (v : C.var) -> v.id <> ev.id) (free body)
       in
       here (Handler { ev; captures; body })
+
+(* A block of type [ty], named [name], taking [params], whose body [body]
+   makes, with the evidence it runs with in scope: the evidence where it's
+   written, [cx.ev], which it captures, with what [given] lists from its
+   caller's on top (Core.Lambda). *)
+and block_value cx ~name ~given params ty loc body =
+  let ev = evidence cx and outer = cx.ev in
+  cx.ev <- ev;
+  let body = body () in
+  cx.ev <- outer;
+  mk
+    (Lambda
+       {
+         name;
+         params;
+         ev;
+         outer;
+         given;
+         captures = captures_of params ev outer body;
+         body;
+       })
+    ty loc
+
+(* What a block's [body] captures: the locals from outside it it uses, and
+   the evidence where it's written, [outer], but not its [params] or its own
+   evidence [ev]. *)
+and captures_of params (ev : C.var) (outer : C.var) body =
+  let own =
+    Ids.of_list (ev.id :: List.map (fun (p : C.param) -> p.var.id) params)
+  in
+  List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
+  @ [ outer ]
+  |> List.sort_uniq (fun (a : C.var) (b : C.var) -> compare a.id b.id)
+
+(* [e], a top-level function, an intrinsic or an operation, used as a
+   value: a block written here, `fn(x) => f(x)`, of the type the parameter
+   it's passed to has (Infer.Block). *)
+and named_block cx (e : expr) =
+  let name, given = block_of cx e.node in
+  let fty = ty_of cx e.node in
+  let ps =
+    match fty with
+    | Fun (ps, _, _, _) -> ps
+    | _ -> bug "a function used as a value whose type isn't a function's"
+  in
+  let params =
+    List.map
+      (fun (p : Ty.param) : C.param ->
+        { mode = p.mode; var = temp cx "x" p.ty })
+      ps
+  in
+  let ret = match fty with Fun (_, r, _, _) -> r | _ -> Ty.unit in
+  block_value cx ~name ~given params (block_ty fty given) e.loc (fun () ->
+      let args =
+        List.map
+          (fun (p : C.param) : C.arg ->
+            match p.mode with
+            | Inout -> Ref p.var
+            | Read -> Value (local p.var e.loc))
+          params
+      in
+      let values = List.map (fun (p : C.param) -> local p.var e.loc) params in
+      match e.kind with
+      | Var (Global p) ->
+          let a = targs_of cx e.node in
+          let f =
+            mk (Global (p, a, descs cx a, dicts_of cx e.node)) fty e.loc
+          in
+          mk (Call (f, args, cx.ev)) ret e.loc
+      | Var (Intrinsic x) ->
+          let a = targs_of cx e.node in
+          let f =
+            mk (Intrinsic (x, a, descs cx a, dicts_of cx e.node)) fty e.loc
+          in
+          mk (Call (f, args, cx.ev)) ret e.loc
+      | Var (Dep_op (dep, op)) ->
+          mk
+            (Dep_call { dep; op; fty; ev = cx.ev; next = false; args = values })
+            ret e.loc
+      | _ -> bug "a block made of something that isn't a function")
 
 (* `with a, b over c in body` (handlers.md, "A `with` is a set"). What
    each link of each item installs is made first, outside the `with`, in
@@ -640,29 +715,30 @@ and handler cx (e : expr) deps state arms finally =
                 let name = Path.full (Path.member p op) in
                 let fty = Ty.Fun (ps, ret, errs, needs) in
                 let params =
-                  List.map (fun (q : Ty.param) -> temp cx "x" q.ty) ps
+                  List.map
+                    (fun (q : Ty.param) : C.param ->
+                      { mode = Read; var = temp cx "x" q.ty })
+                    ps
                 in
-                let ev = evidence cx in
-                let args = List.map (fun v -> local v e.loc) params in
                 Some
                   ( op,
-                    mk
-                      (Lambda
-                         {
-                           name;
-                           params =
-                             List.map
-                               (fun var : C.param -> { mode = Read; var })
-                               params;
-                           ev;
-                           captures = [];
-                           body =
-                             mk
-                               (Dep_call
-                                  { dep = p; op; fty; ev; next = false; args })
-                               ret e.loc;
-                         })
-                      fty e.loc )
+                    block_value cx ~name ~given:[] params fty e.loc (fun () ->
+                        let args =
+                          List.map
+                            (fun (q : C.param) -> local q.var e.loc)
+                            params
+                        in
+                        mk
+                          (Dep_call
+                             {
+                               dep = p;
+                               op;
+                               fty;
+                               ev = cx.ev;
+                               next = false;
+                               args;
+                             })
+                          ret e.loc) )
             | _ -> None)
           forwards
       in
@@ -717,7 +793,7 @@ and handler cx (e : expr) deps state arms finally =
 and arm_impl cx cells (impl : expr) =
   let lam = expr cx impl in
   match lam.kind with
-  | Lambda { name; params; ev; captures; body } ->
+  | Lambda { name; params; ev; outer; given; captures; body } ->
       let loc = impl.loc in
       let used =
         List.filter
@@ -752,11 +828,11 @@ and arm_impl cx cells (impl : expr) =
              used)
           body
       in
-      let own = Ids.of_list (List.map (fun (p : C.param) -> p.var.id) params) in
-      let captures =
-        List.filter (fun (v : C.var) -> not (Ids.mem v.id own)) (free body)
-      in
-      { lam with kind = Lambda { name; params; ev; captures; body } }
+      let captures = captures_of params ev outer body in
+      {
+        lam with
+        kind = Lambda { name; params; ev; outer; given; captures; body };
+      }
   | _ -> bug "a handler's arm that isn't a lambda"
 
 (* The ids of the locals [e] changes, added to [acc]: those it assigns to,
@@ -1145,21 +1221,24 @@ and free (e : C.expr) =
     | Tag (_, args, ds) ->
         List.iter use (List.concat_map C.desc_vars ds);
         List.iter go args
-    | Dep_call { ev; next; args; _ } ->
-        (* through `next`, its handler's evidence, which its operations
-           and `finally` keep, and no other lambda (Infer_env.next_at) *)
-        if next then use ev;
+    | Dep_call { ev; args; _ } ->
+        (* evidence is a local like any other: a block captures the
+           evidence where it's written, and through `next`, its handler's *)
+        use ev;
         List.iter go args
     | Prim (_, args) | Array args | Tuple args | Con (_, _, args) ->
         List.iter go args
-    | With { impl; desc; body; _ } ->
-        (* its evidence isn't a local: nothing captures it *)
+    | With { ev; outer; impl; desc; body; _ } ->
+        use outer;
         go impl;
         List.iter use (C.desc_vars desc);
+        bind ev;
         go body
-    | With_handler { handler; desc; body; _ } ->
+    | With_handler { ev; outer; handler; desc; body; _ } ->
+        use outer;
         go handler;
         List.iter use (C.desc_vars desc);
+        bind ev;
         go body
     | Instance { impls; finally } ->
         List.iter (fun (_, i) -> go i) impls;
@@ -1199,11 +1278,13 @@ and free (e : C.expr) =
     | While (a, b) | Seq (a, b) | Update (a, _, b) ->
         go a;
         go b
-    | Call (f, args, _) ->
+    | Call (f, args, ev) ->
+        use ev;
         go f;
         List.iter (function C.Value a -> go a | C.Ref v -> use v) args
-    | Lambda { params; captures; _ } ->
+    | Lambda { params; ev; captures; _ } ->
         List.iter (fun (p : C.param) -> bind p.var) params;
+        bind ev;
         List.iter use captures
     | Record (_, fields) -> List.iter (fun (_, v) -> go v) fields
     | Field (r, _, _) -> go r
