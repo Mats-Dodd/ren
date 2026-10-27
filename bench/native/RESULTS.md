@@ -9,7 +9,139 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
-## Summary
+## Combined
+
+Five experiments, each built from 920456c, are merged on top of H5's
+work (compiler.md, step 8): `map` in place and no stack check where
+recursion can't go; nested reuse, reuse into inlined builders and an
+inline reset; an 8-byte header and a small-object allocator; objects
+kept in the frame (H8); and shared or atomic counting behind build
+flags. These are all of them together, against the compiler at
+920456c, which is before H5's work too, so a ratio to it counts H5's
+gains. The sections after this one are the history: what each
+hypothesis measured before.
+
+**How.** Ren 920456c, Ren combined, Rust and Go in **one** hyperfine
+invocation per program (`-N --warmup 3 --runs 10`), release builds at
+main.ren's size. Peak resident memory is hyperfine's per-run mean. The
+machine was shared with other agents' work (the "load" column is the
+1-minute load average before and after each program's run, of 16
+cores), so 920456c's rbtree, nbody and inout times swung by ±50% to
+±70% in a run; ratios to 920456c are therefore of **CPU cycles**,
+which hyperfine records per run and load hardly moves. Every binary
+prints what the Rust twin prints. The scripts are as build.sh and
+measure.sh make them; blocks' chain kernel is new in build.sh.
+
+| program | Ren 920456c (s) | Ren combined (s) | Rust (s) | Go (s) | combined / 920456c, cycles | combined / Rust, time | combined / Rust, cycles | combined / Go, time | Ren MB, 920456c | combined | Rust | Go | memory, combined / Rust | load |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| rbtree | 2.438 ± 1.159 | 0.621 ± 0.003 | 0.856 ± 0.019 | 0.391 ± 0.004 | 0.34× | **0.73×** | 0.72× | 1.59× | 270.7 | 203.1 | 136.2 | 221.3 | **1.49×** | 5.6–7.3 |
+| deriv | 1.010 ± 0.017 | 0.477 ± 0.003 | 1.135 ± 0.027 | 1.034 ± 0.026 | 0.46× | **0.42×** | 0.41× | 0.46× | 682.0 | 474.8 | 1023.3 | 1332.7 | 0.46× | 7.3–7.3 |
+| nqueens | 0.670 ± 0.012 | 0.476 ± 0.005 | 0.636 ± 0.010 | 0.499 ± 0.015 | 0.71× | **0.75×** | 0.75× | 0.95× | 138.5 | 99.5 | 189.9 | 126.2 | 0.52× | 7.3–6.5 |
+| cfold | 0.171 ± 0.004 | 0.102 ± 0.001 | 0.426 ± 0.007 | 0.316 ± 0.008 | 0.59× | **0.24×** | 0.24× | 0.32× | 161.5 | 130.0 | 377.1 | 627.7 | 0.34× | 6.5–6.8 |
+| binary-trees | 13.003 ± 0.278 | 4.863 ± 0.086 | 8.393 ± 0.034 | 4.812 ± 0.023 | 0.37× | **0.58×** | 0.58× | 1.01× | 274.8 | 202.8 | 137.8 | 216.9 | **1.47×** | 5.5–5.4 |
+| nbody | 24.475 ± 11.621 | 2.603 ± 0.055 | 1.089 ± 0.000 | 1.791 ± 0.030 | 0.15× | **2.39×** | 2.39× | 1.45× | 1.4 | 1.4 | 1.5 | 4.2 | 0.93× | 4.8–5.5 |
+| fannkuch | 4.297 ± 0.012 | 1.736 ± 0.004 | 1.733 ± 0.001 | 1.617 ± 0.003 | 0.41× | **1.00×** | 1.00× | 1.07× | 1.5 | 1.5 | 1.6 | 4.3 | 0.93× | 6.7–4.8 |
+| inout | 11.658 ± 6.926 | 1.712 ± 0.012 | 0.964 ± 0.002 | 1.635 ± 0.008 | 0.20× | 1.78× | 1.85× | 1.05× | 1.5 | 1.5 | 1.6 | 4.3 | 0.95× | 5.9–6.7 |
+| stack (H8) | 2.478 ± 0.032 | 0.648 ± 0.001 | 0.595 ± 0.001 | 0.579 ± 0.000 | 0.27× | 1.09× | 1.09× | 1.12× | 1.6 | 1.5 | 1.6 | 4.2 | 0.93× | 6.8–5.9 |
+
+The first seven are H7's set. Cycles, 10⁹, 920456c / combined / Rust /
+Go (Go's include its collector's threads): rbtree 7.17 / 2.46 / 3.40 /
+2.01; deriv 3.93 / 1.83 / 4.43 / 11.61; nqueens 2.65 / 1.89 / 2.52 /
+2.65; cfold 0.67 / 0.40 / 1.68 / 2.11; binary-trees 52.4 / 19.6 / 33.8 /
+45.2; nbody 67.8 / 10.5 / 4.39 / 7.08; fannkuch 16.9 / 6.92 / 6.91 /
+6.44; inout 32.2 / 6.56 / 3.55 / 6.28. `--stats`, 920456c to combined:
+rbtree allocates 50.4 million objects to 4.2 million (one an insertion,
+as Rust), with no dups left; cfold 3.48 to 3.15 million; binary-trees
+614 to 611 million, 2.8 million roots kept in a frame; peak live bytes
+fall 14% (rbtree) to 29% (cfold) on everything that allocates (the
+header).
+
+blocks' kernels, H1 (blocks / loop, both builds in one run, cycles 10⁹):
+
+| kernel | 920456c, time (s) | combined, time (s) | 920456c, cycles | combined, cycles | instructions 10⁹, 920456c | combined | load |
+|---|---|---|---|---|---|---|---|
+| map | 0.368 ± 0.002 / 0.360 ± 0.027 | 0.339 ± 0.001 / 0.578 ± 0.022 | 1.465 / 1.307 = 1.12× | 1.347 / 1.447 = 0.93× | 5.19 / 4.89 | 3.47 / 4.16 | 5.5–5.6 |
+| reduce | 0.087 ± 0.008 / 0.078 ± 0.006 | 0.068 ± 0.006 / 0.049 ± 0.003 | 0.204 / 0.207 = 0.99× | 0.154 / 0.154 = 1.00× | 1.13 / 1.13 | 1.03 / 1.03 | 5.6–5.8 |
+| each | 0.056 ± 0.006 / 0.054 ± 0.005 | 0.040 ± 0.003 / 0.040 ± 0.003 | 0.198 / 0.205 = 0.97× | 0.150 / 0.153 = 0.98× | 1.12 / 1.12 | 1.02 / 1.02 | 5.8–6.1 |
+| fold | 0.213 ± 0.005 / 0.207 ± 0.009 | 0.215 ± 0.005 / 0.208 ± 0.008 | 0.830 / 0.817 = 1.02× | 0.832 / 0.811 = 1.03× | 3.83 / 3.83 | 3.83 / 3.83 | 6.1–5.9 |
+| attempt | 0.095 ± 0.003 / 0.098 ± 0.005 | 0.097 ± 0.005 / 0.093 ± 0.002 | 0.375 / 0.389 = 0.97× | 0.384 / 0.367 = 1.05× | 2.72 / 2.72 | 2.72 / 2.72 | 5.9–5.9 |
+| chain | 1.102 ± 0.011 / 0.182 ± 0.001 | 0.094 ± 0.000 / 0.058 ± 0.000 | 4.355 / 0.684 = 6.37× | 0.363 / 0.219 = 1.65× | 14.71 / 6.32 | 2.23 / 1.42 | 5.9–5.9 |
+
+`map` over a unique array (map_unique) goes from 1.410 to 0.219
+billion cycles, **6.4× fewer** (0.366 s to 0.057 s), and from 100,003
+allocations to 3: map writes in place, and hoist.ml hoists that loop
+like any other. The chain, three `map`s a round, is 12× fewer cycles
+than at 920456c and **1.65×** the loop fused by hand, which three
+passes over the elements instead of one cost; it allocates what the
+fused loop does. `map`'s blocks kernel is now *faster* than its loop
+twin, which still pushes into `[]` where `map` reserves its length
+once; that loop twin takes 11% more cycles than at 920456c on 15% fewer
+instructions, which wasn't looked into (H1's placement effect is the
+first suspect).
+
+**fannkuch, and the runtime experiment's 13%.** It doesn't persist.
+In one run, with fannkuch built five ways: 920456c 16.90 billion
+cycles; H5's work alone (301da87) 6.76; combined 6.91; combined with
+the allocator off (`REN_CFLAGS=-DREN_SYSTEM_MALLOC`) 6.90; Rust 6.90.
+The allocator changes nothing here now: the loop the 13% was in, the
+out-of-line `ren_array_set_taking`, is gone (H5). What's left, combined
+2.2% more cycles than H5 alone on 3.8% fewer instructions (22.05 to
+21.22 billion: the stack checks `flip` no longer makes), is where the
+code lands: the program's C is the same but for those checks, and
+built with `-falign-functions=64 -mllvm -align-all-nofallthru-blocks=6`
+the two take 6.788 and 6.784 billion cycles.
+
+One line each:
+
+- **H1, blocks cost nothing: holds.** Release blocks / loops 0.93× to
+  1.05× in cycles, instructions equal but `map`'s, which now does less
+  than its loop.
+- **H2, a known handler's operation costs a call: holds,** unchanged
+  (not run again; nothing here touches it).
+- **H3, Perceus counts far less: holds,** and more so: rbtree makes no
+  dups at all now, and every program of the Perceus set is faster than
+  Rust (0.24× to 0.75×).
+- **H4, Perceus allocates less: holds,** with both earlier gaps closed:
+  `map` over a unique array allocates 3 objects in all, and rbtree one
+  node an insertion, as Rust.
+- **H5, array loops at Rust's speed: partly.** fannkuch 1.00× Rust;
+  inout 1.85× and nbody 2.39× in cycles, for the index, overflow and
+  NaN checks Rust's release build doesn't make (H5 below).
+- **H6, debug builds faster than `go build`: fails,** unchanged (not
+  run again).
+- **H7, within 2× of Rust in time and memory: holds** on six of seven;
+  nbody is 2.39×, its NaN checks 31% of its cycles. Memory is within
+  1.5× of Rust on all seven, rbtree and binary-trees at 1.49× and
+  1.47×, the count in the header the rest of it. Against Go: faster
+  on deriv, cfold and nqueens, tied on binary-trees (1.01×), slower on
+  rbtree (1.59×), nbody (1.45×) and fannkuch (1.07×).
+- **H8, values that never escape live in the frame: holds where it
+  applies, which is rarely.** The kernels made of temporaries run at
+  Rust's speed (stack: 0.27× of 920456c's cycles, 1.09× Rust); in the
+  H7 set it moves nothing but binary-trees' roots, since those programs
+  return or store what they build. Second-class blocks matter for
+  escape only where an object is handed to a block (stack.md, in the
+  experiments).
+- **Many cores (cores experiment): the shared bit is cheap and
+  necessary, not sufficient.** Counting shared objects atomically only
+  costs 1 to 4% of cycles single-threaded, but a shared object that's
+  counted scales as Rust's `Arc` does, which collapses to 2 to 12%
+  efficiency at 8 threads on data hot in cache; borrowed reads and
+  frozen (never counted) state scale. `-DREN_RC_SHARED`,
+  `-DREN_RC_ATOMIC` and bench/native/cores build and run on the 8-byte
+  header.
+
+**Restricted to stay sound, and left:** a loop hoist.ml indexes that
+builds a framed object stays in its function, without `restrict`;
+reuse never takes a framed object's memory, nor builds in it; a framed
+object must never be marked shared (no code marks anything shared yet;
+publishing one would be an escape). The allocator's heap is per thread
+only in the experimental counting modes, and a block freed on another
+thread joins that thread's lists, since chunks are never given back:
+fine for the harness, not the design for tasks (mimalloc's delayed
+free is).
+
+## Summary (before the merge)
 
 | | Hypothesis | Number | Verdict |
 |---|---|---|---|
@@ -456,3 +588,11 @@ the token carried into `balance`, a small-object allocator and an
 before it, and what `Float`'s NaN checks cost weighed (nbody and inout,
 H5); `map` in place. The inline array store, hoisted uniqueness and
 in-place field stores are done (H5).
+
+After the merge ("Combined"), what's left: nbody's and inout's checks,
+a loop's index checks made once before it and what `Float`'s NaN checks
+cost weighed (H5); a packed scalar area for rbtree's two one-word
+scalar fields, toward 1.25× Rust's memory; a stackless free walk for
+binary-trees, whose time is half freeing; H6's backend and cache; and
+for tasks, frozen handler state and a per-thread heap with delayed
+frees.

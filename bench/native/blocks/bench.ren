@@ -124,6 +124,23 @@ pub fn attempt_loop(n: Int) -> Int =
     total += result
   total + calls
 
+// A chain of three maps over an array only `ys` holds, each round's
+// result the next round's input, and the same fused by hand into one
+// loop that writes in place: run alone as build.sh's chain kernels, not
+// by `run`.
+pub fn chain_blocks(xs: Array<Int>, n: Int) -> Int =
+  var ys = xs
+  for round in 0..n
+    ys = ys.map(fn(x) => x + round).map(fn(x) => x * 3).map(fn(x) => x % 1000)
+  ys[7] + ys[999]
+
+pub fn chain_loop(xs: Array<Int>, n: Int) -> Int =
+  var ys = xs
+  for round in 0..n
+    for i in 0..ys.len()
+      ys[i] = (ys[i] + round) * 3 % 1000
+  ys[7] + ys[999]
+
 fn line(name: Str, with_blocks: Int, with_loops: Int) uses Console =
   Console.write(name.concat(" ").concat(show(with_blocks)).concat(" ").concat(show(with_loops)))
 

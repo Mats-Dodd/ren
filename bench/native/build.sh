@@ -97,6 +97,11 @@ fn main() uses Console =
   for round in 0..100_000
     ys = ys.map(fn(x) => (x * 3 + round) % 1000)
   print(ys[7])"
+# a chain of three maps against the same fused by hand, both in place
+for v in blocks loop; do
+  kernel blocks "chain_$v" "$xs
+fn main() uses Console = print(chain_$v(xs(), 100_000))"
+done
 # H2: each loop of `handlers` alone, at main.ren's size, and the debug
 # build's evidence passing again at -O2, to tell it from -O0's cost
 kernel handlers with "fn main() uses Console =

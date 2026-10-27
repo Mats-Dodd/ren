@@ -1460,7 +1460,8 @@ themselves (bench/native); Mem IR, the C runtime and a naive backend
 for the first-order subset, with `ren build`; the debug strategy for
 the rest of the subset, blocks, generics, handlers, errors, `show` and
 `Console`; Perceus over Mem IR; release builds that specialize; and the
-measurements. Each step extends this section, and says what it changed
+measurements. Then two that act on what they measured: arrays in loops,
+and the experiments merged. Each step extends this section, and says what it changed
 of the ones before.
 
 ### Step 2: Mem IR, the runtime, and `ren build`
@@ -2099,3 +2100,75 @@ What later stages need to know:
   each index check is a way out of the loop, which the vectorizer of
   the clang measured won't take. Rust's release build doesn't check
   overflow, and its inout loop has no index checks once it's inlined.
+
+### Step 8: the experiments merged
+
+Five experiments on the native backend, each built apart from step 6
+and merged after step 7; RESULTS.md's "Combined" section measures them
+together. A release build's passes are now: specialize; memory
+lowering; Perceus (`Rc.prepare`, borrow.ml, `Rc.program`), then
+**stack.ml**, then reuse.ml; **inline.ml**, and Perceus and the rest
+again on what it inlined; hoist.ml; Mem Lint.
+
+- **Reuse goes deeper** (rc.ml, reuse.ml). A dying object's fields
+  whose own fields the program reads are kept by its free and dropped
+  with their own specialized drops inside its unique branch, nested
+  (Koka's `specializeDrop`, recursing); each object such a tree frees
+  is reset to a token of its own if a constructor as big is built
+  after it. Of the builds before the path branches, the one with the
+  most fields already in place takes the token (Koka's
+  ParcReuseSpec.hs, Lean's `isSelfSset`), and only the changed fields
+  are written. A token's path may cross a failing call: the call's
+  error block frees it first. `ren_reset` is inline, and does nothing
+  when it keeps every field that holds an object.
+- **inline.ml** inlines a call, one level, only where a reuse token was
+  freed unused right after it and the callee builds a constructor of
+  that size: simple callees (no loops, catches, blocks, handlers,
+  cells or recursion) of Koka's cost of 20 at most. rbtree's
+  `balance_left` and `balance_right` go into `ins`, so the node `ins`
+  took apart is the node `balance` builds.
+- **stack.ml** (H8) keeps in the frame an object that never outlives
+  the call that builds it: its class (it and its other names) is used
+  only by field reads, `unique?`, the drop Perceus placed, the
+  runtime's reads, and borrowed parameters that, by a fixpoint over
+  the program, let nothing escape; one built in a loop only if nothing
+  of its class lives across iterations. A function whose result is
+  such an object gets a second version, `f_frame`, that builds it in
+  memory its caller gives. A framed object's count is 1 for life; its
+  drop releases its fields and leaves the memory. Reuse leaves framed
+  objects alone both ways. A loop hoist.ml indexes that builds a
+  framed object stays in its function, without `restrict`, since the
+  outlined loop couldn't name the frame. `REN_NO_STACK`, `REN_NO_SLOT`
+  and `REN_STACK_REPORT` (env) turn it off, turn the second versions
+  off, and say why each site stays on the heap.
+- **`map` in place.** The prelude's `Array.map` writes into its input
+  when that's unique and the element layouts match (`map_into`,
+  `unsafe_cast`, Lean's `mapMUnsafe`), which hoist.ml then hoists like
+  any store loop; otherwise it reserves the length once
+  (`array_reserve`).
+- **No stack check where recursion can't go** (emit_c.ml,
+  `unchecked`): a function that calls, directly, only functions that
+  don't check either, through no block or handler, in a chain of at
+  most 8.
+- **The header is 8 bytes** (ren_rt.h): a 32-bit count, a 16-bit tag
+  whose top three values are an array's, a string's and a
+  descriptor's, a field count and a byte that masks which of the first
+  eight fields hold objects. More than eight fields keep a 64-bit mask
+  in a word after them, so 64 fields at most. An array's stride is in
+  its body, and the byte says whether its elements are counted. A
+  negative count is the shared mark: by default it aborts, and under
+  `-DREN_RC_SHARED` it's Lean's atomic count (`-DREN_RC_ATOMIC`
+  counts everything atomically). bench/native/cores measures those
+  modes on several threads.
+- **A small-object allocator** (ren_rt.h): free lists by size in
+  words up to 64, refilled from 1 MiB chunks, sized frees, nothing
+  zeroed; bigger objects and arrays' elements use malloc. It's thread
+  local in the threaded counting modes, and `-DREN_SYSTEM_MALLOC`,
+  which every AddressSanitizer build sets, sends everything to malloc.
+
+bench/frames.ren (under the sanitizers in build.t) has where stack
+promotion meets the rest: a framed record of more than eight fields, one
+that dies where one as big is built after it, and one built in a
+hoisted loop; bench/tokens.ren a token crossing a failing call. Core
+Lint checks a specialized module with every module's interface in
+scope, since a copy can be at a type its module never imports.
