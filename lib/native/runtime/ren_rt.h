@@ -7,12 +7,17 @@
    its tag shifted left with the low bit set, so it's never counted.
    That's Lean's `lean_box` (lean.h, `lean_is_scalar`).
 
-   Every object starts with a header word: its count, and enough to free
-   it without knowing its type. A count of 0 marks an object that's never
-   freed, as Lean's `m_rc == 0` does: a string literal, made once in the
-   C file. Counts are plain, never atomic, since a program has one
-   thread (foundations.md, decision 10, makes them atomic only on
-   shared objects, once there are tasks).
+   Every object starts with a header word, eight bytes: its count, and
+   enough to free it without knowing its type. A count of 0 marks an
+   object that's never freed, as Lean's `m_rc == 0` does: a string
+   literal, made once in the C file. Counts are plain, never atomic,
+   since a program has one thread. A negative count is kept for the
+   shared mark foundations.md's many-cores decision needs, as Lean's
+   is (lean.h:146, `m_rc < 0`: multi-threaded, counted
+   atomically): every fast path below tests for a positive count, and
+   the rest goes to a cold path, so marking an object shared later
+   costs the single-threaded code nothing. Nothing makes a count
+   negative yet.
 
    The C file `ren build` writes holds this header, then ren_rt.c, then
    the program, so a binary needs nothing installed. Building it with
@@ -29,24 +34,43 @@
 
 typedef uint8_t ren_unit;
 
-/* What an object holds, which says how to free it. */
-enum { REN_CTOR = 0, REN_ARRAY = 1, REN_STR = 2, REN_DESC = 3 };
+/* What an object holds, which says how to free it, is its tag: a
+   constructor's, a record's (0) or an error's, or one of these three
+   at the top, as Lean's tags above `LeanMaxCtorTag` are its arrays and
+   strings (lean.h:113-125) and kklib's `KK_TAG_STRING` and the rest
+   theirs. */
+enum {
+  REN_TAG_ARRAY = 0xFFFD,
+  REN_TAG_STR = 0xFFFE,
+  REN_TAG_DESC = 0xFFFF,
+};
 
-/* The header. A constructor's fields are in the order they're declared,
-   and [objs] has a bit for each that holds an object, so freeing it
-   drops those, as Lean's `m_other` says how many of a constructor's
-   fields are objects (lean.h, `lean_ctor_object`). A mask rather than a
-   count, since a field of a type variable's type holds an object in one
-   value and an `Int` in another: whoever makes the value knows which,
-   from the type's descriptor, and the order of the fields stays the
-   declaration's, so generic code finds a field where any other does. */
+/* The header, after Lean's `lean_object` (lean.h:174) and kklib's
+   `kk_header_t` (kklib.h:136): a 32-bit count, a 16-bit tag and two
+   bytes. A constructor's fields are in the order they're declared,
+   [nfields] of them, and [objs] has a bit for each of the first eight
+   that holds an object, so freeing it drops those. A constructor of
+   more than eight fields keeps that mask in a word after its fields,
+   ren_ctor_objs's, 64 fields at most.
+
+   A mask, where Koka and Lean put the fields that hold objects first
+   and keep their count (kklib's `scan_fsize`, Lean's `m_other`): both
+   box a value of a type variable's type, so a field holds an object or
+   doesn't whatever the value. Ren keeps an `Int` there unboxed (a
+   [ren_val] word), so whether that field holds an object is the
+   value's, which its maker knows from the type's descriptor, and
+   moving it would make where a field is the value's too, which generic
+   code couldn't find without reading the header. The order stays the
+   declaration's, and the mask goes in the byte the count would.
+
+   An array keeps whether its elements are counted in [objs], and a
+   string and a descriptor use neither byte. */
 typedef struct ren_obj {
-  int32_t rc;          /* > 0: counted; 0: never freed */
-  uint16_t tag;        /* a constructor's, a record's (0) or an error's */
-  uint8_t kind;        /* REN_CTOR, REN_ARRAY, REN_STR or REN_DESC */
-  uint8_t boxed_elems; /* an array's: whether its elements are counted */
-  uint32_t objs;       /* a constructor's fields that hold objects, a bit each */
-  uint32_t nfields;    /* a constructor's fields, 32 at most */
+  int32_t rc;      /* > 0: counted; 0: never freed; < 0: kept, shared */
+  uint16_t tag;    /* a constructor's, or REN_TAG_ARRAY, _STR or _DESC */
+  uint8_t nfields; /* a constructor's fields */
+  uint8_t objs;    /* its first eight that hold objects; an array's: 1 if
+                      its elements are counted */
 } ren_obj;
 
 /* A field or an array element: eight bytes, whatever it holds. A `Bool`,
@@ -73,6 +97,7 @@ typedef struct {
   int64_t len;
   int64_t cap;
   ren_val *data;
+  int64_t stride; /* words an element, 1 but for an array of structs */
 } ren_array;
 
 typedef struct {
@@ -143,13 +168,20 @@ static inline int64_t ren_tag(ren_obj *o) {
 
 void ren_free(ren_obj *o);
 
-/* One more reference: lean.h's `lean_inc_ref`, and kklib's
-   `kk_block_dup`, without their thread-shared paths. */
+/* A shared object's count, which is negative: what a thread that
+   isn't its owner's does, atomically, once there are tasks. */
+_Noreturn void ren_shared_count(ren_obj *o);
+
+/* One more reference: lean.h's `lean_inc_ref` (a positive count, then
+   `lean_inc_ref_cold`), and kklib's `kk_block_dup`. */
 static inline void ren_dup(ren_obj *o) {
-  if (ren_is_scalar(o) || o->rc == 0)
+  if (ren_is_scalar(o))
     return;
-  REN_STAT(dups);
-  o->rc++;
+  if (__builtin_expect(o->rc > 0, 1)) {
+    REN_STAT(dups);
+    o->rc++;
+  } else if (o->rc != 0)
+    ren_shared_count(o);
 }
 
 /* One reference fewer, freeing the object with the last: lean.h's
@@ -160,10 +192,11 @@ static inline void ren_drop(ren_obj *o) {
   if (o->rc > 1) {
     REN_STAT(drops);
     o->rc--;
-  } else if (o->rc != 0) {
+  } else if (o->rc == 1) {
     REN_STAT(drops);
     ren_free(o);
-  }
+  } else if (o->rc != 0)
+    ren_shared_count(o);
 }
 
 /* Whether [o] is held by nothing else, so it can be changed in place:
@@ -172,13 +205,131 @@ static inline bool ren_is_unique(ren_obj *o) {
   return !ren_is_scalar(o) && o->rc == 1;
 }
 
+/* ---- the heap ----
+
+   Objects of up to [REN_SMALL_WORDS] words come from free lists, one
+   for each size in words, as kklib gets them from mimalloc
+   (kklib.h:511, `kk_malloc_small`, `mi_theap_wmalloc_small` by word
+   size) and Lean through `lean_alloc_small_object` (lean.h:522, also
+   mimalloc's now), whose size the compiler knows at most calls, so the
+   branch on it folds away, as it does here. A free object's first word
+   points to the next; a list that's empty is refilled from a chunk of
+   memory taken a bump at a time, and a chunk used up is replaced by a
+   new one from the system. Nothing is zeroed: every allocation's
+   caller writes all of what it reads.
+
+   Freeing is told the size, which every object's header gives
+   (ren_free_one), so it needs no lookup. Memory freed to a list stays
+   with that size for the rest of the program, and chunks are never
+   given back, so a program whose live objects change size over time
+   can hold more than malloc would; Lean's and mimalloc's pages, which
+   go back to a shared pool when empty, are the fix if that shows.
+
+   One heap, since a program has one thread: with tasks, each thread
+   gets its own, as kklib's context holds one (kklib.h:367), and an
+   object freed on a thread that isn't its own goes back to its owner's,
+   as mimalloc's delayed free does. Bigger objects, and an array's
+   elements, which grow with realloc, use malloc. Building with
+   -DREN_SYSTEM_MALLOC sends everything to malloc, for tools that
+   check it; AddressSanitizer does, so a build under it does too, and a
+   use after free is still caught (bench/build.t). */
+
+#if defined(__SANITIZE_ADDRESS__)
+#define REN_SYSTEM_MALLOC 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define REN_SYSTEM_MALLOC 1
+#endif
+#endif
+
+#define REN_SMALL_WORDS 64
+#define REN_CHUNK_BYTES ((size_t)1 << 20)
+
+typedef struct {
+  void *free[REN_SMALL_WORDS + 1]; /* by size in words; [0] unused */
+  char *bump, *end;                /* what's left of the chunk */
+} ren_heap_t;
+extern ren_heap_t ren_heap;
+
+void *ren_alloc_slow(size_t words);
+void *ren_alloc_big(size_t bytes);
+
+static inline size_t ren_words(size_t bytes) { return (bytes + 7) >> 3; }
+
+/* [bytes] of memory, not zeroed. */
+static inline void *ren_alloc_bytes(size_t bytes) {
+#ifndef REN_SYSTEM_MALLOC
+  size_t w = ren_words(bytes);
+  if (__builtin_expect(w <= REN_SMALL_WORDS, 1)) {
+    void *p = ren_heap.free[w];
+    if (__builtin_expect(p != NULL, 1)) {
+      ren_heap.free[w] = *(void **)p;
+      return p;
+    }
+    return ren_alloc_slow(w);
+  }
+#endif
+  return ren_alloc_big(bytes);
+}
+
+/* Memory [ren_alloc_bytes] gave, of the same [bytes]. */
+static inline void ren_free_bytes(void *p, size_t bytes) {
+#ifndef REN_SYSTEM_MALLOC
+  size_t w = ren_words(bytes);
+  if (__builtin_expect(w <= REN_SMALL_WORDS, 1)) {
+    *(void **)p = ren_heap.free[w];
+    ren_heap.free[w] = p;
+    return;
+  }
+#else
+  (void)bytes;
+#endif
+  free(p);
+}
+
+#ifdef REN_STATS
+void ren_count_alloc(int64_t bytes);
+#endif
+
 /* ---- objects ---- */
 
-/* A constructor of [nfields] fields, those with a bit in [objs]
-   counted, with its count at 1. The caller fills in the fields. */
-ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields, uint32_t objs);
-
 static inline ren_val *ren_fields(ren_obj *o) { return ((ren_ctor *)o)->fields; }
+
+/* A constructor's size: the header, its fields, and the mask's word if
+   it has more than eight. */
+static inline size_t ren_ctor_size(uint32_t nfields) {
+  return sizeof(ren_ctor) + (nfields + (nfields > 8)) * sizeof(ren_val);
+}
+
+/* Which of a constructor's fields hold objects, a bit each. */
+static inline uint64_t ren_ctor_objs(ren_obj *o) {
+  return o->nfields <= 8 ? o->objs
+                         : (uint64_t)ren_fields(o)[o->nfields].i;
+}
+
+static inline void ren_set_objs(ren_obj *o, uint32_t nfields, uint64_t objs) {
+  if (nfields <= 8)
+    o->objs = (uint8_t)objs;
+  else
+    ren_fields(o)[nfields].i = (int64_t)objs;
+}
+
+/* A constructor of [nfields] fields, those with a bit in [objs]
+   counted, with its count at 1. The caller fills in the fields. The
+   compiler passes [nfields] as a constant, so the branches on it fold. */
+static inline ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields,
+                                      uint64_t objs) {
+  size_t bytes = ren_ctor_size(nfields);
+  ren_obj *o = ren_alloc_bytes(bytes);
+#ifdef REN_STATS
+  ren_count_alloc((int64_t)bytes);
+#endif
+  o->rc = 1;
+  o->tag = tag;
+  o->nfields = (uint8_t)nfields;
+  ren_set_objs(o, nfields, objs);
+  return o;
+}
 
 /* ---- reuse ----
 
@@ -190,20 +341,22 @@ static inline ren_val *ren_fields(ren_obj *o) { return ((ren_ctor *)o)->fields; 
 /* Free [o], whose count is 1, and drop the fields it doesn't keep: Koka's
    drop specialization (Parc.hs, `specializeDrop`), so taking the fields
    of a constructor that dies costs no counting. */
-void ren_free_keeping(ren_obj *o, uint32_t kept);
+void ren_free_keeping(ren_obj *o, uint64_t kept);
 
 /* The same, but keep [o]'s memory to build a constructor of as many
    fields in: a reuse token (Lean's `reset`, kklib.h's
    `kk_block_alloc_at`). */
-ren_obj *ren_reset(ren_obj *o, uint32_t kept);
+ren_obj *ren_reset(ren_obj *o, uint64_t kept);
 
-/* A token's memory as a constructor of [tag] again, with a count of 1;
-   the caller writes the fields that changed. */
-static inline ren_obj *ren_reuse(ren_obj *tok, uint16_t tag, uint32_t objs) {
+/* A token's memory as a constructor of [tag] again, of the same
+   [nfields], with a count of 1; the caller writes the fields that
+   changed. */
+static inline ren_obj *ren_reuse(ren_obj *tok, uint16_t tag, uint32_t nfields,
+                                 uint64_t objs) {
   REN_STAT(reuses);
   tok->rc = 1;
   tok->tag = tag;
-  tok->objs = objs;
+  ren_set_objs(tok, nfields, objs);
   return tok;
 }
 
@@ -217,11 +370,9 @@ static inline ren_val *ren_elems(ren_obj *o) { return ((ren_array *)o)->data; }
 /* An array of [len] elements of [stride] words each, a release build's
    structs (a copied record's fields, Mem's [Struct]), kept in the
    elements: never counted, and never walked, since nothing that walks a
-   value is given one. An array's [nfields] is its stride, and 0 is 1. */
+   value is given one. */
 ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride);
-static inline int64_t ren_stride(ren_obj *a) {
-  return a->nfields > 1 ? (int64_t)a->nfields : 1;
-}
+static inline int64_t ren_stride(ren_obj *a) { return ((ren_array *)a)->stride; }
 
 /* ---- arrays ---- */
 

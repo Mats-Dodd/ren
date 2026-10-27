@@ -1160,6 +1160,11 @@ and alloc fs env sh fields =
   r
 
 and alloc_taking fs env sh fields =
+  (* an object's header has a bit for each field that holds an object,
+     64 at most (ren_rt.h, [ren_ctor_objs]) *)
+  if List.length fields > 64 then
+    unsupported fs.here
+      "a record, a tuple, a constructor or an error of more than 64 fields";
   let words =
     List.filter_map
       (fun x ->
