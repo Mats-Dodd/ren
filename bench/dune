@@ -28,6 +28,7 @@
   (glob_files native/handlers/*.ren)
   (glob_files native/inout/*.ren)
   (glob_files native/nbody/*.ren)
+  (glob_files native/nested/*.ren)
   (glob_files native/nqueens/*.ren)
   (glob_files native/rbtree/*.ren)
   (glob_files native/stack/*.ren)

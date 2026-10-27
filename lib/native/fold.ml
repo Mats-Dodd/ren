@@ -56,6 +56,7 @@ let atoms h = List.map (atom h)
 let rt h (r : rt) : rt =
   match r with
   | Array_get l -> Array_get (lay h l)
+  | Array_take l -> Array_take (lay h l)
   | Array_set l -> Array_set (lay h l)
   | Array_push l -> Array_push (lay h l)
   | Array_set_taking l -> Array_set_taking (lay h l)
@@ -64,6 +65,7 @@ let rt h (r : rt) : rt =
   | Array_set_field_taking (n, k, l) ->
       Array_set_field_taking (h.st n, k, lay h l)
   | Buf_get l -> Buf_get (lay h l)
+  | Buf_take l -> Buf_take (lay h l)
   | Buf_set l -> Buf_set (lay h l)
   | Buf_set_field (n, k, l) -> Buf_set_field (h.st n, k, lay h l)
   | Array_reserve l -> Array_reserve (lay h l)
@@ -121,6 +123,7 @@ let rhs h (r : rhs) : rhs =
   | Pack ps -> Pack (List.map (fun (x, at, n) -> (a x, at, n)) ps)
   | Unpack (x, at, n) -> Unpack (a x, at, n)
   | Reset (x, k) -> Reset (a x, kept h k)
+  | Hole (x, n) -> Hole (a x, n)
 
 let rec stmt h (s : stmt) : stmt =
   let a = atom h and v = var h and b = block h in
@@ -135,6 +138,7 @@ let rec stmt h (s : stmt) : stmt =
   | Drop_word (x, d) -> Drop_word (a x, a d)
   | Free (x, k) -> Free (a x, kept h k)
   | Free_token x -> Free_token (a x)
+  | Fill (p, x) -> Fill (a p, a x)
   | Do r -> Do (rhs h r)
   | Call_fails { result; fn; args; error; on_error } ->
       Call_fails

@@ -1175,6 +1175,77 @@ let rec pure (e : C.expr) =
   | Update (r, _, v) -> pure r && pure v
   | _ -> false
 
+(* ---- a write into an element of an element ----
+
+   `grid[i][j] = v`, which Core writes `grid = set grid i (set (get grid
+   i) j v)`, and `xs[i].f = w`, `set xs i (update (get xs i) f w)`, of
+   an element that's an object. Lowered as Core says, the element is
+   read before [v] is, and [v] often reads the array (`grid[i][j] +=
+   1`), so the array is used between reading the element and writing it
+   back, and swap.ml can't move the element out (Lean's swap-out).
+   Where [v] only computes, it's evaluated first, after the reads'
+   index checks, which is where Core evaluates it, and then each
+   element on the way is read once, into a local, and written back:
+
+     check i (against grid); let t = v
+     let e = get grid i in grid = set grid i (set e j t)
+
+   [v] calls and changes nothing, so it gives what it gave after the
+   reads, and the reads give what they gave before it; an index out of
+   bounds panics where it did, before [v], and the write's own check
+   after it, as before. *)
+
+(* Whether [e] only reads locals, fields and elements and computes, so
+   it gives the same before the reads of an array it's written into as
+   after them. *)
+let rec calm (e : C.expr) =
+  match e.kind with
+  | Int _ | Float _ | Bool _ | Unit | Str _ | Local _ -> true
+  | Prim ((Neg | Not | Binop _ | Length | Get_index), args) ->
+      List.for_all calm args
+  | Field (r, _, _) -> calm r
+  | _ -> false
+
+let is_index (e : C.expr) = match e.kind with Local _ | Int _ -> true | _ -> false
+
+let rec same (a : C.expr) (b : C.expr) =
+  match (a.kind, b.kind) with
+  | Local x, Local y -> x.id = y.id
+  | Int m, Int n -> Int64.equal m n
+  | Prim (Get_index, [ p; i ]), Prim (Get_index, [ q; j ]) -> same p q && same i j
+  | _ -> false
+
+(* What's written at the end of a spine: [Put (j, v)], [v] at [j] in the
+   last element read, or [Change w], the last element read with a field
+   [w]. *)
+type leaf = Put of C.expr * C.expr | Change of C.expr
+
+(* [path[i] = value], as the reads ([get]s) it goes through, outermost
+   first, and its leaf. *)
+let rec spine (path : C.expr) (i : C.expr) (value : C.expr) =
+  let get_of (g : C.expr) =
+    match g.kind with
+    | Prim (Get_index, [ p; i' ]) -> same p path && same i' i
+    | _ -> false
+  in
+  match value.kind with
+  | Prim (Set_index, [ g; j; v ]) when get_of g && is_index j ->
+      let gets, leaf = spine g j v in
+      (g :: gets, leaf)
+  | Update (g, _, w) when get_of g -> ([ g ], Change w)
+  | _ -> ([], Put (i, value))
+
+(* The temporaries the rewrite binds, apart from every other local:
+   below the hidden type parameters' ids, which count down from -1. *)
+let spine_ids = ref (-1_000_000)
+
+let spine_var name ty : C.var =
+  decr spine_ids;
+  { id = !spine_ids; name; ty }
+
+let is_spine_var (e : C.expr) =
+  match e.kind with Local v -> v.id <= -1_000_000 | _ -> false
+
 let rec expr fs env (e : C.expr) : atom =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
@@ -1578,6 +1649,75 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       in
       drop fs env x;
       v
+  (* a write into an element of an element, its value first (above,
+     [spine]) *)
+  | Set_index, [ ({ kind = Local _; _ } as a); i; v ]
+    when is_index i
+         &&
+         match spine a i v with
+         | [], _ -> false
+         | _, (Put (_, w) | Change w) when is_spine_var w || not (calm w) ->
+             false
+         | [ g ], Change _ -> not (is_struct (lay g.ty))
+         | _ -> true ->
+      let gets, leaf = spine a i v in
+      (* each read's index checked, as the read would: for the last
+         element of a [Change], too *)
+      List.iter
+        (fun (g : C.expr) ->
+          match g.kind with
+          | Prim (Get_index, [ p; j ]) ->
+              let x = expr fs env p in
+              let at_get = new_site cx (at fs g.loc) in
+              emit fs
+                (Do (Runtime (Array_check, [ x; expr fs env j ], Some at_get)));
+              drop fs env x
+          | _ -> bug "a spine's read")
+        gets;
+      let w = match leaf with Put (_, w) | Change w -> w in
+      let t = spine_var "$put" w.ty in
+      let local (x : C.var) : C.expr = { kind = Local x; ty = x.ty; loc = e.loc } in
+      (* the elements read into locals: each but a [Change]'s last if
+         it's a struct, whose field alone is written ([Array_set_field],
+         below) *)
+      let kept =
+        match leaf with
+        | Change _ when is_struct (lay (List.nth gets (List.length gets - 1)).ty)
+          ->
+            List.filteri (fun k _ -> k < List.length gets - 1) gets
+        | _ -> gets
+      in
+      let locals = List.map (fun (g : C.expr) -> (g, spine_var "$elem" g.ty)) kept in
+      let local_of (p : C.expr) =
+        match List.find_opt (fun (g, _) -> same g p) locals with
+        | Some (_, x) -> local x
+        | None -> p
+      in
+      let reread (g : C.expr) : C.expr =
+        match g.kind with
+        | Prim (Get_index, [ p; j ]) ->
+            { g with kind = Prim (Get_index, [ local_of p; j ]) }
+        | _ -> bug "a spine's read"
+      in
+      (* [value] with each read replaced by its local, and the leaf's
+         value by [t] *)
+      let rec swap_in (value : C.expr) : C.expr =
+        match value.kind with
+        | Prim (Set_index, [ g; j; v ]) when List.mem_assq g locals ->
+            { value with kind = Prim (Set_index, [ local_of g; j; swap_in v ]) }
+        | Update (g, f, _) ->
+            let r = if List.mem_assq g locals then local_of g else reread g in
+            { value with kind = Update (r, f, local t) }
+        | _ -> local t
+      in
+      let body = { e with kind = Prim (Set_index, [ a; i; swap_in v ]) } in
+      let body =
+        List.fold_right
+          (fun (g, x) (body : C.expr) ->
+            { body with kind = Let (x, reread g, body) })
+          locals body
+      in
+      expr fs env { body with kind = Let (t, w, body) }
   (* `a[i].f = w`, which Core writes `a = set a i (update (get a i) f w)`,
      of an array of structs: only the field is written, in place once
      Perceus takes the array, rather than the element built again and

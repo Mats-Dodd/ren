@@ -102,6 +102,11 @@ for v in blocks loop; do
   kernel blocks "chain_$v" "$xs
 fn main() uses Console = print(chain_$v(xs(), 100_000))"
 done
+# swap-out and tail recursion modulo cons: each of `nested`'s kernels
+# alone, at main.ren's size
+kernel nested grid "fn main() uses Console = print(grid(10_000))"
+kernel nested map "fn main() uses Console = print(map(10_000))"
+kernel nested list "fn main() uses Console = print(list(101, 1_000_000))"
 # H2: each loop of `handlers` alone, at main.ren's size, and the debug
 # build's evidence passing again at -O2, to tell it from -O0's cost
 kernel handlers with "fn main() uses Console =

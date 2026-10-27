@@ -1,0 +1,12 @@
+// A write into an element of an element that panics after the element
+// was moved out of its array (swap.ml): its index is out of bounds for
+// the row, which is checked when it's written, after the value. The
+// panic is the same as `ren run`'s, at the same place, with the grid's
+// other rows alive. build.t runs it under the sanitizers, in both
+// builds and both countings.
+
+fn main() uses Console =
+  var g = [[1, 2], [3, 4, 5]]
+  for k in 0..3
+    g[k % 2][k] = g[1][k] * 10
+    print(g[k % 2][k])

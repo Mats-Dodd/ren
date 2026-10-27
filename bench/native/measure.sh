@@ -105,6 +105,11 @@ for part in $parts; do
       done
       stat blocks-map_unique-naive-stats
       stat blocks-map_unique-perceus-stats
+      # swap-out and tail recursion modulo cons: copies and allocations
+      for k in grid map list; do
+        stat "nested-$k-debug-stats"
+        stat "nested-$k-perceus-stats"
+      done
       ;;
 
     memory)
@@ -132,6 +137,9 @@ for part in $parts; do
       for p in nbody fannkuch inout; do
         hyper "$p" "$p" perceus norestrict rust go
       done
+      # arrays of arrays and lists built by recursion, both builds
+      hyper nested nested perceus debug rust go
+      for k in grid map list; do hyper "nested-$k" "nested-$k" perceus debug; done
       # H1: each block kernel against its loop twin, release
       for k in $kernels; do
         hyper "h1-$k" blocks "${k}_blocks-perceus" "${k}_loop-perceus"

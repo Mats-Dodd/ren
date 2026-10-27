@@ -1,0 +1,12 @@
+// A write into an element of an element whose value is evaluated
+// apart from the elements' reads (to_mem.ml, [spine]): its row's index
+// is out of bounds and its value overflows, and it panics as `ren run`
+// does, for the same one. build.t runs it under the sanitizers, in
+// both builds and both countings.
+
+fn main() uses Console =
+  var g = [[1], [2]]
+  let big = 9223372036854775807
+  for k in 0..3
+    g[k][0] = big - 1 + k
+    print(g[k][0])

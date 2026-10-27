@@ -276,6 +276,11 @@ let runtime rt args site_arg =
         (site ())
   | Array_push_taking _ ->
       sprintf "ren_array_push_taking(%s, %s)" (a 0) (to_val (List.nth args 1))
+  (* an element moved out, if the array is unique (swap.ml): of objects
+     or a [Word]'s, whose array says whether they're counted *)
+  | Array_take l ->
+      of_val l
+        (sprintf "ren_array_take(%s, %s, %s)" (a 0) (a 1) (site ()))
   | Array_check -> sprintf "ren_array_check(%s, %s, %s)" (a 0) (a 1) (site ())
   | Array_set_field (n, k, _) ->
       sprintf "ren_array_set_field(%s, %s, %d, %d, %s, %s)" (a 0) (a 1) k
@@ -311,6 +316,9 @@ let runtime rt args site_arg =
         k (struct_words n)
         (to_val (List.nth args 3))
         (site ())
+  | Buf_take l ->
+      of_val l
+        (sprintf "ren_buf_take_o(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (site ()))
   | Buf_check -> sprintf "ren_buf_check(%s, %s, %s)" (a 0) (a 1) (site ())
   | Array_reserve (Struct (n, _)) ->
       sprintf "ren_array_reserve(%s, false, %d)" (a 0) (struct_words n)
@@ -414,6 +422,7 @@ let rhs (r : rhs) =
   | Unpack _ -> bug "a packed field read outside a Let"
   | Is_unique x -> sprintf "ren_is_unique(%s)" (atom x)
   | Reset (x, kept) -> sprintf "ren_reset(%s, %s)" (atom x) (mask kept)
+  | Hole (x, n) -> sprintf "((void*)&ren_fields(%s)[%d])" (atom x) n
   | Call (f, xs) -> sprintf "%s(%s)" f (String.concat ", " (List.map atom xs))
   | Runtime (rt, xs, s) ->
       let call = runtime rt xs s in
@@ -681,6 +690,7 @@ let rec stmt o d (s : stmt) =
   | Free (x, kept) ->
       line (sprintf "ren_free_keeping(%s, %s);" (atom x) (mask kept))
   | Free_token x -> line (sprintf "ren_free_token(%s);" (atom x))
+  | Fill (p, x) -> line (sprintf "*(ren_val*)%s = %s;" (atom p) (to_val x))
   | Do (Runtime (rt, xs, s)) -> line (sprintf "%s;" (runtime rt xs s))
   | Do r -> line (sprintf "(void)%s;" (rhs r))
   | Call_fails { result; fn; args; error; on_error } ->
@@ -948,7 +958,7 @@ let callees (b : block) =
         block body;
         block handler
     | Decl _ | Set _ | Store _ | Dup _ | Drop _ | Dup_word _ | Drop_word _
-    | Free _ | Free_token _ | Break _ | Jump _ | Raise _ | Return _
+    | Free _ | Free_token _ | Fill _ | Break _ | Jump _ | Raise _ | Return _
     | Assert _ | Panic _ ->
         ()
   and block b = List.iter stmt b in

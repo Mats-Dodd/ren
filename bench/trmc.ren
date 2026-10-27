@@ -1,0 +1,110 @@
+// Tail recursion modulo cons (trmc.ml): a function whose recursive call
+// is put in a constructor and returned runs as a loop that fills a hole.
+// Each place it meets the rest: a list built 60,000 long, deeper than a
+// recursion of these frames would want; a `map` of one, unique, so each
+// cell is reused, and shared, so the other holder keeps what it had; a
+// `filter`, whose call that drops an element is a plain tail call; an
+// `append` of strings; a tree, whose right side is the loop and left
+// side recursion still; a builder that can fail part way, whose chain
+// built so far is dropped; and a record's field. build.t runs it under
+// the sanitizers, in both builds and both countings, and checks each
+// prints what `ren run` prints.
+
+type List =
+  | Cons(head: Int, tail: List)
+  | Nil
+
+type Words =
+  | More(word: Str, rest: Words)
+  | Done
+
+type Tree =
+  | Node(left: Tree, key: Int, right: Tree)
+  | Leaf
+
+type Link = { id: Int, next: Chain }
+
+type Chain =
+  | Has(link: Link)
+  | Ends
+
+fn build(i: Int, n: Int) -> List =
+  if i == n then Nil else Cons(i, build(i + 1, n))
+
+fn scale(l: List, k: Int) -> List =
+  match l
+    Cons(h, t) => Cons(h * k, scale(t, k))
+    Nil => Nil
+
+fn evens(l: List) -> List =
+  match l
+    Cons(h, t) => if h % 2 == 0 then Cons(h, evens(t)) else evens(t)
+    Nil => Nil
+
+fn sum(l: List) -> Int =
+  var s = 0
+  var c = l
+  var go = true
+  while go
+    match c
+      Cons(h, t) =>
+        s = s + h
+        c = t
+      Nil => go = false
+  s
+
+fn append(a: Words, b: Words) -> Words =
+  match a
+    More(w, r) => More(w, append(r, b))
+    Done => b
+
+fn join(ws: Words) -> Str =
+  match ws
+    More(w, r) => w.concat(join(r))
+    Done => ""
+
+fn tree(d: Int, k: Int) -> Tree =
+  if d == 0 then Leaf else Node(tree(d - 1, k * 2), k, tree(d - 1, k * 2 + 1))
+
+fn keys(t: Tree) -> Int =
+  match t
+    Node(l, k, r) => keys(l) + k + keys(r)
+    Leaf => 0
+
+fn checked(l: List, limit: Int) -> List ! TooBig(at: Int) =
+  match l
+    Cons(h, t) =>
+      if h > limit then fail TooBig(h)
+      Cons(h + 1, try checked(t, limit))
+    Nil => Nil
+
+fn chain(i: Int, n: Int) -> Chain =
+  if i == n then Ends else Has(Link { id: i, next: chain(i + 1, n) })
+
+fn ids(c: Chain) -> Int =
+  match c
+    Has(l) => l.id + ids(l.next)
+    Ends => 0
+
+fn main() uses Console =
+  // long, and reused
+  let big = build(0, 60000)
+  print(sum(scale(build(0, 60000), 3)))
+  // shared: the other holder keeps what it had
+  let doubled = scale(big, 2)
+  print(sum(doubled) - sum(big))
+  print(sum(evens(big)))
+  // strings
+  let ab = append(More("a", More("b", Done)), More("c", Done))
+  print(join(append(ab, ab)))
+  // a tree's right sides
+  print(keys(tree(10, 1)))
+  // failing part way: the chain so far dropped
+  match attempt checked(build(0, 100), 50)
+    Ok(l) => print(sum(l))
+    Err(TooBig(x)) => print(x)
+  match attempt checked(build(0, 100), 500)
+    Ok(l) => print(sum(l))
+    Err(TooBig(x)) => print(x)
+  // a constructor of a record of the call's result
+  print(ids(chain(0, 1000)))

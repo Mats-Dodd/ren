@@ -36,6 +36,10 @@ change here is a change in what the program computes.
   == nbody
   -0.169075164
   -0.169087605
+  == nested
+  996055
+  664567
+  997991
   == nqueens
   92
   == rbtree

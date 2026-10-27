@@ -147,6 +147,13 @@ type rt =
   | Array_push_taking of layout
       (** [Array_push], which takes the element, and grows the array in place if
           it's unique *)
+  | Array_take of layout
+      (** [Array_get], for an element written back where it was before anything
+          else can see the array (swap.ml): if the array is unique, the element
+          is moved out, its count not changed, and a scalar left in its place,
+          so what it's changed into can be changed in place too (Lean's
+          swap-out, Init/Data/Array/Basic.lean:774); otherwise it's counted
+          again, as [Array_get] does *)
   | Array_check
       (** panics if an index is out of bounds for an array, as [Array_get] would
       *)
@@ -169,6 +176,9 @@ type rt =
   | Buf_set of layout
       (** an element changed in place, taking the new one and dropping the old:
           [Array_set_taking] once the array is known unique *)
+  | Buf_take of layout
+      (** [Array_take] once the array is known unique: the element moved out,
+          a scalar left in its place *)
   | Buf_set_field of int * int * layout
       (** [Array_set_field_taking] once the array is known unique *)
   | Buf_check  (** [Array_check] of a length *)
@@ -291,6 +301,10 @@ type rhs =
   | Unpack of atom * int * int
       (** the scalar, of the variable's layout, at this bit of a word [Pack]
           made, in this many bits ([lean_ctor_get_uint8], lean.h:592) *)
+  | Hole of atom * int
+      (** where slot [n] of an object is, a [Ptr]: a constructor built before
+          what goes in that slot, which holds a scalar till [Fill] puts it
+          there (trmc.ml, Koka's constructor contexts) *)
   | Reset of atom * (int * atom) list
       (** a unique object's memory, as a [Token]: the fields at the slots listed
           are the variables after them, which keep their references, and the
@@ -312,6 +326,10 @@ type stmt =
           (Koka's drop specialization, Parc.hs, [specializeDrop]). Of a counted
           [Struct], which is always its own, its slots not listed are dropped *)
   | Free_token of atom  (** the memory of a [Token] nothing was built in *)
+  | Fill of atom * atom
+      (** the value after it, taken, written where a [Hole] is, which held a
+          scalar: the slot of a constructor only the function building it can
+          reach (trmc.ml) *)
   | Do of rhs  (** for what it does, a [Runtime] call or a [Call] *)
   | Call_fails of {
       result : var;
@@ -522,6 +540,7 @@ let show_rt = function
   | Array_push l -> "array-push:" ^ show_layout l
   | Array_set_taking l -> "array-set-taking:" ^ show_layout l
   | Array_push_taking l -> "array-push-taking:" ^ show_layout l
+  | Array_take l -> "array-take:" ^ show_layout l
   | Array_check -> "array-check"
   | Array_set_field (n, k, _) -> Printf.sprintf "array-set-field:%d.%d" n k
   | Array_set_field_taking (n, k, _) ->
@@ -530,6 +549,7 @@ let show_rt = function
   | Array_data -> "array-data"
   | Buf_get l -> "buf-get:" ^ show_layout l
   | Buf_set l -> "buf-set:" ^ show_layout l
+  | Buf_take l -> "buf-take:" ^ show_layout l
   | Buf_set_field (n, k, _) -> Printf.sprintf "buf-set-field:%d.%d" n k
   | Buf_check -> "buf-check"
   | Array_reserve l -> "array-reserve:" ^ show_layout l
@@ -628,6 +648,7 @@ let rhs_sexp = function
         ]
   | Is_unique x -> Core.List [ a "unique?"; a (show_atom x) ]
   | Reset (x, kept) -> Core.List (a "reset" :: a (show_atom x) :: kept_sexp kept)
+  | Hole (x, n) -> Core.List [ a "hole"; a (show_atom x); a (string_of_int n) ]
   | Make_struct xs ->
       Core.List (a "struct" :: List.map (fun x -> a (show_atom x)) xs)
   | Struct_get (x, n) ->
@@ -653,6 +674,7 @@ let rec stmt_sexp = function
   | Drop_word (x, d) -> Core.List [ a "drop"; a (show_atom x); a (show_atom d) ]
   | Free (x, kept) -> Core.List (a "free" :: a (show_atom x) :: kept_sexp kept)
   | Free_token x -> Core.List [ a "free-token"; a (show_atom x) ]
+  | Fill (p, x) -> Core.List [ a "fill"; a (show_atom p); a (show_atom x) ]
   | Do r -> Core.List [ a "do"; rhs_sexp r ]
   | Call_fails { result; fn; args; error; on_error } ->
       Core.List

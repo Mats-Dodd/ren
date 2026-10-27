@@ -14,6 +14,7 @@
   (glob_files handlers/*.ren)
   (glob_files inout/*.ren)
   (glob_files nbody/*.ren)
+  (glob_files nested/*.ren)
   (glob_files nqueens/*.ren)
   (glob_files rbtree/*.ren)
   (glob_files stack/*.ren)))

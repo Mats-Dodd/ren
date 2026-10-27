@@ -30,9 +30,11 @@ compiles, and its counting, path by path.
 The benchmarks of `bench`. `overflow` reaches the stack-overflow panic,
 after which AddressSanitizer warns that it can't clean up a stack that
 deep, which is left out. `values_panic` panics where objects are alive,
-which a panic leaves as they are.
+which a panic leaves as they are, and so do `swap_panic`, after a row
+was moved out of its grid, `swap_order`, and `trmc_panic`, with the
+cells a loop built where a recursion would have built none yet.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -51,6 +53,16 @@ which a panic leaves as they are.
   values.ren, naive: the same, exit 0, objects live at exit 0
   values_panic.ren, perceus: the same, exit 1, objects live at exit 4
   values_panic.ren, naive: the same, exit 1, objects live at exit 4
+  swap.ren, perceus: the same, exit 0, objects live at exit 0
+  swap.ren, naive: the same, exit 0, objects live at exit 0
+  swap_panic.ren, perceus: the same, exit 1, objects live at exit 4
+  swap_panic.ren, naive: the same, exit 1, objects live at exit 4
+  swap_order.ren, perceus: the same, exit 1, objects live at exit 4
+  swap_order.ren, naive: the same, exit 1, objects live at exit 4
+  trmc.ren, perceus: the same, exit 0, objects live at exit 0
+  trmc.ren, naive: the same, exit 0, objects live at exit 0
+  trmc_panic.ren, perceus: the same, exit 1, objects live at exit 11
+  trmc_panic.ren, naive: the same, exit 1, objects live at exit 1
 
 Every native benchmark, at its small size:
 
@@ -71,6 +83,8 @@ Every native benchmark, at its small size:
   native/inout/small.ren, naive: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, naive: the same, exit 0, objects live at exit 0
+  native/nested/small.ren, perceus: the same, exit 0, objects live at exit 0
+  native/nested/small.ren, naive: the same, exit 0, objects live at exit 0
   native/nqueens/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/nqueens/small.ren, naive: the same, exit 0, objects live at exit 0
   native/rbtree/small.ren, perceus: the same, exit 0, objects live at exit 0
@@ -193,7 +207,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -203,6 +217,11 @@ prints what `ren run` prints, and ends with no object alive; so does
   packed.ren, release: the same, exit 0, objects live at exit 0
   values.ren, release: the same, exit 0, objects live at exit 0
   values_panic.ren, release: the same, exit 1, objects live at exit 3
+  swap.ren, release: the same, exit 0, objects live at exit 0
+  swap_panic.ren, release: the same, exit 1, objects live at exit 4
+  swap_order.ren, release: the same, exit 1, objects live at exit 4
+  trmc.ren, release: the same, exit 0, objects live at exit 0
+  trmc_panic.ren, release: the same, exit 1, objects live at exit 11
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
@@ -212,6 +231,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   native/handlers/small.ren, release: the same, exit 0, objects live at exit 0
   native/inout/small.ren, release: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, release: the same, exit 0, objects live at exit 0
+  native/nested/small.ren, release: the same, exit 0, objects live at exit 0
   native/nqueens/small.ren, release: the same, exit 0, objects live at exit 0
   native/rbtree/small.ren, release: the same, exit 0, objects live at exit 0
   native/stack/small.ren, release: the same, exit 0, objects live at exit 0
@@ -257,7 +277,7 @@ as its twin written as a loop, as in the debug build:
   map: allocations 13, both
   reduce: allocations 3, both
   each: allocations 3, both
-  fold: allocations 1001, both
+  fold: allocations 1002, both
   attempt: allocations 2, both
 
 Each `inout` parameter is a `restrict` pointer in the release build,
@@ -408,15 +428,17 @@ not known takes and a block not lifted is given.
   boxed.ren, release: the same, exit 0, objects live at exit 0
   typedef struct { ren_val s[2]; } ren_struct_0;
 
-nbody's bodies are structs in the array, so a step allocates nothing,
-where the debug build allocates a body for each change of one:
+nbody's bodies are structs in the array, so a step allocates nothing.
+The debug build's are objects: a change of one's field moves it out of
+the array (swap.ml) and builds the new one in its memory, where that's
+unique, so it allocates a body only where it isn't:
 
   $ cd native/nbody
   $ for mode in debug release; do
   >   ren build --$mode --stats small.ren -o ./nbody.bin 2> /dev/null && ./nbody.bin 2>&1 > /dev/null |
   >     grep -o 'allocations [0-9]*' | sed "s/^/$mode: /"
   > done
-  debug: allocations 65020
+  debug: allocations 5017
   release: allocations 12
   $ cd ../..
 

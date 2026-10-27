@@ -1,0 +1,108 @@
+// Swap-out (swap.ml): an element changed and written back where it was
+// is moved out of its array while it's changed, if the array is unique,
+// so it's changed in place too. Each place it meets the rest: an
+// element of an element written, `+=` that reads it first, three deep,
+// through `inout`, a field of a record element, a field of a record two
+// deep, `map` over arrays of arrays and of strings, each also with the
+// array shared, so the other holder must keep what it had; a `map`
+// whose block fails part way, which leaves the array with the element
+// it was given taken; a write whose value reads another row of the
+// same array; and a generic loop that writes back what a block made of
+// each element, whose elements are words in a debug build. build.t runs
+// it under the sanitizers, in both builds and both countings, and
+// checks each prints what `ren run` prints.
+
+type Acc = { name: Str, hits: Int }
+
+type Cell = { label: Str, n: Int }
+
+fn grid(n: Int, m: Int) -> Array<Array<Int>> =
+  var g: Array<Array<Int>> = []
+  for i in 0..n
+    var row: Array<Int> = []
+    for j in 0..m
+      &row.push(i * 10 + j)
+    &g.push(row)
+  g
+
+fn total(g: Array<Array<Int>>) -> Int =
+  var s = 0
+  for row in g
+    for x in row
+      s = s + x
+  s
+
+fn bump(inout g: Array<Array<Int>>, i: Int, j: Int) =
+  g[i][j] += 100
+
+fn negatives(row: Array<Int>) -> Array<Int> ! Negative(at: Int) =
+  var out: Array<Int> = []
+  for x in row
+    if x < 0 then fail Negative(x)
+    &out.push(0 - x)
+  out
+
+fn each_through<T>(xs: Array<T>, f: fn(T) -> T) -> Array<T> =
+  var out = xs
+  for i in 0..out.len()
+    out[i] = try f(out[i])
+  out
+
+fn main() uses Console =
+  // an element of an element, written and read first
+  var g = grid(3, 4)
+  for k in 0..12
+    g[k % 3][k % 4] = k
+  for k in 0..12
+    g[k % 3][k % 4] += g[(k + 1) % 3][k % 4]
+  print(total(g))
+  // shared: the other holder keeps what it had
+  let kept = g
+  g[1][2] = 999
+  print(total(g) - total(kept))
+  print(kept[1][2])
+  // through `inout`
+  bump(&g, 2, 3)
+  print(g[2][3])
+  // three deep
+  var c: Array<Array<Array<Int>>> = [[[1, 2], [3]], [[4]]]
+  c[0][1][0] = 30
+  c[0][0][1] += c[1][0][0]
+  print(c[0][0][1] + c[0][1][0])
+  // a field of a record element, and two deep
+  var accs = [Acc { name: "a", hits: 0 }, Acc { name: "b", hits: 1 }]
+  let before = accs
+  for i in 0..6
+    accs[i % 2].hits += i
+  print(accs[0].hits * 10 + accs[1].hits)
+  print(before[1].hits)
+  print(accs[1].name.concat(before[0].name))
+  var cells = [[Cell { label: "x", n: 1 }], [Cell { label: "y", n: 2 }, Cell { label: "z", n: 3 }]]
+  for i in 0..4
+    cells[1][i % 2].n = cells[1][i % 2].n * 2 + i
+  print(cells[1][0].n + cells[1][1].n + cells[0][0].n)
+  print(cells[1][1].label)
+  // `map` over arrays of arrays, unique and shared
+  var h = grid(2, 3)
+  for r in 0..3
+    h = h.map(fn(row) => row.map(fn(x) => x + r))
+  print(total(h))
+  let other = h
+  let mapped = h.map(fn(row) => row.map(fn(x) => x * 2))
+  print(total(mapped) - total(other))
+  var words = [["a", "b"], ["c"]]
+  words = words.map(fn(ws) => ws.map(fn(w) => w.concat(w)))
+  print(words[0][1].concat(words[1][0]))
+  // a block that fails part way through `map`
+  let mixed = [[1, 2], [3, -4], [5]]
+  match attempt mixed.map(negatives)
+    Ok(rows) => print(total(rows))
+    Err(Negative(x)) => print(x)
+  match attempt grid(2, 2).map(negatives)
+    Ok(rows) => print(total(rows))
+    Err(Negative(x)) => print(x)
+  print(total(mixed))
+  // a generic loop, of strings and of numbers
+  let ss = each_through(["p", "q"], fn(w) => w.concat("!"))
+  print(ss[0].concat(ss[1]))
+  print(total([each_through([1, 2, 3], fn(x) => x * x)]))

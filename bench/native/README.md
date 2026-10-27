@@ -38,6 +38,7 @@ The twins take the size as their first argument and default to
 | `blocks` | 100,000 rounds | 10 | **H1**: a block costs nothing once specialized |
 | `handlers` | 1,000,000,000 calls | 1,000 | **H2**: a call to a known handler costs a function call |
 | `inout` | 2,000,000 rounds | 10 | **H5**: an `&` parameter aliases nothing |
+| `nested` | 10,000 rounds, lists of 1,000,000 | 20 rounds, lists of 2,000 | an array of arrays changed by index and mapped in place (swap-out), and lists built and mapped by recursion that takes no stack (tail recursion modulo cons) |
 
 The first four are the Perceus set, ported from Koka's
 `test/bench/koka/*.kk` with the same algorithms and outputs. The next
@@ -64,6 +65,16 @@ twin without it, in the same file, and print both checksums:
   where knowing `a` and `b` are different arrays lets the compiler keep
   values in registers and vectorize. Rust's `&mut` says the same; Go
   can't.
+
+- **`nested`** writes each element of a grid, an `Array<Array<Int>>`,
+  by its indices, maps the grid with `map` inside `map`, and builds and
+  scales a list of a million cells by recursion, `Cons(i, build(...))`.
+  The first two need a row moved out of the grid while it's changed
+  (swap.ml), the third a loop that fills a hole (trmc.ml). The Rust
+  writes `g[i][j]`, maps with `into_iter().map().collect()`, which
+  reuses each Vec, and builds its list front to back through a `&mut`
+  to the next link, as one too long to recurse over must be; the Go is
+  the same with pointers, its `map` writing new slices.
 
 `bench.ren`'s `run` prints the checksums in a fixed order, so to time a
 kernel alone, write an entry that calls the one you want: each is a plain
@@ -122,6 +133,7 @@ times, Rust then Go:
 | `blocks` | 0.88 s | 1.20 s |
 | `handlers` | 0.83 s | 1.20 s |
 | `inout` | 0.88 s | 1.57 s |
+| `nested` | 2.62 s | 2.81 s |
 
 Two miss the range on purpose. `cfold` keeps Koka's size, so it can be
 compared with Koka's published numbers. `binary-trees` keeps the

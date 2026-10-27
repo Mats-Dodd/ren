@@ -838,6 +838,115 @@ let%expect_test "Mem Lint: a struct counted that holds no object" =
     [ fn [ Let (x, alloc); Let (s, Make_struct [ Var x; Int 1L ]); Return (Int 0L) ] ];
   [%expect {| Mem Lint, in f: Struct0 is counted as a struct with objects |}]
 
+let%expect_test "Mem Lint: an element taken that isn't written back" =
+  let a = v 1 "a" Boxed and x = v 2 "x" Boxed in
+  lint
+    [
+      fn ~params:[ a ] ~modes:[ Owned ]
+        [
+          Let (x, Runtime (Array_take Boxed, [ Var a; Int 0L ], None));
+          Drop (Var x);
+          Drop (Var a);
+          Return (Int 0L);
+        ];
+    ];
+  [%expect
+    {| Mem Lint, in f: x/2 is taken from an array that isn't written back as it must be |}]
+
+let%expect_test "Mem Lint: a hole filled with a value it doesn't own" =
+  let t = v 1 "t" Boxed and x = v 2 "x" Boxed and h = v 3 "h" Ptr in
+  lint
+    [
+      fn ~params:[ t ] ~modes:[ Borrowed ] ~result:Boxed
+        [
+          Let (x, Mem.Alloc { tag = 0; fields = [ Scalar_ctor 0 ]; words = []; at = None });
+          Let (h, Hole (Var x, 0));
+          Fill (Var h, Var t);
+          Return (Var x);
+        ];
+    ];
+  [%expect {| Mem Lint, in f: t/1 is put in a hole, but holds no reference here |}]
+
+let%expect_test
+    "swap-out: a row of a grid is taken out to be changed, and written back" =
+  mem_lines "ren_test_put" [ "array-take"; "array-set-taking" ]
+    {|
+fn put(g: Array<Array<Int>>, i: Int, j: Int) -> Array<Array<Int>> =
+  var h = g
+  h[i][j] = 7
+  h
+fn main() -> Int = put([[1, 2], [3]], 0, 1)[0][1]
+|};
+  [%expect {|
+    (let $elem/16:Boxed (array-take:Boxed h/14 $index/15))
+    (let $set/23:Boxed (array-set-taking:Int $elem/20 $index/21 $put/22))
+    (let $set/24:Boxed (array-set-taking:Boxed h/18 $index/19 $set/23))
+    Mem Lint: ok
+    |}]
+
+let%expect_test
+    "tail recursion modulo cons: a list built by a loop that fills a hole" =
+  mem ~only:[ "ren_test_build" ]
+    {|
+type List =
+  | Cons(head: Int, tail: List)
+  | Nil
+fn build(i: Int, n: Int) -> List =
+  if i == n then Nil else Cons(i, build(i + 1, n))
+fn main() -> Int =
+  match build(0, 3)
+    Cons(h, _) => h
+    Nil => 0
+|};
+  [%expect {|
+    (fn ren_test_build (ev/21:Ev i/22:Int n/23:Int) -> Boxed
+      (do (decl ev/16:Ev) (decl i/17:Int) (decl n/18:Int) (decl root/15:Boxed)
+        (decl hole/14:Ptr)
+        (joins
+          (do (let i/24:Int i/22) (let n/25:Int n/23)
+            (let $eq/26:Bool (== i/24 n/25))
+            (decl $if/27:Boxed)
+            (if $eq/26 (do (set $if/27 #1*))
+              (do (let i/28:Int i/22) (let i/29:Int i/22)
+                (let $arith/30:Int (+ i/29 1))
+                (let n/31:Int n/23)
+                (let $new/32:Boxed (alloc #0 i/28 #0*))
+                (let hole/33:Ptr (hole $new/32 1))
+                (set root/15 $new/32)
+                (set hole/14 hole/33)
+                (set ev/16 ev/21)
+                (set i/17 $arith/30)
+                (set n/18 n/31)
+                jump L2))
+            (return $if/27))
+          (L2:
+            (do
+              (loop L3
+                (do
+                  (joins
+                    (do (let ev/1:Ev ev/16) (let i/2:Int i/17) (let n/3:Int n/18)
+                      (let i/4:Int i/2)
+                      (let n/5:Int n/3)
+                      (let $eq/6:Bool (== i/4 n/5))
+                      (decl $if/7:Boxed)
+                      (if $eq/6 (do (set $if/7 #1*))
+                        (do (let i/8:Int i/2) (let i/9:Int i/2)
+                          (let $arith/10:Int (+ i/9 1))
+                          (let n/11:Int n/3)
+                          (let $new/13:Boxed (alloc #0 i/8 #0*))
+                          (let hole/19:Ptr (hole $new/13 1))
+                          (fill hole/14 $new/13)
+                          (set hole/14 hole/19)
+                          (set ev/16 ev/1)
+                          (set i/17 $arith/10)
+                          (set n/18 n/11)
+                          jump L1))
+                      (fill hole/14 $if/7)
+                      (return root/15))
+                    (L1: (do))))))))))
+    Mem Lint: ok
+    |}]
+
 (* ---- what isn't in the subset yet ---- *)
 
 let%expect_test "the world but the real `Console` isn't in the native slice" =

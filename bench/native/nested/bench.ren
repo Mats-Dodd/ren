@@ -1,0 +1,75 @@
+// Arrays of arrays changed where they are, and lists built by recursion.
+// `grid` writes each element of a 100 by 100 grid by its indices,
+// `g[i][j] = ...`, each round: the row is moved out of the grid while
+// it's changed (swap.ml), so neither is copied. `map` maps a grid of
+// rows with `map` inside `map`, each round's result the next round's
+// input: each row is moved out, changed in place, and put back. `list`
+// builds a list of a million cells by recursion, `Cons(i, build(...))`,
+// and scales it by recursion, `Cons(h * k, scale(t, k))`: each is a loop
+// that fills a hole (trmc.ml), so neither takes stack, and `scale`
+// reuses the cells it takes apart. Each prints a checksum.
+
+type List =
+  | Cons(head: Int, tail: List)
+  | Nil
+
+fn grid_of(n: Int) -> Array<Array<Int>> =
+  var g: Array<Array<Int>> = []
+  for i in 0..n
+    var row: Array<Int> = []
+    for j in 0..n
+      &row.push(i * n + j)
+    &g.push(row)
+  g
+
+fn total(g: Array<Array<Int>>) -> Int =
+  var s = 0
+  for row in g
+    for x in row
+      s = (s + x) % 1000003
+  s
+
+pub fn grid(rounds: Int) -> Int =
+  var g = grid_of(100)
+  for r in 0..rounds
+    for i in 0..100
+      for j in 0..100
+        g[i][j] = (g[i][j] * 31 + i + j + r) % 1000003
+  total(g)
+
+pub fn map(rounds: Int) -> Int =
+  var g = grid_of(100)
+  for r in 0..rounds
+    g = g.map(fn(row) => row.map(fn(x) => (x * 7 + r) % 1000003))
+  total(g)
+
+fn build(i: Int, n: Int) -> List =
+  if i == n then Nil else Cons(i, build(i + 1, n))
+
+fn scale(l: List, k: Int) -> List =
+  match l
+    Cons(h, t) => Cons(h * k % 1000003, scale(t, k))
+    Nil => Nil
+
+fn sum(l: List) -> Int =
+  var s = 0
+  var c = l
+  var go = true
+  while go
+    match c
+      Cons(h, t) =>
+        s = (s + h) % 1000003
+        c = t
+      Nil => go = false
+  s
+
+pub fn list(rounds: Int, n: Int) -> Int =
+  var s = 0
+  for r in 0..rounds
+    s = (s + sum(scale(build(0, n), r + 2))) % 1000003
+  s
+
+pub fn run(n: Int) uses Console =
+  print(grid(n * 10))
+  print(map(n * 10))
+  print(list(n / 10 + 1, 1000 * n))

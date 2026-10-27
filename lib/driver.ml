@@ -1565,7 +1565,12 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
     | Perceus ->
         pass "Perceus" (fun () ->
             let perceus p =
-              Rc.prepare p |> Borrow.infer |> Rc.program
+              Rc.prepare p
+              (* a call whose result is only put in a constructor and
+                 returned made a turn of a loop (trmc.ml), which Perceus
+                 then counts as anything else *)
+              |> Trmc.program
+              |> Borrow.infer |> Rc.program
               (* objects that never escape kept in the frame (stack.ml),
                  before reuse, which then leaves them alone *)
               |> (if release then Stack.program else Fun.id)
@@ -1577,6 +1582,11 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
             match if release then Inline.sites placed else [] with
             | [] -> placed
             | sites -> perceus (Inline.program sites p))
+  in
+  (* an element written back where it was moved out of its array, not
+     counted again (swap.ml), which needs Perceus's taking writes *)
+  let p =
+    if rc = Perceus then pass "swap-out" (fun () -> Swap.program p) else p
   in
   (* a loop's arrays indexed directly, which needs Perceus's taking writes *)
   let p =

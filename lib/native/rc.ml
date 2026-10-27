@@ -96,7 +96,8 @@ let rhs_atoms (r : rhs) : atom list =
   | Block_of (_, x)
   | Op_block (x, _, _)
   | Is_unique x
-  | Unpack (x, _, _) ->
+  | Unpack (x, _, _)
+  | Hole (x, _) ->
       [ x ]
   | Pack ps -> List.map (fun (x, _, _) -> x) ps
   | Arith (_, x, y, _) | Compare (_, x, y) -> [ x; y ]
@@ -124,6 +125,7 @@ let stmt_atoms (s : stmt) : atom list =
   | Set (_, x) -> [ x ]
   | Store (c, x) -> [ Var c; x ]
   | Dup x | Drop x | Free_token x -> [ x ]
+  | Fill (p, x) -> [ p; x ]
   | Dup_word (x, d) | Drop_word (x, d) -> [ x; d ]
   | Free (x, kept) -> x :: List.map snd kept
   | Call_fails { args; _ } -> args
@@ -680,6 +682,7 @@ let operands fi (s : stmt) : atom list * atom list =
   | Let (_, r) | Do r -> rhs r
   | Set (_, x) -> ([ x ], [])
   | Store (_, x) -> ([ x ], [])
+  | Fill (_, x) -> ([ x ], [])
   | Call_fails { fn; args; _ } -> call fn args
   | Call_block { args; _ } -> (args, [])
   | Call_handler { handler; desc; _ } -> ([], [ handler; desc ])
@@ -1092,6 +1095,12 @@ let rec place_block pl cx ?(entry = []) (b : block) (out : Ids.t) :
   let stmts, live =
     List.fold_right
       (fun (cx, s) (acc, l) ->
+        (* nothing is alive after a statement that leaves the function,
+           wherever its block is: a [Return] in a loop (trmc.ml) takes
+           what the loop's next turn would have read *)
+        let l =
+          match s with Return _ | Raise (_, None) | Panic _ -> Ids.empty | _ -> l
+        in
         let ss, before = place_stmt pl cx s l in
         (ss @ acc, before))
       (scoped cx b) ([], out)

@@ -9,6 +9,62 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Arrays of arrays and recursion that builds (compiler.md, step 11)
+
+Swap-out (swap.ml, Lean's) and tail recursion modulo cons (trmc.ml,
+Koka's), on `nested` ([README.md](README.md)), against 7fdeedb, the
+commit before them, and 7f8822f, in **one** hyperfine invocation per
+row (`-N --warmup 3 --runs 10`, at main.ren's size), with CPU cycles
+and instructions retired as hyperfine records them and its mean peak
+memory. Each kernel is `nested`'s function alone (build.sh's
+`nested-grid`, `-map`, `-list`). The Rust column is the twin's kernel
+alone, timed in its own invocation just after. Load average 2.7 to
+3.8 of 16 cores. Every binary prints what the Rust and Go twins print.
+
+| run | 7f8822f (s) | 7fdeedb (s) | now (s) | Rust (s) | now / 7fdeedb, cycles | instructions 10⁹, 7fdeedb / now | MB, 7fdeedb / now | allocations, 7fdeedb / now |
+|---|---|---|---|---|---|---|---|---|
+| `nested`, release | 13.919 ± 0.139 | 13.908 ± 0.073 | **1.100 ± 0.013** | 2.623 ± 0.025 (Go 2.812) | **0.079×** | 255.5 / 14.1 | 98.4 / 25.6 | 303.0 million / 101.0 million |
+| grid, release | 10.392 ± 0.092 | 10.333 ± 0.044 | **0.172 ± 0.016** | 0.098 | **0.016×** | 229.5 / 3.5 | 2.4 / 1.6 | 100,000,103 / 103 |
+| map, release | 0.534 ± 0.005 | 0.519 ± 0.003 | **0.089 ± 0.000** | 0.063 | **0.17×** | 4.7 / 1.4 | 1.7 / 1.6 | 1,000,103 / 103 |
+| list, release | 3.070 ± 0.019 | 3.042 ± 0.025 | **0.849 ± 0.004** | 2.513 | **0.28×** | 21.1 / 9.1 | 97.4 / 25.5 | 202.0 million / 101.0 million, 101.0 million reused |
+| `nested`, debug | 43.218 ± 0.355 | 43.357 ± 0.275 | **16.746 ± 0.054** | | **0.39×** | 572.7 / 189.2 | 243.2 / 26.2 | |
+| grid, debug | 30.877 ± 0.627 | 30.806 ± 0.601 | **6.766 ± 0.008** | | **0.22×** | 436.8 / 70.2 | 2.9 / 1.6 | 100,000,103 / 103 |
+| map, debug | 3.217 ± 0.009 | 3.329 ± 0.004 | 3.332 ± 0.005 | | 1.00× | 32.5 / 32.5 | 2.9 / 2.4 | 1,010,103 / 1,010,103 |
+| list, debug | 9.345 ± 0.018 | 9.345 ± 0.011 | **6.611 ± 0.013** | | **0.71×** | 103.4 / 86.6 | 241.5 / 25.5 | 202.0 million / 101.0 million, 101.0 million reused |
+
+- **grid: every write copied a row, and now none does.** `g[i][j] = v`
+  read the row counted again, so its count was 2 when it was written:
+  100 million copies of a 100-element row. Now it's moved out of the
+  grid and back: 103 allocations in all, 60× fewer cycles, in both
+  builds. 1.76× Rust's time: 100 million counts and drops are left,
+  the read of `g[i][j]` in the value, which borrows the row for a
+  moment but counts it (`array-get` counts what it gives; a borrowed
+  read would need Perceus to know the array outlives it).
+- **map over an array of arrays reuses every row in the release build,**
+  1,000,103 allocations to 103, 6× fewer cycles, 1.41× Rust's (whose
+  `into_iter().map().collect()` reuses each Vec too). The debug build's
+  `map` is the generic one, which builds a new array (step 7's
+  `map_into` is release only), so it's unchanged.
+- **list: no stack, and the cells reused.** `build` and `scale` are
+  loops: peak memory 97.4 MB to 25.5 MB, the 72 MB a million frames
+  took. And building `scale`'s cell before its recursive call puts it
+  right after the drop of the cell it takes apart, so reuse.ml builds
+  it there: 101 million cells reused, where the call between had kept
+  any from being. 3.6× fewer cycles; a third of the Rust's time, whose
+  twin mallocs and frees each `Box` (as in binary-trees). At 30 million
+  cells, 7fdeedb panics, the stack overflowed at 1 GiB; now it runs in
+  722 MB, its cells.
+- What it costs: a function this pass takes has its body twice in the
+  C, a first turn and the loop; and a parameter it walks without
+  consuming becomes a variable the loop owns, counted each turn, where
+  borrow inference had borrowed it. `evens` over a shared list counts
+  and drops each cell once more (60,000 of each for 60,000 cells), and
+  over a million cells 30 times still takes 2.1× less time than
+  7fdeedb (230 to 110 ms): the stack it no longer touches costs more. blocks' `fold` kernel allocates its tree's root on
+  the heap now, 1,001 to 1,002 in the release build: `build` was a
+  function that built its result in its caller's frame (stack.ml),
+  which a loop that fills a hole can't be.
+
 ## Small values and packed fields (compiler.md, step 10)
 
 Packed scalar fields (Lean's) and small values as values (Koka's),

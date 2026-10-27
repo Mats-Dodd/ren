@@ -12,8 +12,10 @@
    descriptor for each field that's a type variable's word; that a block
    is never stored in an object, or anywhere but a local, an argument or
    an environment on the stack, so it can't outlive the call it's passed
-   to (foundations.md, decision 1); and that a block's code, and a
-   handler's, has the signature every caller of one uses. Then it checks
+   to (foundations.md, decision 1); that a block's code, and a
+   handler's, has the signature every caller of one uses; and that an
+   element taken out of an array is written back where it was before
+   anything else can see the array (swap.ml, [unpaired]). Then it checks
    the counting, path by path ("counting", below).
 
    Anything it finds is a bug in the compiler, which fails with [Failure],
@@ -102,7 +104,7 @@ let define env (v : var) =
 let rt_sig (rt : rt) : layout list * layout =
   match rt with
   | Array_len -> ([ Boxed ], Int)
-  | Array_get l -> ([ Boxed; Int ], l)
+  | Array_get l | Array_take l -> ([ Boxed; Int ], l)
   | Array_set l -> ([ Boxed; Int; l ], Boxed)
   | Array_push l | Array_push_taking l -> ([ Cell Boxed; l ], Unit)
   | Array_set_taking l -> ([ Boxed; Int; l ], Boxed)
@@ -111,7 +113,7 @@ let rt_sig (rt : rt) : layout list * layout =
       ([ Boxed; Int; l ], Boxed)
   | Array_own -> ([ Boxed ], Boxed)
   | Array_data -> ([ Boxed ], Ptr)
-  | Buf_get l -> ([ Ptr; Int; Int ], l)
+  | Buf_get l | Buf_take l -> ([ Ptr; Int; Int ], l)
   | Buf_set l -> ([ Ptr; Int; Int; l ], Unit)
   | Buf_set_field (_, _, l) -> ([ Ptr; Int; Int; l ], Unit)
   | Buf_check -> ([ Int; Int ], Unit)
@@ -335,6 +337,10 @@ let rhs env (r : rhs) : layout =
       operand env "what's reset" Boxed x;
       kept_fields env kept;
       Token
+  | Hole (x, n) ->
+      operand env "what a hole is in" Boxed x;
+      if n < 0 || n >= 64 then fail env (sprintf "a hole at slot %d" n);
+      Ptr
   | Make_struct xs ->
       (* the struct's is the variable's, which [stmt] checks *)
       List.iter (fun x -> ignore (atom env x)) xs;
@@ -436,6 +442,10 @@ let rec stmt env (s : stmt) : env =
       env
   | Free_token x ->
       operand env "a token freed" Token x;
+      env
+  | Fill (p, x) ->
+      operand env "a hole" Ptr p;
+      operand env "what fills a hole" Boxed x;
       env
   | Dup x | Drop x ->
       let l = atom env x in
@@ -549,7 +559,15 @@ let fn fns values ndescs structs (f : fn) =
       catches = [];
     }
   in
-  block (List.fold_left define env f.params) f.body
+  block (List.fold_left define env f.params) f.body;
+  (* an element moved out of its array is written back before anything
+     else can see the array (swap.ml) *)
+  match Swap.unpaired f with
+  | Some v ->
+      fail env
+        (sprintf "%s is taken from an array that isn't written back as it must be"
+           v)
+  | None -> ()
 
 (* ---- counting ----
 
@@ -1154,7 +1172,7 @@ let rc_let env st (v : var) (r : rhs) =
       List.iter (read env st)
         (match r with
         | Arith (_, x, y, _) | Compare (_, x, y) -> [ x; y ]
-        | Neg (x, _) | Not x | Tag_of x | Is_unique x -> [ x ]
+        | Neg (x, _) | Not x | Tag_of x | Is_unique x | Hole (x, _) -> [ x ]
         | _ -> []);
       fresh_var env st v ~count:0 B_static
 
@@ -1312,6 +1330,10 @@ let rec rc_stmt env (st : rc_state option) (s : stmt) : rc_state option =
       | Assert (c, _) ->
           read env st c;
           Some st
+      | Fill (p, x) ->
+          read env st p;
+          read env st x;
+          Some (take env st "put in a hole" x)
       | Panic _ -> None)
 
 (* A block, from [st]: the state where it ends, if it can, with only the

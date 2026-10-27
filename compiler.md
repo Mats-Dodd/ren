@@ -2389,3 +2389,107 @@ rbtree's peak memory 203.2 MB to 169.6 MB, 1.25× Rust's, on 9% fewer
 cycles; H8's four kernels allocate nothing without stack.ml's frames,
 at the cycles the frames gave them, so the frames add nothing
 measurable on top; the rest of the H7 set is unchanged.
+
+### Step 11: arrays of arrays changed in place, and recursion that builds
+
+Two ways a program changes or builds a structure that Perceus alone
+left copying or deep in the stack.
+
+**Swap-out** (swap.ml), in Perceus builds. `grid[i][j] = x` reads the
+row, counted again, and writes it back changed: the row's count is 2
+when it's changed, so `Array_set_taking` copies it, every time. Lean
+moves the element out of a unique array instead, leaving a placeholder,
+so it's still counted 1 when it's changed (`Array.modify`'s `swapAt`,
+and `mapMUnsafe`'s `uset i default`, Init/Data/Array/Basic.lean:774).
+Here the pass makes such an `Array_get` an `Array_take` (ren_rt.h,
+`ren_array_take`): if the array's count is 1, the element is moved out,
+its count unchanged, and a scalar left where it was, which a drop
+ignores; if not, it's counted again, as before. It's made only where
+the same array is written back at the same index, by an
+`Array_set_taking` later in the same block, and nothing between can see
+the array: no statement between mentions anything that may be it (its
+variables, its slot, a cell of it, a view of a field it's in, a cast of
+it), but to name it again; nothing between leaves the block, but a
+call's error path that only drops it and returns the error; and a call
+comes between only if no variable that may be it has its address
+taken, since only through a cell or a reference of its own, which
+counts it, could the callee reach it. Then the take moves the element
+out exactly when the write changes the array in place: both test the
+same count. Tokens, a value's identity that a `Set`, or a call, store or
+nested block where its address is taken, renews, say the array and the
+index written are the ones read. hoist.ml makes a take in a loop it
+hoists a `Buf_take`. Mem Lint checks each take again, after hoisting,
+and fails the build if one isn't paired so (`Swap.unpaired`).
+
+Core says `grid[i][j] = v` as `grid = set grid i (set (get grid i) j v)`,
+which reads the row before `v`, and `v` often reads the grid
+(`grid[i][j] += 1`): the grid is used between the read and the write.
+So to_mem.ml lowers a write into an element of an element (or a field
+of one, `xs[i].f = w`) whose value only computes (`calm`: locals,
+fields, elements, operators) as: the reads' index checks, where Core
+reads; the value, into a local; each element on the way read once, into
+a local; and the writes back. The value can't call or change anything,
+so it gives what it gave, and every panic comes where it did, in the
+same order. A `map` over an array of arrays needs nothing new: its
+release loop, `out[i] = f(out[i])`, is the pairing.
+
+**Tail recursion modulo cons** (trmc.ml), in Perceus builds. A
+function whose recursive call's result is put in a constructor and
+returned, `Cons(i, build(i + 1, n))`, runs as a loop instead, which
+builds each constructor first, with a scalar in the slot the call's
+result goes in, and fills that slot, the hole, on the next turn: Koka's
+(Leijen and Lorenzen, POPL'22; Core/CTail.hs, `ctailExpr` :264,
+`ctailTryArg` :364, `ctailFoundArg` :436). Koka's context is a value a
+program can hold; here only the loop holds it, as in Koka's linear case
+(`kk_cctx_apply_linear`, lib/std/core/inline/types-cctx.h:66). Mem has
+two new operations for it, `Hole`, a slot's address, and `Fill`, which
+takes a value and writes it there. The first turn is a copy of the
+body, with names of its own, which makes the first constructor the
+root; each later turn fills the hole the turn before left, and a
+`Return v` on it fills the last hole with `v` and returns the root. So
+the root is held, counted 1, from the first turn on, on every path, and
+Perceus and Mem Lint count it as any other variable, with no flag that
+says which turn it is. A call whose result is returned as it is
+becomes a turn too, once there's a hole (`filter`'s skipped element).
+It's sound because the constructors are built before the call's work
+instead of after it, which nothing can see: their other fields were
+computed before the call, an `Alloc` can't fail, and only the root
+reaches them, so the hole is written where no one else looks. A
+failure returns the error as the innermost call's would have been
+passed on, with the chain built so far dropped by Perceus; so a call
+that can fail is taken only if all it does with an error is return it.
+A function whose values are words, with an `inout` or cell parameter,
+or a call in a loop or a catch, isn't taken; nor is any call but the
+last in a constructor: `Node(build(l), k, build(r))` loops down its
+right side and recurses down its left. The pass runs after
+`Rc.prepare`, before borrow inference, so the loop's variables are
+counted, and reused, as anything else is: building the constructor
+before the call puts it right after the drop of the cell `scale` takes
+apart, and reuse.ml builds it there, which it couldn't with the call
+between.
+
+Perceus placed a `Return` in a loop as if the loop's next turn read
+what it returns: nothing is alive after a statement that leaves the
+function, wherever it is (rc.ml, `place_block`).
+
+bench/swap.ren, swap_panic.ren and swap_order.ren, and trmc.ren and
+trmc_panic.ren, run under the sanitizers in build.t, in both builds and
+both countings, and print what `ren run` does: rows shared and
+unique, `+=`, three deep, through `inout`, a record's field, `map` over
+arrays of arrays and of strings, a `map` whose block fails part way, a
+generic loop; lists built long, mapped unique and shared, filtered and
+appended, a tree, a builder that fails part way, and a panic with the
+chain half built. bench/native/nested measures them against Rust and
+Go.
+
+Measured (bench/native/RESULTS.md, "Arrays of arrays and recursion
+that builds"): `nested`'s release build 13.9 s to 1.10 s, 0.42× the
+Rust's time; its grid of writes by index 100 million allocations to
+103 and 60× fewer cycles in both builds; `map` over it 1,000,103
+allocations to 103 in the release build (the debug build's generic
+`map` copies, as before); a list built and scaled by recursion 3.6×
+fewer cycles, its peak memory 97.4 MB to 25.5 MB, every cell of
+`scale` reused, and a list of 30 million, which overflowed the 1 GiB
+stack, built. What it costs: a function taken has its body twice in
+the C, and a parameter it walks without consuming is owned by the
+loop, counted each turn, where it had been borrowed.

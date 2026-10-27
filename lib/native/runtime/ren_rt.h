@@ -574,6 +574,30 @@ static inline ren_val ren_array_get_s(ren_obj *a, int64_t i, const ren_site *sit
   return ((ren_array *)a)->data[i];
 }
 
+/* Element [i], for swap.ml's take: a write puts what it's changed into
+   back at [i] before anything else can see [a]. If [a] is unique, and
+   its elements are counted, the element is moved out, its count left
+   as it is, and a scalar, which drops ignore, left in its place, so the
+   element is unique if [a] held the only reference to it, and changing
+   it doesn't copy it (Lean's swap-out, `Array.modify`'s `swapAt` and
+   `mapMUnsafe`'s `uset i default`, Init/Data/Array/Basic.lean:774).
+   [a] is unique exactly when the write after would change it in place,
+   which tests the count the same way ([ren_array_own]), so nothing but
+   that write sees the scalar. Otherwise it's counted again, as
+   [ren_array_get] does. */
+static inline ren_val ren_array_take(ren_obj *a, int64_t i, const ren_site *site) {
+  ren_array_check(a, i, site);
+  ren_val *at = &((ren_array *)a)->data[i];
+  ren_val v = *at;
+  if (a->objs) {
+    if (__builtin_expect(ren_rc(a) == 1, 1))
+      at->o = ren_box(0);
+    else
+      ren_dup(v.o);
+  }
+  return v;
+}
+
 /* A new array, [a] with element [i] replaced by [v]: the naive
    semantics, which copies. Neither argument is taken. */
 ren_obj *ren_array_set(ren_obj *a, int64_t i, ren_val v, const ren_site *site);
@@ -671,6 +695,15 @@ static inline ren_val ren_dup_elem(ren_val v) {
 #define ren_buf_get_s(p, len, i, site) (ren_buf_check(len, i, site), (p)[i])
 #define ren_buf_get_o(p, len, i, site)                                         \
   (ren_buf_check(len, i, site), ren_dup_elem((p)[i]))
+/* [ren_array_take] once the array is known unique, of objects: the
+   element moved out, a scalar left in its place */
+#define ren_buf_take_o(p, len, i, site)                                        \
+  ({                                                                           \
+    ren_buf_check(len, i, site);                                               \
+    ren_val ren_taken_ = (p)[i];                                               \
+    (p)[i].o = ren_box(0);                                                     \
+    ren_taken_;                                                                \
+  })
 #define ren_buf_slots(p, len, i, k, site)                                      \
   (ren_buf_check(len, i, site), &(p)[(i) * (k)])
 #define ren_buf_set_s(p, len, i, v, site)                                      \
