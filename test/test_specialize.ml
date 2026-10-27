@@ -96,6 +96,34 @@ fn main() uses Console =
     3 copies, 1 blocks lifted, 0 handlers known, 0 past
     |}]
 
+let%expect_test
+    "a block isn't lifted if one passed as written uses what it captures" =
+  (* a lifted block is given its captures when the call is made, so the
+     reader would miss what the other block changes during it *)
+  run
+    {|
+fn both(f: fn(), g: fn() -> Int) -> Int =
+  try f()
+  let a = try g()
+  try f()
+  a
+fn main() uses Console =
+  var n = 10
+  let get = fn() => n
+  print(both(fn() => n -= 1, get))
+  print(n)
+  let dec = fn() => n = 5
+  print(both(dec, fn() => n))
+  print(n)
+|};
+  [%expect {|
+    9
+    8
+    5
+    5
+    ()
+    |}]
+
 let%expect_test "an operation whose handler is known is called directly" =
   (* the handler's state is made where it's installed, and passed to
      each function that calls the operation; the `with` stays, for the

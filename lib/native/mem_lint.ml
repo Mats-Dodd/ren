@@ -519,7 +519,8 @@ let fn fns values ndescs structs (f : fn) =
 
    Where paths meet, the variables that share a bundle on one path are
    taken together, and hold as many references on each; a loop's body
-   ends holding as many as it started with. *)
+   ends holding as many as it started with, or a constant, which holds
+   none. *)
 
 module IM = Map.Make (Int)
 
@@ -914,10 +915,11 @@ let loop_check env head st =
   leak_check env st env.scope;
   if not (Ids.equal st.tokens head.tokens) then
     rc_fail env "a reuse token is used in a loop's body";
+  (* a constant where it goes round holds no references, and dropping
+     it does nothing, as where paths meet *)
   let same what b0 b1 =
-    let k0 = IM.find_opt b0 head.kind in
-    match k0 with
-    | Some B_static | None -> ()
+    match (IM.find_opt b0 head.kind, IM.find_opt b1 st.kind) with
+    | (Some B_static | None), _ | _, (Some B_static | None) -> ()
     | _ ->
         if get head.count b0 <> get st.count b1 then
           rc_fail env

@@ -19,7 +19,7 @@ would fix it. The programs are in this folder ([README.md](README.md));
 | H4 | Perceus allocates less and peaks lower | rbtree 3.6× fewer allocations, map over a unique array 1,000×, fannkuch 10 against 2.3 billion; peak equal on rbtree | **holds**, but `map` doesn't reuse its input |
 | H5 | `restrict` on `&` parameters helps | 1.00×, 1.00×, 0.99× | **fails** (a null result): nothing it could help is reached through the pointer it marks |
 | H6 | debug builds faster than `go build` | 500k lines: 56.7 s against 12.6 s clean; a leaf edit 56.6 s against 0.64 s | **fails**: 77% of it is clang -O0, and Ren has no build cache yet |
-| H7 | within 2× of Rust, in time and peak memory | 4 of 7 within 2× in time (0.40× to 1.57×); rbtree 2.20×, fannkuch 2.50×, nbody 15.5×; memory all within 2×, two at 1.99× | **fails** on three programs, each for one cause in the runtime |
+| H7 | within 2× of Rust, in time and peak memory | 4 of 7 within 2× in time (0.40× to 1.57×); rbtree 2.20×, fannkuch 2.50×, nbody 15.5×; memory all within 2×, two at 1.99× | **fails** on three programs: fannkuch and nbody on the runtime's array stores, rbtree on allocation |
 
 ## Setup
 
@@ -156,8 +156,13 @@ Two things it shows that are short of the plan:
 - **rbtree still allocates 12 nodes an insertion.** Reuse is one level
   deep (compiler.md, step 4): `balance` reuses the node it takes apart
   but not the ones inside it, so the counts and allocations Koka's
-  nested drop specialization saves are spent here. **Fix:** nested
-  reuse, after Koka's ParcReuse.hs.
+  nested drop specialization saves are spent here. And where `ins`
+  rebalances, it frees the token of the node it took apart right after
+  calling `balance_left` or `balance_right`, which then allocates fresh
+  nodes, so that node is never reused there; nested reuse alone
+  wouldn't get it back. **Fix:** nested reuse, after Koka's
+  ParcReuse.hs, and the token carried into the call that builds,
+  which Koka gets by inlining `balance` into `ins`.
 
 ## H5: `restrict`
 
@@ -203,7 +208,9 @@ timed fully clean, an empty `GOCACHE`, which builds the standard library
 too, and clean but for the standard library, a cache holding only what
 a program importing `fmt` built. The leaf edit changes one number in a
 function of the last module, which nothing imports, then builds again
-on the cache the build before left.
+on the cache the build before left. vision.md also asks for an edit
+in a widely imported module; that wasn't measured, since every Ren
+build is a clean one and would take what the leaf edit does.
 
 | program | ren build --debug (s) | front half + C (s) | cc -O0 (s) | go build, clean (s) | go build, std cached (s) | Ren / Go std cached | Ren, leaf edit (s) | Go, leaf edit (s) | lines/s, Ren / Go clean |
 |---|---|---|---|---|---|---|---|---|---|
@@ -244,7 +251,9 @@ cache); then the front half in parallel per module.
 ## H7: against Rust and Go
 
 vision.md's set, the release build against Rust and Go: times from
-hyperfine, peak resident memory from `/usr/bin/time -l`.
+hyperfine, peak resident memory from `/usr/bin/time -l`. Its real
+program, the `just` or a JSON parser, isn't here: `examples/just`
+stands for it until it's built natively ([README.md](README.md)).
 
 | program | Ren (s) | Rust (s) | Go (s) | Ren / Rust | Ren / Go | Ren MB | Rust MB | Go MB | memory, Ren / Rust |
 |---|---|---|---|---|---|---|---|---|---|
@@ -276,9 +285,10 @@ which only allocates and frees, is 1.57×. Each failure has one cause:
 - **fannkuch, 2.50×: every array write is a call** to
   `ren_array_set_taking` (68% of the time), as H5 says. **Fix:** H5's.
 - **rbtree, 2.20×: allocation.** 12 allocations an insertion, since
-  reuse is one level deep (H4), and each goes to the system `malloc`:
+  reuse is one level deep and the token isn't carried into `balance`
+  (H4), a limit of Perceus here, not of the runtime, and each goes to the system `malloc`:
   sampling puts 58% of the time in `malloc`, `free` and the `memset`
-  under them. **Fix:** nested reuse (H4), and a small-object allocator
+  under them. **Fix:** nested reuse and the token carried into `balance` (H4), and a small-object allocator
   with free lists by size, which kklib gets from mimalloc
   (koka/kklib/include/kklib.h:367).
 - **Memory, rbtree and binary-trees at 1.99×: the header.** Every
@@ -294,5 +304,5 @@ which only allocates and frees, is 1.57×. Each failure has one cause:
 In order of what they'd change: the inline array store with hoisted
 uniqueness and in-place field stores (nbody, fannkuch, and H5's
 re-measure); tcc or a direct backend for debug builds, and modules
-compiled apart and cached (H6); nested reuse, a small-object allocator
-and an 8-byte header (rbtree and memory); `map` in place.
+compiled apart and cached (H6); nested reuse with the token carried
+into `balance`, a small-object allocator and an 8-byte header (rbtree and memory); `map` in place.

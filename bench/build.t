@@ -415,3 +415,103 @@ like the real `Clock`:
     │    ^^^^ `ren build` can't compile this yet
     help: run it with `ren run clock.ren`
   [1]
+  $ cd ../..
+
+A `var` walked down a list or a tree, by a `match` of it that assigns
+it a field its pattern took out, or a constant: the field the variable
+holds next is the one reference the old value gave up, counted once,
+and a constant where the loop goes round holds none.
+
+  $ cat > walks.ren <<'EOF'
+  > type List = Nil | Cons(h: Int, t: List)
+  > type T = Leaf | Node(l: T, r: T)
+  > 
+  > fn count(xs: List) -> Int =
+  >   var n = 0
+  >   var cur = xs
+  >   while true
+  >     match cur
+  >       Nil => break
+  >       Cons(_, t) =>
+  >         n += 1
+  >         cur = t
+  >   n
+  > 
+  > fn count_go(xs: List) -> Int =
+  >   var n = 0
+  >   var cur = xs
+  >   var go = true
+  >   while go
+  >     match cur
+  >       Nil => go = false
+  >       Cons(_, t) =>
+  >         n += 1
+  >         cur = t
+  >   n
+  > 
+  > fn first(xs: List) -> Int =
+  >   var n = 0
+  >   var cur = xs
+  >   while true
+  >     match cur
+  >       Nil => break
+  >       Cons(h, _) =>
+  >         n = h
+  >         cur = Nil
+  >   n
+  > 
+  > fn last(xs: List) -> Int =
+  >   var cur = xs
+  >   var out = 0
+  >   for i in 0..100
+  >     match cur
+  >       Nil => out = out + 0
+  >       Cons(h, t) =>
+  >         out = h
+  >         cur = t
+  >   out
+  > 
+  > fn main() uses Console =
+  >   let xs = Cons(1, Cons(2, Cons(3, Nil)))
+  >   print(count(xs) + count_go(xs) * 10 + first(xs) * 100 + last(xs) * 1000)
+  >   var t = Node(Node(Leaf, Leaf), Leaf)
+  >   var n = 0
+  >   var go = true
+  >   while go
+  >     match t
+  >       Leaf => go = false
+  >       Node(l, _) =>
+  >         n += 1
+  >         t = l
+  >   print(n)
+  > EOF
+  $ same walks.ren; release walks.ren
+  walks.ren, perceus: the same, exit 0, objects live at exit 0
+  walks.ren, naive: the same, exit 0, objects live at exit 0
+  walks.ren, release: the same, exit 0, objects live at exit 0
+
+A call given a block the release build lifts, and one it doesn't, a
+`let` of a block, that uses the same variable: the lifted one would be
+given that variable when the call is made, and miss what the other
+changes during it, so neither is lifted.
+
+  $ cat > siblings.ren <<'EOF'
+  > fn both(f: fn(), g: fn() -> Int) -> Int =
+  >   try f()
+  >   let a = try g()
+  >   try f()
+  >   a
+  > 
+  > fn main() uses Console =
+  >   var n = 10
+  >   let get = fn() => n
+  >   print(both(fn() => n -= 1, get))
+  >   let dec = fn() => n -= 1
+  >   print(both(dec, fn() => n))
+  >   print(n)
+  > EOF
+  $ release siblings.ren; ren run siblings.ren
+  siblings.ren, release: the same, exit 0, objects live at exit 0
+  9
+  7
+  6

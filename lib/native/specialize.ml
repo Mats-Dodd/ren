@@ -485,6 +485,9 @@ type env = {
   blocks : (lifted * C.var list) Ids.t;
       (** the block parameters a copy was given a block for, by id: the block,
           lifted, and the variable here for each of its captures *)
+  fn_vars : C.var list option Ids.t;
+      (** the blocks bound by `let` here, by id: the variables each may use, or
+          [None] if that isn't known *)
   known : (Path.t * (hspec * C.var list)) list Ids.t;
       (** for evidence by id, its known handlers, each with its state here *)
   uses : Ty.label list;  (** the dependencies used here, or installed *)
@@ -679,6 +682,24 @@ let own_ev cx (f : C.fn_def) i =
       Hashtbl.replace cx.own_ev (f.path, i) b;
       b
 
+(* Whether [v] holds data, as a block's captures that are slots do, not
+   evidence, a type or a dictionary. *)
+let is_data (v : C.var) =
+  not (List.mem v.ty [ C.evidence_ty; C.type_ty; C.dict_ty ])
+
+(* The variables here a block [x], rewritten, may use when it's called:
+   what it captures, and what the blocks bound by `let` it uses may, or
+   [None] if that isn't known. A block parameter can't use this
+   function's variables, which exclusivity sees to. *)
+let reach env (x : C.expr) =
+  List.fold_left
+    (fun acc (v : C.var) ->
+      match (acc, Ids.find_opt v.id env.fn_vars) with
+      | None, _ | _, Some None -> None
+      | Some vs, Some (Some ws) -> Some (ws @ vs)
+      | Some vs, None -> Some (if is_data v then v :: vs else vs))
+    (Some []) (uses_of x [])
+
 let rec rw cx fb env (e : C.expr) : C.expr =
   let mk kind : C.expr = { e with kind; ty = ty env e.ty } in
   let r = rw cx fb env in
@@ -832,8 +853,16 @@ let rec rw cx fb env (e : C.expr) : C.expr =
            })
   | Prim (p, args) -> mk (Prim (prim env p, List.map r args))
   | Let (v, a, b) ->
-      let v' = cvar env v in
-      mk (Let (v', r a, rw cx fb (in_scope env v') b))
+      let v' = cvar env v and a = r a in
+      let env = in_scope env v' in
+      let env =
+        match v.ty with
+        | Fun _ ->
+            let vs = if changes v b then None else reach env a in
+            { env with fn_vars = Ids.add v.id vs env.fn_vars }
+        | _ -> env
+      in
+      mk (Let (v', a, rw cx fb env b))
   | Assign (v, a) -> mk (Assign (cvar env v, r a))
   | If (c, t, f) -> mk (If (r c, r t, r f))
   | Match (s, arms) ->
@@ -1093,6 +1122,56 @@ and call cx fb env (e : C.expr) p (a : Ty.args) ds dicts args (cev : C.var) =
         | _, C.Ref v -> `Plain (C.Ref (cvar env v)))
       (List.combine ps args)
   in
+  (* A lifted block is given its captures when the call is made: by
+     value, or `inout`. So none may be a variable an argument passed as
+     written may use or change during the call, a block that isn't
+     lifted or one passed with `&`, or the copy would compute something
+     else; such a block is passed as written too. *)
+  let rec settle classified =
+    let used =
+      List.fold_left
+        (fun acc c ->
+          match (acc, c) with
+          | None, _ -> None
+          | Some vs, `Plain (C.Ref v) -> Some (v :: vs)
+          | Some vs, `Plain (C.Value (x : C.expr)) -> (
+              match x.ty with
+              | Fun _ -> Option.map (fun ws -> ws @ vs) (reach env x)
+              | _ -> Some vs)
+          | Some vs, _ -> Some vs)
+        (Some []) classified
+    in
+    let caps = function
+      | `Pass (_, vars) -> List.filter is_data vars
+      | `Lit (({ kind = Lambda { captures; _ }; _ } : C.expr), _) ->
+          List.filter is_data captures
+      | _ -> []
+    in
+    let clash c =
+      caps c <> []
+      &&
+      match used with
+      | None -> true
+      | Some vs ->
+          List.exists
+            (fun (v : C.var) -> List.exists (fun (w : C.var) -> w.id = v.id) vs)
+            (caps c)
+    in
+    if not (List.exists clash classified) then classified
+    else
+      settle
+        (List.map
+           (fun c ->
+             if not (clash c) then c
+             else
+               match c with
+               | `Pass (l, vars) ->
+                   `Plain (C.Value (rematerialize fb env e l vars))
+               | `Lit (block, _) -> `Plain (C.Value block)
+               | c -> c)
+           classified)
+  in
+  let classified = settle classified in
   let as_written () : C.expr =
     let args =
       List.map
@@ -1279,6 +1358,7 @@ and make_copy cx key (src : C.fn_def) blocks slots shape =
       fin = false;
       scope = Ids.empty;
       blocks = Ids.empty;
+      fn_vars = Ids.empty;
       known = Ids.empty;
       uses = [];
       cur = src.ev;
@@ -1484,6 +1564,7 @@ and make_spec cx h (a : Ty.args) dep =
           fin = false;
           scope = Ids.empty;
           blocks = Ids.empty;
+          fn_vars = Ids.empty;
           known = Ids.empty;
           uses = [];
           cur = src.ev;
@@ -1707,6 +1788,7 @@ let program ?(budget = 64) (modules : C.program list) =
       fin = false;
       scope = Ids.singleton start.ev.id start.ev;
       blocks = Ids.empty;
+      fn_vars = Ids.empty;
       known = Ids.empty;
       uses;
       cur = start.ev;

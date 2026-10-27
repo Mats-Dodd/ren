@@ -1000,16 +1000,19 @@ and place_stmt pl cx (s : stmt) (after : Ids.t) : stmt list * Ids.t =
   (* a use that takes a view straight from its slot: the store after it
      fills the slot again *)
   let taken gid = Hashtbl.mem pl.taken gid && List.mem gid owned_ids in
+  (* what [s] changes holds another value after it: the one it held,
+     which a part or a view may be borrowed from, isn't alive after *)
+  let kept = Ids.diff after (Ids.of_list (defines fi s)) in
   let rec moved gid =
     taken gid
     || List.mem gid owned_ids
        && (not (Ids.mem gid after))
        && (not (List.mem gid borrowed_ids))
-       && owns fi ~after ~uses:before ~moved gid
+       && owns fi ~after:kept ~uses:before ~moved gid
   in
   (* a part or a view is borrowed from its parent while the parent is
      held, even where the two die together *)
-  let owned_now gid = owns fi ~after ~uses:before ~moved gid in
+  let owned_now gid = owns fi ~after:kept ~uses:before ~moved gid in
   (* one more reference for each use that takes one, but the first use
      of a group [s] takes, which takes the group's own *)
   let dups =

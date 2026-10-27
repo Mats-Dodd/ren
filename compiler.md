@@ -1881,7 +1881,10 @@ it, keyed by three things the call knows.
   parameters (Effekt's static-argument transformation): a capture the
   block changes is `inout`, the rest are values. The copy calls it
   directly. A block parameter passed on keeps its key, so a recursive
-  function is copied once.
+  function is copied once. A block isn't lifted if the call's other
+  arguments as written, a block not lifted or one passed with `&`, may
+  use a variable it captures: it's given its captures when the call is
+  made, and would miss what the other changes during it.
 - **Its evidence's shape:** which dependencies it uses have a handler
   known to be installed, by a `with` around the call whose handler is a
   literal. A known handler's operations are lifted, `counter.next`, its
@@ -1979,9 +1982,11 @@ What the slice showed: blocks and known handlers cost what a loop and a
 direct call do once specialized (H1, H2); Perceus counts 12 to 137
 times less than naive counting and allocates less (H3, H4); four of
 vision.md's seven programs run within 2× of Rust, and rbtree, fannkuch
-and nbody don't (H7), for causes in the runtime, not in the design:
-an array store is an out-of-line call that checks uniqueness each time
-and, for an array of structs, copies the whole element, and every
+and nbody don't (H7), for causes in the runtime and in Perceus, not
+in the design: an array store is an out-of-line call that checks
+uniqueness each time and, for an array of structs, copies the whole
+element; rbtree allocates 12 nodes an insertion, since reuse is one
+level deep and a token isn't passed into a call that builds; and every
 object comes from the system `malloc` with a 16-byte header. `restrict`
 changes nothing yet (H5), since those calls hide the buffers it would
 be about. Debug builds are slower than `go build` (H6): 77% of the time

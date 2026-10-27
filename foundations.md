@@ -458,8 +458,9 @@ dependencies where it's called.
    are in [bench/native/RESULTS.md](bench/native/RESULTS.md): blocks and
    known handlers cost what a loop and a call do, and Perceus counts
    12 to 137 times less than naive counting; four of the seven
-   programs run within 2× of Rust and three don't, each for one cause
-   in the runtime's arrays and allocation; `restrict` changes nothing
+   programs run within 2× of Rust and three don't, fannkuch and nbody
+   for the runtime's array stores and rbtree for allocation, reuse one
+   level deep in Perceus and the system `malloc`; `restrict` changes nothing
    yet; and debug builds are slower than `go build`, most of it clang
    at -O0.
 3. **10d, descriptions.** Generic dependencies; handler descriptions as

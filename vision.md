@@ -18,9 +18,10 @@ subset:
 - **Within 2× of Rust:** not yet. Four of the seven programs are
   (deriv, nqueens and cfold at 0.40× to 1.03×, binary-trees at 1.57×),
   and three aren't: rbtree at 2.20×, fannkuch at 2.50× and nbody at
-  15.5×, each from one cause in the runtime, an array store that's a
-  call and copies a whole element, or allocation through the system
-  `malloc`. Peak memory is within 2× on all seven, two at 1.99×.
+  15.5×: fannkuch and nbody from one cause in the runtime, an array
+  store that's a call and copies a whole element, and rbtree from
+  allocating 12 nodes an insertion, since Perceus reuses only one level
+  of a node, each through the system `malloc`. Peak memory is within 2× on all seven, two at 1.99×.
 - **Debug builds faster than Go:** no. A clean build of 500k lines
   takes 57 s against Go's 13, 77% of it clang -O0, and a one-line edit
   rebuilds everything, since there's no build cache yet.
