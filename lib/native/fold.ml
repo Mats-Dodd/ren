@@ -24,8 +24,9 @@
      folds what calls what was folded the round before, until a round
      folds nothing;
    - the number of a [Struct] (to_mem.ml numbers one for each type),
-     where the two structs' fields are laid out alike: the C is the same,
-     a word for each field (emit_c.ml);
+     where the two structs' slots are laid out alike and keep their
+     values alike: the C is the same, a word for each slot, and so are
+     their counting and their tags (emit_c.ml);
    - the number of a panic's site, where the two sites say the same: a
      panic prints what its site says, where it is and its help, nothing
      else.
@@ -43,7 +44,7 @@ open Mem
 type hooks = { st : int -> int; name : string -> string; site : site -> site }
 
 let rec lay h (l : layout) : layout =
-  match l with Cell l -> Cell (lay h l) | Struct n -> Struct (h.st n) | l -> l
+  match l with Cell l -> Cell (lay h l) | Struct (n, c) -> Struct (h.st n, c) | l -> l
 
 let var h (v : var) = { v with layout = lay h v.layout }
 

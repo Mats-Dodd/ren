@@ -1,0 +1,150 @@
+// Small values as values (to_mem.ml, [small]): in a release build a
+// record, a tuple or a sum that isn't recursive, of at most a tag and
+// three words, is a C struct passed by value, counted as the objects in
+// it are. Each shape, where it meets the rest: an `Option` of an object,
+// a pointer that may be none; an option of an option, whose inner one
+// is boxed, since a struct is never a struct's field; a `Result` and a
+// sum whose constructors share slots, built in a loop; a record and a
+// tuple holding strings, taken apart, changed a field at a time, through
+// `inout` and by a block that captures it, and kept in a loop; one an
+// associated value; and kept boxed, one a field of a boxed record, one
+// an array's element and one shown; and a recursive type, never one.
+// build.t runs it under the sanitizers, in both builds, and checks each
+// prints what `ren run` prints.
+
+type Line = { item: Str, qty: Int, cents: Int }
+
+type Shape =
+  | Circle(r: Int)
+  | Rect(w: Int, h: Int)
+  | Named(name: Str, sides: Int)
+  | Blank
+
+type List =
+  | Cons(head: Str, tail: List)
+  | Nil
+
+type Holder = { line: (Str, Bool), n: Int }
+
+type Label =
+  | Text(s: Str)
+  | Plain
+
+type Pair = { a: Str, b: Str }
+
+type Tally = { label: Str, count: Int }
+
+  pub fn empty() -> Tally = Tally { label: "none", count: 0 }
+
+fn find(xs: Array<Str>, s: Str) -> Option<Str> =
+  var found = None
+  for x in xs
+    if x == s then found = Some(x.concat("!"))
+  found
+
+fn twice(o: Option<Option<Int>>) -> Int =
+  match o
+    Some(Some(k)) => k * 2
+    Some(None) => 1
+    None => 0
+
+type Parsed =
+  | Good(n: Int)
+  | Bad(why: Str)
+
+fn parse(s: Str) -> Parsed =
+  if s.len() > 3 then Bad(s.concat(" is too long")) else Good(s.len())
+
+fn check(s: Str) -> Int ! TooLong(n: Int) =
+  if s.len() > 3 then fail TooLong(s.len()) else s.len()
+
+fn area(s: Shape) -> Int =
+  match s
+    Circle(r) => 3 * r * r
+    Rect(w, h) => w * h
+    Named(n, k) => n.len() * k
+    Blank => 0
+
+fn subtotal(l: Line) -> Int = l.qty * l.cents + l.item.len()
+
+fn pick(xs: Array<Str>, i: Int) -> (Str, Int) = (xs[i % xs.len()], i)
+
+fn bump(inout l: Line, by: Int) =
+  l.qty += by
+  l.item = l.item.concat("+")
+
+fn swap(p: Pair) -> Pair = Pair { a: p.b, b: p.a }
+
+fn length(l: List) -> Int =
+  match l
+    Cons(_, t) => 1 + length(t)
+    Nil => 0
+
+fn apply(l: Line, f: fn(Line) -> Int) -> Int = try f(l)
+
+fn main() uses Console =
+  let names = ["fig", "pear", "quince"]
+  // an option of an object, and one of an option
+  for s in ["pear", "kiwi"]
+    match find(names, s)
+      Some(x) => print(x)
+      None => print("no ".concat(s))
+  print(find(names, "fig").is_some())
+  print(twice(Some(Some(3))) + twice(Some(None)) + twice(None))
+  // a result, and a sum of shared slots
+  for s in ["ab", "abcde"]
+    match parse(s)
+      Good(n) => print(n)
+      Bad(e) => print(e)
+    match attempt check(s)
+      Ok(n) => print(n)
+      Err(TooLong(n)) => print(0 - n)
+  var shape = Blank
+  var total = 0
+  for i in 0..4
+    shape =
+      if i == 0 then Circle(2)
+      else if i == 1 then Rect(3, 4)
+      else if i == 2 then Named(names[i], 6)
+      else Blank
+    total += area(shape)
+  print(total)
+  let labels = [Text("tri"), Plain]
+  match labels[0]
+    Text(s) => print(s)
+    Plain => print("plain")
+  // a record and a tuple holding strings
+  var sum = 0
+  for i in 0..10
+    let l = Line { item: names[i % 3], qty: i, cents: 7 }
+    let (s, k) = pick(names, i)
+    sum += subtotal(l) + s.len() + k
+  print(sum)
+  var l = Line { item: "plum", qty: 1, cents: 5 }
+  let before = l
+  l.qty = 3
+  bump(&l, 2)
+  print(subtotal(l))
+  print(subtotal(before))
+  print(l.item)
+  // a block that captures one and changes it
+  var m = Line { item: "lime", qty: 2, cents: 3 }
+  let n = apply(m, fn(x) => x.qty * x.cents + x.item.len())
+  for i in 0..3
+    m = Line { item: m.item.concat(names[i]), qty: m.qty + i, cents: m.cents }
+  names.each(fn(s) => m = Line { item: s, qty: m.qty + s.len(), cents: m.cents })
+  print(n + subtotal(m))
+  var p = Pair { a: "left", b: "right" }
+  for _ in 0..3
+    p = swap(p)
+  print(p.a)
+  // an associated value
+  let t = Tally.empty()
+  print(t.label.len() + t.count)
+  // a field of a boxed record, and one shown
+  let h = Holder { line: ("deep", true), n: 3 }
+  let (w, c) = h.line
+  print(w.len() + h.n)
+  print(c)
+  print(("shown", 1, false))
+  print(length(Cons("a", Cons("b", Nil))))

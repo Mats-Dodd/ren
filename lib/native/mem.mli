@@ -63,18 +63,39 @@ type layout =
   | Ptr
       (** a raw pointer: a block's environment or its arguments, an
           implementation of a dependency, a handler's code *)
-  | Struct of int
-      (** a release build's copied record or tuple (copied.ml), its fields all
-          scalars: a C struct, the program's [structs]'s n-th, a word for each
-          field, passed by value and kept in an array's elements, never counted.
-          Never a word, nor in an object: a type whose value would be one is
-          boxed instead *)
+  | Struct of int * bool
+      (** a release build's small value (foundations.md, decision 14): a record,
+          a tuple or a sum that isn't recursive, kept as a C struct, the
+          program's [structs]'s n-th, a word for each of its slots, passed by
+          value and never allocated. With [true], a slot holds an object, and
+          the struct is counted as its slots are, each its own (Koka's value
+          types, Backend/C/FromCore.hs:1048, [genDupDropValue]); with [false],
+          it's never counted, and may be an array's element. Never a word, nor
+          in an object: a type whose value would be one is boxed instead *)
   | Token
       (** a reuse token: the memory of an object a [Reset] found unique, to
           build a new one in, or NULL. Never counted, and used or freed once *)
 
+(* How a [Struct] keeps its value. *)
+type struct_kind =
+  | Product  (** a record's or a tuple's fields, a slot each *)
+  | Tagged
+      (** a sum's: slot 0 its constructor's tag, an [Int], and the fields of
+          each constructor in the slots after, which constructors share where
+          their layouts are the same; a slot a constructor has no field in
+          holds a scalar ([Scalar_ctor 0] where it's [Boxed]) *)
+  | Nullable of int * int
+      (** a sum of two constructors, the first tag's without fields and the
+          second's with one, an object, its only slot: the object, or
+          [Scalar_ctor (-1)], which no object or constructor is, for the first
+          (Koka's [DataAsMaybe], Core/Core.hs:533) *)
+
+(* A [Struct]: its slots' layouts, and how it keeps its value. *)
+type strukt = { sfields : layout list; skind : struct_kind }
+
 (* Whether a value of this layout has a count: an object, a descriptor,
-   or a type variable's word, which may be either. *)
+   a type variable's word, which may be either, or a struct holding an
+   object. *)
 val counted : layout -> bool
 
 (* Whether a value of this layout is always an object, so the runtime
@@ -194,7 +215,9 @@ type rhs =
   | Compare of cmp * atom * atom
       (** two scalars of one layout, [Int], [Float], [Bool], [Unit] or [Enum] *)
   | Not of atom
-  | Tag_of of atom  (** the tag of a sum type's value, an [Int] *)
+  | Tag_of of atom
+      (** the tag of a sum type's value, an [Int]: an [Enum], a [Boxed], or a
+          [Struct] that's [Tagged] or [Nullable] *)
   | Field of atom * int * int
       (** the [n]-th field of a constructor, a record or a tuple of [size]
           fields, by its slot: borrowed, not counted again *)
@@ -254,9 +277,10 @@ type rhs =
   | Is_unique of atom
       (** whether an object's count is 1 (lean.h, [lean_is_exclusive]) *)
   | Make_struct of atom list
-      (** a [Struct], the variable's, of these fields, in the order they're
-          declared *)
-  | Struct_get of atom * int  (** the [n]-th field of a [Struct] *)
+      (** a [Struct], the variable's, of these slots, in order, which it takes
+      *)
+  | Struct_get of atom * int
+      (** the [n]-th slot of a [Struct]: borrowed, not counted again *)
   | Pack of (atom * int * int) list
       (** a word, an [Int], holding small scalars side by side: each a [Bool],
           a [Unit] or an [Enum], at the bit given, in as many bits as given.
@@ -284,7 +308,8 @@ type stmt =
   | Free of atom * (int * atom) list
       (** free a unique object: the fields at the slots listed are the variables
           after them, which keep their references, and the others are dropped
-          (Koka's drop specialization, Parc.hs, [specializeDrop]) *)
+          (Koka's drop specialization, Parc.hs, [specializeDrop]). Of a counted
+          [Struct], which is always its own, its slots not listed are dropped *)
   | Free_token of atom  (** the memory of a [Token] nothing was built in *)
   | Do of rhs  (** for what it does, a [Runtime] call or a [Call] *)
   | Call_fails of {
@@ -430,7 +455,7 @@ type program = {
   values : value list;  (** made in this order, each after those it uses *)
   strings : string list;  (** the string literals, by [Lit]'s index *)
   sites : site list;  (** by [sid] *)
-  structs : layout list list;  (** each [Struct]'s fields' layouts, by its n *)
+  structs : strukt list;  (** each [Struct], by its n *)
   overflow : site;  (** where the stack overflowing is said to be *)
 }
 

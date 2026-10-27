@@ -83,7 +83,9 @@ type ctx = {
           be a word or in an object: found compiling the program, which is then
           compiled again ([Demote]) *)
   structs : (Ty.ty, int) Hashtbl.t;  (** each [Struct]'s type, by its n *)
-  mutable struct_list : layout list list;  (** most recent first *)
+  mutable struct_list : strukt list;  (** most recent first *)
+  recursive : (Path.t, bool) Hashtbl.t;
+      (** whether each type's declaration reaches itself ([recursive]) *)
 }
 
 (* A value of the copied type would have to be one word, or a field of an
@@ -179,46 +181,151 @@ let ty_name (t : Ty.ty) =
        { ty = t; names = []; reqs = []; row_reqs = [] })
     t
 
+(* A [Struct]'s type, by its number. *)
+let struct_ty cx n =
+  match
+    Hashtbl.fold
+      (fun t m found -> if m = n then Some t else found)
+      cx.structs None
+  with
+  | Some t -> t
+  | None -> bug "a struct that isn't there"
+
+let scalar (l : layout) =
+  match l with Int | Float | Bool | Unit | Enum -> true | _ -> false
+
+(* Whether the type [p]'s declaration reaches [p] again, through the
+   types of its fields and theirs, whatever their arguments: a recursive
+   type, which is never a small value, since its values can be as big as
+   the program makes them (Koka's [createDataDef], Kind/Repr.hs:66, which
+   never makes a recursive type a value type). *)
+let recursive cx (p : Path.t) =
+  match Hashtbl.find_opt cx.recursive p with
+  | Some r -> r
+  | None ->
+      let rec paths acc (t : Ty.ty) =
+        match t with Con (q, ts) -> List.fold_left paths (q :: acc) ts | _ -> acc
+      in
+      let fields (fs : Iface.field list) =
+        List.fold_left (fun acc (f : Iface.field) -> paths acc f.fty) [] fs
+      in
+      let mentions q =
+        match Hashtbl.find_opt cx.types q with
+        | Some { body = Record fs; _ } -> fields fs
+        | Some { body = Sum cs; _ } ->
+            List.concat_map (fun (c : Iface.ctor) -> fields c.cfields) cs
+        | Some { body = Opaque (Rep r); _ } -> paths [] r
+        | _ -> []
+      in
+      let seen = Hashtbl.create 8 in
+      let rec reaches q =
+        q = p
+        || (not (Hashtbl.mem seen q))
+           && (Hashtbl.replace seen q ();
+               List.exists reaches (mentions q))
+      in
+      let r = List.exists reaches (mentions p) in
+      Hashtbl.replace cx.recursive p r;
+      r
+
 let rec layout cx loc (t : Ty.ty) : layout =
   match t with
   | Con (p, args) when cx.release && not (Hashtbl.mem cx.boxed t) -> (
-      match struct_fields cx loc p args with
-      | Some fields -> Struct (struct_id cx t fields)
+      match small cx loc p args with
+      | Some (st, _) ->
+          Struct (struct_id cx t st, List.exists is_object st.sfields)
       | None -> plain_layout cx loc t)
   | _ -> plain_layout cx loc t
 
-(* The layouts of the fields of the record or tuple [Con (p, args)], if
-   it's copied (copied.ml), and each is a scalar: what a release build
-   keeps as a C struct. *)
-and struct_fields cx loc p args =
+(* How a release build keeps a value of [Con (p, args)] if it's a small
+   value (foundations.md, decision 14), a C struct passed by value, and
+   the slot of each field of each constructor, by tag:
+   - a copied record or tuple (copied.ml) of scalars, however many;
+   - a record or a tuple of at most four fields, each a scalar or an
+     object;
+   - a sum that isn't recursive, whose constructors' fields are each a
+     scalar or an object, with a tag and at most three slots, which the
+     constructors share where their fields' layouts are the same (as
+     Koka's constructors of a value type share their scan fields,
+     Kind/Repr.hs:150-170); or, if it has two constructors, one with no
+     fields and one with an object, that object, or a value no object is
+     (Koka's [DataAsMaybe], Core/Core.hs:533).
+   A field that would be a struct itself isn't one of these: the type
+   with that field stays boxed, and so the field's type is boxed too
+   ([slot]), after which this one is a struct. *)
+and small cx loc p args : (strukt * int list list) option =
   let t : Ty.ty = Con (p, args) in
-  let fields =
-    if Ty.is_tuple p then Some args
+  let types_of (fs : Iface.field list) =
+    List.map (fun (f : Iface.field) -> subst args f.fty) fs
+  in
+  (* the layouts of fields of types [tys], if each is a scalar or an
+     object *)
+  let simple tys =
+    let ls = List.map (layout cx loc) tys in
+    if List.for_all (fun l -> scalar l || l = Boxed) ls then Some ls else None
+  in
+  let product tys =
+    let slots = [ List.mapi (fun i _ -> i) tys ] in
+    let plain = List.map (plain_layout cx loc) tys in
+    if Copied.is ~types:(Hashtbl.find_opt cx.types) t && List.for_all scalar plain
+    then Some ({ sfields = plain; skind = Product }, slots)
     else
-      match Hashtbl.find_opt cx.types p with
-      | Some { body = Record fs; _ } ->
-          Some (List.map (fun (f : Iface.field) -> subst args f.fty) fs)
+      match simple tys with
+      | Some ls when List.length ls <= 4 ->
+          Some ({ sfields = ls; skind = Product }, slots)
       | _ -> None
   in
-  match fields with
-  | Some fs when Copied.is ~types:(Hashtbl.find_opt cx.types) t ->
-      let ls = List.map (plain_layout cx loc) fs in
-      if
-        List.for_all
-          (fun (l : layout) ->
-            match l with Int | Float | Bool | Unit | Enum -> true | _ -> false)
-          ls
-      then Some ls
-      else None
-  | _ -> None
+  if Ty.is_tuple p then product args
+  else
+    match Hashtbl.find_opt cx.types p with
+    | Some { body = Record fs; _ } when not (recursive cx p) ->
+        product (types_of fs)
+    | Some { body = Sum cs; _ }
+      when List.exists (fun (c : Iface.ctor) -> c.cfields <> []) cs
+           && not (recursive cx p) -> (
+        let ctors = List.map (fun (c : Iface.ctor) -> simple (types_of c.cfields)) cs in
+        if List.mem None ctors then None
+        else
+          let ctors = List.map Option.get ctors in
+          match ctors with
+          | [ []; [ Boxed ] ] ->
+              Some ({ sfields = [ Boxed ]; skind = Nullable (0, 1) }, [ []; [ 0 ] ])
+          | [ [ Boxed ]; [] ] ->
+              Some ({ sfields = [ Boxed ]; skind = Nullable (1, 0) }, [ [ 0 ]; [] ])
+          | _ ->
+              (* slot 0 is the tag; each field goes in the first slot after
+                 of its layout that its constructor hasn't used *)
+              let slots = ref [ (Int : layout) ] in
+              let place ls =
+                let used = ref [] in
+                List.map
+                  (fun l ->
+                    let rec find i = function
+                      | [] ->
+                          slots := !slots @ [ l ];
+                          i
+                      | l' :: rest ->
+                          if i > 0 && l' = l && not (List.mem i !used) then i
+                          else find (i + 1) rest
+                    in
+                    let i = find 0 !slots in
+                    used := i :: !used;
+                    i)
+                  ls
+              in
+              let placed = List.map place ctors in
+              if List.length !slots <= 4 then
+                Some ({ sfields = !slots; skind = Tagged }, placed)
+              else None)
+    | _ -> None
 
-and struct_id cx (t : Ty.ty) fields =
+and struct_id cx (t : Ty.ty) st =
   match Hashtbl.find_opt cx.structs t with
   | Some n -> n
   | None ->
       let n = Hashtbl.length cx.structs in
       Hashtbl.replace cx.structs t n;
-      cx.struct_list <- fields :: cx.struct_list;
+      cx.struct_list <- st :: cx.struct_list;
       n
 
 and plain_layout cx loc (t : Ty.ty) : layout =
@@ -231,7 +338,14 @@ and plain_layout cx loc (t : Ty.ty) : layout =
   | _ when t = Ty.bool -> Bool
   | _ when t = Ty.unit -> Unit
   | _ when t = Ty.str -> Boxed
-  | Con (p, [ _ ]) when p = array_path -> Boxed
+  | Con (p, [ e ]) when p = array_path ->
+      (* an array's elements are counted as words are, or never: a struct
+         that holds an object is kept boxed instead *)
+      (if cx.release then
+         match layout cx loc e with
+         | Struct (n, true) -> raise (Demote (struct_ty cx n))
+         | _ -> ());
+      Boxed
   | Con (p, _) when Ty.is_tuple p -> Boxed
   | Con (p, args) -> (
       match Hashtbl.find_opt cx.types p with
@@ -347,25 +461,22 @@ let pack cx (tys : Ty.ty list) : (place list * int) option =
 (* The layout of a field of type [t] of an object: a word, which a
    [Struct] can't be, so its type is kept boxed instead. *)
 let slot cx loc (t : Ty.ty) =
-  match layout cx loc t with Struct _ -> raise (Demote t) | l -> l
+  match layout cx loc t with
+  | Struct (n, _) -> raise (Demote (struct_ty cx n))
+  | l -> l
 
-(* A [Struct]'s type, by its number. *)
-let struct_ty cx n =
-  match
-    Hashtbl.fold
-      (fun t m found -> if m = n then Some t else found)
-      cx.structs None
-  with
-  | Some t -> t
-  | None -> bug "a struct that isn't there"
+(* The [n]-th struct. *)
+let struct_of cx n = List.nth (List.rev cx.struct_list) n
 
-(* Its fields' layouts. *)
-let struct_layouts cx n = List.nth (List.rev cx.struct_list) n
+(* [l], an array's elements': counted as words are, or never, so a
+   struct that holds an object is kept boxed instead. *)
+let element cx (l : layout) =
+  match l with Struct (n, true) -> raise (Demote (struct_ty cx n)) | _ -> l
 
 (* [l], where a value has to be a word: a [Struct]'s type is kept boxed
    instead. *)
 let word_only cx (l : layout) =
-  match l with Struct n -> raise (Demote (struct_ty cx n)) | _ -> ()
+  match l with Struct (n, _) -> raise (Demote (struct_ty cx n)) | _ -> ()
 
 (* The declaration of the named type [t], and its arguments. *)
 let rec decl cx loc (t : Ty.ty) =
@@ -391,8 +502,40 @@ let placed cx loc d t tag tys layouts =
       { tag; places = List.combine places layouts; words }
   | None -> shape tag layouts
 
-(* The constructor [c] of the sum type [t]. *)
+(* The constructor [c] of the sum type [t]: of a small value, its fields'
+   slots in the struct ([small]). *)
 let ctor_shape cx loc (t : Ty.ty) c =
+  let small_of (t : Ty.ty) =
+    match (t, layout cx loc t) with
+    | Con (p, args), Struct _ -> small cx loc p args
+    | _ -> None
+  in
+  (* an opaque type is its representation, where it can be seen *)
+  let rec rep (t : Ty.ty) =
+    match t with
+    | Con (p, args) -> (
+        match Hashtbl.find_opt cx.types p with
+        | Some { body = Opaque (Rep r); _ } -> rep (subst args r)
+        | _ -> t)
+    | _ -> t
+  in
+  match (small_of (rep t), decl cx loc t) with
+  | Some (st, slots), ({ body = Sum ctors; _ }, _) ->
+      let rec find i = function
+        | [] -> bug ("no constructor " ^ c)
+        | (k : Iface.ctor) :: _ when k.cname = c ->
+            {
+              tag = i;
+              places =
+                List.map2
+                  (fun n _ -> (Slot n, List.nth st.sfields n))
+                  (List.nth slots i) k.cfields;
+              words = List.length st.sfields;
+            }
+        | _ :: rest -> find (i + 1) rest
+      in
+      find 0 ctors
+  | _ ->
   match decl cx loc t with
   | ({ body = Sum ctors; _ } as d), args ->
       let rec find i = function
@@ -494,7 +637,7 @@ and no_struct_in cx loc (t : Ty.ty) =
       if
         cx.release
         && (not (Hashtbl.mem cx.boxed t))
-        && struct_fields cx loc p args <> None
+        && small cx loc p args <> None
       then raise (Demote t);
       List.iter (no_struct_in cx loc) args
   | _ -> ()
@@ -686,17 +829,17 @@ let word_desc fs n : atom =
   | None -> unsupported fs.here "a value of a type variable here"
 
 (* One more reference to [x], or one fewer: through its descriptor if
-   it's a word. *)
+   it's a word, and to each object in it if it's a struct. *)
 let dup fs (x : atom) =
   match atom_layout x with
   | Word n -> emit fs (Dup_word (x, word_desc fs n))
-  | l when is_object l -> emit fs (Dup x)
+  | l when counted l -> emit fs (Dup x)
   | _ -> ()
 
 let drop_now fs (x : atom) =
   match atom_layout x with
   | Word n -> emit fs (Drop_word (x, word_desc fs n))
-  | l when is_object l -> emit fs (Drop x)
+  | l when counted l -> emit fs (Drop x)
   | _ -> ()
 
 (* The statements [f] emits, as a block, and what it gives. *)
@@ -791,9 +934,9 @@ let rec dummy fs env (l : layout) : atom =
   | Desc -> Desc_lit 0
   | Ev -> No_ev
   | Ptr -> Fn_ptr "NULL"
-  | Struct n ->
-      borrowed fs "$never" l
-        (Make_struct (List.map (dummy fs env) (struct_layouts fs.cx n)))
+  | Struct (n, _) ->
+      owned fs env "$never" l
+        (Make_struct (List.map (dummy fs env) (struct_of fs.cx n).sfields))
   | Cell _ | Block | Token ->
       bug "a cell, a block or a token where nothing runs"
 
@@ -1134,6 +1277,26 @@ let rec expr fs env (e : C.expr) : atom =
       unsupported_at fs e.loc
         (sprintf "`%s` used as a value, not called" (Intrinsic.name x))
   | Prim (p, args) -> prim fs env e p args
+  | Con (_, c, args) when is_struct (lay e.ty) ->
+      (* a small value: its tag and its fields in their slots, a scalar in
+         each slot it has no field in *)
+      let l = lay e.ty in
+      let st = match l with Struct (n, _) -> struct_of cx n | _ -> bug "a struct" in
+      let sh = ctor_shape cx (at fs e.loc) e.ty c in
+      let xs = List.map (expr fs env) args in
+      let slots = Array.of_list (List.map (dummy fs env) st.sfields) in
+      (match st.skind with
+      | Tagged -> slots.(0) <- Int (Int64.of_int sh.tag)
+      | Nullable (none, _) when sh.tag = none -> slots.(0) <- Scalar_ctor (-1)
+      | _ -> ());
+      List.iter2
+        (fun ((place : place), _) x ->
+          match place with
+          | Slot k -> slots.(k) <- x
+          | Bits _ -> bug "a struct's field packed")
+        sh.places xs;
+      List.iter (consume env) xs;
+      owned fs env "$struct" l (Make_struct (Array.to_list slots))
   | Con (_, c, args) -> (
       let sh = ctor_shape cx (at fs e.loc) e.ty c in
       match args with
@@ -1145,10 +1308,12 @@ let rec expr fs env (e : C.expr) : atom =
   | Record (_, fields) when is_struct (lay e.ty) ->
       let decl_fields = record_fields cx (at fs e.loc) e.ty in
       let values = List.map (fun (f, x) -> (f, expr fs env x)) fields in
-      owned fs env "$struct" (lay e.ty)
-        (Make_struct (List.map (fun (f, _) -> List.assoc f values) decl_fields))
+      let xs = List.map (fun (f, _) -> List.assoc f values) decl_fields in
+      List.iter (consume env) xs;
+      owned fs env "$struct" (lay e.ty) (Make_struct xs)
   | Tuple xs when is_struct (lay e.ty) ->
       let xs = List.map (expr fs env) xs in
+      List.iter (consume env) xs;
       owned fs env "$struct" (lay e.ty) (Make_struct xs)
   | Record (_, fields) ->
       let decl_fields = record_fields cx (at fs e.loc) e.ty in
@@ -1193,7 +1358,7 @@ let rec expr fs env (e : C.expr) : atom =
       drop fs env x;
       r
   | Array xs ->
-      let l = lay (C.elem_ty e.ty) in
+      let l = element cx (lay (C.elem_ty e.ty)) in
       let xs = List.map (expr fs env) xs in
       List.iter (consume env) xs;
       let desc = match l with Word n -> Some (word_desc fs n) | _ -> None in
@@ -1407,7 +1572,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
   | Get_index, [ a; i ] ->
       let x = expr fs env a in
       let i = expr fs env i in
-      let l = lay e.ty in
+      let l = element cx (lay e.ty) in
       let v =
         owned fs env "$elem" l (Runtime (Array_get l, [ x; i ], Some (site ())))
       in
@@ -1439,7 +1604,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
         };
       ] )
     when av.id = av'.id && iv.id = iv'.id && is_struct (lay ty) && pure w ->
-      let n = match lay ty with Struct n -> n | _ -> bug "a struct" in
+      let n = match lay ty with Struct (n, _) -> n | _ -> bug "a struct" in
       let fields = record_fields cx (at fs e.loc) ty in
       let sh = record_shape cx (at fs e.loc) ty in
       let k, l =
@@ -1465,7 +1630,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let x = expr fs env a in
       let i = expr fs env i in
       let y = expr fs env v in
-      let l = lay v.ty in
+      let l = element cx (lay v.ty) in
       let r =
         owned fs env "$set" Boxed
           (Runtime (Array_set l, [ x; i; y ], Some (site ())))
@@ -1703,7 +1868,8 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
             | l -> borrowed fs ("&" ^ xs.name) (Cell l) (Addr m)
           in
           let y = expr fs env v in
-          emit fs (Do (Runtime (Array_push (lay t), [ cell; y ], None)));
+          emit fs
+            (Do (Runtime (Array_push (element cx (lay t)), [ cell; y ], None)));
           drop fs env y;
           Unit
       | _ -> bug "a `push` without `&`")
@@ -1721,7 +1887,7 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   | Array_reserve, [ t ], [ d ] -> (
       match values () with
       | [ n ] ->
-          let l = lay t in
+          let l = element cx (lay t) in
           let d = match l with Word _ -> [ desc fs env d ] | _ -> [] in
           let r =
             owned fs env "$reserved" Boxed
@@ -2441,6 +2607,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       boxed;
       structs = Hashtbl.create 8;
       struct_list = [];
+      recursive = Hashtbl.create 16;
     }
   in
   List.iter
@@ -2528,14 +2695,15 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
     overflow;
   }
 
-(* In a release build, a copied type a value of which turns out to need
-   a word, or a field of an object, is kept boxed, and the program
-   compiled again: once for each pass that finds such types, which is
-   once for most programs that have any, and never more than once for
-   each type. Boxing a type changes no other type's layout (a struct's
-   fields are scalars), nor where a value has to be a word, which its
-   type decides; so a type found in a pass is one the program would keep
-   boxed whichever order they were found in. *)
+(* In a release build, a small value's type a value of which turns out
+   to need a word, a field of an object or, if it holds an object, an
+   array's element, is kept boxed, and the program compiled again: once
+   for each pass that finds such types, which is once for most programs
+   that have any, and never more than once for each type. Where a value
+   has to be a word is its type's to decide, not its layout's. Boxing a
+   type can make another a struct, one with a field of the type, which a
+   later pass may find to box in turn; each pass boxes types none before
+   did, so it ends. *)
 let program ?(release = false) (modules : C.program list) : Mem.program =
   let boxed = Hashtbl.create 4 in
   let box t =

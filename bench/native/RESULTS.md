@@ -9,6 +9,61 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Small values and packed fields (compiler.md, step 10)
+
+Packed scalar fields (Lean's) and small values as values (Koka's),
+against 31fc1ca, the commit before them, in **one** hyperfine
+invocation per program (`-N --warmup 3 --runs 10`, release builds at
+main.ren's size), with CPU cycles and instructions retired as hyperfine
+records them; peak memory is its per-run mean. "no frames" is the new
+compiler with stack.ml's pass off (`REN_NO_STACK` when building), which
+says what H8's frames still add on top. Load average 2.2 to 6.5 of 16
+cores during the run. Every binary prints what the Rust twin prints.
+
+| program | 31fc1ca (s) | now (s) | now, no frames (s) | Rust (s) | now / 31fc1ca, cycles | no frames / now, cycles | instructions 10⁹, 31fc1ca / now | MB, 31fc1ca | now | Rust |
+|---|---|---|---|---|---|---|---|---|---|---|
+| rbtree | 0.953 ± 0.007 | 0.866 ± 0.006 | 0.863 ± 0.006 | 1.496 ± 0.100 | **0.91×** | 1.00× | 11.69 / 12.74 | 203.2 | **169.6** | 136.2 |
+| deriv | 0.719 ± 0.010 | 0.741 ± 0.010 | 0.737 ± 0.013 | 1.867 ± 0.094 | 1.03× | 1.00× | 9.15 / 9.15 | 474.7 | 474.7 | 1023.2 |
+| nqueens | 0.737 ± 0.013 | 0.734 ± 0.006 | 0.738 ± 0.013 | 1.066 ± 0.026 | 1.00× | 1.01× | 5.23 / 5.23 | 99.6 | 99.5 | 189.9 |
+| cfold | 0.162 ± 0.002 | 0.163 ± 0.002 | 0.163 ± 0.002 | 0.651 ± 0.013 | 1.00× | 1.00× | 1.09 / 1.09 | 130.0 | 130.0 | 377.1 |
+| binary-trees | 7.646 ± 0.149 | 7.732 ± 0.191 | 7.760 ± 0.238 | 12.581 ± 0.144 | 1.01× | 1.00× | 105.11 / 105.11 | 202.8 | 202.8 | 137.8 |
+| nbody | 4.264 ± 0.299 | 4.057 ± 0.210 | 4.078 ± 0.218 | 1.683 ± 0.002 | 0.96× | 1.01× | 64.73 / 64.73 | 1.4 | 1.4 | 1.5 |
+| fannkuch | 2.656 ± 0.017 | 2.651 ± 0.018 | 2.657 ± 0.024 | 2.651 ± 0.006 | 1.00× | 1.00× | 21.22 / 21.22 | 1.5 | 1.5 | 1.6 |
+| inout | 2.517 ± 0.014 | 2.509 ± 0.009 | 2.506 ± 0.012 | 1.359 ± 0.001 | 1.00× | 1.00× | 56.09 / 56.09 | 1.5 | 1.5 | 1.6 |
+| stack (H8) | 0.986 ± 0.002 | 0.988 ± 0.003 | 0.988 ± 0.003 | 0.907 ± 0.001 | 1.00× | 1.00× | 6.66 / 6.13 | 1.5 | 1.5 | 1.5 |
+
+H8's four kernels alone, 50 million rounds each, both compilers with
+and without frames (cycles 10⁹; instructions 10⁹ in brackets):
+
+| kernel | 31fc1ca | 31fc1ca, no frames | now | now, no frames | allocations, 31fc1ca no frames / 31fc1ca / now |
+|---|---|---|---|---|---|
+| records | 0.566 (1.92) | 1.407 (6.27) | 0.565 (1.92) | 0.565 (1.92) | 50 million / 0, 50 million in a frame / 0 |
+| options | 0.561 (1.46) | 0.767 (3.71) | 0.561 (1.02) | 0.562 (1.02) | 33 million / 0, 33 million in a frame / 0 |
+| tuples | 0.614 (1.97) | 0.628 (4.32) | 0.614 (1.87) | 0.615 (1.87) | 50 million / 0, 50 million in a frame / 0 |
+| blocks | 0.564 (1.97) | 1.409 (6.12) | 0.562 (1.97) | 0.562 (1.97) | 50 million / 0, 50 million in a frame / 0 |
+
+- **Packing: rbtree's peak memory 203.2 MB to 169.6 MB, 1.49× Rust's to
+  1.25×,** its node four words, not five, color and value in one (peak
+  live bytes 201.6 to 168.0 million); 9% fewer cycles on 9% more
+  instructions, the shifts and masks costing less than the memory they
+  save. binary-trees can't gain: `Node(left, right)` has no scalar, and
+  its 1.47× is the header's 8 bytes on Rust's 16.
+- **Small values: every H8 kernel allocates nothing, and nothing is
+  left for the frame.** Without frames, a record, an option, a tuple
+  and a record given to a block now cost what H8's frames made them
+  cost (0.56 to 0.61 billion cycles), with up to 30% fewer instructions
+  (options, 1.46 to 1.02 billion: no frame object to build and read);
+  31fc1ca without frames took 1.02× to 2.50× as many cycles. The
+  kernels are bound by their `%`s, so the instructions saved don't show
+  as time.
+- **What H8's frames add on top: nothing measurable.** With small
+  values, no program here keeps an object in a frame but binary-trees'
+  2.8 million roots, which save 0.3% of its instructions and no time
+  outside noise. The H7 set doesn't use small values in its hot loops
+  (rbtree, deriv, nqueens, cfold and binary-trees build recursive
+  types; nbody, fannkuch and inout were already structs or arrays of
+  scalars), so it moves only by packing.
+
 ## Combined
 
 Five experiments, each built from 920456c, are merged on top of H5's

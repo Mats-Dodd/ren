@@ -29,9 +29,10 @@ compiles, and its counting, path by path.
 
 The benchmarks of `bench`. `overflow` reaches the stack-overflow panic,
 after which AddressSanitizer warns that it can't clean up a stack that
-deep, which is left out.
+deep, which is left out. `values_panic` panics where objects are alive,
+which a panic leaves as they are.
 
-  $ for f in fib deep loop overflow frames tokens packed; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -46,6 +47,10 @@ deep, which is left out.
   tokens.ren, naive: the same, exit 0, objects live at exit 0
   packed.ren, perceus: the same, exit 0, objects live at exit 0
   packed.ren, naive: the same, exit 0, objects live at exit 0
+  values.ren, perceus: the same, exit 0, objects live at exit 0
+  values.ren, naive: the same, exit 0, objects live at exit 0
+  values_panic.ren, perceus: the same, exit 1, objects live at exit 4
+  values_panic.ren, naive: the same, exit 1, objects live at exit 4
 
 Every native benchmark, at its small size:
 
@@ -188,7 +193,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -196,6 +201,8 @@ prints what `ren run` prints, and ends with no object alive; so does
   frames.ren, release: the same, exit 0, objects live at exit 0
   tokens.ren, release: the same, exit 0, objects live at exit 0
   packed.ren, release: the same, exit 0, objects live at exit 0
+  values.ren, release: the same, exit 0, objects live at exit 0
+  values_panic.ren, release: the same, exit 1, objects live at exit 3
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0

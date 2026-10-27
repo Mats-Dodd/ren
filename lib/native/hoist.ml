@@ -197,7 +197,7 @@ type place = {
 let elem_of (rt : rt) =
   match rt with
   | Array_get l | Array_set_taking l -> Some l
-  | Array_set_field_taking (n, _, _) -> Some (Struct n)
+  | Array_set_field_taking (n, _, _) -> Some (Struct (n, false))
   | _ -> None
 
 (* The places [Loop (l, b)] can hoist, each with its views and writes;

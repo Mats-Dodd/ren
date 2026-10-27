@@ -583,9 +583,44 @@ fn main() -> Int =
     Mem Lint: ok
     |}]
 
+let%expect_test
+    "release: a tuple and an option of objects are structs, counted as the \
+     strings in them; nothing's allocated" =
+  mem ~release:true ~only:[ "ren_test_pick_1"; "ren_test_first_1" ]
+    {|
+fn pick(xs: Array<Str>, i: Int) -> (Str, Int) = (xs[i], i)
+fn first(xs: Array<Str>) -> Option<Str> =
+  if xs.len() == 0 then None else Some(xs[0])
+fn main() -> Int =
+  let xs = ["a", "bb"]
+  let (s, k) = pick(xs, 1)
+  match first(xs)
+    Some(t) => s.len() + k + t.len()
+    None => 0
+|};
+  [%expect {|
+    (fn ren_test_first_1 (ev/1:Ev ^xs/2:Boxed) -> Struct1c
+      (do (let xs/3:Boxed xs/2) (let $len/4:Int (array-len xs/3))
+        (let $eq/5:Bool (== $len/4 0))
+        (decl $if/6:Struct1c)
+        (if $eq/5
+          (do (let $struct/7:Struct1c (struct #none*)) (set $if/6 $struct/7))
+          (do (let xs/8:Boxed xs/2) (let $elem/9:Boxed (array-get:Boxed xs/8 0))
+            (let $struct/10:Struct1c (struct $elem/9))
+            (set $if/6 $struct/10)))
+        (return $if/6)))
+    (fn ren_test_pick_1 (ev/1:Ev ^xs/2:Boxed i/3:Int) -> Struct0c
+      (do (let xs/4:Boxed xs/2) (let i/5:Int i/3)
+        (let $elem/6:Boxed (array-get:Boxed xs/4 i/5))
+        (let i/7:Int i/3)
+        (let $struct/8:Struct0c (struct $elem/6 i/7))
+        (return $struct/8)))
+    Mem Lint: ok
+    |}]
+
 (* ---- what Mem Lint catches ---- *)
 
-let lint fns =
+let lint ?(structs = []) fns =
   let p : Mem.program =
     {
       fns;
@@ -599,7 +634,7 @@ let lint fns =
       values = [];
       strings = [];
       sites = [];
-      structs = [];
+      structs;
       overflow =
         { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics };
     }
@@ -730,6 +765,78 @@ let%expect_test "Mem Lint: a reuse token never used" =
   let t = v 1 "t" Token in
   lint [ fn [ Decl t; Return (Int 0L) ] ];
   [%expect {| Mem Lint, in f: a reuse token is never used or freed |}]
+
+(* ---- small values: a struct that holds an object ---- *)
+
+let line : Mem.strukt = { sfields = [ Boxed; Int ]; skind = Product }
+
+let%expect_test "Mem Lint: a struct's object never dropped" =
+  let s = v 1 "s" (Struct (0, true)) and x = v 2 "x" Boxed in
+  lint ~structs:[ line ]
+    [ fn [ Let (x, alloc); Let (s, Make_struct [ Var x; Int 1L ]); Return (Int 0L) ] ];
+  [%expect
+    {| Mem Lint, in f: s/1 still holds a reference where the function ends |}]
+
+let%expect_test "Mem Lint: a struct's object read after the struct's dropped" =
+  let s = v 1 "s" (Struct (0, true))
+  and x = v 2 "x" Boxed
+  and y = v 3 "y" Boxed
+  and n = v 4 "n" Int in
+  lint ~structs:[ line ]
+    [
+      fn
+        [
+          Let (x, alloc);
+          Let (s, Make_struct [ Var x; Int 1L ]);
+          Let (y, Struct_get (Var s, 0));
+          Drop (Var s);
+          Let (n, Tag_of (Var y));
+          Return (Var n);
+        ];
+    ];
+  [%expect {| Mem Lint, in f: y/3 is read after it's dropped |}]
+
+let%expect_test "Mem Lint: a struct's slot kept, the rest dropped" =
+  let s = v 1 "s" (Struct (0, true))
+  and x = v 2 "x" Boxed
+  and y = v 3 "y" Boxed in
+  (* `$start`'s one parameter, its evidence, so the whole program passes *)
+  lint ~structs:[ line ]
+    [
+      fn ~params:[ v 9 "ev" Ev ]
+        [
+          Let (x, alloc);
+          Let (s, Make_struct [ Var x; Int 1L ]);
+          Let (y, Struct_get (Var s, 0));
+          Free (Var s, [ (0, Var y) ]);
+          Drop (Var y);
+          Return (Int 0L);
+        ];
+    ];
+  [%expect {| ok |}]
+
+let%expect_test "Mem Lint: an array of structs that hold objects" =
+  let s = v 1 "s" (Struct (0, true))
+  and x = v 2 "x" Boxed
+  and a = v 3 "a" Boxed in
+  lint ~structs:[ line ]
+    [
+      fn
+        [
+          Let (x, alloc);
+          Let (s, Make_struct [ Var x; Int 1L ]);
+          Let (a, Alloc_array { elem = Struct (0, true); elems = [ Var s ]; desc = None });
+          Drop (Var a);
+          Return (Int 0L);
+        ];
+    ];
+  [%expect {| Mem Lint, in f: an array of Struct0c |}]
+
+let%expect_test "Mem Lint: a struct counted that holds no object" =
+  let s = v 1 "s" (Struct (0, false)) and x = v 2 "x" Boxed in
+  lint ~structs:[ line ]
+    [ fn [ Let (x, alloc); Let (s, Make_struct [ Var x; Int 1L ]); Return (Int 0L) ] ];
+  [%expect {| Mem Lint, in f: Struct0 is counted as a struct with objects |}]
 
 (* ---- what isn't in the subset yet ---- *)
 

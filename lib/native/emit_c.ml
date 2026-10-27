@@ -32,7 +32,7 @@ let rec ctype (l : layout) =
   | Ev -> "const ren_ev*"
   | Block -> "ren_block"
   | Ptr -> "void*"
-  | Struct n -> sprintf "ren_struct_%d" n
+  | Struct (n, _) -> sprintf "ren_struct_%d" n
 
 let zero (l : layout) =
   match l with
@@ -42,7 +42,7 @@ let zero (l : layout) =
   | Boxed | Desc | Cell _ | Ev | Ptr | Token -> "NULL"
   | Word _ -> "(ren_val){0}"
   | Block -> "(ren_block){0}"
-  | Struct n -> sprintf "(ren_struct_%d){0}" n
+  | Struct (n, _) -> sprintf "(ren_struct_%d){0}" n
 
 (* [s] as a C string literal: a byte that isn't printable ASCII as an
    octal escape, and `?` escaped, so nothing reads as a trigraph. *)
@@ -106,6 +106,8 @@ let atom (x : atom) =
   | Bool b -> if b then "true" else "false"
   | Unit -> "((ren_unit)0)"
   | Enum_tag t -> sprintf "((uint32_t)%d)" t
+  (* a [Nullable] struct's first constructor: a tag no type has *)
+  | Scalar_ctor t when t < 0 -> "ren_box(UINT32_MAX)"
   | Scalar_ctor t -> sprintf "ren_box(%d)" t
   | Lit n -> sprintf "((ren_obj*)&ren_lit_%d)" n
   | Desc_lit n -> sprintf "((ren_obj*)&ren_desc_%d)" n
@@ -148,10 +150,28 @@ let site (s : site) =
   sprintf "&ren_site_%d"
     (Option.value (Hashtbl.find_opt site_names s.sid) ~default:s.sid)
 
-(* The number of fields of each of the program's structs, by its
-   number: set by [program], for the C it writes. *)
-let struct_sizes = ref [||]
-let struct_words n = max 1 !struct_sizes.(n)
+(* The program's structs, by number: set by [program], for the C it
+   writes. *)
+let structs : strukt array ref = ref [||]
+let struct_words n = max 1 (List.length !structs.(n).sfields)
+
+(* The slots of a value [x] of a counted struct that hold objects, but
+   those in [kept]: what counting it counts (Koka's [genDupDropValue],
+   Backend/C/FromCore.hs:1048). A slot of a constructor without a field
+   there holds a scalar, which [ren_dup] and [ren_drop] skip. *)
+let struct_objects ?(kept = []) (l : layout) c =
+  match l with
+  | Struct (n, true) ->
+      List.filter_map
+        (fun (i, l) ->
+          if is_object l && not (List.mem_assoc i kept) then
+            Some (sprintf "%s.s[%d].o" c i)
+          else None)
+        (List.mapi (fun i l -> (i, l)) !structs.(n).sfields)
+  | _ -> bug "a struct counted that holds no object"
+
+let is_struct (x : atom) =
+  match atom_layout x with Struct _ -> true | _ -> false
 
 (* The variables of the function being written whose objects are in its
    frame (stack.ml, [Mem.fn.stack]): set by [fn]. *)
@@ -226,7 +246,7 @@ let runtime rt args site_arg =
   match rt with
   | Array_len -> sprintf "ren_array_len(%s)" (a 0)
   (* an array of structs: each element its words, a stride the C knows *)
-  | Array_get (Struct n) ->
+  | Array_get (Struct (n, _)) ->
       sprintf "(*(ren_struct_%d*)ren_array_slots_k(%s, %s, %d, %s))" n (a 0)
         (a 1) (struct_words n) (site ())
   | Array_set (Struct _) ->
@@ -234,7 +254,7 @@ let runtime rt args site_arg =
         (site ())
   | Array_push (Struct _) ->
       sprintf "ren_array_push_slots(%s, %s.s)" (a 0) (a 1)
-  | Array_set_taking (Struct n) ->
+  | Array_set_taking (Struct (n, _)) ->
       sprintf "ren_array_set_slots_taking_k(%s, %s, %s.s, %d, %s)" (a 0) (a 1)
         (a 2) (struct_words n) (site ())
   | Array_push_taking (Struct _) ->
@@ -271,14 +291,14 @@ let runtime rt args site_arg =
   | Array_data -> sprintf "((void*)ren_elems(%s))" (a 0)
   (* a buffer hoist.ml found: never of [Word]s, so whether its elements
      are counted is the layout's *)
-  | Buf_get (Struct n) ->
+  | Buf_get (Struct (n, _)) ->
       sprintf "(*(ren_struct_%d*)ren_buf_slots(%s, %s, %s, %d, %s))" n (a 0)
         (a 1) (a 2) (struct_words n) (site ())
   | Buf_get l ->
       of_val l
         (sprintf "ren_buf_get%s(%s, %s, %s, %s)" (buf_suffix l) (a 0) (a 1)
            (a 2) (site ()))
-  | Buf_set (Struct n) ->
+  | Buf_set (Struct (n, _)) ->
       sprintf "ren_buf_set_slots(%s, %s, %s, %s.s, %d, %s)" (a 0) (a 1) (a 2)
         (a 3) (struct_words n) (site ())
   | Buf_set l ->
@@ -292,7 +312,7 @@ let runtime rt args site_arg =
         (to_val (List.nth args 3))
         (site ())
   | Buf_check -> sprintf "ren_buf_check(%s, %s, %s)" (a 0) (a 1) (site ())
-  | Array_reserve (Struct n) ->
+  | Array_reserve (Struct (n, _)) ->
       sprintf "ren_array_reserve(%s, false, %d)" (a 0) (struct_words n)
   | Array_reserve (Word _) ->
       sprintf "ren_array_reserve(%s, ren_desc_counted(%s), 0)" (a 0) (a 1)
@@ -375,6 +395,13 @@ let rhs (r : rhs) =
   | Tag_of x -> (
       match atom_layout x with
       | Enum -> sprintf "((int64_t)%s)" (atom x)
+      | Struct (n, _) -> (
+          match !structs.(n).skind with
+          | Tagged -> sprintf "%s.s[0].i" (atom x)
+          | Nullable (none, some) ->
+              sprintf "(%s.s[0].o == ren_box(UINT32_MAX) ? %d : %d)" (atom x)
+                none some
+          | Product -> bug "the tag of a record or a tuple")
       | _ -> sprintf "ren_tag(%s)" (atom x))
   | Field (x, n, _) | Struct_get (x, n) ->
       failwith (sprintf "bug: emit_c: a field %s.%d outside a Let" (atom x) n)
@@ -539,7 +566,7 @@ let rec stmt o d (s : stmt) =
         | None -> string_of_bool (is_object elem)
       in
       match elem with
-      | Struct n ->
+      | Struct (n, _) ->
           line
             (sprintf "ren_obj* %s = ren_alloc_array_n(%d, %d);" (var v)
                (List.length elems) (struct_words n));
@@ -631,6 +658,17 @@ let rec stmt o d (s : stmt) =
       line (sprintf "%s %s = %s;" (ctype v.layout) (var v) (zero v.layout))
   | Set (v, x) -> line (sprintf "%s = %s;" (var v) (atom x))
   | Store (v, x) -> line (sprintf "*%s = %s;" (var v) (atom x))
+  (* a struct: each object it holds *)
+  | (Dup x | Drop x | Free (x, _)) when is_struct x ->
+      let what, kept =
+        match s with
+        | Dup _ -> ("ren_dup", [])
+        | Free (_, kept) -> ("ren_drop", kept)
+        | _ -> ("ren_drop", [])
+      in
+      List.iter
+        (fun o -> line (sprintf "%s(%s);" what o))
+        (struct_objects ~kept (atom_layout x) (atom x))
   | Dup x -> line (sprintf "ren_dup(%s);" (atom x))
   | Drop x when framed x -> line (sprintf "ren_stack_drop(%s, 0u);" (atom x))
   | Drop x -> line (sprintf "ren_drop(%s);" (atom x))
@@ -1217,13 +1255,13 @@ let program ?(restrict = false) ~(site_pieces : site -> Diag.piece list)
        (braces
           (match p.tags with [] -> [ "NULL" ] | ts -> List.map c_string ts)));
   static_types add p.descs p.decls;
-  struct_sizes := Array.of_list (List.map List.length p.structs);
-  (* each struct, a word for each field, as an array of structs keeps it *)
+  structs := Array.of_list p.structs;
+  (* each struct, a word for each slot, as an array of structs keeps it *)
   List.iteri
-    (fun n fields ->
+    (fun n st ->
       add
         (sprintf "typedef struct { ren_val s[%d]; } ren_struct_%d;\n"
-           (max 1 (List.length fields))
+           (max 1 (List.length st.sfields))
            n))
     p.structs;
   List.iter
@@ -1281,7 +1319,12 @@ let program ?(restrict = false) ~(site_pieces : site -> Diag.piece list)
   if is_object p.start_result then add "  ren_drop(r);\n";
   List.iter
     (fun (v : value) ->
-      if is_object v.vlayout then add (sprintf "  ren_drop(%s);\n" v.vname))
+      match v.vlayout with
+      | Struct (_, true) ->
+          List.iter
+            (fun o -> add (sprintf "  ren_drop(%s);\n" o))
+            (struct_objects v.vlayout v.vname)
+      | l -> if is_object l then add (sprintf "  ren_drop(%s);\n" v.vname))
     (List.rev p.values);
   add "}\n\n";
   add "int main(void) {\n";

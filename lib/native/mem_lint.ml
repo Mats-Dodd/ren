@@ -29,7 +29,7 @@ type env = {
   fns : (string, fn) Hashtbl.t;
   values : (string, layout) Hashtbl.t;
   ndescs : int;
-  structs : layout list array;  (** each [Struct]'s fields' layouts *)
+  structs : strukt array;  (** each [Struct], by its number *)
   fn : fn;  (** the function being checked *)
   defined : Ids.t;  (** the variables in scope here *)
   seen : (int, unit) Hashtbl.t;  (** every variable defined so far *)
@@ -39,6 +39,12 @@ type env = {
 }
 
 let fail env msg = failwith (sprintf "Mem Lint, in %s: %s" env.fn.name msg)
+
+(* The program's [k]-th struct. *)
+let struct_of env k =
+  if k < 0 || k >= Array.length env.structs then
+    fail env (sprintf "a struct %d, which isn't in the program" k);
+  env.structs.(k)
 
 let atom_layout (x : atom) : layout =
   match x with
@@ -190,6 +196,7 @@ let rhs env (r : rhs) : layout =
   | Tag_of x ->
       (match atom env x with
       | Enum | Boxed -> ()
+      | Struct (k, _) when (struct_of env k).skind <> Product -> ()
       | l -> fail env (sprintf "the tag of %s" (show_layout l)));
       Int
   | Field (x, n, size) ->
@@ -227,7 +234,9 @@ let rhs env (r : rhs) : layout =
       List.iter (operand env "a field's descriptor" Desc) words;
       Boxed
   | Alloc_array { elem; elems; desc } ->
-      if not (wordable elem || match elem with Struct _ -> true | _ -> false)
+      (* an array's elements are counted as words, or never: a struct that
+         holds an object is never one *)
+      if not (wordable elem || match elem with Struct (_, c) -> not c | _ -> false)
       then fail env (sprintf "an array of %s" (show_layout elem));
       List.iter (operand env "an array's element" elem) elems;
       (match (elem, desc) with
@@ -353,8 +362,8 @@ let rhs env (r : rhs) : layout =
       Unit
   | Struct_get (x, n) -> (
       match atom env x with
-      | Struct k when k >= 0 && k < Array.length env.structs -> (
-          match List.nth_opt env.structs.(k) n with
+      | Struct (k, _) -> (
+          match List.nth_opt (struct_of env k).sfields n with
           | Some l -> l
           | None -> fail env (sprintf "field %d of a struct of fewer" n))
       | l -> fail env (sprintf "a struct's field read from %s" (show_layout l)))
@@ -378,11 +387,21 @@ let rec stmt env (s : stmt) : env =
                    (show_layout l)))
       | Make_struct xs -> (
           match v.layout with
-          | Struct k
-            when k >= 0
-                 && k < Array.length env.structs
-                 && List.length env.structs.(k) = List.length xs ->
-              List.iter2 (operand env "a struct's field") env.structs.(k) xs
+          | Struct (k, c)
+            when List.length (struct_of env k).sfields = List.length xs ->
+              let st = struct_of env k in
+              List.iter2 (operand env "a struct's field") st.sfields xs;
+              (* it's counted if and only if a slot holds an object *)
+              if c <> List.exists is_object st.sfields then
+                fail env
+                  (sprintf "%s is counted as a struct %s objects"
+                     (show_layout v.layout)
+                     (if c then "without" else "with"));
+              (match (st.skind, st.sfields) with
+              | Product, _ -> ()
+              | Tagged, Int :: _ -> ()
+              | Nullable _, [ Boxed ] -> ()
+              | _ -> fail env "a struct of a sum kept wrong")
           | l ->
               fail env
                 (sprintf "a struct made as %s, %s" (show_var v) (show_layout l))
@@ -410,7 +429,9 @@ let rec stmt env (s : stmt) : env =
             (sprintf "a store into %s, which is %s" (show_var v) (show_layout l)));
       env
   | Free (x, kept) ->
-      operand env "what's freed" Boxed x;
+      (match atom env x with
+      | Struct (_, true) -> ()
+      | _ -> operand env "what's freed" Boxed x);
       kept_fields env kept;
       env
   | Free_token x ->
@@ -418,7 +439,8 @@ let rec stmt env (s : stmt) : env =
       env
   | Dup x | Drop x ->
       let l = atom env x in
-      if not (is_object l) then
+      if not (is_object l || match l with Struct (_, c) -> c | _ -> false)
+      then
         fail env
           (sprintf "%s is %s, which isn't an object, but is counted"
              (show_atom x) (show_layout l));
@@ -595,6 +617,7 @@ let rc_counted env (v : var) =
   match v.layout with
   | Word n -> List.mem_assoc n env.rfn.words
   | Boxed | Desc -> true
+  | Struct (_, c) -> c
   | _ -> false
 
 let get m k = match IM.find_opt k m with Some x -> x | None -> 0
@@ -1046,11 +1069,16 @@ let rc_let env st (v : var) (r : rhs) =
         match bundle_of st x with
         | Some b -> { st with kind = IM.add b B_static st.kind }
         | None -> st)
-  | Field (x, _, _) -> (
+  | Field (x, _, _) | Struct_get (x, _) -> (
       read env st x;
       match bundle_of st x with
       | Some p -> fresh_var env st v ~count:0 (B_part p)
       | None -> fresh_var env st v ~count:0 B_static)
+  (* a struct takes what it holds *)
+  | Make_struct xs ->
+      List.iter (read env st) xs;
+      let st = List.fold_left (fun st x -> take env st "given away" x) st xs in
+      fresh_var env st v B_owned
   | Load c -> (
       match c.layout with
       | Cell l when (not (counted l)) || l = Desc ->

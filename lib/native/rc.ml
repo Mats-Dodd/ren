@@ -425,7 +425,14 @@ let tracked g =
 
 (* Whether a group owns its reference where it's made. *)
 let owner g = g.kind = Owned || g.snap
+let is_struct (l : layout) = match l with Struct _ -> true | _ -> false
 let parent g = match g.kind with Part (p, _) | View p -> Some p | _ -> None
+
+(* Whether a value of this layout is counted as itself, not through a
+   descriptor: an object, or a struct that holds one, counted as the
+   objects in it are. *)
+let direct (l : layout) =
+  is_object l || match l with Struct (_, c) -> c | _ -> false
 
 (* The callee of a call, by its C name. *)
 let callee fi name =
@@ -506,7 +513,8 @@ let analyze fns (f : fn) : info =
         | Let (v, r) -> (
             match r with
             | Atom x | To_word x | Of_word (x, _) -> same v x
-            | Field (Var x, slot, _) when not (changes v) ->
+            | (Field (Var x, slot, _) | Struct_get (Var x, slot))
+              when not (changes v) ->
                 let gx = group fi x in
                 if gx.kind = Uncounted then define v Uncounted
                 else child v (Part (gx.gid, slot)) gx
@@ -554,12 +562,12 @@ let analyze fns (f : fn) : info =
       let own (v : var) =
         match v.layout with
         | Word n -> List.mem_assoc n f.words
-        | l -> is_object l
+        | l -> direct l
       in
       let renamed (v : var) = own v && not (Hashtbl.mem results v.id) in
       g.cvar <-
         (match
-           List.find_opt (fun (v : var) -> is_object v.layout) g.members
+           List.find_opt (fun (v : var) -> direct v.layout) g.members
          with
         | Some v -> Some v
         | None -> (
@@ -602,7 +610,7 @@ let count_var_layout fi (v : var) ~dup : stmt list =
             (if dup then Dup_word (Var v, Var d) else Drop_word (Var v, Var d));
           ]
       | None -> bug "a cell of a word with no descriptor")
-  | l when is_object l -> [ (if dup then Dup (Var v) else Drop (Var v)) ]
+  | l when direct l -> [ (if dup then Dup (Var v) else Drop (Var v)) ]
   | _ -> []
 
 (* ---- uses ---- *)
@@ -656,6 +664,7 @@ let operands fi (s : stmt) : atom list * atom list =
         in
         (List.map snd o, List.map snd b)
     | Reset (x, _) -> ([ x ], [])
+    | Make_struct xs -> (xs, [])
     | r -> ([], rhs_atoms r)
   in
   match s with
@@ -1025,6 +1034,18 @@ let rec drop_tree pl (g : group) (t : dtree) : stmt list =
   else
     match (t.parts, t.nested, count_var g) with
     | [], [], _ -> count fi g ~dup:false
+    (* a struct is always its own: it drops the slots not kept, and the
+       nested ones are dropped the same way in turn *)
+    | _, _, Some cv when is_struct cv.layout ->
+        let kept =
+          List.map (fun (n, v) -> (n, Var v)) t.parts
+          @ List.map (fun (n, (v : var), _) -> (n, Var v)) t.nested
+        in
+        Free (Var cv, kept)
+        :: List.concat_map
+             (fun (_, (v : var), sub) ->
+               sub.incs @ drop_tree pl (group fi v) sub)
+             t.nested
     | _, _, Some cv when cv.layout = Boxed ->
         let u = fresh pl "$unique" Bool in
         let kept =
@@ -1165,7 +1186,7 @@ and place_stmt pl cx (s : stmt) (after : Ids.t) : stmt list * Ids.t =
      the program only borrows, a field say, owns a reference of its own *)
   let borrowed_def =
     match s with
-    | Let (v, (Field _ | Load _ | Global _ | Env_get _)) -> (
+    | Let (v, (Field _ | Struct_get _ | Load _ | Global _ | Env_get _)) -> (
         match Hashtbl.find_opt fi.group_of v.id with
         | Some ({ kind = Owned; _ } as g) when g.gid = v.id -> Some g
         | _ -> None)

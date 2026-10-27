@@ -1,0 +1,19 @@
+// A panic while small values (to_mem.ml, [small]) hold objects: an
+// `Option` of a string and a record of one, live where an index is out
+// of bounds. Native and `ren run` panic alike, at the same place.
+// build.t runs it under the sanitizers, in both builds.
+
+type Line = { item: Str, qty: Int }
+
+fn nth(xs: Array<Str>, i: Int) -> Option<Str> =
+  if i < 0 then None else Some(xs[i])
+
+fn main() uses Console =
+  let xs = ["a", "bb", "ccc"]
+  var l = Line { item: "start", qty: 0 }
+  for i in 0..5
+    match nth(xs, i)
+      Some(s) => l = Line { item: l.item.concat(s), qty: l.qty + i }
+      None => print("none")
+    print(l.item)
+  print(l.qty)

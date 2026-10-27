@@ -2336,3 +2336,56 @@ token's memory when reuse had given its `Alloc` one, which the caller
 then never freed. The frame's version gives the token back and builds
 in the frame (emit_c.ml).
 
+
+**Small values are values** (to_mem.ml, [small]), in release builds.
+Step 5's structs held only scalars; now a record or a tuple of at most
+four fields, or a sum that isn't recursive with a tag and at most three
+slots, is a `Struct` too when each field is a scalar or an object, and
+a copied record of scalars still is however many fields it has. A sum
+keeps its tag in slot 0 and its constructors' fields in the slots
+after, shared between constructors where their layouts are the same,
+as Koka's value types share their scan fields (Kind/Repr.hs:150-170);
+a slot a constructor has no field in holds a scalar. A sum of two
+constructors, one without fields and one with an object, is that
+object or a value no object or constructor is, `Scalar_ctor (-1)`
+(`ren_box(UINT32_MAX)`), Koka's `DataAsMaybe` (Core/Core.hs:533):
+`Option<Str>` is one word. A type is recursive if its declaration
+reaches itself through its fields' types, whatever their arguments,
+and is never a small value, as in Koka (Kind/Repr.hs:66); so `List`
+stays boxed, and `Option<List>` is a pointer that may be none.
+
+A struct that holds an object is `Struct (n, true)`, counted: `Dup` and
+`Drop` of it count each object in it, and `Free` of it drops the slots
+it doesn't keep, with no question of uniqueness, since a struct is
+always its own (Koka's `genDupDropValue`, Backend/C/FromCore.hs:1048).
+Perceus counts it as it does an object: `Make_struct` takes its slots,
+as `Alloc` takes its fields; `Struct_get` is a part, borrowed while the
+struct lives; and where a struct dies with parts still used, it's
+freed keeping them, so `let (s, k) = pick(xs, i)` counts nothing. Mem
+Lint checks it the same way, path by path, and that a struct is
+counted if and only if a slot holds an object. Reuse never resets a
+struct, and stack.ml treats an object put in one as stored.
+
+A struct is never a field of another, nor a word, nor what a
+descriptor describes, nor, if counted, an array's element, whose
+elements the runtime counts as words or not at all: a type whose value
+would be one is boxed, as before ([Demote]). Boxing one can make a type
+that held it a struct, which a later pass of compiling may box in
+turn; each boxes types none before did, so it ends. So `==` and `show`
+of a small value box its type, and so does an option of an option,
+whose inner one is a field. Debug builds don't make small values: the
+types stay boxed there, as they were.
+
+bench/values.ren, under the sanitizers in build.t in both builds and
+both countings, has an `Option` of a string, a `Result`, a sum of
+shared slots built in a loop, a record and a tuple of strings taken
+apart, changed a field at a time, through `inout` and by a block that
+captures one, an associated value, and each kind boxed; values_panic
+panics with them alive. Associated values that are structs drop their
+objects at exit, as boxed ones do.
+
+Measured (bench/native/RESULTS.md, "Small values and packed fields"):
+rbtree's peak memory 203.2 MB to 169.6 MB, 1.25× Rust's, on 9% fewer
+cycles; H8's four kernels allocate nothing without stack.ml's frames,
+at the cycles the frames gave them, so the frames add nothing
+measurable on top; the rest of the H7 set is unchanged.
