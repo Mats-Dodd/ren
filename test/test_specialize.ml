@@ -279,3 +279,29 @@ let%expect_test "Core Lint: a cell parameter of a function as it's written" =
       match f.origin with Lifted_op _ -> { f with origin = Written } | _ -> f);
   [%expect
     {| Core Lint: in `counter.next`, at test.ren:6:3: the parameter `$n` is a cell, in a function as written |}]
+
+let%expect_test "a copy at a type its module doesn't import" =
+  (* the prelude's `sum`, copied at `money.Money`: Core Lint checks the
+     prelude's copy seeing money's interface, where `Money` has a `zero`
+     (examples/bank's release build) *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import money.{Money}
+fn main() uses Console =
+  print([Money.cents(3), Money.cents(4)].sum().in_cents())
+|}
+      );
+      ( "money.ren",
+        {|
+pub type Money = opaque Int with numeric
+  pub fn cents(n: Int) -> Money = n
+  pub fn in_cents(self) -> Int = self
+|}
+      );
+    ];
+  [%expect {|
+    7
+    ()
+    |}]

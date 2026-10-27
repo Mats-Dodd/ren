@@ -518,9 +518,16 @@ let specialize ?lint ?budget (modules : checked list) =
   let specialized, stats =
     pass "specialize" (fun () -> Specialize.program ?budget linked)
   in
+  (* a copy is in its original's module but at the types of the call that
+     asked for it, which may be another module's that this one never
+     imports: the prelude's `sum` at a `money.Money`. So each module is
+     checked seeing every module's interface, its own imports last, so
+     what it does import it sees as it did. *)
+  let everyone = List.concat_map (fun c -> c.reachable) modules in
   List.iter2
     (fun imports m ->
-      pass "lint" (fun () -> Core_lint.program ~imports ~linked:specialized m))
+      pass "lint" (fun () ->
+          Core_lint.program ~imports:(everyone @ imports) ~linked:specialized m))
     imports specialized;
   (specialized, stats)
 
