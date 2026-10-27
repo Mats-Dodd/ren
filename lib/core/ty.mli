@@ -6,8 +6,7 @@ type mode = Ast.mode = Read | Inout
 
 type ty =
   | Con of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
-  | Fun of param list * ty * row * row * lams
-      (** params, result, errors, uses, and its lambda set *)
+  | Fun of param list * ty * row * row  (** params, result, errors, uses *)
   | Var of int
       (** a type variable. In a scheme, a generic one, numbered by first
           appearance; in a type declaration, the declaration's parameter at that
@@ -42,15 +41,6 @@ and row = {
    path written in full ([dep_label]). *)
 and label = { name : string; payload : ty list }
 
-(* A function type's lambda set: the identities of the lambdas and
-   top-level functions known to flow to it, sorted, and the lambda-set
-   variable that stands for the rest, numbered apart from type and row
-   variables. A set is always open. Hidden from every message and from
-   `ren types` (see ty.ml). In canonical form [lvar] is [Some n]; [None]
-   is a set nothing else shares, in a type written in a declaration,
-   which [canonical] numbers. *)
-and lams = { ids : string list; lvar : int option }
-
 (* A function's type, for every choice of its variables. [names] are the
    names its variables were declared with, like the `T` of `fn id<T>`.
    [reqs] are what it needs of its variables, [(0, "eq")] for variable 0
@@ -68,10 +58,9 @@ type scheme = {
 (* What one use of a scheme picks for its variables, its type arguments:
    the n-th of [tys] for [Var n], and the n-th of [rows] for row variable
    [n], which stands for that row's labels, added to the scheme's, and its
-   tail, and the n-th of [lams] for lambda-set variable [n], the same way.
-   Typed Core carries them on each use of a top-level function
+   tail. Typed Core carries them on each use of a top-level function
    (core.ml). *)
-type args = { tys : ty list; rows : row list; lams : lams list }
+type args = { tys : ty list; rows : row list }
 
 (* The prelude's types: [Int], [Bool], [Unit], [Str] and [Array<t>]. *)
 val int : ty
@@ -106,22 +95,9 @@ val impl : ?over:bool -> ?fails:row -> Path.t list -> row -> ty
    and what it needs. *)
 val impl_parts : ty -> (Path.t list * row) option
 
-(* A lambda set of its own, for a function type written in a
-   declaration. *)
-val any_lams : lams
-
-(* The identity in a lambda set of a top-level function, a member or an
-   intrinsic, by its path, and of the n-th lambda of a top-level function,
-   counting from 1, `main.main#2`. *)
-val global_id : Path.t -> string
+(* The name of the n-th lambda of a top-level function, counting from 1,
+   `main.main#2`, which Lower gives its code. *)
 val lambda_id : Path.t -> int -> string
-
-(* The lambda-set variables in a type, in the order they appear. *)
-val lam_vars : ty -> int list
-
-(* A type with every lambda set [any_lams]: the type without them, to
-   compare by what can be written. *)
-val without_lams : ty -> ty
 
 (* The label of the dependency declared at a path, `Clock` or
    `shop/store.Users`, and the path back from a label. *)
@@ -133,22 +109,15 @@ val sort_labels : label list -> label list
 
 (* The type arguments that give back a canonical type itself, the ones
    a function is used at its own type with: [Var n] for each type
-   variable, for each row variable a row of no labels ending in it, and
-   for each lambda-set variable an empty set ending in it. *)
+   variable, and for each row variable a row of no labels ending in it. *)
 val own_args : ty -> args
 
 (* A scheme with its variables renumbered by where they first appear,
-   reading left to right, type, row and lambda-set variables separately,
-   and its rows' labels and lambda sets' identities sorted. A lambda set
-   of its own ([any_lams]) gets a variable of its own. Its [names],
+   reading left to right, type and row variables separately, and its
+   rows' labels sorted. Its [names],
    [reqs] and [row_reqs] follow their variables, and those of a variable
    the type doesn't have are dropped. *)
 val canonical : scheme -> scheme
-
-(* A scheme with each of its lambda sets one of its own, numbered apart,
-   in canonical form: what an interface states of a function, whose
-   lambda sets inference finds from bodies. *)
-val forget_lams : scheme -> scheme
 
 (* ---- printing ---- *)
 
@@ -161,15 +130,9 @@ type printer
 (* A printer for types of scheme [s], which gives its variables their
    declared names. [names] writes a type's name as the module it's shown
    in would (Resolve.type_name). Row tails are hidden unless [show_tail]
-   picks them, by number, and then print as `..e` or `..d`. Lambda sets
-   are hidden unless [show_lams], which only a debug printer passes, and
-   then print after the function's effects, `[main.inc | ..l0]`. *)
+   picks them, by number, and then print as `..e` or `..d`. *)
 val printer :
-  ?show_tail:(int -> bool) ->
-  ?show_lams:bool ->
-  names:(Path.t -> string) ->
-  scheme ->
-  printer
+  ?show_tail:(int -> bool) -> names:(Path.t -> string) -> scheme -> printer
 
 (* Replace the declared names the printer knows, by variable, as the
    [names] of a scheme. types.ml adds to them as it converts types for a
@@ -199,10 +162,6 @@ val show_row :
 
 (* An error tag and its payload's types, `Short(Int, Money)`. *)
 val show_label : printer -> label -> string
-
-(* A lambda set, with a leading space, ` [main.inc | ..l0]`, if the
-   printer shows them; otherwise nothing. *)
-val show_lams : printer -> lams -> string
 
 (* A function's `! errors` and `uses deps`, each with a leading space, or
    nothing for an empty row. *)

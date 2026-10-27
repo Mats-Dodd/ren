@@ -66,7 +66,7 @@ let forced_why env callee expected =
   let rec has_unit t =
     match repr t with
     | TCon (p, args) -> p = Path.prelude "Unit" || List.exists has_unit args
-    | TFun (ps, ret, _, _, _) ->
+    | TFun (ps, ret, _, _) ->
         List.exists (fun (p : param) -> has_unit p.ty) ps || has_unit ret
     | _ -> false
   in
@@ -188,7 +188,7 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
             help = Some help;
           }
   | (Block _ | If (_, _, Some _) | Match _), _ -> branches ()
-  | Lambda (params, body), TFun (eps, eret, _, _, _)
+  | Lambda (params, body), TFun (eps, eret, _, _)
     when List.length eps = List.length params
          && List.for_all2
               (fun (p : Resolved.param) (ep : Types.param) -> p.pmode = ep.mode)
@@ -206,20 +206,20 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
       in
       let errs = fresh_row env.st and uses = fresh_row env.st in
       (* numbered before the lambdas in its body, as when it's inferred *)
-      let lams = lambda_set env cx e.node in
+      name_lambda cx e.node;
       bind_params cx params ps;
       check env
         (lambda_cx cx params ps ~errs ~uses)
         body eret
         ?written:
           (match written with
-          | Some (TFun (_, r, _, _, _)) when is_written r -> Some r
+          | Some (TFun (_, r, _, _)) when is_written r -> Some r
           | _ -> None)
         ~why:
           (explain ~notes:why.notes ?help:why.help
              ?narrowed_help:why.narrowed_help ~labels:why.labels
              ~msg:lambda_produces ());
-      let t = TFun (ps, eret, errs, uses, lams) in
+      let t = TFun (ps, eret, errs, uses) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
   | Handler { deps; over; _ }, t
@@ -346,10 +346,10 @@ and synth env cx (e : expr) : ty =
         List.map (param_type env ~tparams:cx.tparams ~named:cx.named) params
       in
       let errs = fresh_row env.st and uses = fresh_row env.st in
-      let lams = lambda_set env cx e.node in
+      name_lambda cx e.node;
       bind_params cx params ps;
       let tb = infer env (lambda_cx cx params ps ~errs ~uses) body in
-      TFun (ps, tb, errs, uses, lams)
+      TFun (ps, tb, errs, uses)
   | Block (stmts, last) ->
       List.iter (stmt env cx) stmts;
       infer env cx last
@@ -531,11 +531,11 @@ and synth env cx (e : expr) : ty =
                  | None -> false ->
               (* a `finally`'s `try r`: what it passes on is the `with`'s
                  body's error, which the `with` fails with already *)
-              Hashtbl.replace cx.found e.node Unwraps;
+              Hashtbl.replace cx.found e.node Unwrap;
               m.unwrapped <- errs :: m.unwrapped;
               v
           | TErrors errs ->
-              Hashtbl.replace cx.found e.node Unwraps;
+              Hashtbl.replace cx.found e.node Unwrap;
               include_errors env cx ~loc:a.loc ~here:(This "Result")
                 ~sources:
                   (sources_later cx ~this:(function
@@ -690,17 +690,13 @@ and dropped env cx (e : expr) t =
    tells it apart from the type's other operators of its name. *)
 and right_head (o : Iface.op) =
   match o.oscheme.ty with
-  | Fun ([ _; { ty = Con (q, _); _ } ], _, _, _, _) -> Some q
+  | Fun ([ _; { ty = Con (q, _); _ } ], _, _, _) -> Some q
   | _ -> None
 
 (* [t] as a type of the checker's, from a type a declaration writes with
    none of its parameters in it. *)
 and of_decl (t : Ty.ty) =
-  of_ty
-    ~vars:(fun _ -> TError)
-    ~tails:(fun _ -> REmpty)
-    ~lams:(fun _ -> REmpty)
-    t
+  of_ty ~vars:(fun _ -> TError) ~tails:(fun _ -> REmpty) t
 
 (* The operator methods [meth] the type [p] writes. *)
 and op_overloads env p meth =
@@ -979,7 +975,7 @@ and made_of env p rep (b : expr) tb =
   in
   let makes (o : Iface.op) =
     match (o.okind, o.oscheme.ty) with
-    | Function, Fun ([ x ], Con (q, []), _, _, _) ->
+    | Function, Fun ([ x ], Con (q, []), _, _) ->
         o.opub && q = p && x.mode = Read && x.ty = rep
     | _ -> false
   in
@@ -1080,7 +1076,7 @@ and op_method env cx (e : expr) ~onode (a : expr) ta b path =
   Hashtbl.replace cx.nodes onode tm;
   Hashtbl.replace cx.found onode (Method_of path);
   match repr tm with
-  | TFun (self :: ps, ret, _, _, _) -> (
+  | TFun (self :: ps, ret, _, _) -> (
       blame_at cx onode
         ((self.ty, a.loc)
         ::
@@ -1290,7 +1286,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       Hashtbl.replace cx.nodes f.node tm;
       Hashtbl.replace cx.found f.node (Method_of path);
       match repr tm with
-      | TFun (self :: ps, ret, errs, uses, lams) -> (
+      | TFun (self :: ps, ret, errs, uses) -> (
           (* the arguments first, so `&m.set(k, v)` blames the key it's
              given, rather than the map *)
           let given =
@@ -1314,7 +1310,7 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
               ~callee:path
               ~written:(written_params env ~callee:path ~skip:1 tm ps)
               f
-              (TFun (ps, ret, errs, uses, lams))
+              (TFun (ps, ret, errs, uses))
               args
           in
           match (self.mode, changed) with
@@ -1376,7 +1372,7 @@ and blame_at cx node args =
 and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
   let ename = Option.value name ~default:"this" in
   match reveal env.st tf with
-  | TFun (ps, ret, errs, uses, _) ->
+  | TFun (ps, ret, errs, uses) ->
       let n = List.length ps and given = List.length args in
       if n <> given then (
         (* still check the arguments, for errors of their own *)
@@ -1402,8 +1398,7 @@ and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
       let ps = List.map (infer_arg env cx) args in
       let ret = fresh_var env.st in
       let errs = fresh_row env.st and uses = fresh_row env.st in
-      unify_at env f.loc ~found:tf
-        ~expected:(TFun (ps, ret, errs, uses, fresh_row env.st));
+      unify_at env f.loc ~found:tf ~expected:(TFun (ps, ret, errs, uses));
       absorb env cx ~call:e ~ename ~fn:f errs uses;
       ret
   | TError ->
@@ -1528,8 +1523,8 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~written ~expected =
       if ctor_shape env e.loc c ctor (List.map fst args) then
         List.iter2
           (fun (f : Iface.field) (_, (a : expr)) ->
-            check env cx a (field_type env ~tvars f)
-              ?written:(written_field env ~tvars written f)
+            check env cx a (field_type ~tvars f)
+              ?written:(written_field ~tvars written f)
               ~why:(explain ~notes:[ part_of c.name "field" f.fname ] ()))
           ctor.cfields args
       else
@@ -1552,8 +1547,8 @@ and written_args (td : Iface.type_decl) written =
 
 (* The type written for field [f], if it's written: its declared type,
    where [written_args] found what the parameters are, or else [tvars]. *)
-and written_field env ~tvars xs (f : Iface.field) =
-  let ft = field_type env ~tvars:(Option.value xs ~default:tvars) f in
+and written_field ~tvars xs (f : Iface.field) =
+  let ft = field_type ~tvars:(Option.value xs ~default:tvars) f in
   if is_written ft then Some ft else None
 
 (* A record literal: `User { ... }`, or `{ ... }` with its type found
@@ -1572,9 +1567,12 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
     match name with
     | Some { tref = Named p; tloc } -> (
         let td = Hashtbl.find env.types p in
-        match literal_fields td with
-        | Some fs -> Some (td, fs)
-        | None ->
+        match (td.body, record_fields td) with
+        | Dep _, _ ->
+            impl_record env cx e td fields;
+            None
+        | _, Some fs -> Some (td, fs)
+        | _, None ->
             report_rep env td
               (not_a_record ~names:env.names ~test:(tested env td) tloc td);
             None)
@@ -1584,19 +1582,22 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
     | None -> (
         let known =
           Option.bind (known_decl env expected) (fun td ->
-              Option.map (fun fs -> (td, fs)) (literal_fields td))
+              Option.map (fun fs -> (td, fs)) (record_fields td))
         in
         let fits td =
-          match literal_fields td with
+          match record_fields td with
           | Some fs when sorted (field_names fs) = given -> Some fs
           | _ -> None
         in
-        match through_type env ~known ~fits with
-        | Found found -> Some found
-        | Nowhere ->
+        match (known_decl env expected, through_type env ~known ~fits) with
+        | Some ({ body = Dep _; _ } as td), _ ->
+            impl_record env cx e td fields;
+            None
+        | _, Found found -> Some found
+        | _, Nowhere ->
             report env (no_record_fits e.loc);
             None
-        | Several paths ->
+        | _, Several paths ->
             report env (several_records_fit ~names:env.names e.loc paths);
             None)
   in
@@ -1607,8 +1608,6 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
   | Some (td, decl) ->
       let t, tvars = instance env td in
       let written = written_args td written in
-      (* an implementation gives a dependency's operations *)
-      let what = match td.body with Dep _ -> "operation" | _ -> "field" in
       (* a misspelled field is also a missing one; once it's reported, the
          missing ones aren't, as they're likely the same mistake *)
       let unknown = ref false in
@@ -1618,72 +1617,14 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
             List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl
           with
           | Some fd ->
-              let ft = field_type env ~tvars fd in
-              (* a closure whose errors end in a named row, `! ..e`, could
-                 fail with anything, which an operation can't *)
-              let named_errors () =
-                match v.kind with
-                | Var (Local b) -> (
-                    match Option.map repr (Hashtbl.find_opt cx.locals b.id) with
-                    | Some (TFun (_, _, errs, _, _)) -> (
-                        let rec tail r =
-                          match repr_row r with
-                          | RExtend (_, rest) -> tail rest
-                          | RSkol (_, n) -> Some n
-                          | _ -> None
-                        in
-                        match (tail errs, ft) with
-                        | Some n, TFun (_, _, declared, _, _) ->
-                            let declared =
-                              List.map
-                                (fun (l : label) -> l.name)
-                                (fst (row_parts declared))
-                            in
-                            Some
-                              (named_row_help ~var:b.ident.name ~row:n declared)
-                        | _ -> None)
-                    | _ -> None)
-                | _ -> None
-              in
-              let ft =
-                match (t, ft) with
-                | TImpl { needs; _ }, TFun (ps, r, errs, _, lams) ->
-                    (* an operation uses what the implementation needs, and
-                       can fail with less than it's declared to: what more
-                       it fails with is reported once the group is done *)
-                    let declared = fst (row_parts errs) in
-                    (* a lambda's is its own until the group is done (see
-                       [handler]); a function given by name fails with
-                       what it does, which is checked against the
-                       operation here *)
-                    let open_errs =
-                      match v.kind with
-                      | Lambda _ -> fresh_row env.st
-                      | _ -> extend declared (fresh_row env.st)
-                    in
-                    defer env
-                      (Impl_op
-                         {
-                           idep = td.path;
-                           iop = f.name;
-                           ideclared = declared;
-                           ierrs = open_errs;
-                           ivalue = v;
-                           inodes = cx.nodes;
-                           ineeds = Some needs;
-                         });
-                    TFun (ps, r, open_errs, needs, lams)
-                | _ -> ft
-              in
-              let help = Option.map (fun h _ _ -> h) (named_errors ()) in
-              check env cx v ft
-                ?written:(written_field env ~tvars written fd)
+              check env cx v (field_type ~tvars fd)
+                ?written:(written_field ~tvars written fd)
                 ~why:
                   (explain
-                     ~notes:[ part_of (type_name env td.path) what f.name ]
-                     ?help ())
+                     ~notes:[ part_of (type_name env td.path) "field" f.name ]
+                     ())
           | None ->
-              report env (no_such_field ~names:env.names ~what f td.path decl);
+              report env (no_such_field ~names:env.names f td.path decl);
               unknown := true;
               ignore (infer env cx v))
         fields;
@@ -1693,6 +1634,30 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
       if missing <> [] && not !unknown then
         report env (missing_fields ~names:env.names e.loc td.path missing);
       t
+
+(* `Clock { now: fn() => t, ... }`, a record literal of the dependency
+   [td]: an implementation is a handler, which the help writes from the
+   literal, an arm for each operation it gives (deps.md,
+   "Implementations"). Its fields are still checked, for errors of their
+   own. *)
+and impl_record env cx (e : expr) (td : Iface.type_decl) fields =
+  List.iter (fun (_, v) -> ignore (infer env cx v)) fields;
+  let arm ((f : ident), (v : expr)) =
+    match v.kind with
+    | Lambda (ps, body) ->
+        let ps = List.map (fun (p : Resolved.param) -> p.pname.ident.name) ps in
+        let body =
+          match env.source body with
+          | Some s when not (String.contains s '\n') -> s
+          | _ -> "..."
+        in
+        sprintf "%s(%s) => %s" f.name (String.concat ", " ps) body
+    | _ -> f.name ^ "(...) => ..."
+  in
+  report env
+    (impl_record_made e.loc ~dep:(type_name env td.path)
+       ~name:(String.lowercase_ascii td.path.name)
+       (List.map arm fields))
 
 (* `r.f`: the field is found through [r]'s type ([field_access]), which
    has to be known by now, or be the one record type that has a field
@@ -1840,8 +1805,7 @@ and bind_pattern env cx t (p : pattern) =
               check tc;
               if ctor_shape env p.ploc c ctor (List.map (fun _ -> None) ps) then
                 List.iter2
-                  (fun fd sub ->
-                    bind_pattern env cx (field_type env ~tvars fd) sub)
+                  (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
                   ctor.cfields ps
               else unknown ())
       | PTuple ps ->

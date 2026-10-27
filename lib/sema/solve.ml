@@ -56,15 +56,8 @@ let join env ~is_value j =
       { j.jinst with rows = j.jinst.rows @ ends }
       (Hashtbl.find env.globals j.target)
   in
-  (* what flows to the use, its lambda set, isn't what can flow to the
-     function itself (Infer_lookup.own_set) *)
-  let expected =
-    match (repr j.used, repr expected) with
-    | TFun (_, _, _, _, l), TFun (ps, r, e, u, _) -> TFun (ps, r, e, u, l)
-    | _, t -> t
-  in
   match (repr j.used, repr expected) with
-  | TFun ([], used, _, _, _), TFun ([], made, _, _, _) when is_value j.target ->
+  | TFun ([], used, _, _), TFun ([], made, _, _) when is_value j.target ->
       (* an associated value, a function of no parameters (ast.ml), is
          used as its result, which is what's shown *)
       equal env j.jloc ~found:used ~expected:made ~msg
@@ -77,7 +70,7 @@ let join env ~is_value j =
       let deps t = Option.map fst (impl_parts t) in
       let at =
         match (used, made) with
-        | TFun (ps, r, _, _, _), TFun (qs, r', _, _, _)
+        | TFun (ps, r, _, _), TFun (qs, r', _, _)
           when deps r = deps r' && List.length ps = List.length qs ->
             List.find_mapi
               (fun i ((p : param), (q : param)) ->
@@ -501,9 +494,6 @@ let marker env m =
    [extra], errors its dependency doesn't declare, where it's given. *)
 let fails_more env o extra =
   let pr = printer env in
-  let is_lambda (e : Ast.Resolved.expr) =
-    match e.kind with Lambda _ -> true | _ -> false
-  in
   let op = env.names o.idep ^ "." ^ o.iop in
   (* where it fails: the first call or `fail` in the lambda's body
      that brings in one of [extra] (a `try`'s call with its
@@ -511,7 +501,7 @@ let fails_more env o extra =
      lambda *)
   let brings (f : Ast.Resolved.expr) =
     match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
-    | Some (TFun (_, _, errs, _, _)) ->
+    | Some (TFun (_, _, errs, _)) ->
         List.exists (fun (l : label) -> List.mem l.name (row_names errs)) extra
     | _ -> false
   in
@@ -539,7 +529,7 @@ let fails_more env o extra =
            at its end, whatever a closure fails with, is more *)
         let more =
           match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
-          | Some (TFun (_, _, errs, _, _)) -> (
+          | Some (TFun (_, _, errs, _)) -> (
               List.exists (fun n -> n <> l.name) (row_names errs)
               || match row_end errs with RSkol _ -> true | _ -> false)
           | _ -> true
@@ -548,14 +538,6 @@ let fails_more env o extra =
           { try_ = more; call = env.source call; tag = l.name; into = d.name }
     | Fail _, _, [] -> Give_value
     | Fail _, _, d :: _ -> Fail_instead d.name
-    | _, l :: _, ds when not (is_lambda o.ivalue) ->
-        (* a function given by name: there's no inside to map in *)
-        Wrap
-          {
-            given = env.source o.ivalue;
-            tag = l.name;
-            into = (match ds with [] -> None | d :: _ -> Some d.name);
-          }
     | _, _, [] -> Handle_inside
     | _, _, d :: _ -> Map_inside d.name
   in
@@ -572,42 +554,7 @@ let fails_more env o extra =
    be a parameter's, `try f()`, which then can fail with what the
    operation can, not with nothing. One already closed with fewer errors
    than declared is fine as it is: an operation can fail with less. *)
-let impl_op env ~reported o =
-  (* reported once for each record, whose operations share what it needs *)
-  (match o.ineeds with
-  | Some needs
-    when List.mem (Ty.dep_label o.idep) (row_names needs)
-         && not (List.memq needs !reported) -> (
-      (* the call that uses it: one whose callee's type does, outside a
-         `with` that installs it. A type written to need it isn't one *)
-      let label = Ty.dep_label o.idep in
-      let uses (f : Ast.Resolved.expr) =
-        match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
-        | Some (TFun (_, _, _, u, _)) -> List.mem label (row_names u)
-        | _ -> false
-      in
-      let installs (lk : Ast.Resolved.with_link) =
-        match Option.map repr (Hashtbl.find_opt o.inodes lk.knode) with
-        | Some (TImpl i) -> List.mem o.idep i.deps
-        | _ -> false
-      in
-      let rec site (e : Ast.Resolved.expr) =
-        match e.kind with
-        | Call (f, _) when uses f -> Some e
-        | With { items; _ }
-          when List.exists
-                 (fun (it : Ast.Resolved.with_item) ->
-                   List.exists installs it.chain)
-                 items ->
-            None
-        | _ -> List.find_map site (Ast.children e)
-      in
-      match site o.ivalue with
-      | Some call ->
-          reported := needs :: !reported;
-          report env (record_uses_itself call.loc (env.names o.idep))
-      | None -> ())
-  | _ -> ());
+let impl_op env o =
   let pr = printer env in
   let declared n = List.exists (fun (l : label) -> l.name = n) o.ideclared in
   (match
@@ -870,8 +817,7 @@ let solve env ~is_value ~withheld =
     cs;
   List.iter (function Unmarked (c, r) -> unmarked env c r | _ -> ()) cs;
   List.iter (function Marker m -> marker env m | _ -> ()) cs;
-  let reported = ref [] in
-  List.iter (function Impl_op o -> impl_op env ~reported o | _ -> ()) cs;
+  List.iter (function Impl_op o -> impl_op env o | _ -> ()) cs;
   (* what's compared, and what's given to a function that compares it,
      once every type of the group is known *)
   Infer_reqs.decide env cs;

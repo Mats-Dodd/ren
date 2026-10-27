@@ -39,8 +39,12 @@ pub dep Clock =
   instant: fn() -> Instant
   sleep:   fn(d: Duration)
 
-  pub fn frozen(at: Time) -> Clock =
-    Clock { now: fn() => at, instant: fn() => Instant.zero, sleep: fn(_) => () }
+  pub fn frozen(at: Time) -> Clock = frozen_clock(at)
+
+handler frozen_clock(at: Time) for Clock =
+  now() => at
+  instant() => Instant.zero
+  sleep(_) => ()
 ```
 
 - A `dep` lists its **operations** first, then its members, as a sum type
@@ -69,13 +73,10 @@ function's signature, as `&` marks only the thing changed. It never takes
 
 ## Implementations
 
-An implementation is a value of the dependency's type, written one of two
-ways.
-
-**Stateless:** a record literal, like `Clock.frozen` above.
-
-**Stateful:** a `handler`, which can implement several dependencies that
-share one state:
+An implementation is a value of the dependency's type, made by a
+`handler`. One without state only gives its operations, like
+`frozen_clock` above; one with state keeps it in `var`s, and can
+implement several dependencies that share it:
 
 ```ren
 handler counting_rates(rate: Decimal) for Rates, RateCalls =
@@ -98,10 +99,10 @@ handler counting_rates(rate: Decimal) for Rates, RateCalls =
 
 ```
 error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
-   ┌─ fx.ren:12:5
+   ┌─ fx.ren:12:16
    │
-12 │     usd_to: fn(c) => try Http.get_rate(c)
-   │                      ^^^^^^^^^^^^^^^^^^^^ fails with `Timeout`
+12 │   usd_to(c) => try Http.get_rate(c)
+   │                ^^^^^^^^^^^^^^^^^^^^ fails with `Timeout`
    │
    = note: `Rates.usd_to` can fail only with `RateUnavailable`
    = help: map it: `match Http.get_rate(c)` with the arm `fail Timeout => fail RateUnavailable`
@@ -170,17 +171,21 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   `uses Clock,` then `    Console =` on the next line.
 - `with` removes what it installs from the body's `uses`, and adds what its
   items need.
-- An item is an implementation, a chain of them joined by `over`, or a
-  **wrapper**: a function whose last parameter is the body. `with
-  retry(3) in body` is `retry(3, fn() => body)`. A function of one
-  parameter is a wrapper on its own: `with twice in body`. Wrappers go
-  inside everything the `with` installs, and two are chained with
-  `over`, `with retry(3) over timeout(d) in`, the first outermost: two
-  side by side are an error.
-- The body of a wrapper is a lambda, so it marks its own calls, and the
-  `with` passes on what the wrapper fails with, as `try` would:
-  `attempt with retry(3) in try fetch()`. Like any lambda's, it can't
-  change a variable from outside it; it gives back a value instead.
+- An item is an implementation, or a chain of them joined by `over`. A
+  function that runs a block, like `retry`, isn't one: it's called with
+  the block, `try retry(3) fn() => try fetch()`, and written in a `with`
+  it's an error whose help writes that call:
+
+```
+error: `with` installs only handlers
+  ┌─ main.ren:8:10
+8 │     with retry(3) in
+  │          ^^^^^^^^ takes a block
+  = `retry` is a function that runs a block, so it's called with the body as one
+  help: call it: `try retry(3) fn() => ...`
+```
+
+  The `try` is there only when the function can fail.
 
 ## Built in
 
@@ -424,8 +429,8 @@ it's installed holds the one under it: `next.get(id)` is a dependency
 call on that evidence, which the handler's operations keep, so a `with`
 around the call still reaches the one under it, and an operation it
 leaves out is a lambda that makes that call. They're the one exception
-to a closure getting its caller's evidence. A lambda can't call `next`,
-nor can the body of a `with` a wrapper is given: one could be passed to
+to a closure getting its caller's evidence. A lambda can't call `next`:
+one could be passed to
 the implementation under the handler and kept there, and would reach it
 again. Its `finally` is a lambda kept in its instance, which
 the `with` calls when its body ends, with the body's result and a
@@ -451,10 +456,6 @@ stage, or settled something the plan left open:
   named row can still follow, since it can't be an argument, and several
   dependencies are written in parentheses, `Box<(fn() uses Clock,
   Console)>`, as `ren types` prints them.
-- **A wrapper's body can't change a variable from outside it.** It's a
-  lambda, which captures values, so a change would be lost.
-- **The `with` around a wrapper is the wrapper call's `try`.** What the
-  wrapper fails with goes on, as for `try`; the body marks its own calls.
 - **A parameter whose type is written transparent, `f: fn() -> Int` or
   `r: Rates`, and is called or installed inside a `with`, still passes
   everything it uses to the caller**, even what that `with` installs: its
@@ -494,9 +495,7 @@ stage, or settled something the plan left open:
   outside it: reaching the implementation under it is `next`'s, through
   `over`. It's checked on what the handler needs, so an arm can still
   install another `Rates`, even the same handler, `with
-  counting_rates(r) in ...`, around a call that uses one. A record
-  implementation can't either, `Rates { usd_to: fn(c) => Rates.usd_to(c)
-  }`: wrapping is only written with `over`.
+  counting_rates(r) in ...`, around a call that uses one.
 - **A `with` fails with what its handlers' state and `finally` fail
   with,** as the `try` of each: the handler's `fails`, part of its type.
   A public handler writes it, `! DbDown`, after what it implements; a

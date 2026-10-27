@@ -130,24 +130,6 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "a wrapper goes inside everything its with installs" =
-  run
-    {|
-fn timed(body: fn() -> Int) -> Int uses Clock =
-  let n = try body()
-  if Clock.now() == Time.epoch then n else 0
-
-fn main() uses Console =
-  let n =
-    with timed, Clock.frozen(Time.epoch) in
-      5
-  print(n)
-|};
-  [%expect {|
-    5
-    ()
-    |}]
-
 let%expect_test "installing a dependency twice is an error" =
   check_error
     {|
@@ -229,27 +211,6 @@ fn main() -> Int =
        │          ------------------ installs `Users`
        = a `with` installs each dependency once, so its order never matters
        help: put one over the other: `plus(1) over plus(2) over Users`
-    |}]
-
-let%expect_test "two wrappers side by side are an error" =
-  check_error
-    {|
-fn twice(body: fn() -> Int) -> Int = (try body()) * 2
-fn plus(n: Int, body: fn() -> Int) -> Int = (try body()) + n
-
-fn main() -> Int =
-  with twice, plus(1) in
-    5
-|};
-  [%expect
-    {|
-    error: this `with` has two wrappers side by side
-      ┌─ test.ren:5:8
-    5 │   with twice, plus(1) in
-      │        ^^^^^
-      │               ------- and another here
-      = a wrapper wraps the body, so one of two has to be outside the other
-      help: say which wraps which: `twice over plus(1)`
     |}]
 
 let%expect_test "two items that each need the other are an error" =
@@ -432,22 +393,6 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "swapping two wrappers changes which wraps which" =
-  run
-    {|
-fn twice(body: fn() -> Int) -> Int = (try body()) * 2
-fn plus(n: Int, body: fn() -> Int) -> Int = (try body()) + n
-
-fn main() uses Console =
-  print(with twice over plus(1) in 5)
-  print(with plus(1) over twice in 5)
-|};
-  [%expect {|
-    12
-    11
-    ()
-    |}]
-
 let%expect_test "next works in a handler's state" =
   run
     (users
@@ -524,35 +469,6 @@ fn main() uses Console =
        │                              ^^^^^^^^^
        = `next` is the implementation under this one while an operation runs, and a lambda can be called after the operation is done
        help: call it in the operation, and give the lambda what it returns: `let v = next.size(...)`
-    |}]
-
-let%expect_test "the body a wrapper is given can't call next" =
-  check_error
-    {|
-dep Store =
-  size: fn() -> Int
-
-handler base() for Store =
-  size() => 7
-
-fn twice(body: fn() -> Int ! ..e) -> Int ! ..e = try body() + try body()
-
-handler w() over Store =
-  size() =>
-    with twice in next.size()
-
-fn main() uses Console =
-  with w() over base() in
-    print(Store.size())
-|};
-  [%expect
-    {|
-    error: the body of this `with` can't call `next`
-       ┌─ test.ren:11:19
-    11 │     with twice in next.size()
-       │                   ^^^^^^^^^
-       = `with` passes its body to `twice` as a lambda, `fn() => ...`, and `next` is the implementation under this one only while an operation runs
-       help: call it outside the `with`, and give the body what it returns: `let v = next.size(...)`
     |}]
 
 let%expect_test "what a lambda needs of next, the operation gives it" =
@@ -966,26 +882,6 @@ fn main() = 1
        help: declare it `over Users`, and call the one under it through `next`
     |}]
 
-let%expect_test "a record implementation can't use its own dependency" =
-  check_error
-    (users
-   ^ {|
-fn wrapped() =
-  Users { get: fn(id) => Users.get(id) + 1, name: fn(id) => "w" }
-
-fn main() = 1
-|}
-    );
-  [%expect
-    {|
-    error: an implementation of `Users` can't use `Users`
-       ┌─ test.ren:15:26
-    15 │   Users { get: fn(id) => Users.get(id) + 1, name: fn(id) => "w" }
-       │                          ^^^^^^^^^^^^^
-       = its operations run with what's installed outside its `with`, so `Users` here would be another implementation, under it
-       help: write a handler declared `over Users`, which calls the one under it with `next`
-    |}]
-
 let%expect_test "a handler over a dependency is installed with over" =
   check_error
     (users ^ {|
@@ -1037,27 +933,6 @@ fn main() -> Int uses Console =
     15 │   with logged("a") over Clock.frozen(Time.epoch) in
        │                         ^^^^^^^^^^^^^^^^^^^^^^^^
        help: put a `Users` under it
-    |}]
-
-let%expect_test "a wrapper and an implementation don't chain" =
-  check_error
-    (users
-   ^ {|
-fn twice(body: fn() -> Int) -> Int = (try body()) * 2
-
-fn main() -> Int uses Console =
-  with twice over base(1) in
-    Users.get(1)
-|}
-    );
-  [%expect
-    {|
-    error: `twice` is a wrapper, so only another wrapper goes under it, and `base(1)` isn't one
-       ┌─ test.ren:17:19
-    17 │   with twice over base(1) in
-       │                   ^^^^^^^
-       = a wrapper wraps the body, inside everything its `with` installs, and an implementation is installed around it
-       help: write them as two items of the `with`, with a comma
     |}]
 
 (* ---- state that can fail to start ---- *)
@@ -1804,23 +1679,6 @@ fn main() = ()
     10 │   with both() over Users in
        │                    ^^^^^ names only `Users`
        help: write `both() over Logs & Users`
-    |}]
-
-let%expect_test "outer in a record implementation points at over and next" =
-  check_error
-    {|
-fn slow() -> Clock =
-  Clock { now: fn() => outer.now(), instant: fn() => Instant.zero, sleep: fn(_) => () }
-
-fn main() = ()
-|};
-  [%expect
-    {|
-    error: there's no variable named `outer`
-      ┌─ test.ren:2:24
-    2 │   Clock { now: fn() => outer.now(), instant: fn() => Instant.zero, sleep: fn(_) => () }
-      │                        ^^^^^
-      help: a record implementation can't reach the one under it: write a handler declared `over Clock`, and call it through `next`: `next.now(...)`
     |}]
 
 (* ---- an arm that names its dependency (stage 10b) ---- *)

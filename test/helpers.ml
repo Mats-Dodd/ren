@@ -101,8 +101,8 @@ type User = { id: Int, plan: Plan }
    change when that does; which uses are of the same binder still shows.
    They're renumbered before the lines are broken, so how they're broken
    doesn't depend on the old numbers either. [types] prints it typed
-   (Core.fn_sexp), and [lams] with its lambda sets too. *)
-let show_fn ?types ?lams f =
+   (Core.fn_sexp). *)
+let show_fn ?types f =
   let ids = Hashtbl.create 16 in
   let number id =
     match Hashtbl.find_opt ids id with
@@ -139,28 +139,28 @@ let show_fn ?types ?lams f =
     | Atom a -> Atom (atom a)
     | List xs -> List (List.map go xs)
   in
-  Core.render 0 (go (Core.fn_sexp ?types ?lams f))
+  Core.render 0 (go (Core.fn_sexp ?types f))
 
 (* The program lowered to Core (core.ml), one function per line, after
    Core Lint has checked it; [types] prints it typed, as `ren core --types`
-   does, and [lams] with lambda sets, as `ren core --lambdas` does. *)
-let core ?types ?lams src =
+   does. *)
+let core ?types src =
   let src = clean src in
   report src (fun () ->
       List.iter
-        (fun f -> print_endline (show_fn ?types ?lams f))
+        (fun f -> print_endline (show_fn ?types f))
         (Driver.core ~lint:true ~file src).fns)
 
 (* Every module of the program in Core, but the prelude, each after its
-   name; with [lams], with lambda sets. *)
-let core_files ?lams files =
+   name. *)
+let core_files files =
   let files, file, src, load = program files in
   report_files files (fun () ->
       List.iteri
         (fun i (m : Core.program) ->
           if i > 0 then print_newline ();
           print_endline ("-- " ^ m.home);
-          List.iter (fun f -> print_endline (show_fn ?lams f)) m.fns)
+          List.iter (fun f -> print_endline (show_fn f)) m.fns)
         (List.tl (Driver.linked ~lint:true ~load ~file src)))
 
 (* ---- tests ----

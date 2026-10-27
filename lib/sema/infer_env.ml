@@ -28,7 +28,6 @@ type found =
   | Installs_handler of Path.t list
       (** a link that describes a handler of these dependencies, which it makes
           an instance of *)
-  | Wraps  (** a link that's a wrapper, which what's inside it is passed to *)
   | Install_order of int list
       (** at a `with`: the items that install, by their place in it, outermost
           first (handlers.md, "A `with` is a set") *)
@@ -44,12 +43,10 @@ type found =
   | Handles  (** a `match` that handles errors: one with `fail` arms *)
   | Fail_arm
       (** a `fail` arm's pattern, which matches an error rather than a value *)
-  | Unwraps
+  | Unwrap
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
-  | Lambda_id of string
-      (** a lambda, or the body a `with` passes to a wrapper: its identity in
-          lambda sets (Ty.lambda_id), which its type's set has *)
+  | Lambda_id of string  (** a lambda: its name (Ty.lambda_id) *)
   | Builtin_op
       (** at an operator's own node (Ast.Binop), an operator the language does
           itself: on [Int]s or [Float]s, a `with numeric` type's, or an opaque
@@ -218,8 +215,7 @@ and row_due = {
   rwhat : Infer_msg.user;
 }
 
-(* An operation of an implementation, `usd_to: fn(c) => ...` in a `Rates
-   { ... }`: it can fail with fewer errors than its dependency declares,
+(* An operation of a handler, its arm `usd_to(c) => ...`: it can fail with fewer errors than its dependency declares,
    never more (deps.md, "Implementations"). Its errors [ierrs] start as
    [ideclared] with room for more, and once the group is done (when it's
    known what its calls fail with), anything more is reported and the room
@@ -232,9 +228,6 @@ and impl_op = {
   ierrs : row;
   ivalue : expr;
   inodes : (int, ty) Hashtbl.t;
-  ineeds : row option;
-      (** a record implementation's: what it needs, which can't be its own
-          dependency (handlers.md, "`over`") *)
 }
 
 (* A `with` that installs [wdep], at [wloc]: its body uses [wbody], which
@@ -509,12 +502,11 @@ and bound_by = Own_param | Lambda_param | Let_bound
 
 (* Whether the code can call `next` (handlers.md, "`next`"): only while
    one of the handler's operations runs, in its state, an arm or its
-   `finally`, not in a lambda, which can outlive the operation, nor in the
-   body of a `with` that a wrapper, [wrapper], is given, which is one. A
-   lambda that called `next` would keep the evidence where the handler is
+   `finally`, not in a lambda, which can outlive the operation. A lambda
+   that called `next` would keep the evidence where the handler is
    installed, and passed to the implementation under it and kept there,
    would reach it: a cycle (compiler.md, "No cycles"). *)
-and next_at = Next_ok | In_lambda | In_wrapped of string option
+and next_at = Next_ok | In_lambda
 
 (* What the expression being inferred can see. *)
 and ctx = {
@@ -561,9 +553,9 @@ and ctx = {
           cell, here shared by every copy of the [ctx] for the same function or
           lambda. *)
   lambdas : int ref;
-      (** how many lambdas of the top-level function have been met, which
-          numbers each one's identity (Ty.lambda_id): shared by every copy of
-          the [ctx] for the function, its lambdas' included *)
+      (** how many lambdas of the top-level function have been met, which names
+          each one (Ty.lambda_id): shared by every copy of the [ctx] for the
+          function, its lambdas' included *)
   tparams : ty list;  (** what the type parameters in scope stand for *)
   named : (string * row) list;
       (** the rows the function's signature names, `..d`, by name (ast.ml) *)
@@ -603,15 +595,12 @@ let dep_names env r =
    join, and no `with` around it installs it. *)
 let brings c dep = List.mem dep c.own
 
-(* A new lambda's lambda set, the lambda at [node]: its identity, the next
-   of the function it's in (Ty.lambda_id), and a variable for the rest,
-   since where it goes it can meet others. The identity is recorded at
-   [node], for lowering, which gives the lambda it makes the same one. *)
-let lambda_set env cx node =
+(* Name the lambda at [node]: the next of the function it's in
+   (Ty.lambda_id), recorded at [node] for lowering, which gives the
+   lambda's code that name. *)
+let name_lambda cx node =
   incr cx.lambdas;
-  let id = Ty.lambda_id cx.self !(cx.lambdas) in
-  Hashtbl.replace cx.found node (Lambda_id id);
-  extend [ lam id ] (fresh_row env.st)
+  Hashtbl.replace cx.found node (Lambda_id (Ty.lambda_id cx.self !(cx.lambdas)))
 
 (* Leave [c] for the solver, once the group is done. *)
 let defer env c = env.pending <- c :: env.pending

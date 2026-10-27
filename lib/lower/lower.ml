@@ -91,12 +91,11 @@ let targs_of cx id =
   | Some a -> a
   | None -> bug (Printf.sprintf "no type arguments for node %d" id)
 
-(* The identity inference gave the lambda at node [id] (Ty.lambda_id),
-   which its type's lambda set has. *)
+(* The name inference gave the lambda at node [id] (Ty.lambda_id). *)
 let lambda_name cx id =
   match (node cx id).found with
   | Some (Lambda_id name) -> name
-  | _ -> bug (Printf.sprintf "no identity for the lambda at node %d" id)
+  | _ -> bug (Printf.sprintf "no name for the lambda at node %d" id)
 
 (* The descriptors a use at the type arguments [a] is passed (core.ml,
    [desc]), built from the function's own hidden type parameters. *)
@@ -296,14 +295,14 @@ and expr_of cx (e : expr) : C.expr =
       (* used as a value: a lambda that calls it, with the evidence it's
          given where it's called *)
       match ty () with
-      | Fun (ps, ret, _, _, _) as fty ->
+      | Fun (ps, ret, _, _) as fty ->
           let params = List.map (fun (p : Ty.param) -> temp cx "x" p.ty) ps in
           let ev = evidence cx in
           let args = List.map (fun v -> local v e.loc) params in
           here
             (Lambda
                {
-                 name = Ty.global_id (Path.member dep op);
+                 name = Path.full (Path.member dep op);
                  params =
                    List.map (fun var : C.param -> { mode = Read; var }) params;
                  ev;
@@ -363,7 +362,7 @@ and expr_of cx (e : expr) : C.expr =
            (mk (Tag (tag.name, args, payload_descs cx args)) (Errors set) e.loc))
   | Try ({ kind = Match (subject, arms); _ } as m) when handles cx m.node ->
       handle_match cx ~passed:true (ty_of cx m.node) e.loc subject arms
-  | Try a when (node cx e.node).found = Some Unwraps ->
+  | Try a when (node cx e.node).found = Some Unwrap ->
       (* `try r` is `match r { Ok(v) => v, Err(e) => fail e }`. A call in
          [r] that fails passes its error on, as every call does *)
       let r = expr cx a in
@@ -431,7 +430,7 @@ and expr_of cx (e : expr) : C.expr =
   | Lambda (params, body) ->
       let ps =
         match ty () with
-        | Fun (ps, _, _, _, _) -> ps
+        | Fun (ps, _, _, _) -> ps
         | _ -> bug "a lambda whose type isn't a function"
       in
       let params =
@@ -464,7 +463,7 @@ and expr_of cx (e : expr) : C.expr =
       | _ -> bug "a constructor inference didn't find")
   | Record (_, fields) -> (
       match ty () with
-      | Con (p, _) | Impl { deps = [ p ]; _ } ->
+      | Con (p, _) ->
           here
             (Record
                (p, List.map (fun ((f : ident), v) -> (f.name, expr cx v)) fields))
@@ -508,9 +507,7 @@ and expr_of cx (e : expr) : C.expr =
    the order written; then the items are installed in the order inference
    worked out, outermost first, each chain's bottom outermost, each a
    [With] or a [With_handler] whose body sees evidence of its own, which
-   extends what's installed around it; and inside them all, the wrappers,
-   each passed a lambda of what's inside it, which it calls with the
-   evidence it's called with. *)
+   extends what's installed around it. *)
 and with_ cx (e : expr) items body =
   let ty = ty_of cx e.node in
   let order =
@@ -541,44 +538,6 @@ and with_ cx (e : expr) items body =
       made
   in
   let desc = C.describe cx.tys ty in
-  (* the wrappers, each wrapping the next, the last the body *)
-  let rec wraps = function
-    | [] -> expr cx body
-    | (lk : with_link) :: rest -> (
-        let ev = evidence cx and outer = cx.ev in
-        cx.ev <- ev;
-        let b = wraps rest in
-        cx.ev <- outer;
-        let lam =
-          mk
-            (Lambda
-               {
-                 name = lambda_name cx lk.lam;
-                 params = [];
-                 ev;
-                 captures = free b;
-                 body = b;
-               })
-            (ty_of cx lk.lam) b.loc
-        in
-        (* `retry(3) over ...` is `retry(3, fn() => ...)` *)
-        match lk.link.kind with
-        | Call (f, args) ->
-            plain_call cx ~changed:false ~last:lam lk.link f args
-        | _ -> (
-            let f = expr cx lk.link in
-            match f.ty with
-            | Fun (_, r, _, _, _) -> mk (Call (f, [ Value lam ], cx.ev)) r e.loc
-            | _ -> bug "a wrapper whose type isn't a function's"))
-  in
-  let wrappers =
-    List.concat_map
-      (fun (it : with_item) ->
-        match it.chain with
-        | lk :: _ when kind lk = Some Wraps -> it.chain
-        | _ -> [])
-      items
-  in
   (* [inside], with the link [lk] installed around it *)
   let install (lk : with_link) inside =
     let impl =
@@ -601,7 +560,7 @@ and with_ cx (e : expr) items body =
     | _ -> bug "a link of a `with` that isn't an implementation"
   in
   let rec nest = function
-    | [] -> wraps wrappers
+    | [] -> expr cx body
     | idx :: rest ->
         let it : with_item = List.nth items idx in
         let rec chain = function
@@ -677,9 +636,9 @@ and handler cx (e : expr) deps state arms finally =
         List.filter_map
           (fun (q, op, (fty : Ty.ty)) ->
             match fty with
-            | Fun (ps, ret, errs, _, lams) when q = p ->
-                let name = Ty.global_id (Path.member p op) in
-                let fty = Ty.Fun (ps, ret, errs, needs, lams) in
+            | Fun (ps, ret, errs, _) when q = p ->
+                let name = Path.full (Path.member p op) in
+                let fty = Ty.Fun (ps, ret, errs, needs) in
                 let params =
                   List.map (fun (q : Ty.param) -> temp cx "x" q.ty) ps
                 in
@@ -721,7 +680,7 @@ and handler cx (e : expr) deps state arms finally =
           cx.tys <- own;
           Some
             (match (lam.kind, lam.ty) with
-            | Lambda l, Fun (ps, r, errs, uses, lams) ->
+            | Lambda l, Fun (ps, r, errs, uses) ->
                 {
                   lam with
                   kind =
@@ -734,13 +693,7 @@ and handler cx (e : expr) deps state arms finally =
                             (fun (v : C.var) -> v.id <> d.id)
                             l.captures;
                       };
-                  ty =
-                    Fun
-                      ( { mode = Read; ty = C.type_ty } :: ps,
-                        r,
-                        errs,
-                        uses,
-                        lams );
+                  ty = Fun ({ mode = Read; ty = C.type_ty } :: ps, r, errs, uses);
                 }
             | _ -> bug "a `finally` that isn't a lambda")
       | Some _, _ -> bug "a `finally` without the type of its body"
@@ -974,7 +927,7 @@ and call cx ?(changed = false) (e : expr) f args =
         (ty_of cx e.node) e.loc
   | _ -> plain_call cx ~changed e f args
 
-and plain_call cx ~changed ?last (e : expr) f args =
+and plain_call cx ~changed (e : expr) f args =
   let inout (p : expr) ty =
     let binds, pl = place cx p in
     Inout { binds; place = pl; ty; loc = p.loc }
@@ -1003,8 +956,6 @@ and plain_call cx ~changed ?last (e : expr) f args =
           | Ref p when changed_receiver a = None -> inout p (ty_of cx a.node)
           | _ -> Read (expr cx a))
         args
-    (* a wrapper's body, already lowered *)
-    @ List.map (fun l -> Read l) (Option.to_list last)
   in
   let ty = ty_of cx e.node in
   let direct = function
@@ -1356,7 +1307,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
   in
   let ps =
     match scheme.ty with
-    | Fun (ps, _, _, _, _) -> ps
+    | Fun (ps, _, _, _) -> ps
     | _ -> bug "a function whose type isn't a function"
   in
   let params =
@@ -1391,10 +1342,7 @@ let shows (types : Iface.type_decl list) (fns : C.fn_def list) =
           {
             okind = Method;
             oscheme =
-              {
-                ty = Fun ([ { ty = Con (p, args); _ } ], ret, errs, uses, _);
-                _;
-              };
+              { ty = Fun ([ { ty = Con (p, args); _ } ], ret, errs, uses); _ };
             _;
           }
         when p = d.path && args = own && ret = Ty.str && errs.labels = []
@@ -1452,7 +1400,7 @@ let start_name = "$start"
    replayer, by a journal's header, which the driver writes from this. *)
 let main_uses (main : C.fn_def) =
   match main.scheme.ty with
-  | Fun (_, _, _, uses, _) ->
+  | Fun (_, _, _, uses) ->
       List.map (fun (l : Ty.label) -> Ty.dep_path l.name) uses.labels
   | _ -> bug "a `main` whose type isn't a function's"
 
@@ -1462,19 +1410,19 @@ let main_uses (main : C.fn_def) =
    (infer_top.ml, [check_main]). It starts from no evidence at all. *)
 let start (main : C.fn_def) : C.fn_def =
   let loc = main.loc in
-  let ret, errs, lams =
+  let ret, errs =
     match main.scheme.ty with
-    | Fun (_, ret, errs, _, lams) -> (ret, errs, lams)
+    | Fun (_, ret, errs, _) -> (ret, errs)
     | _ -> bug "a `main` whose type isn't a function's"
   in
   let deps = main_uses main in
-  let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed, lams) } in
+  let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) } in
   let tys = C.type_params scheme in
   let dicts = C.dict_params scheme in
   (* each install's evidence is numbered after the one it extends *)
   let rec install n = function
     | [] ->
-        let own, ty = C.own_use main.path main.scheme.ty in
+        let own = Ty.own_args main.scheme.ty in
         mk
           (Call
              ( mk
@@ -1483,7 +1431,7 @@ let start (main : C.fn_def) : C.fn_def =
                       own,
                       List.map (C.describe tys) own.tys,
                       List.map (fun v -> C.Dict_param v) dicts ))
-                 ty loc,
+                 main.scheme.ty loc,
                [],
                C.evidence n ))
           ret loc
@@ -1498,7 +1446,7 @@ let start (main : C.fn_def) : C.fn_def =
                (* of a type with no variables *)
                impl =
                  mk
-                   (Global_value (real, { tys = []; rows = []; lams = [] }))
+                   (Global_value (real, { tys = []; rows = [] }))
                    (Ty.impl [ dep ] Ty.closed)
                    loc;
                desc = C.describe tys ret;

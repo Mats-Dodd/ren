@@ -495,9 +495,7 @@ let%expect_test "each intrinsic that reaches the world is an operation's" =
 let%expect_test "Core Lint refuses the world reached from anywhere else" =
   let loc = Loc.point ~file 1 1 in
   let call x : Core.expr =
-    Core.mk
-      (Intrinsic (x, { tys = []; rows = []; lams = [] }, [], []))
-      Ty.unit loc
+    Core.mk (Intrinsic (x, { tys = []; rows = [] }, [], [])) Ty.unit loc
   in
   let fn path ~test body : Core.fn_def =
     {

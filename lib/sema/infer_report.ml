@@ -239,7 +239,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
             | _, _, _, Some x -> blame f x
             | None, None, None, None -> (
                 match (f, x) with
-                | TFun (ps, r, _, _, _), TFun (qs, s, _, _, _) ->
+                | TFun (ps, r, _, _), TFun (qs, s, _, _) ->
                     pairs
                       (r :: List.map (fun p -> p.ty) ps)
                       (s :: List.map (fun p -> p.ty) qs)
@@ -277,7 +277,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
           when List.length ds > 1 && ds <> es ->
             Some (ds, es, false, solved)
         | TCon (p, fs), TCon (q, xs), _, _ when p = q -> pairs fs xs
-        | TFun (ps, r, _, _, _), TFun (qs, r', _, _, _), _, _ ->
+        | TFun (ps, r, _, _), TFun (qs, r', _, _), _, _ ->
             pairs
               (r :: List.map (fun p -> p.ty) ps)
               (r' :: List.map (fun p -> p.ty) qs)

@@ -95,7 +95,7 @@ let key_loops env p =
                   | None, _ -> false)
               | None -> false)
             || List.exists (reaches seen) args)
-    | Fun (ps, r, _, _, _) ->
+    | Fun (ps, r, _, _) ->
         List.exists (fun (x : Ty.param) -> reaches seen x.ty) ps
         || reaches seen r
     | Errors e ->
@@ -118,7 +118,6 @@ let with_args args (t : Ty.ty) =
   of_ty
     ~vars:(fun n -> Option.value (List.nth_opt args n) ~default:TError)
     ~tails:(fun _ -> REmpty)
-    ~lams:(fun _ -> REmpty)
     t
 
 (* What the member at [path] needs of its type's parameters, by their
@@ -130,7 +129,7 @@ let with_args args (t : Ty.ty) =
 let member_reqs env path (o : Iface.op) =
   let of_args (t : ty) =
     match repr t with
-    | TFun (self :: _, _, _, _, _) -> (
+    | TFun (self :: _, _, _, _) -> (
         match repr self.ty with
         | TCon (_, args) ->
             List.concat

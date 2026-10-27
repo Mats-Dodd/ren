@@ -49,8 +49,8 @@ same machine, for the same program.
   pass doesn't count.
 - **What it measures:** run time and peak memory. Twice Rust's peak
   memory is the limit too.
-- **What gets it there:** the memory stage (specialization, lambda
-  sets, borrow inference, Perceus, reuse), through the C backend at
+- **What gets it there:** the memory stage (specialization per
+  block and handler, borrow inference, Perceus, reuse), through the C backend at
   `-O2`.
 - **Where it's at risk:** code that mutates shared arrays. TigerBeetle-
   style code lives there. Reuse helps when a value has one owner. When

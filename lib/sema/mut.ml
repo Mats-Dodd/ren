@@ -272,8 +272,6 @@ let rec walk cx (e : expr) =
            "`&` can't be used here")
   | Unop (_, a, _) | Try a | Attempt a | Assert a -> walk cx a
   | With { items; body } ->
-      (* a wrapper's body is a lambda, which can't change what's outside
-         it: inference, which knows which items are wrappers, says so *)
       List.iter (walk cx) (with_links items);
       walk cx body
   | Fail (_, args) -> List.iter (fun (_, a) -> walk cx a) args

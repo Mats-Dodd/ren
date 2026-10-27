@@ -452,7 +452,7 @@ let transparent_rows (params : Resolved.param list) ps =
     (List.map2
        (fun (p : Resolved.param) (t : Types.param) ->
          match (p.pty, repr t.ty) with
-         | Some (TyFn (_, _, None, _, _) as w), TFun (_, _, e, _, _)
+         | Some (TyFn (_, _, None, _, _) as w), TFun (_, _, e, _)
            when not (names_row w) ->
              [ e ]
          | _ -> [])
@@ -594,7 +594,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
   let uses =
     (match (declared_uses ~is_value:(fun _ -> false) f, repr ty) with
       | Some ds, _ -> ds
-      | None, TFun (_, _, _, u, _) -> row_names u
+      | None, TFun (_, _, _, u) -> row_names u
       | None, _ -> [])
     @ row_names cx.uses
   in
@@ -602,7 +602,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
      before it, so it isn't one to suggest; a handler of [p] is one *)
   let makes p t =
     match repr t with
-    | TFun (ps, ret, _, _, _) -> (
+    | TFun (ps, ret, _, _) -> (
         match impl_parts ret with
         | Some (ds, needs)
           when List.mem p ds
@@ -666,7 +666,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
               in
               match (o.okind, o.oscheme.ty) with
               | Value, t when makes t -> Some name
-              | Function, Fun (ps, t, _, _, _) when makes t ->
+              | Function, Fun (ps, t, _, _) when makes t ->
                   Some (call_written name (List.length ps))
               | _ -> None)
             (if p.home = env.home then [] else Iface.members td))
@@ -866,9 +866,7 @@ let add_globals env ~imports ~reachable fns =
             (fun path (o : Iface.op) ->
               let t = of_scheme env.st o.oscheme in
               Hashtbl.replace env.globals path
-                (if o.okind = Value then
-                   TFun ([], t, REmpty, REmpty, generic_row env.st)
-                 else t))
+                (if o.okind = Value then TFun ([], t, REmpty, REmpty) else t))
             td.members)
         iface.types)
     reachable;
@@ -1022,11 +1020,10 @@ let setup env ~is_value (f : fn_def) =
       next_at = Next_ok;
     }
   in
-  Hashtbl.replace env.globals path
-    (TFun (ps, ret, errs, uses, fresh_row env.st));
+  Hashtbl.replace env.globals path (TFun (ps, ret, errs, uses));
   let declared () =
     let ps, ret, errs, uses = signature ~seen:true () in
-    TFun (ps, ret, errs, uses, fresh_row env.st)
+    TFun (ps, ret, errs, uses)
   in
   (* its errors and uses, if it names the row each ends in, `! ..e`, and
      they don't end in it yet: the variable each ends in, and the named
@@ -1126,7 +1123,7 @@ let check_spelled env ~is_value so_far ms =
       let f = m.fn in
       if f.pub && is_value f && f.ret = None then
         match Hashtbl.find so_far.schemes m.cx.self with
-        | TFun (_, t, _, _, _) as scheme ->
+        | TFun (_, t, _, _) as scheme ->
             let pr = printer env in
             reserve pr scheme;
             report env
@@ -1139,7 +1136,7 @@ let check_spelled env ~is_value so_far ms =
       let f = m.fn in
       if f.pub && not (is_value f) then
         match Hashtbl.find so_far.schemes m.cx.self with
-        | TFun (ps, _, _, _, _) as scheme ->
+        | TFun (ps, _, _, _) as scheme ->
             List.iter2
               (fun (p : Resolved.param) (t : Types.param) ->
                 if p.pty = None then (
@@ -1167,7 +1164,7 @@ let check_reserved env so_far ms =
       in
       if reserved then
         match Hashtbl.find so_far.schemes m.cx.self with
-        | TFun (_, _, errs, uses, _) -> (
+        | TFun (_, _, errs, uses) -> (
             match (fst (row_parts errs), fst (row_parts uses)) with
             | l :: _, _ ->
                 report env
@@ -1224,7 +1221,7 @@ let check_keeps_rules env so_far (r : Resolve.t) =
     in
     let refuses (f : fn_def) =
       match Hashtbl.find_opt so_far.schemes (Ast.fn_path r.home f) with
-      | Some (TFun (_, ret, errs, _, _)) ->
+      | Some (TFun (_, ret, errs, _)) ->
           (holds ret && fst (row_parts errs) <> [])
           || ((not (is_method f)) && refused ret)
       | _ -> false
@@ -1418,7 +1415,7 @@ and check_own_group env ~values ~main so_far group =
 (* A test's body is `Unit`, so one whose value is thrown away, like a
    comparison without its `assert`, is reported, as any other dropped
    value is. Its value is that of the last line, inside the `with` a group
-   wraps it in. [bodies] are the functions that are tests' bodies. *)
+   puts around it. [bodies] are the functions that are tests' bodies. *)
 let check_test_body env so_far ~bodies (f : fn_def) =
   let path = Ast.fn_path env.home f in
   if List.mem path bodies then
@@ -1428,14 +1425,13 @@ let check_test_body env so_far ~bodies (f : fn_def) =
       | With { body; _ } -> last body
       | _ -> e
     in
-    (* the last line's own type: a wrapper's `with` around it has the
-       wrapper's result, which is reported where it's wrong *)
+    (* the last line's own type, which is the test's *)
     let own =
       Option.bind (Hashtbl.find_opt so_far.tables path) (fun cx ->
           Hashtbl.find_opt cx.nodes (last f.body).node)
     in
     match (own, repr (Hashtbl.find so_far.schemes path)) with
-    | Some ret, _ | None, TFun (_, ret, _, _, _) ->
+    | Some ret, _ | None, TFun (_, ret, _, _) ->
         unify_at env (last f.body).loc ~found:ret ~expected:unit ~msg:test_body
           ~notes:[ test_passes ]
           ~help:(test_body_help ~is_bool:(repr ret = bool))
@@ -1502,14 +1498,13 @@ let canonical env so_far (f : fn_def) =
           let scheme = Hashtbl.find env.globals u.tcallee in
           let s = matching env.st scheme t in
           match repr scheme with
-          | TFun ([], r, _, _, _) when u.tvalue -> restrict s (generics r)
+          | TFun ([], r, _, _) when u.tvalue -> restrict s (generics r)
           | _ -> s)
     in
     let args : Ty.args =
       {
         tys = List.map (fun (_, t) -> canon_ty c ~all:true t) s.tys;
         rows = List.map (fun (_, r) -> canon_row c ~all:true r) s.rows;
-        lams = List.map (fun (_, l) -> canon_lams c l) s.lams;
       }
     in
     (* and what the callee needs of each, its scheme's requirements, by
@@ -1553,38 +1548,6 @@ let canonical env so_far (f : fn_def) =
             (Handler_facts { f with body_ty = Some k })
       | _ -> ())
   | None -> ());
-  (* each operation a handler over a dependency leaves out, which lowering
-     makes a lambda of: its type, with a lambda set of its own numbered
-     with the function's *)
-  Hashtbl.filter_map_inplace
-    (fun _ (found : found) ->
-      match found with
-      | Handler_facts f ->
-          let forward (p, op, (fty : Ty.ty)) =
-            let t =
-              match
-                of_ty
-                  ~vars:(fun _ -> TError)
-                  ~tails:(fun _ -> REmpty)
-                  ~lams:(fun _ -> REmpty)
-                  fty
-              with
-              | TFun (ps, r, e, u, _) ->
-                  TFun
-                    ( ps,
-                      r,
-                      e,
-                      u,
-                      extend
-                        [ lam (Ty.global_id (Path.member p op)) ]
-                        (fresh_row env.st) )
-              | t -> t
-            in
-            (p, op, canon_ty c ~all:true t)
-          in
-          Some (Handler_facts { f with forwards = List.map forward f.forwards })
-      | found -> Some found)
-    cx.found;
   let ids =
     Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes [] |> List.sort compare
   in

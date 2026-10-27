@@ -202,16 +202,12 @@ type scope = {
 }
 
 (* What `next` is in the code being resolved: nothing, outside a handler;
-   in a handler for these dependencies, or a record implementation of
-   one, nothing either, but a message says how to get one; in a handler
-   over these, the implementation under it. *)
+   in a handler for these dependencies, nothing either, but a message says
+   how to get one; in a handler over these, the implementation under it. *)
 and next_in =
   | No_next
   | In_for of string * Path.t list  (** the handler's name, and its `for` *)
   | In_over of string * Path.t list  (** the handler's name, and its `over` *)
-  | In_record of Path.t
-      (** a record implementation of this dependency, which can't reach the one
-          under it *)
 
 and fn_state = {
   mutable last_id : int;  (** the last binder id handed out *)
@@ -295,7 +291,7 @@ let bind env sc (id : ident) bound =
   not_an_alias env id;
   (match sc.next with
   | In_over _ when id.name = "next" -> next_bound env id.loc
-  | In_over _ | In_for _ | In_record _ | No_next -> ());
+  | In_over _ | In_for _ | No_next -> ());
   sc.fn.last_id <- sc.fn.last_id + 1;
   let b = { id = sc.fn.last_id; ident = id; bound; depth = sc.depth } in
   (* `_`, as in `let _ = ...`, names nothing: the value is dropped *)
@@ -1077,7 +1073,6 @@ let lookup env sc loc ~what x =
               let ds =
                 match sc.next with
                 | In_for (_, ds) | In_over (_, ds) -> ds
-                | In_record d -> [ d ]
                 | No_next -> []
               in
               let call =
@@ -1100,12 +1095,6 @@ let lookup env sc loc ~what x =
                         (String.concat " & "
                            (List.map (fun (p : Path.t) -> p.name) ds))
                         call
-                  | In_record d ->
-                      sprintf
-                        "a record implementation can't reach the one under it: \
-                         write a handler declared `over %s`, and call it \
-                         through `next`: %s"
-                        d.name call
                   | In_over _ | No_next ->
                       sprintf "call the one under it with `next`: %s" call)
                 (sprintf "there's no %s named `outer`" what)
@@ -1128,7 +1117,7 @@ let lookup env sc loc ~what x =
                      more than its receiver *)
                   let amp, rest =
                     match scheme.ty with
-                    | Fun (self :: ps, _, _, _, _) ->
+                    | Fun (self :: ps, _, _, _) ->
                         ( (if self.mode = Inout then "&" else ""),
                           if ps = [] then "" else "..." )
                     | _ -> ("", "")
@@ -1342,11 +1331,6 @@ let no_next env sc loc =
           sprintf
             "declare it `handler %s(...) over %s`, to reach the `%s` under it" h
             ds ds
-      | In_record d ->
-          sprintf
-            "a record implementation can't reach the one under it: write a \
-             handler declared `over %s`, which can"
-            d.name
       | In_over _ | No_next ->
           "only a handler declared `over` another implementation has a `next`")
     "`next` is only in a handler declared `over` a dependency";
@@ -1449,14 +1433,14 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Var (Bare "next") when next_free env sc -> (
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ())
-        | In_for _ | In_record _ | No_next -> Var (no_next env sc e.loc))
+        | In_for _ | No_next -> Var (no_next env sc e.loc))
     | Field ({ kind = Var (Bare "next"); _ }, op)
       when next_free env sc
            && match sc.next with In_over _ -> true | _ -> false -> (
         (* `next.get` not called *)
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ~called:op.name ())
-        | In_for _ | In_record _ | No_next -> assert false)
+        | In_for _ | No_next -> assert false)
     | Var (Bare x) -> Var (lookup env sc e.loc ~what:"variable" x)
     | Var (Item (t, f)) -> Var (item env sc t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
@@ -1530,14 +1514,6 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
                     tloc = tyname_loc t;
                   })
             name
-        in
-        (* the fields of a record implementation, `Clock { ... }`, outside
-           a handler: `outer` and `next` there say what to write instead *)
-        let sc =
-          match (name, sc.next) with
-          | Some { tref = Named p; _ }, No_next when dep_ops env p <> None ->
-              { sc with next = In_record p }
-          | _ -> sc
         in
         Record (name, List.map (fun (f, v) -> (f, expr env sc v)) fields)
     | Field ({ kind = Var (Bare m); _ }, f) when Env.mem m env.modules ->

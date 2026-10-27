@@ -262,17 +262,17 @@ let as_declared env path cx declared =
   let names = List.map (fun (l : label) -> l.name) declared in
   if List.exists (fun n -> not (List.mem n names)) (row_names cx.errs) then
     match repr (Hashtbl.find env.globals path) with
-    | TFun (ps, ret, errs, uses, lams) ->
+    | TFun (ps, ret, errs, uses) ->
         let errs' = extend declared (fresh_row env.st) in
         let param (p : Types.param) =
           match repr p.ty with
-          | TFun (qs, r, e, u, l)
+          | TFun (qs, r, e, u)
             when row_tail e <> None && row_tail e = row_tail errs ->
-              { p with ty = TFun (qs, r, errs', u, l) }
+              { p with ty = TFun (qs, r, errs', u) }
           | _ -> p
         in
         Hashtbl.replace env.globals path
-          (TFun (List.map param ps, ret, errs', uses, lams))
+          (TFun (List.map param ps, ret, errs', uses))
     | _ -> ()
 
 (* ---- named rows (deps.md, "Implementations") ---- *)

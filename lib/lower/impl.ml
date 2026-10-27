@@ -7,8 +7,10 @@
    specializer will copy into its callers, when a release build
    specializes the whole program (compiler.md, "Specialization"). Those
    are the generic ones, whose type variables a caller picks, and the
-   higher-order ones, a function given or giving a function, whose lambda
-   sets a caller decides. Nothing reads it yet.
+   higher-order ones, which a caller passes blocks to: release copies
+   such a function for each block it's given, so the block inlines and
+   nothing is allocated (foundations.md, "Lambdas are blocks"). Nothing
+   reads it yet.
 
    It's kept by path in a map, so its order is fixed, and the Core in it
    has no source locations: like the interface, it mustn't change when a
@@ -116,7 +118,7 @@ let recorded (f : Core.fn_def) =
   f.tys <> []
   ||
   match f.scheme.ty with
-  | Fun (ps, r, _, _, _) ->
+  | Fun (ps, r, _, _) ->
       List.exists (fun (p : Ty.param) -> has_fn p.ty) ps || has_fn r
   | _ -> false
 

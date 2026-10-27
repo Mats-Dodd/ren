@@ -331,8 +331,8 @@ Retry policies are values:
 ```ren
 let backoff = schedule.exponential(100.ms).jitter().up_to(5)
 
-with retry(backoff) over Async.timeout(3.s) in
-  try Billing.charge(card, amount)
+try retry(backoff) fn() =>
+  try Async.timeout(3.s) fn() => try Billing.charge(card, amount)
 ```
 
 Configuration comes from a type, and `secret` keeps a field out of logs and traces:

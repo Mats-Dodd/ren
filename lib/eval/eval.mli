@@ -1,7 +1,7 @@
 (* The interpreter's interface (see eval.ml). *)
 
 (* What a panic's help suggests for an `Int` operation that overflowed:
-   the method [meth] that wraps instead, `wrapping_add`, called on what's
+   the wrapping method [meth] instead, `wrapping_add`, called on what's
    at [recv] with what's at [arg], as the source writes them (driver.ml
    makes the help, from the source). *)
 type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }

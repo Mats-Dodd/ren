@@ -131,7 +131,7 @@ type step =
    The arithmetic is Arith's (arith.ml), shared with the methods the
    operators are, `n.add(2)`; here a panic is given where the operation
    is. [at] are the operands' expressions, for an overflow's help to show
-   them calling the method that wraps, `n.wrapping_add(1)`: none for an
+   them calling the wrapping method, `n.wrapping_add(1)`: none for an
    operator through a dictionary, on a `T`, which has no such method. *)
 
 (* An overflow's panic: with the help, if the left side is written as an
@@ -306,8 +306,7 @@ let rec type_of env (d : desc) : Ty.ty =
         ( List.map (fun (mode, d) : Ty.param -> { mode; ty = type_of env d }) ps,
           type_of env r,
           row e,
-          u,
-          Ty.any_lams )
+          u )
   | Errs e -> Errors (row e)
 
 (* The dictionary the hidden dictionary parameter [v] holds. *)
@@ -388,8 +387,8 @@ let rec eval cx env (e : expr) =
       let what = "installing `" ^ dep.name ^ "`" in
       let impl = eval cx env impl in
       let outer = evidence_in env outer what in
-      (* a record is installed as it is, and a handler's description as a
-         fresh instance's implementation of [dep] *)
+      (* a handler's description, as a fresh instance's implementation
+         of [dep] *)
       let impl, finally =
         match impl with
         | VHandler h -> (
@@ -397,7 +396,7 @@ let rec eval cx env (e : expr) =
             match List.assoc_opt dep impls with
             | Some impl -> (impl, finally)
             | None -> bug (what ^ " from a handler that doesn't implement it"))
-        | impl -> (impl, None)
+        | _ -> bug (what ^ " with something that isn't a handler")
       in
       let installed = VEvidence ({ dep; impl; outer } :: outer) in
       ending cx env e.loc finally desc outer (fun () ->
@@ -937,7 +936,7 @@ and gives_nothing cx (c : Journal.call) = Hashtbl.mem cx.outputs (c.dep, c.op)
 and traced cx t ~dep ~op (fty : Ty.ty) args call =
   let ps, ret, errs =
     match fty with
-    | Fun (ps, r, e, _, _) -> (List.map (fun (p : Ty.param) -> p.ty) ps, r, e)
+    | Fun (ps, r, e, _) -> (List.map (fun (p : Ty.param) -> p.ty) ps, r, e)
     | _ -> bug "an operation whose type isn't a function's"
   in
   let write (t : Ty.ty) v =
@@ -1005,7 +1004,7 @@ and key_of cx (p : Path.t) args v =
       let f = Hashtbl.find cx.fns m in
       let k =
         match f.scheme.ty with
-        | Fun (_, r, _, _, _) -> Walk.subst args r
+        | Fun (_, r, _, _) -> Walk.subst args r
         | _ -> bug "a key that isn't a function"
       in
       match
@@ -1085,7 +1084,7 @@ let error_of cx p err =
   match
     Option.map (fun (f : fn_def) -> f.scheme.ty) (Hashtbl.find_opt cx.fns p)
   with
-  | Some (Fun (_, _, errs, _, _)) ->
+  | Some (Fun (_, _, errs, _)) ->
       Shown.value ~own:(own_show cx) cx.types (Errors errs) err
   | _ -> Value.show err
 
@@ -1096,7 +1095,7 @@ let uncaught cx p err =
     match
       Option.map (fun (f : fn_def) -> f.scheme.ty) (Hashtbl.find_opt cx.fns p)
     with
-    | Some (Fun (_, _, errs, _, _)) -> Journal.write cx.types (Errors errs) err
+    | Some (Fun (_, _, errs, _)) -> Journal.write cx.types (Errors errs) err
     | _ -> Value.show err
   in
   Uncaught { shown = error_of cx p err; written }
@@ -1158,7 +1157,7 @@ let load (modules : program list) =
           List.iter
             (fun (o : Iface.field) ->
               match o.fty with
-              | Fun (_, r, _, _, _) when r = Ty.unit ->
+              | Fun (_, r, _, _) when r = Ty.unit ->
                   Hashtbl.replace cx.outputs (dep, o.fname) ()
               | _ -> ())
             ops

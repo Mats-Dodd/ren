@@ -29,12 +29,11 @@ val find_ctor :
 
 (* Whether a constructor is given as many arguments as it has fields,
    labelled correctly. Each problem is reported. *)
+(* A record's fields, or [None] for any other type. *)
+val record_fields : Iface.type_decl -> Iface.field list option
+
 val ctor_shape :
   env -> Loc.t -> Ast.ident -> Iface.ctor -> Ast.ident option list -> bool
-
-(* The fields a literal of a type gives: a record's, or a dependency's
-   operations. *)
-val literal_fields : Iface.type_decl -> Iface.field list option
 
 (* By name, in a type declaration: a dependency's operation, a member, and
    a record's field. *)

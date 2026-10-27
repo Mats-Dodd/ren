@@ -1222,7 +1222,8 @@ let%expect_test "== can't panic" =
   lacks
     "dep D =\n\
     \  get: fn() -> Int\n\
-     fn d() = D { get: fn() => 1 }\n\
+     handler d() for D =\n\
+    \  get() => 1\n\
      fn main() = d() == d()";
   (* and a tag holding one, in the errors of a function given to one that
      compares what it fails with *)

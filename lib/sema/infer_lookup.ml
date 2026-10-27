@@ -157,15 +157,6 @@ let record_fields (td : Iface.type_decl) =
   | Record fs -> Some fs
   | Sum _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
 
-(* The fields a literal of [td] gives, `T { f: ... }`: a record's, or a
-   dependency's operations, which an implementation gives (deps.md,
-   "Implementations"). An operation isn't read from one: it's called on
-   the dependency, where it's installed. *)
-let literal_fields (td : Iface.type_decl) =
-  match td.body with
-  | Record fs | Dep fs -> Some fs
-  | Sum _ | Builtin | Opaque _ | Errors _ -> None
-
 (* The operation [name] of the dependency [td], if it's one. *)
 let dep_op_in name (td : Iface.type_decl) =
   match td.body with
@@ -201,10 +192,7 @@ let rec op_of env t name =
           | Some _, _ -> None
           | None, Some rep ->
               op_of env
-                (of_ty ~vars:(List.nth args)
-                   ~tails:(fun _ -> REmpty)
-                   ~lams:(fun _ -> fresh_row env.st)
-                   rep)
+                (of_ty ~vars:(List.nth args) ~tails:(fun _ -> REmpty) rep)
                 name
           | None, None -> None))
   | TImpl { deps = [ p ]; _ } -> (
@@ -245,8 +233,7 @@ let member_of_several env cx (r : expr) tr (name : ident) =
               ( _,
                 {
                   okind = Method;
-                  oscheme =
-                    { ty = Fun ({ mode = Inout; _ } :: _, _, _, _, _); _ };
+                  oscheme = { ty = Fun ({ mode = Inout; _ } :: _, _, _, _); _ };
                   _;
                 } ) ->
               (* narrowing a place it changes would write a plain [d] back
@@ -315,7 +302,7 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
         | Method ->
             let changes =
               match o.oscheme.ty with
-              | Fun ({ mode = Inout; _ } :: _, _, _, _, _) -> true
+              | Fun ({ mode = Inout; _ } :: _, _, _, _) -> true
               | _ -> false
             in
             method_not_called f ~recv:(env.source r) ~item ~changes
@@ -324,7 +311,7 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
   | None -> (
       let found (td : Iface.type_decl) fd tvars =
         Hashtbl.replace cx.found e.node (Field_of td.path);
-        field_type env ~tvars fd
+        field_type ~tvars fd
       in
       let needs_record t =
         report env (needs_record f (show (printer env) t));
@@ -448,8 +435,7 @@ let fresh env cx ~node loc p =
     { tcallee = p; tvalue = false; tpicked = Fresh s };
   (* only a variable that needs something can make the use need it *)
   let needing l = List.filter (fun (id, _) -> needs env.st id <> []) l in
-  require env cx ~node loc p
-    { s with tys = needing s.tys; rows = needing s.rows };
+  require env cx ~node loc p { tys = needing s.tys; rows = needing s.rows };
   t
 
 (* [p], a function of the group being checked, is used at [node] at the
@@ -468,28 +454,7 @@ let own_instance env (g : group_fn) : subst =
   {
     tys = List.map (fun id -> (id, fresh_var env.st)) g.gparams;
     rows = List.map (fun id -> (id, fresh_row env.st)) g.grows;
-    lams = [];
   }
-
-(* [t], the type a top-level function, a member, an intrinsic or an
-   operation [p] is used at, with [p]'s identity in its lambda set: a
-   value of it can be [p], as well as whatever else it meets. *)
-let named env p t =
-  (match repr t with
-  | TFun (_, _, _, _, l) ->
-      Unify.unify_lams env.st l
-        (extend [ lam (Ty.global_id p) ] (fresh_row env.st))
-  | _ -> ());
-  t
-
-(* The type of a function of the group being checked, [t], with a lambda
-   set of its own, for one use of it: what flows to the use, [named] it,
-   isn't what the function's own type says it can be, which nothing in
-   its group constrains, so it's generic once the group is done. *)
-let own_set env t =
-  match repr t with
-  | TFun (ps, r, e, u, _) -> TFun (ps, r, e, u, fresh_row env.st)
-  | t -> t
 
 (* A name's type, at the expression [node]. A top-level function's is a
    fresh instance of its scheme, so each use can pick its own types;
@@ -509,12 +474,12 @@ let rec lookup env cx ~node loc = function
       let used = Hashtbl.find cx.targs node in
       let picked =
         match (used.tpicked, repr (Hashtbl.find env.globals p)) with
-        | Fresh s, TFun ([], r, _, _, _) -> Fresh (restrict s (generics r))
+        | Fresh s, TFun ([], r, _, _) -> Fresh (restrict s (generics r))
         | picked, _ -> picked
       in
       Hashtbl.replace cx.targs node
         { used with tvalue = true; tpicked = picked };
-      match repr t with TFun ([], t, _, _, _) -> t | _ -> TError)
+      match repr t with TFun ([], t, _, _) -> t | _ -> TError)
   | Global p when List.mem p env.spelled ->
       (* its declaration says everything about it, so even in its own body
          it's an instance of that, joined with nothing: a use that closes
@@ -522,25 +487,22 @@ let rec lookup env cx ~node loc = function
       let g = List.assoc p env.group in
       let inst = own_instance env g in
       require env cx ~node loc p inst;
-      in_group cx ~node p (named env p (replace inst (g.declared ())))
+      in_group cx ~node p (replace inst (g.declared ()))
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let g = List.assoc p env.group in
       let jinst = own_instance env g in
       require env cx ~node loc p jinst;
-      let used = named env p (replace jinst (g.declared ())) in
+      let used = replace jinst (g.declared ()) in
       defer env
         (Join { jloc = loc; jname = Path.local p; used; target = p; jinst });
       in_group cx ~node p used
   | Global p when p = cx.self ->
       (* its own type, not generic until its group is done, so the copy
-         is the same type, but for its lambda set ([own_set]) *)
+         is the same type *)
       in_group cx ~node p
-        (named env p
-           (own_set env (fst (instantiate env.st (Hashtbl.find env.globals p)))))
-  | Global p -> named env p (fresh env cx ~node loc p)
-  | Intrinsic x ->
-      let p = Intrinsic.path x in
-      named env p (fresh env cx ~node loc p)
+        (fst (instantiate env.st (Hashtbl.find env.globals p)))
+  | Global p -> fresh env cx ~node loc p
+  | Intrinsic x -> fresh env cx ~node loc (Intrinsic.path x)
   | Assoc_value (Param i, v) ->
       (* `T.zero`: whatever the function's given for [T] has it *)
       let t = List.nth cx.tparams i in
@@ -555,17 +517,11 @@ let rec lookup env cx ~node loc = function
          adds it to the caller's `uses` *)
       match Option.bind (Hashtbl.find_opt env.types p) (dep_op_in op) with
       | Some o -> (
-          match field_type env ~tvars:[] o with
-          | TFun (ps, ret, errs, _, l) ->
-              (* used as a value, it's a lambda that calls it, of its
-                 identity (Lower) *)
-              named env (Path.member p op)
-                (TFun
-                   ( ps,
-                     ret,
-                     errs,
-                     RExtend (dep (Ty.dep_label p), fresh_row env.st),
-                     l ))
+          match field_type ~tvars:[] o with
+          | TFun (ps, ret, errs, _) ->
+              (* used as a value, it's a lambda that calls it (Lower) *)
+              TFun
+                (ps, ret, errs, RExtend (dep (Ty.dep_label p), fresh_row env.st))
           | _ -> TError)
       | None -> TError)
   | Next_op (p, op) -> (
@@ -576,12 +532,10 @@ let rec lookup env cx ~node loc = function
          while an operation runs, never in a lambda ([next_at]). *)
       (match cx.next_at with
       | Next_ok -> ()
-      | In_lambda -> report env (next_in_lambda loc op)
-      | In_wrapped w -> report env (next_in_wrapped loc ~wrapper:w op));
+      | In_lambda -> report env (next_in_lambda loc op));
       match Option.bind (Hashtbl.find_opt env.types p) (dep_op_in op) with
       | Some o -> (
-          match field_type env ~tvars:[] o with
-          | TFun (ps, ret, errs, _, l) ->
-              TFun (ps, ret, errs, fresh_row env.st, l)
+          match field_type ~tvars:[] o with
+          | TFun (ps, ret, errs, _) -> TFun (ps, ret, errs, fresh_row env.st)
           | _ -> TError)
       | None -> TError)

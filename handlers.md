@@ -175,19 +175,14 @@ with Clock.frozen(t), cached(ttl) over mem_users([ann]) in
   // cached's Clock is the frozen one: it's in the same with
 ```
 
-### Wrappers
+### Functions that run a block
 
-A wrapper, a function whose last parameter is the body (`retry(3)`), wraps
-the body, so it goes inside everything its `with` installs. Two wrappers
-in one `with` say which wraps which with `over`, as handlers do:
-
-```ren
-with Clock.frozen(t), retry(3) over timeout(Duration.seconds(5)) in
-  try fetch()
-```
-
-`retry` is outside `timeout`, so each try gets five seconds. Two wrappers
-listed with a comma are an error, whose help writes them with `over`.
+A `with` installs only handlers. A function that runs a block, like
+`retry(3)`, is called with it, `try retry(3) fn() => try fetch()`; 10c
+took these wrappers out of `with` ([foundations.md](foundations.md)). One
+written in a `with` is an error, "`with` installs only handlers", whose
+help writes the call: `call it: try retry(3) fn() => ...`, with `try`
+only when the function can fail.
 
 ## When a `with` ends: `finally`
 
@@ -233,10 +228,8 @@ nothing more here.
 ### State that can fail to start
 
 A handler's state can now call a dependency that fails: `let tx = try
-next.begin()`. A `with` that installs it fails with those errors too. A
-`with` already acts as the `try` of a wrapper it installs ([deps.md,
-Deviations](deps.md#deviations)), and this is the same rule: the `with`
-passes on what installing its items can fail with.
+next.begin()`. A `with` that installs it fails with those errors too: the `with` passes
+on what installing its items can fail with, as `try` would.
 
 ## The journal
 
@@ -507,8 +500,7 @@ it:
 - **`next` isn't a keyword:** in a handler declared `over`, `next.op(...)`
   and `next(A).op(...)` reach the one under it, and nothing there can be
   named `next`. It can only be called through, never kept.
-- **A lambda can't call `next`,** nor can the body of a `with` that a
-  wrapper is given, which is one: a lambda can outlive the operation,
+- **A lambda can't call `next`:** a lambda can outlive the operation,
   and passed to the implementation under the handler and kept there, it
   would reach it again, a cycle. An operation calls `next` and gives the
   lambda what it returned.
@@ -516,7 +508,7 @@ it:
   taking the place of what it goes over: `cached(ttl) over counting()`,
   where `counting` is a `Prices & Calls`, installs both.
 - **An item's value is made outside the `with`,** in the order written,
-  before anything is installed; a wrapper's call is made innermost.
+  before anything is installed.
 - **Items that don't need each other are installed in the order of their
   dependencies' names,** so a `with` means the same whatever order its
   items are written in, even when two `finally`s run.
@@ -525,8 +517,6 @@ it:
   an implementation's type:** `over Users uses Clock`, `Sql ! DbDown`. A
   written type without `!` can't fail to start, a transparent parameter's
   included.
-- **A record implementation can't use its own dependency;** wrapping is
-  only written with `over`.
 - **`with h() over A & B`** wraps several implementations installed
   outside the `with` at once.
 - **A `finally` comes last, and a handler has one.**

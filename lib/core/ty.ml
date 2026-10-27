@@ -18,8 +18,7 @@ type mode = Ast.mode = Read | Inout
 
 type ty =
   | Con of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
-  | Fun of param list * ty * row * row * lams
-      (** params, result, errors, uses, and its lambda set *)
+  | Fun of param list * ty * row * row  (** params, result, errors, uses *)
   | Var of int
       (** a type variable. In a scheme, a generic one, numbered by first
           appearance; in a type declaration, the declaration's parameter at that
@@ -48,22 +47,6 @@ and row = {
       (** [None]: exactly these labels. [Some n]: these and possibly more,
           standing for row variable [n] (numbered apart from type variables) *)
 }
-
-(* A function type's lambda set (compiler.md, "The facts"): which code a
-   value of the type can run. [ids] are the identities of the lambdas and
-   top-level functions known to flow to it ([lambda_id], [global_id]),
-   sorted, each once; [lvar] is the lambda-set variable that stands for
-   the rest, numbered apart from type and row variables. A set is like a
-   row whose labels have no payload, and it's always open: as far as this
-   stage knows, a function value can be one nothing has listed yet, and no
-   pass reads them until specialization.
-
-   They're hidden: no message and nothing `ren types` prints shows one,
-   and only [printer]'s [show_lams] does, for debugging. In canonical form
-   [lvar] is always [Some n]. [None] is only in a type written in a
-   declaration, before [canonical]: a set nothing else shares, which
-   [canonical] numbers apart from every other. *)
-and lams = { ids : string list; lvar : int option }
 
 (* A row's label: an error's tag and its payload's types, `Short(Int)`, or
    a dependency, whose payload is always empty. A tag is its name and its
@@ -103,9 +86,8 @@ type scheme = {
    row variable [n], whose row is that one's labels added to the scheme's,
    ending in its tail. Typed Core puts them on each use of a polymorphic
    function (core.ml), and Core Lint checks the use's type is the scheme's
-   with them put in. The n-th of [lams] is what lambda-set variable [n]
-   stands for, the same way: its identities, added to the set's. *)
-type args = { tys : ty list; rows : row list; lams : lams list }
+   with them put in. *)
+type args = { tys : ty list; rows : row list }
 
 let int = Con (Path.prelude "Int", [])
 let float = Con (Path.prelude "Float", [])
@@ -137,22 +119,10 @@ let impl ?(over = false) ?(fails = closed) deps needs =
    what it needs. *)
 let impl_parts t = match t with Impl i -> Some (i.deps, i.needs) | _ -> None
 
-(* The lambda set of a function type written in a declaration: one of its
-   own, which nothing else shares, that [canonical] numbers. *)
-let any_lams = { ids = []; lvar = None }
-
-(* The identity a top-level function, a member or an intrinsic has in a
-   lambda set: its path, written in full, `shop/cart.total`, and for an
-   operator's second overload or later, which one it is, `Time.sub/1`. *)
-let global_id p =
-  match Path.overload p with
-  | 0 -> Path.full p
-  | n -> Path.full p ^ "/" ^ string_of_int n
-
-(* And the [n]-th lambda of the top-level function [p], counting from 1
-   in the order inference meets them, `main.main#2`: its function's path
-   and its place in it, so an edit elsewhere in the module doesn't change
-   it. *)
+(* The name of the [n]-th lambda of the top-level function [p], counting
+   from 1 in the order inference meets them, `main.main#2`: its
+   function's path and its place in it, so an edit elsewhere in the module
+   doesn't change it. Lower gives it to the lambda's code. *)
 let lambda_id p n = Path.full p ^ "#" ^ string_of_int n
 
 (* The label of the dependency declared at [p]: `Clock`, the prelude's, or
@@ -177,7 +147,7 @@ let rec tails t =
   | Con (_, args) -> List.concat_map tails args
   | Errors e -> row_tails e
   | Impl i -> row_tails i.needs @ row_tails i.fails
-  | Fun (ps, r, e, u, _) ->
+  | Fun (ps, r, e, u) ->
       List.concat_map (fun (p : param) -> tails p.ty) ps
       @ tails r @ row_tails e @ row_tails u
 
@@ -185,55 +155,9 @@ and row_tails r =
   List.concat_map (fun l -> List.concat_map tails l.payload) r.labels
   @ Option.to_list r.tail
 
-(* The lambda-set variables inside a type, in the order they appear. *)
-let rec lam_vars t =
-  match t with
-  | Var _ | Error -> []
-  | Con (_, args) -> List.concat_map lam_vars args
-  | Errors e -> row_lam_vars e
-  | Impl i -> row_lam_vars i.needs @ row_lam_vars i.fails
-  | Fun (ps, r, e, u, l) ->
-      List.concat_map (fun (p : param) -> lam_vars p.ty) ps
-      @ lam_vars r @ row_lam_vars e @ row_lam_vars u @ Option.to_list l.lvar
-
-and row_lam_vars r =
-  List.concat_map (fun l -> List.concat_map lam_vars l.payload) r.labels
-
-(* [t] with every lambda set one of its own, [any_lams]: what it is
-   without them. *)
-let rec without_lams t =
-  match t with
-  | Var _ | Error -> t
-  | Con (p, args) -> Con (p, List.map without_lams args)
-  | Errors e -> Errors (row_without_lams e)
-  | Impl i ->
-      Impl
-        {
-          i with
-          needs = row_without_lams i.needs;
-          fails = row_without_lams i.fails;
-        }
-  | Fun (ps, r, e, u, _) ->
-      Fun
-        ( List.map (fun (p : param) -> { p with ty = without_lams p.ty }) ps,
-          without_lams r,
-          row_without_lams e,
-          row_without_lams u,
-          any_lams )
-
-and row_without_lams r =
-  {
-    r with
-    labels =
-      List.map
-        (fun l -> { l with payload = List.map without_lams l.payload })
-        r.labels;
-  }
-
 (* The type arguments that give back a canonical type itself: [Var n]
-   for each of its type variables, for each row variable a row of no
-   labels ending in that variable, and for each lambda-set variable a set
-   of nothing ending in it. They're how a function is used at its
+   for each of its type variables, and for each row variable a row of no
+   labels ending in that variable. They're how a function is used at its
    own type, as `$start` calls `main`. A canonical type numbers its
    variables from 0 without gaps, so how many there are is one more than
    the largest. *)
@@ -244,7 +168,7 @@ let own_args t =
     | Con (_, args) -> List.concat_map vars args
     | Errors e -> row_vars e
     | Impl i -> row_vars i.needs @ row_vars i.fails
-    | Fun (ps, r, e, u, _) ->
+    | Fun (ps, r, e, u) ->
         List.concat_map (fun (p : param) -> vars p.ty) ps
         @ vars r @ row_vars e @ row_vars u
   and row_vars r =
@@ -254,14 +178,12 @@ let own_args t =
   {
     tys = List.init (count (vars t)) (fun n -> Var n);
     rows = List.init (count (tails t)) (fun n -> { labels = []; tail = Some n });
-    lams = List.init (count (lam_vars t)) (fun n -> { ids = []; lvar = Some n });
   }
 
 (* A scheme with its variables renumbered by where they first appear,
-   reading left to right, as inference numbers them: type variables, row
-   variables and lambda-set variables separately. [names], [reqs] and
-   [row_reqs] follow their variables. A lambda set of its own
-   ([any_lams]) gets a variable nothing else has. *)
+   reading left to right, as inference numbers them: type variables and
+   row variables separately. [names], [reqs] and [row_reqs] follow their
+   variables. *)
 let canonical (s : scheme) =
   let number table n =
     match List.assoc_opt n !table with
@@ -271,15 +193,7 @@ let canonical (s : scheme) =
         table := (n, m) :: !table;
         m
   in
-  let tys = ref [] and rows = ref [] and lams = ref [] in
-  (* a set of its own takes a number no variable of the type has *)
-  let own = ref 0 in
-  let lam_var = function
-    | Some n -> number lams n
-    | None ->
-        decr own;
-        number lams !own
-  in
+  let tys = ref [] and rows = ref [] in
   let rec go = function
     | Var n -> Var (number tys n)
     | Error -> Error
@@ -289,17 +203,14 @@ let canonical (s : scheme) =
         let needs = row i.needs in
         let fails = row i.fails in
         Impl { i with needs; fails }
-    | Fun (ps, r, e, u, l) ->
+    | Fun (ps, r, e, u) ->
         (* `let`s fix the order of first appearance: OCaml evaluates a
            constructor's arguments right to left *)
         let ps = List.map (fun (p : param) -> { p with ty = go p.ty }) ps in
         let r = go r in
         let e = row e in
         let u = row u in
-        let l =
-          { ids = List.sort_uniq compare l.ids; lvar = Some (lam_var l.lvar) }
-        in
-        Fun (ps, r, e, u, l)
+        Fun (ps, r, e, u)
   (* the labels' payloads, in order of name, then the tail *)
   and row r =
     let labels =
@@ -324,13 +235,6 @@ let canonical (s : scheme) =
     row_reqs = renumber rows s.row_reqs;
   }
 
-(* A scheme without its lambda sets: each one of its own, numbered apart.
-   It's what an interface states (iface.ml): a function type written in a
-   declaration says nothing of which lambdas flow to it, and inference's
-   sets depend on the module's bodies, which an interface mustn't
-   (compiler.md, "Lambda sets"). *)
-let forget_lams (s : scheme) = canonical { s with ty = without_lams s.ty }
-
 (* ---- printing ----
 
    A printer names variables consistently across everything printed with
@@ -338,8 +242,7 @@ let forget_lams (s : scheme) = canonical { s with ty = without_lams s.ty }
    otherwise the next of T, U, V, ...
 
    Row tails are hidden unless [show_tail] picks them, and then print as
-   `..e` (errors) or `..d` (dependencies). Lambda sets are hidden unless
-   [show_lams] says to show them, which only a debug printer does. [names] says how to write each
+   `..e` (errors) or `..d` (dependencies). [names] says how to write each
    type's name: the shortest way the module the type is shown in could
    write it (Resolve.type_name), so a message or `ren types` shows what
    you'd write there.
@@ -355,13 +258,10 @@ type printer = {
   mutable reserved : string list;
   show_tail : int -> bool;
   tail_names : (int, string) Hashtbl.t;
-  show_lams : bool;
 }
 
-let printer ?(show_tail = fun _ -> false) ?(show_lams = false) ~names
-    (s : scheme) =
+let printer ?(show_tail = fun _ -> false) ~names (s : scheme) =
   {
-    show_lams;
     type_name = names;
     hints = s.names;
     names = Hashtbl.create 8;
@@ -412,7 +312,7 @@ let rec reserve pr t =
   | Con (_, args) -> List.iter (reserve pr) args
   | Errors e -> List.iter (reserve_label pr) e.labels
   | Impl _ -> ()
-  | Fun (ps, r, e, _, _) ->
+  | Fun (ps, r, e, _) ->
       List.iter (reserve pr) (r :: List.map (fun (p : param) -> p.ty) ps);
       List.iter (reserve_label pr) e.labels
 
@@ -476,7 +376,7 @@ and show pr t =
       | s -> s)
   | Error -> "_"
   | Var id -> var_name pr id
-  | Fun (ps, r, e, u, l) ->
+  | Fun (ps, r, e, u) ->
       (* `let`s fix the order variables are named in: OCaml evaluates the
          operands of `^` right to left *)
       let ps =
@@ -488,7 +388,7 @@ and show pr t =
              ps)
       in
       let r = show_ret pr r in
-      "fn(" ^ ps ^ ")" ^ r ^ show_effects pr e u ^ show_lams pr l
+      "fn(" ^ ps ^ ")" ^ r ^ show_effects pr e u
 
 (* A function type's parameters, each shown, and whether it ends in a
    `uses` list, which a comma could go on: one that does is in parentheses
@@ -510,7 +410,7 @@ and show_list pr ts =
          let s = show pr t in
          match t with
          | Impl i when List.length (shown_needs i).labels > 1 -> "(" ^ s ^ ")"
-         | Fun (_, _, _, u, _) when List.length u.labels > 1 -> "(" ^ s ^ ")"
+         | Fun (_, _, _, u) when List.length u.labels > 1 -> "(" ^ s ^ ")"
          | _ -> s)
        ts)
 
@@ -532,7 +432,7 @@ and show_param pr p =
 and ends_in_uses pr t =
   match t with
   | Impl i -> show_row pr ~prefix:"" ~sep:"" ~kind:"d" (shown_needs i) <> ""
-  | Fun (_, _, _, u, _) -> show_row pr ~prefix:"" ~sep:"" ~kind:"d" u <> ""
+  | Fun (_, _, _, u) -> show_row pr ~prefix:"" ~sep:"" ~kind:"d" u <> ""
   | _ -> false
 
 (* Whether [t], shown, ends in a `!` or `uses` list: an implementation
@@ -551,30 +451,15 @@ and ends_in_effects pr t =
 and show_ret pr r =
   match r with
   | r when r = unit -> ""
-  | Fun (_, _, e, u, l) as f ->
+  | Fun (_, _, e, u) as f ->
       let s = show pr f in
-      if show_effects pr e u ^ show_lams pr l = "" then " -> " ^ s
-      else " -> (" ^ s ^ ")"
+      if show_effects pr e u = "" then " -> " ^ s else " -> (" ^ s ^ ")"
   | r when ends_in_effects pr r -> " -> (" ^ show pr r ^ ")"
   | r -> " -> " ^ show pr r
 
 and show_effects pr e u =
   show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" e
   ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
-
-(* A lambda set, ` [main.inc, main.main#1 | ..l0]`, only if the printer
-   shows them: nothing else ever does. *)
-and show_lams pr l =
-  if not pr.show_lams then ""
-  else
-    let tail =
-      match l.lvar with
-      | Some n -> [ "..l" ^ string_of_int n ]
-      | None -> [ "..l?" ]
-    in
-    match l.ids with
-    | [] -> " [" ^ String.concat "" tail ^ "]"
-    | ids -> " [" ^ String.concat ", " ids ^ " | " ^ String.concat "" tail ^ "]"
 
 (* How `ren types` prints a function: the signature `ren fmt --annotate`
    would write. [params] are the parameters' names. A row tail is printed
@@ -599,7 +484,7 @@ and show_lams pr l =
    is printed without its type, which is always the type's. *)
 let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
   match s.ty with
-  | Fun (ps, ret, errs, uses, lams) ->
+  | Fun (ps, ret, errs, uses) ->
       (* a parameter's row that is the function's own, which isn't printed:
          a transparent parameter, written `fn(...)`. One that ends in the
          same tail but has fewer labels fails with less than the function,
@@ -611,7 +496,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
         List.map
           (fun (p : param) ->
             match p.ty with
-            | Fun (qs, r, e, u, l) ->
+            | Fun (qs, r, e, u) ->
                 (* one row the function's own and the other closed and
                    empty is a closure that's kept, `f: fn() uses ..d`,
                    which isn't written like a transparent one, *)
@@ -625,7 +510,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
                   || (u_own && e = closed)
                   || kept errs e || kept uses u
                 then p
-                else { p with ty = Fun (qs, r, own errs e, own uses u, l) }
+                else { p with ty = Fun (qs, r, own errs e, own uses u) }
             | Impl i ->
                 (* a transparent one needs what the function uses, and
                    fails to be installed with what it fails with *)
@@ -642,7 +527,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
             | _ -> p)
           ps
       in
-      let ty = Fun (ps, ret, errs, uses, lams) in
+      let ty = Fun (ps, ret, errs, uses) in
       let s = { s with ty } in
       (* a tail is printed where it links two places: the function's own
          rows, a parameter, the result. So is one at the end of a
@@ -654,8 +539,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
         List.concat_map
           (fun (p : param) ->
             match p.ty with
-            | Fun (_, _, e, u, _) ->
-                Option.to_list e.tail @ Option.to_list u.tail
+            | Fun (_, _, e, u) -> Option.to_list e.tail @ Option.to_list u.tail
             | _ -> [])
           ps
       in
@@ -760,7 +644,7 @@ let value_signature ~names ~pub ~name (s : scheme) =
    it links two places, a closure it keeps and what it needs, say. *)
 let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
   match s.ty with
-  | Fun (ps, (Impl i as ret), _, _, _) ->
+  | Fun (ps, (Impl i as ret), _, _) ->
       let all =
         List.concat_map (fun (p : param) -> tails p.ty) ps @ tails ret
       in

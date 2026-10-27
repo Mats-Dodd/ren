@@ -183,8 +183,8 @@ and ('v, 'b, 't) expr_kind =
   | Binop of binop * ('v, 'b, 't) expr * ('v, 'b, 't) expr * int
       (** [a + b]. An operator is a method of its left side's type, `a.add(b)`
           (operators.md), and the [int] numbers that method's use, as a node of
-          its own, as [With]'s [lam] does: what inference found it to be, and
-          the type it's used at, are recorded there. [-a] is [Unop]'s *)
+          its own, as a [with_link]'s [knode] does: what inference found it to
+          be, and the type it's used at, are recorded there. [-a] is [Unop]'s *)
   | If of ('v, 'b, 't) expr * ('v, 'b, 't) expr * ('v, 'b, 't) expr option
       (** with no [else], the [if] is [Unit] *)
   | Call of ('v, 'b, 't) expr * ('v, 'b, 't) expr list
@@ -234,9 +234,9 @@ and ('v, 'b, 't) expr_kind =
   | With of { items : ('v, 'b, 't) with_item list; body : ('v, 'b, 't) expr }
       (** [with a, b in body] (deps.md, "`with`"): a set of items, each
           installed once around [body], in an order inference works out
-          (handlers.md, "A `with` is a set"). An item is an implementation, or a
-          wrapper, a call missing its last argument, which is [body] as a
-          lambda: `with retry(3) in body` is `retry(3, fn() => body)` *)
+          (handlers.md, "A `with` is a set"). An item is an implementation; a
+          wrapper, like `retry(3)`, is called instead, `try retry(3) fn() =>
+          body` *)
   | Handler of {
       deps : 't list;
           (** the dependencies after `for`, or after `over`, in order *)
@@ -265,8 +265,8 @@ and ('v, 'b, 't) expr_kind =
       (** [assert e]: a panic if [e] is false, which shows both sides of an
           [a == b] (deps.md, "`assert`") *)
 
-(* An item of a `with`: an implementation or a wrapper, or a chain of
-   them joined by `over`, [chain], the top first, each over the next:
+(* An item of a `with`: an implementation, or a chain of them joined by
+   `over`, [chain], the top first, each over the next:
    `cached(ttl) over counted() over pg_users(pool)`. [under] are the
    dependencies the bottom goes over when the chain ends in their names,
    `slow_clock(2) over Clock`: whatever implements them outside the `with`
@@ -277,14 +277,9 @@ and ('v, 'b, 't) with_item = {
   iloc : Loc.t;  (** the whole item *)
 }
 
-(* One implementation or wrapper of an item's chain, [link]. A wrapper's
-   body is a lambda, which [lam] numbers, as a node of its own; [knode]
-   is the node inference records whether it installs or wraps at. *)
-and ('v, 'b, 't) with_link = {
-  link : ('v, 'b, 't) expr;
-  lam : int;
-  knode : int;
-}
+(* One implementation of an item's chain, [link]; [knode] is the node
+   inference records what it installs at. *)
+and ('v, 'b, 't) with_link = { link : ('v, 'b, 't) expr; knode : int }
 
 (* An arm of a handler, `usd_to(c) => ...`: [arm_op] is the operation, a
    bare name as parsed and a [Dep_op] once resolved, and [arm_impl] the
@@ -527,7 +522,7 @@ let changed_receiver (e : ('v, 'b, 't) expr) =
   | Ref ({ kind = Call _; _ } as call) -> Some call
   | _ -> None
 
-(* The implementations and wrappers of a `with`'s items, in source order. *)
+(* The implementations of a `with`'s items, in source order. *)
 let with_links items =
   List.concat_map (fun i -> List.map (fun l -> l.link) i.chain) items
 

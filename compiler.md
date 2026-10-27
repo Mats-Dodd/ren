@@ -25,8 +25,7 @@ for.
    dynamic uniqueness check can't justify "no `Alloc`" unless the shared
    path is ruled out.
 2. **Each fact is computed once, by one pass, and carried in the IR.**
-   Types, effects, requirements and lambda sets now; ownership,
-   lifetimes, reuse and provenance later. Nothing downstream works one out
+   Types, effects and requirements now; ownership, lifetimes, reuse and provenance later. Nothing downstream works one out
    again, and nothing guesses it back from a name.
 3. **Every IR has a checker,** as Core Lint is for Core. A pass that
    breaks an IR's promise is caught where it did it, not where the
@@ -44,10 +43,10 @@ for.
    parse ─▶ resolve ─▶ infer ─▶ typed Core
                         │
                         └ one solver: types, ! rows, uses rows,
-                          requirements, lambda sets
+                          requirements
 
  whole program, later
-   specialize ─▶ defunctionalize ─▶ Mem IR ─▶ borrow inference
+   specialize ─▶ Mem IR ─▶ borrow inference
      ─▶ Perceus: dup/drop, reset/reuse ─▶ resource checks
      ─▶ instrumented interpreter, then C
 ```
@@ -64,9 +63,9 @@ inference every body a value goes through.
 | AST, parsed | parser.ml | the program as written | nothing yet: the tree-sitter grammar's differential test only checks that both parsers accept the same programs, not that they read them alike | yes |
 | AST, resolved | resolve.ml | every name found through scope, by its binder's id or its path | inference, which only reads it | yes |
 | inferred | infer.ml | each function's scheme and each node's type and lookup | the driver: a public function's inferred scheme is the one its interface states | yes |
-| Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments from R2, requirement dictionaries and lambda sets from R4 | Core Lint, which the tests run on every program | yes |
-| specialized Core | the specializer | Core with type arguments, requirements and lambda sets chosen | Core Lint | the memory stage |
-| Mem IR | memory lowering | A-normal form, layouts, closures as tagged unions | its own lint | the memory stage |
+| Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments from R2, requirement dictionaries from R4 | Core Lint, which the tests run on every program | yes |
+| specialized Core | the specializer | Core with type arguments and requirements chosen, and each block and known handler specialized where it's used | Core Lint | the memory stage |
+| Mem IR | memory lowering | A-normal form, layouts, a block as a code and a frame pointer | its own lint | the memory stage |
 | Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | the memory stage |
 | C | the C backend | the counted Mem IR, emitted | the C compiler, ASan and UBSan | after the memory stage |
 
@@ -104,22 +103,10 @@ it, each fact says so, and which step fixes it.
   use of one is passed a dictionary for each, as a function's is:
   `Map.get` is given its keys' `hash`, and `Array.sort` its elements'
   order.
-- **Lambda sets.** From R4. Which lambdas and functions a value of a
-  function type can be. Inference, by unification, as a hidden third
-  row of a function type beside `!` and `uses` (Lambda sets, below).
-  Carried in canonical types (ty.ml, `Ty.lams`), so in every Core node's
-  type and each use's type arguments, and each Core lambda carries its
-  identity; Core Lint checks them. They're invisible: no message and
-  nothing `ren types` prints shows one, only `ren core --lambdas`, a
-  debugging aid. Nothing reads them until specialization.
 - **Ownership, lifetimes, reuse credits, provenance.** Later, each by
   its own pass over Mem IR, after specialization: a known callee's body
   says whether it borrows, consumes or keeps a value, which is what
   makes reuse possible.
-
-Effects say what may happen, lambda sets what code may run. They're kept
-apart, because a pass that needs one never needs the other, and
-specialization reads lambda sets without touching effects.
 
 ## What each IR promises
 
@@ -134,7 +121,7 @@ falls short it says so.
 - **Inference's result** gives every expression and pattern a type and,
   where something was found through a type, what (infer.mli). It decides
   every question once: which constructor, which method, whether a call
-  can fail, whether a `with` installs a handler or wraps its body, the
+  can fail, which handler a `with` installs, the
   order a `with` installs its items in, and the type of the body a
   handler's `finally` is given, which `match`es handle errors and which arms are `fail` arms, whether
   a `try` unwraps a `Result`. Lower and exhaust read those decisions
@@ -167,20 +154,14 @@ falls short it says so.
   requirements, checked as a function's are; a tuple, and a tuple
   pattern, is checked part by part; and a `Map`'s `Entries` and a
   `Set`'s `Members`, the arrays a `for` goes over, are of the table's
-  own type's parts. Every function type has a
-  lambda set in canonical form, and Lint checks that a lambda's type's
-  set has the lambda's identity, and a function's, member's or
-  intrinsic's used as a value its own; that a use's set is its scheme's
-  with the use's lambda-set arguments put in; that an `if`'s or a
-  `match`'s set has whatever each branch's has; and that each identity a
-  callee's set has names a function or lambda of the module, or one it
-  uses, that takes as many arguments as the call passes. Since 9c, a
+  own type's parts. Since 9c, a
   function that isn't test code uses no test function, which is what
   lets `ren run` leave test code out. Since 10b, an intrinsic that reaches the
   world is used only by the real implementation of the dependency it's
   an operation of, and `journal_load` only by test code (`world`), so
   every call a program makes to the world is an operation's, which a
-  journal records.
+  journal records. Since 10c, a record of a dependency's operations is
+  only ever a handler's `Instance`'s, never a value of the program.
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -226,7 +207,8 @@ called:
   `same` at `Int` passes `Int`'s. One copy of each function, quick to
   build.
 - **Release builds** specialize the whole program: each generic function
-  for each type, requirement and lambda set it's used at, and each
+  for each type and requirement it's used at, each block for the call
+  it's passed to, and each
   dependency call for the handler known to be installed there. Results
   are cached by content, so a rebuild specializes only what changed.
   Specialization has a budget, and past it the code falls back to what a
@@ -343,9 +325,7 @@ The constraints:
 - **The rules of markers** (errors.md, "Marking"): a call no marker
   covers can't fail, and every marker covers something that can.
 - **An implementation's operation fails with no more than its
-  dependency declares** (deps.md, "Implementations"), and a record
-  implementation's operations don't call its own dependency outside a
-  `with` that installs it (stage 10a).
+  dependency declares** (deps.md, "Implementations").
 - **A row a named row is added to ends in it,** `..d`, once it has every
   other label, since that stops it getting more; and so do a function's
   own rows, in the rows it names.
@@ -411,9 +391,7 @@ general solution whatever order it's given the equalities in. An
 inclusion only adds labels, so each row ends up with the union of what's
 included in it, whatever order they're added in, and a requirement only
 adds to what a variable needs, so each needs what any use or `==` says
-it does. Lambda sets need no constraint: they're unified where they
-meet, as the rest of a type is, and two unified each get what the other
-lists, whatever order they meet in (Lambda sets, below). A check that reads a
+it does. A check that reads a
 result is decided after whatever decides it, so it never sees half of it.
 And a constraint that fails changes nothing, so it can't change what
 another sees. What order does decide is only which of two constraints
@@ -439,77 +417,6 @@ out in full never needs it, since its type is known before it's
 checked, unless it's generic: what it needs of its type parameters
 isn't written, so a generic method is known only once its body is
 checked, like any other function.
-
-## Lambda sets
-
-A function type has a third row beside `!` and `uses`, its **lambda
-set**: the identities of the lambdas and functions a value of the type
-can be, and a variable for the rest. Specialization will read it to turn
-a call of a function value into a call of one of a few known functions,
-and defunctionalization to make a closure a tagged union with an apply
-switch. Until then nothing reads them, but they're inferred and checked
-now, since retrofitting them is what Roc found hard.
-
-- **Identities.** A top-level function, a member, an intrinsic or a
-  dependency's operation is its path, written in full (`Ty.global_id`):
-  `shop/cart.total`, `Array.push`, `Clock.now`. A lambda is its
-  top-level function's path and its place in it, counting from 1 in the
-  order inference meets them, outer before inner (`Ty.lambda_id`):
-  `main.main#2`. So an edit in one function never renumbers another's
-  lambdas; adding a lambda renumbers those after it in its own function.
-  The body a `with` passes to a wrapper, a handler's operation and an
-  implementation's are lambdas like any other. An operation used as a
-  value, `let f = Clock.now`, is a lambda lowering makes, which takes the
-  operation's identity.
-- **Inference.** Each lambda's type gets a set of its own identity and a
-  fresh variable, and each use of a function, member, intrinsic or
-  operation a set with its identity added to what its scheme says
-  (infer_lookup.ml, `named`). Then sets meet only by unification, as the
-  rest of the type does: the two branches of an `if`, an argument and its
-  parameter, a variable and its value. Unifying two gives each what the
-  other lists, and a fresh variable then ends both (unify.ml,
-  `unify_lams`). A set is always open, so this never fails, and it only
-  adds, so the result doesn't depend on the order sets meet in. A set
-  that lists an identity twice means what listing it once does, as a row
-  of dependencies does, which is what lets a big set be linked to whole
-  rather than copied.
-- **Generalizing.** A set's variable is generalized and instantiated as
-  a row variable is, numbered apart from type and row variables. So a
-  generic `fn map(xs, f)` has a variable for `f`'s set, and each call
-  puts what it passes there, at that call only. A function's own set,
-  the outermost of its type, is left alone in its group: a use of it,
-  even in its own body, gets a set of its own (`own_set`), so its scheme
-  says nothing of what its uses are given, and each use adds its
-  identity to a fresh one.
-
-**In schemes and interfaces.** A module's own schemes keep the sets
-inference found: `fn even(n, k)`, in a group with an `odd` that passes
-`even` a lambda, has `k: fn(Int) -> Bool [main.odd#1 | ..l0]`, and a
-call of `even` from the module adds its own lambda to that. An interface
-doesn't: each function type in it has a set of its own, which says
-nothing of what flows there (`Ty.forget_lams`), as a written
-declaration would. Sets are inferred from bodies, so an interface that
-kept them would change with every body edit that changes which lambda
-reaches which function, and early cutoff would be lost; they'd also say
-which private lambdas a public function passes around, which a
-dependent has no use for while checking. So a dependent sees another
-module's function as its signature has it, its sets each a variable of
-its own: what `pick(c, f, g)` returns is a set unrelated to what it's
-given. That's sound, since a set is always open, just imprecise across
-modules, which is lambda set specialization's known limit with separate
-compilation; release builds specialize the whole program, from the
-implementation tier, which keeps the typed Core with the sets in it.
-The driver's check that a public function's inferred scheme is the one
-its interface states compares them without sets, and Core Lint checks
-a use of another module's function against its interface's scheme,
-not that module's own.
-
-**Cost.** A set is a row of identities, so unifying a small one with a
-big one walks the big one. The usual sets are small. One that gathers
-thousands, an array literal of thousands of lambdas, is linked to whole
-rather than copied, and converted to canonical form once for all the
-nodes that share it (types.ml, `canon_lams`): 4,000 lambdas in one array
-check in about 0.3s (test_infer.ml).
 
 ## Stage 10.0
 
@@ -544,7 +451,8 @@ the next starts:
   group, a handler coercion that depends on argument order, a private
   function rejected because two rows share a tail, and an error set of
   tags written in `Err` left open after its group.
-- **R4, requirements and lambda sets.** `==` and `!=` require `eq`,
+- **R4, requirements and lambda sets** (lambda sets removed in 10c,
+  [foundations.md](foundations.md)). `==` and `!=` require `eq`,
   derived structurally and absent from a type with a function in it. A
   generic function's requirements are inferred and kept in its scheme and
   its module's interface, and passed as dictionaries. A module's
@@ -869,84 +777,12 @@ Where the work forced a change to the plan above:
   as higher-order: specializing for a known handler is decided where
   it's installed, which is later work. Its Core has no source locations,
   so it changes only when one of those bodies does (test_modules.ml,
-  "what the implementation tier records"), or, since the lambda sets in
-  it, which specialization will read, come from the module's other
-  bodies too, when an edit elsewhere in the module changes which lambdas
-  reach one. It isn't yet all a specializer will need. It holds only
+  "what the implementation tier records"). It isn't yet all a specializer will need. It holds only
   public bodies, so a private generic helper a public one calls isn't
   in it; and it tells a higher-order function only by the function
   types its signature writes, so one that takes a record with a function
   field, or an implementation of a dependency, isn't either. Both wait
   for the stage that reads it, which knows what it has to copy.
-- **R4, lambda sets unify, and don't include.** The plan has sets unify
-  and include as rows do. They only unify: everywhere a function value
-  flows, inference unifies its type with the type of where it goes, as it
-  always has, so the two sets are one, and an inclusion would never have
-  anything to add. It's the imprecision lambda set specialization accepts
-  (Roc's sets are unified too): `if c then f else g` makes `f`'s and
-  `g`'s sets the same, so each lists the other. A set is always open,
-  which is what makes unifying two never fail, so it can't add an error;
-  a closed set would say no other function can reach a type, which
-  specialization can work out from the whole program, and nothing needs
-  it before then.
-- **R4, a function's own set.** A use of a function of the group being
-  checked is joined with the function's own type once the group is done
-  (The constraint solver). Joined whole, every use's identity, and what
-  the use is then given, would be in the function's own set, the
-  outermost of its scheme, and so in every later use's. So a use gets a
-  set of its own in place of the function's (Infer_lookup.own_set,
-  solve.ml's `join`), and the function's own set is a variable nothing in
-  its group touches, which generalizes.
-- **R4, the identities.** The plan leaves them to the implementation: a
-  path for what has one (`Ty.global_id`), and a lambda's function's path
-  and its place in it (`Ty.lambda_id`), which inference records at the
-  lambda's node (`Infer.found`'s `Lambda_id`) and Core carries on the
-  `Lambda`, so lowering never works it out again. The lambda lowering
-  makes for an operation used as a value takes the operation's path, as
-  inference gave its type.
-- **R4, what an implementation carries.** An implementation's type is
-  its dependency's, `Clock uses Os`, which has no lambda sets: the
-  lambdas of a record implementation and a handler's operations have
-  their sets, with their identities, but a call of an operation
-  (`Dep_call`) doesn't know which implementation it reaches. Which one is
-  installed is what specializing for known handlers works out, where it's
-  installed, a later stage's work.
-- **R4, lambda sets in canonical form.** `Ty.Fun` has a fifth part,
-  `Ty.lams`: the identities, sorted, and a lambda-set variable numbered
-  apart from type and row variables, so no row variable's number moved
-  and no printed type or row argument changed; type arguments have a
-  list for them (`Ty.args.lams`). Its variable is an `option` only for a
-  type written in a declaration, a field's or an operation's, before
-  `Ty.canonical` numbers it: a set of its own (`Ty.any_lams`), which Core
-  Lint takes as any set, since a declaration says nothing of what flows
-  to it.
-- **R4, what Core Lint checks of them.** "A call's callee's set is
-  consistent" is read as: every identity in the callee's set names a
-  function, member, intrinsic, operation or lambda of the module, or one
-  it uses, that takes as many arguments as the call passes, since those
-  are what specialization will call there. "Sets of joined branches
-  include both" is checked as each branch's sets being within the
-  `if`'s or `match`'s, with its own message, before the types are
-  compared whole, which compares sets too.
-- **R4, printing lambda sets.** `ren core --lambdas` prints Core typed,
-  as `--types` does, with every function type's set after its effects,
-  `fn(Int) -> Int [main.inc, main.main#1 | ..l0]`, each use's lambda-set
-  arguments after its row arguments, each lambda's identity and type,
-  and the type of a local, an `if`, a `match`, a `let` or a call whose
-  type is a function's. It's a debugging aid, so its format can change;
-  the tests use it (test_lower.ml). Nothing else prints a set: `ren
-  types`, messages and `ren core --types` are as they were.
-- **R4, a big lambda set.** Unifying two sets as rows are unified copies
-  what each lacks into the other, so an array of n lambdas, each unified
-  with the set of all the elements so far, took time quadratic in n in
-  copies, and converting each node's set again cubic: 2,000 lambdas took
-  over 30s to check and run. A set of more than 32 identities is linked
-  to whole instead of copied, which a set listing an identity twice
-  allows, and a node's set that is linked to one already converted reuses
-  it (types.ml, `canon_lams`). The cost: a type argument for a set's
-  variable can then list some of the scheme's own identities too, which
-  changes nothing it means, the set being their union.
-
 ## Stage 9a deviations
 
 Where building operators, `key` and `with numeric` (operators.md, 9a)
@@ -1272,21 +1108,23 @@ carried:
 - **A `with`'s items** are a list in the AST, each a chain of links, top
   first, and what the bottom goes over when it's the one outside,
   `over Prices`. Inference classifies each link once, in the `with`'s
-  own context, as an implementation or a wrapper (`Installs`,
-  `Installs_handler` or `Wraps` at the link's node), checks the chain and
+  own context, as an implementation (`Installs` or `Installs_handler`
+  at the link's node), checks the chain and
   the set, and records the order to install the items in at the `with`,
   `Install_order`: an item whose needs another installs goes inside it,
   and otherwise the order of their dependencies' names. Lowering makes
   each implementation's value outside, in the order written, then nests
   a Core `With` or `With_handler` for each in that order, each chain's
-  bottom outermost, and the wrappers innermost.
+  bottom outermost. Until 10c a link could be a wrapper too, a function
+  given the body as a block; 10c took them out (foundations.md), and a
+  wrapper in a `with` is an error whose help writes the call,
+  `try retry(3) fn() => ...`.
 - **`next`** is resolved to `Next_op (dep, op)` only in a handler
   declared `over` (Resolve, `next_op`), typed as the operation is, and
   lowered to a `Dep_call` marked `next`, on the `Handler`'s own evidence,
   what's installed where it is, so the one under it, even inside a `with`
   in an operation. Only the handler's state, operations and `finally`
-  can call it: Infer reports a call in a lambda, or in the body of a
-  `with` a wrapper is given, which is one (`next_at`), since one could be
+  can call it: Infer reports a call in a lambda (`next_at`), since one could be
   passed to the implementation under the handler and kept, a cycle
   ("No cycles"). The operations and `finally` are the only lambdas Core
   lets keep that evidence; Lint checks a `next` call is given its
@@ -1329,9 +1167,6 @@ Where it differed from its plan:
 - **A written implementation type without `!` can't fail to start,** a
   transparent parameter's included, where the plan had a transparent one
   fail with its function's errors.
-- **A record implementation that uses its own dependency** is reported
-  at the call that does, outside a `with` installing it, not at the
-  record: a type that merely says it needs it is no error.
 - **The help for a link over nothing** writes `over D` rather than naming
   a maker of `D`.
 - **`ren core` doesn't print a `With`'s `desc`.**
@@ -1460,4 +1295,5 @@ above); `5 + price` and `price < 5` on an opaque number help with its
 constructors, from any expression of its representation; a handler's
 parameter that goes over nothing says to write `over D` in its type;
 `h() over A` where `h` goes over `A & B` says to name both; and `outer`,
-or `next`, in a record implementation says a handler over it is how.
+or `next`, in a record implementation says a handler over it is how
+(record implementations removed in 10c).

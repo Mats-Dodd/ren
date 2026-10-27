@@ -32,11 +32,10 @@ let rec occurs id level t =
   | TImpl i ->
       occurs_row ~ty:id (-1) level i.needs;
       occurs_row ~ty:id (-1) level i.fails
-  | TFun (ps, r, e, u, l) ->
+  | TFun (ps, r, e, u) ->
       List.iter (occurs id level) (r :: param_tys ps);
       occurs_row ~ty:id (-1) level e;
-      occurs_row ~ty:id (-1) level u;
-      occurs_row (-1) level l
+      occurs_row ~ty:id (-1) level u
 
 (* The same for row variables. Type and row ids never clash, so passing -1
    as [id] just adjusts levels. A label's payload is made of types, which
@@ -68,7 +67,7 @@ let rec unify st a b =
   (* in its own module, an opaque type is what it's represented as *)
   | (TCon (p, _) as t), u when Hashtbl.mem st.reps p -> unify st (reveal st t) u
   | t, (TCon (p, _) as u) when Hashtbl.mem st.reps p -> unify st t (reveal st u)
-  | TFun (p1, r1, e1, u1, l1), TFun (p2, r2, e2, u2, l2)
+  | TFun (p1, r1, e1, u1), TFun (p2, r2, e2, u2)
     when List.length p1 = List.length p2 ->
       List.iter2
         (fun a b ->
@@ -78,8 +77,7 @@ let rec unify st a b =
         p1 p2;
       unify st r1 r2;
       unify_row st e1 e2;
-      unify_row st u1 u2;
-      unify_lams st l1 l2
+      unify_row st u1 u2
   | TErrors e1, TErrors e2 -> unify_row st e1 e2
   (* an implementation of several dependencies is one of exactly those;
      where a written type asks for fewer, it's narrowed before it gets
@@ -120,86 +118,6 @@ and unify_row st a b =
   | (REmpty | RSkol _), (REmpty | RSkol _) | REmpty, RExtend _ -> raise Mismatch
   | RVar { contents = RLink _ }, _ | _, RVar { contents = RLink _ } ->
       assert false
-
-(* Two lambda sets are one (ty.ml): each gets the identities the other
-   lists, and a fresh variable then ends both. A set is always open, so
-   this doesn't fail, and unlike two rows of errors, two sets that end in
-   one variable but list different identities can be made one too: that
-   variable gets what either lists. A set may list an identity twice,
-   which means what listing it once does (Types.row_parts), and that's what
-   makes it quick when one set has many: rather than given a copy of what
-   the big one lists, the other's end is linked to the whole of it. An
-   array of thousands of lambdas, each unified with the set of all of them
-   so far, then costs a walk of that set each, not a copy of it. *)
-and unify_lams st a b =
-  (* how many identities a set lists, and its end *)
-  let rec count n r =
-    match repr_row r with RExtend (_, rest) -> count (n + 1) rest | r -> (n, r)
-  in
-  let rec names acc r =
-    match repr_row r with
-    | RExtend (l, rest) -> names (l.name :: acc) rest
-    | _ -> acc
-  in
-  let rec lists r n =
-    match repr_row r with
-    | RExtend (l, rest) -> l.name = n || lists rest n
-    | _ -> false
-  in
-  (* what [from] lists that [have] doesn't, each once. A set can have
-     thousands: a few are looked for in [have] itself, and more in a table
-     of it, so it takes time proportional to the two, not their product.
-     The tables are only looked up, never walked *)
-  let missing have from =
-    let from = names [] from in
-    let few = List.compare_length_with from 8 <= 0 in
-    let has =
-      if few then lists have
-      else
-        let t = Hashtbl.create 16 in
-        List.iter (fun n -> Hashtbl.replace t n ()) (names [] have);
-        Hashtbl.mem t
-    in
-    let seen = Hashtbl.create 16 in
-    List.filter_map
-      (fun n ->
-        if has n || Hashtbl.mem seen n then None
-        else (
-          Hashtbl.replace seen n ();
-          Some (lam n)))
-      from
-  in
-  let na, end_a = count 0 a and nb, end_b = count 0 b in
-  match (end_a, end_b) with
-  | RVar ({ contents = RUnbound (_, l) } as c1), RVar c2 when c1 == c2 -> (
-      match missing a b @ missing b a with
-      | [] -> ()
-      | more ->
-          c1 := RLink (extend more (RVar (ref (RUnbound (fresh_id st, l))))))
-  | ( RVar ({ contents = RUnbound (_, l1) } as c1),
-      RVar ({ contents = RUnbound (_, l2) } as c2) )
-    when max na nb <= 32 ->
-      (* each gets what the other has that it hasn't, as rows do *)
-      let rest = RVar (ref (RUnbound (fresh_id st, min l1 l2))) in
-      let for_a = missing a b and for_b = missing b a in
-      c1 := RLink (extend for_a rest);
-      c2 := RLink (extend for_b rest)
-  | ( RVar ({ contents = RUnbound (_, l1) } as c1),
-      RVar ({ contents = RUnbound (_, l2) } as c2) ) ->
-      (* a big one: it gets what the other has that it hasn't, and the
-         other all of it, by linking its end to it, so the big one isn't
-         copied. The other's variable, a type argument perhaps, then lists
-         some of what it had too *)
-      let big, small, big_end, small_end =
-        if na >= nb then (a, b, c1, c2) else (b, a, c2, c1)
-      in
-      let more = missing big small in
-      let rest = RVar (ref (RUnbound (fresh_id st, min l1 l2))) in
-      big_end := RLink (extend more rest);
-      small_end := RLink big
-  | _ ->
-      (* a set that isn't open, which nothing makes *)
-      unify_row st a b
 
 (* [row] with [label] removed, extending an open tail if the label isn't
    there yet. A label of the same name has to have the same payload. *)
@@ -263,13 +181,12 @@ let copier () =
             c)
     | TVar { contents = Link _ } -> assert false
     | TCon (p, args) -> TCon (p, List.map ty args)
-    | TFun (ps, r, e, u, l) ->
+    | TFun (ps, r, e, u) ->
         TFun
           ( List.map (fun (p : param) -> { p with ty = ty p.ty }) ps,
             ty r,
             row e,
-            row u,
-            row l )
+            row u )
     | TErrors r -> TErrors (row r)
     | TImpl i ->
         let needs = row i.needs in

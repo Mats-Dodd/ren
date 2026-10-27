@@ -1283,7 +1283,6 @@ fn main() = print(Some(true))
       | Some (Installs_handler ps) ->
           print_endline
             ("installs a handler of " ^ String.concat ", " (List.map path ps))
-      | Some Wraps -> print_endline "wraps"
       | Some (Install_order o) ->
           print_endline
             ("installs in the order "
@@ -1292,7 +1291,7 @@ fn main() = print(Some(true))
       | Some Handles -> print_endline "handles errors"
       | Some Fail_arm -> print_endline "a `fail` arm"
       | Some Error_tag -> print_endline "an error's tag"
-      | Some Unwraps -> print_endline "unwraps a result"
+      | Some Unwrap -> print_endline "unwraps a result"
       | Some (Lambda_id id) -> print_endline ("lambda " ^ id)
       | Some Builtin_op -> print_endline "a built-in operator"
       | Some (Generic_op r) -> print_endline ("an operator, by its " ^ r)
@@ -1339,12 +1338,8 @@ fn main() = twice(fn() => say(1))
         Ty.printer ~show_tail:(fun _ -> true) ~names:Path.full v.scheme
       in
       Printf.printf "%s: %s (%s)\n" v.vname (Ty.show pr v.scheme.ty)
-        (* but for lambda sets, which an interface leaves out: `app`'s
-           `f` is given the lambda in its body *)
-        (if
-           Ty.forget_lams (Path.Map.find (Path.make "test" v.vname) schemes)
-           = v.scheme
-         then "as inferred"
+        (if Path.Map.find (Path.make "test" v.vname) schemes = v.scheme then
+           "as inferred"
          else "differs from inference"))
     iface.values;
   [%expect
@@ -1859,13 +1854,10 @@ let%expect_test "instantiate gives its fresh variables in variable order" =
       {
         ty =
           Fun
-            ( [
-                read (Var 0); read (Fun ([], Var 1, row [] 0, closed, any_lams));
-              ],
+            ( [ read (Var 0); read (Fun ([], Var 1, row [] 0, closed)) ],
               array (Var 2),
               row [ tag "B" [ Var 3 ]; tag "A" [ Var 4 ] ] 1,
-              row [] 2,
-              any_lams );
+              row [] 2 );
         names = [];
         reqs = [];
         row_reqs = [];
@@ -2059,29 +2051,6 @@ let%expect_test "a group of many calls checks in time linear in them" =
   print_endline (if took < 10. then "in time" else Printf.sprintf "%.1fs" took);
   [%expect {| in time |}]
 
-let%expect_test "many lambdas in one lambda set check in time" =
-  (* an array of 4,000 lambdas makes one set of all of them, which each
-     element's set is unified with in turn: the one with fewer identities
-     is linked to the other whole, rather than given a copy of them
-     (Unify.unify_lams), and each set is converted once (Types.canon_lams),
-     so it checks in about half a second, where copying took minutes *)
-  let src =
-    String.concat "\n"
-      [
-        "fn main() =";
-        "  let fs = ["
-        ^ String.concat ", "
-            (List.init 4_000 (Printf.sprintf "fn(x: Int) => x + %d"))
-        ^ "]";
-        "  print(fs.len())";
-      ]
-  in
-  let start = Sys.time () in
-  ignore (Driver.check ~file src);
-  let took = Sys.time () -. start in
-  print_endline (if took < 10. then "in time" else Printf.sprintf "%.1fs" took);
-  [%expect {| in time |}]
-
 (* ---- requirements (operators.md, "Generic code") ---- *)
 
 let%expect_test "comparing functions is an error, not a panic (B2)" =
@@ -2125,7 +2094,8 @@ type Wrap = { tick: Tick, n: Int }
 type Shape =
   | Circle(r: Int)
   | Drawn(draw: fn() -> Int)
-fn fixed() -> Tick = Tick { now: fn() => 1 }
+handler fixed() for Tick =
+  now() => 1
 fn main() =
   print(fixed() == fixed())
   print(Wrap { tick: fixed(), n: 1 } == Wrap { tick: fixed(), n: 1 })
@@ -2135,32 +2105,32 @@ fn main() =
   [%expect
     {|
     error: `Tick` has no `==`
-       ┌─ test.ren:10:9
-    10 │   print(fixed() == fixed())
+       ┌─ test.ren:11:9
+    11 │   print(fixed() == fixed())
        │         ^^^^^^^^^^^^^^^^^^
        = a type with a function in it has no `==` or `hash`
        = an implementation of `Tick` is its operations, which are functions
        help: compare what its operations return instead
 
     error: `Wrap` has no `==`
-       ┌─ test.ren:11:9
-    11 │   print(Wrap { tick: fixed(), n: 1 } == Wrap { tick: fixed(), n: 1 })
+       ┌─ test.ren:12:9
+    12 │   print(Wrap { tick: fixed(), n: 1 } == Wrap { tick: fixed(), n: 1 })
        │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
        = a type with a function in it has `==` and `hash` only through its `key`
        = the field `tick` of `Wrap` has a function in it
        help: give `Wrap` a key, which says what makes two the same: `fn key(self) -> K = ...`
 
     error: `Shape` has no `==`
-       ┌─ test.ren:12:9
-    12 │   print(Circle(1) == Circle(2))
+       ┌─ test.ren:13:9
+    13 │   print(Circle(1) == Circle(2))
        │         ^^^^^^^^^^^^^^^^^^^^^^
        = a type with a function in it has `==` and `hash` only through its `key`
        = the field `draw` of `Drawn` has a function in it
        help: give `Shape` a key, which says what makes two the same: `fn key(self) -> K = ...`
 
     error: `Option<fn() -> Int>` has no `==`
-       ┌─ test.ren:13:9
-    13 │   print(Some(fn() => 1) == None)
+       ┌─ test.ren:14:9
+    14 │   print(Some(fn() => 1) == None)
        │         ^^^^^^^^^^^^^^^^^^^^^^^
        = a type with a function in it has no `==` or `hash`
        = it has `fn() -> Int` in it

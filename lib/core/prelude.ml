@@ -688,7 +688,6 @@ pub test fn replay(file: Str) -> Clock & Console & Fs & Os & Proc & Random =
 
 (* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
    [n]th row variable, numbered by first appearance (ty.ml). *)
-(* canonical numbers each function type's lambda set *)
 let scheme_of ?(reqs = []) ty : Ty.scheme =
   Ty.canonical { ty; names = []; reqs; row_reqs = [] }
 
@@ -707,7 +706,7 @@ let scheme (x : Intrinsic.t) =
   (* most fail with nothing and use nothing: open rows, which any row
      fits *)
   let fn ?reqs params ret =
-    scheme_of ?reqs (Fun (params, ret, open_row 0, open_row 1, any_lams))
+    scheme_of ?reqs (Fun (params, ret, open_row 0, open_row 1))
   in
   let inout ty = { mode = Inout; ty } in
   (* a key, or a member of a set, is found by its hash, with the `==` it
@@ -834,12 +833,11 @@ let scheme (x : Intrinsic.t) =
            ( [ read bytes ],
              str,
              { labels = [ label "InvalidUtf8" ]; tail = None },
-             open_row 0,
-             any_lams ))
+             open_row 0 ))
   (* fn(self: Bytes) -> Int *)
   | Bytes_len -> fn [ read bytes ] int
-  (* fn(self: Int, n: Int) -> Int: the arithmetic that wraps around at
-     64 bits instead of panicking (operators.md, "`Int` and `Float`") *)
+  (* fn(self: Int, n: Int) -> Int: wrapping arithmetic at 64 bits,
+     instead of panicking (operators.md, "`Int` and `Float`") *)
   | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul ->
       fn [ read int; read int ] int
   (* fn(self: Int) -> Int *)

@@ -1,5 +1,5 @@
 (* Handlers and `with` (see infer_expr.ml; deps.md): a handler's body,
-   and a `with` that installs an implementation or wraps its body. *)
+   and a `with` that installs implementations around its body. *)
 
 open Ast
 open Ast.Resolved
@@ -36,18 +36,14 @@ type core = {
     unit;
 }
 
-(* What a link of a `with`'s item is ([classify]): an implementation, a
-   wrapper, which is given the context it's called in and what checks
-   what's inside it, or something that isn't either, reported, or reported
-   once what the `with`'s body uses is known. *)
-type link =
-  | Implementation of with_link * impl
-  | Wrapper of with_link * (ctx -> (ctx -> ty option -> ty) -> ty)
-  | Broken of (row -> unit)
+(* What a link of a `with`'s item is ([classify]): an implementation, or
+   something that isn't one, reported, or reported once what the `with`'s
+   body uses is known. *)
+type link = Implementation of with_link * impl | Broken of (row -> unit)
 
 (* An item of a `with`, checked as a chain ([with_]): by its place in the
    `with`, what it installs, each link with its implementation, top first,
-   or the wrappers it is, or neither, since something's wrong. *)
+   or nothing, since something's wrong. *)
 type item =
   | Installs_item of {
       idx : int;
@@ -55,10 +51,6 @@ type item =
       links : (with_link * impl) list;
       installs : Path.t list;
     }
-  | Wraps_item of
-      int
-      * with_item
-      * (with_link * (ctx -> (ctx -> ty option -> ty) -> ty)) list
   | Bad_item of int
 
 let sprintf = Printf.sprintf
@@ -141,14 +133,14 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
         | Dep_op (p, op) -> (
             match dep_op_in op (Hashtbl.find env.types p) with
             | Some fd -> (
-                match field_type env ~tvars:[] fd with
-                | TFun (ps, r, errs, _, l) -> Some (p, op, ps, r, errs, l)
+                match field_type ~tvars:[] fd with
+                | TFun (ps, r, errs, _) -> Some (p, op, ps, r, errs)
                 | _ -> None)
             | None -> None)
         | _ -> None
       in
       match (op, a.arm_impl.kind) with
-      | Some (p, op, ps, r, errs, l), Lambda (params, body)
+      | Some (p, op, ps, r, errs), Lambda (params, body)
         when List.length params = List.length ps ->
           let declared = fst (row_parts errs) in
           (* what it fails with, which is its own until the group is done:
@@ -164,14 +156,12 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
                  ierrs = open_errs;
                  ivalue = a.arm_impl;
                  inodes = cx.nodes;
-                 ineeds = None;
                });
           (* checked as a lambda is, against the operation, but what its
              calls use is what the handler needs, and they're the
              handler's calls, so a message can point at one *)
           let notes = [ part_of (type_name env p) "operation" op ] in
           let why = explain ~notes () in
-          (* its result reads as a record implementation's lambda's does *)
           let result_why = explain ~notes ~msg:arm_produces () in
           let qs =
             List.map2
@@ -180,7 +170,7 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
                 else param_type env ~tparams:cx.tparams ~named:cx.named q)
               params ps
           in
-          let lams = lambda_set env cx a.arm_impl.node in
+          name_lambda cx a.arm_impl.node;
           bind_params hcx params qs;
           let acx =
             {
@@ -190,12 +180,12 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
             }
           in
           core.check env acx body r ~why:result_why;
-          let t = TFun (qs, r, open_errs, needs, lams) in
+          let t = TFun (qs, r, open_errs, needs) in
           Hashtbl.replace cx.nodes a.arm_impl.node t;
           ignore
             (unifies env why a.arm_impl.loc ~found:t
-               ~expected:(TFun (ps, r, open_errs, needs, l)))
-      | Some (p, op, ps, _, _, _), Lambda (params, _) ->
+               ~expected:(TFun (ps, r, open_errs, needs)))
+      | Some (p, op, ps, _, _), Lambda (params, _) ->
           report env
             (arm_arity a.arm_name.loc ~dep:(type_name env p) ~op
                (List.length ps) (List.length params));
@@ -240,7 +230,7 @@ and finally_ core env cx hcx ~node ~in_state ~fails ~needs (fin : expr) =
       env.finally_rows <- eid :: env.finally_rows;
       Hashtbl.replace env.finallies cx.self (node, tid, eid);
       let qs = [ { mode = Read; ty = rt } ] in
-      let lams = lambda_set env cx fin.node in
+      name_lambda cx fin.node;
       bind_params hcx [ p ] qs;
       let fcx =
         {
@@ -259,7 +249,7 @@ and finally_ core env cx hcx ~node ~in_state ~fails ~needs (fin : expr) =
              ~msg:(finally_produces ~result:(show (printer env) rt) r)
              ~type_params:false ());
       env.in_state <- None;
-      Hashtbl.replace cx.nodes fin.node (TFun (qs, t, fails, needs, lams))
+      Hashtbl.replace cx.nodes fin.node (TFun (qs, t, fails, needs))
   | Lambda (ps, _) ->
       report env (finally_params fin.loc (List.length ps));
       ignore (core.infer env hcx fin)
@@ -268,8 +258,9 @@ and finally_ core env cx hcx ~node ~in_state ~fails ~needs (fin : expr) =
 (* ---- `with` (handlers.md, "A `with` is a set") ---- *)
 
 (* What a link of a `with`'s item is, found from its type in the context
-   outside the `with`, where it's made. *)
-and classify core env cx ~kw ~body (lk : with_link) : link =
+   outside the `with`, where it's made. A wrapper, a function that takes a
+   block, is called instead: `try retry(3) fn() => ...` ([wrapper]). *)
+and classify core env cx (lk : with_link) : link =
   let item = lk.link in
   (* an implementation, if [t] is one *)
   let impl t =
@@ -315,7 +306,7 @@ and classify core env cx ~kw ~body (lk : with_link) : link =
             report env (cant_install item.loc Unknown);
             Broken (fun _ -> ()))
     | t when impl_of t <> None -> Implementation (lk, Option.get (impl_of t))
-    | TFun ([], ret, _, _, _) as tf when impl_of (reveal env.st ret) <> None ->
+    | TFun ([], ret, _, _) as tf when impl_of (reveal env.st ret) <> None ->
         (* `with h in`, a handler or a function that makes an
            implementation not called: the body is checked as if it were,
            so what it uses isn't reported as missing too *)
@@ -330,34 +321,22 @@ and classify core env cx ~kw ~body (lk : with_link) : link =
   match item.kind with
   | Call (({ kind = Field (r, m); _ } as f), args) -> (
       let tr = member_of_several env cx r (core.infer env cx r) m in
-      (* a method is a wrapper if it takes one more argument, besides its
-         `self`, than it's given *)
-      let wrapper =
+      (* a method that takes one more argument, besides its `self`, than
+         it's given, a block, is a wrapper *)
+      let takes =
         match op_of env tr m.name with
         | Some (td, ({ okind = Method; _ } as o)) -> (
             let path = op_path td o in
             if path.home = env.home && not (Hashtbl.mem env.globals path) then
               raise (Unchecked { caller = cx.self; callee = path });
             match repr (lookup env cx ~node:f.node f.loc (Global path)) with
-            | TFun (self :: ps, ret, errs, uses, l) as tm
-              when List.length ps = List.length args + 1 ->
-                Some (path, tm, self, TFun (ps, ret, errs, uses, l))
+            | TFun (_ :: ps, _, errs, _) when takes_block env ps args ->
+                Some (ps, errs)
             | _ -> None)
         | _ -> None
       in
-      match wrapper with
-      | Some (path, tm, self, tf) ->
-          Hashtbl.replace cx.nodes f.node tm;
-          Hashtbl.replace cx.found f.node (Method_of path);
-          unify_at env r.loc ~found:(widen env ~loc:r.loc tr) ~expected:self.ty;
-          if self.mode = Inout then
-            report env (wrapper_changes_receiver item.loc m.name);
-          Wrapper
-            ( lk,
-              fun cx inner ->
-                wrap core env cx ~kw ~lk ~call:item ~f ~args
-                  ?target:(if group_call env path then Some path else None)
-                  ~callee:path ~skip:1 ~body tf inner )
+      match takes with
+      | Some (ps, errs) -> wrapper core env cx item args ps errs
       | None ->
           let t = core.infer_call env cx ~tr item f args in
           Hashtbl.replace cx.nodes item.node t;
@@ -375,7 +354,7 @@ and classify core env cx ~kw ~body (lk : with_link) : link =
         | _ -> true
       in
       match reveal env.st tf with
-      | TFun (ps, ret, _, _, _) when short ps ret ->
+      | TFun (ps, ret, _, _) when short ps ret ->
           let name = callee_name f in
           report env
             (with_too_few item.loc name
@@ -384,11 +363,8 @@ and classify core env cx ~kw ~body (lk : with_link) : link =
           List.iter (fun a -> ignore (core.infer env cx a)) args;
           Hashtbl.replace cx.nodes item.node ret;
           impl ret
-      | TFun (ps, _, _, _, _) when List.length ps = List.length args + 1 ->
-          Wrapper
-            ( lk,
-              fun cx inner ->
-                wrap core env cx ~kw ~lk ~call:item ~f ~args ~body tf inner )
+      | TFun (ps, _, errs, _) when takes_block env ps args ->
+          wrapper core env cx item args ps errs
       | _ ->
           let t = core.call_with env cx item f tf args in
           Hashtbl.replace cx.nodes item.node t;
@@ -396,13 +372,45 @@ and classify core env cx ~kw ~body (lk : with_link) : link =
   | _ -> (
       let t = core.infer env cx item in
       match reveal env.st t with
-      | TFun ([ _ ], _, _, _, _) ->
-          Wrapper
-            ( lk,
-              fun cx inner ->
-                wrap core env cx ~kw ~lk ~call:item ~f:item ~args:[] ~body t
-                  inner )
+      | TFun (ps, _, errs, _) when takes_block env ps [] ->
+          wrapper core env cx item [] ps errs
       | _ -> impl t)
+
+(* Whether a function of parameters [ps], given [args], takes one more
+   argument than it's given, a block: then it's a wrapper, which `with`
+   doesn't install. *)
+and takes_block env (ps : Types.param list) args =
+  List.length ps = List.length args + 1
+  &&
+  match reveal env.st (List.nth ps (List.length ps - 1)).ty with
+  | TFun _ -> true
+  | _ -> false
+
+(* The wrapper [item], `retry(3)`, given [args], whose callee takes
+   parameters [ps] and fails with [errs]: `with` installs only handlers,
+   so the help calls it, with the body as a block, `try retry(3) fn() =>
+   ...`, and `try` only if it can fail. *)
+and wrapper core env cx (item : expr) args ps errs =
+  List.iter (fun a -> ignore (core.infer env cx a)) args;
+  let src = Option.value (env.source item) ~default:"f" in
+  let call = match item.kind with Call _ -> src | _ -> src ^ "()" in
+  let block =
+    match reveal env.st (List.nth ps (List.length ps - 1)).ty with
+    | TFun (qs, _, _, _) ->
+        "fn(" ^ String.concat ", " (List.map (fun _ -> "_") qs) ^ ") => ..."
+    | _ -> "fn() => ..."
+  in
+  let fails = fst (row_parts errs) <> [] in
+  let name =
+    match item.kind with
+    | Call ({ kind = Field (_, m); _ }, _) -> Some m.name
+    | Call (f, _) -> callee_name f
+    | _ -> Some src
+  in
+  report env
+    (wrapper_in_with item.loc name
+       ((if fails then "try " else "") ^ call ^ " " ^ block));
+  Broken (fun _ -> ())
 
 (* `replay("tests/run.journal")`, the link [item] (handlers.md, "A journal
    as a test fixture"): an implementation of only the built-in
@@ -437,15 +445,14 @@ and replayed cx (item : expr) link =
 (* `with a, b over c in body`, the expression [e] (handlers.md, "A `with`
    is a set"). Each link of each item is made here, outside the `with`, and
    what it is is found from its type ([classify]): an implementation,
-   installed, or a wrapper, which wraps the body. An item that's a chain,
+   installed. An item that's a chain,
    `cached(ttl) over counted() over pg(pool)`, installs what its bottom
    does, each link above in place of what it goes over; the bottom can go
    over what's installed outside, `over Users`. Each dependency is
    installed once, and the items are installed in an order worked out
-   from what each needs, so an item's needs are met by the others first;
-   the wrappers go inside them all. That order, and what each link is, are
-   recorded for lowering. The `with` fails with what installing each link
-   can, as it does with what a wrapper fails with. *)
+   from what each needs, so an item's needs are met by the others first.
+   That order, and what each link is, are recorded for lowering. The
+   `with` fails with what installing each link can. *)
 and with_ core env cx (e : expr) (items : with_item list) body =
   let kw = keyword e.loc 4 in
   let src (x : expr) = Option.value (env.source x) ~default:"this" in
@@ -453,7 +460,7 @@ and with_ core env cx (e : expr) (items : with_item list) body =
   let checked =
     List.mapi
       (fun idx (it : with_item) ->
-        (idx, it, List.map (classify core env cx ~kw ~body) it.chain))
+        (idx, it, List.map (classify core env cx) it.chain))
       items
   in
   let under_loc (it : with_item) =
@@ -463,17 +470,8 @@ and with_ core env cx (e : expr) (items : with_item list) body =
         Loc.span d.tloc
           (List.fold_left (fun _ (d : tname) -> d.tloc) d.tloc rest)
   in
-  let link_of = function
-    | Implementation (lk, _) | Wrapper (lk, _) -> Some lk
-    | Broken _ -> None
-  in
-  let kind_of = function
-    | Wrapper _ -> Some A_wrapper
-    | Implementation _ -> Some An_implementation
-    | Broken _ -> None
-  in
-  (* each item, checked as a chain: what it installs, or the wrappers it
-     is, or nothing, if something's wrong *)
+  (* each item, checked as a chain: what it installs, or nothing, if
+     something's wrong *)
   let laters = ref [] in
   let sorted =
     List.filter_map
@@ -484,124 +482,78 @@ and with_ core env cx (e : expr) (items : with_item list) body =
             links;
           Some (Bad_item idx))
         else
-          let rec mixed = function
-            | a :: (b :: _ as rest) ->
-                if kind_of a <> kind_of b then Some (a, b) else mixed rest
-            | _ -> None
+          let impls =
+            List.filter_map
+              (function Implementation (lk, i) -> Some (lk, i) | _ -> None)
+              links
           in
-          match mixed links with
-          | Some (a, b) ->
-              let a = Option.get (link_of a) and b' = Option.get (link_of b) in
-              report env
-                (wrong_under b'.link.loc ~link:(src a.link)
-                   ~kind:(Option.get (kind_of (List.hd links)))
-                   ~under:(src b'.link));
-              ignore b;
-              Some (Bad_item idx)
-          | None -> (
-              match links with
-              | Wrapper _ :: _ when it.under <> [] ->
-                  let top = Option.get (link_of (List.hd (List.rev links))) in
-                  report env
-                    (wrong_under (under_loc it) ~link:(src top.link)
-                       ~kind:A_wrapper
-                       ~under:
-                         ("over "
-                         ^ String.concat " & "
-                             (List.map env.names (Iface.dep_paths it.under))));
-                  Some (Bad_item idx)
-              | Wrapper _ :: _ ->
-                  Some
-                    (Wraps_item
-                       ( idx,
-                         it,
-                         List.filter_map
-                           (function
-                             | Wrapper (lk, run) -> Some (lk, run) | _ -> None)
-                           links ))
-              | _ ->
-                  let impls =
-                    List.filter_map
-                      (function
-                        | Implementation (lk, i) -> Some (lk, i) | _ -> None)
-                      links
-                  in
-                  let name (lk : with_link) =
-                    match lk.link.kind with
-                    | Call (f, _) -> (
-                        match callee_name f with
-                        | Some n -> n
-                        | None -> src lk.link)
-                    | _ -> src lk.link
-                  in
-                  (* a parameter whose type is written, `w: Users`, which
+          let name (lk : with_link) =
+            match lk.link.kind with
+            | Call (f, _) -> (
+                match callee_name f with Some n -> n | None -> src lk.link)
+            | _ -> src lk.link
+          in
+          (* a parameter whose type is written, `w: Users`, which
                      says whether it goes over another *)
-                  let param (lk : with_link) =
-                    match lk.link.kind with
-                    | Var (Local b) ->
-                        Hashtbl.mem cx.written_locals b.id
-                        && Hashtbl.find_opt cx.binders b.id <> Some Let_bound
-                    | _ -> false
-                  in
-                  let rec fits = function
-                    | ((a : with_link), (ai : impl)) :: ((b, bi) :: _ as rest)
-                      ->
-                        if not ai.over then (
-                          report env
-                            (not_over ~param:(param a) a.link.loc
-                               ~link:(src a.link) ~name:(name a)
-                               ~deps:(shown ai.deps) ~uloc:b.link.loc);
-                          false)
-                        else if
-                          not
-                            (List.for_all (fun d -> List.mem d bi.deps) ai.deps)
-                        then (
-                          report env
-                            (not_one_under b.link.loc ~link:(src a.link)
-                               ~deps:(shown ai.deps) ~under:(src b.link));
-                          false)
-                        else fits rest
-                    | [ (b, bi) ] -> (
-                        let under =
-                          List.sort_uniq compare (Iface.dep_paths it.under)
-                        in
-                        match under with
-                        | [] when bi.over ->
-                            report env
-                              (over_nothing b.link.loc ~link:(src b.link)
-                                 ~deps:(shown bi.deps));
-                            false
-                        | [] -> true
-                        | _ when not bi.over ->
-                            report env
-                              (not_over ~param:(param b) b.link.loc
-                                 ~link:(src b.link) ~name:(name b)
-                                 ~deps:(shown bi.deps) ~uloc:(under_loc it));
-                            false
-                        | under
-                          when List.for_all (fun d -> List.mem d bi.deps) under
-                               && under <> bi.deps ->
-                            (* `h() over A`, for an `h` over `A & B` *)
-                            report env
-                              (over_some (under_loc it) ~link:(src b.link)
-                                 ~deps:(List.map env.names bi.deps)
-                                 ~named:(List.map env.names under));
-                            false
-                        | under when under <> bi.deps ->
-                            report env
-                              (not_one_under (under_loc it) ~link:(src b.link)
-                                 ~deps:(shown bi.deps)
-                                 ~under:("over " ^ shown under));
-                            false
-                        | _ -> true)
-                    | [] -> false
-                  in
-                  if fits impls then
-                    let bottom = snd (List.nth impls (List.length impls - 1)) in
-                    Some
-                      (Installs_item
-                         { idx; it; links = impls; installs = bottom.deps })
-                  else Some (Bad_item idx)))
+          let param (lk : with_link) =
+            match lk.link.kind with
+            | Var (Local b) ->
+                Hashtbl.mem cx.written_locals b.id
+                && Hashtbl.find_opt cx.binders b.id <> Some Let_bound
+            | _ -> false
+          in
+          let rec fits = function
+            | ((a : with_link), (ai : impl)) :: ((b, bi) :: _ as rest) ->
+                if not ai.over then (
+                  report env
+                    (not_over ~param:(param a) a.link.loc ~link:(src a.link)
+                       ~name:(name a) ~deps:(shown ai.deps) ~uloc:b.link.loc);
+                  false)
+                else if not (List.for_all (fun d -> List.mem d bi.deps) ai.deps)
+                then (
+                  report env
+                    (not_one_under b.link.loc ~link:(src a.link)
+                       ~deps:(shown ai.deps) ~under:(src b.link));
+                  false)
+                else fits rest
+            | [ (b, bi) ] -> (
+                let under = List.sort_uniq compare (Iface.dep_paths it.under) in
+                match under with
+                | [] when bi.over ->
+                    report env
+                      (over_nothing b.link.loc ~link:(src b.link)
+                         ~deps:(shown bi.deps));
+                    false
+                | [] -> true
+                | _ when not bi.over ->
+                    report env
+                      (not_over ~param:(param b) b.link.loc ~link:(src b.link)
+                         ~name:(name b) ~deps:(shown bi.deps)
+                         ~uloc:(under_loc it));
+                    false
+                | under
+                  when List.for_all (fun d -> List.mem d bi.deps) under
+                       && under <> bi.deps ->
+                    (* `h() over A`, for an `h` over `A & B` *)
+                    report env
+                      (over_some (under_loc it) ~link:(src b.link)
+                         ~deps:(List.map env.names bi.deps)
+                         ~named:(List.map env.names under));
+                    false
+                | under when under <> bi.deps ->
+                    report env
+                      (not_one_under (under_loc it) ~link:(src b.link)
+                         ~deps:(shown bi.deps)
+                         ~under:("over " ^ shown under));
+                    false
+                | _ -> true)
+            | [] -> false
+          in
+          if fits impls then
+            let bottom = snd (List.nth impls (List.length impls - 1)) in
+            Some
+              (Installs_item { idx; it; links = impls; installs = bottom.deps })
+          else Some (Bad_item idx))
       checked
   in
   (* each dependency installed once *)
@@ -652,19 +604,6 @@ and with_ core env cx (e : expr) (items : with_item list) body =
           | [] -> ())
       | _ -> ())
     sorted;
-  (* the wrappers: one item, a chain of them, if they're more than one *)
-  let wrappers =
-    List.filter_map
-      (function Wraps_item (_, it, ws) -> Some (it, ws) | _ -> None)
-      sorted
-  in
-  (match wrappers with
-  | (a, (alk, _) :: _) :: (b, (blk, _) :: _) :: _ ->
-      ok := false;
-      report env
-        (wrappers_side_by_side a.iloc ~other:b.iloc ~first:(src alk.link)
-           ~second:(src blk.link))
-  | _ -> ());
   let installs =
     List.filter_map
       (function
@@ -707,30 +646,9 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                 i.fails REmpty)
             links)
         order;
-      (* the body, inside the wrappers, each wrapping the one after it *)
-      let rec through ws cx expected =
-        match ws with
-        | [] -> (
-            match expected with
-            | Some r ->
-                core.check env cx body r;
-                r
-            | None -> core.infer env cx body)
-        | (_, run) :: rest ->
-            let t = run cx (through rest) in
-            (match expected with
-            | Some r -> unify_at env e.loc ~found:t ~expected:r
-            | None -> ());
-            t
-      in
-      let innermost cx =
-        match wrappers with
-        | (_, ws) :: _ -> through ws cx None
-        | [] -> through [] cx None
-      in
       (* each item around the ones after it, each chain's bottom outermost *)
       let rec nest cx = function
-        | [] -> innermost cx
+        | [] -> core.infer env cx body
         | (_, _, links, _) :: rest ->
             let rec chain cx = function
               | [] -> nest cx rest
@@ -848,147 +766,3 @@ and install env cx (lk : with_link) (i : impl) inner =
         tb
   in
   around cx i.deps
-
-(* The wrapper call [call], `retry(3)`, of [f], of type [tf], given
-   [args]: what's inside it, which [inner] checks, given the type it has
-   to be if that's known, is its last argument, a lambda of no
-   parameters, whose type is recorded at its link's [lam]. The `with`
-   passes on what the call fails with, as `try` would: the body marks its
-   own calls, and the wrapper is written to fail with what the body does.
-   [skip] are its callee's parameters before [tf]'s, a method's `self`. *)
-and wrap core env cx ~kw ~(lk : with_link) ~call ~f ~args ?target ?callee ?skip
-    ~body tf inner =
-  match reveal env.st tf with
-  | TFun (ps, ret, errs, uses, _) ->
-      Hashtbl.replace cx.nodes lk.knode ret;
-      Hashtbl.replace cx.found lk.knode Wraps;
-      let name = callee_name f in
-      let n = List.length args in
-      let firsts = List.filteri (fun i _ -> i < n) ps in
-      let last = List.nth ps n in
-      let callee =
-        match (callee, f.kind) with
-        | Some p, _ | None, Var (Global p) -> Some p
-        | None, _ -> None
-      in
-      core.check_args env cx ~name ?callee
-        ~written:(written_params env ?callee ?skip tf firsts)
-        firsts args;
-      outer_changes env body name;
-      let berrs = fresh_row env.st and buses = fresh_row env.st in
-      let lams = lambda_set env cx lk.lam in
-      let bcx =
-        {
-          (lambda_cx cx [] [] ~errs:berrs ~uses:buses) with
-          next_at =
-            (match cx.next_at with Next_ok -> In_wrapped name | at -> at);
-        }
-      in
-      let tb =
-        match repr last.ty with
-        | TFun ([], r, _, _, _) -> inner bcx (Some r)
-        | _ -> inner bcx None
-      in
-      let tl = TFun ([], tb, berrs, buses, lams) in
-      Hashtbl.replace cx.nodes lk.lam tl;
-      if last.mode = Inout then report env (wrapper_changes_body call.loc name)
-      else
-        unify_at env call.loc ~found:tl ~expected:last.ty
-          ~notes:[ wrapper_body_note ] ~help:(call_outside name)
-          ~msg:(wrapper_last name);
-      let m =
-        {
-          mkind = Mtry;
-          mloc = kw;
-          covered = [];
-          unwrapped = [];
-          hint = None;
-          failed = false;
-        }
-      in
-      let target =
-        match (target, f.kind) with
-        | Some p, _ -> Some p
-        | None, Var (Global p) when group_call env p -> Some p
-        | None, _ -> None
-      in
-      absorb env
-        { cx with markers = m :: cx.markers }
-        ~call
-        ~ename:(Option.value name ~default:"this")
-        ~fn:f ?target ?callee errs uses;
-      (* the call's type, unless it's the bare function, `with twice in` *)
-      if call != f then Hashtbl.replace cx.nodes call.node ret;
-      ret
-  | _ -> assert false (* [classify] makes sure it's a function *)
-
-(* A wrapper's body is a lambda, which captures the values of the
-   variables it uses when it's made: changing one from outside it would
-   change only the lambda's copy, so that's reported, as mut.ml reports it
-   in a lambda that's written. [name] is the wrapper. *)
-and outer_changes env (body : expr) name =
-  let bound = Hashtbl.create 8 in
-  let bind (b : binder) = Hashtbl.replace bound b.id () in
-  let rec root (e : expr) =
-    match e.kind with
-    | Var (Local b) -> Some (b, e.loc)
-    | Field (r, _) | Index (r, _) -> root r
-    | _ -> None
-  in
-  let changed (place : expr) =
-    match root place with
-    | Some (b, _) when not (Hashtbl.mem bound b.id) ->
-        report env
-          (body_changes_outer place.loc ~wrapper:name ~var:b.ident.name)
-    | _ -> ()
-  in
-  let rec walk (e : expr) =
-    let all = List.iter walk in
-    match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
-    | Lambda _ -> () (* its own changes are mut.ml's *)
-    | Assign { target; value; _ } ->
-        changed target;
-        walk value
-    | Ref { kind = Call ({ kind = Field (r, _); _ }, args); _ } ->
-        changed r;
-        all args
-    | Ref a -> changed a
-    | For { pat; over; body } ->
-        (match over with
-        | Each { kind = Ref a; _ } -> changed a
-        | Each iter -> walk iter
-        | Range (lo, hi) -> all [ lo; hi ]);
-        List.iter (fun (b, _) -> bind b) (binders pat);
-        walk body
-    | Block (stmts, last) ->
-        List.iter
-          (function
-            | Let { name; value; _ } ->
-                walk value;
-                bind name
-            | Let_tuple { pat; value } ->
-                walk value;
-                List.iter (fun (b, _) -> bind b) (binders pat)
-            | Expr e -> walk e)
-          stmts;
-        walk last
-    | Match (s, arms) ->
-        walk s;
-        List.iter
-          (fun (a : arm) ->
-            List.iter (fun (b, _) -> bind b) (binders a.arm_pat);
-            Option.iter walk a.arm_guard;
-            walk a.arm_body)
-          arms
-    | Unop (_, a, _) | Field (a, _) | Try a | Attempt a | Assert a -> walk a
-    | Binop (_, a, b, _) | Index (a, b) -> all [ a; b ]
-    | If (c, t, f) -> all (c :: t :: Option.to_list f)
-    | Call (f, args) -> all (f :: args)
-    | Con (_, args) | Fail (_, args) -> all (List.map snd args)
-    | Record (_, fields) -> all (List.map snd fields)
-    | Array xs | Tuple xs -> all xs
-    | With { items; body } -> all (with_links items @ [ body ])
-    | Handler _ -> () (* only ever a handler's function's body *)
-  in
-  walk body

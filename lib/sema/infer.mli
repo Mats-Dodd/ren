@@ -30,7 +30,6 @@ type found =
   | Installs_handler of Path.t list
       (** a link that describes a handler of these dependencies, all of which it
           installs *)
-  | Wraps  (** a link that's a wrapper, which what's inside it is passed to *)
   | Install_order of int list
       (** at a `with`: the items that install, by their place in it, outermost
           first (handlers.md, "A `with` is a set") *)
@@ -46,12 +45,10 @@ type found =
   | Handles  (** a `match` that handles errors: one with `fail` arms *)
   | Fail_arm
       (** a `fail` arm's pattern, which matches an error rather than a value *)
-  | Unwraps
+  | Unwrap
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
-  | Lambda_id of string
-      (** a lambda, or the body a `with` passes to a wrapper: its identity in
-          lambda sets (Ty.lambda_id), which its type's set has *)
+  | Lambda_id of string  (** a lambda: its name (Ty.lambda_id) *)
   | Builtin_op
       (** at an operator's own node (Ast.Binop), one the language does itself:
           on [Int]s or [Float]s, a `with numeric` type's, or an opaque type's in

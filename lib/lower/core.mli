@@ -230,9 +230,10 @@ and kind =
       (** [captures] are the locals from outside the lambda its body uses, in
           order of id; their values are copied when the lambda is made. Its
           evidence [ev] is passed where it's called, never captured. [name] is
-          its identity in lambda sets (Ty.lambda_id), which its type's set has:
-          one written in the program's, or, for the lambda that calls an
-          operation used as a value, the operation's (Ty.global_id) *)
+          its name, for printing and for the code a release build specializes
+          for it: one written in the program's (Ty.lambda_id), or, for the
+          lambda that calls an operation used as a value, the operation's path
+      *)
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
@@ -404,13 +405,6 @@ val dict_vars : dict -> var list
 (* The type of a cell holding a value of this type (see [New_cell]). *)
 val cell_ty : Ty.ty -> Ty.ty
 
-(* A use of the function [p], of scheme type [t], at its own type, as
-   `$start` calls `main`: the type arguments that give back [t], but that
-   [t]'s lambda set has [p], as every use's does, and the type they give.
-   Only for a [t] whose lambda set's variable is nowhere else in it, as in
-   a function that takes nothing. *)
-val own_use : Path.t -> Ty.ty -> Ty.args * Ty.ty
-
 (* [()], and a use of a local, of its type. *)
 val unit : Loc.t -> expr
 val local : var -> Loc.t -> expr
@@ -453,14 +447,6 @@ val show : expr -> string
    that has type arguments with them, as [(inst first_or Int)], a row
    argument in braces, [{Short | ..e}], and the dictionaries it's given
    after them; and the dictionary each [==] compares with, [(== (eq Int) a
-   b)]. A plain print, the default, shows none of these.
-
-   [lams] prints it typed and shows lambda sets as well, which nothing
-   else does (ty.ml): after each function type, [fn(Int) -> Int
-   [main.inc | ..l0]]; each use's lambda-set arguments after its row
-   arguments; each lambda's identity and type after `lambda`; and the type
-   of a local, an [If], a [Match], a [Let] or a call of a function type,
-   [(: f/1 fn() [..l2])]. It's a debug aid, for `ren core --lambdas` and
-   tests. *)
-val fn_sexp : ?types:bool -> ?lams:bool -> fn_def -> sexp
-val show_fn : ?types:bool -> ?lams:bool -> fn_def -> string
+   b)]. A plain print, the default, shows none of these. *)
+val fn_sexp : ?types:bool -> fn_def -> sexp
+val show_fn : ?types:bool -> fn_def -> string

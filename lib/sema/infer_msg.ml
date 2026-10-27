@@ -27,7 +27,7 @@ let article = Diag.article
    the two types can otherwise look alike. *)
 let rec mode_clash found expected =
   match (repr found, repr expected) with
-  | TFun (p1, r1, _, _, _), TFun (p2, r2, _, _, _)
+  | TFun (p1, r1, _, _), TFun (p2, r2, _, _)
     when List.length p1 = List.length p2 ->
       let here =
         List.find_map
@@ -51,7 +51,7 @@ let rec errors_clash found expected =
     else None
   in
   match (repr found, repr expected) with
-  | TFun (p1, r1, e1, _, _), TFun (p2, r2, e2, _, _) -> (
+  | TFun (p1, r1, e1, _), TFun (p2, r2, e2, _) -> (
       let wanted = row_names e2 in
       match
         List.filter
@@ -95,7 +95,7 @@ let rec labels_named name t =
     List.filter (fun (l : label) -> l.name = name) (fst (row_parts r))
   in
   match repr t with
-  | TFun (ps, r, e, _, _) ->
+  | TFun (ps, r, e, _) ->
       row e @ List.concat_map (labels_named name) (r :: param_tys ps)
   | TCon (_, args) -> List.concat_map (labels_named name) args
   | TErrors e -> row e
@@ -294,8 +294,8 @@ let not_in_type ~names ?(expected = false) ?(test = false) loc (c : Ast.ident)
         ( sprintf "`%s` is a dependency, so it has no constructors" t,
           Some
             (sprintf
-               "make an implementation of it with `%s { ... }`, giving each of \
-                its operations"
+               "an implementation of it is a handler, `handler h() for %s`, \
+                with an arm for each operation under it, called as `h()`"
                t) )
     | Builtin ->
         ( sprintf "`%s` is built in, and has no constructors" t,
@@ -397,6 +397,30 @@ let op_of_value ~names (f : Ast.ident) dep (ops : Iface.field list) =
     Diag.make f.loc
       ~help:(sprintf "its operations: %s" (quote (field_names ops)))
       (sprintf "`%s` has no operation named `%s`" d f.name)
+
+(* `Users { get: fn(id) => id * 2 }`, a record literal of the dependency
+   [dep]: [arms] are its fields as a handler's arms, `get(id) => id * 2`,
+   and [name] a name for the handler (deps.md, "Implementations"). *)
+let impl_record_made loc ~dep ~name arms =
+  let head = sprintf "handler %s() for %s" name dep in
+  Diag.make loc
+    ~says:(sprintf "a record of `%s`'s operations" dep)
+    ~notes:
+      [
+        "a record holds data, and code that's kept, like an implementation's \
+         operations, is a handler";
+      ]
+    ~help:
+      (match arms with
+      | [] -> sprintf "write a handler: `%s`, with its arms under it" head
+      | [ arm ] ->
+          sprintf "write a handler, `%s`, with the arm `%s` under it" head arm
+      | arm :: _ ->
+          sprintf
+            "write a handler, `%s`, with an arm for each operation under it, \
+             like `%s`"
+            head arm)
+    (sprintf "an implementation of `%s` is a handler, not a record" dep)
 
 let missing_fields ~names loc path missing =
   Diag.make loc
@@ -614,7 +638,7 @@ let behind_note = function
         ],
         let impl =
           if String.contains dep '&' then "a handler for each of them"
-          else sprintf "a `%s { ... }`, or a handler for `%s`" dep dep
+          else sprintf "a handler for `%s`" dep
         in
         if here then sprintf "give an implementation of `%s` here: %s" dep impl
         else
@@ -878,21 +902,6 @@ let two_fields (f : Ast.ident) first =
     ~labels:[ (first, sprintf "the first `%s` is here" f.name) ]
     (sprintf "there are two fields named `%s`" f.name)
 
-(* The closure [var], given for an operation, fails with whatever its
-   named row [row] stands for; the operation fails only with [declared]. *)
-let named_row_help ~var ~row declared =
-  sprintf
-    "`%s` can fail with anything `..%s` stands for%s: write %s in place of `! \
-     ..%s`"
-    var row
-    (match declared with
-    | [] -> ", and the operation can't fail"
-    | ds -> ", and the operation only with " ^ and_list ds)
-    (match declared with
-    | [] -> "nothing"
-    | ds -> sprintf "`! %s`" (String.concat " | " ds))
-    row
-
 (* ---- `match` and patterns ---- *)
 
 let arm_after f x =
@@ -1095,20 +1104,6 @@ let arm_arity loc ~dep ~op n given =
     (sprintf "`%s.%s` takes %d argument%s, but this has %d parameter%s" dep op n
        (plural n) given (plural given))
 
-let call_outside name =
-  sprintf "call %s outside the `with`, with all its arguments" (callee name)
-
-(* `with r.w(a) in body`, where the method [m] has `inout self` *)
-let wrapper_changes_receiver loc m =
-  Diag.make loc
-    ~notes:
-      [
-        "`with r.w(a) in body` calls `r.w(a, fn() => body)`, and a `with`'s \
-         item can't change what it's called on";
-      ]
-    ~help:(call_outside (Some m))
-    (sprintf "`%s` changes its receiver, so it can't wrap a body" m)
-
 (* `with h(1) in`, where [name] takes [n] arguments, and makes the
    implementation [made] *)
 let with_too_few loc name ~made n given =
@@ -1138,8 +1133,7 @@ let with_uncalled loc src shown =
     ~help:(sprintf "call it: `with %s() in ...`" src)
     (sprintf "`with` installs an implementation, but this is %s" (article shown))
 
-(* What a `with` was given that's neither an implementation nor a
-   wrapper. *)
+(* What a `with` was given that isn't an implementation. *)
 type with_given =
   | Unknown  (** something whose type isn't known, but a variable's *)
   | Known of string  (** something of this type *)
@@ -1148,25 +1142,36 @@ let cant_install loc item =
   Diag.make loc
     ~notes:
       [
-        "`with` installs an implementation of a dependency around its body, or \
-         passes its body to a wrapper, a function whose last parameter is the \
-         body";
+        "`with` installs an implementation of a dependency, a handler, around \
+         its body";
       ]
     ~help:
       (match item with
       | Unknown ->
           "install something whose type is known here, like `Clock.frozen(t)`, \
            or a handler's call"
-      | Known _ ->
-          "give it an implementation, like `Clock.frozen(t)`, or a wrapper's \
-           call without its last argument, like `retry(3)`")
+      | Known _ -> "give it an implementation, like `Clock.frozen(t)`")
     (match item with
     | Unknown ->
         "`with` can't tell what this installs: its type isn't known here"
     | Known shown ->
-        sprintf
-          "`with` installs an implementation, or wraps its body, but this is %s"
+        sprintf "`with` installs an implementation, but this is %s"
           (article shown))
+
+(* `with retry(3) in body`: [name], the item's function, takes a block,
+   and [call] is the item called with the body as one, `try retry(3) fn()
+   => ...`. *)
+let wrapper_in_with loc name call =
+  Diag.make loc ~says:"takes a block"
+    ~notes:
+      [
+        sprintf
+          "%s is a function that runs a block, so it's called with the body as \
+           one"
+          (callee name);
+      ]
+    ~help:(sprintf "call it: `%s`" call)
+    "`with` installs only handlers"
 
 (* `with c in`, where nothing has said what the variable [var] is, which
    could install one dependency or several: [fix] is its declaration with a
@@ -1213,16 +1218,6 @@ let installed_twice loc ~deps ~first ~chain ~all =
             "to put one in front of another, use a handler declared `over %s`"
             (String.concat " & " deps))
     (sprintf "this `with` installs %s twice" (and_list deps))
-
-(* Two items of a `with` that each wrap the body, [first] and [second] as
-   written. *)
-let wrappers_side_by_side loc ~other ~first ~second =
-  Diag.make loc
-    ~labels:[ (other, "and another here") ]
-    ~notes:
-      [ "a wrapper wraps the body, so one of two has to be outside the other" ]
-    ~help:(sprintf "say which wraps which: `%s over %s`" first second)
-    "this `with` has two wrappers side by side"
 
 (* Two items of a `with`, [a] at [loc] and [b] at [bloc], each needing what
    the other installs: [a] needs [a_needs], and [b] [b_needs]. *)
@@ -1286,26 +1281,6 @@ let over_some loc ~link ~deps ~named =
     (sprintf "`%s` goes over %s, so it's installed over %s" link (and_list deps)
        (if List.length deps = 2 then "both" else "all of them"))
 
-(* What a link of a chain is, for [wrong_under]. *)
-type link_kind = A_wrapper | An_implementation
-
-(* [link] is a [kind], and what's under it, [under] at [loc], isn't. *)
-let wrong_under loc ~link ~kind ~under =
-  let what, other =
-    match kind with
-    | A_wrapper -> ("a wrapper", "wrapper")
-    | An_implementation -> ("an implementation", "implementation")
-  in
-  Diag.make loc
-    ~notes:
-      [
-        "a wrapper wraps the body, inside everything its `with` installs, and \
-         an implementation is installed around it";
-      ]
-    ~help:"write them as two items of the `with`, with a comma"
-    (sprintf "`%s` is %s, so only another %s goes under it, and `%s` isn't one"
-       link what other under)
-
 (* ---- `finally` (handlers.md, "When a `with` ends") ---- *)
 
 let finally_params loc n =
@@ -1357,24 +1332,6 @@ let finally_needs loc req ~op =
     | "ord" -> "`finally` can't order the body's value"
     | _ -> sprintf "`finally` can't use `%s` on the body's value" op)
 
-(* A record implementation of [dep] whose operation uses [dep] itself, at
-   [loc]. *)
-let record_uses_itself loc dep =
-  Diag.make loc
-    ~notes:
-      [
-        sprintf
-          "its operations run with what's installed outside its `with`, so \
-           `%s` here would be another implementation, under it"
-          dep;
-      ]
-    ~help:
-      (sprintf
-         "write a handler declared `over %s`, which calls the one under it \
-          with `next`"
-         dep)
-    (sprintf "an implementation of `%s` can't use `%s`" dep dep)
-
 (* Two items of an array, an implementation of several dependencies and one
    of some of them, which a written element type would narrow to that:
    [this], at [loc], is of the type [this_ty], and the first, at
@@ -1420,27 +1377,6 @@ let changes_one_of_several loc ~recv ~all ~name ~dep =
     (sprintf "`%s` can't change `%s`, which implements more than `%s`" name recv
        dep)
 
-(* `with w(a) in body`, where [name]'s last parameter is `inout` *)
-let wrapper_changes_body loc name =
-  Diag.make loc
-    ~notes:
-      [
-        "`with w(a) in body` calls `w(a, fn() => body)`, and a lambda isn't a \
-         place to change";
-      ]
-    ~help:(call_outside name)
-    (sprintf "%s changes its last argument, so it can't take a body"
-       (callee name))
-
-let wrapper_body_note =
-  "`with w(a) in body` calls `w(a, fn() => body)`, so the wrapper's last \
-   parameter is a function of no parameters"
-
-let wrapper_last name _ x =
-  let name = callee name in
-  sprintf "%s's last parameter is %s, but a `with` passes it its body, a `fn()`"
-    name (article x)
-
 (* `next.op(...)` in a lambda a handler makes (Infer_env.next_at) *)
 let next_in_lambda loc op =
   Diag.make loc
@@ -1455,41 +1391,6 @@ let next_in_lambda loc op =
           v = next.%s(...)`"
          op)
     "a lambda can't call `next`"
-
-(* `next.op(...)` in the body of a `with` that the wrapper [wrapper] is
-   given *)
-let next_in_wrapped loc ~wrapper op =
-  Diag.make loc
-    ~notes:
-      [
-        sprintf
-          "`with` passes its body to %s as a lambda, `fn() => ...`, and `next` \
-           is the implementation under this one only while an operation runs"
-          (callee wrapper);
-      ]
-    ~help:
-      (sprintf
-         "call it outside the `with`, and give the body what it returns: `let \
-          v = next.%s(...)`"
-         op)
-    "the body of this `with` can't call `next`"
-
-(* The body of a `with` that the wrapper [name] is given changes [var], a
-   variable from outside it. *)
-let body_changes_outer loc ~wrapper ~var =
-  Diag.make loc
-    ~notes:
-      [
-        sprintf
-          "`with` passes its body to %s as a lambda, `fn() => ...`, which \
-           captures the values of the variables it uses when it's made, so \
-           changing them would have no effect outside"
-          (callee wrapper);
-      ]
-    ~help:"give the body's result back as its value instead"
-    (sprintf
-       "the body of this `with` can't change `%s`, a variable from outside it"
-       var)
 
 (* ---- what a module writes (infer_top.ml) ---- *)
 
@@ -1771,9 +1672,6 @@ type impl_fix =
           `match`, with `try` if the call fails with more *)
   | Give_value  (** a `fail`, where [op] can't fail *)
   | Fail_instead of string  (** a `fail`, where [op] can fail with this *)
-  | Wrap of { given : string option; tag : string; into : string option }
-      (** a function given by name, as written: a lambda that calls it, and maps
-          [tag] to [into], if [op] can fail, or else handles it *)
   | Handle_inside
   | Map_inside of string
 
@@ -1790,19 +1688,6 @@ let impl_fails_more loc ~op ~shown ~declared fix =
     | Give_value -> sprintf "`%s` can't fail: give a value here instead" op
     | Fail_instead d ->
         sprintf "fail with what `%s` can instead: `fail %s`" op d
-    | Wrap { given; tag; into } -> (
-        let given = match given with Some s -> code s | None -> "it" in
-        match into with
-        | None ->
-            sprintf
-              "give a lambda that calls %s and handles what it fails with, \
-               with `match` and `fail` arms"
-              given
-        | Some d ->
-            sprintf
-              "give a lambda that calls %s and maps what it fails with, with \
-               `match` and `fail` arms, to what `%s` can: `fail %s => fail %s`"
-              given op tag d)
     | Handle_inside ->
         "handle what it fails with inside it, with `match` and `fail` arms"
     | Map_inside d ->
@@ -1946,9 +1831,9 @@ let not_installed loc runner ~dep ~short ~real ~maker ~declared ~needs ~why =
                  "install one around each of its tests, in the group's `with`: \
                   `group %s(...) with %s =`%s"
                  g
-                 (match maker with Some m -> m | None -> dep ^ " { ... }")
+                 (match maker with Some m -> m | None -> "h()")
                  (if maker = None then
-                    ", an implementation that gives each of its operations"
+                    sprintf ", for a handler `h` for `%s`" dep
                   else ""))
         | None, Some (Some m, g) ->
             (* another module's group, which this one can't change *)
@@ -1965,8 +1850,8 @@ let not_installed loc runner ~dep ~short ~real ~maker ~declared ~needs ~why =
     | None, Some m, _ -> sprintf "install one %s: `with %s in ...`" inside m
     | None, None, true ->
         sprintf
-          "install one %s, with `with`: an implementation is a `%s { ... }` \
-           that gives each of its operations"
+          "install one %s, with `with`: `with h() in ...`, for a handler `h` \
+           for `%s`"
           inside dep
     | None, None, false ->
         sprintf "remove it: nothing can implement `%s` yet" dep

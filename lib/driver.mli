@@ -174,7 +174,7 @@ val dump_tokens : (Token.t * Loc.t) array -> string
    of each file the message can show, by its name (diag.ml). *)
 val render_error : sources:(string -> string option) -> exn -> string option
 
-(* The help a panic gives for an `Int` that overflowed: the method that
-   wraps instead, called as the source writes the operands,
+(* The help a panic gives for an `Int` that overflowed: the wrapping
+   method instead, called as the source writes the operands,
    `n.wrapping_add(1)`, or [None] if they can't be shown. *)
 val wrap_help : sources:(string -> string option) -> Eval.wrap -> string option

@@ -10,7 +10,6 @@ let usage =
        ren run [--record <file.journal>] [--trace] <file.ren> [-- <args>...]
        ren replay <file.journal> [--trace]
        ren core --types <file.ren>
-       ren core --lambdas <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
        ren test --keep <file.journal>
@@ -69,9 +68,6 @@ commands:
           with the evidence of what's installed passed explicitly:
             --types    also each function's type, and the type arguments
                        each use of a generic function picks
-            --lambdas  as --types, and every function type's lambda set,
-                       which lambdas and functions a value of it can be:
-                       a debugging aid for the compiler
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree
 
@@ -639,14 +635,11 @@ let console args =
 
 let () =
   (* `ren core --types <file.ren>`: the flag is taken out, and the rest
-     read as any command's is; and so is `--lambdas` *)
-  let types, lams, argv =
+     read as any command's is *)
+  let types, argv =
     match Sys.argv with
-    | [| ren; "core"; "--types"; path |] ->
-        (true, false, [| ren; "core"; path |])
-    | [| ren; "core"; "--lambdas"; path |] ->
-        (true, true, [| ren; "core"; path |])
-    | argv -> (false, false, argv)
+    | [| ren; "core"; "--types"; path |] -> (true, [| ren; "core"; path |])
+    | argv -> (false, argv)
   in
   match argv with
   | [| _; "--help" | "-h" | "help" |] ->
@@ -680,9 +673,7 @@ let () =
               (fun i (m : Core.program) ->
                 if i > 0 then print_newline ();
                 print_endline ("-- " ^ m.home);
-                List.iter
-                  (fun f -> print_endline (Core.show_fn ~types ~lams f))
-                  m.fns)
+                List.iter (fun f -> print_endline (Core.show_fn ~types f)) m.fns)
               (List.tl (Driver.linked ~load ~file:path src))
         | "tokens" ->
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))

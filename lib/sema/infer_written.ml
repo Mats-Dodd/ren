@@ -16,9 +16,7 @@ let error_labels env ~tvars (es : Resolved.errors) =
         name = l.name;
         payload =
           List.map
-            (of_ty ~vars:(List.nth tvars)
-               ~tails:(fun _ -> REmpty)
-               ~lams:(fun _ -> fresh_row env.st))
+            (of_ty ~vars:(List.nth tvars) ~tails:(fun _ -> REmpty))
             l.payload;
         written = unmarked ();
       })
@@ -96,13 +94,7 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
       let uses =
         match u with Some u -> written_uses ~named u | None -> row ()
       in
-      (* a lambda set of its own, which nothing written says anything of *)
-      TFun
-        ( List.map (convert_param env ~tvars ~named ~row) ps,
-          ret,
-          errs,
-          uses,
-          fresh_row env.st )
+      TFun (List.map (convert_param env ~tvars ~named ~row) ps, ret, errs, uses)
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
@@ -143,13 +135,12 @@ let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
     | Some (TyFn (_, _, written_e, written_u, _) as t), Some (errs, uses)
       when not (names_row t) -> (
         match convert env ~tvars:tparams ~named ~row:closed t with
-        | TFun (ps, ret, e, u, l) ->
+        | TFun (ps, ret, e, u) ->
             TFun
               ( ps,
                 ret,
                 (if written_e = None then errs else e),
-                (if written_u = None then uses else u),
-                l )
+                if written_u = None then uses else u )
         | _ -> assert false)
     | ( Some
           (TyImpl
@@ -237,10 +228,6 @@ let written_params env ?callee ?(skip = 0) tf (ps : param list) =
     ps
 
 (* A field's type, given what the type's parameters stand for. A function
-   type written in a declaration uses and fails with nothing, and has a
-   lambda set of its own. *)
-let field_type env ~tvars (f : Iface.field) =
-  of_ty ~vars:(List.nth tvars)
-    ~tails:(fun _ -> REmpty)
-    ~lams:(fun _ -> fresh_row env.st)
-    f.fty
+   type written in a declaration uses and fails with nothing. *)
+let field_type ~tvars (f : Iface.field) =
+  of_ty ~vars:(List.nth tvars) ~tails:(fun _ -> REmpty) f.fty

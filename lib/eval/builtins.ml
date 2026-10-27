@@ -229,7 +229,7 @@ let one_dict x (dicts : Value.dict list) =
 (* ---- numbers ---- *)
 
 (* [f ()], one operation of Arith's (arith.ml), which panics as the
-   operator does, but without a help: a method that wraps is the
+   operator does, but without a help: a wrapping method is the
    operator's, and this is already a method. *)
 let number f =
   try f () with
@@ -450,7 +450,7 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
   | Bytes_len ->
       pure (function [ VBytes b ] -> int (String.length b) | _ -> bug x)
   | Str_lower -> pure (function [ VStr s ] -> VStr (lower s) | _ -> bug x)
-  (* the arithmetic that wraps around at 64 bits, as [Int64]'s does *)
+  (* wrapping arithmetic at 64 bits, as [Int64]'s is *)
   | Int_wrapping_add ->
       pure (function [ VInt a; VInt b ] -> VInt (Int64.add a b) | _ -> bug x)
   | Int_wrapping_sub ->

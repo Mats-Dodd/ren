@@ -65,7 +65,6 @@ type found = Infer_env.found =
   | Method_of of Path.t
   | Installs of Path.t
   | Installs_handler of Path.t list
-  | Wraps
   | Install_order of int list
   | Handler_facts of {
       forwards : (Path.t * string * Ty.ty) list;
@@ -73,7 +72,7 @@ type found = Infer_env.found =
     }
   | Handles
   | Fail_arm
-  | Unwraps
+  | Unwrap
   | Lambda_id of string
   | Builtin_op
   | Generic_op of string

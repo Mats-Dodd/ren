@@ -42,7 +42,7 @@ val option_path : Path.t
 val instance : env -> Iface.type_decl -> Types.ty * Types.ty list
 
 (* A field's type, given what the type's parameters stand for. *)
-val field_type : Infer_env.env -> tvars:Types.ty list -> Iface.field -> Types.ty
+val field_type : tvars:Types.ty list -> Iface.field -> Types.ty
 
 (* Whether a parameter's or a field's type, as it was made from a
    declaration or a scheme, is written there, not a variable: looked at

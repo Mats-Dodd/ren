@@ -22,8 +22,8 @@ open Helpers
 (* ---- s2: wrappers are calls, and an implementation is a handler ---- *)
 
 let%expect_test "[s2 reject] a wrapper in a with is called instead" =
-  (* target: an error at `retry(3)`, "`with` installs only handlers", with
-     the help `call it: try retry(3) fn() => ...` *)
+  (* an error at `retry(3)`, "`with` installs only handlers", with the
+     help `call it: try retry(3) fn() => ...` *)
   run
     {|
 fn retry(n: Int, body: fn() -> Int ! Flaky) -> Int ! Flaky =
@@ -37,14 +37,18 @@ fn main() uses Console =
       1
   print(n)
 |};
-  (* until s2: today's output *)
-  [%expect {|
-    1
-    ()
+  [%expect
+    {|
+    error: `with` installs only handlers
+      ┌─ test.ren:8:10
+    8 │     with retry(3) in
+      │          ^^^^^^^^ takes a block
+      = `retry` is a function that runs a block, so it's called with the body as one
+      help: call it: `try retry(3) fn() => ...`
     |}]
 
 let%expect_test "[s2 reject] a wrapper named in a with beside a handler" =
-  (* target: the same error and help, at `timed` *)
+  (* the same error and help, at `timed`, without `try`: it doesn't fail *)
   run
     {|
 fn timed(body: fn() -> Int) -> Int uses Clock =
@@ -57,15 +61,19 @@ fn main() uses Console =
       5
   print(n)
 |};
-  (* until s2: today's output *)
-  [%expect {|
-    5
-    ()
+  [%expect
+    {|
+    error: `with` installs only handlers
+      ┌─ test.ren:7:10
+    7 │     with timed, Clock.frozen(Time.epoch) in
+      │          ^^^^^ takes a block
+      = `timed` is a function that runs a block, so it's called with the body as one
+      help: call it: `timed() fn() => ...`
     |}]
 
 let%expect_test "[s2 reject] a record implementation of Clock" =
-  (* target: an error at `Clock { ... }`, "an implementation is a handler",
-     with the help to write `handler ... for Clock` *)
+  (* an error at `Clock { ... }`, "an implementation is a handler", with
+     the help to write `handler ... for Clock` *)
   run
     {|
 fn stopped(t: Time) -> Clock =
@@ -75,15 +83,18 @@ fn main() uses Console =
   with stopped(Time.epoch) in
     print(Clock.now())
 |};
-  (* until s2: today's output *)
-  [%expect {|
-    Time(0)
-    ()
+  [%expect
+    {|
+    error: an implementation of `Clock` is a handler, not a record
+      ┌─ test.ren:2:3
+    2 │   Clock { now: fn() => t, instant: fn() => Instant.zero, sleep: fn(_) => () }
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a record of `Clock`'s operations
+      = a record holds data, and code that's kept, like an implementation's operations, is a handler
+      help: write a handler, `handler clock() for Clock`, with an arm for each operation under it, like `now() => t`
     |}]
 
 let%expect_test "[s2 reject] a record implementation written in a with" =
-  (* target: the same error, with the help to write `handler ... for
-     Users` *)
+  (* the same error, with the help to write `handler ... for Users` *)
   run
     {|
 dep Users =
@@ -93,10 +104,14 @@ fn main() uses Console =
   with Users { get: fn(id) => id * 2 } in
     print(Users.get(4))
 |};
-  (* until s2: today's output *)
-  [%expect {|
-    8
-    ()
+  [%expect
+    {|
+    error: an implementation of `Users` is a handler, not a record
+      ┌─ test.ren:5:8
+    5 │   with Users { get: fn(id) => id * 2 } in
+      │        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a record of `Users`'s operations
+      = a record holds data, and code that's kept, like an implementation's operations, is a handler
+      help: write a handler, `handler users() for Users`, with the arm `get(id) => id * 2` under it
     |}]
 
 let%expect_test "[s2 accept] a local retry called with a block" =

@@ -1330,8 +1330,8 @@ and parse_if p =
   mk (If (cond, then_, else_)) start p
 
 (* `with a, b in body`: a set of items, each installed once around the
-   body (handlers.md, "A `with` is a set"). An item is an implementation
-   or a wrapper, or a chain of them joined by `over`, the top first,
+   body (handlers.md, "A `with` is a set"). An item is an implementation,
+   or a chain of them joined by `over`, the top first,
    which can end in the names of the dependencies its bottom goes over,
    `slow_clock(2) over Clock` ([parse_with_item]). *)
 and parse_with p =
@@ -1369,16 +1369,15 @@ and parse_with p =
 
    After `over`, a dependency's name with nothing after it that makes it
    an expression, a `.`, `(` or `{`, is what's installed outside the
-   `with`: `over Clock`, `over A & B`. `over Clock.frozen(t)` and `over
-   Users { ... }` are implementations. Each link gets two node ids of its
-   own: one for the lambda a wrapper's body becomes, one for what
-   inference finds it does. *)
+   `with`: `over Clock`, `over A & B`. `over Clock.frozen(t)` is an
+   implementation. Each link gets a node id of its
+   own, for what inference finds it installs. *)
 and parse_with_item p : Parsed.with_item =
   let start = loc p in
   let link () =
     let link = parse_expr p in
-    p.node <- p.node + 2;
-    { link; lam = p.node - 1; knode = p.node }
+    p.node <- p.node + 1;
+    { link; knode = p.node }
   in
   (* a dependency's name, `Clock` or `store.Users`, that isn't the start
      of an expression *)
