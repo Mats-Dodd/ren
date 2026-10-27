@@ -862,10 +862,11 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
                          ren_val v);
 
 /* Each of [n] fields of [o], of the types [types] read under [env], with
-   [names] before them if there are any. */
-static void ren_show_fields(ren_buf *b, ren_obj *o, int32_t n,
-                            const char *const *names, ren_desc *const *types,
-                            const ren_tenv *env) {
+   [names] before them if there are any; where they are is [c]'s, if
+   there's one. */
+static void ren_show_fields(ren_buf *b, ren_obj *o, const ren_ctor_info *c,
+                            int32_t n, const char *const *names,
+                            ren_desc *const *types, const ren_tenv *env) {
   for (int32_t i = 0; i < n; i++) {
     if (i > 0)
       ren_puts(b, ", ");
@@ -873,7 +874,7 @@ static void ren_show_fields(ren_buf *b, ren_obj *o, int32_t n,
       ren_puts(b, names[i]);
       ren_puts(b, ": ");
     }
-    ren_show_val(b, types[i], env, ren_fields(o)[i]);
+    ren_show_val(b, types[i], env, ren_ctor_field(o, c, i));
   }
 }
 
@@ -931,7 +932,7 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
   }
   case REN_D_TUPLE:
     ren_puts(b, "(");
-    ren_show_fields(b, v.o, d->nargs, NULL, d->args, env);
+    ren_show_fields(b, v.o, NULL, d->nargs, NULL, d->args, env);
     ren_puts(b, ")");
     break;
   case REN_D_ERRORS:
@@ -949,14 +950,14 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
       const ren_ctor_info *c = &decl->ctors[0];
       ren_puts(b, decl->name);
       ren_puts(b, decl->opaque ? "(" : " { ");
-      ren_show_fields(b, v.o, c->nfields, c->fields, c->types, &inner);
+      ren_show_fields(b, v.o, c, c->nfields, c->fields, c->types, &inner);
       ren_puts(b, decl->opaque ? ")" : " }");
     } else {
       const ren_ctor_info *c = &decl->ctors[ren_ctor_tag(decl, v)];
       ren_puts(b, c->name);
       if (c->nfields > 0) {
         ren_puts(b, "(");
-        ren_show_fields(b, v.o, c->nfields, NULL, c->types, &inner);
+        ren_show_fields(b, v.o, c, c->nfields, NULL, c->types, &inner);
         ren_puts(b, ")");
       }
     }
@@ -987,10 +988,12 @@ void ren_print_value(FILE *out, ren_obj *d, ren_val v) {
 static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
                          ren_val b);
 
-static bool ren_equal_fields(ren_obj *a, ren_obj *b, int32_t n,
-                             ren_desc *const *types, const ren_tenv *env) {
+static bool ren_equal_fields(ren_obj *a, ren_obj *b, const ren_ctor_info *c,
+                             int32_t n, ren_desc *const *types,
+                             const ren_tenv *env) {
   for (int32_t i = 0; i < n; i++)
-    if (!ren_equal_in(types[i], env, ren_fields(a)[i], ren_fields(b)[i]))
+    if (!ren_equal_in(types[i], env, ren_ctor_field(a, c, i),
+                      ren_ctor_field(b, c, i)))
       return false;
   return true;
 }
@@ -1014,7 +1017,7 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
     return true;
   }
   case REN_D_TUPLE:
-    return ren_equal_fields(a.o, b.o, d->nargs, d->args, env);
+    return ren_equal_fields(a.o, b.o, NULL, d->nargs, d->args, env);
   case REN_D_ERRORS: {
     if (ren_tag(a.o) != ren_tag(b.o))
       return false;
@@ -1033,14 +1036,15 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
     if (decl->kind == REN_DECL_REP)
       return ren_equal_in(decl->rep, &inner, a, b);
     if (decl->kind == REN_DECL_RECORD)
-      return ren_equal_fields(a.o, b.o, decl->ctors[0].nfields,
-                              decl->ctors[0].types, &inner);
+      return ren_equal_fields(a.o, b.o, &decl->ctors[0],
+                              decl->ctors[0].nfields, decl->ctors[0].types,
+                              &inner);
     int64_t tag = ren_ctor_tag(decl, a);
     if (tag != ren_ctor_tag(decl, b))
       return false;
     const ren_ctor_info *c = &decl->ctors[tag];
     return c->nfields == 0 ||
-           ren_equal_fields(a.o, b.o, c->nfields, c->types, &inner);
+           ren_equal_fields(a.o, b.o, c, c->nfields, c->types, &inner);
   }
   default: /* an `Int`, a `Bool` or `Unit` */
     return a.i == b.i;

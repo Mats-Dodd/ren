@@ -204,33 +204,34 @@ fn main() -> Bool = lookup(Node(Black, Leaf, 1, true, Leaf), 1)
           (do (let $tag/10:Int (tag t/5))
             (switch $tag/10
               (#0
-                (do (let $part/11:Boxed (field t/5 1/5))
-                  (let $part/12:Int (field t/5 2/5))
-                  (let $part/13:Bool (field t/5 3/5))
-                  (let $part/14:Boxed (field t/5 4/5))
+                (do (let $part/11:Boxed (field t/5 0/4))
+                  (let $part/12:Int (field t/5 1/4))
+                  (let $packed/13:Int (field t/5 3/4))
+                  (let $part/14:Bool (unpack $packed/13@8:8))
+                  (let $part/15:Boxed (field t/5 2/4))
                   (let l/6:Boxed $part/11)
                   (let kx/7:Int $part/12)
-                  (let v/8:Bool $part/13)
-                  (let r/9:Boxed $part/14)
-                  (let k/15:Int k/3)
-                  (let kx/16:Int kx/7)
-                  (let $cmp/17:Bool (< k/15 kx/16))
-                  (decl $if/18:Bool)
-                  (if $cmp/17
-                    (do (let l/19:Boxed l/6) (let k/20:Int k/3)
-                      (let $result/21:Bool (call ren_test_lookup ev/1 l/19 k/20))
-                      (set $if/18 $result/21))
-                    (do (let k/22:Int k/3) (let kx/23:Int kx/7)
-                      (let $cmp/24:Bool (> k/22 kx/23))
-                      (decl $if/25:Bool)
-                      (if $cmp/24
-                        (do (let r/26:Boxed r/9) (let k/27:Int k/3)
-                          (let $result/28:Bool
-                            (call ren_test_lookup ev/1 r/26 k/27))
-                          (set $if/25 $result/28))
-                        (do (let v/29:Bool v/8) (set $if/25 v/29)))
-                      (set $if/18 $if/25)))
-                  (set $match/4 $if/18)
+                  (let v/8:Bool $part/14)
+                  (let r/9:Boxed $part/15)
+                  (let k/16:Int k/3)
+                  (let kx/17:Int kx/7)
+                  (let $cmp/18:Bool (< k/16 kx/17))
+                  (decl $if/19:Bool)
+                  (if $cmp/18
+                    (do (let l/20:Boxed l/6) (let k/21:Int k/3)
+                      (let $result/22:Bool (call ren_test_lookup ev/1 l/20 k/21))
+                      (set $if/19 $result/22))
+                    (do (let k/23:Int k/3) (let kx/24:Int kx/7)
+                      (let $cmp/25:Bool (> k/23 kx/24))
+                      (decl $if/26:Bool)
+                      (if $cmp/25
+                        (do (let r/27:Boxed r/9) (let k/28:Int k/3)
+                          (let $result/29:Bool
+                            (call ren_test_lookup ev/1 r/27 k/28))
+                          (set $if/26 $result/29))
+                        (do (let v/30:Bool v/8) (set $if/26 v/30)))
+                      (set $if/19 $if/26)))
+                  (set $match/4 $if/19)
                   jump L3))
               (#1 (do (set $match/4 false) jump L3))
               (else (do (panic "no arm of this `match` matched")))))
@@ -267,29 +268,29 @@ fn main() -> Bool =
     );
   [%expect
     {|
-    (let $unique/95:Bool (unique? r/5))
-    (reset r/5 4=$part/30 1=$part/27))
-    (let $unique/96:Bool (unique? $part/27))
-    (reset $part/27 1=$part/34 4=$part/37))
-    (let $new/61:Boxed (alloc #0 #1 l/57 k/58 v/59 lx/60))
-    (alloc #0 #1 rx/64 ky/65 vy/66 ry/67
-    (at $reuse/99 =2 =3 =4)))
-    (alloc #0 #0 $new/61 kx/62 vx/63 $new/68
-    (at $reuse/97 =2 =3)))
-    (let $unique/93:Bool (unique? r/5))
-    (reset r/5 1=$part/40 4=$part/43))
-    (let $unique/94:Bool (unique? $part/43))
-    (reset $part/43 1=$part/47 4=$part/50))
-    (let $new/74:Boxed (alloc #0 #1 l/70 k/71 v/72 lx/73))
-    (alloc #0 #1 ly/77 ky/78 vy/79 ry/80
-    (at $reuse/101 =1 =2 =3 =4)))
-    (alloc #0 #0 $new/74 kx/75 vx/76 $new/81
-    (at $reuse/103 =2 =3)))
-    (let $unique/92:Bool (unique? r/5))
-    (do (let $token/106:Token (reset r/5 1=$part/53 4=$part/56))
-    (alloc #0 #0 lx/86 kx/87 vx/88 rx/89
-    (at $reuse/105 =1 =2 =3 =4)))
-    (let $new/91:Boxed (alloc #0 #1 l/83 k/84 v/85 $new/90))
+    (let $unique/110:Bool (unique? r/5))
+    (reset r/5 2=$part/31 0=$part/27))
+    (let $unique/111:Bool (unique? $part/27))
+    (reset $part/27 0=$part/36 2=$part/40))
+    (alloc #0 l/64 k/65 lx/67 $packed/68))
+    (alloc #0 rx/72 ky/73 ry/75 $packed/76
+    (at $reuse/114 =1 =2)))
+    (alloc #0 $new/69 kx/70 $new/77 $packed/78
+    (at $reuse/112 =1)))
+    (let $unique/108:Bool (unique? r/5))
+    (reset r/5 0=$part/43 2=$part/47))
+    (let $unique/109:Bool (unique? $part/47))
+    (reset $part/47 0=$part/52 2=$part/56))
+    (alloc #0 l/80 k/81 lx/83 $packed/84))
+    (alloc #0 ly/88 ky/89 ry/91 $packed/92
+    (at $reuse/116 =0 =1 =2)))
+    (alloc #0 $new/85 kx/86 $new/93 $packed/94
+    (at $reuse/118 =1)))
+    (let $unique/107:Bool (unique? r/5))
+    (do (let $token/121:Token (reset r/5 0=$part/59 2=$part/63))
+    (alloc #0 lx/99 kx/100 rx/102 $packed/103
+    (at $reuse/120 =0 =1 =2)))
+    (let $new/106:Boxed (alloc #0 l/96 k/97 $new/104 $packed/105))
     Mem Lint: ok
     |}]
 
@@ -326,16 +327,16 @@ fn main() -> Bool =
     );
   [%expect
     {|
-    (let $result/35:Bool (call ren_test_is_red_1 ev/1 r/34))
-    (call ren_test_ins_1 ev/1 r/40 k/41 v/42))
-    (decl $inlined/78:Boxed)
-    (free-token $reuse/186)
-    (free-token $reuse/186)
-    (set $inlined/78 $match/79)
-    (let $result/44:Boxed $inlined/78)
-    (call ren_test_ins_1 ev/1 r/48 k/49 v/50))
-    (call ren_test_ins_1 ev/1 r/65 k/66 v/67))
-    (free-token $reuse/188)
+    (let $result/39:Bool (call ren_test_is_red_1 ev/1 r/38))
+    (call ren_test_ins_1 ev/1 r/44 k/45 v/46))
+    (decl $inlined/87:Boxed)
+    (free-token $reuse/210)
+    (free-token $reuse/210)
+    (set $inlined/87 $match/88)
+    (let $result/48:Boxed $inlined/87)
+    (call ren_test_ins_1 ev/1 r/52 k/53 v/54))
+    (call ren_test_ins_1 ev/1 r/71 k/72 v/73))
+    (free-token $reuse/212)
     Mem Lint: ok
     |}]
 

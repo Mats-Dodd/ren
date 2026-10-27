@@ -95,8 +95,10 @@ let rhs_atoms (r : rhs) : atom list =
   | Arg (x, _)
   | Block_of (_, x)
   | Op_block (x, _, _)
-  | Is_unique x ->
+  | Is_unique x
+  | Unpack (x, _, _) ->
       [ x ]
+  | Pack ps -> List.map (fun (x, _, _) -> x) ps
   | Arith (_, x, y, _) | Compare (_, x, y) -> [ x; y ]
   | Alloc { fields; words; at; _ } ->
       fields @ words @ Option.to_list (Option.map fst at)
@@ -297,7 +299,7 @@ let set_once (body : block) : block =
 let pure (r : rhs) =
   match r with
   | Atom _ | Field _ | Load _ | Addr _ | To_word _ | Of_word _ | Tag_of _
-  | Compare _ | Not _ | Global _ | Env_get _ | Is_unique _ ->
+  | Compare _ | Not _ | Global _ | Env_get _ | Is_unique _ | Pack _ | Unpack _ ->
       true
   | _ -> false
 

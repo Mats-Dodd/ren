@@ -353,6 +353,10 @@ let mask kept =
   | [] -> "0u"
   | _ -> String.concat " | " (List.map (fun (n, _) -> bit n) kept)
 
+(* A mask of the low [bits] bits of a word, as C. *)
+let low_bits bits =
+  if bits >= 64 then "UINT64_MAX" else sprintf "UINT64_C(0x%Lx)" (Int64.pred (Int64.shift_left 1L bits))
+
 (* What [r] computes, as a C expression; an [Alloc] is statements of its
    own ([stmt]). *)
 let rhs (r : rhs) =
@@ -375,6 +379,12 @@ let rhs (r : rhs) =
   | Field (x, n, _) | Struct_get (x, n) ->
       failwith (sprintf "bug: emit_c: a field %s.%d outside a Let" (atom x) n)
   | Make_struct _ -> bug "a struct made outside a Let"
+  | Pack xs ->
+      let part (x, at, bits) =
+        sprintf "(((uint64_t)%s & %s) << %d)" (atom x) (low_bits bits) at
+      in
+      sprintf "((int64_t)(%s))" (String.concat " | " (List.map part xs))
+  | Unpack _ -> bug "a packed field read outside a Let"
   | Is_unique x -> sprintf "ren_is_unique(%s)" (atom x)
   | Reset (x, kept) -> sprintf "ren_reset(%s, %s)" (atom x) (mask kept)
   | Call (f, xs) -> sprintf "%s(%s)" f (String.concat ", " (List.map atom xs))
@@ -446,6 +456,10 @@ let rec stmt o d (s : stmt) =
       line
         (sprintf "%s %s = %s;" (ctype v.layout) (var v)
            (of_val v.layout (sprintf "%s.s[%d]" (atom x) n)))
+  | Let (v, Unpack (x, at, bits)) ->
+      line
+        (sprintf "%s %s = (%s)(((uint64_t)%s >> %d) & %s);" (ctype v.layout)
+           (var v) (ctype v.layout) (atom x) at (low_bits bits))
   | Let (v, Make_struct xs) ->
       line
         (sprintf "%s %s = {%s};" (ctype v.layout) (var v)
@@ -491,6 +505,16 @@ let rec stmt o d (s : stmt) =
       match at with
       | None ->
           line (sprintf "ren_obj* %s = %s;" (var v) alloc);
+          List.iteri set fields
+      | Some (t, _) when List.mem v.id !in_slot ->
+          (* the version that builds its result in its caller's frame
+             builds it there, as its caller drops it: the token's memory,
+             which reuse gave the version that builds on the heap, is
+             given back *)
+          line (sprintf "ren_free_token(%s);" (atom t));
+          line
+            (sprintf "ren_obj* %s = ren_stack_ctor(ren_slot, %d, %d, %s);"
+               (var v) tag n objs);
           List.iteri set fields
       | Some (t, same) ->
           (* in the token's memory, the slots in [same] already hold their
@@ -1006,6 +1030,18 @@ let static_types add (descs : desc list) (decls : decl list) =
       let ctor j (name, fields, types) =
         let nfields = List.length types in
         let types = table (sprintf "ren_decl_%d_%d_types" i j) types in
+        (* where each field is kept, if its small scalars are packed *)
+        let at =
+          match List.nth_opt dc.dplaces j with
+          | Some (Some places) ->
+              let n = sprintf "ren_decl_%d_%d_at" i j in
+              add
+                (sprintf "static const uint32_t %s[%d] = %s;\n" n
+                   (max 1 (List.length places))
+                   (braces (List.map string_of_int places)));
+              n
+          | _ -> "NULL"
+        in
         let names =
           match fields with
           | Some names ->
@@ -1017,7 +1053,7 @@ let static_types add (descs : desc list) (decls : decl list) =
               n
           | None -> "NULL"
         in
-        sprintf "{%s, %d, %s, %s}" (c_string name) nfields names types
+        sprintf "{%s, %d, %s, %s, %s}" (c_string name) nfields names types at
       in
       let ctors_of cs =
         let name = sprintf "ren_decl_%d_ctors" i in

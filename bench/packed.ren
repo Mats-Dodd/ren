@@ -1,0 +1,98 @@
+// An object's small scalars packed into shared words (to_mem.ml, [pack]),
+// where they meet the rest: a red-black tree's color and value in one
+// word, its nodes reused as Perceus takes them apart; a record of more
+// than eight `Bool`s, two packed words; a record changed a field at a
+// time; and each walked by `show`, `==` and a generic function, which
+// find a packed field through its declaration (ren_rt.h,
+// [ren_ctor_field]). `print(blacken(ins(...)))` builds its tree in
+// `main`'s frame through `ins`'s second version (stack.ml), whose node
+// reuse had given a token: the token's memory goes back to the heap, not
+// leaked. build.t runs it under the sanitizers.
+
+type Color =
+  | Red
+  | Black
+
+type Tree =
+  | Node(color: Color, left: Tree, key: Int, value: Bool, right: Tree)
+  | Leaf
+
+fn ins(t: Tree, k: Int, v: Bool) -> Tree =
+  match t
+    Node(c, l, kx, vx, r) =>
+      if k < kx then balance(Node(c, ins(l, k, v), kx, vx, r))
+      else if k > kx then balance(Node(c, l, kx, vx, ins(r, k, v)))
+      else Node(c, l, k, v, r)
+    Leaf => Node(Red, Leaf, k, v, Leaf)
+
+fn balance(t: Tree) -> Tree =
+  match t
+    Node(Black, Node(Red, Node(Red, a, xk, xv, b), yk, yv, c), zk, zv, d) =>
+      Node(Red, Node(Black, a, xk, xv, b), yk, yv, Node(Black, c, zk, zv, d))
+    Node(Black, a, xk, xv, Node(Red, b, yk, yv, Node(Red, c, zk, zv, d))) =>
+      Node(Red, Node(Black, a, xk, xv, b), yk, yv, Node(Black, c, zk, zv, d))
+    _ => t
+
+fn blacken(t: Tree) -> Tree =
+  match t
+    Node(_, l, k, v, r) => Node(Black, l, k, v, r)
+    Leaf => Leaf
+
+fn trues(t: Tree) -> Int =
+  match t
+    Node(_, l, _, true, r) => trues(l) + trues(r) + 1
+    Node(_, l, _, false, r) => trues(l) + trues(r)
+    Leaf => 0
+
+fn reds(t: Tree) -> Int =
+  match t
+    Node(Red, l, _, _, r) => reds(l) + reds(r) + 1
+    Node(Black, l, _, _, r) => reds(l) + reds(r)
+    Leaf => 0
+
+type Level =
+  | Low
+  | Mid
+  | High
+
+type Flags = {
+  a: Bool, name: Str, b: Bool, c: Bool, d: Bool, level: Level,
+  e: Bool, f: Bool, g: Bool, h: Bool, i: Bool, n: Int, last: Level
+}
+
+fn count_on(x: Flags) -> Int =
+  var k = 0
+  for on in [x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h, x.i]
+    if on then k += 1
+  k
+
+fn first<T>(xs: Array<T>) -> T = xs[0]
+
+fn main() uses Console =
+  var t = Leaf
+  for i in 0..40
+    t = blacken(ins(t, (i * 7) % 41, i % 3 == 0))
+  print(trues(t))
+  print(reds(t))
+  print(blacken(ins(ins(Leaf, 2, true), 1, false)))
+  let x = Flags {
+    a: true, name: "x", b: false, c: true, d: false, level: High,
+    e: true, f: false, g: true, h: false, i: true, n: 42, last: Mid
+  }
+  print(x)
+  print(count_on(x))
+  var y = x
+  y.b = true
+  y.level = Low
+  y.i = false
+  print(y)
+  print(count_on(y))
+  print(x == y)
+  var z = y
+  z.b = false
+  z.level = High
+  z.i = true
+  print(x == z)
+  print(first([y, x]).level == Low)
+  print(first([x]))
+  print([Node(Red, Leaf, 1, true, Leaf), Leaf])

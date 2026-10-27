@@ -1461,9 +1461,10 @@ themselves (bench/native); Mem IR, the C runtime and a naive backend
 for the first-order subset, with `ren build`; the debug strategy for
 the rest of the subset, blocks, generics, handlers, errors, `show` and
 `Console`; Perceus over Mem IR; release builds that specialize; and the
-measurements. Then three that act on what they measured: arrays in
-loops, the experiments merged, and the release build's costs. Each step
-extends this section, and says what it changed of the ones before.
+measurements. Then four that act on what they measured: arrays in
+loops, the experiments merged, the release build's costs, and small
+values and packed fields. Each step extends this section, and says what
+it changed of the ones before.
 
 ### Step 2: Mem IR, the runtime, and `ren build`
 
@@ -2298,3 +2299,40 @@ What later steps need to know:
 - Without the cap, the stress program's C is 1.30 times what it was
   with it, and clang's time grows with it, while its machine code is
   0.63 times what it was, since the cap's fallback was the bigger code.
+
+### Step 10: small values, and packed fields
+
+Decision 14's layouts for what isn't an array: an object's small
+scalars share a word, and a small value is no object at all
+(foundations.md, decision 14, and Staging, item 2).
+
+**Packed scalar fields** (to_mem.ml, [pack]), in both builds. An
+object of a type with no parameters keeps its `Bool`s, `()`s and sums
+without fields, a byte each (two or four for an enum of more than 256
+or 65,536 constructors), packed into words after its other fields,
+the widest first, each in the first word with room: Lean's scalar
+fields after the objects (lean.h:592-612, `lean_ctor_get_uint8` and
+`ctor_set_uint*`). Only where that saves a word, so a lone `Bool`
+keeps its own. rbtree's `Node(color, left, key, value, right)` is four
+words, not five, its color and value in one. A type with parameters
+keeps a word a field in the order they're declared, since generic code
+finds a field where any other does. Mem says it in two operations,
+`Pack`, the small scalars into the word an `Alloc` is given, and
+`Unpack`, a scalar out of the word a `Field` reads, so every pass that
+counts or reuses an object's words sees words, as before; reuse writes
+a packed word again where any scalar in it changed. Each declaration
+tells the walks where its fields are (ren_rt.h, `ren_ctor_info`'s
+`at`, and `ren_ctor_field`), so `show`, `==` and order find a packed
+field as Mem does. Mem Lint checks that a packed word holds small
+scalars that don't overlap, and that what comes out of one is one.
+bench/packed.ren, under the sanitizers in build.t, has a red-black
+tree's nodes packed and reused, a record of nine `Bool`s and two enums
+in two packed words, changed a field at a time, and each walked by
+`show` and `==`.
+
+Measuring it found a leak from step 8: a function's version that
+builds its result in its caller's frame (stack.ml) built it in a reuse
+token's memory when reuse had given its `Alloc` one, which the caller
+then never freed. The frame's version gives the token back and builds
+in the frame (emit_c.ml).
+

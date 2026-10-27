@@ -330,6 +330,27 @@ let rhs env (r : rhs) : layout =
       (* the struct's is the variable's, which [stmt] checks *)
       List.iter (fun x -> ignore (atom env x)) xs;
       Unit
+  | Pack xs ->
+      ignore
+        (List.fold_left
+           (fun used (x, at, bits) ->
+             (match atom env x with
+             | Bool | Unit | Enum -> ()
+             | l -> fail env (sprintf "%s packed in a word" (show_layout l)));
+             if bits < 1 || bits > 32 || at < 0 || at + bits > 64 then
+               fail env (sprintf "a packed field at bit %d of %d bits" at bits);
+             let m = Int64.shift_left (Int64.pred (Int64.shift_left 1L bits)) at in
+             if Int64.logand used m <> 0L then
+               fail env (sprintf "packed fields that overlap at bit %d" at);
+             Int64.logor used m)
+           0L xs);
+      Int
+  | Unpack (x, at, bits) ->
+      operand env "a packed word" Int x;
+      if bits < 1 || bits > 32 || at < 0 || at + bits > 64 then
+        fail env (sprintf "a packed field at bit %d of %d bits" at bits);
+      (* the field's own layout is the variable's, which [stmt] checks *)
+      Unit
   | Struct_get (x, n) -> (
       match atom env x with
       | Struct k when k >= 0 && k < Array.length env.structs -> (
@@ -348,6 +369,13 @@ let rec stmt env (s : stmt) : env =
             fail env
               (sprintf "%s, %s, read from words" (show_var v)
                  (show_layout v.layout))
+      | Unpack _ -> (
+          match v.layout with
+          | Bool | Unit | Enum -> ()
+          | l ->
+              fail env
+                (sprintf "%s, %s, unpacked from a word" (show_var v)
+                   (show_layout l)))
       | Make_struct xs -> (
           match v.layout with
           | Struct k

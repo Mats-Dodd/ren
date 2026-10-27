@@ -257,6 +257,15 @@ type rhs =
       (** a [Struct], the variable's, of these fields, in the order they're
           declared *)
   | Struct_get of atom * int  (** the [n]-th field of a [Struct] *)
+  | Pack of (atom * int * int) list
+      (** a word, an [Int], holding small scalars side by side: each a [Bool],
+          a [Unit] or an [Enum], at the bit given, in as many bits as given.
+          The scalar fields of an object packed together, after Lean's
+          ([lean_ctor_set_uint8], lean.h:612, and the [sset] of
+          Lean/Compiler/IR/Basic.lean) *)
+  | Unpack of atom * int * int
+      (** the scalar, of the variable's layout, at this bit of a word [Pack]
+          made, in this many bits ([lean_ctor_get_uint8], lean.h:592) *)
   | Reset of atom * (int * atom) list
       (** a unique object's memory, as a [Token]: the fields at the slots listed
           are the variables after them, which keep their references, and the
@@ -390,7 +399,17 @@ type decl_body =
   | Sum_decl of (string * int list) list  (** its constructors, by tag *)
   | Rep_decl of int  (** an opaque type: what it's represented as *)
 
-type decl = { dname : string; dopaque : bool; dbody : decl_body }
+type decl = {
+  dname : string;
+  dopaque : bool;
+  dbody : decl_body;
+  dplaces : int list option list;
+      (** for each constructor, a record's one, where each field is kept, if
+          its scalars are packed ([Pack]): the word's number, shifted left 16,
+          the bit it starts at, shifted left 8, and how many bits, 64 for a
+          word of its own; [None] where each field is the word of its number
+          (ren_rt.h, [ren_ctor_info]) *)
+}
 
 (* An associated value: its C name, the function that makes it, and its
    layout. *)

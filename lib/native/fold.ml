@@ -117,6 +117,8 @@ let rhs h (r : rhs) : rhs =
   | Is_unique x -> Is_unique (a x)
   | Make_struct fields -> Make_struct (xs fields)
   | Struct_get (x, n) -> Struct_get (a x, n)
+  | Pack ps -> Pack (List.map (fun (x, at, n) -> (a x, at, n)) ps)
+  | Unpack (x, at, n) -> Unpack (a x, at, n)
   | Reset (x, k) -> Reset (a x, kept h k)
 
 let rec stmt h (s : stmt) : stmt =

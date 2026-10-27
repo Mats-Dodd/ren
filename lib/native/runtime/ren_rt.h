@@ -819,13 +819,31 @@ typedef struct ren_desc {
 } ren_desc;
 
 /* A constructor, or a record's fields, as declared: each field's type is
-   a template over the type's parameters. */
+   a template over the type's parameters. [at] says where each field is
+   kept, if the type packs its small scalars (to_mem.ml, [pack]): the
+   word's number shifted left 16, the bit it starts at shifted left 8,
+   and how many bits, 64 for a word of its own. NULL: field i is word i. */
 typedef struct {
   const char *name;
   int32_t nfields;
   const char *const *fields; /* a record's field names; NULL for a sum */
   ren_desc *const *types;
+  const uint32_t *at;
 } ren_ctor_info;
+
+/* Field [i] of [o], a constructor or a record of [c], as a word: a packed
+   one's bits, unsigned. [c] NULL is a tuple's, never packed. */
+static inline ren_val ren_ctor_field(ren_obj *o, const ren_ctor_info *c,
+                                     int32_t i) {
+  if (c == NULL || c->at == NULL)
+    return ren_fields(o)[i];
+  uint32_t at = c->at[i], bits = at & 0xFF;
+  ren_val v = ren_fields(o)[at >> 16];
+  if (bits < 64)
+    v.i = (int64_t)(((uint64_t)v.i >> ((at >> 8) & 0xFF)) &
+                    ((UINT64_C(1) << bits) - 1));
+  return v;
+}
 
 enum { REN_DECL_RECORD, REN_DECL_SUM, REN_DECL_REP };
 
