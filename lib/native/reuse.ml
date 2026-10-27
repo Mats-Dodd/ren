@@ -148,6 +148,30 @@ let escapes (s : stmt) =
 
 exception Give_up
 
+(* A call whose block for when it fails always leaves: on a token's path
+   before a build takes it, that block frees the token first ([guard]),
+   and the path goes on after the call. A call whose block may go on, or
+   anything else a path may leave from inside, ends the token's path
+   there. Without this, a failing call between a reset and the build
+   that takes its token leaked the token on the error's path. *)
+let guardable (s : stmt) =
+  match s with
+  | Call_fails { on_error; _ } -> ends_all on_error
+  | Call_block { on_error = Some b; _ } | Call_handler { on_error = Some b; _ }
+    ->
+      ends_all b
+  | _ -> false
+
+let guard tok (s : stmt) =
+  let free b = Free_token (Var tok) :: b in
+  match s with
+  | Call_fails c -> Call_fails { c with on_error = free c.on_error }
+  | Call_block ({ on_error = Some b; _ } as c) ->
+      Call_block { c with on_error = Some (free b) }
+  | Call_handler ({ on_error = Some b; _ } as c) ->
+      Call_handler { c with on_error = Some (free b) }
+  | s -> s
+
 type cx = {
   next : int ref;
   root : var -> int;
@@ -199,6 +223,8 @@ let rec take cx (t : token) (b : block) : block =
             acc
         | Loop _ | Joins _ | Catch _ -> acc
         | s when Rc.ends s -> acc
+        | s when guardable s -> straight (i + 1) acc rest
+        | s when escapes s -> acc
         | Let (_, Alloc a) when is_alloc ~stack:cx.stack t.n s ->
             straight (i + 1) ((i, List.length (same cx t a.fields)) :: acc) rest
         | _ -> straight (i + 1) acc rest)
@@ -215,6 +241,7 @@ let rec take cx (t : token) (b : block) : block =
           match s with
           | Let (v, Alloc a) when i = best ->
               Let (v, Alloc { a with at = Some (Var t.tok, same cx t a.fields) })
+          | s when i < best && guardable s -> guard t.tok s
           | s -> s)
         b
   | [] -> branch cx t b
@@ -248,6 +275,8 @@ and branch cx t (b : block) : block =
   | Joins (d, js) :: rest when builds ~stack:cx.stack t.n d -> Joins (take cx t d, js) :: rest
   | s :: rest when Rc.ends s -> Free_token (Var t.tok) :: s :: rest
   | (Loop _ | Joins _ | Catch _) :: _ -> Free_token (Var t.tok) :: b
+  | s :: rest when guardable s -> guard t.tok s :: branch cx t rest
+  | s :: _ when escapes s -> Free_token (Var t.tok) :: b
   | s :: rest -> s :: branch cx t rest
 
 (* [b], a branch the path may go on from, after the statement it's in:

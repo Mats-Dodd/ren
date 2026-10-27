@@ -1,0 +1,32 @@
+// A reuse token whose path crosses a call that can fail (reuse.ml,
+// `guard`): the object dies and is reset before the call, the build
+// that takes its memory comes after it, and the call's error leaves the
+// function in between, so that path must free the token. Before, Mem
+// Lint stopped the build with "a reuse token is never used or freed".
+// build.t runs it under the sanitizers, both ways out.
+
+type P = { a: Str, b: Int }
+
+fn check(n: Int) -> Int ! Bad(n: Int) = if n > 5 then fail Bad(n) else n
+
+fn go(n: Int) -> Int ! Bad(n: Int) =
+  let p = P { a: "x".concat(show(n)), b: n }
+  let s = p.a
+  let k = try check(n)
+  let q = P { a: s, b: k }
+  q.a.len() + q.b
+
+// the same with the failing call inside a branch that goes on
+fn branchy(n: Int) -> Int ! Bad(n: Int) =
+  let p = P { a: "y".concat(show(n)), b: n }
+  let s = p.a
+  var k = 0
+  if n % 2 == 0 then k = try check(n)
+  let q = P { a: s, b: k }
+  q.a.len() + q.b
+
+fn main() uses Console =
+  print(attempt go(3))
+  print(attempt go(9))
+  print(attempt branchy(4))
+  print(attempt branchy(8))
