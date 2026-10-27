@@ -125,6 +125,9 @@ type rt =
   | Array_push_taking of layout
       (** [Array_push], which takes the element, and grows the array in place if
           it's unique *)
+  | Array_reserve of layout
+      (** an empty array of these elements, with room for as many as the [Int]
+          given; a [Word]'s descriptor after it says whether they're objects *)
   | Str_len
   | Str_concat
   | Str_eq

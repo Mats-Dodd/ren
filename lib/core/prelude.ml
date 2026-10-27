@@ -49,9 +49,22 @@ pub type Array<T> = builtin
     if i >= 0 && i < self.len() then Some(self[i]) else None
   pub fn first(self) -> Option<T> = self.get(0)
   pub fn last(self) -> Option<T> = self.get(self.len() - 1)
-  // each element through `f`
+  // each element through `f`. If nothing else holds this array and a
+  // `U` is kept as a `T` is, each element is replaced where it is, and
+  // the array is the new one (Lean's `Array.mapMUnsafe`); otherwise the
+  // new array is made with room for them all at once
   pub fn map<U>(self, f: fn(T) -> U) -> Array<U> =
-    var out: Array<U> = []
+    let into: MapInto<U> = map_into(self)
+    match into
+      InPlace =>
+        var out = self
+        for i in 0..out.len()
+          out[i] = unsafe_cast(try f(out[i]))
+        unsafe_cast(out)
+      Fresh => try self.map_fresh(f)
+  // `map` into a new array, made with room for every element at once
+  fn map_fresh<U>(self, f: fn(T) -> U) -> Array<U> =
+    var out: Array<U> = array_reserve(self.len())
     for x in self
       &out.push(try f(x))
     out
@@ -446,6 +459,11 @@ pub type FsError =
 
 // what the system said to a read or a write, which `fs_checked` turns
 // into its value or its error
+// how `Array.map` makes its array of `T`s (`map_into`)
+type MapInto<T> =
+  | InPlace
+  | Fresh
+
 type FsOutcome<T> =
   | FsDone(value: T)
   | FsMissing
@@ -778,6 +796,20 @@ let scheme (x : Intrinsic.t) =
      order they were *)
   | Array_sort ->
       fn ~reqs:[ (0, "ord") ] [ read (array (Var 0)) ] (array (Var 0))
+  (* The prelude's own, which `map` is written with (prelude.ml's
+     [caller], [Internal]). *)
+  (* fn<T>(n: Int) -> Array<T>: an empty array with room for [n] *)
+  | Array_reserve -> fn [ read int ] (array (Var 0))
+  (* fn<T, U>(xs: Array<T>) -> MapInto<U>: whether `xs.map` can replace
+     each element where it is, giving [xs] back as the new array: nothing
+     else holds [xs], and a [U] is kept in an array as a [T] is (Lean's
+     `Array.mapMUnsafe`, Init/Data/Array/Basic.lean:766) *)
+  | Map_into ->
+      fn [ read (array (Var 0)) ] (Con (Path.prelude "MapInto", [ Var 1 ]))
+  (* fn<A, B>(x: A) -> B: [x], said to be a [B]. Only `map` calls it, on
+     an element of an array [map_into] said keeps a [B] as it keeps an
+     [A], and on that array: Lean's `unsafeCast` *)
+  | Unsafe_cast -> fn [ read (Var 0) ] (Var 1)
   (* A `Map` and a `Set` keep insertion order (operators.md, "`Map` and
      `Set`"), and find a key by its `hash`. *)
   (* fn<K, V>() -> Map<K, V>, which `Map.empty` is *)
@@ -888,6 +920,7 @@ let reaches (x : Intrinsic.t) =
   | Proc_run -> Some ("Proc", "run")
   | Seeded_next | Seeded_int | Journal_kept | Journal_gave | Journal_answer
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
+  | Array_reserve | Map_into | Unsafe_cast
   | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
@@ -905,8 +938,9 @@ let reaches (x : Intrinsic.t) =
    implementations works ([Test]); or it's the journal's, which the
    runtime puts over the world ([Journal]); or because it's what one of
    the source's values is made with, which a program uses instead:
-   `map_empty()` is `Map.empty` ([Value]). *)
-type caller = Any | World | Test | Journal | Value
+   `map_empty()` is `Map.empty` ([Value]); or it's how the prelude's own
+   `map` works, and unsafe anywhere else ([Internal]). *)
+type caller = Any | World | Test | Journal | Value | Internal
 
 let caller (x : Intrinsic.t) =
   match (reaches x, x) with
@@ -917,6 +951,7 @@ let caller (x : Intrinsic.t) =
       | Journal_load ) ) ->
       Journal
   | None, (Map_empty | Set_empty) -> Value
+  | None, (Array_reserve | Map_into | Unsafe_cast) -> Internal
   | None, _ -> Any
 
 let runtime x = caller x <> Any
@@ -946,6 +981,9 @@ let fns : Intrinsic.t list =
     Journal_load;
     Map_empty;
     Set_empty;
+    Array_reserve;
+    Map_into;
+    Unsafe_cast;
   ]
 
 (* ---- built-in types ----

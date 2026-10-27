@@ -126,6 +126,9 @@ type rt =
   | Array_push_taking of layout
       (** [Array_push], which takes the element, and grows the array in place if
           it's unique *)
+  | Array_reserve of layout
+      (** an empty array of these elements, with room for as many as the [Int]
+          given; a [Word]'s descriptor after it says whether they're objects *)
   | Str_len
   | Str_concat
   | Str_eq
@@ -438,6 +441,7 @@ let show_rt = function
   | Array_push l -> "array-push:" ^ show_layout l
   | Array_set_taking l -> "array-set-taking:" ^ show_layout l
   | Array_push_taking l -> "array-push-taking:" ^ show_layout l
+  | Array_reserve l -> "array-reserve:" ^ show_layout l
   | Str_len -> "str-len"
   | Str_concat -> "str-concat"
   | Str_eq -> "str-eq"

@@ -33,6 +33,9 @@ type t =
   | Array_len
   | Array_push
   | Array_sort
+  | Array_reserve
+  | Map_into
+  | Unsafe_cast
   | Map_empty
   | Map_of
   | Map_get
@@ -107,6 +110,9 @@ let path x =
   | Array_len -> member "Array" "len"
   | Array_push -> member "Array" "push"
   | Array_sort -> member "Array" "sort"
+  | Array_reserve -> fn "array_reserve"
+  | Map_into -> fn "map_into"
+  | Unsafe_cast -> fn "unsafe_cast"
   | Map_empty -> fn "map_empty"
   | Map_of -> member "Map" "of"
   | Map_get -> member "Map" "get"

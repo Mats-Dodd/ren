@@ -100,6 +100,8 @@ let rt_sig (rt : rt) : layout list * layout =
   | Array_set l -> ([ Boxed; Int; l ], Boxed)
   | Array_push l | Array_push_taking l -> ([ Cell Boxed; l ], Unit)
   | Array_set_taking l -> ([ Boxed; Int; l ], Boxed)
+  | Array_reserve (Word _) -> ([ Int; Desc ], Boxed)
+  | Array_reserve _ -> ([ Int ], Boxed)
   | Str_len -> ([ Boxed ], Int)
   | Str_concat -> ([ Boxed; Boxed ], Boxed)
   | Str_eq -> ([ Boxed; Boxed ], Bool)
