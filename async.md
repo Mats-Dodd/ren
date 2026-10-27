@@ -8,10 +8,12 @@ It's the stage after [handlers.md](handlers.md) on the
 [runtime-io.md](runtime-io.md).
 
 [foundations.md](foundations.md) changes this design: lambdas become
-blocks, wrappers become calls, the one wait is `Async.until`, there's no
-preemption and no `par_map`, and the runtime is a handler. Where the two
-disagree, foundations.md is the decision; this document is rewritten in
-stage 11a.
+blocks, whose dependencies are found where they're written, wrappers
+become calls, `finally` is written where it starts covering, the one
+wait is `Async.until`, there's no preemption and no `par_map`, and the
+runtime is a handler. Stage 10c built the blocks, the calls and
+`finally`. Where the two disagree, foundations.md is the decision; this
+document is rewritten in stage 11a.
 
 Ren's concurrency is [Effect](https://effect.website/)'s, written in
 direct style. `T ! E uses R` is already Effect's `Effect<A, E, R>`, so
@@ -561,8 +563,8 @@ limit, and cleanup that can't wait. Ren has none of them.
   `attempt` or `retry` inside a task.
 - **Per-core handlers** (`with per_core(cached(ttl)) over ...`), if a
   shared handler becomes a bottleneck across loops.
-- **The rest of the simulation scheduler** (stage 17): failing networks
-  and disks, crashes, and checking every interleaving.
+- **The rest of the simulation scheduler** (after 11a's `sim`): failing
+  networks and disks, crashes, and checking every interleaving.
 
 ## Open questions
 

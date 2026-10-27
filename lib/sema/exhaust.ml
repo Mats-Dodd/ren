@@ -380,7 +380,7 @@ let guard env f = Diag.recover env.sink ~default:() f
 
 let rec check_expr env (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms
   | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
@@ -392,29 +392,16 @@ let rec check_expr env (e : expr) =
   | If (c, t, f) -> List.iter (check_expr env) (c :: t :: Option.to_list f)
   | Array xs | Tuple xs -> List.iter (check_expr env) xs
   | Assign { target; value; _ } -> List.iter (check_expr env) [ target; value ]
-  | For _ -> List.iter (check_expr env) (children e)
+  | For _ | While _ -> List.iter (check_expr env) (children e)
   | Call (f, args) -> List.iter (check_expr env) (f :: args)
   | Lambda (_, body) -> check_expr env body
-  | Block (stmts, last) ->
-      List.iter
-        (function
-          | Let { value; _ } | Let_tuple { value; _ } -> check_expr env value
-          | Expr e -> check_expr env e)
-        stmts;
-      check_expr env last
+  | Block _ -> List.iter (check_expr env) (children e)
   | Con (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields
   | Match (subject, arms) -> check_match_expr env e subject arms
   | With { items; body } ->
       List.iter (check_expr env) (with_links items @ [ body ])
-  | Handler { state; arms; finally; _ } ->
-      List.iter
-        (function
-          | Let { value; _ } | Let_tuple { value; _ } -> check_expr env value
-          | Expr e -> check_expr env e)
-        state;
-      List.iter (fun (a : handler_arm) -> check_expr env a.arm_impl) arms;
-      Option.iter (check_expr env) finally
+  | Handler _ -> List.iter (check_expr env) (children e)
 
 and check_match_expr env ?passes_on e subject arms =
   check_expr env subject;

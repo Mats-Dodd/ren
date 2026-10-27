@@ -895,7 +895,8 @@ let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
   (* where the new line's value is, for a message *)
   let at =
     match List.hd rev with
-    | Let { value; _ } | Let_tuple { value; _ } | Expr value -> value.loc
+    | Let { value; _ } | Let_tuple { value; _ } | Expr value | Finally value ->
+        value.loc
   in
   let loc = Loc.point ~file:console_file 1 1 in
   let before, value, is_expr =

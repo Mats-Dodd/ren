@@ -70,6 +70,10 @@ let recorded_panic loc ~at ~msg ~instead =
 (* An error on its way to the [Handle] that catches it. *)
 exception Failed of Value.t
 
+(* A [Break] on its way to the [While] it leaves. Core Lint makes sure
+   there's one around it, in the same function or block. *)
+exception Broke
+
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug what = failwith ("bug: checking or lowering let through " ^ what)
 
@@ -469,10 +473,13 @@ let rec eval cx env (e : expr) =
   | If (c, t, f) ->
       if truth (eval cx env c) then eval cx env t else eval cx env f
   | While (c, body) ->
-      while truth (eval cx env c) do
-        ignore (eval cx env body)
-      done;
+      (try
+         while truth (eval cx env c) do
+           ignore (eval cx env body)
+         done
+       with Broke -> ());
       VUnit
+  | Break -> raise Broke
   | Seq (a, b) ->
       ignore (eval cx env a);
       eval cx env b
@@ -580,7 +587,12 @@ let rec eval cx env (e : expr) =
           v
       | exception Failed err ->
           ignore (eval cx env after);
-          raise (Failed err))
+          raise (Failed err)
+      | exception Broke ->
+          (* a `break` leaves the loop, but writes back what was changed,
+             a `for &`'s element *)
+          ignore (eval cx env after);
+          raise Broke)
 
 (* [e], the body of a function or a part of one in tail position: a
    [Call] there with no `inout` argument, which would have to be written

@@ -36,6 +36,7 @@
   "let"
   "var"
   "for"
+  "while"
   "in"
   "if"
   "then"
@@ -57,6 +58,7 @@
 
 (visibility) @keyword
 (numeric) @keyword
+(break) @keyword
 
 ; something changes here
 (reference "&" @keyword.mutation)

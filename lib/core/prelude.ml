@@ -656,6 +656,9 @@ handler recording_proc(j: Journal) over Proc =
 // the recording says it gave. When the `with` that installed it ends, a
 // test's outputs are compared with the recording's.
 handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc =
+  finally(r) =>
+    journal_outputs(j)
+    try r
   now() => journal_answer(j, "Clock.now", ())
   instant() => journal_answer(j, "Clock.instant", ())
   sleep(d) => journal_answer(j, "Clock.sleep", d)
@@ -672,9 +675,6 @@ handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc =
   args() => journal_answer(j, "Os.args", ())
   run(cmd, args) =>
     let r: Result<Int, ! ProcError> = journal_answer(j, "Proc.run", (cmd, args))
-    try r
-  finally(r) =>
-    journal_outputs(j)
     try r
 
 // A recorded run, `ren run --record tests/run.journal main.ren`, as each

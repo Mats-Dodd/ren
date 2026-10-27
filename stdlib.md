@@ -13,7 +13,7 @@ This doc covers what ships with Ren: which modules are in the standard library, 
 ```
  std owns the shared types        Time, Decimal, Request, Sql, Blob: libraries agree on them
  three implementations each       real, in-memory, simulated, plus one conformance suite
- the producer owns the loop       for line in Fs.lines(path): push streams, no Reader objects
+ cursors first                    for line in &reader: a value keeps its place, no Reader objects
  borrow the computation           SQLite, aws-lc, rustls, zstd: pure work, effects supplied by Ren
  own the effects                  borrowed code never reaches the world on its own
  stable in std, moving in std.x   HTTP and JSON are stable; cloud APIs and YAML are not
@@ -82,32 +82,30 @@ std.x      websocket, protobuf, grpc, yaml, mysql, redis, jwt, prometheus,
 
 ## Part 2: Shared types
 
-### Streams: the producer owns the loop
+### Streams: cursors first
 
-Go's `io.Reader` is a stateful object behind an interface. Ren has neither half of that: there are no traits, and a block can't hold mutable state, because state lives only in handlers. What Ren does have is the block parameter, which never allocates and passes its errors and dependencies through to the caller. So the producer owns the loop and calls a body for each item, which is where Go itself moved with range-over-func in 1.23:
+Go's `io.Reader` is a stateful object behind an interface. Ren has neither half of that: there are no traits, and a block can't hold state, since it can't be kept. What Ren has is a value that keeps its position, which value semantics allow, and `for` over it. A **cursor** is any type with a method `next(inout self) -> Option<T>`, and `for x in &c` calls it until it gives `None` (runs since stage 10c):
 
 ```ren
-pub fn lines(path: Path, body: fn(line: Str)) ! NoSuchFile(path: Path)
-    uses Fs, Alloc
-
-for line in Fs.lines(path)                 // sugar for: Fs.lines(path) fn(line) => ...
-  if not line.starts_with("#") then
-    try Index.add(parse(line))             // errors and `uses` flow out through the body
+var r = Fs.line_reader(path)               // a cursor: it keeps its place in the file
+for line in &r
+  if line == "---" then break              // `r` stays where it stopped
+  try Index.add(parse(line))
+for line in &r                             // and this loop goes on from there
+  body.push(line)
 ```
 
-`for x in f(...)` is sugar for passing the loop body as `f`'s last parameter (*proposed*, stage 12). Lines, SQL rows, HTTP bodies and byte chunks all use the same shape:
+`for x in c`, without `&`, steps a copy, so `c` stays at the start. A cursor reads one item at a time, so it can zip two streams or read exactly *n* bytes for a framed protocol, and `break` leaves the loop with the cursor where it stopped. Lines, SQL rows, HTTP bodies and byte chunks all use the same shape:
 
 ```ren
-for chunk in Net.chunks(conn)              // chunk: Bytes, leased from the runtime's pool
+var chunks = Net.chunks(conn)              // chunk: Bytes, leased from the runtime's pool
+for chunk in &chunks
   try out.write(chunk)
 ```
 
-When the body returns, the chunk's reference count reaches zero, its buffer goes back to the pool, and the next read is submitted ([runtime-io.md](runtime-io.md#buffers-lent-or-leased)). Backpressure comes for free: the producer can't run ahead of a body that hasn't returned.
+When the body's turn ends, the chunk's reference count reaches zero, its buffer goes back to the pool, and the next read is submitted ([runtime-io.md](runtime-io.md#buffers-lent-or-leased)). Backpressure comes for free: nothing is read ahead of a body that hasn't finished.
 
-Push iteration can't easily zip two streams or read exactly *n* bytes for a framed protocol. Two escape hatches cover that:
-
-- **`Async.pull(seq)`** runs a push sequence on a fiber and hands back a pull iterator, like Go's `iter.Pull`.
-- **A buffered reader value** keeps its position in an `inout` value, which value semantics allow: `var r = bufio.reader(conn)`, then `try &r.read_exact(4)`.
+Today a cursor's `next` can't fail or use a dependency, so `Fs.line_reader` and `Net.chunks` wait: they need a `next` that fails and uses `Fs` or `Net`, which waits for generators (stage 11c, [foundations.md](foundations.md#12-frames-and-generators)), a `gen fn` being the easy way to write a cursor. A producer can still own the loop and take a block, `Fs.each_line(path) fn(line) => ...`, but there's no `for` sugar for it: a `break` in the body would have to leave the producer's loop, and a block can't. **`Async.pull(seq)`**, which runs a producer on a task and hands back a cursor, is only for a producer that recurses, like a tree walk, and waits for 11a.
 
 ### `Time` and `Instant`
 
@@ -198,7 +196,7 @@ Every tag `std` uses then either agrees with user code by design or can't collid
 | `Http` (client) | `http.client()` | `mem_http(routes)` | `sim.http(seed, p99: 2.s)` |
 | `Sql` | the driver | `sqlite.memory` | `sim.sql(seed, conflict_rate: 5%)` |
 
-Simulated implementations need the simulation scheduler, so they arrive in stage 17. Until then the rule is two implementations, with fault-injecting fakes (`fail_rate:`) from stage 11.
+Simulated implementations need the simulation scheduler, the runtime `sim` that stage 11a brings, and the full set arrives in stage 17. Until then the rule is two implementations, with fault-injecting fakes (`fail_rate:`) from stage 11a.
 
 Each dependency type also ships a **conformance suite**: one set of tests every implementation must pass, including the in-memory and simulated ones. It's a `pub group` over an implementation, which a vendor package imports and runs against its own ([deps.md](deps.md#groups)):
 
@@ -393,8 +391,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 8** | `str` and `bytes`; `Fs`, `Os` and `path`, each real and in-memory; `config`, `schedule`, `retry`; the infrastructure types with in-memory implementations |
 | **Stage 9** | operators; `Map` and `Set` ([operators.md](operators.md)) |
 | **Stage 10** | handlers `over` a dependency, like `transaction() over Sql`; journal fixtures for tests |
-| **Stage 11** | `Net` and `Async` ([async.md](async.md)); `channel`; fault-injecting fakes; buffers leased from a pool for `Net` |
-| **Stage 12** | `Decimal` and its `d` suffix; interpolation libraries can intercept; `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); `for x in f(...)`, push streams; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
+| **Stage 11a** | `Net` and `Async` ([async.md](async.md)); `channel`; fault-injecting fakes; buffers leased from a pool for `Net` |
+| **Stage 12** | `Decimal` and its `d` suffix; interpolation libraries can intercept; `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); cursors over files, sockets and SQL rows; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
 | **↑ interpreted Ren** | a JSON API on SQLite, configured from the environment, with retries on an outgoing HTTPS call, whose tests run in under a second on in-memory fakes |
 | **Stage 13** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd, `postgres`, HTTP/2; conformance suites for vendor packages |
 | **Stage 15** | non-allocating pure modules (`checksum`, `hash`, parsers), `push_within`, registered buffers |

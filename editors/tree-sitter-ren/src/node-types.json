@@ -24,6 +24,10 @@
         "named": true
       },
       {
+        "type": "break",
+        "named": true
+      },
+      {
         "type": "call_expression",
         "named": true
       },
@@ -458,11 +462,19 @@
           "named": true
         },
         {
+          "type": "finally_statement",
+          "named": true
+        },
+        {
           "type": "for_statement",
           "named": true
         },
         {
           "type": "let_statement",
+          "named": true
+        },
+        {
+          "type": "while_statement",
           "named": true
         }
       ]
@@ -497,6 +509,10 @@
           },
           {
             "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "break",
             "named": true
           },
           {
@@ -953,6 +969,10 @@
             "named": true
           },
           {
+            "type": "break",
+            "named": true
+          },
+          {
             "type": "call_expression",
             "named": true
           },
@@ -1063,7 +1083,7 @@
     }
   },
   {
-    "type": "finally_arm",
+    "type": "finally_statement",
     "named": true,
     "fields": {
       "body": {
@@ -1535,7 +1555,7 @@
         "required": false,
         "types": [
           {
-            "type": "finally_arm",
+            "type": "finally_statement",
             "named": true
           }
         ]
@@ -1760,6 +1780,10 @@
           },
           {
             "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "break",
             "named": true
           },
           {
@@ -2098,6 +2122,10 @@
           },
           {
             "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "break",
             "named": true
           },
           {
@@ -3009,6 +3037,32 @@
     }
   },
   {
+    "type": "while_statement",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "with_chain",
     "named": true,
     "fields": {
@@ -3201,6 +3255,10 @@
     "named": false
   },
   {
+    "type": "break",
+    "named": true
+  },
+  {
     "type": "comment",
     "named": true
   },
@@ -3339,6 +3397,10 @@
   {
     "type": "visibility",
     "named": true
+  },
+  {
+    "type": "while",
+    "named": false
   },
   {
     "type": "wildcard",

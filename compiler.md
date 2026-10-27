@@ -214,8 +214,8 @@ each pass keeps it so:
    of a `Handler`'s body, after the `let`s that make its state. Since
    10a, the implementation a handler goes over is reached by a dependency
    call on the evidence its handler was installed with, `next.get(id)`,
-   never held as a value, and its `finally` is a lambda in the instance,
-   which keeps cells as the operations do, not the instance.
+   never held as a value, and its `finally`s are one lambda in the
+   instance, which keeps cells as the operations do, not the instance.
 
 And one rule for the stages after this: **a handler's state can never
 hold a suspended continuation.** A fiber belongs to the scope of
@@ -281,6 +281,44 @@ by lowering, which lists it with its method in its module's Core. The
 interpreter evaluates descriptors as it evaluates evidence, and never
 matches or substitutes a type. A release build specializes them away
 like dictionaries.
+
+## Blocks
+
+A lambda is a block (foundations.md, decision 1): it's passed down and
+called, never kept. Since 10c each part of that is decided once, by one
+pass, and checked again on Core:
+
+- **Where a block can be** is checked twice in the front half, both per
+  module. Resolve rejects a function type written where a value is kept,
+  a record field, a constructor's payload, a type argument or a result
+  (`no_kept_blocks`), before inference. After inference, one walk per
+  function over its nodes (Infer_top, `check_blocks`) checks that each
+  value of a function type is a call's callee, a call's argument, or
+  the value of a `let` of one literal `fn`; that no type variable is
+  given a block's type, since `T` could be stored; and that a handler's
+  parameters are data.
+- **What a block captures** it shares by reference: a `var` it uses is
+  its frame's cell, and it reads it when it runs. It captures the
+  evidence where it's written too, and its callee gives it only what
+  its parameter's type lists (deps.md, "How it runs").
+- **Exclusivity** is one pass after inference, per function, one walk
+  (excl.ml; The facts, above). It and rule A are checks, not facts: they
+  give the optimizer that an `&` parameter aliases nothing the callee
+  can see.
+- **Core Lint** checks each again from scratch: a value of a function
+  type is only a callee, an argument or a `let`'s value, but an
+  instance's operations; no type argument has a function type in it; a
+  block's `captures` lists every local its body uses, the evidence where
+  it's written among them; it's given only what its type lists; and a
+  `Break` never leaves it.
+
+What the optimizer and a native backend get from it, with no flow
+analysis: every block at a call site is a literal or a parameter of the
+function it's in, so a release build specializes the callee per block,
+and a debug build passes a code pointer and a frame pointer. Each block
+has a stable name (`Lambda`'s `name`), which a specialized copy is keyed
+by, and its captured evidence is explicit, `outer` and `given`, so a
+dependency call in it is resolved as in the function it's written in.
 
 ## The constraint solver
 
@@ -354,8 +392,8 @@ The constraints:
   other label, since that stops it getting more; and so do a function's
   own rows, in the rows it names.
 - **A function does what it declares** (infer_declared.ml): it uses and
-  fails with what its signature says, a public one's transparent
-  parameters keep their rows open, and a handler needs no more than it
+  fails with what its signature says, a public one's parameters of a
+  dependency's type keep their rows open, and a handler needs no more than it
   declares, and never itself, but for what it goes over, which only a
   `next` call reaches; what its state and `finally` fail with is all it
   fails to start with, closed once its group is done.
@@ -980,8 +1018,9 @@ Where it differed from its plan:
   the rest an array or a value. `Map.first()` and the rest are written
   over its pairs, by a private `pairs()`, an array of them.
 - **Each method that stops early is a loop that stops calling.**
-  There's no `break` or early return, so `find`, `any` and `all` go
-  over every element but call the function no more once they know.
+  There was no `break` until 10c, so `find`, `any` and `all` go over
+  every element but call the function no more once they know. They can
+  `break` now, and haven't been rewritten.
 - **`take` and `drop` of a negative count panic**, through an `assert`
   in the prelude. A failed `assert` in the prelude is a panic, said to
   be at the program's call that reached it, as any panic in the prelude
@@ -1024,7 +1063,7 @@ Each fact is computed once and carried:
   member's errors aren't written: a `pub` record or sum type can have no
   member, public or private, that takes `inout self`, or that returns
   the type, or a value with one in it, with an error row that has a
-  label (a transparent parameter's tail alone isn't one), or, with no
+  label (a block parameter's error tail alone isn't one), or, with no
   `self`, returns `Option` or `Result` of one: a refusal written as a
   value. A method returning `Option<Day>` is a question about a value,
   not a way to make one, so it's allowed. It's reported once per type, at the
@@ -1186,6 +1225,8 @@ carried:
   ends, with `Ok(v)` or `Err(e)`. Lint checks the `With`'s `desc`
   describes its body's type, and the `finally` is a lambda of that
   descriptor and a `Result` of the next type variable, returning it.
+  Since 10c a handler can have several, which lowering makes that one
+  lambda (Stage 10c).
 
 Where it differed from its plan:
 
@@ -1195,7 +1236,7 @@ Where it differed from its plan:
   descriptor parameter describes (Lint's `body_ty`), so `print(v)` works
   in it without a lifted function's descriptor.
 - **A written implementation type without `!` can't fail to start,** a
-  transparent parameter's included, where the plan had a transparent one
+  parameter's of a dependency's type included, where the plan had one
   fail with its function's errors.
 - **The help for a link over nothing** writes `over D` rather than naming
   a maker of `D`.
@@ -1327,3 +1368,72 @@ parameter that goes over nothing says to write `over D` in its type;
 `h() over A` where `h` goes over `A & B` says to name both; and `outer`,
 or `next`, in a record implementation says a handler over it is how
 (record implementations removed in 10c).
+
+## Stage 10c
+
+Blocks (foundations.md, decisions 1, 2, 5 and 7; Blocks, above). Six
+steps, each green on its own: the specification first, as
+test_blocks.ml's catalogue with each test's target; then deletions,
+lambda sets out of the type checker, wrappers out of `with` and record
+implementations out, each with a fix-it; blocks second-class; lexical
+lookup; capture by reference with one exclusivity pass; and the
+additions below. Each fact is computed once and carried:
+
+- **Where a block can be, what it captures, and exclusivity** are in
+  Blocks, above. A block's name is its one stable fact Core keeps from
+  what lambda sets were, `Lambda`'s `name`.
+- **`while` and `break`** are Core's `While` and `Break`. Resolve
+  decides where a `break` is allowed, once, from where it's written:
+  inside a loop, and not across a block or a `with` (`loop_at`); Lint
+  checks a `Break` is inside a `While` of its own function, block or
+  handler. A `for`'s element written back through `&` is written back
+  when a `break` leaves the loop, by the `Finally` that already did it
+  when the body failed, which lowering adds when the body can `break`
+  too (Lower, `breaks`).
+- **A cursor** is a type with a method `next(inout self) -> Option<T>`
+  that can't fail and uses nothing. Inference decides once that a
+  `for` goes over one, recording the method (`Method_of`) and its type
+  arguments at the loop's subject, and lowering makes the loop a `While`
+  over a `match` of `next(&c)`, `None` breaking. A `for x in c` steps a
+  copy; `for x in &c` steps `c` itself, so a loop left by `break` leaves
+  it where it stopped, and the next loop goes on from there.
+- **`finally` is a statement where it's written,** and covers what
+  comes after it: several among a handler's state, before its arms, or
+  among the top-level statements of an arm. The parser reads it as a
+  statement, `Ast.Finally` of a lambda; resolve allows it only in those
+  two places. One among a handler's state is checked as 10a's was,
+  every one of a handler sharing the body's type and errors as skolems
+  (`Handler_facts.body_ty` is unchanged); one in an arm is checked as an
+  `attempt` of the rest of the arm, so `r: Result<T, ! E>` where `T` is
+  the arm's value. Lowering composes a handler's into the one lambda
+  10a's `Instance` holds, the last written run first, each earlier one
+  given what the one after it returned or failed with; and when the
+  state after one can fail to start, it handles that error with the
+  `finally`'s body given `Err(e)` before failing with it, Koka's
+  `finally` around `initially` (/tmp/ren-refs/koka/lib/std/core/
+  hnd.kk:485-494). One in an arm is lowered as `let r = attempt
+  (rest) in` its body. Core is unchanged for it.
+
+Where it differed from its plan:
+
+- **A `break` can't leave a `with`.** A handler's `finally` is given
+  the body's result, and a `break` gives none, so it's an error whose
+  help ends the body in a `Bool` and breaks after the `with`; a `break`
+  inside a block can't leave the loop around the block either.
+- **A cursor's `next` can't fail or use anything,** so a `for` over one
+  needs no `try`; a cursor that reads a file waits for generators
+  (11c). Changing the element a cursor loop gave is an error: there's
+  nothing to write it back to.
+- **A `finally` in an arm is only at its top level,** not inside an
+  `if` or `match` of it, and one in a handler is never after its first
+  arm: the parser says to move it above. A block that ends in a
+  `finally` is an error, since nothing comes after it.
+- **The failed-start path copies a `finally`'s body** into the
+  `Handle` of the state it covers, so the body is lowered twice, its
+  binders' ids repeated in two subtrees Lint sees apart. It's skipped
+  when nothing after the `finally` can fail to start. The error it's
+  given there is typed as the body's error skolem, which Core doesn't
+  check.
+- **Blocks still can't take `inout` parameters,** and `retry(n, on:)`,
+  inline handlers and generic dependencies wait for 10d. Rules B to D
+  wait for 11a, which makes concurrent and spawned parameters.

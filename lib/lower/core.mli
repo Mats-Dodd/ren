@@ -216,6 +216,11 @@ and kind =
   | If of expr * expr * expr
   | Match of expr * arm list
   | While of expr * expr  (** the condition, then the body *)
+  | Break
+      (** leave the innermost [While] around it, which is in the same function
+          or block, never outside a [Lambda], a [Handler] or a [With]'s body
+          (Core Lint); of any type, since it never ends. A [Finally] it leaves
+          runs its [after] first *)
   | Seq of expr * expr  (** the first's value is dropped *)
   | Call of expr * arg list * var
       (** the callee, its arguments, and the evidence it's passed: always the

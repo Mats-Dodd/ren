@@ -544,7 +544,7 @@ let param_use cx (b : binder) loc why =
 
 let rec walk cx (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Break -> ()
   | Var _ | Field _ | Index _ -> (
       match place_of cx e with
       | Some p ->
@@ -575,18 +575,19 @@ let rec walk cx (e : expr) =
           instant cx l;
           walk { cx with loops = l :: cx.loops } body
       | None -> walk cx body)
-  | Handler { state; arms; finally; _ } ->
-      List.iter (stmt cx) state;
+  | Handler { state; arms; _ } ->
+      List.iter (function Finally _ -> () | s -> stmt cx s) state;
       let vars =
         List.filter_map
           (function Let { name; mut = true; _ } -> Some name | _ -> None)
           state
       in
+      (* its `finally`s run as its arms do, when the `with` ends *)
       let arm = { cx with state = Some vars } in
-      List.iter (fun (a : handler_arm) -> walk arm a.arm_impl) arms;
-      Option.iter (walk arm) finally
+      List.iter (function Finally f -> walk arm f | _ -> ()) state;
+      List.iter (fun (a : handler_arm) -> walk arm a.arm_impl) arms
   | Unop _ | Binop _ | If _ | Con _ | Record _ | Match _ | Array _ | Tuple _
-  | For _ | Fail _ | Try _ | Attempt _ | With _ | Assert _ ->
+  | For _ | While _ | Fail _ | Try _ | Attempt _ | With _ | Assert _ ->
       List.iter (walk cx) (children e)
 
 and stmt cx = function
@@ -596,6 +597,10 @@ and stmt cx = function
       Hashtbl.replace cx.blocks name.id (block cx value)
   | Let { value; _ } | Let_tuple { value; _ } -> walk cx value
   | Expr e -> walk cx e
+  | Finally { kind = Lambda (_, body); _ } ->
+      (* in an arm: it runs in the arm's frame, after the rest of it *)
+      walk cx body
+  | Finally f -> walk cx f
 
 (* A block, checked on its own, and what it accesses of the variables
    from outside it, its captures, nested blocks' included. *)

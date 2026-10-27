@@ -422,12 +422,12 @@ handler base(n: Int) for F =
   one() => n
 
 handler w() over F uses Console =
-  one() =>
-    let g = next.one()
-    (with base(50) in next.one() + 1000) + (with base(70) in g)
   finally(r) =>
     with base(60) in print(next.one())
     try r
+  one() =>
+    let g = next.one()
+    (with base(50) in next.one() + 1000) + (with base(70) in g)
 
 fn main() uses Console =
   with w() over base(1) in print(F.one())
@@ -1327,16 +1327,16 @@ dep L =
   l: fn() -> Int
 
 handler h() for L =
-  l() => 1
   finally(_) => 3
+  l() => 1
 
 fn main() = 1
 |};
   [%expect
     {|
     error: `finally` produces an `Int`, but it has to give back the body's value
-      ┌─ test.ren:6:17
-    6 │   finally(_) => 3
+      ┌─ test.ren:5:17
+    5 │   finally(_) => 3
       │                 ^
       = it's given the body's result, and what it produces is the `with`'s
       help: name the result, `finally(r) =>`, and give back `v` from `Ok(v)`, or fail: `try r`
@@ -1355,53 +1355,71 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: `finally` takes one parameter, the body's result, but this has 2
+    error: `finally` takes one parameter, the result of what it covers, but this has 2
       ┌─ test.ren:5:3
     5 │   finally(a, b) => 1
       │   ^^^^^^^^^^^^^^^^^^
       help: `finally(r) => ...`
     |}]
 
-let%expect_test "a handler has one finally, last" =
+let%expect_test "a handler's finally is among its state" =
+  (* where it's written says what it covers, so after the operations it
+     would cover nothing of the handler's *)
   check_error
     {|
 dep N =
   get: fn() -> Int
 
 handler wrong() over N =
-  finally(r) => try r
   get() => 1
-|};
-  [%expect
-    {|
-    error: `finally` comes last, after the handler's operations
-      ┌─ test.ren:5:3
-    5 │   finally(r) => try r
-      │   ^^^^^^^
-    6 │   get() => 1
-      │   --- this operation comes after it
-      help: move `finally` below the handler's last operation
-    |}];
-  check_error
-    {|
-dep N =
-  get: fn() -> Int
-
-handler wrong() over N =
-  finally(r) => try r
   finally(r) => try r
 
 fn main() = 1
 |};
   [%expect
     {|
-    error: a handler has one `finally`
+    error: a handler's `finally` is among its state, before its operations
       ┌─ test.ren:6:3
-    5 │   finally(r) => try r
-      │   ------- the first is here
     6 │   finally(r) => try r
       │   ^^^^^^^
-      help: remove one of them
+      = a `finally` covers what comes after it: the state below it, and the body of each `with` that installs the handler
+      help: move it above the handler's first operation
+    |}];
+  (* and anywhere but a handler or an arm, it's an error *)
+  check_error {|
+fn main() =
+  finally(r) => try r
+  1
+|};
+  [%expect
+    {|
+    error: a `finally` is only in a handler: among its state, or in an operation's arm
+      ┌─ test.ren:2:3
+    2 │   finally(r) => try r
+      │   ^^^^^^^
+      = it covers what comes after it there: the state below it and the body of each `with` that installs the handler, or the rest of the arm
+      help: use `attempt` on what it should cover, and act on the `Result` after
+    |}];
+  (* last in an arm, it covers nothing *)
+  check_error
+    {|
+dep N =
+  get: fn() -> Int
+
+handler h() for N =
+  get() =>
+    let n = 1
+    finally(r) => try r
+
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: a `finally` covers what comes after it, and nothing does
+      ┌─ test.ren:7:5
+    7 │     finally(r) => try r
+      │     ^^^^^^^
+      help: move it above the lines it should cover
     |}]
 
 let%expect_test "finally in Core" =
@@ -1431,12 +1449,13 @@ fn main() = 1
                     (lambda () (captures ev/2) ev/5 (extend ev/2)
                       (dep-call ev/5 test.N.get)))))
               (finally
-                (lambda ($ty/6 r/7) (captures ev/2 $n/4) ev/8 (extend ev/2)
+                (lambda ($ty/6 $outcome/7) (captures ev/2 $n/4) ev/8 (extend ev/2)
                   (let n/3 (get-cell $n/4)
                     (finally
-                      (seq (= n/3 (+ n/3 1))
-                        (match r/7 ((Ok $value/9) => $value/9)
-                          ((Err $error/10) => (fail $error/10))))
+                      (let r/9 $outcome/7
+                        (seq (= n/3 (+ n/3 1))
+                          (match r/9 ((Ok $value/10) => $value/10)
+                            ((Err $error/11) => (fail $error/11)))))
                       (set-cell $n/4 n/3))))))))))
     (fn main () ev/1 1)
     (fn $start () ev/1 (call ev/1 main))
@@ -1450,16 +1469,16 @@ dep Log =
   note: fn(s: Str)
 
 handler a() for Log =
-  note(s) => ()
   finally(r) => r
+  note(s) => ()
 
 fn main() = 1
 |};
   [%expect
     {|
     error: `finally` gives back the body's result, `r`, but it has to give back its value
-      ┌─ test.ren:6:17
-    6 │   finally(r) => r
+      ┌─ test.ren:5:17
+    5 │   finally(r) => r
       │                 ^
       = it's given the body's result, `r`, and what it produces is the `with`'s
       help: give back `v` from `Ok(v)`, or fail: `try r`
@@ -1472,20 +1491,20 @@ dep Log =
   note: fn(s: Str)
 
 handler b() for Log =
-  note(s) => ()
   finally(res) =>
     match res
       Ok(v) => v
       Err(Bad) => try res
       Err(_) => try res
+  note(s) => ()
 
 fn main() = 1
 |};
   [%expect
     {|
     error: `Bad` can't be matched here, because the body's errors aren't known
-      ┌─ test.ren:9:11
-    9 │       Err(Bad) => try res
+      ┌─ test.ren:8:11
+    8 │       Err(Bad) => try res
       │           ^^^
       = `finally` is given the body's error to pass on, not to look at: it could be whatever the body fails with
       help: match it with `Err(_)`, and pass it on with `try res`
@@ -1496,19 +1515,19 @@ dep Log =
   note: fn(s: Str)
 
 handler b() for Log =
-  note(s) => ()
   finally(res) =>
     match res
       Ok(v) => v
       Err(e) => try res
+  note(s) => ()
 
 fn main() = 1
 |};
   [%expect
     {|
     error: `e` would hold the body's error, which isn't a value
-      ┌─ test.ren:9:11
-    9 │       Err(e) => try res
+      ┌─ test.ren:8:11
+    8 │       Err(e) => try res
       │           ^
       = `finally` is given the body's error to pass on, not to look at: it could be whatever the body fails with
       help: match it with `Err(_)`, and pass it on with `try res`

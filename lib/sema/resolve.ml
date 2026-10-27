@@ -194,12 +194,20 @@ type scope = {
   rows : named;
       (** the rows the function's signature names, `..d` (see [rows]) *)
   depth : int;  (** how many lambdas deep *)
+  loop : loop_at;  (** where a `break` would go *)
   fn : fn_state;
   next : next_in;
       (** whether the code is a handler's, and which: in one declared `over` a
           dependency, `next` is the implementation under it (handlers.md,
           "`next`") *)
 }
+
+(* Where a `break` in the code being resolved would go: nowhere; to the
+   innermost `while` or `for` around it; or nowhere, since the loop around
+   it is outside the block it's in, which can't jump out of the call it's
+   passed to, or outside the `with` it's in, whose handlers are given
+   what its body ends in. *)
+and loop_at = No_loop | In_loop | Loop_outside | Loop_past_with
 
 (* What `next` is in the code being resolved: nothing, outside a handler;
    in a handler for these dependencies, nothing either, but a message says
@@ -1501,7 +1509,11 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
           (* an `inout` lambda parameter is an error (mut.ml), but binding it
              as one keeps its uses from being reported a second time *)
           params env
-            { sc with depth = sc.depth + 1 }
+            {
+              sc with
+              depth = sc.depth + 1;
+              loop = (if sc.loop = No_loop then No_loop else Loop_outside);
+            }
             (fun (p : Parsed.param) ->
               if p.pmode = Inout then By_inout else By_lambda)
             ps
@@ -1584,7 +1596,36 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         in
         no_duplicates env "loop variables" (pattern_vars pat);
         let pat, inner = binding env sc bound pat in
-        For { pat; over; body = expr env inner body }
+        For { pat; over; body = expr env { inner with loop = In_loop } body }
+    | While { cond; body } ->
+        let inner = { sc with loop = In_loop } in
+        let cond = expr env inner cond in
+        While { cond; body = expr env inner body }
+    | Break ->
+        (match sc.loop with
+        | In_loop -> ()
+        | No_loop ->
+            report env e.loc
+              ~help:
+                "remove it: to end a function early, put what comes after in \
+                 an `if ... else`"
+              ~notes:[ "`break` leaves the `while` or `for` it's written in" ]
+              "`break` is only inside a loop"
+        | Loop_outside ->
+            report env e.loc
+              ~notes:[ "a block runs during the call it's passed to" ]
+              ~help:"return a `Bool` from the block, and `break` after the call"
+              "a block can't `break` out of the loop it's written in"
+        | Loop_past_with ->
+            report env e.loc
+              ~notes:
+                [
+                  "the handlers a `with` installs are given what its body ends \
+                   in, and a `break` ends in nothing";
+                ]
+              ~help:"end the `with`'s body with a `Bool`, and `break` after it"
+              "a `break` can't leave a `with`");
+        Break
     | Fail (t, args) ->
         (match Hashtbl.find_opt env.types t.name with
         | Some (p, _) when is_set env p ->
@@ -1614,7 +1655,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
           }
         in
         let items = List.map item items in
-        With { items; body = go body }
+        let loop = if sc.loop = In_loop then Loop_past_with else sc.loop in
+        With { items; body = expr env { sc with loop } body }
     | Handler _ ->
         (* the parser makes one only the body of a handler, which
            [handler_body] resolves *)
@@ -1622,8 +1664,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
   in
   { kind; loc = e.loc; node = e.node }
 
-(* A block's statements, and the scope after them. *)
-and block_stmts env sc (stmts : Parsed.stmt list) =
+(* A block's statements, and the scope after them. A `finally` is one of
+   them only in a handler's state or an operation's arm, [finally]. *)
+and block_stmts ?(finally = false) env sc (stmts : Parsed.stmt list) =
   let stmts, sc =
     List.fold_left
       (fun (acc, sc) (s : Parsed.stmt) ->
@@ -1646,22 +1689,34 @@ and block_stmts env sc (stmts : Parsed.stmt list) =
             no_duplicates env "variables" (pattern_vars pat);
             let pat, sc = binding env sc By_let pat in
             (Let_tuple { pat; value } :: acc, sc)
-        | Expr e -> (Expr (expr env sc e) :: acc, sc))
+        | Expr e -> (Expr (expr env sc e) :: acc, sc)
+        | Finally f ->
+            if not finally then
+              report env
+                {
+                  f.loc with
+                  stop = { f.loc.start with col = f.loc.start.col + 7 };
+                }
+                ~notes:
+                  [
+                    "it covers what comes after it there: the state below it \
+                     and the body of each `with` that installs the handler, or \
+                     the rest of the arm";
+                  ]
+                ~help:
+                  "use `attempt` on what it should cover, and act on the \
+                   `Result` after"
+                "a `finally` is only in a handler: among its state, or in an \
+                 operation's arm";
+            (Finally (arm_lambda ~arm:false env sc f) :: acc, sc))
       ([], sc) stmts
   in
   (List.rev stmts, sc)
 
-(* The body of the handler [name] (ast.ml, [Handler]): the dependencies
-   after `for` or `over`, each a declared one with operations, once; its
-   state; its arms, each the implementation of an operation of exactly one
-   of them, a [Dep_op], and every operation implemented once, unless it
-   goes over another implementation, which does the rest; and its
-   `finally`. The state is bound as deep as the arms' bodies, so an arm can
-   change it (mut.ml). In one over a dependency, `next` is the
-   implementation under it (handlers.md, "`next`"). *)
-(* A handler's arm, or its `finally`: a lambda, whose parameters are
-   bound beside the handler's state. *)
-let arm_lambda env sc (l : Parsed.expr) : Resolved.expr =
+(* A handler's arm, or a `finally`: a lambda, whose parameters are bound
+   beside the handler's state, or the arm's. An arm's body, [arm], can
+   have `finally`s among its statements. *)
+and arm_lambda ?(arm = true) env sc (l : Parsed.expr) : Resolved.expr =
   match l.kind with
   | Lambda (ps, body) ->
       no_duplicates env "parameters"
@@ -1673,7 +1728,18 @@ let arm_lambda env sc (l : Parsed.expr) : Resolved.expr =
             if p.pmode = Inout then By_inout else By_lambda)
           ps
       in
-      { kind = Lambda (ps, expr env inner body); loc = l.loc; node = l.node }
+      let body =
+        match body.kind with
+        | Block (stmts, last) ->
+            let stmts, inner = block_stmts ~finally:arm env inner stmts in
+            {
+              kind = Block (stmts, expr env inner last);
+              loc = body.loc;
+              node = body.node;
+            }
+        | _ -> expr env inner body
+      in
+      { kind = Lambda (ps, body); loc = l.loc; node = l.node }
   | _ -> (* the parser makes each arm a lambda *) assert false
 
 (* "`a`", "`a` or `b`", "`a`, `b` or `c`" *)
@@ -1684,10 +1750,18 @@ let or_list = function
       let rev = List.rev all in
       String.concat ", " (List.rev (List.tl rev)) ^ " or " ^ List.hd rev
 
+(* The body of the handler [name] (ast.ml, [Handler]): the dependencies
+   after `for` or `over`, each a declared one with operations, once; its
+   state, with its `finally`s; and its arms, each the implementation of an
+   operation of exactly one of them, a [Dep_op], and every operation
+   implemented once, unless it goes over another implementation, which
+   does the rest. The state is bound as deep as the arms' bodies, so an
+   arm can change it (mut.ml). In one over a dependency, `next` is the
+   implementation under it (handlers.md, "`next`"). *)
 let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
     Resolved.expr_kind =
   match e.kind with
-  | Handler { deps; over; fails; state; arms; finally; _ } ->
+  | Handler { deps; over; fails; state; arms; _ } ->
       let after = if over then "over" else "for" in
       let seen = Hashtbl.create 4 in
       let deps =
@@ -1754,7 +1828,7 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
               u.deps)
           needs;
       let fails = Option.map (errors env ~params:sc.tparams) fails in
-      let state, sc = block_stmts env sc state in
+      let state, sc = block_stmts ~finally:true env sc state in
       let ops (p : Path.t) = Option.value (dep_ops env p) ~default:[] in
       let shown (p : Path.t) = sprintf "`%s`" p.name in
       let given = Hashtbl.create 8 in
@@ -1886,9 +1960,7 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
                      should handle them"
                     ds ds)
                (sprintf "`%s` doesn't implement %s" name.name (or_list missing)));
-      let finally = Option.map (arm_lambda env sc) finally in
-      Handler
-        { deps = List.map snd deps; over; fails; needs; state; arms; finally }
+      Handler { deps = List.map snd deps; over; fails; needs; state; arms }
   | _ -> assert false
 
 (* ---- declarations ---- *)
@@ -2053,6 +2125,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       tparams = List.map (fun (t : ident) -> t.name) tparams;
       rows = [];
       depth = 0;
+      loop = No_loop;
       fn = { last_id = 0; calls = []; dots = []; typed = []; test = f.test };
       next =
         (match f.body.kind with
@@ -2681,7 +2754,7 @@ let no_kept_blocks env (items : Resolved.program) =
   let rec expr (e : Resolved.expr) =
     let stmt = function
       | Let { ty = Some t; _ } -> inner t
-      | Let _ | Let_tuple _ | Expr _ -> ()
+      | Let _ | Let_tuple _ | Expr _ | Finally _ -> ()
     in
     (match e.kind with
     | Lambda (ps, _) ->

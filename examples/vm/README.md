@@ -83,8 +83,9 @@ candidates for what comes next:
   but nothing joins two strings, so output is still bare values:
   `main.ren` comments what each printed line means, and jumps name
   instruction indexes, counted by hand.
-- **Arguments can't read part of what a call changes.** `step`'s `Load`
-  needs a `let` (planned for stage 11, for plain values).
+- **Arguments could read part of what a call changes only since 10c.**
+  `step`'s `Load` needed a `let` until exclusivity let a copied value,
+  an `Int`, be read before the call starts changing `self`.
 - **`print` shows an opaque type's insides.** Printing a `Vm` would show
   its `Stack` as the list it is. Should debug output respect opacity?
 - **`ren types` lists a public type only if it has members.** `Status`

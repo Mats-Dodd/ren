@@ -105,9 +105,10 @@ let walk ~ty ~errors ~pattern (prog : program) =
   let rec expr (e : expr) =
     let go = List.iter expr in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
     | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
         expr a
+    | While { cond; body } -> go [ cond; body ]
     | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go [ a; b ]
     | If (c, t, f) -> go (c :: t :: Option.to_list f)
@@ -118,11 +119,9 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Block (stmts, last) ->
         List.iter stmt stmts;
         expr last
-    | Handler { state; arms; finally; _ } ->
+    | Handler { state; arms; _ } ->
         List.iter stmt state;
-        go
-          (List.map (fun (a : handler_arm) -> a.arm_impl) arms
-          @ Option.to_list finally)
+        go (List.map (fun (a : handler_arm) -> a.arm_impl) arms)
     | Con (_, args) | Fail (_, args) -> go (List.map snd args)
     | Record (_, fields) -> go (List.map snd fields)
     | Match (s, arms) ->
@@ -145,7 +144,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Let_tuple { pat; value } ->
         pattern_ pat;
         expr value
-    | Expr e -> expr e
+    | Expr e | Finally e -> expr e
   in
   let fn_ (f : fn_def) =
     List.iter param f.params;
@@ -1592,7 +1591,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     let carried = if block then Said else Kept Elsewhere in
     let all place = List.iter (walk (Kept place)) in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
     | Call (callee, args) ->
         (* a block a type variable of the callee stands for is blamed on
            the argument that gives it *)
@@ -1668,13 +1667,12 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         if of_dep then List.iter (walk Said) (List.map snd fields)
         else all In_record (List.map snd fields)
     | Fail (_, args) -> all In_error (List.map snd args)
-    | For _ -> all Elsewhere (Ast.children e)
-    | Handler { state; arms; finally; _ } ->
+    | For _ | While _ -> all Elsewhere (Ast.children e)
+    | Handler { state; arms; _ } ->
         List.iter (stmt ~state:true) state;
-        (* an arm, and the `finally`, are blocks the handler is made of *)
+        (* an arm is a block the handler is made of *)
         List.iter (walk Arg)
-          (List.map (fun (a : handler_arm) -> a.arm_impl) arms
-          @ Option.to_list finally)
+          (List.map (fun (a : handler_arm) -> a.arm_impl) arms)
   and stmt ~state = function
     | Let { name; value; mut; _ } when (state || mut) && is_block value ->
         (* at its name: `var f`, or a handler's `let` or `var` *)
@@ -1686,6 +1684,9 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         walk (if state then Kept Elsewhere else Let_value name.ident.name) value
     | Let_tuple { value; _ } -> walk (Kept Elsewhere) value
     | Expr e -> walk (Kept Elsewhere) e
+    | Finally f ->
+        (* a block the handler, or its arm, is made of *)
+        walk Arg f
   in
   walk
     (if shown then Said

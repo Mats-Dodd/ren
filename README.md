@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4, 5a, 5b, 6–9, 10.0, 10a and 10b of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with` and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, `hash`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, `Float`s with no `NaN`, tuples, ranges in `for`, `Map` and `Set` in insertion order, and `Enumerable`'s methods on `Array`, `Map` and `Set` (see [examples/bank](examples/bank)); and stage 9c: `opaque { ... }` records, a type that keeps rules is opaque, tests that see what an importer sees, `test fn` and `test handler`, and `ren console` on test implementations (see [examples/bank](examples/bank)); and stage 10a: `with` as a set, handlers `over` another implementation that reach it with `next`, `finally`, and handler state that can fail to start (see [examples/prices](examples/prices) and [examples/ledger](examples/ledger)); and stage 10b: the journal, `ren run --record` and `ren replay`, which runs a program again on what it was given without touching the world, `ren run --trace`, a journal as a test with `replay(file)` and `ren test --keep`, and the console's effects shown as they happen, `:reload` and `:spec` (see [examples/just](examples/just)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
+> **Status:** early. Stages 1–4, 5a, 5b, 6–9, 10.0, 10a, 10b and 10c of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, blocks, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with` and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, `hash`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, `Float`s with no `NaN`, tuples, ranges in `for`, `Map` and `Set` in insertion order, and `Enumerable`'s methods on `Array`, `Map` and `Set` (see [examples/bank](examples/bank)); and stage 9c: `opaque { ... }` records, a type that keeps rules is opaque, tests that see what an importer sees, `test fn` and `test handler`, and `ren console` on test implementations (see [examples/bank](examples/bank)); and stage 10a: `with` as a set, handlers `over` another implementation that reach it with `next`, `finally`, and handler state that can fail to start (see [examples/prices](examples/prices) and [examples/ledger](examples/ledger)); and stage 10b: the journal, `ren run --record` and `ren replay`, which runs a program again on what it was given without touching the world, `ren run --trace`, a journal as a test with `replay(file)` and `ren test --keep`, and the console's effects shown as they happen, `:reload` and `:spec` (see [examples/just](examples/just)); and stage 10c: blocks, lambdas that are passed down and called but never kept, which capture by reference and find their dependencies where they're written, with exclusivity checked in one pass and rule A; `with` installing only handlers, a function that runs a block called with it; `while` and `break`, cursors and `for` over them; and `finally` where it's written, among a handler's state or in an operation's arm (see [examples/ledger](examples/ledger) and [examples/values.ren](examples/values.ren)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
 
 ---
 
@@ -130,6 +130,24 @@ user.plan = Pro(seats: 5)              // reads like mutation, means "new value"
 
 No two names ever see the same mutable thing, a block sharing its frame's variables only during its call, so Ren has no data races and no reference cycles. When a value isn't shared, the compiler updates it in place, so the copies you'd expect from immutable data mostly never happen.
 
+Loops are `for` and `while`, and `break` leaves the innermost one. A `for` goes over an array, a range, a `Map` or a `Set`, or a **cursor**: a value that keeps its place, any type with a method `next(inout self) -> Option<T>`. Since the cursor is a value, `for x in &c` steps `c` itself, so a loop left by `break` leaves it where it stopped, and the next loop goes on from there:
+
+```ren
+var i = 0
+while i < xs.len()
+  if xs[i] < 0 then break
+  i += 1
+
+var lines = Lines.of(text)             // a cursor: `next(inout self) -> Option<Str>`
+for line in &lines
+  if line == "---" then break
+  &head.push(line)
+for line in &lines                     // goes on after the `---`
+  &body.push(line)
+```
+
+`for x in c`, without `&`, steps a copy. A `break` can't leave a block for the loop around it, since the block runs during the call it's passed to, nor a `with`, whose handlers are given what its body ends in.
+
 ### 3. Functions
 
 ```
@@ -176,14 +194,14 @@ let total = items.reduce(0, fn(sum, item) =>
 
 Public functions spell out their full contract. Private functions can infer their `uses` and their error set (`! _`). `ren fmt --annotate` writes the inferred clauses into your code.
 
-A parameter written `fn(...)` takes a block, and since a block can only be called or passed on, the parameter is **transparent**: its errors and dependencies flow into the caller automatically, so they're never written:
+A parameter written `fn(...)` takes a block. A block's errors flow out of the call it's passed to, and its dependencies are found where it's written, so they're the writer's: neither is written on the parameter:
 
 ```ren
 pub fn map<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U>
 pub fn retry<T>(n: Int, body: fn() -> T) -> T
 ```
 
-`Async.map` and `Async.timeout` take theirs the same way. Calling `Async.map` with a block that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError` and use `Net`. It's still transparent even though it runs `f` on other tasks, because no task outlives the call that started it ([async.md](async.md)).
+`Async.map` and `Async.timeout` take theirs the same way. Calling `Async.map` with a block that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError`, and the function that wrote the block use `Net`. That holds even though it runs `f` on other tasks, because no task outlives the call that started it ([async.md](async.md)).
 
 Behaviour that's kept is data, or a dependency. A button that remembers what a click does holds an enum to `match` on where the click is handled, or the code that runs is a `dep`'s implementation, installed with `with`. Writing a function type in a record field, a constructor's payload, a type argument or a return type is an error that says so.
 
@@ -253,7 +271,7 @@ pub fn touch(id: UserId) ! NotFound | Conflict
 
 A dependency call takes no marker: the capitalised `Users.` already shows it. Its errors are marked as any call's, `try Users.save(u)`. A private function's `uses` is inferred, and a public one's is checked against its body, with the error pointing at the call that uses what the signature leaves out. `Users.x` means exactly one thing: an operation and a member can't share a name.
 
-The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` today, then `Net` and `Async` (stage 12), `Alloc` (stage 14) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`. Stage 8 gives it methods, and `Bytes` and `Path` with it. Stage 9 renames `s.find(":")` to `s.index(":")`, as `Array.index`: `index` finds where something is, and `find` takes a function.
+The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` today, then `Async` and `Net` (stage 11a), `Alloc` (stage 15) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`. Stage 8 gives it methods, and `Bytes` and `Path` with it. Stage 9 renames `s.find(":")` to `s.index(":")`, as `Array.index`: `index` finds where something is, and `find` takes a function.
 
 The runtime installs exactly the built-ins `main` lists in its `uses`, outermost. Any other dependency has to be installed inside `main`, and leaving it out is a compile error, `nothing installs Users before main`, with a help that says how.
 
@@ -408,7 +426,7 @@ A handler's state is exclusive between dependency calls. Two tasks are never ins
 
 That narrows where a race can happen without hiding it. `cached` above has one: between `cache.remove` and `next.save`, another task's `get` can miss, read the old user, and put it back in the cache. The compiler warns about it, since `cache` is read before a dependency call and written after it ([async.md](async.md#state-that-changed-during-a-call)), and the simulation scheduler switches tasks at exactly these points, so `ren test --sim` finds it too. The fix is to invalidate after `next.save` returns.
 
-A handler can also run code when its `with` ends, in `finally`, which is given the body's result and returns the `with`'s. Its state can fail to start, and the `with` passes that failure on:
+A handler can also run code when its `with` ends, in `finally`. It's a statement written among the handler's state, and covers what comes after it: the state below it and the `with`'s body, whose result it's given, returning the `with`'s. Its state can fail to start, and the `with` passes that failure on:
 
 ```ren
 pub handler transaction() over Sql ! DbDown =
@@ -423,7 +441,7 @@ pub handler transaction() over Sql ! DbDown =
         try r
 ```
 
-`r` is the body's result, as `attempt` would keep it, and `try r` passes its error on. `! DbDown` says installing it can fail, so the `with` can too ([examples/ledger](examples/ledger)).
+`r` is the body's result, as `attempt` would keep it, and `try r` passes its error on. `! DbDown` says installing it can fail, so the `with` can too ([examples/ledger](examples/ledger)). This `finally` is written after `begin`, so a failed `begin` never reaches it; one written above it would be given that error. A handler can have several, the last written run first, and an operation's arm can have one, covering the rest of the arm ([handlers.md](handlers.md#when-a-with-ends-finally)).
 
 When the body is cancelled, `finally` sees `Err(Cancelled)`, and what it returns is discarded ([async.md](async.md#cancellation)).
 
@@ -655,7 +673,7 @@ fn step(inout ps: Array<Particle, soa>, dt: Float) =
 
 **Blocks.** A block is never heap-allocated. That's a language guarantee, not an optimization that might fail. A block can't be stored or returned, so it lives on the stack of the call it's passed to, and shares the frame it was written in.
 
-**Generics.** A requirement on a type parameter, `T has add`, which the compiler infers, works like a transparent parameter. `sum<Int>` doesn't allocate; `sum<BigInt>` uses `Alloc`, because `BigInt.add` does.
+**Generics.** A requirement on a type parameter, `T has add`, which the compiler infers, is met by the caller, as a block's dependencies are met where it's written. `sum<Int>` doesn't allocate; `sum<BigInt>` uses `Alloc`, because `BigInt.add` does.
 
 **Panics.** A panic in a function without `Alloc` uses a message formatted at compile time and aborts.
 
@@ -1017,14 +1035,19 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 10.0 | one constraint solver, typed Core, requirements passed as dictionaries, lambda sets in function types (removed in 10c) ([compiler.md](compiler.md)) | every stage-10.0 step passes its check (done) |
 | 10a | `with` as a set, `over` and `next`, `finally`, handler state that can fail ([handlers.md](handlers.md)) | the prices cache wraps a real `Prices`, and a transaction commits or rolls back (done) |
 | 10b | **the journal**: `ren run --record`, `ren replay`, `--trace`, journals as tests, and the console's `:reload` and `:spec` ([handlers.md](handlers.md#the-journal), [testing.md](testing.md)) | the `just` replays exactly: what it did through `Console`, with no disk read and nothing run (done) |
-| 11 | `Async` and `Net`: structured concurrency, cancellation, tasks in handlers, deterministic tests on virtual time ([async.md](async.md)) | a server shuts down gracefully, and `ren test --seeds` finds the `cached` race |
+| 10c | **blocks**: lambdas passed down and called, never kept, capturing by reference, with exclusivity and rule A; dependencies found where a block is written; `with` installs only handlers; `while` and `break`, cursors and `for` over them, `finally` where it's written ([foundations.md](foundations.md), [compiler.md](compiler.md#blocks)) | the ledger's test retries a transaction with a block that counts its tries in a `var` (done) |
+| native slice | a naive C backend from Core for the sequential subset, with no optimizations ([vision.md](vision.md)) | vision.md's benchmarks run natively, measured against Rust and Go, before tasks build on the design |
+| 10d | descriptions: generic dependencies, handler descriptions as the only stored code, inline handlers, stateless handlers as methods, `over any`, `retry(n, on:)` ([foundations.md](foundations.md#staging)) | `retry(3, on: DbDown)` works for any block, and the journal's recorder is an `over any` handler in Ren |
+| 11a | tasks and `Net`: exclusivity's rules B to D, `Async.scope` and `spawn`, `until`, `tick`, `yield`, `timeout`, `race`, `isolate`; the runtime as a handler, `single` and `sim`; journals with task paths ([async.md](async.md)) | a server shuts down gracefully, and `ren test --sim --seeds` finds the `cached` race |
+| 11b | many cores: `work_stealing`, `per_core` and `pinned`; handler locks; atomic counts on shared objects | the server's `sim` tests pass unchanged on every core |
+| 11c | generators, `gen fn` as cursors, and the stream library on them ([stdlib.md](stdlib.md#streams-cursors-first)) | a file is read a line at a time with `for line in &lines` |
 | 12 | the standard library for a web service and the compiler: `http`, `json` and `cli` over shapes, top-level `let` and `assert`; property tests and `ren fuzz` ([stdlib.md](stdlib.md), [shapes.md](shapes.md), [testing.md](testing.md)) | a small web service and its tests, specifications and properties, run interpreted |
-| 13 | a naive C backend, emitting Core with reference counting and no optimizations; packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally; debug builds measured against Go ([vision.md](vision.md)) |
-| 14 | memory: specialization, defunctionalization, borrow inference, reference counting with reuse ([compiler.md](compiler.md)) | `map` reuses memory in place; the benchmarks measured against Rust ([vision.md](vision.md)) |
+| 13 | the C backend for the whole language, tasks and handlers included, with reference counting and no optimizations; packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally; debug builds measured against Go ([vision.md](vision.md)) |
+| 14 | memory: specialization per block and per handler, dispatch switches, borrow inference, reference counting with reuse ([compiler.md](compiler.md)) | `map` reuses memory in place; the benchmarks measured against Rust ([vision.md](vision.md)) |
 | **↑** | **native Ren** | **the web service runs natively, within the bars** |
 | 15 | `Alloc` as a dependency, arenas, no-alloc checking | `checksum` provably never allocates |
 | 16 | `unique`, layout (`soa`, `cold`, `where size`) | hot loops run with zero copies |
-| 17 | the full simulation scheduler, flight recorder, profiler | a failing seed replays exactly |
+| 17 | the flight recorder and the profiler | a production failure replays from its flight recording |
 | 18 | the compiler, rewritten in Ren | it compiles itself |
 | **↑** | **Ren 1.0** | **flottning, rewritten in Ren, passes 10,000 simulation seeds** |
 

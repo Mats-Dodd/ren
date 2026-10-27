@@ -148,7 +148,7 @@ let no_inout cx (ps : param list) =
 
 let rec walk cx (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Break -> ()
   | Var _ | Field _ | Index _ -> (
       match place_of e with
       | Some _ -> walk_indices cx e
@@ -224,13 +224,9 @@ let rec walk cx (e : expr) =
   | Lambda (ps, body) ->
       no_inout cx ps;
       walk cx body
-  | Handler { state; arms; finally; _ } ->
+  | Handler { state; arms; _ } ->
       let cx = { cx with in_handler = true } in
-      List.iter
-        (function
-          | Let { value; _ } | Let_tuple { value; _ } -> walk cx value
-          | Expr e -> walk cx e)
-        state;
+      List.iter (stmt cx) state;
       List.iter
         (fun (a : handler_arm) ->
           match a.arm_impl.kind with
@@ -238,22 +234,9 @@ let rec walk cx (e : expr) =
               no_inout cx ps;
               walk cx body
           | _ -> walk cx a.arm_impl)
-        arms;
-      (* and so is its `finally` *)
-      Option.iter
-        (fun (f : expr) ->
-          match f.kind with
-          | Lambda (ps, body) ->
-              no_inout cx ps;
-              walk cx body
-          | _ -> walk cx f)
-        finally
+        arms
   | Block (stmts, last) ->
-      List.iter
-        (function
-          | Let { value; _ } | Let_tuple { value; _ } -> walk cx value
-          | Expr e -> walk cx e)
-        stmts;
+      List.iter (stmt cx) stmts;
       walk cx last
   | Con (_, args) -> List.iter (fun (_, a) -> walk cx a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> walk cx v) fields
@@ -275,6 +258,9 @@ let rec walk cx (e : expr) =
       walk cx lo;
       walk cx hi;
       walk cx body
+  | While { cond; body } ->
+      walk cx cond;
+      walk cx body
   | Match (subject, arms) ->
       walk cx subject;
       List.iter
@@ -282,6 +268,16 @@ let rec walk cx (e : expr) =
           Option.iter (walk cx) a.arm_guard;
           walk cx a.arm_body)
         arms
+
+(* A statement: a `finally`, in a handler, is an arm's lambda too. *)
+and stmt cx = function
+  | Let { value; _ } | Let_tuple { value; _ } | Expr value -> walk cx value
+  | Finally f -> (
+      match f.kind with
+      | Lambda (ps, body) ->
+          no_inout cx ps;
+          walk cx body
+      | _ -> walk cx f)
 
 (* A call's argument. One passed with `&` is a place the call changes,
    unless it's a method call, `f(&s.pop())`, which changes `s` itself. *)

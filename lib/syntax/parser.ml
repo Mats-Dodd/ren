@@ -45,9 +45,11 @@
      handler  := "handler" IDENT "(" param, ... ")"
                  ("for" tyname, ... | "over" tyname { "&" tyname })
                  [errors] [uses] "=" INDENT { stmt NEWLINE }
-                 arm_impl { NEWLINE arm_impl } [NEWLINE finally] DEDENT
+                 arm_impl { NEWLINE arm_impl } DEDENT
+                                                   (its state, `let`, `var`
+                                                    and `finally` lines,
+                                                    then its arms)
      arm_impl := IDENT "(" param, ... ")" "=>" body
-     finally  := "finally" "(" param ")" "=>" body
      test     := "test" STR [uses] "=" body
      group    := "group" IDENT "(" param, ... ")" ["with" witem, ...] "="
                  INDENT test { NEWLINE test } DEDENT
@@ -88,6 +90,10 @@
                                                      names, `_` and tuples)
               |  "for" (IDENT | tuple_pat) "in" (expr | expr ".." expr)
                  INDENT block                       (a range only here)
+              |  "while" expr INDENT block
+              |  "finally" "(" param ")" "=>" body  (only in a handler's
+                                                     state or an arm, which
+                                                     resolve.ml checks)
               |  line
      line     := expr [("=" | "+=" | "-=" | "*=") body]
                                                     (an assignment's target
@@ -110,6 +116,7 @@
                                                     (a trailing lambda is
                                                      the call's last argument)
      primary  := INT | STR | "true" | "false" | "(" ")" | IDENT | "self"
+              |  "break"
               |  lambda
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
               |  tyname "." IDENT               (a member: `Stack.of`)
@@ -874,6 +881,11 @@ and parse_block p =
       Diag.error pat.ploc
         ~help:"add the value this block should produce as its last line"
         "this block ends with a `let`, so it has no value"
+  | Finally f :: _ ->
+      Diag.error
+        { f.loc with stop = { f.loc.start with col = f.loc.start.col + 7 } }
+        ~help:"move it above the lines it should cover"
+        "a `finally` covers what comes after it, and nothing does"
   | [] -> assert false (* parse_stmt always returns a statement *)
 
 and parse_stmt p =
@@ -910,6 +922,8 @@ and parse_stmt p =
       expect p EQ;
       Let { name; ty; value = parse_body p; mut = kw = VAR }
   | FOR, _ -> Expr (parse_for p)
+  | WHILE, _ -> Expr (parse_while p)
+  | FINALLY, _ -> parse_finally p
   | _ -> Expr (parse_line p)
 
 and parse_for p =
@@ -951,6 +965,35 @@ and parse_for p =
   advance p;
   let body = parse_block p in
   mk (For { pat; over; body }) start p
+
+(* `while c`, then its body, indented below *)
+and parse_while p =
+  let start = loc p in
+  expect p WHILE;
+  let cond = parse_orelse p in
+  if peek p <> INDENT then
+    Diag.error (loc p) ~help:"put the loop's body on the lines below, indented"
+      (Printf.sprintf "expected the body of the `while` loop, found %s"
+         (describe (peek p)));
+  advance p;
+  let body = parse_block p in
+  mk (While { cond; body }) start p
+
+(* `finally(r) => ...`: a lambda of one parameter, what the code after it
+   ends in (ast.ml, [Finally]) *)
+and parse_finally p =
+  let at = loc p in
+  expect p FINALLY;
+  if peek p <> LPAREN then
+    Diag.error (loc p) ~help:"write `finally(r) => ...`"
+      (Printf.sprintf
+         "expected `(` and the result it's given after `finally`, found %s"
+         (describe (peek p)));
+  advance p;
+  let params = sep_list p ~close:RPAREN parse_param in
+  expect p FATARROW;
+  let body = parse_body p in
+  Finally (mk (Lambda (params, body)) at p)
 
 and parse_expr p =
   let e = parse_orelse p in
@@ -1170,6 +1213,9 @@ and parse_primary p =
   | SELF ->
       advance p;
       mk (Var (Bare "self")) start p
+  | BREAK ->
+      advance p;
+      mk Break start p
   | LPAREN when peek2 p = RPAREN ->
       advance p;
       advance p;
@@ -1844,8 +1890,8 @@ let parse_dep p ~pub =
 
 (* A handler (deps.md, "Implementations"): a function of its parameters
    that describes a stateful implementation of the dependencies after
-   `for`. Its body, indented under it, is its state, `var`s and `let`s,
-   then an arm for each operation:
+   `for`. Its body, indented under it, is its state, `var`s, `let`s and
+   `finally`s, then an arm for each operation:
 
      handler counting_rates(rate: Int) for Rates, RateCalls =
        var calls = 0
@@ -1989,7 +2035,7 @@ let parse_handler p ~pub =
   in
   let rec state acc =
     match peek p with
-    | LET | VAR ->
+    | LET | VAR | FINALLY ->
         let s = parse_stmt p in
         if next_line () then state (s :: acc) else (List.rev (s :: acc), false)
     | _ -> (List.rev acc, true)
@@ -2024,6 +2070,15 @@ let parse_handler p ~pub =
     | (LET | VAR), _ ->
         Diag.error (loc p) ~help:"move it above the handler's first operation"
           "a handler's state comes first, before its operations"
+    | FINALLY, _ ->
+        Diag.error (loc p)
+          ~notes:
+            [
+              "a `finally` covers what comes after it: the state below it, and \
+               the body of each `with` that installs the handler";
+            ]
+          ~help:"move it above the handler's first operation"
+          "a handler's `finally` is among its state, before its operations"
     | IDENT n, _ ->
         Diag.error (loc p)
           ~help:(Printf.sprintf "write it as `%s(...) => ...`" n)
@@ -2034,41 +2089,14 @@ let parse_handler p ~pub =
              (describe (peek2 p)))
     | _ -> fail_expected p "an operation's implementation, like `now() => ...`"
   in
-  (* `finally(r) => ...`, last (handlers.md, "When a `with` ends") *)
-  let finally () =
-    let at = loc p in
-    expect p FINALLY;
-    if peek p <> LPAREN then
-      Diag.error (loc p) ~help:"write `finally(r) => ...`"
-        (Printf.sprintf
-           "expected `(` and the body's result after `finally`, found %s"
-           (describe (peek p)));
-    advance p;
-    let params = sep_list p ~close:RPAREN parse_param in
-    expect p FATARROW;
-    let body = parse_body p in
-    let f = mk (Lambda (params, body)) at p in
-    if next_line () then
-      if peek p = FINALLY then
-        Diag.error (loc p) ~help:"remove one of them"
-          ~labels:[ (at, "the first is here") ]
-          "a handler has one `finally`"
-      else
-        Diag.error at ~help:"move `finally` below the handler's last operation"
-          ~labels:[ (loc p, "this operation comes after it") ]
-          "`finally` comes last, after the handler's operations";
-    f
-  in
   let rec arms acc =
-    if peek p = FINALLY then (List.rev acc, Some (finally ()))
-    else
-      let a = arm p in
-      if next_line () then arms (a :: acc) else (List.rev (a :: acc), None)
+    let a = arm p in
+    if next_line () then arms (a :: acc) else List.rev (a :: acc)
   in
-  let arms, finally = if more then arms [] else ([], None) in
+  let arms = if more then arms [] else [] in
   let body =
     node p
-      (Handler { deps; over; fails; needs; state; arms; finally })
+      (Handler { deps; over; fails; needs; state; arms })
       (Loc.span body_start (last_loc p))
   in
   {

@@ -436,22 +436,30 @@ dependencies where it's called.
    type isn't written; `next` in a block runs. Capture by reference
    (step 5): a block shares its frame's cells, and one exclusivity pass
    after inference, one walk per function, checks the table in decision
-   2 and rule A, with ordinary the only parameter mode. Rules B to D
-   land with 11a, which makes concurrent and spawned parameters.
-2. **10d, descriptions.** Generic dependencies; handler descriptions as
+   2 and rule A, with ordinary the only parameter mode. Additions
+   (step 6): `while` and `break`, cursors and `for` over them, and
+   `finally` as a statement where it's written, among a handler's state
+   or in an operation's arm. So 10c built everything in this item but
+   rules B to D, which land with 11a, since 11a makes the concurrent and
+   spawned parameters they're about.
+2. **The native slice.** A naive C backend from Core for the sequential
+   subset, with no optimizations, and the benchmarks in vision.md
+   measured against Rust and Go, to put numbers on the memory and
+   dispatch bet before tasks and many cores build on it.
+3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.
-3. **11a, tasks.** Rules B to D; `Async.scope`, `spawn` and its handle,
+4. **11a, tasks.** Rules B to D; `Async.scope`, `spawn` and its handle,
    keyed spawn, `until`, `tick`, `yield`, `timeout`, `race`, `isolate`;
    the runtime as a handler with `single` and `sim`; the tape, poll
    points, task paths, journal version 2, journals as tests with a
    schedule prefix; the standard library's channel, semaphore and
    `Batcher`.
-4. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; handler
+5. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; handler
    locks and the shared mark; atomic counts on shared objects; immutable
    handler state read without counting.
-5. **11c, generators** and the stream library on them.
-6. **Native, stages 13 and 14.** The task frame allocator, specialization
+6. **11c, generators** and the stream library on them.
+7. **Native, stages 13 and 14.** The task frame allocator, specialization
    per block and per handler, the dispatch switches and the build notes.
 
 The interpreter runs tasks on OCaml effects throughout, so 10c to 11c

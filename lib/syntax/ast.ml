@@ -223,7 +223,15 @@ and ('v, 'b, 't) expr_kind =
       body : ('v, 'b, 't) expr;
     }
       (** [for x in xs], [for (k, v) in m], [for i in 0..n], or [for p in &ps]
-          to change each element *)
+          to change each element; or [for x in &c] over a cursor, a value whose
+          type has [next(inout self) -> Option<T>], which advances [c] itself,
+          and [for x in c], which advances a copy *)
+  | While of { cond : ('v, 'b, 't) expr; body : ('v, 'b, 't) expr }
+      (** [while c] and its body, indented below: the body runs again while [c]
+          holds *)
+  | Break
+      (** [break]: leaves the innermost `while` or `for` it's written in, never
+          a block's (resolve.ml) *)
   | Fail of ident * (ident option * ('v, 'b, 't) expr) list
       (** [fail Short(self.id, by)]: stop with that error. A tag isn't a value,
           so it's only ever written here, after `!`, in a pattern, and as the
@@ -250,19 +258,15 @@ and ('v, 'b, 't) expr_kind =
               state and its `finally` can fail with *)
       needs : 't uses option;
           (** what it's written to need, after the `for` list's `uses` *)
-      state : ('v, 'b, 't) stmt list;  (** its `var`s and `let`s *)
+      state : ('v, 'b, 't) stmt list;
+          (** its `var`s and `let`s, and its `finally`s ([Finally]) *)
       arms : ('v, 'b, 't) handler_arm list;
-      finally : ('v, 'b, 't) expr option;
-          (** `finally(r) => ...`, a lambda of one parameter, the body's result,
-              which runs when the `with` that installed it ends and gives what
-              the `with` does (handlers.md, "`finally`") *)
     }
       (** a handler's body (deps.md, "Implementations"), the whole body of the
           function a `handler` declaration is (see [is_handler]): its state,
-          then an arm for each operation of each dependency it implements, and
-          its `finally`. Calling the function describes the handler, and each
-          `with` that installs it makes a fresh instance, running [state] then
-      *)
+          then an arm for each operation of each dependency it implements.
+          Calling the function describes the handler, and each `with` that
+          installs it makes a fresh instance, running [state] then *)
   | Assert of ('v, 'b, 't) expr
       (** [assert e]: a panic if [e] is false, which shows both sides of an
           [a == b] (deps.md, "`assert`") *)
@@ -317,6 +321,14 @@ and ('v, 'b, 't) stmt =
       (** [let (k, v) = pair]: a tuple taken apart, by a pattern that always
           matches, of names, [_] and tuples *)
   | Expr of ('v, 'b, 't) expr
+  | Finally of ('v, 'b, 't) expr
+      (** [finally(r) => ...], a lambda of one parameter: it covers what comes
+          after it: it's given what that ends in, `Ok` of its value or `Err` of
+          its error, and gives the value in its place (handlers.md,
+          "`finally`"). Only among a handler's state, where it covers the state
+          after it and the body of each `with` that installs it, or among the
+          statements of an operation's arm, where it covers the rest of the arm
+          (resolve.ml) *)
 
 (* Type declarations. *)
 
@@ -522,10 +534,10 @@ let with_links items =
 let children (e : ('v, 'b, 't) expr) =
   let stmt = function
     | Let { value; _ } | Let_tuple { value; _ } -> value
-    | Expr e -> e
+    | Expr e | Finally e -> e
   in
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> []
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> []
   | Unop (_, a, _)
   | Field (a, _)
   | Ref a
@@ -541,6 +553,7 @@ let children (e : ('v, 'b, 't) expr) =
   | Array xs | Tuple xs -> xs
   | For { over = Each iter; body; _ } -> [ iter; body ]
   | For { over = Range (lo, hi); body; _ } -> [ lo; hi; body ]
+  | While { cond; body } -> [ cond; body ]
   | Con (_, args) | Fail (_, args) -> List.map snd args
   | Record (_, fields) -> List.map snd fields
   | Block (stmts, last) -> List.map stmt stmts @ [ last ]
@@ -550,10 +563,8 @@ let children (e : ('v, 'b, 't) expr) =
            (fun a -> Option.to_list a.arm_guard @ [ a.arm_body ])
            arms
   | With { items; body } -> with_links items @ [ body ]
-  | Handler { state; arms; finally; _ } ->
-      List.map stmt state
-      @ List.map (fun a -> a.arm_impl) arms
-      @ Option.to_list finally
+  | Handler { state; arms; _ } ->
+      List.map stmt state @ List.map (fun a -> a.arm_impl) arms
 
 (* ---- names, once resolved ----
 
@@ -841,6 +852,8 @@ let rec show_expr (e : expr) =
           parens [ ".."; show_expr lo; show_expr hi ];
           show_expr body;
         ]
+  | While { cond; body } -> parens [ "while"; show_expr cond; show_expr body ]
+  | Break -> "break"
   | Fail (t, args) ->
       let show_arg = function
         | Some (l : ident), a -> l.name ^ "=" ^ show_expr a
@@ -855,17 +868,12 @@ let rec show_expr (e : expr) =
          `(over top ... bottom)`, ending in `(deps Clock)` if it goes over
          what's installed outside *)
       parens (("with" :: List.map show_with_item items) @ [ show_expr body ])
-  | Handler { deps; over; fails; needs; state; arms; finally } ->
+  | Handler { deps; over; fails; needs; state; arms } ->
       let fails =
         match fails with Some es -> [ parens [ show_errors es ] ] | None -> []
       in
       let needs =
         match needs with Some u -> [ parens [ show_uses u ] ] | None -> []
-      in
-      let finally =
-        match finally with
-        | Some f -> [ parens [ "finally"; show_expr f ] ]
-        | None -> []
       in
       parens
         ("handler"
@@ -881,8 +889,7 @@ let rec show_expr (e : expr) =
                 | Bare op -> op
               in
               parens [ name; show_expr a.arm_impl ])
-            arms
-        @ finally)
+            arms)
 
 (* An item of one implementation is itself, and a chain is `(over top ...
    bottom)`, ending in `(deps Clock)` if it goes over what's installed
@@ -914,6 +921,7 @@ and show_stmt : stmt -> string = function
   | Let_tuple { pat; value } ->
       parens [ "let"; show_pattern pat; show_expr value ]
   | Expr e -> show_expr e
+  | Finally f -> parens [ "finally"; show_expr f ]
 
 let show_fn (f : fn_def) =
   let params = List.map (fun (p : param) -> p.pname.name) f.params in
@@ -1092,8 +1100,8 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         ^ String.concat ", "
             (List.map (fun ((f : ident), v) -> f.name ^ ": " ^ go v) fields)
         ^ " }"
-    | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | With _
-    | Handler _ ->
+    | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | While _ | Break
+    | With _ | Handler _ ->
         raise Exit
   and operand n (a : Resolved.expr) =
     match a.kind with

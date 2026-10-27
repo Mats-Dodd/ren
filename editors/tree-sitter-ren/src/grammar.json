@@ -1737,18 +1737,18 @@
                 },
                 {
                   "type": "FIELD",
-                  "name": "arm",
+                  "name": "finally",
                   "content": {
                     "type": "SYMBOL",
-                    "name": "handler_arm"
+                    "name": "finally_statement"
                   }
                 },
                 {
                   "type": "FIELD",
-                  "name": "finally",
+                  "name": "arm",
                   "content": {
                     "type": "SYMBOL",
-                    "name": "finally_arm"
+                    "name": "handler_arm"
                   }
                 }
               ]
@@ -1775,18 +1775,18 @@
                       },
                       {
                         "type": "FIELD",
-                        "name": "arm",
+                        "name": "finally",
                         "content": {
                           "type": "SYMBOL",
-                          "name": "handler_arm"
+                          "name": "finally_statement"
                         }
                       },
                       {
                         "type": "FIELD",
-                        "name": "finally",
+                        "name": "arm",
                         "content": {
                           "type": "SYMBOL",
-                          "name": "finally_arm"
+                          "name": "handler_arm"
                         }
                       }
                     ]
@@ -1860,7 +1860,7 @@
         }
       ]
     },
-    "finally_arm": {
+    "finally_statement": {
       "type": "SEQ",
       "members": [
         {
@@ -3277,6 +3277,14 @@
         },
         {
           "type": "SYMBOL",
+          "name": "while_statement"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "finally_statement"
+        },
+        {
+          "type": "SYMBOL",
           "name": "_line"
         }
       ]
@@ -3421,6 +3429,31 @@
                 "name": "range"
               }
             ]
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "body",
+          "content": {
+            "type": "SYMBOL",
+            "name": "block"
+          }
+        }
+      ]
+    },
+    "while_statement": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "while"
+        },
+        {
+          "type": "FIELD",
+          "name": "condition",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expression"
           }
         },
         {
@@ -4252,8 +4285,16 @@
         {
           "type": "SYMBOL",
           "name": "with_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "break"
         }
       ]
+    },
+    "break": {
+      "type": "STRING",
+      "value": "break"
     },
     "number": {
       "type": "PATTERN",

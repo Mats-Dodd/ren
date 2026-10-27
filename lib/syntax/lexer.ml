@@ -49,6 +49,8 @@ let keywords =
     ("var", VAR);
     ("inout", INOUT);
     ("for", FOR);
+    ("while", WHILE);
+    ("break", BREAK);
     ("in", IN);
     ("if", IF);
     ("then", THEN);

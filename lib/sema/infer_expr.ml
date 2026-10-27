@@ -176,8 +176,10 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
     fits ();
     match e.kind with
     | Block (stmts, last) ->
-        List.iter (stmt env cx) stmts;
-        check env cx ~why ?written last expected
+        ignore
+          (block env cx stmts (fun cx ->
+               check env cx ~why ?written last expected;
+               expected))
     | If (c, t, Some f) ->
         want_bool env Condition c (infer env cx c);
         check env cx ~why ?written t expected;
@@ -444,9 +446,7 @@ and synth env cx (e : expr) : ty =
       let tb = infer env bcx body in
       block_uses env cx e.loc ~listed:[] bcx;
       TFun (ps, tb, errs, REmpty)
-  | Block (stmts, last) ->
-      List.iter (stmt env cx) stmts;
-      infer env cx last
+  | Block (stmts, last) -> block env cx stmts (fun cx -> infer env cx last)
   | Con (c, args) ->
       infer_con env cx e c args ~written:None ~expected:(fresh_var env.st)
   | Record (name, fields) ->
@@ -558,6 +558,9 @@ and synth env cx (e : expr) : ty =
             | TCon (p, [ k; v ]), _ when p = map_path ->
                 TCon (Ty.tuple_path 2, [ k; v ])
             | TCon (p, [ x ]), _ when p = set_path -> x
+            | TCon (p, _), _
+              when p <> Path.prelude "Array" && op_of env ta "next" <> None ->
+                cursor env cx iter ta
             | _ -> (
                 let elem = fresh_var env.st in
                 let ok =
@@ -575,10 +578,27 @@ and synth env cx (e : expr) : ty =
                 | _ -> if ok then elem else TError))
       in
       bind_pattern env cx elem pat;
+      (match over with
+      | Each ({ kind = Ref _; _ } as iter)
+        when match Hashtbl.find_opt cx.found iter.node with
+             | Some (Method_of _) -> true
+             | _ -> false ->
+          (* over a cursor, `for x in &c` changes `c`, not `x` *)
+          Option.iter
+            (fun (loc, name) -> report env (cursor_elem_changed loc name))
+            (changes (pattern_binders pat) body)
+      | _ -> ());
       (* each time round, the body's value is thrown away, as a
          statement's is *)
       dropped env cx (result_of body) (infer env cx body);
       unit
+  | While { cond; body } ->
+      want_bool env Condition cond (infer env cx cond);
+      dropped env cx (result_of body) (infer env cx body);
+      unit
+  | Break ->
+      (* it never produces a value, as `fail` doesn't *)
+      fresh_var env.st
   | Fail (tag, args) ->
       (* the error joins whatever handles the code here, by inclusion, as
          a call's do, so the solver knows what an `attempt` around it
@@ -665,6 +685,74 @@ and synth env cx (e : expr) : ty =
       handler core env cx e ~needs ~fails ~declared:None;
       impl_type ~over ~fails (handler_deps deps) needs
 
+(* `for x in &c` or `for x in c` over a cursor (foundations.md, decision
+   12), [iter], of type [tc]: a value whose type has a method
+   `next(inout self) -> Option<T>`, found as an operator is, by method on
+   its type, which can't fail or use a dependency. Its elements are [T]s.
+   The method's use is recorded at [iter], whose type is the cursor's, so
+   lowering can call it each time round (lower.ml, [for_loop]). *)
+and cursor env cx (iter : expr) tc =
+  let td, o = Option.get (op_of env tc "next") in
+  let path = op_path td o in
+  if path.home = env.home && not (Hashtbl.mem env.globals path) then
+    raise (Unchecked { caller = cx.self; callee = path });
+  let tm = lookup env cx ~node:iter.node iter.loc (Global path) in
+  Hashtbl.replace cx.found iter.node (Method_of path);
+  let elem = fresh_var env.st in
+  let shaped =
+    o.okind = Method
+    &&
+    match repr tm with
+    | TFun ([ self ], ret, errs, uses) -> (
+        self.mode = Inout
+        && row_names errs = []
+        && row_names uses = []
+        &&
+        match repr ret with
+        | TCon (p, [ _ ]) -> p = Path.prelude "Option"
+        | _ -> false)
+    | _ -> false
+  in
+  if
+    shaped
+    && unifies env plain iter.loc ~found:tm
+         ~expected:
+           (TFun
+              ( [ { mode = Inout; ty = tc } ],
+                TCon (Path.prelude "Option", [ elem ]),
+                REmpty,
+                REmpty ))
+  then elem
+  else (
+    if not shaped then
+      report env
+        (not_a_cursor (result_loc iter) ~item:(type_name env td.path ^ ".next"));
+    TError)
+
+(* The binders of the pattern [p]. *)
+and pattern_binders (p : pattern) =
+  match p.pkind with
+  | PVar b -> [ b ]
+  | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
+      List.concat_map pattern_binders ps
+  | PWild | PInt _ | PBool _ | PFail_any -> []
+
+(* Where [e] first changes one of [bs], and which: an assignment to it, or
+   a `&` of it. *)
+and changes bs (e : expr) =
+  let rec root (e : expr) =
+    match e.kind with
+    | Var (Local b) when List.memq b bs -> Some b.ident.name
+    | Field (r, _) | Index (r, _) -> root r
+    | Call ({ kind = Field (r, _); _ }, _) -> root r
+    | _ -> None
+  in
+  match e.kind with
+  | Assign { target; _ } when root target <> None ->
+      Some (target.loc, Option.get (root target))
+  | Ref a when root a <> None -> Some (e.loc, Option.get (root a))
+  | _ -> List.find_map (changes bs) (children e)
+
 (* Whether the place [target], assigned to, has a type that's written: a
    local whose is, a field, by its declaration, or an item of an array
    that's one of these and whose item type is written. *)
@@ -737,6 +825,48 @@ and stmt env cx = function
       Hashtbl.replace cx.locals name.id t
   | Let_tuple { pat; value } -> bind_pattern env cx (infer env cx value) pat
   | Expr e -> dropped env cx e (infer env cx e)
+  | Finally f ->
+      (* only among a handler's state ([Infer_handlers.handler]) or an
+         arm's statements ([block]): anywhere else, Resolve reported it *)
+      ignore (infer env cx f)
+
+(* A block's statements, then what [last] makes of the rest of it, with
+   what they bind: its type. A `finally` among them, in an operation's
+   arm, covers the rest ([finally_stmt]). *)
+and block env cx stmts (last : ctx -> ty) =
+  match stmts with
+  | [] -> last cx
+  | Finally f :: rest ->
+      finally_stmt env cx f (fun cx -> block env cx rest last)
+  | s :: rest ->
+      stmt env cx s;
+      block env cx rest last
+
+(* `finally(r) => ...` in an operation's arm (handlers.md, "`finally`"),
+   [f], and [rest], what comes after it: the rest is checked as `attempt`
+   checks what it covers, its errors kept apart, and [r] is what it ends
+   in, `Ok` of its value or `Err` of its error. What `finally` gives is
+   the arm's value, and what it fails with, the arm's errors. *)
+and finally_stmt env cx (f : expr) rest =
+  match f.kind with
+  | Lambda ([ p ], body) ->
+      let kept = fresh_row env.st in
+      defer env (Kept (kept, cx.params, None));
+      let t = rest { cx with handler = kept; sources = None } in
+      let rt = TCon (result_path, [ t; TErrors kept ]) in
+      let qs = [ { mode = Read; ty = rt } ] in
+      name_lambda cx f.node;
+      bind_params cx [ p ] qs;
+      check env cx body t ~why:(explain ~msg:finally_gives ());
+      Hashtbl.replace cx.nodes f.node (TFun (qs, t, cx.handler, REmpty));
+      t
+  | Lambda (ps, _) ->
+      report env (finally_params f.loc (List.length ps));
+      ignore (infer env cx f);
+      rest cx
+  | _ ->
+      ignore (infer env cx f);
+      rest cx
 
 (* Keep [t], the type of a value [e] throws away, to be checked later
    (see [drop]). *)

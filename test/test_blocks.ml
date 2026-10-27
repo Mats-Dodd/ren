@@ -9,11 +9,10 @@
      s5  capture by reference and exclusivity
      s6  while, break, cursors, finally
 
-   Until step N lands, the expect block holds today's output, preceded by
-   the comment `(* until sN: today's output *)`, and a comment above the
-   program says what the step makes of it. Step N removes the comment and
-   promotes the target. A test without that comment shows its target
-   already. The exclusivity cases are the rows of the research's table
+   While a step was still to come, its tests held the output of the time,
+   marked as such, and a comment above the program said what the step
+   would make of it; each step promoted its targets, so every test now
+   shows its target. The exclusivity cases are the rows of the research's table
    (exclusivity.md, "Adversarial table"), by number, and their errors are
    its drafted ones, with "lambda" written "block". *)
 
@@ -1545,13 +1544,9 @@ fn main() uses Console =
     if i == 3 then break
   print(i)
 |};
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: expected the end of the line, found `true`
-      ┌─ test.ren:3:9
-    3 │   while true
-      │         ^^^^
+  [%expect {|
+    3
+    ()
     |}]
 
 let%expect_test "[s6 accept] while whose condition ends it" =
@@ -1566,13 +1561,9 @@ fn main() uses Console =
     n *= 2
   print(seen)
 |};
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: expected the end of the line, found `n`
-      ┌─ test.ren:4:9
-    4 │   while n < 10
-      │         ^
+  [%expect {|
+    [1, 2, 4, 8]
+    ()
     |}]
 
 let%expect_test "[s6 reject] break outside a loop" =
@@ -1583,13 +1574,14 @@ fn main() uses Console =
   print(1)
   break
 |};
-  (* until s6: today's output *)
   [%expect
     {|
-    error: there's no variable named `break`
+    error: `break` is only inside a loop
       ┌─ test.ren:3:3
     3 │   break
       │   ^^^^^
+      = `break` leaves the `while` or `for` it's written in
+      help: remove it: to end a function early, put what comes after in an `if ... else`
     |}]
 
 let%expect_test "[s6 reject] break inside a block inside a loop" =
@@ -1605,13 +1597,14 @@ fn main() uses Console =
     run(fn() => if x == 2 then break)
     print(x)
 |};
-  (* until s6: today's output *)
   [%expect
     {|
-    error: there's no variable named `break`
+    error: a block can't `break` out of the loop it's written in
       ┌─ test.ren:5:32
     5 │     run(fn() => if x == 2 then break)
       │                                ^^^^^
+      = a block runs during the call it's passed to
+      help: return a `Bool` from the block, and `break` after the call
     |}]
 
 let%expect_test "[s6 accept] break in a for over an array" =
@@ -1623,13 +1616,10 @@ fn main() uses Console =
     if x == 3 then break
     print(x)
 |};
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: there's no variable named `break`
-      ┌─ test.ren:3:20
-    3 │     if x == 3 then break
-      │                    ^^^^^
+  [%expect {|
+    1
+    2
+    ()
     |}]
 
 let%expect_test "[s6 accept] break in a for & keeps what was written" =
@@ -1644,13 +1634,9 @@ fn main() uses Console =
     if p == 12 then break
   print(ps)
 |};
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: there's no variable named `break`
-      ┌─ test.ren:5:21
-    5 │     if p == 12 then break
-      │                     ^^^^^
+  [%expect {|
+    [11, 12, 3]
+    ()
     |}]
 
 (* A cursor: a value with `next(inout self) -> Option<T>`, which owns
@@ -1698,13 +1684,12 @@ fn main() uses Console =
     print(x)
 |}
     );
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: there's no variable named `break`
-       ┌─ test.ren:12:20
-    12 │     if x == 2 then break
-       │                    ^^^^^
+  [%expect {|
+    1
+    2
+    3
+    4
+    ()
     |}]
 
 let%expect_test "[s6 accept] for over a cursor goes over a copy" =
@@ -1719,13 +1704,12 @@ fn main() uses Console =
   print(c)
 |}
     );
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: a `for` loop goes over an `Array`, a `Map` or a `Set`, but this is an `Each`
-       ┌─ test.ren:10:12
-    10 │   for x in c
-       │            ^
+  [%expect {|
+    1
+    2
+    3
+    Each { xs: [1, 2, 3], i: 0 }
+    ()
     |}]
 
 let%expect_test "[s6 accept] row 37: a block advances a cursor it captures" =
@@ -1769,16 +1753,10 @@ handler guarded(ok: Bool) for N ! Closed uses Console =
 fn main() uses Console =
   print(attempt with guarded(false) in N.get())
 |};
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: `finally` comes last, after the handler's operations
-       ┌─ test.ren:7:3
-     7 │   finally(r) =>
-       │   ^^^^^^^
-    10 │   let n = try opening(ok)
-       │   --- this operation comes after it
-       help: move `finally` below the handler's last operation
+  [%expect {|
+    closed
+    Err(Closed)
+    ()
     |}]
 
 let%expect_test "[s6 accept] two finallys run last written first" =
@@ -1800,16 +1778,11 @@ handler twice() for N uses Console =
 fn main() uses Console =
   print(with twice() in N.get())
 |};
-  (* until s6: today's output *)
-  [%expect
-    {|
-    error: a handler has one `finally`
-      ┌─ test.ren:8:3
-    5 │   finally(r) =>
-      │   ------- the first is here
-    8 │   finally(r) =>
-      │   ^^^^^^^
-      help: remove one of them
+  [%expect {|
+    second
+    first
+    7
+    ()
     |}]
 
 let%expect_test "[s6 accept] a finally inside an operation's arm" =
@@ -1831,11 +1804,187 @@ fn main() uses Console =
   with pool() in
     print(attempt Pool.take())
 |};
-  (* until s6: today's output *)
+  [%expect {|
+    released
+    Err(Busy)
+    ()
+    |}]
+
+let%expect_test "[s6 accept] break leaves only the loop it's in" =
+  run
+    {|
+fn main() uses Console =
+  var i = 0
+  while i < 2
+    i += 1
+    for x in [10, 20, 30]
+      if x == 20 then break
+      print(i * x)
+|};
+  [%expect {|
+    10
+    20
+    ()
+    |}]
+
+let%expect_test "[s6 accept] break in a for & whose body can fail" =
+  (* the element is written back on the way out, whether the body fails
+     or breaks *)
+  run
+    {|
+fn check(n: Int) ! TooBig = if n > 20 then fail TooBig
+
+fn bump(ps: Array<Int>) -> Array<Int> ! TooBig =
+  var qs = ps
+  for p in &qs
+    p += 10
+    try check(p)
+    if p == 12 then break
+  qs
+
+fn main() uses Console =
+  print(attempt bump([1, 2, 3]))
+  print(attempt bump([1, 20, 3]))
+|};
+  [%expect {|
+    Ok([11, 12, 3])
+    Err(TooBig)
+    ()
+    |}]
+
+let%expect_test
+    "[s6 accept] break runs the write-backs it leaves, and only those" =
+  (* the inner loop's `break` writes its element back, and the outer
+     loop goes on, writing its own back each time round *)
+  run
+    {|
+fn main() uses Console =
+  var grid = [[1, 2, 3], [4, 5, 6]]
+  for row in &grid
+    for x in &row
+      x *= 10
+      if x >= 20 then break
+    &row.push(0)
+  print(grid)
+|};
+  [%expect {|
+    [[10, 20, 3, 0], [40, 5, 6, 0]]
+    ()
+    |}]
+
+let%expect_test "[s6 reject] break can't leave a with" =
+  (* the handlers are given what the body ends in, and a `break` ends in
+     nothing *)
+  run
+    {|
+fn main() uses Console =
+  while true
+    with Clock.frozen(Time.epoch) in
+      break
+|};
   [%expect
     {|
-    error: expected an expression, found `finally`
-      ┌─ test.ren:6:5
-    6 │     finally(r) =>
-      │     ^^^^^^^
+    error: a `break` can't leave a `with`
+      ┌─ test.ren:4:7
+    4 │       break
+      │       ^^^^^
+      = the handlers a `with` installs are given what its body ends in, and a `break` ends in nothing
+      help: end the `with`'s body with a `Bool`, and `break` after it
+    |}]
+
+let%expect_test "[s6 reject] a next that isn't a cursor's" =
+  run
+    {|
+type Count = { n: Int }
+  fn next(self) -> Option<Int> = Some(self.n)
+
+fn main() uses Console =
+  for x in Count { n: 1 }
+    print(x)
+|};
+  [%expect
+    {|
+    error: a `for` loop goes over a cursor, but `Count.next` isn't a cursor's
+      ┌─ test.ren:5:12
+    5 │   for x in Count { n: 1 }
+      │            ^^^^^^^^^^^^^^
+      = a cursor's type has a method `next(inout self) -> Option<T>`, which can't fail or use a dependency, and the loop goes over the `T`s it gives
+      help: give `Count.next` that signature
+    |}]
+
+let%expect_test "[s6 accept] a cursor's loop in Core" =
+  core
+    (each_cursor
+   ^ {|
+fn main() uses Console =
+  var c = Each { xs: [1, 2], i: 0 }
+  for x in &c
+    if x == 2 then break
+    print(x)
+|}
+    );
+  [%expect
+    {|
+    (fn Each.next (self/1) ev/2
+      (if (< (. self/1 i) (call ev/2 Array.len (. self/1 xs)))
+        (seq (= self/1 (update self/1 i: (+ (. self/1 i) 1)))
+          (con Some (get (. self/1 xs) (- (. self/1 i) 1))))
+        (con None)))
+    (fn main () ev/1
+      (let c/2 (record (xs: (array 1 2)) (i: 0))
+        (while true
+          (match (call ev/1 Each.next &c/2)
+            ((Some x/3) => (seq (if (== x/3 2) break ()) (call ev/1 print x/3)))
+            (None => break)))))
+    (fn $start () ev/1
+      (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main)))
+    |}]
+
+let%expect_test "[s6 accept] a finally in an arm gives the arm's value" =
+  run
+    {|
+dep N =
+  get: fn(n: Int) -> Int ! Neg
+
+fn checked(n: Int) -> Int ! Neg = if n < 0 then fail Neg else n
+
+handler plus_one() for N =
+  get(n) =>
+    finally(r) =>
+      match r
+        Ok(v) => v + 1
+        Err(_) => try r
+    try checked(n)
+
+fn main() uses Console =
+  with plus_one() in
+    print(attempt N.get(41))
+    print(attempt N.get(-1))
+|};
+  [%expect {|
+    Ok(42)
+    Err(Neg)
+    ()
+    |}]
+
+let%expect_test "[s6 reject] changing what a cursor gave" =
+  (* `&` advances the cursor, and `x` is a value it gave: changing it
+     would change nothing *)
+  run
+    (each_cursor
+   ^ {|
+fn main() uses Console =
+  var c = Each { xs: [1, 2], i: 0 }
+  for x in &c
+    x += 1
+|}
+    );
+  [%expect
+    {|
+    error: changing `x` changes nothing the loop goes over
+       ┌─ test.ren:11:5
+    11 │     x += 1
+       │     ^
+       = over a cursor, `&` is what advances the cursor, and each `x` is a value it gave
+       help: change a copy: `var y = x`
     |}]

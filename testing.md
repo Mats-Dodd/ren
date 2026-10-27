@@ -441,7 +441,7 @@ fn(inout Account, Money, Movement) ! Frozen(AccountId) uses Clock
   state machine testing, derived from the interface rather than written
   by hand: a deep module, tested at its boundary, automatically.
 - **Schedules in the same sequence.** The simulation scheduler's choices
-  (stage 17) join the choice sequence, so a failing interleaving shrinks
+  (the `sim` runtime, stage 11a) join the choice sequence, so a failing interleaving shrinks
   to the shortest schedule that still fails, and generated data and
   generated schedules shrink together.
 - **Programs as properties.** Generate a world, files, clock jumps,
@@ -457,8 +457,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 |---|---|
 | **9c** | tests see what an importer sees; test items; a type that keeps rules is opaque ([module-build.md](module-build.md#private-unless-pub)); `ren console` with types, private items and the choice of world |
 | **10** | the journal: effects shown in the console, `:reload`, `:spec`, journals as tests (done, stage 10b) |
-| **12** | property tests: derived generation, generation through constructors, `arbitrary`, shaped parameters, shrinking by replay, saved failures, the report, `ren fuzz` |
-| **17** | schedules in the choice sequence |
+| **11a** | `ren test --sim --seeds` on the `sim` runtime; journals as tests with a schedule prefix |
+| **12** | property tests: derived generation, generation through constructors, `arbitrary`, shaped parameters, shrinking by replay, saved failures, the report, `ren fuzz`; schedules from 11a's `sim` in the choice sequence |
 | **Later** | generated call sequences, programs as properties, swarm testing, attaching the console |
 
 ## Borrowed from

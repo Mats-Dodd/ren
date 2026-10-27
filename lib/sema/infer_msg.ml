@@ -824,8 +824,34 @@ let assigned_var var part =
 
 let not_iterable f _ =
   sprintf
-    "a `for` loop goes over an `Array`, a `Map` or a `Set`, but this is %s"
+    "a `for` loop goes over an `Array`, a `Map`, a `Set` or a cursor, but this \
+     is %s"
     (article f)
+
+(* `x = ...` in `for x in &c` over a cursor, where `&` is the cursor's:
+   [x] is what it gave, a value of its own. *)
+let cursor_elem_changed loc x =
+  Diag.make loc
+    ~notes:
+      [
+        "over a cursor, `&` is what advances the cursor, and each `" ^ x
+        ^ "` is a value it gave";
+      ]
+    ~help:(sprintf "change a copy: `var y = %s`" x)
+    (sprintf "changing `%s` changes nothing the loop goes over" x)
+
+(* `for x in c`, where [c]'s type has a `next`, [item], that isn't a
+   cursor's. *)
+let not_a_cursor loc ~item =
+  Diag.make loc
+    ~notes:
+      [
+        "a cursor's type has a method `next(inout self) -> Option<T>`, which \
+         can't fail or use a dependency, and the loop goes over the `T`s it \
+         gives";
+      ]
+    ~help:(sprintf "give `%s` that signature" item)
+    (sprintf "a `for` loop goes over a cursor, but `%s` isn't a cursor's" item)
 
 (* `for x in &m`, of a [what], a map or a set: its entries aren't places,
    since a key that changed would be in the wrong place. *)
@@ -1300,8 +1326,16 @@ let over_some loc ~link ~deps ~named =
 
 let finally_params loc n =
   Diag.make loc ~help:"`finally(r) => ...`"
-    (sprintf "`finally` takes one parameter, the body's result, but this has %d"
+    (sprintf
+       "`finally` takes one parameter, the result of what it covers, but this \
+        has %d"
        n)
+
+(* In an operation's arm, where what it covers, the rest of the arm, is
+   of a type it knows. *)
+let finally_gives f x =
+  sprintf "`finally` produces %s, but it has to give the arm's value, %s"
+    (article f) (article x)
 
 (* [result] is the type of the body's result, as it's printed: giving
    that back is said so, not with the type, whose parameters the code

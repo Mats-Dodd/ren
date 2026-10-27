@@ -482,13 +482,17 @@ and expr_of cx (e : expr) : C.expr =
   | Assign { target; op; value; onode } -> assign cx e ~onode target op value
   | For { pat; over = Each iter; body } -> for_loop cx e pat iter body
   | For { pat; over = Range (lo, hi); body } -> range_loop cx e pat lo hi body
+  | While { cond; body } ->
+      let cond = expr cx cond in
+      here (While (cond, expr cx body))
+  | Break -> here Break
   | With { items; body } -> with_ cx e items body
-  | Handler { deps; state; arms; finally; _ } ->
+  | Handler { deps; state; arms; _ } ->
       (* it runs where it's installed, with the evidence there *)
       let ev = evidence cx and outer = cx.ev and around = cx.handler_ev in
       cx.ev <- ev;
       cx.handler_ev <- Some ev;
-      let body = handler cx e deps state arms finally in
+      let body = handler cx e deps state arms in
       cx.ev <- outer;
       cx.handler_ev <- around;
       (* its own evidence, which `next` uses, is bound, not captured *)
@@ -657,8 +661,19 @@ and with_ cx (e : expr) items body =
    one it changes when it ends, even if it fails. Nothing else changes a
    cell in between: an arm runs with what was installed outside its
    handler's `with`, which isn't the instance it's part of, so it never
-   runs inside another arm of the same instance. *)
-and handler cx (e : expr) deps state arms finally =
+   runs inside another arm of the same instance.
+
+   Each `finally` among the state covers what comes after it (handlers.md,
+   "`finally`"): the state after it is a [Handle], which gives it what
+   that fails to start with, `Err(e)`, and fails with what it fails with,
+   as it can only fail, given an error, since it has to give back a value
+   of the body's type, which it doesn't know. The `with`'s body it covers
+   through the instance's `finally`, which runs them all, the last written
+   first, each given what the one after it ends in. As Koka's `finally` is
+   a handler around what it covers
+   (/tmp/ren-refs/koka/lib/std/core/hnd.kk:485-494), Core needs nothing
+   new for it. *)
+and handler cx (e : expr) deps state arms =
   let needs =
     match Ty.impl_parts (ty_of cx e.node) with
     | Some (_, needs) -> needs
@@ -668,6 +683,16 @@ and handler cx (e : expr) deps state arms finally =
     match (node cx e.node).found with
     | Some (Handler_facts { forwards; body_ty }) -> (forwards, body_ty)
     | _ -> ([], None)
+  in
+  let finallies =
+    List.filter_map (function Finally f -> Some f | _ -> None) state
+  in
+  (* what the `finally` [f] is given, of type `Result<T, ! ..e>`, the
+     body's type and errors (Infer_handlers.finally_), shared by each *)
+  let outcome_ty (f : expr) =
+    match ty_of cx f.node with
+    | Fun ([ r ], _, _, _) -> r.ty
+    | _ -> bug "a `finally` whose type isn't a function's"
   in
   let rec state_lets = function
     | [] -> instance ()
@@ -679,6 +704,32 @@ and handler cx (e : expr) deps state arms finally =
     | Let_tuple { pat; value } :: rest ->
         take_apart cx pat (expr cx value) (fun () -> state_lets rest)
     | Expr s :: rest -> seq (expr cx s) (state_lets rest)
+    | Finally f :: rest ->
+        (* the state after it, which, if it fails to start, it's given;
+           most can't *)
+        let after = state_lets rest in
+        if not (C.can_fail after) then after
+        else
+          let rt = outcome_ty f in
+          let made = temp cx "instance" after.ty
+          and error = temp cx "error" (snd (result_args rt)) in
+          let failed =
+            mk (Con (result_path, "Err", [ local error f.loc ])) rt f.loc
+          in
+          let given = finally_body cx f failed in
+          let on_error =
+            seq given (mk (Fail (local error f.loc)) after.ty f.loc)
+          in
+          mk
+            (Handle
+               {
+                 body = after;
+                 value = made;
+                 on_value = local made f.loc;
+                 error;
+                 on_error;
+               })
+            after.ty f.loc
   and instance () =
     let cells =
       List.filter_map
@@ -686,7 +737,7 @@ and handler cx (e : expr) deps state arms finally =
           | Let { name; mut = true; _ } ->
               let v = var_of cx name in
               Some (v, temp cx v.name (C.cell_ty v.ty))
-          | Let _ | Let_tuple _ | Expr _ -> None)
+          | Let _ | Let_tuple _ | Expr _ | Finally _ -> None)
         state
     in
     let impl (d : tname) : Path.t * C.expr =
@@ -744,36 +795,48 @@ and handler cx (e : expr) deps state arms finally =
       in
       (p, mk (Record (p, ops @ forwarded)) (Ty.impl [ p ] needs) e.loc)
     in
-    (* its `finally`, which is given the descriptor of the `with`'s body's
-       type first, the variable after the function's own *)
+    (* its `finally`s, as one lambda, which is given the descriptor of
+       the `with`'s body's type first, the variable after the function's
+       own, then the body's outcome: the last one written is given that,
+       and each before it what the one after it ends in *)
     let finally =
-      match (finally, body_ty) with
-      | Some f, Some k when k = List.length cx.tys ->
+      match (finallies, body_ty) with
+      | [], _ -> None
+      | first :: _, Some k when k = List.length cx.tys ->
           let d = temp cx "ty" C.type_ty in
           let own = cx.tys in
           cx.tys <- own @ [ d ];
-          let lam = arm_impl cx cells f in
+          let rt = outcome_ty first in
+          let outcome = temp cx "outcome" rt in
+          let ret, errs, uses =
+            match ty_of cx first.node with
+            | Fun (_, r, errs, uses) -> (r, errs, uses)
+            | _ -> bug "a `finally` whose type isn't a function's"
+          in
+          let params : C.param list =
+            [ { mode = Read; var = d }; { mode = Read; var = outcome } ]
+          in
+          let name, _ = block_of cx first.node in
+          let lam =
+            block_value cx ~name ~given:[] params
+              (Fun
+                 ( [ { mode = Read; ty = C.type_ty }; { mode = Read; ty = rt } ],
+                   ret,
+                   errs,
+                   uses ))
+              first.loc
+              (fun () ->
+                List.fold_left
+                  (fun (given : C.expr) f ->
+                    finally_body cx f (attempted cx given rt))
+                  (finally_body cx
+                     (List.hd (List.rev finallies))
+                     (local outcome first.loc))
+                  (List.tl (List.rev finallies)))
+          in
           cx.tys <- own;
-          Some
-            (match (lam.kind, lam.ty) with
-            | Lambda l, Fun (ps, r, errs, uses) ->
-                {
-                  lam with
-                  kind =
-                    Lambda
-                      {
-                        l with
-                        params = { mode = Read; var = d } :: l.params;
-                        captures =
-                          List.filter
-                            (fun (v : C.var) -> v.id <> d.id)
-                            l.captures;
-                      };
-                  ty = Fun ({ mode = Read; ty = C.type_ty } :: ps, r, errs, uses);
-                }
-            | _ -> bug "a `finally` that isn't a lambda")
-      | Some _, _ -> bug "a `finally` without the type of its body"
-      | None, _ -> None
+          Some (with_cells cx cells lam)
+      | _ :: _, _ -> bug "a `finally` without the type of its body"
     in
     let made =
       List.map
@@ -788,13 +851,45 @@ and handler cx (e : expr) deps state arms finally =
   in
   state_lets state
 
-(* An arm of a handler, or its `finally`, the lambda [impl], which keeps
-   [cells], the state's `var`s' cells. *)
-and arm_impl cx cells (impl : expr) =
-  let lam = expr cx impl in
+(* The body of the `finally` [f], given [given], what it covers ends in,
+   as its parameter. *)
+and finally_body cx (f : expr) (given : C.expr) =
+  match f.kind with
+  | Lambda ([ p ], body) ->
+      let r = bind cx p.pname given.ty in
+      let body = expr cx body in
+      mk (Let (r, given, body)) body.ty f.loc
+  | _ -> bug "a `finally` that isn't a lambda of one parameter"
+
+(* What [e] ends in, of type [rt], a [Result] of its type: `Ok` of its
+   value, or `Err` of its error, as `attempt e` is. *)
+and attempted cx (e : C.expr) rt =
+  let v, errs = result_args rt in
+  let value = temp cx "value" v and error = temp cx "error" errs in
+  mk
+    (Handle
+       {
+         body = e;
+         value;
+         on_value = mk (Con (result_path, "Ok", [ local value e.loc ])) rt e.loc;
+         error;
+         on_error =
+           mk (Con (result_path, "Err", [ local error e.loc ])) rt e.loc;
+       })
+    rt e.loc
+
+(* An arm of a handler, the lambda [impl], which keeps [cells], the
+   state's `var`s' cells. *)
+and arm_impl cx cells (impl : expr) = with_cells cx cells (expr cx impl)
+
+(* [lam], a lambda of a handler, an arm or its `finally`s, made to keep
+   [cells], the state's `var`s' cells, rather than the `var`s: it reads
+   each it uses when it starts, and writes back each it changes when it
+   ends, even if it fails. *)
+and with_cells cx cells (lam : C.expr) =
   match lam.kind with
   | Lambda { name; params; ev; outer; given; captures; body } ->
-      let loc = impl.loc in
+      let loc = lam.loc in
       let used =
         List.filter
           (fun ((v : C.var), _) ->
@@ -1082,6 +1177,14 @@ and block cx stmts last =
   | Expr e :: rest ->
       let e = expr cx e in
       seq e (block cx rest last)
+  | Finally f :: rest ->
+      (* in an arm: it's given what the rest of it ends in *)
+      let rt =
+        match ty_of cx f.node with
+        | Fun ([ r ], _, _, _) -> r.ty
+        | _ -> bug "a `finally` whose type isn't a function's"
+      in
+      finally_body cx f (attempted cx (block cx rest last) rt)
 
 (* [body ()] with [pat], a name or a tuple of them (the parser sees to
    that), bound to [value]: a [Let], or a [match] of one arm, which always
@@ -1118,9 +1221,16 @@ and range_loop cx (e : expr) (pat : pattern) lo hi body =
 (* `for x in xs` holds the array, then goes over its indices; a `Map`'s
    entries and a `Set`'s members are made an array first, in order.
    `for p in &ps` finds the place (once), then each pass copies the element
-   into `p` and writes it back afterwards. mut.ml makes sure the body can't
-   change the array itself, so its length can't change. *)
+   into `p` and writes it back afterwards, even if the body fails or
+   `break`s. mut.ml makes sure the body can't change the array itself, so
+   its length can't change. A cursor's is a loop of its own
+   ([cursor_loop]). *)
 and for_loop cx (e : expr) (pat : pattern) (iter : expr) body =
+  match (node cx iter.node).found with
+  | Some (Method_of next) -> cursor_loop cx e pat iter next body
+  | _ -> array_loop cx e pat iter body
+
+and array_loop cx (e : expr) (pat : pattern) (iter : expr) body =
   let loc = e.loc in
   let iter_ty = ty_of cx iter.node in
   (* what's gone over, as an array, from the value of [iter] *)
@@ -1158,7 +1268,7 @@ and for_loop cx (e : expr) (pat : pattern) (iter : expr) body =
       (* the element is written back after the body, even if it fails *)
       let write = write at (local x loc) loc in
       let rest =
-        if C.can_fail body then
+        if C.can_fail body || breaks body then
           seq (mk (Finally (body, write)) body.ty loc) step
         else seq body (seq write step)
       in
@@ -1174,6 +1284,83 @@ and for_loop cx (e : expr) (pat : pattern) (iter : expr) body =
         [ (xs, elements (expr cx iter)) ]
         (loop ~start:xs_e
            ~pass:(take_apart cx pat element (fun () -> seq (expr cx body) step)))
+
+(* `for x in &c` over a cursor (Infer_expr.cursor), whose method [next]
+   is called each time round, with `&` of the place, until it gives
+   `None`: a [While] that [Break]s then. `c` keeps its place after the
+   loop, a `break` included. `for x in c` goes over a copy, in a
+   temporary. *)
+and cursor_loop cx (e : expr) (pat : pattern) (iter : expr) next body =
+  let loc = e.loc in
+  let cursor = ty_of cx iter.node in
+  let elem = ty_of cx pat.pnode in
+  let opt : Ty.ty = Con (option_path, [ elem ]) in
+  let fty : Ty.ty =
+    Fun ([ { mode = Inout; ty = cursor } ], opt, Ty.closed, Ty.closed)
+  in
+  let a = targs_of cx iter.node in
+  let callee : C.kind =
+    match Prelude.find next with
+    | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx iter.node)
+    | None -> Global (next, a, descs cx a, dicts_of cx iter.node)
+  in
+  let call (v : C.var) =
+    mk (Call (mk callee fty iter.loc, [ Ref v ], cx.ev)) opt iter.loc
+  in
+  (* the place it advances, and how to advance it once: a local is passed
+     as it is, and anything else through a temporary, written back *)
+  let binds, advance =
+    match iter.kind with
+    | Ref p -> (
+        let binds, pl = place cx p in
+        match pl with
+        | { root; steps = [] } -> (binds, call root)
+        | _ ->
+            let t = temp cx "ref" cursor and got = temp cx "next" opt in
+            ( binds,
+              lets
+                [ (t, read pl iter.loc); (got, call t) ]
+                (seq (write pl (local t loc) loc) (local got loc)) ))
+    | _ ->
+        let copy = temp cx "cursor" cursor in
+        ([ (copy, expr cx iter) ], call copy)
+  in
+  (* the pattern binds what the body uses, so it's lowered first *)
+  let elem_pat = pattern cx pat in
+  let body =
+    (* its value is dropped, as a statement's is *)
+    let b = expr cx body in
+    if b.ty = Ty.unit then b else seq b (C.unit loc)
+  in
+  let some : C.arm =
+    {
+      pat =
+        {
+          pkind = PCon (option_path, "Some", [ elem_pat ]);
+          pty = opt;
+          ploc = pat.ploc;
+        };
+      guard = None;
+      body;
+    }
+  in
+  let none : C.arm =
+    {
+      pat = { pkind = PCon (option_path, "None", []); pty = opt; ploc = loc };
+      guard = None;
+      body = mk Break Ty.unit loc;
+    }
+  in
+  let pass = mk (Match (advance, [ some; none ])) Ty.unit loc in
+  lets binds (mk (While (mk (Bool true) Ty.bool loc, pass)) Ty.unit loc)
+
+(* Whether [e] has a [Break] in it that leaves it, one outside every
+   [While] in it. *)
+and breaks (e : C.expr) =
+  match e.kind with
+  | Break -> true
+  | While _ | Lambda _ | Handler _ -> false
+  | _ -> List.exists breaks (C.children e)
 
 and pattern cx (p : pattern) : C.pattern =
   let pty = ty_of cx p.pnode in
@@ -1206,7 +1393,7 @@ and free (e : C.expr) =
   let bind (v : C.var) = bound := Ids.add v.id !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ | Break -> ()
     | Global (_, _, ds, dicts) | Intrinsic (_, _, ds, dicts) ->
         (* the hidden type and dictionary parameters its descriptors and
            dictionaries are built from *)
@@ -1307,10 +1494,13 @@ let max_binder (f : fn_def) =
   let see (b : binder) = m := max !m b.id in
   let rec go (e : expr) =
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
     | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
         go a
-    | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
+    | Binop (_, a, b, _)
+    | Index (a, b)
+    | Assign { target = a; value = b; _ }
+    | While { cond = a; body = b } ->
         go a;
         go b
     | Fail (_, args) -> List.iter (fun (_, a) -> go a) args
@@ -1320,16 +1510,7 @@ let max_binder (f : fn_def) =
         List.iter (fun (p : Resolved.param) -> see p.pname) ps;
         go body
     | Block (stmts, last) ->
-        List.iter
-          (function
-            | Let { name; value; _ } ->
-                see name;
-                go value
-            | Let_tuple { pat = p; value } ->
-                pat p;
-                go value
-            | Expr e -> go e)
-          stmts;
+        List.iter stmt stmts;
         go last
     | Con (_, args) -> List.iter (fun (_, a) -> go a) args
     | Record (_, fields) -> List.iter (fun (_, v) -> go v) fields
@@ -1348,19 +1529,17 @@ let max_binder (f : fn_def) =
     | With { items; body } ->
         List.iter go (with_links items);
         go body
-    | Handler { state; arms; finally; _ } ->
-        List.iter
-          (function
-            | Let { name; value; _ } ->
-                see name;
-                go value
-            | Let_tuple { pat = p; value } ->
-                pat p;
-                go value
-            | Expr e -> go e)
-          state;
-        List.iter (fun (a : handler_arm) -> go a.arm_impl) arms;
-        Option.iter go finally
+    | Handler { state; arms; _ } ->
+        List.iter stmt state;
+        List.iter (fun (a : handler_arm) -> go a.arm_impl) arms
+  and stmt = function
+    | Let { name; value; _ } ->
+        see name;
+        go value
+    | Let_tuple { pat = p; value } ->
+        pat p;
+        go value
+    | Expr e | Finally e -> go e
   and pat (p : pattern) =
     match p.pkind with
     | PVar b -> see b

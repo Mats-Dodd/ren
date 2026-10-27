@@ -115,11 +115,11 @@ handler: over a dependency, what it can fail to start with, next and finally
 
 pub handler transaction() over Sql ! DbDown =
   let tx = try next.begin()
-  get() => next(Sql).get()
   finally(r) =>
     match r
       Ok(v) => v
       Err(_) => try r
+  get() => next(Sql).get()
 
 handler both() over A & B uses Clock =
   finally(r) => try r
@@ -143,19 +143,7 @@ handler both() over A & B uses Clock =
           (identifier)
           (identifier)
           (arguments))))
-    (handler_arm
-      (identifier)
-      (parameters)
-      (method_call_expression
-        (call_expression
-          (identifier)
-          (arguments
-            (constructor_expression
-              (constructor_ref
-                (type_identifier)))))
-        (identifier)
-        (arguments)))
-    (finally_arm
+    (finally_statement
       (parameters
         (parameter
           (identifier)))
@@ -174,7 +162,19 @@ handler both() over A & B uses Clock =
                 (type_identifier))
               (wildcard))
             (try_expression
-              (identifier)))))))
+              (identifier))))))
+    (handler_arm
+      (identifier)
+      (parameters)
+      (method_call_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (constructor_expression
+              (constructor_ref
+                (type_identifier)))))
+        (identifier)
+        (arguments))))
   (handler_definition
     (identifier)
     (parameters)
@@ -185,7 +185,7 @@ handler both() over A & B uses Clock =
     (uses_clause
       (dependency
         (type_identifier)))
-    (finally_arm
+    (finally_statement
       (parameters
         (parameter
           (identifier)))
@@ -223,3 +223,111 @@ handler both() for Console, Fs =
         (parameter
           (identifier)))
       (unit))))
+
+================================================================================
+handler: finally among its state lines, more than once
+================================================================================
+
+handler guarded(ok: Bool) for N ! Closed =
+  finally(r) => try r
+  let n = try opening(ok)
+  finally(r) =>
+    close(n)
+    try r
+  var calls = 0
+  get() => n
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (handler_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (dependency
+      (type_identifier))
+    (error_set
+      (error_tag
+        (type_identifier)))
+    (finally_statement
+      (parameters
+        (parameter
+          (identifier)))
+      (try_expression
+        (identifier)))
+    (let_statement
+      (identifier)
+      (try_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier)))))
+    (finally_statement
+      (parameters
+        (parameter
+          (identifier)))
+      (block
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier)))
+        (try_expression
+          (identifier))))
+    (let_statement
+      (identifier)
+      (number))
+    (handler_arm
+      (identifier)
+      (parameters)
+      (identifier))))
+
+================================================================================
+handler: finally in an operation's arm
+================================================================================
+
+handler pool() for Pool =
+  take() =>
+    let n = try reserve()
+    finally(r) =>
+      release(n)
+      try r
+    try use(n)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (handler_definition
+    (identifier)
+    (parameters)
+    (dependency
+      (type_identifier))
+    (handler_arm
+      (identifier)
+      (parameters)
+      (block
+        (let_statement
+          (identifier)
+          (try_expression
+            (call_expression
+              (identifier)
+              (arguments))))
+        (finally_statement
+          (parameters
+            (parameter
+              (identifier)))
+          (block
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))
+            (try_expression
+              (identifier))))
+        (try_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier))))))))

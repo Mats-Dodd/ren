@@ -29,8 +29,9 @@
    (foundations.md): a value of a function type is only a call's callee,
    a call's argument, or a `let`'s value, but for the operations of a
    handler's instance, and no type argument, nor any type's argument, is
-   a function type, since a type variable never stands for a block. Which
-   errors code can fail with isn't checked: inference has, and Core has
+   a function type, since a type variable never stands for a block. And
+   that a [Break] is inside a [While], never leaving a block, a handler or
+   a [With]'s body for one. Which errors code can fail with isn't checked: inference has, and Core has
    no use for them.
 
    Lint finding anything is a bug in the compiler, never in the program,
@@ -62,6 +63,9 @@ type env = {
   own : ((int * string) * var) list;
       (** the function's hidden dictionary parameters, by the requirement each
           is for *)
+  in_loop : bool;
+      (** whether a [Break] here leaves a [While]: one is around it, in the same
+          function or block, and not around a [With] it's in *)
 }
 
 let show t =
@@ -713,7 +717,12 @@ let rec expr env sc (e : expr) =
             (sprintf "what's installed has type `%s`, but should be a `%s`"
                (show t) (Path.full p)));
       expr
-        { env with ev = Some ev; installed = p :: env.installed }
+        {
+          env with
+          ev = Some ev;
+          installed = p :: env.installed;
+          in_loop = false;
+        }
         (add ev sc) body;
       (* a `finally` is given what its body is *)
       describes env sc loc "the body of a `With`" desc body.ty;
@@ -739,6 +748,7 @@ let rec expr env sc (e : expr) =
             {
               (inside env loc "a handler's evidence" ev needs) with
               handler = Some (ev, needs);
+              in_loop = false;
             }
             (add ev inner) body;
           same env body.loc "a handler's body" body.ty e.ty
@@ -805,7 +815,12 @@ let rec expr env sc (e : expr) =
                (show t)
                (String.concat " & " (List.map Path.full deps))));
       expr
-        { env with ev = Some ev; installed = deps @ env.installed }
+        {
+          env with
+          ev = Some ev;
+          installed = deps @ env.installed;
+          in_loop = false;
+        }
         (add ev sc) body;
       describes env sc loc "the body of a `With`" desc body.ty;
       is "a `With`" body.ty
@@ -839,10 +854,17 @@ let rec expr env sc (e : expr) =
           same env a.body.loc "an arm" a.body.ty e.ty)
         arms
   | While (c, body) ->
+      let env = { env with in_loop = true } in
       expr env sc c;
       expr env sc body;
       same env loc "a `while` condition" c.ty Ty.bool;
       is "a `while`" Ty.unit
+  | Break ->
+      (* of any type, since it never ends *)
+      if not env.in_loop then
+        fail env loc
+          "a `Break` outside a `While`, or leaving a block, a handler or a \
+           `With`"
   | Seq (a, b) ->
       expr env sc a;
       expr env sc b;
@@ -919,6 +941,7 @@ let rec expr env sc (e : expr) =
           env with
           ev = Some ev;
           uses = { env.uses with labels = env.uses.labels @ given_labels };
+          in_loop = false;
         }
         inner body;
       match reveal env e.ty with
@@ -1270,8 +1293,9 @@ and operations env sc loc p needs fs =
 
 (* An installed handler instance is never a value (compiler.md, "No
    cycles"): an [Instance] is only ever the end of a [Handler]'s body,
-   after the [Let]s and statements that make its state, which is where a
-   [With] gets it from. Anywhere else, a program could hold one, and a
+   after the [Let]s and statements that make its state, and the [Handle]
+   around the state after a `finally`, which is where a [With] gets it
+   from. Anywhere else, a program could hold one, and a
    handler's state could reach its own instance. *)
 
 (* A handler's `finally` (core.ml, [Instance]): a lambda that takes the
@@ -1306,6 +1330,12 @@ and handler_end env (e : expr) =
   | Let (_, a, b) | Seq (a, b) ->
       instances env a;
       handler_end env b
+  | Handle { body; value; on_value = { kind = Local v; _ }; on_error; _ }
+    when v = value ->
+      (* the state after a `finally`, which is given what that fails to
+         start with (lower.ml), and then fails with it *)
+      handler_end env body;
+      instances env on_error
   | Instance { impls; finally } ->
       List.iter (fun (_, i) -> instances env i) impls;
       Option.iter (instances env) finally
@@ -1421,7 +1451,8 @@ let fn_def env (f : fn_def) =
 let rec globals (e : expr) =
   match e.kind with
   | Global (p, _, _, _) | Global_value (p, _) -> [ p ]
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ -> []
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ | Break ->
+      []
   | Prim (_, es)
   | Array es
   | Tuple es
@@ -1690,6 +1721,7 @@ let program ~imports ~linked (prog : program) =
       ntys = 0;
       body_ty = None;
       own = [];
+      in_loop = false;
     }
   in
   List.iter

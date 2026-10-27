@@ -26,8 +26,11 @@ given the body's result: on `Ok(v)` it commits and gives back `v`, and
 on `Err(_)` it rolls back and fails with the body's error, `try r`.
 
 **Installing it can fail.** `! DbDown` says the handler's state or its
-`finally` can fail, so the `with` that installs it can too. When `begin`
-fails, the body never runs and `finally` isn't called.
+`finally` can fail, so the `with` that installs it can too. A `finally`
+covers what comes after the line it's written on, and this one is
+written after `let tx`, so when `begin` fails, the body never runs and
+`finally` isn't called. One written above it would run then too, given
+`begin`'s error (stage 10c).
 
 **`with sql.transaction() over Sql`** puts the transaction over the `Sql`
 installed outside the `with`: `transfer` doesn't say which database, only

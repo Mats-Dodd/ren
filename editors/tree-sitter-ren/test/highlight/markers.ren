@@ -192,13 +192,22 @@ pub handler transaction() over Sql ! DbDown =
   let tx = try next.begin()
 //             ^ variable.special
 //                  ^ function.method
-  get() => next(Sql).get()
-//         ^ variable.special
   finally(r) =>
 //^ keyword
     N.next()
 //    ^ function
     try r
+  get() => next(Sql).get()
+//         ^ variable.special
+
+fn count() -> Int =
+  var i = 0
+  while i < 10
+//^ keyword
+    i += 1
+    if i == 3 then break
+//                 ^ keyword
+  i
 
 fn wrapped(s: over Sql) -> Int uses Sql =
 //            ^ keyword

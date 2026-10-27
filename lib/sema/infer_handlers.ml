@@ -65,7 +65,7 @@ let handler_deps (deps : tname list) =
 
 (* A handler's body (ast.ml, [Handler]), the body of its function,
    [cx.self], whose result is the handler's type ([handler_deps]). Its
-   state, arms and `finally` run where it's installed, not where the
+   state, `finally`s and arms run where it's installed, not where the
    function is called, so what they use is what the handler needs,
    [needs], and the function itself uses nothing. One declared [over] its
    dependencies needs them too: the one under it, which `next` reaches.
@@ -78,13 +78,13 @@ let handler_deps (deps : tname list) =
    against what's [declared], if anything is (see [handler_needs]). *)
 let rec handler core env cx (h : expr) ~needs ~fails ~declared =
   match h.kind with
-  | Handler { deps; over; state; arms; finally; _ } ->
+  | Handler { deps; over; state; arms; _ } ->
       handler_parts core env cx ~node:h.node ~loc:h.loc ~deps ~over ~fails state
-        arms finally ~needs ~declared
+        arms ~needs ~declared
   | _ -> assert false
 
-and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
-    ~needs ~declared =
+and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
+    ~declared =
   let own = handler_deps deps in
   (* the operations one over its dependencies leaves out, which lowering
      makes calls of the one under it *)
@@ -121,8 +121,13 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
         if over then "over " ^ String.concat " & " (List.map env.names own)
         else "for " ^ String.concat ", " (List.map env.names own) )
   in
-  env.in_state <- in_state;
-  List.iter (core.stmt env hcx) state;
+  List.iter
+    (fun (s : stmt) ->
+      env.in_state <- in_state;
+      match s with
+      | Finally f -> finally_ core env cx hcx ~node ~in_state ~fails ~needs f
+      | s -> core.stmt env hcx s)
+    state;
   env.in_state <- None;
   List.iter
     (fun (a : handler_arm) ->
@@ -189,7 +194,6 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
           ignore (core.infer env hcx a.arm_impl)
       | _ -> ignore (core.infer env hcx a.arm_impl))
     arms;
-  Option.iter (finally_ core env cx hcx ~node ~in_state ~fails ~needs) finally;
   (* what it goes over it needs too, added only now: a call made before
      that brings it in, `Users.get` in an arm, names it itself, so
      [check_needs] can tell it from a call that only got it
@@ -209,23 +213,32 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms finally
          ncalls = hcx.calls;
        })
 
-(* A handler's `finally(r) => ...` (handlers.md, "When a `with` ends"),
-   [fin], checked beside its state, in [hcx]: [r] is the body's result,
-   a `Result<T, ! ..e>` of a type and errors that are any a `with` that
+(* A `finally(r) => ...` among a handler's state (handlers.md, "When a
+   `with` ends"), [fin], checked where it's written, in [hcx]: [r] is what
+   the state after it and the body of a `with` that installs it end in, a
+   `Result<T, ! ..e>` of a type and errors that are any a `with` that
    installs it has, so it can only give back the value or fail. What it
    fails with itself is what installing the handler can fail with,
    [fails]: what it passes on of the body's, `try r`, the `with` fails with
-   already. The two are skolems, which become variables of the handler's
-   function's when it's put in canonical form, numbered after its own
-   (Infer_top.canonical), so lowering can describe the body's type to it. *)
+   already, and the state's, that installing does. The two are skolems,
+   which become variables of the handler's function's when it's put in
+   canonical form, numbered after its own (Infer_top.canonical), so
+   lowering can describe the body's type to it. Every `finally` of a
+   handler shares them: each gives the value of the same body. *)
 and finally_ core env cx hcx ~node ~in_state ~fails ~needs (fin : expr) =
   match fin.kind with
   | Lambda ([ p ], body) ->
-      let tid = fresh_id env.st and eid = fresh_id env.st in
+      let tid, eid =
+        match Hashtbl.find_opt env.finallies cx.self with
+        | Some (_, tid, eid) -> (tid, eid)
+        | None ->
+            let tid = fresh_id env.st and eid = fresh_id env.st in
+            env.finally_rows <- eid :: env.finally_rows;
+            Hashtbl.replace env.finallies cx.self (node, tid, eid);
+            (tid, eid)
+      in
       let t = TSkol (tid, "T") in
       let rt = TCon (result_path, [ t; TErrors (RSkol (eid, "e")) ]) in
-      env.finally_rows <- eid :: env.finally_rows;
-      Hashtbl.replace env.finallies cx.self (node, tid, eid);
       let qs = [ { mode = Read; ty = rt } ] in
       name_lambda cx fin.node;
       bind_params hcx [ p ] qs;

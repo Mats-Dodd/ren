@@ -12,6 +12,6 @@ brackets = [
   { start = "(", end = ")", close = true, newline = true },
 ]
 # A line opens a block, so the next is indented, when it ends with `=`,
-# `=>`, `then` or `else` (a comment after it allowed), or starts a `match`
-# or a `for`.
-increase_indent_pattern = "((=|=>|\\bthen|\\belse)\\s*(//.*)?$)|(^\\s*for\\b.*$)|(\\bmatch\\b[^=]*$)"
+# `=>`, `then` or `else` (a comment after it allowed), or starts a `match`,
+# a `for` or a `while`.
+increase_indent_pattern = "((=|=>|\\bthen|\\belse)\\s*(//.*)?$)|(^\\s*(for|while)\\b.*$)|(\\bmatch\\b[^=]*$)"

@@ -30,7 +30,7 @@ let rec unplaced (e : Core.expr) : Core.expr =
   let kind : Core.kind =
     match e.kind with
     | ( Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
-      | Global_value _ | Intrinsic _ ) as k ->
+      | Global_value _ | Intrinsic _ | Break ) as k ->
         k
     | Dep_call d -> Dep_call { d with args = List.map go d.args }
     | With w -> With { w with impl = go w.impl; body = go w.body }

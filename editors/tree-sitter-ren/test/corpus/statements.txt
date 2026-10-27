@@ -269,3 +269,68 @@ fn f(p, m) =
             (arguments
               (identifier)))))
       (identifier))))
+
+================================================================================
+while, and break
+================================================================================
+
+fn main() =
+  var i = 0
+  while i < 10
+    i += 1
+    if i == 3 then break
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (number))
+      (while_statement
+        (binary_expression
+          (identifier)
+          (number))
+        (block
+          (assignment
+            (identifier)
+            (number))
+          (if_expression
+            (binary_expression
+              (identifier)
+              (number))
+            (break)))))))
+
+================================================================================
+break in a for over a cursor
+================================================================================
+
+fn main() =
+  for x in &c
+    if x == 2 then break
+    print(x)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (for_statement
+        (identifier)
+        (reference
+          (identifier))
+        (block
+          (if_expression
+            (binary_expression
+              (identifier)
+              (number))
+            (break))
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier))))))))

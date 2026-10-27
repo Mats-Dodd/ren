@@ -147,8 +147,11 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   installed outside the `with`, `over Prices`. Its type says so, `over
   Prices uses Clock`.
 - **A handler can run code when its `with` ends,** in `finally(r) =>
-  ...`, last: it's given the body's result, `Ok(v)` or `Err(_)`, and
-  what it gives back, or fails with, is the `with`'s.
+  ...`, a statement among its state that covers what comes after it:
+  it's given the result of the body, `Ok(v)` or `Err(_)`, and what it
+  gives back, or fails with, is the `with`'s. A handler can have
+  several, and an operation's arm can have one, covering the rest of the
+  arm (handlers.md, "When a `with` ends").
 - **A handler's state can fail,** `let tx = try next.begin()`, and so can
   its `finally`: the `with` that installs it fails with that, as it would
   for a `try`, and the body doesn't run. A public handler says so, `pub
@@ -245,7 +248,7 @@ error: `with` installs only handlers
   `Bytes`, `File`, `Command`, `Exit`, `TestClock`, `TestProc` and the
   rest. A program's own `type Time`, `type Command` or `dep Clock` is an
   error: it chooses another name.
-- `Net` comes with `Async` in stage 11 ([async.md](async.md),
+- `Net` comes with `Async` in stage 11a ([async.md](async.md),
   [runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
@@ -447,9 +450,9 @@ it's installed holds the one under it: `next.get(id)` is a dependency
 call on that evidence, which the handler's operations capture, and so
 does a block written in one, so a `with` around the call still reaches
 the one under it, and an operation it leaves out is a block that makes
-that call. Its `finally` is kept in its instance, as its operations are,
-and the `with` calls it when its body ends, with the body's result and
-a descriptor of its type.
+that call. Its `finally`s are one lambda kept in its instance, as its
+operations are, and the `with` calls it when its body ends, with the
+body's result and a descriptor of its type.
 
 ## Deviations
 
@@ -509,10 +512,10 @@ stage, or settled something the plan left open:
   be returned or captured, since its type can't be written: kept where it
   needs nothing, `-> N`, only a receiver that needs nothing is taken. A
   public method that keeps it says so, `-> (N uses ..d) uses ..d`.
-- **A transparent parameter passed to a function that keeps it** where
-  its rows close, `pub fn f(r: Rates) -> Box<Rates> = keep(r)`, is an
-  error at the parameter, whose help names its row: no syntactic check
-  sees that `keep` keeps it.
+- **A parameter of a dependency's type passed to a function that keeps
+  it** where its rows close, `pub fn f(r: Rates) -> Box<Rates> =
+  keep(r)`, is an error at the parameter, whose help names its row: no
+  syntactic check sees that `keep` keeps it.
 
 - **A handler's state is a cell per `var`, not one cell.** Each
   operation of an instance reads the `var`s it uses from their cells
@@ -532,8 +535,8 @@ stage, or settled something the plan left open:
   with,** as the `try` of each: the handler's `fails`, part of its type.
   A public handler writes it, `! DbDown`, after what it implements; a
   private one's is inferred. A written implementation type without `!`
-  can't fail to start, a transparent parameter's included, where a
-  block parameter `f: fn()` fails with its function's errors.
+  can't fail to start, a parameter's of a dependency's type included,
+  where a block parameter `f: fn()` fails with its function's errors.
 - **`finally` is generic in the body's value.** It can give it back, pass
   it on or show it, but comparing, ordering or hashing it is an error,
   and it's given its result as `Ok(v)` or `Err(_)`, the error passed on
@@ -549,7 +552,12 @@ stage, or settled something the plan left open:
   `next.op(...)` or `next(A).op(...)` reach the one under it. It can only
   be called through, never kept, and nothing in that handler can be named
   `next`.
-- **A panic skips `finally`, and so does a failed start.**
+- **A panic skips `finally`.** A failed start skips one written below
+  the line that failed, and, since 10c, runs one written above it,
+  given the error, before the `with` fails with it.
+- **10c: a `break` can't leave a `with`,** since its handlers'
+  `finally`s are given what the body ends in, and a `break` ends in
+  nothing. The help ends the body in a `Bool` and breaks after it.
 - **A handler of several dependencies has a type that lists them,**
   `Rates & RateCalls`, from the moment it's made, and it never changes.
   The order doesn't matter: `RateCalls & Rates` is the same type. A
@@ -746,7 +754,7 @@ error: `with` can't tell what `c` installs
 
 - A handler that goes over some dependencies and implements others
   whole.
-- `Async` and `Net` (stage 11, [async.md](async.md)).
+- `Async` and `Net` (stage 11a, [async.md](async.md)).
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.

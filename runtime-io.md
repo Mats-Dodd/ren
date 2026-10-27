@@ -64,7 +64,7 @@ Registered buffers, pinned once so each call skips setup, fit code without `Allo
 
 Rust's async I/O lends out `&mut buf`, and dropping a future cancels it at once. With a completion API the kernel may still be writing into a buffer that has been freed, which is why tokio-uring needs a different, owned-buffer API.
 
-Ren avoids the problem by rule (*proposed*, stage 11):
+Ren avoids the problem by rule (*proposed*, stage 11a):
 
 > A call cancelled while the kernel holds its buffer returns only after the kernel confirms it has let go.
 
@@ -179,7 +179,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 7** | `Clock`, `Random` and `Console` as dependency types, with real implementations and test ones (done) |
 | **Stage 8** | `Fs`, `Os` and `Proc` as dependency types, with real implementations and in-memory ones: `Fs` on `Unix` and `mem_fs`, `Os.args` and `test_os`, `Proc.run` and `test_proc` (done) |
 | **Stage 10** | the journal entry format |
-| **Stage 11** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; linked operations; leased buffers returned to the pool when their count reaches zero |
+| **Stage 11a** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; linked operations; leased buffers returned to the pool when their count reaches zero |
 | **Stage 13** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls; a monotonic `Clock.instant` |
 | **Stage 15** | registered buffers for code without `Alloc` |
 | **Stage 17** | the ring replaced wholesale by the simulator; replay from journal entries |

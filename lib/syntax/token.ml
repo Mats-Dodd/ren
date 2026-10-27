@@ -68,6 +68,8 @@ type t =
   | VAR
   | INOUT
   | FOR
+  | WHILE
+  | BREAK
   | IN
   | IF
   | THEN
@@ -162,6 +164,8 @@ let to_string = function
   | VAR -> "var"
   | INOUT -> "inout"
   | FOR -> "for"
+  | WHILE -> "while"
+  | BREAK -> "break"
   | IN -> "in"
   | IF -> "if"
   | THEN -> "then"

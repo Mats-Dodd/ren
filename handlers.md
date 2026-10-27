@@ -8,7 +8,9 @@ rules: a `with` installs a set, and its order never matters.
 
 **Status:** built. 10a and 10b run, as
 [Where 10a differed](#where-10a-differed) and
-[Where 10b differed](#where-10b-differed) say.
+[Where 10b differed](#where-10b-differed) say. Stage 10c took wrappers
+out of `with` and made `finally` a statement where it's written
+([Where 10c differed](#where-10c-differed)).
 
 It's built in two halves:
 
@@ -26,7 +28,7 @@ be visible in the code, not hidden in where a comma falls.
 ## What it has to do
 
 1. **What wraps what is written, not implied by order.** Swapping two
-   wrappers changes the words, never a comma.
+   handlers, one `over` the other, changes the words, never a comma.
 2. **A `with` means the same thing whatever order its items are in.**
 3. **Cleanup that can fail is handled where it's written.** No silently
    lost errors (Go's `defer f.Close()`) and no hidden suppression rule
@@ -193,8 +195,10 @@ so is a `var` in its state that holds a block.
 
 ## When a `with` ends: `finally`
 
-A handler can run code when the `with` that installed it ends. It's given
-the body's result, and returns the `with`'s:
+A handler can run code when the `with` that installed it ends. A
+`finally` is a statement among its state, and covers what comes after
+it: the state below it, and the `with`'s body. It's given the result of
+what it covers, and returns the `with`'s:
 
 ```ren
 pub handler transaction() over Sql ! DbDown =
@@ -226,6 +230,24 @@ fn transfer(t: Transfer) ! DbDown | Short uses Sql =
   any other.
 - `finally` runs once, whether the body finished or failed. A panic isn't
   an error, so `finally` doesn't see it: a panic ends the program.
+- **Where it's written says what it covers.** This one is after `let tx
+  = try next.begin()`, so a failed `begin` never reaches it. One written
+  above that line would run then too, given `begin`'s error, and the
+  `with` would still fail. A handler can have several, all before its
+  first operation, and the last written runs first, given the body's
+  result; each one above is given what the one below it returned or
+  failed with.
+- **An operation's arm can have one too,** covering the rest of the arm,
+  and given its result:
+
+  ```ren
+  save(u) =>
+    let lock = try next.lock(u.id)
+    finally(r) =>
+      next.unlock(lock)
+      try r
+    try next.save(u)
+  ```
 
 A handler is already what a type that keeps rules has to be
 ([module-build.md](module-build.md#private-unless-pub)): its state can't
@@ -236,7 +258,8 @@ nothing more here.
 
 A handler's state can now call a dependency that fails: `let tx = try
 next.begin()`. A `with` that installs it fails with those errors too: the `with` passes
-on what installing its items can fail with, as `try` would.
+on what installing its items can fail with, as `try` would. A `finally`
+written above the line that failed runs first, given that error.
 
 ## The journal
 
@@ -437,10 +460,14 @@ submission and its completion:
   ([deps.md](deps.md#how-it-runs)).
 - **Leaving operations out** compiles to forwarding them, with no code to
   write. It's a direct call, so it costs what writing it out would.
-- **`finally`** is a lambda kept in the handler's instance. The Core
-  `With` that installed it calls it with the body's result, `Ok(v)` or
-  `Err(e)`, and a descriptor of the body's type, which the lambda takes
-  first, so `print(v)` works for any type ([compiler.md](compiler.md#stage-10a)).
+- **A handler's `finally`s** are one lambda kept in its instance,
+  which runs them last written first. The Core `With` that installed it
+  calls it with the body's result, `Ok(v)` or `Err(e)`, and a descriptor
+  of the body's type, which the lambda takes first, so `print(v)` works
+  for any type ([compiler.md](compiler.md#stage-10a)). When the state
+  below one fails to start, the error is handled there, the `finally`'s
+  body run on it, and passed on. One in an arm is an `attempt` of the
+  rest of the arm, then its body ([compiler.md](compiler.md#stage-10c)).
 - **The recorder is the one privileged handler,** as the README says: only
   the runtime can install it over the real implementations. A program
   can't name them, so it can't wrap them any other way than `over Clock`.
@@ -525,15 +552,17 @@ it:
 - **A handler is `for` all its dependencies or `over` all of them.**
 - **Whether it goes over, and what it can fail to start with, are part of
   an implementation's type:** `over Users uses Clock`, `Sql ! DbDown`. A
-  written type without `!` can't fail to start, a transparent parameter's
-  included.
+  written type without `!` can't fail to start, a parameter's of a
+  dependency's type included.
 - **`with h() over A & B`** wraps several implementations installed
   outside the `with` at once.
-- **A `finally` comes last, and a handler has one.**
+- **A `finally` came last, and a handler had one,** until 10c, which
+  made it a statement where it's written.
 - **The help for a link over nothing** writes `over Users` rather than
   naming a maker of `Users`, which the compiler can't know is the one
   meant.
-- **A panic skips `finally`, and so does a failed start.**
+- **A panic skips `finally`, and so did a failed start** until 10c:
+  now a failed start reaches a `finally` written above where it failed.
 
 ## Where 10b differed
 
@@ -579,6 +608,24 @@ it:
   there only if it's where the recording panicked, inside that call.
   Anywhere else the program went on past the recording's end, and the
   replay went differently.
+
+## Where 10c differed
+
+Stage 10c made lambdas blocks (foundations.md), which changed three
+things here:
+
+- **Wrappers left `with`.** `with` installs only handlers; a function
+  that runs a block is called with it, and a wrapper written in a `with`
+  is an error whose help writes the call, `try retry(3) fn() => ...`
+  ([Functions that run a block](#functions-that-run-a-block)).
+- **`next` can be called from a block** written in a handler, since a
+  block can't be kept (Where 10a differed).
+- **`finally` is a statement where it's written,** among the handler's
+  state or in an operation's arm, covering what comes after it, and a
+  handler can have several. It's never after a handler's first
+  operation, and in an arm it's only at the arm's top level, not inside
+  an `if` or a `match`. A `break` can't leave a `with`, since a
+  `finally` would be given nothing.
 
 ## Later
 

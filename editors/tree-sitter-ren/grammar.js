@@ -330,10 +330,10 @@ module.exports = grammar({
     // ---- handlers ----
 
     // handler counting_rates(rate: Int) for Rates, RateCalls = ...: its
-    // state, `var`s and `let`s, indented under it, then an arm for each
-    // operation, and last its `finally`; the compiler checks the order.
-    // `over Users` goes over another implementation, `over A & B` of
-    // several, and `! DbDown` is what its state and `finally` can fail with
+    // state, `var`s, `let`s and `finally`s, indented under it, then an arm
+    // for each operation; the compiler checks the order. `over Users` goes
+    // over another implementation, `over A & B` of several, and `! DbDown`
+    // is what its state and `finally`s can fail with
     handler_definition: ($) =>
       seq(
         optional($.visibility),
@@ -352,8 +352,8 @@ module.exports = grammar({
         sep1(
           choice(
             field('state', $.let_statement),
+            field('finally', $.finally_statement),
             field('arm', $.handler_arm),
-            field('finally', $.finally_arm),
           ),
           $._newline,
         ),
@@ -372,9 +372,10 @@ module.exports = grammar({
         field('body', $._body),
       ),
 
-    // finally(r) => ...: what runs when the `with` that installed it ends,
-    // given the body's result
-    finally_arm: ($) =>
+    // finally(r) => ...: it covers what comes after it, the state below
+    // it and the `with`'s body, or the rest of an operation's arm, and is
+    // given what that ends in; the compiler checks it's in a handler
+    finally_statement: ($) =>
       seq(
         'finally',
         field('parameters', $.parameters),
@@ -607,7 +608,14 @@ module.exports = grammar({
 
     block: ($) => seq($._indent, sep1($._statement, $._newline), $._dedent),
 
-    _statement: ($) => choice($.let_statement, $.for_statement, $._line),
+    _statement: ($) =>
+      choice(
+        $.let_statement,
+        $.for_statement,
+        $.while_statement,
+        $.finally_statement,
+        $._line,
+      ),
 
     // and `let (k, v) = pair`, a tuple taken apart, whose pattern the
     // compiler checks always matches: names, `_` and tuples
@@ -635,6 +643,14 @@ module.exports = grammar({
         field('variable', choice($.identifier, $.tuple_pattern)),
         'in',
         field('iterable', choice($._expression, $.range)),
+        field('body', $.block),
+      ),
+
+    // while n < 10, its body indented below
+    while_statement: ($) =>
+      seq(
+        'while',
+        field('condition', $._expression),
         field('body', $.block),
       ),
 
@@ -801,7 +817,11 @@ module.exports = grammar({
         $.match_expression,
         $.fail_expression,
         $.with_expression,
+        $.break,
       ),
+
+    // leaves the innermost `while` or `for`
+    break: (_) => 'break',
 
     number: (_) => /[0-9][0-9_]*/,
 
