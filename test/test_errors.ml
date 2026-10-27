@@ -621,8 +621,8 @@ fn main() = ()
 |};
   [%expect
     {|
-    fn wrap(g: fn() -> Int ! ..e) -> Result<Int, ! ..e>
-    fn w<T>(f: fn() -> T ! ..e) -> Result<T, ! ..e>
+    fn wrap(g: fn() -> Int) -> Result<Int, ! ..e>
+    fn w<T>(f: fn() -> T) -> Result<T, ! ..e>
     fn both(g: fn()) -> Result<Unit, ! ..e> ! ..e
     fn bad() -> Int ! B
     fn use() -> Result<Int, ! Q>
@@ -677,7 +677,7 @@ fn main() = ()
   [%expect
     {|
     fn local(n: Int) -> Result<Int, ! Q> ! Other | Q
-    fn passed(g: fn() -> Int ! ..e, n: Int) -> Result<Int, ! ..e> ! Z | ..e
+    fn passed(g: fn() -> Int, n: Int) -> Result<Int, ! ..e> ! Z | ..e
     fn again(g: fn() -> Int) -> Int
     fn exact(n: Int) -> Int ! Other | Q
     fn main()

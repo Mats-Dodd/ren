@@ -92,7 +92,7 @@ for line in &r
   if line == "---" then break              // `r` stays where it stopped
   try Index.add(parse(line))
 for line in &r                             // and this loop goes on from there
-  body.push(line)
+  &body.push(line)
 ```
 
 `for x in c`, without `&`, steps a copy, so `c` stays at the start. A cursor reads one item at a time, so it can zip two streams or read exactly *n* bytes for a framed protocol, and `break` leaves the loop with the cursor where it stopped. Lines, SQL rows, HTTP bodies and byte chunks all use the same shape:
@@ -324,12 +324,10 @@ type Signup = { email: Email, name: Str, plan: Plan = Free }
 let s = try json.decode<Signup>(body)      // checks Email, fills in the default plan
 ```
 
-Retry policies are values:
+Retrying is a call, which says how many times and which errors it retries:
 
 ```ren
-let backoff = schedule.exponential(100.ms).jitter().up_to(5)
-
-try retry(backoff) fn() =>
+try retry(5, on: Declined) fn() =>
   try Async.timeout(3.s) fn() => try Billing.charge(card, amount)
 ```
 

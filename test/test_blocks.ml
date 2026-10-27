@@ -1068,7 +1068,10 @@ let%expect_test
     "[s5 reject] row 9: a block parameter's call given a block that calls it" =
   (* rule A. target: an error at the outer `f(...)`'s argument, "a block
      that calls `f` can't be passed to `f`", with the help to write a
-     named recursive function *)
+     named recursive function. The block given to `f: fn(fn())` can't
+     fail, since that `fn()` is closed (Infer_written.param_type), so the
+     inner call keeps its errors with `attempt`: written `try f(...)`, it
+     would be reported by inference first, which stops before this check *)
   types
     {|
 fn rec(f: fn(fn())) =
@@ -1987,4 +1990,171 @@ fn main() uses Console =
        │     ^
        = over a cursor, `&` is what advances the cursor, and each `x` is a value it gave
        help: change a copy: `var y = x`
+    |}]
+
+(* ---- found in review: each fixes a gap in a step above ---- *)
+
+let%expect_test "[s3 reject] a block can't outlive the with it's written in" =
+  (* the block would run Counter.tick after the `with` ended and its
+     `finally` ran *)
+  run
+    {|
+dep Counter =
+  tick: fn() -> Int
+
+handler counter() for Counter uses Console =
+  var n = 0
+  finally(r) =>
+    print("closed")
+    try r
+  tick() =>
+    n += 1
+    n
+
+fn run(f: fn() -> Int) -> Int = try f()
+
+fn main() uses Console =
+  let f = with counter() in fn() => Counter.tick()
+  print(f())
+  print(run(with counter() in fn() => Counter.tick()))
+|};
+  [%expect
+    {|
+    error: a block can't outlive the `with` it's written in
+       ┌─ test.ren:16:29
+    16 │   let f = with counter() in fn() => Counter.tick()
+       │                             ^^^^^^^^^^^^^^^^^^^^^^ a block
+       = a block lives only as long as the call it's passed to
+       help: put the `with` inside the block, `fn() => with ... in ...`, or call the block inside the `with`
+
+    error: a block can't outlive the `with` it's written in
+       ┌─ test.ren:18:31
+    18 │   print(run(with counter() in fn() => Counter.tick()))
+       │                               ^^^^^^^^^^^^^^^^^^^^^^ a block
+       = a block lives only as long as the call it's passed to
+       help: put the `with` inside the block, `fn() => with ... in ...`, or call the block inside the `with`
+    |}]
+
+let%expect_test
+    "[s3 reject] a let binds a block written there, not one an indented block \
+     gives" =
+  run
+    {|
+fn main() uses Console =
+  let f =
+    var x = 1
+    fn() => x += 1
+  f()
+|};
+  [%expect
+    {|
+    error: a block can't be the value of an indented block
+      ┌─ test.ren:4:5
+    4 │     fn() => x += 1
+      │     ^^^^^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: move the lines before it into the block, or ahead of where it's used
+    |}]
+
+let%expect_test "[s3 accept] a with inside the block" =
+  run
+    {|
+dep Counter =
+  tick: fn() -> Int
+
+handler counter() for Counter =
+  var n = 0
+  tick() =>
+    n += 1
+    n
+
+fn run(f: fn() -> Int) -> Int = try f()
+
+fn main() uses Console =
+  print(run(fn() => with counter() in Counter.tick()))
+|};
+  [%expect {|
+    1
+    ()
+    |}]
+
+let%expect_test "[s5 accept] a block in a handler's arm calls its own parameter"
+    =
+  (* rule A is about the arm's block parameter `f`, not the block's own
+     `g`, which is bound inside it *)
+  run
+    {|
+dep Runner =
+  run: fn(f: fn(fn(fn())))
+
+handler direct() for Runner =
+  run(f) => f(fn(g) => g())
+
+fn main() uses Console =
+  with direct() in
+    Runner.run(fn(b) => b(fn() => print(1)))
+|};
+  [%expect {|
+    1
+    ()
+    |}]
+
+let%expect_test
+    "[s5 reject] a block reads handler state across a dependency call" =
+  (* row 35's error: the dependency call is the other access *)
+  run
+    {|
+dep Store =
+  load: fn(k: Int) -> Int
+  visit: fn(f: fn())
+
+handler base() for Store =
+  load(k) => k * 10
+  visit(f) => f()
+
+handler counted() over Store uses Console =
+  var count = 0
+  load(k) => next.load(k)
+  visit(f) => next.visit(fn() => print(count))
+
+fn main() uses Console =
+  with counted() over base() in
+    Store.visit(fn() => ())
+|};
+  [%expect
+    {|
+    error: `count` is read by this block across a dependency call
+       ┌─ test.ren:12:40
+    12 │   visit(f) => next.visit(fn() => print(count))
+       │                                        ^^^^^ read here
+       │               -------------------------------- the handler's state can change during this call
+       = a block runs during the call it's passed to
+       = other tasks can run this handler at a dependency call
+       help: copy it first: `let c = count`, and use `c` in the block
+    |}]
+
+let%expect_test "[s3 accept] ren types prints a block parameter as it's written"
+    =
+  (* its errors are its function's, which aren't printed, even when the
+     function fails with more *)
+  types
+    {|
+fn binary(f: fn(Int, Int) -> Int) -> Int =
+  if true then fail Underflow(1)
+  try f(1, 2)
+
+fn keep(f: fn() -> Int) -> Bool =
+  match attempt f()
+    Ok(_) => true
+    Err(_) => false
+
+fn main() ! Underflow(Int) uses Console =
+  print(try binary(fn(a, b) => a + b))
+  print(keep(fn() => 1))
+|};
+  [%expect
+    {|
+    fn binary(f: fn(Int, Int) -> Int) -> Int ! Underflow(Int) | ..e
+    fn keep(f: fn() -> Int) -> Bool
+    fn main() ! Underflow(Int) uses Console
     |}]

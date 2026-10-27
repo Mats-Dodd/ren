@@ -1582,6 +1582,15 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     | _, Kept place ->
         say e.loc (Infer_msg.block_kept ~written:false e.loc place)
   in
+  (* where the block a `with` or an indented block gives is: a `let`
+     binds, and a call is given, one written there, so one that would
+     run after the `with` has ended, or its lines' `finally`s have run, is
+     kept past them *)
+  let past pos place =
+    match pos with
+    | Arg | Callee | Receiver | Let_value _ -> Kept place
+    | Handler_arg | Install | Said | Kept _ -> pos
+  in
   let rec walk pos (e : expr) =
     let block = is_block e in
     if block then here pos e;
@@ -1619,10 +1628,10 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     | Lambda (_, body) -> walk (Kept Returned) body
     | Block (stmts, last) ->
         List.iter (stmt ~state:false) stmts;
-        walk (if block then pos else Kept Elsewhere) last
+        walk (if block then past pos Past_lines else Kept Elsewhere) last
     | With { items; body } ->
         List.iter (walk Install) (with_links items);
-        walk (if block then pos else Kept Elsewhere) body
+        walk (if block then past pos Past_with else Kept Elsewhere) body
     | If (c, t, f) ->
         walk (Kept Elsewhere) c;
         List.iter (walk carried) (t :: Option.to_list f)

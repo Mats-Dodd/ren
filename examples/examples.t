@@ -355,7 +355,7 @@ changes:
     pub fn run(inout self, p: Program, fuel: Int) ! Underflow(Int)
     fn push(inout self, n: Int)
     fn pop(inout self) -> Int ! Underflow(Int)
-    fn binary(inout self, f: fn(Int, Int) -> Int ! ..e) ! Underflow(Int) | ..e
+    fn binary(inout self, f: fn(Int, Int) -> Int) ! Underflow(Int) | ..e
   
   -- timeline
   pub type Timeline

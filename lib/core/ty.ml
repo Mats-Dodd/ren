@@ -486,20 +486,25 @@ and show_effects pr e u =
 let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
   match s.ty with
   | Fun (ps, ret, errs, uses) ->
-      (* a parameter's row that is the function's own, which isn't printed:
-         a block's errors, or a transparent parameter's. One that ends in the
-         same tail but has fewer labels fails with less than the function,
-         and is printed, so the tail shows whose it is *)
+      (* a transparent parameter's row that is the function's own, which
+         isn't printed *)
       let own (own : row) (r : row) =
         if r.tail <> None && r = own then closed else r
       in
-      let ps =
+      (* a block's errors, unless they're written, `fn() ! Bad`, which
+         closes them, aren't printed either: they're its function's, or
+         what the function keeps with `attempt`, and a block's type can't
+         name them (resolve.ml). Their tail still links the places it's
+         printed, `-> Result<T, ! ..e>` or the function's own `! E | ..e`,
+         unless it's just the function's own row *)
+      let block_errs (r : row) = if r.tail <> None then closed else r in
+      let shown_params block_errs =
         List.map
           (fun (p : param) ->
             match p.ty with
             | Fun (qs, r, e, u) ->
                 (* a block uses what its type lists, which is printed *)
-                { p with ty = Fun (qs, r, own errs e, u) }
+                { p with ty = Fun (qs, r, block_errs e, u) }
             | Impl i ->
                 (* a transparent one needs what the function uses, and
                    fails to be installed with what it fails with *)
@@ -516,19 +521,20 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
             | _ -> p)
           ps
       in
+      let ps = shown_params block_errs and linked = shown_params (own errs) in
       let ty = Fun (ps, ret, errs, uses) in
       let s = { s with ty } in
       (* a tail is printed where it links two places: the function's own
-         rows, a parameter, the result. So is one at the end of a
-         parameter's function type that isn't the function's own, which
-         would read as a transparent parameter's without it *)
-      let all = tails ty in
+         rows, a parameter, the result. So is one at the end of what a
+         block parameter uses, which would read as what its type lists
+         without it *)
+      let all = tails (Fun (linked, ret, errs, uses)) in
       let links id = List.length (List.filter (( = ) id) all) > 1 in
       let kept =
         List.concat_map
           (fun (p : param) ->
             match p.ty with
-            | Fun (_, _, e, u) -> Option.to_list e.tail @ Option.to_list u.tail
+            | Fun (_, _, _, u) -> Option.to_list u.tail
             | _ -> [])
           ps
       in
@@ -630,7 +636,7 @@ let value_signature ~names ~pub ~name (s : scheme) =
    them, what installing it can fail with, and what it needs, from its
    function's scheme [s], whose result is the handler's type: its
    dependency's, or the one that lists them. A row tail is printed where
-   it links two places, a closure it keeps and what it needs, say. *)
+   it links two places, a parameter's type and what it needs, say. *)
 let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
   match s.ty with
   | Fun (ps, (Impl i as ret), _, _) ->

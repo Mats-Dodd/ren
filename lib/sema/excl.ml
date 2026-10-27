@@ -97,21 +97,6 @@ type access = {
   block_param : bool;  (** [var] is a block parameter, which rule A is about *)
 }
 
-(* How a parameter runs the block it's given. Only [Ordinary] exists so
-   far: during the call, on the caller's task. Stage 11a adds a
-   concurrent mode, `Async.map`'s, and a spawned one, `s.spawn`'s, whose
-   blocks may only read, and aren't siblings (foundations.md, rules B to
-   D). *)
-type mode = Ordinary
-
-(* The mode of the [i]th parameter of the callee [f], counting a method's
-   receiver: ordinary, until 11a gives a parameter's type a mode. *)
-let mode_of (_ : expr) (_ : int) = Ordinary
-
-(* Blocks passed to the same call conflict unless both parameters are
-   ordinary. *)
-let sibling = function Ordinary -> true
-
 (* The accesses an argument makes for the whole of its call, or the
    callee's own. *)
 type group = {
@@ -355,6 +340,34 @@ let across cx f o =
         ~help
         (sprintf "`%s` is %s across a dependency call" x (read_or_changed f))
 
+(* [a], made by a block, happens during [call]: a dependency call, or a
+   block parameter's, in a handler's arm, which the block is passed to. *)
+let block_across cx a call =
+  let x = a.var.ident.name in
+  let across, note =
+    match call.why with
+    | Block_call g ->
+        (sprintf "a call of `%s`" g, sprintf "`%s` can run this handler again" g)
+    | _ ->
+        ( "a dependency call",
+          "other tasks can run this handler at a dependency call" )
+  in
+  let help =
+    if a.kind = Read then
+      let c = String.sub x 0 1 in
+      let c = if c = x then c ^ "0" else c in
+      sprintf "copy it first: `let %s = %s`, and use `%s` in the block" c
+        (show a) c
+    else
+      sprintf
+        "change `%s` before or after the call, and pass the change as a value" x
+  in
+  report cx a.loc
+    ~says:(read_or_changed a ^ " here")
+    ~labels:[ (call.loc, "the handler's state can change during this call") ]
+    ~notes:[ block_note; note ] ~help
+    (sprintf "`%s` is %s by this block across %s" x (read_or_changed a) across)
+
 (* Two accesses that overlap, the first made in [va] (a block) if it's
    [Some], the second in [vb]. *)
 let conflict cx (a, va) (b, vb) =
@@ -377,6 +390,8 @@ let conflict cx (a, va) (b, vb) =
   in
   match (f.why, vf, o.why, vo) with
   | _, None, (Dep_call _ | Block_call _), _ when lasting f -> across cx f o
+  | _, _, _, Some _ when state_write f -> block_across cx o f
+  | _, Some _, _, _ when state_write o -> block_across cx f o
   | Looped elem, None, _, None ->
       report cx o.loc
         ~help:(sprintf "inside the loop, use `%s`" elem)
@@ -473,11 +488,21 @@ let conflict cx (a, va) (b, vb) =
              (show f))
         (sprintf "`%s` is changed by this block while the call reads it" x)
   | _ ->
-      (* two blocks, one of them the callee *)
+      (* two blocks, one of them the callee. They can reach the place
+         through the same code, a block bound by `let` that both call *)
+      let labels =
+        match vf with
+        | Some l when f.loc = o.loc ->
+            [
+              ( l,
+                sprintf "this block %s it too"
+                  (if f.kind = Write then "changes" else "reads") );
+            ]
+        | _ -> [ (f.loc, read_or_changed f ^ " here") ]
+      in
       report cx o.loc
         ~says:(read_or_changed o ^ " here")
-        ~labels:[ (f.loc, read_or_changed f ^ " here") ]
-        ~notes:[ block_note ]
+        ~labels ~notes:[ block_note ]
         ~help:
           (sprintf
              "change `%s` in only one of them, or pass the change as a value" x)
@@ -582,10 +607,16 @@ let rec walk cx (e : expr) =
           (function Let { name; mut = true; _ } -> Some name | _ -> None)
           state
       in
-      (* its `finally`s run as its arms do, when the `with` ends *)
+      (* its `finally`s run as its arms do, when the `with` ends. An arm,
+         and a `finally`, binds its parameters beside the handler's state
+         (Resolve.arm_lambda), so its body is walked at this depth, not as
+         a block one deeper *)
       let arm = { cx with state = Some vars } in
-      List.iter (function Finally f -> walk arm f | _ -> ()) state;
-      List.iter (fun (a : handler_arm) -> walk arm a.arm_impl) arms
+      let body (l : expr) =
+        match l.kind with Lambda (_, b) -> walk arm b | _ -> walk arm l
+      in
+      List.iter (function Finally f -> body f | _ -> ()) state;
+      List.iter (fun (a : handler_arm) -> body a.arm_impl) arms
   | Unop _ | Binop _ | If _ | Con _ | Record _ | Match _ | Array _ | Tuple _
   | For _ | While _ | Fail _ | Try _ | Attempt _ | With _ | Assert _ ->
       List.iter (walk cx) (children e)
@@ -661,10 +692,14 @@ and call cx (e : expr) (f : expr) args ~changed =
         let held = if dep_call cx f then state_writes why e.loc else [] in
         ({ none with held }, None)
   in
-  (* an argument passed to a parameter that only reads it, the [i]th *)
-  let plain i (a : expr) ~code =
+  (* an argument passed to a parameter that only reads it *)
+  let plain (a : expr) ~code =
     if is_block cx a then (
-      let sibling = sibling (mode_of f i) in
+      (* every block parameter runs its block during the call, on the
+         caller's task, so blocks passed to one call are siblings. Stage
+         11a adds concurrent and spawned parameters, whose blocks aren't
+         (foundations.md, rules B to D) *)
+      let sibling = true in
       match a.kind with
       | Lambda _ -> { held = block cx a; via = Some a.loc; sibling }
       | Var (Local b) -> (
@@ -703,16 +738,15 @@ and call cx (e : expr) (f : expr) args ~changed =
   let receiver =
     match receiver with
     | Some r when changed -> [ passed r ~loc:r.loc ]
-    | Some r -> [ plain 0 r ~code:(hoist cx e) ]
+    | Some r -> [ plain r ~code:(hoist cx e) ]
     | None -> []
   in
-  let first = List.length receiver in
   let args_held =
-    List.mapi
-      (fun i (a : expr) ->
+    List.map
+      (fun (a : expr) ->
         match a.kind with
         | Ref p when changed_receiver a = None -> passed p ~loc:a.loc
-        | _ -> plain (first + i) a ~code:(hoist cx a))
+        | _ -> plain a ~code:(hoist cx a))
       args
   in
   (* rule A *)

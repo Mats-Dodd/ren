@@ -2291,8 +2291,8 @@ fn main() = twice(good) && cmp(good)
   [%expect
     {|
     fn same<T has eq>(a: T, b: T) -> Bool
-    fn twice<T has eq, ..e has eq>(g: fn() -> T ! ..e) -> Bool
-    fn cmp<T has eq, ..e has eq>(g: fn() -> T ! ..e) -> Bool
+    fn twice<T has eq, ..e has eq>(g: fn() -> T) -> Bool
+    fn cmp<T has eq, ..e has eq>(g: fn() -> T) -> Bool
     fn good() -> Int ! Good(Int)
     fn main() -> Bool
     |}];

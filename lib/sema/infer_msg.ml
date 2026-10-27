@@ -1472,6 +1472,8 @@ type block_place =
   | In_value of string  (** an associated value, by its name *)
   | Represented  (** what an opaque type is represented as *)
   | Compared  (** an operand of `==` or `!=` *)
+  | Past_with  (** the value of a `with`, which ends before it runs *)
+  | Past_lines  (** the value of an indented block, after its lines *)
   | Elsewhere
 
 let block_lives = "a block lives only as long as the call it's passed to"
@@ -1525,6 +1527,14 @@ let block_kept ~written loc place =
     | Compared ->
         ( "a block can only be called or passed, not compared",
           "compare what it returns instead" )
+    | Past_with ->
+        ( "a block can't outlive the `with` it's written in",
+          "put the `with` inside the block, `fn() => with ... in ...`, or call \
+           the block inside the `with`" )
+    | Past_lines ->
+        ( "a block can't be the value of an indented block",
+          "move the lines before it into the block, or ahead of where it's used"
+        )
     | Elsewhere ->
         ( "a block can only be called or passed where it's written",
           "call it here, or pass it straight to a function" )
