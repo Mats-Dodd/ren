@@ -5,9 +5,18 @@
    runs it as it runs the program. *)
 
 (* What it made: copies of functions, blocks lifted, `with`s whose
-   handler is known, and calls past the budget, given the function as
-   it's written. *)
-type stats = { copies : int; blocks : int; handlers : int; over_budget : int }
+   handler is known, and calls past the size budget, given the function
+   as it's written, with what each calls and where ([notes]), which a
+   build reports. *)
+type stats = {
+  copies : int;
+  blocks : int;
+  handlers : int;
+  past_budget : int;
+  notes : (Path.t * Loc.t) list;
+}
 
-(* [budget] is the most copies of one function, 64 unless it's said. *)
+(* [budget] is how much Core, in expression nodes, the copies made may
+   add up to: unless it's said, 8 times the program's own, and at least
+   a million. *)
 val program : ?budget:int -> Core.program list -> Core.program list * stats

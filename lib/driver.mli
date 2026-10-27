@@ -59,7 +59,8 @@ val linked :
 
 (* A release build's program: [linked]'s, with what `$start` reaches
    specialized (specialize.ml), each module checked by Core Lint, and
-   what specializing made. [budget] is the most copies of one function. *)
+   what specializing made. [budget] is specialization's size budget
+   (specialize.mli), or `REN_SPEC_BUDGET`'s. *)
 val specialized :
   ?lint:bool ->
   ?load:loader ->
@@ -67,6 +68,11 @@ val specialized :
   file:string ->
   string ->
   Core.program list * Specialize.stats
+
+(* What a release build says when specialization reached its size budget
+   (Specialize.stats.notes): the calls given the function as written, the
+   first few by where they are. Empty if there are none. *)
+val budget_notes : Specialize.stats -> string
 
 (* Every function's inferred signature, as `ren types` prints it, for each
    module of the program in the order they're checked (the entry last), by

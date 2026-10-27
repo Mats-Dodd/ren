@@ -31,9 +31,15 @@
      its operation, given the state in the [With]'s frame (Core.known).
 
    A copy is only ever faster than what it replaces (compiler.md, rule
-   1), and there's a budget: past [budget] copies of one function, a call
-   gets the function as written, the debug build's strategy, unless a
-   handler it uses is known, which only a copy can call directly. *)
+   1), and there's no cap on the copies of one function (foundations.md,
+   decision 4): measured, copies grow with a program's distinct calls, as
+   Rust's do, and shrink its machine code. The one limit is a size budget
+   for the whole program: once the copies made add up to more of Core
+   than [budget], a call that would need a new copy gets the function as
+   written, the debug build's strategy, its arguments boxed, unless a
+   handler it uses is known, which only a copy can call directly. Each
+   such call is a dispatch the program didn't ask for, so it's reported
+   ([stats.notes]), never silent. *)
 
 module C = Core
 module Ids = Map.Make (Int)
@@ -406,24 +412,62 @@ type key = {
   kshape : (Path.t * int) list;
 }
 
-type stats = { copies : int; blocks : int; handlers : int; over_budget : int }
+(* The copies made, by key. [Hashtbl.hash] looks at only the first 10
+   meaningful words of what it hashes, which a key's [kpath] mostly uses
+   up, so every copy of one function would land in one bucket and each
+   lookup would compare against all of them: O(copies²) for a function
+   copied often. [Hashtbl.hash_param 256 1024] looks further in. Equal
+   keys still hash the same, so what's found is what [Hashtbl] found. *)
+module Keys = Hashtbl.Make (struct
+  type t = key
+
+  let equal = ( = )
+  let hash = Hashtbl.hash_param 256 1024
+end)
+
+type stats = {
+  copies : int;
+  blocks : int;
+  handlers : int;
+  past_budget : int;
+  notes : (Path.t * Loc.t) list;
+      (** each call past the size budget, given the function as written: what it
+          calls and where, in the order met *)
+}
 
 type cx = {
   fns : (Path.t, C.fn_def) Hashtbl.t;
   eligible : (Path.t, unit) Hashtbl.t;
       (** dependencies whose handler can be known: no block is given one by its
           callee, and no handler needs one *)
-  copies : (key, Path.t * Ty.ty) Hashtbl.t;
-  counts : (Path.t, int) Hashtbl.t;  (** copies made of each function *)
+  copies : (Path.t * Ty.ty) Keys.t;
   taken : (Path.t, unit) Hashtbl.t;
+  suffixes : (Path.t, int) Hashtbl.t;
+      (** for each path [fresh_path] was asked for, the smallest suffix that may
+          still be free *)
   specs : (Path.t * Ty.args, hspec option) Hashtbl.t;
   own_ev : (Path.t * int, bool) Hashtbl.t;
-  mutable todo : (unit -> unit) list;
+  todo : (unit -> unit) Queue.t;
+      (** the copies still to make, first in first out *)
   made : (string, C.fn_def list) Hashtbl.t;  (** by module, last first *)
   mutable nspecs : int;
-  budget : int;
+  sizes : (Path.t, int) Hashtbl.t;  (** each function's size, [size] *)
+  budget : int;  (** how much Core the copies may add up to *)
+  mutable spent : int;  (** how much they do so far *)
   mutable st : stats;
 }
+
+(* How big an expression is: its nodes, the measure of the size budget. *)
+let rec size (e : C.expr) =
+  List.fold_left (fun n c -> n + size c) 1 (C.children e)
+
+let fn_size cx (f : C.fn_def) =
+  match Hashtbl.find_opt cx.sizes f.path with
+  | Some n -> n
+  | None ->
+      let n = size f.body in
+      Hashtbl.replace cx.sizes f.path n;
+      n
 
 let add_fn cx (f : C.fn_def) =
   let home = f.path.home in
@@ -432,7 +476,12 @@ let add_fn cx (f : C.fn_def) =
 
 (* A path no function has, in [home], named after [name]: `map$2`. A
    member's copy is still a member of its type, so it's printed after
-   it. *)
+   it.
+
+   The search starts where the last one for [p] ended, not at 1: a path
+   that's taken stays taken, so the smallest free suffix only grows, and
+   the names are the ones a search from 1 finds. From 1 each time, the
+   nth copy of a function cost n probes, O(copies²) in all. *)
 let fresh_path cx (p : Path.t) =
   let rec go n =
     let suffix = "$" ^ string_of_int n in
@@ -444,9 +493,10 @@ let fresh_path cx (p : Path.t) =
     if Hashtbl.mem cx.taken q || Hashtbl.mem cx.fns q then go (n + 1)
     else (
       Hashtbl.replace cx.taken q ();
+      Hashtbl.replace cx.suffixes p (n + 1);
       q)
   in
-  go 1
+  go (Option.value (Hashtbl.find_opt cx.suffixes p) ~default:1)
 
 (* A function being made: the next free variable id, and the known
    handlers of the evidence in it so far. *)
@@ -1227,16 +1277,22 @@ and call cx fb env (e : C.expr) p (a : Ty.args) ds dicts args (cev : C.var) =
       (fun (d, _) -> List.mem (Ty.label (Ty.dep_label d)) uses)
       (List.sort (fun (d, _) (d', _) -> compare d d') (known_at env cev))
   in
-  let count = Option.value (Hashtbl.find_opt cx.counts p) ~default:0 in
-  let over_budget () =
-    cx.st <- { cx.st with over_budget = cx.st.over_budget + 1 };
+  (* past the size budget, a call that needs a new copy, and knows no
+     handler, gets [p] as written, and is reported *)
+  let spent = cx.spent >= cx.budget && shape = [] in
+  let past_budget () =
+    cx.st <-
+      {
+        cx.st with
+        past_budget = cx.st.past_budget + 1;
+        notes = (p, e.loc) :: cx.st.notes;
+      };
     as_written ()
   in
   if kargs = None && (not has_blocks) && shape = [] then as_written ()
   else if
-    count >= cx.budget && shape = []
-    && List.exists (function _, `Lit _ -> true | _ -> false) indexed
-  then over_budget ()
+    spent && List.exists (function _, `Lit _ -> true | _ -> false) indexed
+  then past_budget ()
   else
     (* each block written here, lifted; a block lifted already is passed
        on as it is *)
@@ -1282,8 +1338,8 @@ and call cx fb env (e : C.expr) p (a : Ty.args) ds dicts args (cev : C.var) =
         kshape = List.map (fun (d, ((s : hspec), _)) -> (d, s.hid)) shape;
       }
     in
-    match Hashtbl.find_opt cx.copies key with
-    | None when count >= cx.budget && shape = [] -> over_budget ()
+    match Keys.find_opt cx.copies key with
+    | None when spent -> past_budget ()
     | found ->
         let path, sty =
           match found with
@@ -1347,8 +1403,7 @@ and call cx fb env (e : C.expr) p (a : Ty.args) ds dicts args (cev : C.var) =
    captures, each once, and [shape] its known handlers. *)
 and make_copy cx key (src : C.fn_def) blocks slots shape =
   let path = fresh_path cx src.path in
-  Hashtbl.replace cx.counts src.path
-    (1 + Option.value (Hashtbl.find_opt cx.counts src.path) ~default:0);
+  cx.spent <- cx.spent + fn_size cx src;
   let sub = Option.map (fun (tys, errs) -> { tys; errs }) key.kargs in
   let env0 =
     {
@@ -1411,7 +1466,7 @@ and make_copy cx key (src : C.fn_def) blocks slots shape =
         errs,
         uses )
   in
-  Hashtbl.replace cx.copies key (path, sty);
+  Keys.replace cx.copies key (path, sty);
   cx.st <- { cx.st with copies = cx.st.copies + 1 };
   let job () =
     let ev = cvar env0 src.ev in
@@ -1476,7 +1531,7 @@ and make_copy cx key (src : C.fn_def) blocks slots shape =
         known = known_in fb.kn ev body;
       }
   in
-  cx.todo <- cx.todo @ [ job ];
+  Queue.push job cx.todo;
   (path, sty)
 
 (* The handler [impl] installs for [dep], if it's known: a call of a
@@ -1744,21 +1799,49 @@ let eligible (modules : C.program list) =
   Hashtbl.iter (fun d () -> Hashtbl.remove deps d) out;
   deps
 
-let program ?(budget = 64) (modules : C.program list) =
+(* The size budget, unless one is given: [budget_factor] times the
+   program's Core, or [budget_floor], whichever is more. Measured, a
+   release build's C is 1.25 times a debug build's, whatever the program's
+   size (compiler.md, "Native slice", step 9), so this is reached only by
+   generic code that makes more generic code at new types without bound;
+   the floor keeps a small program from reaching it. *)
+let budget_factor = 8
+let budget_floor = 1_000_000
+
+let program ?budget (modules : C.program list) =
+  let sizes = Hashtbl.create 256 in
+  let whole =
+    List.fold_left
+      (fun n (m : C.program) ->
+        List.fold_left
+          (fun n (f : C.fn_def) ->
+            let k = size f.body in
+            Hashtbl.replace sizes f.path k;
+            n + k)
+          n m.fns)
+      0 modules
+  in
+  let budget =
+    match budget with
+    | Some b -> b
+    | None -> max budget_floor (budget_factor * whole)
+  in
   let cx =
     {
       fns = Hashtbl.create 256;
       eligible = eligible modules;
-      copies = Hashtbl.create 64;
-      counts = Hashtbl.create 64;
+      copies = Keys.create 64;
       taken = Hashtbl.create 64;
+      suffixes = Hashtbl.create 64;
       specs = Hashtbl.create 16;
       own_ev = Hashtbl.create 64;
-      todo = [];
+      todo = Queue.create ();
       made = Hashtbl.create 16;
       nspecs = 0;
+      sizes;
       budget;
-      st = { copies = 0; blocks = 0; handlers = 0; over_budget = 0 };
+      spent = 0;
+      st = { copies = 0; blocks = 0; handlers = 0; past_budget = 0; notes = [] };
     }
   in
   List.iter
@@ -1807,10 +1890,9 @@ let program ?(budget = 64) (modules : C.program list) =
     }
   in
   let rec drain () =
-    match cx.todo with
-    | [] -> ()
-    | job :: rest ->
-        cx.todo <- rest;
+    match Queue.take_opt cx.todo with
+    | None -> ()
+    | Some job ->
         job ();
         drain ()
   in
@@ -1832,4 +1914,4 @@ let program ?(budget = 64) (modules : C.program list) =
         })
       modules
   in
-  (modules, cx.st)
+  (modules, { cx.st with notes = List.rev cx.st.notes })

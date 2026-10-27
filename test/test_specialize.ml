@@ -17,7 +17,7 @@ let specialized ?budget src =
       let entry = List.nth modules (List.length modules - 1) in
       List.iter (fun f -> print_endline (show_fn f)) entry.fns;
       Printf.printf "%d copies, %d blocks lifted, %d handlers known, %d past\n"
-        s.copies s.blocks s.handlers s.over_budget)
+        s.copies s.blocks s.handlers s.past_budget)
 
 let%expect_test "a generic function is copied for each type it's used at" =
   specialized
@@ -194,8 +194,10 @@ fn main() uses Console =
     3 copies, 0 blocks lifted, 1 handlers known, 0 past
     |}]
 
+(* The budget is of the whole program's copies, in Core's nodes: 25 is
+   enough for `main`'s, `print`'s and one of `apply`'s, not the other. *)
 let%expect_test "past the budget, a call is of the function as it's written" =
-  specialized ~budget:1
+  specialized ~budget:25
     {|
 fn apply(x: Int, f: fn(Int) -> Int) -> Int = try f(x)
 fn main() uses Console =

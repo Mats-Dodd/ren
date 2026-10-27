@@ -140,7 +140,13 @@ let of_val l v =
   | Block | Cell _ | Token | Struct _ ->
       bug "a word as a block, a cell, a token or a struct"
 
-let site (s : site) = sprintf "&ren_site_%d" s.sid
+(* Each site's C name's number, by its [sid]: one site for all those
+   whose pieces are the same, set by [program]. *)
+let site_names : (int, int) Hashtbl.t = Hashtbl.create 64
+
+let site (s : site) =
+  sprintf "&ren_site_%d"
+    (Option.value (Hashtbl.find_opt site_names s.sid) ~default:s.sid)
 
 (* The number of fields of each of the program's structs, by its
    number: set by [program], for the C it writes. *)
@@ -1057,9 +1063,101 @@ let static_types add (descs : desc list) (decls : decl list) =
            args))
     descs
 
-(* The C file for [p]. [site_text] is what's printed before and after the
-   message of a panic at a site. *)
-let program ?(restrict = false) ~(site_text : site -> string * string)
+(* A number in a site's pieces: 7 bits a byte, least first, the top bit
+   set on all but the last (LEB128), as ren_rt.c's [ren_site_num] reads
+   it. *)
+let leb b n =
+  let rec go n =
+    if n < 0x80 then Buffer.add_char b (Char.chr n)
+    else (
+      Buffer.add_char b (Char.chr (0x80 lor (n land 0x7f)));
+      go (n lsr 7))
+  in
+  go n
+
+(* The sites' pieces as C (ren_rt.h, [ren_site]): the texts they print,
+   each once, in [ren_text_table], and each site's pieces as bytes, a
+   site for all those whose bytes are the same. Text written next to text
+   is one piece, but for [Shared] text, which other sites print too. *)
+let sites add ~(site_pieces : site -> Diag.piece list) (all : site list) =
+  let texts = Hashtbl.create 1024 and text_list = ref [] in
+  let text s =
+    match Hashtbl.find_opt texts s with
+    | Some n -> n
+    | None ->
+        let n = Hashtbl.length texts in
+        Hashtbl.replace texts s n;
+        text_list := s :: !text_list;
+        n
+  in
+  let rec merge (ps : Diag.piece list) : Diag.piece list =
+    match ps with
+    | Text a :: Text b :: rest -> merge (Text (a ^ b) :: rest)
+    | Text "" :: rest -> merge rest
+    | p :: rest -> p :: merge rest
+    | [] -> []
+  in
+  let ops (ps : Diag.piece list) =
+    let b = Buffer.create 32 in
+    let op n = Buffer.add_char b (Char.chr n) in
+    List.iter
+      (fun (p : Diag.piece) ->
+        match p with
+        | Text s | Shared s ->
+            op 1;
+            leb b (text s)
+        | Spaces n when n >= 0 ->
+            op 2;
+            leb b n
+        | Marks (c, n) when n >= 0 ->
+            op 3;
+            Buffer.add_char b c;
+            leb b n
+        | Num n when n >= 0 ->
+            op 4;
+            leb b n
+        | Hole -> op 5
+        | Slice (s, i, n) ->
+            op 6;
+            leb b (text s);
+            leb b i;
+            leb b n
+        (* what a number can't be: never, as it's rendered *)
+        | Spaces _ | Marks _ | Num _ ->
+            op 1;
+            leb b (text (Diag.expand [ p ])))
+      (merge ps);
+    op 0;
+    Buffer.contents b
+  in
+  Hashtbl.reset site_names;
+  let named = Hashtbl.create 1024 in
+  let decls = Buffer.create 65536 in
+  List.iter
+    (fun (s : site) ->
+      let bytes = ops (site_pieces s) in
+      match Hashtbl.find_opt named bytes with
+      | Some n -> Hashtbl.replace site_names s.sid n
+      | None ->
+          Hashtbl.replace named bytes s.sid;
+          Hashtbl.replace site_names s.sid s.sid;
+          Buffer.add_string decls
+            (sprintf
+               "static const ren_site ren_site_%d = { (const unsigned char \
+                *)%s };\n"
+               s.sid (c_string bytes)))
+    all;
+  let texts = List.rev !text_list in
+  add
+    (sprintf "static const char *const ren_text_table[%d] = %s;\n"
+       (max 1 (List.length texts))
+       (braces
+          (match texts with [] -> [ "NULL" ] | ts -> List.map c_string ts)));
+  add (Buffer.contents decls)
+
+(* The C file for [p]. [site_pieces] is what a panic at a site prints,
+   with a [Hole] where its message goes. *)
+let program ?(restrict = false) ~(site_pieces : site -> Diag.piece list)
     (p : program) =
   let b = Buffer.create 65536 in
   let add = Buffer.add_string b in
@@ -1076,13 +1174,7 @@ let program ?(restrict = false) ~(site_text : site -> string * string)
             ren_lit_%d = { { 0, REN_TAG_STR, 0, 0 }, %d, %s };\n"
            (n + 1) i n (c_string s)))
     p.strings;
-  List.iter
-    (fun (s : site) ->
-      let before, after = site_text s in
-      add
-        (sprintf "static const ren_site ren_site_%d = { %s, %s };\n" s.sid
-           (c_string before) (c_string after)))
-    p.sites;
+  sites add ~site_pieces p.sites;
   add
     (sprintf "static const char *const ren_tag_table[%d] = %s;\n"
        (max 1 (List.length p.tags))
@@ -1157,7 +1249,8 @@ let program ?(restrict = false) ~(site_text : site -> string * string)
     (List.rev p.values);
   add "}\n\n";
   add "int main(void) {\n";
-  add (sprintf "  ren_overflow_site = &ren_site_%d;\n" p.overflow.sid);
+  add (sprintf "  ren_overflow_site = %s;\n" (site p.overflow));
+  add "  ren_texts = ren_text_table;\n";
   add "  ren_tag_names = ren_tag_table;\n";
   add "  return ren_run(ren_program);\n}\n";
   Buffer.contents b

@@ -91,6 +91,9 @@ type ctx = {
    again, with it among [boxed]. *)
 exception Demote of Ty.ty
 
+(* What one pass of compiling found to keep boxed, all of it. *)
+exception Demoted of Ty.ty list
+
 (* A C name for [s] no other function has: [s] with anything C doesn't
    allow in a name made `_`, and a number after it if another took that
    already. *)
@@ -2330,6 +2333,14 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
   let overflow = new_site cx start.loc in
   cx.todo <- [ (start_path, start.loc) ];
   let done_ = Hashtbl.create 64 in
+  (* A function that finds a type to keep boxed ([Demote]) is left
+     unfinished, and the others are still compiled, to find the rest of
+     the program's such types in this one pass: compiling again for each
+     was O(types × program), 826 times a 100,000-line program's lowering
+     (compiler.md, "Native slice", step 9). What's compiled once one is
+     found is thrown away, so state a function left unfinished can only
+     make it stop early: anything else it raises then ends the pass. *)
+  let demoted = ref [] in
   let rec go acc =
     match cx.todo with
     | [] -> List.rev acc
@@ -2338,9 +2349,17 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
         if Hashtbl.mem done_ p then go acc
         else (
           Hashtbl.replace done_ p ();
-          go (fn cx here (Hashtbl.find cx.fns p) :: acc))
+          match fn cx here (Hashtbl.find cx.fns p) with
+          | f -> go (f :: acc)
+          | exception Demote t ->
+              if not (List.mem t !demoted) then demoted := t :: !demoted;
+              go acc
+          | exception _ when !demoted <> [] -> raise (Demoted !demoted))
   in
   let fns = go [] in
+  (* a function whose types are to be kept boxed was left unfinished, and
+     whatever it reaches only through what's left wasn't reached *)
+  if !demoted <> [] then raise (Demoted !demoted);
   let by_index table =
     List.map snd
       (List.sort compare (Hashtbl.fold (fun k n acc -> (n, k) :: acc) table []))
@@ -2367,13 +2386,26 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
 
 (* In a release build, a copied type a value of which turns out to need
    a word, or a field of an object, is kept boxed, and the program
-   compiled again: once for each such type, at most. *)
+   compiled again: once for each pass that finds such types, which is
+   once for most programs that have any, and never more than once for
+   each type. Boxing a type changes no other type's layout (a struct's
+   fields are scalars), nor where a value has to be a word, which its
+   type decides; so a type found in a pass is one the program would keep
+   boxed whichever order they were found in. *)
 let program ?(release = false) (modules : C.program list) : Mem.program =
   let boxed = Hashtbl.create 4 in
+  let box t =
+    if Hashtbl.mem boxed t then bug "a type kept boxed found again";
+    Hashtbl.replace boxed t ()
+  in
   let rec go () =
-    try compile ~release ~boxed modules
-    with Demote t ->
-      Hashtbl.replace boxed t ();
-      go ()
+    match compile ~release ~boxed modules with
+    | p -> p
+    | exception Demote t ->
+        box t;
+        go ()
+    | exception Demoted ts ->
+        List.iter box ts;
+        go ()
   in
   go ()

@@ -518,6 +518,63 @@ cached by the hash of the module's interface and body, which is also
 what makes a leaf edit rebuild one module (stage 13's content-addressed
 cache); then the front half in parallel per module.
 
+## Release builds
+
+compiler.md's step 9 fixed the four superlinear costs of the release
+build, cut its panic text down to an interned table, and removed
+specialization's per-function copy cap (decision 4). Before is 7f8822f
+and after is step 9, both run in one session, on gen/gen.py's base
+program (no generics) and its stress program (generic code called at
+many types, each with a block of its own). "Front" means `ren build
+--emit-c` (from source to C, through specialization, Core Lint, Mem,
+Perceus and Mem Lint) and is reported with hyperfine's mean and its
+CPU cycles; "cc" is clang -O2 on that C, as user CPU time. The sizes
+are from `size -m` on the binary. Load averages ran 4 to 7 of 16
+cores. 500k lines wasn't measured: base-500k's front half takes about
+20 minutes before.
+
+| program | front (s) | front cycles (bn) | cc (s) | `__text` (MB) | `__cstring` (MB) | stripped (MB) |
+|---|---|---|---|---|---|---|
+| base 10k | 0.568 → 0.378 | 2.13 → 1.37 | 7.6 → 7.7 | 0.758 → 0.759 | 0.650 → 0.015 | 1.52 → 1.06 |
+| stress 10k | 3.08 → 1.09 | 10.7 → 3.7 | 12.4 → 14.4 | 1.36 → 0.88 | 1.72 → 0.042 | 3.33 → 1.51 |
+| base 100k | 29.7 → 3.83 | 111.6 → 13.2 | 91.9 → 85.9 | — | 6.45 → 0.113 | 14.6 → 10.0 |
+| stress 100k | 268.6 ± 39 → 9.62 | 897 → 38.1 | 96.3 → 112.4 | 13.6 → 8.6 | 17.2 → 0.32 | 32.9 → 14.5 |
+
+- **The front half is linear again**: 28× fewer cycles on stress-100k
+  and 8.5× fewer on base-100k. What's left at 100k (`REN_PASS_TIMES`)
+  is C emission (1.4 s base, 2.7 s stress), Perceus (0.8 / 2.0), then
+  folding, Core Lint and specialization (each 0.2 to 0.7).
+- **Panic text was most of every binary**, and now isn't. Each site's
+  message is a few LEB128 operations over a table of shared text and
+  slices of source lines. Stripped binaries are 0.44 to 0.70 times as big.
+- **Removing the cap trades C for machine code.** The stress program's
+  C is 1.30 times as long (1.69M → 2.20M lines at 100k), and clang
+  takes 1.17 times as long on it, but its `__text` is 0.63 times as
+  big, since the cap's fallback, which boxed the arguments, was the
+  bigger code. clang's peak memory at stress-100k went from 5.50 to 4.91 GB.
+- **clang is now 92% to 96% of a release build at 100k** (85.9 s of
+  89.7, 112.4 of 122.0). One C file per module, compiled in parallel and
+  cached, is what's left (decision 13).
+
+**The benchmarks' run times don't move.** Their Mem is byte for byte
+what it was (with `REN_NO_FOLD`; folding folds nothing in them). Every
+output matches its Rust twin. In one hyperfine invocation per program,
+before against after, wall time differs by −3.6% to +1.0%,
+instructions by under 0.01%, and cycles by under 1% (most within
+±0.5%):
+
+| program | cycles before (bn) | cycles after (bn) | wall before | wall after |
+|---|---|---|---|---|
+| rbtree | 2.459 | 2.455 | 645 ms | 635 ms |
+| deriv | 1.821 | 1.819 | 477 ms | 475 ms |
+| nqueens | 1.874 | 1.888 | 476 ms | 477 ms |
+| cfold | 0.401 | 0.402 | 102 ms | 103 ms |
+| binary-trees | 20.19 | 19.90 | 5.17 s | 4.99 s |
+| nbody | 10.41 | 10.32 | 2.56 s | 2.58 s |
+| fannkuch | 6.93 | 6.88 | 1.71 s | 1.71 s |
+| inout | 6.57 | 6.57 | 1.63 s | 1.63 s |
+| stack | 2.58 | 2.58 | 589 ms | 587 ms |
+
 ## H7: against Rust and Go
 
 vision.md's set, the release build against Rust and Go: times from

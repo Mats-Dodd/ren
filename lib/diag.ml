@@ -118,6 +118,37 @@ let indexed (sources : string -> string option) =
         Hashtbl.replace split file ls;
         ls
 
+(* A rendered diagnostic, in pieces: what [render] prints, and what a
+   native binary keeps of a panic's message (driver.ml, [site_pieces]),
+   which shares the pieces many panics have, a file's name and a line of
+   its source, instead of keeping each message whole. [Hole] is where the
+   message of a panic goes, which only the running program knows. *)
+type piece =
+  | Text of string
+  | Shared of string
+      (** text that many diagnostics have: a file's name, or a line of it *)
+  | Spaces of int
+  | Marks of char * int  (** a `^` or a `-`, this many times *)
+  | Num of int
+  | Slice of string * int * int
+      (** the [n] bytes from [i] of a [Shared] text: an operand, as the source
+          writes it *)
+  | Hole
+
+(* The text [pieces] stand for, with [hole] in the [Hole]. *)
+let expand ?(hole = "") pieces =
+  let b = Buffer.create 256 in
+  List.iter
+    (function
+      | Text s | Shared s -> Buffer.add_string b s
+      | Spaces n -> Buffer.add_string b (String.make n ' ')
+      | Marks (c, n) -> Buffer.add_string b (String.make n c)
+      | Num n -> Buffer.add_string b (string_of_int n)
+      | Slice (s, i, n) -> Buffer.add_string b (String.sub s i n)
+      | Hole -> Buffer.add_string b hole)
+    pieces;
+  Buffer.contents b
+
 (* [sources] is the source map: the text of each file a diagnostic can
    point into, by its name. A label in a file it doesn't have (the
    prelude's) can't be shown as source, so it's a `= note` line instead. A
@@ -132,8 +163,9 @@ let indexed (sources : string -> string option) =
        │ -------- `a` imports `b` here
 
    [lines_of] is the source map [indexed]: each file's lines, split once
-   (see [render] and [render_all]). *)
-let render_indexed ~(lines_of : string -> string array option) (d : t) =
+   (see [render] and [render_all]). The diagnostic comes as [piece]s,
+   which [expand] makes text. *)
+let pieces_indexed ~(lines_of : string -> string array option) (d : t) =
   let shown, elsewhere =
     List.partition (fun ((l : Loc.t), _) -> lines_of l.file <> None) d.labels
   in
@@ -151,9 +183,11 @@ let render_indexed ~(lines_of : string -> string array option) (d : t) =
         max w (String.length (string_of_int l.start.line)))
       0 spans
   in
-  let pad = String.make width ' ' in
-  let b = Buffer.create 256 in
-  Printf.bprintf b "error: %s\n" d.msg;
+  (* the pieces, most recent first *)
+  let out = ref [] in
+  let add p = out := p :: !out in
+  let pad () = add (Spaces width) in
+  add (Text (Printf.sprintf "error: %s\n" d.msg));
   List.iter
     (fun file ->
       let src = Option.value (lines_of file) ~default:(lines "") in
@@ -169,16 +203,30 @@ let render_indexed ~(lines_of : string -> string array option) (d : t) =
       (* the header points at the error itself, or, in another file, at
          its first label *)
       let first = if file = d.loc.file then d.loc else fst (List.hd by_line) in
-      Printf.bprintf b "%s ┌─ %s:%d:%d\n" pad file first.start.line
-        first.start.col;
+      pad ();
+      List.iter add
+        [
+          Text " ┌─ ";
+          Shared file;
+          Text ":";
+          Num first.start.line;
+          Text ":";
+          Num first.start.col;
+          Text "\n";
+        ];
       let last = ref 0 in
       (* a file the map doesn't have, the prelude's, has only its header *)
       if lines_of file <> None then
         List.iter
           (fun ((l : Loc.t), label) ->
             let text = line src l.start.line in
-            if l.start.line <> !last then
-              Printf.bprintf b "%*d │ %s\n" width l.start.line text;
+            if l.start.line <> !last then (
+              (* the line's number, right-aligned in [width] *)
+              add
+                (Spaces
+                   (max 0 (width - String.length (string_of_int l.start.line))));
+              List.iter add
+                [ Num l.start.line; Text " │ "; Shared text; Text "\n" ]);
             last := l.start.line;
             (* Underline to the end of the span, or to the end of the line if
              the span continues onto later lines. *)
@@ -189,24 +237,51 @@ let render_indexed ~(lines_of : string -> string array option) (d : t) =
             let n = max 1 (stop_col - l.start.col) in
             let mark, text =
               match label with
-              | None ->
-                  ( String.make n '^',
-                    match d.says with Some s -> " " ^ s | None -> "" )
-              | Some s -> (String.make n '-', " " ^ s)
+              | None -> ('^', match d.says with Some s -> " " ^ s | None -> "")
+              | Some s -> ('-', " " ^ s)
             in
-            Printf.bprintf b "%s │ %s%s%s\n" pad
-              (String.make (l.start.col - 1) ' ')
-              mark text)
+            pad ();
+            List.iter add
+              [
+                Text " │ ";
+                (* [String.make]'s, which fails on a column before the first,
+                   as it did when this was text *)
+                Spaces (String.length (String.make (l.start.col - 1) ' '));
+                Marks (mark, n);
+                Text (text ^ "\n");
+              ])
           by_line)
     files;
   List.iter
     (fun ((l : Loc.t), s) ->
-      Printf.bprintf b "%s = %s: %s:%d:%d\n" pad s l.file l.start.line
-        l.start.col)
+      pad ();
+      List.iter add
+        [
+          Text (" = " ^ s ^ ": ");
+          Shared l.file;
+          Text ":";
+          Num l.start.line;
+          Text ":";
+          Num l.start.col;
+          Text "\n";
+        ])
     elsewhere;
-  List.iter (fun n -> Printf.bprintf b "%s = %s\n" pad n) d.notes;
-  Option.iter (fun h -> Printf.bprintf b "%s help: %s\n" pad h) d.help;
-  Buffer.contents b
+  List.iter
+    (fun n ->
+      pad ();
+      add (Text (" = " ^ n ^ "\n")))
+    d.notes;
+  Option.iter
+    (fun h ->
+      pad ();
+      add (Text (" help: " ^ h ^ "\n")))
+    d.help;
+  List.rev !out
+
+let render_indexed ~lines_of d = expand (pieces_indexed ~lines_of d)
+
+(* One diagnostic, in pieces, with the source map [sources]. *)
+let pieces ~sources d = pieces_indexed ~lines_of:(indexed sources) d
 
 (* One diagnostic, with the source map [sources]. *)
 let render ~sources d = render_indexed ~lines_of:(indexed sources) d

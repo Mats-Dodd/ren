@@ -9,12 +9,58 @@ const ren_site *ren_overflow_site;
 
 /* ---- panics ---- */
 
+const char *const *ren_texts;
+
+/* The number at [*p] in a site's pieces, and [*p] moved past it. */
+static uint64_t ren_site_num(const unsigned char **p) {
+  uint64_t n = 0;
+  int shift = 0;
+  unsigned char c;
+  do {
+    c = *(*p)++;
+    n |= (uint64_t)(c & 0x7f) << shift;
+    shift += 7;
+  } while (c & 0x80);
+  return n;
+}
+
+static void ren_repeat(int c, uint64_t n) {
+  for (uint64_t i = 0; i < n; i++) fputc(c, stderr);
+}
+
 _Noreturn void ren_panic(const ren_site *site, const char *msg) {
   fflush(stdout);
-  fputs(site->before, stderr);
-  fputs(msg, stderr);
-  fputs(site->after, stderr);
-  exit(1);
+  const unsigned char *p = site->ops;
+  for (;;) {
+    switch (*p++) {
+    case 1:
+      fputs(ren_texts[ren_site_num(&p)], stderr);
+      break;
+    case 2:
+      ren_repeat(' ', ren_site_num(&p));
+      break;
+    case 3: {
+      int c = *p++;
+      ren_repeat(c, ren_site_num(&p));
+      break;
+    }
+    case 4:
+      fprintf(stderr, "%llu", (unsigned long long)ren_site_num(&p));
+      break;
+    case 5:
+      fputs(msg, stderr);
+      break;
+    case 6: {
+      const char *t = ren_texts[ren_site_num(&p)];
+      uint64_t i = ren_site_num(&p);
+      uint64_t n = ren_site_num(&p);
+      fwrite(t + i, 1, n, stderr);
+      break;
+    }
+    default:
+      exit(1);
+    }
+  }
 }
 
 _Noreturn void ren_stack_overflowed(void) {

@@ -9,7 +9,19 @@ exception Internal_error of { pass : string; message : string }
 (* Run one pass. Diagnostics and panics are about the program, so they pass
    through; anything else is a bug in the compiler, and is reported as one
    so it can't be mistaken for a problem with the program. *)
+let pass_times = Sys.getenv_opt "REN_PASS_TIMES" <> None
+
 let pass name f =
+  (* `REN_PASS_TIMES` prints each pass's wall time, to see where a build's
+     time goes (compiler.md, "Native slice", step 9) *)
+  let f =
+    if pass_times then (fun () ->
+      let t0 = Unix.gettimeofday () in
+      let r = f () in
+      Printf.eprintf "ren pass %s: %.3f s\n%!" name (Unix.gettimeofday () -. t0);
+      r)
+    else f
+  in
   try f () with
   | ( Diag.Error _ | Diag.Errors _ | Eval.Panic _ | Eval.Assert_failed _
     | Eval.Uncaught _ | Eval.Went_differently _ | Internal_error _ ) as e ->
@@ -192,11 +204,7 @@ let link_lowered ?(lint = false) ~imports modules =
         let fns = entry.fns @ Option.to_list (Option.map Lower.start main) in
         List.rev ({ entry with fns } :: rest)
   in
-  if lint then
-    List.iter2
-      (fun imports m ->
-        pass "lint" (fun () -> Core_lint.program ~imports ~linked m))
-      imports linked;
+  if lint then pass "lint" (fun () -> Core_lint.programs ~imports linked);
   linked
 
 (* The prelude, as a module: its source, parsed and checked against the
@@ -512,6 +520,12 @@ let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
    checks that. *)
 let specialize ?lint ?budget (modules : checked list) =
   let linked = link ?lint modules in
+  (* `REN_SPEC_BUDGET` sets the size budget, to see what's past it *)
+  let budget =
+    match budget with
+    | Some _ -> budget
+    | None -> Option.bind (Sys.getenv_opt "REN_SPEC_BUDGET") int_of_string_opt
+  in
   let imports =
     [ Prelude.intrinsics ] :: List.map (fun c -> c.reachable) modules
   in
@@ -523,16 +537,52 @@ let specialize ?lint ?budget (modules : checked list) =
      imports: the prelude's `sum` at a `money.Money`. So each module is
      checked seeing every module's interface, its own imports last, so
      what it does import it sees as it did. *)
-  let everyone = List.concat_map (fun c -> c.reachable) modules in
-  List.iter2
-    (fun imports m ->
-      pass "lint" (fun () ->
-          Core_lint.program ~imports:(everyone @ imports) ~linked:specialized m))
-    imports specialized;
+  let everyone =
+    (* each interface once, where it was last in the list, which is where
+       it took effect: an interface reachable from many modules is in many
+       of their lists *)
+    let seen = Hashtbl.create 64 in
+    List.rev
+      (List.filter
+         (fun (i : Iface.t) ->
+           (* the same interface, not just one of the same module's *)
+           if List.memq i (Hashtbl.find_all seen i.home) then false
+           else (
+             Hashtbl.add seen i.home i;
+             true))
+         (List.rev (List.concat_map (fun c -> c.reachable) modules)))
+  in
+  pass "lint" (fun () -> Core_lint.programs ~everyone ~imports specialized);
   (specialized, stats)
 
 let specialized ?lint ?load ?budget ~file src =
   specialize ?lint ?budget (check_all ?load ~file src)
+
+(* The note a release build prints when specialization reached its size
+   budget: how many calls get the function as written, their arguments
+   boxed, and where the first few are. Empty if none do. *)
+let budget_notes (s : Specialize.stats) =
+  match s.notes with
+  | [] -> ""
+  | notes ->
+      let shown = 10 in
+      let n = List.length notes in
+      let b = Buffer.create 256 in
+      Printf.bprintf b
+        "note: specialization reached its size budget, so %d call%s %s \
+         compiled as written, %s arguments boxed:\n"
+        n
+        (if n = 1 then "" else "s")
+        (if n = 1 then "is" else "are")
+        (if n = 1 then "its" else "their");
+      List.iteri
+        (fun i ((p : Path.t), (loc : Loc.t)) ->
+          if i < shown then
+            Printf.bprintf b "  %s:%d:%d: a call of `%s`\n" loc.file
+              loc.start.line loc.start.col (Path.full p))
+        notes;
+      if n > shown then Printf.bprintf b "  and %d more\n" (n - shown);
+      Buffer.contents b
 
 (* ---- tests ---- *)
 
@@ -1269,12 +1319,12 @@ let dump_tokens toks =
    name, a literal, a call or a field, which a `.` can follow; and for
    `n += 1`, where what's between the operands ends in `=`, it's put back,
    `n = n.wrapping_add(1)`, since a call on its own line does nothing.
-   [None] if an operand isn't on one line of a file [sources] has. *)
-let wrap_help ~sources (w : Eval.wrap) =
+   [None] if an operand isn't on one line of a file [lines_of] has. *)
+let wrap_help_in ~lines_of (w : Eval.wrap) =
   let text (l : Loc.t) =
-    match sources l.file with
-    | Some src when l.start.line = l.stop.line ->
-        let line = Diag.line_text src l.start.line in
+    match lines_of l.file with
+    | Some lines when l.start.line = l.stop.line ->
+        let line = Diag.line lines l.start.line in
         let from = l.start.col - 1 and n = l.stop.col - l.start.col in
         if from >= 0 && n > 0 && from + n <= String.length line then
           Some (String.sub line from n)
@@ -1331,9 +1381,17 @@ let wrap_help ~sources (w : Eval.wrap) =
   | Some recv, Some a -> Option.bind (text a) (call ~assign:(assigns a) recv)
   | None, _ -> None
 
+(* The same, with the files of the source map [sources] split into lines
+   here, or by [lines_of] ([Diag.indexed]), which a caller with many
+   panics to render splits once. *)
+let wrap_help ~sources w = wrap_help_in ~lines_of:(Diag.indexed sources) w
+
 (* A panic, as `ren run` reports it. *)
-let panic_diag ~sources loc msg wrap =
-  let help = Option.bind wrap (wrap_help ~sources) in
+let panic_diag ?lines_of ~sources loc msg wrap =
+  let lines_of =
+    match lines_of with Some f -> f | None -> Diag.indexed sources
+  in
+  let help = Option.bind wrap (wrap_help_in ~lines_of) in
   Diag.make ?help loc ("panic: " ^ msg)
 
 (* A replay that went differently from its recording (journal.ml), at
@@ -1370,26 +1428,104 @@ let render_error ~sources = function
 
 (* ---- `ren build` (compiler.md, "Native slice") ---- *)
 
-(* What a panic at [s] prints around its message, which the binary fills
-   in when it panics: `ren run`'s message for a panic there, with a hole
-   where the message goes, so the two print the same bytes. An
-   `assert`'s whole message is known now. *)
-let site_text ~sources (s : Mem.site) =
+(* What a panic at [s] prints, in pieces (Diag.piece), which the binary
+   fills in when it panics: `ren run`'s message for a panic there, with a
+   [Hole] where the message goes, so the two print the same bytes. An
+   `assert`'s whole message is known now. The operands its help suggests
+   the wrapping method for are written as slices of the lines they're
+   on, which the binary keeps once, for every panic on them. *)
+(* Where [sub] first is in [s], if it is. *)
+let find_sub sub s =
+  let n = String.length sub and m = String.length s in
+  let rec at i =
+    if i + n > m then None
+    else if String.sub s i n = sub then Some i
+    else at (i + 1)
+  in
+  if n = 0 then None else at 0
+
+let site_pieces ~lines_of ~sources (s : Mem.site) : Diag.piece list =
   match s.kind with
-  | Asserts -> (Diag.render ~sources (assert_failed s.loc None), "")
-  | Panics -> (
+  | Asserts -> Diag.pieces_indexed ~lines_of (assert_failed s.loc None)
+  | Panics ->
       let wrap =
         Option.map
           (fun (w : Mem.wrap) : Eval.wrap ->
             { meth = w.meth; recv = w.recv; arg = w.arg })
           s.wrap
       in
-      let text = Diag.render ~sources (panic_diag ~sources s.loc "\000" wrap) in
-      match String.index_opt text '\000' with
-      | Some i ->
-          ( String.sub text 0 i,
-            String.sub text (i + 1) (String.length text - i - 1) )
-      | None -> failwith "bug: a panic's message that doesn't hold its message")
+      let pieces =
+        Diag.pieces_indexed ~lines_of
+          (panic_diag ~lines_of ~sources s.loc "\000" wrap)
+      in
+      (* the message's hole, and nothing else of the kind *)
+      let split_at c (p : Diag.piece) : Diag.piece list =
+        match p with
+        | Text t -> (
+            match String.index_opt t c with
+            | Some i ->
+                [
+                  Text (String.sub t 0 i);
+                  Hole;
+                  Text (String.sub t (i + 1) (String.length t - i - 1));
+                ]
+            | None -> [ p ])
+        | p -> [ p ]
+      in
+      let pieces = List.concat_map (split_at '\000') pieces in
+      if List.length (List.filter (( = ) Diag.Hole) pieces) <> 1 then
+        failwith "bug: a panic's message that doesn't hold its message";
+      (* each operand, where its text is in the help: a slice of its line *)
+      let operands =
+        match s.wrap with
+        | None -> []
+        | Some w ->
+            List.filter_map
+              (fun (l : Loc.t) ->
+                match lines_of l.file with
+                | Some lines when l.start.line = l.stop.line ->
+                    let line = Diag.line lines l.start.line in
+                    let from = l.start.col - 1
+                    and n = l.stop.col - l.start.col in
+                    if from >= 0 && n > 0 && from + n <= String.length line then
+                      Some (String.sub line from n, (line, from, n))
+                    else None
+                | _ -> None)
+              (w.recv :: Option.to_list w.arg)
+      in
+      let rec slice (p : Diag.piece) : Diag.piece list =
+        match p with
+        | Text t -> (
+            (* the operand found first in [t], the longer where two start
+               at one place *)
+            let found =
+              List.fold_left
+                (fun best (op, sl) ->
+                  match find_sub op t with
+                  | Some i -> (
+                      match best with
+                      | Some (j, op', _)
+                        when j < i
+                             || (j = i && String.length op' >= String.length op)
+                        ->
+                          best
+                      | _ -> Some (i, op, sl))
+                  | None -> best)
+                None operands
+            in
+            match found with
+            | None -> [ p ]
+            | Some (i, op, (line, from, n)) ->
+                let k = i + String.length op in
+                Diag.Text (String.sub t 0 i)
+                :: Slice (line, from, n)
+                :: slice (Text (String.sub t k (String.length t - k))))
+        | p -> [ p ]
+      in
+      let sliced = List.concat_map slice pieces in
+      if Diag.expand sliced <> Diag.expand pieces then
+        failwith "bug: a panic's operands sliced into other text";
+      sliced
 
 (* What the native slice can't compile yet, at [loc]: an error that says
    so, and how to run the program anyway. *)
@@ -1415,6 +1551,13 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
         try To_mem.program ~release modules
         with To_mem.Unsupported (loc, what) ->
           raise (not_native ~file loc what))
+  in
+  (* identical copies made one (fold.ml), before anything else works on
+     each of them; `REN_NO_FOLD` (env) leaves them apart, to measure *)
+  let p =
+    if release && Sys.getenv_opt "REN_NO_FOLD" = None then
+      pass "folding" (fun () -> Fold.program p)
+    else p
   in
   let p =
     match rc with
@@ -1458,4 +1601,5 @@ let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc ~sources
   in
   pass "C" (fun () ->
       Emit_c.program ~restrict:(release && restrict)
-        ~site_text:(site_text ~sources) p)
+        ~site_pieces:(site_pieces ~lines_of:(Diag.indexed sources) ~sources)
+        p)

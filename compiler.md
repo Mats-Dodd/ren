@@ -241,8 +241,9 @@ called:
   it's passed to, and each
   dependency call for the handler known to be installed there. Results
   are cached by content, so a rebuild specializes only what changed.
-  Specialization has a budget, and past it the code falls back to what a
-  debug build does.
+  Specialization has no cap on the copies of one function, but a size
+  budget for the whole program: past it, a call falls back to what a
+  debug build does, and the build says so (Native slice, "Step 9").
 
 Since native step 5, `ren build --release` does this (Native slice,
 "Step 5"): specialize.ml, from `$start`, over the linked program's Core,
@@ -1460,9 +1461,9 @@ themselves (bench/native); Mem IR, the C runtime and a naive backend
 for the first-order subset, with `ren build`; the debug strategy for
 the rest of the subset, blocks, generics, handlers, errors, `show` and
 `Console`; Perceus over Mem IR; release builds that specialize; and the
-measurements. Then two that act on what they measured: arrays in loops,
-and the experiments merged. Each step extends this section, and says what it changed
-of the ones before.
+measurements. Then three that act on what they measured: arrays in
+loops, the experiments merged, and the release build's costs. Each step
+extends this section, and says what it changed of the ones before.
 
 ### Step 2: Mem IR, the runtime, and `ren build`
 
@@ -1898,8 +1899,9 @@ it, keyed by three things the call knows.
 A copy is named `f$1`, in its original's module, and records where it
 came from (`Core.fn_def.origin`) and which handlers it knows
 (`known`). A copy only ever replaces a call to the same code (rule 1),
-and the budget is 64 copies of one function: past it a call gets the
-function as written, the debug strategy, unless a handler it uses is
+and the budget is 64 copies of one function (step 9 replaced it with a
+size budget for the whole program): past it a call gets the function
+as written, the debug strategy, unless a handler it uses is
 known, which only a copy can call directly. A handler known inside
 another handler's operations isn't specialized, and the call goes
 through evidence. `ren build --release --stats` prints what it made:
@@ -2172,3 +2174,127 @@ that dies where one as big is built after it, and one built in a
 hoisted loop; bench/tokens.ren a token crossing a failing call. Core
 Lint checks a specialized module with every module's interface in
 scope, since a copy can be at a type its module never imports.
+
+### Step 9: the release build's costs
+
+The release-build experiment found that specialization grows code
+linearly, a constant 1.25 times the debug build's C, and shrinks
+machine code, but that the release build's front half had four costs
+that grew with the square of the program, and that 60% of every
+binary was the text of its panics (foundations.md, decision 4 and
+Staging, item 2). This step fixes those and takes the cap off
+specialization. RESULTS.md, "Release builds", has the numbers.
+
+**The four quadratic costs.**
+
+- **Core Lint after specializing** linted each module seeing every
+  module's interface and function, and made those tables again for each
+  one: O(modules × functions), 96% of a 500,000-line program's front
+  half. `Core_lint.programs` makes what every module shares once, the
+  interfaces, each module's dependencies, the program's functions, its
+  test functions; each module's own imports, types and functions go on
+  top with `Hashtbl.add`, which hides what's there, and come off after
+  with `Hashtbl.remove`, which shows it again. Each module sees what it
+  saw before, in the order it saw it (core_lint.ml, `lint_module`, says
+  why), at the cost of what it adds. Debug builds' lint, under the
+  tests, shares the same way.
+- **Restarting memory lowering for each type kept boxed.** A copied
+  record whose value must be a word is kept boxed, and lowering starts
+  again (step 5); one restart a type was 826 restarts at 100,000 lines.
+  Now a function that finds one is left unfinished and the rest are
+  still compiled, so one pass finds them all, and the program is
+  compiled again once. Boxing one type changes no other's layout, since
+  a struct's fields are scalars, so a type found in a pass is one the
+  program keeps boxed whatever order they're found in; what's compiled
+  after the first is thrown away, so a function another left in a
+  strange state can only end the pass early.
+- **Naming a copy** tried `f$1`, `f$2`, ... until one was free, n tries
+  for the nth copy. The search for a name now starts where the last
+  ended: a name that's taken stays taken, so the names are the same.
+- **The worklist and the table of copies.** Appending to a list for
+  each copy is now a `Queue`, first in first out as before; and the
+  table, whose `Hashtbl.hash` looked at only the first ten words of a
+  key, which its function's path mostly used, so every copy of a
+  function was in one bucket, hashes deeper (`Hashtbl.hash_param 256
+  1024`).
+
+None of them changes what's made: on every program the old cap didn't
+reach, every benchmark and gen.py's programs among them, the Mem is
+byte for byte what it was. `REN_PASS_TIMES` (env) prints each pass's
+wall time.
+
+**A panic's message in pieces.** The text a panic prints was kept
+whole for each site, the line of source and the help, as `ren run`
+renders it. diag.ml now renders a diagnostic as pieces (`Diag.piece`):
+text, a text many diagnostics share (a file's name, a line of it),
+spaces, a run of `^`, a number, a slice of a shared text, and the hole
+the message goes in; `Diag.render` is those pieces made text, so there's
+one renderer. A site is its pieces as bytes (ren_rt.h, `ren_site`),
+each text once in the C, in `ren_text_table`, and the help's operands
+are slices of the line they're on; sites whose bytes are the same are
+one. `ren_panic` prints the pieces. A panic is a few bytes and the
+lines it's on are shared, so `__cstring` goes from 6.5 MB to 0.11 MB at
+100,000 lines (base), and debug binaries shrink the same. bench/build.t
+compares what each kind of site prints with `ren run`, debug and
+release, under the sanitizers.
+
+**Specialization without the cap** (foundations.md, decision 4).
+
+- **No copies-per-function cap.** It was reached at about ten modules
+  of ordinary code, its fallback code was bigger than what it saved,
+  and its fallback made types boxed program-wide, which made the
+  restarts above.
+- **A size budget for the whole program.** The copies made may add up
+  to 8 times the program's own Core, in expression nodes, and at least
+  a million (`Specialize.budget_factor`, `budget_floor`; `REN_SPEC_BUDGET`
+  sets it). Past it, a call that would need a new copy, and knows no
+  handler, gets the function as written, its arguments boxed: a
+  dispatch the program didn't ask for, so `ren build` prints a note
+  saying how many calls and where the first ten are, always, not only
+  with `--stats`. Measured, specialization grows a program by a
+  constant 1.25, so only generic code that makes generic code at new
+  types without bound reaches it.
+- **Folding** (fold.ml), in release builds, after memory lowering and
+  before Perceus: functions whose Mem is the same but for their names,
+  the numbers of structs laid out alike, and the sites of panics that
+  say the same, are one function, rounds of it until a round folds
+  nothing, since a caller folds once its callees have. Struct numbers
+  are canonical there, the first struct whose fields are laid out
+  alike, so every module's `Tag { code: Int, label: Int }` is one C
+  struct. `REN_NO_FOLD` (env) turns it off.
+- **Per layout, not per type.** A generic function whose body only
+  moves its values is one function for each layout, since its copies
+  at two types laid out alike have the same Mem, and fold. One that
+  uses `==`, `show`, hashing or anything else that depends on its type
+  names its type's descriptor, so its copies differ, and stay one per
+  type. bench/build.t shows both.
+
+Where it differed from its plan:
+
+- **Per layout is found after lowering, not keyed before it.** The
+  specializer still makes a copy for each type, which Core Lint checks
+  at its types, and folding finds the copies that came out the same.
+  Keying a copy by its types' layouts in the specializer would make
+  Core copies Core Lint can't type, a copy at one type called with
+  another's values; that would need Core to say "any type laid out
+  so", which it can't. So it saves the binary's size and clang's time,
+  not the front half's.
+- **The budget's fallback still makes a type boxed program-wide** where
+  a struct's value must be a word: generic code given an
+  `Array<Tag>` reads its elements as words, which no boxing at the call
+  can change without copying the array. It's what the call as written
+  needs, and it happens only past the budget.
+- **Folding folds nothing in the generated programs.** Every call there
+  passes a block literal of its own, and a block is keyed by its
+  literal, so no two copies are the same (Rust's closures are each a
+  type too). It folds generic code without blocks: containers, `pick`,
+  `swap`.
+
+What later steps need to know:
+
+- clang -O2 on one C file is now most of a release build: 92% to 96%
+  of it at 100,000 lines (bench/native/RESULTS.md, "Release builds"). A C file per module or partition, compiled in
+  parallel and cached, is what's left (decision 13).
+- Without the cap, the stress program's C is 1.30 times what it was
+  with it, and clang's time grows with it, while its machine code is
+  0.63 times what it was, since the cap's fallback was the bigger code.

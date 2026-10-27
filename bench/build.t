@@ -218,8 +218,8 @@ What it made, with `--stats`: blocks's five kernels each lift their
 block, and handlers's `Counter` is known where it's installed.
 
   $ for d in blocks handlers; do (cd native/$d && sed 's/^ren specialized: //' release.made); done
-  21 copies, 5 blocks lifted, 0 handlers known, 0 calls past the budget
-  6 copies, 0 blocks lifted, 1 handlers known, 0 calls past the budget
+  21 copies, 5 blocks lifted, 0 handlers known, 0 calls past the size budget
+  6 copies, 0 blocks lifted, 1 handlers known, 0 calls past the size budget
 
 H1, in the release build: the kernels written with a block make no
 indirect call and build no block. The only functions that do are the
@@ -613,3 +613,138 @@ changes during it, so neither is lifted.
   9
   7
   6
+
+A panic's message is kept in pieces (ren_rt.h, `ren_site`): each text
+once, a file's name and each line of it, which every panic there
+shares, and the numbers, spaces and marks between them. Each binary
+prints what `ren run` prints for a panic: one in a prelude function,
+whose file the binary doesn't show; one with the wrapping method's help
+on operands in parentheses, and on `+=` at a line past 99, where the
+gutter is wider; a division by zero; an index out of bounds; and an
+`assert`, whose message is known whole. A panic leaks what's still
+held (foundations.md, decision 8), which the counts at exit show.
+
+  $ cat > p_sum.ren <<'EOF'
+  > fn main() uses Console =
+  >   let xs = [9223372036854775807, 1]
+  >   print(xs.sum())
+  > EOF
+  $ cat > p_paren.ren <<'EOF'
+  > fn main() uses Console =
+  >   let a = 4611686018427387904
+  >   let b = 1
+  >   print((a + b) * 2)
+  > EOF
+  $ { for i in $(seq 1 100); do echo "// line $i"; done; cat <<'EOF'
+  > fn main() uses Console =
+  >   var n = 9223372036854775800
+  >   for i in 0..10
+  >     n += i
+  >   print(n)
+  > EOF
+  > } > p_far.ren
+  $ cat > p_div.ren <<'EOF'
+  > fn main() uses Console =
+  >   let z = [0].len() - 1
+  >   print(10 / z)
+  > EOF
+  $ cat > p_index.ren <<'EOF'
+  > fn main() uses Console =
+  >   let a = [1, 2, 3]
+  >   print(a[1] + a[5])
+  > EOF
+  $ cat > p_assert.ren <<'EOF'
+  > fn main() uses Console =
+  >   let a = 3
+  >   assert(a > 4)
+  >   print(a)
+  > EOF
+  $ for f in p_sum p_paren p_far p_div p_index p_assert; do same $f.ren; release $f.ren; done
+  p_sum.ren, perceus: the same, exit 1, objects live at exit 2
+  p_sum.ren, naive: the same, exit 1, objects live at exit 2
+  p_sum.ren, release: the same, exit 1, objects live at exit 2
+  p_paren.ren, perceus: the same, exit 1, objects live at exit 1
+  p_paren.ren, naive: the same, exit 1, objects live at exit 1
+  p_paren.ren, release: the same, exit 1, objects live at exit 1
+  p_far.ren, perceus: the same, exit 1, objects live at exit 1
+  p_far.ren, naive: the same, exit 1, objects live at exit 1
+  p_far.ren, release: the same, exit 1, objects live at exit 1
+  p_div.ren, perceus: the same, exit 1, objects live at exit 1
+  p_div.ren, naive: the same, exit 1, objects live at exit 1
+  p_div.ren, release: the same, exit 1, objects live at exit 1
+  p_index.ren, perceus: the same, exit 1, objects live at exit 2
+  p_index.ren, naive: the same, exit 1, objects live at exit 2
+  p_index.ren, release: the same, exit 1, objects live at exit 2
+  p_assert.ren, perceus: the same, exit 1, objects live at exit 1
+  p_assert.ren, naive: the same, exit 1, objects live at exit 1
+  p_assert.ren, release: the same, exit 1, objects live at exit 1
+  $ ren run p_far.ren
+  error: panic: `+` overflowed: 9223372036854775806 + 4
+      ┌─ p_far.ren:104:5
+  104 │     n += i
+      │     ^^^^^^
+      help: if wrapping is what you mean, write `n = n.wrapping_add(i)`
+  [1]
+
+The texts are each once in the C, and a site is a few bytes of pieces:
+`p_paren`'s line is one text, its operands slices of it.
+
+  $ ren build --release --emit-c p_paren.ren | grep -c '"  print((a + b) \* 2)"'
+  1
+
+Functions whose Mem is the same are one (fold.ml): `pick` and `keep`,
+which only move their values, at two record types laid out alike, two
+`Int`s, a struct each, are one function each; `show_it`, which shows
+its value, so depends on its type, is still two.
+
+  $ cat > fold.ren <<'EOF'
+  > type A = { x: Int, y: Int }
+  > type B = { p: Int, q: Int }
+  > type C = { c: Int }
+  > type D = { d: Int }
+  > 
+  > fn pick<T>(c: Bool, a: T, b: T) -> T = if c then a else b
+  > 
+  > fn keep<T>(xs: Array<T>, x: T) -> Array<T> =
+  >   var ys = xs
+  >   &ys.push(x)
+  >   ys
+  > 
+  > fn show_it<T>(x: T) -> Str = show(x)
+  > 
+  > fn main() uses Console =
+  >   let a = pick(true, A { x: 1, y: 2 }, A { x: 3, y: 4 })
+  >   let b = pick(false, B { p: 1, q: 2 }, B { p: 3, q: 4 })
+  >   let xs = keep([a], a)
+  >   let ys = keep([b], b)
+  >   print(a.x + b.q + xs.len() + ys.len())
+  >   print(show_it(C { c: 5 }))
+  >   print(show_it(D { d: 6 }))
+  > EOF
+  $ ren run fold.ren
+  9
+  C { c: 5 }
+  D { d: 6 }
+  $ release fold.ren; ren build --release --emit-mem fold.ren | grep -o -e '^(fn ren_fold_pick.*' -e '^(fn ren_fold_keep.*' -e '^(fn ren_fold_show_it' | sed 's/_[0-9] (/ (/' | sort | uniq -c
+  fold.ren, release: the same, exit 0, objects live at exit 0
+     1 (fn ren_fold_keep (ev/1:Ev xs/2:Boxed x/3:Struct0) -> Boxed
+     1 (fn ren_fold_pick (ev/1:Ev c/2:Bool a/3:Struct0 b/4:Struct0) -> Struct0
+     2 (fn ren_fold_show_it
+
+Specialization has no cap on the copies of one function, but a size
+budget for the whole program (specialize.ml), which `REN_SPEC_BUDGET`
+sets: past it, a call that needs a new copy gets the function as
+written, its arguments boxed, and the build says so. The program still
+prints what `ren run` prints.
+
+  $ cat > budget.ren <<'EOF'
+  > fn apply(x: Int, f: fn(Int) -> Int) -> Int = try f(x)
+  > fn main() uses Console =
+  >   print(apply(1, fn(n) => n + 1))
+  >   print(apply(2, fn(n) => n * 2))
+  > EOF
+  $ REN_SPEC_BUDGET=25 release budget.ren; cat release.made
+  budget.ren, release: the same, exit 0, objects live at exit 0
+  ren specialized: 3 copies, 1 blocks lifted, 0 handlers known, 1 calls past the size budget
+  note: specialization reached its size budget, so 1 call is compiled as written, its arguments boxed:
+    budget.ren:3:9: a call of `budget.apply`

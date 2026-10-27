@@ -6,6 +6,15 @@
 val program :
   imports:Iface.t list -> linked:Core.program list -> Core.program -> unit
 
+(* [program] for each of the program's modules [linked], each seeing its
+   [imports] over [everyone], the interfaces every module sees (none
+   unless it's said): what they share made once, not once a module. *)
+val programs :
+  ?everyone:Iface.t list ->
+  imports:Iface.t list list ->
+  Core.program list ->
+  unit
+
 (* The audit [program] makes of the world (handlers.md, "The journal"):
    an intrinsic that reaches the world is called only by the real
    implementation of the dependency it's an operation of, and

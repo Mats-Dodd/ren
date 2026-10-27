@@ -666,14 +666,17 @@ let build args =
   in
   let src = read path in
   let known = [ (path, src) ] in
-  (* what specializing made, which `--stats` prints *)
+  (* what specializing made, which `--stats` prints, and the calls past
+     its size budget, which a build always reports (foundations.md,
+     decision 4): each is a dispatch the program didn't ask for *)
   let made (s : Specialize.stats) =
     if stats then
       prerr_endline
         (Printf.sprintf
            "ren specialized: %d copies, %d blocks lifted, %d handlers known, \
-            %d calls past the budget"
-           s.copies s.blocks s.handlers s.over_budget)
+            %d calls past the size budget"
+           s.copies s.blocks s.handlers s.past_budget);
+    prerr_string (Driver.budget_notes s)
   in
   if emit = `Mem then
     let p =

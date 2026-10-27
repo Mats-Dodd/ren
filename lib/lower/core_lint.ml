@@ -1595,15 +1595,8 @@ let keys_and_ops env (prog : program) =
 (* Only test code calls a test function (ast.ml, [fn_def.test]): so
    `ren run`, which leaves test functions out, leaves out nothing it
    runs. Resolve reports a call of a test item from other code, so this
-   holds whatever's written. *)
-let test_code ~linked (prog : program) =
-  let tests = Hashtbl.create 16 in
-  List.iter
-    (fun (m : program) ->
-      List.iter
-        (fun (f : fn_def) -> if f.test then Hashtbl.replace tests f.path ())
-        m.fns)
-    (linked @ [ prog ]);
+   holds whatever's written. [tests] are the program's test functions. *)
+let test_code ~tests (prog : program) =
   List.iter
     (fun (f : fn_def) ->
       if not f.test then
@@ -1656,15 +1649,6 @@ let world (prog : program) =
       go f.body)
     prog.fns
 
-(* Lint module [prog], which sees the interfaces [imports]: every one
-   reachable through its imports, since a type from any of them can turn
-   up in its code. [linked] are the program's modules, [prog] among them:
-   `$start` installs the prelude's real implementations, which no
-   interface has. The evidence a function is passed can hold an
-   implementation of a dependency its module can't see, too (one declared
-   in a module that imports it), so every module's dependencies are known
-   here; their other types aren't, since another module's opaque type
-   must stay opaque. *)
 (* What a release build's specialization (specialize.ml) says, checked
    against the code: a parameter that's a cell, a known handler's state,
    is only a function's the specializer made; at each [With] whose
@@ -1752,12 +1736,59 @@ let specialized ~(fns : (Path.t, fn_def) Hashtbl.t) (f : fn_def) =
   in
   go f.body
 
-let program ~imports ~linked (prog : program) =
-  let env =
+(* What linting every module of a program shares, made once for all of
+   them (whole program, below): what each sees of the rest, and the
+   program's test functions and functions by path. Made again for each
+   module, as it was, these were O(modules × functions), which was 96% of
+   a 500,000-line program's release build (compiler.md, "Native slice",
+   step 9). *)
+type whole = {
+  base : env;
+      (** its tables: the interfaces [everyone] sees, then each module's
+          dependencies, then each function's scheme, if no interface has it *)
+  deps : (Path.t, Iface.type_decl) Hashtbl.t;  (** each module's dependencies *)
+  tests : (Path.t, unit) Hashtbl.t;
+  fns : (Path.t, fn_def) Hashtbl.t;
+}
+
+(* Each interface's types, members and values, in [env]'s tables, by
+   [put_type] and [put], each [Hashtbl.replace] or [Hashtbl.add]: two
+   arguments, since the tables hold different things, and a function
+   passed as an argument has one type wherever it's used. *)
+let add_ifaces env put_type put (ifaces : Iface.t list) =
+  List.iter
+    (fun (iface : Iface.t) ->
+      List.iter
+        (fun (td : Iface.type_decl) ->
+          put_type env.types td.path td;
+          Path.Map.iter
+            (fun p (o : Iface.op) ->
+              put
+                (if o.okind = Value then env.values else env.schemes)
+                p o.oscheme)
+            td.members)
+        iface.types;
+      List.iter
+        (fun (v : Iface.value) ->
+          put env.schemes (Path.make iface.home v.vname) v.scheme)
+        (iface.values @ iface.tests))
+    ifaces
+
+(* The table a function's scheme is in, and the scheme: an associated
+   value's function has no parameters, and its result is the value, which
+   is all the rest of the module sees of it. *)
+let scheme_entry env (m : program) (f : fn_def) =
+  match f.scheme with
+  | { ty = Fun ([], t, _, _); _ } as s when List.mem f.path m.values ->
+      (env.values, { s with ty = t })
+  | s -> (env.schemes, s)
+
+let whole ~everyone (linked : program list) =
+  let base =
     {
-      types = Hashtbl.create 16;
-      schemes = Hashtbl.create 16;
-      values = Hashtbl.create 16;
+      types = Hashtbl.create 256;
+      schemes = Hashtbl.create 1024;
+      values = Hashtbl.create 64;
       fn = "";
       ev = None;
       handler = None;
@@ -1769,63 +1800,102 @@ let program ~imports ~linked (prog : program) =
       in_loop = false;
     }
   in
-  List.iter
-    (fun (iface : Iface.t) ->
-      List.iter
-        (fun (td : Iface.type_decl) ->
-          Hashtbl.replace env.types td.path td;
-          Path.Map.iter
-            (fun p (o : Iface.op) ->
-              Hashtbl.replace
-                (if o.okind = Value then env.values else env.schemes)
-                p o.oscheme)
-            td.members)
-        iface.types;
-      List.iter
-        (fun (v : Iface.value) ->
-          Hashtbl.replace env.schemes (Path.make iface.home v.vname) v.scheme)
-        (iface.values @ iface.tests))
-    imports;
+  add_ifaces base Hashtbl.replace Hashtbl.replace everyone;
+  let deps = Hashtbl.create 16 in
   List.iter
     (fun (m : program) ->
       List.iter
         (fun (td : Iface.type_decl) ->
           match td.body with
-          | Dep _ -> Hashtbl.replace env.types td.path td
+          | Dep _ ->
+              Hashtbl.replace deps td.path td;
+              Hashtbl.replace base.types td.path td
           | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> ())
         m.types)
     linked;
-  List.iter
-    (fun (td : Iface.type_decl) -> Hashtbl.replace env.types td.path td)
-    prog.types;
   (* another module's function is used as its interface states it, if it
-     has one *)
-  let add table (m : program) path s =
-    if m == prog || not (Hashtbl.mem table path) then
-      Hashtbl.replace table path s
-  in
+     has one; a module's own functions are added over these for it *)
   List.iter
     (fun (m : program) ->
       List.iter
         (fun (f : fn_def) ->
-          (* an associated value's function has no parameters, and its
-             result is the value, which is all the rest of the module sees
-             of it *)
-          match f.scheme with
-          | { ty = Fun ([], t, _, _); _ } as s when List.mem f.path m.values ->
-              add env.values m f.path { s with ty = t }
-          | _ -> add env.schemes m f.path f.scheme)
+          let table, s = scheme_entry base m f in
+          if not (Hashtbl.mem table f.path) then Hashtbl.replace table f.path s)
         m.fns)
-    (linked @ [ prog ]);
-  value_order prog;
-  test_code ~linked prog;
-  world prog;
-  shows env prog;
-  keys_and_ops env prog;
-  List.iter (fn_def env) prog.fns;
-  let fns = Hashtbl.create 256 in
+    linked;
+  let tests = Hashtbl.create 16 and fns = Hashtbl.create 1024 in
   List.iter
     (fun (m : program) ->
-      List.iter (fun (f : fn_def) -> Hashtbl.replace fns f.path f) m.fns)
-    (linked @ [ prog ]);
-  List.iter (specialized ~fns) prog.fns
+      List.iter
+        (fun (f : fn_def) ->
+          if f.test then Hashtbl.replace tests f.path ();
+          Hashtbl.replace fns f.path f)
+        m.fns)
+    linked;
+  { base; deps; tests; fns }
+
+(* Lint module [prog] of the program [w] was made from, which sees the
+   interfaces [imports]: every one reachable through its imports, since a
+   type from any of them can turn up in its code. The program's modules
+   are known too: `$start` installs the prelude's real implementations,
+   which no interface has. The evidence a function is passed can hold an
+   implementation of a dependency its module can't see, too (one declared
+   in a module that imports it), so every module's dependencies are known
+   here; their other types aren't, since another module's opaque type
+   must stay opaque.
+
+   What [prog] sees on top of what every module does, its imports, its
+   own types and its own functions, is added over [w]'s tables with
+   [Hashtbl.add], which hides what was there, and taken out after with
+   [Hashtbl.remove], which shows it again: so each module is checked
+   seeing what it saw when its tables were made for it alone, in the
+   order they were (imports, then the program's dependencies, then its
+   types, then its functions over any interface's), at the cost of what
+   it adds. *)
+let lint_module w ~imports (prog : program) =
+  let env = w.base in
+  let added = ref [] in
+  let put table k v =
+    Hashtbl.add table k v;
+    added := (fun () -> Hashtbl.remove table k) :: !added
+  and put_type table k v =
+    Hashtbl.add table k v;
+    added := (fun () -> Hashtbl.remove table k) :: !added
+  in
+  Fun.protect
+    ~finally:(fun () -> List.iter (fun undo -> undo ()) !added)
+    (fun () ->
+      add_ifaces env put_type put imports;
+      (* a dependency an import declares is the program's own declaration
+         of it, which was added after the imports *)
+      List.iter
+        (fun (iface : Iface.t) ->
+          List.iter
+            (fun (td : Iface.type_decl) ->
+              match Hashtbl.find_opt w.deps td.path with
+              | Some d -> put_type env.types td.path d
+              | None -> ())
+            iface.types)
+        imports;
+      List.iter
+        (fun (td : Iface.type_decl) -> put_type env.types td.path td)
+        prog.types;
+      List.iter
+        (fun (f : fn_def) ->
+          let table, s = scheme_entry env prog f in
+          put table f.path s)
+        prog.fns;
+      value_order prog;
+      test_code ~tests:w.tests prog;
+      world prog;
+      shows env prog;
+      keys_and_ops env prog;
+      List.iter (fn_def env) prog.fns;
+      List.iter (specialized ~fns:w.fns) prog.fns)
+
+let program ~imports ~linked (prog : program) =
+  lint_module (whole ~everyone:[] (linked @ [ prog ])) ~imports prog
+
+let programs ?(everyone = []) ~imports (linked : program list) =
+  let w = whole ~everyone linked in
+  List.iter2 (fun imports m -> lint_module w ~imports m) imports linked

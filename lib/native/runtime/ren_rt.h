@@ -106,13 +106,28 @@ typedef struct {
   char data[]; /* [len] bytes, then a 0 */
 } ren_str;
 
-/* Where a panic is, and what's printed around its message: the
-   compiler renders `ren run`'s message with a hole where the message
-   goes, so the two print the same bytes. */
+/* Where a panic is, and what it prints: the compiler renders `ren run`'s
+   message in pieces (diag.ml, [piece]), with a hole where the message
+   goes, so the two print the same bytes. [ops] are the pieces, each a
+   byte that says which and its numbers after it, 7 bits a byte, least
+   first, the top bit set on all but the last (LEB128), ending in a 0:
+
+     1 t        the program's text [t] (ren_texts)
+     2 n        [n] spaces
+     3 c n      the byte [c], [n] times: a `^` or a `-` under the code
+     4 n        the number [n]: a line or a column
+     5          the message
+     6 t i n    the [n] bytes from [i] of text [t]: code an operand is
+
+   A file's name and each of its lines are one text, which every panic in
+   them shares: a panic costs a few bytes, not the line it's on (60% of a
+   binary, when each kept its message whole). */
 typedef struct {
-  const char *before;
-  const char *after;
+  const unsigned char *ops;
 } ren_site;
+
+/* The program's texts, which its sites' pieces print. */
+extern const char *const *ren_texts;
 
 /* ---- statistics ---- */
 
