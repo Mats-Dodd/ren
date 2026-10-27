@@ -15,8 +15,9 @@ for rep in $(seq 1 "$reps"); do
   # 4: a small value every round takes from the root, so the root's
   # line is all there is; 10: in cache; 20: 48 MB, out of it
   for depth in 4 10 20; do
-    # about half a second a run at one thread
-    case $depth in 4) rounds=5000000 ;; 10) rounds=100000 ;; 20) rounds=80 ;; esac
+    # about a tenth of a second a run at one thread; a run that collapses
+    # takes longer, since the work per thread is fixed
+    case $depth in 4) rounds=1000000 ;; 10) rounds=25000 ;; 20) rounds=20 ;; esac
     for t in $threads; do
       for b in shared atomic rust plain; do
         for m in a-owned a-borrowed b c d e; do
