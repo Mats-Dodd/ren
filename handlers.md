@@ -6,6 +6,15 @@ replayed and traced. It's stage 10 of the [roadmap](README.md#roadmap),
 after operators. It builds on [deps.md](deps.md), and changes one of its
 rules: a `with` installs a set, and its order never matters.
 
+It's built in two halves:
+
+- **10a, handlers:** `with` as a set, `over` and `next`, `finally`, and
+  handler state that can fail to start. It's checking and lowering, with
+  no new runtime format.
+- **10b, the journal:** recording, replaying, tracing, journals as tests,
+  and the console's `:reload` and `:spec` ([testing.md](testing.md#the-console)).
+  It needs 10a: recording is a handler `over` each real implementation.
+
 The README's earlier sketch used `outer` and `for Users forwards`. This
 design replaces both with one word, `over`, because the wrapping should
 be visible in the code, not hidden in where a comma falls.
@@ -35,6 +44,9 @@ with Clock.frozen(t), mem_users([ann]), mem_rates(1) in
 - **An item's needs are met by the other items in the same `with` first,**
   then by what's installed outside it. The compiler works out the order
   to install them in. Two items that each need the other are an error.
+- **A handler of several dependencies counts as each of them.** `with h`
+  where `h: Clock & TestClock` installs both, so `with h, test_clock(t)`
+  installs `Clock` twice.
 - **Installing a dependency twice is an error,** because the second would
   silently hide the first:
 
@@ -115,8 +127,9 @@ error: `next` can only be called through
   = help: call it where it's needed: `next.get(id)`
 ```
 
-- **A handler `over A, B`** writes `next.get` when only one of the two has
-  a `get`, and `next(A).get` when both do.
+- **A handler `over A & B`** writes `next.get` when only one of the two
+  has a `get`, and `next(A).get` when both do. `A & B` is written as a
+  handler of several dependencies' type is ([deps.md](deps.md)).
 - **Inside an `over Users` handler, `Users.get` is still an error,** with
   help that says `next.get`. Reading it would suggest a call to itself.
 
@@ -182,8 +195,12 @@ pub handler transaction() over Sql =
   query(q) => try tx.query(q)
   finally(r) =>
     match r
-      Ok(v) => { try tx.commit(); v }
-      fail e => { tx.rollback(); fail e }
+      Ok(v) =>
+        try tx.commit()
+        v
+      fail e =>
+        tx.rollback()
+        fail e
 
 fn transfer(t: Transfer) ! DbDown | Short uses Sql =
   with transaction() over Sql in
@@ -201,6 +218,11 @@ fn transfer(t: Transfer) ! DbDown | Short uses Sql =
   any other.
 - `finally` runs once, whether the body finished or failed. A panic isn't
   an error, so `finally` doesn't see it: a panic ends the program.
+
+A handler is already what a type that keeps rules has to be
+([module-build.md](module-build.md#private-unless-pub)): its state can't
+be reached from outside, only through its operations, so the rule needs
+nothing more here.
 
 ### State that can fail to start
 
@@ -229,14 +251,32 @@ cc a.c
 replayed 14 calls: nothing touched the disk, and nothing ran
 ```
 
-- **Recording is a handler over each real implementation,** installed by
-  the runtime outermost: `recorder over Fs`, `over Clock`, and the rest.
-  It calls `next`, and writes down the call and what it gave back.
+- **Recording is a handler over an implementation,** which calls `next`
+  and writes down the call and what it gave back. `ren run --record`
+  has the runtime install it outermost, over each real implementation:
+  `recorder over Fs`, `over Clock`, and the rest. Only the runtime can
+  put it over the world. It works over any implementation, though, so
+  the test `Random`'s choices that property tests shrink
+  ([testing.md](testing.md#shrinking-replays-the-choices)) and the
+  console's session are journals in the same format.
+- **A panic is recorded too.** The journal is written as the program
+  runs, and a panic is its last entry, so a replay checks that the same
+  panic happens at the same call. A bug report is usually a panic, and
+  this is what makes it a file you can replay.
+- **Recording says what it holds:** `ren run --record` warns that the
+  journal has everything the program read, files and arguments included.
+  `secret` types will redact what they mark ([Later](#later)), and until
+  then the warning is the honest answer.
 - **Replaying is a handler for each,** answering every call with what was
   recorded, in order. Pure code is deterministic, so a program given the
   same answers makes the same calls.
 - That's enough for exact replay. What happens inside the program, between
-  calls to the world, replays by itself.
+  calls to the world, replays by itself. It needs one thing to be true:
+  **nothing reaches the world except through a dependency.** Every
+  intrinsic the prelude marks as reaching the world is an operation of
+  `Clock`, `Random`, `Console`, `Fs`, `Os` or `Proc`, and so is recorded:
+  arguments, the environment and the working directory included, and the
+  exit code is the journal's last entry.
 
 ### A replay that goes differently
 
@@ -254,25 +294,37 @@ error: the replay went differently at call 3 of 14
 ```
 
 A call differs if its dependency, its operation or its arguments differ.
-The replay stops at the first one, says what the recording expected, and
-points at the call that was made instead. Temporal's workflows taught
-this: a replay that silently goes wrong is worse than one that stops.
+`ren replay` is strict: it stops at the first one, says what the
+recording expected, and points at the call that was made instead. That's
+what replaying byte for byte means ([vision.md](vision.md)). Temporal's
+workflows taught this: a replay that silently goes wrong is worse than one
+that stops.
 
 ### A journal as a test fixture
 
 ```ren
 test "the just runs a real justfile" =
-  with replay("fixtures/build.journal") in
+  with replay("tests/build.journal") in
     try main()
-  assert TestConsole.output() == ["fmt a.c", "cc a.c"]
 ```
 
 Record a real run once, check the journal in, and the test needs no disk,
 no processes and no network again. Ruby's VCR does this for HTTP. In Ren
 it works for every dependency, with nothing to set up. `replay(file)` is
 an implementation of every built-in dependency the journal holds calls
-for. When the code changes how it calls the world, the test fails at the
-first call that differs, with the error above.
+for, and **it's the one way a journal becomes a test.**
+
+- **In a test, a replay answers inputs and compares outputs.** A call
+  whose result the program uses, `Fs.read`, `Clock.now`, `Proc.run`, is
+  answered from the journal, in order for each dependency. A call that
+  gives back nothing, `Console.print`, `Fs.write`, is compared: the test
+  fails if the outputs differ, and shows them as a diff, not as the first
+  call that differs. So adding a log line fails with what changed, rather
+  than breaking every journal at a call.
+- **A bug report becomes a test with one command.** `ren run --record
+  bug.journal` records the run that went wrong, and `ren test --keep
+  bug.journal` moves it to `tests/` and writes the test above for it, an
+  ordinary test to read and edit. Fix the bug, and it stays fixed.
 
 ### Tracing
 
@@ -300,10 +352,19 @@ trace is for reading, and replay doesn't need them.
 ### What an entry holds
 
 ```
-{ task: 1, seq: 412, dep: Fs, op: read, args: (p: "justfile"), result: Ok(61 bytes) }
+# ren journal 1 · just/main.ren · deps: Fs Os Proc Console
+1  Os.args()                         → ["build"]
+2  Fs.read("justfile")               → Ok(61 bytes: "build:\n\tfmt a.c\n...")
+3  Proc.run("sh", ["-c", "fmt a.c"]) → Ok(0)
+4  Console.error("fmt a.c")
 ```
 
-The shape is `runtime-io.md`'s, a submission and its completion:
+**A journal is text,** one call a line, because journals are checked in
+as tests and read in review: a changed journal shows what changed, and a
+bug report can be read before it's run. A compact binary form can come
+with the flight recorder, where size matters. The format is to be
+revisited once real journals exist. The shape is `runtime-io.md`'s, a
+submission and its completion:
 
 - **`task` and `seq`** say who made the call and in what order. There's
   one task until `Async`, but the field is there from the start, so the
@@ -351,15 +412,27 @@ The shape is `runtime-io.md`'s, a submission and its completion:
 
 ## Done when
 
+**10a:**
+
 - The prices example's cache is `cached(ttl) over Prices`, wrapping a real
   `Prices`, and the made-up `Supplier` is gone.
 - A `transaction() over Sql` handler commits or rolls back in `finally`,
   tested against an in-memory `Sql`.
+- A `with` is a set: installing a dependency twice, a handler of several
+  included, is the error above.
+
+**10b:**
+
 - `ren run --record` and `ren replay` reproduce the `just` exactly,
   without touching the disk or running anything. Changing a line of it
   makes the replay stop with the error above.
-- A test of the `just` runs from a checked-in journal fixture.
+- A run that panics replays to the same panic at the same call.
+- A test of the `just` runs from a checked-in journal, and `ren test
+  --keep` turns a recorded journal into such a test.
+- Every intrinsic that reaches the world is an operation of a recorded
+  dependency.
 - `ren run --trace` prints the call tree.
+- The console's `:reload` and `:spec` work, on the session's journal.
 
 ## Later
 
