@@ -12,5 +12,5 @@ languages = ["languages/ren"]
 # the grammar, once that commit is pushed.
 [grammars.ren]
 repository = "https://github.com/Mats-Dodd/ren"
-rev = "e8ce6c9182e94d4ec1cb6bb63583babc9c953c8f"
+rev = "45378a02845d3d626d7f1d0b0cea3776fef7c8d2"
 path = "editors/tree-sitter-ren"
