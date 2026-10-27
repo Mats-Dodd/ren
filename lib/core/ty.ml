@@ -180,6 +180,47 @@ let own_args t =
     rows = List.init (count (tails t)) (fun n -> { labels = []; tail = Some n });
   }
 
+(* [s], a scheme's type, with the type arguments [a] put in: the
+   n-th of [a.tys] for [Var n], and for a row ending in row variable [n],
+   the n-th of [a.rows]'s labels added to the row's, ending in its tail.
+   A canonical row has each label once, so where both have a label of one
+   name, the row's own is kept. *)
+let rec apply (a : args) (s : ty) : ty =
+  match s with
+  | Var n -> List.nth a.tys n
+  | Error -> Error
+  | Con (p, args) -> Con (p, List.map (apply a) args)
+  | Errors e -> Errors (apply_row a e)
+  | Impl i ->
+      let needs = apply_row a i.needs in
+      let fails = apply_row a i.fails in
+      Impl { i with needs; fails }
+  | Fun (ps, r, e, u) ->
+      Fun
+        ( List.map (fun (p : param) -> { p with ty = apply a p.ty }) ps,
+          apply a r,
+          apply_row a e,
+          apply_row a u )
+
+and apply_row a (r : row) : row =
+  let labels =
+    List.map
+      (fun (l : label) -> { l with payload = List.map (apply a) l.payload })
+      r.labels
+  in
+  match r.tail with
+  | None -> { labels; tail = None }
+  | Some n ->
+      let more : row = List.nth a.rows n in
+      let has (l : label) =
+        List.exists (fun (k : label) -> k.name = l.name) labels
+      in
+      {
+        labels =
+          sort_labels (labels @ List.filter (fun l -> not (has l)) more.labels);
+        tail = more.tail;
+      }
+
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, as inference numbers them: type variables and
    row variables separately. [names], [reqs] and [row_reqs] follow their

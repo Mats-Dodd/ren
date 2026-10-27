@@ -57,6 +57,17 @@ val core : ?lint:bool -> ?load:loader -> file:string -> string -> Core.program
 val linked :
   ?lint:bool -> ?load:loader -> file:string -> string -> Core.program list
 
+(* A release build's program: [linked]'s, with what `$start` reaches
+   specialized (specialize.ml), each module checked by Core Lint, and
+   what specializing made. [budget] is the most copies of one function. *)
+val specialized :
+  ?lint:bool ->
+  ?load:loader ->
+  ?budget:int ->
+  file:string ->
+  string ->
+  Core.program list * Specialize.stats
+
 (* Every function's inferred signature, as `ren types` prints it, for each
    module of the program in the order they're checked (the entry last), by
    module. With [lint], each module is also lowered and linted. *)
@@ -89,10 +100,13 @@ val suite :
    `Os.args`. With [record], each call to the world is written to the
    journal as it's made, and how the run ended after them (`ren run
    --record`); with [trace], each call of an operation is added to it
-   (`ren run --trace`). *)
+   (`ren run --trace`). With [release], it runs the program a release
+   build compiles, specialized (`ren run --release`), which has to do
+   just what the program does. *)
 val run :
   ?lint:bool ->
   ?load:loader ->
+  ?release:bool ->
   ?args:string list ->
   ?record:Journal.t ->
   ?trace:Trace.t ->
@@ -187,17 +201,31 @@ val wrap_help : sources:(string -> string option) -> Eval.wrap -> string option
    can't compile yet is an error that says so, at that code. Its counting
    is placed by Perceus (rc.ml), or with [~rc:Naive] as to_mem.ml makes
    it, a count at every use and a drop where the scope ends, the
-   baseline Perceus is measured against. *)
+   baseline Perceus is measured against. With [release], it's the
+   program specialized ([specialized]), and [made] is given what
+   specializing made. *)
 type rc = Naive | Perceus
 
 val mem :
-  ?lint:bool -> ?load:loader -> ?rc:rc -> file:string -> string -> Mem.program
+  ?lint:bool ->
+  ?load:loader ->
+  ?release:bool ->
+  ?made:(Specialize.stats -> unit) ->
+  ?rc:rc ->
+  file:string ->
+  string ->
+  Mem.program
 
 (* The same, as one C file, the runtime in it. [sources] gives the text
-   of each file a panic's message can show, by name (diag.ml). *)
+   of each file a panic's message can show, by name (diag.ml). In a
+   [release] build, each `inout` parameter is a `restrict` pointer, but
+   with [~restrict:false] (`--no-restrict`). *)
 val native :
   ?lint:bool ->
   ?load:loader ->
+  ?release:bool ->
+  ?made:(Specialize.stats -> unit) ->
+  ?restrict:bool ->
   ?rc:rc ->
   sources:(string -> string option) ->
   file:string ->

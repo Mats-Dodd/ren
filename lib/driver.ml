@@ -506,6 +506,27 @@ let link ?lint ?(for_tests = false) (modules : checked list) =
 
 let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
 
+(* A release build's program (specialize.ml): what [link] makes, with
+   what `$start` reaches specialized. Core Lint checks every module of
+   it, always, since specialization is what makes it and nothing else
+   checks that. *)
+let specialize ?lint ?budget (modules : checked list) =
+  let linked = link ?lint modules in
+  let imports =
+    [ Prelude.intrinsics ] :: List.map (fun c -> c.reachable) modules
+  in
+  let specialized, stats =
+    pass "specialize" (fun () -> Specialize.program ?budget linked)
+  in
+  List.iter2
+    (fun imports m ->
+      pass "lint" (fun () -> Core_lint.program ~imports ~linked:specialized m))
+    imports specialized;
+  (specialized, stats)
+
+let specialized ?lint ?load ?budget ~file src =
+  specialize ?lint ?budget (check_all ?load ~file src)
+
 (* ---- tests ---- *)
 
 (* A failed `assert`, as `ren run` reports it: a panic, with the sides of
@@ -751,10 +772,12 @@ let main_uses (modules : Core.program list) =
    over each real implementation instead, and the journal gets how the
    run ended as its last entry. With [trace], each call of an operation
    is added to it (`ren run --trace`). *)
-let run ?lint ?load ?(args = []) ?record ?trace ~file src =
+let run ?lint ?load ?(release = false) ?(args = []) ?record ?trace ~file src =
   let checked = check_all ?load ~file src in
   Builtins.args := args;
-  let modules = link ?lint checked in
+  let modules =
+    if release then fst (specialize ?lint checked) else link ?lint checked
+  in
   let start : Eval.start =
     match record with
     | None -> Real
@@ -1371,11 +1394,18 @@ let not_native ~file loc what =
 
 type rc = Naive | Perceus
 
-let mem ?lint ?load ?(rc = Perceus) ~file src =
-  let modules = linked ?lint ?load ~file src in
+let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
+    src =
+  let modules =
+    if release then (
+      let modules, stats = specialized ?lint ?load ~file src in
+      made stats;
+      modules)
+    else linked ?lint ?load ~file src
+  in
   let p =
     pass "native lowering" (fun () ->
-        try To_mem.program modules
+        try To_mem.program ~release modules
         with To_mem.Unsupported (loc, what) ->
           raise (not_native ~file loc what))
   in
@@ -1389,6 +1419,9 @@ let mem ?lint ?load ?(rc = Perceus) ~file src =
   pass "Mem Lint" (fun () -> Mem_lint.program p);
   p
 
-let native ?lint ?load ?rc ~sources ~file src =
-  let p = mem ?lint ?load ?rc ~file src in
-  pass "C" (fun () -> Emit_c.program ~site_text:(site_text ~sources) p)
+let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc ~sources
+    ~file src =
+  let p = mem ?lint ?load ~release ?made ?rc ~file src in
+  pass "C" (fun () ->
+      Emit_c.program ~restrict:(release && restrict)
+        ~site_text:(site_text ~sources) p)

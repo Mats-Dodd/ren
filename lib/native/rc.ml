@@ -88,6 +88,7 @@ let rhs_atoms (r : rhs) : atom list =
   | Not x
   | Tag_of x
   | Field (x, _, _)
+  | Struct_get (x, _)
   | To_word x
   | Of_word (x, _)
   | Env_get (x, _)
@@ -100,7 +101,12 @@ let rhs_atoms (r : rhs) : atom list =
   | Alloc { fields; words; at; _ } ->
       fields @ words @ Option.to_list (Option.map fst at)
   | Alloc_array { elems; desc; _ } -> elems @ Option.to_list desc
-  | Call (_, xs) | Runtime (_, xs, _) | Env_new xs | Impl (_, xs) -> xs
+  | Call (_, xs)
+  | Runtime (_, xs, _)
+  | Env_new xs
+  | Impl (_, xs)
+  | Make_struct xs ->
+      xs
   | Load v | Addr v -> [ Var v ]
   | Global _ -> []
   | Install { outer; impls; deps; ndeps } -> (outer :: impls) @ [ deps; ndeps ]

@@ -63,6 +63,12 @@ type layout =
   | Ptr
       (** a raw pointer: a block's environment or its arguments, an
           implementation of a dependency, a handler's code *)
+  | Struct of int
+      (** a release build's copied record or tuple (copied.ml), its fields all
+          scalars: a C struct, the program's [structs]'s n-th, a word for each
+          field, passed by value and kept in an array's elements, never counted.
+          Never a word, nor in an object: a type whose value would be one is
+          boxed instead *)
   | Token
       (** a reuse token: the memory of an object a [Reset] found unique, to
           build a new one in, or NULL. Never counted, and used or freed once *)
@@ -220,6 +226,10 @@ type rhs =
           implementation of the dependency with this number in the evidence *)
   | Is_unique of atom
       (** whether an object's count is 1 (lean.h, [lean_is_exclusive]) *)
+  | Make_struct of atom list
+      (** a [Struct], the variable's, of these fields, in the order they're
+          declared *)
+  | Struct_get of atom * int  (** the [n]-th field of a [Struct] *)
   | Reset of atom * (int * atom) list
       (** a unique object's memory, as a [Token]: the fields at the slots listed
           are the variables after them, which keep their references, and the
@@ -307,6 +317,9 @@ type fn = {
   name : string;  (** its C name *)
   params : var list;
   modes : mode list;  (** each parameter's, in order *)
+  inout : var list;
+      (** its `inout` parameters, which nothing else points to what they point
+          to: a release build tells C so, with `restrict` *)
   words : (int * var) list;
       (** the descriptor of each type variable whose values are words here, a
           parameter or a variable its body defines first *)
@@ -363,6 +376,7 @@ type program = {
   values : value list;  (** made in this order, each after those it uses *)
   strings : string list;  (** the string literals, by [Lit]'s index *)
   sites : site list;  (** by [sid] *)
+  structs : layout list list;  (** each [Struct]'s fields' layouts, by its n *)
   overflow : site;  (** where the stack overflowing is said to be *)
 }
 
@@ -391,6 +405,7 @@ let rec show_layout (l : layout) =
   | Block -> "Block"
   | Ptr -> "Ptr"
   | Token -> "Token"
+  | Struct n -> "Struct" ^ string_of_int n
 
 let show_var (v : var) = v.name ^ "/" ^ string_of_int v.id
 let typed (v : var) = Core.Atom (show_var v ^ ":" ^ show_layout v.layout)
@@ -518,6 +533,10 @@ let rhs_sexp = function
         ]
   | Is_unique x -> Core.List [ a "unique?"; a (show_atom x) ]
   | Reset (x, kept) -> Core.List (a "reset" :: a (show_atom x) :: kept_sexp kept)
+  | Make_struct xs ->
+      Core.List (a "struct" :: List.map (fun x -> a (show_atom x)) xs)
+  | Struct_get (x, n) ->
+      Core.List [ a "."; a (show_atom x); a (string_of_int n) ]
 
 let rec stmt_sexp = function
   | Let (v, r) -> Core.List [ a "let"; typed v; rhs_sexp r ]

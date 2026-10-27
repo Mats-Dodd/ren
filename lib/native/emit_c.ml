@@ -30,6 +30,7 @@ let rec ctype (l : layout) =
   | Ev -> "const ren_ev*"
   | Block -> "ren_block"
   | Ptr -> "void*"
+  | Struct n -> sprintf "ren_struct_%d" n
 
 let zero (l : layout) =
   match l with
@@ -39,6 +40,7 @@ let zero (l : layout) =
   | Boxed | Desc | Cell _ | Ev | Ptr | Token -> "NULL"
   | Word _ -> "(ren_val){0}"
   | Block -> "(ren_block){0}"
+  | Struct n -> sprintf "(ren_struct_%d){0}" n
 
 (* [s] as a C string literal: a byte that isn't printable ASCII as an
    octal escape, and `?` escaped, so nothing reads as a trigraph. *)
@@ -110,7 +112,8 @@ let word_of (l : layout) c =
   | Boxed | Desc -> sprintf "(ren_val){.o = %s}" c
   | Ptr | Ev -> sprintf "(ren_val){.p = (void*)%s}" c
   | Int | Bool | Unit | Enum -> sprintf "(ren_val){.i = (int64_t)%s}" c
-  | Block | Cell _ | Token -> bug "a block, a cell or a token as a word"
+  | Block | Cell _ | Token | Struct _ ->
+      bug "a block, a cell, a token or a struct as a word"
 
 let to_val (x : atom) = word_of (atom_layout x) (atom x)
 
@@ -124,9 +127,15 @@ let of_val l v =
   | Ev -> sprintf "((const ren_ev*)%s.p)" v
   | Int -> sprintf "%s.i" v
   | Bool | Unit | Enum -> sprintf "(%s)%s.i" (ctype l) v
-  | Block | Cell _ | Token -> bug "a word as a block, a cell or a token"
+  | Block | Cell _ | Token | Struct _ ->
+      bug "a word as a block, a cell, a token or a struct"
 
 let site (s : site) = sprintf "&ren_site_%d" s.sid
+
+(* The number of fields of each of the program's structs, by its
+   number: set by [program], for the C it writes. *)
+let struct_sizes = ref [||]
+let struct_words n = max 1 !struct_sizes.(n)
 
 let binop_fn (op : Ast.binop) (l : layout) =
   let name =
@@ -157,6 +166,20 @@ let runtime rt args site_arg =
   in
   match rt with
   | Array_len -> sprintf "ren_array_len(%s)" (a 0)
+  (* an array of structs: each element its words *)
+  | Array_get (Struct n) ->
+      sprintf "(*(ren_struct_%d*)ren_array_slots(%s, %s, %s))" n (a 0) (a 1)
+        (site ())
+  | Array_set (Struct _) ->
+      sprintf "ren_array_set_slots(%s, %s, %s.s, %s)" (a 0) (a 1) (a 2)
+        (site ())
+  | Array_push (Struct _) ->
+      sprintf "ren_array_push_slots(%s, %s.s)" (a 0) (a 1)
+  | Array_set_taking (Struct _) ->
+      sprintf "ren_array_set_slots_taking(%s, %s, %s.s, %s)" (a 0) (a 1) (a 2)
+        (site ())
+  | Array_push_taking (Struct _) ->
+      sprintf "ren_array_push_slots_taking(%s, %s.s)" (a 0) (a 1)
   | Array_get l ->
       of_val l (sprintf "ren_array_get(%s, %s, %s)" (a 0) (a 1) (site ()))
   | Array_set _ ->
@@ -239,8 +262,9 @@ let rhs (r : rhs) =
       match atom_layout x with
       | Enum -> sprintf "((int64_t)%s)" (atom x)
       | _ -> sprintf "ren_tag(%s)" (atom x))
-  | Field (x, n, _) ->
+  | Field (x, n, _) | Struct_get (x, n) ->
       failwith (sprintf "bug: emit_c: a field %s.%d outside a Let" (atom x) n)
+  | Make_struct _ -> bug "a struct made outside a Let"
   | Is_unique x -> sprintf "ren_is_unique(%s)" (atom x)
   | Reset (x, kept) -> sprintf "ren_reset(%s, %s)" (atom x) (mask kept)
   | Call (f, xs) -> sprintf "%s(%s)" f (String.concat ", " (List.map atom xs))
@@ -298,6 +322,14 @@ let rec stmt o d (s : stmt) =
       line
         (sprintf "%s %s = %s;" (ctype v.layout) (var v)
            (of_val v.layout (sprintf "ren_fields(%s)[%d]" (atom x) n)))
+  | Let (v, Struct_get (x, n)) ->
+      line
+        (sprintf "%s %s = %s;" (ctype v.layout) (var v)
+           (of_val v.layout (sprintf "%s.s[%d]" (atom x) n)))
+  | Let (v, Make_struct xs) ->
+      line
+        (sprintf "%s %s = {%s};" (ctype v.layout) (var v)
+           (braces (List.map to_val xs)))
   | Let (v, Alloc { tag; fields; words; at }) -> (
       (* a bit for each field that holds an object: one that always does,
          or a word whose descriptor says it does *)
@@ -347,19 +379,31 @@ let rec stmt o d (s : stmt) =
               fields;
             line "}");
           List.iteri (fun i x -> if not (List.mem i same) then set i x) fields)
-  | Let (v, Alloc_array { elem; elems; desc }) ->
+  | Let (v, Alloc_array { elem; elems; desc }) -> (
       let boxed =
         match desc with
         | Some d -> sprintf "ren_desc_counted(%s)" (atom d)
         | None -> string_of_bool (is_object elem)
       in
-      line
-        (sprintf "ren_obj* %s = ren_alloc_array(%d, %s);" (var v)
-           (List.length elems) boxed);
-      List.iteri
-        (fun i x ->
-          line (sprintf "ren_elems(%s)[%d] = %s;" (var v) i (to_val x)))
-        elems
+      match elem with
+      | Struct n ->
+          line
+            (sprintf "ren_obj* %s = ren_alloc_array_n(%d, %d);" (var v)
+               (List.length elems) (struct_words n));
+          List.iteri
+            (fun i x ->
+              line
+                (sprintf "((ren_struct_%d*)ren_elems(%s))[%d] = %s;" n (var v) i
+                   (atom x)))
+            elems
+      | _ ->
+          line
+            (sprintf "ren_obj* %s = ren_alloc_array(%d, %s);" (var v)
+               (List.length elems) boxed);
+          List.iteri
+            (fun i x ->
+              line (sprintf "ren_elems(%s)[%d] = %s;" (var v) i (to_val x)))
+            elems)
   | Let (v, Runtime (New_desc how, xs, _)) ->
       let args = var v ^ "_args" in
       let n = List.length xs in
@@ -545,8 +589,18 @@ and on_failure o d error on_error =
       line o d "}"
   | None -> line o d (sprintf "(void)%s;" (var error))
 
-let signature (f : fn) =
-  let params = List.map (fun v -> ctype v.layout ^ " " ^ var v) f.params in
+(* With [restrict], an `inout` parameter is a `restrict` pointer: the
+   only way to what it points to, which exclusivity (excl.ml) makes
+   true, so C may keep what it points to in a register. *)
+let signature ~restrict (f : fn) =
+  let params =
+    List.map
+      (fun v ->
+        if restrict && List.exists (fun (w : var) -> w.id = v.id) f.inout then
+          ctype v.layout ^ " restrict " ^ var v
+        else ctype v.layout ^ " " ^ var v)
+      f.params
+  in
   if f.fails then
     sprintf "static ren_obj* %s(%s)" f.name
       (String.concat ", " (params @ [ ctype f.result ^ "* ren_out" ]))
@@ -554,9 +608,9 @@ let signature (f : fn) =
     sprintf "static %s %s(%s)" (ctype f.result) f.name
       (match params with [] -> "void" | ps -> String.concat ", " ps)
 
-let fn b (f : fn) =
+let fn ~restrict b (f : fn) =
   let o = { b; fails = f.fails; catches = [] } in
-  Buffer.add_string b (signature f ^ " {\n");
+  Buffer.add_string b (signature ~restrict f ^ " {\n");
   line o 1 "REN_STACK_CHECK();";
   block o 1 f.body;
   Buffer.add_string b "}\n\n"
@@ -655,7 +709,8 @@ let static_types add (descs : desc list) (decls : decl list) =
 
 (* The C file for [p]. [site_text] is what's printed before and after the
    message of a panic at a site. *)
-let program ~(site_text : site -> string * string) (p : program) =
+let program ?(restrict = false) ~(site_text : site -> string * string)
+    (p : program) =
   let b = Buffer.create 65536 in
   let add = Buffer.add_string b in
   add Runtime_c.header;
@@ -684,14 +739,23 @@ let program ~(site_text : site -> string * string) (p : program) =
        (braces
           (match p.tags with [] -> [ "NULL" ] | ts -> List.map c_string ts)));
   static_types add p.descs p.decls;
+  struct_sizes := Array.of_list (List.map List.length p.structs);
+  (* each struct, a word for each field, as an array of structs keeps it *)
+  List.iteri
+    (fun n fields ->
+      add
+        (sprintf "typedef struct { ren_val s[%d]; } ren_struct_%d;\n"
+           (max 1 (List.length fields))
+           n))
+    p.structs;
   List.iter
     (fun (v : value) ->
       add (sprintf "static %s %s;\n" (ctype v.vlayout) v.vname))
     p.values;
   add "\n";
-  List.iter (fun f -> add (signature f ^ ";\n")) p.fns;
+  List.iter (fun f -> add (signature ~restrict f ^ ";\n")) p.fns;
   add "\n";
-  List.iter (fn b) p.fns;
+  List.iter (fn ~restrict b) p.fns;
   add "static void ren_program(void) {\n";
   (* the associated values, made once, in order *)
   List.iter

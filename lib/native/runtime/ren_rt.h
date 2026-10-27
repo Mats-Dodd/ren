@@ -214,6 +214,15 @@ void ren_free_token(ren_obj *tok);
 ren_obj *ren_alloc_array(int64_t len, bool boxed_elems);
 static inline ren_val *ren_elems(ren_obj *o) { return ((ren_array *)o)->data; }
 
+/* An array of [len] elements of [stride] words each, a release build's
+   structs (a copied record's fields, Mem's [Struct]), kept in the
+   elements: never counted, and never walked, since nothing that walks a
+   value is given one. An array's [nfields] is its stride, and 0 is 1. */
+ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride);
+static inline int64_t ren_stride(ren_obj *a) {
+  return a->nfields > 1 ? (int64_t)a->nfields : 1;
+}
+
 /* ---- arrays ---- */
 
 int64_t ren_array_len(ren_obj *a);
@@ -238,6 +247,16 @@ void ren_array_push(ren_obj **cell, ren_val v);
 ren_obj *ren_array_set_taking(ren_obj *a, int64_t i, ren_val v,
                               const ren_site *site);
 void ren_array_push_taking(ren_obj **cell, ren_val v);
+
+/* The same for an array of structs, each element [v], its words: [get]
+   gives where element [i] is, which the caller copies. */
+ren_val *ren_array_slots(ren_obj *a, int64_t i, const ren_site *site);
+ren_obj *ren_array_set_slots(ren_obj *a, int64_t i, const ren_val *v,
+                             const ren_site *site);
+void ren_array_push_slots(ren_obj **cell, const ren_val *v);
+ren_obj *ren_array_set_slots_taking(ren_obj *a, int64_t i, const ren_val *v,
+                                    const ren_site *site);
+void ren_array_push_slots_taking(ren_obj **cell, const ren_val *v);
 
 /* ---- strings ---- */
 

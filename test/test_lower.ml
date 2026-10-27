@@ -235,6 +235,8 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       body;
       test = false;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   report "" (fun () ->
@@ -273,6 +275,8 @@ let%expect_test "Core Lint reports a test function used by other code" =
       body;
       test;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   let helper = fn "helper" ~test:true (Ren.Core.unit loc) in
@@ -321,6 +325,8 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
       body;
       test = false;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   let x : Ren.Core.var = { id = 1; name = "x"; ty = Var 0 } in
@@ -427,6 +433,8 @@ let%expect_test "Core Lint reports a block that's returned" =
       body;
       test = false;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   let x : Ren.Core.var = { id = 1; name = "x"; ty = Ren.Ty.int } in
@@ -496,6 +504,8 @@ let%expect_test "Core Lint reports a pattern of an error type" =
       body;
       test = false;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   report "" (fun () ->
@@ -538,6 +548,8 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
       body;
       test = false;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   report "" (fun () ->
@@ -587,6 +599,8 @@ let%expect_test "Core Lint reports an instance that is a value" =
       body;
       test = false;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   report "" (fun () ->
@@ -627,6 +641,8 @@ let values_program ~uses_b ~values =
       body;
       test = false;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   let a = value "a" (Ren.Core.mk uses_b Ren.Ty.int loc) in

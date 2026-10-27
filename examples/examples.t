@@ -1023,7 +1023,7 @@ the wrong folder than a pass, so `ren test` on one exits 1:
 
   $ ren --help | head -2
   usage: ren <command> <file.ren>
-         ren run [--record <file.journal>] [--trace] <file.ren> [-- <args>...]
+         ren run [--record <file.journal>] [--trace] [--release] <file.ren>
   $ ren -h > /dev/null
   $ ren --version
   ren 0.1.0

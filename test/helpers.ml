@@ -30,11 +30,53 @@ let report_files files f =
 (* The same, for a program that is the one file [src]. *)
 let report src f = report_files [ (file, src) ] f
 
-(* [args] are what `ren run` was given after `--`. *)
-let run ?args src =
+(* What [f] prints, kept rather than printed, and what it raised, if
+   anything. *)
+let captured f =
+  flush stdout;
+  let tmp = Filename.temp_file "ren-test" ".out" in
+  let fd = Unix.openfile tmp [ O_WRONLY; O_TRUNC ] 0o600 in
+  let saved = Unix.dup Unix.stdout in
+  Unix.dup2 fd Unix.stdout;
+  Unix.close fd;
+  let raised =
+    Fun.protect
+      ~finally:(fun () ->
+        flush stdout;
+        Unix.dup2 saved Unix.stdout;
+        Unix.close saved)
+      (fun () -> match f () with () -> None | exception e -> Some e)
+  in
+  let out = In_channel.with_open_bin tmp In_channel.input_all in
+  Sys.remove tmp;
+  (out, raised)
+
+(* Run a program as `ren run` does, [run ~release:false], printing what
+   it prints, and as `ren run --release` does, specialized, which has to
+   print just the same: if it doesn't, what that printed is printed
+   first. An exception the first raises goes on. *)
+let both (run : release:bool -> unit) =
+  let said = function
+    | out, None -> out
+    | out, Some e -> out ^ "raised: " ^ Printexc.to_string e ^ "\n"
+  in
+  let release = captured (fun () -> run ~release:true) in
+  let plain = captured (fun () -> run ~release:false) in
+  if said release <> said plain then
+    print_string
+      ("`ren run --release` printed:\n" ^ said release ^ "and `ren run`:\n");
+  print_string (fst plain);
+  Option.iter raise (snd plain)
+
+(* [args] are what `ren run` was given after `--`. A program that
+   changes the world, which a second run would find changed, is run
+   once, without [twice]. *)
+let run ?args ?(twice = true) src =
   let src = clean src in
-  report src (fun () ->
-      print_endline (Value.show (Driver.run ~lint:true ?args ~file src)))
+  (if twice then both else fun run -> run ~release:false) (fun ~release ->
+      report src (fun () ->
+          print_endline
+            (Value.show (Driver.run ~lint:true ~release ?args ~file src))))
 
 let tokens src =
   let src = clean src in
@@ -71,8 +113,10 @@ let program files =
 
 let run_files files =
   let files, file, src, load = program files in
-  report_files files (fun () ->
-      print_endline (Value.show (Driver.run ~lint:true ~load ~file src)))
+  both (fun ~release ->
+      report_files files (fun () ->
+          print_endline
+            (Value.show (Driver.run ~lint:true ~release ~load ~file src))))
 
 (* Every module's signatures, as `ren types` prints them. *)
 let types_files files =
@@ -227,7 +271,9 @@ let check_error_files files =
    when it runs: what `ren run` says. *)
 let run_error ?args src =
   let src = clean src in
-  expecting_error
-    [ (file, src) ]
-    (fun () ->
-      print_endline (Value.show (Driver.run ~lint:true ?args ~file src)))
+  both (fun ~release ->
+      expecting_error
+        [ (file, src) ]
+        (fun () ->
+          print_endline
+            (Value.show (Driver.run ~lint:true ~release ?args ~file src))))

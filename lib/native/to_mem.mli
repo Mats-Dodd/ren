@@ -7,5 +7,7 @@ exception Unsupported of Loc.t * string
 
 (* The program [modules], the prelude first and the entry last, with its
    `$start`: what `$start` reaches, in Mem IR. Raises [Unsupported] at the
-   first code outside the subset. *)
-val program : Core.program list -> Mem.program
+   first code outside the subset. With [release], a copied record or
+   tuple of scalars (copied.ml) is a C struct ([Mem.Struct]), unless a
+   value of its type has to be a word or a field of an object. *)
+val program : ?release:bool -> Core.program list -> Mem.program

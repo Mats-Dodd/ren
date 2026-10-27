@@ -29,6 +29,7 @@ type env = {
   fns : (string, fn) Hashtbl.t;
   values : (string, layout) Hashtbl.t;
   ndescs : int;
+  structs : layout list array;  (** each [Struct]'s fields' layouts *)
   fn : fn;  (** the function being checked *)
   defined : Ids.t;  (** the variables in scope here *)
   seen : (int, unit) Hashtbl.t;  (** every variable defined so far *)
@@ -59,8 +60,9 @@ let same (a : layout) (b : layout) =
 
 (* Whether a value of this layout fits in a word, which is how a block's
    arguments and value, and a type variable's, are passed. A block, two
-   words, never is one, and neither is a cell. *)
-let wordable (l : layout) = match l with Block | Cell _ -> false | _ -> true
+   words, never is one, and neither is a cell, nor a struct. *)
+let wordable (l : layout) =
+  match l with Block | Cell _ | Struct _ -> false | _ -> true
 
 let use env (v : var) =
   if not (Ids.mem v.id env.defined) then
@@ -214,8 +216,8 @@ let rhs env (r : rhs) : layout =
       List.iter (operand env "a field's descriptor" Desc) words;
       Boxed
   | Alloc_array { elem; elems; desc } ->
-      if not (wordable elem) then
-        fail env (sprintf "an array of %s" (show_layout elem));
+      if not (wordable elem || match elem with Struct _ -> true | _ -> false)
+      then fail env (sprintf "an array of %s" (show_layout elem));
       List.iter (operand env "an array's element" elem) elems;
       (match (elem, desc) with
       | Word _, Some d -> operand env "an array's descriptor" Desc d
@@ -313,6 +315,17 @@ let rhs env (r : rhs) : layout =
       operand env "what's reset" Boxed x;
       kept_fields env kept;
       Token
+  | Make_struct xs ->
+      (* the struct's is the variable's, which [stmt] checks *)
+      List.iter (fun x -> ignore (atom env x)) xs;
+      Unit
+  | Struct_get (x, n) -> (
+      match atom env x with
+      | Struct k when k >= 0 && k < Array.length env.structs -> (
+          match List.nth_opt env.structs.(k) n with
+          | Some l -> l
+          | None -> fail env (sprintf "field %d of a struct of fewer" n))
+      | l -> fail env (sprintf "a struct's field read from %s" (show_layout l)))
 
 let rec stmt env (s : stmt) : env =
   match s with
@@ -324,6 +337,17 @@ let rec stmt env (s : stmt) : env =
             fail env
               (sprintf "%s, %s, read from words" (show_var v)
                  (show_layout v.layout))
+      | Make_struct xs -> (
+          match v.layout with
+          | Struct k
+            when k >= 0
+                 && k < Array.length env.structs
+                 && List.length env.structs.(k) = List.length xs ->
+              List.iter2 (operand env "a struct's field") env.structs.(k) xs
+          | l ->
+              fail env
+                (sprintf "a struct made as %s, %s" (show_var v) (show_layout l))
+          )
       | Env_get _ -> (
           match v.layout with
           | Cell _ -> ()
@@ -449,12 +473,13 @@ let rec stmt env (s : stmt) : env =
 (* A block's own definitions end with it. *)
 and block env b = ignore (List.fold_left stmt env b)
 
-let fn fns values ndescs (f : fn) =
+let fn fns values ndescs structs (f : fn) =
   let env =
     {
       fns;
       values;
       ndescs;
+      structs;
       fn = f;
       defined = Ids.empty;
       seen = Hashtbl.create 64;
@@ -1328,7 +1353,7 @@ let program (p : program) =
       Hashtbl.replace values v.vname v.vlayout)
     p.values;
   let ndescs = List.length p.descs in
-  List.iter (fn fns values ndescs) p.fns;
+  List.iter (fn fns values ndescs (Array.of_list p.structs)) p.fns;
   List.iter (counting fns) p.fns;
   if p.start_desc < 0 || p.start_desc >= ndescs then
     failwith "Mem Lint: `main`'s descriptor isn't in the program";

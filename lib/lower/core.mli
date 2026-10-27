@@ -306,6 +306,29 @@ and pattern_kind =
   | POr of pattern list
       (** any of these; each binds the same variables (the same [var]s) *)
 
+(* Where a function came from. The specializer makes the others, each
+   from what the program wrote (specialize.ml). *)
+type origin =
+  | Written  (** lowered from the program *)
+  | Copy of Path.t
+      (** a copy of this function, specialized for the types, blocks and
+          handlers a call gives it *)
+  | Lifted_block of string
+      (** a block, by its name (Lambda's [name]), lifted out of the function
+          it's written in: its captures are parameters before its own *)
+  | Lifted_op of { dep : Path.t; handler : Path.t; op : string }
+      (** the operation [op] of [handler]'s implementation of [dep], lifted: the
+          handler's state, its cells and what it keeps, are parameters before
+          the operation's own. Called directly where that handler is known to be
+          installed ([known]) *)
+
+(* At the evidence [kev], the implementation of [kdep] is known: an
+   instance of the handler [khandler], whose state is in the frame of
+   the [With] that installed it, so a call of one of its operations is a
+   direct call of the operation, lifted ([Lifted_op]), and the [With]
+   installs nothing in a native build. *)
+type known = { kev : var; kdep : Path.t; khandler : Path.t }
+
 type fn_def = {
   path : Path.t;
   params : param list;
@@ -326,6 +349,13 @@ type fn_def = {
           test code calls one, which Lint checks, so `ren run` leaves them out
       *)
   loc : Loc.t;  (** its name, where it's declared *)
+  origin : origin;
+      (** where it came from: lowered from what's written, or made by a release
+          build's specializer (specialize.ml) *)
+  known : known list;
+      (** the evidence in it whose implementation of a dependency is known, by
+          the variable: its own, a [With]'s or a block's. Only the specializer
+          knows any (compiler.md, "Specialization") *)
 }
 
 (* A module, lowered. [types] are the types it declares. *)

@@ -7,4 +7,4 @@
    (glob_files ../examples/*.ren)))
  (preprocess
   (pps ppx_expect))
- (libraries ren))
+ (libraries ren unix))

@@ -7,11 +7,13 @@ let version = "ren 0.1.0"
 
 let usage =
   {|usage: ren <command> <file.ren>
-       ren run [--record <file.journal>] [--trace] <file.ren> [-- <args>...]
+       ren run [--record <file.journal>] [--trace] [--release] <file.ren>
+               [-- <args>...]
        ren replay <file.journal> [--trace]
        ren build <file.ren> [-o <out>] [--debug | --release] [--emit-c]
-                 [--emit-mem] [--stats] [--rc naive | --rc perceus]
-       ren core --types <file.ren>
+                 [--emit-mem] [--stats] [--no-restrict]
+                 [--rc naive | --rc perceus]
+       ren core [--types] [--release] <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
        ren test --keep <file.journal>
@@ -30,6 +32,9 @@ commands:
                                      dependencies, once it ends, with how
                                      long each took (REN_NO_TIMINGS set
                                      leaves that out)
+            --release                run the program `ren build --release`
+                                     compiles, specialized, which does
+                                     just what it does
   replay  run the program a journal recorded again, each call to the world
           answered from the journal, so nothing touches the disk and
           nothing runs; it stops at the first call that isn't the
@@ -42,11 +47,19 @@ commands:
             -o <out>   the binary to write, the file's name without
                        `.ren` if not given
             --debug    -O0 -g, the default
-            --release  -O2, the same code until native step 5
+            --release  -O2, and the program specialized: a copy of each
+                       generic function for each type it's used at,
+                       each block given lifted into a function, and
+                       each call of an operation whose handler is known
+                       made directly
             --emit-c   print the C instead of building it
             --emit-mem print the Mem IR instead, its counting placed
             --stats    count allocations, frees and reference counting,
-                       printed to stderr when the binary exits
+                       printed to stderr when the binary exits, and,
+                       with --release, print what specializing made
+            --no-restrict
+                       with --release, don't promise C that an `inout`
+                       parameter is the only way to what it points to
             --rc perceus
                        place the counting precisely, borrowing what's
                        only read and changing what's unique in place,
@@ -90,6 +103,8 @@ commands:
           with the evidence of what's installed passed explicitly:
             --types    also each function's type, and the type arguments
                        each use of a generic function picks
+            --release  the program `ren build --release` compiles,
+                       specialized
   tokens  print the tokens the lexer produces
   ast     print the parsed syntax tree
 
@@ -449,9 +464,10 @@ let test args =
          with e -> fail ~known:roots e)
   | exception e -> fail ~known:roots e
 
-(* `ren run [--record <file>] [--trace] <file.ren> [-- <args>...]`
-   (handlers.md, "The journal"). *)
+(* `ren run [--record <file>] [--trace] [--release] <file.ren>
+   [-- <args>...]` (handlers.md, "The journal"). *)
 let run args =
+  let release = ref false in
   (* the flags come before or after the file, but before `--` *)
   let rec parse (record, trace, path) = function
     | "--record" :: file :: rest
@@ -465,6 +481,9 @@ let run args =
            --record run.journal";
         exit 2
     | "--trace" :: rest -> parse (record, true, path) rest
+    | "--release" :: rest ->
+        release := true;
+        parse (record, trace, path) rest
     | ("--" :: _ | []) as rest -> (
         let os_args = match rest with _ :: a -> a | [] -> [] in
         match path with
@@ -524,7 +543,8 @@ let run args =
       record
   in
   match
-    Driver.run ~load:(loader path) ~args:os_args ?record ?trace ~file:path src
+    Driver.run ~load:(loader path) ~release:!release ~args:os_args ?record
+      ?trace ~file:path src
   with
   | v ->
       print_trace trace;
@@ -603,7 +623,7 @@ let replay args =
    "Native slice"): the program as C, compiled in a temporary folder by
    $REN_CC, or cc. *)
 let build args =
-  let rc = ref Driver.Perceus in
+  let rc = ref Driver.Perceus and restrict = ref true in
   let rec parse ((out, release, emit, stats, path) as o) = function
     | "-o" :: file :: rest -> parse (Some file, release, emit, stats, path) rest
     | "--debug" :: rest -> parse (out, false, emit, stats, path) rest
@@ -611,6 +631,9 @@ let build args =
     | "--emit-c" :: rest -> parse (out, release, `C, stats, path) rest
     | "--emit-mem" :: rest -> parse (out, release, `Mem, stats, path) rest
     | "--stats" :: rest -> parse (out, release, emit, true, path) rest
+    | "--no-restrict" :: rest ->
+        restrict := false;
+        parse o rest
     | "--rc" :: "naive" :: rest ->
         rc := Driver.Naive;
         parse o rest
@@ -643,17 +666,26 @@ let build args =
   in
   let src = read path in
   let known = [ (path, src) ] in
+  (* what specializing made, which `--stats` prints *)
+  let made (s : Specialize.stats) =
+    if stats then
+      prerr_endline
+        (Printf.sprintf
+           "ren specialized: %d copies, %d blocks lifted, %d handlers known, \
+            %d calls past the budget"
+           s.copies s.blocks s.handlers s.over_budget)
+  in
   if emit = `Mem then
     let p =
-      try Driver.mem ~load:(loader path) ~rc:!rc ~file:path src
+      try Driver.mem ~load:(loader path) ~release ~made ~rc:!rc ~file:path src
       with e -> fail ~known e
     in
     List.iter (fun f -> print_endline (Mem.show_fn f)) p.fns
   else
     let c =
       try
-        Driver.native ~load:(loader path) ~rc:!rc ~sources:(sources ~known)
-          ~file:path src
+        Driver.native ~load:(loader path) ~release ~made ~restrict:!restrict
+          ~rc:!rc ~sources:(sources ~known) ~file:path src
       with e -> fail ~known e
     in
     if emit = `C then print_string c
@@ -752,12 +784,18 @@ let console args =
   Console.run ~echo:(not (Unix.isatty Unix.stdin)) s stdin
 
 let () =
-  (* `ren core --types <file.ren>`: the flag is taken out, and the rest
-     read as any command's is *)
-  let types, argv =
+  (* `ren core [--types] [--release] <file.ren>`: the flags are taken
+     out, and the rest read as any command's is *)
+  let types, release, argv =
     match Sys.argv with
-    | [| ren; "core"; "--types"; path |] -> (true, [| ren; "core"; path |])
-    | argv -> (false, argv)
+    | [| ren; "core"; "--types"; path |] ->
+        (true, false, [| ren; "core"; path |])
+    | [| ren; "core"; "--release"; path |] ->
+        (false, true, [| ren; "core"; path |])
+    | [| ren; "core"; "--types" | "--release"; "--types" | "--release"; path |]
+      ->
+        (true, true, [| ren; "core"; path |])
+    | argv -> (false, false, argv)
   in
   match argv with
   | [| _; "--help" | "-h" | "help" |] ->
@@ -794,7 +832,9 @@ let () =
                 if i > 0 then print_newline ();
                 print_endline ("-- " ^ m.home);
                 List.iter (fun f -> print_endline (Core.show_fn ~types f)) m.fns)
-              (List.tl (Driver.linked ~load ~file:path src))
+              (List.tl
+                 (if release then fst (Driver.specialized ~load ~file:path src)
+                  else Driver.linked ~load ~file:path src))
         | "tokens" ->
             print_endline (Driver.dump_tokens (Driver.tokens ~file:path src))
         | "ast" ->

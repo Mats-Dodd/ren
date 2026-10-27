@@ -223,48 +223,6 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
   in
   go s t
 
-(* [s], a scheme's type, with the type arguments [a] put in (Ty.args): the
-   n-th of [a.tys] for [Var n], and for a row ending in row variable [n],
-   the n-th of [a.rows]'s labels added to the row's, ending in its tail.
-   A canonical row has each label once, so where both have a label of one
-   name, the row's own is kept. *)
-let rec apply (a : Ty.args) (s : Ty.ty) : Ty.ty =
-  match s with
-  | Var n -> List.nth a.tys n
-  | Error -> Error
-  | Con (p, args) -> Con (p, List.map (apply a) args)
-  | Errors e -> Errors (apply_row a e)
-  | Impl i ->
-      let needs = apply_row a i.needs in
-      let fails = apply_row a i.fails in
-      Impl { i with needs; fails }
-  | Fun (ps, r, e, u) ->
-      Fun
-        ( List.map (fun (p : Ty.param) -> { p with ty = apply a p.ty }) ps,
-          apply a r,
-          apply_row a e,
-          apply_row a u )
-
-and apply_row a (r : Ty.row) : Ty.row =
-  let labels =
-    List.map
-      (fun (l : Ty.label) -> { l with payload = List.map (apply a) l.payload })
-      r.labels
-  in
-  match r.tail with
-  | None -> { labels; tail = None }
-  | Some n ->
-      let more : Ty.row = List.nth a.rows n in
-      let has (l : Ty.label) =
-        List.exists (fun (k : Ty.label) -> k.name = l.name) labels
-      in
-      {
-        labels =
-          Ty.sort_labels
-            (labels @ List.filter (fun l -> not (has l)) more.labels);
-        tail = more.tail;
-      }
-
 (* A use of [name], whose scheme's type is [s], at the type arguments [a]:
    there's one for each of [s]'s variables, none of them an error, and the
    use's type [t] is [s] with them put in. Inference picked them where it
@@ -280,7 +238,7 @@ let used env loc name (s : Ty.ty) (a : Ty.args) (t : Ty.ty) =
          name ntys nrows (show s) (List.length own.tys) (List.length own.rows));
   if List.exists has_error a.tys || List.exists row_has_error a.rows then
     fail env loc (sprintf "`%s` is given an error type as a type argument" name);
-  let expected = apply a s in
+  let expected = Ty.apply a s in
   if not (equal env t expected) then
     fail env loc
       (sprintf "`%s` is used at `%s`, but its type arguments make it `%s`" name
@@ -1707,6 +1665,93 @@ let world (prog : program) =
    in a module that imports it), so every module's dependencies are known
    here; their other types aren't, since another module's opaque type
    must stay opaque. *)
+(* What a release build's specialization (specialize.ml) says, checked
+   against the code: a parameter that's a cell, a known handler's state,
+   is only a function's the specializer made; at each [With] whose
+   handler is known ([fn_def.known]), the handler is the one written
+   there, and no call of one of its operations goes through the evidence;
+   a direct call of an operation ([Lifted_op]) is where the handler it's
+   of is known, and a call of a function that knows a handler is where
+   the same one is known: the shape a function was specialized for is
+   the one each of its callers has. *)
+let specialized ~(fns : (Path.t, fn_def) Hashtbl.t) (f : fn_def) =
+  let env_fail (loc : Loc.t) msg =
+    failwith
+      (sprintf "Core Lint: in `%s`, at %s:%d:%d: %s" (Path.local f.path)
+         loc.file loc.start.line loc.start.col msg)
+  in
+  let is_cell (t : Ty.ty) =
+    match (t, cell_ty Ty.unit) with
+    | Con (p, [ _ ]), Con (c, _) -> p = c
+    | _ -> false
+  in
+  if f.origin = Written then
+    List.iter
+      (fun (p : param) ->
+        if is_cell p.var.ty then
+          env_fail f.loc
+            (sprintf "the parameter `%s` is a cell, in a function as written"
+               p.var.name))
+      f.params;
+  let known_in (g : fn_def) (ev : var) =
+    List.filter (fun (k : known) -> k.kev.id = ev.id) g.known
+  in
+  let known_at = known_in f in
+  let shape ks =
+    List.sort compare (List.map (fun (k : known) -> (k.kdep, k.khandler)) ks)
+  in
+  let rec go (e : expr) =
+    (match e.kind with
+    | Call ({ kind = Global (p, _, _, _); _ }, _, cev) -> (
+        match Hashtbl.find_opt fns p with
+        | Some g ->
+            (match g.origin with
+            | Lifted_op { dep; handler; op } ->
+                if
+                  not
+                    (List.exists
+                       (fun (k : known) -> k.kdep = dep && k.khandler = handler)
+                       (known_at cev))
+                then
+                  env_fail e.loc
+                    (sprintf
+                       "a direct call of `%s`, where `%s`'s handler isn't \
+                        known to be `%s`"
+                       op (Path.local dep) (Path.local handler))
+            | Written | Copy _ | Lifted_block _ -> ());
+            let theirs = shape (known_in g g.ev) in
+            if
+              theirs <> []
+              && not
+                   (List.for_all
+                      (fun k -> List.mem k (shape (known_at cev)))
+                      theirs)
+            then
+              env_fail e.loc
+                (sprintf
+                   "a call of `%s`, which knows a handler this call doesn't"
+                   (Path.local p))
+        | None -> ())
+    | Dep_call { dep; ev; next = false; op; _ }
+      when List.exists (fun (k : known) -> k.kdep = dep) (known_at ev) ->
+        env_fail e.loc
+          (sprintf
+             "`%s.%s` called through the evidence, where its handler is known"
+             (Path.local dep) op)
+    | With { ev; dep; impl; _ }
+      when List.exists (fun (k : known) -> k.kdep = dep) (known_at ev) -> (
+        match impl.kind with
+        | Handler _ -> ()
+        | _ ->
+            env_fail e.loc
+              (sprintf
+                 "a `with` of a known `%s` handler that isn't written there"
+                 (Path.local dep)))
+    | _ -> ());
+    List.iter go (children e)
+  in
+  go f.body
+
 let program ~imports ~linked (prog : program) =
   let env =
     {
@@ -1777,4 +1822,10 @@ let program ~imports ~linked (prog : program) =
   world prog;
   shows env prog;
   keys_and_ops env prog;
-  List.iter (fn_def env) prog.fns
+  List.iter (fn_def env) prog.fns;
+  let fns = Hashtbl.create 256 in
+  List.iter
+    (fun (m : program) ->
+      List.iter (fun (f : fn_def) -> Hashtbl.replace fns f.path f) m.fns)
+    (linked @ [ prog ]);
+  List.iter (specialized ~fns) prog.fns

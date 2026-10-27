@@ -1586,6 +1586,8 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
     body = expr cx f.body;
     test = f.test;
     loc = f.name.loc;
+    origin = Written;
+    known = [];
   }
 
 (* The types among [types] that show their values through their own
@@ -1724,4 +1726,6 @@ let start (main : C.fn_def) : C.fn_def =
     body = install 1 deps;
     test = false;
     loc;
+    origin = Written;
+    known = [];
   }

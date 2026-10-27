@@ -12,3 +12,7 @@ val start_name : string
 (* The built-in dependencies a `main` uses, which the runtime installs
    around it. *)
 val main_uses : Core.fn_def -> Path.t list
+
+(* The locals [e] uses but doesn't bind, in order of id: what a block
+   whose body is [e] captures, but for its own parameters and evidence. *)
+val free : Core.expr -> Core.var list

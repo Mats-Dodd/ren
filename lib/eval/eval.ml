@@ -239,8 +239,9 @@ let unmet cx env (a : Core.expr) =
       (fun _ (f : fn_def) found ->
         match found with
         | _
-          when f.loc.file <> Prelude.file || f.loc.start.line > a.loc.start.line
-          ->
+          when f.loc.file <> Prelude.file
+               || f.loc.start.line > a.loc.start.line
+               || f.origin <> Written ->
             found
         | Some (g : fn_def) when g.loc.start.line >= f.loc.start.line -> found
         | _ -> Some f)

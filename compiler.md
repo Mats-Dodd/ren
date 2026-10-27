@@ -66,7 +66,7 @@ inference every body a value goes through.
 | AST, resolved | resolve.ml | every name found through scope, by its binder's id or its path | inference, which only reads it | yes |
 | inferred | infer.ml | each function's scheme and each node's type and lookup | the driver: a public function's inferred scheme is the one its interface states | yes |
 | Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments from R2, requirement dictionaries from R4 | Core Lint, which the tests run on every program | yes |
-| specialized Core | the specializer | Core with type arguments and requirements chosen, and each block and known handler specialized where it's used | Core Lint | the memory stage |
+| specialized Core | the specializer | Core with type arguments and requirements chosen, and each block and known handler specialized where it's used | Core Lint | since native step 5, in a release build: specialize.ml, from the linked program, checked by Core Lint and run by `ren run --release`, `ren core --release` prints it |
 | Mem IR | memory lowering | A-normal form, layouts, a block as a code and a frame pointer | its own lint | the sequential subset ([Native slice](#native-slice)): to_mem.ml, checked by mem_lint.ml on every build; generic code through descriptors, blocks, evidence and handlers since native step 3 |
 | Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | since native step 4: borrow.ml, rc.ml and reuse.ml, each function's counting checked path by path by Mem Lint; the naive counting to_mem.ml places, a dup at every use and a drop at every scope's end, is `ren build --rc naive` |
 | C | the C backend | the counted Mem IR, emitted | the C compiler, ASan and UBSan | the first-order subset: emit_c.ml and the runtime, `ren build`, tested under ASan and UBSan against `ren run` |
@@ -243,6 +243,13 @@ called:
   are cached by content, so a rebuild specializes only what changed.
   Specialization has a budget, and past it the code falls back to what a
   debug build does.
+
+Since native step 5, `ren build --release` does this (Native slice,
+"Step 5"): specialize.ml, from `$start`, over the linked program's Core,
+into Core that Core Lint checks and the interpreter runs, as `ren run
+--release` and `ren core --release` do. It isn't cached yet: it runs on
+the whole program each build, from the linked modules' Core, not the
+implementation tier.
 
 Both mean the same: specialization only makes code faster (rule 1). To
 specialize a function of another module, a release build needs its body,
@@ -1849,3 +1856,108 @@ What later steps need to know:
   these passes count as they count any other; the take of a cell's
   array relies on the same `&` rule, that it aliases nothing the callee
   can see, that `restrict` will.
+
+### Step 5: release builds that specialize
+
+`ren build --release` specializes the whole program before memory
+lowering, then lays copied records out unboxed and marks `&` parameters
+`restrict`. The debug build is unchanged. Everything that follows,
+Perceus included, runs on the specialized program as it ran on the
+debug one.
+
+**specialize.ml** runs after `Driver.linked`, on the program's Core,
+from `$start`. It's a worklist driven by demand, after Roc's
+monomorphization: each call of a function reached asks for a copy of
+it, keyed by three things the call knows.
+
+- **Its types:** the type arguments, and what each of its rows of
+  errors stands for, so a copy has no type variables, its descriptors
+  are known and its dictionaries derived from known types. A row of
+  what a function uses stays a variable, since it changes nothing a copy
+  does. `$start`'s own type variables, ones inference left undecided,
+  are `()`.
+- **Its blocks:** each block parameter's literal is lifted out to a
+  function of its own, `main$1#2`, whose captures are its first
+  parameters (Effekt's static-argument transformation): a capture the
+  block changes is `inout`, the rest are values. The copy calls it
+  directly. A block parameter passed on keeps its key, so a recursive
+  function is copied once.
+- **Its evidence's shape:** which dependencies it uses have a handler
+  known to be installed, by a `with` around the call whose handler is a
+  literal. A known handler's operations are lifted, `counter.next`, its
+  state their first parameters, as cells, and a dependency call of one
+  becomes a direct call. The handler's state is bound before the
+  `with`, which stays, with the handler as a literal, so the
+  interpreter still installs it; memory lowering installs nothing for
+  it.
+
+A copy is named `f$1`, in its original's module, and records where it
+came from (`Core.fn_def.origin`) and which handlers it knows
+(`known`). A copy only ever replaces a call to the same code (rule 1),
+and the budget is 64 copies of one function: past it a call gets the
+function as written, the debug strategy, unless a handler it uses is
+known, which only a copy can call directly. A handler known inside
+another handler's operations isn't specialized, and the call goes
+through evidence. `ren build --release --stats` prints what it made:
+copies, blocks lifted, handlers known and calls past the budget.
+
+**Core Lint checks it** like any Core, and checks the specializer's own
+claims too (`Core_lint.specialized`): a cell parameter only in a
+function the specializer made, a direct call of an operation only where
+its handler is known at the call's evidence, a callee's known handlers
+a subset of its caller's there, no dependency call on a known
+dependency but `next`, and a known dependency's `with` installing a
+handler literal. test/helpers.ml runs every program of the test suite
+both ways, and says so if `ren run --release` prints anything different
+from `ren run`.
+
+**Copied records are structs.** Whether a type is copied, read in an
+instant rather than counted, is one predicate, copied.ml's
+`Copied.is`, which excl.ml and memory lowering both use. In a release
+build a copied record or tuple whose fields are all `Int`, `Float`,
+`Bool`, `()` or a sum with no payloads is a Mem layout of its own,
+`Struct n`: a C struct, passed and returned by value, and stored inline
+in an array, whose header's stride says how many slots each element
+takes. `Make_struct` builds one and `Struct_get` reads a field. A type
+whose value would have to be a word, a generic function's parameter
+not specialized, a field of an object or a descriptor's, is boxed
+instead: memory lowering raises `Demote` for it and starts again with
+that type boxed, so a type is one layout in the whole program. Mem Lint
+checks that a struct is never a word, but an array's element. nbody's
+bodies are structs, and a step allocates nothing: 12 allocations in all
+at the small size, where the debug build makes 65,020.
+
+**`restrict`.** Each `inout` parameter of a function is listed in
+`Mem.fn.inout`, and the release build declares it `T *restrict`, which
+the exclusivity rule makes true: an `&` parameter aliases nothing the
+callee can see. `--no-restrict` leaves it out.
+
+bench/build.t builds every benchmark and example `--release` under
+ASan and UBSan, the same as `ren run` and `ren run --release`, with no
+object alive at the end. It shows H1's `map`, `reduce`, `each`, fold and
+retry wrapper making no indirect call and building no block, each
+allocating as many objects as its twin written as a loop; H2's
+`Counter.bump` a direct call; the `restrict` prototypes; and the
+structs. test/test_specialize.ml shows the Core it makes and what Core
+Lint catches.
+
+Where it differed from its plan:
+
+- **Only scalars make a struct.** A copied record with a string or an
+  array in it stays boxed, since its fields would need counting.
+- **A known handler's `with` stays in Core,** with its handler literal,
+  so the interpreter runs specialized Core unchanged; memory lowering
+  skips the install.
+- **`restrict` is on `inout` parameters only,** not on a known
+  handler's state, which is passed as a pointer too.
+- **No cache.** Specialization runs on the whole linked program each
+  release build.
+
+What step 6 needs to know:
+
+- `ren build --release` is `-O2` on specialized, unboxed, `restrict`
+  C; `--no-restrict` and `--rc naive` isolate what each part gives;
+  `--stats` prints the specializer's counts at build time and the
+  runtime's at exit.
+- `ren run --release` and `ren core --release` run and print the
+  specialized Core, to tell a specializer bug from a backend one.

@@ -421,6 +421,7 @@ let lint fns =
       values = [];
       strings = [];
       sites = [];
+      structs = [];
       overflow =
         { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics };
     }
@@ -435,6 +436,7 @@ let fn ?(fails = false) ?(result : Mem.layout = Int) ?(params = [])
     name = "f";
     params;
     modes;
+    inout = [];
     words = [];
     result;
     fails;

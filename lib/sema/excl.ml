@@ -161,48 +161,9 @@ let dep_call cx (f : expr) =
 
 (* ---- copied values ---- *)
 
-(* [t] with the type arguments [args] put in for its declaration's
-   parameters, [Var 0] the first. *)
-let rec subst args (t : Ty.ty) : Ty.ty =
-  match t with
-  | Var i -> Option.value (List.nth_opt args i) ~default:t
-  | Con (p, ts) -> Con (p, List.map (subst args) ts)
-  | Fun _ | Errors _ | Impl _ | Error -> t
-
-(* Whether a value of type [t] is copied, rather than counted: a number,
-   a `Bool` or `Unit`, or a record, tuple or enum made only of those.
-   [seen] are the types it's inside, so a recursive type, which has to be
-   counted, ends the search. A type whose representation is hidden is
-   counted, unless it's a number type. *)
-let rec copied cx seen (t : Ty.ty) =
-  match t with
-  | Con (p, args) when Ty.is_tuple p -> List.for_all (copied cx seen) args
-  | Con (p, args) -> (
-      if List.mem t seen || List.length seen > 16 then false
-      else
-        let seen = t :: seen in
-        let all tys =
-          List.for_all (fun t -> copied cx seen (subst args t)) tys
-        in
-        let fields (fs : Iface.field list) =
-          List.map (fun f -> f.Iface.fty) fs
-        in
-        match Hashtbl.find_opt cx.types p with
-        | None -> false
-        | Some td -> (
-            match td.body with
-            | Builtin -> List.mem t [ Ty.int; Ty.float; Ty.bool; Ty.unit ]
-            | Record fs -> all (fields fs)
-            | Sum cs ->
-                all
-                  (List.concat_map
-                     (fun (c : Iface.ctor) -> fields c.cfields)
-                     cs)
-            | Opaque (Rep r) -> all [ r ]
-            | Opaque (Hidden _) -> td.numeric <> None
-            | Errors _ | Dep _ -> false))
-  | Error -> true
-  | Fun _ | Var _ | Errors _ | Impl _ -> false
+(* Whether a value of type [t] is copied, rather than counted (copied.ml):
+   reading one is an instant. *)
+let copied cx (t : Ty.ty) = Copied.is ~types:(Hashtbl.find_opt cx.types) t
 
 (* ---- places ---- *)
 
@@ -719,7 +680,7 @@ and call cx (e : expr) (f : expr) args ~changed =
           none)
     else
       match place_of cx a with
-      | Some p when not (copied cx [] (ty cx a)) ->
+      | Some p when not (copied cx (ty cx a)) ->
           walk_indices cx a;
           { none with held = [ access p Read (Borrowed code) ] }
       | _ ->

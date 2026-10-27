@@ -126,6 +126,8 @@ let lint_evidence body =
       body = body ~loc ~op ~lambda ~call ~uses_d;
       test = false;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   report "" (fun () ->
@@ -939,7 +941,7 @@ let temp_file () = Filename.temp_file "ren" ".txt"
 let%expect_test "the real Fs" =
   let file = temp_file () in
   Sys.remove file;
-  run
+  run ~twice:false
     (Printf.sprintf
        {|
 fn main() ! FsError | InvalidUtf8 uses Fs, Console =

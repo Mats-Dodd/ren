@@ -58,22 +58,32 @@ ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields, uint32_t objs) {
   return o;
 }
 
-ren_obj *ren_alloc_array(int64_t len, bool boxed_elems) {
+static ren_obj *ren_alloc_array_s(int64_t len, bool boxed_elems,
+                                  uint32_t stride) {
   ren_array *a = ren_malloc(sizeof(ren_array));
   int64_t cap = len > 0 ? len : 1;
-  a->data = ren_malloc((size_t)cap * sizeof(ren_val));
+  size_t bytes = (size_t)cap * (stride > 1 ? stride : 1) * sizeof(ren_val);
+  a->data = ren_malloc(bytes);
 #ifdef REN_STATS
-  ren_count_alloc((int64_t)(sizeof(ren_array) + (size_t)cap * sizeof(ren_val)));
+  ren_count_alloc((int64_t)(sizeof(ren_array) + bytes));
 #endif
   a->h.rc = 1;
   a->h.tag = 0;
   a->h.kind = REN_ARRAY;
   a->h.boxed_elems = boxed_elems;
   a->h.objs = 0;
-  a->h.nfields = 0;
+  a->h.nfields = stride;
   a->len = len;
   a->cap = cap;
   return &a->h;
+}
+
+ren_obj *ren_alloc_array(int64_t len, bool boxed_elems) {
+  return ren_alloc_array_s(len, boxed_elems, 0);
+}
+
+ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride) {
+  return ren_alloc_array_s(len, false, stride);
 }
 
 static ren_obj *ren_alloc_str(int64_t len) {
@@ -151,7 +161,8 @@ static void ren_free_one(ren_obj *o) {
     if (o->boxed_elems)
       for (int64_t i = 0; i < a->len; i++)
         ren_release(a->data[i].o);
-    bytes = (int64_t)(sizeof(ren_array) + (size_t)a->cap * sizeof(ren_val));
+    bytes = (int64_t)(sizeof(ren_array) +
+                      (size_t)(a->cap * ren_stride(o)) * sizeof(ren_val));
     free(a->data);
     break;
   }
@@ -234,9 +245,10 @@ ren_val ren_array_get(ren_obj *a, int64_t i, const ren_site *site) {
 /* A copy of [a] with room for [extra] more, each element counted again. */
 static ren_obj *ren_array_copy(ren_obj *a, int64_t extra) {
   ren_array *from = (ren_array *)a;
-  ren_obj *b = ren_alloc_array(from->len + extra, a->boxed_elems);
+  ren_obj *b = ren_alloc_array_s(from->len + extra, a->boxed_elems, a->nfields);
   ren_val *to = ren_elems(b);
-  for (int64_t i = 0; i < from->len; i++) {
+  int64_t words = from->len * ren_stride(a);
+  for (int64_t i = 0; i < words; i++) {
     to[i] = from->data[i];
     if (a->boxed_elems)
       ren_dup(to[i].o);
@@ -281,6 +293,29 @@ ren_obj *ren_array_set_taking(ren_obj *a, int64_t i, ren_val v,
   return a;
 }
 
+/* Room for one element more in a unique array: its buffer doubled if
+   it's full. */
+static void ren_array_grow(ren_array *arr) {
+  if (arr->len < arr->cap)
+    return;
+  int64_t k = ren_stride(&arr->h);
+  int64_t cap = arr->cap * 2;
+  ren_val *data = realloc(arr->data, (size_t)(cap * k) * sizeof(ren_val));
+  if (data == NULL) {
+    fflush(stdout);
+    fputs("error: out of memory\n", stderr);
+    exit(1);
+  }
+#ifdef REN_STATS
+  ren_stats.grows++;
+  ren_stats.live_bytes += (cap - arr->cap) * k * (int64_t)sizeof(ren_val);
+  if (ren_stats.live_bytes > ren_stats.peak_bytes)
+    ren_stats.peak_bytes = ren_stats.live_bytes;
+#endif
+  arr->data = data;
+  arr->cap = cap;
+}
+
 void ren_array_push_taking(ren_obj **cell, ren_val v) {
   ren_obj *a = *cell;
   if (!ren_is_unique(a)) {
@@ -291,24 +326,64 @@ void ren_array_push_taking(ren_obj **cell, ren_val v) {
     return;
   }
   ren_array *arr = (ren_array *)a;
-  if (arr->len == arr->cap) {
-    int64_t cap = arr->cap * 2;
-    ren_val *data = realloc(arr->data, (size_t)cap * sizeof(ren_val));
-    if (data == NULL) {
-      fflush(stdout);
-      fputs("error: out of memory\n", stderr);
-      exit(1);
-    }
-#ifdef REN_STATS
-    ren_stats.grows++;
-    ren_stats.live_bytes += (cap - arr->cap) * (int64_t)sizeof(ren_val);
-    if (ren_stats.live_bytes > ren_stats.peak_bytes)
-      ren_stats.peak_bytes = ren_stats.live_bytes;
-#endif
-    arr->data = data;
-    arr->cap = cap;
-  }
+  ren_array_grow(arr);
   arr->data[arr->len++] = v;
+}
+
+/* ---- arrays of structs ---- */
+
+ren_val *ren_array_slots(ren_obj *a, int64_t i, const ren_site *site) {
+  ren_check_index(a, i, site);
+  return &((ren_array *)a)->data[i * ren_stride(a)];
+}
+
+ren_obj *ren_array_set_slots(ren_obj *a, int64_t i, const ren_val *v,
+                             const ren_site *site) {
+  ren_check_index(a, i, site);
+  ren_obj *b = ren_array_copy(a, 0);
+  int64_t k = ren_stride(a);
+  memcpy(&ren_elems(b)[i * k], v, (size_t)k * sizeof(ren_val));
+  return b;
+}
+
+void ren_array_push_slots(ren_obj **cell, const ren_val *v) {
+  ren_obj *a = *cell;
+  ren_obj *b = ren_array_copy(a, 1);
+  int64_t k = ren_stride(a);
+  memcpy(&ren_elems(b)[(((ren_array *)b)->len - 1) * k], v,
+         (size_t)k * sizeof(ren_val));
+  ren_drop(a);
+  *cell = b;
+}
+
+ren_obj *ren_array_set_slots_taking(ren_obj *a, int64_t i, const ren_val *v,
+                                    const ren_site *site) {
+  ren_check_index(a, i, site);
+  if (!ren_is_unique(a)) {
+    ren_obj *b = ren_array_copy(a, 0);
+    ren_drop(a);
+    a = b;
+  }
+  int64_t k = ren_stride(a);
+  memcpy(&ren_elems(a)[i * k], v, (size_t)k * sizeof(ren_val));
+  return a;
+}
+
+void ren_array_push_slots_taking(ren_obj **cell, const ren_val *v) {
+  ren_obj *a = *cell;
+  int64_t k = ren_stride(a);
+  if (!ren_is_unique(a)) {
+    ren_obj *b = ren_array_copy(a, 1);
+    memcpy(&ren_elems(b)[(((ren_array *)b)->len - 1) * k], v,
+           (size_t)k * sizeof(ren_val));
+    ren_drop(a);
+    *cell = b;
+    return;
+  }
+  ren_array *arr = (ren_array *)a;
+  ren_array_grow(arr);
+  memcpy(&arr->data[arr->len * k], v, (size_t)k * sizeof(ren_val));
+  arr->len++;
 }
 
 /* ---- strings ---- */

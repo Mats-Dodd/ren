@@ -74,7 +74,21 @@ type ctx = {
   decl_bodies : (int, Mem.decl) Hashtbl.t;
   values : (Path.t, Mem.value) Hashtbl.t;
   mutable nwords : int;
+  release : bool;
+      (** a release build's, which keeps a copied record or tuple as a C struct
+          ([Struct]) *)
+  boxed : (Ty.ty, unit) Hashtbl.t;
+      (** the copied types kept boxed all the same, since a value of one would
+          be a word or in an object: found compiling the program, which is then
+          compiled again ([Demote]) *)
+  structs : (Ty.ty, int) Hashtbl.t;  (** each [Struct]'s type, by its n *)
+  mutable struct_list : layout list list;  (** most recent first *)
 }
+
+(* A value of the copied type would have to be one word, or a field of an
+   object, so the type's values are kept boxed: the program is compiled
+   again, with it among [boxed]. *)
+exception Demote of Ty.ty
 
 (* A C name for [s] no other function has: [s] with anything C doesn't
    allow in a name made `_`, and a number after it if another took that
@@ -140,6 +154,10 @@ let dep_id cx dep = number cx.deps dep
 
 let array_path = match Ty.array Ty.int with Con (p, _) -> p | _ -> bug "Array"
 let cell_path = match C.cell_ty Ty.int with Con (p, _) -> p | _ -> bug "Cell"
+let is_struct (l : layout) = match l with Struct _ -> true | _ -> false
+
+let is_cell (t : Ty.ty) =
+  match t with Con (p, [ _ ]) -> p = cell_path | _ -> false
 
 (* [t], a type in a declaration, with its parameters, [Var i], replaced by
    [args]. *)
@@ -157,6 +175,48 @@ let ty_name (t : Ty.ty) =
     t
 
 let rec layout cx loc (t : Ty.ty) : layout =
+  match t with
+  | Con (p, args) when cx.release && not (Hashtbl.mem cx.boxed t) -> (
+      match struct_fields cx loc p args with
+      | Some fields -> Struct (struct_id cx t fields)
+      | None -> plain_layout cx loc t)
+  | _ -> plain_layout cx loc t
+
+(* The layouts of the fields of the record or tuple [Con (p, args)], if
+   it's copied (copied.ml), and each is a scalar: what a release build
+   keeps as a C struct. *)
+and struct_fields cx loc p args =
+  let t : Ty.ty = Con (p, args) in
+  let fields =
+    if Ty.is_tuple p then Some args
+    else
+      match Hashtbl.find_opt cx.types p with
+      | Some { body = Record fs; _ } ->
+          Some (List.map (fun (f : Iface.field) -> subst args f.fty) fs)
+      | _ -> None
+  in
+  match fields with
+  | Some fs when Copied.is ~types:(Hashtbl.find_opt cx.types) t ->
+      let ls = List.map (plain_layout cx loc) fs in
+      if
+        List.for_all
+          (fun (l : layout) ->
+            match l with Int | Float | Bool | Unit | Enum -> true | _ -> false)
+          ls
+      then Some ls
+      else None
+  | _ -> None
+
+and struct_id cx (t : Ty.ty) fields =
+  match Hashtbl.find_opt cx.structs t with
+  | Some n -> n
+  | None ->
+      let n = Hashtbl.length cx.structs in
+      Hashtbl.replace cx.structs t n;
+      cx.struct_list <- fields :: cx.struct_list;
+      n
+
+and plain_layout cx loc (t : Ty.ty) : layout =
   match t with
   | _ when t = C.type_ty || t = C.dict_ty -> Desc
   | _ when t = C.evidence_ty -> Ev
@@ -201,6 +261,29 @@ type shape = { tag : int; slots : (int * layout) list }
 
 let shape tag layouts = { tag; slots = List.mapi (fun i l -> (i, l)) layouts }
 
+(* The layout of a field of type [t] of an object: a word, which a
+   [Struct] can't be, so its type is kept boxed instead. *)
+let slot cx loc (t : Ty.ty) =
+  match layout cx loc t with Struct _ -> raise (Demote t) | l -> l
+
+(* A [Struct]'s type, by its number. *)
+let struct_ty cx n =
+  match
+    Hashtbl.fold
+      (fun t m found -> if m = n then Some t else found)
+      cx.structs None
+  with
+  | Some t -> t
+  | None -> bug "a struct that isn't there"
+
+(* Its fields' layouts. *)
+let struct_layouts cx n = List.nth (List.rev cx.struct_list) n
+
+(* [l], where a value has to be a word: a [Struct]'s type is kept boxed
+   instead. *)
+let word_only cx (l : layout) =
+  match l with Struct n -> raise (Demote (struct_ty cx n)) | _ -> ()
+
 (* The declaration of the named type [t], and its arguments. *)
 let rec decl cx loc (t : Ty.ty) =
   match t with
@@ -221,7 +304,7 @@ let ctor_shape cx loc (t : Ty.ty) c =
         | (k : Iface.ctor) :: _ when k.cname = c ->
             shape i
               (List.map
-                 (fun (f : Iface.field) -> layout cx loc (subst args f.fty))
+                 (fun (f : Iface.field) -> slot cx loc (subst args f.fty))
                  k.cfields)
         | _ :: rest -> find (i + 1) rest
       in
@@ -248,15 +331,15 @@ let record_fields cx loc (t : Ty.ty) =
   | _ -> bug "fields of a type that isn't a record"
 
 let record_shape cx loc t =
-  shape 0 (List.map (fun (_, ft) -> layout cx loc ft) (record_fields cx loc t))
+  shape 0 (List.map (fun (_, ft) -> slot cx loc ft) (record_fields cx loc t))
 
 let tuple_shape cx loc (t : Ty.ty) =
   match t with
-  | Con (_, parts) -> shape 0 (List.map (layout cx loc) parts)
+  | Con (_, parts) -> shape 0 (List.map (slot cx loc) parts)
   | _ -> bug "a tuple whose type isn't one"
 
 let error_shape cx loc name (payload : Ty.ty list) =
-  shape (tag_id cx name) (List.map (layout cx loc) payload)
+  shape (tag_id cx name) (List.map (slot cx loc) payload)
 
 (* ---- descriptors ---- *)
 
@@ -265,6 +348,8 @@ let error_shape cx loc name (payload : Ty.ty list) =
    with [template], a field's type in a declaration, whose [Var i] is the
    type's [i]-th parameter. *)
 let rec static_desc cx loc ~template (t : Ty.ty) : int =
+  (* what a descriptor describes is a word, or in one *)
+  if not template then no_struct_in cx loc t;
   match Hashtbl.find_opt cx.descs (template, t) with
   | Some n -> n
   | None ->
@@ -303,6 +388,19 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
         { dkind = kind; dargs = args; dcounted = counted } :: cx.desc_list;
       Hashtbl.replace cx.descs (template, t) n;
       n
+
+(* A [Struct]'s type in [t], kept boxed instead: what has a descriptor
+   is a word, or in one. *)
+and no_struct_in cx loc (t : Ty.ty) =
+  match t with
+  | Con (p, args) ->
+      if
+        cx.release
+        && (not (Hashtbl.mem cx.boxed t))
+        && struct_fields cx loc p args <> None
+      then raise (Demote t);
+      List.iter (no_struct_in cx loc) args
+  | _ -> ()
 
 (* The program's declaration of the type [p], by its index: its fields'
    types as templates. A type with a `show`, a `key` or an operator of its
@@ -412,6 +510,9 @@ type fs = {
   fails : bool;
   mutable words : (int * var) list;
   mutable handler : handler_args option;
+  known : (int * Path.t) list;
+      (** the [With]s whose handler a release build knows (Core's [known]):
+          their evidence and dependency. Each installs nothing *)
 }
 
 let at fs (loc : Loc.t) = if loc.file = Prelude.file then fs.here else loc
@@ -439,6 +540,12 @@ let atom_layout (x : atom) : layout =
   | Desc_lit _ -> Desc
   | Fn_ptr _ -> Ptr
   | No_ev -> Ev
+
+(* Of a record or a tuple [x], the [n]-th of [size] fields, borrowed. *)
+let field_rhs (x : atom) n size : rhs =
+  match atom_layout x with
+  | Struct _ -> Struct_get (x, n)
+  | _ -> Field (x, n, size)
 
 (* The descriptor of the type variable [n], a word here. *)
 let word_desc fs n : atom =
@@ -524,7 +631,7 @@ let borrowed fs name layout rhs =
 
 (* An atom of [layout] for code that never runs, after a [Raise] or a
    [Break]. *)
-let dummy fs env (l : layout) : atom =
+let rec dummy fs env (l : layout) : atom =
   match l with
   | Int -> Int 0L
   | Float -> Float 0.
@@ -536,6 +643,9 @@ let dummy fs env (l : layout) : atom =
   | Desc -> Desc_lit 0
   | Ev -> No_ev
   | Ptr -> Fn_ptr "NULL"
+  | Struct n ->
+      borrowed fs "$never" l
+        (Make_struct (List.map (dummy fs env) (struct_layouts fs.cx n)))
   | Cell _ | Block | Token ->
       bug "a cell, a block or a token where nothing runs"
 
@@ -712,6 +822,7 @@ let result_tag cx c =
 
 (* [x] as a word, borrowed: what a runtime walk is given. *)
 let as_word fs (x : atom) : atom =
+  word_only fs.cx (atom_layout x);
   match atom_layout x with
   | Word _ -> x
   | _ -> borrowed fs "$word" (Word 0) (To_word x)
@@ -719,6 +830,7 @@ let as_word fs (x : atom) : atom =
 (* What [rhs] gives, a word, as an owned value of [l]: a type
    variable's word as it is, anything else taken out of it. *)
 let from_word fs env name (rhs : rhs) (l : layout) : atom =
+  word_only fs.cx l;
   match l with
   | Word _ -> owned fs env name l rhs
   | _ ->
@@ -728,6 +840,7 @@ let from_word fs env name (rhs : rhs) (l : layout) : atom =
 (* [x] as a value of [l], what a callee takes: a word if that's what it
    takes and [x] isn't one. Taken. *)
 let convert fs (x : atom) (l : layout) : atom =
+  (match l with Word _ -> word_only fs.cx (atom_layout x) | _ -> ());
   match (l, atom_layout x) with
   | Word _, Word _ -> x
   | Word _, _ -> borrowed fs "$word" (Word 0) (To_word x)
@@ -840,6 +953,11 @@ let rec expr fs env (e : C.expr) : atom =
   | With { dep; impl = { kind = Global_value (real, _); _ }; _ }
     when real = Path.member dep "real" && dep <> Path.prelude "Console" ->
       unsupported_at fs e.loc (sprintf "the real `%s`" (Path.local dep))
+  | With { ev; outer; dep; body; _ } when List.mem (ev.id, dep) fs.known ->
+      (* a handler a release build knows: its state is in this frame,
+         made before the `with`, and each call of one of its operations
+         is a direct call already, so it installs nothing *)
+      expr fs (bind env ev (borrow_var fs env outer)) body
   | With { ev; outer; dep; impl; desc = d; body } ->
       install fs env e ~ev ~outer ~deps:[ dep ] ~handler:impl ~body_desc:d body
   | With_handler { ev; outer; handler; deps; desc = d; body } ->
@@ -866,6 +984,14 @@ let rec expr fs env (e : C.expr) : atom =
           | Enum -> Enum_tag sh.tag
           | _ -> Scalar_ctor sh.tag)
       | _ -> alloc fs env sh (List.map (expr fs env) args))
+  | Record (_, fields) when is_struct (lay e.ty) ->
+      let decl_fields = record_fields cx (at fs e.loc) e.ty in
+      let values = List.map (fun (f, x) -> (f, expr fs env x)) fields in
+      owned fs env "$struct" (lay e.ty)
+        (Make_struct (List.map (fun (f, _) -> List.assoc f values) decl_fields))
+  | Tuple xs when is_struct (lay e.ty) ->
+      let xs = List.map (expr fs env) xs in
+      owned fs env "$struct" (lay e.ty) (Make_struct xs)
   | Record (_, fields) ->
       let decl_fields = record_fields cx (at fs e.loc) e.ty in
       let values = List.map (fun (f, x) -> (f, expr fs env x)) fields in
@@ -880,7 +1006,7 @@ let rec expr fs env (e : C.expr) : atom =
         List.assoc f (List.combine (List.map fst fields) sh.slots)
       in
       let t = fresh fs f l in
-      emit fs (Let (t, Field (x, slot, List.length sh.slots)));
+      emit fs (Let (t, field_rhs x slot (List.length sh.slots)));
       dup fs (Var t);
       drop fs env x;
       own env t;
@@ -896,13 +1022,17 @@ let rec expr fs env (e : C.expr) : atom =
             if name = f then y
             else
               let t =
-                borrowed fs name l (Field (x, slot, List.length sh.slots))
+                borrowed fs name l (field_rhs x slot (List.length sh.slots))
               in
               dup fs t;
               t)
           fields sh.slots
       in
-      let r = alloc_taking fs env sh parts in
+      let r =
+        match atom_layout x with
+        | Struct _ as l -> owned fs env "$struct" l (Make_struct parts)
+        | _ -> alloc_taking fs env sh parts
+      in
       consume env y;
       drop fs env x;
       r
@@ -1205,6 +1335,9 @@ and call fs env (e : C.expr) (f : C.expr) args ev =
       let xs =
         List.map
           (function
+            (* a cell, a known handler's state, passed as its address *)
+            | C.Value { kind = Local v; _ } when is_cell v.ty ->
+                Var (mem_var env v)
             | C.Value a -> expr fs env a
             | Ref v -> (
                 let m = mem_var env v in
@@ -1247,6 +1380,7 @@ and call fs env (e : C.expr) (f : C.expr) args ev =
    taken out of a word if it's one and [l] isn't, and a word of the
    callee's type variable made one of the caller's. *)
 and take_word fs env (r : atom) (l : layout) : atom =
+  (match atom_layout r with Word _ -> word_only fs.cx l | _ -> ());
   match (atom_layout r, l) with
   | Word i, Word j when i = j -> r
   | Word _, Word _ ->
@@ -1261,6 +1395,8 @@ and take_word fs env (r : atom) (l : layout) : atom =
    [xs], which it takes; its value is of layout [result]. If its type
    says it can fail, its error is raised here. *)
 and call_block fs env ~result ~fails b ev xs =
+  List.iter (fun x -> word_only fs.cx (atom_layout x)) xs;
+  word_only fs.cx result;
   let r = fresh fs "$result" result in
   let error = fresh fs "$error" Boxed in
   let on_error =
@@ -1391,6 +1527,7 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
       fails = true;
       words = [];
       handler = None;
+      known = fs.known;
     }
   in
   let env_p = fresh code "$env" Ptr in
@@ -1423,7 +1560,9 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
         let w =
           match atom_layout r with
           | Word _ -> r
-          | _ -> borrowed code "$word" (Word 0) (To_word r)
+          | l ->
+              word_only cx l;
+              borrowed code "$word" (Word 0) (To_word r)
         in
         drop_all code frame;
         emit code (Return w))
@@ -1434,6 +1573,7 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
       name;
       params = [ env_p; caller; args ];
       modes = [ Owned; Owned; Owned ];
+      inout = [];
       words = code.words;
       result = Word 0;
       fails = true;
@@ -1475,6 +1615,7 @@ and lambda fs env ~name ~(params : C.param list) ~ev ~outer ~given ~captures
            let l = layout_at code body.loc p.var.ty in
            if not (match l with Block | Cell _ -> false | _ -> true) then
              unsupported_at code body.loc "a block passed to a block";
+           word_only cx l;
            let x = let_var code p.var.name l (Arg (args, i)) in
            own cenv x;
            if typed && i = 0 then code.words <- (n, x) :: code.words;
@@ -1510,6 +1651,7 @@ and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
   let d = desc fs env body_desc in
   let outer = borrow fs env outer in
   let result = fresh fs "$with" (layout_at fs e.loc e.ty) in
+  word_only cx result.layout;
   let error = fresh fs "$error" Boxed in
   let on_error =
     if can_raise fs env then
@@ -1549,6 +1691,7 @@ and handler fs env (e : C.expr) ~ev ~captures body =
       fails = true;
       words = [];
       handler = None;
+      known = fs.known;
     }
   in
   let self = fresh code "$self" Boxed in
@@ -1587,6 +1730,7 @@ and handler fs env (e : C.expr) ~ev ~captures body =
       (* the `with` that calls it keeps its description and the body's
          descriptor *)
       modes = [ Borrowed; Owned; Owned; Borrowed; Owned; Owned ];
+      inout = [];
       words = code.words;
       result = Word 0;
       fails = true;
@@ -1806,7 +1950,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
                   Some
                     ( q,
                       borrowed fs "$part" l
-                        (Field (x, slot, List.length sh.slots)) ))
+                        (field_rhs x slot (List.length sh.slots)) ))
             (List.combine ps sh.slots)
         in
         let tagged sh ps =
@@ -1932,6 +2076,7 @@ let fn cx here (f : C.fn_def) : Mem.fn =
           fails = fn_fails f;
           words = [];
           handler = None;
+          known = List.map (fun (k : C.known) -> (k.kev.id, k.kdep)) f.known;
         }
       in
       let lay t = layout_at fs f.loc t in
@@ -1958,7 +2103,7 @@ let fn cx here (f : C.fn_def) : Mem.fn =
             let m =
               fresh fs p.var.name (if p.mode = Inout then Cell l else l)
             in
-            if p.mode = Read then own env m;
+            if p.mode = Read && not (is_cell p.var.ty) then own env m;
             (bind env p.var m, m))
           env f.params
       in
@@ -1978,6 +2123,10 @@ let fn cx here (f : C.fn_def) : Mem.fn =
         name = c_name cx f.path;
         params = tys @ dicts @ [ ev ] @ params;
         modes = List.map (fun _ -> Owned) (tys @ dicts @ [ ev ] @ params);
+        inout =
+          List.filter_map
+            (fun ((p : C.param), m) -> if p.mode = Inout then Some m else None)
+            (List.combine f.params params);
         words = fs.words;
         result;
         fails = fn_fails f;
@@ -1987,7 +2136,7 @@ let fn cx here (f : C.fn_def) : Mem.fn =
 
 (* The program [modules], the prelude first and the entry last, with its
    `$start`, compiled from there: only what it reaches. *)
-let program (modules : C.program list) : Mem.program =
+let compile ~release ~boxed (modules : C.program list) : Mem.program =
   let cx =
     {
       types = Hashtbl.create 64;
@@ -2008,6 +2157,10 @@ let program (modules : C.program list) : Mem.program =
       decl_bodies = Hashtbl.create 16;
       values = Hashtbl.create 16;
       nwords = 0;
+      release;
+      boxed;
+      structs = Hashtbl.create 8;
+      struct_list = [];
     }
   in
   List.iter
@@ -2075,5 +2228,19 @@ let program (modules : C.program list) : Mem.program =
         (List.concat_map (fun (m : C.program) -> m.values) modules);
     strings = List.rev cx.string_list;
     sites = List.rev cx.sites;
+    structs = List.rev cx.struct_list;
     overflow;
   }
+
+(* In a release build, a copied type a value of which turns out to need
+   a word, or a field of an object, is kept boxed, and the program
+   compiled again: once for each such type, at most. *)
+let program ?(release = false) (modules : C.program list) : Mem.program =
+  let boxed = Hashtbl.create 4 in
+  let rec go () =
+    try compile ~release ~boxed modules
+    with Demote t ->
+      Hashtbl.replace boxed t ();
+      go ()
+  in
+  go ()

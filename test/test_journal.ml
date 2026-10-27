@@ -508,6 +508,8 @@ let%expect_test "Core Lint refuses the world reached from anywhere else" =
       body;
       test;
       loc;
+      origin = Written;
+      known = [];
     }
   in
   let lint fns =

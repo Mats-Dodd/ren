@@ -63,6 +63,12 @@ type layout =
   | Ptr
       (** a raw pointer: a block's environment or its arguments, an
           implementation of a dependency, a handler's code *)
+  | Struct of int
+      (** a release build's copied record or tuple (copied.ml), its fields all
+          scalars: a C struct, the program's [structs]'s n-th, a word for each
+          field, passed by value and kept in an array's elements, never counted.
+          Never a word, nor in an object: a type whose value would be one is
+          boxed instead *)
   | Token
       (** a reuse token: the memory of an object a [Reset] found unique, to
           build a new one in, or NULL. Never counted, and used or freed once *)
@@ -219,6 +225,10 @@ type rhs =
           implementation of the dependency with this number in the evidence *)
   | Is_unique of atom
       (** whether an object's count is 1 (lean.h, [lean_is_exclusive]) *)
+  | Make_struct of atom list
+      (** a [Struct], the variable's, of these fields, in the order they're
+          declared *)
+  | Struct_get of atom * int  (** the [n]-th field of a [Struct] *)
   | Reset of atom * (int * atom) list
       (** a unique object's memory, as a [Token]: the fields at the slots listed
           are the variables after them, which keep their references, and the
@@ -306,6 +316,9 @@ type fn = {
   name : string;  (** its C name *)
   params : var list;
   modes : mode list;  (** each parameter's, in order *)
+  inout : var list;
+      (** its `inout` parameters, which nothing else points to what they point
+          to: a release build tells C so, with `restrict` *)
   words : (int * var) list;
       (** the descriptor of each type variable whose values are words here, a
           parameter or a variable its body defines first *)
@@ -362,6 +375,7 @@ type program = {
   values : value list;  (** made in this order, each after those it uses *)
   strings : string list;  (** the string literals, by [Lit]'s index *)
   sites : site list;  (** by [sid] *)
+  structs : layout list list;  (** each [Struct]'s fields' layouts, by its n *)
   overflow : site;  (** where the stack overflowing is said to be *)
 }
 
