@@ -631,6 +631,22 @@ let borrowed fs name layout rhs =
   emit fs (Let (v, rhs));
   Var v
 
+(* Whether `map` can replace each element of an array of [t]s with a
+   [u] where it is (prelude.ml, [map_into]): it reads each as a [t] and
+   writes the [u] it gives back as a [t] (to_mem's [Unsafe_cast]), so a
+   [t] must hold a [u] whole, and the array must count them as it would
+   an array of [u]s. A value of the same layout; or a [t] that's an
+   [Int], which holds any word that isn't an object, a [Float]'s bits
+   too. Not a type variable's word, which may be either. *)
+let scalar_element (l : layout) =
+  match l with Int | Float | Bool | Unit | Enum -> true | _ -> false
+
+let same_elements (t : layout) (u : layout) =
+  match (t, u) with
+  | Word _, _ | _, Word _ -> false
+  | Int, u -> scalar_element u
+  | t, u -> t = u
+
 (* An atom of [layout] for code that never runs, after a [Raise] or a
    [Break]. *)
 let rec dummy fs env (l : layout) : atom =
@@ -1545,6 +1561,55 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   | Int_wrapping_sub, _, _ -> runtime (Wrapping Sub)
   | Int_wrapping_mul, _, _ -> runtime (Wrapping Mul)
   | Int_wrapping_neg, _, _ -> runtime Wrapping_neg
+  (* `map`'s own (prelude.ml) *)
+  | Array_reserve, [ t ], [ d ] -> (
+      match values () with
+      | [ n ] ->
+          let l = lay t in
+          let d = match l with Word _ -> [ desc fs env d ] | _ -> [] in
+          let r =
+            owned fs env "$reserved" Boxed
+              (Runtime (Array_reserve l, n :: d, None))
+          in
+          List.iter (drop fs env) d;
+          r
+      | _ -> bug "an `array_reserve` of no length")
+  | Map_into, [ t; u ], _ -> (
+      let into tag =
+        Enum_tag (ctor_shape cx (at fs e.loc) e.ty tag).tag
+      in
+      match values () with
+      | [ xs ] when same_elements (lay t) (lay u) ->
+          let unique = borrowed fs "$unique" Bool (Is_unique xs) in
+          drop fs env xs;
+          let r = fresh fs "$into" Enum in
+          emit fs (Decl r);
+          emit fs
+            (If
+               ( unique,
+                 [ Set (r, into "InPlace") ],
+                 [ Set (r, into "Fresh") ] ));
+          Var r
+      | [ xs ] ->
+          drop fs env xs;
+          into "Fresh"
+      | _ -> bug "a `map_into` of no array")
+  | Unsafe_cast, [ a; b ], _ -> (
+      match (values (), lay a, lay b) with
+      | [ x ], la, lb when la = lb -> x
+      | [ x ], la, Int when scalar_element la ->
+          (* the word, read as an [Int]: its bits, not a conversion *)
+          from_word fs env "$cast" (To_word x) Int
+      | [ x ], _, lb ->
+          (* never run: [map_into] says `Fresh` for these layouts, and
+             this is `map`'s other arm *)
+          drop fs env x;
+          emit fs
+            (Panic
+               ( new_site cx (at fs e.loc),
+                 "an element cast to a type it isn't kept as" ));
+          dummy fs env lb
+      | _ -> bug "an `unsafe_cast` of no value")
   (* the real `Console`'s operations *)
   | Console_write, _, _ -> runtime Console_write
   | Console_error, _, _ -> runtime Console_error

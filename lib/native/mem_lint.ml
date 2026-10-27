@@ -109,6 +109,8 @@ let rt_sig (rt : rt) : layout list * layout =
   | Buf_set l -> ([ Ptr; Int; Int; l ], Unit)
   | Buf_set_field (_, _, l) -> ([ Ptr; Int; Int; l ], Unit)
   | Buf_check -> ([ Int; Int ], Unit)
+  | Array_reserve (Word _) -> ([ Int; Desc ], Boxed)
+  | Array_reserve _ -> ([ Int ], Boxed)
   | Str_len -> ([ Boxed ], Int)
   | Str_concat -> ([ Boxed; Boxed ], Boxed)
   | Str_eq -> ([ Boxed; Boxed ], Bool)

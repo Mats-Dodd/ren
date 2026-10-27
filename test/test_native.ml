@@ -7,11 +7,12 @@ open Helpers
 
 (* Each function of a program's Mem IR that isn't `$start` or `main`,
    or only those named in [only], once Mem Lint has checked them all. Its
-   counting is Perceus's, or the naive one with [~rc:Naive]. *)
-let mem ?rc ?only src =
+   counting is Perceus's, or the naive one with [~rc:Naive]; a release
+   build's with [~release:true]. *)
+let mem ?rc ?release ?only src =
   let src = clean src in
   report src (fun () ->
-      let p = Driver.mem ~lint:true ?rc ~file src in
+      let p = Driver.mem ~lint:true ?rc ?release ~file src in
       List.iter
         (fun (f : Mem.fn) ->
           let shown =
@@ -276,7 +277,7 @@ fn main() -> Bool =
 
 let%expect_test
     "Perceus: the prelude's `map` pushes onto the array it builds in place" =
-  mem ~only:[ "ren_Array_map" ]
+  mem ~only:[ "ren_Array_map_fresh" ]
     {|
 fn main() -> Int =
   var xs: Array<Int> = []
@@ -286,34 +287,146 @@ fn main() -> Int =
 |};
   [%expect
     {|
-    (fn ren_Array_map (^$ty0/1:Desc ^$ty1/2:Desc ev/3:Ev ^self/4:Boxed f/5:Block)
+    (fn ren_Array_map_fresh
+      (^$ty0/1:Desc ^$ty1/2:Desc ev/3:Ev ^self/4:Boxed f/5:Block)
       fails -> Boxed
-      (do (let $array/6:Boxed (array:Word1 $ty1/2)) (let out/7:Boxed $array/6)
-        (let self/8:Boxed self/4)
-        (let $xs/9:Boxed self/8)
-        (let $xs/10:Boxed $xs/9)
-        (let $len/11:Int (array-len $xs/10))
-        (let $n/12:Int $len/11)
-        (let $i/13:Int 0)
+      (do (let self/6:Boxed self/4) (let $len/7:Int (array-len self/6))
+        (let $ty1/8:Desc $ty1/2)
+        (let $reserved/9:Boxed (array-reserve:Word1 $len/7 $ty1/8))
+        (let out/10:Boxed $reserved/9)
+        (let self/11:Boxed self/4)
+        (let $xs/12:Boxed self/11)
+        (let $xs/13:Boxed $xs/12)
+        (let $len/14:Int (array-len $xs/13))
+        (let $n/15:Int $len/14)
+        (let $i/16:Int 0)
         (loop L1
-          (do (let $i/14:Int $i/13) (let $n/15:Int $n/12)
-            (let $cmp/16:Bool (< $i/14 $n/15))
-            (if $cmp/16 (do) (do break L1))
-            (let $xs/17:Boxed $xs/9)
-            (let $i/18:Int $i/13)
-            (let $elem/19:Word0 (array-get:Word0 $xs/17 $i/18))
-            (let x/20:Word0 $elem/19)
-            (let &out/21:&Boxed (addr out/7))
-            (let f/22:Block f/5)
-            (let x/23:Word0 x/20)
-            (call-block $result/24:Word1 (f/22 ev/3 x/23)
-              (error $error/25:Boxed (drop out/7) (raise $error/25)))
-            (do (array-push-taking:Word1 &out/21 $result/24))
-            (let $i/26:Int $i/13)
-            (let $arith/27:Int (+ $i/26 1))
-            (set $i/13 $arith/27)))
-        (let out/28:Boxed out/7)
-        (return out/28)))
+          (do (let $i/17:Int $i/16) (let $n/18:Int $n/15)
+            (let $cmp/19:Bool (< $i/17 $n/18))
+            (if $cmp/19 (do) (do break L1))
+            (let $xs/20:Boxed $xs/12)
+            (let $i/21:Int $i/16)
+            (let $elem/22:Word0 (array-get:Word0 $xs/20 $i/21))
+            (let x/23:Word0 $elem/22)
+            (let &out/24:&Boxed (addr out/10))
+            (let f/25:Block f/5)
+            (let x/26:Word0 x/23)
+            (call-block $result/27:Word1 (f/25 ev/3 x/26)
+              (error $error/28:Boxed (drop out/10) (raise $error/28)))
+            (do (array-push-taking:Word1 &out/24 $result/27))
+            (let $i/29:Int $i/16)
+            (let $arith/30:Int (+ $i/29 1))
+            (set $i/16 $arith/30)))
+        (let out/31:Boxed out/10)
+        (return out/31)))
+    Mem Lint: ok
+    |}]
+
+let%expect_test
+    "release: `map` over an array nothing else holds replaces each element \
+     where it is, if it's unique; `Int` to `Str` makes a new array" =
+  mem ~release:true ~only:[ "ren_Array_map_1"; "ren_Array_map_2" ]
+    {|
+fn main() -> Int =
+  var xs: Array<Int> = []
+  &xs.push(1)
+  let ys = xs.map(fn(x) => x + 1)
+  let zs = ys.map(fn(y) => show(y))
+  zs.len()
+|};
+  [%expect {|
+    (fn ren_Array_map_2 (ev/1:Ev self/2:Boxed) -> Boxed
+      (do (let into/4:Enum #1) (decl $match/5:Boxed) (let into/6:Enum into/4)
+        (joins
+          (do (let $tag/7:Int (tag into/6))
+            (switch $tag/7
+              (#0
+                (do (let self/8:Boxed self/2) (let out/9:Boxed self/8)
+                  (let $i/10:Int 0)
+                  (let out/11:Boxed out/9)
+                  (let $len/12:Int (array-len out/11))
+                  (let $stop/13:Int $len/12)
+                  (let out/35:Boxed out/9)
+                  (let $len/36:Int (array-len out/35))
+                  (let out/37:Boxed out/9)
+                  (let $buf/38:Ptr (array-data out/37))
+                  (loop L3
+                    (do (let $i/14:Int $i/10) (let $stop/15:Int $stop/13)
+                      (let $cmp/16:Bool (< $i/14 $stop/15))
+                      (if $cmp/16 (do) (do break L3))
+                      (let $i/17:Int $i/10)
+                      (let i/18:Int $i/17)
+                      (let i/22:Int i/18)
+                      (let $elem/23:Int (buf-get:Int $buf/38 $len/36 i/22))
+                      (drop self/2)
+                      (let $result/24:Boxed
+                        (call ren_test_main_1_2 ev/1 $elem/23))
+                      (drop $result/24)
+                      (panic "an element cast to a type it isn't kept as")))
+                  (let out/32:Boxed out/9)
+                  (set $match/5 out/32)
+                  jump L4))
+              (#1
+                (do (let self/33:Boxed self/2)
+                  (let $result/34:Boxed (call ren_Array_map_fresh_2 ev/1 self/33))
+                  (drop self/2)
+                  (set $match/5 $result/34)
+                  jump L4))
+              (else (do (drop self/2) (panic "no arm of this `match` matched")))))
+          (L4: (do)))
+        (return $match/5)))
+    (fn ren_Array_map_1 (ev/1:Ev self/2:Boxed) -> Boxed
+      (do (let self/3:Boxed self/2) (let $unique/4:Bool (unique? self/3))
+        (decl $into/5:Enum)
+        (if $unique/4 (do (set $into/5 #0)) (do (set $into/5 #1)))
+        (let into/6:Enum $into/5)
+        (decl $match/7:Boxed)
+        (let into/8:Enum into/6)
+        (joins
+          (do (let $tag/9:Int (tag into/8))
+            (switch $tag/9
+              (#0
+                (do (let self/10:Boxed self/2) (let out/11:Boxed self/10)
+                  (let $i/12:Int 0)
+                  (let out/13:Boxed out/11)
+                  (let $len/14:Int (array-len out/13))
+                  (let $stop/15:Int $len/14)
+                  (let out/37:Boxed out/11)
+                  (let $len/38:Int (array-len out/37))
+                  (let $own/39:Boxed (array-own out/37))
+                  (set out/11 $own/39)
+                  (let out/40:Boxed out/11)
+                  (let $buf/41:Ptr (array-data out/40))
+                  (loop L3
+                    (do (let $i/16:Int $i/12) (let $stop/17:Int $stop/15)
+                      (let $cmp/18:Bool (< $i/16 $stop/17))
+                      (if $cmp/18 (do) (do break L3))
+                      (let $i/19:Int $i/12)
+                      (let i/20:Int $i/19)
+                      (let i/21:Int i/20)
+                      (let $index/22:Int i/21)
+                      (let i/24:Int i/20)
+                      (let $elem/25:Int (buf-get:Int $buf/41 $len/38 i/24))
+                      (let $result/26:Int (call ren_test_main_1_1 ev/1 $elem/25))
+                      (let $v/27:Int $result/26)
+                      (let $index/29:Int $index/22)
+                      (let $v/30:Int $v/27)
+                      (do (buf-set:Int $buf/41 $len/38 $index/29 $v/30))
+                      (let $i/32:Int $i/12)
+                      (let $arith/33:Int (+ $i/32 1))
+                      (set $i/12 $arith/33)))
+                  (let out/34:Boxed out/11)
+                  (set $match/7 out/34)
+                  jump L4))
+              (#1
+                (do (let self/35:Boxed self/2)
+                  (let $result/36:Boxed (call ren_Array_map_fresh_1 ev/1 self/35))
+                  (drop self/2)
+                  (set $match/7 $result/36)
+                  jump L4))
+              (else (do (drop self/2) (panic "no arm of this `match` matched")))))
+          (L4: (do)))
+        (return $match/7)))
     Mem Lint: ok
     |}]
 

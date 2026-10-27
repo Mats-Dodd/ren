@@ -58,10 +58,11 @@ ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields, uint32_t objs) {
   return o;
 }
 
-static ren_obj *ren_alloc_array_s(int64_t len, bool boxed_elems,
+static ren_obj *ren_alloc_array_c(int64_t len, int64_t cap, bool boxed_elems,
                                   uint32_t stride) {
   ren_array *a = ren_malloc(sizeof(ren_array));
-  int64_t cap = len > 0 ? len : 1;
+  cap = cap > len ? cap : len;
+  cap = cap > 0 ? cap : 1;
   size_t bytes = (size_t)cap * (stride > 1 ? stride : 1) * sizeof(ren_val);
   a->data = ren_malloc(bytes);
 #ifdef REN_STATS
@@ -76,6 +77,15 @@ static ren_obj *ren_alloc_array_s(int64_t len, bool boxed_elems,
   a->len = len;
   a->cap = cap;
   return &a->h;
+}
+
+static ren_obj *ren_alloc_array_s(int64_t len, bool boxed_elems,
+                                  uint32_t stride) {
+  return ren_alloc_array_c(len, len, boxed_elems, stride);
+}
+
+ren_obj *ren_array_reserve(int64_t cap, bool boxed_elems, uint32_t stride) {
+  return ren_alloc_array_c(0, cap, boxed_elems, stride);
 }
 
 ren_obj *ren_alloc_array(int64_t len, bool boxed_elems) {

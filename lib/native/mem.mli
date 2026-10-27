@@ -150,6 +150,9 @@ type rt =
   | Buf_set_field of int * int * layout
       (** [Array_set_field_taking] once the array is known unique *)
   | Buf_check  (** [Array_check] of a length *)
+  | Array_reserve of layout
+      (** an empty array of these elements, with room for as many as the [Int]
+          given; a [Word]'s descriptor after it says whether they're objects *)
   | Str_len
   | Str_concat
   | Str_eq

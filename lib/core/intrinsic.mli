@@ -25,6 +25,9 @@ type t =
   | Array_len
   | Array_push
   | Array_sort
+  | Array_reserve
+  | Map_into
+  | Unsafe_cast
   | Map_empty
   | Map_of
   | Map_get

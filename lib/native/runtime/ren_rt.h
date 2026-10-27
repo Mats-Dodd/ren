@@ -214,6 +214,10 @@ void ren_free_token(ren_obj *tok);
 ren_obj *ren_alloc_array(int64_t len, bool boxed_elems);
 static inline ren_val *ren_elems(ren_obj *o) { return ((ren_array *)o)->data; }
 
+/* An empty array with room for [cap] elements of [stride] words each,
+   0 meaning 1: what `map` makes when it can't reuse its input. */
+ren_obj *ren_array_reserve(int64_t cap, bool boxed_elems, uint32_t stride);
+
 /* An array of [len] elements of [stride] words each, a release build's
    structs (a copied record's fields, Mem's [Struct]), kept in the
    elements: never counted, and never walked, since nothing that walks a

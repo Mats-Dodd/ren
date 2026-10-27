@@ -209,7 +209,7 @@ What it made, with `--stats`: blocks's five kernels each lift their
 block, and handlers's `Counter` is known where it's installed.
 
   $ for d in blocks handlers; do (cd native/$d && sed 's/^ren specialized: //' release.made); done
-  20 copies, 5 blocks lifted, 0 handlers known, 0 calls past the budget
+  21 copies, 5 blocks lifted, 0 handlers known, 0 calls past the budget
   6 copies, 0 blocks lifted, 1 handlers known, 0 calls past the budget
 
 H1, in the release build: the kernels written with a block make no

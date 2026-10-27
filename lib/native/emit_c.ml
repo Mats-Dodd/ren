@@ -256,6 +256,12 @@ let runtime rt args site_arg =
         (to_val (List.nth args 3))
         (site ())
   | Buf_check -> sprintf "ren_buf_check(%s, %s, %s)" (a 0) (a 1) (site ())
+  | Array_reserve (Struct n) ->
+      sprintf "ren_array_reserve(%s, false, %d)" (a 0) (struct_words n)
+  | Array_reserve (Word _) ->
+      sprintf "ren_array_reserve(%s, ren_desc_counted(%s), 0)" (a 0) (a 1)
+  | Array_reserve l ->
+      sprintf "ren_array_reserve(%s, %b, 0)" (a 0) (is_object l)
   | Str_len -> sprintf "ren_str_len(%s)" (a 0)
   | Str_concat -> sprintf "ren_str_concat(%s, %s)" (a 0) (a 1)
   | Str_eq -> sprintf "ren_str_eq(%s, %s)" (a 0) (a 1)
@@ -749,7 +755,81 @@ let signature ~restrict (f : fn) =
     sprintf "static %s %s(%s)" (ctype f.result) f.name
       (match params with [] -> "void" | ps -> String.concat ", " ps)
 
-let fn ~restrict b (f : fn) =
+(* ---- where the stack is checked ----
+
+   Every function checks the stack when it starts ([REN_STACK_CHECK]),
+   but for one that can't be where it runs out: one that calls no
+   function of the program's but those that can't either, through no
+   block or handler, whose code isn't known, in a chain of at most
+   [shallow] of them. Recursion only goes on through functions that
+   check, so it panics as before, and below the last frame that checked
+   there are at most [shallow] that didn't, each of a fixed size, which
+   [REN_STACK_MARGIN] (1 MiB) has room for. A lifted block that only
+   computes, H1's `map`, is one of them: its check was three
+   instructions an element (bench/native/RESULTS.md, H1). *)
+
+let shallow = 8
+
+(* The functions [b] calls directly, or [None] if it calls through a
+   block or a handler. *)
+let callees (b : block) =
+  let exception Indirect in
+  let acc = ref [] in
+  let rhs = function Call (g, _) -> acc := g :: !acc | _ -> () in
+  let rec stmt = function
+    | Let (_, r) | Do r -> rhs r
+    | Call_fails { fn; on_error; _ } ->
+        acc := fn :: !acc;
+        block on_error
+    | Call_block _ | Call_handler _ -> raise Indirect
+    | If (_, a, b) ->
+        block a;
+        block b
+    | Switch (_, cases, d) ->
+        List.iter (fun (_, b) -> block b) cases;
+        block d
+    | Loop (_, b) -> block b
+    | Joins (b, js) ->
+        block b;
+        List.iter (fun (_, b) -> block b) js
+    | Catch { body; handler; _ } ->
+        block body;
+        block handler
+    | Decl _ | Set _ | Store _ | Dup _ | Drop _ | Dup_word _ | Drop_word _
+    | Free _ | Free_token _ | Break _ | Jump _ | Raise _ | Return _
+    | Assert _ | Panic _ ->
+        ()
+  and block b = List.iter stmt b in
+  match block b with () -> Some !acc | exception Indirect -> None
+
+(* The functions that needn't check, each with the length of the
+   longest chain of calls it starts, itself counted: found from the
+   leaves up, so a function in a cycle is never one. *)
+let unchecked (fns : fn list) =
+  let calls =
+    List.filter_map
+      (fun (f : fn) -> Option.map (fun gs -> (f.name, gs)) (callees f.body))
+      fns
+  in
+  let depth = Hashtbl.create 64 in
+  let rec go () =
+    let changed = ref false in
+    List.iter
+      (fun (f, gs) ->
+        if not (Hashtbl.mem depth f) then
+          let ds = List.map (Hashtbl.find_opt depth) gs in
+          if List.for_all Option.is_some ds then
+            let d = 1 + List.fold_left (fun m d -> max m (Option.get d)) 0 ds in
+            if d <= shallow then (
+              Hashtbl.replace depth f d;
+              changed := true))
+      calls;
+    if !changed then go ()
+  in
+  go ();
+  depth
+
+let fn ~restrict ~checks b (f : fn) =
   let bufs = Hashtbl.create 8 in
   Rc.iter_stmts
     (function
@@ -768,7 +848,7 @@ let fn ~restrict b (f : fn) =
       restrict;
     }
   in
-  line o 1 "REN_STACK_CHECK();";
+  if checks f.name then line o 1 "REN_STACK_CHECK();";
   block o 1 f.body;
   Buffer.add_buffer b o.outlined;
   Buffer.add_string b (signature ~restrict f ^ " {\n");
@@ -915,7 +995,9 @@ let program ?(restrict = false) ~(site_text : site -> string * string)
   add "\n";
   List.iter (fun f -> add (signature ~restrict f ^ ";\n")) p.fns;
   add "\n";
-  List.iter (fn ~restrict b) p.fns;
+  let unchecked = unchecked p.fns in
+  let checks name = not (Hashtbl.mem unchecked name) in
+  List.iter (fn ~restrict ~checks b) p.fns;
   add "static void ren_program(void) {\n";
   (* the associated values, made once, in order *)
   List.iter

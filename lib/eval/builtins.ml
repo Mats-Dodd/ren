@@ -351,6 +351,13 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
                   (List.stable_sort compare (Array.to_list (items xs)))
             | _ -> bug x)
         | _ -> bug x)
+  (* `map`'s own: an array is a value here, so `map` replacing each
+     element where it is gives what a new array would *)
+  | Array_reserve -> pure (fun _ -> array_of_list [])
+  | Map_into ->
+      pure (fun _ ->
+          VCon { ty = Path.prelude "MapInto"; name = "InPlace"; args = [] })
+  | Unsafe_cast -> pure (function [ v ] -> v | _ -> bug x)
   (* ---- `Map` and `Set`, by the `hash` of their keys (table.ml) ---- *)
   | Map_empty | Set_empty -> pure (fun _ -> VTable Table.empty)
   | Map_of ->
