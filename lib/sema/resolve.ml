@@ -152,6 +152,20 @@ type env = {
       (** the module's own named error sets, by name *)
   own_numeric : (string, unit) Hashtbl.t;
       (** the module's own `with numeric` types, by name *)
+  own_tests : (string, unit) Hashtbl.t;
+      (** the module's own test items, `test fn`, by name *)
+  own_private : (string, unit) Hashtbl.t;
+      (** the module's own private items that aren't test items, which a test
+          doesn't see: its functions by name, its types' members by `Type.name`,
+          and its types by name, each after `type `. One is taken out once a
+          test's use of it is reported (see [check_private]) *)
+  mutable in_test : bool;
+      (** whether the function being resolved is test code, which sees the
+          module as an importer does (testing.md, "Tests are specifications") *)
+  sees_all : bool;
+      (** whether test code sees everything, as it does when `ren console`
+          checks the program, so a test that reaches past the interface doesn't
+          keep the console shut *)
   own_deps : (string, string list) Hashtbl.t;
       (** the module's own dependencies, by name, each with its operations *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
@@ -190,10 +204,33 @@ and fn_state = {
           type, if it's written (see [receiver_type]) *)
   mutable typed : (int * Path.t) list;
       (** the locals whose type is written, by binder id, with that type *)
+  test : bool;
+      (** whether the function is test code (ast.ml), which alone can use a test
+          item *)
 }
 
 let report env ?help ?notes ?labels loc msg =
   Diag.report env.sink (Diag.make ?help ?notes ?labels loc msg)
+
+(* [written], one of the module's private items, is used by test code,
+   which sees what an importer sees (testing.md, "Tests are
+   specifications"). *)
+let private_in_test env loc written =
+  report env loc
+    ~notes:[ sprintf "a test is a specification of `%s`'s interface" env.home ]
+    ~help:
+      (sprintf "mark it `pub`, or explore it in the console: `ren console %s`"
+         env.home)
+    (sprintf "`%s` is private, and a test sees what an importer sees" written)
+
+(* Whether test code is using the module's own private item [key] (see
+   [own_private]), reported at [loc] as [written]. It's reported at its
+   first use only: the fix, marking it `pub` or exploring it instead, is
+   the same at every one, so it's taken out of [own_private] then. *)
+let check_private env loc ~key written =
+  if env.in_test && Hashtbl.mem env.own_private key then (
+    private_in_test env loc written;
+    Hashtbl.remove env.own_private key)
 
 (* `_` names nothing, so there can be any number of them: `fn f(_, _)` *)
 let no_duplicates env what (ids : ident list) =
@@ -333,7 +370,10 @@ let find_named env ~params (t : tyname) =
       | Some i -> Some (Param i, 0)
       | None -> (
           match find_type env t.tid.name with
-          | Some (p, n) -> Some (Named p, n)
+          | Some (p, n) ->
+              if p.home = env.home then
+                check_private env t.tid.loc ~key:("type " ^ p.name) p.name;
+              Some (Named p, n)
           | None ->
               report env t.tid.loc
                 (sprintf "there's no type named `%s`" t.tid.name);
@@ -415,6 +455,8 @@ let uses env (deps : tyname list) : tname list =
         match Hashtbl.find_opt env.types d.tid.name with
         | Some (p, _) when dep_ops env p <> None ->
             ignore (find_type env d.tid.name);
+            if p.home = env.home then
+              check_private env d.tid.loc ~key:("type " ^ p.name) p.name;
             Some p
         | Some _ -> not_a_dep d
         | None when List.mem d.tid.name Prelude.dependencies ->
@@ -637,6 +679,9 @@ and errors env ~params ?(rows = Declaration) (es : Parsed.errors) :
   in
   let error : Parsed.error -> Resolved.error = function
     | Tag (t, []) when set_in_scope t <> None ->
+        (* a private set of the module's own is hidden from test code, as
+           any private type is *)
+        check_private env t.loc ~key:("type " ^ t.name) t.name;
         Set { tref = Named (Option.get (set_in_scope t)); tloc = t.loc }
     | Tag (t, ps) ->
         Tag
@@ -741,16 +786,36 @@ let params env sc ?rows bound ps =
 
 (* ---- expressions ---- *)
 
+(* [written], a test item of the module [home], is used by code that
+   isn't a test's (ast.ml, [fn_def.test]). *)
+let test_item env loc ~home written =
+  report env loc
+    ~notes:
+      [
+        sprintf
+          "a test item isn't part of `%s`'s interface, and `ren run` leaves it \
+           out"
+          home;
+      ]
+    ~help:"call it from a test, or remove `test` from its declaration"
+    (sprintf "`%s` is a test item, so only a test can use it" written)
+
 (* The public function [f] of the imported module [iface], written
    `alias.f`. A private function isn't in the interface, so it can't be
    told apart from one that doesn't exist. *)
 let qualified env sc ((i : import), (iface : Iface.t)) (f : ident) =
   Hashtbl.replace env.used i.alias.name ();
   let p = Path.make iface.home f.name in
-  if Iface.find_value iface f.name = None then
-    report env f.loc ~help:"if it's defined there, mark it `pub`"
-      (sprintf "`%s` has no public `%s`" iface.home f.name)
-  else sc.fn.calls <- p :: sc.fn.calls;
+  (match (Iface.find_value iface f.name, Iface.find_test iface f.name) with
+  | Some _, _ -> sc.fn.calls <- p :: sc.fn.calls
+  | None, Some _ ->
+      (* one of its public test items, which only a test can use *)
+      if not sc.fn.test then
+        test_item env f.loc ~home:iface.home (i.alias.name ^ "." ^ f.name);
+      sc.fn.calls <- p :: sc.fn.calls
+  | None, None ->
+      report env f.loc ~help:"if it's defined there, mark it `pub`"
+        (sprintf "`%s` has no public `%s`" iface.home f.name));
   Global p
 
 (* The member [f] of the type [t], written `Stack.of`, or with the type's
@@ -833,6 +898,10 @@ let item env sc (t : tyname) (f : ident) =
                    f.name);
               Global path
           | Some kind, None ->
+              if p.home = env.home then
+                check_private env f.loc
+                  ~key:(p.name ^ "." ^ f.name)
+                  (shown ^ "." ^ f.name);
               sc.fn.calls <- path :: sc.fn.calls;
               if kind = Value then Global_value path else Global path
           | None, _
@@ -899,6 +968,9 @@ let lookup env sc loc ~what x =
   | None -> (
       match Hashtbl.find_opt env.values x with
       | Some (Global p as name) ->
+          if Hashtbl.mem env.own_tests x && not sc.fn.test then
+            test_item env loc ~home:env.home x;
+          if p.home = env.home then check_private env loc ~key:x x;
           sc.fn.calls <- p :: sc.fn.calls;
           name
       | Some name -> name
@@ -1572,6 +1644,8 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     Resolved.fn_def * Path.t list * (string * Path.t option) list =
   let outer = match owner with Some td -> td.type_params | None -> [] in
   let tparams = outer @ f.tparams in
+  (* test code sees what an importer sees, but in the console *)
+  env.in_test <- f.test && not env.sees_all;
   no_duplicates env "type parameters" tparams;
   List.iter
     (fun (t : ident) ->
@@ -1617,7 +1691,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       tparams = List.map (fun (t : ident) -> t.name) tparams;
       rows = [];
       depth = 0;
-      fn = { last_id = 0; calls = []; dots = []; typed = [] };
+      fn = { last_id = 0; calls = []; dots = []; typed = []; test = f.test };
     }
   in
   let ps, inner =
@@ -1639,7 +1713,8 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
               (* a dependency's `self` is an implementation, which needs what
                  its method uses, as `c: Clock` does *)
               TyImpl ([ { tref = Named owner; tloc = loc } ], None, loc)
-          | Fields _ | Ctors _ | Opaque _ | Errors _ | Builtin ->
+          | Fields _ | Ctors _ | Opaque _ | Opaque_fields _ | Errors _ | Builtin
+            ->
               TyName
                 ( { tref = Named owner; tloc = loc },
                   List.mapi
@@ -1697,6 +1772,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
         | _ -> (body, None, none))
     | _ -> (expr env { inner with rows = !named } f.body, ret, deps)
   in
+  env.in_test <- false;
   ( { f with tparams; params = ps; ret; errors = errs; uses = deps; body },
     List.sort_uniq compare sc.fn.calls,
     List.sort_uniq compare sc.fn.dots )
@@ -1915,7 +1991,7 @@ let type_def env (td : Parsed.type_def) :
       (List.map (fun (f : Parsed.field) -> f.field_name) fs)
   in
   (match td.type_body with
-  | Fields fs -> no_duplicate_fields fs
+  | Fields fs | Opaque_fields fs -> no_duplicate_fields fs
   | Ctors cs ->
       List.iter (fun (c : Parsed.ctor) -> no_duplicate_fields c.ctor_fields) cs
   | Dep ops ->
@@ -1950,6 +2026,7 @@ let type_def env (td : Parsed.type_def) :
               "`with numeric` is for an opaque `Int` or `Float`"
         | None, _ -> ());
         Opaque { rep; numeric }
+    | Opaque_fields fs -> Opaque_fields (List.map field fs)
     | Errors es -> Errors (errors env ~params es)
     | Dep ops -> Dep (List.map field ops)
     | Builtin -> Builtin
@@ -2003,9 +2080,21 @@ let type_def env (td : Parsed.type_def) :
                       tname id.name))
           | None -> ())
         td.type_ops
-  | Fields _ | Ctors _ | Opaque _ | Errors _ | Builtin -> ());
+  | Fields _ | Ctors _ | Opaque _ | Opaque_fields _ | Errors _ | Builtin -> ());
+  (* an opaque record's method can share its field's name, and read it,
+     `pub fn balance(self) -> Money = self.balance`: outside its module
+     there's only the method, and inside, `a.balance` is the field and
+     `a.balance()` the method. Unless the field holds a function, which
+     `a.f()` would call too. *)
+  let accessor (o : Parsed.op) (f : Parsed.field) =
+    match (td.type_body, o.op_kind, o.op_fn.params, f.field_ty) with
+    | Opaque_fields _, Op_fn, p :: _, (TyName _ | TyTuple _)
+      when p.pname.name = "self" ->
+        true
+    | _ -> false
+  in
   (match td.type_body with
-  | Fields fs ->
+  | Fields fs | Opaque_fields fs ->
       List.iter
         (fun (o : Parsed.op) ->
           let id = o.op_fn.name in
@@ -2014,6 +2103,7 @@ let type_def env (td : Parsed.type_def) :
               (fun (f : Parsed.field) -> f.field_name.name = id.name)
               fs
           with
+          | Some f when accessor o f -> ()
           | Some f ->
               let what =
                 match (o.op_kind, o.op_fn.params) with
@@ -2251,7 +2341,7 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
                       (sprintf "`pub dep %s`'s operation `%s` mentions `%s`" t
                          fd.field_name.name))
                 ops
-          | Opaque _ | Builtin ->
+          | Opaque _ | Opaque_fields _ | Builtin ->
               (* its representation isn't in the interface, so it can be a
                  private type *)
               ()
@@ -2337,7 +2427,8 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
       | _ -> callees td)
   | Some None | None -> []
 
-let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
+let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
+    (prog : Parsed.program) =
   (* tests are functions by now (test_items.ml); any left are ignored *)
   let prog = List.filter (function Testing _ -> false | _ -> true) prog in
   (* each import, with the interface of the module it imports; the driver
@@ -2360,6 +2451,10 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
       ifaces = imports;
       own_ops = Hashtbl.create 8;
       own_numeric = Hashtbl.create 8;
+      own_tests = Hashtbl.create 8;
+      own_private = Hashtbl.create 16;
+      in_test = false;
+      sees_all;
       own_sets = Hashtbl.create 8;
       own_deps = Hashtbl.create 8;
       modules =
@@ -2422,10 +2517,22 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
           in
           let fields =
             match td.type_body with
-            | Fields fs ->
+            | Fields fs | Opaque_fields fs ->
                 List.map (fun (f : Parsed.field) -> f.field_name.name) fs
             | Ctors _ | Opaque _ | Errors _ | Dep _ | Builtin -> []
           in
+          (* what a test doesn't see: a private type, and a private
+             member; an operator and a `key` are public wherever their
+             type is *)
+          if not td.type_pub then
+            Hashtbl.replace env.own_private ("type " ^ td.type_name.name) ();
+          List.iter
+            (fun (o : Parsed.op) ->
+              if not o.op_fn.pub then
+                Hashtbl.replace env.own_private
+                  (td.type_name.name ^ "." ^ o.op_fn.name.name)
+                  ())
+            td.type_ops;
           (match td.type_body with
           | Errors _ -> Hashtbl.replace env.own_sets td.type_name.name ()
           | Opaque { numeric = Some _; _ } ->
@@ -2434,7 +2541,7 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
               if not (Hashtbl.mem env.own_deps td.type_name.name) then
                 Hashtbl.replace env.own_deps td.type_name.name
                   (List.map (fun (f : Parsed.field) -> f.field_name.name) ops)
-          | Fields _ | Ctors _ | Opaque _ | Builtin -> ());
+          | Fields _ | Ctors _ | Opaque _ | Opaque_fields _ | Builtin -> ());
           (* a built-in type's members are its intrinsics, then those its
              declaration writes *)
           let built_in =
@@ -2559,7 +2666,9 @@ let program sink ~home ~imports ?(groups = []) (prog : Parsed.program) =
   List.iter
     (fun (f : Parsed.fn_def) ->
       Hashtbl.replace env.values f.name.name
-        (Global (Path.make home f.name.name)))
+        (Global (Path.make home f.name.name));
+      if f.test then Hashtbl.replace env.own_tests f.name.name ()
+      else if not f.pub then Hashtbl.replace env.own_private f.name.name ())
     fns;
   let items, calls =
     List.split

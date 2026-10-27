@@ -102,3 +102,18 @@ recipes print, in order, and how it fails.
   loops in `recipe` and the duplicate check became `find` and `any`.
   `split(" ")` still gives an empty string between two spaces, which
   `parse` drops by hand.
+
+What stage 9c changed, where a test sees what an importer sees:
+
+- **`plan.ren` cost nothing.** Its private recursive `visit` was already
+  tested through `pub fn order`, which is what the tests call.
+- **`main` is `pub`, with its whole contract.** The tests call it, so
+  its signature spells out nine errors and four dependencies:
+  `! FsError | InvalidUtf8 | BadLine(number: Int) | ... uses Fs, Os,
+  Proc, Console`. Getting there takes one "can fail with" error per
+  error; a help that wrote the whole `!` clause at once would save that.
+- **The helpers are test items,** `test fn sh`, `files` and `diamond`,
+  which only tests see, and which `ren run` leaves out.
+- **`Justfile` is opaque.** `parse` refuses a bad justfile, so it keeps
+  a rule, and an open `Justfile` would let anyone make one `parse`
+  refuses. Its recipes are read through `recipes()`.

@@ -11,8 +11,8 @@ fn main() =
   let p = try Program.check(programs.factorial(5))
   var vm = Vm.fresh
   try &vm.run(p, 1000)
-  print(vm.out)                       // [120]
-  print(vm.out[0] == fact(5))         // true
+  print(vm.out())                     // [120]
+  print(vm.out()[0] == fact(5))       // true
 
   // The same run, recorded. Every state is a copy, so the last one
   // recorded is the machine as it ended.
@@ -35,12 +35,13 @@ fn main() =
   var ftl = Timeline.empty
   var f = Vm.fresh
   try &ftl.run(&f, fib, 1000)
-  print(f.out)                        // [0, 1, 1, 2, 3]
+  print(f.out())                      // [0, 1, 1, 2, 3]
   let early = try ftl.back(ftl.len() - 3)
   var fork = early
-  fork.locals[0] = 10
+  try &fork.set_local(0, 10)
+  print(attempt &fork.set_local(4, 0))          // Err(NoLocal(4))
   try &fork.run(fib, 1000)
-  print(fork.out)                     // [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+  print(fork.out())                   // [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
   print(try ftl.back(ftl.len() - 3) == early)  // true: untouched
 
   // There's no state before the first.
@@ -51,7 +52,7 @@ fn main() =
   let short = try Program.check([Push(1), Add, Halt])
   var bad = Vm.fresh
   print(attempt &bad.run(short, 1000))          // Err(Underflow(1))
-  print(bad.steps)                              // 2
+  print(bad.steps())                            // 2
 
   // And one that jumps outside itself never becomes a `Program`.
   print(attempt Program.check([Jump(7), Halt]))   // Err(Outside(0, 7))

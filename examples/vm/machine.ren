@@ -1,7 +1,8 @@
 // The machine: a program counter, a stack, four locals and the output so
 // far. Everything it does is in `step`, which changes it, so every call is
 // marked `&vm.step(p)`. It's a plain value: copy one, and the copy is a
-// machine of its own.
+// machine of its own. It's opaque, so only `step` and `set_local` change
+// it, and what's outside reads it through `out` and `steps`.
 
 import program.{Program}
 import stack.{Stack}
@@ -14,7 +15,7 @@ pub type Status =
 // didn't have.
 pub type Fault = ! Underflow(pc: Int)
 
-pub type Vm = {
+pub type Vm = opaque {
   pc: Int,
   stack: Stack<Int>,
   locals: Array<Int>,
@@ -32,6 +33,16 @@ pub type Vm = {
   }
 
   pub fn running(self) -> Bool = self.status == Running
+
+  // what it's emitted so far, and how many steps it's taken
+  pub fn out(self) -> Array<Int> = self.out
+  pub fn steps(self) -> Int = self.steps
+
+  // a local set from outside, as a debugger would; a slot the machine
+  // doesn't have is refused
+  pub fn set_local(inout self, slot: Int, v: Int) ! NoLocal(slot: Int) =
+    if slot < 0 || slot >= self.locals.len() then fail NoLocal(slot)
+    self.locals[slot] = v
 
   // Run one instruction.
   pub fn step(inout self, p: Program) ! Fault =

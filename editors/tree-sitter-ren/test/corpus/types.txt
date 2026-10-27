@@ -632,3 +632,75 @@ fn f(p: (Int, Str), m: Map<Str, (Int, Bool, Str)>) -> (Str, Int) = p
         (type_name
           (type_identifier))))
     (identifier)))
+
+================================================================================
+an opaque record, on one line and over several, with members
+================================================================================
+
+pub type Point = opaque { x: Int, y: Int }
+
+pub type Account = opaque {
+  id: AccountId,
+  balance: Money,
+}
+  pub fn balance(self) -> Money = self.balance
+  pub fn freeze(inout self) = self.frozen = true
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (opaque_type
+      (record_type
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))))
+  (type_definition
+    (visibility)
+    (type_identifier)
+    (opaque_type
+      (record_type
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (type_members
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (self)))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (field_expression
+          (self)
+          (identifier)))
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (inout)
+            (self)))
+        (assignment
+          (field_expression
+            (self)
+            (identifier))
+          (boolean))))))

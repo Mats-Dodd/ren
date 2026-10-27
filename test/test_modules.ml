@@ -1516,3 +1516,220 @@ pub fn made() -> RateCalls & Rates = counting(2)
     3
     ()
     |}]
+
+(* ---- an opaque record ---- *)
+
+let account =
+  ( "account.ren",
+    {|
+pub type Account = opaque { id: Int, balance: Int, f: fn() -> Int }
+  pub fn open(id: Int) -> Account = Account { id, balance: 0, f: fn() => 0 }
+  pub fn balance(self) -> Int = self.balance
+  pub fn credit(inout self, n: Int) = self.balance += n
+
+pub type Point = opaque { x: Int, y: Int }
+  pub fn at(x: Int, y: Int) -> Point = Point { x, y }
+
+pub fn demo() uses Console =
+  var a = Account.open(1)
+  a.balance = 5
+  print(a.balance)
+  print(a.balance())
+  print(a.id)
+  let p = Point { x: 1, y: 2 }
+  print(p)
+  print(p == Point.at(1, 2))
+  var q = p
+  q.x = 3
+  print(q.x)
+|}
+  )
+
+let%expect_test "inside its module, an opaque record is a record" =
+  run_files
+    [
+      ("main.ren", {|
+import account
+fn main() uses Console = account.demo()
+|});
+      account;
+    ];
+  [%expect
+    {|
+    5
+    5
+    1
+    Point(x: 1, y: 2)
+    true
+    3
+    ()
+    |}]
+
+let%expect_test "outside its module, an opaque record is opaque" =
+  run_files
+    [
+      ( "main.ren",
+        {|
+import account.{Account, Point}
+fn main() uses Console =
+  var a = Account.open(2)
+  &a.credit(3)
+  print(a.balance())
+  let p = Point.at(1, 2)
+  print(p)
+  print(p == Point.at(1, 2))
+  print([p, Point.at(3, 4)])
+|}
+      );
+      account;
+    ];
+  [%expect
+    {|
+    3
+    Point(x: 1, y: 2)
+    true
+    [Point(x: 1, y: 2), Point(x: 3, y: 4)]
+    ()
+    |}];
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import account.{Account, Point}
+fn main() uses Console =
+  var a = Account.open(2)
+  print(a.balance)
+  print(a.id)
+  a.id = 3
+  let p = Point { x: 1, y: 2 }
+  print(Point.at(1, 2) < p)
+  print(a == a)
+|}
+      );
+      account;
+    ];
+  [%expect
+    {|
+    error: `balance` is a method, so it has to be called
+      ┌─ main.ren:4:11
+    4 │   print(a.balance)
+      │           ^^^^^^^
+      help: write `a.balance()`, or use `Account.balance` as a function
+
+    error: `Account`'s representation is private to `account`
+      ┌─ main.ren:5:11
+    5 │   print(a.id)
+      │           ^^
+      help: use a function from `account` to make or read one
+
+    error: `Account`'s representation is private to `account`
+      ┌─ main.ren:6:5
+    6 │   a.id = 3
+      │     ^^
+      help: use a function from `account` to make or read one
+
+    error: `Point`'s representation is private to `account`
+      ┌─ main.ren:7:11
+    7 │   let p = Point { x: 1, y: 2 }
+      │           ^^^^^
+      help: use a function from `account` to make or read one
+
+    error: `Point` has no `<`
+      ┌─ main.ren:8:9
+    8 │   print(Point.at(1, 2) < p)
+      │         ^^^^^^^^^^^^^^^^^^
+      = another module's opaque type is ordered only by its `key`
+      help: give `Point` a key in its module
+
+    error: `Account` has no `==`
+      ┌─ main.ren:9:9
+    9 │   print(a == a)
+      │         ^^^^^^
+      = a type with a function in it has no `==` or `hash`
+      = `Account` is opaque, and its module represents it with a function in it
+      help: compare something its module's functions tell you about it instead
+    |}]
+
+let%expect_test "an opaque record's interface hides its fields" =
+  let src = clean (snd account) ^ "fn main() = 1\n" in
+  let i = Ren.Driver.interface ~file:"account.ren" src in
+  List.iter
+    (fun (td : Ren.Iface.type_decl) ->
+      Printf.printf "%s: %s\n" td.path.name
+        (match td.body with
+        | Opaque (Hidden { eq = true }) -> "opaque"
+        | Opaque (Hidden { eq = false }) -> "opaque, without `==`"
+        | _ -> "not hidden"))
+    i.types;
+  [%expect {|
+    Account: opaque, without `==`
+    Point: opaque
+    |}]
+
+let%expect_test "a method can share its field's name only on an opaque record" =
+  check_error
+    {|
+type Open = { balance: Int }
+  fn balance(self) -> Int = self.balance
+type Closed = opaque { balance: Int, f: fn() -> Int, n: Int }
+  fn balance(self) -> Int = self.balance
+  fn f(self) -> Int = 1
+  fn n() -> Int = 1
+fn main() = 1
+|};
+  [%expect
+    {|
+    error: `Open` has a field and a method both named `balance`
+      ┌─ test.ren:2:6
+    1 │ type Open = { balance: Int }
+      │               ------- the field `balance` is here
+    2 │   fn balance(self) -> Int = self.balance
+      │      ^^^^^^^
+      help: rename one of them
+
+    error: `Closed` has a field and a method both named `f`
+      ┌─ test.ren:5:6
+    3 │ type Closed = opaque { balance: Int, f: fn() -> Int, n: Int }
+      │                                      - the field `f` is here
+    5 │   fn f(self) -> Int = 1
+      │      ^
+      help: rename one of them
+
+    error: `Closed` has a field and an associated function both named `n`
+      ┌─ test.ren:6:6
+    3 │ type Closed = opaque { balance: Int, f: fn() -> Int, n: Int }
+      │                                                      - the field `n` is here
+    6 │   fn n() -> Int = 1
+      │      ^
+      help: rename one of them
+    |}]
+
+let%expect_test
+    "writing an opaque record's field is looking inside it, even one a method \
+     shares a name with" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import acct.{Acct}
+fn main() =
+  var a = Acct.open(1)
+  a.bal = 3
+|}
+      );
+      ( "acct.ren",
+        {|
+pub type Acct = opaque { id: Int, bal: Int }
+  pub fn open(id: Int) -> Acct = Acct { id, bal: 0 }
+  pub fn bal(self) -> Int = self.bal
+|}
+      );
+    ];
+  [%expect
+    {|
+    error: `Acct`'s representation is private to `acct`
+      ┌─ main.ren:4:5
+    4 │   a.bal = 3
+      │     ^^^
+      help: use a function from `acct` to make or read one
+    |}]

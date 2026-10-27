@@ -56,6 +56,18 @@ type t =
   | Int_wrapping_sub
   | Int_wrapping_mul
   | Int_wrapping_neg
+  | Int_add
+  | Int_sub
+  | Int_mul
+  | Int_div
+  | Int_rem
+  | Int_neg
+  | Float_add
+  | Float_sub
+  | Float_mul
+  | Float_div
+  | Float_rem
+  | Float_neg
   | Float_of
   | Float_round
   | Float_truncate
@@ -113,6 +125,18 @@ let path x =
   | Int_wrapping_sub -> member "Int" "wrapping_sub"
   | Int_wrapping_mul -> member "Int" "wrapping_mul"
   | Int_wrapping_neg -> member "Int" "wrapping_neg"
+  | Int_add -> member "Int" "add"
+  | Int_sub -> member "Int" "sub"
+  | Int_mul -> member "Int" "mul"
+  | Int_div -> member "Int" "div"
+  | Int_rem -> member "Int" "rem"
+  | Int_neg -> member "Int" "neg"
+  | Float_add -> member "Float" "add"
+  | Float_sub -> member "Float" "sub"
+  | Float_mul -> member "Float" "mul"
+  | Float_div -> member "Float" "div"
+  | Float_rem -> member "Float" "rem"
+  | Float_neg -> member "Float" "neg"
   | Float_of -> member "Float" "of"
   | Float_round -> member "Float" "round"
   | Float_truncate -> member "Float" "truncate"

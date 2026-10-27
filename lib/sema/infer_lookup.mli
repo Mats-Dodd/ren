@@ -64,8 +64,10 @@ val member_of_several :
 val sorted : string list -> string list
 
 (* `r.f`, the expression given, once [r]'s type is known: the field's
-   type, or [TError] once a problem is reported. *)
+   type, or [TError] once a problem is reported. With [assigned], it's
+   what an assignment writes. *)
 val field_access :
+  ?assigned:bool ->
   env ->
   ctx ->
   Ast.Resolved.expr ->

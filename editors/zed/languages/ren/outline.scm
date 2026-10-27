@@ -5,6 +5,7 @@
 
 (function_definition
   (visibility)? @context
+  "test"? @context
   "fn" @context
   name: (identifier) @name) @item
 
@@ -23,6 +24,7 @@
 
 (handler_definition
   (visibility)? @context
+  "test"? @context
   "handler" @context
   name: (identifier) @name) @item
 

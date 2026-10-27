@@ -56,11 +56,14 @@ val unused_imports : Diag.sink -> t -> found:Path.t list -> unit
    that doesn't exist, type with the wrong number of arguments and name
    declared twice is reported to the sink. [groups] are the functions
    made for a public group's tests (test_items.ml), each with the group's
-   name: their parameters are the group's, in the module's interface. *)
+   name: their parameters are the group's, in the module's interface.
+   With [sees_all], test code sees the whole module, not only what an
+   importer sees: `ren console` checks a program so (driver.ml). *)
 val program :
   Diag.sink ->
   home:string ->
   imports:Iface.t list ->
   ?groups:(string * string) list ->
+  ?sees_all:bool ->
   Ast.Parsed.program ->
   t

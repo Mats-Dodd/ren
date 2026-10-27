@@ -8,7 +8,7 @@ open Helpers
 let stack =
   ( "stack.ren",
     {|
-pub type Stack<T> = { items: Array<T> }
+pub type Stack<T> = opaque { items: Array<T> }
   pub fn push(inout self, x: T) = &self.items.push(x)
   pub fn peek(self) -> Option<T> =
     let n = self.items.len()
@@ -27,9 +27,8 @@ let%expect_test "`ren types` shows a type's members under it" =
     [
       ("main.ren", {|
 import stack.{Stack}
-fn main() = Stack { items: [1] }
-|});
-      stack;
+fn main() = Stack.of([1])
+|}); stack;
     ];
   [%expect
     {|
@@ -49,7 +48,7 @@ fn main() = Stack { items: [1] }
 let%expect_test "members parse under their type" =
   ast (snd stack);
   [%expect
-    {| (pub type Stack<T> (fields items:Array<T>) (members (pub (fn push (self x) (& (call (. (. self items) push) x)))) (pub (fn peek (self) (block (let n (call (. (. self items) len))) (if (== n 0) (con None) (con Some (index (. self items) (- n 1))))))) (pub (fn size (self) (call (. (. self items) len)))) (pub (fn of (xs) (record Stack items=xs))) (pub let empty (record Stack items=(array))) ((fn grow (self) (block (let first (index (. self items) 0)) (& (call (. (. self items) push) first))))))) |}]
+    {| (pub type Stack<T> (opaque (fields items:Array<T>)) (members (pub (fn push (self x) (& (call (. (. self items) push) x)))) (pub (fn peek (self) (block (let n (call (. (. self items) len))) (if (== n 0) (con None) (con Some (index (. self items) (- n 1))))))) (pub (fn size (self) (call (. (. self items) len)))) (pub (fn of (xs) (record Stack items=xs))) (pub let empty (record Stack items=(array))) ((fn grow (self) (block (let first (index (. self items) 0)) (& (call (. (. self items) push) first))))))) |}]
 
 let%expect_test "members of a sum type and of an opaque type" =
   (* inside its module, an opaque type is what it's represented as, so
@@ -293,7 +292,7 @@ fn main() = 1
 let%expect_test "a public item spells out its signature" =
   types
     {|
-pub type Stack = { items: Array<Int> }
+pub type Stack = opaque { items: Array<Int> }
   pub fn push(inout self, x) = &self.items.push(x)
   pub fn size(self) = self.items.len()
   pub let empty = Stack { items: [] }
@@ -1203,7 +1202,7 @@ fn main() = [Int.foo, Array.foo]
       ┌─ test.ren:1:18
     1 │ fn main() = [Int.foo, Array.foo]
       │                  ^^^
-      help: its members: `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`
+      help: its members: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`
 
     error: `Array` has no member named `foo`
       ┌─ test.ren:1:29
@@ -1493,4 +1492,220 @@ fn main() =
       = an argument passed with `&` has to be the only way the call can reach that value
       = reading part of `xs` counts as using it
       help: read it into a `let` before the call, and pass that
+    |}]
+
+(* A type that keeps rules is opaque (module-build.md, "Private unless
+   `pub`"): a public record or sum type can have no member that changes
+   it, and none that can refuse to make one. *)
+
+let%expect_test "an open type's method can't change it" =
+  types
+    {|
+pub type Bank = { accounts: Map<Int, Int>, next: Int }
+  pub fn size(self) -> Int = self.accounts.len()
+  pub fn open(inout self) =
+    self.next = self.next + 1
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Bank` is open, so `open` can't change it
+      ┌─ test.ren:3:10
+    3 │   pub fn open(inout self) =
+      │          ^^^^
+      = anyone can change an open type's fields, so a method that changes it is either a second way to do that, or a rule nobody else has to follow
+      help: hide its fields: `pub type Bank = opaque { accounts: Map<Int, Int>, next: Int }`
+    |}]
+
+let%expect_test "nor can a private member of a public open type" =
+  types
+    {|
+pub type Counter = { n: Int }
+  pub fn get(self) -> Int = self.n
+  fn bump(inout self) = self.n = self.n + 1
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Counter` is open, so `bump` can't change it
+      ┌─ test.ren:3:6
+    3 │   fn bump(inout self) = self.n = self.n + 1
+      │      ^^^^
+      = anyone can change an open type's fields, so a method that changes it is either a second way to do that, or a rule nobody else has to follow
+      help: hide its fields: `pub type Counter = opaque { n: Int }`
+    |}]
+
+let%expect_test "an open sum type's method can't change it" =
+  types
+    {|
+pub type Light =
+  | Red
+  | Green
+  pub fn next(inout self) =
+    self = match self
+      Red => Green
+      Green => Red
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Light` is open, so `next` can't change it
+      ┌─ test.ren:4:10
+    4 │   pub fn next(inout self) =
+      │          ^^^^
+      = anyone can make an open type's values, so a method that changes one is either a second way to do that, or a rule nobody else has to follow
+      help: hide its constructors: declare them in a private type, `type LightState = ...`, and make this `pub type Light = opaque LightState`
+    |}]
+
+let%expect_test "an open type's constructor can't fail" =
+  types
+    {|
+pub type Range = { lo: Int, hi: Int }
+  pub fn of(lo: Int, hi: Int) -> Range ! Backwards =
+    if hi < lo then fail Backwards
+    Range { lo, hi }
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Range` is open, so `of` can't refuse to make one
+      ┌─ test.ren:2:10
+    2 │   pub fn of(lo: Int, hi: Int) -> Range ! Backwards =
+      │          ^^
+      = anyone can make an open type's values without calling `of`, so what it checks isn't a rule
+      help: hide its fields: `pub type Range = opaque { lo: Int, hi: Int }`
+    |}]
+
+let%expect_test "nor can a private one whose errors are inferred" =
+  types
+    {|
+pub type Range = { lo: Int, hi: Int }
+  fn of(lo: Int, hi: Int) =
+    if hi < lo then fail Backwards
+    Range { lo, hi }
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Range` is open, so `of` can't refuse to make one
+      ┌─ test.ren:2:6
+    2 │   fn of(lo: Int, hi: Int) =
+      │      ^^
+      = anyone can make an open type's values without calling `of`, so what it checks isn't a rule
+      help: hide its fields: `pub type Range = opaque { lo: Int, hi: Int }`
+    |}]
+
+let%expect_test "the help keeps a generic type's parameters" =
+  types
+    {|
+pub type Stack<T> = { items: Array<T> }
+  pub fn push(inout self, x: T) = &self.items.push(x)
+pub type Tree<T> =
+  | Leaf
+  | Node(left: Tree<T>, value: T, right: Tree<T>)
+  pub fn clear(inout self) = self = Leaf
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Stack` is open, so `push` can't change it
+      ┌─ test.ren:2:10
+    2 │   pub fn push(inout self, x: T) = &self.items.push(x)
+      │          ^^^^
+      = anyone can change an open type's fields, so a method that changes it is either a second way to do that, or a rule nobody else has to follow
+      help: hide its fields: `pub type Stack<T> = opaque { items: Array<T> }`
+
+    error: `Tree` is open, so `clear` can't change it
+      ┌─ test.ren:6:10
+    6 │   pub fn clear(inout self) = self = Leaf
+      │          ^^^^^
+      = anyone can make an open type's values, so a method that changes one is either a second way to do that, or a rule nobody else has to follow
+      help: hide its constructors: declare them in a private type, `type TreeState<T> = ...`, and make this `pub type Tree<T> = opaque TreeState<T>`
+    |}]
+
+let%expect_test "what keeps no rules can stay open" =
+  (* a private open type changes itself; an opaque record does; a pure
+     method, a constructor that can't fail, a function that fails making
+     another type, and one that fails only with what it's given *)
+  types
+    {|
+type Draft = { n: Int }
+  fn bump(inout self) = self.n = self.n + 1
+pub type Account = opaque { balance: Int }
+  pub fn credit(inout self, m: Int) = self.balance = self.balance + m
+pub type Point = { x: Int, y: Int }
+  pub fn moved(self, dx: Int) -> Point = Point { x: self.x + dx, y: self.y }
+  pub fn origin() -> Point = Point { x: 0, y: 0 }
+  pub fn parse(s: Str) -> Int ! Bad =
+    if s == "" then fail Bad
+    0
+  pub fn made(f: fn() -> Point ! ..e) -> Point ! ..e = try f()
+fn main() = ()
+|};
+  [%expect
+    {|
+    type Draft
+      fn bump(inout self)
+    pub type Account
+      pub fn credit(inout self, m: Int)
+    pub type Point
+      pub fn moved(self, dx: Int) -> Point
+      pub fn origin() -> Point
+      pub fn parse(s: Str) -> Int ! Bad
+      pub fn made(f: fn() -> Point ! ..e) -> Point ! ..e
+    fn main()
+    |}]
+
+let%expect_test "nor one that can refuse to make a value holding one" =
+  types
+    {|
+pub type P = { n: Int }
+  pub fn make(n: Int) -> Option<P> ! Neg =
+    if n < 0 then fail Neg
+    Some(P { n })
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `P` is open, so `make` can't refuse to make one
+      ┌─ test.ren:2:10
+    2 │   pub fn make(n: Int) -> Option<P> ! Neg =
+      │          ^^^^
+      = anyone can make an open type's values without calling `make`, so what it checks isn't a rule
+      help: hide its fields: `pub type P = opaque { n: Int }`
+    |}]
+
+let%expect_test "nor one that refuses in what it returns" =
+  (* `Result<P, ! Bad>` and `Option<P>` refuse as a value, as `P ! Bad`
+     does with an error; a method returning `Option` of one is a question
+     about a value, not a way to make one *)
+  types
+    {|
+pub type P = { n: Int }
+  pub fn mk(n: Int) -> Result<P, ! Neg> =
+    if n < 0 then Err(Neg) else Ok(P { n })
+pub type Q = { n: Int }
+  pub fn mk(n: Int) -> Option<Q> = if n < 0 then None else Some(Q { n })
+pub type Day = Mon | Tue
+  pub fn next(self) -> Option<Day> =
+    match self
+      Mon => Some(Tue)
+      Tue => None
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `P` is open, so `mk` can't refuse to make one
+      ┌─ test.ren:2:10
+    2 │   pub fn mk(n: Int) -> Result<P, ! Neg> =
+      │          ^^
+      = anyone can make an open type's values without calling `mk`, so what it checks isn't a rule
+      help: hide its fields: `pub type P = opaque { n: Int }`
+
+    error: `Q` is open, so `mk` can't refuse to make one
+      ┌─ test.ren:5:10
+    5 │   pub fn mk(n: Int) -> Option<Q> = if n < 0 then None else Some(Q { n })
+      │          ^^
+      = anyone can make an open type's values without calling `mk`, so what it checks isn't a rule
+      help: hide its fields: `pub type Q = opaque { n: Int }`
     |}]

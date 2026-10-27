@@ -1,6 +1,7 @@
 ; examples.t runs every example with `ren run` and checks what it prints.
 ; Each folder is a program of several modules. just.t runs examples/just
-; on a real justfile.
+; on a real justfile, and console.t runs `ren console` in bank and
+; prices.
 
 (cram
  (deps

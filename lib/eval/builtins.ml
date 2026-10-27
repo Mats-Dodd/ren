@@ -226,6 +226,22 @@ let pure f args = (f args, args)
 let one_dict x (dicts : Value.dict list) =
   match dicts with [ d ] -> d | _ -> bug x
 
+(* ---- numbers ---- *)
+
+(* [f ()], one operation of Arith's (arith.ml), which panics as the
+   operator does, but without a help: a method that wraps is the
+   operator's, and this is already a method. *)
+let number f =
+  try f () with
+  | Arith.Overflowed { op; shown; _ } ->
+      raise (Panic (Arith.overflow_message ~op ~shown))
+  | Arith.Undefined msg -> raise (Panic msg)
+
+(* The operator [op], as the method of [x]'s two operands. *)
+let arith x op = function
+  | [ a; b ] -> number (fun () -> Arith.binop op a b)
+  | _ -> bug x
+
 (* ---- tables ---- *)
 
 let table x = function VTable t -> t | _ -> bug x
@@ -437,6 +453,15 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
       pure (function [ VInt a; VInt b ] -> VInt (Int64.mul a b) | _ -> bug x)
   | Int_wrapping_neg ->
       pure (function [ VInt a ] -> VInt (Int64.neg a) | _ -> bug x)
+  (* the operators, as methods, `n.add(2)`: Arith's, as `n + 2` is, with
+     the panic said at the call *)
+  | Int_add | Float_add -> pure (arith x Add)
+  | Int_sub | Float_sub -> pure (arith x Sub)
+  | Int_mul | Float_mul -> pure (arith x Mul)
+  | Int_div | Float_div -> pure (arith x Div)
+  | Int_rem | Float_rem -> pure (arith x Mod)
+  | Int_neg | Float_neg ->
+      pure (function [ v ] -> number (fun () -> Arith.neg v) | _ -> bug x)
   | Float_of ->
       pure (function [ VInt n ] -> VFloat (Int64.to_float n) | _ -> bug x)
   | Float_round ->
@@ -452,3 +477,79 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
               raise (Panic ("`sqrt` of a negative number: " ^ Ast.show_float f));
             VFloat (Float.sqrt f)
         | _ -> bug x)
+
+(* ---- the console's journal ----
+
+   `ren console` runs its session again from its first line for each new
+   one (driver.ml). On the test implementations that's the same run each
+   time; on a real one, `--real Clock`, it wouldn't be: an earlier line's
+   file would be written again, and its `let t = Clock.now()` would be a
+   new time. So while a session runs, what each built-in that touches the
+   world gave is written down, in order, and a run again gives back what
+   the earlier lines were given, without asking the world again. Only the
+   new line's calls reach the world. *)
+
+(* What the built-ins that touch the world gave, in the order they were
+   called: [kept], those of the lines the session kept; [ahead], those
+   this run hasn't given back yet; and [fresh], those this run asked the
+   world for, most recent first. *)
+type journal = {
+  mutable kept : (Intrinsic.t * Value.t) list;
+  mutable ahead : (Intrinsic.t * Value.t) list;
+  mutable fresh : (Intrinsic.t * Value.t) list;
+}
+
+let new_journal () = { kept = []; ahead = []; fresh = [] }
+
+(* The journal of the session running, if one is. *)
+let journal : journal option ref = ref None
+
+(* The built-ins that touch the world: what the real implementations of
+   the built-in dependencies are made of. *)
+let touches_world (x : Intrinsic.t) =
+  match x with
+  | Clock_now | Clock_instant | Clock_sleep | Random_int | Console_write
+  | Console_error | Fs_read | Fs_write | Fs_exists | Os_args | Proc_run ->
+      true
+  | _ -> false
+
+(* A value given back again, as it was given: an array is copied, since
+   one can be pushed onto. *)
+let again = function VArray xs -> array (items xs) | v -> v
+
+(* What [x] gives: the next one in the journal, if the run hasn't given
+   back all it holds, or else what [now] asks the world, written down. *)
+let journaled j x now =
+  match j.ahead with
+  | (y, v) :: rest when y = x ->
+      j.ahead <- rest;
+      again v
+  | _ :: _ ->
+      failwith
+        ("bug: a console session called `" ^ Intrinsic.name x
+       ^ "` where it called another before")
+  | [] ->
+      let v = now () in
+      j.fresh <- (x, again v) :: j.fresh;
+      v
+
+let run (x : Intrinsic.t) ~dicts =
+  let now = run x ~dicts in
+  fun args ->
+    match !journal with
+    | Some j when touches_world x ->
+        (journaled j x (fun () -> fst (now args)), args)
+    | _ -> now args
+
+(* Run [f], a session's run, with [j] its journal (see above). *)
+let replaying j f =
+  j.ahead <- j.kept;
+  j.fresh <- [];
+  journal := Some j;
+  Fun.protect ~finally:(fun () -> journal := None) f
+
+(* The line that ran last is kept: what it was given is given back from
+   now on. *)
+let keep j =
+  j.kept <- j.kept @ List.rev j.fresh;
+  j.fresh <- []

@@ -285,6 +285,10 @@ type fn_def = {
           [dict_params]'s j-th *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
+  test : bool;
+      (** test code (ast.ml): a test item, or a function made of a test. Only
+          test code calls one, which Lint checks, so `ren run` leaves them out
+      *)
   loc : Loc.t;  (** its name, where it's declared *)
 }
 

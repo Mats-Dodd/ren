@@ -198,7 +198,9 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
                 | _ -> None))
       in
       let private_ =
-        match blame found expected with Some p -> [ Private p ] | None -> []
+        match blame found expected with
+        | Some p -> [ Private (p, p.home = env.home) ]
+        | None -> []
       in
       (* an implementation of several dependencies where one of others, or
          of some of them, is wanted, or the other way round, at the top or

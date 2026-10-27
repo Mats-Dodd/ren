@@ -139,3 +139,74 @@ group "imported" = conform.clocks(test_clock(Time.epoch))
               (type_name
                 (type_identifier))
               (identifier))))))))
+
+================================================================================
+test items: a test fn, a public one, and a test handler
+================================================================================
+
+test fn alice() -> Account = Account.open(AccountId.of(1))
+
+pub test fn twice(n: Int) -> Int = n * 2
+
+test handler mem(init: Array<Int>) for Store =
+  var xs = init
+  get() => xs
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (named_type
+      (type_name
+        (type_identifier)))
+    (call_expression
+      (item_expression
+        (type_name
+          (type_identifier))
+        (identifier))
+      (arguments
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments
+            (number))))))
+  (function_definition
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (binary_expression
+      (identifier)
+      (number)))
+  (handler_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (dependency
+      (type_identifier))
+    (let_statement
+      (identifier)
+      (identifier))
+    (handler_arm
+      (identifier)
+      (parameters)
+      (identifier))))

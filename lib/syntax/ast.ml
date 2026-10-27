@@ -289,6 +289,10 @@ type 't type_body =
   | Opaque of { rep : 't ty; numeric : Loc.t option }
       (** [opaque Int]: a type of its own, represented as the type written,
           which only its module can see *)
+  | Opaque_fields of 't field list
+      (** [opaque { id: Int, balance: Money }]: a record only its module can see
+          as one, to make, read and change (module-build.md, "Private unless
+          `pub`"); anywhere else it's opaque *)
   | Errors of 't errors
       (** [! Short(by: Money) | Frozen]: a named error set. It isn't a type of
           values: it's only written after `!` *)
@@ -320,13 +324,17 @@ type ('v, 'b, 't) fn_def = {
           source order: an operator can be written once for each type on its
           right, `sub(self, t: Time)` and `sub(self, d: Duration)`, and nothing
           else more than once (operators.md). 0 for anything else *)
+  test : bool;
+      (** test code: a test item, [test fn], or a function made of a test, a
+          group or a group's run (test_items.ml). It sees only what an importer
+          sees, only test code can call it, and `ren run` leaves it out *)
   loc : Loc.t;
 }
 
 (* A member of a type (module-build.md, "Methods and operators
    live on the type"):
 
-     pub type Stack<T> = { items: Array<T> }
+     pub type Stack<T> = opaque { items: Array<T> }
        pub fn push(inout self, x: T) = &self.items.push(x)
        pub fn of(xs: Array<T>) -> Stack<T> = Stack { items: xs }
        pub let empty: Stack<T> = Stack { items: [] }
@@ -837,8 +845,10 @@ let show_fn (f : fn_def) =
         [ parens (("uses" :: List.map show_tyname u.deps) @ tail) ]
     | None -> []
   in
+  (* a test item, `test fn` *)
+  let fn = if f.test then [ "test"; "fn" ] else [ "fn" ] in
   parens
-    (([ "fn"; f.name.name; parens params ] @ errors @ uses)
+    ((fn @ [ f.name.name; parens params ] @ errors @ uses)
     @ [ show_expr f.body ])
 
 let show_type_def (td : type_def) =
@@ -862,6 +872,8 @@ let show_type_def (td : type_def) =
     | Opaque { rep; numeric = None } -> [ parens [ "opaque"; show_ty rep ] ]
     | Opaque { rep; numeric = Some _ } ->
         [ parens [ "opaque"; show_ty rep; "numeric" ] ]
+    | Opaque_fields fs ->
+        [ parens [ "opaque"; parens ("fields" :: List.map show_field fs) ] ]
     | Errors es -> [ parens [ show_errors es ] ]
     | Dep ops -> [ parens ("ops" :: List.map show_field ops) ]
     | Builtin -> [ "builtin" ]

@@ -4,7 +4,7 @@
 
 This doc covers how Ren code is organized into files and packages, how names are found, and how `ren build` turns all of it into binaries. The two halves depend on each other. The module rules are what make the build fast and trustworthy, and the build is the reason the module rules look the way they do.
 
-> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and methods, associated functions and associated values declared under their type run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Structural error tags, named error sets imported like types, and the "two shapes" error run too, in stage 6; [examples/bank](examples/bank) uses them. Dependencies declared with `dep`, imported like types, and `pub group`s imported to run their tests run too, in stage 7. Operators, packages and the build are still planned; see [Roadmap](#roadmap).
+> **Status:** partly built. Files as modules, `import`, `pub`, `opaque` types, lookup through types (constructors, fields and methods), interfaces made from declarations, `uses` on signatures, and methods, associated functions and associated values declared under their type run today, in stages 5a and 5b; [examples/shop](examples/shop) uses them all. Structural error tags, named error sets imported like types, and the "two shapes" error run too, in stage 6; [examples/bank](examples/bank) uses them. Dependencies declared with `dep`, imported like types, and `pub group`s imported to run their tests run too, in stage 7. "A type that keeps rules is opaque", `opaque { ... }` over a record, and "a test sees what an importer sees", with test items in an interface tier of their own, run too, in stage 9c. Packages and the build are still planned; see [Roadmap](#roadmap).
 
 ---
 
@@ -135,7 +135,7 @@ Two libraries can both define `Error`, and the prelude doesn't reserve `Some` an
 A type's members, indented directly under its declaration, are everything attached to it: operators, associated values, and methods. Only the module that declares the type can write them, so every lookup goes to exactly one place and orphan instances can't exist.
 
 ```ren
-pub type Stack<T> = { items: Array<T> }
+pub type Stack<T> = opaque { items: Array<T> }
   pub fn push(inout self, x: T) = &self.items.push(x)
   pub fn peek(self) -> Option<T> =
     let n = self.items.len()
@@ -199,7 +199,7 @@ A file is the boundary that matters most, because it's the cheapest: a 14-line `
 **A type that keeps rules is opaque.** A public type that isn't opaque, a record or a sum type, is open: anyone can build one and change its fields. So it can have neither of these:
 
 - **a method that changes it,** `inout self`. Since anyone can already change its fields, such a method is either a second way to do that, or a rule nobody else has to follow: `transfer` keeps the total, but `a.balance = ...` walks past it.
-- **a constructor that can fail,** a function under it that returns one with `!`. It's checking something, and `Transfer { amount: Money.cents(-5), ... }` skips the check.
+- **a constructor that can fail,** a function under it that returns one, or a value with one in it, `(Transfer, Int)`, with `!`, or that refuses in what it returns, `Option<Transfer>` or `Result<Transfer, ! Bad>`. It's checking something, and `Transfer { amount: Money.cents(-5), ... }` skips the check.
 
 ```
 error: `Bank` is open, so `transfer` can't change it
@@ -210,8 +210,22 @@ error: `Bank` is open, so `transfer` can't change it
   │
   = anyone can change an open type's fields, so a method that changes it
     is either a second way to do that, or a rule nobody else has to follow
-  help: hide its fields: `pub type Bank = opaque { accounts: ..., next: Int }`
+  help: hide its fields: `pub type Bank = opaque { accounts: Map<AccountId, Account>, next: Int }`
 ```
+
+```
+error: `Justfile` is open, so `parse` can't refuse to make one
+  ┌─ justfile.ren:14:10
+  │
+14 │   pub fn parse(text: Str) -> Justfile ! BadLine(number: Int) | DuplicateRecipe(name: Str) =
+  │          ^^^^^
+  │
+  = anyone can make an open type's values without calling `parse`,
+    so what it checks isn't a rule
+  help: hide its fields: `pub type Justfile = opaque { recipes: Array<Recipe> }`
+```
+
+A sum type hides its constructors the same way, in a private type it's opaque over: `type LightState = | Red | Green`, and `pub type Light = opaque LightState`. A private type keeps whatever rules it likes, since only its module can build one. The compiler reports the first member that keeps a rule, once per type, since the fix is the same for all of them.
 
 Data stays open: plain records and sum types, with pure methods and constructors that can't fail, `Account.open(id)`. Anything that keeps rules is closed, and the compiler can tell which from the type's own members. A state machine, `Draft | Placed | Shipped`, becomes opaque and shows its state as a plain sum with no fields, `pub fn status(self) -> Status`, which callers can match on and can't forge. What it costs is a few methods that read: an interface that's behaviour, `balance()` and `statement()`, rather than a data structure. There's no third, read-only kind of field.
 
@@ -227,7 +241,7 @@ The prelude is an ordinary module that every module imports implicitly.
 
 | Kind | Always available |
 |---|---|
-| Types | `Int` `Bool` `Str` `Unit` `Option` `Result` `List` `Array` `Map` `Set` |
+| Types | `Int` `Bool` `Str` `Unit` `Option` `Result` `Array` `Map` `Set` |
 | Constructors | `Some` `None` `Ok` `Err` |
 | Dependencies | `Clock` `Random` `Console` `Net` `Alloc` `Async` `Unsafe` |
 | Functions | `print` `dbg` `assert` |
@@ -244,7 +258,7 @@ For every module, the compiler generates a summary that dependents read instead 
 
 | Tier | Contains | Read by |
 |---|---|---|
-| **Interface** | `pub` types (with their representation, unless `opaque`), `pub` signatures, error sets, `uses`, transparency, the signatures of `pub` types' members, what each `pub` generic function needs of its type parameters (inferred), and whether each `opaque` type has `==` | type checking of dependents |
+| **Interface** | `pub` types (with their representation, unless `opaque`), `pub` signatures, error sets, `uses`, transparency, the signatures of `pub` types' members, what each `pub` generic function needs of its type parameters (inferred), and whether each `opaque` type has `==`; and, apart, its test code: `pub test fn`s, `pub test handler`s and `pub group`s' tests, which only dependents' tests read | type checking of dependents |
 | **Implementation** | `opaque` representations, layouts and sizes, the bodies of `pub` generic, higher-order and inlinable functions, inferred borrow modes, whether the module contains `trust` | code generation of dependents |
 
 **The interface is computed from declarations, and from one inferred fact.** Rule 1 makes most of that possible. Transparency would otherwise need a body, so `pub` signatures state it: a function parameter without `..e` or `..d` is transparent, and the body is checked against that. Requirements are the exception: what a `pub` generic function needs of a type parameter, `same<T has eq>`, is never written, so it comes from inferring the body ([operators.md](operators.md#generic-code) says why). Lambda sets, which lambdas and functions can reach each function type ([compiler.md](compiler.md#lambda-sets)), are inferred from bodies too, but the interface leaves them out: each function type in it has a set of its own, which says nothing of what flows to it, so they never change it. The interface tier contains no source locations, so adding a blank line at the top of a file doesn't change it. The implementation tier is computed from bodies: today it holds the typed Core of each `pub` function that's generic or higher-order, a function given or giving a function, which is what release builds will specialize into their callers ([compiler.md](compiler.md#specialization)), lambda sets included. Nothing reads it yet, so it's worked out only when asked for, not kept by the build, and it leaves out what a specializer will also need, such as the private helpers those bodies call (compiler.md, "Deviations").
@@ -394,9 +408,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 | When | What |
 |---|---|
-| **Today** (stages 5a, 5b, 6, 7) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, the "two shapes" error, dependency types imported like other types, and public groups imported to run their tests. Every compiler pass is a pure function of its inputs |
+| **Today** (stages 5a, 5b, 6, 7, 9c) | Files as modules, `import`, `pub`, `opaque`, lookup through types (constructors shared between types, fields, methods), interface summaries in memory, the prelude as a module, `uses` on signatures, methods, associated functions and associated values under their type, structural error tags with payloads, named error sets in interfaces, the "two shapes" error, dependency types imported like other types, and public groups imported to run their tests; a type that keeps rules is opaque, and `opaque { ... }` over a record; tests see what an importer sees, and test items ([testing.md](testing.md)). Every compiler pass is a pure function of its inputs |
 | **Stage 5b, left over** | `dbg` |
-| **Stage 9c** | A type that keeps rules is opaque, and `opaque { ... }` over a record; tests see what an importer sees; test items ([testing.md](testing.md)) |
 | **Stage 13** | Packages (`ren.toml`, vendoring, `allow`), and `ren build` with a local content-addressed cache and `--verify` |
 | **Stage 17** | Cached simulation-test results |
 | **After 1.0** | `build.ren`, sandboxed tools, remote cache and execution |

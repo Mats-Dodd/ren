@@ -5,7 +5,9 @@ import money.{Money}
 import account.{AccountId}
 import bank.{Bank, Transfer, TransferError}
 
-fn main() =
+// `pub`, with its whole contract, so the test below can call it: a test
+// sees what an importer sees
+pub fn main() ! TransferError uses Clock, Console =
   var acme = Bank.empty
   let alice = &acme.open()
   let bob = &acme.open()

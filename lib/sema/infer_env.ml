@@ -103,7 +103,7 @@ type env = {
       (** every type the module can meet: its own, and the public types of every
           module reachable through its imports (iface.ml) *)
   sets : Iface.sets;  (** the named error sets among them *)
-  visible : Iface.type_decl list;
+  mutable visible : Iface.type_decl list;
       (** the types it can name bare, sorted by name, which is the order an
           error lists them in: its own, those imported by name, and the
           prelude's *)
@@ -133,6 +133,13 @@ type env = {
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
+  mutable client : bool;
+      (** whether the group being checked is test code, which sees the module as
+          an importer does (testing.md, "Tests are specifications"): its private
+          items aren't there, and its opaque types are opaque *)
+  mutable hidden : Iface.type_decl list;
+      (** while [client], the module's private types as it declares them, which
+          test code can't see: a message names what it reached for *)
 }
 
 (* A function of the group being checked, as the group's functions see
@@ -518,6 +525,15 @@ and ctx = {
    order, so the call graph was missing this edge: infer_top.ml adds it
    and checks the module again. *)
 exception Unchecked of { caller : Path.t; callee : Path.t }
+
+(* Whether the code being checked sees the type [p] as its own module
+   does: its private members, and an opaque type's representation. Test
+   code sees its own module's as an importer does ([env.client]). *)
+let own env (p : Path.t) = p.home = env.home && not env.client
+
+(* Whether [td] is the module's own type, seen by a test as an importer
+   sees it: a message then says so. *)
+let tested env (td : Iface.type_decl) = env.client && td.path.home = env.home
 
 (* Does a row ending in [tail] belong to one of [params]? Then it stands
    for whatever the function passed there fails with. *)

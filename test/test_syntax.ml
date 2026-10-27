@@ -873,7 +873,8 @@ let%expect_test "code printed for a message keeps a try or attempt to itself" =
   (* and a comparison doesn't end an `attempt`'s reach *)
   show (Binop (Eq, e (Binop (Mul, x, e (Attempt a), 0)), one, 0));
   show (Binop (Add, x, e (Attempt a), 0));
-  [%expect {|
+  [%expect
+    {|
     (x * attempt a()) + 1
     (x * try a()) + 1
     (x * -try a()) + 1
@@ -921,10 +922,12 @@ fn f() uses Rates & RateCalls = 1
 let%expect_test "a Float is digits, a dot and digits" =
   (* `1..3` and `1.foo()` lex as before: a dot that a digit doesn't
      follow isn't part of the number *)
-  tokens {|
+  tokens
+    {|
 fn main() = [1.5, 0.25, 1_000.5, 2.0.sqrt(), 1.foo(), 9223372036854775807]
 |};
-  [%expect {| FN (IDENT "main") LPAREN RPAREN EQ LBRACKET (FLOAT 1.5) COMMA (FLOAT 0.25) COMMA (FLOAT 1000.5) COMMA (FLOAT 2.0) DOT (IDENT "sqrt") LPAREN RPAREN COMMA (INT 1) DOT (IDENT "foo") LPAREN RPAREN COMMA (INT 9223372036854775807) RBRACKET EOF |}];
+  [%expect
+    {| FN (IDENT "main") LPAREN RPAREN EQ LBRACKET (FLOAT 1.5) COMMA (FLOAT 0.25) COMMA (FLOAT 1000.5) COMMA (FLOAT 2.0) DOT (IDENT "sqrt") LPAREN RPAREN COMMA (INT 1) DOT (IDENT "foo") LPAREN RPAREN COMMA (INT 9223372036854775807) RBRACKET EOF |}];
   ast {|
 fn main() = 1.5 * -2.0
 |};
@@ -932,7 +935,8 @@ fn main() = 1.5 * -2.0
   ast {|
 fn main() = 9223372036854775808
 |};
-  [%expect {|
+  [%expect
+    {|
     error: this number is too big to fit in an `Int`
       ┌─ test.ren:1:13
     1 │ fn main() = 9223372036854775808
@@ -945,21 +949,53 @@ fn main(x: Float) =
     1.5 => 1
     _ => 2
 |};
-  [%expect {|
+  [%expect
+    {|
     error: a `Float` can't be a pattern
       ┌─ test.ren:3:5
     3 │     1.5 => 1
       │     ^^^
       help: compare it in a guard: `x if x == 1.5 => ...`
     |}];
-  ast {|
+  ast
+    {|
 pub type Money = opaque Int with numeric
 pub type Odd = opaque Int with sums
 |};
-  [%expect {|
+  [%expect
+    {|
     error: an opaque type can only be `with numeric`
       ┌─ test.ren:2:32
     2 │ pub type Odd = opaque Int with sums
       │                                ^^^^
       help: write `opaque Int with numeric`
+    |}]
+
+let%expect_test "an opaque record" =
+  ast
+    {|
+pub type Account = opaque { id: Int, balance: Int }
+  pub fn balance(self) -> Int = self.balance
+type Point = opaque {
+  x: Int,
+  y: Int,
+}
+|};
+  [%expect
+    {|
+    (pub type Account (opaque (fields id:Int balance:Int)) (members (pub (fn balance (self) (. self balance)))))
+    (type Point (opaque (fields x:Int y:Int)))
+    |}];
+  check_error
+    {|
+pub type Account = opaque { id: Int } with numeric
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: a record can't be `with numeric`
+      ┌─ test.ren:1:39
+    1 │ pub type Account = opaque { id: Int } with numeric
+      │                                       ^^^^
+      help: `with numeric` makes a number of an `Int` or a `Float`: `opaque Int with numeric`
     |}]

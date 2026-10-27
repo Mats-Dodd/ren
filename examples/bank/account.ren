@@ -1,6 +1,8 @@
 // One customer's account: its balance, whether it's frozen, and its
 // statement, every change to it in order, each stamped with when it
-// happened.
+// happened. It keeps rules, never below zero and nothing into a frozen
+// one, so it's opaque: only this module sees its fields, and everyone
+// else reads and changes it through its methods.
 
 import money.{Money}
 
@@ -21,7 +23,7 @@ pub type Movement =
 // clock is installed
 pub type Entry = { at: Time, what: Movement }
 
-pub type Account = {
+pub type Account = opaque {
   id: AccountId,
   balance: Money,
   frozen: Bool,
@@ -33,6 +35,14 @@ pub type Account = {
     frozen: false,
     statement: [],
   }
+
+  // what it has, and every change to it so far: each reads the field of
+  // its name, which only this module can
+  pub fn balance(self) -> Money = self.balance
+  pub fn statement(self) -> Array<Entry> = self.statement
+
+  // a frozen account takes nothing in and lets nothing out
+  pub fn freeze(inout self) = self.frozen = true
 
   // money in, unless the account is frozen. Stamping the entry reads the
   // clock, so the signature says `uses Clock`.
@@ -47,3 +57,30 @@ pub type Account = {
     if self.balance < m then fail Short(self.id, m - self.balance)
     self.balance = self.balance - m
     &self.statement.push(Entry { at: Clock.now(), what })
+
+// The tests are this module's clients: they see what `bank.ren` sees, its
+// `pub` items, and an `Account` only through its methods.
+
+test "a new account is empty" =
+  let a = Account.open(AccountId.of(1))
+  assert a.balance() == Money.zero
+  assert a.statement() == []
+
+test "a frozen account takes nothing in" =
+  var a = Account.open(AccountId.of(1))
+  &a.freeze()
+  assert attempt &a.credit(Money.dollars(5), Deposited(Money.dollars(5))) == Err(Frozen(AccountId.of(1)))
+  assert a.balance() == Money.zero
+
+test "a debit can't go below zero" =
+  var a = Account.open(AccountId.of(1))
+  try &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
+  let out = Sent(Money.dollars(7), AccountId.of(2))
+  assert attempt &a.debit(Money.dollars(7), out) == Err(Short(AccountId.of(1), Money.dollars(2)))
+  assert a.balance() == Money.dollars(5)
+
+test "each change is stamped with the time" =
+  var a = Account.open(AccountId.of(1))
+  TestClock.advance(Duration.seconds(3))
+  try &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
+  assert a.statement() == [Entry { at: Time.epoch + Duration.seconds(3), what: Deposited(Money.dollars(5)) }]

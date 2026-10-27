@@ -1,4 +1,6 @@
 // The bank: every account, by its id, and the only way to change them.
+// It's opaque, so that's so: a transfer keeps the total, and nothing
+// outside this module can change an account but through it.
 //
 // An account is changed the way any value in a `Map` is: get it, change
 // the copy, and set it back. A transfer changes two accounts, and either
@@ -17,7 +19,7 @@ pub type Transfer = { from: AccountId, to: AccountId, amount: Money }
 // every way a transfer can fail
 pub type TransferError = ! Refusal | NoSuchAccount(account: AccountId) | NotPositive(amount: Money) | SameAccount
 
-pub type Bank = { accounts: Map<AccountId, Account>, next: Int }
+pub type Bank = opaque { accounts: Map<AccountId, Account>, next: Int }
   pub let empty: Bank = Bank { accounts: Map.empty, next: 1 }
 
   pub fn open(inout self) -> AccountId =
@@ -53,19 +55,19 @@ pub type Bank = { accounts: Map<AccountId, Account>, next: Int }
 
   pub fn freeze(inout self, id: AccountId) ! NoSuchAccount(account: AccountId) =
     var a = try self.get(id)
-    a.frozen = true
+    &a.freeze()
     &self.accounts.set(id, a)
 
   pub fn balance(self, id: AccountId) -> Money ! NoSuchAccount(account: AccountId) =
     let a = try self.get(id)
-    a.balance
+    a.balance()
 
   pub fn statement(self, id: AccountId) -> Array<Entry> ! NoSuchAccount(account: AccountId) =
     let a = try self.get(id)
-    a.statement
+    a.statement()
 
   // all the money in the bank: only deposits change it
-  pub fn total(self) -> Money = self.accounts.values().map(fn(a) => a.balance).sum()
+  pub fn total(self) -> Money = self.accounts.values().map(fn(a) => a.balance()).sum()
 
   // the account `id`, a copy. It's private, so what it fails with is
   // worked out, not written.

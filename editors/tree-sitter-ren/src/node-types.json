@@ -1188,6 +1188,16 @@
           }
         ]
       },
+      "test": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "test",
+            "named": false
+          }
+        ]
+      },
       "type_parameters": {
         "multiple": false,
         "required": false,
@@ -1499,6 +1509,16 @@
           {
             "type": "let_statement",
             "named": true
+          }
+        ]
+      },
+      "test": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "test",
+            "named": false
           }
         ]
       },
@@ -2172,6 +2192,16 @@
     "type": "opaque_type",
     "named": true,
     "fields": {
+      "fields": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "record_type",
+            "named": true
+          }
+        ]
+      },
       "numeric": {
         "multiple": false,
         "required": false,
@@ -2184,7 +2214,7 @@
       },
       "representation": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "_type",

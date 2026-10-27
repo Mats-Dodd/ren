@@ -58,7 +58,7 @@ The determinism test is the one other languages don't have. A third-party `sin`,
 ### Layers
 
 ```
-prelude    Int, Str, Bytes, Array, List, Map, Set, Option, Result, Duration, Time
+prelude    Int, Str, Bytes, Array, Map, Set, Option, Result, Duration, Time
            (what nearly every module needs)
 
 pure       str, bytes, fmt, sort, math, unicode, decimal, bigint, random, uuid,

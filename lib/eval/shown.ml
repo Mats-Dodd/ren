@@ -2,10 +2,11 @@
    handled show them.
 
    A value is shown as it's written, with the names of the types it's
-   made of: a record after its type's name, `Account { id: AccountId(1)
-   }`, and an opaque value as its type's name around what it is,
-   `Money(-100)`, unless its type has a `show` method of its own, `Path`'s,
-   which is used instead. At runtime an opaque value is only what it's
+   made of: a record after its type's name, `Entry { at: Time(0), ... }`,
+   and an opaque value as its type's name around what it is,
+   `Money(-100)`, or, for an opaque record, its fields, `Account(id:
+   AccountId(1), ...)`, unless its type has a `show` method of its own,
+   `Path`'s, which is used instead. At runtime an opaque value is only what it's
    represented as, so a value is shown through its type, and each type's
    declaration, by its path. *)
 
@@ -46,11 +47,13 @@ let rec value ~own (types : types) (t : Ty.ty) (v : Value.t) =
       "Set.of(["
       ^ list (List.map (fun (a, _) -> value elem a) (Table.to_list t))
       ^ "])"
-  | _, Record (name, fields) ->
-      (* the fields in the order they're declared *)
-      name ^ " { "
-      ^ list (List.map (fun (f, t, x) -> f ^ ": " ^ value t x) fields)
-      ^ " }"
+  | how, Record { name; opaque; fields } ->
+      (* the fields in the order they're declared; an opaque record's in
+         parentheses, as no module but its own can write one, unless
+         that's its own `show`, which sees it as its module does *)
+      let fields = List.map (fun (f, t, x) -> f ^ ": " ^ value t x) fields in
+      if opaque && how <> Inside then name ^ "(" ^ list fields ^ ")"
+      else name ^ " { " ^ list fields ^ " }"
   | _, Ctor { name; fields = _ :: _ as fields; _ } ->
       name ^ "(" ^ list (List.map (fun (t, x) -> value t x) fields) ^ ")"
   | Inside, Opaque (_, rep) -> value rep v
@@ -73,7 +76,7 @@ let shown ~own types (t : Ty.ty) (v : Value.t) =
    with what they share left out (deps.md, "`assert`"): the way to the
    first place they differ, and what each side has there, with every
    other field, element and payload `...`, and a run of them one `...`.
-   `Account { ..., balance: Money(-100), ... }`. Both sides leave out the
+   `Account(..., balance: Money(-100), ...)`. Both sides leave out the
    same things, so everything up to the difference is written the same on
    both, and a marker can be put under it. A part is kept whole where it
    can't be looked inside to compare: an opaque value, one its type's own
@@ -177,7 +180,7 @@ let sides ~own ~equal types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           and er = extra ys (List.length ys) in
           let side shared extra = "[" ^ parts (shared @ extra) ^ "]" in
           (side l el, side r er)
-      | Record (name, xs), Record (_, ys) ->
+      | Record { name; opaque; fields = xs }, Record { fields = ys; _ } ->
           let l, r =
             both
               (List.map (fun (_, t, _) -> t) xs)
@@ -187,7 +190,8 @@ let sides ~own ~equal types (t : Ty.ty) (a : Value.t) (b : Value.t) =
               (List.map (fun (_, _, x) -> x) xs)
               (List.map (fun (_, _, y) -> y) ys)
           in
-          (name ^ " { " ^ l ^ " }", name ^ " { " ^ r ^ " }")
+          if opaque then (name ^ "(" ^ l ^ ")", name ^ "(" ^ r ^ ")")
+          else (name ^ " { " ^ l ^ " }", name ^ " { " ^ r ^ " }")
       | Ctor c, Ctor d when c.name = d.name && c.fields <> [] ->
           let l, r =
             both (List.map fst c.fields)

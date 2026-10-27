@@ -259,6 +259,22 @@
           ]
         },
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "test",
+              "content": {
+                "type": "STRING",
+                "value": "test"
+              }
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "STRING",
           "value": "fn"
         },
@@ -1181,35 +1197,53 @@
           "value": "opaque"
         },
         {
-          "type": "FIELD",
-          "name": "representation",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_type"
-          }
-        },
-        {
           "type": "CHOICE",
           "members": [
+            {
+              "type": "FIELD",
+              "name": "fields",
+              "content": {
+                "type": "SYMBOL",
+                "name": "record_type"
+              }
+            },
             {
               "type": "SEQ",
               "members": [
                 {
-                  "type": "STRING",
-                  "value": "with"
-                },
-                {
                   "type": "FIELD",
-                  "name": "numeric",
+                  "name": "representation",
                   "content": {
                     "type": "SYMBOL",
-                    "name": "numeric"
+                    "name": "_type"
                   }
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SEQ",
+                      "members": [
+                        {
+                          "type": "STRING",
+                          "value": "with"
+                        },
+                        {
+                          "type": "FIELD",
+                          "name": "numeric",
+                          "content": {
+                            "type": "SYMBOL",
+                            "name": "numeric"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
                 }
               ]
-            },
-            {
-              "type": "BLANK"
             }
           ]
         }
@@ -1516,6 +1550,22 @@
             {
               "type": "SYMBOL",
               "name": "visibility"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "test",
+              "content": {
+                "type": "STRING",
+                "value": "test"
+              }
             },
             {
               "type": "BLANK"

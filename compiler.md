@@ -170,7 +170,9 @@ falls short it says so.
   with the use's lambda-set arguments put in; that an `if`'s or a
   `match`'s set has whatever each branch's has; and that each identity a
   callee's set has names a function or lambda of the module, or one it
-  uses, that takes as many arguments as the call passes.
+  uses, that takes as many arguments as the call passes. Since 9c, a
+  function that isn't test code uses no test function, which is what
+  lets `ren run` leave test code out.
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -964,9 +966,11 @@ differed from its plan:
 - **An operator written for several types on its right can't be named
   as `V.add`**, as a value or a call, since nothing there says which;
   `a + b` and `a.add(b)` choose by the right side.
-- **`Int` and `Float` have no `add` method.** Their operators are the
-  language's own, so `n + 2` works and `n.add(2)` doesn't; only their
-  `wrapping_*` methods are methods.
+- **`Int` and `Float` have no `add` method** was so until 9c, which
+  made each operator a method of theirs too, an intrinsic, so `n.add(2)`
+  works. Its arithmetic is the operator's (arith.ml, shared by both), so
+  it panics where `n + 2` does, but without the help to wrap, which the
+  operator's panic gives.
 - **The overflow panic's help**, `n.wrapping_add(1)`, is given only when
   the left side is written as an `Int`: a `T` or a `with numeric` type
   has no `wrapping_add` to suggest. For `n += 1` it's `n = n.wrapping_add(1)`,
@@ -1099,9 +1103,130 @@ Where it differed from its plan:
 - **A failed `assert` on two maps** leaves out the entries they share,
   their keys paired by `==`, as the maps find them, so two keys equal by
   their type's `key` are one, and keeps a key whole beside its
-  differing value: `Map.of([(AccountId(1), Account { ..., balance:
-  Money(-100), ... }), ...])`.
+  differing value: `Map.of([(AccountId(1), Account(..., balance:
+  Money(-100), ...)), ...])` (an opaque record in parentheses since
+  9c).
 - **Help for names Ren doesn't use** (operators.md, "There's one name
   for each") is a table in infer_msg.ml, `other_names`, consulted only
   when the receiver's type lacks the name but has Ren's:
   `xs.filter(f)` says `select`, `s.find(":")` says `index`.
+
+## Stage 9c
+
+Boundaries (module-build.md, "Private unless `pub`"; testing.md, "Tests
+are specifications"): opaque records, a type that keeps rules is opaque,
+tests that see what an importer sees, test items, and `ren console`.
+Each fact is computed once and carried:
+
+- **`opaque { ... }`** is a type body of its own in the AST
+  (`Opaque_fields`), and in the interface's `type_decl` it's a `Record`
+  with `opaque = true`, a flag every opaque type has. So in its own
+  module it's a record: literals, fields, updates, lowering, exhaust and
+  Lint work on it unchanged, and there's no representation to reveal, so
+  nothing joins `reps`. `Iface.of_module` makes any opaque type
+  `Opaque (Hidden { eq })`, as it made `opaque Int`. A field and a
+  method can share a name on one, `balance` and `balance()`, if the
+  field isn't a function (Resolve); in its own module `a.balance` is the
+  field (Infer_lookup, `own_field`). Shown, it's in parentheses,
+  `Account(id: AccountId(1), ...)`, as no other module can write one;
+  `Walk.view`'s `Record` says whether it's opaque, and a failed `assert`
+  looks inside it as it does a record.
+- **A type that keeps rules is opaque** is checked once every group is
+  generalized (infer_top.ml, `check_keeps_rules`), since a private
+  member's errors aren't written: a `pub` record or sum type can have no
+  member, public or private, that takes `inout self`, or that returns
+  the type, or a value with one in it, with an error row that has a
+  label (a transparent parameter's tail alone isn't one), or, with no
+  `self`, returns `Option` or `Result` of one: a refusal written as a
+  value. A method returning `Option<Day>` is a question about a value,
+  not a way to make one, so it's allowed. It's reported once per type, at the
+  first such member, with the type written opaque as the help, its
+  fields' types printed through its parameters' names.
+- **Test code is one flag,** `fn_def.test`, in the AST and in Core: set
+  by the parser for `test fn` and `test handler`, and by Test_items on
+  every function it makes of a test, a group or a run. Resolve reads it
+  for what test code can see, Infer for which view a group is checked
+  in, Iface for which tier a public one goes in, and `Driver.link` to
+  leave it out of `ren run`, which it can because Core Lint checks that
+  nothing else uses it (`test_code`).
+- **Test items are in their own interface tier,** `Iface.t.tests`: a
+  `pub test fn`, a `pub test handler`, and a `pub group`'s tests, which
+  were in `values` before. Only test code finds a name there (Resolve,
+  `qualified`); anything else gets "`m.alice` is a test item, so only a
+  test can use it".
+- **The client view.** Resolve knows the module's own private items,
+  `own_private`, and reports test code naming one, a function, a type,
+  a named error set, a dependency or a member written after its type: "`stamp` is private,
+  and a test sees what an importer sees", at its first use only (it's
+  taken out of `own_private` then), since the fix, marking it `pub` or
+  exploring it in the console, is the same at every one. What's found through a type,
+  a field, a method, a representation, is Infer's: a group of test code
+  (a group is all test code or none, since only test code calls it) is
+  checked with the module's own types swapped for what an importer sees
+  of them (`client_view`, made once: an opaque one hidden, a private one
+  empty and not visible), no representation revealed, and `env.client`
+  set, which `Infer_env.own` reads wherever a check used to ask whether
+  a type is the module's own. They're put back after the group, by
+  `Fun.protect`, since the constraint solver runs inside it. The
+  messages say "a test sees what an importer sees" when the opaque type
+  is the module's own (`Infer_env.tested`), and a test item's say the
+  same, since it's test code too. While the view is swapped in,
+  `env.hidden` holds the private types as the module declares them, so
+  a bare constructor of one is reported as private, not as missing.
+- **The console** (driver.ml, `console`; console.ml) is the simplest
+  sound design: each line re-checks the program with the session added
+  to the module as a private function, `$console`, of no parameters,
+  whose body is every line kept then the new one, each earlier
+  expression kept as `let _ =`; and re-runs it from its first line, as a
+  test is run (`Eval.run_installed`), on the test implementations but
+  those `--real` names, `Random` from seed 0. A real one would make the
+  run differ each time, and do its effects again, so the session keeps
+  a journal (builtins.ml, `journal`): while it runs, what each built-in
+  that touches the world gave is written down in order, and a run again
+  gives the kept lines back what they were given, without asking the
+  world; only the new line's calls reach it. So the run is the same each
+  time, `--real` or not, and only what the new line gave, and what it
+  printed past what was printed before, is shown; a line that fails or
+  panics shows what it printed before it did (`Console_failed`), as the
+  real `Console` would have. Infer checks the
+  session as it checks a test (`check_console`): a dependency nothing
+  installs is reported "in the console", unless the line is `:t`,
+  which doesn't run. The session is test code (`fn_def.test`), so it
+  can use test items, and the program is checked with test code seeing
+  every module whole (`sees_all`, Resolve and Infer): the console is
+  where a test told it reaches past the interface is sent, so that error
+  can't keep it shut. Each line is lexed on its own, as line 1 of
+  `<console>`, its nodes numbered on from the line before
+  (`Parser.parse_session_line`), so a message shows that line; a `:t`
+  line's tokens are moved past the `:t`. A line that doesn't check,
+  fails or panics isn't kept, and neither is what its run was given.
+
+Where it differed from its plan:
+
+- **No `test type`, `test dep` or `test let`.** Each would need a view
+  of its own in the test tier. So a dependency only tests use, prices'
+  `Calls`, is an ordinary `pub dep`.
+- **Test items are `Fn`s with the flag,** not a `testing` case of their
+  own: every pass already handles a function.
+- **Rule 2 is reported once per type,** not once per member: the fix is
+  the same for all of them.
+- **The console's costs.** Every line re-checks and re-runs the whole
+  session, so a long one gets slower line by line. The journal is
+  stage 10's replay in miniature, for the built-ins only, and matched by
+  position: the kept lines are deterministic given what they're given,
+  so they make the same calls in the same order. A line that fails
+  after a real effect isn't kept, but its effect happened. Input is one
+  line at a time, so no multi-line `match`. `:t a.credit`, a method not
+  called, is an error: write `:t Account.credit`.
+- **`n.add(2)` on `Int` and `Float`** is intrinsics only (arith.ml, the
+  arithmetic `+` and the method share): a call that overflows panics
+  without the `wrapping_add` help an operator's panic has, since that
+  help is built from the operator's source. A `with numeric` type has
+  its operators with no methods behind them, so outside its module
+  `m.add(n)` is an error whose help writes the operator,
+  `m + n` (Infer_msg, `numeric_method`); in it, the representation's
+  method is found.
+- **A private type named in a `pub group`'s parameters** is reported
+  twice: once as a public group taking a private type, and once as test
+  code naming a private item.
+

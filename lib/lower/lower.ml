@@ -1180,6 +1180,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
     dicts = List.map snd cx.dicts;
     scheme;
     body = expr cx f.body;
+    test = f.test;
     loc = f.name.loc;
   }
 
@@ -1310,5 +1311,6 @@ let start (main : C.fn_def) : C.fn_def =
     dicts;
     scheme;
     body = install 1 deps;
+    test = false;
     loc;
   }

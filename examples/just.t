@@ -55,3 +55,17 @@ needs a justfile, args, or a program that fails:
 
   $ ren test just | tail -1 | sed 's/[0-9]*ms$/Nms/'
   16 passed in Nms
+
+`Justfile.parse` refuses a justfile with a bad line or a recipe twice,
+so `Justfile` keeps rules and is opaque, read through `recipes()`. With
+its fields open, anyone could make one `parse` would refuse:
+
+  $ cp -r just j1 && perl -0pi -e 's/pub type Justfile = opaque \{/pub type Justfile = {/; s/  pub fn recipes\(self\)[^\n]*\n//' j1/justfile.ren && perl -pi -e 's/j\.recipes\(\)/j.recipes/g' j1/*.ren
+  $ ren check j1/main.ren
+  error: `Justfile` is open, so `parse` can't refuse to make one
+     ┌─ j1/justfile.ren:14:10
+  14 │   pub fn parse(text: Str) -> Justfile ! BadLine(number: Int) | DuplicateRecipe(name: Str) =
+     │          ^^^^^
+     = anyone can make an open type's values without calling `parse`, so what it checks isn't a rule
+     help: hide its fields: `pub type Justfile = opaque { recipes: Array<Recipe> }`
+  [1]

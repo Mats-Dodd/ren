@@ -162,3 +162,14 @@ fn big(m: Map<Str, (Int, Bool)>) -> Map<Str, (Int, Bool)> =
   m.select(fn((k, (v, _))) => v > 1)
 //             ^ variable.parameter
 //                 ^ variable.parameter
+
+pub test fn twice(n: Int) -> Int = n * 2
+// <- keyword
+//  ^ keyword
+//       ^ keyword
+//          ^ function
+
+test handler fixed(n: Int) for Store =
+// <- keyword
+//   ^ keyword
+  get() => n

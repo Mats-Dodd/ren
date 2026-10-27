@@ -210,7 +210,7 @@ and metrics are flushed:
 
 ```ren
 pub handler batched(every: Duration) over Metrics uses Clock, Async =
-  var pending: List<Sample> = []
+  var pending: Array<Sample> = []
   record(s) => &pending.push(s)
   task =>
     loop
@@ -352,7 +352,7 @@ fn main() uses Http, Console, Async =
 ### The `just`, running independent recipes at once
 
 ```ren
-fn run_all(plan: List<List<Recipe>>) ! ProcError | Failed uses Proc, Console, Async =
+fn run_all(plan: Array<Array<Recipe>>) ! ProcError | Failed uses Proc, Console, Async =
   for level in plan                    // each level depends only on earlier ones
     Async.each(level, max: Os.cpus()) fn(r) => try run(r)
 ```

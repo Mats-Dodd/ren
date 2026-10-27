@@ -211,15 +211,38 @@ let ambiguous_ctor ~names (c : Ast.ident) owners =
 
 (* ---- opaque types ---- *)
 
-(* Another module's opaque type [p], looked inside: made, read, or used as
-   what it's represented as, none of which this module can see. *)
-let representation_private (p : Path.t) =
-  ( sprintf "`%s`'s representation is private to `%s`" p.name p.home,
-    sprintf "use a function from `%s` to make or read one" p.home )
+(* The module [home]'s private item [name], used by a test, which sees
+   what an importer sees (testing.md, "Tests are specifications"). Resolve
+   reports what it can name; this is a member found through a value's
+   type. *)
+let private_in_test loc ~home name =
+  Diag.make loc
+    ~notes:[ sprintf "a test is a specification of `%s`'s interface" home ]
+    ~help:
+      (sprintf "mark it `pub`, or explore it in the console: `ren console %s`"
+         home)
+    (sprintf "`%s` is private, and a test sees what an importer sees" name)
 
-let opaque_private loc (td : Iface.type_decl) =
-  let msg, help = representation_private td.path in
-  Diag.make loc ~help msg
+(* Another module's opaque type [p], looked inside: made, read, or used as
+   what it's represented as, none of which this module can see. With
+   [test], it's the module's own, and a test, which sees what an importer
+   sees (testing.md, "Tests are specifications"), looked inside it. *)
+let representation_private ?(test = false) (p : Path.t) =
+  if test then
+    ( sprintf "`%s` is opaque, and a test sees what an importer sees" p.name,
+      sprintf "explore it in the console: `ren console %s`" p.home )
+  else
+    ( sprintf "`%s`'s representation is private to `%s`" p.name p.home,
+      sprintf "use a function from `%s` to make or read one" p.home )
+
+let opaque_private ?(test = false) loc (td : Iface.type_decl) =
+  let msg, help = representation_private ~test td.path in
+  let notes =
+    if test then
+      [ sprintf "a test is a specification of `%s`'s interface" td.path.home ]
+    else []
+  in
+  Diag.make loc ~notes ~help msg
 
 (* What the module's own opaque type [td] is represented as, as the module
    writes it. *)
@@ -251,7 +274,7 @@ let opaque_own ~names loc (td : Iface.type_decl) what =
 
 (* `Light.Purple`, where `Light` has no `Purple`. With [expected], it's a
    bare `Purple` where a `Light` is expected. *)
-let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
+let not_in_type ~names ?(expected = false) ?(test = false) loc (c : Ast.ident)
     (td : Iface.type_decl) =
   let t = names td.path in
   let notes =
@@ -279,7 +302,7 @@ let not_in_type ~names ?(expected = false) loc (c : Ast.ident)
           Some "its values are written directly, like `1`, `true` or `[1, 2]`"
         )
     | Opaque (Hidden _) ->
-        let msg, help = representation_private td.path in
+        let msg, help = representation_private ~test td.path in
         (msg, Some help)
     | Opaque (Rep _) ->
         ( sprintf "`%s` is opaque, so it has no constructors of its own" t,
@@ -320,9 +343,9 @@ let wrong_label (l : Ast.ident) (f : Iface.field) =
     (sprintf "expected the label `%s` here, found `%s`" f.fname l.name)
 
 (* `Plan { ... }`, where `Plan` isn't a record *)
-let not_a_record ~names loc (td : Iface.type_decl) =
+let not_a_record ~names ?(test = false) loc (td : Iface.type_decl) =
   match td.body with
-  | Opaque (Hidden _) -> opaque_private loc td
+  | Opaque (Hidden _) -> opaque_private ~test loc td
   | Opaque (Rep _) -> opaque_own ~names loc td "has no fields"
   | _ ->
       let help =
@@ -465,7 +488,9 @@ type behind =
   | Holds_beyond of string list * string list
       (** a `Result` that can hold the first, where one that holds only the
           second, and no more, is wanted *)
-  | Private of Path.t  (** another module's opaque type *)
+  | Private of Path.t * bool
+      (** another module's opaque type, or, [true], the module's own, in a test
+          ([representation_private]) *)
   | Narrowed_only_written of {
       all : string;
       part : string;
@@ -533,8 +558,8 @@ let behind_note = function
         ],
         "use `Result`s that can hold the same errors here, or `match` on one \
          instead" )
-  | Private p ->
-      let note, help = representation_private p in
+  | Private (p, test) ->
+      let note, help = representation_private ~test p in
       ([ note ], help)
   | Narrowed_only_written { all; part; fix } ->
       ( [
@@ -1579,6 +1604,9 @@ let call_written name arity = if arity = 0 then name ^ "()" else name ^ "(...)"
    `main`, around which it installs [runtime], or the test [name]. *)
 type runner =
   | Main of string list
+  | Console of { real : string list; faked : string list }
+      (** a `ren console` session, which gets the real built-ins [real], and the
+          test ones [faked] *)
   | Test of {
       name : string;  (** as it's written, quoted *)
       real : string list;  (** the built-ins it gets the real one of *)
@@ -1600,6 +1628,17 @@ let not_installed loc runner ~dep ~short ~real ~maker ~declared ~needs ~why =
         ( "inside `main`",
           sprintf "nothing installs `%s` before `main`" dep,
           sprintf "the runtime installs only %s" (and_list runtime) )
+    | Console c ->
+        ( "in the line",
+          sprintf "nothing installs `%s` in the console" dep,
+          match c.real with
+          | [] ->
+              sprintf
+                "the console gets only the test %s, and what controls them"
+                (and_list c.faked)
+          | real ->
+              sprintf "the console gets only the real %s, and the test %s"
+                (and_list real) (and_list c.faked) )
     | Test t ->
         ( "inside the test",
           sprintf "nothing installs `%s` in the test %s" dep t.name,
@@ -1627,7 +1666,7 @@ let not_installed loc runner ~dep ~short ~real ~maker ~declared ~needs ~why =
   in
   let fix =
     match runner with
-    | Main _ -> None
+    | Main _ | Console _ -> None
     | Test t -> (
         match (real, t.group) with
         | Some d, _ ->
@@ -1838,8 +1877,10 @@ type no_ord =
   | Unordered_prelude of string
       (** a sum type with fields the prelude declares, named, which a program
           can't give a key: `Option` *)
-  | Unordered_opaque of string
-      (** another module's opaque type, named, without a key *)
+  | Unordered_opaque of string * bool
+      (** another module's opaque type, named, without a key; or, with [true],
+          the module's own, compared by a test, which sees what an importer sees
+      *)
   | Unordered_key of string * string
       (** a type, named, with a key, whose type, shown, has no order *)
   | Unordered_table of string  (** a `Map` or a `Set` *)
@@ -1892,9 +1933,15 @@ let no_ord loc ~shown ~op ~by ~uses why =
               t;
           ],
           None )
-    | Unordered_opaque t ->
+    | Unordered_opaque (t, false) ->
         ( [ "another module's opaque type is ordered only by its `key`" ],
           Some (sprintf "give `%s` a key in its module" t) )
+    | Unordered_opaque (t, true) ->
+        ( [
+            "a test sees what an importer sees, and to an importer an opaque \
+             type is ordered only by its `key`";
+          ],
+          Some (key t) )
     | Unordered_key (t, k) ->
         ( [
             sprintf "`%s` is ordered by its key, %s, which has no order" t
@@ -1937,7 +1984,7 @@ let no_ord loc ~shown ~op ~by ~uses why =
    [loc], or given to [by], which uses it; [uses] says how (uses_note).
    [Str]'s `+` is `concat`. [other] says [shown] has an [op], but not one
    that takes another [shown], which is the one generic code uses. *)
-let no_op ?hidden ?(other = false) loc ~shown ~op ~by ~uses =
+let no_op ?hidden ?(test = false) ?(other = false) loc ~shown ~op ~by ~uses =
   let what =
     if other then sprintf "`%s` that takes %s" op (article shown)
     else sprintf "`%s`" op
@@ -1951,7 +1998,7 @@ let no_op ?hidden ?(other = false) loc ~shown ~op ~by ~uses =
   let notes, help =
     match (hidden, shown, op) with
     | Some p, _, _ ->
-        let note, help = representation_private p in
+        let note, help = representation_private ~test p in
         ([ note ], Some help)
     | None, "Str", "+" -> ([], Some "join two strings with `a.concat(b)`")
     (* `sum` of what has no `+`: `count` and `reduce` say what adding
@@ -1995,6 +2042,13 @@ let no_op_taking loc ~left ~op ~right ~numbers ?help () =
    converted. *)
 let convert_help ~written = sprintf "convert one: `%s`" written
 let float_literal_help ~written = sprintf "write it as a `Float`: `%s`" written
+
+(* The help for a `with numeric` type [ty] and a literal number, `price +
+   5`: [written] are the ways to make one of the type of it, `price +
+   Money.cents(5)`, by each function that makes one. *)
+let made_help ~ty written =
+  sprintf "make %s of it: %s" (article ty)
+    (String.concat " or " (List.map code written))
 
 (* The other way round, `now + Duration.seconds(5)`, for `+` and `*`,
    where the right side's type has the operator taking the left's. *)
@@ -2072,6 +2126,47 @@ let reserved_impure loc ~name ~what =
              anything");
       ]
     (sprintf "`%s` can't %s" name what)
+
+(* A public open type, [owner], keeps a rule (module-build.md, "A type
+   that keeps rules is opaque"): its member [name] changes it, [`Changes],
+   or can refuse to make one, [`Refuses]. [record] is whether it's a
+   record, rather than a sum type, and [hide] the help, [hide_fields] or
+   [hide_ctors]. *)
+let keeps_rules loc ~owner ~name ~record ~hide how =
+  let note =
+    match (how, record) with
+    | `Changes, true ->
+        "anyone can change an open type's fields, so a method that changes it \
+         is either a second way to do that, or a rule nobody else has to \
+         follow"
+    | `Changes, false ->
+        "anyone can make an open type's values, so a method that changes one \
+         is either a second way to do that, or a rule nobody else has to \
+         follow"
+    | `Refuses, _ ->
+        sprintf
+          "anyone can make an open type's values without calling `%s`, so what \
+           it checks isn't a rule"
+          name
+  in
+  let what =
+    match how with
+    | `Changes -> "can't change it"
+    | `Refuses -> "can't refuse to make one"
+  in
+  Diag.make loc ~notes:[ note ] ~help:hide
+    (sprintf "`%s` is open, so `%s` %s" owner name what)
+
+(* The help for a record: the type, written opaque, [written]. *)
+let hide_fields ~written = sprintf "hide its fields: `%s`" written
+
+(* The help for a sum type: its constructors in a private type, [state],
+   which the type, [written], is opaque over. *)
+let hide_ctors ~state ~written =
+  sprintf
+    "hide its constructors: declare them in a private type, `%s`, and make \
+     this `%s`"
+    state written
 
 (* The key of the type [owner] leads back to [owner]: comparing two would
    never end. *)
@@ -2254,12 +2349,33 @@ let not_changed loc ~recv ?returns ?keep (m : string) =
     (sprintf "`%s` doesn't change %s" m
        (match recv with Some r -> sprintf "`%s`" r | None -> "its receiver"))
 
+(* The operators `with numeric` gives a type, by the name of the method
+   each would be on `Int` (operators.md): a numeric type has the operator,
+   with no method behind it. *)
+let numeric_operators =
+  [ ("add", "+"); ("sub", "-"); ("neg", "-"); ("mul", "*") ]
+
+(* `m.add(n)`, where [shown] is a `with numeric` type, which has `+` but
+   no `add`; [written] is the call with the operator [op], if it can be
+   shown *)
+let numeric_method (m : Ast.ident) ~shown ~op ~written =
+  Diag.make m.loc
+    ~notes:
+      [
+        sprintf "`with numeric` gives `%s` the operator `%s`, not a method"
+          shown op;
+      ]
+    ?help:(Option.map (sprintf "write the operator: `%s`") written)
+    (sprintf "`%s` has no method `%s`" shown m.name)
+
 (* `s.grow()`, where `s`'s type [shown], declared in another module, has
    no public `grow` *)
-let no_public_method (m : Ast.ident) ~shown (p : Path.t) =
-  Diag.make m.loc
-    ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
-    (sprintf "`%s` has no public `%s`" shown m.name)
+let no_public_method ?(test = false) (m : Ast.ident) ~shown (p : Path.t) =
+  if test then private_in_test m.loc ~home:p.home m.name
+  else
+    Diag.make m.loc
+      ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
+      (sprintf "`%s` has no public `%s`" shown m.name)
 
 (* Names other languages give a collection's methods, each with the one
    Ren gives it: there's one name for each (operators.md, "The collection

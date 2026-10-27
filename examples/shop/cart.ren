@@ -1,13 +1,17 @@
 // A customer's cart: the plans they're about to buy. Everything a cart can
 // do is in the methods under its type. A method that changes the cart takes
-// `inout self`, so every call to it is marked with `&`.
+// `inout self`, so every call to it is marked with `&`. Since its methods
+// change it, it's opaque: no other module can change its fields behind
+// their backs.
 
 import plan.{Plan}
 import users.{UserId}
 
-pub type Cart = { owner: UserId, plans: Array<Plan> }
+pub type Cart = opaque { owner: UserId, plans: Array<Plan> }
   pub fn of(owner: UserId) -> Cart = Cart { owner: owner, plans: [] }
   pub let guest: Cart = Cart.of(UserId.new(0))   // made once, at start
+
+  pub fn owner(self) -> UserId = self.owner
 
   pub fn put(inout self, p: Plan) = &self.plans.push(p)
   pub fn clear(inout self) = self.plans = []

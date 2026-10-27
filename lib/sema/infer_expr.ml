@@ -169,6 +169,17 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
   | (Block _ | If (_, _, Some _) | Match _), TVar _ when written <> None ->
       branches ()
   | _, TVar _ -> leaf ()
+  | Int n, (TCon (_, []) as t) when t = float && Option.is_none why.help ->
+      (* an `Int` literal where a `Float` is wanted, `x.add(2)`: it's
+         written as one, as for an operator's ([numbers_help]) *)
+      let help _ _ = float_literal_help ~written:(sprintf "%Ld.0" n) in
+      check env cx ?written e expected
+        ~why:
+          {
+            why with
+            notes = why.notes @ [ "numbers never convert by themselves" ];
+            help = Some help;
+          }
   | (Block _ | If (_, _, Some _) | Match _), _ -> branches ()
   | Lambda (params, body), TFun (eps, eret, _, _, _)
     when List.length eps = List.length params
@@ -362,7 +373,17 @@ and synth env cx (e : expr) : ty =
          calls; the first two handle it themselves *)
       infer env cx a
   | Assign { target; op; value; onode } ->
-      let tt = infer env cx target in
+      let tt =
+        match target.kind with
+        | Field (r, f) ->
+            (* as [infer] would, but saying it's written to *)
+            let t =
+              field_access ~assigned:true env cx target r (infer env cx r) f
+            in
+            Hashtbl.replace cx.nodes target.node t;
+            t
+        | _ -> infer env cx target
+      in
       (match op with
       | Some op ->
           (* `x += v` puts `x + v` back in `x`, so it has to make what [x]
@@ -746,9 +767,11 @@ and operator env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
          it were what it's represented as *)
       let hidden =
         match Hashtbl.find_opt env.types p with
-        | Some { body = Opaque (Hidden _); _ } when p.home <> env.home -> Some p
+        | Some { body = Opaque (Hidden _); _ } when not (own env p) -> Some p
         | _ -> None
       in
+      (* the module's own, seen from a test *)
+      let hidden_own = hidden <> None && p.home = env.home in
       let overloads = op_overloads env p meth in
       let numeric_takes tb = numeric_takes env p meth tb in
       let builtin () =
@@ -762,7 +785,8 @@ and operator env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
           | [ (path, _) ] -> op_method env cx e ~onode a ta None path
           | _ ->
               report env
-                (no_op ?hidden e.loc ~shown:left ~op:name ~by:None ~uses:None);
+                (no_op ?hidden ~test:hidden_own e.loc ~shown:left ~op:name
+                   ~by:None ~uses:None);
               TError)
       | Some (b, tb) -> (
           (* the overload that takes [tb]'s type, by its type's name *)
@@ -784,7 +808,22 @@ and operator env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
                      ~op:name ~meth)
             | _, _, _ when overloads = [] && numeric = None ->
                 report env
-                  (no_op ?hidden e.loc ~shown:left ~op:name ~by:None ~uses:None)
+                  (no_op ?hidden ~test:hidden_own e.loc ~shown:left ~op:name
+                     ~by:None ~uses:None)
+            | Some rep, ("mul" | "div"), _
+              when literal_scale env ~name rep a b <> None ->
+                (* `w * 2` scales a `Float` one by a `Float`, as `x * 2`
+                   on a plain `Float` would *)
+                report env
+                  (no_op_taking e.loc ~left ~op:name ~right ~numbers:true
+                     ?help:(literal_scale env ~name rep a b)
+                     ())
+            | Some rep, ("add" | "sub"), _
+              when literal_made env ~name p rep a b <> None ->
+                report env
+                  (no_op_taking e.loc ~left ~op:name ~right ~numbers:false
+                     ?help:(literal_made env ~name p rep a b)
+                     ())
             | _ ->
                 report env
                   (no_op_taking e.loc ~left ~op:name ~right ~numbers:false
@@ -872,6 +911,51 @@ and swapped env ~meth ~name p (a : expr) tb (b : expr) =
       | true, Some sa, Some sb ->
           Some (swap_help ~written:(sprintf "%s %s %s" sb name sa))
       | _ -> None)
+  | _ -> None
+
+(* What to write for `w * 2`, where [a] is a `with numeric` type
+   represented as a `Float`, [rep], and [b] an [Int] literal: what's
+   scaled by is a `Float`, so the literal is written as one, `w * 2.0`. *)
+and literal_scale env ~name rep (a : expr) (b : expr) =
+  match (repr (of_decl rep), b.kind, env.source a) with
+  | t, Int n, Some sa when t = float ->
+      Some (float_literal_help ~written:(sprintf "%s %s %Ld.0" sa name n))
+  | _ -> None
+
+(* What to write for `price + 5`, where [a] is the `with numeric` type
+   [p], represented as [rep], and [b] a literal number: one of [p] made
+   by each of its public functions that takes one of [rep] and gives a
+   [p], in source order, `price + Money.cents(5)`. Choosing the unit is
+   the point, so each is given. The literal is written as [rep] is, `2.0`
+   for a `Float`. [None] if [p] has none of those functions, or the
+   literal can't be a [rep]. *)
+and literal_made env ~name p rep (a : expr) (b : expr) =
+  let literal =
+    match (repr (of_decl rep), b.kind) with
+    | t, Int n when t = int -> Some (Int64.to_string n)
+    | t, Int n when t = float -> Some (sprintf "%Ld.0" n)
+    | t, Float f when t = float -> Some (Ast.show_float f)
+    | _ -> None
+  in
+  let makes (o : Iface.op) =
+    match (o.okind, o.oscheme.ty) with
+    | Function, Fun ([ x ], Con (q, []), _, _, _) ->
+        o.opub && q = p && x.mode = Read && x.ty = rep
+    | _ -> false
+  in
+  let made =
+    match Hashtbl.find_opt env.types p with
+    | Some td -> List.filter makes (Iface.members td)
+    | None -> []
+  in
+  match (literal, env.source a, made) with
+  | Some lit, Some sa, _ :: _ ->
+      Some
+        (made_help ~ty:(env.names p)
+           (List.map
+              (fun (o : Iface.op) ->
+                sprintf "%s %s %s.%s(%s)" sa name (env.names p) o.oname lit)
+              made))
   | _ -> None
 
 (* What to write for `a op b` on an [Int] and a [Float], [left] [a]'s
@@ -978,8 +1062,24 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
           let shown = show (printer env) tr in
           (match td.body with
           | Dep ops -> report env (op_of_value ~names:env.names m p ops)
-          | _ when p.home <> env.home && p.home <> Path.prelude_home ->
-              report env (no_public_method m ~shown p)
+          | _
+            when Infer_reqs.numeric env p <> None
+                 && List.mem_assoc m.name numeric_operators ->
+              (* `with numeric` gives the operator, with no method of that
+                 name behind it *)
+              let op = List.assoc m.name numeric_operators in
+              let written =
+                match (env.source r, List.map env.source args) with
+                | Some sr, [] -> Some (op ^ sr)
+                | Some sr, [ Some sa ] -> Some (sprintf "%s %s %s" sr op sa)
+                | _ -> None
+              in
+              report env (numeric_method m ~shown ~op ~written)
+          | _ when (not (own env p)) && p.home <> Path.prelude_home ->
+              report env
+                (no_public_method
+                   ~test:(env.client && op_in m.name td <> None)
+                   m ~shown p)
           | _ ->
               (* an operator written for several types on its right is
                  named once *)
@@ -990,12 +1090,11 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
                       acc @ [ o.oname ]
                     else acc)
                   []
-                  ((if p.home = env.home then Iface.members
-                    else Iface.public_members)
+                  ((if own env p then Iface.members else Iface.public_members)
                      td)
               in
               report env
-                (no_method m ~shown ~own:(p.home = env.home)
+                (no_method m ~shown ~own:(own env p)
                    ~type_name:(type_name env p) methods));
           nothing ()
       | None, TVar _
@@ -1402,7 +1501,8 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
         match literal_fields td with
         | Some fs -> Some (td, fs)
         | None ->
-            report env (not_a_record ~names:env.names tloc td);
+            report env
+              (not_a_record ~names:env.names ~test:(tested env td) tloc td);
             None)
     | Some { tref = Param _; _ } ->
         (* resolve.ml only resolves a record's name to a declared type *)

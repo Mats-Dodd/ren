@@ -49,6 +49,18 @@ type t =
   | Int_wrapping_sub
   | Int_wrapping_mul
   | Int_wrapping_neg
+  | Int_add
+  | Int_sub
+  | Int_mul
+  | Int_div
+  | Int_rem
+  | Int_neg
+  | Float_add
+  | Float_sub
+  | Float_mul
+  | Float_div
+  | Float_rem
+  | Float_neg
   | Float_of
   | Float_round
   | Float_truncate

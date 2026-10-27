@@ -5,7 +5,7 @@
 import machine.{Fault, Vm}
 import program.{Program}
 
-pub type Timeline = { frames: Array<Vm> }
+pub type Timeline = opaque { frames: Array<Vm> }
   pub let empty: Timeline = Timeline { frames: [] }
 
   pub fn record(inout self, vm: Vm) = &self.frames.push(vm)

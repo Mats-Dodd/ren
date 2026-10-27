@@ -131,9 +131,13 @@ module.exports = grammar({
 
     // ---- functions ----
 
+    // `test fn` is a test item, which only tests see; the compiler
+    // refuses one among a type's members, with a better message than a
+    // parse error would give
     function_definition: ($) =>
       seq(
         optional($.visibility),
+        optional(field('test', 'test')),
         'fn',
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
@@ -265,12 +269,18 @@ module.exports = grammar({
     record_type: ($) => seq('{', commaSep($.field_declaration), '}'),
 
     // opaque Int, and opaque Int with numeric, which gives an opaque number
-    // its arithmetic; the compiler checks it's an `Int` or a `Float`
+    // its arithmetic; the compiler checks it's an `Int` or a `Float`. Or
+    // opaque { id: Int, ... }, a record only its own module sees as one
     opaque_type: ($) =>
       seq(
         'opaque',
-        field('representation', $._type),
-        optional(seq('with', field('numeric', $.numeric))),
+        choice(
+          field('fields', $.record_type),
+          seq(
+            field('representation', $._type),
+            optional(seq('with', field('numeric', $.numeric))),
+          ),
+        ),
       ),
 
     numeric: (_) => 'numeric',
@@ -321,6 +331,7 @@ module.exports = grammar({
     handler_definition: ($) =>
       seq(
         optional($.visibility),
+        optional(field('test', 'test')),
         'handler',
         field('name', $.identifier),
         field('parameters', $.parameters),

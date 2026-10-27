@@ -122,7 +122,7 @@ let of_module (iface : Iface.t) (core : Core.program) =
   let public =
     List.map
       (fun (v : Iface.value) -> Path.make iface.home v.vname)
-      iface.values
+      (iface.values @ iface.tests)
     @ List.concat_map
         (fun (td : Iface.type_decl) ->
           List.filter_map

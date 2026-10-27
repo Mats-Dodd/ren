@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4, 5a, 5b and 6–9 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, `hash`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, `Float`s with no `NaN`, tuples, ranges in `for`, `Map` and `Set` in insertion order, and `Enumerable`'s methods on `Array`, `Map` and `Set` (see [examples/bank](examples/bank)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
+> **Status:** early. Stages 1–4, 5a, 5b and 6–9 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, `hash`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, `Float`s with no `NaN`, tuples, ranges in `for`, `Map` and `Set` in insertion order, and `Enumerable`'s methods on `Array`, `Map` and `Set` (see [examples/bank](examples/bank)); and stage 9c: `opaque { ... }` records, a type that keeps rules is opaque, tests that see what an importer sees, `test fn` and `test handler`, and `ren console` on test implementations (see [examples/bank](examples/bank)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
 
 ---
 
@@ -167,7 +167,7 @@ Public functions spell out their full contract. Private functions can infer thei
 A function parameter is **transparent** when the function only calls it: it doesn't store it, return it, or hand it to something that outlives the call. A transparent parameter's errors and dependencies flow into the caller automatically, so they're never written:
 
 ```ren
-pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>
+pub fn map<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U>
 pub fn retry<T>(n: Int, body: fn() -> T) -> T
 ```
 
@@ -313,7 +313,7 @@ test "a deposit is stamped with the time" =
   assert s[0].at == Time.epoch + Duration.minutes(5)
 ```
 
-Tests sit next to the code they test, and `ren run` ignores them. A test sees what an importer sees, the module's `pub` items, so it's a specification of the interface, and its helpers are test items, `test fn` and `test handler`, which only tests see (from stage 9c; today tests can still reach private functions). Exploring a module's insides is what `ren console` is for ([testing.md](testing.md)). Every test gets test implementations of the built-ins without a `with`: a `Clock` stopped at `Time.epoch` until `TestClock.advance` moves it, a `Random` seeded from the test's name, and a `Console` that keeps what it's given, `TestConsole.output()`. So a test that uses no real dependency gives the same result on every run. A test asks for a real one in its `uses`, `test "the system clock moves" uses Clock =`, so going outside is visible. Any other dependency needs a `with`, and forgetting one is a compile error naming the test and the call that needs it.
+Tests sit next to the code they test, and `ren run` ignores them. A test sees what an importer sees, the module's `pub` items, so it's a specification of the interface, and its helpers are test items, `test fn` and `test handler`, which only tests see: a test that reaches a private item is a compile error. Exploring a module's insides is what `ren console` is for ([testing.md](testing.md)). Every test gets test implementations of the built-ins without a `with`: a `Clock` stopped at `Time.epoch` until `TestClock.advance` moves it, a `Random` seeded from the test's name, and a `Console` that keeps what it's given, `TestConsole.output()`. So a test that uses no real dependency gives the same result on every run. A test asks for a real one in its `uses`, `test "the system clock moves" uses Clock =`, so going outside is visible. Any other dependency needs a `with`, and forgetting one is a compile error naming the test and the call that needs it.
 
 A group is a function over implementations, so one suite runs against every implementation of a dependency, each test with a fresh one:
 
@@ -327,7 +327,7 @@ group "frozen" = clock_conforms(Clock.frozen(Time.epoch))
 group "test clock" = clock_conforms(test_clock(Time.epoch))
 ```
 
-A failed `assert` is a panic: it's a bug, not an error. `assert a == b` shows both sides, with a marker under the first place they differ and what they share left out, `Account { ..., balance: Money(-100), ... }`, and an opaque value as its type around its contents, `Money(-100)`, as `print` shows it. To check that something fails, keep it with `attempt` and compare: `assert attempt &acme.deposit(a, Money.zero) == Err(NotPositive(Money.zero))`.
+A failed `assert` is a panic: it's a bug, not an error. `assert a == b` shows both sides, with a marker under the first place they differ and what they share left out, `Account(..., balance: Money(-100), ...)`, and an opaque value as its type around its contents, `Money(-100)`, as `print` shows it. To check that something fails, keep it with `attempt` and compare: `assert attempt &acme.deposit(a, Money.zero) == Err(NotPositive(Money.zero))`.
 
 `ren test` runs every module's tests in a folder: one line per test, then each failure with its source, both sides, its seed and the command that reruns it, and what it printed. `--only <text>` runs the tests whose name has it, `--seed N` sets every test's seed, `--list` lists them, saying which use a real dependency, and it exits with status 1 if any failed. [examples/bank](examples/bank) carries a suite like this.
 
@@ -420,7 +420,7 @@ A function body uses exactly two markers: `try` means a call can fail, and `&` m
 There are no traits or typeclasses. A type carries its own operations, indented directly under its declaration: methods, associated functions and values, and operators. The compiler looks there and nowhere else.
 
 ```ren
-pub type Stack<T> = { items: Array<T> }
+pub type Stack<T> = opaque { items: Array<T> }
   pub fn push(inout self, x: T) = &self.items.push(x)
   pub fn peek(self) -> Option<T> =
     let n = self.items.len()
@@ -641,7 +641,7 @@ An arena also works as a per-request memory limit: a request that exceeds `req.b
 Ren has no `async` or `await` and no colored functions. `Async` is a dependency like `Clock`, and concurrency is structured: no task outlives the call that started it, and a failure in one task cancels the others.
 
 ```ren
-pub fn dashboard(ids: List<UserId>) -> List<Summary> ! Timeout | FeedError
+pub fn dashboard(ids: Array<UserId>) -> Array<Summary> ! Timeout | FeedError
     uses Users, Net, Async =
   Async.timeout(2.s) fn() =>
     Async.map(ids) fn(id) =>
@@ -964,7 +964,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 7 | `dep`, `uses`, `with`, `handler`, `Clock`, `Random` and `Console`; `test`, `group`, `assert`, `ren test` ([deps.md](deps.md)) | the bank's tests run on the test implementations, with no `with` (done) |
 | 8 | `Str` and `Bytes`, `Fs`, `Os`, `Proc`, `Path`, each with real and in-memory implementations | a small [just](https://github.com/casey/just) runs, and its tests run on `mem_fs` and a fake `Os` and `Proc` (done, as a slice: `Os` has only `args`, and `Proc.run` doesn't capture output) |
 | 9 | operators, derived equality and hashing, arithmetic for opaque number types, `Map` and `Set`, tuples, ranges and the collection methods ([operators.md](operators.md)) | `Map<Email, User>` works (done: 9a, operators, `key`, `with numeric`, `Int` and `Float`; 9b, tuples, ranges, `Map`, `Set` and `Enumerable`'s methods, and the bank keeps its accounts in a `Map`) |
-| 9c | boundaries: a type that keeps rules is opaque; a test sees what an importer sees, with test items; `ren console` ([testing.md](testing.md), [module-build.md](module-build.md#private-unless-pub)) | the bank's `Account` and `Bank` are opaque, and its tests are specifications |
+| 9c | boundaries: a type that keeps rules is opaque; a test sees what an importer sees, with test items; `ren console` ([testing.md](testing.md), [module-build.md](module-build.md#private-unless-pub)) | the bank's `Account` and `Bank` are opaque, and its tests are specifications (done) |
 | 10.0 | one constraint solver, typed Core, requirements passed as dictionaries, lambda sets in function types ([compiler.md](compiler.md)) | every stage-10.0 step passes its check (done) |
 | 10 | `over` and `next`, `with` as a set, `finally`, **the journal**: `ren run --record`, `ren replay`, `--trace`, journals as tests, and the console's `:reload` and `:spec` ([handlers.md](handlers.md), [testing.md](testing.md)) | a cache wraps a real implementation, and the `just` replays byte for byte |
 | 11 | `Async` and `Net`: structured concurrency, cancellation, tasks in handlers, deterministic tests on virtual time ([async.md](async.md)) | a server shuts down gracefully, and `ren test --seeds` finds the `cached` race |

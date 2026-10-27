@@ -17,3 +17,20 @@ val args : string list ref
    its type itself. *)
 val run :
   Intrinsic.t -> dicts:Value.dict list -> Value.t list -> Value.t * Value.t list
+
+(* ---- `ren console`'s journal ---- *)
+
+(* What the built-ins that touch the world (the real `Clock`, `Fs`, ...)
+   gave a console session's lines, in order: a session runs again from its
+   first line for each new one (driver.ml), and the lines it kept are given
+   back what they were given, so the world is asked only for the new
+   line's. *)
+type journal
+
+val new_journal : unit -> journal
+
+(* Run [f], one run of the session, with its journal. *)
+val replaying : journal -> (unit -> 'a) -> 'a
+
+(* Keep what the run that just ended was given: its line is kept. *)
+val keep : journal -> unit

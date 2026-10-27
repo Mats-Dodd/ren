@@ -54,7 +54,7 @@ after a failed batch holds: nothing moved. Two maps are equal when they
 have the same keys with the same values, in any order.
 
 **The total is one line.** `self.accounts.values().map(fn(a) =>
-a.balance).sum()`: `sum` needs `+` and `zero` of what it adds, and
+a.balance()).sum()`: `sum` needs `+` and `zero` of what it adds, and
 `Money` is `with numeric`, so it has both.
 
 **Three ways to deal with an error.** `main` passes most of them on with
@@ -155,8 +155,8 @@ What stage 7 found, writing the tests:
 
 - **A bank was one long line.** A failed `assert acme == before`
   printed each bank on one line, hundreds of characters wide. Now it
-  leaves out what the two share, `Bank { accounts: Map.of([(AccountId(1),
-  Account { ..., balance: Money(-100), ... }), ...]), ... }`, with the
+  leaves out what the two share, `Bank(accounts: Map.of([(AccountId(1),
+  Account(..., balance: Money(-100), ...)), ...]), ...)`, with the
   marker under the first difference.
 - **Printing showed an opaque payload,** `"Err(Short(2, 45000))"`, where
   `ren test` showed `Money(-100)`. Now `print` shows a value through its
@@ -169,3 +169,18 @@ What stage 9b changed:
   `&draft.accounts[i].debit(...)`. Now they're a `Map<AccountId,
   Account>`, `find` is gone, and `total` is a `map` and a `sum` instead
   of a loop.
+
+What stage 9c changed:
+
+- **`Account` and `Bank` are opaque records,** `opaque { ... }`. Before,
+  any module could write `a.balance = ...` and walk past `debit`'s check;
+  now only `account` reads or writes the fields, and others read through
+  `a.balance()` and `a.statement()`, and freeze an account with
+  `&a.freeze()`. A failed `assert` shows one in parentheses,
+  `Account(..., balance: Money(-100), ...)`, as no other module can
+  write one.
+- **`account.ren` has its own tests,** of what an importer can do with an
+  account: a new one is empty, a frozen one takes nothing in, a debit
+  can't go below zero, and each change is stamped with the time. With
+  `debit`'s check broken, the third fails too.
+- **`main` is `pub`,** with its full signature, so a test can call it.

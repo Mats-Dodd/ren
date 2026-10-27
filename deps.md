@@ -169,8 +169,9 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
 
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.
   `show` shows a value through its type, as it's written: a record after
-  its type's name, `Account { id: AccountId(1), ... }`, and an opaque
-  value as its type's name around what it is, `Money(-100)`, unless the
+  its type's name, `Entry { at: Time(0), ... }`, and an opaque
+  value as its type's name around what it is, `Money(-100)`, or, for an
+  opaque record, its fields, `Account(id: AccountId(1), ...)`, unless the
   type has a `show(self) -> Str` method of its own, which is used
   instead: `Path`'s, so `print(p)` prints `src/main.ren`. A string on its
   own is itself. A failed `assert` and an error nothing handles show
@@ -248,9 +249,9 @@ test "main prints the balances, and every refusal" =
   ]
 ```
 
-- Tests sit next to the code, and `ren run` ignores them. Today they can
-  reach private functions. From stage 9c a test sees what an importer
-  sees, and its helpers are test items, `test fn` and `test handler`
+- Tests sit next to the code, and `ren run` ignores them. A test sees
+  what an importer sees, and its helpers are test items, `test fn` and
+  `test handler`, which only tests see
   ([testing.md](testing.md#tests-are-specifications)).
 - **Every test gets the test `Clock`, `Random`, `Console`, `Fs`, `Os`
   and `Proc`, and their controls, implicitly.** No `with`, no fixtures. A test without real
@@ -293,8 +294,8 @@ its dependency ([testing.md](testing.md#conformance-groups)).
 `assert a == b` shows both sides when it fails, with a marker under the
 first place they differ. What they share there is left out: each side
 shows the way to that place and what it has there, and every other
-field, element and payload is `...`, `Account { ..., balance:
-Money(-100), ... }`. Any other `assert` shows its source. A failed
+field, element and payload is `...`, `Account(..., balance:
+Money(-100), ...)`. Any other `assert` shows its source. A failed
 `assert` is a panic, not an error: it's a bug.
 
 ### `ren test`
@@ -329,9 +330,9 @@ main.ren
 114 │   assert acme == before
     │          ^^^^^^^^^^^^^^
     │
-    left:  Bank { accounts: [Account { ..., balance: Money(-100), ... }, ...], ... }
-    right: Bank { accounts: [Account { ..., balance: Money(1000), ... }, ...], ... }
-                                                           ^ differs here
+    left:  Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(-100), ...)), ...]), ...)
+    right: Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(1000), ...)), ...]), ...)
+                                                                             ^ differs here
 
     seed 3529 · rerun: ren test bank --only "an overdraft" --seed 3529
 

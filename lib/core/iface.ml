@@ -81,6 +81,10 @@ type type_decl = {
       (** for an opaque type `with numeric`, what it's represented as, `Int` or
           `Float`, which even its interface says: another module adds two and
           scales one by that (operators.md, "Number types") *)
+  opaque : bool;
+      (** whether it's declared `opaque`: [opaque Int], whose own module's view
+          has its representation, [Opaque (Rep _)], or [opaque { ... }], a
+          [Record] there. Its interface hides either, as [Opaque (Hidden _)] *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
@@ -90,12 +94,14 @@ type t = {
   home : string;  (** the module this is the interface of *)
   types : type_decl list;  (** in the order they're declared *)
   values : value list;
+  tests : value list;
 }
 
 let find_type iface name =
   List.find_opt (fun d -> d.path.name = name) iface.types
 
 let find_value iface name = List.find_opt (fun v -> v.vname = name) iface.values
+let find_test iface name = List.find_opt (fun v -> v.vname = name) iface.tests
 
 (* The member [name] of the type [d], if it has one: the first of that
    name, if it's an operator written for several types on its right. *)
@@ -413,7 +419,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
   in
   let body =
     match td.type_body with
-    | Fields fs -> Record (List.map field fs)
+    | Fields fs | Opaque_fields fs -> Record (List.map field fs)
     | Ctors cs ->
         Sum
           (List.map
@@ -459,6 +465,10 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
       (match td.type_body with
       | Opaque { rep; numeric = Some _ } -> Some (of_written ~sets rep)
       | _ -> None);
+    opaque =
+      (match td.type_body with
+      | Opaque _ | Opaque_fields _ -> true
+      | Fields _ | Ctors _ | Errors _ | Dep _ | Builtin -> false);
     loc = Some td.type_name.loc;
   }
 
@@ -495,6 +505,19 @@ let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
         let reqs, row_reqs = needs path in
         Ty.canonical { s with reqs; row_reqs }
   in
+  let public_fns ~test =
+    List.filter_map
+      (function
+        | Ast.Fn (f : Ast.Resolved.fn_def) when f.pub && f.test = test ->
+            let scheme = signature ~sets f in
+            Some
+              {
+                vname = f.name.name;
+                scheme = needed (Path.make home f.name.name) scheme;
+              }
+        | _ -> None)
+      prog
+  in
   let public (td : type_decl) =
     let td =
       {
@@ -510,9 +533,8 @@ let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
             td.members;
       }
     in
-    match td.body with
-    | Opaque _ -> { td with body = Opaque (Hidden { eq = has_eq td.path }) }
-    | _ -> td
+    if td.opaque then { td with body = Opaque (Hidden { eq = has_eq td.path }) }
+    else td
   in
   {
     home;
@@ -523,18 +545,9 @@ let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
               Some (public (of_type_def ~home ~sets td))
           | Type _ | Fn _ | Import _ | Testing _ -> None)
         prog;
-    values =
-      List.filter_map
-        (function
-          | Ast.Fn (f : Ast.Resolved.fn_def) when f.pub ->
-              let scheme = signature ~sets f in
-              Some
-                {
-                  vname = f.name.name;
-                  scheme = needed (Path.make home f.name.name) scheme;
-                }
-          | _ -> None)
-        prog;
+    (* a public test item is in its own tier, which only tests read *)
+    values = public_fns ~test:false;
+    tests = public_fns ~test:true;
   }
 
 (* A built-in type [a] with the members [b], its declaration in the
@@ -563,4 +576,5 @@ let union a b =
       List.map joined a.types
       @ List.filter (fun d -> find_type a d.path.name = None) b.types;
     values = a.values @ b.values;
+    tests = a.tests @ b.tests;
   }

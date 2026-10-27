@@ -331,7 +331,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
       | Type td ->
           let field (fd : Resolved.field) = ty_ fd.field_ty in
           (match td.type_body with
-          | Fields fs | Dep fs -> List.iter field fs
+          | Fields fs | Opaque_fields fs | Dep fs -> List.iter field fs
           | Ctors cs -> List.iter (fun c -> List.iter field c.ctor_fields) cs
           | Opaque { rep; _ } -> ty_ rep
           | Errors es -> errors_ es
@@ -716,8 +716,11 @@ let check_main env r ~fns ~schemes ~withheld (f : fn_def) ty cx =
 (* A test gets the test implementation of each built-in dependency, and
    the dependency that controls it, unless it gets the real one (deps.md,
    "Tests"): [t] says which, and [f] is its function (test_items.ml). *)
-let check_test env r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
-    ty cx =
+(* What a test's world installs, when it gets the real implementation of
+   the built-ins [real] and the test one of the rest: whether it installs
+   a dependency, the built-in a dependency controls if that's a real one,
+   and the built-ins it gets the test one of. *)
+let test_world ~real =
   (* the built-in dependency the prelude's [c] controls: `Clock` for
      `TestClock` *)
   let control c =
@@ -730,21 +733,26 @@ let check_test env r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
     && (List.mem_assoc p.name Test_items.defaults
        ||
        match control p.name with
-       | Some d -> not (List.mem d t.real)
+       | Some d -> not (List.mem d real)
        | None -> false)
   in
   (* the built-in [p] controls, if the test gets the real one *)
   let real_of (p : Path.t) =
     match control p.name with
-    | Some d when p.home = Path.prelude_home && List.mem d t.real -> Some d
+    | Some d when p.home = Path.prelude_home && List.mem d real -> Some d
     | _ -> None
   in
   (* the built-ins it gets the test implementation of *)
   let faked =
     List.filter_map
-      (fun (d, _) -> if List.mem d t.real then None else Some d)
+      (fun (d, _) -> if List.mem d real then None else Some d)
       Test_items.defaults
   in
+  (installs, real_of, faked)
+
+let check_test env r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
+    ty cx =
+  let installs, real_of, faked = test_world ~real:t.real in
   check_installed env r ~fns ~schemes ~withheld f ty cx
     ~run:
       {
@@ -760,6 +768,13 @@ let check_test env r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
             };
         at = t.loc;
       }
+
+(* A `ren console` session, the function [f] (driver.ml), runs in a
+   test's world, with the real implementation of the built-ins [real]. *)
+let check_console env r ~fns ~schemes ~withheld ~real (f : fn_def) ty cx =
+  let installs, real_of, faked = test_world ~real in
+  check_installed env r ~fns ~schemes ~withheld f ty cx
+    ~run:{ installs; real_of; kind = Console { real; faked }; at = f.body.loc }
 
 (* ---- checking the module ---- *)
 
@@ -807,6 +822,8 @@ let new_env sink ~reachable (r : Resolve.t) =
     written = Hashtbl.create 16;
     in_state = false;
     in_scope = [];
+    client = false;
+    hidden = [];
   }
 
 (* The types of what the module can call before any of its own functions
@@ -822,7 +839,8 @@ let add_globals env ~imports ~reachable fns =
           Hashtbl.replace env.globals
             (Path.make iface.home v.vname)
             (of_scheme env.st v.scheme))
-        iface.values)
+        (* the test tier too: Resolve lets only tests call it *)
+        (iface.values @ iface.tests))
     imports;
   (* the members of every type the module can meet, which it can call
      with a dot; an associated value is a function of no parameters, as in
@@ -1136,13 +1154,210 @@ let check_reserved env so_far ms =
         | _ -> ())
     ms
 
+(* A type that keeps rules is opaque (module-build.md, "Private unless
+   `pub`"). A public record or sum type is open: anyone can build one and
+   change its fields. So none of its members, public or private, can
+   change it, `inout self`, or refuse to make one: return it, or a value
+   with one in it, `(P, Int)`, with errors (an error row that's only a
+   transparent parameter's tail isn't any), or, as an associated
+   function, return `Option<P>` or `Result<P, E>`, a refusal written as a
+   value. It's checked once every member's type is inferred, since a
+   private member's errors aren't written. The first such member is
+   reported, once per type: the fix, making it opaque, is the same for
+   all of them. *)
+let check_keeps_rules env so_far (r : Resolve.t) =
+  let check (td : type_def) =
+    let path = Path.make r.home td.type_name.name in
+    let changes (f : fn_def) =
+      match f.params with
+      | p :: _ -> p.pname.ident.name = "self" && p.pmode = Inout
+      | [] -> false
+    in
+    let is_method (f : fn_def) =
+      match f.params with p :: _ -> p.pname.ident.name = "self" | [] -> false
+    in
+    (* whether a value of [t] holds one of the type: is one, or has one in
+       it, `Option<P>`, `(P, Int)` *)
+    let rec holds t =
+      match repr t with
+      | TCon (p, args) -> p = path || List.exists holds args
+      | _ -> false
+    in
+    (* whether [ret] is a refusal written as a value, `Option<P>` or
+       `Result<P, ! Bad>`. Only an associated function refuses so: a
+       method, `fn pred(self) -> Option<Day>`, is a question about a
+       value it's given, not a way to make one. *)
+    let refused ret =
+      match repr ret with
+      | TCon (p, [ ok ]) when p = Path.prelude "Option" -> holds ok
+      | TCon (p, [ ok; _ ]) when p = Path.prelude "Result" -> holds ok
+      | _ -> false
+    in
+    let refuses (f : fn_def) =
+      match Hashtbl.find_opt so_far.schemes (Ast.fn_path r.home f) with
+      | Some (TFun (_, ret, errs, _, _)) ->
+          (holds ret && fst (row_parts errs) <> [])
+          || ((not (is_method f)) && refused ret)
+      | _ -> false
+    in
+    let broken =
+      List.find_map
+        (fun (o : op) ->
+          let f = o.op_fn in
+          if o.op_kind <> Op_fn then None
+          else if changes f then Some (f, `Changes)
+          else if refuses f then Some (f, `Refuses)
+          else None)
+        td.type_ops
+    in
+    match broken with
+    | None -> ()
+    | Some (f, how) ->
+        let decl = Hashtbl.find env.types path in
+        let params =
+          match decl.params with
+          | [] -> ""
+          | ps -> "<" ^ String.concat ", " ps ^ ">"
+        in
+        let name = td.type_name.name ^ params in
+        let record, hide =
+          match decl.body with
+          | Record fs ->
+              (* each field's type as this module writes it, the type's
+                 parameters by their names *)
+              let pr =
+                Ty.printer ~names:env.names
+                  {
+                    ty = Ty.Error;
+                    names = List.mapi (fun i n -> (i, n)) decl.params;
+                    reqs = [];
+                    row_reqs = [];
+                  }
+              in
+              let fields =
+                List.map
+                  (fun (fd : Iface.field) ->
+                    fd.fname ^ ": " ^ Ty.show pr fd.fty)
+                  fs
+              in
+              ( true,
+                hide_fields
+                  ~written:
+                    (sprintf "pub type %s = opaque { %s }" name
+                       (String.concat ", " fields)) )
+          | _ ->
+              let state = td.type_name.name ^ "State" ^ params in
+              ( false,
+                hide_ctors
+                  ~state:(sprintf "type %s = ..." state)
+                  ~written:(sprintf "pub type %s = opaque %s" name state) )
+        in
+        report env
+          (keeps_rules f.name.loc ~owner:td.type_name.name ~name:f.name.name
+             ~record ~hide how)
+  in
+  List.iter
+    (function
+      | Type ({ type_pub = true; type_body = Fields _ | Ctors _; _ } as td) ->
+          check td
+      | Type _ | Fn _ | Import _ | Testing _ -> ())
+    r.prog
+
+(* ---- the client view ---- *)
+
+(* Test code sees the module as an importer does (testing.md, "Tests are
+   specifications"): each of its own types as its interface has it, an
+   opaque one opaque; a private one with nothing to see in it, and nothing
+   to name it by. Each is made once, at
+   the start, as [Iface.of_module] makes the interface, with whether it's
+   public. A named error set or a dependency is kept as it is: Resolve
+   has already stopped test code naming a private one. *)
+let client_view env (r : Resolve.t) =
+  let public =
+    List.filter_map
+      (function
+        | Type (td : type_def) when td.type_pub ->
+            Some (Path.make r.home td.type_name.name)
+        | Type _ | Fn _ | Import _ | Testing _ -> None)
+      r.prog
+  in
+  List.map
+    (fun (td : Iface.type_decl) ->
+      let hidden =
+        Iface.Opaque (Hidden { eq = Infer_reqs.opaque_has_eq env td.path })
+      in
+      if List.mem td.path public then
+        (* its private members stay, so a message can say one is private:
+           what's not [own] (infer_env.ml) finds only the public ones *)
+        ((if td.opaque then { td with body = hidden } else td), true)
+      else
+        match td.body with
+        | Record _ | Sum _ | Opaque _ ->
+            ({ td with members = Path.Map.empty; body = hidden }, false)
+        | Errors _ | Dep _ | Builtin -> (td, false))
+    r.types
+
+(* Run [f] with the module seen through [client] (see [client_view]): its
+   own types swapped for theirs, no representation revealed, and only its
+   public types visible; then put back as it was. *)
+let as_client env client f =
+  let mine =
+    List.map
+      (fun ((td : Iface.type_decl), _) -> Hashtbl.find env.types td.path)
+      client
+  in
+  let reps = Hashtbl.copy env.st.reps and visible = env.visible in
+  List.iter
+    (fun ((td : Iface.type_decl), _) -> Hashtbl.replace env.types td.path td)
+    client;
+  Hashtbl.reset env.st.reps;
+  env.visible <-
+    List.filter_map
+      (fun (td : Iface.type_decl) ->
+        match
+          List.find_opt
+            (fun ((c : Iface.type_decl), _) -> c.path = td.path)
+            client
+        with
+        | Some (c, true) -> Some c
+        | Some (_, false) -> None
+        | None -> Some td)
+      visible;
+  env.client <- true;
+  env.hidden <-
+    List.filter_map
+      (fun (td, (_, public)) -> if public then None else Some td)
+      (List.combine mine client);
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter
+        (fun (td : Iface.type_decl) -> Hashtbl.replace env.types td.path td)
+        mine;
+      Hashtbl.iter (Hashtbl.replace env.st.reps) reps;
+      env.visible <- visible;
+      env.client <- false;
+      env.hidden <- [])
+    f
+
 (* Check a group of functions that call each other: each one's body, then
    what that leaves to decide once every body is checked, by the
    constraint solver; then each is generalized. Each body sees the others
    only as their declarations describe them (see [setup]). [values] are
    the module's associated values, and [main] the program's `main`, if
-   the module is the program's entry. *)
-let check_group env ~values ~main so_far group =
+   the module is the program's entry. A group of test code is checked
+   seeing the module through [client], unless [sees_all] (see [check]). *)
+let rec check_group env ~values ~main ~client ~sees_all so_far group =
+  (* a group is all test code or none of it: only test code calls test
+     code (resolve.ml), so a group of both would need a call back *)
+  match List.partition (fun (f : fn_def) -> f.test) group with
+  | _ :: _, _ :: _ ->
+      failwith "a group of functions is part test code, part not"
+  | _ :: _, [] when (not sees_all) && not env.client ->
+      as_client env client (fun () ->
+          check_group env ~values ~main ~client ~sees_all so_far group)
+  | _ -> check_own_group env ~values ~main so_far group
+
+and check_own_group env ~values ~main so_far group =
   let is_value_path p = List.mem p values in
   let is_value f = is_value_path (Ast.fn_path env.home f) in
   enter_level env.st;
@@ -1200,7 +1415,7 @@ let check_test_body env so_far ~bodies (f : fn_def) =
 (* What the runtime installs around what it runs: the program's `main`,
    if the module is the program's entry, the file [entry], and each of
    [tests]. *)
-let check_runs env r so_far ?entry ~tests fns =
+let check_runs env r so_far ?entry ?console ~tests fns =
   let find name =
     List.find_opt
       (fun (f : fn_def) -> Ast.fn_path env.home f = Path.make env.home name)
@@ -1226,7 +1441,15 @@ let check_runs env r so_far ?entry ~tests fns =
           let ty, cx = found f in
           check_test env r ~fns ~schemes ~withheld t f ty cx
       | None -> ())
-    tests
+    tests;
+  Option.iter
+    (fun (name, real) ->
+      Option.iter
+        (fun f ->
+          let ty, cx = found f in
+          check_console env r ~fns ~schemes ~withheld ~real f ty cx)
+        (find name))
+    console
 
 (* What inference found of [f], in canonical form: its scheme, and its
    nodes. Its scheme and node types share one numbering, so a variable is
@@ -1309,9 +1532,11 @@ let canonical env so_far (f : fn_def) =
    [reachable] those of every module reachable through them, whose types
    it can meet: a field of an imported type can have a type from a module
    this one never imported. [extra] are the dot calls of methods found so
-   far that the call graph needs besides [r]'s (see [program]). *)
-let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
-    =
+   far that the call graph needs besides [r]'s (see [program]). With
+   [sees_all], test code sees the whole module, as Resolve let it
+   (Resolve.program). *)
+let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
+    ~bodies (r : Resolve.t) =
   let env = new_env sink ~reachable r in
   let home = r.home in
   check_written sink ~sets:env.sets ~names:env.names r.prog;
@@ -1357,8 +1582,9 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
     { schemes = Hashtbl.create 16; tables = Hashtbl.create 16; withheld = [] }
   in
   let main = Option.map (fun _ -> Path.make home "main") entry in
+  let client = client_view env r in
   List.iter
-    (check_group env ~values ~main so_far)
+    (check_group env ~values ~main ~client ~sees_all so_far)
     (components ~home
        ~calls:
          (Path.Map.mapi
@@ -1371,11 +1597,12 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
               calls @ Path.Map.find f r.methods @ found)
             r.calls)
        fns);
+  check_keeps_rules env so_far r;
   let values = value_order env r fns ~is_value ~found:so_far.tables in
   List.iter
     (check_test_body env so_far ~bodies:(List.map (Path.make home) bodies))
     fns;
-  check_runs env r so_far ?entry ~tests fns;
+  check_runs env r so_far ?entry ?console ~tests fns;
   let schemes, nodes = List.split (List.map (canonical env so_far) fns) in
   (* an associated value is made once, so it's given no dictionaries: a
      value of its type variable is compared by its shape alone (walk.ml),
@@ -1397,10 +1624,8 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
     opaque_eq =
       List.filter_map
         (fun (td : Iface.type_decl) ->
-          match td.body with
-          | Opaque (Rep _) when Infer_reqs.opaque_has_eq env td.path ->
-              Some td.path
-          | _ -> None)
+          if td.opaque && Infer_reqs.opaque_has_eq env td.path then Some td.path
+          else None)
         r.types;
   }
 
@@ -1415,12 +1640,15 @@ let check sink ~extra ~imports ~reachable ?entry ~tests ~bodies (r : Resolve.t)
    one called changes nothing about the caller's type or its `uses`.
 
    A try reports to its own sink, and only the last try's errors are kept. *)
-let program sink ~imports ~reachable ?entry ?(tests = []) ?(bodies = [])
-    (r : Resolve.t) =
+let program sink ~imports ~reachable ?entry ?console ?(sees_all = false)
+    ?(tests = []) ?(bodies = []) (r : Resolve.t) =
   let rec go extra =
     let tried = Diag.sink () in
     let keep () = List.iter (Diag.report sink) (List.rev tried.reported) in
-    match check tried ~extra ~imports ~reachable ?entry ~tests ~bodies r with
+    match
+      check tried ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
+        ~bodies r
+    with
     | t ->
         keep ();
         t

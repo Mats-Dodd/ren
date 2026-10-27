@@ -92,11 +92,21 @@ type t = {
           its interface says so, since it hides the representation *)
 }
 
+(* Infer the module [r]'s types, checked against the interfaces [imports]
+   and those of everything [reachable]. [entry] is the file of the
+   program's entry, which needs a `main`; [tests] are its tests and
+   [bodies] the functions whose body is a test's (test_items.ml); and
+   [console] is a `ren console` session's function, with the built-ins it
+   gets the real implementation of: like a test, it runs on the others'
+   test implementations (driver.ml). With [sees_all], test code sees the
+   whole module, not only what an importer sees (Resolve.program). *)
 val program :
   Diag.sink ->
   imports:Iface.t list ->
   reachable:Iface.t list ->
   ?entry:string ->
+  ?console:string * string list ->
+  ?sees_all:bool ->
   ?tests:Test_items.test list ->
   ?bodies:string list ->
   Resolve.t ->

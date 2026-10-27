@@ -8,12 +8,14 @@
 import justfile.{Justfile, Recipe}
 import plan
 
-fn main() =
+// `pub`, with its whole contract, since the tests below call it, and a
+// test sees what an importer sees
+pub fn main() ! FsError | InvalidUtf8 | BadLine(number: Int) | DuplicateRecipe(name: Str) | NoRecipes | UnknownRecipe(name: Str) | Cycle(name: Str) | RecipeFailed(name: Str, code: Int) | ProcError uses Fs, Os, Proc, Console =
   let j = try Justfile.parse(try Fs.read_str(Path.of("justfile")))
   let args = Os.args()
   let name =
     if args.len() > 0 then args[0]
-    else if j.recipes.len() > 0 then j.recipes[0].name
+    else if j.recipes().len() > 0 then j.recipes()[0].name
     else fail NoRecipes
   for n in try plan.order(j, name)
     try run(try j.recipe(n))
@@ -30,11 +32,11 @@ fn run(r: Recipe) ! RecipeFailed(name: Str, code: Int) | ProcError uses Proc, Co
 // memory, the args a test gives, and programs that don't run but are kept,
 // to check what would have run, and in what order.
 
-fn sh(line: Str) -> Command = Command { cmd: "sh", args: ["-c", line] }
+test fn sh(line: Str) -> Command = Command { cmd: "sh", args: ["-c", line] }
 
-fn files(text: Str) -> Array<File> = [File { path: Path.of("justfile"), data: text.bytes() }]
+test fn files(text: Str) -> Array<File> = [File { path: Path.of("justfile"), data: text.bytes() }]
 
-fn diamond() -> Str =
+test fn diamond() -> Str =
   "all: left right\n  echo all\nleft: base\n  echo left\nright: base\n  echo right\nbase:\n  echo base\n"
 
 test "no args runs the first recipe, after what it depends on" =

@@ -107,14 +107,11 @@ type step =
 
 (* ---- numbers ----
 
-   An `Int` is 64 bits, as it is on every backend, and arithmetic that
-   doesn't fit panics, in every build (operators.md, "`Int` and
-   `Float`"). A `Float` is never `NaN`: an operation that would make one
-   panics too, and each result is checked here, where the C backend will
-   check one only where it leaves arithmetic. [at] are the operands'
-   expressions, for the panic's help to show them calling the method that
-   wraps, `n.wrapping_add(1)`: none for an operator through a dictionary,
-   on a `T`, which has no such method. *)
+   The arithmetic is Arith's (arith.ml), shared with the methods the
+   operators are, `n.add(2)`; here a panic is given where the operation
+   is. [at] are the operands' expressions, for an overflow's help to show
+   them calling the method that wraps, `n.wrapping_add(1)`: none for an
+   operator through a dictionary, on a `T`, which has no such method. *)
 
 (* An overflow's panic: with the help, if the left side is written as an
    `Int`, which has the method [meth], and not a `with numeric` type. *)
@@ -126,84 +123,18 @@ let overflowed ~(at : expr list) loc op meth shown =
         Some { meth; recv; arg }
     | _ -> None
   in
-  panic ?wrap loc (Printf.sprintf "`%s` overflowed: %s" op shown)
+  panic ?wrap loc (Arith.overflow_message ~op ~shown)
 
-(* What a panic shows of [x op y], made only once there is one: building
-   it for every operation made arithmetic several times slower. *)
-let shown_ints op x y = Printf.sprintf "%Ld %s %Ld" x (Ast.binop_to_string op) y
-
-let int_over ~at loc op meth x y =
-  overflowed ~at loc (Ast.binop_to_string op) meth (shown_ints op x y)
-
-let int_binop ~at loc (op : Ast.binop) x y =
-  match op with
-  | Add ->
-      let r = Int64.add x y in
-      (* it overflowed if both have the same sign and [r] the other *)
-      if Int64.logand (Int64.logxor x r) (Int64.logxor y r) < 0L then
-        int_over ~at loc op "wrapping_add" x y
-      else VInt r
-  | Sub ->
-      let r = Int64.sub x y in
-      if Int64.logand (Int64.logxor x y) (Int64.logxor x r) < 0L then
-        int_over ~at loc op "wrapping_sub" x y
-      else VInt r
-  | Mul ->
-      let r = Int64.mul x y in
-      if
-        (x = -1L && y = Int64.min_int)
-        || (y = -1L && x = Int64.min_int)
-        || (x <> 0L && Int64.div r x <> y)
-      then int_over ~at loc op "wrapping_mul" x y
-      else VInt r
-  | (Div | Mod) when y = 0L -> panic loc "division by zero"
-  | Div when x = Int64.min_int && y = -1L ->
-      panic loc (Printf.sprintf "`/` overflowed: %s" (shown_ints op x y))
-  (* both round toward zero, as C's do *)
-  | Div -> VInt (Int64.div x y)
-  | Mod -> VInt (Int64.rem x y)
-  | Lt -> VBool (x < y)
-  | Le -> VBool (x <= y)
-  | Gt -> VBool (x > y)
-  | Ge -> VBool (x >= y)
-  | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on `Int`s")
-
-(* [r], unless it's `NaN`, which there isn't: a panic that says what made
-   it. *)
-let not_nan loc (op : Ast.binop) x y r =
-  if Float.is_nan r then
-    panic loc
-      (Printf.sprintf "`%s` has no answer here: %s %s %s"
-         (Ast.binop_to_string op) (Ast.show_float x) (Ast.binop_to_string op)
-         (Ast.show_float y))
-  else VFloat r
-
-let float_binop loc (op : Ast.binop) x y =
-  match op with
-  | Add -> not_nan loc op x y (x +. y)
-  | Sub -> not_nan loc op x y (x -. y)
-  | Mul -> not_nan loc op x y (x *. y)
-  | Div -> not_nan loc op x y (x /. y)
-  | Mod -> not_nan loc op x y (Float.rem x y)
-  (* a total order, since there's no `NaN`, with -0.0 and 0.0 equal *)
-  | Lt -> VBool (Float.compare x y < 0)
-  | Le -> VBool (Float.compare x y <= 0)
-  | Gt -> VBool (Float.compare x y > 0)
-  | Ge -> VBool (Float.compare x y >= 0)
-  | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on `Float`s")
+(* [f ()], one operation of Arith's, with its panic said at [loc]. *)
+let arith ~at loc f =
+  try f () with
+  | Arith.Overflowed { op; meth; shown } -> overflowed ~at loc op meth shown
+  | Arith.Undefined msg -> panic loc msg
 
 let binop ~at loc (op : Ast.binop) a b =
-  match (a, b) with
-  | VInt x, VInt y -> int_binop ~at loc op x y
-  | VFloat x, VFloat y -> float_binop loc op x y
-  | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on the wrong types")
+  arith ~at loc (fun () -> Arith.binop op a b)
 
-let neg ~at loc = function
-  | VInt n when n = Int64.min_int ->
-      overflowed ~at loc "-" "wrapping_neg" (Printf.sprintf "-(%Ld)" n)
-  | VInt n -> VInt (Int64.neg n)
-  | VFloat f -> VFloat (Float.neg f)
-  | _ -> bug "`-` on the wrong type"
+let neg ~at loc v = arith ~at loc (fun () -> Arith.neg v)
 
 let element loc (xs : vec) i =
   if i < 0L || i >= Int64.of_int xs.len then
@@ -1022,14 +953,16 @@ type outcome =
   | Failed of string  (** with this error, which nothing handled, shown *)
   | Panicked of exn  (** a [Panic], or an [Assert_failed] *)
 
-(* Run the test whose function is [fn], in a program [load] made, with
-   the test implementation of each built-in dependency (deps.md, "Tests"),
-   a fresh instance for this test, but the real one of those in [real]:
-   `Random`'s seeded with [seed]. The runtime installs them as it does
-   `main`'s, outermost, so they run with nothing installed. Returns how
-   it ended, and every line it wrote to the test `Console`, which is kept
-   even if it panicked; with the real one, it went to stdout. *)
-let run_test cx ~(fn : Path.t) ~real ~seed =
+(* Run the function [fn], of no parameters, in a program [load] made, as
+   a test is run: with the test implementation of each built-in
+   dependency (deps.md, "Tests"), a fresh instance for this run, but the
+   real one of those in [real]: `Random`'s seeded with [seed]. The runtime
+   installs them as it does `main`'s, outermost, so they run with nothing
+   installed. Returns what it gave, or how it ended if it didn't, and
+   every line it wrote to the test `Console`, which is kept even if it
+   panicked; with the real one, it went to stdout. A test runs this way,
+   and so does a `ren console` session (driver.ml). *)
+let run_installed cx ~(fn : Path.t) ~real ~seed =
   let what = "installing a test's implementations" in
   let value p =
     match Hashtbl.find_opt cx.values p with
@@ -1073,11 +1006,11 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
   let outcome =
     try
       match fst (apply cx (from_outside cx fn) [] (VEvidence installed)) with
-      | Ok _ -> Passed
-      | Error err -> Failed (error_of cx fn err)
+      | Ok v -> Ok v
+      | Error err -> Error (Failed (error_of cx fn err))
     with
-    | (Panic _ | Assert_failed _) as e -> Panicked e
-    | Stack_overflow | Too_deep -> Panicked (overflowed cx fn)
+    | (Panic _ | Assert_failed _) as e -> Error (Panicked e)
+    | Stack_overflow | Too_deep -> Error (Panicked (overflowed cx fn))
   in
   (* what the test `Console` kept, asked of it as the test would *)
   let console =
@@ -1097,3 +1030,14 @@ let run_test cx ~(fn : Path.t) ~real ~seed =
       installed
   in
   (outcome, Option.value console ~default:[])
+
+(* Run the test whose function is [fn] (see [run_installed]): how it
+   ended, and what it wrote to the test `Console`. *)
+let run_test cx ~fn ~real ~seed =
+  match run_installed cx ~fn ~real ~seed with
+  | Ok _, console -> (Passed, console)
+  | Error outcome, console -> (outcome, console)
+
+(* [v], a value of type [t], as `ren console` shows it: as it's written,
+   through its type (shown.ml), a string in quotes. *)
+let show cx (t : Ty.ty) v = Shown.value ~own:(own_show cx) cx.types t v

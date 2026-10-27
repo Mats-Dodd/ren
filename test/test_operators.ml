@@ -632,7 +632,8 @@ pub type Email = opaque Str
     ()
     |}];
   run_files (files "  print(Email.of(\"x\").key())\n  print(t.key())\n");
-  [%expect {|
+  [%expect
+    {|
     error: `Email` has no public `key`
       ┌─ main.ren:6:23
     6 │   print(Email.of("x").key())
@@ -1276,4 +1277,244 @@ pub type Money = opaque Int with numeric
       │           ^^^^^^^^^^^^^^^^^^^^
       = `*` is found on its left side's type, `Int`
       help: write it the other way round: `Money.dollars(2) * 3`
+    |}]
+
+(* ---- an Int's and a Float's operators are methods too ---- *)
+
+let%expect_test "`n.add(2)` is `n + 2`, on an Int and a Float" =
+  run
+    {|
+fn main() uses Console =
+  print(3.add(2))
+  print(3.sub(5))
+  print(4.mul(5))
+  print(7.div(2))
+  print(7.rem(3))
+  print((-3).neg())
+  print(2.5.mul(2.0))
+  print(1.0.div(4.0))
+  print(2.5.neg())
+|};
+  [%expect
+    {|
+    5
+    -2
+    20
+    3
+    1
+    3
+    5.0
+    0.25
+    -2.5
+    ()
+    |}]
+
+let%expect_test "an Int's method overflows as its operator does" =
+  run_error
+    {|
+fn main() uses Console =
+  let n = 9223372036854775807
+  print(n.add(1))
+|};
+  [%expect
+    {|
+    error: panic: `+` overflowed: 9223372036854775807 + 1
+      ┌─ test.ren:3:9
+    3 │   print(n.add(1))
+      │         ^^^^^^^^
+    |}]
+
+let%expect_test "an Int's `div` by zero panics as `/` does" =
+  run_error {|
+fn main() uses Console =
+  let zero = 0
+  print(7.div(zero))
+|};
+  [%expect
+    {|
+    error: panic: division by zero
+      ┌─ test.ren:3:9
+    3 │   print(7.div(zero))
+      │         ^^^^^^^^^^^
+    |}]
+
+let%expect_test "a Float's `div` that has no answer panics as `/` does" =
+  run_error {|
+fn main() uses Console = print(0.0.div(0.0))
+|};
+  [%expect
+    {|
+    error: panic: `/` has no answer here: 0.0 / 0.0
+      ┌─ test.ren:1:32
+    1 │ fn main() uses Console = print(0.0.div(0.0))
+      │                                ^^^^^^^^^^^^
+    |}]
+
+let%expect_test "an Int's `add` takes an Int" =
+  check_error {|
+fn main() uses Console = print(1.add(2.0))
+|};
+  [%expect
+    {|
+    error: expected `Int`, found `Float`
+      ┌─ test.ren:1:38
+    1 │ fn main() uses Console = print(1.add(2.0))
+      │                                      ^^^
+    |}]
+
+(* ---- a literal beside a `with numeric` type ---- *)
+
+let units =
+  {|
+pub type Money = opaque Int with numeric
+  pub fn cents(n: Int) -> Money = n
+  pub fn dollars(n: Int) -> Money = n * 100
+  pub fn of_count(n: Int) -> Int = n
+  fn hidden(n: Int) -> Money = n
+
+pub type Weight = opaque Float with numeric
+  pub fn kg(x: Float) -> Weight = x
+
+pub type Score = opaque Int with numeric
+|}
+
+let%expect_test "`price + 5` says how to make a `Money` of the 5" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import units.{Money}
+fn main() uses Console =
+  let price = Money.cents(5)
+  print(price + 5)
+|}
+      );
+      ("units.ren", units);
+    ];
+  [%expect
+    {|
+    error: `Money` has no `+` that takes an `Int`
+      ┌─ main.ren:4:9
+    4 │   print(price + 5)
+      │         ^^^^^^^^^
+      = `+` is found on its left side's type, `Money`
+      help: make a `Money` of it: `price + Money.cents(5)` or `price + Money.dollars(5)`
+    |}]
+
+let%expect_test "a Float one is made of a Float literal" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import units.{Weight}
+fn main() uses Console =
+  let w = Weight.kg(1.5)
+  print(w - 2)
+|}
+      );
+      ("units.ren", units);
+    ];
+  [%expect
+    {|
+    error: `Weight` has no `-` that takes an `Int`
+      ┌─ main.ren:4:9
+    4 │   print(w - 2)
+      │         ^^^^^
+      = `-` is found on its left side's type, `Weight`
+      help: make a `Weight` of it: `w - Weight.kg(2.0)`
+    |}]
+
+let%expect_test "a type with nothing that makes one gets no help" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import units.{Score}
+fn next(s: Score) -> Score = s + 1
+fn main() = ()
+|}
+      );
+      ("units.ren", units);
+    ];
+  [%expect
+    {|
+    error: `Score` has no `+` that takes an `Int`
+      ┌─ main.ren:2:30
+    2 │ fn next(s: Score) -> Score = s + 1
+      │                              ^^^^^
+      = `+` is found on its left side's type, `Score`
+    |}]
+
+let%expect_test "a Float one is scaled by a Float, as a Float is" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import units.{Weight}
+fn main() uses Console =
+  let w = Weight.kg(1.5)
+  print(w * 2)
+|}
+      );
+      ("units.ren", units);
+    ];
+  [%expect
+    {|
+    error: `Weight` has no `*` that takes an `Int`
+      ┌─ main.ren:4:9
+    4 │   print(w * 2)
+      │         ^^^^^
+      = numbers never convert by themselves
+      help: write it as a `Float`: `w * 2.0`
+    |}]
+
+let%expect_test "an Int literal given a Float's method is written as a Float" =
+  run_error {|
+fn main() uses Console =
+  print(1.0.add(2))
+|};
+  [%expect
+    {|
+    error: expected `Float`, found `Int`
+      ┌─ test.ren:2:17
+    2 │   print(1.0.add(2))
+      │                 ^
+      = numbers never convert by themselves
+      help: write it as a `Float`: `2.0`
+    |}]
+
+let%expect_test "a `with numeric` type's arithmetic is its operators" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import money.{Money}
+fn main() uses Console =
+  let a = Money.cents(1)
+  print(a.add(Money.cents(2)))
+  print(a.neg())
+|}
+      );
+      ( "money.ren",
+        {|
+pub type Money = opaque Int with numeric
+  pub fn cents(n: Int) -> Money = n
+|}
+      );
+    ];
+  [%expect
+    {|
+    error: `Money` has no method `add`
+      ┌─ main.ren:4:11
+    4 │   print(a.add(Money.cents(2)))
+      │           ^^^
+      = `with numeric` gives `Money` the operator `+`, not a method
+      help: write the operator: `a + Money.cents(2)`
+
+    error: `Money` has no method `neg`
+      ┌─ main.ren:5:11
+    5 │   print(a.neg())
+      │           ^^^
+      = `with numeric` gives `Money` the operator `-`, not a method
+      help: write the operator: `-a`
     |}]

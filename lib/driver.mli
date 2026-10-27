@@ -94,6 +94,49 @@ val run :
   file:string ->
   string ->
   Value.t
+
+(* ---- `ren console` (see driver.ml) ---- *)
+
+(* The file a line typed into the console is in, for a message: each line
+   is its own, as line 1. *)
+val console_file : string
+
+(* What a line gave: its value as it's written, unless the line is a
+   `let` or a `var`, or its value is `()`; its type; and every line the
+   session wrote to the test `Console`, from the start. *)
+type console_line = {
+  shown : string option;
+  ty : string;
+  printed : string list;
+}
+
+(* A line that failed or panicked when it ran: every line the session
+   wrote to the test `Console`, from the start, and what it raised. *)
+exception Console_failed of string list * exn
+
+(* Check, and unless [types_only] run, the console session that kept the
+   lines [history] and adds the line given, inside the module [home]
+   (whose file is [file], with the source [src]) of the program in the
+   folder [dir], on the test implementations of the built-ins but those
+   [real] names. [journal] is the session's (Builtins.journal): what the
+   real ones gave the lines kept is given back to them, not asked again.
+   [line] starts [col] columns into what was typed, which a message
+   counts in. Raises what checking it raised, and what running it raised
+   as [Console_failed]. *)
+val console :
+  ?types_only:bool ->
+  ?col:int ->
+  journal:Builtins.journal ->
+  load:loader ->
+  dir:string ->
+  home:string ->
+  file:string ->
+  src:string ->
+  real:string list ->
+  history:string list ->
+  string ->
+  console_line
+
 val dump_tokens : (Token.t * Loc.t) array -> string
 
 (* The message for an exception a pass raised: a diagnostic, a panic or an

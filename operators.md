@@ -44,7 +44,8 @@ An operator is a method with a reserved name. `a + b` is `a.add(b)`:
 | `a == b`, `a != b` | derived, through `key` |
 | `a < b`, `a <= b`, `a > b`, `a >= b` | derived, through `key` |
 
-`zero` and `one` are associated values, `pub let zero: Vec = ...`.
+`zero` and `one` are associated values, `pub let zero: Vec = ...`. On
+`Int` and `Float` too: `n.add(2)` is `n + 2`, and panics where it does.
 
 ```ren
 pub type Vec = { x: Int, y: Int }

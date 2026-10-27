@@ -198,6 +198,7 @@ it. Since stage 6 a charge over the card's limit is declined, which
   pub type Cart
     pub fn of(owner: UserId) -> Cart
     pub let guest: Cart
+    pub fn owner(self) -> UserId
     pub fn put(inout self, p: Plan)
     pub fn clear(inout self)
     pub fn len(self) -> Int
@@ -314,6 +315,7 @@ changes:
   true
   true
   [0, 1, 1, 2, 3]
+  Err(NoLocal(4))
   [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
   true
   Err(NotRecorded(85))
@@ -344,6 +346,9 @@ changes:
   pub type Vm
     pub let fresh: Vm
     pub fn running(self) -> Bool
+    pub fn out(self) -> Array<Int>
+    pub fn steps(self) -> Int
+    pub fn set_local(inout self, slot: Int, v: Int) ! NoLocal(Int)
     pub fn step(inout self, p: Program) ! Underflow(Int)
     pub fn run(inout self, p: Program, fuel: Int) ! Underflow(Int)
     fn push(inout self, n: Int)
@@ -363,7 +368,7 @@ changes:
   pub fn fibonacci(n: Int) -> Array<Op>
   
   -- main
-  fn main() ! Empty | NoHalt | NotRecorded(Int) | Outside(Int, Int) | Underflow(Int) uses Console
+  fn main() ! Empty | NoHalt | NoLocal(Int) | NotRecorded(Int) | Outside(Int, Int) | Underflow(Int) uses Console
   fn fact(n: Int) -> Int
 
 What it says when the VM is changed in the ways a reader might try. A new
@@ -372,8 +377,8 @@ instruction isn't handled until `Vm.step` has an arm for it:
   $ cp -r vm v1 && perl -0pi -e 's/(  \| Push\(n: Int\)[^\n]*\n)/$1  | Dup\n/' v1/op.ren
   $ ren check v1/main.ren
   error: this `match` doesn't handle every `op.Op`
-     ┌─ v1/machine.ren:39:5
-  39 │     match p.at(self.pc)
+     ┌─ v1/machine.ren:50:5
+  50 │     match p.at(self.pc)
      │     ^^^^^
      = missing: Dup
      help: add an arm for `Dup`, or a `_ =>` arm for the rest
@@ -384,8 +389,8 @@ A method that changes its receiver is called with `&`:
   $ cp -r vm v2 && perl -0pi -e 's/    &self.stack.push\(n\)/    self.stack.push(n)/' v2/machine.ren
   $ ren check v2/main.ren
   error: `push` changes `self.stack`, so the call needs `&`
-     ┌─ v2/machine.ren:70:5
-  70 │     self.stack.push(n)
+     ┌─ v2/machine.ren:81:5
+  81 │     self.stack.push(n)
      │     ^^^^^^^^^^^^^^^^^^
      = `&` shows at the call that `self.stack` is changed
      help: write `&self.stack.push(n)`
@@ -393,11 +398,11 @@ A method that changes its receiver is called with `&`:
 
 A private method can't be called from another module:
 
-  $ cp -r vm v3 && perl -0pi -e 's/  print\(bad.steps\)[^\n]*/  let _ = &bad.pop()/' v3/main.ren
+  $ cp -r vm v3 && perl -0pi -e 's/  print\(bad.steps\(\)\)[^\n]*/  let _ = &bad.pop()/' v3/main.ren
   $ ren check v3/main.ren
   error: `Vm` has no public `pop`
-     ┌─ v3/main.ren:54:16
-  54 │   let _ = &bad.pop()
+     ┌─ v3/main.ren:55:16
+  55 │   let _ = &bad.pop()
      │                ^^^
      help: if it's defined in `machine`, mark it `pub`
   [1]
@@ -420,8 +425,8 @@ A call that changes `self` can't also read part of it in an argument:
   $ cp -r vm v5 && perl -0pi -e 's/let v = self.locals\[slot\]\n *&self.push\(v\)/&self.push(self.locals[slot])/' v5/machine.ren
   $ ren check v5/main.ren
   error: this call changes `self`, so no other argument can use it
-     ┌─ v5/machine.ren:44:20
-  44 │         &self.push(self.locals[slot])
+     ┌─ v5/machine.ren:55:20
+  55 │         &self.push(self.locals[slot])
      │                    ^^^^^^^^^^^^^^^^^
      │          ---- passed with `&` here
      = an argument passed with `&` has to be the only way the call can reach that value
@@ -465,6 +470,9 @@ copies of two accounts and sets them back only if neither failed:
   pub type Refusal = ! Short(AccountId, Money) | Frozen(AccountId)
   pub type Account
     pub fn open(id: AccountId) -> Account
+    pub fn balance(self) -> Money
+    pub fn statement(self) -> Array<Entry>
+    pub fn freeze(inout self)
     pub fn credit(inout self, m: Money, what: Movement) ! Frozen(AccountId) uses Clock
     pub fn debit(inout self, m: Money, what: Movement) ! Frozen(AccountId) | Short(AccountId, Money) uses Clock
   
@@ -483,7 +491,7 @@ copies of two accounts and sets them back only if neither failed:
     fn get(self, id: AccountId) -> Account ! NoSuchAccount(AccountId)
   
   -- main
-  fn main() ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Clock, Console
+  pub fn main() ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money) uses Clock, Console
   fn send(from: AccountId, to: AccountId, dollars: Int) -> Transfer
   fn cents(b: Bank, id: AccountId) -> Int ! NoSuchAccount(AccountId)
   fn worth_retrying(r: Result<Unit, ! Frozen(AccountId) | NoSuchAccount(AccountId) | NotPositive(Money) | SameAccount | Short(AccountId, Money)>) -> Bool
@@ -494,16 +502,17 @@ module:
   $ cp -r bank b1 && perl -0pi -e 's/print\(try cents\(acme, alice\)\)( *\/\/ 7000\n  print\(try cents\(acme, bob\)\))/print(try acme.balance(alice) + 5)$1/' b1/main.ren
   $ ren check b1/main.ren
   error: `Money` has no `+` that takes an `Int`
-     ┌─ b1/main.ren:18:13
-  18 │   print(try acme.balance(alice) + 5)                   // 7000
+     ┌─ b1/main.ren:20:13
+  20 │   print(try acme.balance(alice) + 5)                   // 7000
      │             ^^^^^^^^^^^^^^^^^^^^^^^
      = `+` is found on its left side's type, `Money`
+     help: make a `Money` of it: `acme.balance(alice) + Money.cents(5)` or `acme.balance(alice) + Money.dollars(5)`
   [1]
   $ cp -r bank b2 && perl -0pi -e 's/&acme.deposit\(bob, Money.dollars\(20\)\)/&acme.deposit(2, Money.dollars(20))/' b2/main.ren
   $ ren check b2/main.ren
   error: expected `AccountId`, found `Int`
-     ┌─ b2/main.ren:14:21
-  14 │   try &acme.deposit(2, Money.dollars(20))
+     ┌─ b2/main.ren:16:21
+  16 │   try &acme.deposit(2, Money.dollars(20))
      │                     ^
      = `AccountId`'s representation is private to `account`
      help: use a function from `account` to make or read one
@@ -514,8 +523,8 @@ Freezing an account changes the bank, so the call says so:
   $ cp -r bank b3 && perl -0pi -e 's/&acme.freeze\(carol\)/acme.freeze(carol)/' b3/main.ren
   $ ren check b3/main.ren
   error: `freeze` changes `acme`, so the call needs `&`
-     ┌─ b3/main.ren:31:7
-  31 │   try acme.freeze(carol)
+     ┌─ b3/main.ren:33:7
+  33 │   try acme.freeze(carol)
      │       ^^^^^^^^^^^^^^^^^^
      = `&` shows at the call that `acme` is changed
      help: write `&acme.freeze(carol)`
@@ -528,39 +537,48 @@ to do about it:
   $ cp -r bank b4 && perl -0pi -e 's/( \| SameAccount)\n/$1 | TooLarge(amount: Money)\n/; s/(    var from = try self.get\(t.from\))/    if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)\n$1/' b4/bank.ren
   $ ren check b4/main.ren
   error: this `match` doesn't handle every error it can fail with
-     ┌─ b4/main.ren:32:3
-  32 │   match &acme.transfer(send(alice, carol, 10))
+     ┌─ b4/main.ren:34:3
+  34 │   match &acme.transfer(send(alice, carol, 10))
      │   ^^^^^
      = missing: fail TooLarge(_)
      help: add an arm for `fail TooLarge(_)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
   
   error: this `match` doesn't handle every `Result`
-     ┌─ b4/main.ren:68:3
-  68 │   match r
+     ┌─ b4/main.ren:70:3
+  70 │   match r
      │   ^^^^^
      = missing: Err(TooLarge(_))
      help: add an arm for `Err(TooLarge(_))`, or a `_ =>` arm for the rest
   [1]
 
-A public function can't take a type other modules can't name:
+A public function can't take a type other modules can't name, and the
+bank's tests, which see what an importer sees, can't name it either. A
+test's use of a private item is reported at the first one only:
 
   $ cp -r bank b5 && perl -0pi -e 's/pub type Transfer/type Transfer/' b5/bank.ren
   $ ren check b5/main.ren
   error: `pub fn Bank.transfer` takes `Transfer`, which is private to this module
-     ┌─ b5/bank.ren:37:34
-  15 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
+     ┌─ b5/bank.ren:39:34
+  17 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  37 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
+  39 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
      │                                  ^^^^^^^^
      help: mark `Transfer` `pub`
   
   error: `pub fn Bank.batch`'s signature mentions `Transfer`, which is private to this module
-     ┌─ b5/bank.ren:48:38
-  15 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
+     ┌─ b5/bank.ren:50:38
+  17 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  48 │   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
+  50 │   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
      │                                      ^^^^^^^^
      help: mark `Transfer` `pub`
+  
+  error: `Transfer` is private, and a test sees what an importer sees
+     ┌─ b5/bank.ren:96:22
+  96 │   try &acme.transfer(Transfer { from: a, to: b, amount: Money.dollars(4) })
+     │                      ^^^^^^^^
+     = a test is a specification of `bank`'s interface
+     help: mark it `pub`, or explore it in the console: `ren console bank`
   [1]
 
 The same new failure, left out of `TransferError`: a public function's
@@ -569,10 +587,10 @@ signature lists exactly what it can fail with, so `transfer` is wrong now:
   $ cp -r bank b6 && perl -0pi -e 's/(    var from = try self.get\(t.from\))/    if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)\n$1/' b6/bank.ren
   $ ren check b6/main.ren
   error: `pub fn Bank.transfer` can fail with `TooLarge`, but its signature doesn't say so
-     ┌─ b6/bank.ren:37:10
-  37 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
+     ┌─ b6/bank.ren:39:10
+  39 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
      │          ^^^^^^^^
-  40 │     if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)
+  42 │     if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)
      │                                           ----------------------- this fails with `TooLarge`
      = `Bank.transfer` can only fail with what's after its `!`
      help: add `TooLarge(Money)` after `!`, or handle it here with `match`
@@ -584,8 +602,8 @@ it can fail with:
   $ cp -r bank b7 && perl -0pi -e 's/try &acme.freeze\(carol\)/&acme.freeze(carol)/' b7/main.ren
   $ ren check b7/main.ren
   error: `freeze` can fail, and nothing handles it
-     ┌─ b7/main.ren:31:4
-  31 │   &acme.freeze(carol)
+     ┌─ b7/main.ren:33:4
+  33 │   &acme.freeze(carol)
      │    ^^^^^^^^^^^^^^^^^^
      │    ----------- it can fail with `NoSuchAccount(AccountId)`
      help: pass the errors on with `try`, or handle them with `match`
@@ -596,8 +614,8 @@ A value can't be thrown away without a word:
   $ cp -r bank b8 && perl -0pi -e 's/print\(acme.total\(\) == Money.dollars\(120\)\)/acme.total()/' b8/main.ren
   $ ren check b8/main.ren
   error: `total` returns `Money`, and this throws it away
-     ┌─ b8/main.ren:54:3
-  54 │   acme.total()       // true
+     ┌─ b8/main.ren:56:3
+  56 │   acme.total()       // true
      │   ^^^^^^^^^^^^
      = `Money`'s representation is private to `money`
      help: use it, or write `let _ = ...` if you mean to drop it
@@ -608,8 +626,8 @@ A `fail` arm on a call that can't fail handles nothing:
   $ cp -r bank b9 && perl -0pi -e 's/  print\(acme.total\(\) == Money.dollars\(120\)\)[^\n]*\n/  match acme.total()\n    t => print(t)\n    fail NoSuchAccount(_) => print(0)\n/' b9/main.ren
   $ ren check b9/main.ren
   error: nothing here can fail, so this `fail` arm can never match
-     ┌─ b9/main.ren:56:5
-  56 │     fail NoSuchAccount(_) => print(0)
+     ┌─ b9/main.ren:58:5
+  58 │     fail NoSuchAccount(_) => print(0)
      │     ^^^^^^^^^^^^^^^^^^^^^
      = a `fail` arm matches an error of what the `match` looks at
      help: remove the `fail` arms
@@ -635,10 +653,10 @@ Stamping an entry reads the clock, so a public signature that drops
   $ cp -r bank b11 && perl -0pi -e 's/(pub fn credit[^\n]*) uses Clock =/$1 =/' b11/account.ren
   $ ren check b11/main.ren
   error: `Account.credit` doesn't declare `Clock`
-     ┌─ b11/account.ren:39:10
-  39 │   pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) =
+     ┌─ b11/account.ren:49:10
+  49 │   pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) =
      │          ^^^^^^
-  42 │     &self.statement.push(Entry { at: Clock.now(), what })
+  52 │     &self.statement.push(Entry { at: Clock.now(), what })
      │                                      ----------- this call uses `Clock`
      = a public function without `uses` uses nothing, and its body is checked against that
      help: add `uses Clock`
@@ -820,6 +838,12 @@ says no, with `attempt`, one runs `main` and checks what it printed, and
 `clocks.ren` runs a conformance group against two clocks:
 
   $ ren test bank
+  account.ren
+    ✓ a new account is empty
+    ✓ a frozen account takes nothing in
+    ✓ a debit can't go below zero
+    ✓ each change is stamped with the time
+  
   bank.ren
     ✓ a deposit is stamped with the time
     ✓ a transfer moves money, and stamps both sides
@@ -843,7 +867,7 @@ says no, with `attempt`, one runs `main` and checks what it printed, and
   main.ren
     ✓ main prints the balances, and every refusal
   
-  15 passed
+  19 passed
 
 If `debit` only checks the balance isn't negative, an account can go
 below zero. The tests that check nothing moved show the two banks, and
@@ -851,6 +875,12 @@ below zero. The tests that check nothing moved show the two banks, and
 
   $ cp -r bank b12 && perl -pi -e 's/if self.balance < m then/if self.balance < Money.zero then/' b12/account.ren
   $ ren test b12
+  account.ren
+    ✓ a new account is empty
+    ✓ a frozen account takes nothing in
+    ✗ a debit can't go below zero
+    ✓ each change is stamped with the time
+  
   bank.ren
     ✓ a deposit is stamped with the time
     ✓ a transfer moves money, and stamps both sides
@@ -874,31 +904,42 @@ below zero. The tests that check nothing moved show the two banks, and
   main.ren
     ✗ main prints the balances, and every refusal
   
-  ──── an overdraft is refused, and nothing moves ── bank.ren:109
+  ──── a debit can't go below zero ── account.ren:79
+     │
+  79 │   assert attempt &a.debit(Money.dollars(7), out) == Err(Short(AccountId.of(1), Money.dollars(2)))
+     │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     │
+     left:  Ok(())
+     right: Err(Short(AccountId(1), Money(200)))
+            ^ differs here
+  
+     seed 736 · rerun: ren test b12 --only "a debit" --seed 736
+  
+  ──── an overdraft is refused, and nothing moves ── bank.ren:111
       │
-  109 │   assert acme == before
+  111 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
-      left:  Bank { accounts: Map.of([(AccountId(1), Account { ..., balance: Money(-100), ... }), ...]), ... }
-      right: Bank { accounts: Map.of([(AccountId(1), Account { ..., balance: Money(1000), ... }), ...]), ... }
-                                                                                   ^ differs here
+      left:  Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(-100), ...)), ...]), ...)
+      right: Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(1000), ...)), ...]), ...)
+                                                                               ^ differs here
   
       seed 3529 · rerun: ren test b12 --only "an overdraft" --seed 3529
   
-  ──── a batch that fails moves nothing ── bank.ren:147
+  ──── a batch that fails moves nothing ── bank.ren:149
       │
-  147 │   assert acme == before
+  149 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
-      left:  Bank { accounts: Map.of([(AccountId(1), Account { ..., balance: Money(1100), ... }), ...]), ... }
-      right: Bank { accounts: Map.of([(AccountId(1), Account { ..., balance: Money(1000), ... }), ...]), ... }
-                                                                                    ^ differs here
+      left:  Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(1100), ...)), ...]), ...)
+      right: Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(1000), ...)), ...]), ...)
+                                                                                ^ differs here
   
       seed 119 · rerun: ren test b12 --only "a batch" --seed 119
   
-  ──── main prints the balances, and every refusal ── main.ren:59
+  ──── main prints the balances, and every refusal ── main.ren:61
      │
-  59 │   print(s[3].at >= s[0].at)                       // true
+  61 │   print(s[3].at >= s[0].at)                       // true
      │         ^^^^
      │
      panic: index 3 is out of bounds for an array of length 3
@@ -921,7 +962,7 @@ below zero. The tests that check nothing moved show the two banks, and
        true
        3
   
-  12 passed, 3 failed
+  15 passed, 4 failed
   [1]
 
 The price lookup puts a cache with expiry in front of a supplier that a

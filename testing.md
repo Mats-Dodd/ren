@@ -6,8 +6,10 @@ for everything that isn't a specification. What runs today, `test`,
 `group`, `assert` and `ren test` on test implementations, is in
 [deps.md](deps.md#tests). This doc is where that's going.
 
-> **Status:** designed. Stage 9c makes tests specifications and adds test
-> items and a first `ren console`. Stage 10 adds what needs the journal.
+> **Status:** partly built. Stage 9c runs: tests are specifications, test
+> items, `test fn` and `test handler`, and a first `ren console`, with
+> types, private items and the choice of world. Stage 10 adds what needs
+> the journal: effects shown as they happen, `:reload` and `:spec`.
 > Property tests come with the standard library in stage 12. See
 > [Roadmap](#roadmap).
 
@@ -55,7 +57,8 @@ test "a frozen account takes nothing in" =
   assert attempt &a.credit(Money.dollars(5), Deposit) == Err(Frozen(AccountId.of(1)))
 ```
 
-A test that reaches past the interface is an error:
+A test that reaches past the interface is an error, reported at the first
+use of each item it reaches:
 
 ```
 error: `stamp` is private, and a test sees what an importer sees
@@ -65,7 +68,7 @@ error: `stamp` is private, and a test sees what an importer sees
   │      ^^^^^
   │
   = a test is a specification of `account`'s interface
-  help: explore it in the console: `ren console account`
+  help: mark it `pub`, or explore it in the console: `ren console account`
 ```
 
 - **What it costs:** a private helper isn't tested on its own. It's tested
@@ -96,9 +99,22 @@ test handler mem_accounts(init: Array<Account>) for Accounts =
 test fn alice() -> Account = Account.open(AccountId.of(1))
 ```
 
-- **Only tests see a test item,** in its own module and in any module
-  that imports it. It's never part of the interface, and `ren run` drops
-  it, as it drops tests.
+- **Only tests see a test item,** in its own module, and in any module
+  that imports it if it's `pub test fn` or `pub test handler`: test items
+  are private unless `pub`, like everything else. A public one is in an
+  interface tier of its own that only tests read, and `ren run` drops it,
+  as it drops tests. Code that isn't a test can't call one:
+
+  ```
+  error: `alice` is a test item, so only a test can use it
+    = a test item isn't part of `bank`'s interface, and `ren run` leaves it out
+    help: call it from a test, or remove `test` from its declaration
+  ```
+
+- **Only a function or a handler can be a test item.** A test type, or a
+  test dependency, would need a view of its own in that tier, so a
+  dependency only tests use, like [examples/prices](examples/prices)'
+  `Calls`, is an ordinary `pub dep`.
 - **A test item sees what an importer sees, too.** Otherwise
   `test fn peek(a) = a.balance` would bring the internals back in through
   a helper.
@@ -289,16 +305,21 @@ where exploring happens, so tests don't have to:
 
 ```
 $ ren console bank/account
-account> let a = Account.open(AccountId.of(1))
-account> &a.stamp(Entry { at: Time.epoch, what: Deposit })     // private: fine here
+account> var a = Account.open(AccountId.of(1))
+account> a.balance                                     // private: fine here
+Money(0) : Money
+account> &a.freeze()
 account> a
-Account { id: AccountId(1), balance: Money(0), frozen: false, statement: [...] } : Account
-account> :t a.credit
-fn(inout Account, Money, Movement) ! Frozen(account: AccountId) uses Clock
+Account(id: AccountId(1), balance: Money(0), frozen: true, statement: []) : Account
+account> :t Account.credit
+fn(inout Account, Money, Movement) ! Frozen(AccountId) uses Clock
 ```
 
 - **It opens inside a module.** Its private items, and its opaque types'
-  representations, are in reach. That's the difference from a test.
+  representations, are in reach. That's the difference from a test. Its
+  test items are in reach too, and a test that reaches past the
+  interface doesn't keep it shut, since this is where that error sends
+  you.
 - **Every result shows its type,** and `:t` shows an expression's type
   without running it.
 - **You choose the world.** It starts on test implementations: the clock
@@ -306,7 +327,10 @@ fn(inout Account, Money, Movement) ! Frozen(account: AccountId) uses Clock
   named, `ren console bank --real Clock,Fs`, so the console is safe by
   default and never touches the world by surprise. Rails' console is
   powerful and dangerous for the same reason, the real database. Here
-  it's a choice you can see.
+  it's a choice you can see. A real call is made once: what it gave is
+  kept, and given back to its line from then on, so a `let t =
+  Clock.now()` stays the same time and an earlier line's file isn't
+  written again.
 - **Every effect is shown as it happens:**
 
   ```
@@ -377,8 +401,14 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 - **The cost of specifications for small files.** If writing tests for a
   small file becomes a chore of marking things `pub`, the rule is too
-  strict. [examples/just](examples/just) is the one to watch: its
-  `plan.ren` does its work in a private recursive `visit`.
+  strict. [examples/just](examples/just) was the one to watch, and in
+  stage 9c it cost less than feared: `plan.ren`'s private recursive
+  `visit` was already tested through `pub fn order`. The cost was
+  elsewhere. Its tests call `main`, which became `pub` with its whole
+  contract, nine errors and four dependencies in one signature, and
+  `Justfile` keeps rules, so it became opaque, with a `recipes()` that
+  reads. A help that writes out the whole `!` clause at once would make
+  the first cheaper.
 - **How `:spec` picks its asserts,** from the results looked at, without
   writing brittle ones.
 - **How a saved failure is named and kept** in the repository, so it

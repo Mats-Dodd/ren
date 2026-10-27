@@ -21,7 +21,8 @@ fn show_price(item: Str) uses Prices, Console =
     fail Unknown(_) => print("unknown")
     fail Throttled(_) => print("throttled")
 
-fn main() uses Clock, Console =
+// `pub`, since its test calls it
+pub fn main() uses Clock, Console =
   with catalogue(),
       limiter.fixed_window(2, Duration.seconds(1)),
       cache.cached(Duration.seconds(10)) in

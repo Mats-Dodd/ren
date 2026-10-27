@@ -93,3 +93,13 @@ candidates for what comes next:
   `f: fn(Int, Int) -> Int`, and a parameter's function type passes on
   whatever the function passed in fails with, so `f(a, b)` is written
   `try f(a, b)` though none of the four lambdas can fail.
+
+What stage 9c changed:
+
+- **`Vm` and `Timeline` are opaque records.** `main` read `vm.out` and
+  `bad.steps`, and set `fork.locals[0] = 10`, reaching into a machine
+  that only `machine` should change. Now `Vm` has `out()`, `steps()`
+  and `try &fork.set_local(0, 10)`: three accessors, the price of keeping
+  the stack's rules in one module. `set_local` keeps one of its own: a
+  slot the machine doesn't have is refused, `NoLocal(slot)`, where
+  `fork.locals[9] = 0` would panic.

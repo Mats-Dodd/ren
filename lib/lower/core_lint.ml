@@ -1597,6 +1597,32 @@ let identities (prog : program) =
   List.iter (fun (f : fn_def) -> go f.body) prog.fns;
   found
 
+(* Only test code calls a test function (ast.ml, [fn_def.test]): so
+   `ren run`, which leaves test functions out, leaves out nothing it
+   runs. Resolve reports a call of a test item from other code, so this
+   holds whatever's written. *)
+let test_code ~linked (prog : program) =
+  let tests = Hashtbl.create 16 in
+  List.iter
+    (fun (m : program) ->
+      List.iter
+        (fun (f : fn_def) -> if f.test then Hashtbl.replace tests f.path ())
+        m.fns)
+    (linked @ [ prog ]);
+  List.iter
+    (fun (f : fn_def) ->
+      if not f.test then
+        match List.find_opt (Hashtbl.mem tests) (globals f.body) with
+        | Some g ->
+            failwith
+              (sprintf
+                 "Core Lint: in `%s`, at %s:%d:%d: it isn't test code, but \
+                  uses the test function `%s`"
+                 (Path.local f.path) f.loc.file f.loc.start.line f.loc.start.col
+                 (Path.local g))
+        | None -> ())
+    prog.fns
+
 (* Lint module [prog], which sees the interfaces [imports]: every one
    reachable through its imports, since a type from any of them can turn
    up in its code. [linked] are the program's modules, [prog] among them:
@@ -1636,7 +1662,7 @@ let program ~imports ~linked (prog : program) =
       List.iter
         (fun (v : Iface.value) ->
           Hashtbl.replace env.schemes (Path.make iface.home v.vname) v.scheme)
-        iface.values)
+        (iface.values @ iface.tests))
     imports;
   List.iter
     (fun (m : program) ->
@@ -1672,6 +1698,7 @@ let program ~imports ~linked (prog : program) =
         m.fns)
     (linked @ [ prog ]);
   value_order prog;
+  test_code ~linked prog;
   shows env prog;
   keys_and_ops env prog;
   List.iter (fn_def env) prog.fns

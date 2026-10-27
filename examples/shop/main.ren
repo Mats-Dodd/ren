@@ -23,7 +23,7 @@ fn main() =
   var c = Cart.of(UserId.new(7))
   &c.put(Free)
   &c.put(Pro(seats: 3))
-  print(c.owner.raw())
+  print(c.owner().raw())
   print(c.len())
   print(c.total())
   print(Cart.guest.len())

@@ -23,10 +23,14 @@
    with the run's arguments. A `$` is in every name made here, which no
    name the program writes can have, so none of them can clash with one.
 
+   Every function made here is test code, [fn_def.test], as a test item,
+   `test fn`, is (ast.ml): only test code can call it, and `ren run`
+   leaves it out.
+
    Another module runs a `pub group` by its alias, `conform.clock(c)`, so
-   its tests' functions are in its interface, with the types inference
-   found for them (driver.ml): what's here is what that module knows about
-   the group, its [group]. *)
+   its tests' functions are in its interface's test tier, with the types
+   inference found for them (driver.ml): what's here is what that module
+   knows about the group, its [group]. *)
 
 open Ast
 open Ast.Parsed
@@ -139,7 +143,8 @@ let real_of sink (t : test_def) =
               None)
         u.deps
 
-(* A function of no parameters, private, made from code at [loc]. *)
+(* A function of no parameters, private and test code, made from code at
+   [loc]. *)
 let fn_of ~name ~loc ?(params = []) body =
   Fn
     {
@@ -153,6 +158,7 @@ let fn_of ~name ~loc ?(params = []) body =
       body;
       owner = None;
       overload = 0;
+      test = true;
       loc = Loc.span loc body.loc;
     }
 

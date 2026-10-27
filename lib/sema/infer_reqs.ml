@@ -345,8 +345,8 @@ and has_ord env t =
           | Some { body = Opaque (Rep rep); _ } ->
               (* in its own module, it's what it's represented as *)
               has env "ord" (with_args args rep)
-          | Some { body = Opaque (Hidden _); _ } ->
-              unordered (Unordered_opaque (env.names p))
+          | Some ({ body = Opaque (Hidden _); _ } as td) ->
+              unordered (Unordered_opaque (env.names p, tested env td))
           | _ when p = Path.prelude "Map" || p = Path.prelude "Set" ->
               unordered (Unordered_table p.name)
           | _ -> unordered Unordered))

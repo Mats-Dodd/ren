@@ -708,7 +708,8 @@ fn main() = ()
 fn w(g: fn() -> Int) -> Bool = attempt g() == Err(Bad)
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Bad` can't be written here, because the errors this holds aren't known
       ┌─ test.ren:1:51
     1 │ fn w(g: fn() -> Int) -> Bool = attempt g() == Err(Bad)
@@ -862,7 +863,8 @@ fn main() =
     Err(Left(n)) => print(n)
     _ => ()
 |};
-  [%expect {|
+  [%expect
+    {|
     true
     true
     true
@@ -871,22 +873,25 @@ fn main() =
     1
     ()
     |}];
-  types {|
+  types
+    {|
 fn pick(c: Bool) = if c then Err(Left(1)) else Err(Right)
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     fn pick<T>(c: Bool) -> Result<T, ! Left(Int) | Right>
     fn main()
     |}];
   test
     {|
-fn load(id: Int) -> Int = if id == 0 then fail NotFound(id) else id
+pub fn load(id: Int) -> Int ! NotFound(id: Int) = if id == 0 then fail NotFound(id) else id
 
 test "a refusal shows what came back" =
   assert attempt load(3) == Err(NotFound(3))
 |};
-  [%expect {|
+  [%expect
+    {|
     test.ren
       ✗ a refusal shows what came back
 
@@ -905,7 +910,8 @@ test "a refusal shows what came back" =
     [exit 1]
     |}]
 
-let%expect_test "a set of tags written inside Err is closed after its group (B5)" =
+let%expect_test
+    "a set of tags written inside Err is closed after its group (B5)" =
   (* [mk2]'s set is its own, made of the two tags: once its group is done
      it holds those and no more, as `ren types` says, and as its type in
      Core says, with no tail. So a `match` with exactly those arms
@@ -930,7 +936,8 @@ fn main() =
 fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     fn mk2<T>(c: Bool) -> Result<T, ! Left(Int) | Right>
     fn pick(c: Bool) -> Int
     fn main() uses Console
@@ -953,7 +960,8 @@ fn same() -> Bool = mk2(true) == attempt g()
 fn mk3(c: Bool) = if c then mk2(c) else Err(Third)
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `==` compares two values of the same type, but this is a `Result<Int, ! Oops>` and the left side is a `Result<Int, ! Left(Int) | Right>`
       ┌─ test.ren:3:34
     3 │ fn same() -> Bool = mk2(true) == attempt g()
@@ -970,7 +978,8 @@ fn main() = ()
       help: check the spelling: a tag that's written wrong is a different error
     |}]
 
-let%expect_test "a kept set doesn't take tags written in an earlier group (B5)" =
+let%expect_test "a kept set doesn't take tags written in an earlier group (B5)"
+    =
   (* [mk2]'s set is a type by the time [kept] is checked, but its tags
      are still ones written in `Err`: the `attempt`'s set can't take
      `Right` from it, which `g` doesn't fail with, as it couldn't from an
@@ -987,7 +996,8 @@ fn pick<T>(c: Bool, a: T, b: T) -> T = if c then a else b
 fn generic(c: Bool) = pick(c, mk2(c), attempt g())
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: this `attempt` can't keep `Right`: nothing it covers fails with it
       ┌─ test.ren:3:42
     1 │ fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
@@ -1037,7 +1047,8 @@ pub fn pick<T>(c: Bool, a: T, b: T) -> T = if c then a else b
 |}
       );
     ];
-  [%expect {|
+  [%expect
+    {|
     error: this `attempt` can't keep `Right`: nothing it covers fails with it
       ┌─ main.ren:3:41
     2 │ fn mk2(c: Bool) = if c then Err(Left(1)) else Err(Right)
@@ -1080,13 +1091,15 @@ pub fn made(c: Bool) -> Result<Int, ! Left(Int) | Right> =
 |}
       );
     ];
-  [%expect {|
+  [%expect
+    {|
     [Err(Left(1)), Err(Left(2)), Err(Left(2))]
     true
     ()
     |}]
 
-let%expect_test "a kept set equal to a declared Result too takes its tags (B5)" =
+let%expect_test "a kept set equal to a declared Result too takes its tags (B5)"
+    =
   (* the `attempt`'s set is equal both to [mk2]'s, of tags written in
      `Err`, and to [h]'s declared one, so it can hold `Right`, as it could
      with the `Err`s written in place: whichever it meets first, and
@@ -1136,7 +1149,8 @@ fn main() =
   let _ = attempt load(0) == Err(NotFound(0, 1))
   ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Gon` isn't one of the errors this can hold
       ┌─ test.ren:2:49
     2 │ pub fn sure() -> Result<Int, ! Gone(Int)> = Err(Gon(1))
@@ -1182,7 +1196,8 @@ fn s() =
 fn t() = Some(attempt f(-1)) == Some(Err(Nge(-1)))
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Nope` isn't one of the errors this can hold
       ┌─ test.ren:4:10
     4 │   if Err(Nope) == r then print("no") else print("yes")
@@ -1230,7 +1245,8 @@ fn passed() -> Int = try made()
 fn tagged() = Err(Some(1))
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     fn f(n: Int) -> Int ! Neg(Int)
     fn ok()
     fn again() -> Int ! Gone(Int)
@@ -1266,7 +1282,8 @@ fn main() =
   let _ = Err(Neg(-1), 2)
   ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Err` holds an error, written as its tag
       ┌─ test.ren:3:11
     3 │   let _ = Err(x)
@@ -1286,7 +1303,8 @@ fn main() =
 fn f() -> Int = try Err(Gone(1))
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: this `try` fails with the error it's given
       ┌─ test.ren:1:17
     1 │ fn f() -> Int = try Err(Gone(1))
@@ -1724,7 +1742,7 @@ fn main() = ()
       ( "bank.ren",
         {|
 pub type Refusal = ! Short(by: Int) | Frozen
-pub type Account = { balance: Int, frozen: Bool }
+pub type Account = opaque { balance: Int, frozen: Bool }
   pub fn debit(inout self, m: Int) ! Refusal =
     if self.frozen then fail Frozen
     if self.balance < m then fail Short(m - self.balance)
@@ -1832,7 +1850,8 @@ fn b(n: Int) -> Int =
   try a(n)
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Bad` has two shapes here
       ┌─ test.ren:1:41
     1 │ fn a(n: Int) -> Int = if n > 0 then try b(n - 1) else fail Bad(1)
@@ -2225,7 +2244,7 @@ let%expect_test "ren types shows what a module fails with" =
 pub type AccountId = opaque Int
 pub type Refusal = ! Short(account: AccountId, by: Int) | Frozen(account: AccountId)
 pub type TransferError = ! Refusal | NoSuchAccount(account: AccountId) | SameAccount
-pub type Account = { id: AccountId, balance: Int, frozen: Bool }
+pub type Account = opaque { id: AccountId, balance: Int, frozen: Bool }
   pub fn debit(inout self, m: Int) ! Refusal =
     if self.frozen then fail Frozen(self.id)
     if self.balance < m then fail Short(self.id, m - self.balance)

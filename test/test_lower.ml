@@ -246,6 +246,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
           row_reqs = [];
         };
       body;
+      test = false;
       loc;
     }
   in
@@ -264,6 +265,60 @@ let%expect_test "Core Lint reports a node of the wrong type" =
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: the value of `x` has type `Bool`, but should have `Int`")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
+let%expect_test "Core Lint reports a test function used by other code" =
+  (* `ren run` leaves test code out, so nothing else can use it; Resolve
+     stops that being written, so only a lowering mistake would *)
+  let loc = Ren.Loc.point ~file 1 1 in
+  let unit_fn : Ren.Ty.ty =
+    Fun
+      ( [],
+        Ren.Ty.unit,
+        Ren.Ty.closed,
+        Ren.Ty.closed,
+        { ids = []; lvar = Some 0 } )
+  in
+  let fn name ~test body : Ren.Core.fn_def =
+    {
+      path = Ren.Path.make "test" name;
+      params = [];
+      ev = Ren.Core.evidence 2;
+      tys = [];
+      dicts = [];
+      scheme = { ty = unit_fn; names = []; reqs = []; row_reqs = [] };
+      body;
+      test;
+      loc;
+    }
+  in
+  let helper = fn "helper" ~test:true (Ren.Core.unit loc) in
+  let uses_helper =
+    Ren.Core.mk
+      (Global
+         ( Ren.Path.make "test" "helper",
+           { tys = []; rows = []; lams = [] },
+           [],
+           [] ))
+      unit_fn loc
+  in
+  let main = fn "main" ~test:false uses_helper in
+  report "" (fun () ->
+      Ren.Driver.pass "lint" (fun () ->
+          Ren.Core_lint.program ~imports:[] ~linked:[]
+            {
+              home = "test";
+              types = [];
+              fns = [ helper; main ];
+              values = [];
+              shows = [];
+              keys = [];
+              ops = [];
+            }));
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: it isn't test code, but uses the test function `helper`")
       = this is a bug in the Ren compiler, not in your program
     |}]
 
@@ -286,6 +341,7 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
       dicts = [];
       scheme = { ty; names = []; reqs = []; row_reqs = [] };
       body;
+      test = false;
       loc;
     }
   in
@@ -431,6 +487,7 @@ let%expect_test "Core Lint reports a pattern of an error type" =
           row_reqs = [];
         };
       body;
+      test = false;
       loc;
     }
   in
@@ -478,6 +535,7 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
           row_reqs = [];
         };
       body;
+      test = false;
       loc;
     }
   in
@@ -530,6 +588,7 @@ let%expect_test "Core Lint reports an instance that is a value" =
           row_reqs = [];
         };
       body;
+      test = false;
       loc;
     }
   in
@@ -571,6 +630,7 @@ let values_program ~uses_b ~values =
       dicts = [];
       scheme = { ty = int_fn; names = []; reqs = []; row_reqs = [] };
       body;
+      test = false;
       loc;
     }
   in
@@ -814,6 +874,7 @@ let%expect_test "Core Lint reports a type said to show itself that can't" =
       body = Record [ { fname = "v"; fty = Var 0 } ];
       members = Ren.Path.Map.empty;
       numeric = None;
+      opaque = false;
       loc = None;
     }
   in

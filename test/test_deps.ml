@@ -132,6 +132,7 @@ let lint_evidence body =
           row_reqs = [];
         };
       body = body ~loc ~op ~lambda ~call ~uses_d;
+      test = false;
       loc;
     }
   in
@@ -148,6 +149,7 @@ let lint_evidence body =
                     body = Dep [ { fname = "op"; fty = int_fn } ];
                     members = Path.Map.empty;
                     numeric = None;
+                    opaque = false;
                     loc = None;
                   };
                 ];
@@ -1540,7 +1542,7 @@ fn main() uses Rates, Console = print(convert(1))
 let%expect_test "what a test can't use" =
   test
     {|
-dep Users =
+pub dep Users =
   count: fn() -> Int
 
   pub fn none() -> Users = Users { count: fn() => 0 }
@@ -1597,7 +1599,7 @@ test "users" uses Users, ..d =
 let%expect_test "a group's run needs what its tests use" =
   test
     {|
-dep Users =
+pub dep Users =
   count: fn() -> Int
 
   pub fn none() -> Users = Users { count: fn() => 0 }
@@ -4055,7 +4057,7 @@ fn main() ! FsError | InvalidUtf8 uses Console =
 let%expect_test "a test gets no args, and programs that exit with 0" =
   test
     {|
-fn build() -> Int ! ProcError uses Proc =
+pub fn build() -> Int ! ProcError uses Proc =
   try Proc.run("make", ["all"])
 
 test "nothing runs" =
@@ -4206,17 +4208,17 @@ pub group "frozen" = conforms()
 let%expect_test "a test gets the test dependencies, and shows how it failed" =
   test
     {|
-type Money = opaque Int
+pub type Money = opaque Int
   pub fn dollars(n: Int) -> Money = n * 100
   pub fn minus(self, m: Money) -> Money = self - m
 
-type Account = { id: Int, balance: Money, at: Time }
+pub type Account = { id: Int, balance: Money, at: Time }
 
-// private, and a test can call it
-fn pay(a: Account, m: Money) -> Account uses Clock =
+// public, so a test can call it
+pub fn pay(a: Account, m: Money) -> Account uses Clock =
   Account { id: a.id, balance: a.balance.minus(m), at: Clock.now() }
 
-fn main() uses Clock, Console =
+pub fn main() uses Clock, Console =
   print("paying")
   let a = pay(Account { id: 1, balance: Money.dollars(1), at: Time.epoch }, Money.dollars(1))
   print(a.balance == Money.dollars(0))
@@ -4264,7 +4266,7 @@ test "main prints" =
 let%expect_test "a test without a real dependency prints the same every time" =
   let src =
     {|
-fn roll() -> Int uses Random = Random.int(6) + 1
+pub fn roll() -> Int uses Random = Random.int(6) + 1
 
 test "a roll is a die's" =
   let r = roll()
@@ -4417,7 +4419,7 @@ test "the test clock isn't" =
 let%expect_test "a test gets an empty mem_fs, or the files its with gives" =
   test
     {|
-fn save(name: Str, text: Str) ! FsError uses Fs =
+pub fn save(name: Str, text: Str) ! FsError uses Fs =
   try Fs.write(Path.of(name), text.bytes())
 
 test "there are no files" =
@@ -4488,7 +4490,7 @@ test "the real file system" uses Fs =
 let%expect_test "a test that fails with an error, or panics" =
   test
     {|
-fn half(n: Int) -> Int ! Odd(Int) =
+pub fn half(n: Int) -> Int ! Odd(Int) =
   if n % 2 == 1 then fail Odd(n)
   n / 2
 
@@ -4532,7 +4534,7 @@ let%expect_test "a group's test that fails with an error, or passes" =
      with reaches the runner, and a test that can't fail runs as well *)
   test
     {|
-fn may(n: Int) -> Int ! Boom = if n > 0 then fail Boom else n
+pub fn may(n: Int) -> Int ! Boom = if n > 0 then fail Boom else n
 
 group g() =
   test "fails" =
@@ -4683,7 +4685,7 @@ let%expect_test "a test's name with a line break, and a difference after an é" 
      looks for what comes before the break *)
   test
     {|
-type P = {name: Str, n: Int}
+pub type P = {name: Str, n: Int}
 
 test "café\nprices" =
   assert P { name: "café", n: 1 } == P { name: "café", n: 2 }
@@ -4919,6 +4921,13 @@ pub group leaky(p: Priv, ps: Array<Priv>) =
 |};
   [%expect
     {|
+    error: `Priv` is private, and a test sees what an importer sees
+      ┌─ test.ren:3:20
+    3 │ pub group leaky(p: Priv, ps: Array<Priv>) =
+      │                    ^^^^
+      = a test is a specification of `test`'s interface
+      help: mark it `pub`, or explore it in the console: `ren console test`
+
     error: `pub group leaky` takes `Priv`, which is private to this module
       ┌─ test.ren:3:20
     1 │ type Priv = {n: Int}
@@ -4983,7 +4992,7 @@ group "r" = g(1)
 let%expect_test "a test's body is `Unit`" =
   test
     {|
-fn compute() = 3
+pub fn compute() -> Int = 3
 
 test "a forgotten assert" =
   compute() == 3
@@ -5024,7 +5033,7 @@ let%expect_test "a group's wrapper that gives a value is reported once" =
      `Unit`, as a test's is *)
   test
     {|
-fn retry(n: Int, body: fn() -> Int) -> Int = try body()
+pub fn retry(n: Int, body: fn() -> Int) -> Int = try body()
 
 group g() with retry(3) =
   test "a" =
@@ -5096,8 +5105,8 @@ let%expect_test "a failed assert leaves out what its two sides share" =
      fields, the other elements and an element only one side has *)
   test
     {|
-type Shape = Dot | Box(w: Int, h: Int)
-type P = { name: Str, at: Int, shapes: Array<Shape> }
+pub type Shape = Dot | Box(w: Int, h: Int)
+pub type P = { name: Str, at: Int, shapes: Array<Shape> }
 
 test "a payload" =
   assert P { name: "a", at: 1, shapes: [Dot, Box(1, 2)] } == P { name: "a", at: 1, shapes: [Dot, Box(1, 3)] }
@@ -6713,7 +6722,8 @@ fn main() uses Console =
   &h.reset()
   with h in print(RateCalls.count())
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `reset` can't change `h`, which implements more than `Rates`
        ┌─ test.ren:15:6
     15 │   &h.reset()
@@ -7288,4 +7298,589 @@ fn a(n: Int) -> Int = if n == 0 then run(make(n)) else 0
        = functions that call each other are checked at a single type
        = `RateCalls & Rates` is a `Rates` only where a written type asks for one
        help: write `make`'s result, `-> Rates`, which narrows it there
+    |}]
+
+(* ---- test items (testing.md, "Test items") ---- *)
+
+let%expect_test "a test uses its module's test items" =
+  test
+    {|
+pub dep Store =
+  get: fn() -> Int
+
+test fn twice(n: Int) -> Int = n * 2
+
+test handler fixed(n: Int) for Store =
+  get() => n
+
+pub fn read() -> Int uses Store = Store.get()
+
+test "a test item helps" =
+  assert with fixed(7) in twice(read()) == 14
+|};
+  [%expect
+    {|
+    test.ren
+      ✓ a test item helps
+
+    1 passed
+    [exit 0]
+    |}]
+
+let%expect_test "another module's tests use its public test items" =
+  test_files
+    [
+      ( "main.ren",
+        {|
+import store
+
+group "fixed" = store.reads(store.fixed(3))
+
+test "a public test item, imported" =
+  assert with store.fixed(5) in store.twice(store.read()) == 10
+|}
+      );
+      ( "store.ren",
+        {|
+pub dep Store =
+  get: fn() -> Int
+
+pub fn read() -> Int uses Store = Store.get()
+
+pub test fn twice(n: Int) -> Int = n * 2
+
+pub test handler fixed(n: Int) for Store =
+  get() => n
+
+pub group reads(s: Store) with s =
+  test "reads what it's given" =
+    assert read() == read()
+|}
+      );
+    ];
+  [%expect
+    {|
+    main.ren
+      fixed
+        ✓ reads what it's given
+      ✓ a public test item, imported
+
+    2 passed
+    [exit 0]
+    |}]
+
+let%expect_test "a private test item is its own module's" =
+  check_error_files
+    [
+      ( "main.ren",
+        {|
+import store
+
+test "it can't" =
+  assert store.twice(2) == 4
+
+fn main() = ()
+|}
+      );
+      ("store.ren", {|
+test fn twice(n: Int) -> Int = n * 2
+|});
+    ];
+  [%expect
+    {|
+    error: `store` has no public `twice`
+      ┌─ main.ren:4:16
+    4 │   assert store.twice(2) == 4
+      │                ^^^^^
+      help: if it's defined there, mark it `pub`
+    |}]
+
+let%expect_test "only test code uses a test item" =
+  check_error {|
+test fn alice() -> Int = 1
+
+fn main() = print(alice())
+|};
+  [%expect
+    {|
+    error: `alice` is a test item, so only a test can use it
+      ┌─ test.ren:3:19
+    3 │ fn main() = print(alice())
+      │                   ^^^^^
+      = a test item isn't part of `test`'s interface, and `ren run` leaves it out
+      help: call it from a test, or remove `test` from its declaration
+    |}];
+  check_error_files
+    [
+      ("main.ren", {|
+import store
+
+fn main() = print(store.twice(2))
+|});
+      ("store.ren", {|
+pub test fn twice(n: Int) -> Int = n * 2
+|});
+    ];
+  [%expect
+    {|
+    error: `store.twice` is a test item, so only a test can use it
+      ┌─ main.ren:3:25
+    3 │ fn main() = print(store.twice(2))
+      │                         ^^^^^
+      = a test item isn't part of `store`'s interface, and `ren run` leaves it out
+      help: call it from a test, or remove `test` from its declaration
+    |}]
+
+let%expect_test "nor a test handler" =
+  check_error
+    {|
+pub dep Store =
+  get: fn() -> Int
+
+test handler fixed(v: Int) for Store =
+  get() => v
+
+fn main() = print(with fixed(1) in Store.get())
+|};
+  [%expect
+    {|
+    error: `fixed` is a test item, so only a test can use it
+      ┌─ test.ren:7:24
+    7 │ fn main() = print(with fixed(1) in Store.get())
+      │                        ^^^^^
+      = a test item isn't part of `test`'s interface, and `ren run` leaves it out
+      help: call it from a test, or remove `test` from its declaration
+    |}]
+
+let%expect_test "a public test item is written `pub test`" =
+  check_error {|
+test pub fn twice(n: Int) -> Int = n * 2
+|};
+  [%expect
+    {|
+    error: `pub` goes before `test`
+      ┌─ test.ren:1:6
+    1 │ test pub fn twice(n: Int) -> Int = n * 2
+      │      ^^^
+      help: write `pub` first: `pub test fn ...`, `pub test handler ...`
+    |}]
+
+let%expect_test "a test compares its own opaque type as an importer would" =
+  check_error
+    {|
+pub type Id = opaque Int
+  pub fn of(n: Int) -> Id = n
+
+test "ordered" =
+  assert Id.of(1) < Id.of(2)
+
+fn main() = ()
+|};
+  [%expect
+    {|
+    error: `Id` has no `<`
+      ┌─ test.ren:5:10
+    5 │   assert Id.of(1) < Id.of(2)
+      │          ^^^^^^^^^^^^^^^^^^^
+      = a test sees what an importer sees, and to an importer an opaque type is ordered only by its `key`
+      help: give `Id` a key: `fn key(self) -> K = ...`
+    |}]
+
+let%expect_test "`ren run` leaves test items out, and `ren types` shows them" =
+  let src =
+    {|
+pub test fn twice(n: Int) -> Int = n * 2
+test fn alice() -> Int = 1
+
+test "they work" =
+  assert twice(alice()) == 2
+
+fn main() = print(3)
+|}
+  in
+  run src;
+  types src;
+  [%expect
+    {|
+    3
+    ()
+    pub test fn twice(n: Int) -> Int
+    test fn alice() -> Int
+    fn main() uses Console
+    |}]
+
+let%expect_test "only a function or a handler can be a test item" =
+  check_error {|
+test type Fake = { n: Int }
+|};
+  check_error {|
+test dep Fake =
+  get: fn() -> Int
+|};
+  check_error {|
+test let n = 1
+|};
+  check_error
+    {|
+pub type Account = opaque { n: Int }
+  test fn peek(self) -> Int = self.n
+|};
+  [%expect
+    {|
+    error: only a function or a handler can be a test item
+      ┌─ test.ren:1:1
+    1 │ test type Fake = { n: Int }
+      │ ^^^^
+      help: make it an ordinary item; a test sees it if it's `pub`
+    error: only a function or a handler can be a test item
+      ┌─ test.ren:1:1
+    1 │ test dep Fake =
+      │ ^^^^
+      help: make it an ordinary item; a test sees it if it's `pub`
+    error: only a function or a handler can be a test item
+      ┌─ test.ren:1:1
+    1 │ test let n = 1
+      │ ^^^^
+      help: make it an ordinary item; a test sees it if it's `pub`
+    error: a member can't be a test item
+      ┌─ test.ren:2:3
+    2 │   test fn peek(self) -> Int = self.n
+      │   ^^^^
+      help: declare it at the top level: `test fn name(...)`
+    |}]
+
+let%expect_test "a test item is named like any function" =
+  check_error {|
+test fn alice() -> Int = 1
+fn alice() -> Int = 2
+|};
+  [%expect
+    {|
+    error: there are two functions named `alice`
+      ┌─ test.ren:2:4
+    1 │ test fn alice() -> Int = 1
+      │         ----- the first `alice` is here
+    2 │ fn alice() -> Int = 2
+      │    ^^^^^
+      help: rename one of them
+    |}]
+
+(* ---- a test sees what an importer sees (testing.md, "Tests are
+   specifications") ---- *)
+
+let account =
+  {|
+pub type AccountId = opaque Int
+  pub fn of(n: Int) -> AccountId = n
+
+pub type Account = opaque { id: AccountId, balance: Int, log: Array<Str> }
+  pub fn open(id: AccountId) -> Account = Account { id, balance: 0, log: [] }
+  pub fn balance(self) -> Int = self.balance
+  pub fn credit(inout self, n: Int) =
+    self.balance = self.balance + n
+    &self.stamp("credit")
+  fn stamp(inout self, what: Str) = &self.log.push(what)
+  pub fn key(self) -> AccountId = self.id
+
+type Ledger = { entries: Array<Int> }
+
+dep Users =
+  count: fn() -> Int
+
+fn audit(a: Account) -> Int = a.log.len()
+|}
+
+let%expect_test "a test can't use a private function, type or dependency" =
+  check_error
+    (account
+   ^ {|
+test "a private function" =
+  assert audit(Account.open(AccountId.of(1))) == 0
+
+test "a private type" =
+  let l = Ledger { entries: [] }
+  assert l.entries == []
+
+test "a private dependency" =
+  assert Users.count() == 0
+|}
+    );
+  [%expect
+    {|
+    error: `audit` is private, and a test sees what an importer sees
+       ┌─ test.ren:21:10
+    21 │   assert audit(Account.open(AccountId.of(1))) == 0
+       │          ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+
+    error: `Ledger` is private, and a test sees what an importer sees
+       ┌─ test.ren:24:11
+    24 │   let l = Ledger { entries: [] }
+       │           ^^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+
+    error: `Users` is private, and a test sees what an importer sees
+       ┌─ test.ren:28:10
+    28 │   assert Users.count() == 0
+       │          ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+    |}]
+
+let%expect_test "a test can't use a private member" =
+  test
+    (account
+   ^ {|
+test "through a value" =
+  var a = Account.open(AccountId.of(1))
+  &a.stamp("x")
+|}
+    );
+  [%expect
+    {|
+    error: `stamp` is private, and a test sees what an importer sees
+       ┌─ test.ren:22:6
+    22 │   &a.stamp("x")
+       │      ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+    |}];
+  test
+    (account
+   ^ {|
+test "after its type" =
+  var a = Account.open(AccountId.of(1))
+  Account.stamp(&a, "x")
+|}
+    );
+  [%expect
+    {|
+    error: `Account.stamp` is private, and a test sees what an importer sees
+       ┌─ test.ren:22:11
+    22 │   Account.stamp(&a, "x")
+       │           ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+    |}]
+
+let%expect_test "a test sees its module's opaque types as opaque" =
+  test
+    (account
+   ^ {|
+test "a field" =
+  let a = Account.open(AccountId.of(1))
+  assert a.log == []
+
+test "a literal" =
+  let a = Account { id: AccountId.of(1), balance: 5, log: [] }
+  assert a.balance() == 5
+
+test "an update" =
+  var a = Account.open(AccountId.of(1))
+  a.log = ["x"]
+
+test "a representation" =
+  assert AccountId.of(1) == 1
+|}
+    );
+  [%expect
+    {|
+    error: `Account` is opaque, and a test sees what an importer sees
+       ┌─ test.ren:22:12
+    22 │   assert a.log == []
+       │            ^^^
+       = a test is a specification of `test`'s interface
+       help: explore it in the console: `ren console test`
+
+    error: `Account` is opaque, and a test sees what an importer sees
+       ┌─ test.ren:25:11
+    25 │   let a = Account { id: AccountId.of(1), balance: 5, log: [] }
+       │           ^^^^^^^
+       = a test is a specification of `test`'s interface
+       help: explore it in the console: `ren console test`
+
+    error: `Account` is opaque, and a test sees what an importer sees
+       ┌─ test.ren:30:5
+    30 │   a.log = ["x"]
+       │     ^^^
+       = a test is a specification of `test`'s interface
+       help: explore it in the console: `ren console test`
+
+    error: `==` compares two values of the same type, but this is an `Int` and the left side is an `AccountId`
+       ┌─ test.ren:33:29
+    33 │   assert AccountId.of(1) == 1
+       │                             ^
+       │          --------------- this is an `AccountId`
+       = `AccountId` is opaque, and a test sees what an importer sees
+       help: explore it in the console: `ren console test`
+    |}]
+
+let%expect_test "a test item, a group and a run see what an importer sees" =
+  test
+    (account
+   ^ {|
+test fn rich() -> Account =
+  var a = Account.open(AccountId.of(1))
+  a.log = ["rich"]
+  a
+|}
+    );
+  [%expect
+    {|
+    error: `Account` is opaque, and a test sees what an importer sees
+       ┌─ test.ren:22:5
+    22 │   a.log = ["rich"]
+       │     ^^^
+       = a test is a specification of `test`'s interface
+       help: explore it in the console: `ren console test`
+    |}];
+  test
+    (account
+   ^ {|
+group spends(a: Account) =
+  test "it's spent" =
+    assert audit(a) == 0
+
+group "spent" = spends(Account.open(AccountId.of(audit(Account.open(AccountId.of(1))))))
+|}
+    );
+  [%expect
+    {|
+    error: `audit` is private, and a test sees what an importer sees
+       ┌─ test.ren:22:12
+    22 │     assert audit(a) == 0
+       │            ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+    |}]
+
+let%expect_test "what a test can use" =
+  (* its module's public items and test items, its public members, `==`
+     through a private `key`, and what it imports *)
+  test_files
+    [
+      ( "account.ren",
+        account
+        ^ {|
+pub type Money = opaque Int with numeric
+  pub fn cents(n: Int) -> Money = n
+
+test fn opened(n: Int) -> Account = Account.open(AccountId.of(n))
+
+test "its public items" =
+  var a = opened(1)
+  &a.credit(5)
+  assert a.balance() == 5
+  assert a == opened(1)
+  assert Money.cents(2) + Money.cents(3) == Money.cents(5)
+  assert Money.cents(2) * 3 == Money.cents(6)
+  assert Path.of("a") == Path.of("a")
+|}
+      );
+    ];
+  [%expect
+    {|
+    account.ren
+      ✓ its public items
+
+    1 passed
+    [exit 0]
+    |}]
+
+let%expect_test "a test can't name a private error set" =
+  check_error
+    {|
+type Oops = ! Bad | Worse
+
+pub fn f() -> Int = 1
+
+test fn t() ! Oops = fail Bad
+
+test "a set" = assert attempt t() == Err(Bad)
+|};
+  [%expect
+    {|
+    error: `Oops` is private, and a test sees what an importer sees
+      ┌─ test.ren:5:15
+    5 │ test fn t() ! Oops = fail Bad
+      │               ^^^^
+      = a test is a specification of `test`'s interface
+      help: mark it `pub`, or explore it in the console: `ren console test`
+    |}]
+
+let%expect_test "a test can't use a private type's constructor" =
+  check_error
+    {|
+type State =
+  | Red
+  | Green
+
+pub type Light = opaque State
+
+pub fn red() -> Light = Red
+
+fn main() = ()
+
+test "through the opaque type" = assert red() == Red
+
+test "on its own" = assert Green == Green
+|};
+  [%expect
+    {|
+    error: `Red` is private, and a test sees what an importer sees
+       ┌─ test.ren:11:50
+    11 │ test "through the opaque type" = assert red() == Red
+       │                                                  ^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+
+    error: `Green` is private, and a test sees what an importer sees
+       ┌─ test.ren:13:28
+    13 │ test "on its own" = assert Green == Green
+       │                            ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+
+    error: `Green` is private, and a test sees what an importer sees
+       ┌─ test.ren:13:37
+    13 │ test "on its own" = assert Green == Green
+       │                                     ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+    |}]
+
+let%expect_test "a test item is told what a test is told" =
+  check_error
+    (account
+   ^ {|
+test fn count() -> Int = audit(Account.open(AccountId.of(1)))
+|});
+  [%expect
+    {|
+    error: `audit` is private, and a test sees what an importer sees
+       ┌─ test.ren:20:26
+    20 │ test fn count() -> Int = audit(Account.open(AccountId.of(1)))
+       │                          ^^^^^
+       = a test is a specification of `test`'s interface
+       help: mark it `pub`, or explore it in the console: `ren console test`
+    |}];
+  check_error (account ^ {|
+test fn peek(a: Account) -> Int = a.log.len()
+|});
+  [%expect
+    {|
+    error: this program has no `main` function
+      ┌─ test.ren:1:1
+    1 │ pub type AccountId = opaque Int
+      │ ^
+      help: add `fn main() = ...`, which is where the program starts
+
+    error: `Account` is opaque, and a test sees what an importer sees
+       ┌─ test.ren:20:37
+    20 │ test fn peek(a: Account) -> Int = a.log.len()
+       │                                     ^^^
+       = a test is a specification of `test`'s interface
+       help: explore it in the console: `ren console test`
     |}]

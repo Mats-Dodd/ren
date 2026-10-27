@@ -69,22 +69,35 @@ let find_ctor env (c : ctor_ref) ~expected =
       match ctor_in c.name td with
       | Some k -> Some (td, k)
       | None ->
-          report env (not_in_type ~names:env.names tloc c.name td);
+          report env
+            (not_in_type ~names:env.names ~test:(tested env td) tloc c.name td);
           None)
   | Some { tref = Param _; _ } ->
       (* resolve.ml only puts a declared type before a constructor *)
       assert false
   | None -> (
       let c = c.name in
+      let private_ctor =
+        env.client
+        && (not (List.exists (fun td -> ctor_in c td <> None) env.visible))
+        && List.exists (fun td -> ctor_in c td <> None) env.hidden
+      in
       match known_decl env expected with
+      | _ when private_ctor ->
+          (* a constructor of a private type of the module's own, which
+             test code doesn't see *)
+          report env (private_in_test c.loc ~home:env.home c.name);
+          None
       | Some ({ body = Opaque (Hidden _); _ } as td) ->
           (* another module's opaque type has no constructors here *)
-          report env (opaque_private c.loc td);
+          report env (opaque_private ~test:(tested env td) c.loc td);
           None
       | Some ({ body = Sum _; _ } as td) when ctor_in c td = None ->
           (* a sum type is expected, so no other type's constructor would
              do *)
-          report env (not_in_type ~names:env.names ~expected:true c.loc c td);
+          report env
+            (not_in_type ~names:env.names ~expected:true ~test:(tested env td)
+               c.loc c td);
           None
       | decl -> (
           let known =
@@ -178,7 +191,7 @@ let rec op_of env t name =
       | None -> None
       | Some td -> (
           match (op_in name td, Hashtbl.find_opt env.st.reps p) with
-          | Some o, _ when o.opub || p.home = env.home -> Some (td, o)
+          | Some o, _ when o.opub || own env p -> Some (td, o)
           | Some _, _ -> None
           | None, Some rep ->
               op_of env
@@ -250,10 +263,37 @@ let sorted names = List.sort String.compare names
 (* `r.f`, once [r]'s type [tr] is known: the field is found through it,
    so it has to be known by now, or be the one record type that has a
    field named [f]. A member of [r]'s type isn't a field: a method has to
-   be called, and anything else is written after the type. *)
-let rec field_access env cx (e : expr) r tr (f : ident) =
+   be called, and anything else is written after the type. With
+   [assigned], it's what an assignment writes, `r.f = v`. *)
+let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
   let field_of = field_in f.name in
-  match op_of env tr f.name with
+  (* an opaque type whose representation is hidden here *)
+  let hidden_decl =
+    match reveal env.st tr with
+    | TCon (p, _) -> (
+        match Hashtbl.find_opt env.types p with
+        | Some ({ body = Opaque (Hidden _); _ } as td) -> Some td
+        | _ -> None)
+    | _ -> None
+  in
+  (* in its own module, an opaque record's field can share a method's name
+     (resolve.ml): `a.balance` is the field there *)
+  let own_field =
+    match reveal env.st tr with
+    | TCon (p, _) when own env p -> (
+        match Hashtbl.find_opt env.types p with
+        | Some ({ opaque = true; body = Record _; _ } as td) ->
+            field_of td <> None
+        | _ -> false)
+    | _ -> false
+  in
+  match if own_field then None else op_of env tr f.name with
+  | Some _ when assigned && hidden_decl <> None ->
+      (* writing it can't be calling a method of the same name: what's
+         wrong is that its fields are hidden *)
+      let td = Option.get hidden_decl in
+      report env (opaque_private ~test:(tested env td) f.loc td);
+      TError
   | Some (td, o) ->
       let item = type_name env td.path ^ "." ^ o.oname in
       report env
@@ -291,7 +331,7 @@ let rec field_access env cx (e : expr) r tr (f : ident) =
               report env (no_such_field ~names:env.names f p decl);
               TError
           | None, None when hidden ->
-              report env (opaque_private f.loc td);
+              report env (opaque_private ~test:(tested env td) f.loc td);
               TError
           | None, None -> (
               match td.body with

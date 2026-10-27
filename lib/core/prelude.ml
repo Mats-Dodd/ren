@@ -724,6 +724,15 @@ let scheme (x : Intrinsic.t) =
       fn [ read int; read int ] int
   (* fn(self: Int) -> Int *)
   | Int_wrapping_neg -> fn [ read int ] int
+  (* fn(self: Int, b: Int) -> Int: the operators, as methods, `n.add(2)`
+     is `n + 2` (operators.md, "Operators are methods"); and `-n` *)
+  | Int_add | Int_sub | Int_mul | Int_div | Int_rem ->
+      fn [ read int; read int ] int
+  | Int_neg -> fn [ read int ] int
+  (* the same, for a `Float` *)
+  | Float_add | Float_sub | Float_mul | Float_div | Float_rem ->
+      fn [ read float; read float ] float
+  | Float_neg -> fn [ read float ] float
   (* fn(n: Int) -> Float: numbers never convert by themselves *)
   | Float_of -> fn [ read int ] float
   (* fn(self: Float) -> Int: the nearest, half away from zero; and
@@ -756,8 +765,9 @@ let caller (x : Intrinsic.t) =
   | Show | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
   | Bytes_len | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
-  | Int_wrapping_neg | Float_of | Float_round | Float_truncate | Float_sqrt
-  | Str_lower ->
+  | Int_wrapping_neg | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
+  | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
+  | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower ->
       Any
 
 let runtime x = caller x = World
@@ -806,10 +816,30 @@ let types =
     t "Int"
       ~methods:
         [
-          Int_wrapping_add; Int_wrapping_sub; Int_wrapping_mul; Int_wrapping_neg;
+          Int_add;
+          Int_sub;
+          Int_mul;
+          Int_div;
+          Int_rem;
+          Int_neg;
+          Int_wrapping_add;
+          Int_wrapping_sub;
+          Int_wrapping_mul;
+          Int_wrapping_neg;
         ];
     t "Float"
-      ~methods:[ Float_round; Float_truncate; Float_sqrt ]
+      ~methods:
+        [
+          Float_add;
+          Float_sub;
+          Float_mul;
+          Float_div;
+          Float_rem;
+          Float_neg;
+          Float_round;
+          Float_truncate;
+          Float_sqrt;
+        ]
       ~functions:[ Float_of ];
     t "Bool";
     t "Unit";
@@ -899,6 +929,7 @@ let intrinsics : Iface.t =
                    (List.map (fun x -> (Iface.Method, x)) t.methods
                    @ List.map (fun x -> (Iface.Function, x)) t.functions));
             numeric = None;
+            opaque = false;
             loc = None;
           })
         types;
@@ -906,6 +937,7 @@ let intrinsics : Iface.t =
       List.map
         (fun x -> { Iface.vname = Intrinsic.name x; scheme = scheme x })
         fns;
+    tests = [];
   }
 
 let public =

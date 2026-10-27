@@ -600,6 +600,18 @@ let parse_type_body ~prelude p =
   | LBRACE ->
       advance p;
       Fields (sep_list p ~close:RBRACE parse_field_decl)
+  | OPAQUE when peek2 p = LBRACE ->
+      (* a record only its module sees as one *)
+      advance p;
+      advance p;
+      let fields = sep_list p ~close:RBRACE parse_field_decl in
+      if peek p = WITH then
+        Diag.error (loc p)
+          ~help:
+            "`with numeric` makes a number of an `Int` or a `Float`: `opaque \
+             Int with numeric`"
+          "a record can't be `with numeric`";
+      Opaque_fields fields
   | OPAQUE ->
       advance p;
       let rep = parse_ty p in
@@ -1481,6 +1493,7 @@ let parse_fn p ~pub =
     body;
     owner = None;
     overload = 0;
+    test = false;
     loc = Loc.span start (last_loc p);
   }
 
@@ -1503,6 +1516,10 @@ let parse_op ?(dep = false) p ~tname =
   if pub then advance p;
   match peek p with
   | FN -> Some { op_kind = Op_fn; op_fn = parse_fn p ~pub }
+  | TEST ->
+      Diag.error (loc p)
+        ~help:"declare it at the top level: `test fn name(...)`"
+        "a member can't be a test item"
   | LET ->
       let start = loc p in
       advance p;
@@ -1530,6 +1547,7 @@ let parse_op ?(dep = false) p ~tname =
               body;
               owner = None;
               overload = 0;
+              test = false;
               loc = Loc.span start (last_loc p);
             };
         }
@@ -1875,6 +1893,7 @@ let parse_handler p ~pub =
     body;
     owner = None;
     overload = 0;
+    test = false;
     loc = Loc.span start (last_loc p);
   }
 
@@ -1893,6 +1912,11 @@ let parse_test p =
         let l = loc p in
         advance p;
         (s, l)
+    | PUB ->
+        (* `test pub fn`: a public test item is written `pub test fn` *)
+        Diag.error (loc p)
+          ~help:"write `pub` first: `pub test fn ...`, `pub test handler ...`"
+          "`pub` goes before `test`"
     | tok ->
         Diag.error (loc p)
           ~help:"name it with a string, saying what it checks: `test \"...\" =`"
@@ -2030,6 +2054,16 @@ let parse_item ~prelude p =
   | DEP -> Type (parse_dep p ~pub)
   | HANDLER -> Fn (parse_handler p ~pub)
   | GROUP -> parse_group p ~pub
+  | TEST when peek2 p = FN || peek2 p = HANDLER ->
+      (* a test item, `test fn` or `test handler`, which only tests see
+         (testing.md, "Test items") *)
+      advance p;
+      let f = if peek p = FN then parse_fn p ~pub else parse_handler p ~pub in
+      Fn { f with test = true }
+  | TEST when peek2 p = TYPE || peek2 p = DEP || peek2 p = LET ->
+      Diag.error (loc p)
+        ~help:"make it an ordinary item; a test sees it if it's `pub`"
+        "only a function or a handler can be a test item"
   | TEST when pub ->
       Diag.error (loc p)
         ~help:
@@ -2099,3 +2133,20 @@ let parse_program ?(prelude = false) sink toks =
           loop acc
   in
   loop []
+
+(* One line typed into `ren console` (console.ml): a `let`, a `var` or an
+   expression, written as a line of a function's body is, which the
+   console adds to the function its session is (driver.ml). Its nodes are
+   numbered on from [node], the last one the session's earlier lines used,
+   so the whole session numbers them once; the last one this line used is
+   returned with it. *)
+let parse_session_line sink toks ~node =
+  let p = { toks; i = 0; node; sink } in
+  let s = parse_stmt p in
+  if peek p = NEWLINE then advance p;
+  if peek p <> EOF then fail_expected p "the end of the line";
+  (s, p.node)
+
+(* A unit, `()`, at [loc], numbered after [node]: the value of a session
+   whose last line is a `let`. *)
+let session_unit loc ~node : Parsed.expr = { kind = Unit; loc; node = node + 1 }

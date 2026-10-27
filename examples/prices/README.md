@@ -43,3 +43,12 @@ and a new window are tested without waiting, and `main`'s own
   operation under another name.
 - **Handlers aren't imported by name,** only types are, so they're
   written `limiter.fixed_window` and `cache.cached`.
+
+What stage 9c changed, where a test sees what an importer sees:
+
+- **`counting` is a test item,** `test handler counting()`, which only
+  tests see.
+- **`Calls` stays `pub`.** Only the tests use it, but only a function or
+  a handler can be a test item, so it's part of `cache`'s interface: the
+  one place the interface carries scaffolding.
+- **`main` is `pub`,** since its test calls it.

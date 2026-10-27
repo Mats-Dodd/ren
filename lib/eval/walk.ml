@@ -49,7 +49,13 @@ let rec subst args (t : Ty.ty) : Ty.ty =
 (* What a value of a type is made of. *)
 type view =
   | Leaf  (** an `Int`, a `Float`, a `Bool`, a `Str`, `Bytes` or `Unit` *)
-  | Record of string * (string * Ty.ty * Value.t) list
+  | Record of {
+      name : string;
+      opaque : bool;
+          (** whether it's declared [opaque \{ ... \}], which is shown as
+              [Name(f: v)], since no other module can write it as a record *)
+      fields : (string * Ty.ty * Value.t) list;
+    }
       (** a record: its type's name, and its fields in the order they're
           declared, each with its type *)
   | Ctor of { name : string; index : int; fields : (Ty.ty * Value.t) list }
@@ -102,11 +108,18 @@ let view (types : types) (t : Ty.ty) (v : Value.t) =
       match (body, v) with
       | Some (Record fs), VRecord vs ->
           Record
-            ( p.name,
-              List.map
-                (fun (f : Iface.field) ->
-                  (f.fname, field f, List.assoc f.fname vs))
-                fs )
+            {
+              name = p.name;
+              opaque =
+                (match Hashtbl.find_opt types p with
+                | Some d -> d.opaque
+                | None -> false);
+              fields =
+                List.map
+                  (fun (f : Iface.field) ->
+                    (f.fname, field f, List.assoc f.fname vs))
+                  fs;
+            }
       | Some (Sum cs), VCon c ->
           let rec find i = function
             | [] -> Shape
@@ -202,7 +215,8 @@ let rec hash cx (t : Ty.ty) v =
       | Leaf, VBytes s -> mix 4L (hash_string s)
       | Leaf, VBool b -> mix 5L (if b then 1L else 0L)
       | Leaf, _ -> 6L
-      | Record (_, fs), _ -> all 7L (List.map (fun (_, t, x) -> (t, x)) fs)
+      | Record { fields = fs; _ }, _ ->
+          all 7L (List.map (fun (_, t, x) -> (t, x)) fs)
       | Ctor c, _ -> all (mix 8L (Int64.of_int c.index)) c.fields
       | Opaque (_, rep), _ -> hash cx rep v
       | Elems (t, xs), _ ->
@@ -265,7 +279,7 @@ let rec equal cx (t : Ty.ty) a b =
   | _ -> (
       match (view cx.types t a, view cx.types t b) with
       | Leaf, _ -> a = b
-      | Record (_, xs), Record (_, ys) ->
+      | Record { fields = xs; _ }, Record { fields = ys; _ } ->
           List.for_all2 (fun (_, t, x) (_, _, y) -> equal cx t x y) xs ys
       | Ctor x, Ctor y ->
           x.name = y.name

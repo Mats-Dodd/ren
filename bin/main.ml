@@ -12,6 +12,7 @@ let usage =
        ren core --lambdas <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
+       ren console <module> [--real <dependency>,...]
        ren --help | --version
 
 The file is the program's entry module. A module it imports is found from
@@ -31,6 +32,16 @@ commands:
             --list         list the tests, without running them, saying
                            which use a real dependency
           REN_NO_TIMINGS set leaves out how long they took
+  console a line at a time inside <module>, its file's path without
+          `.ren`, whose folder is the program's (`ren console
+          bank/account`): each line is a `let`, a `var` or an expression, whose
+          value is printed with its type, on the test implementations of
+          the built-in dependencies:
+            --real <dependency>,...  the real one of each of these instead;
+                                     each real call is made once, and what
+                                     it gave is kept for its line
+            :t <expression>          its type, without running it
+            :q                       quit, as the end of the input does
   check   check the program and its tests without running them
   types   print every function's inferred signature, module by module,
           and each type's members under it
@@ -199,6 +210,63 @@ let test args =
          with e -> fail ~known:roots e)
   | exception e -> fail ~known:roots e
 
+(* `ren console <module> [--real Clock,Fs]` (testing.md, "The console"). *)
+let console args =
+  let home, real =
+    match args with
+    | [ home ] -> (home, [])
+    | [ home; "--real"; names ] -> (home, String.split_on_char ',' names)
+    | _ ->
+        prerr_endline usage;
+        exit 2
+  in
+  (match Console.unknown_real real with
+  | Some msg ->
+      prerr_endline msg;
+      exit 2
+  | None -> ());
+  let path =
+    if Filename.check_suffix home ".ren" then Filename.chop_suffix home ".ren"
+    else home
+  in
+  (* the module's folder is the program's, as `ren check dir/main.ren`'s is *)
+  let dir = Filename.dirname path and home = Filename.basename path in
+  let file = Driver.file_in ~dir home in
+  let src =
+    try In_channel.with_open_bin file In_channel.input_all
+    with Sys_error _ ->
+      prerr_endline
+        (Printf.sprintf
+           "error: there's no module `%s` here: it would be the file `%s`" home
+           file);
+      exit 1
+  in
+  let load m =
+    try
+      Some
+        (In_channel.with_open_bin (Driver.file_in ~dir m) In_channel.input_all)
+    with Sys_error _ -> None
+  in
+  let s : Console.session =
+    {
+      load;
+      dir;
+      home;
+      file;
+      src;
+      real;
+      journal = Builtins.new_journal ();
+      sources = sources ~known:[ (file, src) ];
+    }
+  in
+  (* the module is checked once first, so a mistake in it is said once *)
+  (try
+     ignore
+       (Driver.console ~types_only:true ~journal:s.journal ~load ~dir ~home
+          ~file ~src ~real ~history:[] "()")
+   with e -> fail ~known:[ (file, src) ] e);
+  Console.run ~echo:(not (Unix.isatty Unix.stdin)) s stdin
+
 let () =
   (* `ren core --types <file.ren>`: the flag is taken out, and the rest
      read as any command's is; and so is `--lambdas` *)
@@ -211,15 +279,17 @@ let () =
     | argv -> (false, false, argv)
   in
   match argv with
-  | [| _; ("--help" | "-h" | "help") |] ->
+  | [| _; "--help" | "-h" | "help" |] ->
       (* asked for, so it's the output, not an error *)
       print_endline usage
   | [| _; "--version" |] -> print_endline version
   | args when Array.length args >= 2 && args.(1) = "test" ->
       test (List.tl (List.tl (Array.to_list args)))
+  | args when Array.length args >= 2 && args.(1) = "console" ->
+      console (List.tl (List.tl (Array.to_list args)))
   | args
-    when Array.length args >= 3
-         && (Array.length args = 3 || args.(3) = "--") -> (
+    when Array.length args >= 3 && (Array.length args = 3 || args.(3) = "--")
+    -> (
       let cmd = args.(1) and path = args.(2) in
       (* what follows `--`, for `ren run` *)
       let os_args =

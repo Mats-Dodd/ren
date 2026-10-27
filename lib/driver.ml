@@ -52,20 +52,25 @@ let parse ~file src = parse ~file src
    whose types it can meet without naming them. [entry] is set for the
    module the program starts in, which needs a `main`. Before any of it,
    its tests are made functions (test_items.ml); [groups] are the public
-   groups of each module it imports, by its alias here. *)
-let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
+   groups of each module it imports, by its alias here. [console] is a
+   `ren console` session's function in it, and what it gets the real
+   implementation of (see [console]). With [sees_all], test code sees the
+   whole module, as the console checks a program (Resolve.program). *)
+let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
+    ?(groups = []) prog =
   let items =
     checked "tests" (fun sink -> Test_items.program sink ~imported:groups prog)
   in
   let r =
     checked "resolve" (fun sink ->
-        Resolve.program sink ~home ~imports ~groups:items.pub_tests items.prog)
+        Resolve.program sink ~home ~imports ~groups:items.pub_tests ?sees_all
+          items.prog)
   in
   checked "mut" (fun sink -> Mut.program sink r);
   let inferred =
     checked "infer" (fun sink ->
-        Infer.program sink ~imports ~reachable ?entry ~tests:items.tests
-          ~bodies:items.bodies r)
+        Infer.program sink ~imports ~reachable ?entry ?console ?sees_all
+          ~tests:items.tests ~bodies:items.bodies r)
   in
   (* only now is it known whether every import is used: a type imported
      by name can be used just by writing one of its constructors bare *)
@@ -130,7 +135,7 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
     (fun (v : Iface.value) ->
       check v.vname v.scheme
         (Path.Map.find (Path.make home v.vname) inferred.schemes))
-    iface.values;
+    (iface.values @ iface.tests);
   (* and so was each public member's, which is in its type's entry *)
   List.iter
     (fun (td : Iface.type_decl) ->
@@ -146,8 +151,8 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
         td.members)
     iface.types;
   (* Another module runs a public group's tests by calling them, so they're
-     in the interface too, with the types inference found: they have no
-     signature to declare one. *)
+     in the interface too, among its test code, with the types inference
+     found: they have no signature to declare one. *)
   let group_tests =
     List.concat_map
       (fun (g : Test_items.group) ->
@@ -165,7 +170,7 @@ let check_module ~home ~imports ~reachable ?entry ?(groups = []) prog =
         else [])
       items.groups
   in
-  (r, { iface with values = iface.values @ group_tests }, inferred, items)
+  (r, { iface with tests = iface.tests @ group_tests }, inferred, items)
 
 (* A checked module, lowered to Core. *)
 let lower r inferred = pass "lower" (fun () -> Lower.program r inferred)
@@ -377,8 +382,12 @@ type checked = {
    its modules in dependency order, each against the interfaces of what it
    imports, never their source. Returns them in that order. [entry] says
    whether a module is the one the program starts in, which needs a
-   `main`. *)
-let check_roots ~load ~dir ~entry roots =
+   `main`. [console] is a `ren console` session: the module it's in, its
+   function, added to that module, and the built-ins it gets the real
+   implementation of, or [None] if it's only checked (see [console]). In a session, test code sees every
+   module whole, so a test that reaches past an interface, which the
+   console is the place to explore, doesn't keep it shut. *)
+let check_roots ?console ~load ~dir ~entry roots =
   let _, prelude_iface, _ = Lazy.force prelude in
   let sources = pass "load" (fun () -> load_all ~load ~dir roots) in
   List.rev
@@ -424,10 +433,19 @@ let check_roots ~load ~dir ~entry roots =
                    (checked_ i.path).items.groups ))
              (imports_of m.parsed)
          in
+         let parsed, session =
+           match console with
+           | Some (home, (f : Ast.Parsed.fn_def), real) when home = m.home ->
+               (* a session that isn't run, `:t`, needn't have what it
+                  uses installed *)
+               ( m.parsed @ [ Ast.Fn f ],
+                 Option.map (fun real -> (f.name.name, real)) real )
+           | _ -> (m.parsed, None)
+         in
          let resolved, iface, inferred, items =
            check_module ~home:m.home ~imports ~reachable ~groups
              ?entry:(if entry m then Some m.file else None)
-             m.parsed
+             ?console:session ~sees_all:(console <> None) parsed
          in
          (* [lazy] delays lowering until something needs it, as for
             [prelude]: checking a program, `ren types`, doesn't *)
@@ -435,7 +453,7 @@ let check_roots ~load ~dir ~entry roots =
          {
            home = m.home;
            file = m.file;
-           prog = m.parsed;
+           prog = parsed;
            resolved;
            iface;
            inferred;
@@ -466,9 +484,9 @@ let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
 let implementation ?load ~file src =
   Lazy.force (entry_of (check_all ?load ~file src)).impl
 
-(* The whole program in Core, the prelude first. The functions its tests
-   were made are left out, unless it's [for_tests]: nothing else calls
-   them. *)
+(* The whole program in Core, the prelude first. Test code, its test
+   items and the functions its tests were made, is left out, unless it's
+   [for_tests]: nothing else calls it (Core Lint checks that). *)
 let link ?lint ?(for_tests = false) (modules : checked list) =
   let prelude, _, _ = Lazy.force prelude in
   let lowered c =
@@ -477,11 +495,7 @@ let link ?lint ?(for_tests = false) (modules : checked list) =
     else
       {
         core with
-        fns =
-          List.filter
-            (fun (f : Core.fn_def) ->
-              not (List.mem (Path.local f.path) c.items.made))
-            core.fns;
+        fns = List.filter (fun (f : Core.fn_def) -> not f.test) core.fns;
       }
   in
   link_lowered ?lint
@@ -584,27 +598,40 @@ let types ?(lint = false) ?load ~file src =
                 ^ Ty.value_signature ~names ~pub:f.pub ~name { s with ty = t }
             | _ -> assert false)
       in
+      (* a test item is shown with `test` in front of its `fn` or
+         `handler`, after any `pub` *)
+      let tested (f : Ast.Resolved.fn_def) line =
+        if not f.test then line
+        else
+          let pub, rest =
+            if String.starts_with ~prefix:"pub " line then
+              ("pub ", String.sub line 4 (String.length line - 4))
+            else ("", line)
+          in
+          pub ^ "test " ^ rest
+      in
       ( home,
         List.concat_map
           (function
             | Ast.Fn ({ body = { kind = Handler { deps; _ }; _ }; _ } as f) ->
-                [
-                  Ty.handler_signature ~names ~pub:f.pub ~name:f.name.name
-                    ~params:
-                      (List.map
-                         (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
-                         f.params)
-                    ~deps:
-                      (List.filter_map
-                         (fun (d : Ast.tname) ->
-                           match d.tref with
-                           | Named p -> Some p
-                           | Param _ -> None)
-                         deps)
-                    (Path.Map.find (Ast.fn_path home f) inferred.schemes);
-                ]
+                List.map (tested f)
+                  [
+                    Ty.handler_signature ~names ~pub:f.pub ~name:f.name.name
+                      ~params:
+                        (List.map
+                           (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
+                           f.params)
+                      ~deps:
+                        (List.filter_map
+                           (fun (d : Ast.tname) ->
+                             match d.tref with
+                             | Named p -> Some p
+                             | Param _ -> None)
+                           deps)
+                      (Path.Map.find (Ast.fn_path home f) inferred.schemes);
+                  ]
             | Ast.Fn f when List.mem f.name.name items.made -> []
-            | Ast.Fn f -> [ fn_ ~name:f.name.name f ]
+            | Ast.Fn f -> [ tested f (fn_ ~name:f.name.name f) ]
             | Type ({ type_body = Dep _; _ } as td) ->
                 (* a dependency: its operations, each with its type, then
                    its members *)
@@ -691,6 +718,186 @@ let run ?lint ?load ?(args = []) ~file src =
   try pass "eval" (fun () -> Eval.run modules)
   with Eval.Assert_failed { loc; sides } ->
     raise (Diag.Error (assert_failed loc sides))
+
+(* ---- the console ----
+
+   `ren console <module>` (testing.md, "The console") reads a line at a
+   time, and each is a `let`, a `var` or an expression, as a line of a
+   function's body is. The session is a function, `$console`, of no
+   parameters, added to the module: so it's inside the module, its private
+   items and its opaque types' representations in reach, and its body is
+   every line the session kept, then the new one. Each line checks the
+   whole program again, with the session one line longer, and runs the
+   session again from its first line, as a test is run: on the test
+   implementations of the built-ins but those [real] names, `Random` from
+   one seed. So the run is the same each time, and only what the new line
+   gave, and what it printed, is new (console.ml). A line that doesn't
+   check, or fails, or panics, isn't kept. compiler.md says what that
+   costs. *)
+
+(* The file a line is in, for a message: each line is its own, line 1. *)
+let console_file = "<console>"
+
+(* The session's function, which no name written in a program can be. *)
+let console_fn = "$console"
+
+(* What a line gave: its value as it's written, unless it's a `let` or
+   a `var`, or its value is `()`; its type; and every line the session
+   wrote to the test `Console`, from its first line. *)
+type console_line = {
+  shown : string option;
+  ty : string;
+  printed : string list;
+}
+
+(* A line that failed or panicked, with every line the session wrote to
+   the test `Console` before it did, from its first line, and what it
+   raised: what the line printed is shown before the error, as it is
+   with the real `Console`. *)
+exception Console_failed of string list * exn
+
+(* Check the session [history], the lines kept so far, then [line], in
+   the module [home] (its file [file], with the source [src]) of the
+   program in the folder [dir], and, unless it's [types_only], run it.
+   [line] starts [col] columns into what was typed, after `:t `, which a
+   message counts in. Raises what checking it raised, and what running it
+   raised as [Console_failed]. *)
+let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
+    ~src ~real ~history line =
+  let shift n (l : Loc.t) =
+    {
+      l with
+      start = { l.start with col = l.start.col + n };
+      stop = { l.stop with col = l.stop.col + n };
+    }
+  in
+  let stmts, node =
+    List.fold_left
+      (fun (stmts, node) (text, n) ->
+        let toks =
+          try tokens ~file:console_file text
+          with Diag.Errors ds ->
+            raise
+              (Diag.Errors
+                 (List.map
+                    (fun (d : Diag.t) -> { d with loc = shift n d.loc })
+                    ds))
+        in
+        let toks = Array.map (fun (t, l) -> (t, shift n l)) toks in
+        let s, node =
+          checked "parse" (fun sink ->
+              Parser.parse_session_line sink toks ~node)
+        in
+        (stmts @ [ s ], node))
+      ([], 0)
+      (List.map (fun l -> (l, 0)) history @ [ (line, col) ])
+  in
+  (* every line but the last is kept for what it names or does: the value
+     of one that's an expression is dropped *)
+  let kept : Ast.Parsed.stmt -> Ast.Parsed.stmt = function
+    | Expr e ->
+        Let
+          {
+            name = { name = "_"; loc = e.loc };
+            ty = None;
+            value = e;
+            mut = false;
+          }
+    | s -> s
+  in
+  let rev = List.rev stmts in
+  let before = List.rev_map kept (List.tl rev) in
+  (* where the new line's value is, for a message *)
+  let at =
+    match List.hd rev with
+    | Let { value; _ } | Let_tuple { value; _ } | Expr value -> value.loc
+  in
+  let loc = Loc.point ~file:console_file 1 1 in
+  let before, value, is_expr =
+    match List.hd rev with
+    | Expr e -> (before, e, true)
+    | s -> (before @ [ s ], Parser.session_unit loc ~node, false)
+  in
+  let body : Ast.Parsed.expr =
+    if before = [] then value
+    else { kind = Block (before, value); loc = value.loc; node = node + 2 }
+  in
+  let fn : Ast.Parsed.fn_def =
+    {
+      pub = false;
+      name = { name = console_fn; loc };
+      tparams = [];
+      params = [];
+      ret = None;
+      errors = None;
+      uses = None;
+      body;
+      owner = None;
+      overload = 0;
+      (* test code, so it can use the module's test items, as a test can;
+         and like all test code in a session, it sees everything *)
+      test = true;
+      loc;
+    }
+  in
+  let modules =
+    check_roots
+      ~console:(home, fn, if types_only then None else Some real)
+      ~load ~dir
+      ~entry:(fun _ -> false)
+      [ (home, file, src) ]
+  in
+  let m = List.find (fun (c : checked) -> c.home = home) modules in
+  let path = Path.make home console_fn in
+  let scheme = Path.Map.find path m.inferred.schemes in
+  let ty =
+    (Infer.Nodes.find value.node (Path.Map.find path m.inferred.nodes)).ty
+  in
+  let shown_ty =
+    Ty.show
+      (Ty.printer ~names:(Resolve.type_name m.resolved) { scheme with ty })
+      ty
+  in
+  let unit = ty = Ty.unit in
+  if types_only then { shown = None; ty = shown_ty; printed = [] }
+  else
+    let cx = pass "eval" (fun () -> Eval.load (link ~for_tests:true modules)) in
+    match
+      pass "eval" (fun () ->
+          Builtins.replaying journal (fun () ->
+              Eval.run_installed cx ~fn:path ~real ~seed:0))
+    with
+    | Ok v, printed ->
+        Builtins.keep journal;
+        {
+          shown =
+            (if is_expr && not unit then Some (Eval.show cx ty v) else None);
+          ty = shown_ty;
+          printed;
+        }
+    | Error (Failed err), printed ->
+        (* a `try` passed it up, and the session can't: the line, with
+           `attempt` in place of its `try`, shows it as a value *)
+        let help =
+          if not is_expr then None
+          else
+            let shown =
+              if String.starts_with ~prefix:"try " line then
+                String.sub line 4 (String.length line - 4)
+              else line
+            in
+            Some (Printf.sprintf "see it as a value: `attempt %s`" shown)
+        in
+        raise
+          (Console_failed
+             ( printed,
+               Diag.Error
+                 (Diag.make ?help at
+                    (Printf.sprintf "the line failed with `%s`" err)) ))
+    | Error (Panicked (Eval.Assert_failed { loc; sides })), printed ->
+        raise (Console_failed (printed, Diag.Error (assert_failed loc sides)))
+    | Error (Panicked e), printed -> raise (Console_failed (printed, e))
+    | Error Passed, _ -> assert false
 
 let dump_tokens toks =
   toks |> Array.to_list

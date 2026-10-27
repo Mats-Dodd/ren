@@ -45,3 +45,17 @@ type outcome =
    the test `Console`. *)
 val run_test :
   ctx -> fn:Path.t -> real:string list -> seed:int -> outcome * string list
+
+(* Run the function [fn], of no parameters, as [run_test] runs a test: what
+   it gave, or, if it didn't, how it ended; and what it wrote to the test
+   `Console`. `ren console` runs its session this way (driver.ml). *)
+val run_installed :
+  ctx ->
+  fn:Path.t ->
+  real:string list ->
+  seed:int ->
+  (Value.t, outcome) result * string list
+
+(* A value of the type [t], as it's written, through its type: what `ren
+   console` shows of what a line gave. *)
+val show : ctx -> Ty.ty -> Value.t -> string

@@ -32,12 +32,14 @@ pub handler cached(ttl: Duration) for Prices uses Supplier, Limiter, Clock =
 
 // ---- tests ----
 
+// `pub`, though only the tests use it: a test item is a function or a
+// handler, so a dependency they share is part of the interface
 pub dep Calls =
   // how many times the supplier has been asked
   count: fn() -> Int
 
 // a supplier that knows two prices, and counts how often it's asked
-handler counting() for Supplier, Calls =
+test handler counting() for Supplier, Calls =
   var n = 0
   quote(item) =>
     n += 1

@@ -63,6 +63,10 @@ type type_decl = {
       (** for an opaque type `with numeric`, what it's represented as, `Int` or
           `Float`, which even its interface says: another module adds two and
           scales one by that (operators.md, "Number types") *)
+  opaque : bool;
+      (** whether it's declared `opaque`: [opaque Int], whose own module's view
+          has its representation, [Opaque (Rep _)], or [opaque { ... }], a
+          [Record] there. Its interface hides either, as [Opaque (Hidden _)] *)
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
@@ -73,11 +77,19 @@ type t = {
   home : string;  (** the module this is the interface of *)
   types : type_decl list;  (** in the order they're declared *)
   values : value list;
+  tests : value list;
+      (** its test code that another module's tests can call: its public test
+          items, `pub test fn`, and its public groups' tests (driver.ml). Only
+          test code sees them, so `ren run` never needs them *)
 }
 
 (* The type, or function, of that name in the interface, if it has one. *)
 val find_type : t -> string -> type_decl option
 val find_value : t -> string -> value option
+
+(* The public test item of that name, or a public group's test, if the
+   interface has one. *)
+val find_test : t -> string -> value option
 
 (* The member of that name of a type, if it has one: the first, if it's
    an operator written for several types on its right. *)

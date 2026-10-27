@@ -3,7 +3,9 @@
 
 pub type Recipe = { name: Str, deps: Array<Str>, lines: Array<Str> }
 
-pub type Justfile = { recipes: Array<Recipe> }
+// It's opaque: `parse` checks what it's given, so a `Justfile` is only
+// ever one that `parse` made.
+pub type Justfile = opaque { recipes: Array<Recipe> }
   // The recipes in `text`. A line that isn't indented starts a recipe,
   // `name: deps`, and an indented one is a line of the recipe above it.
   // Blank lines and comments, after `#`, are skipped, and two recipes
@@ -34,20 +36,23 @@ pub type Justfile = { recipes: Array<Recipe> }
         &recipes.push(Recipe { name: name, deps: deps, lines: [] })
     Justfile { recipes: recipes }
 
+  // every recipe, in the order they're written
+  pub fn recipes(self) -> Array<Recipe> = self.recipes
+
   // the recipe called `name`
   pub fn recipe(self, name: Str) -> Recipe ! UnknownRecipe(name: Str) =
     self.recipes.find(fn(r) => r.name == name) orelse fail UnknownRecipe(name)
 
 test "a recipe has a name, dependencies and lines" =
   let j = try Justfile.parse("# build it\nbuild: fmt  gen\n  cc -c a.c\n\n\tcc -o a a.o\nfmt:\n")
-  assert j.recipes == [
+  assert j.recipes() == [
     Recipe { name: "build", deps: ["fmt", "gen"], lines: ["cc -c a.c", "cc -o a a.o"] },
     Recipe { name: "fmt", deps: [], lines: [] },
   ]
 
 test "dependencies between tabs, and a comment after them" =
   let j = try Justfile.parse("a:\tb  c\t# not d\n  echo a\nb:\nc:\n")
-  assert j.recipes[0].deps == ["b", "c"]
+  assert j.recipes()[0].deps == ["b", "c"]
 
 test "two recipes with one name" =
   assert attempt Justfile.parse("a:\n  echo x\nb:\na:\n  echo y\n") == Err(DuplicateRecipe("a"))
