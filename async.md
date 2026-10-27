@@ -176,7 +176,7 @@ and Ren has a rule for each way.
   `attempt` and `orelse` can't see it, and it's never in an error row.
   Kotlin's `runCatching` and Python's `except BaseException` catch it by
   accident, so a cancelled task keeps going. In Ren, only `finally` sees
-  it, as `fail Cancelled`. When cancellation was the cause, what `finally`
+  it, as `Err(Cancelled)`. When cancellation was the cause, what `finally`
   returns is thrown away, so cleanup can't turn a cancel into a success.
 - **It never loses a result.** A dependency call that finished is never
   thrown away. A cancel that arrives as a read completes lands at the
@@ -381,7 +381,7 @@ fn transfer(t: Transfer) ! DbDown | Short | Timeout uses Sql, Async =
 ```
 
 - **A timeout during `credit`:** the query is cancelled, and `finally`
-  sees `fail Cancelled` and rolls back, shielded. The result is `fail
+  sees `Err(Cancelled)` and rolls back, shielded. The result is `fail
   Timeout`, and nothing moved.
 - **A timeout during `commit`:** the commit is in `finally`, so it
   finishes. The timeout waits for it and reports the transfer.
@@ -468,7 +468,7 @@ instead is `match attempt next.all()`.
 | `Effect.timeout` | `Async.timeout` |
 | `Effect.forkScoped`, `FiberSet` | `Async.group` |
 | `Effect.makeSemaphore`, `withPermits` | `Async.limit(n) over Dep` |
-| interruption, `onInterrupt`, `ensuring`, `acquireRelease` | `finally`, which sees `fail Cancelled` |
+| interruption, `onInterrupt`, `ensuring`, `acquireRelease` | `finally`, which sees `Err(Cancelled)` |
 | `Layer.scoped` with `forkScoped` | a handler's `task` |
 | `Ref`, `SynchronizedRef` | handler state |
 | `Layer`, `provide` | `with`, `over` |
@@ -525,8 +525,8 @@ limit, and cleanup that can't wait. Ren has none of them.
 - **The README:** `async.par_map` becomes `Async.map`, and
   `async.timeout` becomes `Async.timeout`.
 - **[handlers.md](handlers.md):**
-  - `finally` also runs when the body is cancelled, and sees `fail
-    Cancelled`. It runs shielded, under a cleanup deadline.
+  - `finally` also runs when the body is cancelled, and sees
+    `Err(Cancelled)`. It runs shielded, under a cleanup deadline.
   - A `with`'s errors include those of its handlers' tasks.
 - **[runtime-io.md](runtime-io.md):** "Fibers and `Async` on the ring"
   now means this design.

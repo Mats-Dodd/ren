@@ -144,19 +144,35 @@ and kind =
       op : string;
       fty : Ty.ty;  (** the operation's type, at this call *)
       ev : var;  (** the evidence it finds [dep]'s implementation in *)
+      next : bool;
+          (** a call through `next`: [ev] is then the evidence of the [Handler]
+              it's in, where it was installed, so the innermost [dep] in it is
+              the one the handler is over. A lambda in the handler keeps that
+              evidence, the one way evidence is captured *)
       args : expr list;
     }
       (** [Clock.now()]: a call of an operation of the innermost implementation
           of [dep] in [ev], which runs with the evidence that implementation was
           installed with. Kept apart from other calls, so what was called, with
-          what, can be recorded (the journal, stage 10). Never with `&` *)
-  | With of { ev : var; outer : var; dep : Path.t; impl : expr; body : expr }
+          what, can be recorded (the journal, stage 10b). Never with `&` *)
+  | With of {
+      ev : var;
+      outer : var;
+      dep : Path.t;
+      impl : expr;
+      desc : desc;
+      body : expr;
+    }
       (** [body], with the evidence [ev]: [outer], the evidence here, with
           [impl] installed for [dep] on top. [impl] is a value of [dep]'s type:
           a record, installed as it is, or a handler's description, of which a
           fresh instance is made with [outer], and its implementation of [dep]
-          installed. Either keeps [outer], which its operations run with. The
-          runtime's installs around `main` are these *)
+          installed. Either keeps [outer], which its operations run with. Making
+          the instance can fail, as the implementation's type says (Ty.impl). If
+          the instance has a `finally`, it's given [body]'s outcome, `Ok` of its
+          value or `Err` of its error, and [desc], which describes [body]'s
+          type, and what it gives is the [With]'s. The runtime's installs around
+          `main` are these *)
   | Handler of { ev : var; captures : var list; body : expr }
       (** a handler, described: what calling a `handler` declaration gives. Like
           a lambda of no parameters it keeps [captures], and its [body] runs
@@ -165,10 +181,15 @@ and kind =
           in a cell, and ends in an [Instance]. Its type is its dependency's, if
           it implements one, or else the type that lists them, either needing
           what its operations use *)
-  | Instance of (Path.t * expr) list
+  | Instance of { impls : (Path.t * expr) list; finally : expr option }
       (** a handler's instance: an implementation of each of its dependencies,
           in the order they're written, records of lambdas that share the cells
-          of one state. Of its [Handler]'s type, which lists them sorted *)
+          of one state, and its `finally`, a lambda that shares them too. Of its
+          [Handler]'s type, which lists them sorted. The `finally` takes the
+          descriptor of the body's type of the `with` that installs it, then its
+          outcome, a [Result] of that type, whose variable is the one after its
+          handler's function's own, [Var n] (Handler_facts.body_ty), and gives
+          what the [With] gives *)
   | Narrowed of Path.t list * expr
       (** a description of a handler of several dependencies, narrowed to some
           of them, where a written type asks for those: a [With] or a
@@ -179,6 +200,7 @@ and kind =
       outer : var;
       handler : expr;
       deps : Path.t list;
+      desc : desc;
       body : expr;
     }
       (** [body], with the evidence [ev]: [outer] with a fresh instance of
@@ -186,7 +208,8 @@ and kind =
           Those are what [handler]'s type lists, sorted: the instance may
           implement more, if it was narrowed ([Narrowed]), which aren't
           installed. The instance's implementations all keep [outer], which
-          their operations run with *)
+          their operations run with. Its `finally`, if it has one, runs as a
+          [With]'s does *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)

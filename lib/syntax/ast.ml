@@ -36,12 +36,22 @@ type 't ty =
       (** [fn(Int) -> Bool], and what it can fail with and uses,
           [fn(Int) -> Bool ! Bad uses Clock]; with no [->] the function returns
           [Unit] *)
-  | TyImpl of 't list * 't uses option * Loc.t
+  | TyImpl of {
+      impl_deps : 't list;
+      impl_over : bool;
+      impl_errors : 't errors option;
+      impl_uses : 't uses option;
+      impl_loc : Loc.t;
+    }
       (** a dependency's type, whose values are implementations, and what one
           needs (deps.md, "Implementations"): [Clock uses Os]; or several joined
           with `&`, as written, an implementation of each sharing one state,
           [Clock & TestClock]. The list is never empty. The parser reads [Clock]
-          alone as a [TyName], which Resolve makes a [TyImpl] with no [uses] *)
+          alone as a [TyName], which Resolve makes a [TyImpl] with no [uses].
+          [impl_over] says it goes over another implementation of them,
+          [over Users] (handlers.md, "`over`"), and [impl_errors] what
+          installing one can fail with, [Sql ! DbDown]: what its state and its
+          `finally` fail with (handlers.md, "State that can fail to start") *)
   | TyInout of 't ty * Loc.t
       (** [inout Int], a parameter of a function type: [fn(inout Int)] *)
   | TyErrors of 't errors
@@ -221,27 +231,60 @@ and ('v, 'b, 't) expr_kind =
       (** [try e]: pass on the errors of every call in [e]. [try match] is a
           [Try] of a [Match] *)
   | Attempt of ('v, 'b, 't) expr  (** [attempt e]: its outcome, as a [Result] *)
-  | With of { item : ('v, 'b, 't) expr; body : ('v, 'b, 't) expr; lam : int }
-      (** [with item in body] (deps.md, "`with`"): [item] is an implementation,
-          installed around [body], or a wrapper, a call missing its last
-          argument, which is [body] as a lambda: `with retry(3) in body` is
-          `retry(3, fn() => body)`. [lam] numbers that lambda, as a node of its
-          own. `with a, b in body` is [a] around `with b in body` *)
+  | With of { items : ('v, 'b, 't) with_item list; body : ('v, 'b, 't) expr }
+      (** [with a, b in body] (deps.md, "`with`"): a set of items, each
+          installed once around [body], in an order inference works out
+          (handlers.md, "A `with` is a set"). An item is an implementation, or a
+          wrapper, a call missing its last argument, which is [body] as a
+          lambda: `with retry(3) in body` is `retry(3, fn() => body)` *)
   | Handler of {
-      deps : 't list;  (** the dependencies after `for`, in order *)
+      deps : 't list;
+          (** the dependencies after `for`, or after `over`, in order *)
+      over : bool;
+          (** declared `over` them, in front of another implementation of them,
+              which it reaches with `next` (handlers.md, "`over`") *)
+      fails : 't errors option;
+          (** what installing it is written to fail with, after `!`: what its
+              state and its `finally` can fail with *)
       needs : 't uses option;
           (** what it's written to need, after the `for` list's `uses` *)
       state : ('v, 'b, 't) stmt list;  (** its `var`s and `let`s *)
       arms : ('v, 'b, 't) handler_arm list;
+      finally : ('v, 'b, 't) expr option;
+          (** `finally(r) => ...`, a lambda of one parameter, the body's result,
+              which runs when the `with` that installed it ends and gives what
+              the `with` does (handlers.md, "`finally`") *)
     }
       (** a handler's body (deps.md, "Implementations"), the whole body of the
           function a `handler` declaration is (see [is_handler]): its state,
-          then an arm for each operation of each dependency it implements.
-          Calling the function describes the handler, and each `with` that
-          installs it makes a fresh instance, running [state] then *)
+          then an arm for each operation of each dependency it implements, and
+          its `finally`. Calling the function describes the handler, and each
+          `with` that installs it makes a fresh instance, running [state] then
+      *)
   | Assert of ('v, 'b, 't) expr
       (** [assert e]: a panic if [e] is false, which shows both sides of an
           [a == b] (deps.md, "`assert`") *)
+
+(* An item of a `with`: an implementation or a wrapper, or a chain of
+   them joined by `over`, [chain], the top first, each over the next:
+   `cached(ttl) over counted() over pg_users(pool)`. [under] are the
+   dependencies the bottom goes over when the chain ends in their names,
+   `slow_clock(2) over Clock`: whatever implements them outside the `with`
+   (handlers.md, "Installing one"); otherwise []. *)
+and ('v, 'b, 't) with_item = {
+  chain : ('v, 'b, 't) with_link list;
+  under : 't list;
+  iloc : Loc.t;  (** the whole item *)
+}
+
+(* One implementation or wrapper of an item's chain, [link]. A wrapper's
+   body is a lambda, which [lam] numbers, as a node of its own; [knode]
+   is the node inference records whether it installs or wraps at. *)
+and ('v, 'b, 't) with_link = {
+  link : ('v, 'b, 't) expr;
+  lam : int;
+  knode : int;
+}
 
 (* An arm of a handler, `usd_to(c) => ...`: [arm_op] is the operation, a
    bare name as parsed and a [Dep_op] once resolved, and [arm_impl] the
@@ -406,8 +449,8 @@ type ('v, 'b, 't) testing =
       group_pub : bool;
       group_name : ident;
       group_params : ('b, 't) param list;
-      group_with : ('v, 'b, 't) expr list;
-          (** installed around each test, outermost first *)
+      group_with : ('v, 'b, 't) with_item list;
+          (** installed around each test, as a `with`'s items are *)
       group_tests : ('v, 'b, 't) test_def list;
     }
   | Run_group of {
@@ -484,6 +527,10 @@ let changed_receiver (e : ('v, 'b, 't) expr) =
   | Ref ({ kind = Call _; _ } as call) -> Some call
   | _ -> None
 
+(* The implementations and wrappers of a `with`'s items, in source order. *)
+let with_links items =
+  List.concat_map (fun i -> List.map (fun l -> l.link) i.chain) items
+
 (* The expressions directly inside [e], in source order: a statement's
    value, a guard and an arm's body, a handler's state and arms too. *)
 let children (e : ('v, 'b, 't) expr) =
@@ -516,9 +563,11 @@ let children (e : ('v, 'b, 't) expr) =
       :: List.concat_map
            (fun a -> Option.to_list a.arm_guard @ [ a.arm_body ])
            arms
-  | With { item; body; _ } -> [ item; body ]
-  | Handler { state; arms; _ } ->
-      List.map stmt state @ List.map (fun a -> a.arm_impl) arms
+  | With { items; body } -> with_links items @ [ body ]
+  | Handler { state; arms; finally; _ } ->
+      List.map stmt state
+      @ List.map (fun a -> a.arm_impl) arms
+      @ Option.to_list finally
 
 (* ---- names, once resolved ----
 
@@ -564,6 +613,10 @@ type name =
   | Dep_op of Path.t * string
       (** an operation of the dependency at the path, [Clock.now]: calling it
           calls the implementation installed where it's called *)
+  | Next_op of Path.t * string
+      (** inside a handler declared `over` the dependency at the path, an
+          operation of the implementation it's over, [next.get]: only ever
+          called (handlers.md, "`next`") *)
   | Assoc_value of tref * string
       (** [zero] or [one] of a type that has it without declaring it: of a type
           parameter, [T.zero], whatever the function's given for [T] has
@@ -583,6 +636,8 @@ module Parsed = struct
   type nonrec expr_kind = (vname, ident, tyname) expr_kind
   type nonrec arm = (vname, ident, tyname) arm
   type nonrec handler_arm = (vname, ident, tyname) handler_arm
+  type nonrec with_item = (vname, ident, tyname) with_item
+  type nonrec with_link = (vname, ident, tyname) with_link
   type nonrec stmt = (vname, ident, tyname) stmt
   type nonrec over = (vname, ident, tyname) over
   type nonrec field = tyname field
@@ -609,6 +664,8 @@ module Resolved = struct
   type nonrec expr_kind = (name, binder, tname) expr_kind
   type nonrec arm = (name, binder, tname) arm
   type nonrec handler_arm = (name, binder, tname) handler_arm
+  type nonrec with_item = (name, binder, tname) with_item
+  type nonrec with_link = (name, binder, tname) with_link
   type nonrec stmt = (name, binder, tname) stmt
   type nonrec over = (name, binder, tname) over
   type nonrec field = tname field
@@ -688,9 +745,17 @@ let rec show_ty : ty -> string = function
       "fn("
       ^ String.concat ", " (List.map show_ty params)
       ^ ")" ^ ret ^ errs ^ uses
-  | TyImpl (names, Some u, _) ->
-      "(" ^ show_joined names ^ " " ^ show_uses u ^ ")"
-  | TyImpl (names, None, _) -> show_joined names
+  | TyImpl { impl_deps; impl_over; impl_errors; impl_uses; _ } -> (
+      let names = (if impl_over then "over " else "") ^ show_joined impl_deps in
+      let errs =
+        match impl_errors with Some es -> [ show_errors es ] | None -> []
+      in
+      let uses =
+        match impl_uses with Some u -> [ show_uses u ] | None -> []
+      in
+      match errs @ uses with
+      | [] -> names
+      | rest -> "(" ^ String.concat " " (names :: rest) ^ ")")
   | TyErrors es -> show_errors es
   | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show_ty ts) ^ ")"
 
@@ -799,18 +864,46 @@ let rec show_expr (e : expr) =
   | Try a -> parens [ "try"; show_expr a ]
   | Attempt a -> parens [ "attempt"; show_expr a ]
   | Assert a -> parens [ "assert"; show_expr a ]
-  | With { item; body; _ } -> parens [ "with"; show_expr item; show_expr body ]
-  | Handler { deps; needs; state; arms } ->
+  | With { items; body } ->
+      (* an item of one implementation is itself, and a chain is
+         `(over top ... bottom)`, ending in `(deps Clock)` if it goes over
+         what's installed outside *)
+      parens (("with" :: List.map show_with_item items) @ [ show_expr body ])
+  | Handler { deps; over; fails; needs; state; arms; finally } ->
+      let fails =
+        match fails with Some es -> [ parens [ show_errors es ] ] | None -> []
+      in
       let needs =
         match needs with Some u -> [ parens [ show_uses u ] ] | None -> []
       in
+      let finally =
+        match finally with
+        | Some f -> [ parens [ "finally"; show_expr f ] ]
+        | None -> []
+      in
       parens
-        (("handler" :: parens ("for" :: List.map show_tyname deps) :: needs)
-        @ List.map show_stmt state
+        ("handler"
+         :: parens
+              ((if over then "over" else "for") :: List.map show_tyname deps)
+         :: fails
+        @ needs @ List.map show_stmt state
         @ List.map
             (fun (a : handler_arm) ->
               parens [ a.arm_name.name; show_expr a.arm_impl ])
-            arms)
+            arms
+        @ finally)
+
+(* An item of one implementation is itself, and a chain is `(over top ...
+   bottom)`, ending in `(deps Clock)` if it goes over what's installed
+   outside the `with`. *)
+and show_with_item (i : with_item) =
+  let links = List.map (fun l -> show_expr l.link) i.chain in
+  let under =
+    match i.under with
+    | [] -> []
+    | ds -> [ parens ("deps" :: List.map show_tyname ds) ]
+  in
+  match links @ under with [ one ] -> one | all -> parens ("over" :: all)
 
 and show_arm (a : arm) =
   let guard =
@@ -919,7 +1012,7 @@ let show_item : item -> string = function
       let with_ =
         match g.group_with with
         | [] -> []
-        | items -> [ parens ("with" :: List.map show_expr items) ]
+        | items -> [ parens ("with" :: List.map show_with_item items) ]
       in
       parens
         ((if g.group_pub then [ "pub" ] else [])
@@ -974,6 +1067,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Var (Global p | Global_value p) -> value_name p
     | Var (Intrinsic x) -> Intrinsic.name x
     | Var (Dep_op (p, op)) -> type_name p ^ "." ^ op
+    | Var (Next_op (_, op)) -> "next." ^ op
     | Var (Assoc_value (Named p, v)) -> type_name p ^ "." ^ v
     | Var (Assoc_value (Param _, _)) -> raise Exit
     | Unop (Neg, a, _) -> "-" ^ operand 7 a

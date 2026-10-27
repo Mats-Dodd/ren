@@ -1285,6 +1285,11 @@ fn main() = print(Some(true))
           print_endline
             ("installs a handler of " ^ String.concat ", " (List.map path ps))
       | Some Wraps -> print_endline "wraps"
+      | Some (Install_order o) ->
+          print_endline
+            ("installs in the order "
+            ^ String.concat ", " (List.map string_of_int o))
+      | Some (Handler_facts _) -> print_endline "a handler"
       | Some Handles -> print_endline "handles errors"
       | Some Fail_arm -> print_endline "a `fail` arm"
       | Some Error_tag -> print_endline "an error's tag"
@@ -1856,8 +1861,7 @@ let%expect_test "instantiate gives its fresh variables in variable order" =
         ty =
           Fun
             ( [
-                read (Var 0);
-                read (Fun ([], Var 1, row [] 0, closed, any_lams));
+                read (Var 0); read (Fun ([], Var 1, row [] 0, closed, any_lams));
               ],
               array (Var 2),
               row [ tag "B" [ Var 3 ]; tag "A" [ Var 4 ] ] 1,
@@ -1896,7 +1900,8 @@ let%expect_test "instantiate gives its fresh variables in variable order" =
     0 1 2
     |}]
 
-let%expect_test "a use in the group at another type, and its value thrown away" =
+let%expect_test "a use in the group at another type, and its value thrown away"
+    =
   (* the use is joined with what [f]'s body made it once the group is
      done, and only then is [h]'s statement known to throw an `Int` away *)
   check_error
@@ -1911,7 +1916,8 @@ fn h(n: Int) =
   ()
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `f` is used here as `fn(Int)`, but its definition makes it `fn(Int) -> Int`
       ┌─ test.ren:5:16
     5 │ fn g(n: Int) = f(n)
@@ -1942,7 +1948,8 @@ fn main() =
   in
   run src;
   core ~types:true src;
-  [%expect {|
+  [%expect
+    {|
     a
     c
     ()
@@ -1966,7 +1973,8 @@ fn main() =
         (call ev/2 (inst main {..e} {..r}))))
     |}]
 
-let%expect_test "a function that names its errors' row, used in its group (B1)" =
+let%expect_test "a function that names its errors' row, used in its group (B1)"
+    =
   (* [call] fails with whatever [f] does, `..e`: [g], in its group, passes
      it a closure that fails with `Bad`, and so the call does *)
   let src =
@@ -1980,7 +1988,8 @@ fn main() = print(attempt g(1))
   in
   run src;
   core ~types:true src;
-  [%expect {|
+  [%expect
+    {|
     Err(Bad)
     ()
     (fn call : fn(fn() -> Int ! ..e, Int) -> Int ! ..e uses ..d (f/1 n/2) ev/3
@@ -2017,7 +2026,8 @@ fn first<T>(xs: Array<T>, n: Int) -> T = xs[g(n)]
 fn g(n) = if n > 0 then first(["a"], 0) * 0 else n
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Str` has no `*`
       ┌─ test.ren:2:25
     2 │ fn g(n) = if n > 0 then first(["a"], 0) * 0 else n
@@ -2077,12 +2087,12 @@ let%expect_test "many lambdas in one lambda set check in time" =
 
 let%expect_test "comparing functions is an error, not a panic (B2)" =
   (* it type-checked, and panicked when it ran *)
-  check_error
-    {|
+  check_error {|
 fn inc(x: Int) -> Int = x + 1
 fn main() = print(inc == inc)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `fn(Int) -> Int` has no `==`
       ┌─ test.ren:2:19
     2 │ fn main() = print(inc == inc)
@@ -2096,7 +2106,8 @@ fn inc(x: Int) -> Int = x + 1
 fn main() =
   assert inc != fn(x: Int) => x
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `fn(Int) -> Int` has no `!=`
       ┌─ test.ren:3:10
     3 │   assert inc != fn(x: Int) => x
@@ -2122,7 +2133,8 @@ fn main() =
   print(Circle(1) == Circle(2))
   print(Some(fn() => 1) == None)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `Tick` has no `==`
        ┌─ test.ren:10:9
     10 │   print(fixed() == fixed())
@@ -2188,7 +2200,8 @@ fn same(a, b) = a == b
 fn main() =
   same(inc, inc)
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `fn(Int) -> Int` has no `==`, which `same` needs
       ┌─ test.ren:4:8
     4 │   same(inc, inc)
@@ -2209,7 +2222,8 @@ fn main() = boxes(1, 2)
 |}
   in
   types src;
-  [%expect {|
+  [%expect
+    {|
     fn same<T has eq>(a: T, b: T) -> Bool
     fn both<U has eq>(a: U, b: U) -> Bool
     fn boxes<T has eq>(a: T, b: T) -> Bool
@@ -2217,7 +2231,8 @@ fn main() = boxes(1, 2)
     fn main() -> Bool
     |}];
   check_error (src ^ "fn wrong() = boxes(inc, inc)\n");
-  [%expect {|
+  [%expect
+    {|
     error: `fn(Int) -> Int` has no `==`, which `boxes` needs
       ┌─ test.ren:7:20
     7 │ fn wrong() = boxes(inc, inc)
@@ -2241,7 +2256,8 @@ fn main() = f(1, 3) && k("a", "b")
 |}
   in
   types src;
-  [%expect {|
+  [%expect
+    {|
     fn f<T has eq>(x: T, n: Int) -> Bool
     fn g<U has eq>(a: U, b: U, n: Int) -> Bool
     fn h<T has eq>(a: T, b: T) -> Bool
@@ -2250,7 +2266,8 @@ fn main() = f(1, 3) && k("a", "b")
     fn main() -> Bool
     |}];
   check_error (src ^ "fn wrong() = f(inc, 3)\n");
-  [%expect {|
+  [%expect
+    {|
     error: `fn(Int) -> Int` has no `==`, which `f` needs
       ┌─ test.ren:7:16
     7 │ fn wrong() = f(inc, 3)
@@ -2267,7 +2284,8 @@ fn two(a, b, c, d) = a == b && c == d
 fn pick(a, b, c) = if a == b then c else c
 fn main() = ()
 |};
-  [%expect {|
+  [%expect
+    {|
     pub fn same<T has eq>(a: T, b: T) -> Bool
     fn two<T has eq, U has eq>(a: T, b: T, c: U, d: U) -> Bool
     fn pick<T has eq, U>(a: T, b: T, c: U) -> U
@@ -2293,7 +2311,8 @@ pub type Bag<T> = { items: Array<T> }
 |}
       );
     ];
-  [%expect {|
+  [%expect
+    {|
     -- bag
     pub type Bag<T>
       pub fn of(xs: Array<T>) -> Bag<T>
@@ -2332,7 +2351,8 @@ pub type Bag<T> = { items: Array<T> }
 |}
       );
     ];
-  [%expect {|
+  [%expect
+    {|
     error: `fn(Int) -> Int` has no `==`, which `same` needs
       ┌─ main.ren:6:20
     6 │   assert util.same(inc, inc)
@@ -2363,7 +2383,8 @@ fn main() = twice(good) && cmp(good)
 |}
   in
   types src;
-  [%expect {|
+  [%expect
+    {|
     fn same<T has eq>(a: T, b: T) -> Bool
     fn twice<T has eq, ..e has eq>(g: fn() -> T ! ..e uses ..d) -> Bool uses ..d
     fn cmp<T has eq, ..e has eq>(g: fn() -> T ! ..e uses ..d) -> Bool uses ..d
@@ -2373,7 +2394,8 @@ fn main() = twice(good) && cmp(good)
   check_error
     (src ^ "fn bad() = if true then fail Bad(fn() => 1) else 1\n"
    ^ "fn wrong() = twice(bad) || cmp(bad)\n");
-  [%expect {|
+  [%expect
+    {|
     error: `Bad(fn() -> Int)` has no `==`, which `twice` needs
       ┌─ test.ren:7:20
     7 │ fn wrong() = twice(bad) || cmp(bad)
@@ -2410,7 +2432,8 @@ pub fn cmp<T>(g: fn() -> T ! ..e) -> Bool = (attempt g()) == (attempt g())
 |}
       );
     ];
-  [%expect {|
+  [%expect
+    {|
     error: `Bad(fn() -> Int)` has no `==`, which `cmp` needs
       ┌─ main.ren:4:40
     4 │ fn main() = util.cmp(good) && util.cmp(bad)
@@ -2438,7 +2461,8 @@ type Bag<T> = { items: Array<T> }
       if y == x then found = true
     found
 |};
-  [%expect {|
+  [%expect
+    {|
     error: `fn(Int) -> Int` has no `==`, which `Bag.has` needs
       ┌─ test.ren:3:22
     3 │ fn main() = mk().has(inc)

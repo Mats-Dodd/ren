@@ -134,13 +134,17 @@ falls short it says so.
 - **Inference's result** gives every expression and pattern a type and,
   where something was found through a type, what (infer.mli). It decides
   every question once: which constructor, which method, whether a call
-  can fail, whether a `with` installs a handler or wraps its body,
-  which `match`es handle errors and which arms are `fail` arms, whether
+  can fail, whether a `with` installs a handler or wraps its body, the
+  order a `with` installs its items in, and the type of the body a
+  handler's `finally` is given, which `match`es handle errors and which arms are `fail` arms, whether
   a `try` unwraps a `Result`. Lower and exhaust read those decisions
   from it and never make them again.
 - **Core** has one way to change something, an assignment to a local,
   and one way each to fail, to handle an error, to install an
-  implementation and to call a dependency (core.ml). Every node has its
+  implementation and to call a dependency (core.ml); a `next` call is a
+  dependency call on its handler's evidence, which a lambda in the
+  handler keeps, and an implementation's type says
+  whether it goes over another and what it can fail to start with. Every node has its
   type, and every function its evidence. Core Lint checks each of those
   against the others, from scratch. Every use of a polymorphic function
   has its type arguments too, and Lint checks the type it's used at is
@@ -187,12 +191,22 @@ each pass keeps it so:
    Some(a)` stores a copy of the old `a`, not `a`.
 2. **A closure doesn't capture the evidence.** It gets its dependencies
    where it's called (deps.md, "How it runs"), so it never holds the
-   handler that's installed where it was made.
+   handler that's installed where it was made. The one exception is a
+   handler's own operations and `finally`, which keep the evidence where
+   it's installed, to call through `next`; a lambda can't call `next`
+   (Infer, `next_at`), so no lambda that could be passed down to the
+   implementation under it, and kept there, holds it. Core Lint checks
+   that only an operation of an `Instance`, or its `finally`, calls
+   through `next`.
 3. **An installed handler instance is never a value.** A `with` installs
    it, and no expression yields it; its own dependencies are captured
    from further out. So a handler's `var`s can't reach their own
    instance. Core Lint checks this: an `Instance` appears only at the end
-   of a `Handler`'s body, after the `let`s that make its state.
+   of a `Handler`'s body, after the `let`s that make its state. Since
+   10a, the implementation a handler goes over is reached by a dependency
+   call on the evidence its handler was installed with, `next.get(id)`,
+   never held as a value, and its `finally` is a lambda in the instance,
+   which keeps cells as the operations do, not the instance.
 
 And one rule for the stages after this: **a handler's state can never
 hold a suspended continuation.** A fiber belongs to the scope of
@@ -325,14 +339,18 @@ The constraints:
 - **The rules of markers** (errors.md, "Marking"): a call no marker
   covers can't fail, and every marker covers something that can.
 - **An implementation's operation fails with no more than its
-  dependency declares** (deps.md, "Implementations").
+  dependency declares** (deps.md, "Implementations"), and a record
+  implementation's operations don't call its own dependency outside a
+  `with` that installs it (stage 10a).
 - **A row a named row is added to ends in it,** `..d`, once it has every
   other label, since that stops it getting more; and so do a function's
   own rows, in the rows it names.
 - **A function does what it declares** (infer_declared.ml): it uses and
   fails with what its signature says, a public one's transparent
   parameters keep their rows open, and a handler needs no more than it
-  declares, and never itself.
+  declares, and never itself, but for what it goes over, which only a
+  `next` call reaches; what its state and `finally` fail with is all it
+  fails to start with, closed once its group is done.
 - **What `==` and `!=` compare has `eq`** (infer_reqs.ml): the type of
   their sides, once it's known. A type variable that has to have it
   passes that on to the function it's in, which then needs it of its
@@ -1230,3 +1248,81 @@ Where it differed from its plan:
   twice: once as a public group taking a private type, and once as test
   code naming a private item.
 
+## Stage 10a
+
+Handlers (handlers.md): a `with` is a set, `over` and `next`, `finally`,
+and handler state that can fail to start. Each fact is computed once and
+carried:
+
+- **An implementation's type** is one constructor, `TImpl` in inference
+  (types.ml) and `Impl` in canonical types (ty.ml): the dependencies it
+  implements, sorted, whether it goes `over` them, what it needs and what
+  it can fail to start with, `fails`. Unification compares `over` and
+  unifies both rows, each use gets a copy of `fails` as of `needs`, and
+  `ren types` prints it as it's written, `over Sql ! DbDown uses Os`.
+- **A `with`'s items** are a list in the AST, each a chain of links, top
+  first, and what the bottom goes over when it's the one outside,
+  `over Prices`. Inference classifies each link once, in the `with`'s
+  own context, as an implementation or a wrapper (`Installs`,
+  `Installs_handler` or `Wraps` at the link's node), checks the chain and
+  the set, and records the order to install the items in at the `with`,
+  `Install_order`: an item whose needs another installs goes inside it,
+  and otherwise the order of their dependencies' names. Lowering makes
+  each implementation's value outside, in the order written, then nests
+  a Core `With` or `With_handler` for each in that order, each chain's
+  bottom outermost, and the wrappers innermost.
+- **`next`** is resolved to `Next_op (dep, op)` only in a handler
+  declared `over` (Resolve, `next_op`), typed as the operation is, and
+  lowered to a `Dep_call` marked `next`, on the `Handler`'s own evidence,
+  what's installed where it is, so the one under it, even inside a `with`
+  in an operation. Only the handler's state, operations and `finally`
+  can call it: Infer reports a call in a lambda, or in the body of a
+  `with` a wrapper is given, which is one (`next_at`), since one could be
+  passed to the implementation under the handler and kept, a cycle
+  ("No cycles"). The operations and `finally` are the only lambdas Core
+  lets keep that evidence; Lint checks a `next` call is given its
+  handler's, in scope, in one of them or the state, and that the handler
+  needs the dependency. A handler over `D` needs `D`, joined to its needs only
+  after its state, arms and `finally` are checked, so a call that names
+  `D.op` brings `D` itself and is reported (with help naming `next.op`,
+  or `next(D).op` when another dependency it goes over has an `op`),
+  while a call of a lambda that only shares the handler's row isn't. What an over
+  handler leaves out, inference records at the handler,
+  `Handler_facts.forwards`, each with the type of a lambda of its own,
+  and lowering makes it a lambda that makes that call. Lint checks every
+  instance's record has each operation, as any record literal.
+- **A handler's `fails`** is the row its state and `finally` are checked
+  with, written after `!` on a public one and closed, inferred on a
+  private one and closed once its group is done (`check_needs`). A
+  `with` passes it on with its keyword as the `try` (`absorb`), and
+  `Core.can_fail` says a `With` whose implementation's type has `fails`
+  can fail.
+- **`finally`** is checked with the body's type and errors as skolems of
+  their own, `r: Result<T, ! ..e>` returning `T`; what it fails with, but
+  `..e`, is the handler's `fails`. Once the function is generalized they
+  become variables numbered after its own, and the handler records which
+  is the body's type, `Handler_facts.body_ty`. A requirement found of it,
+  `==` on the body's value, is an error. Lowering makes it a lambda in
+  the `Instance`, `{ impls; finally }`, that takes a descriptor of that
+  type first, and each Core `With` and `With_handler` carries a
+  descriptor of its body's type, `desc`, which it passes when its body
+  ends, with `Ok(v)` or `Err(e)`. Lint checks the `With`'s `desc`
+  describes its body's type, and the `finally` is a lambda of that
+  descriptor and a `Result` of the next type variable, returning it.
+
+Where it differed from its plan:
+
+- **`finally` isn't lifted** to a generic top-level function: it's a
+  lambda in the instance, as the arms are, which keeps the cells as they
+  do. Its one type variable is the function's next, which only its
+  descriptor parameter describes (Lint's `body_ty`), so `print(v)` works
+  in it without a lifted function's descriptor.
+- **A written implementation type without `!` can't fail to start,** a
+  transparent parameter's included, where the plan had a transparent one
+  fail with its function's errors.
+- **A record implementation that uses its own dependency** is reported
+  at the call that does, outside a `with` installing it, not at the
+  record: a type that merely says it needs it is no error.
+- **The help for a link over nothing** writes `over D` rather than naming
+  a maker of `D`.
+- **`ren core` doesn't print a `With`'s `desc`.**

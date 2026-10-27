@@ -704,3 +704,104 @@ pub type Account = opaque {
             (self)
             (identifier))
           (boolean))))))
+
+================================================================================
+an implementation that goes over another, or can fail to be installed
+================================================================================
+
+fn f(s: over Sql ! DbDown, t: Sql ! DbDown uses Os, u: over A & B uses Clock) = s
+fn g(b: Box<over Sql>, c: Box<Sql ! E>, d: Box<(over Sql uses Os)>) -> (over Sql ! DbDown) = h()
+fn k() -> over Sql = h()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (implementation_type
+          (type_name
+            (type_identifier))
+          (error_set
+            (error_tag
+              (type_identifier)))))
+      (parameter
+        (identifier)
+        (implementation_type
+          (type_name
+            (type_identifier))
+          (error_set
+            (error_tag
+              (type_identifier)))
+          (uses_clause
+            (dependency
+              (type_identifier)))))
+      (parameter
+        (identifier)
+        (implementation_type
+          (type_name
+            (type_identifier))
+          (type_name
+            (type_identifier))
+          (uses_clause
+            (dependency
+              (type_identifier))))))
+    (identifier))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (implementation_type
+              (type_name
+                (type_identifier))))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (implementation_type
+              (type_name
+                (type_identifier))
+              (error_set
+                (error_tag
+                  (type_identifier)))))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (parenthesized_type
+              (implementation_type
+                (type_name
+                  (type_identifier))
+                (uses_clause
+                  (dependency
+                    (type_identifier)))))))))
+    (parenthesized_type
+      (implementation_type
+        (type_name
+          (type_identifier))
+        (error_set
+          (error_tag
+            (type_identifier)))))
+    (call_expression
+      (identifier)
+      (arguments)))
+  (function_definition
+    (identifier)
+    (parameters)
+    (implementation_type
+      (type_name
+        (type_identifier)))
+    (call_expression
+      (identifier)
+      (arguments))))

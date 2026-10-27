@@ -39,13 +39,10 @@ type ty =
   | TErrors of row
       (** an error set as a type argument, which only [Result<T, ! ...>] takes
       *)
-  | TUses of row
-      (** what an implementation needs, as its dependency type's one argument
-          (ty.ml) *)
-  | TAll of Path.t list * row
-      (** an implementation of several dependencies, sharing one state, and what
-          it needs: what a handler of several describes, `Clock & TestClock`
-          ([impl_type]) *)
+  | TImpl of impl
+      (** an implementation of a dependency, or of several sharing one state,
+          what a handler of several describes, `Clock & TestClock` ([impl_type])
+      *)
   | TSkol of int * string
       (** a type parameter like [T], while checking the function that declares
           it: equal only to itself, since the function has to work for every [T]
@@ -60,6 +57,13 @@ type ty =
    can't be passed where one that only reads it is expected: the caller
    wouldn't write `&`, and the change would be lost. *)
 and param = { mode : mode; ty : ty }
+
+(* An implementation's type (ty.ml, [impl]): the dependencies it
+   implements, sorted, each once; whether it goes over another
+   implementation of them (handlers.md, "`over`"); what it needs where
+   it's installed; and what installing it can fail with, what its state
+   and its `finally` fail with. *)
+and impl = { deps : Path.t list; over : bool; needs : row; fails : row }
 and tvar = Unbound of int * int  (** id, level *) | Link of ty
 
 and row =
@@ -162,11 +166,11 @@ let param_tys ps = List.map (fun p -> p.ty) ps
 (* The type of an implementation of [deps], needing [needs]: one
    dependency's, `Clock`, or for several, a type that lists them, `Clock &
    TestClock`, the same whichever order they're written in, so they're
-   kept sorted, each once (deps.md, "Implementations"). *)
-let impl_type deps needs =
-  match List.sort_uniq compare deps with
-  | [ d ] -> TCon (d, [ TUses needs ])
-  | ds -> TAll (ds, needs)
+   kept sorted, each once (deps.md, "Implementations"). [over] says it
+   goes over another implementation of them, and [fails] is what
+   installing it can fail with: nothing, unless it's said. *)
+let impl_type ?(over = false) ?(fails = REmpty) deps needs =
+  TImpl { deps = List.sort_uniq compare deps; over; needs; fails }
 
 (* A label's mark when it isn't written inside `Err`: one of its own,
    since a mark is changed when it's joined with another. *)
@@ -196,13 +200,12 @@ let rec repr_row r =
   | r -> r
 
 (* If [t] is an implementation, of one dependency or several: which, sorted,
-   and what it needs. A dependency's type always has its one argument, so
-   any other type with a [TUses] isn't one. *)
+   and what it needs. *)
 let impl_parts t =
-  match repr t with
-  | TCon (d, [ TUses needs ]) -> Some ([ d ], needs)
-  | TAll (ds, needs) -> Some (ds, needs)
-  | _ -> None
+  match repr t with TImpl i -> Some (i.deps, i.needs) | _ -> None
+
+(* If [t] is an implementation, all of its type. *)
+let impl_of t = match repr t with TImpl i -> Some i | _ -> None
 
 (* A row's labels and, if it's open, the id of its tail: a variable, or a
    named row, which stands for more labels too, only not ones inference
@@ -335,8 +338,7 @@ let generalize st ~skolems ?(row_skolems = []) t =
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
-    | TUses u -> TUses (row u)
-    | TAll (ds, u) -> TAll (ds, row u)
+    | TImpl i -> TImpl { i with needs = row i.needs; fails = row i.fails }
     | TFun (ps, r, e, u, l) ->
         TFun (List.map param ps, go r, row e, row u, row l)
     | TError -> TError
@@ -398,7 +400,10 @@ let generics t =
         see seen_tys id v
     | TVar _ | TSkol _ | TError -> ()
     | TCon (_, args) -> List.iter walk args
-    | TErrors e | TUses e | TAll (_, e) -> walk_row e
+    | TErrors e -> walk_row e
+    | TImpl i ->
+        walk_row i.needs;
+        walk_row i.fails
     | TFun (ps, r, e, u, l) ->
         List.iter (fun p -> walk p.ty) ps;
         walk r;
@@ -451,8 +456,12 @@ let instantiate st t =
     | (TVar _ | TSkol _ | TError) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
-    | TUses u -> TUses (row u)
-    | TAll (ds, u) -> TAll (ds, row u)
+    | TImpl i ->
+        (* `let`s fix the order: OCaml evaluates a record's fields in no
+           order it promises *)
+        let needs = row i.needs in
+        let fails = row i.fails in
+        TImpl { i with needs; fails }
     | TFun (ps, r, e, u, l) ->
         TFun (List.map param ps, go r, row e, row u, row l)
   and param p = { p with ty = copy_param go p.ty }
@@ -502,8 +511,12 @@ let replace (s : subst) t =
     | (TVar _ | TError) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
-    | TUses u -> TUses (row u)
-    | TAll (ds, u) -> TAll (ds, row u)
+    | TImpl i ->
+        (* `let`s fix the order: OCaml evaluates a record's fields in no
+           order it promises *)
+        let needs = row i.needs in
+        let fails = row i.fails in
+        TImpl { i with needs; fails }
     | TFun (ps, r, e, u, l) ->
         TFun (List.map param ps, go r, row e, row u, row l)
   and param p = { p with ty = go p.ty }
@@ -597,8 +610,10 @@ let rec canon_ty c ~all t : Ty.ty =
   | TVar _ | TError -> Error
   | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
   | TErrors e -> Errors (canon_row c ~all e)
-  | TUses u -> Uses (canon_row c ~all u)
-  | TAll (ds, u) -> All (ds, canon_row c ~all u)
+  | TImpl i ->
+      let needs = canon_row c ~all i.needs in
+      let fails = canon_row c ~all i.fails in
+      Impl { deps = i.deps; over = i.over; needs; fails }
   | TFun (ps, r, e, u, l) ->
       (* `let`s fix the order of first appearance: OCaml evaluates a
          constructor's arguments right to left *)
@@ -735,8 +750,10 @@ let rec of_ty ~vars ~tails ~lams (t : Ty.ty) =
   match t with
   | Con (p, args) -> TCon (p, List.map go args)
   | Errors e -> TErrors (of_row ~vars ~tails ~lams e)
-  | Uses u -> TUses (of_row ~vars ~tails ~lams u)
-  | All (ds, u) -> TAll (ds, of_row ~vars ~tails ~lams u)
+  | Impl i ->
+      let needs = of_row ~vars ~tails ~lams i.needs in
+      let fails = of_row ~vars ~tails ~lams i.fails in
+      TImpl { deps = i.deps; over = i.over; needs; fails }
   | Fun (ps, r, e, u, l) ->
       TFun
         ( List.map (fun (p : Ty.param) -> { mode = p.mode; ty = go p.ty }) ps,
@@ -809,8 +826,10 @@ let matching st s t =
         row rows e e';
         row rows u u';
         row lams l l'
-    | TErrors e, TErrors e' | TUses e, TUses e' -> row rows e e'
-    | TAll (ds, e), TAll (ds', e') when ds = ds' -> row rows e e'
+    | TErrors e, TErrors e' -> row rows e e'
+    | TImpl i, TImpl j when i.deps = j.deps ->
+        row rows i.needs j.needs;
+        row rows i.fails j.fails
     | (TCon _ as s), (TCon _ as t) ->
         (* one of the module's opaque types, and what it's represented
            as: [!=] says [reveal] made something else of one *)
@@ -965,7 +984,8 @@ let rec row_vars t =
   match repr t with
   | TVar _ | TSkol _ | TError -> []
   | TCon (_, args) -> List.concat_map row_vars args
-  | TErrors e | TUses e | TAll (_, e) -> row e
+  | TErrors e -> row e
+  | TImpl i -> row i.needs @ row i.fails
   | TFun (ps, r, e, u, _) ->
       List.concat_map row_vars (r :: param_tys ps) @ row e @ row u
 
@@ -973,7 +993,7 @@ let rec row_vars t =
 let rec skolems t =
   match repr t with
   | TSkol (id, n) -> [ (id, n) ]
-  | TVar _ | TError | TErrors _ | TUses _ | TAll _ -> []
+  | TVar _ | TError | TErrors _ | TImpl _ -> []
   | TCon (_, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _, _) -> List.concat_map skolems (r :: param_tys ps)
 
@@ -987,7 +1007,8 @@ let mentions v t =
         | TVar { contents = Unbound (i, _) } -> i = id
         | TVar _ | TSkol _ | TError -> false
         | TCon (_, args) -> List.exists go args
-        | TErrors e | TUses e | TAll (_, e) -> row e
+        | TErrors e -> row e
+        | TImpl i -> row i.needs || row i.fails
         | TFun (ps, r, e, u, _) ->
             List.exists go (r :: param_tys ps) || row e || row u
       and row r =

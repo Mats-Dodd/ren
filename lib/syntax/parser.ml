@@ -42,12 +42,14 @@
                                                    (its operations, then its
                                                     members)
      dep_op   := IDENT ":" "fn" fn_type
-     handler  := "handler" IDENT "(" param, ... ")" "for" tyname, ...
-                 [uses] "=" INDENT { stmt NEWLINE } arm_impl
-                 { NEWLINE arm_impl } DEDENT
+     handler  := "handler" IDENT "(" param, ... ")"
+                 ("for" tyname, ... | "over" tyname { "&" tyname })
+                 [errors] [uses] "=" INDENT { stmt NEWLINE }
+                 arm_impl { NEWLINE arm_impl } [NEWLINE finally] DEDENT
      arm_impl := IDENT "(" param, ... ")" "=>" body
+     finally  := "finally" "(" param ")" "=>" body
      test     := "test" STR [uses] "=" body
-     group    := "group" IDENT "(" param, ... ")" ["with" expr, ...] "="
+     group    := "group" IDENT "(" param, ... ")" ["with" witem, ...] "="
                  INDENT test { NEWLINE test } DEDENT
      run      := "group" STR "=" expr               (a call of a group)
      op       := ["pub"] fn_def
@@ -63,8 +65,11 @@
      ctor     := UIDENT ["(" field, ... ")"]
      field    := IDENT ":" type
      type     := tyname ["<" type, ... ">"]
-              |  tyname uses               (an implementation, and what it
-                                             needs; not right after `->`)
+              |  ["over"] tyname { "&" tyname } [errors] [uses]
+                                            (an implementation, what
+                                             installing it can fail with and
+                                             what it needs; not right after
+                                             `->`)
               |  "fn" "(" ["inout"] [IDENT ":"] type, ... ")" ["->" type]
                  [errors] [uses]           (the innermost function type's)
               |  "(" type ")"
@@ -111,7 +116,8 @@
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
               |  "(" expr "," expr ["," expr] ")"   (a tuple)
               |  "if" expr "then" body [[NEWLINE] "else" body]
-              |  "with" expr, ... "in" body
+              |  "with" witem, ... "in" body
+     witem    := expr { "over" expr } ["over" tyname { "&" tyname }]
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
               |  "fail" UIDENT ["(" con_args ")"]
      arm      := (pattern | fails) ["if" expr] "=>" body
@@ -351,6 +357,24 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
       advance p;
       TyErrors { errs = []; etail = None; eloc = l }
   | BANG -> TyErrors (parse_errors p)
+  | OVER ->
+      (* an implementation that goes over another: `over Users uses Clock`
+         (handlers.md, "`over`") *)
+      let start = loc p in
+      advance p;
+      let rec joined acc =
+        let d = parse_tyname ~what:"a dependency's name" p in
+        if peek p = LT then
+          Diag.error (loc p) ~help:"only a dependency's type goes after `over`"
+            "what goes after `over` is a dependency's type, which takes no \
+             type arguments";
+        if peek p = AMP then (
+          advance p;
+          joined (d :: acc))
+        else List.rev (d :: acc)
+      in
+      let names = joined [] in
+      impl_rest p ~uses ~arg ~start ~over:true names
   | DOTDOT when arg ->
       (* `Box<fn() uses Clock, Console, ..d>`: the `uses` ended at the first
          comma, so the row is left on its own *)
@@ -388,22 +412,38 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
           else List.rev acc
         in
         let names = joined [ name ] in
-        let u =
-          if uses && peek p = USES then Some (parse_uses ~arg p) else None
-        in
-        TyImpl (names, u, Loc.span start (last_loc p)))
-      else if uses && peek p = USES then (
-        (* an implementation, and what it needs: `Clock uses Os` *)
+        impl_rest p ~uses ~arg ~start ~over:false names)
+      else if uses && (peek p = USES || peek p = BANG) then (
+        (* an implementation, and what installing it can fail with and it
+           needs: `Sql ! DbDown uses Os` *)
         if args <> [] then
           Diag.error (loc p)
-            ~help:"only a dependency's type is followed by `uses`"
+            ~help:
+              (Printf.sprintf "only a dependency's type is followed by `%s`"
+                 (Token.to_string (peek p)))
             (Printf.sprintf
-               "`%s` takes type arguments, so it isn't a dependency, and needs \
-                nothing"
-               (show_tyname name));
-        let u = parse_uses ~arg p in
-        TyImpl ([ name ], Some u, Loc.span start (last_loc p)))
+               "`%s` takes type arguments, so it isn't a dependency, and %s"
+               (show_tyname name)
+               (if peek p = USES then "needs nothing"
+                else "can't fail to be installed"));
+        impl_rest p ~uses ~arg ~start ~over:false [ name ])
       else TyName (name, args)
+
+(* The rest of an implementation's type, after its dependencies' names:
+   what installing it can fail with, `! DbDown`, and what it needs, `uses
+   Os`. Neither is read after `->`, where they're the function's own
+   ([uses] is false then). *)
+and impl_rest p ~uses ~arg ~start ~over names =
+  let errors = if uses && peek p = BANG then Some (parse_errors p) else None in
+  let u = if uses && peek p = USES then Some (parse_uses ~arg p) else None in
+  TyImpl
+    {
+      impl_deps = names;
+      impl_over = over;
+      impl_errors = errors;
+      impl_uses = u;
+      impl_loc = Loc.span start (last_loc p);
+    }
 
 (* A parameter in a function type may be named for documentation, as in
    `fn(id: UserId) -> User`. The name doesn't affect the type. *)
@@ -1289,14 +1329,16 @@ and parse_if p =
   in
   mk (If (cond, then_, else_)) start p
 
-(* `with a, b in body`: [a] installed (or wrapped) around `with b in body`,
-   so the first item is the outermost. Each [With] numbers the lambda its
-   body becomes if its item is a wrapper (ast.ml). *)
+(* `with a, b in body`: a set of items, each installed once around the
+   body (handlers.md, "A `with` is a set"). An item is an implementation
+   or a wrapper, or a chain of them joined by `over`, the top first,
+   which can end in the names of the dependencies its bottom goes over,
+   `slow_clock(2) over Clock` ([parse_with_item]). *)
 and parse_with p =
   let start = loc p in
   expect p WITH;
   let rec items acc =
-    let item = parse_expr p in
+    let item = parse_with_item p in
     if peek p = COMMA then (
       advance p;
       if peek p = NEWLINE || peek p = DEDENT then
@@ -1314,19 +1356,66 @@ and parse_with p =
       ~help:
         "write what it installs, then `in`, then the code it's installed around"
       (Printf.sprintf
-         "expected `,` or `in` after what `with` installs, found %s"
+         "expected `,`, `over` or `in` after what `with` installs, found %s"
          (describe (peek p)));
   advance p;
   let body = parse_body p in
-  let rec nest ~start = function
-    | [] -> body
-    | (item : expr) :: rest ->
-        let body = nest ~start:item.loc rest in
-        p.node <- p.node + 1;
-        let lam = p.node in
-        node p (With { item; body; lam }) (Loc.span start body.loc)
+  node p (With { items; body }) (Loc.span start body.loc)
+
+(* An item of a `with`, or of a group's (ast.ml, [with_item]):
+
+     witem := expr {"over" expr} ["over" deps]
+     deps  := tyname {"&" tyname}
+
+   After `over`, a dependency's name with nothing after it that makes it
+   an expression, a `.`, `(` or `{`, is what's installed outside the
+   `with`: `over Clock`, `over A & B`. `over Clock.frozen(t)` and `over
+   Users { ... }` are implementations. Each link gets two node ids of its
+   own: one for the lambda a wrapper's body becomes, one for what
+   inference finds it does. *)
+and parse_with_item p : Parsed.with_item =
+  let start = loc p in
+  let link () =
+    let link = parse_expr p in
+    p.node <- p.node + 2;
+    { link; lam = p.node - 1; knode = p.node }
   in
-  nest ~start items
+  (* a dependency's name, `Clock` or `store.Users`, that isn't the start
+     of an expression *)
+  let at_deps () =
+    let after k = fst p.toks.(min (p.i + k) (Array.length p.toks - 1)) in
+    let ends = function DOT | LPAREN | LBRACE -> false | _ -> true in
+    match (peek p, peek2 p, peek3 p) with
+    | IDENT t, next, _ when is_upper t -> ends next
+    | IDENT m, DOT, IDENT t when (not (is_upper m)) && is_upper t ->
+        ends (after 3)
+    | _ -> false
+  in
+  let rec chain acc =
+    if peek p = OVER then (
+      advance p;
+      if at_deps () then (
+        let rec deps acc =
+          let d = parse_tyname ~what:"a dependency's name" p in
+          if peek p = AMP then (
+            advance p;
+            deps (d :: acc))
+          else List.rev (d :: acc)
+        in
+        let under = deps [] in
+        if peek p = OVER then
+          Diag.error (loc p)
+            ~help:
+              "put it under the last implementation, before the dependency's \
+               name"
+            "nothing goes under what's installed outside the `with`";
+        (List.rev acc, under))
+      else chain (link () :: acc))
+    else (List.rev acc, [])
+  in
+  let top = link () in
+  let chain, under = chain [ top ] in
+  { chain; under; iloc = Loc.span start (last_loc p) }
 
 and parse_match p =
   let start = loc p in
@@ -1789,23 +1878,72 @@ let parse_handler p ~pub =
          (describe (peek p)));
   advance p;
   let params = sep_list p ~close:RPAREN parse_param in
-  if peek p <> FOR then
+  if peek p <> FOR && peek p <> OVER then
     Diag.error (loc p)
       ~help:
-        (Printf.sprintf "say what it implements: `handler %s(...) for Clock =`"
+        (Printf.sprintf
+           "say what it implements: `handler %s(...) for Clock =`, or `over \
+            Clock` to go in front of another `Clock`"
            name.name)
       (Printf.sprintf
-         "expected `for` and the dependencies it implements, found %s"
+         "expected `for` or `over` and the dependencies it implements, found %s"
          (describe (peek p)));
+  (* `for A, B` implements each of them; `over A & B` goes over another
+     implementation of them, as a handler of several's type is written *)
+  let over = peek p = OVER in
   advance p;
   let rec deps acc =
     let d = parse_tyname ~what:"a dependency's name" p in
-    if peek p = COMMA then (
-      advance p;
-      deps (d :: acc))
-    else List.rev (d :: acc)
+    match peek p with
+    | COMMA when not over ->
+        advance p;
+        deps (d :: acc)
+    | AMP when over ->
+        advance p;
+        deps (d :: acc)
+    | COMMA ->
+        Diag.error (loc p)
+          ~help:(Printf.sprintf "write `over %s`" (written " & " (d :: acc)))
+          "a handler over several dependencies joins them with `&`, as the \
+           type of a handler of several is written"
+    | AMP ->
+        Diag.error (loc p)
+          ~help:(Printf.sprintf "write `for %s`" (written ", " (d :: acc)))
+          "after `for`, the dependencies a handler implements are separated by \
+           commas"
+    | (FOR | OVER) as t ->
+        (* `for A over B`: it implements them all, or goes over them all *)
+        let all =
+          String.concat
+            (if over then " & " else ", ")
+            (List.rev_map show_tyname (d :: acc))
+        in
+        Diag.error (loc p)
+          ~notes:
+            [ "a handler is `for` all its dependencies, or `over` all of them" ]
+          ~help:
+            (Printf.sprintf
+               "write `handler %s(...) %s %s`, and another handler `%s %s`"
+               name.name
+               (if over then "over" else "for")
+               all
+               (if t = OVER then "over" else "for")
+               (match peek2 p with IDENT n -> n | _ -> "the others"))
+          (Printf.sprintf
+             "a handler %s some dependencies can't also be %s others"
+             (if over then "over" else "for")
+             (if t = OVER then "over" else "for"))
+    | _ -> List.rev (d :: acc)
+  (* the dependencies so far, [acc] reversed, and the one after the
+     wrong separator, if it's a name, joined by [sep] *)
+  and written sep acc =
+    let after = match peek2 p with IDENT n -> [ n ] | _ -> [] in
+    String.concat sep (List.rev_map show_tyname acc @ after)
   in
   let deps = deps [] in
+  (* what installing it can fail with, which its state and `finally` can
+     (handlers.md, "State that can fail to start") *)
+  let fails = if peek p = BANG then Some (parse_errors p) else None in
   let needs =
     if peek p = USES then Some (parse_uses ~greedy:true p)
     else if peek p = NEWLINE && peek2 p = USES then
@@ -1815,6 +1953,19 @@ let parse_handler p ~pub =
     else None
   in
   let body_start = loc p in
+  (match peek p with
+  | IDENT "forwards" ->
+      (* the README's early sketch, `for Users forwards` *)
+      Diag.error (loc p)
+        ~help:
+          (Printf.sprintf
+             "declare it `handler %s(...) over %s`: the operations it leaves \
+              out go to the one under it, which it calls with `next`"
+             name.name
+             (String.concat " & " (List.map show_tyname deps)))
+        "a handler that passes on what it doesn't implement goes `over` it, \
+         not `forwards`"
+  | _ -> ());
   expect p EQ;
   if peek p <> INDENT then
     Diag.error (loc p)
@@ -1872,14 +2023,41 @@ let parse_handler p ~pub =
              (describe (peek2 p)))
     | _ -> fail_expected p "an operation's implementation, like `now() => ...`"
   in
-  let rec arms acc =
-    let a = arm p in
-    if next_line () then arms (a :: acc) else List.rev (a :: acc)
+  (* `finally(r) => ...`, last (handlers.md, "When a `with` ends") *)
+  let finally () =
+    let at = loc p in
+    expect p FINALLY;
+    if peek p <> LPAREN then
+      Diag.error (loc p) ~help:"write `finally(r) => ...`"
+        (Printf.sprintf
+           "expected `(` and the body's result after `finally`, found %s"
+           (describe (peek p)));
+    advance p;
+    let params = sep_list p ~close:RPAREN parse_param in
+    expect p FATARROW;
+    let body = parse_body p in
+    let f = mk (Lambda (params, body)) at p in
+    if next_line () then
+      if peek p = FINALLY then
+        Diag.error (loc p) ~help:"remove one of them"
+          ~labels:[ (at, "the first is here") ]
+          "a handler has one `finally`"
+      else
+        Diag.error at ~help:"move `finally` below the handler's last operation"
+          ~labels:[ (loc p, "this operation comes after it") ]
+          "`finally` comes last, after the handler's operations";
+    f
   in
-  let arms = if more then arms [] else [] in
+  let rec arms acc =
+    if peek p = FINALLY then (List.rev acc, Some (finally ()))
+    else
+      let a = arm p in
+      if next_line () then arms (a :: acc) else (List.rev (a :: acc), None)
+  in
+  let arms, finally = if more then arms [] else ([], None) in
   let body =
     node p
-      (Handler { deps; needs; state; arms })
+      (Handler { deps; over; fails; needs; state; arms; finally })
       (Loc.span body_start (last_loc p))
   in
   {
@@ -1989,7 +2167,7 @@ let parse_group p ~pub =
         if peek p = WITH then (
           advance p;
           let rec items acc =
-            let item = parse_expr p in
+            let item = parse_with_item p in
             if peek p = COMMA then (
               advance p;
               items (item :: acc))

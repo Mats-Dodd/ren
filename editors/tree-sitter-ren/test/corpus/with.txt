@@ -1,5 +1,5 @@
 ================================================================================
-with: installed items, the first outermost, and a wrapper
+with: installed items, a set, and a wrapper
 ================================================================================
 
 fn main() =
@@ -173,3 +173,132 @@ fn keep(f: fn() -> Int ! ..e uses ..d) -> (fn() -> Int ! Bad | ..e uses Clock, .
         (identifier)))
     (block
       (identifier))))
+
+================================================================================
+with: a chain of links, each over the one after it
+================================================================================
+
+fn main() =
+  with limiter.fixed_window(2, d), cache.cached(t) over cache.limited() over catalogue() in
+    body()
+  with retry(3) over timeout(d) in try f()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (with_expression
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (number)
+            (identifier)))
+        (with_chain
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (identifier)))
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments))
+          (call_expression
+            (identifier)
+            (arguments)))
+        (block
+          (call_expression
+            (identifier)
+            (arguments))))
+      (with_expression
+        (with_chain
+          (call_expression
+            (identifier)
+            (arguments
+              (number)))
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier))))
+        (try_expression
+          (call_expression
+            (identifier)
+            (arguments)))))))
+
+================================================================================
+with: a link over the one installed outside, by its name
+================================================================================
+
+fn main() =
+  with later(d) over Clock, logged() over store.Users & Log in 1
+  with Prices.fixed(1) over Prices in 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (with_expression
+        (with_chain
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))
+          (dependency
+            (type_identifier)))
+        (with_chain
+          (call_expression
+            (identifier)
+            (arguments))
+          (dependency
+            (identifier)
+            (type_identifier))
+          (dependency
+            (type_identifier)))
+        (number))
+      (with_expression
+        (with_chain
+          (call_expression
+            (item_expression
+              (type_name
+                (type_identifier))
+              (identifier))
+            (arguments
+              (number)))
+          (dependency
+            (type_identifier)))
+        (number)))))
+
+================================================================================
+group: a chain in its with
+================================================================================
+
+group g(c: Clock) with later(1) over c =
+  test "a" = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (group_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (with_chain
+      (call_expression
+        (identifier)
+        (arguments
+          (number)))
+      (identifier))
+    (test_definition
+      (string)
+      (number))))

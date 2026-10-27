@@ -240,7 +240,7 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
                 { ty = t; names = []; reqs = []; row_reqs = [] })
              t)
     | Con (p, _) -> Some (env.names p)
-    | Var _ | Fun _ | Errors _ | Uses _ | All _ | Error -> None
+    | Var _ | Fun _ | Errors _ | Impl _ | Error -> None
   in
   (* With `fail` arms, each row is an outcome (see [owner]), and the error
      set they match is in each `fail` pattern's type *)
@@ -405,14 +405,16 @@ let rec check_expr env (e : expr) =
   | Con (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields
   | Match (subject, arms) -> check_match_expr env e subject arms
-  | With { item; body; _ } -> List.iter (check_expr env) [ item; body ]
-  | Handler { state; arms; _ } ->
+  | With { items; body } ->
+      List.iter (check_expr env) (with_links items @ [ body ])
+  | Handler { state; arms; finally; _ } ->
       List.iter
         (function
           | Let { value; _ } | Let_tuple { value; _ } -> check_expr env value
           | Expr e -> check_expr env e)
         state;
-      List.iter (fun (a : handler_arm) -> check_expr env a.arm_impl) arms
+      List.iter (fun (a : handler_arm) -> check_expr env a.arm_impl) arms;
+      Option.iter (check_expr env) finally
 
 and check_match_expr env ?passes_on e subject arms =
   check_expr env subject;

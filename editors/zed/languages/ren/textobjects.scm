@@ -17,10 +17,14 @@
 ; a dependency, with its operations and members
 (dependency_definition) @class.around
 
-; a handler, with its state and arms; an arm is a function
+; a handler, with its state and arms; an arm is a function, and so is
+; its `finally`
 (handler_definition) @class.around
 
 (handler_arm
+  body: (_) @function.inside) @function.around
+
+(finally_arm
   body: (_) @function.inside) @function.around
 
 (test_definition

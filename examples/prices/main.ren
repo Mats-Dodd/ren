@@ -3,10 +3,10 @@
 // look at.
 
 import limiter
-import cache.{Supplier, Prices}
+import cache.{Prices}
 
-// a supplier that takes a moment to answer
-fn catalogue() = Supplier { quote: fn(item) =>
+// the supplier, which takes a moment to answer
+fn catalogue() = Prices { price: fn(item) =>
     Clock.sleep(Duration.ms(20))
     if item == "apple" then 3
     else if item == "pear" then 5
@@ -23,9 +23,8 @@ fn show_price(item: Str) uses Prices, Console =
 
 // `pub`, since its test calls it
 pub fn main() uses Clock, Console =
-  with catalogue(),
-      limiter.fixed_window(2, Duration.seconds(1)),
-      cache.cached(Duration.seconds(10)) in
+  with limiter.fixed_window(2, Duration.seconds(1)),
+      cache.cached(Duration.seconds(10)) over cache.limited() over catalogue() in
     show_price("apple")  // 3, from the supplier
     show_price("apple")  // 3, from the cache
     show_price("pear")   // 5, from the supplier: that's two this second

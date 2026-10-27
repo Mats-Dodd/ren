@@ -70,6 +70,7 @@ let name_of = function
   | Global p | Global_value p -> Path.local p
   | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
+  | Next_op (_, op) -> "next." ^ op
   | Assoc_value (Named p, v) -> p.name ^ "." ^ v
   | Assoc_value (Param _, v) -> v
 
@@ -94,7 +95,9 @@ let rec overlap a b =
 
 let check_locks cx (p : place) =
   match p.root with
-  | Global _ | Global_value _ | Intrinsic _ | Dep_op _ | Assoc_value _ -> ()
+  | Global _ | Global_value _ | Intrinsic _ | Dep_op _ | Next_op _
+  | Assoc_value _ ->
+      ()
   | Local b ->
       List.iter
         (fun l ->
@@ -148,7 +151,7 @@ let writable cx (e : expr) ~what
   | Some ({ root = Global _ | Intrinsic _; _ } as p) ->
       Diag.error p.rloc
         (sprintf "`%s` is a function, not a variable" (name_of p.root))
-  | Some ({ root = Dep_op _; _ } as p) ->
+  | Some ({ root = Dep_op _ | Next_op _; _ } as p) ->
       Diag.error p.rloc
         ~help:
           (sprintf
@@ -230,7 +233,8 @@ let rec walk cx (e : expr) =
       (match place_of r with Some _ -> walk_indices cx r | None -> walk cx r);
       List.iter (arg cx) args;
       guard cx (fun () -> exclusive ({ r with kind = Ref r } :: args))
-  | Ref { kind = Call ({ kind = Var (Dep_op _ as op); _ }, _); _ } ->
+  | Ref { kind = Call ({ kind = Var ((Dep_op _ | Next_op _) as op); _ }, _); _ }
+    ->
       (* `&Clock.now()`: an operation's state is its implementation's *)
       Diag.report cx.sink
         (Diag.make e.loc ~help:"remove the `&`"
@@ -267,10 +271,10 @@ let rec walk cx (e : expr) =
              ]
            "`&` can't be used here")
   | Unop (_, a, _) | Try a | Attempt a | Assert a -> walk cx a
-  | With { item; body; _ } ->
+  | With { items; body } ->
       (* a wrapper's body is a lambda, which can't change what's outside
          it: inference, which knows which items are wrappers, says so *)
-      walk cx item;
+      List.iter (walk cx) (with_links items);
       walk cx body
   | Fail (_, args) -> List.iter (fun (_, a) -> walk cx a) args
   | Binop (_, a, b, _) ->
@@ -284,7 +288,7 @@ let rec walk cx (e : expr) =
   | Lambda (ps, body) ->
       no_inout cx ps;
       walk { cx with depth = cx.depth + 1 } body
-  | Handler { state; arms; _ } ->
+  | Handler { state; arms; finally; _ } ->
       let cx = { cx with in_handler = true } in
       List.iter
         (function
@@ -301,7 +305,16 @@ let rec walk cx (e : expr) =
               no_inout cx ps;
               walk cx body
           | _ -> walk cx a.arm_impl)
-        arms
+        arms;
+      (* and so is its `finally` *)
+      Option.iter
+        (fun (f : expr) ->
+          match f.kind with
+          | Lambda (ps, body) ->
+              no_inout cx ps;
+              walk cx body
+          | _ -> walk cx f)
+        finally
   | Block (stmts, last) ->
       List.iter
         (function

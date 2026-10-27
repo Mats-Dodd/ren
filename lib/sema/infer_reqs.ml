@@ -102,7 +102,7 @@ let key_loops env p =
         List.exists
           (fun (l : Ty.label) -> List.exists (reaches seen) l.payload)
           e.labels
-    | Var _ | Error | Uses _ | All _ -> false
+    | Var _ | Error | Impl _ -> false
   in
   match Option.bind (Hashtbl.find_opt env.types p) Iface.key with
   | Some (_, k) -> reaches (ref []) k
@@ -218,8 +218,8 @@ let rec decl_lacks env seen p : Infer_msg.no_eq option =
 and lacks_in env seen (t : Ty.ty) : Infer_msg.no_eq option =
   match t with
   | Fun _ -> Some Is_function
-  | Var _ | Error | Uses _ -> None
-  | All (ds, _) ->
+  | Var _ | Error -> None
+  | Impl { deps = ds; _ } ->
       Some (Implementation (String.concat " & " (List.map env.names ds)))
   | Errors e ->
       List.find_map
@@ -252,7 +252,7 @@ let rec has env req t =
   match repr t with
   | TVar { contents = Unbound (id, _) } | TSkol (id, _) -> Has [ (id, req) ]
   | TVar { contents = Link _ } -> assert false (* [repr] followed it *)
-  | TError | TUses _ -> Has []
+  | TError -> Has []
   | t -> (
       match req with
       | "eq" | "hash" -> has_eq env req t
@@ -300,7 +300,7 @@ and keyed env req p args =
 
 and has_eq env req t =
   match t with
-  | TAll (ds, _) ->
+  | TImpl { deps = ds; _ } ->
       Lacks
         (Decl (Implementation (String.concat " & " (List.map env.names ds))))
   | TFun _ as f -> Lacks (Fn f)

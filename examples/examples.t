@@ -966,8 +966,9 @@ below zero. The tests that check nothing moved show the two banks, and
   [1]
 
 The price lookup puts a cache with expiry in front of a supplier that a
-rate limiter guards (prices/README.md). Each piece is a dependency, and
-`main` stacks them with one `with`:
+rate limiter guards (prices/README.md). The cache and the limiter are
+each a handler over `Prices`, and `main` chains them with `over` in one
+`with`:
 
   $ ren run prices/main.ren
   3
@@ -994,6 +995,23 @@ rate limiter guards (prices/README.md). Each piece is a dependency, and
     ✓ main prints each price, or what stopped it
   
   10 passed
+
+The ledger moves money inside a transaction (ledger/README.md): a
+handler over `Sql` that begins when it's installed, and in its `finally`
+commits, or rolls back when the body failed:
+
+  $ ren run ledger/main.ren
+  Ok(())
+  Err(Short("ann"))
+  Ok((70, 50))
+  $ ren test ledger
+  main.ren
+    ✓ main prints each transfer, and the balances
+    ✓ a transfer that leaves an account short changes nothing
+    ✓ a commit that fails changes nothing
+    ✓ a transaction that can't begin doesn't run its body
+  
+  4 passed
 
 `ren --help` is asked for, so it's printed to stdout and exits 0, and
 `--version` says which Ren this is. A folder with no tests is more likely

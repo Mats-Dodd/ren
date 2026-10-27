@@ -14,16 +14,26 @@ ren test prices            # every module's tests
 | File | What's in it |
 |---|---|
 | `limiter.ren` | `Limiter`, a dependency with one operation, `take`, that fails with `Throttled`; `Limiter.none`; `fixed_window`, a handler that lets `limit` calls through in each window of time; `token_bucket`, one that lets a burst through and then one call each time a token comes |
-| `cache.ren` | `Supplier`, where prices come from; `Prices`, what the program asks; `cached`, a handler for `Prices` that keeps answers for `ttl`, in a `Map` by item, and asks the supplier past the limiter; tests with a supplier that counts its calls |
-| `main.ren` | a slow supplier, the three pieces stacked with one `with`, and a test of what it prints |
+| `cache.ren` | `Prices`, what the program asks; `cached`, a handler over `Prices` that keeps answers for `ttl`, in a `Map` by item, and asks the one under it for the rest; `limited`, one over `Prices` that asks the one under it only past the limiter; tests with a supplier that counts its calls |
+| `main.ren` | `catalogue`, the real `Prices`, slow to answer; the pieces stacked with one `with`, and a test of what it prints |
 
 ## What to look at
 
-**Each piece says what it needs.** `cached` is `for Prices uses
-Supplier, Limiter, Clock`, so a `with` that installs it has to install
-those three further out, and the compiler says which one is missing and
-where to put it. `main` lists `Clock` only because the runtime has to
-install the real one.
+**Each piece goes over the one under it.** `cached(ttl) over Prices
+uses Clock` and `limited() over Prices uses Limiter` each implement
+`Prices` by asking another `Prices`, with `next.price(item)`, so `main`
+stacks them as it reads:
+
+```
+with limiter.fixed_window(2, Duration.seconds(1)),
+    cache.cached(Duration.seconds(10)) over cache.limited() over catalogue() in
+```
+
+The chain installs one `Prices`; the limiter beside it is what `limited`
+needs, and the items of a `with` meet each other's needs whatever order
+they're written in. Each piece says what it needs, and the compiler says
+which one is missing and where to put it. `main` lists `Clock` only
+because the runtime has to install the real one.
 
 **State lives in handlers.** The limiter's window and the cache's
 entries are `var`s of a handler, and each `with` gets a fresh instance,
@@ -37,10 +47,6 @@ and a new window are tested without waiting, and `main`'s own
 
 ## What it ran into
 
-- **The cache can't sit in front of another `Prices`.** A handler can't
-  call the dependency it implements until `outer` (stage 10), so the
-  backend has to be a dependency of its own, `Supplier`, with the same
-  operation under another name.
 - **Handlers aren't imported by name,** only types are, so they're
   written `limiter.fixed_window` and `cache.cached`.
 
@@ -52,3 +58,8 @@ What stage 9c changed, where a test sees what an importer sees:
   a handler can be a test item, so it's part of `cache`'s interface: the
   one place the interface carries scaffolding.
 - **`main` is `pub`,** since its test calls it.
+
+What stage 10a changed: the cache used to ask a dependency of its own,
+`Supplier`, since a handler couldn't call another implementation of
+what it implements. Now `cached` and `limited` go `over Prices`, the
+supplier is a plain `Prices`, and `Supplier` is gone.

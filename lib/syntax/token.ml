@@ -89,6 +89,8 @@ type t =
   | ORELSE
   | WITH
   | HANDLER
+  | OVER
+  | FINALLY
   | TEST
   | GROUP
   | ASSERT
@@ -181,6 +183,8 @@ let to_string = function
   | ORELSE -> "orelse"
   | WITH -> "with"
   | HANDLER -> "handler"
+  | OVER -> "over"
+  | FINALLY -> "finally"
   | TEST -> "test"
   | GROUP -> "group"
   | ASSERT -> "assert"

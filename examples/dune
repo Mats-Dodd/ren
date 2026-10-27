@@ -13,5 +13,6 @@
   (glob_files vm/*.ren)
   (glob_files bank/*.ren)
   (glob_files prices/*.ren)
+  (glob_files ledger/*.ren)
   (glob_files just/*.ren)
   just/justfile))

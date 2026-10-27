@@ -86,7 +86,8 @@ let check_transparent sink (f : fn_def) =
       (fun (p : Resolved.param) ->
         match p.pty with
         | Some (TyFn _ as t) when not (names_row t) -> Some (p.pname, None)
-        | Some (TyImpl (ds, None, _)) when p.pname.ident.name <> "self" ->
+        | Some (TyImpl { impl_deps = ds; impl_uses = None; _ })
+          when p.pname.ident.name <> "self" ->
             Some
               ( p.pname,
                 Some
@@ -154,15 +155,16 @@ let check_transparent sink (f : fn_def) =
                    (fun (a : arm) ->
                      Option.to_list a.arm_guard @ [ a.arm_body ])
                    arms)
-        | With { item; body; _ } -> any [ item; body ]
-        | Handler { state; arms; _ } ->
+        | With { items; body } -> any (with_links items @ [ body ])
+        | Handler { state; arms; finally; _ } ->
             any
               (List.map
                  (function
                    | Let { value; _ } | Let_tuple { value; _ } -> value
                    | Expr e -> e)
                  state
-              @ List.map (fun (a : handler_arm) -> a.arm_impl) arms)
+              @ List.map (fun (a : handler_arm) -> a.arm_impl) arms
+              @ Option.to_list finally)
       in
       (* [ok]: this position may hold the bare parameter, or a lambda that
          captures it *)
@@ -209,11 +211,11 @@ let check_transparent sink (f : fn_def) =
                 Option.iter (walk ~ok:false) a.arm_guard;
                 walk ~ok:false a.arm_body)
               arms
-        | With { item; body; _ } ->
+        | With { items; body } ->
             (* an item is installed, or called with the body *)
-            walk ~ok:true item;
+            List.iter (walk ~ok:true) (with_links items);
             walk ~ok:false body
-        | Handler { state; arms; _ } ->
+        | Handler { state; arms; finally; _ } ->
             (* its state and arms are kept by each instance *)
             List.iter
               (function
@@ -222,8 +224,8 @@ let check_transparent sink (f : fn_def) =
                 | Expr e -> walk ~ok:false e)
               state;
             List.iter
-              (fun (a : handler_arm) ->
-                match a.arm_impl.kind with
+              (fun (impl : expr) ->
+                match impl.kind with
                 | Lambda (_, body) when mentions body ->
                     (* an arm keeps it as a lambda would, but there's no
                        lambda written: point at where the arm uses it *)
@@ -233,10 +235,11 @@ let check_transparent sink (f : fn_def) =
                       | _ -> List.find_map use (Ast.children e)
                     in
                     fail
-                      (Option.value (use body) ~default:a.arm_impl.loc)
+                      (Option.value (use body) ~default:impl.loc)
                       Kept_by_handler
-                | _ -> walk ~ok:false a.arm_impl)
-              arms
+                | _ -> walk ~ok:false impl)
+              (List.map (fun (a : handler_arm) -> a.arm_impl) arms
+              @ Option.to_list finally)
       in
       Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
     params
@@ -256,7 +259,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
         List.iter ty_ ps;
         Option.iter ty_ ret;
         Option.iter errors_ errs
-    | TyImpl _ -> ()
+    | TyImpl { impl_errors; _ } -> Option.iter errors_ impl_errors
     | TyInout (t, _) -> ty_ t
     | TyTuple (ts, _) -> List.iter ty_ ts
     | TyErrors es -> errors_ es
@@ -292,9 +295,11 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Block (stmts, last) ->
         List.iter stmt stmts;
         expr last
-    | Handler { state; arms; _ } ->
+    | Handler { state; arms; finally; _ } ->
         List.iter stmt state;
-        go (List.map (fun (a : handler_arm) -> a.arm_impl) arms)
+        go
+          (List.map (fun (a : handler_arm) -> a.arm_impl) arms
+          @ Option.to_list finally)
     | Con (_, args) | Fail (_, args) -> go (List.map snd args)
     | Record (_, fields) -> go (List.map snd fields)
     | Match (s, arms) ->
@@ -309,7 +314,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | For { pat; _ } ->
         pattern_ pat;
         go (Ast.children e)
-    | With { item; body; _ } -> go [ item; body ]
+    | With { items; body } -> go (with_links items @ [ body ])
   and stmt = function
     | Let { ty = t; value; _ } ->
         Option.iter ty_ t;
@@ -347,7 +352,10 @@ let walk ~ty ~errors ~pattern (prog : program) =
    says how it writes a type's name. *)
 let written_loc : Resolved.ty -> Loc.t = function
   | TyName ({ tloc; _ }, _) -> tloc
-  | TyFn (_, _, _, _, l) | TyImpl (_, _, l) | TyInout (_, l) | TyTuple (_, l) ->
+  | TyFn (_, _, _, _, l)
+  | TyImpl { impl_loc = l; _ }
+  | TyInout (_, l)
+  | TyTuple (_, l) ->
       l
   | TyErrors es -> es.eloc
 
@@ -424,7 +432,9 @@ let rows_named (f : fn_def) =
         Option.iter ty ret;
         errs e;
         uses u
-    | TyImpl (_, u, _) -> uses u
+    | TyImpl { impl_errors = e; impl_uses = u; _ } ->
+        errs e;
+        uses u
     | TyInout (t, _) -> ty t
     | TyTuple (ts, _) -> List.iter ty ts
     | TyErrors es -> errs (Some es)
@@ -645,18 +655,18 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
           List.find_map
             (fun (o : Iface.op) ->
               let name = env.names p ^ "." ^ o.oname in
-              let itself = function
-                | [ Ty.Uses u ] ->
-                    List.exists
-                      (fun (l : Ty.label) -> l.name = Ty.dep_label p)
-                      u.labels
+              let makes = function
+                | Ty.Impl { deps = [ q ]; needs; _ } ->
+                    q = p
+                    && not
+                         (List.exists
+                            (fun (l : Ty.label) -> l.name = Ty.dep_label p)
+                            needs.labels)
                 | _ -> false
               in
               match (o.okind, o.oscheme.ty) with
-              | Value, Con (q, args) when q = p && not (itself args) ->
-                  Some name
-              | Function, Fun (ps, Con (q, args), _, _, _)
-                when q = p && not (itself args) ->
+              | Value, t when makes t -> Some name
+              | Function, Fun (ps, t, _, _, _) when makes t ->
                   Some (call_written name (List.length ps))
               | _ -> None)
             (if p.home = env.home then [] else Iface.members td))
@@ -820,7 +830,9 @@ let new_env sink ~reachable (r : Resolve.t) =
     pending = [];
     forced = [];
     written = Hashtbl.create 16;
-    in_state = false;
+    in_state = None;
+    finallies = Hashtbl.create 4;
+    finally_rows = [];
     in_scope = [];
     client = false;
     hidden = [];
@@ -948,16 +960,31 @@ let setup env ~is_value (f : fn_def) =
     in
     let ret =
       match f.ret with
+      | Some (TyImpl { impl_errors = None; _ } as t)
+        when Ast.is_handler f && not f.pub -> (
+          (* a private handler whose needs are written, but not what it
+             fails to start with: that's inferred, as a private function's
+             errors are *)
+          match convert env ~tvars:tparams ~named ~row:closed t with
+          | TImpl i -> TImpl { i with fails = fresh_row env.st }
+          | t -> t)
       | Some t -> convert env ~tvars:tparams ~named ~row:closed t
       | None when f.pub && not (is_value f) ->
           unit (* a public function without `->` returns Unit *)
       | None when Ast.is_handler f ->
           (* a handler whose needs aren't written: its type, which lists
              the dependencies it implements (Types.impl_type), needs what
-             its body works out, which is known before its body is
-             checked, so the group's other functions, and its own arms,
-             can install it *)
-          impl_type (Option.get (Iface.handler_deps f)) (fresh_row env.st)
+             its body works out, and fails to start with what that does,
+             which is known before its body is checked, so the group's
+             other functions, and its own arms, can install it *)
+          impl_type
+            ~over:
+              (match f.body.kind with
+              | Handler { over; _ } -> over
+              | _ -> false)
+            ~fails:(fresh_row env.st)
+            (Option.get (Iface.handler_deps f))
+            (fresh_row env.st)
       | None -> fresh_var env.st
     in
     (ps, ret, errs, uses)
@@ -991,6 +1018,7 @@ let setup env ~is_value (f : fn_def) =
       selves = errs :: transparent_rows f.params ps;
       sources = Some (ref []);
       named;
+      next_at = Next_ok;
     }
   in
   Hashtbl.replace env.globals path
@@ -1048,10 +1076,10 @@ let check_body env ~is_value m =
     | None -> plain
   in
   match (f.body.kind, m.ret) with
-  | Handler { state; arms; _ }, t when f.ret = None && impl_parts t <> None ->
+  | Handler _, t when f.ret = None && impl_of t <> None ->
       (* its needs are what its state and arms use *)
-      let needs = snd (Option.get (impl_parts t)) in
-      handler core env m.cx state arms ~needs ~declared:None;
+      let i = Option.get (impl_of t) in
+      handler core env m.cx f.body ~needs:i.needs ~fails:i.fails ~declared:None;
       Hashtbl.replace m.cx.nodes f.body.node m.ret
   | _ ->
       check env m.cx ~why
@@ -1503,6 +1531,59 @@ let canonical env so_far (f : fn_def) =
     }
   in
   let cx = Hashtbl.find so_far.tables path in
+  (* a handler's `finally`: the body's type and its errors' row, skolems
+     while it was checked, are variables of the function's now, numbered
+     after its own, so lowering knows which the body's type is *)
+  (match Hashtbl.find_opt env.finallies path with
+  | Some (node, tid, eid) -> (
+      (* what's used of the body's value, it can't have: it's any type *)
+      (match needs env.st tid with
+      | req :: _ -> (
+          match need_at env.st tid req with
+          | Some loc -> report env (finally_needs loc req ~op:(req_symbol req))
+          | None -> ())
+      | [] -> ());
+      let v = generic_var env.st in
+      Hashtbl.replace env.st.skolem_vars tid v;
+      Hashtbl.replace env.st.skolem_rows eid (generic_row env.st);
+      match (canon_ty c ~all:true v, Hashtbl.find_opt cx.found node) with
+      | Var k, Some (Handler_facts f) ->
+          Hashtbl.replace cx.found node
+            (Handler_facts { f with body_ty = Some k })
+      | _ -> ())
+  | None -> ());
+  (* each operation a handler over a dependency leaves out, which lowering
+     makes a lambda of: its type, with a lambda set of its own numbered
+     with the function's *)
+  Hashtbl.filter_map_inplace
+    (fun _ (found : found) ->
+      match found with
+      | Handler_facts f ->
+          let forward (p, op, (fty : Ty.ty)) =
+            let t =
+              match
+                of_ty
+                  ~vars:(fun _ -> TError)
+                  ~tails:(fun _ -> REmpty)
+                  ~lams:(fun _ -> REmpty)
+                  fty
+              with
+              | TFun (ps, r, e, u, _) ->
+                  TFun
+                    ( ps,
+                      r,
+                      e,
+                      u,
+                      extend
+                        [ lam (Ty.global_id (Path.member p op)) ]
+                        (fresh_row env.st) )
+              | t -> t
+            in
+            (p, op, canon_ty c ~all:true t)
+          in
+          Some (Handler_facts { f with forwards = List.map forward f.forwards })
+      | found -> Some found)
+    cx.found;
   let ids =
     Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes [] |> List.sort compare
   in

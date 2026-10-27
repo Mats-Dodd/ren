@@ -74,9 +74,17 @@ val without : string list -> Types.row -> Types.row
 
 (* Add what a call's callee uses, or what an implementation a `with`
    installs needs ([needs]), to the dependencies of the function or lambda
-   the context is in. *)
+   the context is in. [op] is the operation called, if it's a
+   dependency's. *)
 val use_row :
-  env -> ctx -> loc:Loc.t -> ?needs:bool -> ?callee:Path.t -> Types.row -> unit
+  env ->
+  ctx ->
+  loc:Loc.t ->
+  ?needs:bool ->
+  ?callee:Path.t ->
+  ?op:string ->
+  Types.row ->
+  unit
 
 (* Join what's used at [loc] to what the function or lambda it's in uses,
    or say it can't use all of that. [what] says what uses it: a call, a
@@ -88,13 +96,15 @@ val join_uses :
    errors, the first row, to whatever marks it, and its dependencies, the
    second, to the caller's (errors.md, "Marking"). [target] is the
    function of the group it calls, and [callee] the top-level function, if
-   it's one. *)
+   it's one. [install] says it's a link of a `with` being installed, not a
+   call. *)
 val absorb :
   env ->
   ctx ->
   call:Ast.Resolved.expr ->
   ename:string ->
   fn:Ast.Resolved.expr ->
+  ?install:bool ->
   ?target:Path.t ->
   ?callee:Path.t ->
   Types.row ->

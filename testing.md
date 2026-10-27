@@ -8,7 +8,7 @@ for everything that isn't a specification. What runs today, `test`,
 
 > **Status:** partly built. Stage 9c runs: tests are specifications, test
 > items, `test fn` and `test handler`, and a first `ren console`, with
-> types, private items and the choice of world. Stage 10 adds what needs
+> types, private items and the choice of world. Stage 10b adds what needs
 > the journal: effects shown as they happen, `:reload` and `:spec`.
 > Property tests come with the standard library in stage 12. See
 > [Roadmap](#roadmap).

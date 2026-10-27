@@ -1,6 +1,6 @@
 ; The outline: every function, type, dependency and handler, and under a
 ; type its members, under a dependency its operations and members, and
-; under a handler the operations it implements; and every test, group and
+; under a handler the operations it implements and its `finally`; and every test, group and
 ; group run, with a group's tests under it.
 
 (function_definition
@@ -30,6 +30,9 @@
 
 (handler_arm
   name: (identifier) @name) @item
+
+(finally_arm
+  "finally" @name) @item
 
 (associated_value
   (visibility)? @context

@@ -18,6 +18,7 @@ let name_of = function
   | Global p | Global_value p -> Path.local p
   | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
+  | Next_op (_, op) -> "next." ^ op
   | Assoc_value (Named p, v) -> p.name ^ "." ^ v
   | Assoc_value (Param _, v) -> v
 
@@ -26,7 +27,7 @@ let short_of = function
   | Local b -> b.ident.name
   | Global p | Global_value p -> Path.short p
   | Intrinsic x -> Intrinsic.member_name x
-  | Dep_op (_, op) | Assoc_value (_, op) -> op
+  | Dep_op (_, op) | Next_op (_, op) | Assoc_value (_, op) -> op
 
 (* The name of the function [f] a call calls, for messages, if it's a
    function's name. *)
@@ -61,7 +62,9 @@ let rec binders (p : pattern) =
    the help, if the caller knows a better one, where the two are an
    implementation of several dependencies and one of some of them, which
    it's narrowed to only where a written type asks for that: it's given
-   that type, printed. It's defined in infer_env.ml, since a constraint
+   that type, printed. [type_params] is whether a note says what a type
+   parameter in either type is, unless the caller's notes say what they
+   stand for. It's defined in infer_env.ml, since a constraint
    can carry one: [= Infer_env.why] says it's that type, not a new one with
    the same fields. *)
 type why = Infer_env.why = {
@@ -70,11 +73,12 @@ type why = Infer_env.why = {
   help : (string -> string -> string) option;
   narrowed_help : (string -> string) option;
   labels : string -> string -> (Loc.t * string) list;
+  type_params : bool;
 }
 
-let explain ?msg ?(notes = []) ?help ?narrowed_help ?(labels = fun _ _ -> []) ()
-    =
-  { msg; notes; help; narrowed_help; labels }
+let explain ?msg ?(notes = []) ?help ?narrowed_help ?(labels = fun _ _ -> [])
+    ?(type_params = true) () =
+  { msg; notes; help; narrowed_help; labels; type_params }
 
 let plain = explain ()
 
@@ -119,7 +123,35 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
       in
       let needs_more =
         match impls found expected with
-        | Some t -> [ Needs_more { ty = f; alone = t == repr found } ]
+        | Some t
+          when match (t, impls expected found) with
+               | TImpl i, Some (TImpl j) -> i.over <> j.over
+               | _ -> false ->
+            (* what differs is whether it goes over another *)
+            let i = Option.get (impl_of t) in
+            [
+              Over_differs
+                {
+                  deps = String.concat " & " (List.map (type_name env) i.deps);
+                  over = i.over;
+                };
+            ]
+        | Some t ->
+            (* it's what they fail to start with that differs, if that
+               does, either way round: then the help writes the one that
+               can fail, which both fit *)
+            let more (i : impl) (j : impl) =
+              List.exists
+                (fun l -> not (List.mem l (row_names j.fails)))
+                (row_names i.fails)
+            in
+            let fails, ty =
+              match (t, impls expected found) with
+              | TImpl i, Some (TImpl j) when more i j -> (true, f)
+              | TImpl i, Some (TImpl j) when more j i -> (true, x)
+              | _ -> (false, f)
+            in
+            [ Needs_more { ty; alone = t == repr found; fails } ]
         | None -> []
       in
       (* what's about errors: one tag with two shapes, or a function that
@@ -222,9 +254,11 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
           else None
         in
         match (f, x, impl_parts f, impl_parts x) with
-        | TAll (ds, _), _, _, Some (es, _) when ds <> es ->
+        | TImpl { deps = ds; _ }, _, _, Some (es, _)
+          when List.length ds > 1 && ds <> es ->
             Some (ds, es, true, solved)
-        | _, TAll (ds, _), Some (es, _), _ when ds <> es ->
+        | _, TImpl { deps = ds; _ }, Some (es, _), _
+          when List.length ds > 1 && ds <> es ->
             Some (ds, es, false, solved)
         | TCon (p, fs), TCon (q, xs), _, _ when p = q -> pairs fs xs
         | TFun (ps, r, _, _, _), TFun (qs, r', _, _, _), _, _ ->
@@ -273,7 +307,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
       in
       report env
         (mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
-           ~found ~expected ~f ~x
+           ~type_params:why.type_params ~found ~expected ~f ~x
            (behind @ needs_more @ errors @ private_ @ several))
 
 (* Unify [found] with [expected], and say whether that worked. *)

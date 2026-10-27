@@ -67,7 +67,12 @@ type cx = {
   mutable ev : C.var;
       (** the evidence in scope: the function's, or the lambda's whose body is
           being lowered *)
-  tys : C.var list;  (** the function's hidden type parameters (core.ml) *)
+  mutable handler_ev : C.var option;
+      (** in a handler, its evidence, where it was installed, which `next` finds
+          the implementation it's over in *)
+  mutable tys : C.var list;
+      (** the function's hidden type parameters (core.ml), and in a handler's
+          `finally`, the one it's given for the type of the `with`'s body *)
   dicts : ((int * string) * C.var) list;
       (** its hidden dictionary parameters, by the requirement each is for *)
 }
@@ -303,9 +308,13 @@ and expr_of cx (e : expr) : C.expr =
                    List.map (fun var : C.param -> { mode = Read; var }) params;
                  ev;
                  captures = [];
-                 body = mk (Dep_call { dep; op; fty; ev; args }) ret e.loc;
+                 body =
+                   mk
+                     (Dep_call { dep; op; fty; ev; next = false; args })
+                     ret e.loc;
                })
       | _ -> bug "an operation whose type isn't a function's")
+  | Var (Next_op _) -> bug "`next` used other than by calling through it"
   | Var (Assoc_value (_, req)) -> value_of cx req (ty ()) e.loc
   | Unop (Neg, a, onode) ->
       operator cx ~onode ~meth:"neg" C.Neg (ty ()) e.loc [ expr cx a ]
@@ -455,7 +464,7 @@ and expr_of cx (e : expr) : C.expr =
       | _ -> bug "a constructor inference didn't find")
   | Record (_, fields) -> (
       match ty () with
-      | Con (p, _) ->
+      | Con (p, _) | Impl { deps = [ p ]; _ } ->
           here
             (Record
                (p, List.map (fun ((f : ident), v) -> (f.name, expr cx v)) fields))
@@ -479,54 +488,133 @@ and expr_of cx (e : expr) : C.expr =
   | Assign { target; op; value; onode } -> assign cx e ~onode target op value
   | For { pat; over = Each iter; body } -> for_loop cx e pat iter body
   | For { pat; over = Range (lo, hi); body } -> range_loop cx e pat lo hi body
-  | With { item; body; lam } -> (
-      (* the body sees evidence of its own: the [With]'s, which extends
-         what's installed around it, or the lambda's, which a wrapper
-         passes the evidence it's called with *)
-      let inner () =
+  | With { items; body } -> with_ cx e items body
+  | Handler { deps; state; arms; finally; _ } ->
+      (* it runs where it's installed, with the evidence there *)
+      let ev = evidence cx and outer = cx.ev and around = cx.handler_ev in
+      cx.ev <- ev;
+      cx.handler_ev <- Some ev;
+      let body = handler cx e deps state arms finally in
+      cx.ev <- outer;
+      cx.handler_ev <- around;
+      (* its own evidence, which `next` uses, is bound, not captured *)
+      let captures =
+        List.filter (fun (v : C.var) -> v.id <> ev.id) (free body)
+      in
+      here (Handler { ev; captures; body })
+
+(* `with a, b over c in body` (handlers.md, "A `with` is a set"). What
+   each link of each item installs is made first, outside the `with`, in
+   the order written; then the items are installed in the order inference
+   worked out, outermost first, each chain's bottom outermost, each a
+   [With] or a [With_handler] whose body sees evidence of its own, which
+   extends what's installed around it; and inside them all, the wrappers,
+   each passed a lambda of what's inside it, which it calls with the
+   evidence it's called with. *)
+and with_ cx (e : expr) items body =
+  let ty = ty_of cx e.node in
+  let order =
+    match (node cx e.node).found with
+    | Some (Install_order o) -> o
+    | _ -> bug "a `with` inference didn't say the order of"
+  in
+  let kind (lk : with_link) = (node cx lk.knode).found in
+  (* each implementation's value, in a temporary, in the order written,
+     unless there's only one, which its [With] makes before it installs it *)
+  let made =
+    List.concat_map
+      (fun (it : with_item) ->
+        List.filter_map
+          (fun (lk : with_link) ->
+            match kind lk with
+            | Some (Installs _ | Installs_handler _) ->
+                Some (lk.knode, expr cx lk.link)
+            | _ -> None)
+          it.chain)
+      items
+  in
+  let alone = List.length made = 1 in
+  let made =
+    List.map
+      (fun (k, (v : C.expr)) ->
+        (k, ((if alone then None else Some (temp cx "impl" v.ty)), v)))
+      made
+  in
+  let desc = C.describe cx.tys ty in
+  (* the wrappers, each wrapping the next, the last the body *)
+  let rec wraps = function
+    | [] -> expr cx body
+    | (lk : with_link) :: rest -> (
         let ev = evidence cx and outer = cx.ev in
         cx.ev <- ev;
-        let body = expr cx body in
+        let b = wraps rest in
         cx.ev <- outer;
-        (ev, outer, body)
-      in
-      match (node cx e.node).found with
-      | Some (Installs dep) ->
-          let impl = expr cx item in
-          let ev, outer, body = inner () in
-          here (With { ev; outer; dep; impl; body })
-      | Some (Installs_handler deps) ->
-          let handler = expr cx item in
-          let ev, outer, body = inner () in
-          here (With_handler { ev; outer; handler; deps; body })
-      | Some Wraps -> (
-          (* `with retry(3) in body` is `retry(3, fn() => body)` *)
-          let ev, _, b = inner () in
-          let lam =
-            mk
-              (Lambda
-                 {
-                   name = lambda_name cx lam;
-                   params = [];
-                   ev;
-                   captures = free b;
-                   body = b;
-                 })
-              (ty_of cx lam) body.loc
-          in
-          match item.kind with
-          | Call (f, args) -> plain_call cx ~changed:false ~last:lam item f args
-          | _ ->
-              let f = expr cx item in
-              here (Call (f, [ Value lam ], cx.ev)))
-      | _ -> bug "a `with` inference didn't say the kind of")
-  | Handler { deps; state; arms; _ } ->
-      (* it runs where it's installed, with the evidence there *)
-      let ev = evidence cx and outer = cx.ev in
-      cx.ev <- ev;
-      let body = handler cx e deps state arms in
-      cx.ev <- outer;
-      here (Handler { ev; captures = free body; body })
+        let lam =
+          mk
+            (Lambda
+               {
+                 name = lambda_name cx lk.lam;
+                 params = [];
+                 ev;
+                 captures = free b;
+                 body = b;
+               })
+            (ty_of cx lk.lam) b.loc
+        in
+        (* `retry(3) over ...` is `retry(3, fn() => ...)` *)
+        match lk.link.kind with
+        | Call (f, args) ->
+            plain_call cx ~changed:false ~last:lam lk.link f args
+        | _ -> (
+            let f = expr cx lk.link in
+            match f.ty with
+            | Fun (_, r, _, _, _) -> mk (Call (f, [ Value lam ], cx.ev)) r e.loc
+            | _ -> bug "a wrapper whose type isn't a function's"))
+  in
+  let wrappers =
+    List.concat_map
+      (fun (it : with_item) ->
+        match it.chain with
+        | lk :: _ when kind lk = Some Wraps -> it.chain
+        | _ -> [])
+      items
+  in
+  (* [inside], with the link [lk] installed around it *)
+  let install (lk : with_link) inside =
+    let impl =
+      match List.assoc_opt lk.knode made with
+      | Some (None, value) -> value
+      | Some (Some v, _) -> local v lk.link.loc
+      | None -> bug "a `with`'s implementation not made"
+    in
+    let ev = evidence cx and outer = cx.ev in
+    cx.ev <- ev;
+    let body = inside () in
+    cx.ev <- outer;
+    match kind lk with
+    | Some (Installs dep) ->
+        mk (With { ev; outer; dep; impl; desc; body }) ty e.loc
+    | Some (Installs_handler deps) ->
+        mk
+          (With_handler { ev; outer; handler = impl; deps; desc; body })
+          ty e.loc
+    | _ -> bug "a link of a `with` that isn't an implementation"
+  in
+  let rec nest = function
+    | [] -> wraps wrappers
+    | idx :: rest ->
+        let it : with_item = List.nth items idx in
+        let rec chain = function
+          | [] -> nest rest
+          | lk :: above -> install lk (fun () -> chain above)
+        in
+        chain (List.rev it.chain)
+  in
+  lets
+    (List.filter_map
+       (fun (_, (v, value)) -> Option.map (fun v -> (v, value)) v)
+       made)
+    (nest order)
 
 (* A handler's body, which makes an instance: its state, each `var` then
    put in a cell, and an implementation of each of [deps], a record of its
@@ -536,11 +624,16 @@ and expr_of cx (e : expr) : C.expr =
    cell in between: an arm runs with what was installed outside its
    handler's `with`, which isn't the instance it's part of, so it never
    runs inside another arm of the same instance. *)
-and handler cx (e : expr) deps state arms =
+and handler cx (e : expr) deps state arms finally =
   let needs =
     match Ty.impl_parts (ty_of cx e.node) with
-    | Some (_, needs) -> Ty.Uses needs
+    | Some (_, needs) -> needs
     | None -> bug "a handler whose type isn't a handler's"
+  in
+  let forwards, body_ty =
+    match (node cx e.node).found with
+    | Some (Handler_facts { forwards; body_ty }) -> (forwards, body_ty)
+    | _ -> ([], None)
   in
   let rec state_lets = function
     | [] -> instance ()
@@ -572,11 +665,86 @@ and handler cx (e : expr) deps state arms =
         List.filter_map
           (fun (a : handler_arm) ->
             match a.arm_op with
-            | Dep_op (q, op) when q = p -> Some (op, arm_impl cx cells a)
+            | Dep_op (q, op) when q = p ->
+                Some (op, arm_impl cx cells a.arm_impl)
             | _ -> None)
           arms
       in
-      (p, mk (Record (p, ops)) (Con (p, [ needs ])) e.loc)
+      (* what it leaves out, the one under it does: a lambda that calls
+         it, with the evidence the operation runs with, where the one
+         under it is the innermost *)
+      let forwarded =
+        List.filter_map
+          (fun (q, op, (fty : Ty.ty)) ->
+            match fty with
+            | Fun (ps, ret, errs, _, lams) when q = p ->
+                let name = Ty.global_id (Path.member p op) in
+                let fty = Ty.Fun (ps, ret, errs, needs, lams) in
+                let params =
+                  List.map (fun (q : Ty.param) -> temp cx "x" q.ty) ps
+                in
+                let ev = evidence cx in
+                let args = List.map (fun v -> local v e.loc) params in
+                Some
+                  ( op,
+                    mk
+                      (Lambda
+                         {
+                           name;
+                           params =
+                             List.map
+                               (fun var : C.param -> { mode = Read; var })
+                               params;
+                           ev;
+                           captures = [];
+                           body =
+                             mk
+                               (Dep_call
+                                  { dep = p; op; fty; ev; next = false; args })
+                               ret e.loc;
+                         })
+                      fty e.loc )
+            | _ -> None)
+          forwards
+      in
+      (p, mk (Record (p, ops @ forwarded)) (Ty.impl [ p ] needs) e.loc)
+    in
+    (* its `finally`, which is given the descriptor of the `with`'s body's
+       type first, the variable after the function's own *)
+    let finally =
+      match (finally, body_ty) with
+      | Some f, Some k when k = List.length cx.tys ->
+          let d = temp cx "ty" C.type_ty in
+          let own = cx.tys in
+          cx.tys <- own @ [ d ];
+          let lam = arm_impl cx cells f in
+          cx.tys <- own;
+          Some
+            (match (lam.kind, lam.ty) with
+            | Lambda l, Fun (ps, r, errs, uses, lams) ->
+                {
+                  lam with
+                  kind =
+                    Lambda
+                      {
+                        l with
+                        params = { mode = Read; var = d } :: l.params;
+                        captures =
+                          List.filter
+                            (fun (v : C.var) -> v.id <> d.id)
+                            l.captures;
+                      };
+                  ty =
+                    Fun
+                      ( { mode = Read; ty = C.type_ty } :: ps,
+                        r,
+                        errs,
+                        uses,
+                        lams );
+                }
+            | _ -> bug "a `finally` that isn't a lambda")
+      | Some _, _ -> bug "a `finally` without the type of its body"
+      | None, _ -> None
     in
     let made =
       List.map
@@ -584,16 +752,20 @@ and handler cx (e : expr) deps state arms =
           (c, mk (Prim (New_cell, [ local v e.loc ])) c.ty e.loc))
         cells
     in
-    lets made (mk (Instance (List.map impl deps)) (ty_of cx e.node) e.loc)
+    lets made
+      (mk
+         (Instance { impls = List.map impl deps; finally })
+         (ty_of cx e.node) e.loc)
   in
   state_lets state
 
-(* An arm of a handler, which keeps [cells], the state's `var`s' cells. *)
-and arm_impl cx cells (a : handler_arm) =
-  let lam = expr cx a.arm_impl in
+(* An arm of a handler, or its `finally`, the lambda [impl], which keeps
+   [cells], the state's `var`s' cells. *)
+and arm_impl cx cells (impl : expr) =
+  let lam = expr cx impl in
   match lam.kind with
   | Lambda { name; params; ev; captures; body } ->
-      let loc = a.arm_impl.loc in
+      let loc = impl.loc in
       let used =
         List.filter
           (fun ((v : C.var), _) ->
@@ -784,7 +956,21 @@ and call cx ?(changed = false) (e : expr) f args =
          order *)
       let args = List.map (expr cx) args in
       mk
-        (Dep_call { dep; op; fty = ty_of cx f.node; ev = cx.ev; args })
+        (Dep_call
+           { dep; op; fty = ty_of cx f.node; ev = cx.ev; next = false; args })
+        (ty_of cx e.node) e.loc
+  | Var (Next_op (dep, op)) ->
+      (* `next.get(id)`: the innermost implementation where the handler
+         was installed, which is the one it's over (handlers.md, "How it
+         runs"), whatever is installed where the call runs *)
+      let ev =
+        match cx.handler_ev with
+        | Some ev -> ev
+        | None -> bug "`next` outside a handler"
+      in
+      let args = List.map (expr cx) args in
+      mk
+        (Dep_call { dep; op; fty = ty_of cx f.node; ev; next = true; args })
         (ty_of cx e.node) e.loc
   | _ -> plain_call cx ~changed e f args
 
@@ -1008,20 +1194,25 @@ and free (e : C.expr) =
     | Tag (_, args, ds) ->
         List.iter use (List.concat_map C.desc_vars ds);
         List.iter go args
-    | Prim (_, args)
-    | Array args
-    | Tuple args
-    | Con (_, _, args)
-    | Dep_call { args; _ } ->
+    | Dep_call { ev; next; args; _ } ->
+        (* through `next`, its handler's evidence, which its operations
+           and `finally` keep, and no other lambda (Infer_env.next_at) *)
+        if next then use ev;
         List.iter go args
-    | With { impl; body; _ } ->
+    | Prim (_, args) | Array args | Tuple args | Con (_, _, args) ->
+        List.iter go args
+    | With { impl; desc; body; _ } ->
         (* its evidence isn't a local: nothing captures it *)
         go impl;
+        List.iter use (C.desc_vars desc);
         go body
-    | With_handler { handler; body; _ } ->
+    | With_handler { handler; desc; body; _ } ->
         go handler;
+        List.iter use (C.desc_vars desc);
         go body
-    | Instance impls -> List.iter (fun (_, i) -> go i) impls
+    | Instance { impls; finally } ->
+        List.iter (fun (_, i) -> go i) impls;
+        Option.iter go finally
     | Handler { captures; _ } -> List.iter use captures
     | Fail a | Narrowed (_, a) | Assert a -> go a
     | Finally (a, b) ->
@@ -1122,10 +1313,10 @@ let max_binder (f : fn_def) =
     | For { pat = p; _ } ->
         pat p;
         List.iter go (Ast.children e)
-    | With { item; body; _ } ->
-        go item;
+    | With { items; body } ->
+        List.iter go (with_links items);
         go body
-    | Handler { state; arms; _ } ->
+    | Handler { state; arms; finally; _ } ->
         List.iter
           (function
             | Let { name; value; _ } ->
@@ -1136,7 +1327,8 @@ let max_binder (f : fn_def) =
                 go value
             | Expr e -> go e)
           state;
-        List.iter (fun (a : handler_arm) -> go a.arm_impl) arms
+        List.iter (fun (a : handler_arm) -> go a.arm_impl) arms;
+        Option.iter go finally
   and pat (p : pattern) =
     match p.pkind with
     | PVar b -> see b
@@ -1157,6 +1349,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
       vars = Hashtbl.create 16;
       next = next + 1;
       ev = C.evidence next;
+      handler_ev = None;
       tys = C.type_params scheme;
       dicts = List.combine scheme.reqs (C.dict_params scheme);
     }
@@ -1297,8 +1490,9 @@ let start (main : C.fn_def) : C.fn_def =
                impl =
                  mk
                    (Global_value (real, { tys = []; rows = []; lams = [] }))
-                   (Con (dep, [ Uses Ty.closed ]))
+                   (Ty.impl [ dep ] Ty.closed)
                    loc;
+               desc = C.describe tys ret;
                body = install (n + 1) rest;
              })
           ret loc

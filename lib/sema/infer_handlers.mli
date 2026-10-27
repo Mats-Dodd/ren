@@ -48,27 +48,27 @@ type core = {
    gives (Types.impl_type). *)
 val handler_deps : Ast.tname list -> Path.t list
 
-(* A handler's body: its state and its arms, which use [needs], checked
-   once the group is done against what's [declared], if anything is. *)
+(* A handler's body, the expression given: its state, arms and `finally`,
+   which use [needs] and fail with [fails], checked once the group is done
+   against what's [declared], if anything is. *)
 val handler :
   core ->
   env ->
   ctx ->
-  Ast.Resolved.stmt list ->
-  Ast.Resolved.handler_arm list ->
+  Ast.Resolved.expr ->
   needs:Types.row ->
+  fails:Types.row ->
   declared:string list option ->
   unit
 
-(* `with item in body`, the first expression, given its item and body and
-   the node id its body's lambda is recorded at: whether it installs or
-   wraps is found here, and kept for lowering. *)
+(* `with a, b over c in body`, the first expression, given its items and
+   body: what each link is, and the order they're installed in, are found
+   here, and kept for lowering. *)
 val with_ :
   core ->
   env ->
   ctx ->
   Ast.Resolved.expr ->
+  Ast.Resolved.with_item list ->
   Ast.Resolved.expr ->
-  Ast.Resolved.expr ->
-  int ->
   Types.ty

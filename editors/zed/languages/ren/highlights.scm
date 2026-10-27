@@ -20,6 +20,14 @@
 (boolean) @boolean
 (self) @variable.special
 (wildcard) @variable.special
+; in a handler over a dependency, the implementation under it: `next.get()`
+; and `next(A).get()`. Only so: `N.next()` names an operation
+((method_call_expression
+  receiver: (identifier) @variable.special)
+  (#eq? @variable.special "next"))
+((call_expression
+  function: (identifier) @variable.special)
+  (#eq? @variable.special "next"))
 
 [
   "fn"
@@ -40,6 +48,8 @@
   "not"
   "with"
   "handler"
+  "over"
+  "finally"
   "test"
   "group"
   "assert"
@@ -110,7 +120,8 @@
 
 ; ---- uses ----
 
-(call_expression function: (identifier) @function)
+((call_expression function: (identifier) @function)
+  (#not-eq? @function "next"))
 (method_call_expression name: (identifier) @function.method)
 (item_expression name: (identifier) @function)
 (field_expression field: (identifier) @property)

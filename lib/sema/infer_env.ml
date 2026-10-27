@@ -23,11 +23,24 @@ type found =
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
   | Installs of Path.t
-      (** a `with` whose item is an implementation of this dependency *)
+      (** a link of a `with`'s item that's an implementation of this dependency
+      *)
   | Installs_handler of Path.t list
-      (** a `with` whose item describes a handler of these dependencies, which
-          it makes an instance of *)
-  | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
+      (** a link that describes a handler of these dependencies, which it makes
+          an instance of *)
+  | Wraps  (** a link that's a wrapper, which what's inside it is passed to *)
+  | Install_order of int list
+      (** at a `with`: the items that install, by their place in it, outermost
+          first (handlers.md, "A `with` is a set") *)
+  | Handler_facts of {
+      forwards : (Path.t * string * Ty.ty) list;
+      body_ty : int option;
+    }
+      (** at a handler: the operations it leaves out, which go to the
+          implementation under it, each with its dependency's declared type
+          (handlers.md, "`over`"); and if it has a `finally`, the variable that
+          stands for the type of the body of a `with` that installs it, which
+          its function's own come before, and a [With] passes a descriptor of *)
   | Handles  (** a `match` that handles errors: one with `fail` arms *)
   | Fail_arm
       (** a `fail` arm's pattern, which matches an error rather than a value *)
@@ -76,6 +89,8 @@ type call = {
   row : row;
   needs : bool;
   callee : Path.t option;  (** the top-level function called, if it's one *)
+  op : string option;
+      (** the operation called, if it's a dependency's, `Users.get(1)` *)
 }
 
 (* How to explain a mismatch with an expected type (Infer_report.why,
@@ -86,6 +101,7 @@ type why = {
   help : (string -> string -> string) option;
   narrowed_help : (string -> string) option;
   labels : string -> string -> (Loc.t * string) list;
+  type_params : bool;
 }
 
 type env = {
@@ -127,9 +143,18 @@ type env = {
       (** each statement that threw away a value of a type still unknown, which
           the solver made `Unit`, with the function it's in: a later mismatch at
           a call of that function points back at it *)
-  mutable in_state : bool;
-      (** whether the code being checked is a handler's state, which can't fail,
-          for a message when something in it does *)
+  mutable in_state : (string * string) option;
+      (** whether the code being checked is a handler's state or `finally`, what
+          a `with` that installs it fails with: the handler, `pub handler h`,
+          and what's after its name, `over Sql`, for a message when something
+          there fails with what it doesn't say *)
+  finallies : (Path.t, int * int * int) Hashtbl.t;
+      (** each handler's `finally`, by its handler's function: the handler's
+          node, and the skolems of the body's type and its errors' row, which
+          become variables of the function's when it's put in canonical form *)
+  mutable finally_rows : int list;
+      (** the skolems of the rows a `finally`'s body's errors are: `try r`
+          passes those on, but they're the `with`'s body's already *)
   mutable in_scope : Path.t list;
       (** the types step 2 of a lookup found: a type imported by name may be
           used only that way, so this says that its import is used *)
@@ -202,6 +227,9 @@ and impl_op = {
   ierrs : row;
   ivalue : expr;
   inodes : (int, ty) Hashtbl.t;
+  ineeds : row option;
+      (** a record implementation's: what it needs, which can't be its own
+          dependency (handlers.md, "`over`") *)
 }
 
 (* A `with` that installs [wdep], at [wloc]: its body uses [wbody], which
@@ -238,14 +266,19 @@ and copy = {
 }
 
 (* A handler: [nrow] is what its state and arms use, and [ncalls] the
-   calls that add to it. That can't be a dependency it implements itself
-   (the next one out is `outer`'s, stage 10). If its needs are written,
+   calls that add to it. That can't be a dependency it implements itself,
+   unless it goes over it, [nover], and reaches the one under it with
+   `next` (handlers.md, "`over`"). If its needs are written,
    `for N uses Console`, or it's public, which needs nothing if it says
    nothing, they're [ndeclared], and [nrow] has to be no more than that.
    It's checked once the group is done, with its function's `uses`, by the
    solver, and then a written row is closed. *)
 and handler_needs = {
   nself : Path.t;
+  nover : string list;
+  nfails : row;
+      (** what its state and `finally` fail with, which is all it can fail to
+          start with once the group is done *)
   ndeclared : string list option;
   nrow : row;
   ncalls : call list ref;
@@ -400,6 +433,9 @@ and ecall = {
   eparams : (string * ty) list;
       (** the parameters of the function or lambdas the call is in *)
   eselves : row list;  (** those functions' and lambdas' own errors *)
+  einstall : bool;
+      (** whether it's installing a `with`'s item, which can fail to start
+          (handlers.md, "State that can fail to start"), not a call *)
 }
 
 (* A `try`, an `attempt` or a `match` with `fail` arms, and the calls it
@@ -466,6 +502,15 @@ and source =
    top-level function, or of a lambda in it, or by a `let`. *)
 and bound_by = Own_param | Lambda_param | Let_bound
 
+(* Whether the code can call `next` (handlers.md, "`next`"): only while
+   one of the handler's operations runs, in its state, an arm or its
+   `finally`, not in a lambda, which can outlive the operation, nor in the
+   body of a `with` that a wrapper, [wrapper], is given, which is one. A
+   lambda that called `next` would keep the evidence where the handler is
+   installed, and passed to the implementation under it and kept there,
+   would reach it: a cycle (compiler.md, "No cycles"). *)
+and next_at = Next_ok | In_lambda | In_wrapped of string option
+
 (* What the expression being inferred can see. *)
 and ctx = {
   self : Path.t;  (** the top-level function being checked *)
@@ -517,6 +562,7 @@ and ctx = {
   tparams : ty list;  (** what the type parameters in scope stand for *)
   named : (string * row) list;
       (** the rows the function's signature names, `..d`, by name (ast.ml) *)
+  next_at : next_at;  (** whether `next` can be called here *)
 }
 
 (* A dot call that turned out to call [callee], a method of the module
@@ -601,4 +647,5 @@ let lambda_cx cx (params : Resolved.param list) ps ~errs ~uses =
       @ cx.params;
     selves = errs :: cx.selves;
     sources = None;
+    next_at = In_lambda;
   }

@@ -94,6 +94,7 @@ let lint_evidence body =
            op = "op";
            fty = Fun ([], Ty.int, Ty.closed, uses_d, Ty.any_lams);
            ev = Core.evidence ev;
+           next = false;
            args = [];
          })
       Ty.int loc
@@ -1510,17 +1511,18 @@ let%expect_test
     {|
 dep Log =
   put: fn(n: Int)
-fn doubling() = Log { put: fn(n) => Log.put(n * 2) }
+handler doubling() over Log =
+  put(n) => next.put(n * 2)
 fn main() uses Log =
   Log.put(1)
 |};
   [%expect
     {|
     error: nothing installs `Log` before `main`
-      ┌─ test.ren:4:16
-    4 │ fn main() uses Log =
+      ┌─ test.ren:5:16
+    5 │ fn main() uses Log =
       │                ^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-    5 │   Log.put(1)
+    6 │   Log.put(1)
       │   ---------- this call uses `Log`
       help: install one inside `main`, with `with`: an implementation is a `Log { ... }` that gives each of its operations
     |}]
@@ -1714,13 +1716,13 @@ fn main() =
   g(with a in 1, 2)
 |};
   [%expect
-    {| (fn main () (block (with (call (. (con Clock) frozen) t) (with (call counting 1) (call body))) (with (call retry 3) (try (call f))) (call g (with a 1) 2))) |}];
+    {| (fn main () (block (with (call (. (con Clock) frozen) t) (call counting 1) (call body)) (with (call retry 3) (try (call f))) (call g (with a 1) 2))) |}];
   ast {|
 fn main() = with a b in 1
 |};
   [%expect
     {|
-    error: expected `,` or `in` after what `with` installs, found `b`
+    error: expected `,`, `over` or `in` after what `with` installs, found `b`
       ┌─ test.ren:1:20
     1 │ fn main() = with a b in 1
       │                    ^
@@ -1763,7 +1765,7 @@ fn at(minutes: Int) -> Clock =
 fn stamp() = Clock.now()
 fn main() uses Console =
   print(with at(1) in stamp())
-  print(with at(1), at(2) in stamp())
+  print(with at(1) in with at(2) in stamp())
   with at(3) in
     print(stamp())
     print(with at(4) in stamp())
@@ -2096,7 +2098,7 @@ fn main() uses Console =
   let w = W { n: 3 }
   print(with w.wrap() in 5)
   print(with W.times(3) in 5)
-  print(with w.wrap(), w.wrap() in 2)
+  print(with w.wrap() over w.wrap() in 2)
   print(attempt with w.wrap() in fail Nope)
 |};
   [%expect {|
@@ -2224,7 +2226,7 @@ fn main() uses Console =
     print(calls())
   with h in
     print(calls())
-  with counting_rates(2), counting_rates(5) in
+  with counting_rates(2) in with counting_rates(5) in
     print(calls())
     print(convert(1))
 |}
@@ -2345,11 +2347,12 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: the handler `missing` doesn't implement `A.y`
+    error: `missing` doesn't implement `y`
        ┌─ test.ren:11:9
     11 │ handler missing() for A =
        │         ^^^^^^^
-       help: add `y(...) => ...`
+       = a handler implements every operation, unless it goes `over` another implementation, which then does the rest
+       help: write them, or declare it `over A` if another `A` should handle them
 
     error: `A` has no operation named `w`
        ┌─ test.ren:17:3
@@ -2390,7 +2393,7 @@ fn main() = 1
     33 │ handler net() for Net =
        │                   ^^^
        = `Net` is only a name so far: what it can do comes in a later stage
-       help: remove it from the `for` list
+       help: remove it from after `for`
 
     error: a handler's parameter can't be `inout`
        ┌─ test.ren:36:22
@@ -2454,11 +2457,11 @@ handler f() =
       │           ^^^
       help: write its parameters, `handler g() for ...`, even if it has none
 
-    error: expected `for` and the dependencies it implements, found `=`
+    error: expected `for` or `over` and the dependencies it implements, found `=`
        ┌─ test.ren:11:13
     11 │ handler f() =
        │             ^
-       help: say what it implements: `handler f(...) for Clock =`
+       help: say what it implements: `handler f(...) for Clock =`, or `over Clock` to go in front of another `Clock`
     |}]
 
 let%expect_test "another module's handler" =
@@ -2512,8 +2515,7 @@ pub handler counting(rate: Int) for Rates, RateCalls =
     ()
     |}]
 
-let%expect_test "a handler's state is made where it's installed, and can't fail"
-    =
+let%expect_test "a handler's state is made where it's installed, and can fail" =
   types
     {|
 dep N =
@@ -2529,12 +2531,11 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: this can fail with Oops, which isn't allowed here
-      ┌─ test.ren:7:15
-    7 │   var n = try bad()
-      │               ^^^^^
-      = a handler's state is made where a `with` installs it, which can't fail
-      help: handle it here, with `attempt` or a `match` with `fail` arms, or make the value in an operation instead
+    dep N
+      get: fn() -> Int
+    fn bad() -> Int ! Oops
+    handler h() for N ! Oops
+    fn main() -> Int
     |}]
 
 let%expect_test "a handler of one dependency is a value of its type" =
@@ -5550,7 +5551,7 @@ fn main() uses Console =
 
 let%expect_test "what a handler needs is fixed where it's installed" =
   (* its state is made, and its operations run, with what's installed
-     outside its `with`: the inner `Base` doesn't change them *)
+     outside it: the inner `Base` doesn't change them *)
   let src =
     {|
 dep Base =
@@ -5569,7 +5570,7 @@ handler offset() for N =
 fn base(n: Int) -> Base = Base { n: fn() => n }
 
 fn main() uses Console =
-  with base(1), offset(), base(2) in
+  with base(1), offset() in with base(2) in
     print(N.get())
     print(N.get())
     print(Base.n())
@@ -5786,8 +5787,8 @@ fn main() = 1
       │         ------- `through` implements `N`
     7 │   next() => via()
       │             ^^^^^ this call uses `N`
-      = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
-      help: call it outside the handler, install an implementation of `N` around the call with `with`, or implement `N` with a record of functions instead
+      = a handler's operations run with what's installed outside its `with`, so `N` here would be the one under it
+      help: declare it `over N`, and call the one under it through `next`
 
     error: a handler for `N` can't use `N`
        ┌─ test.ren:10:13
@@ -5795,14 +5796,14 @@ fn main() = 1
        │         ------ `direct` implements `N`
     10 │   next() => N.next()
        │             ^^^^^^^^ this call uses `N`
-       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
-       help: call it outside the handler, install an implementation of `N` around the call with `with`, or implement `N` with a record of functions instead
+       = a handler's operations run with what's installed outside its `with`, so `N` here would be the one under it
+       help: declare it `over N`, and call the one under it through `next`
 
     error: a handler for `N` can't use `N`
        ┌─ test.ren:12:9
     12 │ handler declared() for N uses N =
        │         ^^^^^^^^
-       = a handler's operations run with what's installed outside its `with`, so `N` here would be the next `N` out, which comes with `outer` (stage 10)
+       = a handler's operations run with what's installed outside its `with`, so `N` here would be the one under it
        help: remove `N` from its `uses`
     |}]
 
@@ -6308,7 +6309,7 @@ let%expect_test "Core Lint checks evidence is threaded" =
       let impl =
         Ren.Core.mk
           (Record (d, [ ("op", lambda 3 (Ren.Core.mk (Int 1L) Ren.Ty.int loc)) ]))
-          (Con (d, [ Uses Ren.Ty.closed ]))
+          (Ren.Ty.impl [ d ] Ren.Ty.closed)
           loc
       in
       Ren.Core.mk
@@ -6318,6 +6319,7 @@ let%expect_test "Core Lint checks evidence is threaded" =
              outer = Ren.Core.evidence 1;
              dep = d;
              impl;
+             desc = Known Ren.Ty.int;
              body = op 1;
            })
         Ren.Ty.int loc);
@@ -7834,21 +7836,21 @@ test "on its own" = assert Green == Green
     11 │ test "through the opaque type" = assert red() == Red
        │                                                  ^^^
        = a test is a specification of `test`'s interface
-       help: mark it `pub`, or explore it in the console: `ren console test`
+       help: mark its type, `State`, `pub`, or explore it in the console: `ren console test`
 
     error: `Green` is private, and a test sees what an importer sees
        ┌─ test.ren:13:28
     13 │ test "on its own" = assert Green == Green
        │                            ^^^^^
        = a test is a specification of `test`'s interface
-       help: mark it `pub`, or explore it in the console: `ren console test`
+       help: mark its type, `State`, `pub`, or explore it in the console: `ren console test`
 
     error: `Green` is private, and a test sees what an importer sees
        ┌─ test.ren:13:37
     13 │ test "on its own" = assert Green == Green
        │                                     ^^^^^
        = a test is a specification of `test`'s interface
-       help: mark it `pub`, or explore it in the console: `ren console test`
+       help: mark its type, `State`, `pub`, or explore it in the console: `ren console test`
     |}]
 
 let%expect_test "a test item is told what a test is told" =

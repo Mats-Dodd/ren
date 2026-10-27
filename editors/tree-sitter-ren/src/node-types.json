@@ -1063,6 +1063,40 @@
     }
   },
   {
+    "type": "finally_arm",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "assignment",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "parameters": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "parameters",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "for_statement",
     "named": true,
     "fields": {
@@ -1343,6 +1377,10 @@
           {
             "type": "_expression",
             "named": true
+          },
+          {
+            "type": "with_chain",
+            "named": true
           }
         ]
       },
@@ -1468,6 +1506,26 @@
         "types": [
           {
             "type": "handler_arm",
+            "named": true
+          }
+        ]
+      },
+      "errors": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "error_set",
+            "named": true
+          }
+        ]
+      },
+      "finally": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "finally_arm",
             "named": true
           }
         ]
@@ -1600,6 +1658,16 @@
     "type": "implementation_type",
     "named": true,
     "fields": {
+      "errors": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "error_set",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": true,
         "required": true,
@@ -2931,6 +2999,32 @@
     }
   },
   {
+    "type": "with_chain",
+    "named": true,
+    "fields": {
+      "link": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "under": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "dependency",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "with_expression",
     "named": true,
     "fields": {
@@ -2958,6 +3052,10 @@
         "types": [
           {
             "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "with_chain",
             "named": true
           }
         ]
@@ -3117,6 +3215,10 @@
     "named": false
   },
   {
+    "type": "finally",
+    "named": false
+  },
+  {
     "type": "float",
     "named": true
   },
@@ -3182,6 +3284,10 @@
   },
   {
     "type": "orelse",
+    "named": false
+  },
+  {
+    "type": "over",
     "named": false
   },
   {

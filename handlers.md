@@ -6,6 +6,9 @@ replayed and traced. It's stage 10 of the [roadmap](README.md#roadmap),
 after operators. It builds on [deps.md](deps.md), and changes one of its
 rules: a `with` installs a set, and its order never matters.
 
+**Status:** 10a runs, as [Where 10a differed](#where-10a-differed)
+says; 10b, the journal, doesn't yet.
+
 It's built in two halves:
 
 - **10a, handlers:** `with` as a set, `over` and `next`, `finally`, and
@@ -16,7 +19,7 @@ It's built in two halves:
   It needs 10a: recording is a handler `over` each real implementation.
 
 The README's earlier sketch used `outer` and `for Users forwards`. This
-design replaces both with one word, `over`, because the wrapping should
+design replaced both with one word, `over`, because the wrapping should
 be visible in the code, not hidden in where a comma falls.
 
 ## What it has to do
@@ -114,7 +117,8 @@ error: `fake_users` doesn't implement `list` or `delete`
   on, so most people already know it.
 - **It can only be called through,** never kept, passed or returned. That
   keeps the third no-cycles invariant: an installed instance is never a
-  value.
+  value. Nor can a lambda call it (see [Where 10a differed](#where-10a-differed)),
+  which would keep it.
 
 ```
 error: `next` can only be called through
@@ -144,13 +148,13 @@ It reads as it nests: `cached` is over `counted`, which is over
 `postgres_users`. A wrapping handler is always installed with `over`:
 
 ```
-error: `cached` goes over a `Users`, so it's installed with `over`
+error: `cached(ttl)` goes over a `Users`, so it's installed with `over`
   ┌─ main.ren:4:8
   │
 4 │   with cached(ttl) in
   │        ^^^^^^^^^^^
   │
-  = help: say what it goes over: `cached(ttl) over postgres_users(pool)`, or `over Users` for the one installed outside this `with`
+  = help: say what it goes over: `cached(ttl) over Users` for the one installed outside this `with`, or another implementation of it after `over`
 ```
 
 **`over` and the dependency's name** wraps whatever is installed outside
@@ -190,17 +194,16 @@ A handler can run code when the `with` that installed it ends. It's given
 the body's result, and returns the `with`'s:
 
 ```ren
-pub handler transaction() over Sql =
-  var tx = try next.begin()
-  query(q) => try tx.query(q)
+pub handler transaction() over Sql ! DbDown =
+  let tx = try next.begin()
   finally(r) =>
     match r
       Ok(v) =>
-        try tx.commit()
+        try next.commit(tx)
         v
-      fail e =>
-        tx.rollback()
-        fail e
+      Err(_) =>
+        next.rollback(tx)
+        try r
 
 fn transfer(t: Transfer) ! DbDown | Short uses Sql =
   with transaction() over Sql in
@@ -208,8 +211,10 @@ fn transfer(t: Transfer) ! DbDown | Short uses Sql =
     try credit(t.to, t.amount)
 ```
 
-- **`r` is the body's result,** matched with stage 6's `fail` arms. What
-  `finally` produces is what the `with` produces.
+- **`r` is the body's result,** a `Result` as `attempt` would keep it,
+  and `try r` passes the body's error on. What `finally` produces is what
+  the `with` produces. It's given a value of any type, so it can give it
+  back or show it, never compare it.
 - **When both the body and the cleanup fail, the handler's author says
   what happens.** Here a failed body rolls back and passes its own error
   on, and a failed commit fails the `with` with the commit's error.
@@ -226,7 +231,7 @@ nothing more here.
 
 ### State that can fail to start
 
-A handler's state can now call a dependency that fails: `var tx = try
+A handler's state can now call a dependency that fails: `let tx = try
 next.begin()`. A `with` that installs it fails with those errors too. A
 `with` already acts as the `try` of a wrapper it installs ([deps.md,
 Deviations](deps.md#deviations)), and this is the same rule: the `with`
@@ -393,12 +398,15 @@ submission and its completion:
   the captured vector.
 - **Leaving operations out** compiles to forwarding them, with no code to
   write. It's a direct call, so it costs what writing it out would.
-- **`finally`** lowers to the `Finally` Core already has for `with` ([compiler.md](compiler.md)).
+- **`finally`** is a lambda kept in the handler's instance. The Core
+  `With` that installed it calls it with the body's result, `Ok(v)` or
+  `Err(e)`, and a descriptor of the body's type, which the lambda takes
+  first, so `print(v)` works for any type ([compiler.md](compiler.md#stage-10a)).
 - **The recorder is the one privileged handler,** as the README says: only
   the runtime can install it over the real implementations. A program
   can't name them, so it can't wrap them any other way than `over Clock`.
 
-## What changes in deps.md and the README
+## What changed in deps.md and the README
 
 - **A `with` is a set.** "Items are installed outermost first; the
   innermost implementation wins" becomes: each dependency once, in any
@@ -433,6 +441,52 @@ submission and its completion:
   dependency.
 - `ren run --trace` prints the call tree.
 - The console's `:reload` and `:spec` work, on the session's journal.
+
+## Where 10a differed
+
+Where building 10a settled something this design left open, or changed
+it:
+
+- **`finally`'s arms are `Ok(v)` and `Err(_)`,** and the error goes on
+  with `try r`: a `fail` pattern never binds a whole error
+  ([errors.md](errors.md)).
+- **`finally` is generic in the body's value,** so it can give it back,
+  pass it on or show it, but comparing, ordering or hashing it is an
+  error. The `with` fails with the body's errors and the handler's own,
+  whatever `finally` does with the body's.
+- **A public handler that can fail to start says so,** `pub handler
+  transaction() over Sql ! DbDown`, as a public function's signature is
+  exact; a private one's is inferred.
+- **`next` isn't a keyword:** in a handler declared `over`, `next.op(...)`
+  and `next(A).op(...)` reach the one under it, and nothing there can be
+  named `next`. It can only be called through, never kept.
+- **A lambda can't call `next`,** nor can the body of a `with` that a
+  wrapper is given, which is one: a lambda can outlive the operation,
+  and passed to the implementation under the handler and kept there, it
+  would reach it again, a cycle. An operation calls `next` and gives the
+  lambda what it returned.
+- **A chain installs what its bottom installs,** with each link above
+  taking the place of what it goes over: `cached(ttl) over counting()`,
+  where `counting` is a `Prices & Calls`, installs both.
+- **An item's value is made outside the `with`,** in the order written,
+  before anything is installed; a wrapper's call is made innermost.
+- **Items that don't need each other are installed in the order of their
+  dependencies' names,** so a `with` means the same whatever order its
+  items are written in, even when two `finally`s run.
+- **A handler is `for` all its dependencies or `over` all of them.**
+- **Whether it goes over, and what it can fail to start with, are part of
+  an implementation's type:** `over Users uses Clock`, `Sql ! DbDown`. A
+  written type without `!` can't fail to start, a transparent parameter's
+  included.
+- **A record implementation can't use its own dependency;** wrapping is
+  only written with `over`.
+- **`with h() over A & B`** wraps several implementations installed
+  outside the `with` at once.
+- **A `finally` comes last, and a handler has one.**
+- **The help for a link over nothing** writes `over Users` rather than
+  naming a maker of `Users`, which the compiler can't know is the one
+  meant.
+- **A panic skips `finally`, and so does a failed start.**
 
 ## Later
 

@@ -28,7 +28,10 @@ let rec occurs id level t =
   | TVar { contents = Link _ } -> assert false
   | TSkol _ | TError -> ()
   | TCon (_, args) -> List.iter (occurs id level) args
-  | TErrors e | TUses e | TAll (_, e) -> occurs_row ~ty:id (-1) level e
+  | TErrors e -> occurs_row ~ty:id (-1) level e
+  | TImpl i ->
+      occurs_row ~ty:id (-1) level i.needs;
+      occurs_row ~ty:id (-1) level i.fails
   | TFun (ps, r, e, u, l) ->
       List.iter (occurs id level) (r :: param_tys ps);
       occurs_row ~ty:id (-1) level e;
@@ -77,11 +80,14 @@ let rec unify st a b =
       unify_row st e1 e2;
       unify_row st u1 u2;
       unify_lams st l1 l2
-  | TErrors e1, TErrors e2 | TUses e1, TUses e2 -> unify_row st e1 e2
+  | TErrors e1, TErrors e2 -> unify_row st e1 e2
   (* an implementation of several dependencies is one of exactly those;
      where a written type asks for fewer, it's narrowed before it gets
-     here (Infer_expr.narrow) *)
-  | TAll (d1, u1), TAll (d2, u2) when d1 = d2 -> unify_row st u1 u2
+     here (Infer_expr.narrow). One that goes over another is never one
+     that doesn't *)
+  | TImpl i, TImpl j when i.deps = j.deps && i.over = j.over ->
+      unify_row st i.needs j.needs;
+      unify_row st i.fails j.fails
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 
@@ -265,8 +271,10 @@ let copier () =
             row u,
             row l )
     | TErrors r -> TErrors (row r)
-    | TUses r -> TUses (row r)
-    | TAll (ds, r) -> TAll (ds, row r)
+    | TImpl i ->
+        let needs = row i.needs in
+        let fails = row i.fails in
+        TImpl { i with needs; fails }
     | (TSkol _ | TError) as t -> t
   and row r =
     match repr_row r with

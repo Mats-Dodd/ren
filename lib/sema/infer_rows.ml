@@ -55,8 +55,15 @@ let copy_needs env ~loc ~what needs =
    more than it does: where one that needs more is allowed, one that needs
    less will do. *)
 let widen env ~loc t =
-  match impl_parts t with
-  | Some (ds, u) -> impl_type ds (copy_needs env ~loc ~what:Passing u)
+  match impl_of t with
+  | Some i ->
+      (* one that can fail to start with fewer errors will do too *)
+      TImpl
+        {
+          i with
+          needs = copy_needs env ~loc ~what:Passing i.needs;
+          fails = reopen env i.fails;
+        }
   | None -> t
 
 (* Where an error that's already in [row] came from, for a message about
@@ -197,9 +204,9 @@ let in_own_body env cx =
    it uses (see [copy]): joined as it is, the function's own row would be
    the `with`'s body's, and what the `with` installs would end up in the
    function's `uses`. *)
-let rec use_row env cx ~loc ?(needs = false) ?callee uses =
+let rec use_row env cx ~loc ?(needs = false) ?callee ?op uses =
   cx.calls :=
-    { cloc = loc; own = row_names uses; row = uses; needs; callee }
+    { cloc = loc; own = row_names uses; row = uses; needs; callee; op }
     :: !(cx.calls);
   let what = if needs then Installing else Call_uses in
   let joined =
@@ -260,9 +267,11 @@ and join_uses env ~loc ~what joined into =
    has to end up empty once the group is done (solve.ml). [ename] and
    [fn] are the callee, as a message names it and as it's written, and
    [target] the function of the group it calls, if it does. *)
-let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
+let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?(install = false) ?target
+    ?callee errs uses =
   let name_loc = fn.loc in
-  use_row env cx ~loc:call.loc ?callee uses;
+  let op = match fn.kind with Var (Dep_op (_, o)) -> Some o | _ -> None in
+  use_row env cx ~loc:call.loc ?callee ?op uses;
   let ewritten =
     match call.kind with
     | Call (f, _) | Ref { kind = Call (f, _); _ } ->
@@ -288,6 +297,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?target ?callee errs uses =
       etarget = target;
       eparams = cx.params;
       eselves = cx.selves;
+      einstall = install;
     }
   in
   let sources =

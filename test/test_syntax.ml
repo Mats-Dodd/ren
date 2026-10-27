@@ -220,7 +220,7 @@ fn main() =
         x, 1)
 |};
   [%expect
-    {| (fn main () (block (let r (record R f=(lambda (x) (+ x 1)) g=2)) (call apply (lambda (x) (+ x 1)) 9) (call apply (lambda (x) (+ x 3)) 1) (call apply (lambda (x) (block (let y (* x 2)) y)) 2) (call apply (lambda (x) (with (call a) (with (call b) x))) 1))) |}]
+    {| (fn main () (block (let r (record R f=(lambda (x) (+ x 1)) g=2)) (call apply (lambda (x) (+ x 1)) 9) (call apply (lambda (x) (+ x 3)) 1) (call apply (lambda (x) (block (let y (* x 2)) y)) 2) (call apply (lambda (x) (with (call a) (call b) x)) 1))) |}]
 
 let%expect_test "a line of a lambda's block indented too little" =
   ast {|
@@ -247,8 +247,7 @@ fn main() =
     c() in
     body()
 |};
-  [%expect
-    {| (fn main () (with (call a) (with (call b) (with (call c) (call body))))) |}];
+  [%expect {| (fn main () (with (call a) (call b) (call c) (call body))) |}];
   ast {|
 fn main() =
   with a(),

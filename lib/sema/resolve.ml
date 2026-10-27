@@ -194,7 +194,20 @@ type scope = {
       (** the rows the function's signature names, `..d` (see [rows]) *)
   depth : int;  (** how many lambdas deep *)
   fn : fn_state;
+  next : next_in;
+      (** whether the code is a handler's, and which: in one declared `over` a
+          dependency, `next` is the implementation under it (handlers.md,
+          "`next`") *)
 }
+
+(* What `next` is in the code being resolved: nothing, outside a handler;
+   in a handler for these dependencies, nothing either, but a message
+   says how to get one; in a handler over these, the implementation
+   under it. *)
+and next_in =
+  | No_next
+  | In_for of string * Path.t list  (** the handler's name, and its `for` *)
+  | In_over of string * Path.t list  (** the handler's name, and its `over` *)
 
 and fn_state = {
   mutable last_id : int;  (** the last binder id handed out *)
@@ -232,6 +245,14 @@ let check_private env loc ~key written =
     private_in_test env loc written;
     Hashtbl.remove env.own_private key)
 
+(* A name bound inside a handler declared `over` a dependency, or one of
+   its parameters, that's `next`, which is the implementation under it
+   there (handlers.md, "`next`"). *)
+let next_bound env loc =
+  report env loc ~help:"choose another name"
+    "`next` is the implementation under this handler, so nothing in it can be \
+     named `next`"
+
 (* `_` names nothing, so there can be any number of them: `fn f(_, _)` *)
 let no_duplicates env what (ids : ident list) =
   let seen = Hashtbl.create 8 in
@@ -268,6 +289,9 @@ let not_self env ~help (p : Parsed.param) =
 
 let bind env sc (id : ident) bound =
   not_an_alias env id;
+  (match sc.next with
+  | In_over _ when id.name = "next" -> next_bound env id.loc
+  | In_over _ | In_for _ | No_next -> ());
   sc.fn.last_id <- sc.fn.last_id + 1;
   let b = { id = sc.fn.last_id; ident = id; bound; depth = sc.depth } in
   (* `_`, as in `let _ = ...`, names nothing: the value is dropped *)
@@ -349,7 +373,10 @@ let tyname_loc (t : tyname) =
 (* Where a type is written: where it starts, for a named one. *)
 let written_loc : Parsed.ty -> Loc.t = function
   | TyName (t, _) -> tyname_loc t
-  | TyFn (_, _, _, _, l) | TyImpl (_, _, l) | TyInout (_, l) | TyTuple (_, l) ->
+  | TyFn (_, _, _, _, l)
+  | TyImpl { impl_loc = l; _ }
+  | TyInout (_, l)
+  | TyTuple (_, l) ->
       l
   | TyErrors es -> es.eloc
 
@@ -561,61 +588,94 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
       TyFn (ps, ret, errs, Option.map (uses_of env ~rows) u, l)
   | TyInout (t, l) -> TyInout (ty env ~params ~rows t, l)
   | TyTuple (ts, l) -> TyTuple (List.map (ty env ~params ~rows) ts, l)
-  | TyImpl ((_ :: _ :: _ as ts), u, l) -> (
-      (* several dependencies joined, `Clock & TestClock`: each has to be
-         one, and each is written once *)
-      let u = Option.map (uses_of env ~rows) u in
-      let deps =
-        List.fold_left
-          (fun deps (t : tyname) ->
-            match find_named env ~params t with
-            | Some (Named p, _) when dep_ops env p <> None -> (
-                match
-                  List.find_opt (fun (d : tname) -> d.tref = Named p) deps
-                with
-                | Some _ ->
-                    report env (tyname_loc t) ~help:"remove one"
-                      (sprintf "`%s` is joined with `&` twice" (show_tyname t));
-                    deps
-                | None -> deps @ [ { tref = Named p; tloc = tyname_loc t } ])
-            | Some _ ->
-                report env (tyname_loc t)
-                  ~help:
-                    (sprintf
-                       "`%s` isn't one: an implementation of several \
-                        dependencies is the one value of this type"
-                       (show_tyname t))
-                  "only a dependency's type can be joined with `&`";
-                deps
-            | None -> deps)
-          [] ts
+  | TyImpl { impl_deps = ts; impl_over; impl_errors; impl_uses; impl_loc = l }
+    -> (
+      let u = Option.map (uses_of env ~rows) impl_uses in
+      let es = Option.map (errors env ~params ~rows) impl_errors in
+      let impl deps : Resolved.ty =
+        TyImpl
+          {
+            impl_deps = deps;
+            impl_over;
+            impl_errors = es;
+            impl_uses = u;
+            impl_loc = l;
+          }
       in
-      match deps with
-      | [] -> TyName ({ tref = Named (Path.prelude "Unit"); tloc = l }, [])
-      | deps -> TyImpl (deps, u, l))
-  | TyImpl (ts, u, l) -> (
-      let t = List.hd ts in
-      let u = Option.map (uses_of env ~rows) u in
-      match find_named env ~params t with
-      | Some (Named p, _) when dep_ops env p <> None ->
-          TyImpl ([ { tref = Named p; tloc = tyname_loc t } ], u, l)
-      | found ->
-          if found <> None then
-            report env (tyname_loc t)
-              ~help:
-                "remove the `uses`: only an implementation of a dependency \
-                 needs something"
-              (sprintf "`%s` isn't a dependency, so it needs nothing"
-                 (show_tyname t));
-          TyName
-            ( {
-                tref =
-                  (match found with
-                  | Some (tref, _) -> tref
-                  | None -> Named (Path.make env.home t.tid.name));
-                tloc = tyname_loc t;
-              },
-              [] ))
+      match ts with
+      | _ :: _ :: _ -> (
+          (* several dependencies joined, `Clock & TestClock`: each has to
+             be one, and each is written once *)
+          let deps =
+            List.fold_left
+              (fun deps (t : tyname) ->
+                match find_named env ~params t with
+                | Some (Named p, _) when dep_ops env p <> None -> (
+                    match
+                      List.find_opt (fun (d : tname) -> d.tref = Named p) deps
+                    with
+                    | Some _ ->
+                        report env (tyname_loc t) ~help:"remove one"
+                          (sprintf "`%s` is joined with `&` twice"
+                             (show_tyname t));
+                        deps
+                    | None -> deps @ [ { tref = Named p; tloc = tyname_loc t } ]
+                    )
+                | Some _ ->
+                    report env (tyname_loc t)
+                      ~help:
+                        (sprintf
+                           "`%s` isn't one: an implementation of several \
+                            dependencies is the one value of this type"
+                           (show_tyname t))
+                      "only a dependency's type can be joined with `&`";
+                    deps
+                | None -> deps)
+              [] ts
+          in
+          match deps with
+          | [] -> TyName ({ tref = Named (Path.prelude "Unit"); tloc = l }, [])
+          | deps -> impl deps)
+      | t :: _ -> (
+          match find_named env ~params t with
+          | Some (Named p, _) when dep_ops env p <> None ->
+              impl [ { tref = Named p; tloc = tyname_loc t } ]
+          | found ->
+              (if found <> None then
+                 let shown = show_tyname t in
+                 if impl_over then
+                   report env (tyname_loc t)
+                     ~help:
+                       "remove the `over`: only an implementation of a \
+                        dependency goes over another"
+                     (sprintf "`%s` isn't a dependency, so nothing goes over it"
+                        shown)
+                 else if impl_uses <> None then
+                   report env (tyname_loc t)
+                     ~help:
+                       "remove the `uses`: only an implementation of a \
+                        dependency needs something"
+                     (sprintf "`%s` isn't a dependency, so it needs nothing"
+                        shown)
+                 else
+                   report env (tyname_loc t)
+                     ~help:
+                       "remove the `!`: only an implementation of a dependency \
+                        is installed"
+                     (sprintf
+                        "`%s` isn't a dependency, so it can't fail to be \
+                         installed"
+                        shown));
+              TyName
+                ( {
+                    tref =
+                      (match found with
+                      | Some (tref, _) -> tref
+                      | None -> Named (Path.make env.home t.tid.name));
+                    tloc = tyname_loc t;
+                  },
+                  [] ))
+      | [] -> (* the parser always reads one *) assert false)
   | TyErrors es ->
       if not arg then
         report env es.eloc
@@ -636,7 +696,8 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
           (* `Box<fn() uses Clock, Console>` is two arguments: in one, a
              `uses` list ends at a comma *)
           let ends_in_uses : Parsed.ty -> bool = function
-            | TyFn (_, _, _, Some _, _) | TyImpl (_, Some _, _) -> true
+            | TyFn (_, _, _, Some _, _) | TyImpl { impl_uses = Some _; _ } ->
+                true
             | _ -> false
           in
           let help =
@@ -655,7 +716,14 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
       | Some (Named p, _) when dep_ops env p <> None ->
           (* a dependency's type is an implementation's, which needs what
              it's written to need: nothing, here *)
-          TyImpl ([ named (Named p) ], None, tyname_loc t)
+          TyImpl
+            {
+              impl_deps = [ named (Named p) ];
+              impl_over = false;
+              impl_errors = None;
+              impl_uses = None;
+              impl_loc = tyname_loc t;
+            }
       | Some (tref, _) ->
           TyName (named tref, List.map (ty env ~params ~rows ~arg:true) args))
 
@@ -993,6 +1061,36 @@ let lookup env sc loc ~what x =
                   "make `self` the first parameter of a function declared \
                    under its type"
                 "there's no `self` here: only a method has one"
+          | [] when x = "outer" && sc.next <> No_next ->
+              (* the README's early sketch, `outer.get(id)` *)
+              let ds =
+                match sc.next with
+                | In_for (_, ds) | In_over (_, ds) -> ds
+                | No_next -> []
+              in
+              let call =
+                match
+                  List.concat_map
+                    (fun p -> Option.value (dep_ops env p) ~default:[])
+                    ds
+                with
+                | op :: _ -> sprintf "`next.%s(...)`" op
+                | [] -> "`next.op(...)`"
+              in
+              report env loc
+                ~help:
+                  (match sc.next with
+                  | In_for (h, ds) ->
+                      sprintf
+                        "declare it `handler %s(...) over %s`, and call the \
+                         one under it with `next`: %s"
+                        h
+                        (String.concat " & "
+                           (List.map (fun (p : Path.t) -> p.name) ds))
+                        call
+                  | In_over _ | No_next ->
+                      sprintf "call the one under it with `next`: %s" call)
+                (sprintf "there's no %s named `outer`" what)
           | [] -> (
               (* `len(xs)`: a built-in type's method, called the old way *)
               let builtin =
@@ -1180,6 +1278,141 @@ let as_item env sc (e : Parsed.expr) : Parsed.expr =
       { e with kind = Var (Item ({ tmod = None; tid = name }, f)) }
   | _ -> e
 
+(* ---- `next` (handlers.md, "`next`") ---- *)
+
+(* Whether `next` here isn't a local: one named so is reported where it's
+   bound, inside a handler over a dependency, and anywhere else it's just
+   a name. *)
+let next_free env sc =
+  (not (Env.mem "next" sc.locals)) && not (Hashtbl.mem env.values "next")
+
+(* `next` used some way other than calling an operation through it, in a
+   handler over [over]: it can't be kept. [called] is the operation it was
+   read for, `next.get` uncalled. *)
+let next_kept env loc over ?called () =
+  let op =
+    match called with
+    | Some op -> op
+    | None -> (
+        match
+          List.concat_map
+            (fun p -> Option.value (dep_ops env p) ~default:[])
+            over
+        with
+        | op :: _ -> op
+        | [] -> "op")
+  in
+  report env loc
+    ~notes:
+      [
+        "`next` is the implementation under this one while an operation runs, \
+         and it can't be kept";
+      ]
+    ~help:(sprintf "call it where it's needed: `next.%s(...)`" op)
+    "`next` can only be called through";
+  Global (Path.make env.home "next")
+
+(* `next` outside a handler over a dependency, where there isn't one. *)
+let no_next env sc loc =
+  report env loc
+    ~help:
+      (match sc.next with
+      | In_for (h, deps) ->
+          let ds =
+            String.concat " & " (List.map (fun (p : Path.t) -> p.name) deps)
+          in
+          sprintf
+            "declare it `handler %s(...) over %s`, to reach the `%s` under it" h
+            ds ds
+      | In_over _ | No_next ->
+          "only a handler declared `over` another implementation has a `next`")
+    "`next` is only in a handler declared `over` a dependency";
+  Global (Path.make env.home "next")
+
+(* The operation [op] of the implementation a handler [h] goes over,
+   [over], called as `next.op(...)`, or `next(d).op(...)` for the one of
+   them [d] names, which is needed when two have one of that name. *)
+let next_op env (h, over) (d : Parsed.expr option) (op : ident) : name =
+  let ops (p : Path.t) = Option.value (dep_ops env p) ~default:[] in
+  let shown (p : Path.t) = sprintf "`%s`" p.name in
+  let placeholder = Global (Path.make env.home "next") in
+  let among =
+    match d with
+    | None -> Some over
+    | Some { kind = Con ({ qual = None; name }, []); loc; _ } -> (
+        match find_type env name.name with
+        | Some (p, _) when List.mem p over -> Some [ p ]
+        | _ ->
+            report env loc
+              ~help:
+                (sprintf "name one of what it goes over: %s"
+                   (String.concat " or "
+                      (List.map
+                         (fun (p : Path.t) -> sprintf "`next(%s)`" p.name)
+                         over)))
+              (sprintf "`%s` doesn't go over `%s`" h name.name);
+            None)
+    | Some d ->
+        report env d.loc
+          ~help:
+            (sprintf "name one of what it goes over: %s"
+               (String.concat " or "
+                  (List.map
+                     (fun (p : Path.t) -> sprintf "`next(%s)`" p.name)
+                     over)))
+          "`next(...)` takes the name of a dependency the handler goes over";
+        None
+  in
+  match among with
+  | None -> placeholder
+  | Some among -> (
+      match List.filter (fun p -> List.mem op.name (ops p)) among with
+      | [ p ] -> Next_op (p, op.name)
+      | [] ->
+          let all =
+            match among with
+            | [ p ] -> List.map (sprintf "`%s`") (ops p)
+            | ps ->
+                List.concat_map
+                  (fun (p : Path.t) ->
+                    List.map (fun o -> sprintf "`%s.%s`" p.name o) (ops p))
+                  ps
+          in
+          report env op.loc
+            ?help:
+              (match all with
+              | [] -> None
+              | all ->
+                  Some
+                    (sprintf "%s operations: %s"
+                       (if List.length among = 1 then "its" else "their")
+                       (String.concat ", " all)))
+            (sprintf "%s %s no operation `%s`"
+               (String.concat " and " (List.map shown among))
+               (if List.length among = 1 then "has" else "have")
+               op.name);
+          placeholder
+      | first :: _ as owners ->
+          report env op.loc
+            ~help:(sprintf "say which: `next(%s).%s(...)`" first.name op.name)
+            (sprintf "%s both have `%s`, so `next.%s` could be either"
+               (String.concat " and " (List.map shown owners))
+               op.name op.name);
+          placeholder)
+
+(* [f], the callee of a call, if it's an operation called through `next`
+   in a handler over a dependency: `next.get` or `next(A).get`. *)
+let next_callee env sc (f : Parsed.expr) =
+  match (sc.next, f.kind) with
+  | In_over (h, o), Field ({ kind = Var (Bare "next"); _ }, op)
+    when next_free env sc ->
+      Some (next_op env (h, o) None op)
+  | ( In_over (h, o),
+      Field ({ kind = Call ({ kind = Var (Bare "next"); _ }, [ d ]); _ }, op) )
+    when next_free env sc ->
+      Some (next_op env (h, o) (Some d) op)
+  | _ -> None
+
 let rec expr env sc (e : Parsed.expr) : Resolved.expr =
   let e = as_item env sc e in
   let go = expr env sc in
@@ -1190,6 +1423,17 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Bool b -> Bool b
     | Str s -> Str s
     | Unit -> Unit
+    | Var (Bare "next") when next_free env sc -> (
+        match sc.next with
+        | In_over (_, over) -> Var (next_kept env e.loc over ())
+        | In_for _ | No_next -> Var (no_next env sc e.loc))
+    | Field ({ kind = Var (Bare "next"); _ }, op)
+      when next_free env sc
+           && match sc.next with In_over _ -> true | _ -> false -> (
+        (* `next.get` not called *)
+        match sc.next with
+        | In_over (_, over) -> Var (next_kept env e.loc over ~called:op.name ())
+        | In_for _ | No_next -> assert false)
     | Var (Bare x) -> Var (lookup env sc e.loc ~what:"variable" x)
     | Var (Item (t, f)) -> Var (item env sc t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
@@ -1200,10 +1444,15 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let c = go c in
         let t = go t in
         If (c, t, Option.map go f)
+    | Call (f, args) when next_callee env sc f <> None ->
+        (* an operation of the implementation under this handler *)
+        let op = Option.get (next_callee env sc f) in
+        Call ({ kind = Var op; loc = f.loc; node = f.node }, List.map go args)
     | Call (f, args) ->
         let f =
           let f = as_item env sc f in
           match f.kind with
+          | Var (Bare "next") when next_free env sc -> go f
           | Var (Bare x) ->
               {
                 kind = Var (lookup env sc f.loc ~what:"function" x);
@@ -1332,9 +1581,19 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Try a -> Try (go a)
     | Attempt a -> Attempt (go a)
     | Assert a -> Assert (go a)
-    | With { item; body; lam } ->
-        let item = go item in
-        With { item; body = go body; lam }
+    | With { items; body } ->
+        let item (i : Parsed.with_item) : Resolved.with_item =
+          {
+            chain =
+              List.map
+                (fun (l : Parsed.with_link) -> { l with link = go l.link })
+                i.chain;
+            under = uses env i.under;
+            iloc = i.iloc;
+          }
+        in
+        let items = List.map item items in
+        With { items; body = go body }
     | Handler _ ->
         (* the parser makes one only the body of a handler, which
            [handler_body] resolves *)
@@ -1372,14 +1631,43 @@ and block_stmts env sc (stmts : Parsed.stmt list) =
   (List.rev stmts, sc)
 
 (* The body of the handler [name] (ast.ml, [Handler]): the dependencies
-   after `for`, each a declared one with operations, once; its state; and
-   its arms, each the implementation of an operation of exactly one of
-   them, a [Dep_op], and every operation implemented once. The state is
-   bound as deep as the arms' bodies, so an arm can change it (mut.ml). *)
+   after `for` or `over`, each a declared one with operations, once; its
+   state; its arms, each the implementation of an operation of exactly one
+   of them, a [Dep_op], and every operation implemented once, unless it
+   goes over another implementation, which does the rest; and its
+   `finally`. The state is bound as deep as the arms' bodies, so an arm can
+   change it (mut.ml). In one over a dependency, `next` is the
+   implementation under it (handlers.md, "`next`"). *)
+(* A handler's arm, or its `finally`: a lambda, whose parameters are
+   bound beside the handler's state. *)
+let arm_lambda env sc (l : Parsed.expr) : Resolved.expr =
+  match l.kind with
+  | Lambda (ps, body) ->
+      no_duplicates env "parameters"
+        (List.map (fun (p : Parsed.param) -> p.pname) ps);
+      List.iter (not_self env ~help:"choose another name") ps;
+      let ps, inner =
+        params env sc
+          (fun (p : Parsed.param) ->
+            if p.pmode = Inout then By_inout else By_lambda)
+          ps
+      in
+      { kind = Lambda (ps, expr env inner body); loc = l.loc; node = l.node }
+  | _ -> (* the parser makes each arm a lambda *) assert false
+
+(* "`a`", "`a` or `b`", "`a`, `b` or `c`" *)
+let or_list = function
+  | [] -> ""
+  | [ one ] -> one
+  | all ->
+      let rev = List.rev all in
+      String.concat ", " (List.rev (List.tl rev)) ^ " or " ^ List.hd rev
+
 let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
     Resolved.expr_kind =
   match e.kind with
-  | Handler { deps; state; arms; _ } ->
+  | Handler { deps; over; fails; state; arms; finally; _ } ->
+      let after = if over then "over" else "for" in
       let seen = Hashtbl.create 4 in
       let deps =
         List.filter_map
@@ -1395,7 +1683,7 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
                           ( first,
                             sprintf "the first `%s` is here" (show_tyname d) );
                         ]
-                      (sprintf "`%s` is after `for` twice" (show_tyname d));
+                      (sprintf "`%s` is after `%s` twice" (show_tyname d) after);
                     None
                 | None, None ->
                     report env tloc
@@ -1406,7 +1694,7 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
                              in a later stage"
                             (show_tyname d);
                         ]
-                      ~help:"remove it from the `for` list"
+                      ~help:(sprintf "remove it from after `%s`" after)
                       (sprintf
                          "`%s` has no operations, so a handler can't implement \
                           it"
@@ -1418,6 +1706,33 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
             | _ -> None)
           deps
       in
+      let sc =
+        let paths = List.map fst deps in
+        {
+          sc with
+          next =
+            (if over then In_over (name.name, paths)
+             else In_for (name.name, paths));
+        }
+      in
+      (* what it goes over it needs already *)
+      if over then
+        Option.iter
+          (fun (u : Resolved.uses) ->
+            List.iter
+              (fun (d : tname) ->
+                match d.tref with
+                | Named p when List.mem_assoc p deps ->
+                    report env d.tloc
+                      ~help:(sprintf "remove `%s` from its `uses`" p.name)
+                      (sprintf
+                         "`%s` is what it goes over, so it isn't listed in \
+                          `uses`"
+                         p.name)
+                | _ -> ())
+              u.deps)
+          needs;
+      let fails = Option.map (errors env ~params:sc.tparams) fails in
       let state, sc = block_stmts env sc state in
       let ops (p : Path.t) = Option.value (dep_ops env p) ~default:[] in
       let shown (p : Path.t) = sprintf "`%s`" p.name in
@@ -1485,48 +1800,49 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
                    op);
               Global (Path.make env.home op)
         in
-        let arm_impl =
-          match a.arm_impl.kind with
-          | Lambda (ps, body) ->
-              no_duplicates env "parameters"
-                (List.map (fun (p : Parsed.param) -> p.pname) ps);
-              List.iter (not_self env ~help:"choose another name") ps;
-              let ps, inner =
-                params env sc
-                  (fun (p : Parsed.param) ->
-                    if p.pmode = Inout then By_inout else By_lambda)
-                  ps
-              in
-              {
-                kind = Lambda (ps, expr env inner body);
-                loc = a.arm_impl.loc;
-                node = a.arm_impl.node;
-              }
-          | _ -> (* the parser makes each arm a lambda *) assert false
-        in
-        { arm_op; arm_name = a.arm_name; arm_impl }
+        {
+          arm_op;
+          arm_name = a.arm_name;
+          arm_impl = arm_lambda env sc a.arm_impl;
+        }
       in
       let arms = List.map arm arms in
-      (* every operation of every dependency is implemented *)
-      List.iter
-        (fun ((p : Path.t), _) ->
-          match
-            List.filter (fun o -> not (Hashtbl.mem given (p, o))) (ops p)
-          with
-          | [] -> ()
-          | missing ->
-              report env name.loc
-                ~help:
-                  (sprintf "add %s"
-                     (String.concat ", "
-                        (List.map
-                           (fun o -> sprintf "`%s(...) => ...`" o)
-                           missing)))
-                (sprintf "the handler `%s` doesn't implement %s" name.name
-                   (String.concat ", "
-                      (List.map (fun o -> sprintf "`%s.%s`" p.name o) missing))))
-        deps;
-      Handler { deps = List.map snd deps; needs; state; arms }
+      (* every operation of every dependency is implemented, unless it goes
+         over another implementation, which does the rest *)
+      (if not over then
+         let missing =
+           List.concat_map
+             (fun ((p : Path.t), _) ->
+               List.filter_map
+                 (fun o ->
+                   if Hashtbl.mem given (p, o) then None
+                   else if List.length deps = 1 then Some (sprintf "`%s`" o)
+                   else Some (sprintf "`%s.%s`" p.name o))
+                 (ops p))
+             deps
+         in
+         match missing with
+         | [] -> ()
+         | missing ->
+             let ds =
+               String.concat " & "
+                 (List.map (fun ((p : Path.t), _) -> p.name) deps)
+             in
+             report env name.loc
+               ~notes:
+                 [
+                   "a handler implements every operation, unless it goes \
+                    `over` another implementation, which then does the rest";
+                 ]
+               ~help:
+                 (sprintf
+                    "write them, or declare it `over %s` if another `%s` \
+                     should handle them"
+                    ds ds)
+               (sprintf "`%s` doesn't implement %s" name.name (or_list missing)));
+      let finally = Option.map (arm_lambda env sc) finally in
+      Handler
+        { deps = List.map snd deps; over; fails; needs; state; arms; finally }
   | _ -> assert false
 
 (* ---- declarations ---- *)
@@ -1692,6 +2008,13 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       rows = [];
       depth = 0;
       fn = { last_id = 0; calls = []; dots = []; typed = []; test = f.test };
+      next =
+        (match f.body.kind with
+        | Handler { over = true; _ } ->
+            (* the dependencies are resolved with its body, but a parameter
+               named `next` is reported now *)
+            In_over (f.name.name, [])
+        | _ -> No_next);
     }
   in
   let ps, inner =
@@ -1712,7 +2035,14 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
           | Dep _ ->
               (* a dependency's `self` is an implementation, which needs what
                  its method uses, as `c: Clock` does *)
-              TyImpl ([ { tref = Named owner; tloc = loc } ], None, loc)
+              TyImpl
+                {
+                  impl_deps = [ { tref = Named owner; tloc = loc } ];
+                  impl_over = false;
+                  impl_errors = None;
+                  impl_uses = None;
+                  impl_loc = loc;
+                }
           | Fields _ | Ctors _ | Opaque _ | Opaque_fields _ | Errors _ | Builtin
             ->
               TyName
@@ -1767,8 +2097,19 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
           | _ -> []
         in
         match kind with
-        | Handler { needs; _ } when (f.pub || needs <> None) && own <> [] ->
-            (body, Some (TyImpl (own, needs, f.name.loc)), none)
+        | Handler { over; fails; needs; _ }
+          when (f.pub || needs <> None || fails <> None) && own <> [] ->
+            ( body,
+              Some
+                (TyImpl
+                   {
+                     impl_deps = own;
+                     impl_over = over;
+                     impl_errors = fails;
+                     impl_uses = needs;
+                     impl_loc = f.name.loc;
+                   }),
+              none )
         | _ -> (body, None, none))
     | _ -> (expr env { inner with rows = !named } f.body, ret, deps)
   in
@@ -2154,11 +2495,12 @@ let rec named_in (t : Resolved.ty) =
       @ Option.fold ~none:[] ~some:named_in ret
       @ Option.fold ~none:[] ~some:named_in_errors errs
       @ Option.fold ~none:[] ~some:named_in_uses u
-  | TyImpl (ds, u, _) ->
+  | TyImpl { impl_deps = ds; impl_errors = es; impl_uses = u; _ } ->
       List.filter_map
         (fun (d : tname) ->
           match d.tref with Named p -> Some (p, d.tloc) | Param _ -> None)
         ds
+      @ Option.fold ~none:[] ~some:named_in_errors es
       @ Option.fold ~none:[] ~some:named_in_uses u
   | TyInout (t, _) -> named_in t
   | TyTuple (ts, _) -> List.concat_map named_in ts
@@ -2242,14 +2584,24 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
       (fun (p : Resolved.param) -> Option.iter (check ~verb:"takes") p.pty)
       f.params;
     (match f.ret with
-    | Some (TyImpl (_, needs, _)) when Ast.is_handler f ->
-        (* what it implements [handler] checks; what it needs is its own *)
+    | Some (TyImpl { impl_errors = fails; impl_uses = needs; _ })
+      when Ast.is_handler f ->
+        (* what it implements [handler] checks; what it needs, and how it
+           can fail, are its own *)
         Option.iter
           (fun u ->
             no_private_named env ~private_ (named_in_uses u)
               ~say:(fun (p : Path.t) ->
                 sprintf "`pub handler %s` needs `%s`" (Ast.fn_name f) p.name))
-          needs
+          needs;
+        Option.iter
+          (no_private_errors env ~private_
+             ~set:
+               (sprintf "`pub handler %s` can fail with `%s`" (Ast.fn_name f))
+             ~tag:
+               (sprintf "`pub handler %s`'s error `%s` mentions `%s`"
+                  (Ast.fn_name f)))
+          fails
     | ret -> Option.iter (check ~verb:"returns") ret);
     Option.iter
       (no_private_errors env ~private_

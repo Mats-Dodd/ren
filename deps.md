@@ -128,9 +128,23 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   type's declaration can't name one yet, so a type that keeps a closure
   takes it as a type parameter, `type Button<F> = { on_click: F }`, and a
   signature writes `Button<fn() ! ..e uses ..d>`.
-- A handler in front of another implementation, declared `over` it and
-  calling it through `next`, comes in stage 10
-  ([handlers.md](handlers.md)).
+- **A handler can go in front of another implementation,** declared
+  `over` it: `handler cached(ttl: Duration) over Prices uses Clock`. Its
+  arms reach the one under it with `next.price(item)`, or `next(A).get()`
+  when it goes over several that share an operation's name, and the
+  operations it leaves out go to that one. A `with` installs it over
+  another, `with cached(ttl) over catalogue() in`, or over the one
+  installed outside the `with`, `over Prices`. Its type says so, `over
+  Prices uses Clock`.
+- **A handler can run code when its `with` ends,** in `finally(r) =>
+  ...`, last: it's given the body's result, `Ok(v)` or `Err(_)`, and
+  what it gives back, or fails with, is the `with`'s.
+- **A handler's state can fail,** `let tx = try next.begin()`, and so can
+  its `finally`: the `with` that installs it fails with that, as it would
+  for a `try`, and the body doesn't run. A public handler says so, `pub
+  handler transaction() over Sql ! DbDown`, and so does a written type,
+  `s: Sql ! DbDown`; a type without `!` can't fail to start. See
+  [handlers.md](handlers.md) and [examples/ledger](examples/ledger).
 
 ## `with`
 
@@ -139,18 +153,27 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   body
 ```
 
-- Items are installed outermost first. The innermost implementation of a
-  dependency wins. Stage 10 changes this: a `with` becomes a set, each
-  dependency once and in any order, and wrapping is written with `over`
-  ([handlers.md](handlers.md#a-with-is-a-set)). A line that ends in `,` goes on with the list on the
-  next, indented further. That holds for any line outside brackets that
+- **A `with` is a set** ([handlers.md](handlers.md#a-with-is-a-set)).
+  Each dependency is installed once: installing one twice, a handler of
+  several included, is an error. An item's needs are met by the other
+  items first, then by what's installed outside, and the compiler finds
+  the order, so the order they're written in never matters; items that
+  don't need each other go in the order of their dependencies' names.
+  Each item's value is made outside the `with`, in the order written. A
+  `with` nested inside another can install a dependency again, and the
+  inner one is what its body sees. A line that ends in `,` goes on with
+  the list on the next, indented further. That holds for any line outside brackets that
   ends in `,`, so a signature's `uses` list wraps the same way:
   `uses Clock,` then `    Console =` on the next line.
 - `with` removes what it installs from the body's `uses`, and adds what its
   items need.
-- An item is an implementation, or a **wrapper**: a function whose last
-  parameter is the body. `with retry(3) in body` is `retry(3, fn() => body)`.
-  A function of one parameter is a wrapper on its own: `with twice in body`.
+- An item is an implementation, a chain of them joined by `over`, or a
+  **wrapper**: a function whose last parameter is the body. `with
+  retry(3) in body` is `retry(3, fn() => body)`. A function of one
+  parameter is a wrapper on its own: `with twice in body`. Wrappers go
+  inside everything the `with` installs, and two are chained with
+  `over`, `with retry(3) over timeout(d) in`, the first outermost: two
+  side by side are an error.
 - The body of a wrapper is a lambda, so it marks its own calls, and the
   `with` passes on what the wrapper fails with, as `try` would:
   `attempt with retry(3) in try fetch()`. Like any lambda's, it can't
@@ -366,7 +389,7 @@ its implementation in the vector by the dependency's identity, never by
 a name at runtime; for now that's a short search, and when the row is
 closed the compiler can make it a fixed index (rule 6). Each call keeps
 its shape, dependency, operation and arguments, which is what the effect
-journal (stage 10) will record.
+journal (stage 10b) will record.
 
 A closure gets the evidence of whoever calls it, not of where it was
 made, so one that outlives its `with` uses what's installed where it's
@@ -378,6 +401,18 @@ installed, so it can't use a dependency; a closure stored in one gets its
 caller's evidence when it's called, like any other. The program starts
 in `$start`, which installs the real implementation of each built-in
 `main` uses and calls `main`. `ren core` prints all of it.
+
+A handler over another is installed inside it, so the evidence where
+it's installed holds the one under it: `next.get(id)` is a dependency
+call on that evidence, which the handler's operations keep, so a `with`
+around the call still reaches the one under it, and an operation it
+leaves out is a lambda that makes that call. They're the one exception
+to a closure getting its caller's evidence. A lambda can't call `next`,
+nor can the body of a `with` a wrapper is given: one could be passed to
+the implementation under the handler and kept there, and would reach it
+again. Its `finally` is a lambda kept in its instance, which
+the `with` calls when its body ends, with the body's result and a
+descriptor of its type.
 
 ## Deviations
 
@@ -439,15 +474,34 @@ stage, or settled something the plan left open:
 - **A handler can't use a dependency it implements,** `Rates.usd_to`
   inside a handler for `Rates`, nor through a function it calls that
   uses `Rates`, even though its operations run with what's installed
-  outside it: reaching the implementation under it is `next`'s, through `over`
-  (stage 10), and the README's section 7 already says it's an error. It's
-  checked on what the handler needs, so an arm can still install
-  another `Rates`, even the same handler, `with counting_rates(r) in
-  ...`, around a call that uses one.
-- **A handler's state is made where it's installed, and can't fail:**
-  the `with` that installs it isn't a call a `try` could mark. Stage 10
-  lifts this: a `with` passes on what setting up its handlers fails with
-  ([handlers.md](handlers.md#state-that-can-fail-to-start)).
+  outside it: reaching the implementation under it is `next`'s, through
+  `over`. It's checked on what the handler needs, so an arm can still
+  install another `Rates`, even the same handler, `with
+  counting_rates(r) in ...`, around a call that uses one. A record
+  implementation can't either, `Rates { usd_to: fn(c) => Rates.usd_to(c)
+  }`: wrapping is only written with `over`.
+- **A `with` fails with what its handlers' state and `finally` fail
+  with,** as the `try` of each: the handler's `fails`, part of its type.
+  A public handler writes it, `! DbDown`, after what it implements; a
+  private one's is inferred. A written implementation type without `!`
+  can't fail to start, a transparent parameter's included, where a
+  transparent `f: fn()` fails with its function's errors.
+- **`finally` is generic in the body's value.** It can give it back, pass
+  it on or show it, but comparing, ordering or hashing it is an error,
+  and it's given its result as `Ok(v)` or `Err(_)`, the error passed on
+  with `try r`, since a `fail` pattern never binds a whole error. The
+  `with` fails with the body's errors and the handler's own, whatever
+  `finally` does with the body's.
+- **A handler is `for` all its dependencies or `over` all of them;** one
+  over several can't be narrowed by a written type to one of them.
+- **A chain installs what its bottom installs,** each link above taking
+  the place of what it goes over: `cached(ttl) over counting()`, where
+  `counting` is a `Prices & Calls`, installs both.
+- **`next` isn't a keyword:** only in a handler declared `over` does
+  `next.op(...)` or `next(A).op(...)` reach the one under it. It can only
+  be called through, never kept, and nothing in that handler can be named
+  `next`.
+- **A panic skips `finally`, and so does a failed start.**
 - **A handler of several dependencies has a type that lists them,**
   `Rates & RateCalls`, from the moment it's made, and it never changes.
   The order doesn't matter: `RateCalls & Rates` is the same type. A
@@ -641,8 +695,9 @@ error: `with` can't tell what `c` installs
 
 ## Later
 
-- `over`, `next`, `finally`, `with` as a set, and the journal (stage 10,
-  [handlers.md](handlers.md)).
+- The journal (stage 10b, [handlers.md](handlers.md#the-journal)).
+- A handler that goes over some dependencies and implements others
+  whole.
 - `Async` and `Net` (stage 11, [async.md](async.md)).
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.

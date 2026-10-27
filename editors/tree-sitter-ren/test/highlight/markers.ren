@@ -173,3 +173,26 @@ test handler fixed(n: Int) for Store =
 // <- keyword
 //   ^ keyword
   get() => n
+
+pub handler transaction() over Sql ! DbDown =
+//                        ^ keyword
+//                             ^ type.dependency
+//                                 ^ keyword.failure
+  let tx = try next.begin()
+//             ^ variable.special
+//                  ^ function.method
+  get() => next(Sql).get()
+//         ^ variable.special
+  finally(r) =>
+//^ keyword
+    N.next()
+//    ^ function
+    try r
+
+fn wrapped(s: over Sql) -> Int uses Sql =
+//            ^ keyword
+//                 ^ type
+  with cached(1) over limited() over Sql, other() in 1
+//               ^ keyword
+//                    ^ function
+//                                   ^ type.dependency

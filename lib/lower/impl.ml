@@ -33,7 +33,12 @@ let rec unplaced (e : Core.expr) : Core.expr =
     | Dep_call d -> Dep_call { d with args = List.map go d.args }
     | With w -> With { w with impl = go w.impl; body = go w.body }
     | Handler h -> Handler { h with body = go h.body }
-    | Instance impls -> Instance (List.map (fun (d, e) -> (d, go e)) impls)
+    | Instance { impls; finally } ->
+        Instance
+          {
+            impls = List.map (fun (d, e) -> (d, go e)) impls;
+            finally = Option.map go finally;
+          }
     | Narrowed (d, e) -> Narrowed (d, go e)
     | With_handler w ->
         With_handler { w with handler = go w.handler; body = go w.body }
@@ -102,7 +107,7 @@ let rec has_fn (t : Ty.ty) =
   | Con (_, ts) -> List.exists has_fn ts
   | Errors r ->
       List.exists (fun (l : Ty.label) -> List.exists has_fn l.payload) r.labels
-  | Var _ | Uses _ | All _ | Error -> false
+  | Var _ | Impl _ | Error -> false
 
 (* Whether a function's body is one to record: it has a type variable, or
    a parameter or result with a function in it. Every function has row

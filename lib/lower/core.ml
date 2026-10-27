@@ -32,7 +32,10 @@
    its body, and a [Dep_call] finds its dependency's implementation in it,
    by the dependency's path, never by a name the program spells. A
    lambda's evidence is its own, passed where it's called, so it never
-   keeps the implementation that was installed where it was made.
+   keeps the implementation that was installed where it was made. The
+   one exception is `next` in a handler: a [Dep_call] through it uses
+   the evidence where the handler was installed, which a lambda in the
+   handler keeps, as it would a local (handlers.md, "How it runs").
 
    So are types, where the running program needs one: to show a value
    (shown.ml). A generic function takes a hidden parameter for each of its
@@ -177,19 +180,35 @@ and kind =
       op : string;
       fty : Ty.ty;  (** the operation's type, at this call *)
       ev : var;  (** the evidence it finds [dep]'s implementation in *)
+      next : bool;
+          (** a call through `next`: [ev] is then the evidence of the [Handler]
+              it's in, where it was installed, so the innermost [dep] in it is
+              the one the handler is over. A lambda in the handler keeps that
+              evidence, the one way evidence is captured *)
       args : expr list;
     }
       (** [Clock.now()]: a call of an operation of the innermost implementation
           of [dep] in [ev], which runs with the evidence that implementation was
           installed with. Kept apart from other calls, so what was called, with
-          what, can be recorded (the journal, stage 10). Never with `&` *)
-  | With of { ev : var; outer : var; dep : Path.t; impl : expr; body : expr }
+          what, can be recorded (the journal, stage 10b). Never with `&` *)
+  | With of {
+      ev : var;
+      outer : var;
+      dep : Path.t;
+      impl : expr;
+      desc : desc;
+      body : expr;
+    }
       (** [body], with the evidence [ev]: [outer], the evidence here, with
           [impl] installed for [dep] on top. [impl] is a value of [dep]'s type:
           a record, installed as it is, or a handler's description, of which a
           fresh instance is made with [outer], and its implementation of [dep]
-          installed. Either keeps [outer], which its operations run with. The
-          runtime's installs around `main` are these *)
+          installed. Either keeps [outer], which its operations run with. Making
+          the instance can fail, as the implementation's type says (Ty.impl). If
+          the instance has a `finally`, it's given [body]'s outcome, `Ok` of its
+          value or `Err` of its error, and [desc], which describes [body]'s
+          type, and what it gives is the [With]'s. The runtime's installs around
+          `main` are these *)
   | Handler of { ev : var; captures : var list; body : expr }
       (** a handler, described: what calling a `handler` declaration gives. Like
           a lambda of no parameters it keeps [captures], and its [body] runs
@@ -198,10 +217,15 @@ and kind =
           in a cell, and ends in an [Instance]. Its type is its dependency's, if
           it implements one, or else the type that lists them, either needing
           what its operations use *)
-  | Instance of (Path.t * expr) list
+  | Instance of { impls : (Path.t * expr) list; finally : expr option }
       (** a handler's instance: an implementation of each of its dependencies,
           in the order they're written, records of lambdas that share the cells
-          of one state. Of its [Handler]'s type, which lists them sorted *)
+          of one state, and its `finally`, a lambda that shares them too. Of its
+          [Handler]'s type, which lists them sorted. The `finally` takes the
+          descriptor of the body's type of the `with` that installs it, then its
+          outcome, a [Result] of that type, whose variable is the one after its
+          handler's function's own, [Var n] (Handler_facts.body_ty), and gives
+          what the [With] gives *)
   | Narrowed of Path.t list * expr
       (** a description of a handler of several dependencies, narrowed to some
           of them, where a written type asks for those (deps.md,
@@ -213,6 +237,7 @@ and kind =
       outer : var;
       handler : expr;
       deps : Path.t list;
+      desc : desc;
       body : expr;
     }
       (** [body], with the evidence [ev]: [outer] with a fresh instance of
@@ -220,7 +245,8 @@ and kind =
           Those are what [handler]'s type lists, sorted: the instance may
           implement more, if it was narrowed ([Narrowed]), which aren't
           installed. The instance's implementations all keep [outer], which
-          their operations run with *)
+          their operations run with. Its `finally`, if it has one, runs as a
+          [With]'s does *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)
@@ -407,7 +433,8 @@ let rec has_param n (t : Ty.ty) =
   | Fun (ps, r, e, u, _) ->
       List.exists (fun (p : Ty.param) -> has_param n p.ty) ps
       || has_param n r || row e || row u
-  | Errors r | Uses r | All (_, r) -> row r
+  | Errors r -> row r
+  | Impl i -> row i.needs || row i.fails
   | Error -> false
 
 (* The descriptor of [t], a type written in the type variables of a
@@ -436,7 +463,7 @@ let rec describe tys (t : Ty.ty) =
           row e,
           u )
   | Errors e -> Errs (row e)
-  | Uses _ | All _ | Error -> Known t
+  | Impl _ | Error -> Known t
 
 (* The type variables among [Var 0] to [Var (n - 1)] that [t] has in it,
    each once, in order. *)
@@ -459,7 +486,8 @@ let params_in n (t : Ty.ty) =
                 r)
              e)
           u
-    | Errors r | Uses r | All (_, r) -> row acc r
+    | Errors r -> row acc r
+    | Impl i -> row (row acc i.needs) i.fails
   in
   List.sort_uniq compare (go [] t)
 
@@ -560,7 +588,7 @@ let children (e : expr) =
       es
   | With { impl; body; _ } -> [ impl; body ]
   | With_handler { handler; body; _ } -> [ handler; body ]
-  | Instance impls -> List.map snd impls
+  | Instance { impls; finally } -> List.map snd impls @ Option.to_list finally
   | Let (_, a, b)
   | While (a, b)
   | Seq (a, b)
@@ -587,11 +615,16 @@ let children (e : expr) =
 (* Whether running [e] can fail: whether it can reach a [Fail] or a call
    that can fail, that no [Handle] in it catches. A lambda's body runs only
    when it's called, so only the call can fail. *)
+let starts_failing (t : Ty.ty) =
+  match t with Impl { fails; _ } -> fails.labels <> [] | _ -> false
+
 let rec can_fail (e : expr) =
   match e.kind with
   | Fail _ -> true
   | Call (f, _, _) when fails f.ty -> true
   | Dep_call { fty; _ } when fails fty -> true
+  | With { impl; _ } when starts_failing impl.ty -> true
+  | With_handler { handler; _ } when starts_failing handler.ty -> true
   | Handle { on_value; on_error; _ } -> can_fail on_value || can_fail on_error
   | Lambda _ | Handler _ -> false
   | _ -> List.exists can_fail (children e)
@@ -753,12 +786,13 @@ and sexp_of_opt t e =
   | Global (p, a, _, ds) -> used t (Path.local p) a ds
   | Global_value (p, a) -> used t (Path.local p) a []
   | Intrinsic (x, a, _, ds) -> used t (Intrinsic.name x) a ds
-  | Dep_call { dep; op; ev; args; _ } ->
+  | Dep_call { dep; op; ev; next; args; _ } ->
       List
-        (atom "dep-call" :: var ev
+        (atom (if next then "next-call" else "dep-call")
+        :: var ev
         :: Atom (Path.full dep ^ "." ^ op)
         :: List.map sexp args)
-  | With { ev; outer; dep; impl; body } ->
+  | With { ev; outer; dep; impl; body; _ } ->
       List
         [
           atom "with";
@@ -778,13 +812,16 @@ and sexp_of_opt t e =
       List
         ((atom "narrowed" :: List.map (fun d -> Atom (Path.full d)) ds)
         @ [ sexp h ])
-  | Instance impls ->
+  | Instance { impls; finally } ->
       List
         (atom "instance"
-        :: List.map
-             (fun (d, impl) -> List [ Atom (Path.full d ^ ":"); sexp impl ])
-             impls)
-  | With_handler { ev; outer; handler; deps; body } ->
+         :: List.map
+              (fun (d, impl) -> List [ Atom (Path.full d ^ ":"); sexp impl ])
+              impls
+        @ Option.fold ~none:[]
+            ~some:(fun f -> [ List [ atom "finally"; sexp f ] ])
+            finally)
+  | With_handler { ev; outer; handler; deps; body; _ } ->
       List
         [
           atom "with";

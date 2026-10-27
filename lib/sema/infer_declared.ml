@@ -109,15 +109,44 @@ let check_needs env (f : fn_def) n =
   List.iter
     (fun dep ->
       let shown = env.names (Ty.dep_path dep) in
-      if List.mem dep own then
-        report env (handler_uses_itself f shown (call_of dep))
+      if List.mem dep n.nover then
+        (* what it goes over it needs, and reaches with `next`: a call of
+           the dependency itself would reach this handler *)
+        match List.find_opt (fun c -> brings c dep) calls with
+        | Some c ->
+            (* the call to write instead: `next(A).get` if another
+               dependency it goes over has a `get` too *)
+            let next =
+              Option.map
+                (fun op ->
+                  let has p =
+                    match Hashtbl.find_opt env.types p with
+                    | Some { Iface.body = Dep fs; _ } ->
+                        List.exists (fun (d : Iface.field) -> d.fname = op) fs
+                    | _ -> false
+                  in
+                  let deps = Option.value (Iface.handler_deps f) ~default:[] in
+                  ( (if List.length (List.filter has deps) > 1 then
+                       sprintf "next(%s).%s" shown op
+                     else "next." ^ op),
+                    sprintf "%s.%s" shown op ))
+                c.op
+            in
+            report env
+              (handler_uses_itself f shown ~over:true ?next
+                 (Some (c.cloc, if c.needs then Installing else Call_uses)))
+        | None -> ()
+      else if List.mem dep own then
+        report env (handler_uses_itself f shown ~over:false (call_of dep))
       else
         match n.ndeclared with
         | Some declared when not (List.mem dep declared) ->
             report env (undeclared_need ~written f shown (call_of dep))
         | _ -> ())
     (List.sort_uniq String.compare (row_names n.nrow));
-  if n.ndeclared <> None then close_row n.nrow
+  if n.ndeclared <> None then close_row n.nrow;
+  (* what its state and `finally` fail with is all it fails to start with *)
+  if row_skolem n.nfails = None then close_row n.nfails
 
 (* ---- what a function fails with (errors.md) ---- *)
 
@@ -159,6 +188,7 @@ let check_errors env ~is_value (f : fn_def) cx declared =
     | Unwrapped (_, r) | Unhandled (_, r) -> row_names r
   in
   let what = function
+    | Passed c when c.einstall -> Install_fails
     | Passed _ -> Call_fails
     | Failed _ -> Fails
     | Unwrapped _ -> Result_holds
@@ -273,7 +303,8 @@ let check_open_rows env (f : fn_def) cx =
             | true, false -> Some (p, None, Cant_fail)
             | false, true -> Some (p, None, Cant_use)
             | true, true -> Some (p, None, Cant_fail_or_use))
-        | Some (TyImpl (ds, None, _)) when uses_closed ->
+        | Some (TyImpl { impl_deps = ds; impl_uses = None; _ }) when uses_closed
+          ->
             let written = List.map env.names (Iface.dep_paths ds) in
             Some (p, Some (String.concat " & " written), Cant_need)
         | _ -> None)

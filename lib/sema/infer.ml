@@ -66,6 +66,11 @@ type found = Infer_env.found =
   | Installs of Path.t
   | Installs_handler of Path.t list
   | Wraps
+  | Install_order of int list
+  | Handler_facts of {
+      forwards : (Path.t * string * Ty.ty) list;
+      body_ty : int option;
+    }
   | Handles
   | Fail_arm
   | Unwraps

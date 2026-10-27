@@ -145,7 +145,7 @@ A dependency that isn't a built-in is installed in the line itself:
   1 │ try Prices.price("apple")
     │ ^^^^^^^^^^^^^^^^^^^^^^^^^ the console gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
     │     --------------------- this call uses `Prices`
-    help: install one in the line: `with cached(...) in ...`
+    help: install one in the line: `with counting() in ...`
   cache> 
 
 An error a `try` passes up stops the line, as a panic does, with how to

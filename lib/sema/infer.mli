@@ -25,12 +25,24 @@ type found =
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
   | Installs of Path.t
-      (** a `with` whose item is an implementation of this dependency, a record
-          or a handler's description *)
+      (** a link of a `with`'s item that's an implementation of this dependency,
+          a record or a handler's description *)
   | Installs_handler of Path.t list
-      (** a `with` whose item describes a handler of these dependencies, all of
-          which it installs *)
-  | Wraps  (** a `with` whose item is a wrapper, which its body is passed to *)
+      (** a link that describes a handler of these dependencies, all of which it
+          installs *)
+  | Wraps  (** a link that's a wrapper, which what's inside it is passed to *)
+  | Install_order of int list
+      (** at a `with`: the items that install, by their place in it, outermost
+          first (handlers.md, "A `with` is a set") *)
+  | Handler_facts of {
+      forwards : (Path.t * string * Ty.ty) list;
+      body_ty : int option;
+    }
+      (** at a handler: the operations it leaves out, which go to the
+          implementation under it, each with its dependency's declared type
+          (handlers.md, "`over`"); and if it has a `finally`, the variable that
+          stands for the type of the body of a `with` that installs it, which
+          its function's own come before, and a [With] passes a descriptor of *)
   | Handles  (** a `match` that handles errors: one with `fail` arms *)
   | Fail_arm
       (** a `fail` arm's pattern, which matches an error rather than a value *)

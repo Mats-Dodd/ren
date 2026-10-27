@@ -192,6 +192,9 @@ if total > budget then fail OverBudget(total - budget)
 
 - It gives `+`, `-`, negation, `zero`, comparison, and `*` by a plain
   `Int` (or `Float`, for `opaque Float with numeric`).
+- **It gives the operators, not the methods:** outside its module,
+  `m.add(n)` is an error whose help writes `m + n`. Inside, where the
+  type is what it's represented as, `Int`'s methods are there too.
 - **Not `*` of two of them,** which would make `Meters * Meters` a
   `Meters`. Anything else is written by hand, `pub fn mul(self, b: Meters)
   -> Area`.

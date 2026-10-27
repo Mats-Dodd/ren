@@ -50,7 +50,7 @@ let through_type env ~known ~fits =
    type. In its own module, an opaque type's is its representation's. *)
 let known_decl env t =
   match reveal env.st t with
-  | TCon (p, _) -> Hashtbl.find_opt env.types p
+  | TCon (p, _) | TImpl { deps = [ p ]; _ } -> Hashtbl.find_opt env.types p
   | _ -> None
 
 let ctor_in (c : ident) (td : Iface.type_decl) =
@@ -86,7 +86,13 @@ let find_ctor env (c : ctor_ref) ~expected =
       | _ when private_ctor ->
           (* a constructor of a private type of the module's own, which
              test code doesn't see *)
-          report env (private_in_test c.loc ~home:env.home c.name);
+          let owner =
+            List.find_map
+              (fun (td : Iface.type_decl) ->
+                Option.map (fun _ -> td.path.name) (ctor_in c td))
+              env.hidden
+          in
+          report env (private_in_test ?owner c.loc ~home:env.home c.name);
           None
       | Some ({ body = Opaque (Hidden _); _ } as td) ->
           (* another module's opaque type has no constructors here *)
@@ -201,6 +207,14 @@ let rec op_of env t name =
                    rep)
                 name
           | None, None -> None))
+  | TImpl { deps = [ p ]; _ } -> (
+      (* a dependency's method *)
+      match Hashtbl.find_opt env.types p with
+      | Some td -> (
+          match op_in name td with
+          | Some o when o.opub || own env p -> Some (td, o)
+          | _ -> None)
+      | None -> None)
   | _ -> None
 
 (* Whether a value of type [t] has a member or a field named [name]: a
@@ -222,8 +236,8 @@ let has_member env t name =
    whose lookup reports that. *)
 let member_of_several env cx (r : expr) tr (name : ident) =
   match repr tr with
-  | TAll (ds, needs) -> (
-      let one d = TCon (d, [ TUses needs ]) in
+  | TImpl ({ deps = _ :: _ :: _ as ds; _ } as i) -> (
+      let one d = TImpl { i with deps = [ d ] } in
       match List.filter (fun d -> has_member env (one d) name.name) ds with
       | [ d ] -> (
           match op_of env (one d) name.name with
@@ -319,6 +333,13 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
       let tr = member_of_several env cx r tr f in
       match reveal env.st tr with
       | TError -> TError
+      | TImpl { deps = [ p ]; _ } -> (
+          (* an implementation's operations aren't read from it *)
+          match (Hashtbl.find env.types p).body with
+          | Dep ops ->
+              report env (op_of_value ~names:env.names f p ops);
+              TError
+          | _ -> needs_record tr)
       | TCon (p, args) as t -> (
           let td = Hashtbl.find env.types p in
           (* another module's opaque type, whose fields are hidden *)
@@ -545,5 +566,22 @@ let rec lookup env cx ~node loc = function
                      errs,
                      RExtend (dep (Ty.dep_label p), fresh_row env.st),
                      l ))
+          | _ -> TError)
+      | None -> TError)
+  | Next_op (p, op) -> (
+      (* the operation of the implementation under the handler, `next.get`:
+         it's only ever called (resolve.ml), on the evidence where the
+         handler is installed (Lower), so it uses nothing of its caller's:
+         [p] is the handler's need, which it has already. It's called only
+         while an operation runs, never in a lambda ([next_at]). *)
+      (match cx.next_at with
+      | Next_ok -> ()
+      | In_lambda -> report env (next_in_lambda loc op)
+      | In_wrapped w -> report env (next_in_wrapped loc ~wrapper:w op));
+      match Option.bind (Hashtbl.find_opt env.types p) (dep_op_in op) with
+      | Some o -> (
+          match field_type env ~tvars:[] o with
+          | TFun (ps, ret, errs, _, l) ->
+              TFun (ps, ret, errs, fresh_row env.st, l)
           | _ -> TError)
       | None -> TError)

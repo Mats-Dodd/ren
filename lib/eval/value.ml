@@ -62,8 +62,9 @@ type t =
   | VHandler of handler
       (** a handler, described (core.ml, [Handler]): a value of its dependency's
           type, or of the handler's own *)
-  | VInstance of (Path.t * t) list
-      (** a handler's instance: an implementation of each of its dependencies *)
+  | VInstance of { impls : (Path.t * t) list; finally : t option }
+      (** a handler's instance: an implementation of each of its dependencies,
+          and its `finally`, a closure, if it has one *)
   | VCell of t ref
       (** a `var` of a handler's state, shared by its instance's operations *)
   | VEvidence of installed list

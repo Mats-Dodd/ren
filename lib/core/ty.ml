@@ -27,18 +27,20 @@ type ty =
   | Errors of row
       (** an error set as a type argument, [! Short(Int) | Frozen], which only
           [Result<T, ! ...>] takes (errors.md, "Keeping an error") *)
-  | Uses of row
-      (** what an implementation needs, as the one argument of its dependency's
-          type: [Clock uses Os] is [Con (Clock, [Uses Os])] (deps.md,
-          "Implementations"). Nothing else takes one *)
-  | All of Path.t list * row
-      (** an implementation of several dependencies, sharing one state, and what
-          it needs: what a handler of several describes, [Clock & TestClock].
-          They're sorted, each once, and there are at least two: one is
-          [Con (d, [Uses _])] ([impl]) *)
+  | Impl of impl
+      (** an implementation of a dependency, or of several sharing one state,
+          what a handler of several describes, [Clock & TestClock] ([impl]) *)
   | Error  (** the type of code that had an error, already reported *)
 
 and param = { mode : mode; ty : ty }
+
+(* An implementation's type (deps.md, "Implementations"): the
+   dependencies it implements, sorted, each once; whether it goes over
+   another implementation of them, [over Users] (handlers.md, "`over`"),
+   whose [needs] then has them too; what it needs where it's installed,
+   [Clock uses Os]; and what installing it can fail with, what its state
+   and its `finally` fail with, [Sql ! DbDown]. *)
+and impl = { deps : Path.t list; over : bool; needs : row; fails : row }
 
 and row = {
   labels : label list;  (** sorted by name *)
@@ -125,19 +127,15 @@ let label name = { name; payload = [] }
 
 (* The type of an implementation of [deps], needing [needs]: one
    dependency's, or for several, the type that lists them, sorted, each
-   once, since which order they're written in doesn't matter. *)
-let impl deps needs =
-  match List.sort_uniq compare deps with
-  | [ d ] -> Con (d, [ Uses needs ])
-  | ds -> All (ds, needs)
+   once, since which order they're written in doesn't matter. [over] says
+   it goes over another implementation of them, and [fails] is what
+   installing it can fail with: nothing, unless it's said. *)
+let impl ?(over = false) ?(fails = closed) deps needs =
+  Impl { deps = List.sort_uniq compare deps; over; needs; fails }
 
 (* If [t] is an implementation, of one dependency or several: which, and
    what it needs. *)
-let impl_parts t =
-  match t with
-  | Con (d, [ Uses needs ]) -> Some ([ d ], needs)
-  | All (ds, needs) -> Some (ds, needs)
-  | _ -> None
+let impl_parts t = match t with Impl i -> Some (i.deps, i.needs) | _ -> None
 
 (* The lambda set of a function type written in a declaration: one of its
    own, which nothing else shares, that [canonical] numbers. *)
@@ -177,7 +175,8 @@ let rec tails t =
   match t with
   | Var _ | Error -> []
   | Con (_, args) -> List.concat_map tails args
-  | Errors e | Uses e | All (_, e) -> row_tails e
+  | Errors e -> row_tails e
+  | Impl i -> row_tails i.needs @ row_tails i.fails
   | Fun (ps, r, e, u, _) ->
       List.concat_map (fun (p : param) -> tails p.ty) ps
       @ tails r @ row_tails e @ row_tails u
@@ -191,7 +190,8 @@ let rec lam_vars t =
   match t with
   | Var _ | Error -> []
   | Con (_, args) -> List.concat_map lam_vars args
-  | Errors e | Uses e | All (_, e) -> row_lam_vars e
+  | Errors e -> row_lam_vars e
+  | Impl i -> row_lam_vars i.needs @ row_lam_vars i.fails
   | Fun (ps, r, e, u, l) ->
       List.concat_map (fun (p : param) -> lam_vars p.ty) ps
       @ lam_vars r @ row_lam_vars e @ row_lam_vars u @ Option.to_list l.lvar
@@ -206,8 +206,13 @@ let rec without_lams t =
   | Var _ | Error -> t
   | Con (p, args) -> Con (p, List.map without_lams args)
   | Errors e -> Errors (row_without_lams e)
-  | Uses u -> Uses (row_without_lams u)
-  | All (ds, u) -> All (ds, row_without_lams u)
+  | Impl i ->
+      Impl
+        {
+          i with
+          needs = row_without_lams i.needs;
+          fails = row_without_lams i.fails;
+        }
   | Fun (ps, r, e, u, _) ->
       Fun
         ( List.map (fun (p : param) -> { p with ty = without_lams p.ty }) ps,
@@ -237,7 +242,8 @@ let own_args t =
     | Var n -> [ n ]
     | Error -> []
     | Con (_, args) -> List.concat_map vars args
-    | Errors e | Uses e | All (_, e) -> row_vars e
+    | Errors e -> row_vars e
+    | Impl i -> row_vars i.needs @ row_vars i.fails
     | Fun (ps, r, e, u, _) ->
         List.concat_map (fun (p : param) -> vars p.ty) ps
         @ vars r @ row_vars e @ row_vars u
@@ -279,8 +285,10 @@ let canonical (s : scheme) =
     | Error -> Error
     | Con (p, args) -> Con (p, List.map go args)
     | Errors e -> Errors (row e)
-    | Uses u -> Uses (row u)
-    | All (ds, u) -> All (ds, row u)
+    | Impl i ->
+        let needs = row i.needs in
+        let fails = row i.fails in
+        Impl { i with needs; fails }
     | Fun (ps, r, e, u, l) ->
         (* `let`s fix the order of first appearance: OCaml evaluates a
            constructor's arguments right to left *)
@@ -403,7 +411,7 @@ let rec reserve pr t =
   | Error -> ()
   | Con (_, args) -> List.iter (reserve pr) args
   | Errors e -> List.iter (reserve_label pr) e.labels
-  | Uses _ | All _ -> ()
+  | Impl _ -> ()
   | Fun (ps, r, e, _, _) ->
       List.iter (reserve pr) (r :: List.map (fun (p : param) -> p.ty) ps);
       List.iter (reserve_label pr) e.labels
@@ -450,13 +458,14 @@ and show_label pr l =
 
 and show pr t =
   match t with
-  | Con (p, [ Uses u ]) ->
-      (* an implementation, and what it needs *)
-      pr.type_name p ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
-  | All (ds, u) ->
-      (* one of several, `Clock & TestClock uses Os` *)
-      String.concat " & " (List.map pr.type_name ds)
-      ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" u
+  | Impl i ->
+      (* an implementation, `Clock uses Os`, or of several, `Clock &
+         TestClock`; one that goes over another, `over Users uses Clock`;
+         and what installing it can fail with, `Sql ! DbDown` *)
+      (if i.over then "over " else "")
+      ^ String.concat " & " (List.map pr.type_name i.deps)
+      ^ show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" i.fails
+      ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" (shown_needs i)
   | Con (p, args) when is_tuple p -> "(" ^ show_list pr args ^ ")"
   | Con (p, []) -> pr.type_name p
   | Con (p, args) -> pr.type_name p ^ "<" ^ show_list pr args ^ ">"
@@ -465,7 +474,6 @@ and show pr t =
       match show_row pr ~prefix:"! " ~sep:" | " ~kind:"e" e with
       | "" -> "!"
       | s -> s)
-  | Uses u -> show_row pr ~prefix:"uses " ~sep:", " ~kind:"d" u
   | Error -> "_"
   | Var id -> var_name pr id
   | Fun (ps, r, e, u, l) ->
@@ -501,11 +509,21 @@ and show_list pr ts =
        (fun t ->
          let s = show pr t in
          match t with
-         | (Con (_, [ Uses u ]) | All (_, u) | Fun (_, _, _, u, _))
-           when List.length u.labels > 1 ->
-             "(" ^ s ^ ")"
+         | Impl i when List.length (shown_needs i).labels > 1 -> "(" ^ s ^ ")"
+         | Fun (_, _, _, u, _) when List.length u.labels > 1 -> "(" ^ s ^ ")"
          | _ -> s)
        ts)
+
+(* What an implementation needs, as its type shows it: one that goes over
+   another needs what it goes over, which `over` already says. *)
+and shown_needs (i : impl) =
+  if not i.over then i.needs
+  else
+    let over = List.map dep_label i.deps in
+    {
+      i.needs with
+      labels = List.filter (fun l -> not (List.mem l.name over)) i.needs.labels;
+    }
 
 and show_param pr p =
   match p.mode with Inout -> "inout " ^ show pr p.ty | Read -> show pr p.ty
@@ -513,9 +531,18 @@ and show_param pr p =
 (* Whether [t], shown, ends in a `uses` list. *)
 and ends_in_uses pr t =
   match t with
-  | Con (_, [ Uses u ]) | All (_, u) | Fun (_, _, _, u, _) ->
-      show_row pr ~prefix:"" ~sep:"" ~kind:"d" u <> ""
+  | Impl i -> show_row pr ~prefix:"" ~sep:"" ~kind:"d" (shown_needs i) <> ""
+  | Fun (_, _, _, u, _) -> show_row pr ~prefix:"" ~sep:"" ~kind:"d" u <> ""
   | _ -> false
+
+(* Whether [t], shown, ends in a `!` or `uses` list: an implementation
+   that can fail to be installed, or needs something. *)
+and ends_in_effects pr t =
+  match t with
+  | Impl i ->
+      ends_in_uses pr t
+      || show_row pr ~prefix:"" ~sep:"" ~kind:"e" i.fails <> ""
+  | _ -> ends_in_uses pr t
 
 (* ` -> R`, or nothing for Unit. A returned function with effects is
    parenthesized, so it's clear whose effects they are, and so is an
@@ -528,7 +555,7 @@ and show_ret pr r =
       let s = show pr f in
       if show_effects pr e u ^ show_lams pr l = "" then " -> " ^ s
       else " -> (" ^ s ^ ")"
-  | r when ends_in_uses pr r -> " -> (" ^ show pr r ^ ")"
+  | r when ends_in_effects pr r -> " -> (" ^ show pr r ^ ")"
   | r -> " -> " ^ show pr r
 
 and show_effects pr e u =
@@ -599,9 +626,19 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
                   || kept errs e || kept uses u
                 then p
                 else { p with ty = Fun (qs, r, own errs e, own uses u, l) }
-            | Con (d, [ Uses u ]) ->
-                { p with ty = Con (d, [ Uses (own uses u) ]) }
-            | All (ds, u) -> { p with ty = All (ds, own uses u) }
+            | Impl i ->
+                (* a transparent one needs what the function uses, and
+                   fails to be installed with what it fails with *)
+                {
+                  p with
+                  ty =
+                    Impl
+                      {
+                        i with
+                        needs = own uses i.needs;
+                        fails = own errs i.fails;
+                      };
+                }
             | _ -> p)
           ps
       in
@@ -627,9 +664,9 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
          it can be used where anything is installed *)
       let rec needs t =
         match t with
-        | Con (_, [ Uses u ]) | All (_, u) -> Option.to_list u.tail
+        | Impl i -> Option.to_list i.needs.tail @ Option.to_list i.fails.tail
         | Con (_, args) -> List.concat_map needs args
-        | Var _ | Error | Errors _ | Uses _ | Fun _ -> []
+        | Var _ | Error | Errors _ | Fun _ -> []
       in
       let kept = kept @ needs ret in
       (* and so is one the function needs something of, which is listed
@@ -715,14 +752,15 @@ let value_signature ~names ~pub ~name (s : scheme) =
   Printf.sprintf "%slet %s: %s" (if pub then "pub " else "") name (show pr s.ty)
 
 (* How `ren types` prints a handler (ast.ml, [is_handler]): its
-   parameters, named [params], the dependencies it implements, [deps], and
-   what it needs, from its function's scheme [s], whose result is the
-   handler's type: its dependency's, or the one that lists them. A row
-   tail is printed where it links two places, a closure it keeps and what
-   it needs, say. *)
+   parameters, named [params], the dependencies it implements, [deps],
+   after `for`, or after `over` if it goes over another implementation of
+   them, what installing it can fail with, and what it needs, from its
+   function's scheme [s], whose result is the handler's type: its
+   dependency's, or the one that lists them. A row tail is printed where
+   it links two places, a closure it keeps and what it needs, say. *)
 let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
   match s.ty with
-  | Fun (ps, ((Con (_, [ Uses needs ]) | All (_, needs)) as ret), _, _, _) ->
+  | Fun (ps, (Impl i as ret), _, _, _) ->
       let all =
         List.concat_map (fun (p : param) -> tails p.ty) ps @ tails ret
       in
@@ -732,10 +770,12 @@ let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
       let params =
         List.map2 (fun n (p : param) -> n ^ ": " ^ show pr p.ty) params ps
       in
-      Printf.sprintf "%shandler %s(%s) for %s%s"
+      Printf.sprintf "%shandler %s(%s) %s%s%s"
         (if pub then "pub " else "")
         name
         (String.concat ", " params)
-        (String.concat ", " (List.map names deps))
-        (show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" needs)
+        (if i.over then "over " ^ String.concat " & " (List.map names deps)
+         else "for " ^ String.concat ", " (List.map names deps))
+        (show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" i.fails)
+        (show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" (shown_needs i))
   | _ -> invalid_arg "Ty.handler_signature: not a handler's function"

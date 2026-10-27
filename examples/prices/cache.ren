@@ -1,15 +1,10 @@
 // Prices, from a supplier that's slow and limits how often it's asked, so
 // each answer is kept for a while. An entry older than `ttl` is asked for
-// again.
-//
-// A handler can't call the dependency it implements until `outer`
-// (stage 10), so the cache can't sit in front of another `Prices`: what it
-// asks is a dependency of its own, `Supplier`.
+// again. Each handler goes over another `Prices`, and asks it with
+// `next`: `cached(ttl) over limited() over catalogue()` keeps answers in
+// front of a limiter in front of the supplier.
 
 import limiter.{Limiter}
-
-pub dep Supplier =
-  quote: fn(item: Str) -> Int ! Unknown(item: Str)
 
 pub dep Prices =
   price: fn(item: Str) -> Int ! Unknown(item: Str) | Throttled(until: Instant)
@@ -17,18 +12,23 @@ pub dep Prices =
 // a price, and until when it's kept
 type Entry = { price: Int, until: Instant }
 
-// at most `ttl` old, and the supplier asked only past the limiter
-pub handler cached(ttl: Duration) for Prices uses Supplier, Limiter, Clock =
+// at most `ttl` old: what it doesn't have, the one under it is asked for
+pub handler cached(ttl: Duration) over Prices uses Clock =
   var entries: Map<Str, Entry> = Map.empty
   price(item) =>
     let now = Clock.instant()
     match entries.get(item)
       Some(e) if now < e.until => e.price
       _ =>
-        try Limiter.take()
-        let p = try Supplier.quote(item)
+        let p = try next.price(item)
         &entries.set(item, Entry { price: p, until: now + ttl })
         p
+
+// the one under it asked only past the limiter
+pub handler limited() over Prices uses Limiter =
+  price(item) =>
+    try Limiter.take()
+    try next.price(item)
 
 // ---- tests ----
 
@@ -39,9 +39,9 @@ pub dep Calls =
   count: fn() -> Int
 
 // a supplier that knows two prices, and counts how often it's asked
-test handler counting() for Supplier, Calls =
+test handler counting() for Prices, Calls =
   var n = 0
-  quote(item) =>
+  price(item) =>
     n += 1
     if item == "apple" then 3
     else if item == "pear" then 5
@@ -49,28 +49,27 @@ test handler counting() for Supplier, Calls =
   count() => n
 
 test "a second ask is answered from the cache" =
-  with counting(), Limiter.none, cached(Duration.seconds(10)) in
+  with cached(Duration.seconds(10)) over counting() in
     assert try Prices.price("apple") == 3
     assert try Prices.price("apple") == 3
     assert Calls.count() == 1
 
 test "an old entry is asked for again" =
-  with counting(), Limiter.none, cached(Duration.seconds(10)) in
+  with cached(Duration.seconds(10)) over counting() in
     let _ = try Prices.price("apple")
     TestClock.advance(Duration.seconds(10))
     let _ = try Prices.price("apple")
     assert Calls.count() == 2
 
 test "an unknown item isn't kept" =
-  with counting(), Limiter.none, cached(Duration.seconds(10)) in
+  with Limiter.none, cached(Duration.seconds(10)) over limited() over counting() in
     assert attempt Prices.price("plum") == Err(Unknown("plum"))
     assert attempt Prices.price("plum") == Err(Unknown("plum"))
     assert Calls.count() == 2
 
 test "a cached answer doesn't count against the limit" =
-  with counting(),
-      limiter.fixed_window(1, Duration.seconds(1)),
-      cached(Duration.seconds(10)) in
+  with limiter.fixed_window(1, Duration.seconds(1)),
+      cached(Duration.seconds(10)) over limited() over counting() in
     assert try Prices.price("apple") == 3
     assert try Prices.price("apple") == 3
     assert attempt Prices.price("pear") == Err(Throttled(Instant.zero + Duration.seconds(1)))

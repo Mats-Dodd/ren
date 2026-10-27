@@ -108,3 +108,86 @@ pub handler cached(ttl: Int) for store.Users
             (identifier))
           (arguments
             (identifier)))))))
+
+================================================================================
+handler: over a dependency, what it can fail to start with, next and finally
+================================================================================
+
+pub handler transaction() over Sql ! DbDown =
+  let tx = try next.begin()
+  get() => next(Sql).get()
+  finally(r) =>
+    match r
+      Ok(v) => v
+      Err(_) => try r
+
+handler both() over A & B uses Clock =
+  finally(r) => try r
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (handler_definition
+    (visibility)
+    (identifier)
+    (parameters)
+    (dependency
+      (type_identifier))
+    (error_set
+      (error_tag
+        (type_identifier)))
+    (let_statement
+      (identifier)
+      (try_expression
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments))))
+    (handler_arm
+      (identifier)
+      (parameters)
+      (method_call_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (constructor_expression
+              (constructor_ref
+                (type_identifier)))))
+        (identifier)
+        (arguments)))
+    (finally_arm
+      (parameters
+        (parameter
+          (identifier)))
+      (block
+        (match_expression
+          (identifier)
+          (match_arm
+            (constructor_pattern
+              (constructor_ref
+                (type_identifier))
+              (identifier))
+            (identifier))
+          (match_arm
+            (constructor_pattern
+              (constructor_ref
+                (type_identifier))
+              (wildcard))
+            (try_expression
+              (identifier)))))))
+  (handler_definition
+    (identifier)
+    (parameters)
+    (dependency
+      (type_identifier))
+    (dependency
+      (type_identifier))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (finally_arm
+      (parameters
+        (parameter
+          (identifier)))
+      (try_expression
+        (identifier)))))

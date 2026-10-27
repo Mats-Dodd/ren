@@ -70,6 +70,8 @@ let keywords =
     ("orelse", ORELSE);
     ("with", WITH);
     ("handler", HANDLER);
+    ("over", OVER);
+    ("finally", FINALLY);
     ("test", TEST);
     ("group", GROUP);
     ("assert", ASSERT);

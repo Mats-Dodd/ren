@@ -1,0 +1,50 @@
+// A database of balances, kept in memory, and a transaction over any
+// `Sql`: it begins when it's installed, and when its `with` ends it
+// commits, or rolls back if the body failed.
+
+pub dep Sql =
+  get: fn(name: Str) -> Int ! DbDown
+  set: fn(name: Str, balance: Int) ! DbDown
+  begin: fn() -> Int ! DbDown
+  commit: fn(tx: Int) ! DbDown
+  rollback: fn(tx: Int)
+
+// when the database is down: never, when a transaction begins, or when
+// it commits
+pub type Outage = | Never | AtBegin | AtCommit
+
+// the balances, and those when the last transaction began, which a
+// rollback or a failed commit puts back
+pub handler mem_sql(balances: Array<(Str, Int)>, down: Outage) for Sql =
+  var rows = Map.of(balances)
+  var kept = Map.of(balances)
+  var begun = 0
+  get(name) =>
+    match rows.get(name)
+      Some(b) => b
+      None => 0
+  set(name, balance) => &rows.set(name, balance)
+  begin() =>
+    if down == AtBegin then fail DbDown
+    kept = rows
+    begun += 1
+    begun
+  commit(_) =>
+    if down == AtCommit then
+      rows = kept
+      fail DbDown
+  rollback(_) => rows = kept
+
+// a transaction around its `with`'s body: `get` and `set` are the ones
+// under it, and what the body leaves is committed, or rolled back if it
+// failed, whose error the `with` then fails with
+pub handler transaction() over Sql ! DbDown =
+  let tx = try next.begin()
+  finally(r) =>
+    match r
+      Ok(v) =>
+        try next.commit(tx)
+        v
+      Err(_) =>
+        next.rollback(tx)
+        try r

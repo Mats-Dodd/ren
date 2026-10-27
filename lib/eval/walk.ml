@@ -44,7 +44,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
           e,
           u,
           l )
-  | Errors _ | Uses _ | All _ | Error -> t
+  | Errors _ | Impl _ | Error -> t
 
 (* What a value of a type is made of. *)
 type view =

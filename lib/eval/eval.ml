@@ -356,22 +356,24 @@ let rec eval cx env (e : expr) =
           | None -> bug (what ^ " on an implementation without it"))
       | Some _ -> bug (what ^ " on an implementation that isn't a record")
       | None -> bug (what ^ " where nothing installs `" ^ dep.name ^ "`"))
-  | With { ev; outer; dep; impl; body } ->
+  | With { ev; outer; dep; impl; desc; body } ->
       let what = "installing `" ^ dep.name ^ "`" in
       let impl = eval cx env impl in
       let outer = evidence_in env outer what in
       (* a record is installed as it is, and a handler's description as a
          fresh instance's implementation of [dep] *)
-      let impl =
+      let impl, finally =
         match impl with
         | VHandler h -> (
-            match List.assoc_opt dep (instance cx h outer what) with
-            | Some impl -> impl
+            let impls, finally = instance cx h outer what in
+            match List.assoc_opt dep impls with
+            | Some impl -> (impl, finally)
             | None -> bug (what ^ " from a handler that doesn't implement it"))
-        | impl -> impl
+        | impl -> (impl, None)
       in
       let installed = VEvidence ({ dep; impl; outer } :: outer) in
-      eval cx (Env.add ev.id (ref installed) env) body
+      ending cx env e.loc finally desc outer (fun () ->
+          eval cx (Env.add ev.id (ref installed) env) body)
   | Narrowed (_, h) -> eval cx env h
   | Handler { ev; captures; body } ->
       (* like a lambda, it copies what it captures now *)
@@ -381,10 +383,14 @@ let rec eval cx env (e : expr) =
           Env.empty captures
       in
       VHandler { ev = ev.id; body; env }
-  | Instance impls ->
+  | Instance { impls; finally } ->
       let values = eval_all cx env (List.map snd impls) in
-      VInstance (List.combine (List.map fst impls) values)
-  | With_handler { ev; outer; handler; deps; body } -> (
+      VInstance
+        {
+          impls = List.combine (List.map fst impls) values;
+          finally = Option.map (eval cx env) finally;
+        }
+  | With_handler { ev; outer; handler; deps; desc; body } -> (
       let what = "installing a handler" in
       let h = eval cx env handler in
       let outer = evidence_in env outer what in
@@ -392,7 +398,7 @@ let rec eval cx env (e : expr) =
       | VHandler h ->
           (* of what the instance implements, only [deps]: it may have
              been narrowed to them (Core.Narrowed) *)
-          let impls = instance cx h outer what in
+          let impls, finally = instance cx h outer what in
           if not (List.for_all (fun d -> List.mem_assoc d impls) deps) then
             bug (what ^ " whose instance doesn't implement its dependencies");
           let installed =
@@ -401,7 +407,8 @@ let rec eval cx env (e : expr) =
                 if List.mem dep deps then { dep; impl; outer } :: acc else acc)
               outer impls
           in
-          eval cx (Env.add ev.id (ref (VEvidence installed)) env) body
+          ending cx env e.loc finally desc outer (fun () ->
+              eval cx (Env.add ev.id (ref (VEvidence installed)) env) body)
       | _ -> bug (what ^ " with something that isn't a handler"))
   | Prim (((Equal d | Not_equal d) as op), [ a; b ]) ->
       let x = eval cx env a in
@@ -622,8 +629,31 @@ and ok = function Ok v -> v | Error err -> raise (Failed err)
    implementation of each of its dependencies. *)
 and instance cx (h : handler) outer what =
   match eval cx (Env.add h.ev (ref (VEvidence outer)) h.env) h.body with
-  | VInstance impls -> impls
+  | VInstance { impls; finally } -> (impls, finally)
   | _ -> bug (what ^ " whose description doesn't make an instance")
+
+(* Run [body], the body of a `with` that installed an instance whose
+   `finally` is [finally], if it has one: it's given the body's outcome,
+   `Ok` of its value or `Err` of its error, and the descriptor of its
+   type, [desc], and runs with [outer], what was installed where the
+   instance was; what it gives is the `with`'s (handlers.md, "When a `with`
+   ends"). A panic isn't an outcome: it ends the program. *)
+and ending cx env loc finally desc outer body =
+  match finally with
+  | None -> body ()
+  | Some f ->
+      let result = Path.prelude "Result" in
+      let outcome =
+        match body () with
+        | v -> VCon { ty = result; name = "Ok"; args = [ v ] }
+        | exception Failed err ->
+            VCon { ty = result; name = "Err"; args = [ err ] }
+      in
+      ok
+        (fst
+           (call_at cx loc f
+              [ VType (type_of env desc); outcome ]
+              (VEvidence outer)))
 
 (* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
 and eval_all cx env = function
@@ -974,7 +1004,7 @@ let run_installed cx ~(fn : Path.t) ~real ~seed =
     match
       apply cx (from_outside cx (Path.prelude name)) args (VEvidence [])
     with
-    | Ok (VHandler h), _ -> instance cx h [] what
+    | Ok (VHandler h), _ -> fst (instance cx h [] what)
     | _ -> bug (what ^ " with `" ^ name ^ "`, which isn't a handler")
   in
   let installed =

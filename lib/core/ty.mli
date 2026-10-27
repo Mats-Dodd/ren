@@ -15,17 +15,20 @@ type ty =
   | Errors of row
       (** an error set as a type argument, [! Short(Int) | Frozen], which only
           [Result<T, ! ...>] takes (errors.md, "Keeping an error") *)
-  | Uses of row
-      (** what an implementation needs, as the one argument of its dependency's
-          type: [Clock uses Os] is [Con (Clock, [Uses Os])] (deps.md,
-          "Implementations"). Nothing else takes one *)
-  | All of Path.t list * row
-      (** an implementation of several dependencies, sharing one state, and what
-          it needs, [Clock & TestClock]: sorted, each once, at least two
-          ([impl]) *)
+  | Impl of impl
+      (** an implementation of a dependency, or of several sharing one state,
+          what a handler of several describes, [Clock & TestClock] ([impl]) *)
   | Error  (** the type of code that had an error, already reported *)
 
 and param = { mode : mode; ty : ty }
+
+(* An implementation's type (deps.md, "Implementations"): the
+   dependencies it implements, sorted, each once; whether it goes over
+   another implementation of them, [over Users] (handlers.md, "`over`"),
+   whose [needs] then has them too; what it needs where it's installed,
+   [Clock uses Os]; and what installing it can fail with, what its state
+   and its `finally` fail with, [Sql ! DbDown]. *)
+and impl = { deps : Path.t list; over : bool; needs : row; fails : row }
 
 and row = {
   labels : label list;  (** sorted by name *)
@@ -94,10 +97,10 @@ val closed : row
 (* A label with no payload: an error tag like `Frozen`, or a dependency. *)
 val label : string -> label
 
-(* The type of an implementation of these dependencies, needing the row:
-   one's own, [Con (d, [Uses needs])], or for several, [All], sorted and
-   each once. *)
-val impl : Path.t list -> row -> ty
+(* The type of an implementation of these dependencies, sorted and each
+   once, needing the row; [over] another implementation of them, and
+   failing to be installed with [fails] (nothing, unless it's said). *)
+val impl : ?over:bool -> ?fails:row -> Path.t list -> row -> ty
 
 (* If a type is an implementation's, of one dependency or several: which,
    and what it needs. *)
@@ -227,7 +230,8 @@ val value_signature :
   names:(Path.t -> string) -> pub:bool -> name:string -> scheme -> string
 
 (* How `ren types` prints a handler: its parameters, named [params], the
-   dependencies it implements, [deps], and what it needs, from the scheme
+   dependencies it implements, [deps], after `for` or `over`, what
+   installing it can fail with, and what it needs, from the scheme
    of its function, whose result is the handler's type. Fails with
    [Invalid_argument] if that isn't a handler's. *)
 val handler_signature :

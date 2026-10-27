@@ -215,17 +215,27 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
       let t = TFun (ps, eret, errs, uses, lams) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
-  | Handler { deps; state; arms; _ }, t
-    when match impl_parts t with
-         | Some (ds, _) -> ds = List.sort_uniq compare (handler_deps deps)
+  | Handler { deps; over; _ }, t
+    when match impl_of t with
+         | Some i ->
+             i.deps = List.sort_uniq compare (handler_deps deps)
+             && i.over = over
          | None -> false ->
       (* what it's written to need, and more, which is reported once the
          group is done *)
       fits ();
-      let declared = snd (Option.get (impl_parts t)) in
-      let labels = fst (row_parts declared) in
-      let needs = extend labels (fresh_row env.st) in
-      handler core env cx state arms ~needs
+      let i = Option.get (impl_of t) in
+      let labels = fst (row_parts i.needs) in
+      (* what it goes over is added once its body is checked (Handler) *)
+      let own = List.map Ty.dep_label (handler_deps deps) in
+      let needs =
+        extend
+          (List.filter
+             (fun (l : label) -> not (over && List.mem l.name own))
+             labels)
+          (fresh_row env.st)
+      in
+      handler core env cx e ~needs ~fails:i.fails
         ~declared:(Some (List.map (fun (l : label) -> l.name) labels))
   | Tuple xs, TCon (p, parts)
     when p = Ty.tuple_path (List.length xs)
@@ -508,6 +518,15 @@ and synth env cx (e : expr) : ty =
       match reveal env.st t with
       | TCon (p, [ v; errs ]) when p = result_path -> (
           match repr errs with
+          | TErrors errs
+            when match row_skolem errs with
+                 | Some (id, _) -> List.mem id env.finally_rows
+                 | None -> false ->
+              (* a `finally`'s `try r`: what it passes on is the `with`'s
+                 body's error, which the `with` fails with already *)
+              Hashtbl.replace cx.found e.node Unwraps;
+              m.unwrapped <- errs :: m.unwrapped;
+              v
           | TErrors errs ->
               Hashtbl.replace cx.found e.node Unwraps;
               include_errors env cx ~loc:a.loc ~here:(This "Result")
@@ -536,14 +555,14 @@ and synth env cx (e : expr) : ty =
         infer env { cx with handler = kept; markers = [ m ]; sources = None } a
       in
       TCon (result_path, [ t; TErrors kept ])
-  | With { item; body; lam } -> with_ core env cx e item body lam
+  | With { items; body } -> with_ core env cx e items body
   | Assert a ->
       want_bool env Asserted a (infer env cx a);
       unit
-  | Handler { deps; state; arms; _ } ->
-      let needs = fresh_row env.st in
-      handler core env cx state arms ~needs ~declared:None;
-      impl_type (handler_deps deps) needs
+  | Handler { deps; over; _ } ->
+      let needs = fresh_row env.st and fails = fresh_row env.st in
+      handler core env cx e ~needs ~fails ~declared:None;
+      impl_type ~over ~fails (handler_deps deps) needs
 
 (* Whether the place [target], assigned to, has a type that's written: a
    local whose is, a field, by its declaration, or an item of an array
@@ -1573,7 +1592,7 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
               in
               let ft =
                 match (t, ft) with
-                | TCon (_, [ TUses needs ]), TFun (ps, r, errs, _, lams) ->
+                | TImpl { needs; _ }, TFun (ps, r, errs, _, lams) ->
                     (* an operation uses what the implementation needs, and
                        can fail with less than it's declared to: what more
                        it fails with is reported once the group is done *)
@@ -1596,6 +1615,7 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
                            ierrs = open_errs;
                            ivalue = v;
                            inodes = cx.nodes;
+                           ineeds = Some needs;
                          });
                     TFun (ps, r, open_errs, needs, lams)
                 | _ -> ft
@@ -1721,9 +1741,31 @@ and bind_pattern env cx t (p : pattern) =
       (* a tag, inside `Err(...)`: one of the errors the [Result] holds *)
       Hashtbl.replace cx.found p.pnode Error_tag;
       tag_pattern env cx p c ps errs
-  | PVar b, TErrors _ ->
+  | PVar b, TErrors errs ->
       (* `Err(e)` would make the error a value of its own *)
-      report env (bound_error p.ploc b.ident.name);
+      (match row_skolem errs with
+      | Some (id, _) when List.mem id env.finally_rows ->
+          (* in a `finally`, the body's, which it can only pass on *)
+          let r =
+            match
+              List.find_opt
+                (fun (_, ty) ->
+                  match repr ty with
+                  | TCon (_, [ _; e ]) -> (
+                      match repr e with
+                      | TErrors e -> (
+                          match row_skolem e with
+                          | Some (id', _) -> id' = id
+                          | None -> false)
+                      | _ -> false)
+                  | _ -> false)
+                cx.params
+            with
+            | Some (r, _) -> r
+            | None -> "r"
+          in
+          report env (bound_body_error p.ploc b.ident.name ~r)
+      | _ -> report env (bound_error p.ploc b.ident.name));
       Hashtbl.replace cx.nodes p.pnode TError;
       Hashtbl.replace cx.locals b.id TError
   | pkind, _ -> (

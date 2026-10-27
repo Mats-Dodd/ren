@@ -434,6 +434,12 @@ let tag_pattern env t =
         Option.bind tail (fun tl ->
             List.find_opt (fun (_, ty) -> List.mem tl (row_vars ty)) t.tin)
       with
+      | Some (param, _)
+        when match row_skolem t.tset with
+             | Some (id, _) -> List.mem id env.finally_rows
+             | None -> false ->
+          (* a `finally`'s result: the `with`'s body's errors *)
+          report env (tag_in_body_error c ~arm ~r:param)
       | Some (param, _) ->
           report env (tag_in_open_set c ~arm ~value:t.tvalue ~param tags)
       | None -> report env (not_an_error c ~arm tags))
@@ -566,7 +572,42 @@ let fails_more env o extra =
    be a parameter's, `try f()`, which then can fail with what the
    operation can, not with nothing. One already closed with fewer errors
    than declared is fine as it is: an operation can fail with less. *)
-let impl_op env o =
+let impl_op env ~reported o =
+  (* reported once for each record, whose operations share what it needs *)
+  (match o.ineeds with
+  | Some needs
+    when List.mem (Ty.dep_label o.idep) (row_names needs)
+         && not (List.memq needs !reported) -> (
+      (* the call that uses it: one whose callee's type does, outside a
+         `with` that installs it. A type written to need it isn't one *)
+      let label = Ty.dep_label o.idep in
+      let uses (f : Ast.Resolved.expr) =
+        match Option.map repr (Hashtbl.find_opt o.inodes f.node) with
+        | Some (TFun (_, _, _, u, _)) -> List.mem label (row_names u)
+        | _ -> false
+      in
+      let installs (lk : Ast.Resolved.with_link) =
+        match Option.map repr (Hashtbl.find_opt o.inodes lk.knode) with
+        | Some (TImpl i) -> List.mem o.idep i.deps
+        | _ -> false
+      in
+      let rec site (e : Ast.Resolved.expr) =
+        match e.kind with
+        | Call (f, _) when uses f -> Some e
+        | With { items; _ }
+          when List.exists
+                 (fun (it : Ast.Resolved.with_item) ->
+                   List.exists installs it.chain)
+                 items ->
+            None
+        | _ -> List.find_map site (Ast.children e)
+      in
+      match site o.ivalue with
+      | Some call ->
+          reported := needs :: !reported;
+          report env (record_uses_itself call.loc (env.names o.idep))
+      | None -> ())
+  | _ -> ());
   let pr = printer env in
   let declared n = List.exists (fun (l : label) -> l.name = n) o.ideclared in
   (match
@@ -829,7 +870,8 @@ let solve env ~is_value ~withheld =
     cs;
   List.iter (function Unmarked (c, r) -> unmarked env c r | _ -> ()) cs;
   List.iter (function Marker m -> marker env m | _ -> ()) cs;
-  List.iter (function Impl_op o -> impl_op env o | _ -> ()) cs;
+  let reported = ref [] in
+  List.iter (function Impl_op o -> impl_op env ~reported o | _ -> ()) cs;
   (* what's compared, and what's given to a function that compares it,
      once every type of the group is known *)
   Infer_reqs.decide env cs;

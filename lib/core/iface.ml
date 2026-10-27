@@ -229,6 +229,23 @@ let labels ~sets errs =
 
 (* ---- from a module's declarations ---- *)
 
+(* What an implementation that goes [over] the dependencies [deps] needs,
+   given what's written, [needs]: those dependencies too, the
+   implementation under it, which it reaches with `next` (handlers.md,
+   "`over`"). *)
+let over_needs ~over deps (needs : Ty.row) : Ty.row =
+  if not over then needs
+  else
+    let have = List.map (fun (l : Ty.label) -> l.name) needs.labels in
+    let extra =
+      List.filter_map
+        (fun d ->
+          let l = Ty.dep_label d in
+          if List.mem l have then None else Some (Ty.label l))
+        deps
+    in
+    { needs with labels = Ty.sort_labels (needs.labels @ extra) }
+
 (* A written type, once Resolve has said what its names mean, in canonical
    form. A function type written in a declaration uses and fails with
    exactly what it's written to, after `uses` and `!`, and so does an
@@ -241,7 +258,12 @@ let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
   match t with
   | TyName ({ tref = Param i; _ }, _) -> Var i
   | TyName ({ tref = Named path; _ }, args) -> Con (path, List.map go args)
-  | TyImpl (ds, u, _) -> Ty.impl (dep_paths ds) (written_uses ~rows u)
+  | TyImpl { impl_deps; impl_over; impl_errors; impl_uses; _ } ->
+      let deps = dep_paths impl_deps in
+      Ty.impl ~over:impl_over
+        ~fails:(written_errors ~rows ~sets impl_errors)
+        deps
+        (over_needs ~over:impl_over deps (written_uses ~rows impl_uses))
   | TyFn (ps, ret, errs, u, _) ->
       let ret = match ret with Some r -> go r | None -> Ty.unit in
       Fun
@@ -394,7 +416,15 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
                   (if written_u = None then deps else u),
                   l )
           | _ -> assert false)
-      | Some (TyImpl (ds, None, _)) -> Ty.impl (dep_paths ds) deps
+      | Some (TyImpl { impl_deps; impl_over; impl_errors; impl_uses = None; _ })
+        ->
+          (* transparent: it needs what the function uses; it can fail to
+             be installed only with what's written *)
+          let ds = dep_paths impl_deps in
+          Ty.impl ~over:impl_over
+            ~fails:(written_errors ~rows ~sets impl_errors)
+            ds
+            (over_needs ~over:impl_over ds deps)
       | Some t -> of_written ~rows ~sets t
       | None -> Error
     in

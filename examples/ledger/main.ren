@@ -1,0 +1,48 @@
+// Money moved between accounts, inside a transaction: a transfer that
+// would leave an account short changes nothing. README.md says what to
+// look at.
+
+import sql.{Sql}
+
+// `pub`, as the rest of this module is, since its tests call it.
+// `to` is credited first, so a transfer that fails part way has
+// something to roll back
+pub fn transfer(from: Str, to: Str, amount: Int) ! DbDown | Short(name: Str) uses Sql =
+  with sql.transaction() over Sql in
+    try Sql.set(to, try Sql.get(to) + amount)
+    let left = try Sql.get(from) - amount
+    if left < 0 then fail Short(from)
+    try Sql.set(from, left)
+
+pub fn balances() -> (Int, Int) ! DbDown uses Sql =
+  (try Sql.get("ann"), try Sql.get("bob"))
+
+// the balances each run starts with
+pub fn start() -> Array<(Str, Int)> = [("ann", 100), ("bob", 20)]
+
+pub fn main() uses Console =
+  with sql.mem_sql(start(), Never) in
+    print(attempt transfer("ann", "bob", 30))   // Ok(())
+    print(attempt transfer("ann", "bob", 500))  // Err(Short("ann"))
+    print(attempt balances())                   // Ok((70, 50))
+
+test "main prints each transfer, and the balances" =
+  main()
+  assert TestConsole.output() == ["Ok(())", "Err(Short(\"ann\"))", "Ok((70, 50))"]
+
+test "a transfer that leaves an account short changes nothing" =
+  with sql.mem_sql(start(), Never) in
+    assert attempt transfer("bob", "ann", 50) == Err(Short("bob"))
+    assert try balances() == (100, 20)
+
+test "a commit that fails changes nothing" =
+  with sql.mem_sql(start(), AtCommit) in
+    assert attempt transfer("ann", "bob", 30) == Err(DbDown)
+    assert try balances() == (100, 20)
+
+test "a transaction that can't begin doesn't run its body" =
+  with sql.mem_sql(start(), AtBegin) in
+    var ran = false
+    let r = attempt (with sql.transaction() over Sql in ran = true)
+    assert r == Err(DbDown)
+    assert not ran

@@ -299,20 +299,17 @@ let program sink ~(imported : (string * group list) list) (prog : program) =
             bodies := fn :: !bodies;
             [ make fn (fn_of ~name:fn ~loc:t.test_loc t.test_body) ]
         | Testing (Group g) ->
-            (* `with a, b in body` is `a` around `with b in body`, each
-               with a node of its own for the lambda a wrapper's body is,
-               numbered below zero, apart from the parser's *)
-            let nest body =
-              let next = ref 0 in
-              List.fold_right
-                (fun (item : expr) (body : expr) : expr ->
-                  next := !next - 2;
+            (* `with a, b in body`, its node numbered below zero, apart
+               from the parser's *)
+            let nest (body : expr) : expr =
+              match g.group_with with
+              | [] -> body
+              | first :: _ ->
                   {
-                    kind = With { item; body; lam = !next - 1 };
-                    loc = Loc.span item.loc body.loc;
-                    node = !next;
-                  })
-                g.group_with body
+                    kind = With { items = g.group_with; body };
+                    loc = Loc.span first.iloc body.loc;
+                    node = -1;
+                  }
             in
             List.mapi
               (fun i (t : test_def) ->

@@ -19,7 +19,7 @@ You can read that signature without opening the body. `upgrade` returns a `User`
 
 Because the compiler knows every boundary a program crosses, Ren can **test, trace, replay, and profile** those boundaries without any instrumentation code. [More on that below.](#test-trace-replay-profile-built-in)
 
-> **Status:** early. Stages 1–4, 5a, 5b and 6–9 of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, `hash`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, `Float`s with no `NaN`, tuples, ranges in `for`, `Map` and `Set` in insertion order, and `Enumerable`'s methods on `Array`, `Map` and `Set` (see [examples/bank](examples/bank)); and stage 9c: `opaque { ... }` records, a type that keeps rules is opaque, tests that see what an importer sees, `test fn` and `test handler`, and `ren console` on test implementations (see [examples/bank](examples/bank)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
+> **Status:** early. Stages 1–4, 5a, 5b, 6–9, 10.0 and 10a of the [Roadmap](#roadmap) run in an interpreter: functions, records, sum types, exhaustive `match`, lambdas, type inference with `uses` rows, `var`, `inout`, `&` with value semantics over records and arrays, modules (files as modules, `import`, `pub`, `opaque` types, constructors and fields found through their type, and `uses` on signatures, checked against the body), methods, associated functions and associated values declared under their type, with `&` before a changed receiver: `&xs.push(x)` (see [examples/shop](examples/shop)), and errors: structural tags after `!`, named error sets, `fail`, `try`, `match` with `fail` arms, `try match`, `attempt` and `orelse`, with exact signatures on public functions, and `&&`, `||` and `not`; and dependencies: `dep` declarations, `with`, wrappers and `handler`s, the built-in `Clock`, `Random` and `Console`, minimal strings, and `test`, `group`, `assert` and `ren test`, with test implementations by default (see [examples/bank](examples/bank)); and the world, thinly: `Str`'s methods, on byte offsets, `Bytes`, `Path`, `Fs`, `Os.args` and `Proc.run`, with `mem_fs`, `test_os` and `test_proc` in tests, and `ren run file.ren -- args` (see [examples/just](examples/just)); and stage 9: operators as methods (`a + b` is `a.add(b)`, chosen by the right side's type), `key`, derived `==`, `hash`, order and `show`, `opaque Int with numeric`, 64-bit `Int`s that panic on overflow, `Float`s with no `NaN`, tuples, ranges in `for`, `Map` and `Set` in insertion order, and `Enumerable`'s methods on `Array`, `Map` and `Set` (see [examples/bank](examples/bank)); and stage 9c: `opaque { ... }` records, a type that keeps rules is opaque, tests that see what an importer sees, `test fn` and `test handler`, and `ren console` on test implementations (see [examples/bank](examples/bank)); and stage 10a: `with` as a set, handlers `over` another implementation that reach it with `next`, `finally`, and handler state that can fail to start (see [examples/prices](examples/prices) and [examples/ledger](examples/ledger)). Most examples in this README show how Ren is intended to look, not what runs today. Editor support: [Zed](editors/zed), on a [tree-sitter grammar](editors/tree-sitter-ren) checked against the compiler's parser.
 
 ---
 
@@ -156,9 +156,9 @@ let summaries = Async.map(users) fn(u) =>
 Inside brackets, where line breaks are otherwise ignored, a lambda's body can be a block too: a `=>` that ends its line opens one, indented further than the line around the brackets, and it ends at a line indented less, at a `,` before the next argument or field, or at the closing bracket:
 
 ```ren
-let supplier = Supplier { quote: fn(item) =>
+let catalogue = Prices { price: fn(item) =>
     Clock.sleep(Duration.ms(20))
-    try prices.get(item)
+    if item == "apple" then 3 else fail Unknown(item)
 }
 ```
 
@@ -355,7 +355,7 @@ handler counting_rates(rate: Decimal) for Rates, RateCalls =
 
 Calling `counting_rates(r)` describes a handler, a value of the dependency's type like any implementation, and each `with` creates a fresh instance with its own state: two `with`s never share it. Its type lists what it implements, `Rates & RateCalls`. `with` installs what the type says, so both, sharing the state. Where a written type asks for one of them, `fn run(r: Rates)`, it becomes that one ([deps.md](deps.md)). Handlers resume at most once, which keeps them as cheap as function calls. Inside a handler for `Users`, writing `Users.get` is an error.
 
-A handler can sit in front of another implementation of the same dependency. It's declared `over` it, may leave operations out, which go to the one under it, and calls that one through `next` (stage 10, [handlers.md](handlers.md)):
+A handler can sit in front of another implementation of the same dependency. It's declared `over` it, may leave operations out, which go to the one under it, and calls that one through `next` ([handlers.md](handlers.md)):
 
 ```ren
 pub handler cached(ttl: Duration) over Users uses Clock =
@@ -384,16 +384,21 @@ That narrows where a race can happen without hiding it. `cached` above has one: 
 A handler can also run code when its `with` ends, in `finally`, which is given the body's result and returns the `with`'s. Its state can fail to start, and the `with` passes that failure on:
 
 ```ren
-pub handler transaction() over Sql =
-  var tx = try next.begin()
-  query(q) => try tx.query(q)
+pub handler transaction() over Sql ! DbDown =
+  let tx = try next.begin()
   finally(r) =>
     match r
-      Ok(v) => { try tx.commit(); v }
-      fail e => { tx.rollback(); fail e }
+      Ok(v) =>
+        try next.commit(tx)
+        v
+      Err(_) =>
+        next.rollback(tx)
+        try r
 ```
 
-When the body is cancelled, `finally` sees `fail Cancelled`, and what it returns is discarded ([async.md](async.md#cancellation)).
+`r` is the body's result, as `attempt` would keep it, and `try r` passes its error on. `! DbDown` says installing it can fail, so the `with` can too ([examples/ledger](examples/ledger)).
+
+When the body is cancelled, `finally` sees `Err(Cancelled)`, and what it returns is discarded ([async.md](async.md#cancellation)).
 
 ### 8. `&`: this call changes it
 
@@ -966,7 +971,8 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 9 | operators, derived equality and hashing, arithmetic for opaque number types, `Map` and `Set`, tuples, ranges and the collection methods ([operators.md](operators.md)) | `Map<Email, User>` works (done: 9a, operators, `key`, `with numeric`, `Int` and `Float`; 9b, tuples, ranges, `Map`, `Set` and `Enumerable`'s methods, and the bank keeps its accounts in a `Map`) |
 | 9c | boundaries: a type that keeps rules is opaque; a test sees what an importer sees, with test items; `ren console` ([testing.md](testing.md), [module-build.md](module-build.md#private-unless-pub)) | the bank's `Account` and `Bank` are opaque, and its tests are specifications (done) |
 | 10.0 | one constraint solver, typed Core, requirements passed as dictionaries, lambda sets in function types ([compiler.md](compiler.md)) | every stage-10.0 step passes its check (done) |
-| 10 | `over` and `next`, `with` as a set, `finally`, **the journal**: `ren run --record`, `ren replay`, `--trace`, journals as tests, and the console's `:reload` and `:spec` ([handlers.md](handlers.md), [testing.md](testing.md)) | a cache wraps a real implementation, and the `just` replays byte for byte |
+| 10a | `with` as a set, `over` and `next`, `finally`, handler state that can fail ([handlers.md](handlers.md)) | the prices cache wraps a real `Prices`, and a transaction commits or rolls back (done) |
+| 10b | **the journal**: `ren run --record`, `ren replay`, `--trace`, journals as tests, and the console's `:reload` and `:spec` ([handlers.md](handlers.md#the-journal), [testing.md](testing.md)) | the `just` replays byte for byte |
 | 11 | `Async` and `Net`: structured concurrency, cancellation, tasks in handlers, deterministic tests on virtual time ([async.md](async.md)) | a server shuts down gracefully, and `ren test --seeds` finds the `cached` race |
 | 12 | the standard library for a web service and the compiler: `http`, `json` and `cli` over shapes, top-level `let` and `assert`; property tests and `ren fuzz` ([stdlib.md](stdlib.md), [shapes.md](shapes.md), [testing.md](testing.md)) | a small web service and its tests, specifications and properties, run interpreted |
 | 13 | a naive C backend, emitting Core with reference counting and no optimizations; packages, `ren build` with a content-addressed cache | native binaries, rebuilt incrementally; debug builds measured against Go ([vision.md](vision.md)) |
@@ -978,7 +984,7 @@ Ren is mostly a new combination of existing ideas. It owes a lot to:
 | 18 | the compiler, rewritten in Ren | it compiles itself |
 | **↑** | **Ren 1.0** | **flottning, rewritten in Ren, passes 10,000 simulation seeds** |
 
-The **effect journal** in stage 10, the record of every dependency call, is the most important design artifact after the type system ([handlers.md](handlers.md#the-journal)). Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
+The **effect journal** in stage 10b, the record of every dependency call, is the most important design artifact after the type system ([handlers.md](handlers.md#the-journal)). Simulation, replay, migration, and traffic replay all depend on it. If the format is right, those features are extensions. If it's wrong, each one becomes a rewrite.
 
 ---
 

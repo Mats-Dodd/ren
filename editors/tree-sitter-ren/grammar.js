@@ -93,6 +93,10 @@ module.exports = grammar({
     // and in a type argument, `uses Clock, ..d` doesn't, which the token
     // after the comma decides
     [$._argument_uses],
+    // after `over` in a `with`, `Prices` is the one installed outside it,
+    // and `Prices.fixed(1)` a link: the token after the name decides
+    [$.dependency, $.constructor_ref],
+    [$.dependency, $.type_name, $._primary],
   ],
 
   supertypes: ($) => [$._expression, $._pattern, $._type],
@@ -327,7 +331,9 @@ module.exports = grammar({
 
     // handler counting_rates(rate: Int) for Rates, RateCalls = ...: its
     // state, `var`s and `let`s, indented under it, then an arm for each
-    // operation; the compiler checks the state comes first
+    // operation, and last its `finally`; the compiler checks the order.
+    // `over Users` goes over another implementation, `over A & B` of
+    // several, and `! DbDown` is what its state and `finally` can fail with
     handler_definition: ($) =>
       seq(
         optional($.visibility),
@@ -335,13 +341,20 @@ module.exports = grammar({
         'handler',
         field('name', $.identifier),
         field('parameters', $.parameters),
-        'for',
-        sep1(field('implements', $.dependency), ','),
+        choice(
+          seq('for', sep1(field('implements', $.dependency), ',')),
+          seq('over', sep1(field('implements', $.dependency), '&')),
+        ),
+        optional(field('errors', $.error_set)),
         optional(field('uses', $.uses_clause)),
         '=',
         $._indent,
         sep1(
-          choice(field('state', $.let_statement), field('arm', $.handler_arm)),
+          choice(
+            field('state', $.let_statement),
+            field('arm', $.handler_arm),
+            field('finally', $.finally_arm),
+          ),
           $._newline,
         ),
         $._dedent,
@@ -351,6 +364,16 @@ module.exports = grammar({
     handler_arm: ($) =>
       seq(
         field('name', $.identifier),
+        field('parameters', $.parameters),
+        '=>',
+        field('body', $._body),
+      ),
+
+    // finally(r) => ...: what runs when the `with` that installed it ends,
+    // given the body's result
+    finally_arm: ($) =>
+      seq(
+        'finally',
         field('parameters', $.parameters),
         '=>',
         field('body', $._body),
@@ -377,7 +400,7 @@ module.exports = grammar({
         'group',
         field('name', $.identifier),
         field('parameters', $.parameters),
-        optional(seq('with', commaSep1Strict(field('item', $._expression)))),
+        optional(seq('with', commaSep1Strict(field('item', $._with_item)))),
         '=',
         $._indent,
         sep1(field('test', $.test_definition), $._newline),
@@ -430,15 +453,31 @@ module.exports = grammar({
         $.error_set,
         alias('!', $.error_set),
         alias($._joined, $.implementation_type),
+        alias($._over, $.implementation_type),
       ),
 
     // Clock uses Os: an implementation of a dependency, and what it needs;
-    // or of several, Clock & TestClock uses Os
+    // or of several, Clock & TestClock uses Os; one that can fail to be
+    // installed, Sql ! DbDown; and one that goes over another, over Users
     implementation_type: ($) =>
       choice(
-        seq(field('name', $.type_name), field('uses', $.uses_clause)),
-        seq($._joined, field('uses', $.uses_clause)),
+        seq(field('name', $.type_name), $._implementation_rest),
+        seq($._joined, $._implementation_rest),
+        seq($._over, $._implementation_rest),
       ),
+
+    _implementation_rest: ($) =>
+      choice(
+        seq(
+          field('errors', $.error_set),
+          optional(field('uses', $.uses_clause)),
+        ),
+        field('uses', $.uses_clause),
+      ),
+
+    // over Users, over A & B: an implementation that goes over another
+    _over: ($) =>
+      seq('over', sep1(field('name', $.type_name), '&')),
 
     // Clock & TestClock: an implementation of each, sharing one state. As
     // a function's result its `uses` is the function's, as above
@@ -475,6 +514,7 @@ module.exports = grammar({
         alias($._argument_function_type, $.function_type),
         alias($._argument_implementation_type, $.implementation_type),
         alias($._joined, $.implementation_type),
+        alias($._over, $.implementation_type),
       ),
 
     _argument_return_type: ($) =>
@@ -486,15 +526,23 @@ module.exports = grammar({
         $.error_set,
         alias('!', $.error_set),
         alias($._joined, $.implementation_type),
+        alias($._over, $.implementation_type),
       ),
 
     _argument_implementation_type: ($) =>
       choice(
+        seq(field('name', $.type_name), $._argument_implementation_rest),
+        seq($._joined, $._argument_implementation_rest),
+        seq($._over, $._argument_implementation_rest),
+      ),
+
+    _argument_implementation_rest: ($) =>
+      choice(
         seq(
-          field('name', $.type_name),
-          field('uses', alias($._argument_uses, $.uses_clause)),
+          field('errors', $.error_set),
+          optional(field('uses', alias($._argument_uses, $.uses_clause))),
         ),
-        seq($._joined, field('uses', alias($._argument_uses, $.uses_clause))),
+        field('uses', alias($._argument_uses, $.uses_clause)),
       ),
 
     _argument_function_type: ($) =>
@@ -877,16 +925,35 @@ module.exports = grammar({
       ),
 
     // with Clock.frozen(t), retry(3) in body: each item installed, or
-    // wrapped, around the rest, the first outermost
+    // wrapped, around the body; the compiler finds the order
     with_expression: ($) =>
       prec.right(
         seq(
           'with',
-          commaSep1Strict(field('item', $._expression)),
+          commaSep1Strict(field('item', $._with_item)),
           'in',
           field('body', $._body),
         ),
       ),
+
+    _with_item: ($) => choice($._expression, $.with_chain),
+
+    // cached(ttl) over limited() over catalogue(), or over Prices, the one
+    // installed outside the `with`: each link goes over the one after it
+    with_chain: ($) =>
+      seq(
+        field('link', $._expression),
+        choice(
+          seq(
+            repeat1(seq('over', field('link', $._expression))),
+            optional(seq('over', $._with_under)),
+          ),
+          seq('over', $._with_under),
+        ),
+      ),
+
+    _with_under: ($) =>
+      prec.dynamic(1, sep1(field('under', $.dependency), '&')),
 
     match_expression: ($) =>
       seq(
