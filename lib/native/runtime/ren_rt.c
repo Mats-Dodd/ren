@@ -109,50 +109,82 @@ static ren_obj *ren_alloc_str(int64_t len) {
    `lean_dec_ref_cold` keeps the same list (runtime/object.cpp:311-331,
    `push_back`), threaded through the freed objects' headers; this one
    is an array, which is simpler and costs a little more. */
-static ren_obj **ren_todo;
-static size_t ren_todo_len, ren_todo_cap;
+#if (defined(REN_RC_SHARED) || defined(REN_RC_ATOMIC)) &&                    \
+    !defined(REN_RC_NO_TLS)
+#define REN_TODO_LOCAL _Thread_local
+#else
+#define REN_TODO_LOCAL
+#endif
+typedef struct {
+  ren_obj **objs;
+  size_t len, cap;
+} ren_todo_t;
+static REN_TODO_LOCAL ren_todo_t ren_todo;
 
-static void ren_todo_push(ren_obj *o) {
-  if (ren_todo_len == ren_todo_cap) {
-    ren_todo_cap = ren_todo_cap ? ren_todo_cap * 2 : 256;
-    ren_todo = realloc(ren_todo, ren_todo_cap * sizeof(ren_obj *));
-    if (ren_todo == NULL) {
+static void ren_todo_push(ren_todo_t *t, ren_obj *o) {
+  if (t->len == t->cap) {
+    t->cap = t->cap ? t->cap * 2 : 256;
+    t->objs = realloc(t->objs, t->cap * sizeof(ren_obj *));
+    if (t->objs == NULL) {
       fflush(stdout);
       fputs("error: out of memory\n", stderr);
       exit(1);
     }
   }
-  ren_todo[ren_todo_len++] = o;
+  t->objs[t->len++] = o;
 }
 
 /* One reference fewer on a child of an object being freed. */
-static void ren_release(ren_obj *o) {
+static void ren_release(ren_todo_t *t, ren_obj *o) {
+#if defined(REN_RC_SHARED)
+  if (ren_is_scalar(o))
+    return;
+  int32_t rc = ren_rc(o);
+  if (rc > 1) {
+    REN_STAT(drops);
+    o->rc = rc - 1;
+  } else if (rc == 1) {
+    REN_STAT(drops);
+    ren_todo_push(t, o);
+  } else if (rc != 0 && __atomic_add_fetch(&o->rc, 1, __ATOMIC_ACQ_REL) == 0) {
+    ren_todo_push(t, o);
+  }
+#elif defined(REN_RC_ATOMIC)
+  if (ren_is_scalar(o) || ren_rc(o) == 0)
+    return;
+  REN_STAT(drops);
+  if (__atomic_sub_fetch(&o->rc, 1, __ATOMIC_RELEASE) == 0) {
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    ren_todo_push(t, o);
+  }
+#else
   if (ren_is_scalar(o) || o->rc == 0)
     return;
   REN_STAT(drops);
   if (o->rc > 1)
     o->rc--;
   else
-    ren_todo_push(o);
+    ren_todo_push(t, o);
+#endif
 }
 
 /* Free one object whose count reached 0, its children going on the
    list. */
-static void ren_free_one(ren_obj *o) {
+static void ren_free_one(ren_todo_t *t, ren_obj *o) {
   int64_t bytes = 0;
   switch (o->kind) {
   case REN_CTOR: {
     ren_val *fs = ren_fields(o);
     for (uint32_t i = 0; i < o->nfields; i++)
       if (o->objs & ((uint32_t)1 << i))
-        ren_release(fs[i].o);
+        ren_release(t, fs[i].o);
     bytes = (int64_t)(sizeof(ren_ctor) + o->nfields * sizeof(ren_val));
     break;
   }
   case REN_DESC: {
     ren_desc *d = (ren_desc *)o;
     for (uint16_t i = 0; i < d->nargs; i++)
-      ren_release(&d->args[i]->h);
+      ren_release(t, &d->args[i]->h);
     bytes = (int64_t)(sizeof(ren_desc) + d->nargs * sizeof(ren_desc *));
     break;
   }
@@ -160,7 +192,7 @@ static void ren_free_one(ren_obj *o) {
     ren_array *a = (ren_array *)o;
     if (o->boxed_elems)
       for (int64_t i = 0; i < a->len; i++)
-        ren_release(a->data[i].o);
+        ren_release(t, a->data[i].o);
     bytes = (int64_t)(sizeof(ren_array) +
                       (size_t)(a->cap * ren_stride(o)) * sizeof(ren_val));
     free(a->data);
@@ -180,10 +212,87 @@ static void ren_free_one(ren_obj *o) {
 }
 
 void ren_free(ren_obj *o) {
-  ren_free_one(o);
-  while (ren_todo_len > 0)
-    ren_free_one(ren_todo[--ren_todo_len]);
+  /* the list's address once, since a thread-local one costs a call on
+     Mach-O to find */
+  ren_todo_t *t = &ren_todo;
+  ren_free_one(t, o);
+  while (t->len > 0)
+    ren_free_one(t, t->objs[--t->len]);
 }
+
+#ifdef REN_RC_SHARED
+/* A shared count runs down from -1: one more reference is one lower,
+   relaxed as in `lean_inc_ref_n` (lean.h:722), since whoever dups
+   already holds a reference that keeps the object alive. */
+void ren_dup_shared(ren_obj *o) {
+  __atomic_fetch_sub(&o->rc, 1, __ATOMIC_RELAXED);
+}
+
+/* One fewer, and the thread that takes the last frees it: acq_rel, so
+   every other thread's writes before its drop happen before the free
+   (runtime/object.cpp:461, `lean_dec_ref_cold`). */
+void ren_drop_shared(ren_obj *o) {
+  if (__atomic_add_fetch(&o->rc, 1, __ATOMIC_ACQ_REL) == 0)
+    ren_free(o);
+}
+
+/* `lean_mark_mt` (runtime/object.cpp:663): an object and all it reaches
+   that one thread owns get their counts negated. One already shared or
+   never freed stops the walk, since what it reaches is too. It runs
+   before the object is published, so the plain writes are seen by the
+   thread that receives it through whatever hands it over. */
+void ren_mark_shared(ren_obj *o) {
+  if (ren_is_scalar(o) || o->rc <= 0)
+    return;
+  size_t len = 0, cap = 64;
+  ren_obj **todo = malloc(cap * sizeof(ren_obj *));
+  if (todo == NULL)
+    abort();
+  todo[len++] = o;
+  while (len > 0) {
+    ren_obj *x = todo[--len];
+    if (ren_is_scalar(x) || x->rc <= 0)
+      continue;
+    x->rc = -x->rc;
+    switch (x->kind) {
+    case REN_CTOR:
+    case REN_ARRAY:
+    case REN_DESC: {
+      ren_obj **kids;
+      size_t n = 0;
+      if (x->kind == REN_CTOR) {
+        n = x->nfields;
+      } else if (x->kind == REN_ARRAY) {
+        n = x->boxed_elems ? (size_t)((ren_array *)x)->len : 0;
+      } else {
+        n = ((ren_desc *)x)->nargs;
+      }
+      if (len + n > cap) {
+        while (len + n > cap)
+          cap *= 2;
+        todo = realloc(todo, cap * sizeof(ren_obj *));
+        if (todo == NULL)
+          abort();
+      }
+      for (size_t i = 0; i < n; i++) {
+        if (x->kind == REN_CTOR) {
+          if (x->objs & ((uint32_t)1 << i))
+            todo[len++] = ren_fields(x)[i].o;
+        } else if (x->kind == REN_ARRAY) {
+          todo[len++] = ((ren_array *)x)->data[i].o;
+        } else {
+          todo[len++] = &((ren_desc *)x)->args[i]->h;
+        }
+      }
+      break;
+    }
+    case REN_STR:
+      break;
+    }
+  }
+  free(todo);
+}
+#endif
 
 /* ---- reuse ---- */
 

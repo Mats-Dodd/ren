@@ -12,7 +12,8 @@
    freed, as Lean's `m_rc == 0` does: a string literal, made once in the
    C file. Counts are plain, never atomic, since a program has one
    thread (foundations.md, decision 10, makes them atomic only on
-   shared objects, once there are tasks).
+   shared objects, once there are tasks; "counting" below has the
+   experimental modes that try it).
 
    The C file `ren build` writes holds this header, then ren_rt.c, then
    the program, so a binary needs nothing installed. Building it with
@@ -143,13 +144,81 @@ static inline int64_t ren_tag(ren_obj *o) {
 
 void ren_free(ren_obj *o);
 
+/* Counting has three modes, chosen when the C is compiled, and the
+   default is the first. They're an experiment for decision 10 of
+   foundations.md, which has no runtime with threads yet: the other two
+   exist to measure what threads would cost (bench/native/cores).
+
+   - plain (the default): counts are plain, as a program has one thread.
+   - -DREN_RC_SHARED: Lean's scheme (lean.h:631-745). A count above 0 is
+     one thread's and plain, one below 0 is shared and atomic, counted
+     down from -1, and 0 is never freed. [ren_mark_shared] negates the
+     counts of everything an object reaches before it's handed to another
+     thread, as `lean_mark_mt` does (runtime/object.cpp:663). The hot
+     paths test the same signs the plain mode does, so a program that
+     shares nothing pays one comparison more only where a count is 1.
+     Lean's sticky range for counts that overflow isn't copied.
+   - -DREN_RC_ATOMIC: every count is atomic, Swift's and Rust's `Arc`'s
+     way: the worst case, to compare against.
+
+   Either of the last two also makes the list [ren_free] keeps thread
+   local, unless -DREN_RC_NO_TLS, which is only sound with one thread
+   and measures the counting alone. */
+
+#if defined(REN_RC_SHARED) && defined(REN_RC_ATOMIC)
+#error "REN_RC_SHARED and REN_RC_ATOMIC are two modes: give one"
+#endif
+
+#if (defined(REN_RC_SHARED) || defined(REN_RC_ATOMIC)) &&                     \
+    !defined(REN_RC_PLAIN_READ)
+/* Read a count that another thread may change: relaxed, a plain load on
+   arm64 and x86-64, but not a data race in C11. It costs something all
+   the same, since the C compiler may not merge two such loads, as it
+   does the plain ones of an `ren_is_unique` and the drop after it.
+   Lean reads it plainly (lean.h:387) outside TSan, a race C11 calls
+   undefined; -DREN_RC_PLAIN_READ does the same, to measure the
+   difference. */
+static inline int32_t ren_rc(ren_obj *o) {
+  return __atomic_load_n(&o->rc, __ATOMIC_RELAXED);
+}
+#else
+static inline int32_t ren_rc(ren_obj *o) { return o->rc; }
+#endif
+
+#ifdef REN_RC_SHARED
+/* The shared paths, out of line as Lean's `lean_dec_ref_cold` is. */
+void ren_dup_shared(ren_obj *o);
+void ren_drop_shared(ren_obj *o);
+/* Mark everything [o] reaches shared, while one thread still owns it. */
+void ren_mark_shared(ren_obj *o);
+#else
+static inline void ren_mark_shared(ren_obj *o) { (void)o; }
+#endif
+
 /* One more reference: lean.h's `lean_inc_ref`, and kklib's
-   `kk_block_dup`, without their thread-shared paths. */
+   `kk_block_dup`. */
 static inline void ren_dup(ren_obj *o) {
+#if defined(REN_RC_SHARED)
+  if (ren_is_scalar(o))
+    return;
+  int32_t rc = ren_rc(o);
+  if (__builtin_expect(rc > 0, 1)) {
+    REN_STAT(dups);
+    o->rc = rc + 1;
+  } else if (rc != 0) {
+    ren_dup_shared(o);
+  }
+#elif defined(REN_RC_ATOMIC)
+  if (ren_is_scalar(o) || ren_rc(o) == 0)
+    return;
+  REN_STAT(dups);
+  __atomic_fetch_add(&o->rc, 1, __ATOMIC_RELAXED);
+#else
   if (ren_is_scalar(o) || o->rc == 0)
     return;
   REN_STAT(dups);
   o->rc++;
+#endif
 }
 
 /* One reference fewer, freeing the object with the last: lean.h's
@@ -157,6 +226,27 @@ static inline void ren_dup(ren_obj *o) {
 static inline void ren_drop(ren_obj *o) {
   if (ren_is_scalar(o))
     return;
+#if defined(REN_RC_SHARED)
+  int32_t rc = ren_rc(o);
+  if (__builtin_expect(rc > 1, 1)) {
+    REN_STAT(drops);
+    o->rc = rc - 1;
+  } else if (rc == 1) {
+    REN_STAT(drops);
+    ren_free(o);
+  } else if (rc != 0) {
+    ren_drop_shared(o);
+  }
+#elif defined(REN_RC_ATOMIC)
+  if (ren_rc(o) == 0)
+    return;
+  REN_STAT(drops);
+  /* Arc's drop: release, and acquire only for the last */
+  if (__atomic_sub_fetch(&o->rc, 1, __ATOMIC_RELEASE) == 0) {
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    ren_free(o);
+  }
+#else
   if (o->rc > 1) {
     REN_STAT(drops);
     o->rc--;
@@ -164,12 +254,19 @@ static inline void ren_drop(ren_obj *o) {
     REN_STAT(drops);
     ren_free(o);
   }
+#endif
 }
 
 /* Whether [o] is held by nothing else, so it can be changed in place:
-   Lean's `lean_is_exclusive`, kklib's `kk_block_is_unique`. */
+   Lean's `lean_is_exclusive`, kklib's `kk_block_is_unique`. A shared
+   object never is, as in Lean (lean.h:776), since another thread may
+   take a reference while this one looks. */
 static inline bool ren_is_unique(ren_obj *o) {
-  return !ren_is_scalar(o) && o->rc == 1;
+#if defined(REN_RC_ATOMIC)
+  return !ren_is_scalar(o) && __atomic_load_n(&o->rc, __ATOMIC_ACQUIRE) == 1;
+#else
+  return !ren_is_scalar(o) && ren_rc(o) == 1;
+#endif
 }
 
 /* ---- objects ---- */
