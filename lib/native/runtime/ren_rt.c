@@ -25,7 +25,7 @@ _Noreturn void ren_stack_overflowed(void) {
 /* ---- memory ---- */
 
 #ifdef REN_STATS
-static void ren_count_alloc(int64_t bytes) {
+void ren_count_alloc(int64_t bytes) {
   ren_stats.allocs++;
   ren_stats.live_bytes += bytes;
   if (ren_stats.live_bytes > ren_stats.peak_bytes)
@@ -33,34 +33,40 @@ static void ren_count_alloc(int64_t bytes) {
 }
 #endif
 
+_Noreturn static void ren_out_of_memory(void) {
+  fflush(stdout);
+  fputs("error: out of memory\n", stderr);
+  exit(1);
+}
+
 static void *ren_malloc(size_t bytes) {
   void *p = malloc(bytes);
-  if (p == NULL) {
-    fflush(stdout);
-    fputs("error: out of memory\n", stderr);
-    exit(1);
-  }
+  if (p == NULL)
+    ren_out_of_memory();
   return p;
 }
 
-ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields, uint32_t objs) {
-  size_t bytes = sizeof(ren_ctor) + nfields * sizeof(ren_val);
-  ren_obj *o = ren_malloc(bytes);
-#ifdef REN_STATS
-  ren_count_alloc((int64_t)bytes);
-#endif
-  o->rc = 1;
-  o->tag = tag;
-  o->kind = REN_CTOR;
-  o->boxed_elems = 0;
-  o->objs = objs;
-  o->nfields = nfields;
-  return o;
+ren_heap_t ren_heap;
+
+void *ren_alloc_big(size_t bytes) { return ren_malloc(bytes); }
+
+/* The list for [words] is empty: a bump from the chunk, or a new chunk
+   first. What's left of the old one is too small for this object, and
+   is lost; at most [REN_SMALL_WORDS] words of each chunk. */
+void *ren_alloc_slow(size_t words) {
+  size_t bytes = words * 8;
+  if ((size_t)(ren_heap.end - ren_heap.bump) < bytes) {
+    ren_heap.bump = ren_malloc(REN_CHUNK_BYTES);
+    ren_heap.end = ren_heap.bump + REN_CHUNK_BYTES;
+  }
+  void *p = ren_heap.bump;
+  ren_heap.bump += bytes;
+  return p;
 }
 
 static ren_obj *ren_alloc_array_c(int64_t len, int64_t cap, bool boxed_elems,
                                   uint32_t stride) {
-  ren_array *a = ren_malloc(sizeof(ren_array));
+  ren_array *a = ren_alloc_bytes(sizeof(ren_array));
   cap = cap > len ? cap : len;
   cap = cap > 0 ? cap : 1;
   size_t bytes = (size_t)cap * (stride > 1 ? stride : 1) * sizeof(ren_val);
@@ -69,13 +75,12 @@ static ren_obj *ren_alloc_array_c(int64_t len, int64_t cap, bool boxed_elems,
   ren_count_alloc((int64_t)(sizeof(ren_array) + bytes));
 #endif
   a->h.rc = 1;
-  a->h.tag = 0;
-  a->h.kind = REN_ARRAY;
-  a->h.boxed_elems = boxed_elems;
-  a->h.objs = 0;
-  a->h.nfields = stride;
+  a->h.tag = REN_TAG_ARRAY;
+  a->h.nfields = 0;
+  a->h.objs = boxed_elems;
   a->len = len;
   a->cap = cap;
+  a->stride = stride > 1 ? stride : 1;
   return &a->h;
 }
 
@@ -98,16 +103,14 @@ ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride) {
 
 static ren_obj *ren_alloc_str(int64_t len) {
   size_t bytes = sizeof(ren_str) + (size_t)len + 1;
-  ren_str *s = ren_malloc(bytes);
+  ren_str *s = ren_alloc_bytes(bytes);
 #ifdef REN_STATS
   ren_count_alloc((int64_t)bytes);
 #endif
   s->h.rc = 1;
-  s->h.tag = 0;
-  s->h.kind = REN_STR;
-  s->h.boxed_elems = 0;
-  s->h.objs = 0;
+  s->h.tag = REN_TAG_STR;
   s->h.nfields = 0;
+  s->h.objs = 0;
   s->len = len;
   s->data[len] = 0;
   return &s->h;
@@ -135,6 +138,15 @@ static void ren_todo_push(ren_obj *o) {
   ren_todo[ren_todo_len++] = o;
 }
 
+_Noreturn void ren_shared_count(ren_obj *o) {
+  (void)o;
+  fflush(stdout);
+  fputs("error: an object's count is negative, which marks it shared, "
+        "and nothing shares one yet\n",
+        stderr);
+  abort();
+}
+
 /* One reference fewer on a child of an object being freed. */
 static void ren_release(ren_obj *o) {
   if (ren_is_scalar(o) || o->rc == 0)
@@ -142,42 +154,48 @@ static void ren_release(ren_obj *o) {
   REN_STAT(drops);
   if (o->rc > 1)
     o->rc--;
-  else
+  else if (o->rc == 1)
     ren_todo_push(o);
+  else
+    ren_shared_count(o);
 }
 
 /* Free one object whose count reached 0, its children going on the
    list. */
 static void ren_free_one(ren_obj *o) {
-  int64_t bytes = 0;
-  switch (o->kind) {
-  case REN_CTOR: {
+  int64_t bytes = 0; /* what it held, for the statistics */
+  size_t size = 0;   /* its own memory */
+  switch (o->tag) {
+  default: { /* a constructor */
     ren_val *fs = ren_fields(o);
-    for (uint32_t i = 0; i < o->nfields; i++)
-      if (o->objs & ((uint32_t)1 << i))
-        ren_release(fs[i].o);
-    bytes = (int64_t)(sizeof(ren_ctor) + o->nfields * sizeof(ren_val));
+    for (uint64_t m = ren_ctor_objs(o); m != 0; m &= m - 1)
+      ren_release(fs[__builtin_ctzll(m)].o);
+    size = ren_ctor_size(o->nfields);
+    bytes = (int64_t)size;
     break;
   }
-  case REN_DESC: {
+  case REN_TAG_DESC: {
     ren_desc *d = (ren_desc *)o;
     for (uint16_t i = 0; i < d->nargs; i++)
       ren_release(&d->args[i]->h);
-    bytes = (int64_t)(sizeof(ren_desc) + d->nargs * sizeof(ren_desc *));
+    size = sizeof(ren_desc) + d->nargs * sizeof(ren_desc *);
+    bytes = (int64_t)size;
     break;
   }
-  case REN_ARRAY: {
+  case REN_TAG_ARRAY: {
     ren_array *a = (ren_array *)o;
-    if (o->boxed_elems)
+    if (o->objs)
       for (int64_t i = 0; i < a->len; i++)
         ren_release(a->data[i].o);
     bytes = (int64_t)(sizeof(ren_array) +
                       (size_t)(a->cap * ren_stride(o)) * sizeof(ren_val));
     free(a->data);
+    size = sizeof(ren_array);
     break;
   }
-  case REN_STR:
-    bytes = (int64_t)(sizeof(ren_str) + (size_t)((ren_str *)o)->len + 1);
+  case REN_TAG_STR:
+    size = sizeof(ren_str) + (size_t)((ren_str *)o)->len + 1;
+    bytes = (int64_t)size;
     break;
   }
 #ifdef REN_STATS
@@ -186,7 +204,7 @@ static void ren_free_one(ren_obj *o) {
 #else
   (void)bytes;
 #endif
-  free(o);
+  ren_free_bytes(o, size);
 }
 
 void ren_free(ren_obj *o) {
@@ -197,24 +215,22 @@ void ren_free(ren_obj *o) {
 
 /* ---- reuse ---- */
 
-void ren_drop_unkept(ren_obj *o, uint32_t kept) {
+void ren_drop_unkept(ren_obj *o, uint64_t kept) {
   ren_val *fs = ren_fields(o);
-  uint32_t drop = o->objs & ~kept;
-  for (uint32_t i = 0; i < o->nfields; i++)
-    if (drop & ((uint32_t)1 << i))
-      ren_drop(fs[i].o);
+  for (uint64_t m = ren_ctor_objs(o) & ~kept; m != 0; m &= m - 1)
+    ren_drop(fs[__builtin_ctzll(m)].o);
 }
 
 static void ren_free_cell(ren_obj *o) {
+  size_t size = ren_ctor_size(o->nfields);
 #ifdef REN_STATS
   ren_stats.frees++;
-  ren_stats.live_bytes -=
-      (int64_t)(sizeof(ren_ctor) + o->nfields * sizeof(ren_val));
+  ren_stats.live_bytes -= (int64_t)size;
 #endif
-  free(o);
+  ren_free_bytes(o, size);
 }
 
-void ren_free_keeping(ren_obj *o, uint32_t kept) {
+void ren_free_keeping(ren_obj *o, uint64_t kept) {
   ren_drop_unkept(o, kept);
   ren_free_cell(o);
 }
@@ -245,12 +261,12 @@ static void ren_check_index(ren_obj *a, int64_t i, const ren_site *site) {
 /* A copy of [a] with room for [extra] more, each element counted again. */
 static ren_obj *ren_array_copy(ren_obj *a, int64_t extra) {
   ren_array *from = (ren_array *)a;
-  ren_obj *b = ren_alloc_array_s(from->len + extra, a->boxed_elems, a->nfields);
+  ren_obj *b = ren_alloc_array_s(from->len + extra, a->objs, (uint32_t)from->stride);
   ren_val *to = ren_elems(b);
   int64_t words = from->len * ren_stride(a);
   for (int64_t i = 0; i < words; i++) {
     to[i] = from->data[i];
-    if (a->boxed_elems)
+    if (a->objs)
       ren_dup(to[i].o);
   }
   return b;
@@ -260,7 +276,7 @@ ren_obj *ren_array_set(ren_obj *a, int64_t i, ren_val v, const ren_site *site) {
   ren_check_index(a, i, site);
   ren_obj *b = ren_array_copy(a, 0);
   ren_val *to = ren_elems(b);
-  if (a->boxed_elems) {
+  if (a->objs) {
     ren_drop(to[i].o);
     ren_dup(v.o);
   }
@@ -271,7 +287,7 @@ ren_obj *ren_array_set(ren_obj *a, int64_t i, ren_val v, const ren_site *site) {
 void ren_array_push(ren_obj **cell, ren_val v) {
   ren_obj *a = *cell;
   ren_obj *b = ren_array_copy(a, 1);
-  if (a->boxed_elems)
+  if (a->objs)
     ren_dup(v.o);
   ren_elems(b)[((ren_array *)b)->len - 1] = v;
   ren_drop(a);
@@ -602,7 +618,7 @@ static bool ren_counted_in(const ren_desc *d, const ren_tenv *env) {
 ren_obj *ren_desc_new(uint8_t kind, const ren_decl *decl, int64_t nargs,
                       ren_obj *const *args) {
   size_t bytes = sizeof(ren_desc) + (size_t)nargs * sizeof(ren_desc *);
-  ren_desc *d = ren_malloc(bytes);
+  ren_desc *d = ren_alloc_bytes(bytes);
 #ifdef REN_STATS
   ren_count_alloc((int64_t)bytes);
 #endif
@@ -612,11 +628,9 @@ ren_obj *ren_desc_new(uint8_t kind, const ren_decl *decl, int64_t nargs,
     kept[i] = (ren_desc *)args[i];
   }
   d->h.rc = 1;
-  d->h.tag = 0;
-  d->h.kind = REN_DESC;
-  d->h.boxed_elems = 0;
-  d->h.objs = 0;
+  d->h.tag = REN_TAG_DESC;
   d->h.nfields = 0;
+  d->h.objs = 0;
   d->kind = kind;
   d->nargs = (uint16_t)nargs;
   d->var = 0;
@@ -991,7 +1005,7 @@ ren_val ren_value_any(ren_obj *d, bool one) {
 
 /* Any error: one keeps its payload's descriptors. */
 static ren_desc ren_errors_desc = {
-    {0, 0, REN_DESC, 0, 0, 0}, REN_D_ERRORS, 1, 0, 0, NULL, NULL};
+    {0, REN_TAG_DESC, 0, 0}, REN_D_ERRORS, 1, 0, 0, NULL, NULL};
 
 _Noreturn void ren_uncaught(ren_obj *e) {
   fflush(stdout);

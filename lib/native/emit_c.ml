@@ -305,13 +305,17 @@ let gives_nothing = function
       true
   | _ -> false
 
+(* Field [n]'s bit in a constructor's mask of them (ren_rt.h,
+   [ren_ctor_objs]), which has 64. *)
+let bit n =
+  if n >= 64 then bug "a field past the 64th";
+  sprintf "((uint64_t)1 << %d)" n
+
 (* The slots a [Free] or a [Reset] keeps, as a mask of bits. *)
 let mask kept =
   match kept with
   | [] -> "0u"
-  | _ ->
-      String.concat " | "
-        (List.map (fun (n, _) -> sprintf "%uu" (1 lsl n)) kept)
+  | _ -> String.concat " | " (List.map (fun (n, _) -> bit n) kept)
 
 (* What [r] computes, as a C expression; an [Alloc] is statements of its
    own ([stmt]). *)
@@ -419,23 +423,26 @@ let rec stmt o d (s : stmt) =
           (List.mapi
              (fun i x ->
                match atom_layout x with
-               | l when is_object l -> [ sprintf "%uu" (1 lsl i) ]
+               | l when is_object l -> [ bit i ]
                | Word _ -> (
                    match !words with
                    | w :: rest ->
                        words := rest;
                        [
-                         sprintf "(ren_desc_counted(%s) ? %uu : 0u)" (atom w)
-                           (1 lsl i);
+                         sprintf "(ren_desc_counted(%s) ? %s : 0u)" (atom w)
+                           (bit i);
                        ]
                    | [] -> bug "a word with no descriptor")
                | _ -> [])
              fields)
       in
       let objs = match bits with [] -> "0" | _ -> String.concat " | " bits in
-      let alloc =
-        sprintf "ren_alloc_ctor(%d, %d, %s)" tag (List.length fields) objs
-      in
+      let n = List.length fields in
+      (* the top three tags are the runtime's (ren_rt.h, [REN_TAG_ARRAY]),
+         and a field count is a byte *)
+      if tag >= 0xFFFD then bug "a constructor's tag past 65,532";
+      if n > 64 then bug "a constructor of more than 64 fields";
+      let alloc = sprintf "ren_alloc_ctor(%d, %d, %s)" tag n objs in
       let set i x =
         line (sprintf "ren_fields(%s)[%d] = %s;" (var v) i (to_val x))
       in
@@ -447,8 +454,8 @@ let rec stmt o d (s : stmt) =
           (* in the token's memory, the slots in [same] already hold their
              fields: only a new object needs them written *)
           line
-            (sprintf "ren_obj* %s = %s != NULL ? ren_reuse(%s, %d, %s) : %s;"
-               (var v) (atom t) (atom t) tag objs alloc);
+            (sprintf "ren_obj* %s = %s != NULL ? ren_reuse(%s, %d, %d, %s) : %s;"
+               (var v) (atom t) (atom t) tag n objs alloc);
           if same <> [] then (
             line (sprintf "if (%s == NULL) {" (atom t));
             List.iteri
@@ -937,7 +944,7 @@ let static_types add (descs : desc list) (decls : decl list) =
       let args = table (sprintf "ren_desc_%d_args" i) d.dargs in
       add
         (sprintf
-           "static ren_desc ren_desc_%d = {{0, 0, REN_DESC, 0, 0, 0}, %s, %b, \
+           "static ren_desc ren_desc_%d = {{0, REN_TAG_DESC, 0, 0}, %s, %b, \
             %d, %d, %s, %s};\n"
            i (dkind_c d.dkind) d.dcounted (List.length d.dargs)
            (match d.dkind with D_var n -> n | _ -> 0)
@@ -963,7 +970,7 @@ let program ?(restrict = false) ~(site_text : site -> string * string)
       add
         (sprintf
            "static struct { ren_obj h; int64_t len; char data[%d]; } \
-            ren_lit_%d = { { 0, 0, REN_STR, 0, 0, 0 }, %d, %s };\n"
+            ren_lit_%d = { { 0, REN_TAG_STR, 0, 0 }, %d, %s };\n"
            (n + 1) i n (c_string s)))
     p.strings;
   List.iter
