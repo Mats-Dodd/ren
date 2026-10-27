@@ -30,17 +30,17 @@ fn main() -> Int = fib(10)
 |};
   [%expect
     {|
-    (fn ren_test_fib (n/1:Int) -> Int
-      (do (let n/2:Int n/1) (let $cmp/3:Bool (< n/2 2)) (decl $if/4:Int)
-        (if $cmp/3 (do (let n/5:Int n/1) (set $if/4 n/5))
-          (do (let n/6:Int n/1) (let $arith/7:Int (- n/6 1))
-            (let $result/8:Int (call ren_test_fib $arith/7))
-            (let n/9:Int n/1)
-            (let $arith/10:Int (- n/9 2))
-            (let $result/11:Int (call ren_test_fib $arith/10))
-            (let $arith/12:Int (+ $result/8 $result/11))
-            (set $if/4 $arith/12)))
-        (return $if/4)))
+    (fn ren_test_fib (ev/1:Ev n/2:Int) -> Int
+      (do (let n/3:Int n/2) (let $cmp/4:Bool (< n/3 2)) (decl $if/5:Int)
+        (if $cmp/4 (do (let n/6:Int n/2) (set $if/5 n/6))
+          (do (let n/7:Int n/2) (let $arith/8:Int (- n/7 1))
+            (let $result/9:Int (call ren_test_fib ev/1 $arith/8))
+            (let n/10:Int n/2)
+            (let $arith/11:Int (- n/10 2))
+            (let $result/12:Int (call ren_test_fib ev/1 $arith/11))
+            (let $arith/13:Int (+ $result/9 $result/12))
+            (set $if/5 $arith/13)))
+        (return $if/5)))
     Mem Lint: ok
     |}]
 
@@ -61,39 +61,39 @@ fn main() -> Int = size(Node(Leaf, 1, Node(Leaf, 2, Leaf)))
 |};
   [%expect
     {|
-    (fn ren_test_size (t/1:Boxed) -> Int
-      (do (decl $match/2:Int) (let t/3:Boxed t/1) (dup t/3) (decl l/4:Boxed)
-        (decl r/5:Boxed)
+    (fn ren_test_size (ev/1:Ev t/2:Boxed) -> Int
+      (do (decl $match/3:Int) (let t/4:Boxed t/2) (dup t/4) (decl l/5:Boxed)
+        (decl r/6:Boxed)
         (joins
-          (do (let $tag/6:Int (tag t/3))
-            (switch $tag/6
+          (do (let $tag/7:Int (tag t/4))
+            (switch $tag/7
               (#0
-                (do (let $part/7:Boxed (field t/3 0))
-                  (let $part/8:Boxed (field t/3 1))
-                  (set l/4 $part/7)
-                  (set r/5 $part/8)
-                  (dup l/4)
-                  (dup r/5)
-                  (drop t/3)
+                (do (let $part/8:Boxed (field t/4 0))
+                  (let $part/9:Boxed (field t/4 2))
+                  (set l/5 $part/8)
+                  (set r/6 $part/9)
+                  (dup l/5)
+                  (dup r/6)
+                  (drop t/4)
                   jump L1
                   (panic "no arm of this `match` matched")))
               (#1
-                (do (drop t/3) jump L2 (panic "no arm of this `match` matched")))
+                (do (drop t/4) jump L2 (panic "no arm of this `match` matched")))
               (else (do (panic "no arm of this `match` matched")))))
           (L1:
-            (do (let l/9:Boxed l/4) (dup l/9)
-              (let $result/10:Int (call ren_test_size l/9))
-              (let $arith/11:Int (+ $result/10 1))
-              (let r/12:Boxed r/5)
-              (dup r/12)
-              (let $result/13:Int (call ren_test_size r/12))
-              (let $arith/14:Int (+ $arith/11 $result/13))
-              (set $match/2 $arith/14)
-              (drop l/4)
-              (drop r/5)))
-          (L2: (do (set $match/2 0))))
-        (drop t/1)
-        (return $match/2)))
+            (do (let l/10:Boxed l/5) (dup l/10)
+              (let $result/11:Int (call ren_test_size ev/1 l/10))
+              (let $arith/12:Int (+ $result/11 1))
+              (let r/13:Boxed r/6)
+              (dup r/13)
+              (let $result/14:Int (call ren_test_size ev/1 r/13))
+              (let $arith/15:Int (+ $arith/12 $result/14))
+              (set $match/3 $arith/15)
+              (drop l/5)
+              (drop r/6)))
+          (L2: (do (set $match/3 0))))
+        (drop t/2)
+        (return $match/3)))
     Mem Lint: ok
     |}]
 
@@ -112,17 +112,17 @@ fn main() -> Int =
 |};
   [%expect
     {|
-    (fn ren_test_check (n/1:Int) fails -> Int
-      (do (let n/2:Int n/1) (let $cmp/3:Bool (< n/2 0)) (decl $if/4:Int)
-        (if $cmp/3
-          (do (let n/5:Int n/1) (let $new/6:Boxed (alloc #0 objs:0 n/5))
-            (raise $new/6)
-            (set $if/4 0))
-          (do (let n/7:Int n/1) (let $cmp/8:Bool (> n/7 10)) (decl $if/9:Int)
-            (if $cmp/8 (do (raise #1*) (set $if/9 0))
-              (do (let n/10:Int n/1) (set $if/9 n/10)))
-            (set $if/4 $if/9)))
-        (return $if/4)))
+    (fn ren_test_check (ev/1:Ev n/2:Int) fails -> Int
+      (do (let n/3:Int n/2) (let $cmp/4:Bool (< n/3 0)) (decl $if/5:Int)
+        (if $cmp/4
+          (do (let n/6:Int n/2) (let $new/7:Boxed (alloc #0 n/6 desc0))
+            (raise $new/7)
+            (set $if/5 0))
+          (do (let n/8:Int n/2) (let $cmp/9:Bool (> n/8 10)) (decl $if/10:Int)
+            (if $cmp/9 (do (raise #1*) (set $if/10 0))
+              (do (let n/11:Int n/2) (set $if/10 n/11)))
+            (set $if/5 $if/10)))
+        (return $if/5)))
     Mem Lint: ok
     |}]
 
@@ -135,8 +135,11 @@ let lint fns =
       start = "f";
       start_result = Int;
       start_fails = false;
-      prints = Shows_int;
-      errors = [];
+      start_desc = 0;
+      descs = [ { dkind = D_int; dargs = []; dcounted = false } ];
+      decls = [];
+      tags = [];
+      values = [];
       strings = [];
       sites = [];
       overflow =
@@ -175,7 +178,8 @@ let%expect_test "Mem Lint: layouts that disagree" =
   [%expect {| Mem Lint, in f: x/1 is Int, but should be Boxed |}];
   let n = v 1 "n" Int in
   lint [ fn [ Let (n, Atom (Int 1L)); Dup (Var n); Return (Var n) ] ];
-  [%expect {| Mem Lint, in f: what's counted n/1 is Int, but should be Boxed |}]
+  [%expect
+    {| Mem Lint, in f: n/1 is Int, which isn't an object, but is counted |}]
 
 let%expect_test "Mem Lint: a raise from a function that can't fail" =
   lint [ fn [ Raise (Scalar_ctor 0, None) ] ];
@@ -185,32 +189,45 @@ let%expect_test "Mem Lint: a break outside its loop" =
   lint [ fn [ Loop (1, [ Break 1 ]); Break 1; Return (Int 0L) ] ];
   [%expect {| Mem Lint, in f: a break of L1 outside it |}]
 
-let%expect_test "Mem Lint: counted fields after a scalar" =
-  let o = v 1 "o" Boxed in
+let%expect_test "Mem Lint: a type variable's word with no descriptor" =
+  let o = v 1 "o" Boxed and w = v 2 "w" (Word 0) in
   lint
     [
       fn
         [
-          Let (o, Alloc { tag = 0; fields = [ Int 1L; Lit 0 ]; nobjs = 1 });
+          Let (w, To_word (Int 1L));
+          Let (o, Alloc { tag = 0; fields = [ Var w; Lit 0 ]; words = [] });
           Return (Int 0L);
         ];
     ];
-  [%expect
-    {| Mem Lint, in f: an object whose 1 counted fields aren't the first |}]
+  [%expect {| Mem Lint, in f: an object with 1 words given 0 descriptors |}]
+
+let%expect_test "Mem Lint: a block stored in an object" =
+  let o = v 1 "o" Boxed and b = v 2 "b" Block in
+  lint
+    [
+      fn
+        [
+          Decl b;
+          Let (o, Alloc { tag = 0; fields = [ Var b ]; words = [] });
+          Return (Int 0L);
+        ];
+    ];
+  [%expect {| Mem Lint, in f: Block stored in an object |}]
 
 (* ---- what isn't in the subset yet ---- *)
 
-let%expect_test "a block isn't in the native slice yet" =
-  mem
-    {|
-fn twice(f: fn(Int) -> Int, x: Int) -> Int = try f(try f(x))
-fn main() -> Int = twice(fn(n) => n + 1, 1)
+let%expect_test "the world but the real `Console` isn't in the native slice" =
+  mem {|
+fn main() -> Unit uses Clock =
+  let t = Clock.now()
+  ()
 |};
   [%expect
     {|
-    error: a block isn't in the native slice yet
-      ┌─ test.ren:2:26
-    2 │ fn main() -> Int = twice(fn(n) => n + 1, 1)
-      │                          ^^^^^^^^^^^^^^ `ren build` can't compile this yet
+    error: the real `Clock` isn't in the native slice yet
+      ┌─ test.ren:1:4
+    1 │ fn main() -> Unit uses Clock =
+      │    ^^^^ `ren build` can't compile this yet
       help: run it with `ren run test.ren`
     |}]

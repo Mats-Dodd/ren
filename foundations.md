@@ -450,7 +450,10 @@ dependencies where it's called.
    bench/native, with the Ren checked in the interpreter; and Mem IR,
    the C runtime and `ren build` for the first-order subset (step 2),
    with naive counting, each binary checked against `ren run` under
-   the sanitizers (compiler.md, "Native slice").
+   the sanitizers; and the debug strategy for the rest of the subset
+   (step 3): descriptors for generic code, blocks as a code and a
+   stack environment, evidence and handler descriptions, so every
+   benchmark builds (compiler.md, "Native slice").
 3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.

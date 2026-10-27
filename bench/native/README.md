@@ -5,11 +5,10 @@ The programs the native slice is measured with ([vision.md](../../vision.md),
 [foundations.md](../../foundations.md), Staging, item 2). Each is written
 three times: in Ren, the way the docs teach it, and in Rust and Go, the
 way a good programmer in each writes it. The interpreter checks what
-each computes. `ren build` (native step 2) compiles those in the
-first-order subset, `binary-trees`, `cfold`, `deriv`, `fannkuch` and
-`nbody`, and bench/build.t checks each binary prints what `ren run`
-does; the rest need native step 3. The timings with hyperfine come in
-step 6.
+each computes. `ren build` compiles every one of them (native steps 2
+and 3), and bench/build.t checks each debug binary prints what `ren
+run` does, and that `blocks`' kernels allocate as much with blocks as
+with loops. The timings with hyperfine come in step 6.
 
 ## What's here
 

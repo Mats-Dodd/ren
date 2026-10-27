@@ -43,7 +43,7 @@ static void *ren_malloc(size_t bytes) {
   return p;
 }
 
-ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields, uint32_t nobjs) {
+ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields, uint32_t objs) {
   size_t bytes = sizeof(ren_ctor) + nfields * sizeof(ren_val);
   ren_obj *o = ren_malloc(bytes);
 #ifdef REN_STATS
@@ -53,7 +53,7 @@ ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields, uint32_t nobjs) {
   o->tag = tag;
   o->kind = REN_CTOR;
   o->boxed_elems = 0;
-  o->nobjs = nobjs;
+  o->objs = objs;
   o->nfields = nfields;
   return o;
 }
@@ -69,7 +69,7 @@ ren_obj *ren_alloc_array(int64_t len, bool boxed_elems) {
   a->h.tag = 0;
   a->h.kind = REN_ARRAY;
   a->h.boxed_elems = boxed_elems;
-  a->h.nobjs = 0;
+  a->h.objs = 0;
   a->h.nfields = 0;
   a->len = len;
   a->cap = cap;
@@ -86,7 +86,7 @@ static ren_obj *ren_alloc_str(int64_t len) {
   s->h.tag = 0;
   s->h.kind = REN_STR;
   s->h.boxed_elems = 0;
-  s->h.nobjs = 0;
+  s->h.objs = 0;
   s->h.nfields = 0;
   s->len = len;
   s->data[len] = 0;
@@ -133,9 +133,17 @@ static void ren_free_one(ren_obj *o) {
   switch (o->kind) {
   case REN_CTOR: {
     ren_val *fs = ren_fields(o);
-    for (uint32_t i = 0; i < o->nobjs; i++)
-      ren_release(fs[i].o);
+    for (uint32_t i = 0; i < o->nfields; i++)
+      if (o->objs & ((uint32_t)1 << i))
+        ren_release(fs[i].o);
     bytes = (int64_t)(sizeof(ren_ctor) + o->nfields * sizeof(ren_val));
+    break;
+  }
+  case REN_DESC: {
+    ren_desc *d = (ren_desc *)o;
+    for (uint16_t i = 0; i < d->nargs; i++)
+      ren_release(&d->args[i]->h);
+    bytes = (int64_t)(sizeof(ren_desc) + d->nargs * sizeof(ren_desc *));
     break;
   }
   case REN_ARRAY: {
@@ -433,6 +441,461 @@ int64_t ren_ftruncate(double a, const ren_site *site) {
   return ren_to_int(trunc(a), a, "truncate", site);
 }
 
+/* ---- descriptors ---- */
+
+const char *const *ren_tag_names;
+
+/* [d] with each parameter it names replaced by what [*env] gives it, and
+   [*env] made what that's read under. */
+static const ren_desc *ren_resolve(const ren_desc *d, const ren_tenv **env) {
+  while (d->kind == REN_D_VAR) {
+    d = (*env)->args[d->var];
+    *env = (*env)->up;
+  }
+  return d;
+}
+
+static bool ren_counted_in(const ren_desc *d, const ren_tenv *env) {
+  d = ren_resolve(d, &env);
+  if (d->kind == REN_D_NAMED && d->decl->kind == REN_DECL_REP) {
+    ren_tenv inner = {d->args, env};
+    return ren_counted_in(d->decl->rep, &inner);
+  }
+  return d->counted;
+}
+
+ren_obj *ren_desc_new(uint8_t kind, const ren_decl *decl, int64_t nargs,
+                      ren_obj *const *args) {
+  size_t bytes = sizeof(ren_desc) + (size_t)nargs * sizeof(ren_desc *);
+  ren_desc *d = ren_malloc(bytes);
+#ifdef REN_STATS
+  ren_count_alloc((int64_t)bytes);
+#endif
+  ren_desc **kept = (ren_desc **)(d + 1);
+  for (int64_t i = 0; i < nargs; i++) {
+    ren_dup(args[i]);
+    kept[i] = (ren_desc *)args[i];
+  }
+  d->h.rc = 1;
+  d->h.tag = 0;
+  d->h.kind = REN_DESC;
+  d->h.boxed_elems = 0;
+  d->h.objs = 0;
+  d->h.nfields = 0;
+  d->kind = kind;
+  d->nargs = (uint16_t)nargs;
+  d->var = 0;
+  d->decl = decl;
+  d->args = kept;
+  switch (kind) {
+  case REN_D_NAMED: {
+    ren_tenv env = {d->args, NULL};
+    if (decl->kind == REN_DECL_REP)
+      d->counted = ren_counted_in(decl->rep, &env);
+    else
+      d->counted = !decl->enumlike;
+    break;
+  }
+  default: /* an array or a tuple */
+    d->counted = 1;
+  }
+  return &d->h;
+}
+
+/* A string being built, which grows as it's written to. */
+typedef struct {
+  char *data;
+  size_t len, cap;
+} ren_buf;
+
+static void ren_put(ren_buf *b, const char *s, size_t n) {
+  if (b->len + n + 1 > b->cap) {
+    while (b->len + n + 1 > b->cap)
+      b->cap = b->cap ? b->cap * 2 : 64;
+    b->data = realloc(b->data, b->cap);
+    if (b->data == NULL) {
+      fflush(stdout);
+      fputs("error: out of memory\n", stderr);
+      exit(1);
+    }
+  }
+  memcpy(b->data + b->len, s, n);
+  b->len += n;
+  b->data[b->len] = 0;
+}
+
+static void ren_puts(ren_buf *b, const char *s) { ren_put(b, s, strlen(s)); }
+
+/* A `Str` as it's written, in quotes: token.ml's `show_str`. */
+static void ren_put_quoted(ren_buf *b, ren_obj *s) {
+  ren_puts(b, "\"");
+  const char *d = ren_str_data(s);
+  for (int64_t i = 0; i < ren_str_len(s); i++) {
+    switch (d[i]) {
+    case '\n':
+      ren_puts(b, "\\n");
+      break;
+    case '\t':
+      ren_puts(b, "\\t");
+      break;
+    case '\\':
+      ren_puts(b, "\\\\");
+      break;
+    case '"':
+      ren_puts(b, "\\\"");
+      break;
+    default:
+      ren_put(b, &d[i], 1);
+    }
+  }
+  ren_puts(b, "\"");
+}
+
+/* The tag of a sum type's value, an object's or the scalar's. */
+static int64_t ren_ctor_tag(const ren_decl *decl, ren_val v) {
+  return decl->enumlike ? v.i : ren_tag(v.o);
+}
+
+static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
+                         ren_val v);
+
+/* Each of [n] fields of [o], of the types [types] read under [env], with
+   [names] before them if there are any. */
+static void ren_show_fields(ren_buf *b, ren_obj *o, int32_t n,
+                            const char *const *names, ren_desc *const *types,
+                            const ren_tenv *env) {
+  for (int32_t i = 0; i < n; i++) {
+    if (i > 0)
+      ren_puts(b, ", ");
+    if (names != NULL) {
+      ren_puts(b, names[i]);
+      ren_puts(b, ": ");
+    }
+    ren_show_val(b, types[i], env, ren_fields(o)[i]);
+  }
+}
+
+/* An error: its tag, and its payload, through the descriptors it keeps
+   after it. */
+static void ren_show_error(ren_buf *b, ren_obj *e) {
+  ren_puts(b, ren_tag_names[ren_tag(e)]);
+  if (ren_is_scalar(e))
+    return;
+  int32_t n = (int32_t)e->nfields / 2;
+  ren_puts(b, "(");
+  for (int32_t i = 0; i < n; i++) {
+    if (i > 0)
+      ren_puts(b, ", ");
+    ren_show_val(b, (ren_desc *)ren_fields(e)[n + i].o, NULL,
+                 ren_fields(e)[i]);
+  }
+  ren_puts(b, ")");
+}
+
+/* [v] as it's written: shown.ml's `value`. */
+static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
+                         ren_val v) {
+  char num[400];
+  d = ren_resolve(d, &env);
+  switch (d->kind) {
+  case REN_D_INT:
+    snprintf(num, sizeof num, "%" PRId64, v.i);
+    ren_puts(b, num);
+    break;
+  case REN_D_FLOAT:
+    ren_format_float(num, v.f);
+    ren_puts(b, num);
+    break;
+  case REN_D_BOOL:
+    ren_puts(b, v.i ? "true" : "false");
+    break;
+  case REN_D_UNIT:
+  case REN_D_UNKNOWN:
+    ren_puts(b, "()");
+    break;
+  case REN_D_STR:
+    ren_put_quoted(b, v.o);
+    break;
+  case REN_D_ARRAY: {
+    ren_array *a = (ren_array *)v.o;
+    ren_puts(b, "[");
+    for (int64_t i = 0; i < a->len; i++) {
+      if (i > 0)
+        ren_puts(b, ", ");
+      ren_show_val(b, d->args[0], env, a->data[i]);
+    }
+    ren_puts(b, "]");
+    break;
+  }
+  case REN_D_TUPLE:
+    ren_puts(b, "(");
+    ren_show_fields(b, v.o, d->nargs, NULL, d->args, env);
+    ren_puts(b, ")");
+    break;
+  case REN_D_ERRORS:
+    ren_show_error(b, v.o);
+    break;
+  case REN_D_NAMED: {
+    const ren_decl *decl = d->decl;
+    ren_tenv inner = {d->args, env};
+    if (decl->kind == REN_DECL_REP) {
+      ren_puts(b, decl->name);
+      ren_puts(b, "(");
+      ren_show_val(b, decl->rep, &inner, v);
+      ren_puts(b, ")");
+    } else if (decl->kind == REN_DECL_RECORD) {
+      const ren_ctor_info *c = &decl->ctors[0];
+      ren_puts(b, decl->name);
+      ren_puts(b, decl->opaque ? "(" : " { ");
+      ren_show_fields(b, v.o, c->nfields, c->fields, c->types, &inner);
+      ren_puts(b, decl->opaque ? ")" : " }");
+    } else {
+      const ren_ctor_info *c = &decl->ctors[ren_ctor_tag(decl, v)];
+      ren_puts(b, c->name);
+      if (c->nfields > 0) {
+        ren_puts(b, "(");
+        ren_show_fields(b, v.o, c->nfields, NULL, c->types, &inner);
+        ren_puts(b, ")");
+      }
+    }
+    break;
+  }
+  }
+}
+
+ren_obj *ren_show_any(ren_obj *d, ren_val v) {
+  if (((ren_desc *)d)->kind == REN_D_STR) {
+    ren_dup(v.o);
+    return v.o;
+  }
+  ren_buf b = {NULL, 0, 0};
+  ren_show_val(&b, (ren_desc *)d, NULL, v);
+  ren_obj *s = ren_str_of(b.data, (int64_t)b.len);
+  free(b.data);
+  return s;
+}
+
+void ren_print_value(FILE *out, ren_obj *d, ren_val v) {
+  ren_buf b = {NULL, 0, 0};
+  ren_show_val(&b, (ren_desc *)d, NULL, v);
+  fwrite(b.data, 1, b.len, out);
+  free(b.data);
+}
+
+static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
+                         ren_val b);
+
+static bool ren_equal_fields(ren_obj *a, ren_obj *b, int32_t n,
+                             ren_desc *const *types, const ren_tenv *env) {
+  for (int32_t i = 0; i < n; i++)
+    if (!ren_equal_in(types[i], env, ren_fields(a)[i], ren_fields(b)[i]))
+      return false;
+  return true;
+}
+
+/* walk.ml's `equal`, part by part. */
+static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
+                         ren_val b) {
+  d = ren_resolve(d, &env);
+  switch (d->kind) {
+  case REN_D_FLOAT:
+    return a.f == b.f;
+  case REN_D_STR:
+    return ren_str_eq(a.o, b.o);
+  case REN_D_ARRAY: {
+    ren_array *x = (ren_array *)a.o, *y = (ren_array *)b.o;
+    if (x->len != y->len)
+      return false;
+    for (int64_t i = 0; i < x->len; i++)
+      if (!ren_equal_in(d->args[0], env, x->data[i], y->data[i]))
+        return false;
+    return true;
+  }
+  case REN_D_TUPLE:
+    return ren_equal_fields(a.o, b.o, d->nargs, d->args, env);
+  case REN_D_ERRORS: {
+    if (ren_tag(a.o) != ren_tag(b.o))
+      return false;
+    if (ren_is_scalar(a.o))
+      return true;
+    int32_t n = (int32_t)a.o->nfields / 2;
+    for (int32_t i = 0; i < n; i++)
+      if (!ren_equal_in((ren_desc *)ren_fields(a.o)[n + i].o, NULL,
+                        ren_fields(a.o)[i], ren_fields(b.o)[i]))
+        return false;
+    return true;
+  }
+  case REN_D_NAMED: {
+    const ren_decl *decl = d->decl;
+    ren_tenv inner = {d->args, env};
+    if (decl->kind == REN_DECL_REP)
+      return ren_equal_in(decl->rep, &inner, a, b);
+    if (decl->kind == REN_DECL_RECORD)
+      return ren_equal_fields(a.o, b.o, decl->ctors[0].nfields,
+                              decl->ctors[0].types, &inner);
+    int64_t tag = ren_ctor_tag(decl, a);
+    if (tag != ren_ctor_tag(decl, b))
+      return false;
+    const ren_ctor_info *c = &decl->ctors[tag];
+    return c->nfields == 0 ||
+           ren_equal_fields(a.o, b.o, c->nfields, c->types, &inner);
+  }
+  default: /* an `Int`, a `Bool` or `Unit` */
+    return a.i == b.i;
+  }
+}
+
+bool ren_equal_any(ren_obj *d, ren_val a, ren_val b) {
+  return ren_equal_in((ren_desc *)d, NULL, a, b);
+}
+
+#define REN_CMP(x, y) ((x) < (y) ? -1 : (x) > (y) ? 1 : 0)
+
+/* walk.ml's `compare`: what inference allows an order on. */
+static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
+                              ren_val a, ren_val b) {
+  d = ren_resolve(d, &env);
+  switch (d->kind) {
+  case REN_D_FLOAT:
+    return REN_CMP(a.f, b.f);
+  case REN_D_STR: {
+    int64_t la = ren_str_len(a.o), lb = ren_str_len(b.o);
+    int c = memcmp(ren_str_data(a.o), ren_str_data(b.o),
+                   (size_t)(la < lb ? la : lb));
+    return c != 0 ? c : REN_CMP(la, lb);
+  }
+  case REN_D_TUPLE:
+    for (uint16_t i = 0; i < d->nargs; i++) {
+      int64_t c = ren_compare_in(d->args[i], env, ren_fields(a.o)[i],
+                                 ren_fields(b.o)[i]);
+      if (c != 0)
+        return c;
+    }
+    return 0;
+  case REN_D_NAMED: {
+    ren_tenv inner = {d->args, env};
+    if (d->decl->kind == REN_DECL_REP)
+      return ren_compare_in(d->decl->rep, &inner, a, b);
+    return REN_CMP(ren_ctor_tag(d->decl, a), ren_ctor_tag(d->decl, b));
+  }
+  default: /* an `Int` or a `Bool` */
+    return REN_CMP(a.i, b.i);
+  }
+}
+
+int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b) {
+  return ren_compare_in((ren_desc *)d, NULL, a, b);
+}
+
+/* Whether a number type is a `Float`, or represented as one, rather
+   than an `Int`. */
+static bool ren_is_float(const ren_desc *d, const ren_tenv *env) {
+  d = ren_resolve(d, &env);
+  if (d->kind == REN_D_NAMED) {
+    ren_tenv inner = {d->args, env};
+    return ren_is_float(d->decl->rep, &inner);
+  }
+  return d->kind == REN_D_FLOAT;
+}
+
+ren_val ren_op_any(ren_obj *d, int op, ren_val a, ren_val b,
+                   const ren_site *site) {
+  ren_val r;
+  if (ren_is_float((ren_desc *)d, NULL)) {
+    switch (op) {
+    case REN_OP_ADD:
+      r.f = ren_fadd(a.f, b.f, site);
+      break;
+    case REN_OP_SUB:
+      r.f = ren_fsub(a.f, b.f, site);
+      break;
+    case REN_OP_MUL:
+      r.f = ren_fmul(a.f, b.f, site);
+      break;
+    case REN_OP_DIV:
+      r.f = ren_fdiv(a.f, b.f, site);
+      break;
+    case REN_OP_REM:
+      r.f = ren_frem(a.f, b.f, site);
+      break;
+    default:
+      r.f = -a.f;
+    }
+  } else {
+    switch (op) {
+    case REN_OP_ADD:
+      r.i = ren_add(a.i, b.i, site);
+      break;
+    case REN_OP_SUB:
+      r.i = ren_sub(a.i, b.i, site);
+      break;
+    case REN_OP_MUL:
+      r.i = ren_mul(a.i, b.i, site);
+      break;
+    case REN_OP_DIV:
+      r.i = ren_div(a.i, b.i, site);
+      break;
+    case REN_OP_REM:
+      r.i = ren_rem(a.i, b.i, site);
+      break;
+    default:
+      r.i = ren_neg(a.i, site);
+    }
+  }
+  return r;
+}
+
+ren_val ren_value_any(ren_obj *d, bool one) {
+  ren_val r;
+  if (ren_is_float((ren_desc *)d, NULL))
+    r.f = one ? 1.0 : 0.0;
+  else
+    r.i = one ? 1 : 0;
+  return r;
+}
+
+/* Any error: one keeps its payload's descriptors. */
+static ren_desc ren_errors_desc = {
+    {0, 0, REN_DESC, 0, 0, 0}, REN_D_ERRORS, 1, 0, 0, NULL, NULL};
+
+_Noreturn void ren_uncaught(ren_obj *e) {
+  fflush(stdout);
+  fputs("error: ", stderr);
+  ren_print_value(stderr, &ren_errors_desc.h, (ren_val){.o = e});
+  fputc('\n', stderr);
+  exit(1);
+}
+
+/* ---- evidence ---- */
+
+const ren_ev *ren_install(ren_ev *nodes, const ren_ev *outer, void *deps,
+                          int64_t ndeps, const ren_impl *const *impls,
+                          int nimpls) {
+  const int32_t *wanted = deps;
+  const ren_ev *ev = outer;
+  for (int64_t i = 0; i < ndeps; i++)
+    for (int j = 0; j < nimpls; j++)
+      if (impls[j]->dep == wanted[i]) {
+        nodes[i].dep = wanted[i];
+        nodes[i].impl = impls[j];
+        nodes[i].next = ev;
+        ev = &nodes[i];
+      }
+  return ev;
+}
+
+const ren_ev *ren_given(ren_ev *nodes, const ren_ev *outer, const ren_ev *from,
+                        const int32_t *deps, int n) {
+  const ren_ev *ev = outer;
+  for (int i = 0; i < n; i++) {
+    nodes[i].dep = deps[i];
+    nodes[i].impl = ren_find(from, deps[i]);
+    nodes[i].next = ev;
+    ev = &nodes[i];
+  }
+  return ev;
+}
+
 /* ---- the world ---- */
 
 void ren_console_write(ren_obj *line) {
@@ -471,9 +934,9 @@ static void ren_print_stats(void) {
   fprintf(stderr,
           "ren stats: allocations %" PRId64 ", frees %" PRId64 ", dups %" PRId64
           ", drops %" PRId64 ", reuses %" PRId64 ", peak live bytes %" PRId64
-          ", objects live at exit %" PRId64 "\n",
+          ", block calls %" PRId64 ", objects live at exit %" PRId64 "\n",
           ren_stats.allocs, ren_stats.frees, ren_stats.dups, ren_stats.drops,
-          ren_stats.reuses, ren_stats.peak_bytes,
+          ren_stats.reuses, ren_stats.peak_bytes, ren_stats.block_calls,
           ren_stats.allocs - ren_stats.frees);
 }
 #endif

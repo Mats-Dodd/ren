@@ -67,7 +67,7 @@ inference every body a value goes through.
 | inferred | infer.ml | each function's scheme and each node's type and lookup | the driver: a public function's inferred scheme is the one its interface states | yes |
 | Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments from R2, requirement dictionaries from R4 | Core Lint, which the tests run on every program | yes |
 | specialized Core | the specializer | Core with type arguments and requirements chosen, and each block and known handler specialized where it's used | Core Lint | the memory stage |
-| Mem IR | memory lowering | A-normal form, layouts, a block as a code and a frame pointer | its own lint | the first-order subset ([Native slice](#native-slice)): to_mem.ml, checked by mem_lint.ml on every build; blocks in native step 3 |
+| Mem IR | memory lowering | A-normal form, layouts, a block as a code and a frame pointer | its own lint | the sequential subset ([Native slice](#native-slice)): to_mem.ml, checked by mem_lint.ml on every build; generic code through descriptors, blocks, evidence and handlers since native step 3 |
 | Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | naive: a dup at every use and a drop at every scope's end, placed by to_mem.ml; Perceus in native step 4 |
 | C | the C backend | the counted Mem IR, emitted | the C compiler, ASan and UBSan | the first-order subset: emit_c.ml and the runtime, `ren build`, tested under ASan and UBSan against `ren run` |
 
@@ -1447,7 +1447,8 @@ themselves (bench/native); Mem IR, the C runtime and a naive backend
 for the first-order subset, with `ren build`; the debug strategy for
 the rest of the subset, blocks, generics, handlers, errors, `show` and
 `Console`; Perceus over Mem IR; release builds that specialize; and the
-measurements. Each step extends this section.
+measurements. Each step extends this section, and says what it changed
+of the ones before.
 
 ### Step 2: Mem IR, the runtime, and `ren build`
 
@@ -1588,3 +1589,144 @@ What later steps need to know:
 - `Free` and `ren_is_unique` exist for step 4 and nothing emits or
   calls them yet; the stats count `reuses` as 0 until reuse exists.
 
+### Step 3: the debug strategy for blocks, generics and handlers
+
+The rest of the sequential subset compiles, with no specialization:
+generic functions, blocks, dependencies, `with` and handlers, `finally`,
+`show`, `==` and order on any type, and the real `Console`
+(foundations.md, decisions 1, 4 and 13). Every `bench/native` program
+and every example that is a single file builds with `ren build
+--debug`. This is the strategy debug builds keep: release builds
+specialize from step 5, and get the same answers.
+
+**Layouts it adds:**
+
+| Layout | What it is | In C |
+|---|---|---|
+| `Word n` | a value of the type variable `n`: one word, counted through `n`'s descriptor | `ren_val` |
+| `Desc` | a type's descriptor, counted: a static one has a count of 0 | `ren_obj*` |
+| `Ev` | evidence: the dependencies installed where the code runs | `const ren_ev*` |
+| `Block` | a block: its code and its environment | `ren_block`, two words |
+| `Ptr` | a raw pointer: a block's environment or arguments, a handler's code | `void*` |
+
+**A value of a type variable is one word** (`ren_val`): an `Int`, a
+`Bool`, a `Unit` or a tag as itself, a `Float` as its bits, an object
+as its pointer. Koka boxes what isn't a word where a value meets a
+type variable (Backend/C/Box.hs, `boxExpr`); every Ren value but a
+block is a word, and a block is never a type's argument, so nothing is
+boxed: `To_word` and `Of_word` only change the C type. Fields stay in
+the order they're declared, whatever their layouts, so generic code
+finds a field where any other does, and the header's count of counted
+fields is now a mask, a bit for each field holding an object (so 32
+fields at most; Mem Lint checks it). Whoever makes the object knows
+which, from the descriptors.
+
+**Descriptors.** A type's descriptor says what its values are: a
+scalar, a `Str`, an array or a tuple of descriptors, a type the program
+declares with its arguments, or a type's errors. A function with type
+parameters takes one descriptor per parameter before its other
+arguments, and a dictionary, the requirement `T: Show` or `T: Eq`, is
+the descriptor of `T` too: what it requires is decided where it's
+used, and the derived walks need nothing else. Descriptors of closed
+types are static C data, with each declaration's constructors and
+their fields' types as templates over its parameters (`ren_decl`), and
+those built from a generic function's own descriptors at run time are
+counted objects (`ren_desc_new`). `ren_dup_val` and `ren_drop_val` count
+a word through its descriptor. The derived `show`, `==` and order walk
+a value with its descriptor (ren_rt.c, `ren_show_any`,
+`ren_equal_any`, `ren_compare_any`), each one shown.ml's, eval's
+equality's and eval's order's, case for case: the bench tests compare
+them byte for byte. The arithmetic of an `opaque ... with numeric` type
+reached generically goes through `ren_op_any`.
+
+**Blocks.** Each block, a lambda written in a function, is lifted to a
+static C function, and every block has the same signature: its
+environment, its caller's evidence, its arguments as an array of words,
+and where its value goes; it returns its error, or `NULL`. Its
+environment is an array of the addresses of the locals it captures,
+on the stack of the function it's written in: capture is by reference
+(10c), so a captured variable is the writer's local and the block
+writes through its address. A block is the pair, passed by value, and
+calling it is an indirect call: nothing is allocated, and Mem Lint
+checks that no block, and no cell, is ever stored in an object, which
+is what keeps their environments from outliving the stack frame. A
+parameter whose type lists dependencies, `fn() uses Log`, gets them
+from its callee: the call installs the callee's evidence for those on
+top of the block's own (`ren_given`, decision 5). `REN_STATS` counts
+block calls, and bench/build.t checks H1 in the debug build: each
+kernel of native/blocks written with a block allocates exactly what
+its twin written as a loop does.
+
+**Evidence and handlers.** Every function, block and handler takes the
+evidence it runs under, a chain of nodes on the stack, each a
+dependency's number, the implementation installed there and the next
+node, after Koka's evidence vectors (std/core/hnd.kk, `Ev`). A
+`Dep_call` finds the innermost implementation of its dependency
+(`ren_find`) and calls the operation's block. An implementation is an
+array of blocks, one per operation, whose environments hold the
+evidence the handler was installed with, so `next`, and the handler's
+own calls of what it's `over`, find the implementation under it. A
+handler's description is a counted object, its code and what it
+captured; its code takes the evidence to install on, the body as a
+block, the descriptor of what the body gives and which dependencies to
+install. It makes the handler's state as its own C locals, makes its
+instance on its stack, installs it, calls the body, and runs its
+`finally` with the outcome, `Ok` or `Err`, as `ren run` does. A `with`
+lifts its body as a block that captures by reference, so it's an
+ordinary call of the description's code; a narrowed description, `let
+only: Log = both(5)`, passes only the dependencies it lists. `$start`'s
+installs are ordinary `with`s, and an associated value such as
+`Console.real` is made once before `$start` and dropped at the end.
+The real `Console`'s `write` and `error` are runtime functions; any
+other implementation the world provides, the real `Clock`, `Random`,
+`Fs`, `Os` or `Proc`, is an error at the `with` that installs it:
+``the real `Clock` isn't in the native slice yet``.
+
+**Errors** are as in step 2, an error's tag carrying its payload as
+fields; an uncaught one is printed through its own descriptors
+(`ren_uncaught`), so its payload shows as `ren run` shows it.
+
+Of step 2 it changed: the header's mask, above, for its count of
+counted fields first; `print`, now the prelude's generic function
+called with a descriptor, for its special case at a scalar or a `Str`;
+and every function's evidence parameter, which step 2 dropped. Step 2's
+list of what's in the subset is this step's, less what's below.
+
+What's still outside, each an error at the code that needs it: a `Map`
+or a `Set`, so no derived `hash`; a type with a `show`, a `key` or an
+operator of its own where a descriptor walks it; `assert a == b`; an
+`inout` parameter of a type variable's type, or a block's; a block
+passed to a block; an associated value of a generic type; and an
+instance outside a handler. bench/build.t builds every
+`bench/native/*/small.ren`, `bench`'s programs, the single-file
+examples and examples/shop and examples/two under ASan and UBSan, each
+the same as `ren run` with no object alive at the end.
+
+Where it differed from its plan:
+
+- **A dictionary is its type's descriptor,** not a table of functions:
+  the derived walks are all a dictionary needs to say, and a type with
+  members of its own is the case that would need more (above).
+- **Nothing is boxed,** since every value a type variable can stand for
+  is a word. Koka's boxing returns if a value bigger than a word ever
+  becomes a type's argument.
+- **A raise the types say can't happen panics.** A failing call inside
+  a function that can't fail, a block whose row's tail is closed there,
+  has nowhere to send an error; its `on_error` panics, `an error where
+  the types say there's none`, rather than being made impossible.
+- **The opaque type's representation is looked through** wherever a
+  constructor or `match` needs its declaration, which step 2 did only
+  for layouts.
+
+What later steps need to know:
+
+- Each lifted block and handler is an ordinary `Mem.fn`, with
+  `[Ptr; Ev; Ptr]` (or a handler's) parameters; Perceus (step 4)
+  treats them like any function. Arguments in a block's array are
+  owned by the block, and its result is written owned.
+- Descriptors and evidence are ordinary parameters: step 5's
+  specialization removes them by making a copy per type and per
+  installed handler, and the debug build keeps this path.
+- `block calls` in the stats counts every indirect call, a
+  dependency's operation included, so a program that prints once
+  counts two: `$start`'s body and `Console.write`.

@@ -1,4 +1,4 @@
-`ren build` compiles each program the native slice's first-order subset
+`ren build` compiles each program the native slice's subset
 covers (compiler.md, "Native slice") to a debug binary, with its
 statistics and under AddressSanitizer and UndefinedBehaviorSanitizer,
 and each prints exactly what `ren run` prints, to stdout and to stderr,
@@ -32,29 +32,72 @@ deep, which is left out.
   loop.ren: the same, exit 0, objects live at exit 0
   overflow.ren: the same, exit 1, objects live at exit 0
 
-The native benchmarks that need nothing from native step 3, at their
-small size:
+Every native benchmark, at its small size:
 
-  $ for d in binary-trees cfold deriv fannkuch nbody; do same native/$d/small.ren; done
+  $ for f in native/*/small.ren; do same $f; done
   native/binary-trees/small.ren: the same, exit 0, objects live at exit 0
+  native/blocks/small.ren: the same, exit 0, objects live at exit 0
   native/cfold/small.ren: the same, exit 0, objects live at exit 0
   native/deriv/small.ren: the same, exit 0, objects live at exit 0
   native/fannkuch/small.ren: the same, exit 0, objects live at exit 0
+  native/handlers/small.ren: the same, exit 0, objects live at exit 0
+  native/inout/small.ren: the same, exit 0, objects live at exit 0
   native/nbody/small.ren: the same, exit 0, objects live at exit 0
+  native/nqueens/small.ren: the same, exit 0, objects live at exit 0
+  native/rbtree/small.ren: the same, exit 0, objects live at exit 0
 
-And the examples in the subset:
+And the examples in the subset, the single files and two of the
+folders:
 
-  $ for f in blocks fib; do same ../examples/$f.ren; done
+  $ for f in ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do same $f; done
   ../examples/blocks.ren: the same, exit 0, objects live at exit 0
   ../examples/fib.ren: the same, exit 0, objects live at exit 0
+  ../examples/infer.ren: the same, exit 0, objects live at exit 0
+  ../examples/plans.ren: the same, exit 0, objects live at exit 0
+  ../examples/values.ren: the same, exit 0, objects live at exit 0
+  ../examples/shop/main.ren: the same, exit 0, objects live at exit 0
+  ../examples/two/main.ren: the same, exit 0, objects live at exit 0
 
-The rest need native step 3: generic functions, blocks, handlers. Each
-says so, at the code that needs it:
+H1, in the debug build: a block costs a call, never an allocation. Its
+environment is on its writer's stack, so each kernel of
+native/blocks/bench.ren written with a block allocates exactly as many
+objects as its twin written as a loop; `block calls` counts the calls.
 
-  $ cd native/nqueens && ren build small.ren
-  error: a call of the generic function `length` isn't in the native slice yet
-     ┌─ bench.ren:38:41
-  38 │ pub fn run(n: Int) uses Console = print(length(find_solutions(n, n), 0))
-     │                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ren build` can't compile this yet
-     help: run it with `ren run small.ren`
+  $ cd native/blocks
+  $ for k in map reduce each; do for v in blocks loop; do
+  >   printf 'import bench\n\nfn main() uses Console =\n  var xs: Array<Int> = []\n  for i in 0..1000\n    &xs.push(i * 7 %% 1000)\n  print(bench.%s_%s(xs, 10))\n' $k $v > ${k}_$v.ren
+  > done; done
+  $ for v in blocks loop; do
+  >   printf 'import bench\n\nfn main() uses Console = print(bench.fold_%s(bench.build(0, 1000), 10))\n' $v > fold_$v.ren
+  >   printf 'import bench\n\nfn main() uses Console = print(bench.attempt_%s(10))\n' $v > attempt_$v.ren
+  > done
+  $ allocations() {
+  >   ren build --debug --stats "$1.ren" -o ./h1.bin && ./h1.bin 2>&1 > /dev/null |
+  >     grep -o 'allocations [0-9]*'
+  > }
+  $ for k in map reduce each fold attempt; do
+  >   b=$(allocations ${k}_blocks); l=$(allocations ${k}_loop)
+  >   if [ "$b" = "$l" ]; then echo "$k: $b, both"; else echo "$k: $b with blocks, $l with loops"; fi
+  > done
+  map: allocations 11013, both
+  reduce: allocations 1003, both
+  each: allocations 1003, both
+  fold: allocations 1002, both
+  attempt: allocations 2, both
+  $ cd ../..
+
+What the native slice doesn't have says so, at the code that needs it,
+like the real `Clock`:
+
+  $ cat > clock.ren <<'EOF'
+  > fn main() uses Clock, Console =
+  >   let t = Clock.now()
+  >   print(t)
+  > EOF
+  $ ren build clock.ren
+  error: the real `Clock` isn't in the native slice yet
+    ┌─ clock.ren:1:4
+  1 │ fn main() uses Clock, Console =
+    │    ^^^^ `ren build` can't compile this yet
+    help: run it with `ren run clock.ren`
   [1]

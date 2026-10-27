@@ -6,7 +6,12 @@
    value through a last parameter, [ren_out]. Control that isn't an `if`
    or a `switch` is a `goto`: a [Break] to the end of its loop, a [Raise]
    to its [Catch]'s handler, and a [Jump] to a join point, so none of
-   them depends on which C statement it's inside. *)
+   them depends on which C statement it's inside.
+
+   A block's code, and a handler's, is a C function with the signature
+   every caller of one uses, [ren_code] and [ren_hcode] (ren_rt.h), whose
+   arguments and value go as words. The program's descriptors and its
+   types' declarations are static data, written before its functions. *)
 
 open Mem
 
@@ -19,15 +24,21 @@ let rec ctype (l : layout) =
   | Bool -> "bool"
   | Unit -> "ren_unit"
   | Enum -> "uint32_t"
-  | Boxed -> "ren_obj*"
+  | Boxed | Desc -> "ren_obj*"
   | Cell l -> ctype l ^ "*"
+  | Word _ -> "ren_val"
+  | Ev -> "const ren_ev*"
+  | Block -> "ren_block"
+  | Ptr -> "void*"
 
 let zero (l : layout) =
   match l with
   | Int | Unit | Enum -> "0"
   | Float -> "0.0"
   | Bool -> "false"
-  | Boxed | Cell _ -> "NULL"
+  | Boxed | Desc | Cell _ | Ev | Ptr -> "NULL"
+  | Word _ -> "(ren_val){0}"
+  | Block -> "(ren_block){0}"
 
 (* [s] as a C string literal: a byte that isn't printable ASCII as an
    octal escape, and `?` escaped, so nothing reads as a trigraph. *)
@@ -67,6 +78,9 @@ let atom_layout (x : atom) : layout =
   | Unit -> Unit
   | Enum_tag _ -> Enum
   | Scalar_ctor _ | Lit _ -> Boxed
+  | Desc_lit _ -> Desc
+  | Fn_ptr _ -> Ptr
+  | No_ev -> Ev
 
 let atom (x : atom) =
   match x with
@@ -82,23 +96,35 @@ let atom (x : atom) =
   | Enum_tag t -> sprintf "((uint32_t)%d)" t
   | Scalar_ctor t -> sprintf "ren_box(%d)" t
   | Lit n -> sprintf "((ren_obj*)&ren_lit_%d)" n
+  | Desc_lit n -> sprintf "((ren_obj*)&ren_desc_%d)" n
+  | Fn_ptr f -> sprintf "((void*)%s)" f
+  | No_ev -> "((const ren_ev*)NULL)"
 
-(* The member of a [ren_val] a value of [l] is kept in. *)
-let member (l : layout) = match l with Float -> "f" | Boxed -> "o" | _ -> "i"
+let bug what = failwith ("bug: emit_c: " ^ what)
 
-(* [x] as a [ren_val]. *)
-let to_val (x : atom) =
-  let l = atom_layout x in
+(* [c], a C expression of a value of [l], as a [ren_val], a word. *)
+let word_of (l : layout) c =
   match l with
-  | Float | Boxed -> sprintf "(ren_val){.%s = %s}" (member l) (atom x)
-  | _ -> sprintf "(ren_val){.i = (int64_t)%s}" (atom x)
+  | Word _ -> c
+  | Float -> sprintf "(ren_val){.f = %s}" c
+  | Boxed | Desc -> sprintf "(ren_val){.o = %s}" c
+  | Ptr | Ev -> sprintf "(ren_val){.p = (void*)%s}" c
+  | Int | Bool | Unit | Enum -> sprintf "(ren_val){.i = (int64_t)%s}" c
+  | Block | Cell _ -> bug "a block or a cell as a word"
+
+let to_val (x : atom) = word_of (atom_layout x) (atom x)
 
 (* A [ren_val], [v], as a value of [l]. *)
 let of_val l v =
   match (l : layout) with
-  | Float | Boxed -> sprintf "%s.%s" v (member l)
+  | Word _ -> v
+  | Float -> sprintf "%s.f" v
+  | Boxed | Desc -> sprintf "%s.o" v
+  | Ptr -> sprintf "%s.p" v
+  | Ev -> sprintf "((const ren_ev*)%s.p)" v
   | Int -> sprintf "%s.i" v
-  | _ -> sprintf "(%s)%s.i" (ctype l) v
+  | Bool | Unit | Enum -> sprintf "(%s)%s.i" (ctype l) v
+  | Block | Cell _ -> bug "a word as a block or a cell"
 
 let site (s : site) = sprintf "&ren_site_%d" s.sid
 
@@ -110,7 +136,7 @@ let binop_fn (op : Ast.binop) (l : layout) =
     | Mul -> "mul"
     | Div -> "div"
     | Mod -> "rem"
-    | _ -> failwith "bug: emit_c: an arithmetic operator that isn't one"
+    | _ -> bug "an arithmetic operator that isn't one"
   in
   match l with Float -> "ren_f" ^ name | _ -> "ren_" ^ name
 
@@ -127,7 +153,7 @@ let runtime rt args site_arg =
   let site () =
     match site_arg with
     | Some s -> site s
-    | None -> failwith "bug: emit_c: a runtime call that panics without a site"
+    | None -> bug "a runtime call that panics without a site"
   in
   match rt with
   | Array_len -> sprintf "ren_array_len(%s)" (a 0)
@@ -155,6 +181,24 @@ let runtime rt args site_arg =
   | Wrapping_neg -> sprintf "((int64_t)(0 - (uint64_t)%s))" (a 0)
   | Console_write -> sprintf "ren_console_write(%s)" (a 0)
   | Console_error -> sprintf "ren_console_error(%s)" (a 0)
+  | Show_any -> sprintf "ren_show_any(%s, %s)" (a 0) (a 1)
+  | Equal_any -> sprintf "ren_equal_any(%s, %s, %s)" (a 0) (a 1) (a 2)
+  | Compare_any -> sprintf "ren_compare_any(%s, %s, %s)" (a 0) (a 1) (a 2)
+  | Op_any op ->
+      let code =
+        match op with
+        | Some Add -> "REN_OP_ADD"
+        | Some Sub -> "REN_OP_SUB"
+        | Some Mul -> "REN_OP_MUL"
+        | Some Div -> "REN_OP_DIV"
+        | Some Mod -> "REN_OP_REM"
+        | None -> "REN_OP_NEG"
+        | Some _ -> bug "an operator through a dictionary that isn't one"
+      in
+      let b = if op = None then "(ren_val){0}" else a 2 in
+      sprintf "ren_op_any(%s, %s, %s, %s, %s)" (a 0) code (a 1) b (site ())
+  | Value_any one -> sprintf "ren_value_any(%s, %b)" (a 0) one
+  | New_desc _ -> bug "a descriptor built outside a Let"
 
 (* Whether the runtime's [rt] gives nothing, so a [Let] of it gives [Unit]
    after calling it. *)
@@ -189,8 +233,15 @@ let rhs (r : rhs) =
       if gives_nothing rt then sprintf "(%s, (ren_unit)0)" call else call
   | Load v -> sprintf "(*%s)" (var v)
   | Addr v -> sprintf "(&%s)" (var v)
-  | Alloc _ | Alloc_array _ ->
-      failwith "bug: emit_c: an allocation outside a Let"
+  | To_word x -> to_val x
+  | Of_word (x, l) -> of_val l (atom x)
+  | Global name -> name
+  | Block_of (f, env) -> sprintf "((ren_block){%s, %s})" f (atom env)
+  | Op_block (ev, dep, op) ->
+      sprintf "ren_find(%s, %d)->ops[%d]" (atom ev) dep op
+  | Alloc _ | Alloc_array _ | Env_new _ | Env_get _ | Arg _ | Impl _ | Install _
+  | Given _ ->
+      bug "an allocation on the heap or the stack outside a Let"
 
 type out = { b : Buffer.t; fails : bool; mutable catches : (int * var) list }
 
@@ -199,6 +250,31 @@ let line o depth s =
   Buffer.add_string o.b s;
   Buffer.add_char o.b '\n'
 
+(* A list of C expressions, in braces, for an array's initializer. *)
+let braces xs = "{" ^ String.concat ", " xs ^ "}"
+
+(* The C type of a [ren_val]'s caller's arguments: an array of them on
+   the stack, or none. *)
+let args_array o d name xs =
+  match xs with
+  | [] -> "NULL"
+  | _ ->
+      line o d
+        (sprintf "ren_val %s[%d] = %s;" name (List.length xs)
+           (braces (List.map to_val xs)));
+      name
+
+(* A call through a block's or a handler's code, [call] given where its
+   value goes, which a status says the end of. *)
+let indirect o d ~result ~error call =
+  let line = line o d in
+  let out = var result ^ "_out" in
+  line (sprintf "ren_val %s = {0};" out);
+  line (sprintf "ren_obj* %s = %s;" (var error) (call ("&" ^ out)));
+  line
+    (sprintf "%s %s = %s;" (ctype result.layout) (var result)
+       (of_val result.layout out))
+
 let rec stmt o d (s : stmt) =
   let line = line o d in
   match s with
@@ -206,27 +282,109 @@ let rec stmt o d (s : stmt) =
       line
         (sprintf "%s %s = %s;" (ctype v.layout) (var v)
            (of_val v.layout (sprintf "ren_fields(%s)[%d]" (atom x) n)))
-  | Let (v, Alloc { tag; fields; nobjs }) ->
+  | Let (v, Alloc { tag; fields; words }) ->
+      (* a bit for each field that holds an object: one that always does,
+         or a word whose descriptor says it does *)
+      let words = ref words in
+      let bits =
+        List.concat
+          (List.mapi
+             (fun i x ->
+               match atom_layout x with
+               | l when is_object l -> [ sprintf "%uu" (1 lsl i) ]
+               | Word _ -> (
+                   match !words with
+                   | w :: rest ->
+                       words := rest;
+                       [
+                         sprintf "(ren_desc_counted(%s) ? %uu : 0u)" (atom w)
+                           (1 lsl i);
+                       ]
+                   | [] -> bug "a word with no descriptor")
+               | _ -> [])
+             fields)
+      in
       line
-        (sprintf "ren_obj* %s = ren_alloc_ctor(%d, %d, %d);" (var v) tag
-           (List.length fields) nobjs);
+        (sprintf "ren_obj* %s = ren_alloc_ctor(%d, %d, %s);" (var v) tag
+           (List.length fields)
+           (match bits with [] -> "0" | _ -> String.concat " | " bits));
       List.iteri
         (fun i x ->
-          let l = atom_layout x in
-          line
-            (sprintf "ren_fields(%s)[%d].%s = %s;" (var v) i (member l)
-               (match l with
-               | Float | Boxed -> atom x
-               | _ -> sprintf "(int64_t)%s" (atom x))))
+          line (sprintf "ren_fields(%s)[%d] = %s;" (var v) i (to_val x)))
         fields
-  | Let (v, Alloc_array (l, xs)) ->
+  | Let (v, Alloc_array { elem; elems; desc }) ->
+      let boxed =
+        match desc with
+        | Some d -> sprintf "ren_desc_counted(%s)" (atom d)
+        | None -> string_of_bool (is_object elem)
+      in
       line
-        (sprintf "ren_obj* %s = ren_alloc_array(%d, %b);" (var v)
-           (List.length xs) (counted l));
+        (sprintf "ren_obj* %s = ren_alloc_array(%d, %s);" (var v)
+           (List.length elems) boxed);
       List.iteri
         (fun i x ->
           line (sprintf "ren_elems(%s)[%d] = %s;" (var v) i (to_val x)))
-        xs
+        elems
+  | Let (v, Runtime (New_desc how, xs, _)) ->
+      let args = var v ^ "_args" in
+      let n = List.length xs in
+      if n > 0 then
+        line
+          (sprintf "ren_obj* %s[%d] = %s;" args n (braces (List.map atom xs)));
+      let kind, decl =
+        match how with
+        | Of_decl k -> ("REN_D_NAMED", sprintf "&ren_decl_%d" k)
+        | Of_array -> ("REN_D_ARRAY", "NULL")
+        | Of_tuple -> ("REN_D_TUPLE", "NULL")
+      in
+      line
+        (sprintf "ren_obj* %s = ren_desc_new(%s, %s, %d, %s);" (var v) kind decl
+           n
+           (if n > 0 then args else "NULL"))
+  | Let (v, Env_new xs) -> (
+      match xs with
+      | [] -> line (sprintf "void* %s = NULL;" (var v))
+      | _ ->
+          line
+            (sprintf "void* %s_env[%d] = %s;" (var v) (List.length xs)
+               (braces (List.map (fun x -> "(void*)" ^ atom x) xs)));
+          line (sprintf "void* %s = %s_env;" (var v) (var v)))
+  | Let (v, Env_get (x, n)) ->
+      line
+        (sprintf "%s %s = (%s)((void**)%s)[%d];" (ctype v.layout) (var v)
+           (ctype v.layout) (atom x) n)
+  | Let (v, Arg (x, n)) ->
+      line
+        (sprintf "%s %s = %s;" (ctype v.layout) (var v)
+           (of_val v.layout (sprintf "((ren_val*)%s)[%d]" (atom x) n)))
+  | Let (v, Impl (dep, ops)) ->
+      line
+        (sprintf "ren_block %s_ops[%d] = %s;" (var v)
+           (max 1 (List.length ops))
+           (braces (List.map atom ops)));
+      line
+        (sprintf "ren_impl %s_impl = {%d, %d, %s_ops};" (var v) dep
+           (List.length ops) (var v));
+      line (sprintf "void* %s = &%s_impl;" (var v) (var v))
+  | Let (v, Install { outer; impls; deps; ndeps }) ->
+      let n = List.length impls in
+      line (sprintf "ren_ev %s_nodes[%d];" (var v) (max 1 n));
+      line
+        (sprintf "const ren_impl* %s_impls[%d] = %s;" (var v) (max 1 n)
+           (braces (List.map (fun x -> "(const ren_impl*)" ^ atom x) impls)));
+      line
+        (sprintf
+           "const ren_ev* %s = ren_install(%s_nodes, %s, %s, %s, %s_impls, %d);"
+           (var v) (var v) (atom outer) (atom deps) (atom ndeps) (var v) n)
+  | Let (v, Given { outer; caller; deps }) ->
+      let n = List.length deps in
+      line (sprintf "ren_ev %s_nodes[%d];" (var v) n);
+      line
+        (sprintf "static const int32_t %s_deps[%d] = %s;" (var v) n
+           (braces (List.map string_of_int deps)));
+      line
+        (sprintf "const ren_ev* %s = ren_given(%s_nodes, %s, %s, %s_deps, %d);"
+           (var v) (var v) (atom outer) (atom caller) (var v) n)
   | Let (v, r) -> line (sprintf "%s %s = %s;" (ctype v.layout) (var v) (rhs r))
   | Decl v ->
       line (sprintf "%s %s = %s;" (ctype v.layout) (var v) (zero v.layout))
@@ -234,6 +392,10 @@ let rec stmt o d (s : stmt) =
   | Store (v, x) -> line (sprintf "*%s = %s;" (var v) (atom x))
   | Dup x -> line (sprintf "ren_dup(%s);" (atom x))
   | Drop x -> line (sprintf "ren_drop(%s);" (atom x))
+  | Dup_word (x, dsc) ->
+      line (sprintf "ren_dup_val(%s, %s);" (atom x) (atom dsc))
+  | Drop_word (x, dsc) ->
+      line (sprintf "ren_drop_val(%s, %s);" (atom x) (atom dsc))
   | Free x -> line (sprintf "ren_free(%s);" (atom x))
   | Do (Runtime (rt, xs, s)) -> line (sprintf "%s;" (runtime rt xs s))
   | Do r -> line (sprintf "(void)%s;" (rhs r))
@@ -247,6 +409,26 @@ let rec stmt o d (s : stmt) =
       line (sprintf "if (%s != NULL) {" (var error));
       block o (d + 1) on_error;
       line "}"
+  | Call_block { result; block = b; ev; args; error; on_error } ->
+      line "REN_STAT(block_calls);";
+      let args = args_array o d (var result ^ "_args") args in
+      indirect o d ~result ~error (fun out ->
+          sprintf "%s.code(%s.env, %s, %s, %s)" (atom b) (atom b) (atom ev) args
+            out);
+      on_failure o d error on_error
+  | Call_handler { result; handler; outer; body; desc; deps; error; on_error }
+    ->
+      let n = List.length deps in
+      line
+        (sprintf "static const int32_t %s_deps[%d] = %s;" (var result) (max 1 n)
+           (braces (List.map string_of_int deps)));
+      indirect o d ~result ~error (fun out ->
+          sprintf
+            "((ren_hcode)ren_fields(%s)[0].p)(%s, %s, %s, %s, (void*)%s_deps, \
+             %d, %s)"
+            (atom handler) (atom handler) (atom outer) (atom body) (atom desc)
+            (var result) n out);
+      on_failure o d error on_error
   | If (c, t, f) ->
       line (sprintf "if (%s) {" (atom c));
       block o (d + 1) t;
@@ -317,6 +499,15 @@ let rec stmt o d (s : stmt) =
 
 and block o d b = List.iter (stmt o d) b
 
+(* What an indirect call does if it failed. *)
+and on_failure o d error on_error =
+  match on_error with
+  | Some b ->
+      line o d (sprintf "if (%s != NULL) {" (var error));
+      block o (d + 1) b;
+      line o d "}"
+  | None -> line o d (sprintf "(void)%s;" (var error))
+
 let signature (f : fn) =
   let params = List.map (fun v -> ctype v.layout ^ " " ^ var v) f.params in
   if f.fails then
@@ -333,17 +524,97 @@ let fn b (f : fn) =
   block o 1 f.body;
   Buffer.add_string b "}\n\n"
 
-(* How `ren run` shows [x], a C expression of a value shown [s], to the
-   stream [out]: [Str] in quotes. *)
-let show_to out (s : shown) x =
-  match s with
-  | Shows_int -> sprintf "fprintf(%s, \"%%\" PRId64, %s);" out x
-  | Shows_float ->
-      sprintf "{ char buf[400]; ren_format_float(buf, %s); fputs(buf, %s); }" x
-        out
-  | Shows_bool -> sprintf "fputs(%s ? \"true\" : \"false\", %s);" x out
-  | Shows_str -> sprintf "ren_print_quoted(%s, %s);" out x
-  | Shows_unit -> sprintf "fputs(\"()\", %s);" out
+let dkind_c (k : dkind) =
+  match k with
+  | D_int -> "REN_D_INT"
+  | D_float -> "REN_D_FLOAT"
+  | D_bool -> "REN_D_BOOL"
+  | D_unit -> "REN_D_UNIT"
+  | D_str -> "REN_D_STR"
+  | D_named _ -> "REN_D_NAMED"
+  | D_array -> "REN_D_ARRAY"
+  | D_tuple -> "REN_D_TUPLE"
+  | D_errors -> "REN_D_ERRORS"
+  | D_var _ -> "REN_D_VAR"
+  | D_unknown -> "REN_D_UNKNOWN"
+
+(* The program's descriptors and its types' declarations, as static data
+   (ren_rt.h, [ren_desc] and [ren_decl]): each descriptor declared first,
+   since a declaration's fields and a descriptor's arguments refer to
+   others. A descriptor's count is 0, so it's never freed. *)
+let static_types add (descs : desc list) (decls : decl list) =
+  let desc_ref n = sprintf "&ren_desc_%d" n in
+  let table name xs =
+    match xs with
+    | [] -> "NULL"
+    | _ ->
+        add
+          (sprintf "static ren_desc *const %s[%d] = %s;\n" name (List.length xs)
+             (braces (List.map desc_ref xs)));
+        name
+  in
+  List.iteri (fun i _ -> add (sprintf "static ren_desc ren_desc_%d;\n" i)) descs;
+  List.iteri
+    (fun i (dc : decl) ->
+      let ctor j (name, fields, types) =
+        let nfields = List.length types in
+        let types = table (sprintf "ren_decl_%d_%d_types" i j) types in
+        let names =
+          match fields with
+          | Some names ->
+              let n = sprintf "ren_decl_%d_%d_names" i j in
+              add
+                (sprintf "static const char *const %s[%d] = %s;\n" n
+                   (max 1 (List.length names))
+                   (braces (List.map c_string names)));
+              n
+          | None -> "NULL"
+        in
+        sprintf "{%s, %d, %s, %s}" (c_string name) nfields names types
+      in
+      let ctors_of cs =
+        let name = sprintf "ren_decl_%d_ctors" i in
+        let cs = List.mapi ctor cs in
+        add
+          (sprintf "static const ren_ctor_info %s[%d] = %s;\n" name
+             (List.length cs) (braces cs));
+        name
+      in
+      let kind, enumlike, nctors, ctors, rep =
+        match dc.dbody with
+        | Record_decl fs ->
+            ( "REN_DECL_RECORD",
+              false,
+              1,
+              ctors_of [ (dc.dname, Some (List.map fst fs), List.map snd fs) ],
+              "NULL" )
+        | Sum_decl cs ->
+            ( "REN_DECL_SUM",
+              List.for_all (fun (_, ts) -> ts = []) cs,
+              List.length cs,
+              ctors_of (List.map (fun (c, ts) -> (c, None, ts)) cs),
+              "NULL" )
+        | Rep_decl r -> ("REN_DECL_REP", false, 0, "NULL", desc_ref r)
+      in
+      add
+        (sprintf
+           "static const ren_decl ren_decl_%d = {%s, %s, %b, %b, %d, %s, %s};\n"
+           i (c_string dc.dname) kind dc.dopaque enumlike nctors ctors rep))
+    decls;
+  List.iteri
+    (fun i (d : desc) ->
+      let args = table (sprintf "ren_desc_%d_args" i) d.dargs in
+      add
+        (sprintf
+           "static ren_desc ren_desc_%d = {{0, 0, REN_DESC, 0, 0, 0}, %s, %b, \
+            %d, %d, %s, %s};\n"
+           i (dkind_c d.dkind) d.dcounted (List.length d.dargs)
+           (match d.dkind with D_var n -> n | _ -> 0)
+           (match d.dkind with
+           | D_named k -> sprintf "&ren_decl_%d" k
+           | _ -> "NULL")
+           args))
+    descs
 
 (* The C file for [p]. [site_text] is what's printed before and after the
    message of a panic at a site. *)
@@ -370,51 +641,44 @@ let program ~(site_text : site -> string * string) (p : program) =
         (sprintf "static const ren_site ren_site_%d = { %s, %s };\n" s.sid
            (c_string before) (c_string after)))
     p.sites;
+  add
+    (sprintf "static const char *const ren_tag_table[%d] = %s;\n"
+       (max 1 (List.length p.tags))
+       (braces
+          (match p.tags with [] -> [ "NULL" ] | ts -> List.map c_string ts)));
+  static_types add p.descs p.decls;
+  List.iter
+    (fun (v : value) ->
+      add (sprintf "static %s %s;\n" (ctype v.vlayout) v.vname))
+    p.values;
   add "\n";
   List.iter (fun f -> add (signature f ^ ";\n")) p.fns;
   add "\n";
   List.iter (fn b) p.fns;
-  (* what `main` failed with, as `ren run` says it *)
-  add "static _Noreturn void ren_uncaught(ren_obj* e) {\n";
-  add
-    "  fflush(stdout);\n\
-    \  fputs(\"error: \", stderr);\n\
-    \  switch (ren_tag(e)) {\n";
-  List.iter
-    (fun (tag, name, payload) ->
-      add (sprintf "  case %d:\n    fputs(%s, stderr);\n" tag (c_string name));
-      if payload <> [] then (
-        add "    fputs(\"(\", stderr);\n";
-        List.iteri
-          (fun i (slot, s) ->
-            if i > 0 then add "    fputs(\", \", stderr);\n";
-            let l : layout =
-              match s with
-              | Shows_float -> Float
-              | Shows_str -> Boxed
-              | _ -> Int
-            in
-            add
-              (sprintf "    %s\n"
-                 (show_to "stderr" s
-                    (of_val l (sprintf "ren_fields(e)[%d]" slot)))))
-          payload;
-        add "    fputs(\")\", stderr);\n");
-      add "    break;\n")
-    p.errors;
-  add "  }\n  fputs(\"\\n\", stderr);\n  exit(1);\n}\n\n";
   add "static void ren_program(void) {\n";
+  (* the associated values, made once, in order *)
+  List.iter
+    (fun (v : value) -> add (sprintf "  %s = %s(NULL);\n" v.vname v.vfn))
+    p.values;
   if p.start_fails then (
     add (sprintf "  %s r = %s;\n" (ctype p.start_result) (zero p.start_result));
-    add (sprintf "  ren_obj* e = %s(&r);\n" p.start);
+    add (sprintf "  ren_obj* e = %s(NULL, &r);\n" p.start);
     add "  if (e != NULL) ren_uncaught(e);\n")
-  else add (sprintf "  %s r = %s();\n" (ctype p.start_result) p.start);
-  if p.prints <> Shows_unit then (
-    add (sprintf "  %s\n" (show_to "stdout" p.prints "r"));
+  else add (sprintf "  %s r = %s(NULL);\n" (ctype p.start_result) p.start);
+  if p.start_result <> Unit then (
+    add
+      (sprintf "  ren_print_value(stdout, (ren_obj*)&ren_desc_%d, %s);\n"
+         p.start_desc
+         (word_of p.start_result "r"));
     add "  fputc('\\n', stdout);\n");
-  if counted p.start_result then add "  ren_drop(r);\n";
+  if is_object p.start_result then add "  ren_drop(r);\n";
+  List.iter
+    (fun (v : value) ->
+      if is_object v.vlayout then add (sprintf "  ren_drop(%s);\n" v.vname))
+    (List.rev p.values);
   add "}\n\n";
   add "int main(void) {\n";
   add (sprintf "  ren_overflow_site = &ren_site_%d;\n" p.overflow.sid);
+  add "  ren_tag_names = ren_tag_table;\n";
   add "  return ren_run(ren_program);\n}\n";
   Buffer.contents b

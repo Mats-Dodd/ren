@@ -4,12 +4,12 @@
 // a thousand Ints, or a tree of as many, and prints the block version's
 // checksum, then the twin's, which agree.
 
-type Tree =
+pub type Tree =
   | Node(left: Tree, value: Int, right: Tree)
   | Leaf
 
 // the numbers from `lo` up to, not including, `hi`, as a balanced tree
-fn build(lo: Int, hi: Int) -> Tree =
+pub fn build(lo: Int, hi: Int) -> Tree =
   if lo >= hi then Leaf
   else
     let mid = (lo + hi) / 2
@@ -37,7 +37,7 @@ fn attempt_n(n: Int, body: fn() -> Int) -> Int =
     tries += 1
   result
 
-fn map_blocks(xs: Array<Int>, n: Int) -> Int =
+pub fn map_blocks(xs: Array<Int>, n: Int) -> Int =
   var total = 0
   for round in 0..n
     let k = round % 4
@@ -45,7 +45,7 @@ fn map_blocks(xs: Array<Int>, n: Int) -> Int =
     total += ys[round % ys.len()]
   total
 
-fn map_loop(xs: Array<Int>, n: Int) -> Int =
+pub fn map_loop(xs: Array<Int>, n: Int) -> Int =
   var total = 0
   for round in 0..n
     let k = round % 4
@@ -55,14 +55,14 @@ fn map_loop(xs: Array<Int>, n: Int) -> Int =
     total += ys[round % ys.len()]
   total
 
-fn reduce_blocks(xs: Array<Int>, n: Int) -> Int =
+pub fn reduce_blocks(xs: Array<Int>, n: Int) -> Int =
   var total = 0
   for round in 0..n
     let k = round % 4
     total += xs.reduce(0, fn(acc, x) => acc + x * k)
   total
 
-fn reduce_loop(xs: Array<Int>, n: Int) -> Int =
+pub fn reduce_loop(xs: Array<Int>, n: Int) -> Int =
   var total = 0
   for round in 0..n
     let k = round % 4
@@ -72,14 +72,14 @@ fn reduce_loop(xs: Array<Int>, n: Int) -> Int =
     total += acc
   total
 
-fn each_blocks(xs: Array<Int>, n: Int) -> Int =
+pub fn each_blocks(xs: Array<Int>, n: Int) -> Int =
   var total = 0
   for round in 0..n
     let k = round % 4
     xs.each(fn(x) => total += x * k)
   total
 
-fn each_loop(xs: Array<Int>, n: Int) -> Int =
+pub fn each_loop(xs: Array<Int>, n: Int) -> Int =
   var total = 0
   for round in 0..n
     let k = round % 4
@@ -87,14 +87,14 @@ fn each_loop(xs: Array<Int>, n: Int) -> Int =
       total += x * k
   total
 
-fn fold_blocks(t: Tree, n: Int) -> Int =
+pub fn fold_blocks(t: Tree, n: Int) -> Int =
   var total = 0
   for round in 0..n
     let k = round % 4
     total += fold_tree(t, 0, fn(acc, v) => acc + v * k)
   total
 
-fn fold_loop(t: Tree, n: Int) -> Int =
+pub fn fold_loop(t: Tree, n: Int) -> Int =
   var total = 0
   for round in 0..n
     total += sum_tree(t, 0, round % 4)
@@ -102,7 +102,7 @@ fn fold_loop(t: Tree, n: Int) -> Int =
 
 // a thousand calls of `attempt_n` a round, whose block fails, giving 0,
 // until its count of calls says otherwise
-fn attempt_blocks(n: Int) -> Int =
+pub fn attempt_blocks(n: Int) -> Int =
   var total = 0
   var calls = 0
   for i in 0..n * 1000
@@ -111,7 +111,7 @@ fn attempt_blocks(n: Int) -> Int =
       (i + calls) % 3
   total + calls
 
-fn attempt_loop(n: Int) -> Int =
+pub fn attempt_loop(n: Int) -> Int =
   var total = 0
   var calls = 0
   for i in 0..n * 1000

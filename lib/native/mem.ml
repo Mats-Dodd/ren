@@ -9,9 +9,10 @@
    that a later pass can count, borrow or reuse.
 
    Every value has a [layout], which says how it's held in memory: a
-   scalar, a counted object, or the address of a C local. A variable's
-   layout is fixed where it's made, and mem_lint.ml checks that every use
-   agrees with it.
+   scalar, a counted object, the address of a C local, a word of a type
+   variable's, or one of the debug build's hidden values: a type's
+   descriptor, evidence, a block. A variable's layout is fixed where it's
+   made, and mem_lint.ml checks that every use agrees with it.
 
    Memory is explicit. [Alloc] makes an object, with a count of 1;
    [Dup] counts one more reference to it, [Drop] one fewer, freeing it
@@ -43,10 +44,30 @@ type layout =
           are never counted *)
   | Cell of layout
       (** the address of a C local that holds a value of this layout: an `inout`
-          parameter, which changes the caller's variable *)
+          parameter, which changes the caller's variable, a local a block
+          captures, or a handler's state *)
+  | Word of int
+      (** a value of the function's type variable [n]: one word, whatever it
+          holds, counted through that variable's descriptor (ren_rt.h,
+          [ren_val]) *)
+  | Desc
+      (** a type's descriptor, or a requirement's dictionary, which is its
+          type's descriptor: a counted object, static if the compiler knows the
+          type *)
+  | Ev  (** evidence: a chain of the implementations installed *)
+  | Block  (** a block: its code and its environment, two words *)
+  | Ptr
+      (** a raw pointer: a block's environment or its arguments, an
+          implementation of a dependency, a handler's code *)
 
-(* Whether a value of this layout has a count. *)
-let counted (l : layout) = match l with Boxed -> true | _ -> false
+(* Whether a value of this layout has a count: an object, a descriptor,
+   or a type variable's word, which may be either. *)
+let counted (l : layout) =
+  match l with Boxed | Desc | Word _ -> true | _ -> false
+
+(* Whether a value of this layout is always an object, so the runtime
+   counts it without a descriptor. *)
+let is_object (l : layout) = match l with Boxed | Desc -> true | _ -> false
 
 (* A variable, known by its id, which is unique in its function. *)
 type var = { id : int; name : string; layout : layout }
@@ -62,6 +83,10 @@ type atom =
       (** a [Boxed] sum's constructor without fields, with this tag *)
   | Lit of int
       (** the program's [strings]'s n-th, a [Str] made once and never freed *)
+  | Desc_lit of int
+      (** the program's [descs]'s n-th: a [Desc] made once and never freed *)
+  | Fn_ptr of string  (** a function's code, a [Ptr]: a handler's *)
+  | No_ev  (** the evidence with nothing installed, `$start`'s *)
 
 (* The parts of a panic's message that are known when the program is
    compiled: where it is, and for an `Int` that overflowed, the operands
@@ -93,6 +118,22 @@ type rt =
   | Wrapping_neg
   | Console_write
   | Console_error
+  | Show_any  (** a descriptor and a [Word]: `show` through the walk *)
+  | Equal_any  (** a descriptor and two [Word]s: `==` through the walk *)
+  | Compare_any
+      (** a descriptor and two [Word]s: their order, an [Int] below 0 if the
+          first comes first *)
+  | Op_any of Ast.binop option
+      (** a descriptor and two [Word]s, or one for [None], `-`: an operator
+          through a requirement's dictionary, which panics as the operator does
+      *)
+  | Value_any of bool  (** a descriptor: `zero`, or `one` if [true] *)
+  | New_desc of new_desc
+      (** a descriptor built of the descriptors given: a named type's, from its
+          declaration, the program's [decls]'s n-th, or an array's or a tuple's
+      *)
+
+and new_desc = Of_decl of int | Of_array | Of_tuple
 
 (* What a [Let] computes. *)
 type rhs =
@@ -108,17 +149,51 @@ type rhs =
   | Field of atom * int
       (** the [n]-th field of a constructor, a record or a tuple, by its slot:
           borrowed, not counted again *)
-  | Alloc of { tag : int; fields : atom list; nobjs : int }
-      (** a new constructor, record, tuple or error, which takes its fields: in
-          slot order, the [nobjs] counted ones first *)
-  | Alloc_array of layout * atom list
-      (** a new array of these elements, which it takes *)
+  | Alloc of { tag : int; fields : atom list; words : atom list }
+      (** a new constructor, record, tuple or error, which takes its fields, in
+          the order they're declared; [words] are the descriptors of those that
+          are a [Word], in order, which say whether each holds an object. An
+          error keeps its payload's descriptors after its payload, as fields *)
+  | Alloc_array of { elem : layout; elems : atom list; desc : atom option }
+      (** a new array of these elements, which it takes; [desc] describes them
+          if they're [Word]s *)
   | Call of string * atom list
       (** a function that can't fail, which takes its arguments, but for cells
       *)
   | Runtime of rt * atom list * site option
   | Load of var  (** what a [Cell] holds, not counted again *)
   | Addr of var  (** a local's address, a [Cell] *)
+  | To_word of atom  (** a value as a type variable's word *)
+  | Of_word of atom * layout  (** a [Word] as a value of this layout *)
+  | Global of string
+      (** an associated value, made once when the program starts (the program's
+          [values]), by its C name: borrowed *)
+  | Env_new of atom list
+      (** a block's environment, a [Ptr]: these [Cell]s, in an array on the
+          stack of the function this is in *)
+  | Env_get of atom * int
+      (** the [n]-th cell of the environment a block's code is given, of the
+          variable's layout *)
+  | Arg of atom * int
+      (** the [n]-th of the words a block's code is given, as a value of the
+          variable's layout *)
+  | Block_of of string * atom
+      (** a block: the code of the function named, which has a block's
+          signature, and an environment *)
+  | Impl of int * atom list
+      (** an implementation of the dependency with this number, a [Ptr]: a
+          [Block] for each operation, in the order the dependency declares them,
+          in a record on the stack *)
+  | Install of { outer : atom; impls : atom list; deps : atom; ndeps : atom }
+      (** [outer] with an implementation from [impls] installed for each of the
+          dependency numbers [deps] points at, [ndeps] of them: new evidence,
+          whose nodes are on the stack *)
+  | Given of { outer : atom; caller : atom; deps : int list }
+      (** [outer] with the implementations of [deps] that [caller] has on top: a
+          block's evidence, when its parameter's type lists them *)
+  | Op_block of atom * int * int
+      (** the [Block] of an operation, its dependency's [n]-th, of the innermost
+          implementation of the dependency with this number in the evidence *)
 
 type stmt =
   | Let of var * rhs
@@ -127,6 +202,9 @@ type stmt =
   | Store of var * atom  (** into what a [Cell] points at *)
   | Dup of atom
   | Drop of atom
+  | Dup_word of atom * atom
+      (** a [Word], counted through the descriptor after it *)
+  | Drop_word of atom * atom
   | Free of atom
   | Do of rhs  (** for what it does, a [Runtime] call or a [Call] *)
   | Call_fails of {
@@ -139,6 +217,32 @@ type stmt =
       (** call a function that can fail. If it fails, its error is [error], and
           [on_error] runs, which ends in a [Raise]; otherwise its value is
           [result], defined after this statement *)
+  | Call_block of {
+      result : var;
+      block : atom;
+      ev : atom;
+      args : atom list;
+      error : var;
+      on_error : block option;
+    }
+      (** call a block, which takes its arguments, with the caller's evidence:
+          an indirect call, whose arguments and value go as words. A block's
+          code always returns a status; [on_error] runs if it failed, and is
+          [None] if its type says it can't *)
+  | Call_handler of {
+      result : var;
+      handler : atom;
+      outer : atom;
+      body : atom;
+      desc : atom;
+      deps : int list;
+      error : var;
+      on_error : block option;
+    }
+      (** install a handler: call the code of the description [handler], with
+          the evidence [outer], the [Block] [body] to run with the evidence it
+          makes, [desc] describing what [body] gives, and the dependencies to
+          install it for. Its value is the `with`'s, a word *)
   | If of atom * block * block
   | Switch of atom * (int * block) list * block
       (** on a tag: the block for each, and the one for any other *)
@@ -170,18 +274,51 @@ type fn = {
   loc : Loc.t;
 }
 
-(* How `ren run` shows a value: [main]'s, or an error's payload. *)
-type shown = Shows_int | Shows_float | Shows_bool | Shows_str | Shows_unit
+(* A descriptor the compiler knows, which the C file holds as static
+   data (ren_rt.h, [ren_desc]): a type's, or, in a declaration, a field
+   type's template, which names the type's parameters ([D_var]). Each
+   argument is another of the program's [descs], by its index. *)
+type dkind =
+  | D_int
+  | D_float
+  | D_bool
+  | D_unit
+  | D_str
+  | D_named of int  (** the program's [decls]'s n-th *)
+  | D_array
+  | D_tuple
+  | D_errors
+  | D_var of int
+  | D_unknown
+
+type desc = { dkind : dkind; dargs : int list; dcounted : bool }
+
+(* A type's declaration, as the walks need it: its fields' types are
+   templates, among the program's [descs]. *)
+type decl_body =
+  | Record_decl of (string * int) list
+  | Sum_decl of (string * int list) list  (** its constructors, by tag *)
+  | Rep_decl of int  (** an opaque type: what it's represented as *)
+
+type decl = { dname : string; dopaque : bool; dbody : decl_body }
+
+(* An associated value: its C name, the function that makes it, and its
+   layout. *)
+type value = { vname : string; vfn : string; vlayout : layout }
 
 type program = {
   fns : fn list;
-  start : string;  (** the C name of `$start`, which the binary runs *)
+  start : string;
+      (** the C name of `$start`, which the binary runs with [No_ev] *)
   start_result : layout;
   start_fails : bool;
-  prints : shown;  (** how its value is printed, as `ren run` prints it *)
-  errors : (int * string * (int * shown) list) list;
-      (** each error `main` can fail with: its tag, its name, and its payload's
-          slots, in order, each with how it's shown *)
+  start_desc : int;
+      (** the descriptor of what it gives, which the binary prints as `ren run`
+          does *)
+  descs : desc list;  (** by [Desc_lit]'s index *)
+  decls : decl list;
+  tags : string list;  (** the error tags' names, by number *)
+  values : value list;  (** made in this order, each after those it uses *)
   strings : string list;  (** the string literals, by [Lit]'s index *)
   sites : site list;  (** by [sid] *)
   overflow : site;  (** where the stack overflowing is said to be *)
@@ -198,6 +335,11 @@ let rec show_layout (l : layout) =
   | Enum -> "Enum"
   | Boxed -> "Boxed"
   | Cell l -> "&" ^ show_layout l
+  | Word n -> "Word" ^ string_of_int n
+  | Desc -> "Desc"
+  | Ev -> "Ev"
+  | Block -> "Block"
+  | Ptr -> "Ptr"
 
 let show_var (v : var) = v.name ^ "/" ^ string_of_int v.id
 let typed (v : var) = Core.Atom (show_var v ^ ":" ^ show_layout v.layout)
@@ -211,6 +353,9 @@ let show_atom = function
   | Enum_tag t -> "#" ^ string_of_int t
   | Scalar_ctor t -> "#" ^ string_of_int t ^ "*"
   | Lit n -> "lit" ^ string_of_int n
+  | Desc_lit n -> "desc" ^ string_of_int n
+  | Fn_ptr f -> "&" ^ f
+  | No_ev -> "no-ev"
 
 let show_cmp = function
   | Lt -> "<"
@@ -239,6 +384,15 @@ let show_rt = function
   | Wrapping_neg -> "wrapping-neg"
   | Console_write -> "console-write"
   | Console_error -> "console-error"
+  | Show_any -> "show-any"
+  | Equal_any -> "equal-any"
+  | Compare_any -> "compare-any"
+  | Op_any (Some op) -> "op-any" ^ Ast.binop_to_string op
+  | Op_any None -> "op-any-neg"
+  | Value_any one -> if one then "one-any" else "zero-any"
+  | New_desc (Of_decl n) -> "new-desc:" ^ string_of_int n
+  | New_desc Of_array -> "new-desc:array"
+  | New_desc Of_tuple -> "new-desc:tuple"
 
 let atoms xs = List.map (fun a -> Core.Atom (show_atom a)) xs
 let a x = Core.Atom x
@@ -253,17 +407,43 @@ let rhs_sexp = function
   | Tag_of x -> Core.List (a "tag" :: atoms [ x ])
   | Field (x, n) ->
       Core.List [ a "field"; a (show_atom x); a (string_of_int n) ]
-  | Alloc { tag; fields; nobjs } ->
+  | Alloc { tag; fields; words } ->
       Core.List
-        (a "alloc"
-        :: a ("#" ^ string_of_int tag)
-        :: a ("objs:" ^ string_of_int nobjs)
-        :: atoms fields)
-  | Alloc_array (l, xs) -> Core.List (a ("array:" ^ show_layout l) :: atoms xs)
+        ((a "alloc" :: a ("#" ^ string_of_int tag) :: atoms fields)
+        @ if words = [] then [] else [ Core.List (a "words" :: atoms words) ])
+  | Alloc_array { elem; elems; desc } ->
+      Core.List
+        ((a ("array:" ^ show_layout elem) :: atoms elems)
+        @ atoms (Option.to_list desc))
   | Call (f, xs) -> Core.List (a "call" :: a f :: atoms xs)
   | Runtime (r, xs, _) -> Core.List (a (show_rt r) :: atoms xs)
   | Load v -> Core.List [ a "load"; a (show_var v) ]
   | Addr v -> Core.List [ a "addr"; a (show_var v) ]
+  | To_word x -> Core.List [ a "to-word"; a (show_atom x) ]
+  | Of_word (x, l) ->
+      Core.List [ a ("of-word:" ^ show_layout l); a (show_atom x) ]
+  | Global v -> Core.List [ a "global"; a v ]
+  | Env_new xs -> Core.List (a "env" :: atoms xs)
+  | Env_get (x, n) ->
+      Core.List [ a "env-get"; a (show_atom x); a (string_of_int n) ]
+  | Arg (x, n) -> Core.List [ a "arg"; a (show_atom x); a (string_of_int n) ]
+  | Block_of (f, env) -> Core.List [ a "block"; a f; a (show_atom env) ]
+  | Impl (dep, ops) ->
+      Core.List (a "impl" :: a ("dep" ^ string_of_int dep) :: atoms ops)
+  | Install { outer; impls; deps; ndeps } ->
+      Core.List ((a "install" :: atoms [ outer; deps; ndeps ]) @ atoms impls)
+  | Given { outer; caller; deps } ->
+      Core.List
+        ((a "given" :: atoms [ outer; caller ])
+        @ List.map (fun d -> a ("dep" ^ string_of_int d)) deps)
+  | Op_block (ev, dep, op) ->
+      Core.List
+        [
+          a "op";
+          a (show_atom ev);
+          a ("dep" ^ string_of_int dep);
+          a (string_of_int op);
+        ]
 
 let rec stmt_sexp = function
   | Let (v, r) -> Core.List [ a "let"; typed v; rhs_sexp r ]
@@ -272,6 +452,8 @@ let rec stmt_sexp = function
   | Store (v, x) -> Core.List [ a "store"; a (show_var v); a (show_atom x) ]
   | Dup x -> Core.List [ a "dup"; a (show_atom x) ]
   | Drop x -> Core.List [ a "drop"; a (show_atom x) ]
+  | Dup_word (x, d) -> Core.List [ a "dup"; a (show_atom x); a (show_atom d) ]
+  | Drop_word (x, d) -> Core.List [ a "drop"; a (show_atom x); a (show_atom d) ]
   | Free x -> Core.List [ a "free"; a (show_atom x) ]
   | Do r -> Core.List [ a "do"; rhs_sexp r ]
   | Call_fails { result; fn; args; error; on_error } ->
@@ -282,6 +464,25 @@ let rec stmt_sexp = function
           Core.List (a fn :: atoms args);
           Core.List (a "error" :: typed error :: List.map stmt_sexp on_error);
         ]
+  | Call_block { result; block; ev; args; error; on_error } ->
+      Core.List
+        ([
+           a "call-block";
+           typed result;
+           Core.List (a (show_atom block) :: atoms (ev :: args));
+         ]
+        @ error_sexp error on_error)
+  | Call_handler { result; handler; outer; body; desc; deps; error; on_error }
+    ->
+      Core.List
+        ([
+           a "call-handler";
+           typed result;
+           Core.List
+             (atoms [ handler; outer; body; desc ]
+             @ List.map (fun d -> a ("dep" ^ string_of_int d)) deps);
+         ]
+        @ error_sexp error on_error)
   | If (c, t, f) ->
       Core.List [ a "if"; a (show_atom c); block_sexp t; block_sexp f ]
   | Switch (x, cases, default) ->
@@ -318,6 +519,10 @@ let rec stmt_sexp = function
   | Panic (_, msg) -> Core.List [ a "panic"; a (Ast.show_str msg) ]
 
 and block_sexp b = Core.List (a "do" :: List.map stmt_sexp b)
+
+and error_sexp error = function
+  | Some b -> [ Core.List (a "error" :: typed error :: List.map stmt_sexp b) ]
+  | None -> []
 
 let show_fn (f : fn) =
   Core.render 0
