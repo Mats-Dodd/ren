@@ -483,25 +483,37 @@ let program (p : program) : program =
             name)
         builders;
       report p ~local ~builds);
+    (* the second versions some caller's frame is given to *)
+    let used = Hashtbl.create 16 in
     let fn (f : fn) =
       let info = analyze ~local ~builds f in
       let stack =
         Hashtbl.fold
           (fun _ c acc ->
             match keepable ~returns:false c with
-            | Ok () -> List.map (fun ((v : var), _, _) -> v.id) c.defs @ acc
+            | Ok () ->
+                List.iter
+                  (fun (_, d, _) ->
+                    match d with Slot g -> Hashtbl.replace used g () | _ -> ())
+                  c.defs;
+                List.map (fun ((v : var), _, _) -> v.id) c.defs @ acc
             | Error _ -> acc)
           info.classes []
       in
-      let slot =
-        match Hashtbl.find_opt builders f.name with
-        | None -> None
-        | Some v ->
-            let c = Option.get (class_of info (List.hd v)) in
-            Some
-              ( List.map (fun (w : var) -> w.id) v,
-                List.map (fun ((w : var), _, _) -> w.id) c.defs )
-      in
-      { f with stack = List.sort_uniq compare stack; slot }
+      (info, { f with stack = List.sort_uniq compare stack })
     in
-    { p with fns = List.map fn p.fns }
+    let fns = List.map fn p.fns in
+    let slot (info, (f : fn)) =
+      match Hashtbl.find_opt builders f.name with
+      | Some v when Hashtbl.mem used f.name ->
+          let c = Option.get (class_of info (List.hd v)) in
+          {
+            f with
+            slot =
+              Some
+                ( List.map (fun (w : var) -> w.id) v,
+                  List.map (fun ((w : var), _, _) -> w.id) c.defs );
+          }
+      | _ -> f
+    in
+    { p with fns = List.map slot fns }

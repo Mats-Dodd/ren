@@ -1,0 +1,110 @@
+// H8: the objects a release build keeps in a frame (lib/native/stack.ml),
+// in the cases its rules are about: a record lent down a recursion, one
+// whose field outlives it, one alive across a loop's iterations (kept on
+// the heap), an Option from an `if`, an error raised while one is alive,
+// one stored in another, and functions that build their result in their
+// caller's frame, one of which fails. build.t runs it under the
+// sanitizers.
+
+type Item = { name: Str, tags: Array<Str>, qty: Int }
+type Pair = { a: Item, b: Int }
+
+fn weigh(it: Item) -> Int = it.name.len() + it.tags.len() + it.qty
+
+// recursion through a borrowed parameter
+fn deep(it: Item, n: Int) -> Int = if n == 0 then weigh(it) else deep(it, n - 1) + 1
+
+// a field taken out, alive after the record dies
+fn take_name(n: Int) -> Int =
+  var total = 0
+  for i in 0..n
+    let it = Item { name: "x".concat(show(i)), tags: ["a"], qty: i }
+    let nm = it.name
+    total += weigh(it)
+    total += nm.len()
+  total
+
+// loop-carried: must stay on the heap
+fn carried(n: Int) -> Int =
+  var prev = Item { name: "p", tags: [], qty: 0 }
+  var total = 0
+  for i in 0..n
+    let cur = Item { name: "c".concat(show(i)), tags: [], qty: i }
+    total += weigh(prev) + weigh(cur)
+    prev = cur
+  total
+
+// an if that makes Some or None, then matched
+fn opt(n: Int) -> Int =
+  var t = 0
+  for i in 0..n
+    let o = if i % 3 == 0 then Some("s".concat(show(i))) else None
+    match o
+      Some(s) => t += s.len()
+      None => t += 1
+  t
+
+fn checked(it: Item) -> Int ! TooBig(n: Int) =
+  if it.qty > 50 then fail TooBig(it.qty) else weigh(it)
+
+// an error raised while an object in the frame is alive
+fn errs(n: Int) -> Int ! TooBig(n: Int) =
+  var t = 0
+  for i in 0..n
+    let it = Item { name: "e".concat(show(i)), tags: ["q", "r"], qty: i }
+    t += try checked(it)
+  t
+
+// stored in another: the inner escapes into the outer
+fn nested(n: Int) -> Int =
+  var t = 0
+  for i in 0..n
+    let p = Pair { a: Item { name: "n", tags: [], qty: i }, b: i }
+    t += weigh(p.a) + p.b
+  t
+
+// returned: escapes
+fn make(i: Int) -> Item = Item { name: "m", tags: [], qty: i }
+
+fn main() uses Console =
+  print(deep(Item { name: "d", tags: ["t"], qty: 2 }, 100))
+  print(take_name(100))
+  print(carried(100))
+  print(opt(100))
+  print(attempt errs(40))
+  print(attempt errs(100))
+  print(nested(100))
+  print(weigh(make(3)))
+  print(picks(100))
+  print(attempt divs(50))
+  print(attempt divz(50))
+
+fn pick(i: Int) -> Option<Str> =
+  if i % 4 == 0 then None
+  else if i % 4 == 1 then Some("one")
+  else Some("n".concat(show(i)))
+
+fn picks(n: Int) -> Int =
+  var t = 0
+  for i in 0..n
+    match pick(i)
+      Some(s) => t += s.len()
+      None => t += 100
+  t
+
+fn safe_div(a: Int, b: Int) -> (Str, Int) ! DivZero =
+  if b == 0 then fail DivZero else ("q".concat(show(a)), a / b)
+
+fn divs(n: Int) -> Int ! DivZero =
+  var t = 0
+  for i in 1..n
+    let (s, q) = try safe_div(n, i)
+    t += s.len() + q
+  t
+
+fn divz(n: Int) -> Int ! DivZero =
+  var t = 0
+  for i in 0..n
+    let (s, q) = try safe_div(n, 5 - i)
+    t += s.len() + q
+  t
