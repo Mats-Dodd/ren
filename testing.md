@@ -289,14 +289,19 @@ is saved and shrunk like any other failure.
 ## The journal is a test
 
 Every effect goes through a dependency, and `ren run --record` writes the
-journal of a run ([handlers.md](handlers.md#the-journal)). A journal is
-already a test: replaying it gives the same output, and replaying it
-against a changed program stops at the first call that differs.
+journal of a run ([handlers.md](handlers.md#the-journal)). A journal
+becomes a test one way: an ordinary test that installs `replay(file)`.
 
-- **`ren test` runs journals** kept in a module's `tests/` folder,
-  comparing the output and the calls.
-- **A bug report is a file.** Record the run that went wrong, drop the
-  journal in `tests/`, fix the bug, and it stays fixed.
+- **A replay answers inputs and compares outputs.** A call whose result
+  the program uses, `Fs.read` or `Clock.now`, is answered from the
+  journal; a call that gives nothing back, `Console.print` or `Fs.write`,
+  is compared, and a difference fails the test with a diff of the
+  outputs. `ren replay`, outside tests, is strict and stops at the first
+  call that differs.
+- **A bug report is a file.** `ren run --record bug.journal` records the
+  run that went wrong, and `ren test --keep bug.journal` moves it to
+  `tests/` and writes the test for it, to read and edit like any other.
+  Fix the bug, and it stays fixed.
 
 ## The console
 
