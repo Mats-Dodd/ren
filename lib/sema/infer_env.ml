@@ -202,7 +202,7 @@ and tag_pattern = {
   tvalue : bool;
 }
 
-(* A call that uses a named row, `f()` for `f: fn() uses ..d`, or a `with`
+(* A call that uses a named row, a function's own `uses ..d`, or a `with`
    that installs an implementation that needs one: the row [rinto] of the
    function or lambda it's in has to end in [rnamed]. Ending a row in one
    would stop it getting any more labels, so that's done once the group is

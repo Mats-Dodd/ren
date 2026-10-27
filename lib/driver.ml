@@ -437,8 +437,7 @@ let check_roots ?console ~load ~dir ~entry roots =
            | Some (home, (f : Ast.Parsed.fn_def), real) when home = m.home ->
                (* a session that isn't run, `:t`, needn't have what it
                   uses installed *)
-               ( m.parsed @ [ Ast.Fn f ],
-                 Option.map (fun real -> (f.name.name, real)) real )
+               (m.parsed @ [ Ast.Fn f ], Some (f.name.name, real))
            | _ -> (m.parsed, None)
          in
          let resolved, iface, inferred, items =

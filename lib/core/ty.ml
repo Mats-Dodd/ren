@@ -463,9 +463,9 @@ and show_effects pr e u =
 
 (* How `ren types` prints a function: the signature `ren fmt --annotate`
    would write. [params] are the parameters' names. A row tail is printed
-   (as `..e` / `..d`) only when it links two places, like a closure kept in
-   the result, `-> (fn() ! ..e)`, or in a type, `Button<fn() ! ..e>`, and
-   the function's own errors; a tail found only once says nothing. A transparent
+   (as `..e` / `..d`) only when it links two places, like an
+   implementation kept in the result, `-> (Clock uses ..d)`, and the
+   function's own uses; a tail found only once says nothing. A transparent
    parameter, whose row is its function's own, is printed as it's written,
    `f: fn(Int)` or `c: Clock`: the function's `!` and `uses` already say
    what's in it.

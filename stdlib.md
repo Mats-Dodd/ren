@@ -84,7 +84,7 @@ std.x      websocket, protobuf, grpc, yaml, mysql, redis, jwt, prometheus,
 
 ### Streams: the producer owns the loop
 
-Go's `io.Reader` is a stateful object behind an interface. Ren has neither half of that: there are no traits, and a closure can't hold mutable state, because state lives only in handlers. What Ren does have is the transparent closure parameter, which never allocates and passes its errors and dependencies through to the caller. So the producer owns the loop and calls a body for each item, which is where Go itself moved with range-over-func in 1.23:
+Go's `io.Reader` is a stateful object behind an interface. Ren has neither half of that: there are no traits, and a block can't hold mutable state, because state lives only in handlers. What Ren does have is the block parameter, which never allocates and passes its errors and dependencies through to the caller. So the producer owns the loop and calls a body for each item, which is where Go itself moved with range-over-func in 1.23:
 
 ```ren
 pub fn lines(path: Path, body: fn(line: Str)) ! NoSuchFile(path: Path)
@@ -161,8 +161,8 @@ pub fn serve(port: Int, handle: fn(req: Request) -> Response) ! AddrInUse(port: 
 ```
 
 - **Middleware is `with`,** not a function from handler to handler. Go needed `func(http.Handler) http.Handler` because it had nothing like `with`.
-- **`handle` is transparent,** so the routes' `uses` flow into `serve`'s caller, and the compiler knows everything the whole server touches.
-- **`Body` is a handle to the connection,** not a stored closure, so it needs no `..e` or `..d`.
+- **`handle` is a block,** so the routes' `uses` flow into `serve`'s caller, and the compiler knows everything the whole server touches.
+- **`Body` is a handle to the connection,** not a stored block, which no type can hold.
 
 ---
 

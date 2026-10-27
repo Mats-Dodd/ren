@@ -1172,7 +1172,7 @@ let%expect_test "an opaque type's interface says whether it has ==" =
     clean
       {|
 pub type Id = opaque Int
-pub type F = opaque fn(Int) -> Int
+pub type F = opaque Clock
 pub type Box<T> = opaque Array<T>
 pub type Held = opaque Box<F>
 fn main() = 1
@@ -1429,8 +1429,9 @@ pub fn made() -> RateCalls & Rates = counting(2)
 let account =
   ( "account.ren",
     {|
-pub type Account = opaque { id: Int, balance: Int, f: fn() -> Int }
-  pub fn open(id: Int) -> Account = Account { id, balance: 0, f: fn() => 0 }
+pub type Account = opaque { id: Int, balance: Int, f: Clock }
+  pub fn open(id: Int) -> Account =
+    Account { id, balance: 0, f: Clock.frozen(Time.epoch) }
   pub fn balance(self) -> Int = self.balance
   pub fn credit(inout self, n: Int) = self.balance += n
 
@@ -1578,7 +1579,7 @@ let%expect_test "a method can share its field's name only on an opaque record" =
     {|
 type Open = { balance: Int }
   fn balance(self) -> Int = self.balance
-type Closed = opaque { balance: Int, f: fn() -> Int, n: Int }
+type Closed = opaque { balance: Int, f: Clock, n: Int }
   fn balance(self) -> Int = self.balance
   fn f(self) -> Int = 1
   fn n() -> Int = 1
@@ -1594,18 +1595,10 @@ fn main() = 1
       │      ^^^^^^^
       help: rename one of them
 
-    error: `Closed` has a field and a method both named `f`
-      ┌─ test.ren:5:6
-    3 │ type Closed = opaque { balance: Int, f: fn() -> Int, n: Int }
-      │                                      - the field `f` is here
-    5 │   fn f(self) -> Int = 1
-      │      ^
-      help: rename one of them
-
     error: `Closed` has a field and an associated function both named `n`
       ┌─ test.ren:6:6
-    3 │ type Closed = opaque { balance: Int, f: fn() -> Int, n: Int }
-      │                                                      - the field `n` is here
+    3 │ type Closed = opaque { balance: Int, f: Clock, n: Int }
+      │                                                - the field `n` is here
     6 │   fn n() -> Int = 1
       │      ^
       help: rename one of them

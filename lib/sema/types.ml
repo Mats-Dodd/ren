@@ -69,8 +69,8 @@ and row =
   | RVar of rvar ref
   | RSkol of int * string
       (** a row named in the signature of the function being checked, the `..d`
-          of `f: fn() uses ..d`: like a [TSkol], equal only to itself, since the
-          function has to work for whatever it stands for *)
+          of `c: Clock uses ..d`: like a [TSkol], equal only to itself, since
+          the function has to work for whatever it stands for *)
 
 and rvar = RUnbound of int * int  (** id, level *) | RLink of row
 

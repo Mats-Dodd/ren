@@ -23,8 +23,13 @@
    type argument it's on, as does each [==], built only from the
    function's own dictionaries and derived only for a type that has what
    it's derived for; and that each type said to show itself has a `show`
-   method the interpreter can call. Which errors code can fail with isn't checked: inference
-   has, and Core has no use for them.
+   method the interpreter can call. And that blocks are second-class
+   (foundations.md): a value of a function type is only a call's callee,
+   a call's argument, or a `let`'s value, but for the operations of a
+   handler's instance, and no type argument, nor any type's argument, is
+   a function type, since a type variable never stands for a block. Which
+   errors code can fail with isn't checked: inference has, and Core has
+   no use for them.
 
    Lint finding anything is a bug in the compiler, never in the program,
    so it fails with an exception, which the driver reports as an internal
@@ -410,14 +415,6 @@ let rec described env sc loc (d : desc) : Ty.ty =
              v.name v.id env.fn);
       Var n
   | Applied (p, ds) -> Con (p, List.map (described env sc loc) ds)
-  | Fn (ps, r, e, u) ->
-      Fun
-        ( List.map
-            (fun (mode, d) : Ty.param -> { mode; ty = described env sc loc d })
-            ps,
-          described env sc loc r,
-          row e,
-          u )
   | Errs e -> Errors (row e)
 
 (* [d] describes [t], which [what] has. *)
@@ -1286,9 +1283,84 @@ and handler_end env (e : expr) =
       Option.iter (instances env) finally
   | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
 
+(* Blocks are second-class (foundations.md): inference checked that a
+   value of a function type is only called, passed as an argument, or
+   bound by a `let` (Infer_top.check_blocks), and lowering mustn't make
+   one anywhere else, a result, a record's field, an array's element. An
+   operation of a handler's instance is the exception: the instance's
+   records of operations are how a handler is built, and never leave it.
+   As in Effekt, whose typer checks where each block is used
+   (effekt/shared/src/main/scala/effekt/Typer.scala:572-615 and
+   1015-1084). [allowed] says whether [e] is in one of those places. *)
+let rec blocks env allowed (e : expr) =
+  (match e.ty with
+  | Fun _ when not allowed ->
+      fail env e.loc
+        "a block that isn't called, passed, or the value of a `let`"
+  | _ -> ());
+  match e.kind with
+  | Call (callee, args, _) ->
+      blocks env true callee;
+      List.iter (function Value a -> blocks env true a | Ref _ -> ()) args
+  | Dep_call { args; _ } -> List.iter (blocks env true) args
+  | Let (_, value, body) ->
+      blocks env true value;
+      blocks env false body
+  | Instance { impls; finally } ->
+      List.iter
+        (fun (_, (i : expr)) ->
+          match i.kind with
+          | Record (_, ops) -> List.iter (fun (_, o) -> blocks env true o) ops
+          | _ -> blocks env false i)
+        impls;
+      Option.iter (blocks env true) finally
+  | _ -> List.iter (blocks env false) (children e)
+
+(* Whether there's a function type in [t] (or in an error's payload). *)
+let rec has_fun (t : Ty.ty) =
+  match t with
+  | Fun _ -> true
+  | Con (_, ts) -> List.exists has_fun ts
+  | Errors r -> row_has_fun r
+  | Var _ | Impl _ | Error -> false
+
+and row_has_fun (r : Ty.row) =
+  List.exists (fun (l : Ty.label) -> List.exists has_fun l.payload) r.labels
+
+(* Whether there's a function type in [t] somewhere other than where a
+   block can be: a type's argument, or an error's payload. A function
+   type's own parameters are where blocks are passed. *)
+let rec fun_inside (t : Ty.ty) =
+  match t with
+  | Con (_, ts) -> List.exists has_fun ts
+  | Errors r -> row_has_fun r
+  | Fun (ps, ret, errs, _) ->
+      List.exists (fun (p : Ty.param) -> fun_inside p.ty) ps
+      || fun_inside ret || row_has_fun errs
+  | Var _ | Impl _ | Error -> false
+
+(* A type variable never stands for a block, since `T` could be stored:
+   no type argument a use picked has a function type in it, and no
+   expression's type has one inside another type, `Option<fn()>`. *)
+let rec no_fun_args env (e : expr) =
+  let args what (a : Ty.args) =
+    if List.exists has_fun a.tys || List.exists row_has_fun a.rows then
+      fail env e.loc
+        (sprintf "`%s` is given a block's type as a type argument" what)
+  in
+  (match e.kind with
+  | Global (p, a, _, _) | Global_value (p, a) -> args (Path.local p) a
+  | Intrinsic (i, a, _, _) -> args (Intrinsic.name i) a
+  | _ -> ());
+  if fun_inside e.ty then
+    fail env e.loc (sprintf "a block inside the type `%s`" (show e.ty));
+  List.iter (no_fun_args env) (children e)
+
 let fn_def env (f : fn_def) =
   let env = { env with fn = Path.local f.path; ntys = List.length f.tys } in
   instances env f.body;
+  blocks env false f.body;
+  no_fun_args env f.body;
   if f.tys <> type_params f.scheme then
     fail env f.loc
       "its hidden type parameters aren't one for each of its type variables";

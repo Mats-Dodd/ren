@@ -404,8 +404,7 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   let param (p : Ast.Resolved.param) : Ty.param =
     let ty : Ty.ty =
       match p.pty with
-      | Some (TyFn (_, _, written_e, written_u, _) as t)
-        when not (Ast.names_row t) -> (
+      | Some (TyFn (_, _, written_e, written_u, _) as t) -> (
           match of_written ~rows ~sets t with
           | Fun (ps, r, e, u) ->
               Fun

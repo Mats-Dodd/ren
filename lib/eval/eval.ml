@@ -301,12 +301,6 @@ let rec type_of env (d : desc) : Ty.ty =
       | VType t -> t
       | _ -> bug ("a descriptor built from `" ^ v.name ^ "`, which isn't one"))
   | Applied (p, ds) -> Con (p, List.map (type_of env) ds)
-  | Fn (ps, r, e, u) ->
-      Fun
-        ( List.map (fun (mode, d) : Ty.param -> { mode; ty = type_of env d }) ps,
-          type_of env r,
-          row e,
-          u )
   | Errs e -> Errors (row e)
 
 (* The dictionary the hidden dictionary parameter [v] holds. *)

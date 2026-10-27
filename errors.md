@@ -235,10 +235,10 @@ error: Frozen(AccountId(3))
 
 ## Later
 
-- ~~`..e` on a closure that's stored~~ came in stage 7, with dependency
-  types: a stored closure writes `fn() ! ..e uses ..d`
-  ([deps.md](deps.md)). A closure passed to a transparent parameter
-  passes its errors to the call: `try ts.map(fn(t) => try validate(t))`.
+- ~~`..e` on a closure that's stored~~ came in stage 7, and went in
+  stage 10c: a block can't be stored (foundations.md), so its type never
+  names a row. A block passed to a parameter written `fn(...)` passes its
+  errors to the call: `try ts.map(fn(t) => try validate(t))`.
 - ~~`with` and handlers~~ came in stage 7 too, and ~~a handler in front
   of another~~, `over` it and calling `next`, with a `finally` that sees
   how its `with` ended, in stage 10a ([handlers.md](handlers.md)).

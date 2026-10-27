@@ -547,9 +547,8 @@ let row_name env ~rows kind (n : ident) =
           report env n.loc
             ~notes:
               [
-                "a named row stands for what a closure or an implementation \
-                 that comes into or out of the function does, so the signature \
-                 names it";
+                "a named row stands for what an implementation that comes into \
+                 or out of the function does, so the signature names it";
               ]
             ~help:(sprintf "name `..%s` in the function's signature" n.name)
             (sprintf "there's no `..%s` in this function's signature" n.name))
@@ -560,10 +559,7 @@ let row_name env ~rows kind (n : ident) =
             "only a function's signature names a row, for now (deps.md, \
              \"Implementations\")";
           ]
-        ~help:
-          "to keep a closure in a type, make its type a type parameter, `type \
-           Button<F> = { on_click: F }`, which a signature can write \
-           `Button<fn() uses ..d>`"
+        ~help:(sprintf "leave `..%s` out" n.name)
         (sprintf "a declaration can't name a row, `..%s`" n.name)
 
 (* A `uses` written in a type, resolved: its dependencies, and the row it
@@ -582,6 +578,24 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
     Resolved.ty =
   match t with
   | TyFn (ps, ret, errs, u, l) ->
+      (* a block's type never names a row: what it fails with and uses is
+         what the call it's passed to does *)
+      let unnamed (n : ident option) =
+        Option.iter
+          (fun (n : ident) ->
+            Diag.report env.sink (Infer_msg.block_row_named n.loc ~row:n.name))
+          n;
+        None
+      in
+      let errs =
+        Option.map
+          (fun (es : Parsed.errors) -> { es with etail = unnamed es.etail })
+          errs
+      and u =
+        Option.map
+          (fun (u : Parsed.uses) -> { u with dtail = unnamed u.dtail })
+          u
+      in
       let ps = List.map (ty env ~params ~rows) ps in
       let ret = Option.map (ty env ~params ~rows) ret in
       let errs = Option.map (errors env ~params ~rows) errs in
@@ -693,7 +707,7 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
           not_a_type env (tyname_loc t) ~what:"it isn't a type of values" t;
           TyName (named (Named p), [])
       | Some (tref, n) when n <> given ->
-          (* `Box<fn() uses Clock, Console>` is two arguments: in one, a
+          (* `Box<Clock uses Os, Console>` is two arguments: in one, a
              `uses` list ends at a comma *)
           let ends_in_uses : Parsed.ty -> bool = function
             | TyFn (_, _, _, Some _, _) | TyImpl { impl_uses = Some _; _ } ->
@@ -705,8 +719,8 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
             then
               Some
                 "in a type argument, a `uses` list ends at a comma: to list \
-                 several dependencies, put the type in parentheses, `Box<(fn() \
-                 uses Clock, Console)>`"
+                 several dependencies, put the type in parentheses, \
+                 `Box<(Clock uses Os, Console)>`"
             else None
           in
           report env (tyname_loc t) ?help
@@ -2109,7 +2123,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
                 "a handler's parameter can't be `inout`")
           ps;
         (* what it needs is written in its signature, which can name a
-           row: `handler h(f: fn() uses ..d) for N uses ..d` *)
+           row: `handler h(c: Clock uses ..d) for N uses ..d` *)
         let needs =
           match f.body.kind with
           | Handler { needs; _ } -> Option.map (uses_of env ~rows) needs
@@ -2603,6 +2617,119 @@ let no_private_errors env ~private_ ~set ~tag (es : Resolved.errors) =
             ~say:(fun (q : Path.t) -> set q.name))
     es.errs
 
+(* ---- blocks in written types (foundations.md, "Lambdas are blocks") ----
+
+   A block lives only as long as the call it's passed to, so a type that
+   holds data can't have one in it: a record's field, a constructor's or
+   an error's payload, a type argument, a tuple, a function's result or
+   an associated value. A parameter may be a block, and so may a
+   dependency's operation's, but not a handler's: a handler's parameters
+   are data, since its description is a value. A `let`'s annotation may
+   be a block's type: whether its value is one written there is checked
+   once inference knows which expressions are blocks (infer_top.ml,
+   [check_blocks]). *)
+
+(* Where a written type is, for an error. *)
+let written_at : Resolved.ty -> Loc.t = function
+  | TyName ({ tloc; _ }, _) -> tloc
+  | TyFn (_, _, _, _, l)
+  | TyImpl { impl_loc = l; _ }
+  | TyInout (_, l)
+  | TyTuple (_, l) ->
+      l
+  | TyErrors es -> es.eloc
+
+let no_kept_blocks env (items : Resolved.program) =
+  let kept loc place =
+    Diag.report env.sink (Infer_msg.block_kept ~written:true loc place)
+  in
+  (* [t], where data goes, [place]: a block in it is reported, the
+     outermost one *)
+  let rec data place (t : Resolved.ty) =
+    match t with TyFn (_, _, _, _, l) -> kept l place | _ -> inner t
+  (* the types in [t], which may itself be a block *)
+  and inner (t : Resolved.ty) =
+    match t with
+    | TyName (_, args) -> List.iter (data In_type_arg) args
+    | TyTuple (ts, _) -> List.iter (data In_tuple) ts
+    | TyFn (ps, ret, es, _, _) ->
+        List.iter inner ps;
+        Option.iter (data Returned) ret;
+        Option.iter errors es
+    | TyImpl { impl_errors = es; _ } -> Option.iter errors es
+    | TyInout (t, _) -> inner t
+    | TyErrors es -> errors es
+  and errors (es : Resolved.errors) =
+    List.iter
+      (function
+        | Tag (_, ps) ->
+            List.iter
+              (fun (p : Resolved.payload) -> data In_error p.payload_ty)
+              ps
+        | Set _ -> ())
+      es.errs
+  in
+  let rec has_block (t : Resolved.ty) =
+    match t with
+    | TyFn _ -> true
+    | TyName (_, ts) | TyTuple (ts, _) -> List.exists has_block ts
+    | TyInout (t, _) -> has_block t
+    | TyImpl _ | TyErrors _ -> false
+  in
+  (* the types a function's body writes: its blocks' parameters' and its
+     `let`s' *)
+  let rec expr (e : Resolved.expr) =
+    let stmt = function
+      | Let { ty = Some t; _ } -> inner t
+      | Let _ | Let_tuple _ | Expr _ -> ()
+    in
+    (match e.kind with
+    | Lambda (ps, _) ->
+        List.iter (fun (p : Resolved.param) -> Option.iter inner p.pty) ps
+    | Block (stmts, _) | Handler { state = stmts; _ } -> List.iter stmt stmts
+    | _ -> ());
+    List.iter expr (Ast.children e)
+  in
+  let fn ?(value = false) (f : Resolved.fn_def) =
+    List.iter
+      (fun (p : Resolved.param) ->
+        match p.pty with
+        | Some t when Ast.is_handler f && has_block t ->
+            let name = p.pname.ident in
+            Diag.report env.sink
+              (Infer_msg.handler_param_block ~name:name.name
+                 (Loc.span name.loc (written_at t)))
+        | Some t -> inner t
+        | None -> ())
+      f.params;
+    Option.iter (data (if value then In_value f.name.name else Returned)) f.ret;
+    Option.iter errors f.errors;
+    expr f.body
+  in
+  List.iter
+    (function
+      | Fn f -> fn f
+      | Type td ->
+          let field place (fd : Resolved.field) = data place fd.field_ty in
+          (match td.type_body with
+          | Fields fs | Opaque_fields fs -> List.iter (field In_record) fs
+          | Ctors cs ->
+              List.iter
+                (fun (c : Resolved.ctor) ->
+                  List.iter (field (In_payload c.ctor_name.name)) c.ctor_fields)
+                cs
+          | Opaque { rep; _ } -> data Represented rep
+          | Errors es -> errors es
+          | Dep ops ->
+              (* an operation is a function, which may take a block *)
+              List.iter (fun (fd : Resolved.field) -> inner fd.field_ty) ops
+          | Builtin -> ());
+          List.iter
+            (fun (o : Resolved.op) -> fn ~value:(o.op_kind = Op_value) o.op_fn)
+            td.type_ops
+      | Import _ | Testing _ -> ())
+    items
+
 let no_leaks env ~private_ ~groups (items : Resolved.program) =
   let fn_ (f : Resolved.fn_def) =
     let kind = if Ast.is_handler f then "handler" else "fn" in
@@ -3085,6 +3212,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
   no_leaks env ~private_ ~groups items;
   no_opaque_cycles env items;
   no_set_cycles env items;
+  no_kept_blocks env items;
   let types =
     List.filter_map
       (function

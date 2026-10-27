@@ -143,7 +143,7 @@ fn normalize(inout xs: Array<Float>)           // updates the caller's value
 fn blur(unique img: Image) -> Image            // proven unshared, so in-place is guaranteed
 ```
 
-Lambdas, with trailing-lambda syntax for multi-line bodies:
+Lambdas are **blocks**, with trailing-lambda syntax for multi-line bodies. A block is passed to a call, called, or named with `let` where it's written, `let f = fn(x) => x + 1`. It can't be stored in a record, an array or an enum, returned, or held in a `var`, so it never outlives the call it's passed to:
 
 ```ren
 let names = users.map(fn(u) => u.name)
@@ -164,7 +164,7 @@ let total = items.reduce(0, fn(sum, item) =>
 
 Public functions spell out their full contract. Private functions can infer their `uses` and their error set (`! _`). `ren fmt --annotate` writes the inferred clauses into your code.
 
-A function parameter is **transparent** when the function only calls it: it doesn't store it, return it, or hand it to something that outlives the call. A transparent parameter's errors and dependencies flow into the caller automatically, so they're never written:
+A parameter written `fn(...)` takes a block, and since a block can only be called or passed on, the parameter is **transparent**: its errors and dependencies flow into the caller automatically, so they're never written:
 
 ```ren
 pub fn map<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U>
@@ -173,11 +173,7 @@ pub fn retry<T>(n: Int, body: fn() -> T) -> T
 
 `Async.map` and `Async.timeout` take theirs the same way. Calling `Async.map` with a lambda that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError` and use `Net`. It's still transparent even though it runs `f` on other tasks, because no task outlives the call that started it ([async.md](async.md)).
 
-A function that stores a closure names the closure's errors and dependencies with `..e` and `..d`:
-
-```ren
-type Button = { label: Str, on_click: fn() ! ..e uses ..d }
-```
+Behaviour that's kept is data, or a dependency. A button that remembers what a click does holds an enum to `match` on where the click is handled, or the code that runs is a `dep`'s implementation, installed with `with`. Writing a function type in a record field, a constructor's payload, a type argument or a return type is an error that says so.
 
 ### 4. Errors
 
@@ -310,7 +306,7 @@ error: `with` installs only handlers
 
 `retry` calls the block again from the top. It doesn't resume anything. It also repeats any dependency calls the body made before failing, so wrap only work that's safe to repeat.
 
-Dependencies are found when code runs, not when it's written. A function or closure whose type says `uses Users` gets whatever `Users` is installed where it's called, and the type checker makes sure one is. A closure that outlives its `with` is still safe: it never holds on to the old implementation.
+Dependencies are found when code runs, not when it's written. A function or block whose type says `uses Users` gets whatever `Users` is installed where it's called, and the type checker makes sure one is. A block never outlives the call it's passed to, so it never holds on to an old implementation.
 
 The one exception is an implementation's own dependencies. **What an implementation needs is part of its type**, and is required at the `with` that installs it: a `Clock` whose `now` calls `Os` makes `with` that clock need `Os`, while the code inside sees only `Clock`. Its dependencies are fixed once, when it's installed, to whatever is installed further out. And **interfaces are exact**: an operation's implementation may fail with fewer errors than the interface declares, never more.
 
@@ -565,8 +561,9 @@ Ren uses compiler-managed reference counting with in-place reuse ([Perceus](http
 
 - Values are immutable once shared, and `a.next = Some(a)` stores a copy of the old `a`, not `a` itself.
 - There are no recursive values (no `let rec` on data).
-- Local recursive functions are compiled as top-level functions, so a closure never captures itself.
-- Closures never capture handlers, because dependencies are looked up at the call site.
+- Local recursive functions are compiled as top-level functions, so a block never captures itself.
+- Blocks can't be stored or returned, so no value holds one.
+- Blocks never capture handlers, because dependencies are looked up at the call site.
 
 In the safe subset, Ren aims for Rust-level memory safety without lifetimes. Safety comes from reference counting and value semantics at runtime rather than a borrow checker at compile time. Borrow inference, moves on last use, `unique`, and arenas eliminate most of the counting work.
 
@@ -621,7 +618,7 @@ fn step(inout ps: Array<Particle, soa>, dt: Float) =
 
 "No `Alloc`, no allocation" is only useful if you can predict allocation by reading the code. These rules make that possible.
 
-**What lives on the heap.** Scalars, records, tuples, and non-recursive enums are inline values, so `Some(i)`, `Vec3`, and `Pro(seats: 5)` never allocate. Heap values are `Array`, `Str`, `Map` and `Set`, recursive types (boxed only where they recurse), closures that are stored, and `cold` fields.
+**What lives on the heap.** Scalars, records, tuples, and non-recursive enums are inline values, so `Some(i)`, `Vec3`, and `Pro(seats: 5)` never allocate. Heap values are `Array`, `Str`, `Map` and `Set`, recursive types (boxed only where they recurse), and `cold` fields.
 
 **What counts as allocating.** Creating or growing a heap value, copying a shared value before changing it (copy-on-write), and freeing a value whose count reaches zero.
 
@@ -629,7 +626,7 @@ fn step(inout ps: Array<Particle, soa>, dt: Float) =
 
 **Parameters.** Read-only parameters are borrowed and cost no reference counting. For an `inout` parameter, the caller makes the value unshared before the call, so any copy is charged to the caller. A `unique` parameter transfers ownership.
 
-**Closures.** A lambda passed to a transparent parameter is never heap-allocated. That's a language guarantee, not an optimization that might fail. A transparent parameter can't escape, so its closure can live on the stack.
+**Blocks.** A block is never heap-allocated. That's a language guarantee, not an optimization that might fail. A block can't be stored or returned, so it lives on the stack of the call it's passed to. (Today's interpreter still copies what a block captures when it's made.)
 
 **Generics.** A requirement on a type parameter, `T has add`, which the compiler infers, works like a transparent parameter. `sum<Int>` doesn't allocate; `sum<BigInt>` uses `Alloc`, because `BigInt.add` does.
 
@@ -754,10 +751,15 @@ Ren knows the sum types and the errors, so the report says what was exercised (`
 Run your system under a seeded fake scheduler, clock, network, and disk. Every failure replays exactly.
 
 ```ren
+type Task = | Writer | Reader
+
 test sim "log survives S3 flakiness and crashes" (seed) =
   with sim.scheduler(seed), sim.clock, sim.s3(seed, fail_rate: 5%), sim.crash(seed) in
     let log = DurableLog.open("bucket")
-    Async.map([writer, reader]) fn(task) => task(log)
+    Async.map([Writer, Reader]) fn(task) =>
+      match task
+        Writer => write_some(log)
+        Reader => read_some(log)
     assert DurableLog.recover("bucket").is_prefix_consistent()
 ```
 

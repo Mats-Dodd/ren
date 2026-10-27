@@ -277,51 +277,35 @@ let as_declared env path cx declared =
 
 (* ---- named rows (deps.md, "Implementations") ---- *)
 
-(* A public function's own rows stay open, as its interface says: a caller
-   adds them to its own. A transparent parameter shares them, so if the
-   body keeps one where its type is closed, `Box<fn() -> Int>`, the
-   function's rows close with it, and the interface would be wrong about
-   what the parameter may do. That's reported at the parameter. [cx] is
-   what checking [f]'s body found. *)
+(* A public function's uses stay open, as its interface says: a caller
+   adds them to its own. A transparent parameter of a dependency's type
+   needs them, so if the body keeps one where what it needs is closed,
+   `Box<Clock>`, the function's uses close with it, and the interface
+   would be wrong about what the parameter may need. That's reported at
+   the parameter. [cx] is what checking [f]'s body found. *)
 let check_open_rows env (f : fn_def) cx =
-  let closed r = row_end r = REmpty in
-  let errs_closed =
-    Option.bind f.errors (fun (es : Resolved.errors) -> es.etail) = None
-    && closed cx.errs
-  and uses_closed =
+  let uses_closed =
     Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail) = None
-    && closed cx.uses
+    && row_end cx.uses = REmpty
   in
   let blamed =
     List.find_map
       (fun (p : Resolved.param) ->
         match p.pty with
-        | Some (TyFn (_, _, e, u, _) as t) when not (names_row t) -> (
-            let e = errs_closed && e = None and u = uses_closed && u = None in
-            match (e, u) with
-            | false, false -> None
-            | true, false -> Some (p, None, Cant_fail)
-            | false, true -> Some (p, None, Cant_use)
-            | true, true -> Some (p, None, Cant_fail_or_use))
         | Some (TyImpl { impl_deps = ds; impl_uses = None; _ }) when uses_closed
           ->
             let written = List.map env.names (Iface.dep_paths ds) in
-            Some (p, Some (String.concat " & " written), Cant_need)
+            Some (p, String.concat " & " written)
         | _ -> None)
       f.params
   in
   match blamed with
   | None -> ()
-  | Some (p, dep, closed) ->
+  | Some (p, d) ->
       let name = p.pname.ident.name in
-      let kept =
-        match dep with
-        | None -> Fn_param
-        | Some d when name = "self" -> Dep_self d
-        | Some d -> Dep_param d
-      in
+      let kept = if name = "self" then Dep_self d else Dep_param d in
       report env
-        (kept_closed p.pname.ident.loc ~name ~fn:(Ast.fn_name f) kept closed)
+        (kept_needing_nothing p.pname.ident.loc ~name ~fn:(Ast.fn_name f) kept)
 
 (* Once the group is done, and the uses of named rows have ended the rows
    they're added to (solve.ml), a function that names its own, `uses ..d`

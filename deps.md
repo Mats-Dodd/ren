@@ -111,24 +111,33 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   The help says `try match` instead when the call fails with more than the
   tag it maps, which the `try` passes on.
 
-- **A parameter of a dependency type follows the closure rule.** If it's
-  only installed, it's transparent, and what it needs flows to the caller.
-  One that's stored names its row, `Clock uses ..d`, as a stored closure
-  writes `fn() ! ..e uses ..d`.
+- **A parameter of a dependency type is transparent, as a block is.** If
+  it's only installed, what it needs flows to the caller. One that's
+  stored names its row, `Clock uses ..d`. A block's type never names one:
+  a block is only called or passed on, so `fn(Int) uses ..d` is an error,
+  "a block's errors and dependencies aren't named", whose help leaves the
+  row out.
 - `uses` after a dependency's name is what an implementation needs:
   `c: Clock uses Os`. After `->` a `uses` is the function's own, so a
   result writes it in parentheses: `-> (Clock uses Os)`.
 - In a type argument, a comma after a `uses` list ends the argument, so
-  `Pair<fn() uses Clock, Int>` has two; a named row can still follow,
-  `Box<fn() uses Clock, ..d>`, and several dependencies are written in
-  parentheses, `Box<(fn() uses Clock, Console)>`.
+  `Pair<Clock uses Os, Int>` has two; a named row can still follow,
+  `Box<Clock uses Os, ..d>`, and several dependencies are written in
+  parentheses, `Box<(Clock uses Os, Console)>`.
 - **Only a signature names a row.** Every `..d` in one signature is the
   same row, and the body can write it again, in a `let`'s type or a
-  lambda's parameter. A function that declares its `uses` or `!` declares
-  the rows it adds to them too: `fn press(f: fn() uses ..d) uses ..d`. A
-  type's declaration can't name one yet, so a type that keeps a closure
-  takes it as a type parameter, `type Button<F> = { on_click: F }`, and a
-  signature writes `Button<fn() ! ..e uses ..d>`.
+  lambda's parameter. A function that declares its `uses` declares the
+  rows it adds to them too: `fn install(c: Clock uses ..d) uses ..d`. A
+  type's declaration can't name one yet, and no type holds a block: a
+  record field, a constructor's payload, a type argument or a result
+  written `fn(...)` is an error, whose help is to keep data, an enum to
+  `match` on, or make the behaviour a dependency.
+- **A handler's parameters are data.** A handler's description is a
+  value, which can outlive the call that made it, so a parameter whose
+  type has a block in it, `handler h(f: fn() -> Int) for N`, is an error,
+  "a handler's parameters are data", with the help `pass the data, or
+  make the behaviour a dependency`. A dependency's operations keep their
+  `fn` types: `get: fn() -> Int` is a signature, not a stored block.
 - **A handler can go in front of another implementation,** declared
   `over` it: `handler cached(ttl: Duration) over Prices uses Clock`. Its
   arms reach the one under it with `next.price(item)`, or `next(A).get()`
@@ -413,14 +422,14 @@ reaches the world is called only by its dependency's real
 implementation, which Core Lint checks, so nothing reaches the world
 but through an operation.
 
-A closure gets the evidence of whoever calls it, not of where it was
-made, so one that outlives its `with` uses what's installed where it's
-called, and a function over closures, `fn twice(f: fn())`, just passes
-`f` its own. An implementation keeps the evidence where it's installed,
-and its operations run with that: what it needs is fixed at install
-(rule 5). An associated value is made once, at startup, with nothing
-installed, so it can't use a dependency; a closure stored in one gets its
-caller's evidence when it's called, like any other. The program starts
+A block gets the evidence of whoever calls it, not of where it was
+made, and a function over blocks, `fn twice(f: fn())`, just passes `f`
+its own. A block never outlives the call it's passed to, so it can't be
+called somewhere a `with` has gone. An implementation keeps the evidence
+where it's installed, and its operations run with that: what it needs
+is fixed at install (rule 5). An associated value is made once, at
+startup, with nothing installed, so it can't use a dependency, and it
+can't hold a block. The program starts
 in `$start`, which installs the real implementation of each built-in
 `main` uses and calls `main`. `ren core` prints all of it.
 
@@ -429,7 +438,7 @@ it's installed holds the one under it: `next.get(id)` is a dependency
 call on that evidence, which the handler's operations keep, so a `with`
 around the call still reaches the one under it, and an operation it
 leaves out is a lambda that makes that call. They're the one exception
-to a closure getting its caller's evidence. A lambda can't call `next`:
+to a block getting its caller's evidence. A lambda can't call `next`:
 one could be passed to
 the implementation under the handler and kept there, and would reach it
 again. Its `finally` is a lambda kept in its instance, which
@@ -447,32 +456,32 @@ stage, or settled something the plan left open:
   says so. The help says `try match` only when the call can fail with
   more.
 - **A type's declaration can't name a row.** The plan had stored
-  closures and implementations name their rows in record fields; a
-  type takes them as a type parameter instead, `type Button<F> = {
-  on_click: F }`, written `Button<fn() uses ..d>` in a signature.
+  implementations name their rows in record fields. A record holds no
+  block (foundations.md), and an implementation it holds needs nothing:
+  a type takes one that needs more as a type parameter, written
+  `Box<Clock uses ..d>` in a signature.
 - **In a type argument, a `uses` list ends at a comma,** where elsewhere
   in a type a comma goes on with it to anything that can be a dependency:
-  `Pair<fn() uses Clock, Int>` would otherwise need `Int` to be one. A
+  `Pair<Clock uses Os, Int>` would otherwise need `Int` to be one. A
   named row can still follow, since it can't be an argument, and several
-  dependencies are written in parentheses, `Box<(fn() uses Clock,
+  dependencies are written in parentheses, `Box<(Clock uses Os,
   Console)>`, as `ren types` prints them.
 - **A parameter whose type is written transparent, `f: fn() -> Int` or
   `r: Rates`, and is called or installed inside a `with`, still passes
   everything it uses to the caller**, even what that `with` installs: its
   row is its function's. That's more than it needs, never less. An
   inferred parameter, `fn run_at(f) = with at(1) in try f()`, gets
-  exactly what the `with` doesn't install, and a signature can say so:
-  `f: fn() -> Int uses Clock, ..d` with `uses ..d`.
-- **A closure called inside two `with`s** gets only what's installed
+  exactly what the `with` doesn't install.
+- **A block called inside two `with`s** gets only what's installed
   outside both, so the same holds for it.
 - **A function calling itself inside a `with`** uses only what it does
   outside it, but **two functions that call each other**, one inside a
   `with`, still need what that `with` installs: each sees the other's
   `uses` as its own until the pair is checked.
-- **`ren types` prints a transparent parameter without the rows a
-  signature names for it**, `body: fn() -> Int ! ..e uses ..d` as `body:
-  fn() -> Int`, when they're only its function's own: the two are the
-  same type.
+- **`ren types` prints a written block parameter without rows**, `body:
+  fn() -> Int`: its rows are its function's own. An inferred one still
+  prints them, `g: fn() -> T ! ..e uses ..d`, until blocks are found
+  lexically (foundations.md, Staging).
 - **A dependency's `self` is transparent, but can be kept.** In `fn
   scaled(self, k: Int) -> N`, `self` needs what the method uses, as `c:
   N` does, and a receiver that needs less will do. Unlike `c: N`, it can
@@ -480,9 +489,9 @@ stage, or settled something the plan left open:
   needs nothing, `-> N`, only a receiver that needs nothing is taken. A
   public method that keeps it says so, `-> (N uses ..d) uses ..d`.
 - **A transparent parameter passed to a function that keeps it** where
-  its rows close, `pub fn f(g: fn() -> Int) -> Box<fn() -> Int> =
-  store(g)`, is an error at the parameter, whose help names its rows: no
-  syntactic check sees that `store` keeps it.
+  its rows close, `pub fn f(r: Rates) -> Box<Rates> = keep(r)`, is an
+  error at the parameter, whose help names its row: no syntactic check
+  sees that `keep` keeps it.
 
 - **A handler's state is a cell per `var`, not one cell.** Each
   operation of an instance reads the `var`s it uses from their cells
@@ -572,8 +581,9 @@ error: `with` can't tell what `c` installs
   = help: write it: `fn run(c: Clock)`
 ```
 
-- **A handler that keeps a closure names its row in its own
-  signature,** `handler h(f: fn() -> Int uses ..d) for N uses ..d`.
+- **A handler keeps no block.** Its parameters are data: one whose type
+  has a block in it is an error, whose help is `pass the data, or make
+  the behaviour a dependency`.
 - **A handler's name starts with a lowercase letter,** as a function's
   does, which is now an error for both: a capitalized name is a type's.
 - **A handler's parameters are written in parentheses even if it has

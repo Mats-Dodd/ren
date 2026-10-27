@@ -256,6 +256,13 @@ fn main() = 1
     1 │ fn f(x) = f
       │           ^
       = it would have to be `_` and `fn(_) -> _` at the same time
+
+    error: a block can't be returned
+      ┌─ test.ren:1:11
+    1 │ fn f(x) = f
+      │           ^ a block
+      = a block lives only as long as the call it's passed to
+      help: take the block's arguments as parameters too, and return what it gives
     |}];
   run {|
 fn main(x) = 1
@@ -867,7 +874,7 @@ fn main() = 1
     fn main() -> Int
     |}]
 
-let%expect_test "a function stored in a record uses nothing" =
+let%expect_test "a record can't hold a block" =
   run
     {|
 type Button = { on_click: fn() }
@@ -875,66 +882,27 @@ fn main() = Button { on_click: fn() => print(1) }
 |};
   [%expect
     {|
-    error: expected `fn()`, found `fn() uses Console`
-      ┌─ test.ren:2:32
-    2 │ fn main() = Button { on_click: fn() => print(1) }
-      │                                ^^^^^^^^^^^^^^^^
-      = `Button`'s field `on_click`
-    |}];
-  run
-    {|
-type Button = { on_click: fn() -> Int }
-fn main() =
-  let b = Button { on_click: fn() => 4 }
-  b.on_click()
-|};
-  [%expect {| 4 |}]
+    error: a record can't hold a block
+      ┌─ test.ren:1:27
+    1 │ type Button = { on_click: fn() }
+      │                           ^^^^ a block's type
+      = a block lives only as long as the call it's passed to
+      help: hold data instead, an enum to `match` on, or a handler's description, and pass the block to the call that runs it
+    |}]
 
-let%expect_test "a parameter written as fn(...) must stay transparent" =
-  types
-    {|
-type Button = { on_click: fn() }
-fn mk(f: fn()) = Button { on_click: f }
-fn main() = 1
-|};
-  [%expect
-    {|
-    error: `f` is used as a value here, so it isn't transparent
-      ┌─ test.ren:2:37
-    2 │ fn mk(f: fn()) = Button { on_click: f }
-      │                                     ^
-      = a parameter whose type is written `fn(...)` can only be called, or passed straight to another function
-      help: to keep it, name its rows, `f: fn(...) ! ..e uses ..d`, or remove the type and let it be inferred
-    |}];
+let%expect_test "a parameter written as fn(...) is only called or passed on" =
   types {|
-fn keep(f: fn()) = fn() => f()
+fn keep(f: fn()) = fn() => try f()
 fn main() = 1
 |};
   [%expect
     {|
-    error: `f` is captured by a lambda that outlives the call, so it isn't transparent
+    error: a block can't be returned
       ┌─ test.ren:1:20
-    1 │ fn keep(f: fn()) = fn() => f()
-      │                    ^^^^^^^^^^^
-      = a parameter whose type is written `fn(...)` can only be called, or passed straight to another function
-      help: to keep it, name its rows, `f: fn(...) ! ..e uses ..d`, or remove the type and let it be inferred
-
-    error: `f` can fail, and nothing handles it
-      ┌─ test.ren:1:28
-    1 │ fn keep(f: fn()) = fn() => f()
-      │                            ^^^
-      │                            - it can fail with whatever the function passed as `f` fails with
-      help: pass the errors on with `try`, or handle them with `match`
-    |}];
-  (* following the help: inferred, its dependencies show up as ..d *)
-  types {|
-fn keep(f) = fn() => f()
-fn main() = keep(fn() => print(1))()
-|};
-  [%expect
-    {|
-    fn keep<T>(f: fn() -> T uses ..d) -> (fn() -> T uses ..d)
-    fn main() uses Console
+    1 │ fn keep(f: fn()) = fn() => try f()
+      │                    ^^^^^^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: take the block's arguments as parameters too, and return what it gives
     |}];
   (* passing it on, directly or inside a lambda, is fine *)
   types
@@ -1309,9 +1277,9 @@ fn main() = print(Some(true))
 let%expect_test "a public function's interface comes from its signature" =
   (* the interface is built from declarations alone; for a public function
      it's the same type inference finds for it. A parameter written
-     `fn(...)` is transparent, so its rows are the function's; any other
-     function type in a parameter is closed. A transparent parameter shares
-     the function's row, labels and all, so `logged`'s `Console` shows on both. *)
+     `fn(...)` is transparent, so its rows are the function's; a block's
+     own block parameter is closed. A transparent parameter shares the
+     function's row, labels and all, so `logged`'s `Console` shows on both. *)
   let src =
     clean
       {|
@@ -1323,10 +1291,6 @@ pub fn logged(f: fn()) uses Console =
   try f()
   print(1)
 pub fn app(f: fn(fn() -> Int) -> Int) -> Int = try f(fn() => 1)
-pub fn maybe(f: Option<fn()>) =
-  match f
-    Some(g) => g()
-    None => ()
 fn main() = twice(fn() => say(1))
 |}
   in
@@ -1348,13 +1312,10 @@ fn main() = twice(fn() => say(1))
     say: fn(Int) ! ..e uses Console, ..d (as inferred)
     logged: fn(fn() ! ..e uses Console, ..d) ! ..e uses Console, ..d (as inferred)
     app: fn(fn(fn() -> Int) -> Int ! ..e uses ..d) -> Int ! ..e uses ..d (as inferred)
-    maybe: fn(Option<fn()>) ! ..e uses ..d (as inferred)
     |}]
 
-let%expect_test "a function type inside a parameter is closed" =
-  (* only a parameter written `fn(...)` is transparent; any other function
-     type in a signature uses and fails with nothing, as in a declaration,
-     so the body is checked at the type the interface shows *)
+let%expect_test "a type argument can't be a block" =
+  (* `Option<fn()>` could keep the block after the call *)
   run
     {|
 pub fn maybe(f: Option<fn()>) =
@@ -1365,31 +1326,12 @@ fn main() = maybe(Some(fn() => print(1)))
 |};
   [%expect
     {|
-    error: expected `Option<fn()>`, found `Option<fn() uses Console>`
-      ┌─ test.ren:5:19
-    5 │ fn main() = maybe(Some(fn() => print(1)))
-      │                   ^^^^^^^^^^^^^^^^^^^^^^
-    |}]
-
-let%expect_test "calling a stored closure leaves the caller open" =
-  (* a closed `fn()` adds nothing to its caller's errors and dependencies,
-     so `main` can still use `Console` after calling `g` *)
-  let src =
-    {|
-type B = { f: fn() }
-fn g(b: B) = b.f()
-fn main() =
-  print(1)
-  g(B { f: fn() => () })
-|}
-  in
-  types src;
-  run src;
-  [%expect {|
-    fn g(b: B)
-    fn main() uses Console
-    1
-    ()
+    error: a type argument can't be a block
+      ┌─ test.ren:1:24
+    1 │ pub fn maybe(f: Option<fn()>) =
+      │                        ^^^^ a block's type
+      = a block lives only as long as the call it's passed to
+      help: pass the block as a parameter of its own, `f: fn(...)`
     |}]
 
 let%expect_test "a misspelled field is reported once" =
@@ -1516,22 +1458,6 @@ fn main() = load(1)
       │   ------ this call uses `Console`
       = a public function without `uses` uses nothing, and its body is checked against that
       help: add `uses Console`
-    |}]
-
-let%expect_test "a public function stored as a value in its own body" =
-  (* storing `f` as a `fn()` closes the rows of that use of it, not those
-     its declaration gives it *)
-  types
-    {|
-type H = { h: fn() }
-pub fn f() =
-  let x = H { h: f }
-  ()
-fn main() = f()
-|};
-  [%expect {|
-    pub fn f()
-    fn main()
     |}]
 
 let%expect_test "a pure call before the one that uses something" =
@@ -1964,14 +1890,14 @@ fn main() =
         (call ev/2 (inst main {..e} {..r}))))
     |}]
 
-let%expect_test "a function that names its errors' row, used in its group (B1)"
-    =
-  (* [call] fails with whatever [f] does, `..e`: [g], in its group, passes
-     it a closure that fails with `Bad`, and so the call does *)
+let%expect_test
+    "a function that passes on its block's errors, used in its group (B1)" =
+  (* [call] fails with whatever [f] does: [g], in its group, passes it a
+     block that fails with `Bad`, and so the call does *)
   let src =
     {|
 type Bad = | Bad
-fn call(f: fn() -> Int ! ..e, n: Int) -> Int ! ..e =
+fn call(f: fn() -> Int, n: Int) -> Int =
   if n > 0 then if attempt g(0) == Ok(2) then 0 else try f() else try f()
 fn g(n: Int) -> Int ! Bad = try call(fn() => if n > 0 then fail Bad else 1, n)
 fn main() = print(attempt g(1))
@@ -1983,7 +1909,10 @@ fn main() = print(attempt g(1))
     {|
     Err(Bad)
     ()
-    (fn call : fn(fn() -> Int ! ..e, Int) -> Int ! ..e uses ..d (f/1 n/2) ev/3
+    (fn call :
+      fn((fn() -> Int ! Bad | ..e uses ..d), Int) -> Int ! Bad | ..e uses ..d
+      (f/1 n/2)
+      ev/3
       (if (> n/2 0)
         (if
           (== (eq Result<Int, ! Bad>)
@@ -1995,7 +1924,7 @@ fn main() = print(attempt g(1))
           (call ev/3 f/1))
         (call ev/3 f/1)))
     (fn g : fn(Int) -> Int ! Bad | ..e uses ..d (n/1) ev/2
-      (call ev/2 (inst call {Bad | ..r} {..d})
+      (call ev/2 (inst call {..r} {..d})
         (lambda () (captures n/1) ev/3 (if (> n/1 0) (fail (tag Bad)) 1))
         n/1))
     (fn main : fn() ! ..e uses Console, ..d () ev/1
@@ -2061,12 +1990,12 @@ fn main() = print(inc == inc)
 |};
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `==`
+    error: a block can only be called or passed, not compared
       ┌─ test.ren:2:19
     2 │ fn main() = print(inc == inc)
-      │                   ^^^^^^^^^^
-      = a type with a function in it has no `==` or `hash`
-      help: a function can't be compared: compare what it returns instead
+      │                   ^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: compare what it returns instead
     |}];
   check_error
     {|
@@ -2076,15 +2005,15 @@ fn main() =
 |};
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `!=`
+    error: a block can only be called or passed, not compared
       ┌─ test.ren:3:10
     3 │   assert inc != fn(x: Int) => x
-      │          ^^^^^^^^^^^^^^^^^^^^^^
-      = a type with a function in it has no `==` or `hash`
-      help: a function can't be compared: compare what it returns instead
+      │          ^^^^^^^^^^^^^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: compare what it returns instead
     |}]
 
-let%expect_test "a type with a function in it has no ==" =
+let%expect_test "a type with an implementation in it has no ==" =
   check_error
     {|
 dep Tick =
@@ -2093,14 +2022,14 @@ dep Tick =
 type Wrap = { tick: Tick, n: Int }
 type Shape =
   | Circle(r: Int)
-  | Drawn(draw: fn() -> Int)
+  | Drawn(draw: Tick)
 handler fixed() for Tick =
   now() => 1
 fn main() =
   print(fixed() == fixed())
   print(Wrap { tick: fixed(), n: 1 } == Wrap { tick: fixed(), n: 1 })
   print(Circle(1) == Circle(2))
-  print(Some(fn() => 1) == None)
+  print(Some(fixed()) == None)
 |};
   [%expect
     {|
@@ -2128,13 +2057,13 @@ fn main() =
        = the field `draw` of `Drawn` has a function in it
        help: give `Shape` a key, which says what makes two the same: `fn key(self) -> K = ...`
 
-    error: `Option<fn() -> Int>` has no `==`
+    error: `Option<Tick>` has no `==`
        ┌─ test.ren:14:9
-    14 │   print(Some(fn() => 1) == None)
-       │         ^^^^^^^^^^^^^^^^^^^^^^^
+    14 │   print(Some(fixed()) == None)
+       │         ^^^^^^^^^^^^^^^^^^^^^
        = a type with a function in it has no `==` or `hash`
-       = it has `fn() -> Int` in it
-       help: compare the parts of it that have no function in them
+       = an implementation of `Tick` is its operations, which are functions
+       help: compare what its operations return instead
     |}]
 
 let%expect_test "everything else has ==, when what's in it does" =
@@ -2171,12 +2100,12 @@ fn main() =
 |};
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `==`, which `same` needs
+    error: a generic `T` can't be a block
       ┌─ test.ren:4:8
     4 │   same(inc, inc)
-      │        ^^^
-      = a type with a function in it has no `==` or `hash`
-      help: give `same` something it can compare, without a function in it
+      │        ^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
     |}]
 
 let%expect_test "a requirement goes through two generic functions" =
@@ -2202,12 +2131,12 @@ fn main() = boxes(1, 2)
   check_error (src ^ "fn wrong() = boxes(inc, inc)\n");
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `==`, which `boxes` needs
+    error: a generic `T` can't be a block
       ┌─ test.ren:7:20
     7 │ fn wrong() = boxes(inc, inc)
-      │                    ^^^
-      = a type with a function in it has no `==` or `hash`
-      help: give `boxes` something it can compare, without a function in it
+      │                    ^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
     |}]
 
 let%expect_test "a requirement inside a group that calls itself" =
@@ -2237,12 +2166,12 @@ fn main() = f(1, 3) && k("a", "b")
   check_error (src ^ "fn wrong() = f(inc, 3)\n");
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `==`, which `f` needs
+    error: a generic `T` can't be a block
       ┌─ test.ren:7:16
     7 │ fn wrong() = f(inc, 3)
-      │                ^^^
-      = a type with a function in it has no `==` or `hash`
-      help: give `f` something it can compare, without a function in it
+      │                ^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
     |}]
 
 let%expect_test "ren types shows what a function needs" =
@@ -2322,19 +2251,26 @@ pub type Bag<T> = { items: Array<T> }
     ];
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `==`, which `same` needs
+    error: a generic `T` can't be a block
       ┌─ main.ren:6:20
     6 │   assert util.same(inc, inc)
-      │                    ^^^
-      = a type with a function in it has no `==` or `hash`
-      help: give `same` something it can compare, without a function in it
+      │                    ^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
 
-    error: `fn(Int) -> Int` has no `==`, which `Bag.has` needs
+    error: a block can't be stored in an array
+      ┌─ main.ren:7:17
+    7 │   assert Bag.of([inc]).has(inc)
+      │                 ^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: store data instead, an enum, and `match` on it where the function is called
+
+    error: a generic type can't be a block
       ┌─ main.ren:7:28
     7 │   assert Bag.of([inc]).has(inc)
-      │                            ^^^
-      = a type with a function in it has no `==` or `hash`
-      help: give `Bag.has` something it can compare, without a function in it
+      │                            ^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
     |}]
 
 let%expect_test "comparing what something given fails with needs == of it" =
@@ -2361,55 +2297,26 @@ fn main() = twice(good) && cmp(good)
     fn main() -> Bool
     |}];
   check_error
-    (src ^ "fn bad() = if true then fail Bad(fn() => 1) else 1\n"
+    (src ^ "fn bad() = if true then fail Bad(Clock.frozen(Time.epoch)) else 1\n"
    ^ "fn wrong() = twice(bad) || cmp(bad)\n");
   [%expect
     {|
-    error: `Bad(fn() -> Int)` has no `==`, which `twice` needs
+    error: `Bad(Clock)` has no `==`, which `twice` needs
       ┌─ test.ren:7:20
     7 │ fn wrong() = twice(bad) || cmp(bad)
       │                    ^^^
       = `twice` compares what something it's given fails with
       = a type with a function in it has no `==` or `hash`
-      = it has `fn() -> Int` in it
+      = an implementation of `Clock` is its operations, which are functions
       help: give `twice` something it can compare, without a function in it
 
-    error: `Bad(fn() -> Int)` has no `==`, which `cmp` needs
+    error: `Bad(Clock)` has no `==`, which `cmp` needs
       ┌─ test.ren:7:32
     7 │ fn wrong() = twice(bad) || cmp(bad)
       │                                ^^^
       = `cmp` compares what something it's given fails with
       = a type with a function in it has no `==` or `hash`
-      = it has `fn() -> Int` in it
-      help: give `cmp` something it can compare, without a function in it
-    |}]
-
-let%expect_test "another module's function needs == of what's failed with" =
-  check_error_files
-    [
-      ( "main.ren",
-        {|
-import util
-fn bad() = if true then fail Bad(fn() => 1) else 1
-fn good() = if true then fail Good(1) else 1
-fn main() = util.cmp(good) && util.cmp(bad)
-|}
-      );
-      ( "util.ren",
-        {|
-pub fn cmp<T>(g: fn() -> T ! ..e) -> Bool = (attempt g()) == (attempt g())
-|}
-      );
-    ];
-  [%expect
-    {|
-    error: `Bad(fn() -> Int)` has no `==`, which `cmp` needs
-      ┌─ main.ren:4:40
-    4 │ fn main() = util.cmp(good) && util.cmp(bad)
-      │                                        ^^^
-      = `cmp` compares what something it's given fails with
-      = a type with a function in it has no `==` or `hash`
-      = it has `fn() -> Int` in it
+      = an implementation of `Clock` is its operations, which are functions
       help: give `cmp` something it can compare, without a function in it
     |}]
 
@@ -2432,10 +2339,17 @@ type Bag<T> = { items: Array<T> }
 |};
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `==`, which `Bag.has` needs
+    error: a block can't be stored in an array
+      ┌─ test.ren:2:18
+    2 │ fn mk() = Bag.of([inc])
+      │                  ^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: store data instead, an enum, and `match` on it where the function is called
+
+    error: a generic type can't be a block
       ┌─ test.ren:3:22
     3 │ fn main() = mk().has(inc)
-      │                      ^^^
-      = a type with a function in it has no `==` or `hash`
-      help: give `Bag.has` something it can compare, without a function in it
+      │                      ^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
     |}]

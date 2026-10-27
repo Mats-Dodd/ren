@@ -384,6 +384,10 @@ let lacking env loc ~req ~op ~by ~uses t lack =
     | _ -> (show pr t, false)
   in
   match lack with
+  | Fn f when f == repr t ->
+      (* a block itself, compared or given for a type variable: that's
+         reported where it's used (Infer_top.check_blocks) *)
+      ()
   | Fn _ | Decl _ ->
       let why : Infer_msg.no_eq =
         match lack with

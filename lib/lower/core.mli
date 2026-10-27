@@ -22,7 +22,9 @@ type var = { id : int; name : string; ty : Ty.ty }
    descriptor is built where it's passed, from what's known there: a type
    with none of the function's type variables in it is [Known], and one of
    them is what the function was itself given for it, the way a
-   requirement's dictionary will be (compiler.md, "Specialization"). *)
+   requirement's dictionary will be (compiler.md, "Specialization"). A
+   function type has none: a type variable never stands for a block, so
+   no type argument is one (Core Lint checks it). *)
 type desc =
   | Known of Ty.ty
       (** a type with none of the function's type variables in it, though maybe
@@ -32,9 +34,6 @@ type desc =
           parameter it was given that in (see [fn_def]) *)
   | Applied of Path.t * desc list
       (** a named type, given its arguments: [Option<T>] *)
-  | Fn of (mode * desc) list * desc * desc_row * Ty.row
-      (** a function's type: its parameters, result and errors, and its uses
-          row, which has no types in it to describe *)
   | Errs of desc_row  (** an error set as a type argument *)
 
 (* An error row's tags, each with its payload, and its tail (Ty.row). *)

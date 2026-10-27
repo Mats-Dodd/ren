@@ -644,7 +644,7 @@ fn main() = ()
       │                                                              ^^^
       │                                                              - its type is written `fn(...)`, so what it fails with is passed on to whoever calls `wrap`
       = a transparent parameter's errors are its function's own, which its signature says it passes on
-      help: to keep them, name their row where `g`'s type is written, as in `g: fn() ! ..e`, or pass them on with `try`
+      help: to keep them, write what it fails with where `g`'s type is written, as in `g: fn() ! Bad`, or pass them on with `try`
     |}]
 
 let%expect_test "attempt keeps only what its call fails with" =
@@ -1719,7 +1719,7 @@ fn main() = ()
       │         ^^^
       │         - its type is written `fn(...)`, so what it fails with is passed on to whoever calls `each`
       = a transparent parameter's errors are its function's own, which its signature says it passes on
-      help: to handle them, name their row where `g`'s type is written, as in `g: fn() ! ..e`, or pass them on with `try`
+      help: to handle them, write what it fails with where `g`'s type is written, as in `g: fn() ! Bad`, or pass them on with `try`
     |}]
 
 (* ---- 6. Libraries compose ---- *)

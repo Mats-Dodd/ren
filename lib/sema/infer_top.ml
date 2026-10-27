@@ -67,183 +67,6 @@ let components ~home ~calls (fns : fn_def list) =
     fns;
   List.rev !result
 
-(* ---- transparent parameters ----
-
-   A parameter whose type is written `fn(...)` is transparent: its errors
-   and dependencies flow into the caller, so they're never written. That's
-   only true if the function just calls it, or passes it straight on to
-   another function. Storing it, returning it, or capturing it in a lambda
-   that escapes would let it outlive the call. One that names a row,
-   `f: fn() uses ..d`, is a closure that can be kept.
-
-   A parameter of a dependency's type, `c: Clock`, is transparent the same
-   way: what it needs flows into the caller, so it can only be installed,
-   `with c in ...`, or passed straight on (deps.md, "Implementations"). *)
-
-let check_transparent sink (f : fn_def) =
-  let params =
-    List.filter_map
-      (fun (p : Resolved.param) ->
-        match p.pty with
-        | Some (TyFn _ as t) when not (names_row t) -> Some (p.pname, None)
-        | Some (TyImpl { impl_deps = ds; impl_uses = None; _ })
-          when p.pname.ident.name <> "self" ->
-            Some
-              ( p.pname,
-                Some
-                  (String.concat " & "
-                     (List.map
-                        (fun (d : Path.t) -> d.name)
-                        (Iface.dep_paths ds))) )
-        | _ -> None)
-      f.params
-  in
-  List.iter
-    (fun ((param : binder), dep) ->
-      let name = param.ident.name in
-      let fail loc escape =
-        let handler_deps =
-          match f.body.kind with
-          | Handler { deps; _ } ->
-              Some
-                (List.filter_map
-                   (fun (d : tname) ->
-                     match d.tref with Named p -> Some p.name | _ -> None)
-                   deps)
-          | _ -> None
-        in
-        raise (Diag.Error (not_transparent loc ~name ~dep ~handler_deps escape))
-      in
-      let is_param = function Local b -> b.id = param.id | _ -> false in
-      (* does [e] use the parameter anywhere? *)
-      let rec mentions (e : expr) =
-        let any = List.exists mentions in
-        match e.kind with
-        | Var x -> is_param x
-        | Int _ | Float _ | Bool _ | Str _ | Unit -> false
-        | Unop (_, a, _)
-        | Field (a, _)
-        | Ref a
-        | Lambda (_, a)
-        | Try a
-        | Attempt a
-        | Assert a ->
-            mentions a
-        | Fail (_, args) -> any (List.map snd args)
-        | Binop (_, a, b, _)
-        | Index (a, b)
-        | Assign { target = a; value = b; _ } ->
-            any [ a; b ]
-        | If (c, t, f) -> any (c :: t :: Option.to_list f)
-        | Array xs | Tuple xs -> any xs
-        | For _ -> any (Ast.children e)
-        | Call (f, args) -> any (f :: args)
-        | Con (_, args) -> any (List.map snd args)
-        | Record (_, fields) -> any (List.map snd fields)
-        | Block (stmts, last) ->
-            any
-              (List.map
-                 (function
-                   | Let { value; _ } | Let_tuple { value; _ } -> value
-                   | Expr e -> e)
-                 stmts
-              @ [ last ])
-        | Match (s, arms) ->
-            any
-              (s
-              :: List.concat_map
-                   (fun (a : arm) ->
-                     Option.to_list a.arm_guard @ [ a.arm_body ])
-                   arms)
-        | With { items; body } -> any (with_links items @ [ body ])
-        | Handler { state; arms; finally; _ } ->
-            any
-              (List.map
-                 (function
-                   | Let { value; _ } | Let_tuple { value; _ } -> value
-                   | Expr e -> e)
-                 state
-              @ List.map (fun (a : handler_arm) -> a.arm_impl) arms
-              @ Option.to_list finally)
-      in
-      (* [ok]: this position may hold the bare parameter, or a lambda that
-         captures it *)
-      let rec walk ~ok (e : expr) =
-        let walk_all = List.iter (walk ~ok:false) in
-        match e.kind with
-        | Var x when is_param x -> if not ok then fail e.loc As_value
-        | Field ({ kind = Var x; _ }, _) when is_param x && dep <> None ->
-            (* `c.now()`: inference reports it isn't how an operation is
-               called *)
-            ()
-        | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
-        | Call (callee, args) ->
-            walk ~ok:true callee;
-            List.iter (walk ~ok:true) args
-        | Lambda (_, body) ->
-            if (not ok) && mentions body then fail e.loc Captured
-            else walk ~ok:false body
-        | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a
-          ->
-            walk_all [ a ]
-        | Fail (_, args) -> walk_all (List.map snd args)
-        | Binop (_, a, b, _)
-        | Index (a, b)
-        | Assign { target = a; value = b; _ } ->
-            walk_all [ a; b ]
-        | If (c, t, f) -> walk_all (c :: t :: Option.to_list f)
-        | Array xs | Tuple xs -> walk_all xs
-        | For _ -> walk_all (Ast.children e)
-        | Con (_, args) -> walk_all (List.map snd args)
-        | Record (_, fields) -> walk_all (List.map snd fields)
-        | Block (stmts, last) ->
-            List.iter
-              (function
-                | Let { value; _ } | Let_tuple { value; _ } ->
-                    walk ~ok:false value
-                | Expr e -> walk ~ok:false e)
-              stmts;
-            walk ~ok:false last
-        | Match (s, arms) ->
-            walk ~ok:false s;
-            List.iter
-              (fun (a : arm) ->
-                Option.iter (walk ~ok:false) a.arm_guard;
-                walk ~ok:false a.arm_body)
-              arms
-        | With { items; body } ->
-            (* an item is installed, or called with the body *)
-            List.iter (walk ~ok:true) (with_links items);
-            walk ~ok:false body
-        | Handler { state; arms; finally; _ } ->
-            (* its state and arms are kept by each instance *)
-            List.iter
-              (function
-                | Let { value; _ } | Let_tuple { value; _ } ->
-                    walk ~ok:false value
-                | Expr e -> walk ~ok:false e)
-              state;
-            List.iter
-              (fun (impl : expr) ->
-                match impl.kind with
-                | Lambda (_, body) when mentions body ->
-                    (* an arm keeps it as a lambda would, but there's no
-                       lambda written: point at where the arm uses it *)
-                    let rec use (e : expr) =
-                      match e.kind with
-                      | Var x when is_param x -> Some e.loc
-                      | _ -> List.find_map use (Ast.children e)
-                    in
-                    fail
-                      (Option.value (use body) ~default:impl.loc)
-                      Kept_by_handler
-                | _ -> walk ~ok:false impl)
-              (List.map (fun (a : handler_arm) -> a.arm_impl) arms
-              @ Option.to_list finally)
-      in
-      Diag.recover sink ~default:() (fun () -> walk ~ok:false f.body))
-    params
-
 (* ---- what's written ----
 
    Every type and error set written in the module, visited in source
@@ -410,7 +233,7 @@ let check_written sink ~sets ~names (prog : program) =
 (* ---- a function's signature ---- *)
 
 (* The rows [f]'s signature names, `..d`, each once, in the order they're
-   first written. *)
+   first written: its own, and those of the implementation types in it. *)
 let rows_named (f : fn_def) =
   let found = ref [] in
   let name (n : ident option) =
@@ -427,11 +250,10 @@ let rows_named (f : fn_def) =
   let rec ty (t : Resolved.ty) =
     match t with
     | TyName (_, args) -> List.iter ty args
-    | TyFn (ps, ret, e, u, _) ->
+    | TyFn (ps, ret, _, _, _) ->
+        (* a block's own rows are never named (resolve.ml) *)
         List.iter ty ps;
-        Option.iter ty ret;
-        errs e;
-        uses u
+        Option.iter ty ret
     | TyImpl { impl_errors = e; impl_uses = u; _ } ->
         errs e;
         uses u
@@ -452,9 +274,7 @@ let transparent_rows (params : Resolved.param list) ps =
     (List.map2
        (fun (p : Resolved.param) (t : Types.param) ->
          match (p.pty, repr t.ty) with
-         | Some (TyFn (_, _, None, _, _) as w), TFun (_, _, e, _)
-           when not (names_row w) ->
-             [ e ]
+         | Some (TyFn (_, _, None, _, _)), TFun (_, _, e, _) -> [ e ]
          | _ -> [])
        params ps)
 
@@ -1469,11 +1289,11 @@ let check_runs env r so_far ?entry ?console ~tests fns =
     tests;
   Option.iter
     (fun (name, real) ->
-      Option.iter
-        (fun f ->
+      match (find name, real) with
+      | Some f, Some real ->
           let ty, cx = found f in
-          check_console env r ~fns ~schemes ~withheld ~real f ty cx)
-        (find name))
+          check_console env r ~fns ~schemes ~withheld ~real f ty cx
+      | _ -> ())
     console
 
 (* What inference found of [f], in canonical form: its scheme, and its
@@ -1571,6 +1391,345 @@ let canonical env so_far (f : fn_def) =
   in
   ((path, scheme), (path, nodes))
 
+(* ---- blocks are second-class (foundations.md, "Lambdas are blocks") ----
+
+   A block, a value of a function type, lives only as long as the call
+   it's passed to. So a function-typed expression may only be called,
+   passed as an argument, or be the value of a `let` that is one block
+   written right there, `let f = fn(x) => x + 1`. Anywhere else, in a
+   record, a constructor, an array or a tuple, as an `if`'s or a
+   `match`'s value, a result, a `var`, a handler's state or a handler's
+   argument, or compared, it's an error. Written types are checked before
+   inference (resolve.ml, [no_kept_blocks]); this is the walk over what
+   inference found, one per function, through each node's type.
+
+   A type variable never stands for a block either: `T` could be stored.
+   That's checked over the type arguments each use picked, rather than in
+   unification, so the error can say where the block was given.
+
+   As in Effekt, whose blocks are second-class too: its typer keeps a
+   block from being returned or stored by checking where each one is
+   used (effekt/shared/src/main/scala/effekt/Typer.scala:572-615 and
+   1015-1084), rather than with lifetimes.
+
+   A parameter of a dependency's type, `c: Clock`, is transparent: what
+   it needs flows into the caller, so it can only be installed, `with c in
+   ...`, or passed straight on (deps.md, "Implementations"). The same
+   walk checks that, until descriptions replace it (stage 10d). *)
+
+(* Where an expression is, as far as a block in it goes. *)
+type place =
+  | Callee
+  | Arg
+  | Handler_arg  (** an argument of a call of one of the module's handlers *)
+  | Let_value of string  (** the value of `let name = ...` *)
+  | Install  (** an item of a `with` *)
+  | Receiver  (** `x` in `x.f` *)
+  | Said  (** a block here is reported already, by what it's part of *)
+  | Kept of Infer_msg.block_place
+
+(* Whether [t] has a function type in it anywhere. *)
+let rec has_fun (t : Ty.ty) =
+  match t with
+  | Fun _ -> true
+  | Con (_, args) -> List.exists has_fun args
+  | Errors r ->
+      List.exists (fun (l : Ty.label) -> List.exists has_fun l.payload) r.labels
+  | Var _ | Impl _ | Error -> false
+
+(* Whether a value of type [t] keeps a block: in a type's arguments or
+   an error's payload. A function that returns one is reported where
+   it's declared. *)
+let keeps_block (t : Ty.ty) =
+  match t with
+  | Con _ | Errors _ -> has_fun t
+  | Fun _ | Var _ | Impl _ | Error -> false
+
+(* Whether two places in the source overlap. *)
+let overlap (a : Loc.t) (b : Loc.t) =
+  let pos (p : Loc.pos) = (p.line, p.col) in
+  a.file = b.file
+  && compare (pos a.start) (pos b.stop) <= 0
+  && compare (pos b.start) (pos a.stop) <= 0
+
+(* Check [f]'s blocks, given [nodes], what inference found of its
+   expressions, and [scheme_of], the type scheme of a function it uses,
+   if it's known. [handlers] are the module's handlers. A `ren console`
+   session's function, [shown], gives its last line's value to be shown,
+   which may be a block. [value] says [f] is an associated value. *)
+let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
+    (f : fn_def) nodes =
+  let ty id =
+    match Nodes.find_opt id nodes with Some n -> n.ty | None -> Ty.Error
+  in
+  let is_block (e : expr) = match ty e.node with Fun _ -> true | _ -> false in
+  let found = ref [] and generic = ref [] in
+  let say loc d = found := (loc, d) :: !found in
+  (* a block given where a type variable of what's used at [e] stands for
+     it: the name of that variable, if it's known *)
+  let generic_at (e : expr) =
+    match Option.bind (Nodes.find_opt e.node nodes) (fun n -> n.targs) with
+    | Some (a : Ty.args) -> (
+        let rec first i = function
+          | t :: rest -> if has_fun t then Some i else first (i + 1) rest
+          | [] -> None
+        in
+        match first 0 a.tys with
+        | None -> None
+        | Some i ->
+            let callee =
+              match e.kind with
+              | Var (Global p | Global_value p) -> Some p
+              | _ -> None
+            in
+            (* named as `ren types` names it: declared, or T, U, ... in
+               the order its type shows them *)
+            let name (s : Ty.scheme) =
+              let pr = Ty.printer ~names:env.names s in
+              Ty.reserve pr s.ty;
+              ignore (Ty.show pr s.ty);
+              Ty.show pr (Var i)
+            in
+            Some (Option.map name (Option.bind callee scheme_of)))
+    | None -> None
+  in
+  let generic_here (e : expr) ~blame =
+    match generic_at e with
+    | Some tvar ->
+        generic := (blame, Infer_msg.generic_block blame ~tvar) :: !generic
+    | None -> ()
+  in
+  (* the parameters of a dependency's type, which are transparent *)
+  let dep_params =
+    List.filter_map
+      (fun (p : Resolved.param) ->
+        match p.pty with
+        | Some (TyImpl { impl_deps = ds; impl_uses = None; _ })
+          when p.pname.ident.name <> "self" ->
+            Some
+              ( p.pname.id,
+                String.concat " & "
+                  (List.map (fun (d : Path.t) -> d.name) (Iface.dep_paths ds))
+              )
+        | _ -> None)
+      f.params
+  in
+  let handler_deps =
+    match f.body.kind with
+    | Handler { deps; _ } ->
+        Some
+          (List.filter_map
+             (fun (d : tname) ->
+               match d.tref with Named p -> Some p.name | _ -> None)
+             deps)
+    | _ -> None
+  in
+  let escaped = ref [] in
+  let dep_param pos (e : expr) =
+    match (e.kind, pos) with
+    | Var (Local b), (Kept _ | Let_value _ | Said)
+      when List.mem_assoc b.id dep_params && not (List.mem b.id !escaped) ->
+        escaped := b.id :: !escaped;
+        say e.loc
+          (Infer_msg.not_transparent e.loc ~name:b.ident.name
+             ~dep:(List.assoc b.id dep_params)
+             ~handler_deps)
+    | _ -> ()
+  in
+  (* how a block is written where a `let` can't bind it: the function it
+     names, and how many parameters that takes *)
+  let arity (e : expr) =
+    match ty e.node with Fun (ps, _, _, _) -> List.length ps | _ -> 0
+  in
+  let name_of (e : expr) =
+    match e.kind with
+    | Var (Local b) -> Some b.ident.name
+    | Var (Global p | Global_value p) -> Some (Resolve.value_name r p)
+    | Var (Dep_op (p, op)) -> Some (env.names p ^ "." ^ op)
+    | Var (Intrinsic x) -> Some (Intrinsic.name x)
+    | _ -> None
+  in
+  (* the blocks an `if` or a `match` chooses between, by name *)
+  let chosen (e : expr) =
+    let values =
+      match e.kind with
+      | If (_, t, f) -> t :: Option.to_list f
+      | Match (_, arms) -> List.map (fun (a : arm) -> a.arm_body) arms
+      | _ -> []
+    in
+    match List.filter_map name_of values with
+    | a :: b :: _ -> (a, b)
+    | _ -> ("f", "g")
+  in
+  (* the block [e] itself, at [pos] *)
+  let here pos (e : expr) =
+    match (e.kind, pos) with
+    | (Block _ | With _ | Call _ | Index _ | Field _ | Try _ | Attempt _), _ ->
+        (* its value is said where it's made *)
+        ()
+    | _, (Said | Callee | Install | Receiver) -> ()
+    | (Lambda _ | Var _), Arg -> ()
+    | Lambda _, Let_value _ -> ()
+    | _, Arg -> say e.loc (Infer_msg.block_kept ~written:false e.loc Branch)
+    | _, Let_value name ->
+        let how =
+          match name_of e with
+          | Some f -> Infer_msg.Let_named f
+          | None ->
+              let f, g = chosen e in
+              Infer_msg.Let_chosen (f, g)
+        in
+        say e.loc (Infer_msg.let_not_literal e.loc ~name ~arity:(arity e) how)
+    | _, Handler_arg -> say e.loc (Infer_msg.handler_param_block e.loc)
+    | _, Kept place ->
+        say e.loc (Infer_msg.block_kept ~written:false e.loc place)
+  in
+  let rec walk pos (e : expr) =
+    let block = is_block e in
+    if block then here pos e;
+    dep_param pos e;
+    if pos <> Callee then generic_here e ~blame:e.loc;
+    (* what a part that gives this expression's value is at *)
+    let carried = if block then Said else Kept Elsewhere in
+    let all place = List.iter (walk (Kept place)) in
+    match e.kind with
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ -> ()
+    | Call (callee, args) ->
+        (* a block a type variable of the callee stands for is blamed on
+           the argument that gives it *)
+        let blame =
+          match List.find_opt (fun (a : expr) -> has_fun (ty a.node)) args with
+          | Some a -> a.loc
+          | None -> callee.loc
+        in
+        generic_here callee ~blame;
+        walk Callee callee;
+        (* a handler's parameters are data: one whose type has a block in
+           it is reported where it's declared *)
+        let arg_place i =
+          match callee.kind with
+          | Var (Global p) when List.mem p handlers -> (
+              match Option.map (fun (s : Ty.scheme) -> s.ty) (scheme_of p) with
+              | Some (Fun (ps, _, _, _)) -> (
+                  match List.nth_opt ps i with
+                  | Some q when has_fun q.ty -> Said
+                  | _ -> Handler_arg)
+              | _ -> Handler_arg)
+          | _ -> Arg
+        in
+        List.iteri (fun i a -> walk (arg_place i) a) args
+    | Lambda (_, body) -> walk (Kept Returned) body
+    | Block (stmts, last) ->
+        List.iter (stmt ~state:false) stmts;
+        walk (if block then pos else Kept Elsewhere) last
+    | With { items; body } ->
+        List.iter (walk Install) (with_links items);
+        walk (if block then pos else Kept Elsewhere) body
+    | If (c, t, f) ->
+        walk (Kept Elsewhere) c;
+        List.iter (walk carried) (t :: Option.to_list f)
+    | Match (s, arms) ->
+        walk (Kept Elsewhere) s;
+        List.iter
+          (fun (a : arm) ->
+            Option.iter (walk (Kept Elsewhere)) a.arm_guard;
+            walk carried a.arm_body)
+          arms
+    | Try a | Attempt a -> walk carried a
+    | Binop ((Eq | Neq), a, b, _) when is_block a || is_block b ->
+        say e.loc (Infer_msg.block_kept ~written:false e.loc Compared);
+        List.iter (walk Said) [ a; b ]
+    | Binop (_, a, b, _) -> all Elsewhere [ a; b ]
+    | Unop (_, a, _) | Ref a | Assert a | Index (a, _) -> (
+        walk (Kept Elsewhere) a;
+        match e.kind with Index (_, i) -> walk (Kept Elsewhere) i | _ -> ())
+    | Field (a, _) -> walk Receiver a
+    | Assign { target; value; _ } ->
+        (* a `var` or a field that holds a block is reported where it's
+           declared *)
+        List.iter (walk Said) [ target; value ]
+    | Array xs ->
+        if List.exists is_block xs then
+          say e.loc (Infer_msg.block_kept ~written:false e.loc In_array);
+        List.iter (walk Said) xs
+    | Tuple xs -> all In_tuple xs
+    | Con (c, args) -> all (In_payload c.name.name) (List.map snd args)
+    | Record (name, fields) ->
+        (* a record of a dependency's operations: inference reports it, as
+           a handler to write *)
+        let of_dep =
+          match (name, ty e.node) with
+          | _, Impl _ -> true
+          | Some { tref = Named p; _ }, _ -> (
+              match Hashtbl.find_opt env.types p with
+              | Some { Iface.body = Dep _; _ } -> true
+              | _ -> false)
+          | _ -> false
+        in
+        if of_dep then List.iter (walk Said) (List.map snd fields)
+        else all In_record (List.map snd fields)
+    | Fail (_, args) -> all In_error (List.map snd args)
+    | For _ -> all Elsewhere (Ast.children e)
+    | Handler { state; arms; finally; _ } ->
+        List.iter (stmt ~state:true) state;
+        (* an arm, and the `finally`, are blocks the handler is made of *)
+        List.iter (walk Arg)
+          (List.map (fun (a : handler_arm) -> a.arm_impl) arms
+          @ Option.to_list finally)
+  and stmt ~state = function
+    | Let { name; value; mut; _ } when (state || mut) && is_block value ->
+        (* at its name: `var f`, or a handler's `let` or `var` *)
+        say name.ident.loc
+          (Infer_msg.block_kept ~written:false name.ident.loc
+             (if state then In_state else In_var));
+        walk Said value
+    | Let { name; value; _ } ->
+        walk (if state then Kept Elsewhere else Let_value name.ident.name) value
+    | Let_tuple { value; _ } -> walk (Kept Elsewhere) value
+    | Expr e -> walk (Kept Elsewhere) e
+  in
+  walk
+    (if shown then Said
+     else if value then Kept (In_value f.name.name)
+     else Kept Returned)
+    f.body;
+  (* a handler's parameter whose type inference found has a block in it *)
+  (if Ast.is_handler f then
+     match
+       Option.map
+         (fun (s : Ty.scheme) -> s.ty)
+         (scheme_of (Ast.fn_path env.home f))
+     with
+     | Some (Fun (ps, _, _, _)) ->
+         List.iter2
+           (fun (p : Resolved.param) (q : Ty.param) ->
+             if has_fun q.ty then
+               let loc = p.pname.ident.loc in
+               say loc
+                 (Infer_msg.handler_param_block ~name:p.pname.ident.name loc))
+           f.params ps
+     | _ -> ());
+  let found = List.rev !found in
+  List.iter (fun (_, d) -> report env d) found;
+  (* a block a type variable stands for, where it isn't said already *)
+  let generic =
+    List.fold_left
+      (fun acc (loc, d) ->
+        if List.exists (fun (l, _) -> overlap l loc) (found @ acc) then acc
+        else acc @ [ (loc, d) ])
+      [] (List.rev !generic)
+  in
+  List.iter (fun (_, d) -> report env d) generic;
+  (* and if nothing's said yet, any other expression that keeps one *)
+  if found = [] && generic = [] then
+    let rec first (e : expr) =
+      if keeps_block (ty e.node) then Some e
+      else List.find_map first (Ast.children e)
+    in
+    Option.iter
+      (fun (e : expr) -> report env (Infer_msg.generic_block e.loc ~tvar:None))
+      (first f.body)
+
 (* Infer every function's type, and return each function's type scheme and
    the types of its expressions, in canonical form. [imports] are the
    interfaces of the modules it imports, whose functions it can call, and
@@ -1609,7 +1768,6 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
       r.prog
   in
   let is_value (f : fn_def) = List.mem (Ast.fn_path home f) values in
-  List.iter (check_transparent sink) fns;
   (* a key that leads back to its own type *)
   List.iter
     (function
@@ -1649,6 +1807,48 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
     fns;
   check_runs env r so_far ?entry ?console ~tests fns;
   let schemes, nodes = List.split (List.map (canonical env so_far) fns) in
+  (* the type scheme of a function a use names: the module's own, or an
+     imported one's, or a member's of a type it can meet *)
+  let scheme_of (p : Path.t) =
+    match List.assoc_opt p schemes with
+    | Some s -> Some s
+    | None -> (
+        match p.member with
+        | None ->
+            List.find_map
+              (fun (i : Iface.t) ->
+                if i.home = p.home then
+                  Option.map
+                    (fun (v : Iface.value) -> v.scheme)
+                    (Iface.find_value i p.name)
+                else None)
+              imports
+        | Some _ ->
+            List.find_map
+              (fun (i : Iface.t) ->
+                List.find_map
+                  (fun (td : Iface.type_decl) ->
+                    Option.map
+                      (fun (o : Iface.op) -> o.oscheme)
+                      (Path.Map.find_opt p td.members))
+                  i.types)
+              reachable)
+  in
+  let handlers =
+    List.filter_map
+      (fun (f : fn_def) ->
+        if Ast.is_handler f then Some (Ast.fn_path home f) else None)
+      fns
+  in
+  List.iter2
+    (fun (f : fn_def) (_, n) ->
+      let shown =
+        match console with
+        | Some (name, _) -> f.name.name = name
+        | None -> false
+      in
+      check_blocks env r ~scheme_of ~handlers ~shown ~value:(is_value f) f n)
+    fns nodes;
   (* an associated value is made once, so it's given no dictionaries: a
      value of its type variable is compared by its shape alone (walk.ml),
      but nothing else can be done with one *)

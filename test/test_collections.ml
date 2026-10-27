@@ -736,19 +736,21 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "a key, or a member of a set, has no function in it" =
-  check_error {|
+let%expect_test "a key, or a member of a set, has no implementation in it" =
+  check_error
+    {|
 fn main() =
-  let m = Map.of([(fn() => 1, 2)])
+  let m = Map.of([(Clock.frozen(Time.epoch), 2)])
   ()
 |};
   [%expect
     {|
-    error: `fn() -> Int` has no `hash`, which `Map.of` needs
+    error: `Clock` has no `hash`, which `Map.of` needs
       ┌─ test.ren:2:18
-    2 │   let m = Map.of([(fn() => 1, 2)])
-      │                  ^^^^^^^^^^^^^^^^
+    2 │   let m = Map.of([(Clock.frozen(Time.epoch), 2)])
+      │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       = a type with a function in it has no `==` or `hash`
+      = an implementation of `Clock` is its operations, which are functions
       help: give `Map.of` something it can hash, without a function in it
     |}];
   check_error
@@ -1032,9 +1034,9 @@ fn main() =
 let%expect_test "a key with a function in it is given a key, in a `Map` too" =
   check_error
     {|
-type Sub = { id: Int, notify: fn(Int) -> Int }
+type Sub = { id: Int, notify: Clock }
 fn main() =
-  let s = Sub { id: 1, notify: fn(x) => x }
+  let s = Sub { id: 1, notify: Clock.frozen(Time.epoch) }
   var m: Map<Sub, Int> = Map.empty
   &m.set(s, 1)
   print(Set.of([s]))
@@ -1067,16 +1069,17 @@ fn count_all(xs) =
     &m.set(x, 1)
   m
 fn main() =
-  let f = fn(x: Int) => x
-  print(count_all([f]).len())
+  let c = Clock.frozen(Time.epoch)
+  print(count_all([c]).len())
 |};
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `hash`, which `count_all` needs
+    error: `Clock` has no `hash`, which `count_all` needs
       ┌─ test.ren:8:19
-    8 │   print(count_all([f]).len())
+    8 │   print(count_all([c]).len())
       │                   ^^^
       = a type with a function in it has no `==` or `hash`
+      = an implementation of `Clock` is its operations, which are functions
       help: give `count_all` something it can hash, without a function in it
     |}]
 
@@ -1198,40 +1201,31 @@ fn main() =
 let%expect_test "`&` on a method that returns a new value is one error" =
   check_error
     {|
-type Box = { f: fn() -> Int }
 fn main() =
   var xs = [3, 1, 2]
   &xs.sort()
   &xs.len()
-  var b = Box { f: fn() => 1 }
-  &b.f()
   ()
 |};
   [%expect
     {|
     error: `sort` doesn't change `xs`
-      ┌─ test.ren:4:3
-    4 │   &xs.sort()
+      ┌─ test.ren:3:3
+    3 │   &xs.sort()
       │   ^^^^^^^^^^
       help: remove the `&`; `sort` returns a new `Array<Int>`, so keep it: `xs = xs.sort()`
 
     error: `len` doesn't change `xs`
-      ┌─ test.ren:5:3
-    5 │   &xs.len()
+      ┌─ test.ren:4:3
+    4 │   &xs.len()
       │   ^^^^^^^^^
       help: remove the `&`, and use the `Int` it returns
-
-    error: `f` doesn't change `b`
-      ┌─ test.ren:7:3
-    7 │   &b.f()
-      │   ^^^^^^
-      help: remove the `&`
     |}]
 
 let%expect_test "a requirement a key lacks is blamed on the key" =
   check_error
     {|
-type Sub = { id: Int, notify: fn(Int) -> Int }
+type Sub = { id: Int, notify: Clock }
 fn find(m: Map<Sub, Int>, s: Sub) -> Option<Int> = m.get(s)
 fn main() = ()
 |};

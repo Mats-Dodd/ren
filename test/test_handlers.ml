@@ -439,7 +439,7 @@ fn main() uses Console =
     |}]
 
 let%expect_test "a lambda can't call next" =
-  (* passed to the one under it and kept there, it would reach it again *)
+  (* passed to the one under it, which calls it, it would reach it again *)
   check_error
     {|
 dep Store =
@@ -448,9 +448,9 @@ dep Store =
   size: fn() -> Int
 
 handler base() for Store =
-  var kept: fn() -> Int = fn() => 0
-  put(f) => kept = f
-  run() => kept()
+  var kept = 0
+  put(f) => kept = f()
+  run() => kept
   size() => 7
 
 handler w() over Store =
@@ -480,9 +480,9 @@ dep Store =
   size: fn() -> Int
 
 handler base() for Store =
-  var kept: fn() -> Int = fn() => 0
-  put(f) => kept = f
-  run() => kept()
+  var kept = 0
+  put(f) => kept = f()
+  run() => kept
   size() => 7
 
 handler w() over Store =

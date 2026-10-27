@@ -280,44 +280,44 @@ let%expect_test "a uses list in a type argument ends at a comma" =
     {|
 type Pair<A, B> = { a: A, b: B }
 type Box<F> = { f: F }
-fn one(p: Pair<fn() -> Int uses Clock, Int>) -> Int uses Clock = p.a() + p.b
-fn two(b: Box<(fn() -> Int uses Clock, Console)>) -> Int uses Clock, Console = b.f()
-fn row(b: Box<fn() -> Int uses Clock, ..d>) -> Int uses Clock, ..d = b.f()
+fn one(p: Pair<Clock uses Console, Int>) -> Int = p.b
+fn two(b: Box<(Clock uses Console, Random)>) -> Int = 1
+fn row(b: Box<Clock uses Console, ..d>) -> Int uses ..d = 1
 fn main() = ()
 |};
   [%expect
     {|
-    fn one(p: Pair<fn() -> Int uses Clock, Int>) -> Int uses Clock
-    fn two(b: Box<(fn() -> Int uses Clock, Console)>) -> Int uses Clock, Console
-    fn row(b: Box<fn() -> Int uses Clock, ..d>) -> Int uses Clock, ..d
+    fn one(p: Pair<Clock uses Console, Int>) -> Int
+    fn two(b: Box<(Clock uses Console, Random)>) -> Int
+    fn row(b: Box<Clock uses Console, ..d>) -> Int uses ..d
     fn main()
     |}];
   types
     {|
 type Box<F> = { f: F }
-fn two(b: Box<fn() -> Int uses Clock, Console>) -> Int uses Clock, Console = b.f()
+fn two(b: Box<Clock uses Console, Random>) -> Int = 1
 |};
   [%expect
     {|
     error: `Box` takes 1 type argument but was given 2
       ┌─ test.ren:2:11
-    2 │ fn two(b: Box<fn() -> Int uses Clock, Console>) -> Int uses Clock, Console = b.f()
+    2 │ fn two(b: Box<Clock uses Console, Random>) -> Int = 1
       │           ^^^
-      help: in a type argument, a `uses` list ends at a comma: to list several dependencies, put the type in parentheses, `Box<(fn() uses Clock, Console)>`
+      help: in a type argument, a `uses` list ends at a comma: to list several dependencies, put the type in parentheses, `Box<(Clock uses Os, Console)>`
     |}];
   (* a named row after a second dependency *)
   types
     {|
 type Box<F> = { f: F }
-fn row(b: Box<fn() -> Int uses Clock, Console, ..d>) -> Int uses Clock, Console, ..d = b.f()
+fn row(b: Box<Clock uses Console, Random, ..d>) -> Int uses ..d = 1
 |};
   [%expect
     {|
     error: a named row ends a `uses` list, but the list before it ended at a comma
-      ┌─ test.ren:2:48
-    2 │ fn row(b: Box<fn() -> Int uses Clock, Console, ..d>) -> Int uses Clock, Console, ..d = b.f()
-      │                                                ^^
-      help: in a type argument, a `uses` list ends at a comma: to list several dependencies, put the type in parentheses, `Box<(fn() uses Clock, Console, ..d)>`
+      ┌─ test.ren:2:43
+    2 │ fn row(b: Box<Clock uses Console, Random, ..d>) -> Int uses ..d = 1
+      │                                           ^^
+      help: in a type argument, a `uses` list ends at a comma: to list several dependencies, put the type in parentheses, `Box<(Clock uses Os, Console, ..d)>`
     |}]
 
 (* after a syntax error, parsing picks up at the next top-level item *)

@@ -376,12 +376,12 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
       let names = joined [] in
       impl_rest p ~uses ~arg ~start ~over:true names
   | DOTDOT when arg ->
-      (* `Box<fn() uses Clock, Console, ..d>`: the `uses` ended at the first
+      (* `Box<Clock uses Os, Console, ..d>`: the `uses` ended at the first
          comma, so the row is left on its own *)
       Diag.error (loc p)
         ~help:
           "in a type argument, a `uses` list ends at a comma: to list several \
-           dependencies, put the type in parentheses, `Box<(fn() uses Clock, \
+           dependencies, put the type in parentheses, `Box<(Clock uses Os, \
            Console, ..d)>`"
         "a named row ends a `uses` list, but the list before it ended at a \
          comma"

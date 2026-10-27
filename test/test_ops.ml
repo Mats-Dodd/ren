@@ -478,8 +478,7 @@ fn main() uses Console =
   let t = Stack.of([7, 8, 9])
   print(t.size())
   print(stack.Stack.of([1]).size())
-  let peek = Stack.peek
-  peek(t)
+  [t].map(Stack.peek)[0]
 |}
       );
       stack;
@@ -1357,8 +1356,7 @@ fn main() =
   &xs.push(3)
   var b = Bag { items: [] }
   &b.items.push(xs.len())
-  let count = Array.len
-  [xs.len(), count(b.items), b.items[0]]
+  [xs.len(), [b.items].map(Array.len)[0], b.items[0]]
 |};
   [%expect {| [3, 1, 3] |}];
   core
@@ -1639,7 +1637,7 @@ pub type Point = { x: Int, y: Int }
   pub fn parse(s: Str) -> Int ! Bad =
     if s == "" then fail Bad
     0
-  pub fn made(f: fn() -> Point ! ..e) -> Point ! ..e = try f()
+  pub fn made(f: fn() -> Point) -> Point = try f()
 fn main() = ()
 |};
   [%expect
@@ -1652,7 +1650,7 @@ fn main() = ()
       pub fn moved(self, dx: Int) -> Point
       pub fn origin() -> Point
       pub fn parse(s: Str) -> Int ! Bad
-      pub fn made(f: fn() -> Point ! ..e) -> Point ! ..e
+      pub fn made(f: fn() -> Point) -> Point
     fn main()
     |}]
 

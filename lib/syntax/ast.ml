@@ -75,8 +75,8 @@ type 't ty =
 and 't errors = {
   errs : 't error list;
   etail : ident option;
-      (** a named row at the end, [..e]: whatever the closure it's in fails with
-          (see [uses]) *)
+      (** a named row at the end, [..e]: whatever the function, or the
+          implementation, it's in fails with (see [uses]) *)
   eloc : Loc.t;
 }
 
@@ -91,10 +91,12 @@ and 't payload = { payload_name : ident option; payload_ty : 't ty }
 
 (* What a function, a function type or an implementation uses, after
    `uses`: dependencies, `Clock, store.Users`, and at the end, a named row,
-   `..d`. A signature names a row where a closure or an implementation is
-   kept rather than only called: `f: fn() uses ..d` stands for whatever
-   `f` uses, and every `..d` in the signature for the same (deps.md,
-   "Implementations"). An error set names one the same way, `! ..e`. *)
+   `..d`. A signature names a row where an implementation is kept rather
+   than only installed: `c: Clock uses ..d` stands for whatever `c` needs,
+   and every `..d` in the signature for the same (deps.md,
+   "Implementations"). An error set names one the same way, `! ..e`. A
+   block's type never names one: a block is only called, so what it does
+   is what the call it's passed to does (resolve.ml). *)
 and 't uses = { deps : 't list; dtail : ident option; uloc : Loc.t }
 
 (* [And] and [Or] are `&&` and `||`, which evaluate their right side only
@@ -500,17 +502,6 @@ let spelled (f : ('v, 'b, 't) fn_def) =
    several. *)
 let is_handler (f : ('v, 'b, 't) fn_def) =
   match f.body.kind with Handler _ -> true | _ -> false
-
-(* Whether a function type names a row of its own, `fn() ! ..e` or
-   `fn() uses ..d`: then it's a closure that can be kept, not only called,
-   and what it doesn't name or list it doesn't do (deps.md,
-   "Implementations"). *)
-let names_row (t : 't ty) =
-  match t with
-  | TyFn (_, _, e, u, _) ->
-      Option.bind e (fun e -> e.etail) <> None
-      || Option.bind u (fun u -> u.dtail) <> None
-  | TyName _ | TyImpl _ | TyInout _ | TyErrors _ | TyTuple _ -> false
 
 (* `&s.push(1)`: a method call whose `&` marks the receiver it changes,
    as opposed to `&xs`, a place passed `inout`. A call's result is never a

@@ -58,7 +58,9 @@ type var = { id : int; name : string; ty : Ty.ty }
    descriptor is built where it's passed, from what's known there: a type
    with none of the function's type variables in it is [Known], and one of
    them is what the function was itself given for it, the way a
-   requirement's dictionary will be (compiler.md, "Specialization"). *)
+   requirement's dictionary will be (compiler.md, "Specialization"). A
+   function type has none: a type variable never stands for a block, so
+   no type argument is one (Core Lint checks it). *)
 type desc =
   | Known of Ty.ty
       (** a type with none of the function's type variables in it, though maybe
@@ -68,9 +70,6 @@ type desc =
           parameter it was given that in (see [fn_def]) *)
   | Applied of Path.t * desc list
       (** a named type, given its arguments: [Option<T>] *)
-  | Fn of (mode * desc) list * desc * desc_row * Ty.row
-      (** a function's type: its parameters, result and errors, and its uses
-          row, which has no types in it to describe *)
   | Errs of desc_row  (** an error set as a type argument *)
 
 (* An error row's tags, each with its payload, and its tail (Ty.row). *)
@@ -456,12 +455,10 @@ let rec describe tys (t : Ty.ty) =
   | _ when not (has_param (List.length tys) t) -> Known t
   | Var n -> Param (List.nth tys n)
   | Con (p, args) -> Applied (p, List.map (describe tys) args)
-  | Fun (ps, r, e, u) ->
-      Fn
-        ( List.map (fun (p : Ty.param) -> (p.mode, describe tys p.ty)) ps,
-          describe tys r,
-          row e,
-          u )
+  | Fun _ ->
+      (* a type variable never stands for a block (Core Lint), so no
+         function type with one of them in it is described *)
+      invalid_arg "Core.describe: a function type with type variables"
   | Errors e -> Errs (row e)
   | Impl _ | Error -> Known t
 
@@ -515,9 +512,6 @@ let rec desc_vars = function
   | Known _ -> []
   | Param v -> [ v ]
   | Applied (_, ds) -> List.concat_map desc_vars ds
-  | Fn (ps, r, e, _) ->
-      List.concat_map (fun (_, d) -> desc_vars d) ps
-      @ desc_vars r @ desc_row_vars e
   | Errs e -> desc_row_vars e
 
 and desc_row_vars r =

@@ -43,11 +43,9 @@ let written_uses ~named (u : Resolved.uses) =
    function's signature names (`..d`, ast.ml). [row] makes the rows of
    written function types and implementations that aren't written: fresh
    variables in parameters (a parameter `f: fn()` passes its dependencies
-   through to the caller), closed in declarations and return types (a
-   stored `fn()` uses nothing). A function type that writes what it fails
-   with or uses, `fn() ! Bad` or `fn() uses Clock`, does just that, and one
-   that names a row, `fn() uses ..d`, is a closure that's kept: what it
-   doesn't write, it doesn't do. *)
+   through to the caller), closed elsewhere, as in a dependency's
+   operation. A function type that writes what it fails with or uses,
+   `fn() ! Bad` or `fn() uses Clock`, does just that. *)
 let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
   let go = convert env ~tvars ~named ~row in
   match t with
@@ -82,8 +80,6 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
             extend (List.map (fun p -> dep (Ty.dep_label p)) deps) (row ())
         | None -> row ())
   | TyFn (ps, ret, errs, u, _) ->
-      let row = if names_row t then closed else row in
-      let go = convert env ~tvars ~named ~row in
       let ret = match ret with Some r -> go r | None -> unit in
       let errs =
         match errs with
@@ -123,17 +119,15 @@ and closed () = REmpty
    parameters, which no interface shows, get fresh rows instead.
 
    A parameter that writes what it fails with, `f: fn() ! Bad`, fails with
-   just that, so only its dependencies are its function's; one that writes
-   what it uses, `f: fn() uses Clock`, uses just that; and one that names
-   a row, `f: fn() uses ..d`, is kept, not only called, so neither of its
-   rows is its function's. A parameter of a dependency's type, `c: Clock`,
+   just that, so only its dependencies are its function's; and one that
+   writes what it uses, `f: fn() uses Clock`, uses just that. A block's
+   type never names a row (resolve.ml). A parameter of a dependency's type, `c: Clock`,
    is transparent too: what it needs is what its function uses (deps.md,
    "Implementations"). [named] are the rows the signature names. *)
 let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
   let t =
     match (p.pty, own) with
-    | Some (TyFn (_, _, written_e, written_u, _) as t), Some (errs, uses)
-      when not (names_row t) -> (
+    | Some (TyFn (_, _, written_e, written_u, _) as t), Some (errs, uses) -> (
         match convert env ~tvars:tparams ~named ~row:closed t with
         | TFun (ps, ret, e, u) ->
             TFun

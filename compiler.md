@@ -161,7 +161,12 @@ falls short it says so.
   an operation of, and `journal_load` only by test code (`world`), so
   every call a program makes to the world is an operation's, which a
   journal records. Since 10c, a record of a dependency's operations is
-  only ever a handler's `Instance`'s, never a value of the program.
+  only ever a handler's `Instance`'s, never a value of the program, and
+  blocks are second-class: a value of a function type is only a call's
+  callee, a call's argument or a `let`'s value, but for an instance's
+  operations, and no type argument has a function type in it. Infer
+  checks the same of the source first (`check_blocks`, and resolve.ml's
+  `no_kept_blocks` for written types).
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -174,7 +179,7 @@ each pass keeps it so:
 
 1. **A value never changes in place once it's shared.** `a.next =
    Some(a)` stores a copy of the old `a`, not `a`.
-2. **A closure doesn't capture the evidence.** It gets its dependencies
+2. **A block doesn't capture the evidence.** It gets its dependencies
    where it's called (deps.md, "How it runs"), so it never holds the
    handler that's installed where it was made. The one exception is a
    handler's own operations and `finally`, which keep the evidence where
@@ -453,7 +458,8 @@ the next starts:
   tags written in `Err` left open after its group.
 - **R4, requirements and lambda sets** (lambda sets removed in 10c,
   [foundations.md](foundations.md)). `==` and `!=` require `eq`,
-  derived structurally and absent from a type with a function in it. A
+  derived structurally and absent from a type with an implementation in
+  it; a block is never compared, and never a type argument. A
   generic function's requirements are inferred and kept in its scheme and
   its module's interface, and passed as dictionaries. A module's
   implementation tier keeps the bodies of its public generic and

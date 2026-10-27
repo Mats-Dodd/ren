@@ -972,12 +972,13 @@ let user = function
 
 (* The help when what a function or lambda uses can't take the
    dependencies [deps], as its type says: it's used as a value of a type
-   that lists what it uses, like a stored `fn()`, since one whose own type
+   that lists what it uses, like an operation's block parameter, `fn()
+   uses Clock`, since one whose own type
    is written, or a lambda's checked against one, isn't closed until it's
    checked. *)
 let closed_uses_help deps =
   sprintf
-    "add %s to the `uses` of the type it's used as, like a stored `fn()`'s, or \
+    "add %s to the `uses` of the type it's used as, `fn() uses ...`, or \
      install %s around this, with `with`"
     (and_list deps)
     (match deps with [ _ ] -> "it" | _ -> "them")
@@ -999,8 +1000,8 @@ let cant_use loc what deps =
       ]
     ~help:
       (if deps = [] then
-         "add what it uses to the `uses` of the type it's used as, like a \
-          stored `fn()`'s"
+         "add what it uses to the `uses` of the type it's used as, `fn() uses \
+          ...`"
        else closed_uses_help deps)
     (sprintf "%s %s" (user what) shown)
 
@@ -1394,57 +1395,185 @@ let next_in_lambda loc op =
 
 (* ---- what a module writes (infer_top.ml) ---- *)
 
-(* How a transparent parameter would outlive its call. *)
-type escape = As_value | Captured | Kept_by_handler
+(* The parameter [name], of the dependency [dep]'s type, is used as a
+   value here: it's transparent, so it can only be installed or passed
+   straight on. [handler_deps] are what the function's body implements,
+   if it's a handler. *)
+let not_transparent loc ~name ~dep ~handler_deps =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "a parameter whose type is a dependency's, `%s`, can only be \
+           installed, with `with`, or passed straight to another function, so \
+           what it needs is what its function uses"
+          dep;
+      ]
+    ~help:
+      (match handler_deps with
+      | Some deps ->
+          (* what it needs, the handler needs where it's installed *)
+          sprintf
+            "to keep it, name what it needs, `%s: %s uses ..d`, and say the \
+             handler needs that: `for %s uses ..d`"
+            name dep (String.concat ", " deps)
+      | None ->
+          sprintf "to keep it, name what it needs: `%s: %s uses ..d`" name dep)
+    (sprintf "`%s` is used as a value here, so it isn't transparent" name)
 
-(* The transparent parameter [name] escapes. [dep] is the dependency it's
-   an implementation of, if it's one, and [handler_deps] what the
-   function's body implements, if it's a handler. *)
-let not_transparent loc ~name ~dep ~handler_deps escape =
-  let what =
-    match escape with
-    | As_value -> "is used as a value here"
-    | Captured -> "is captured by a lambda that outlives the call"
-    | Kept_by_handler ->
-        "is kept by the handler, whose operations run where a `with` installs \
-         it"
+(* ---- blocks are second-class (foundations.md, "Lambdas are blocks") ---- *)
+
+(* A place a block can't be: where it would outlive the call it's passed
+   to, or be chosen at run time. *)
+type block_place =
+  | In_record
+  | In_payload of string  (** a constructor's, by its name *)
+  | In_error  (** an error's payload *)
+  | In_array
+  | In_tuple
+  | In_type_arg  (** a type argument, as written *)
+  | Branch  (** the value of an `if` or a `match` *)
+  | Returned  (** a function's or a block's result *)
+  | In_var
+  | In_state  (** a handler's state *)
+  | In_value of string  (** an associated value, by its name *)
+  | Represented  (** what an opaque type is represented as *)
+  | Compared  (** an operand of `==` or `!=` *)
+  | Elsewhere
+
+let block_lives = "a block lives only as long as the call it's passed to"
+
+(* A block, at [loc], in [place]: [written] says [loc] is a type written
+   there, not an expression. *)
+let block_kept ~written loc place =
+  let header, help =
+    match place with
+    | In_record ->
+        ( (if written then "a record can't hold a block"
+           else "a block can't be stored in a record"),
+          "hold data instead, an enum to `match` on, or a handler's \
+           description, and pass the block to the call that runs it" )
+    | In_payload c ->
+        ( (if written then sprintf "`%s`'s payload can't hold a block" c
+           else sprintf "a block can't be stored in `%s`" c),
+          "hold data instead, and pass the block to the call that runs it" )
+    | In_error ->
+        ( "an error can't hold a block",
+          "put the data the block would need in the error instead" )
+    | In_array ->
+        ( "a block can't be stored in an array",
+          "store data instead, an enum, and `match` on it where the function \
+           is called" )
+    | In_tuple ->
+        ( "a block can't be stored in a tuple",
+          "pass the block as an argument of its own" )
+    | In_type_arg ->
+        ( "a type argument can't be a block",
+          "pass the block as a parameter of its own, `f: fn(...)`" )
+    | Branch ->
+        ( "a block can only be called or passed where it's written",
+          "call the block in each branch: `if c then f(x) else g(x)`" )
+    | Returned ->
+        ( "a block can't be returned",
+          "take the block's arguments as parameters too, and return what it \
+           gives" )
+    | In_var ->
+        ( "a `var` can't hold a block",
+          "bind it with `let`: `let f = fn() => ...`" )
+    | In_state ->
+        ( "a handler's state can't hold a block",
+          "keep data in the state, and call a function from the operation" )
+    | In_value v ->
+        ( "an associated value can't hold a block",
+          sprintf "make it a function: `fn %s(...)`" v )
+    | Represented ->
+        ( "a type can't be represented as a block",
+          "represent it as data, or as a dependency's type" )
+    | Compared ->
+        ( "a block can only be called or passed, not compared",
+          "compare what it returns instead" )
+    | Elsewhere ->
+        ( "a block can only be called or passed where it's written",
+          "call it here, or pass it straight to a function" )
   in
-  let msg = sprintf "`%s` %s, so it isn't transparent" name what in
-  match dep with
-  | None ->
-      Diag.make loc
-        ~notes:
-          [
-            "a parameter whose type is written `fn(...)` can only be called, \
-             or passed straight to another function";
-          ]
-        ~help:
-          (sprintf
-             "to keep it, name its rows, `%s: fn(...) ! ..e uses ..d`, or \
-              remove the type and let it be inferred"
-             name)
-        msg
-  | Some d ->
-      Diag.make loc
-        ~notes:
-          [
-            sprintf
-              "a parameter whose type is a dependency's, `%s`, can only be \
-               installed, with `with`, or passed straight to another function, \
-               so what it needs is what its function uses"
-              d;
-          ]
-        ~help:
-          (match handler_deps with
-          | Some deps ->
-              (* what it needs, the handler needs where it's installed *)
-              sprintf
-                "to keep it, name what it needs, `%s: %s uses ..d`, and say \
-                 the handler needs that: `for %s uses ..d`"
-                name d (String.concat ", " deps)
-          | None ->
-              sprintf "to keep it, name what it needs: `%s: %s uses ..d`" name d)
-        msg
+  Diag.make loc
+    ~says:(if written then "a block's type" else "a block")
+    ~notes:[ block_lives ] ~help header
+
+(* What a `let` is given that isn't a block written there: one named,
+   or chosen between two by an `if` or a `match`, named if they are. *)
+type not_literal = Let_named of string | Let_chosen of string * string
+
+(* `let [name] = e`, where [e] is a block of [arity] parameters that
+   isn't one written there. *)
+let let_not_literal loc ~name ~arity how =
+  (* its parameters, named for the help *)
+  let xs =
+    String.concat ", "
+      (match arity with
+      | 1 -> [ "x" ]
+      | 2 -> [ "x"; "y" ]
+      | 3 -> [ "x"; "y"; "z" ]
+      | n -> List.init n (fun i -> sprintf "x%d" (i + 1)))
+  in
+  let help =
+    match how with
+    | Let_named f ->
+        sprintf
+          "pass `%s` where it's needed, or write `let %s = fn(%s) => %s(%s)`" f
+          name xs f xs
+    | Let_chosen (f, g) ->
+        sprintf
+          "choose inside one block: `let %s = fn(%s) => if ... then %s(%s) \
+           else %s(%s)`"
+          name xs f xs g xs
+  in
+  Diag.make loc ~says:"not a `fn` written here"
+    ~notes:
+      [
+        "a `let` names one block, so the code it runs is known where it's \
+         called";
+      ]
+    ~help "`let` binds one block written right there"
+
+(* A handler's parameter [name], at [loc], whose type has a block in it;
+   or, without [name], a block given to a handler's parameter. *)
+let handler_param_block ?name loc =
+  Diag.make loc
+    ~says:
+      (match name with
+      | Some n -> sprintf "`%s` is a block" n
+      | None -> "a block")
+    ~notes:
+      [
+        "a handler's description is a value, which can outlive the call that \
+         made it";
+      ]
+    ~help:"pass the data, or make the behaviour a dependency"
+    "a handler's parameters are data"
+
+(* A block, at [loc], given where the type variable [tvar] of what's
+   called stands for it. *)
+let generic_block loc ~tvar =
+  Diag.make loc ~says:"a block"
+    ~notes:
+      [ "a type variable stands for data, which can be stored or returned" ]
+    ~help:"pass a block only to a parameter written `fn(...)`"
+    (match tvar with
+    | Some t -> sprintf "a generic `%s` can't be a block" t
+    | None -> "a generic type can't be a block")
+
+(* A named row, `..[row]`, written on a block's type, at [loc]. *)
+let block_row_named loc ~row =
+  Diag.make loc
+    ~says:(sprintf "`..%s` names them" row)
+    ~notes:
+      [
+        "a block is only called, never kept, so what it fails with and uses is \
+         what the call it's passed to does";
+      ]
+    ~help:(sprintf "leave `..%s` out of the block's type" row)
+    "a block's errors and dependencies aren't named"
 
 (* `Result<Int, Int>`, at [loc]: its second argument isn't an error set. *)
 let result_needs_set loc =
@@ -1500,35 +1629,16 @@ let param_fails_here loc =
     "this can fail with whatever a function it was passed fails with, which \
      isn't allowed here"
 
-(* What a public function's rows can't do, kept where they're closed. *)
-type closed = Cant_fail | Cant_use | Cant_fail_or_use | Cant_need
+(* The transparent parameter that's kept where what it needs is closed:
+   the `self` of a dependency's method, or another of a dependency's
+   type. *)
+type kept = Dep_self of string | Dep_param of string
 
-(* The transparent parameter that's kept so: one written `fn(...)`, the
-   `self` of a dependency's method, or another of a dependency's type. *)
-type kept = Fn_param | Dep_self of string | Dep_param of string
-
-(* The transparent parameter [name] of [fn] is kept where its rows are
-   closed. *)
-let kept_closed loc ~name ~fn kept closed =
-  let what =
-    match closed with
-    | Cant_fail -> "fail"
-    | Cant_use -> "use anything"
-    | Cant_fail_or_use -> "fail or use anything"
-    | Cant_need -> "need anything"
-  in
+(* The transparent parameter [name] of [fn] is kept where it can't need
+   anything. *)
+let kept_needing_nothing loc ~name ~fn kept =
   let note, help =
     match kept with
-    | Fn_param ->
-        ( sprintf
-            "a parameter whose type is written `fn(...)` passes what it fails \
-             with and uses on to `%s`'s callers, but here it's passed to \
-             something that keeps it as a function that can't %s"
-            fn what,
-          sprintf
-            "to keep it, name its rows, `%s: fn(...) ! ..e uses ..d`, and \
-             write them where it's kept"
-            name )
     | Dep_self d ->
         ( sprintf
             "a dependency's `self` needs what its method uses, but here it's \
@@ -1550,7 +1660,8 @@ let kept_closed loc ~name ~fn kept closed =
             name d )
   in
   Diag.make loc ~notes:[ note ] ~help
-    (sprintf "`%s` is kept where it can't %s, so it isn't transparent" name what)
+    (sprintf
+       "`%s` is kept where it can't need anything, so it isn't transparent" name)
 
 (* `uses Clock, ..d`: what a function that lists [deps] would write to use
    the named row [n] as well. *)
@@ -3004,8 +3115,8 @@ let kept_passed_on loc ~name_loc callee ~fn ~handled =
       ]
     ~help:
       (sprintf
-         "to %s them, name their row where `%s`'s type is written, as in `%s: \
-          fn() ! ..e`, or pass them on with `try`"
+         "to %s them, write what it fails with where `%s`'s type is written, \
+          as in `%s: fn() ! Bad`, or pass them on with `try`"
          (if handled then "handle" else "keep")
          callee callee)
     (if handled then

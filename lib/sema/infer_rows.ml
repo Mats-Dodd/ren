@@ -16,7 +16,7 @@ open Infer_report
 open Infer_written
 
 (* An open row is unified with another as it is, which is how its tail
-   picks up everything the other has. A closed one, like a stored `fn()`'s,
+   picks up everything the other has. A closed one, like a written `fn()`'s,
    says only what it has itself: unified as it is, it would close the other
    row too, and then nothing else could be added to it. So it's opened
    first, with a fresh tail. *)

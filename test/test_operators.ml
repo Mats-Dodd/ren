@@ -372,7 +372,7 @@ fn main() =
       = `sum` uses `+` on its `T` (test.ren:4)
     |}]
 
-let%expect_test "a function has no `==`" =
+let%expect_test "a block can't be compared" =
   check_error
     {|
 fn same<T>(a: T, b: T) -> Bool = a == b
@@ -384,19 +384,19 @@ fn main() =
 |};
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `==`, which `same` needs
+    error: a generic `T` can't be a block
       ┌─ test.ren:4:16
     4 │   let _ = same(inc, inc)
-      │                ^^^
-      = a type with a function in it has no `==` or `hash`
-      help: give `same` something it can compare, without a function in it
+      │                ^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
 
-    error: `fn(Int) -> Int` has no `==`
+    error: a block can only be called or passed, not compared
       ┌─ test.ren:5:11
     5 │   let _ = inc == inc
-      │           ^^^^^^^^^^
-      = a type with a function in it has no `==` or `hash`
-      help: a function can't be compared: compare what it returns instead
+      │           ^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: compare what it returns instead
     |}]
 
 let%expect_test "an unwritten type becomes generic over what it needs" =
@@ -696,13 +696,13 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "a key with a function in it makes `==` an error" =
+let%expect_test "a key with an implementation in it makes `==` an error" =
   check_error
     {|
-type F = { f: fn(Int) -> Int }
-  fn key(self) -> fn(Int) -> Int = self.f
+type F = { f: Clock }
+  fn key(self) -> Clock = self.f
 fn main() =
-  let a = F { f: fn(n) => n }
+  let a = F { f: Clock.frozen(Time.epoch) }
   let _ = a == a
   ()
 |};
@@ -713,8 +713,8 @@ fn main() =
     5 │   let _ = a == a
       │           ^^^^^^
       = a type with a function in it has no `==` or `hash`
-      = it has `fn(Int) -> Int` in it
-      help: compare the parts of it that have no function in them
+      = an implementation of `Clock` is its operations, which are functions
+      help: compare what its operations return instead
     |}]
 
 let%expect_test "a key that needs its `T`'s order passes it on" =

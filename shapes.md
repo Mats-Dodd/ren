@@ -72,9 +72,9 @@ error: this assert failed while building
 - **Building has a limit, as everything does.** A top-level value that
   runs for longer than the build's budget is an error that says where it
   was, rather than a build that never finishes.
-- **A function value can be a top-level value** (`ROUTES` holds handlers),
-  but only a function defined at the top level. A closure capturing
-  something is computed at run time.
+- **A top-level value holds data, never a block** (foundations.md). A
+  table of routes holds an enum to `match` on, or handlers' descriptions,
+  which are data.
 
 ## The build's world
 

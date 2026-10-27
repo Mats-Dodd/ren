@@ -269,7 +269,7 @@ fn main() =
 
 (* lambdas *)
 
-let%expect_test "lambdas, closures, functions as values" =
+let%expect_test "blocks, and functions passed as arguments" =
   let src =
     {|
 fn double(x) = x * 2
@@ -279,25 +279,18 @@ fn apply(o, f) =
     Some(v) => Some(f(v))
     None => None
 
-fn compose(f, g) = fn(x) => g(f(x))
-
 fn main() =
   let n = 10
   print(apply(Some(5), fn(x) => x + n))
-  let inc_then_double = compose(fn(x) => x + 1, double)
-  print(inc_then_double(4))
-  print(compose(double, double)(1))
+  print(apply(Some(5), double))
   let ignore = fn(_) => ()
   ignore(3)
-  print(double)
 |}
   in
   run src;
   [%expect {|
     Some(15)
-    10
-    4
-    <fn double>
+    Some(10)
     ()
     |}];
   types src;
@@ -305,8 +298,41 @@ fn main() =
     {|
     fn double(x: Int) -> Int
     fn apply<T, U>(o: Option<T>, f: fn(T) -> U uses ..d) -> Option<U> uses ..d
-    fn compose<T, U, V>(f: fn(T) -> U uses ..d, g: fn(U) -> V uses ..d) -> (fn(T) -> V uses ..d)
     fn main() uses Console
+    |}]
+
+let%expect_test "a block can't be returned" =
+  run
+    {|
+fn double(x) = x * 2
+fn compose(f, g) = fn(x) => g(f(x))
+
+fn main() = print(compose(double, double)(1))
+|};
+  [%expect
+    {|
+    error: a block can't be returned
+      ┌─ test.ren:2:20
+    2 │ fn compose(f, g) = fn(x) => g(f(x))
+      │                    ^^^^^^^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: take the block's arguments as parameters too, and return what it gives
+    |}]
+
+let%expect_test "a function can't be printed" =
+  run {|
+fn double(x) = x * 2
+
+fn main() = print(double)
+|};
+  [%expect
+    {|
+    error: a generic `T` can't be a block
+      ┌─ test.ren:3:19
+    3 │ fn main() = print(double)
+      │                   ^^^^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
     |}]
 
 let%expect_test "trailing lambdas" =
@@ -987,7 +1013,8 @@ dep Log =
   put: fn(s: Str)
 
 fn sh<T>(x: T) -> Str = show(x)
-fn later<T>(x: T) -> fn() -> Str = fn() => show([x])
+fn later<T>(x: T) -> Str = run_it(fn() => show([x]))
+fn run_it(f: fn() -> Str) -> Str = try f()
 fn apply<A, B>(f: fn(A) -> B, x: A) -> B = try f(x)
 fn logged<T>(x: T) uses Console =
   with logging(x) in
@@ -996,7 +1023,7 @@ fn logged<T>(x: T) uses Console =
 fn main() uses Console =
   let a = Acc { id: 1 }
   print(sh(a))
-  print(later(a)())
+  print(later(a))
   print(apply(sh, Some(a)))
   logged(a)
   print(Box { v: a })
@@ -1034,28 +1061,6 @@ fn main() = same(Some(Acc { id: 3 }), Some(Acc { id: 4 }))
       = right: Some(Acc { id: 4 })
     |}]
 
-let%expect_test "a generic associated value knows nothing of its type" =
-  (* it's made once, when the program starts, with nothing to say what
-     `T` stands for, so a value of it is shown by its shape alone, whether
-     through `show` itself or a lambda that calls it (compiler.md,
-     "Deviations") *)
-  run
-    {|
-type Acc = { id: Int }
-type Box<T> = { v: T }
-  pub let lam: fn(T) -> Str = fn(x) => show(x)
-  pub let shower: fn(T) -> Str = show
-
-fn main() uses Console =
-  print(Box.lam(Acc { id: 1 }))
-  print(Box.shower(Acc { id: 1 }))
-|};
-  [%expect {|
-    { id: 1 }
-    { id: 1 }
-    ()
-    |}]
-
 (* ---- equality, through requirements' dictionaries ---- *)
 
 let%expect_test "a generic function compares through the dictionary it's given"
@@ -1074,8 +1079,7 @@ fn main() uses Console =
   print([same((), ()), differ("a", "b"), differ(3, 3)])
   print([both(1, 1), both(1, 2), both(Box { v: "a" }, Box { v: "a" })])
   print([both([1, 2], [1, 2]), both([1, 2], [1]), both([[1]], [[2]])])
-  let f = same
-  print([f(Some(1), Some(1)), f(Some(1), None)])
+  print([same(Some(1), Some(1)), same(Some(1), None)])
 |};
   [%expect
     {|
@@ -1178,26 +1182,6 @@ fn main() =
       = right: Box { v: [None] }
     |}]
 
-let%expect_test "where nothing says what T is, values compare by shape" =
-  (* a generic associated value is made once, with no dictionary for its
-     `T` (core.ml, [Global_value]), and so is given one that compares by
-     the values' shape, which only an opaque type of another module can
-     make reach a function: inference rules out anything else *)
-  run
-    {|
-type Point = { x: Int, y: Int }
-type Box<T> = { v: T }
-  pub let eqf: fn(T, T) -> Bool = fn(a, b) => a == b
-fn main() uses Console =
-  print([Box.eqf(1, 1), Box.eqf(Point { x: 1, y: 2 }, Point { x: 1, y: 2 })])
-  print([Box.eqf([Some("a")], [Some("b")]), Box.eqf(Ok(1), Err(Oops))])
-|};
-  [%expect {|
-    [true, true]
-    [false, false]
-    ()
-    |}]
-
 let%expect_test "== can't panic" =
   (* comparing anything with a function in it, a handler, or an
      implementation of a dependency, directly or through a generic
@@ -1216,9 +1200,9 @@ let%expect_test "== can't panic" =
      fn inc(x: Int) -> Int = x + 1\n\
      fn main() = same([Some(inc)], [None])";
   lacks
-    "type R = { f: fn() -> Int }\n\
+    "type R = { f: Clock }\n\
      fn same(a, b) = a == b\n\
-     fn main() = same(Ok(R { f: fn() => 1 }), Err(Gone))";
+     fn main() = same(Ok(R { f: Clock.frozen(Time.epoch) }), Err(Gone))";
   lacks
     "dep D =\n\
     \  get: fn() -> Int\n\
@@ -1258,8 +1242,8 @@ fn main() = same(a.mk(), a.mk()) || a.Id.of(1) == a.Id.of(1)
       );
       ( "a.ren",
         {|
-pub type F = opaque fn(Int) -> Int
-pub fn mk() -> F = fn(x: Int) => x
+pub type F = opaque Clock
+pub fn mk() -> F = Clock.frozen(Time.epoch)
 pub type Pair = { n: Int, f: F }
 pub type Id = opaque Pair
   pub fn of(n: Int) -> Id = Pair { n: n, f: mk() }

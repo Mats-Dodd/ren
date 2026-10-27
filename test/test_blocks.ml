@@ -158,10 +158,14 @@ fn main() uses Console =
   let b = Button { label: "ok", on_click: fn() => 1 }
   print(b.label)
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    ok
-    ()
+  [%expect
+    {|
+    error: a record can't hold a block
+      ┌─ test.ren:1:39
+    1 │ type Button = { label: Str, on_click: fn() -> Int }
+      │                                       ^^^^^^^^^^^ a block's type
+      = a block lives only as long as the call it's passed to
+      help: hold data instead, an enum to `match` on, or a handler's description, and pass the block to the call that runs it
     |}]
 
 let%expect_test "[s3 reject] a record literal holding a block" =
@@ -175,10 +179,14 @@ fn main() uses Console =
   let b = Box { v: fn() => 1 }
   print((b.v)())
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    1
-    ()
+  [%expect
+    {|
+    error: a block can't be stored in a record
+      ┌─ test.ren:4:20
+    4 │   let b = Box { v: fn() => 1 }
+      │                    ^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: hold data instead, an enum to `match` on, or a handler's description, and pass the block to the call that runs it
     |}]
 
 let%expect_test "[s3 reject] an array of functions" =
@@ -193,10 +201,14 @@ fn main() uses Console =
   let fs = [double, triple]
   print(fs[1](2))
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    6
-    ()
+  [%expect
+    {|
+    error: a block can't be stored in an array
+      ┌─ test.ren:5:12
+    5 │   let fs = [double, triple]
+      │            ^^^^^^^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: store data instead, an enum, and `match` on it where the function is called
     |}]
 
 let%expect_test "[s3 reject] a block in a constructor's payload" =
@@ -210,10 +222,14 @@ fn main() uses Console =
     Some(f) => print(f(1))
     None => ()
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    2
-    ()
+  [%expect
+    {|
+    error: a block can't be stored in `Some`
+      ┌─ test.ren:2:16
+    2 │   let o = Some(fn(x) => x + 1)
+      │                ^^^^^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: hold data instead, and pass the block to the call that runs it
     |}]
 
 let%expect_test "[s3 reject] a function in a tuple" =
@@ -226,10 +242,14 @@ fn main() uses Console =
   let (f, n) = (double, 1)
   print(f(n))
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    2
-    ()
+  [%expect
+    {|
+    error: a block can't be stored in a tuple
+      ┌─ test.ren:4:17
+    4 │   let (f, n) = (double, 1)
+      │                 ^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: pass the block as an argument of its own
     |}]
 
 let%expect_test "[s3 reject] a function's result is a block" =
@@ -244,36 +264,14 @@ fn main() uses Console =
   let h = compose(fn(x) => x + 1, fn(x) => x * 2)
   print(h(3))
 |};
-  (* until s3: today's output *)
   [%expect
     {|
-    error: `f` is captured by a lambda that outlives the call, so it isn't transparent
-      ┌─ test.ren:2:3
-    2 │   fn(x) => g(f(x))
-      │   ^^^^^^^^^^^^^^^^
-      = a parameter whose type is written `fn(...)` can only be called, or passed straight to another function
-      help: to keep it, name its rows, `f: fn(...) ! ..e uses ..d`, or remove the type and let it be inferred
-
-    error: `g` is captured by a lambda that outlives the call, so it isn't transparent
-      ┌─ test.ren:2:3
-    2 │   fn(x) => g(f(x))
-      │   ^^^^^^^^^^^^^^^^
-      = a parameter whose type is written `fn(...)` can only be called, or passed straight to another function
-      help: to keep it, name its rows, `g: fn(...) ! ..e uses ..d`, or remove the type and let it be inferred
-
-    error: `g` can fail, and nothing handles it
-      ┌─ test.ren:2:12
-    2 │   fn(x) => g(f(x))
-      │            ^^^^^^^
-      │            - it can fail with whatever the function passed as `g` fails with
-      help: pass the errors on with `try`, or handle them with `match`
-
-    error: `f` can fail, and nothing handles it
-      ┌─ test.ren:2:14
-    2 │   fn(x) => g(f(x))
-      │              ^^^^
-      │              - it can fail with whatever the function passed as `f` fails with
-      help: pass the errors on with `try`, or handle them with `match`
+    error: a block can't be returned
+      ┌─ test.ren:1:53
+    1 │ fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int =
+      │                                                     ^^^^^^^^^^^^^^ a block's type
+      = a block lives only as long as the call it's passed to
+      help: take the block's arguments as parameters too, and return what it gives
     |}]
 
 let%expect_test "[s3 reject] an if whose branches are blocks" =
@@ -287,10 +285,14 @@ fn main() uses Console =
   let c = true
   print(apply(if c then fn(x) => x + 1 else fn(x) => x * 2, 5))
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    6
-    ()
+  [%expect
+    {|
+    error: a block can only be called or passed where it's written
+      ┌─ test.ren:5:15
+    5 │   print(apply(if c then fn(x) => x + 1 else fn(x) => x * 2, 5))
+      │               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: call the block in each branch: `if c then f(x) else g(x)`
     |}]
 
 let%expect_test "[s3 reject] a match whose arms are functions" =
@@ -310,10 +312,14 @@ fn main() uses Console =
       _ => triple
   print(apply(g, 5))
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    15
-    ()
+  [%expect
+    {|
+    error: `let` binds one block written right there
+      ┌─ test.ren:8:5
+    8 │     match n
+      │     ^^^^^^^ not a `fn` written here
+      = a `let` names one block, so the code it runs is known where it's called
+      help: choose inside one block: `let g = fn(x) => if ... then double(x) else triple(x)`
     |}]
 
 let%expect_test "[s3 reject] var holding a block" =
@@ -326,10 +332,14 @@ fn main() uses Console =
   f = fn() => 2
   print(f())
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    2
-    ()
+  [%expect
+    {|
+    error: a `var` can't hold a block
+      ┌─ test.ren:2:7
+    2 │   var f = fn() => 1
+      │       ^ a block
+      = a block lives only as long as the call it's passed to
+      help: bind it with `let`: `let f = fn() => ...`
     |}]
 
 let%expect_test "[s3 reject] let of a named function" =
@@ -344,10 +354,14 @@ fn main() uses Console =
   let f = double
   print(f(4))
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    8
-    ()
+  [%expect
+    {|
+    error: `let` binds one block written right there
+      ┌─ test.ren:4:11
+    4 │   let f = double
+      │           ^^^^^^ not a `fn` written here
+      = a `let` names one block, so the code it runs is known where it's called
+      help: pass `double` where it's needed, or write `let f = fn(x) => double(x)`
     |}]
 
 let%expect_test "[s3 reject] let of an if between two blocks" =
@@ -362,15 +376,19 @@ fn main() uses Console =
   let g = if c then f else h
   print(g(5))
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    10
-    ()
+  [%expect
+    {|
+    error: `let` binds one block written right there
+      ┌─ test.ren:5:11
+    5 │   let g = if c then f else h
+      │           ^^^^^^^^^^^^^^^^^^ not a `fn` written here
+      = a `let` names one block, so the code it runs is known where it's called
+      help: choose inside one block: `let g = fn(x) => if ... then f(x) else h(x)`
     |}]
 
 let%expect_test "[s3 reject] a block given to a generic parameter" =
-  (* target: an error at `double`, "a type variable can't stand for a
-     block": `T` could be stored *)
+  (* target: an error at `double`, "a generic `T` can't be a block": `T`
+     could be stored *)
   run
     {|
 fn id<T>(x: T) -> T = x
@@ -379,10 +397,14 @@ fn double(x: Int) -> Int = x * 2
 fn main() uses Console =
   print(id(double)(3))
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    6
-    ()
+  [%expect
+    {|
+    error: a generic `T` can't be a block
+      ┌─ test.ren:5:12
+    5 │   print(id(double)(3))
+      │            ^^^^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
     |}]
 
 let%expect_test "[s3 reject] printing a function" =
@@ -394,10 +416,14 @@ fn double(x: Int) -> Int = x * 2
 fn main() uses Console =
   print(double)
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    <fn double>
-    ()
+  [%expect
+    {|
+    error: a generic `T` can't be a block
+      ┌─ test.ren:4:9
+    4 │   print(double)
+      │         ^^^^^^ a block
+      = a type variable stands for data, which can be stored or returned
+      help: pass a block only to a parameter written `fn(...)`
     |}]
 
 let%expect_test "[s3 reject] comparing functions" =
@@ -410,15 +436,14 @@ fn inc(x: Int) -> Int = x + 1
 fn main() uses Console =
   print(inc == inc)
 |};
-  (* until s3: today's output *)
   [%expect
     {|
-    error: `fn(Int) -> Int` has no `==`
+    error: a block can only be called or passed, not compared
       ┌─ test.ren:4:9
     4 │   print(inc == inc)
-      │         ^^^^^^^^^^
-      = a type with a function in it has no `==` or `hash`
-      help: a function can't be compared: compare what it returns instead
+      │         ^^^^^^^^^^ a block
+      = a block lives only as long as the call it's passed to
+      help: compare what it returns instead
     |}]
 
 let%expect_test "[s3 reject] an associated value holding a block" =
@@ -432,10 +457,14 @@ type Steps = { n: Int }
 fn main() uses Console =
   print(Steps.step(1))
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    2
-    ()
+  [%expect
+    {|
+    error: an associated value can't hold a block
+      ┌─ test.ren:2:13
+    2 │   let step: fn(Int) -> Int = fn(x) => x + 1
+      │             ^^^^^^^^^^^^^^ a block's type
+      = a block lives only as long as the call it's passed to
+      help: make it a function: `fn step(...)`
     |}]
 
 let%expect_test "[s3 reject] a handler parameter of a function type" =
@@ -454,22 +483,14 @@ fn main() uses Console =
   with h(fn() => 3) in
     print(N.get())
 |};
-  (* until s3: today's output *)
   [%expect
     {|
-    error: `f` is kept by the handler, whose operations run where a `with` installs it, so it isn't transparent
-      ┌─ test.ren:5:12
-    5 │   get() => f()
-      │            ^
-      = a parameter whose type is written `fn(...)` can only be called, or passed straight to another function
-      help: to keep it, name its rows, `f: fn(...) ! ..e uses ..d`, or remove the type and let it be inferred
-
-    error: `f` can fail, and nothing handles it
-      ┌─ test.ren:5:12
-    5 │   get() => f()
-      │            ^^^
-      │            - it can fail with whatever the function passed as `f` fails with
-      help: pass the errors on with `try`, or handle them with `match`
+    error: a handler's parameters are data
+      ┌─ test.ren:4:11
+    4 │ handler h(f: fn() -> Int) for N =
+      │           ^^^^^^^^^^^^^^ `f` is a block
+      = a handler's description is a value, which can outlive the call that made it
+      help: pass the data, or make the behaviour a dependency
     |}]
 
 let%expect_test "[s3 reject] handler state holding a block" =
@@ -488,10 +509,14 @@ fn main() uses Console =
   with h() in
     print(N.get())
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    1
-    ()
+  [%expect
+    {|
+    error: a handler's state can't hold a block
+      ┌─ test.ren:5:7
+    5 │   var k = fn() => 1
+      │       ^ a block
+      = a block lives only as long as the call it's passed to
+      help: keep data in the state, and call a function from the operation
     |}]
 
 let%expect_test "[s3 reject] a description's argument holding a block" =
@@ -509,10 +534,14 @@ fn main() uses Console =
   with holding(fn() => 2) in
     print(N.get())
 |};
-  (* until s3: today's output *)
-  [%expect {|
-    1
-    ()
+  [%expect
+    {|
+    error: a handler's parameters are data
+      ┌─ test.ren:8:16
+    8 │   with holding(fn() => 2) in
+      │                ^^^^^^^^^ a block
+      = a handler's description is a value, which can outlive the call that made it
+      help: pass the data, or make the behaviour a dependency
     |}]
 
 let%expect_test "[s3 reject] a block's type naming its dependencies' row" =
@@ -527,11 +556,14 @@ fn each(xs: Array<Int>, f: fn(Int) uses ..d) uses ..d =
 
 fn main() uses Console = each([1, 2], fn(x) => print(x))
 |};
-  (* until s3: today's output *)
   [%expect
     {|
-    fn each(xs: Array<Int>, f: fn(Int) uses ..d) uses ..d
-    fn main() uses Console
+    error: a block's errors and dependencies aren't named
+      ┌─ test.ren:1:43
+    1 │ fn each(xs: Array<Int>, f: fn(Int) uses ..d) uses ..d =
+      │                                           ^ `..d` names them
+      = a block is only called, never kept, so what it fails with and uses is what the call it's passed to does
+      help: leave `..d` out of the block's type
     |}]
 
 let%expect_test "[s3 reject] a block's type naming its errors' row" =
@@ -543,11 +575,14 @@ fn twice(f: fn() -> Int ! ..e) -> Int ! ..e = try f() + try f()
 
 fn main() uses Console = print(twice(fn() => 2))
 |};
-  (* until s3: today's output *)
   [%expect
     {|
-    fn twice(f: fn() -> Int ! ..e) -> Int ! ..e
-    fn main() uses Console
+    error: a block's errors and dependencies aren't named
+      ┌─ test.ren:1:29
+    1 │ fn twice(f: fn() -> Int ! ..e) -> Int ! ..e = try f() + try f()
+      │                             ^ `..e` names them
+      = a block is only called, never kept, so what it fails with and uses is what the call it's passed to does
+      help: leave `..e` out of the block's type
     |}]
 
 let%expect_test "[s3 accept] a let bound to a block, then called" =

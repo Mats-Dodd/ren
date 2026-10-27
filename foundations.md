@@ -426,7 +426,12 @@ dependencies where it's called.
    of `with`, with a fix-it; lexical lookup; `while` and `break`; cursors
    and `for` over them; `finally` where it's written; lambda sets out of
    the type checker; the deps.md, handlers.md and README sections on
-   kept lambdas rewritten.
+   kept lambdas rewritten. Landed so far: wrappers and record
+   implementations out of `with` (step 2), and blocks second-class
+   (step 3): a block is only called, passed, or the value of a `let` of
+   one literal `fn`; written types, generics and handler parameters hold
+   none; Infer checks it after inference and Core Lint again. Capture is
+   still by value until step 5, and lookup still dynamic until step 4.
 2. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.

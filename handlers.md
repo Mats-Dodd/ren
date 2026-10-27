@@ -184,6 +184,12 @@ written in a `with` is an error, "`with` installs only handlers", whose
 help writes the call: `call it: try retry(3) fn() => ...`, with `try`
 only when the function can fail.
 
+A handler keeps no block either. Its description is a value, which can
+outlive the call that made it, so its parameters are data: `handler
+h(f: fn() -> Int) for N` is an error, "a handler's parameters are data",
+with the help `pass the data, or make the behaviour a dependency`, and
+so is a `var` in its state that holds a block.
+
 ## When a `with` ends: `finally`
 
 A handler can run code when the `with` that installed it ends. It's given
@@ -500,10 +506,10 @@ it:
 - **`next` isn't a keyword:** in a handler declared `over`, `next.op(...)`
   and `next(A).op(...)` reach the one under it, and nothing there can be
   named `next`. It can only be called through, never kept.
-- **A lambda can't call `next`:** a lambda can outlive the operation,
-  and passed to the implementation under the handler and kept there, it
-  would reach it again, a cycle. An operation calls `next` and gives the
-  lambda what it returned.
+- **A lambda can't call `next`:** passed to the implementation under
+  the handler and kept there, it would reach it again, a cycle. Since
+  10c a block can't be kept (foundations.md), but the rule stays for
+  now. An operation calls `next` and gives the block what it returned.
 - **A chain installs what its bottom installs,** with each link above
   taking the place of what it goes over: `cached(ttl) over counting()`,
   where `counting` is a `Prices & Calls`, installs both.

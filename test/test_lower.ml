@@ -187,20 +187,14 @@ let%expect_test "a function of the group being checked is used at its own type"
     =
   (* [walk] and [back] are checked together, so each is used at its own
      type in the other: its type arguments are the variables of the
-     function it's used in. A public function is used at a copy of the
-     type its declaration gives it, even in its own body, where storing
-     [f] as a `fn()` closes only that copy's rows *)
+     function it's used in *)
   core ~types:true
     {|
-type H = { h: fn() }
 fn walk(x, n) = if n == 0 then x else back(x, n - 1)
 fn back(x, n) = walk(x, n)
-pub fn f() =
-  let k = H { h: f }
-  ()
 fn main() =
   let s = walk("a", 3)
-  f()
+  ()
 |};
   [%expect
     {|
@@ -208,10 +202,8 @@ fn main() =
       (if (== (eq Int) n/2 0) x/1 (call ev/3 (inst back T {..d}) x/1 (- n/2 1))))
     (fn back : fn(T, Int) -> T uses ..d (x/1 n/2) ev/3
       (call ev/3 (inst walk T {..d}) x/1 n/2))
-    (fn f : fn() ! ..e uses ..d () ev/1 (let k/2 (record (h: (inst f {} {}))) ()))
     (fn main : fn() ! ..e uses ..d () ev/1
-      (let s/2 (call ev/1 (inst walk Str {..d}) "a" 3)
-        (call ev/1 (inst f {} {..d}))))
+      (let s/2 (call ev/1 (inst walk Str {..d}) "a" 3) ()))
     (fn $start : fn() ! ..e () ev/1 (call ev/1 (inst main {..e} {..r})))
     |}]
 
@@ -401,6 +393,67 @@ let%expect_test "Core Lint reports a use at the wrong type arguments" =
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `id` is given 1 type and 0 row arguments, but `fn(T) -> T ! ..e uses ..d` has 1 type and 2 row variables")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
+let%expect_test "Core Lint reports a block as a type argument" =
+  (* `id` at `fn(Int) -> Int`: a type variable never stands for a block *)
+  let int_fn : Ren.Ty.ty =
+    Fun ([ Ren.Ty.read Ren.Ty.int ], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed)
+  in
+  id_program { tys = [ int_fn ]; rows = [ Ren.Ty.closed; Ren.Ty.closed ] };
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: `id` is given a block's type as a type argument")
+      = this is a bug in the Ren compiler, not in your program
+    |}]
+
+let%expect_test "Core Lint reports a block that's returned" =
+  (* `fn main() = double`: a block is only called, passed, or bound by a
+     `let` *)
+  let loc = Ren.Loc.point ~file 1 1 in
+  let int_fn : Ren.Ty.ty =
+    Fun ([ Ren.Ty.read Ren.Ty.int ], Ren.Ty.int, Ren.Ty.closed, Ren.Ty.closed)
+  in
+  let fn path params ty body : Ren.Core.fn_def =
+    {
+      path = Ren.Path.make "test" path;
+      params;
+      ev = Ren.Core.evidence 9;
+      tys = [];
+      dicts = [];
+      scheme = { ty; names = []; reqs = []; row_reqs = [] };
+      body;
+      test = false;
+      loc;
+    }
+  in
+  let x : Ren.Core.var = { id = 1; name = "x"; ty = Ren.Ty.int } in
+  let double =
+    fn "double" [ { mode = Read; var = x } ] int_fn (Ren.Core.local x loc)
+  in
+  let main =
+    fn "main" []
+      (Fun ([], int_fn, Ren.Ty.closed, Ren.Ty.closed))
+      (Ren.Core.mk
+         (Global (double.path, { tys = []; rows = [] }, [], []))
+         int_fn loc)
+  in
+  report "" (fun () ->
+      Ren.Driver.pass "lint" (fun () ->
+          Ren.Core_lint.program ~imports:[] ~linked:[]
+            {
+              home = "test";
+              types = [];
+              fns = [ double; main ];
+              values = [];
+              shows = [];
+              keys = [];
+              ops = [];
+            }));
+  [%expect
+    {|
+    internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a block that isn't called, passed, or the value of a `let`")
       = this is a bug in the Ren compiler, not in your program
     |}]
 
