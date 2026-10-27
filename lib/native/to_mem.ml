@@ -536,7 +536,8 @@ let dummy fs env (l : layout) : atom =
   | Desc -> Desc_lit 0
   | Ev -> No_ev
   | Ptr -> Fn_ptr "NULL"
-  | Cell _ | Block -> bug "a cell or a block where nothing runs"
+  | Cell _ | Block | Token ->
+      bug "a cell, a block or a token where nothing runs"
 
 let drop_all fs (fr : frame) = List.iter (fun v -> drop_now fs (Var v)) fr.live
 
@@ -879,7 +880,7 @@ let rec expr fs env (e : C.expr) : atom =
         List.assoc f (List.combine (List.map fst fields) sh.slots)
       in
       let t = fresh fs f l in
-      emit fs (Let (t, Field (x, slot)));
+      emit fs (Let (t, Field (x, slot, List.length sh.slots)));
       dup fs (Var t);
       drop fs env x;
       own env t;
@@ -894,7 +895,9 @@ let rec expr fs env (e : C.expr) : atom =
           (fun (name, _) (slot, l) ->
             if name = f then y
             else
-              let t = borrowed fs name l (Field (x, slot)) in
+              let t =
+                borrowed fs name l (Field (x, slot, List.length sh.slots))
+              in
               dup fs t;
               t)
           fields sh.slots
@@ -1031,7 +1034,7 @@ and alloc_taking fs env sh fields =
         match atom_layout x with Word n -> Some (word_desc fs n) | _ -> None)
       fields
   in
-  owned fs env "$new" Boxed (Alloc { tag = sh.tag; fields; words })
+  owned fs env "$new" Boxed (Alloc { tag = sh.tag; fields; words; at = None })
 
 and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
   let cx = fs.cx in
@@ -1430,6 +1433,8 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
     {
       name;
       params = [ env_p; caller; args ];
+      modes = [ Owned; Owned; Owned ];
+      words = code.words;
       result = Word 0;
       fails = true;
       body = body_block;
@@ -1563,7 +1568,8 @@ and handler fs env (e : C.expr) ~ev ~captures body =
           List.fold_left
             (fun cenv (i, ((v : C.var), x)) ->
               bind cenv v
-                (let_var code v.name (atom_layout x) (Field (Var self, i + 1))))
+                (let_var code v.name (atom_layout x)
+                   (Field (Var self, i + 1, List.length captures + 1))))
             cenv
             (List.mapi (fun i c -> (i, c)) (List.combine captures values))
         in
@@ -1578,6 +1584,10 @@ and handler fs env (e : C.expr) ~ev ~captures body =
     {
       name;
       params = [ self; outer; body_p; body_desc; deps; ndeps ];
+      (* the `with` that calls it keeps its description and the body's
+         descriptor *)
+      modes = [ Borrowed; Owned; Owned; Borrowed; Owned; Owned ];
+      words = code.words;
       result = Word 0;
       fails = true;
       body = body_block;
@@ -1792,7 +1802,11 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
             (fun ((q : C.pattern), (slot, l)) ->
               match q.pkind with
               | PWild -> None
-              | _ -> Some (q, borrowed fs "$part" l (Field (x, slot))))
+              | _ ->
+                  Some
+                    ( q,
+                      borrowed fs "$part" l
+                        (Field (x, slot, List.length sh.slots)) ))
             (List.combine ps sh.slots)
         in
         let tagged sh ps =
@@ -1963,6 +1977,8 @@ let fn cx here (f : C.fn_def) : Mem.fn =
       {
         name = c_name cx f.path;
         params = tys @ dicts @ [ ev ] @ params;
+        modes = List.map (fun _ -> Owned) (tys @ dicts @ [ ev ] @ params);
+        words = fs.words;
         result;
         fails = fn_fails f;
         body;

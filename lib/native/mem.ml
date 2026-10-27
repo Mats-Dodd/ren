@@ -16,11 +16,15 @@
 
    Memory is explicit. [Alloc] makes an object, with a count of 1;
    [Dup] counts one more reference to it, [Drop] one fewer, freeing it
-   with the last, and [Free] gives back an object the program knows
-   nothing else holds. Native step 2 places them naively: a [Dup] at
-   every use of a counted variable, and a [Drop] of every variable that
-   owns one when its scope ends (to_mem.ml). Step 4's Perceus places
-   them precisely, over this same IR.
+   with the last. to_mem.ml places them naively, `--rc naive`: a [Dup]
+   at every use of a counted variable, and a [Drop] of every variable
+   that owns one when its scope ends. Perceus, `--rc perceus`, the
+   default, places them again over this same IR: borrow.ml decides which
+   parameters each function borrows ([fn.modes]), rc.ml puts a [Dup] only
+   where a value is used again and a [Drop] where it dies, specialized
+   ([Is_unique] and [Free]) when the program keeps some of its fields,
+   and reuse.ml turns a [Drop] followed by an [Alloc] of the same size
+   into a [Reset] whose memory the [Alloc] is built in.
 
    Failing is explicit too, as in Core. A function that can fail returns
    a status, its error or nothing, and writes its value through a
@@ -59,6 +63,9 @@ type layout =
   | Ptr
       (** a raw pointer: a block's environment or its arguments, an
           implementation of a dependency, a handler's code *)
+  | Token
+      (** a reuse token: the memory of an object a [Reset] found unique, to
+          build a new one in, or NULL. Never counted, and used or freed once *)
 
 (* Whether a value of this layout has a count: an object, a descriptor,
    or a type variable's word, which may be either. *)
@@ -97,13 +104,22 @@ type site_kind = Panics | Asserts
 type site = { sid : int; loc : Loc.t; wrap : wrap option; kind : site_kind }
 type cmp = Lt | Le | Gt | Ge | Eq | Ne
 
-(* A function of the runtime's (ren_rt.h). Each borrows its arguments:
-   what it keeps, it counts again itself. *)
+(* A function of the runtime's (ren_rt.h). Each borrows its arguments,
+   and counts again what it keeps, but for the two that change an array
+   in place, which take theirs ([takes]). *)
 type rt =
   | Array_len
   | Array_get of layout  (** of an array whose elements have this layout *)
-  | Array_set of layout
+  | Array_set of layout  (** a copy with one element changed *)
   | Array_push of layout
+      (** what a [Cell] holds, copied with one element more, put back *)
+  | Array_set_taking of layout
+      (** [Array_set], which takes the array and the element, and changes the
+          array in place if it's unique (lean.h, [lean_ensure_exclusive_array])
+      *)
+  | Array_push_taking of layout
+      (** [Array_push], which takes the element, and grows the array in place if
+          it's unique *)
   | Str_len
   | Str_concat
   | Str_eq
@@ -146,14 +162,22 @@ type rhs =
       (** two scalars of one layout, [Int], [Float], [Bool], [Unit] or [Enum] *)
   | Not of atom
   | Tag_of of atom  (** the tag of a sum type's value, an [Int] *)
-  | Field of atom * int
-      (** the [n]-th field of a constructor, a record or a tuple, by its slot:
-          borrowed, not counted again *)
-  | Alloc of { tag : int; fields : atom list; words : atom list }
+  | Field of atom * int * int
+      (** the [n]-th field of a constructor, a record or a tuple of [size]
+          fields, by its slot: borrowed, not counted again *)
+  | Alloc of {
+      tag : int;
+      fields : atom list;
+      words : atom list;
+      at : (atom * int list) option;
+    }
       (** a new constructor, record, tuple or error, which takes its fields, in
           the order they're declared; [words] are the descriptors of those that
           are a [Word], in order, which say whether each holds an object. An
-          error keeps its payload's descriptors after its payload, as fields *)
+          error keeps its payload's descriptors after its payload, as fields.
+          With [at], it's built in a [Token]'s memory if it has some, whose
+          slots listed already hold their fields (Lean's ExpandResetReuse.lean,
+          [reuseToSet]), and allocated if it's NULL *)
   | Alloc_array of { elem : layout; elems : atom list; desc : atom option }
       (** a new array of these elements, which it takes; [desc] describes them
           if they're [Word]s *)
@@ -194,6 +218,12 @@ type rhs =
   | Op_block of atom * int * int
       (** the [Block] of an operation, its dependency's [n]-th, of the innermost
           implementation of the dependency with this number in the evidence *)
+  | Is_unique of atom
+      (** whether an object's count is 1 (lean.h, [lean_is_exclusive]) *)
+  | Reset of atom * (int * atom) list
+      (** a unique object's memory, as a [Token]: the fields at the slots listed
+          are the variables after them, which keep their references, and the
+          others are dropped (Koka's drop-reuse, Lean's [reset]) *)
 
 type stmt =
   | Let of var * rhs
@@ -205,7 +235,11 @@ type stmt =
   | Dup_word of atom * atom
       (** a [Word], counted through the descriptor after it *)
   | Drop_word of atom * atom
-  | Free of atom
+  | Free of atom * (int * atom) list
+      (** free a unique object: the fields at the slots listed are the variables
+          after them, which keep their references, and the others are dropped
+          (Koka's drop specialization, Parc.hs, [specializeDrop]) *)
+  | Free_token of atom  (** the memory of a [Token] nothing was built in *)
   | Do of rhs  (** for what it does, a [Runtime] call or a [Call] *)
   | Call_fails of {
       result : var;
@@ -265,9 +299,17 @@ type stmt =
 
 and block = stmt list
 
+(* Whether a function takes a parameter's reference, and drops it or
+   passes it on, or borrows it from its caller, who keeps it alive. *)
+type mode = Owned | Borrowed
+
 type fn = {
   name : string;  (** its C name *)
   params : var list;
+  modes : mode list;  (** each parameter's, in order *)
+  words : (int * var) list;
+      (** the descriptor of each type variable whose values are words here, a
+          parameter or a variable its body defines first *)
   result : layout;
   fails : bool;  (** whether it returns a status, its value through a pointer *)
   body : block;
@@ -324,6 +366,14 @@ type program = {
   overflow : site;  (** where the stack overflowing is said to be *)
 }
 
+(* Whether the runtime's [rt] takes its [n]-th argument's reference: the
+   array and the element of the two that change an array in place. *)
+let takes (rt : rt) n =
+  match rt with
+  | Array_set_taking _ -> n = 0 || n = 2
+  | Array_push_taking _ -> n = 1
+  | _ -> false
+
 (* ---- printing, as s-expressions, for tests ---- *)
 
 let rec show_layout (l : layout) =
@@ -340,6 +390,7 @@ let rec show_layout (l : layout) =
   | Ev -> "Ev"
   | Block -> "Block"
   | Ptr -> "Ptr"
+  | Token -> "Token"
 
 let show_var (v : var) = v.name ^ "/" ^ string_of_int v.id
 let typed (v : var) = Core.Atom (show_var v ^ ":" ^ show_layout v.layout)
@@ -370,6 +421,8 @@ let show_rt = function
   | Array_get l -> "array-get:" ^ show_layout l
   | Array_set l -> "array-set:" ^ show_layout l
   | Array_push l -> "array-push:" ^ show_layout l
+  | Array_set_taking l -> "array-set-taking:" ^ show_layout l
+  | Array_push_taking l -> "array-push-taking:" ^ show_layout l
   | Str_len -> "str-len"
   | Str_concat -> "str-concat"
   | Str_eq -> "str-eq"
@@ -397,6 +450,10 @@ let show_rt = function
 let atoms xs = List.map (fun a -> Core.Atom (show_atom a)) xs
 let a x = Core.Atom x
 
+(* The fields a [Free] or a [Reset] keeps: [slot=var]. *)
+let kept_sexp kept =
+  List.map (fun (n, x) -> a (string_of_int n ^ "=" ^ show_atom x)) kept
+
 let rhs_sexp = function
   | Atom x -> a (show_atom x)
   | Arith (op, x, y, _) ->
@@ -405,12 +462,27 @@ let rhs_sexp = function
   | Compare (c, x, y) -> Core.List (a (show_cmp c) :: atoms [ x; y ])
   | Not x -> Core.List (a "not" :: atoms [ x ])
   | Tag_of x -> Core.List (a "tag" :: atoms [ x ])
-  | Field (x, n) ->
-      Core.List [ a "field"; a (show_atom x); a (string_of_int n) ]
-  | Alloc { tag; fields; words } ->
+  | Field (x, n, size) ->
+      Core.List
+        [
+          a "field";
+          a (show_atom x);
+          a (string_of_int n ^ "/" ^ string_of_int size);
+        ]
+  | Alloc { tag; fields; words; at } ->
       Core.List
         ((a "alloc" :: a ("#" ^ string_of_int tag) :: atoms fields)
-        @ if words = [] then [] else [ Core.List (a "words" :: atoms words) ])
+        @ (if words = [] then [] else [ Core.List (a "words" :: atoms words) ])
+        @
+        match at with
+        | None -> []
+        | Some (t, same) ->
+            [
+              Core.List
+                (a "at"
+                :: a (show_atom t)
+                :: List.map (fun n -> a ("=" ^ string_of_int n)) same);
+            ])
   | Alloc_array { elem; elems; desc } ->
       Core.List
         ((a ("array:" ^ show_layout elem) :: atoms elems)
@@ -444,6 +516,8 @@ let rhs_sexp = function
           a ("dep" ^ string_of_int dep);
           a (string_of_int op);
         ]
+  | Is_unique x -> Core.List [ a "unique?"; a (show_atom x) ]
+  | Reset (x, kept) -> Core.List (a "reset" :: a (show_atom x) :: kept_sexp kept)
 
 let rec stmt_sexp = function
   | Let (v, r) -> Core.List [ a "let"; typed v; rhs_sexp r ]
@@ -454,7 +528,8 @@ let rec stmt_sexp = function
   | Drop x -> Core.List [ a "drop"; a (show_atom x) ]
   | Dup_word (x, d) -> Core.List [ a "dup"; a (show_atom x); a (show_atom d) ]
   | Drop_word (x, d) -> Core.List [ a "drop"; a (show_atom x); a (show_atom d) ]
-  | Free x -> Core.List [ a "free"; a (show_atom x) ]
+  | Free (x, kept) -> Core.List (a "free" :: a (show_atom x) :: kept_sexp kept)
+  | Free_token x -> Core.List [ a "free-token"; a (show_atom x) ]
   | Do r -> Core.List [ a "do"; rhs_sexp r ]
   | Call_fails { result; fn; args; error; on_error } ->
       Core.List
@@ -524,13 +599,24 @@ and error_sexp error = function
   | Some b -> [ Core.List (a "error" :: typed error :: List.map stmt_sexp b) ]
   | None -> []
 
+(* A borrowed parameter is printed with a [^] before it, as Koka writes
+   one. *)
 let show_fn (f : fn) =
+  let param (v : var) m =
+    match (m : mode) with
+    | Owned -> typed v
+    | Borrowed -> Core.Atom ("^" ^ show_var v ^ ":" ^ show_layout v.layout)
+  in
+  let modes =
+    if List.length f.modes = List.length f.params then f.modes
+    else List.map (fun _ -> Owned) f.params
+  in
   Core.render 0
     (Core.List
        [
          a "fn";
          a f.name;
-         Core.List (List.map typed f.params);
+         Core.List (List.map2 param f.params modes);
          a ((if f.fails then "fails " else "") ^ "-> " ^ show_layout f.result);
          block_sexp f.body;
        ])

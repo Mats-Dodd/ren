@@ -16,11 +16,15 @@
 
    Memory is explicit. [Alloc] makes an object, with a count of 1;
    [Dup] counts one more reference to it, [Drop] one fewer, freeing it
-   with the last, and [Free] gives back an object the program knows
-   nothing else holds. Native step 2 places them naively: a [Dup] at
-   every use of a counted variable, and a [Drop] of every variable that
-   owns one when its scope ends (to_mem.ml). Step 4's Perceus places
-   them precisely, over this same IR.
+   with the last. to_mem.ml places them naively, `--rc naive`: a [Dup]
+   at every use of a counted variable, and a [Drop] of every variable
+   that owns one when its scope ends. Perceus, `--rc perceus`, the
+   default, places them again over this same IR: borrow.ml decides which
+   parameters each function borrows ([fn.modes]), rc.ml puts a [Dup] only
+   where a value is used again and a [Drop] where it dies, specialized
+   ([Is_unique] and [Free]) when the program keeps some of its fields,
+   and reuse.ml turns a [Drop] followed by an [Alloc] of the same size
+   into a [Reset] whose memory the [Alloc] is built in.
 
    Failing is explicit too, as in Core. A function that can fail returns
    a status, its error or nothing, and writes its value through a
@@ -59,6 +63,9 @@ type layout =
   | Ptr
       (** a raw pointer: a block's environment or its arguments, an
           implementation of a dependency, a handler's code *)
+  | Token
+      (** a reuse token: the memory of an object a [Reset] found unique, to
+          build a new one in, or NULL. Never counted, and used or freed once *)
 
 (* Whether a value of this layout has a count: an object, a descriptor,
    or a type variable's word, which may be either. *)
@@ -96,13 +103,22 @@ type site_kind = Panics | Asserts
 type site = { sid : int; loc : Loc.t; wrap : wrap option; kind : site_kind }
 type cmp = Lt | Le | Gt | Ge | Eq | Ne
 
-(* A function of the runtime's (ren_rt.h). Each borrows its arguments:
-   what it keeps, it counts again itself. *)
+(* A function of the runtime's (ren_rt.h). Each borrows its arguments,
+   and counts again what it keeps, but for the two that change an array
+   in place, which take theirs ([takes]). *)
 type rt =
   | Array_len
   | Array_get of layout  (** of an array whose elements have this layout *)
-  | Array_set of layout
+  | Array_set of layout  (** a copy with one element changed *)
   | Array_push of layout
+      (** what a [Cell] holds, copied with one element more, put back *)
+  | Array_set_taking of layout
+      (** [Array_set], which takes the array and the element, and changes the
+          array in place if it's unique (lean.h, [lean_ensure_exclusive_array])
+      *)
+  | Array_push_taking of layout
+      (** [Array_push], which takes the element, and grows the array in place if
+          it's unique *)
   | Str_len
   | Str_concat
   | Str_eq
@@ -145,14 +161,22 @@ type rhs =
       (** two scalars of one layout, [Int], [Float], [Bool], [Unit] or [Enum] *)
   | Not of atom
   | Tag_of of atom  (** the tag of a sum type's value, an [Int] *)
-  | Field of atom * int
-      (** the [n]-th field of a constructor, a record or a tuple, by its slot:
-          borrowed, not counted again *)
-  | Alloc of { tag : int; fields : atom list; words : atom list }
+  | Field of atom * int * int
+      (** the [n]-th field of a constructor, a record or a tuple of [size]
+          fields, by its slot: borrowed, not counted again *)
+  | Alloc of {
+      tag : int;
+      fields : atom list;
+      words : atom list;
+      at : (atom * int list) option;
+    }
       (** a new constructor, record, tuple or error, which takes its fields, in
           the order they're declared; [words] are the descriptors of those that
           are a [Word], in order, which say whether each holds an object. An
-          error keeps its payload's descriptors after its payload, as fields *)
+          error keeps its payload's descriptors after its payload, as fields.
+          With [at], it's built in a [Token]'s memory if it has some, whose
+          slots listed already hold their fields (Lean's ExpandResetReuse.lean,
+          [reuseToSet]), and allocated if it's NULL *)
   | Alloc_array of { elem : layout; elems : atom list; desc : atom option }
       (** a new array of these elements, which it takes; [desc] describes them
           if they're [Word]s *)
@@ -193,6 +217,12 @@ type rhs =
   | Op_block of atom * int * int
       (** the [Block] of an operation, its dependency's [n]-th, of the innermost
           implementation of the dependency with this number in the evidence *)
+  | Is_unique of atom
+      (** whether an object's count is 1 (lean.h, [lean_is_exclusive]) *)
+  | Reset of atom * (int * atom) list
+      (** a unique object's memory, as a [Token]: the fields at the slots listed
+          are the variables after them, which keep their references, and the
+          others are dropped (Koka's drop-reuse, Lean's [reset]) *)
 
 type stmt =
   | Let of var * rhs
@@ -204,7 +234,11 @@ type stmt =
   | Dup_word of atom * atom
       (** a [Word], counted through the descriptor after it *)
   | Drop_word of atom * atom
-  | Free of atom
+  | Free of atom * (int * atom) list
+      (** free a unique object: the fields at the slots listed are the variables
+          after them, which keep their references, and the others are dropped
+          (Koka's drop specialization, Parc.hs, [specializeDrop]) *)
+  | Free_token of atom  (** the memory of a [Token] nothing was built in *)
   | Do of rhs  (** for what it does, a [Runtime] call or a [Call] *)
   | Call_fails of {
       result : var;
@@ -264,9 +298,17 @@ type stmt =
 
 and block = stmt list
 
+(* Whether a function takes a parameter's reference, and drops it or
+   passes it on, or borrows it from its caller, who keeps it alive. *)
+type mode = Owned | Borrowed
+
 type fn = {
   name : string;  (** its C name *)
   params : var list;
+  modes : mode list;  (** each parameter's, in order *)
+  words : (int * var) list;
+      (** the descriptor of each type variable whose values are words here, a
+          parameter or a variable its body defines first *)
   result : layout;
   fails : bool;  (** whether it returns a status, its value through a pointer *)
   body : block;
@@ -323,6 +365,10 @@ type program = {
   overflow : site;  (** where the stack overflowing is said to be *)
 }
 
+(* Whether the runtime's [rt] takes its [n]-th argument's reference: the
+   array and the element of the two that change an array in place. *)
+val takes : rt -> int -> bool
+
 (* ---- printing, as s-expressions, for tests ---- *)
 
 val show_layout : layout -> string
@@ -331,5 +377,5 @@ val show_atom : atom -> string
 val show_rt : rt -> string
 
 (* A function, as the expect tests print it: each variable with its
-   layout where it's defined. *)
+   layout where it's defined, and a borrowed parameter with a [^]. *)
 val show_fn : fn -> string

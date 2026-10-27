@@ -92,8 +92,13 @@ typedef struct {
 /* ---- statistics ---- */
 
 #ifdef REN_STATS
+/* [allocs] counts the objects made and [frees] those given back, so
+   their difference is what's live; [reuses] counts objects built in the
+   memory of one that died, which is neither, and [grows] an array's
+   buffer made bigger in place, which [peak_bytes] counts but isn't an
+   object. */
 typedef struct {
-  int64_t allocs, frees, dups, drops, reuses, live_bytes, peak_bytes,
+  int64_t allocs, frees, dups, drops, reuses, grows, live_bytes, peak_bytes,
       block_calls;
 } ren_stats_t;
 extern ren_stats_t ren_stats;
@@ -162,8 +167,7 @@ static inline void ren_drop(ren_obj *o) {
 }
 
 /* Whether [o] is held by nothing else, so it can be changed in place:
-   Lean's `lean_is_exclusive`, kklib's `kk_block_is_unique`. Nothing in
-   the naive backend asks yet. */
+   Lean's `lean_is_exclusive`, kklib's `kk_block_is_unique`. */
 static inline bool ren_is_unique(ren_obj *o) {
   return !ren_is_scalar(o) && o->rc == 1;
 }
@@ -175,6 +179,36 @@ static inline bool ren_is_unique(ren_obj *o) {
 ren_obj *ren_alloc_ctor(uint16_t tag, uint32_t nfields, uint32_t objs);
 
 static inline ren_val *ren_fields(ren_obj *o) { return ((ren_ctor *)o)->fields; }
+
+/* ---- reuse ----
+
+   What Perceus does with an object that dies unique (compiler.md,
+   "Native slice"). [kept] has a bit for each field the program took
+   out of it, whose reference is now the program's: every other field
+   that holds an object is dropped. */
+
+/* Free [o], whose count is 1, and drop the fields it doesn't keep: Koka's
+   drop specialization (Parc.hs, `specializeDrop`), so taking the fields
+   of a constructor that dies costs no counting. */
+void ren_free_keeping(ren_obj *o, uint32_t kept);
+
+/* The same, but keep [o]'s memory to build a constructor of as many
+   fields in: a reuse token (Lean's `reset`, kklib.h's
+   `kk_block_alloc_at`). */
+ren_obj *ren_reset(ren_obj *o, uint32_t kept);
+
+/* A token's memory as a constructor of [tag] again, with a count of 1;
+   the caller writes the fields that changed. */
+static inline ren_obj *ren_reuse(ren_obj *tok, uint16_t tag, uint32_t objs) {
+  REN_STAT(reuses);
+  tok->rc = 1;
+  tok->tag = tag;
+  tok->objs = objs;
+  return tok;
+}
+
+/* A token nothing was built in: its memory, if it has some, given back. */
+void ren_free_token(ren_obj *tok);
 
 /* An array of [len] elements, which the caller fills in. */
 ren_obj *ren_alloc_array(int64_t len, bool boxed_elems);
@@ -195,6 +229,15 @@ ren_obj *ren_array_set(ren_obj *a, int64_t i, ren_val v, const ren_site *site);
 /* `&xs.push(v)`: what [cell] holds, copied, with [v] after it, put back
    in [cell]. [v] isn't taken. */
 void ren_array_push(ren_obj **cell, ren_val v);
+
+/* What Perceus calls instead, which take the array and [v]: the array
+   changed in place if it's unique, and copied first if it isn't, as
+   lean.h's `lean_ensure_exclusive_array` (lean.h:1142-1182) does. A
+   push grows the buffer by doubling it, so pushing n elements onto a
+   unique array copies O(n) of them in all. */
+ren_obj *ren_array_set_taking(ren_obj *a, int64_t i, ren_val v,
+                              const ren_site *site);
+void ren_array_push_taking(ren_obj **cell, ren_val v);
 
 /* ---- strings ---- */
 

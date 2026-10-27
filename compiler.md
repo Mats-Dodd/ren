@@ -68,7 +68,7 @@ inference every body a value goes through.
 | Core | lower.ml | the program with one way to change something, every node typed, evidence explicit; type arguments from R2, requirement dictionaries from R4 | Core Lint, which the tests run on every program | yes |
 | specialized Core | the specializer | Core with type arguments and requirements chosen, and each block and known handler specialized where it's used | Core Lint | the memory stage |
 | Mem IR | memory lowering | A-normal form, layouts, a block as a code and a frame pointer | its own lint | the sequential subset ([Native slice](#native-slice)): to_mem.ml, checked by mem_lint.ml on every build; generic code through descriptors, blocks, evidence and handlers since native step 3 |
-| Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | naive: a dup at every use and a drop at every scope's end, placed by to_mem.ml; Perceus in native step 4 |
+| Mem IR, counted | borrow inference, Perceus | borrows, dup and drop, reuse tokens | its own lint; the resource checks | since native step 4: borrow.ml, rc.ml and reuse.ml, each function's counting checked path by path by Mem Lint; the naive counting to_mem.ml places, a dup at every use and a drop at every scope's end, is `ren build --rc naive` |
 | C | the C backend | the counted Mem IR, emitted | the C compiler, ASan and UBSan | the first-order subset: emit_c.ml and the runtime, `ren build`, tested under ASan and UBSan against `ren run` |
 
 ## The facts
@@ -121,10 +121,16 @@ it, each fact says so, and which step fixes it.
   so copy-in, copy-out and passing by reference mean the same. That's
   about the slot: the buffer in it can still be shared, `let a = xs;
   f(&xs, a)`, so changing it in place keeps Perceus's uniqueness check.
-- **Ownership, lifetimes, reuse credits, provenance.** Later, each by
-  its own pass over Mem IR, after specialization: a known callee's body
-  says whether it borrows, consumes or keeps a value, which is what
-  makes reuse possible.
+- **Ownership.** Since native step 4, by its own passes over Mem IR,
+  each computing one fact (Native slice, "Step 4"). Borrow inference
+  (borrow.ml), over the whole program's calls, decides whether each
+  parameter is borrowed or owned, carried in `Mem.fn.modes`: a known
+  callee's body says whether it consumes a value. Perceus (rc.ml)
+  places each `Dup` and `Drop` from that, and reuse (reuse.ml) a reuse
+  token, a variable of layout `Token` an `Alloc` builds in. Mem Lint
+  checks the counting they place on every path of every function.
+- **Lifetimes, reuse credits, provenance.** Later, each by its own pass
+  over Mem IR, after specialization.
 
 ## What each IR promises
 
@@ -1730,3 +1736,116 @@ What later steps need to know:
 - `block calls` in the stats counts every indirect call, a
   dependency's operation included, so a program that prints once
   counts two: `$start`'s body and `Console.write`.
+
+### Step 4: Perceus
+
+The counting is placed precisely now, in both builds: a value is
+counted again only where it's used again, and dropped as soon as it's
+dead; a parameter only read is borrowed, and counted nowhere; and what
+dies where one as big is built is reused. Three passes over the Mem IR
+to_mem.ml makes, each computing one fact, then Mem Lint:
+
+- **rc.ml, `Rc.prepare`,** puts the naive IR in a shape Perceus can see
+  through: every count erased, `Array_set` and `Array_push` made the
+  ones that take the array (`Array_set_taking`, `Array_push_taking`),
+  and each `match` arm only one test reaches moved to that test, so
+  the subject dies where the arm's pattern takes it apart; a pattern's
+  variable, set once there, is a `Let` of its field, and the loads
+  to_mem.ml made only to drop what a cell held are gone.
+- **borrow.ml** decides each parameter's mode, `Mem.fn.modes`, after
+  Lean's InferBorrow.lean: every counted parameter of a function only
+  the program's own calls reach starts borrowed (`mkInitParamMap`,
+  :86), and one the body returns, raises, stores, gives to an owned
+  parameter or changes is owned, as is one a field or a view of it is
+  given away through; until nothing changes (`infer`, :263). `^name` in
+  the printed IR is a borrowed parameter. A function a block, a
+  handler or an associated value is made of keeps to_mem.ml's modes,
+  since its callers don't know which function they call: a block's
+  arguments are owned, and a handler's description and its body's
+  descriptor borrowed.
+- **rc.ml, `Rc.program`,** places the counting, one function at a time,
+  after Koka's Parc.hs and Lean's ExplicitRC.lean. What's counted is a
+  group, a variable and those that are only it under another name. A
+  group is owned, borrowed, a part (a field of another, borrowed from
+  it while that one's alive: Lean's derived borrows), or a view (what a
+  mutable variable, a local whose address is taken, or a cell holds
+  now, borrowed while that doesn't change; one live where it changes
+  is a snapshot, which owns a reference). A use that takes a reference
+  takes the group's where the group dies, and counts it again where it
+  doesn't (`addIncBefore`); a group that dies at a use that only reads
+  it is dropped right after (`addDecIfNeeded`); each branch first drops
+  what's dead in it (`addPrologForAlt`, Koka's `parcBranches`, :239);
+  and when a group dies, its parts still used are counted first, so
+  they own theirs from then on. A drop whose object's fields are still
+  used is specialized (Koka's `specializeDrop`, :356): if it's unique
+  it's freed (`Free`) without counting the fields, and if not they're
+  counted and it's dropped. A use of a cell's array that's filled
+  again right after, with nothing between that reads it or calls
+  anything, takes it from the cell without counting it, so `p[i] = v`
+  through an `&` parameter changes the array in place.
+- **reuse.ml** reuses an object that dies where a constructor of as
+  many fields is built after it, on the path that goes on (Koka's
+  ParcReuse.hs, `ruBranch` :305; Lean's ResetReuse.lean): the
+  specialized drop becomes a `Reset` if it's unique, whose memory is a
+  token the `Alloc` takes, `alloc ... (at tok =1 =4)` in the printed IR,
+  with the slots that hold what they held not written again (Lean's
+  ExpandResetReuse.lean). If it isn't unique the token is null and the
+  `Alloc` allocates. A token no build takes is freed (`Free_token`)
+  where its path ends, or before a loop. A record's update is a
+  constructor built where the record dies, and reuses it the same way.
+
+Arrays change in place when they're unique: `Array_set_taking` and
+`Array_push_taking` take the array, and copy it only if it's shared
+(lean.h, `lean_ensure_exclusive_array`), so `&xs[i] = v` and
+`&out.push(x)` on an array nothing else holds allocate nothing. A push
+that outgrows its buffer reallocates it, which the stats count as a
+`grow`, not an allocation. The runtime's `ren_is_unique`,
+`ren_free_keeping`, `ren_reset`, `ren_reuse` and `ren_free_token` are
+what `Free`, `Reset` and `Alloc ... at` emit.
+
+**Mem Lint checks the counting,** path by path, in both builds:
+every reference a function holds is given away or dropped exactly
+once on every path, a borrowed parameter is never dropped, nothing is
+read after its last reference is dropped, a part kept by a `Free` or
+a `Reset` is a field of what's freed, a cell lent to the function holds
+one reference when it ends, and every reuse token is used or freed. It
+tracks bundles of references, one per value under all its names; a
+cell's value is one reference fewer at any call, since what's called
+may change it. Where paths meet, the variables that share a value on
+one path are taken together, and hold as many on each.
+
+`ren build --rc naive` keeps step 2's counting, H3's baseline, and
+`--emit-mem` prints the counted Mem IR. bench/build.t builds every
+program in both, the same as `ren run` under the sanitizers with no
+object alive at the end, and checks that rbtree counts fewer times
+with Perceus than naive, that fannkuch allocates as many objects for 7
+as for 6, and that `map` over an array of 2000 allocates as many as
+over 1000. test/test_native.ml shows rbtree's `lookup` borrowing the
+tree, its `balance_right` building in the node it took apart, the
+prelude's `map` pushing in place, fannkuch's `flip` swapping in place,
+and what Lint's check of the counting catches.
+
+Where it differed from its plan:
+
+- **Placement is one backward pass over groups,** not Koka's forward
+  pass: liveness is the same analysis, and the groups, parts and views
+  are what make the debug build's IR, full of `Let`s that rename,
+  precise.
+- **Only one level of reuse.** A node taken apart inside one that's
+  reused has its fields counted again rather than being reused too,
+  as Koka's nested drop specialization would; rbtree's `balance`
+  reuses the outer node.
+- **A function a block or a handler is made of isn't inferred,** above.
+
+What later steps need to know:
+
+- Modes are `Mem.fn.modes`, decided once by borrow.ml; to_mem.ml makes
+  every function's `Owned`, and the naive build keeps them. A call's
+  arguments follow its callee's modes, a `Runtime` borrows but what
+  `Mem.takes` says, and an `Alloc`'s descriptors are borrowed.
+- A `Field` carries its object's size, which reuse needs; `Alloc`'s
+  `at` names the token and the slots not written again.
+- A copy per type that step 5 makes is an ordinary `Mem.fn`, which
+  these passes count as they count any other; the take of a cell's
+  array relies on the same `&` rule, that it aliases nothing the callee
+  can see, that `restrict` will.

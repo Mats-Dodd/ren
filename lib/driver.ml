@@ -1369,7 +1369,9 @@ let not_native ~file loc what =
        ~help:(sprintf "run it with `ren run %s`" file)
        (what ^ " isn't in the native slice yet"))
 
-let mem ?lint ?load ~file src =
+type rc = Naive | Perceus
+
+let mem ?lint ?load ?(rc = Perceus) ~file src =
   let modules = linked ?lint ?load ~file src in
   let p =
     pass "native lowering" (fun () ->
@@ -1377,9 +1379,16 @@ let mem ?lint ?load ~file src =
         with To_mem.Unsupported (loc, what) ->
           raise (not_native ~file loc what))
   in
+  let p =
+    match rc with
+    | Naive -> p
+    | Perceus ->
+        pass "Perceus" (fun () ->
+            Rc.prepare p |> Borrow.infer |> Rc.program |> Reuse.program)
+  in
   pass "Mem Lint" (fun () -> Mem_lint.program p);
   p
 
-let native ?lint ?load ~sources ~file src =
-  let p = mem ?lint ?load ~file src in
+let native ?lint ?load ?rc ~sources ~file src =
+  let p = mem ?lint ?load ?rc ~file src in
   pass "C" (fun () -> Emit_c.program ~site_text:(site_text ~sources) p)

@@ -184,14 +184,21 @@ val wrap_help : sources:(string -> string option) -> Eval.wrap -> string option
 (* The program, as Mem IR (mem.ml): its modules linked, and what `$start`
    reaches lowered, then checked by Mem Lint, which runs on every build.
    With [lint], Core Lint checks each module first. Code the native slice
-   can't compile yet is an error that says so, at that code. *)
-val mem : ?lint:bool -> ?load:loader -> file:string -> string -> Mem.program
+   can't compile yet is an error that says so, at that code. Its counting
+   is placed by Perceus (rc.ml), or with [~rc:Naive] as to_mem.ml makes
+   it, a count at every use and a drop where the scope ends, the
+   baseline Perceus is measured against. *)
+type rc = Naive | Perceus
+
+val mem :
+  ?lint:bool -> ?load:loader -> ?rc:rc -> file:string -> string -> Mem.program
 
 (* The same, as one C file, the runtime in it. [sources] gives the text
    of each file a panic's message can show, by name (diag.ml). *)
 val native :
   ?lint:bool ->
   ?load:loader ->
+  ?rc:rc ->
   sources:(string -> string option) ->
   file:string ->
   string ->

@@ -453,7 +453,9 @@ dependencies where it's called.
    the sanitizers; and the debug strategy for the rest of the subset
    (step 3): descriptors for generic code, blocks as a code and a
    stack environment, evidence and handler descriptions, so every
-   benchmark builds (compiler.md, "Native slice").
+   benchmark builds; and Perceus over Mem IR (step 4), borrow
+   inference, precise counting, reuse and arrays changed in place, the
+   naive counting kept as `--rc naive` (compiler.md, "Native slice").
 3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    `over any`; `retry(n, on:)`.

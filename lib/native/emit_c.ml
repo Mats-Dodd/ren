@@ -24,7 +24,7 @@ let rec ctype (l : layout) =
   | Bool -> "bool"
   | Unit -> "ren_unit"
   | Enum -> "uint32_t"
-  | Boxed | Desc -> "ren_obj*"
+  | Boxed | Desc | Token -> "ren_obj*"
   | Cell l -> ctype l ^ "*"
   | Word _ -> "ren_val"
   | Ev -> "const ren_ev*"
@@ -36,7 +36,7 @@ let zero (l : layout) =
   | Int | Unit | Enum -> "0"
   | Float -> "0.0"
   | Bool -> "false"
-  | Boxed | Desc | Cell _ | Ev | Ptr -> "NULL"
+  | Boxed | Desc | Cell _ | Ev | Ptr | Token -> "NULL"
   | Word _ -> "(ren_val){0}"
   | Block -> "(ren_block){0}"
 
@@ -110,7 +110,7 @@ let word_of (l : layout) c =
   | Boxed | Desc -> sprintf "(ren_val){.o = %s}" c
   | Ptr | Ev -> sprintf "(ren_val){.p = (void*)%s}" c
   | Int | Bool | Unit | Enum -> sprintf "(ren_val){.i = (int64_t)%s}" c
-  | Block | Cell _ -> bug "a block or a cell as a word"
+  | Block | Cell _ | Token -> bug "a block, a cell or a token as a word"
 
 let to_val (x : atom) = word_of (atom_layout x) (atom x)
 
@@ -124,7 +124,7 @@ let of_val l v =
   | Ev -> sprintf "((const ren_ev*)%s.p)" v
   | Int -> sprintf "%s.i" v
   | Bool | Unit | Enum -> sprintf "(%s)%s.i" (ctype l) v
-  | Block | Cell _ -> bug "a word as a block or a cell"
+  | Block | Cell _ | Token -> bug "a word as a block, a cell or a token"
 
 let site (s : site) = sprintf "&ren_site_%d" s.sid
 
@@ -165,6 +165,12 @@ let runtime rt args site_arg =
         (site ())
   | Array_push _ ->
       sprintf "ren_array_push(%s, %s)" (a 0) (to_val (List.nth args 1))
+  | Array_set_taking _ ->
+      sprintf "ren_array_set_taking(%s, %s, %s, %s)" (a 0) (a 1)
+        (to_val (List.nth args 2))
+        (site ())
+  | Array_push_taking _ ->
+      sprintf "ren_array_push_taking(%s, %s)" (a 0) (to_val (List.nth args 1))
   | Str_len -> sprintf "ren_str_len(%s)" (a 0)
   | Str_concat -> sprintf "ren_str_concat(%s, %s)" (a 0) (a 1)
   | Str_eq -> sprintf "ren_str_eq(%s, %s)" (a 0) (a 1)
@@ -203,8 +209,16 @@ let runtime rt args site_arg =
 (* Whether the runtime's [rt] gives nothing, so a [Let] of it gives [Unit]
    after calling it. *)
 let gives_nothing = function
-  | Array_push _ | Console_write | Console_error -> true
+  | Array_push _ | Array_push_taking _ | Console_write | Console_error -> true
   | _ -> false
+
+(* The slots a [Free] or a [Reset] keeps, as a mask of bits. *)
+let mask kept =
+  match kept with
+  | [] -> "0u"
+  | _ ->
+      String.concat " | "
+        (List.map (fun (n, _) -> sprintf "%uu" (1 lsl n)) kept)
 
 (* What [r] computes, as a C expression; an [Alloc] is statements of its
    own ([stmt]). *)
@@ -225,8 +239,10 @@ let rhs (r : rhs) =
       match atom_layout x with
       | Enum -> sprintf "((int64_t)%s)" (atom x)
       | _ -> sprintf "ren_tag(%s)" (atom x))
-  | Field (x, n) ->
+  | Field (x, n, _) ->
       failwith (sprintf "bug: emit_c: a field %s.%d outside a Let" (atom x) n)
+  | Is_unique x -> sprintf "ren_is_unique(%s)" (atom x)
+  | Reset (x, kept) -> sprintf "ren_reset(%s, %s)" (atom x) (mask kept)
   | Call (f, xs) -> sprintf "%s(%s)" f (String.concat ", " (List.map atom xs))
   | Runtime (rt, xs, s) ->
       let call = runtime rt xs s in
@@ -278,11 +294,11 @@ let indirect o d ~result ~error call =
 let rec stmt o d (s : stmt) =
   let line = line o d in
   match s with
-  | Let (v, Field (x, n)) ->
+  | Let (v, Field (x, n, _)) ->
       line
         (sprintf "%s %s = %s;" (ctype v.layout) (var v)
            (of_val v.layout (sprintf "ren_fields(%s)[%d]" (atom x) n)))
-  | Let (v, Alloc { tag; fields; words }) ->
+  | Let (v, Alloc { tag; fields; words; at }) -> (
       (* a bit for each field that holds an object: one that always does,
          or a word whose descriptor says it does *)
       let words = ref words in
@@ -304,14 +320,33 @@ let rec stmt o d (s : stmt) =
                | _ -> [])
              fields)
       in
-      line
-        (sprintf "ren_obj* %s = ren_alloc_ctor(%d, %d, %s);" (var v) tag
-           (List.length fields)
-           (match bits with [] -> "0" | _ -> String.concat " | " bits));
-      List.iteri
-        (fun i x ->
-          line (sprintf "ren_fields(%s)[%d] = %s;" (var v) i (to_val x)))
-        fields
+      let objs = match bits with [] -> "0" | _ -> String.concat " | " bits in
+      let alloc =
+        sprintf "ren_alloc_ctor(%d, %d, %s)" tag (List.length fields) objs
+      in
+      let set i x =
+        line (sprintf "ren_fields(%s)[%d] = %s;" (var v) i (to_val x))
+      in
+      match at with
+      | None ->
+          line (sprintf "ren_obj* %s = %s;" (var v) alloc);
+          List.iteri set fields
+      | Some (t, same) ->
+          (* in the token's memory, the slots in [same] already hold their
+             fields: only a new object needs them written *)
+          line
+            (sprintf "ren_obj* %s = %s != NULL ? ren_reuse(%s, %d, %s) : %s;"
+               (var v) (atom t) (atom t) tag objs alloc);
+          if same <> [] then (
+            line (sprintf "if (%s == NULL) {" (atom t));
+            List.iteri
+              (fun i x ->
+                if List.mem i same then
+                  line
+                    (sprintf "  ren_fields(%s)[%d] = %s;" (var v) i (to_val x)))
+              fields;
+            line "}");
+          List.iteri (fun i x -> if not (List.mem i same) then set i x) fields)
   | Let (v, Alloc_array { elem; elems; desc }) ->
       let boxed =
         match desc with
@@ -396,7 +431,9 @@ let rec stmt o d (s : stmt) =
       line (sprintf "ren_dup_val(%s, %s);" (atom x) (atom dsc))
   | Drop_word (x, dsc) ->
       line (sprintf "ren_drop_val(%s, %s);" (atom x) (atom dsc))
-  | Free x -> line (sprintf "ren_free(%s);" (atom x))
+  | Free (x, kept) ->
+      line (sprintf "ren_free_keeping(%s, %s);" (atom x) (mask kept))
+  | Free_token x -> line (sprintf "ren_free_token(%s);" (atom x))
   | Do (Runtime (rt, xs, s)) -> line (sprintf "%s;" (runtime rt xs s))
   | Do r -> line (sprintf "(void)%s;" (rhs r))
   | Call_fails { result; fn; args; error; on_error } ->

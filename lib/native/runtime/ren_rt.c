@@ -174,6 +174,40 @@ void ren_free(ren_obj *o) {
     ren_free_one(ren_todo[--ren_todo_len]);
 }
 
+/* ---- reuse ---- */
+
+static void ren_drop_unkept(ren_obj *o, uint32_t kept) {
+  ren_val *fs = ren_fields(o);
+  uint32_t drop = o->objs & ~kept;
+  for (uint32_t i = 0; i < o->nfields; i++)
+    if (drop & ((uint32_t)1 << i))
+      ren_drop(fs[i].o);
+}
+
+static void ren_free_cell(ren_obj *o) {
+#ifdef REN_STATS
+  ren_stats.frees++;
+  ren_stats.live_bytes -=
+      (int64_t)(sizeof(ren_ctor) + o->nfields * sizeof(ren_val));
+#endif
+  free(o);
+}
+
+void ren_free_keeping(ren_obj *o, uint32_t kept) {
+  ren_drop_unkept(o, kept);
+  ren_free_cell(o);
+}
+
+ren_obj *ren_reset(ren_obj *o, uint32_t kept) {
+  ren_drop_unkept(o, kept);
+  return o;
+}
+
+void ren_free_token(ren_obj *tok) {
+  if (tok != NULL)
+    ren_free_cell(tok);
+}
+
 /* ---- arrays ---- */
 
 int64_t ren_array_len(ren_obj *a) { return ((ren_array *)a)->len; }
@@ -230,6 +264,51 @@ void ren_array_push(ren_obj **cell, ren_val v) {
   ren_elems(b)[((ren_array *)b)->len - 1] = v;
   ren_drop(a);
   *cell = b;
+}
+
+ren_obj *ren_array_set_taking(ren_obj *a, int64_t i, ren_val v,
+                              const ren_site *site) {
+  ren_check_index(a, i, site);
+  if (!ren_is_unique(a)) {
+    ren_obj *b = ren_array_copy(a, 0);
+    ren_drop(a);
+    a = b;
+  }
+  ren_val *to = ren_elems(a);
+  if (a->boxed_elems)
+    ren_drop(to[i].o);
+  to[i] = v;
+  return a;
+}
+
+void ren_array_push_taking(ren_obj **cell, ren_val v) {
+  ren_obj *a = *cell;
+  if (!ren_is_unique(a)) {
+    ren_obj *b = ren_array_copy(a, 1);
+    ren_elems(b)[((ren_array *)b)->len - 1] = v;
+    ren_drop(a);
+    *cell = b;
+    return;
+  }
+  ren_array *arr = (ren_array *)a;
+  if (arr->len == arr->cap) {
+    int64_t cap = arr->cap * 2;
+    ren_val *data = realloc(arr->data, (size_t)cap * sizeof(ren_val));
+    if (data == NULL) {
+      fflush(stdout);
+      fputs("error: out of memory\n", stderr);
+      exit(1);
+    }
+#ifdef REN_STATS
+    ren_stats.grows++;
+    ren_stats.live_bytes += (cap - arr->cap) * (int64_t)sizeof(ren_val);
+    if (ren_stats.live_bytes > ren_stats.peak_bytes)
+      ren_stats.peak_bytes = ren_stats.live_bytes;
+#endif
+    arr->data = data;
+    arr->cap = cap;
+  }
+  arr->data[arr->len++] = v;
 }
 
 /* ---- strings ---- */
@@ -933,10 +1012,12 @@ static void *ren_thread(void *unused) {
 static void ren_print_stats(void) {
   fprintf(stderr,
           "ren stats: allocations %" PRId64 ", frees %" PRId64 ", dups %" PRId64
-          ", drops %" PRId64 ", reuses %" PRId64 ", peak live bytes %" PRId64
-          ", block calls %" PRId64 ", objects live at exit %" PRId64 "\n",
+          ", drops %" PRId64 ", reuses %" PRId64 ", grows %" PRId64
+          ", peak live bytes %" PRId64 ", block calls %" PRId64
+          ", objects live at exit %" PRId64 "\n",
           ren_stats.allocs, ren_stats.frees, ren_stats.dups, ren_stats.drops,
-          ren_stats.reuses, ren_stats.peak_bytes, ren_stats.block_calls,
+          ren_stats.reuses, ren_stats.grows, ren_stats.peak_bytes,
+          ren_stats.block_calls,
           ren_stats.allocs - ren_stats.frees);
 }
 #endif
