@@ -289,3 +289,16 @@ fn halves(xs: Array<Int>, f: fn(&Array<Int>) -> Int) -> Int =
   &ys.split_at(1) fn(&lo, &hi) => f(&lo) + hi.len()
 //                   ^ keyword.mutation
 //                    ^ variable.parameter
+
+pub fn fan_out(xs: Array<Int>, max: Int = 8, f: concurrent fn(Int) -> Int) -> Array<Int> uses Async =
+//                             ^ variable.parameter
+//                                        ^ number
+//                                              ^ keyword
+  try Async.map(xs, max: max, f)
+//^ keyword.failure
+
+fn store(k: Int) ! DbDown uses Sql =
+  try with transaction() over Sql in
+//^ keyword.failure
+//    ^ keyword
+    try Sql.set(k)

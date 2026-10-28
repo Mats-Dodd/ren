@@ -80,6 +80,7 @@ type 'l found_ = 'l Infer_env.found_ =
   | Builtin_op
   | Generic_op of string
   | Tags_given of string list
+  | Args of Ast.Resolved.expr list
 
 type found = Ty.label found_
 

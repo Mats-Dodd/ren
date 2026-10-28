@@ -81,6 +81,11 @@ type 'l found_ =
       (** at `on: A | B`, an argument of a parameter of `Tags`: the tags it
           gives, those of a named error set written out, sorted (compiler.md,
           "`over any` and `retry`") *)
+  | Args of Ast.Resolved.expr list
+      (** at a call that gives a parameter with a default by name, or leaves
+          it out: its arguments in its parameters' order, each one left out
+          its default, a literal at a node of its own, whose type is in the
+          nodes too (compiler.md, "Stage 11a", "The surface") *)
 
 (* What lowering reads: the labels are dependencies with their type
    arguments, in canonical form, numbered as the function's scheme. *)

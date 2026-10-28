@@ -179,12 +179,38 @@ module.exports = grammar({
 
     parameters: ($) => seq('(', commaSep($.parameter), ')'),
 
+    // a block parameter's mode, `f: concurrent fn(T) -> U`, and a
+    // default, `max: Int = 64` (compiler.md, "Stage 11a", "The surface")
     parameter: ($) =>
       seq(
         optional($.inout),
         field('name', choice($.identifier, $.self)),
-        optional(seq(':', field('type', $._type))),
+        optional(
+          seq(
+            ':',
+            choice(
+              seq(field('mode', $.block_mode), field('type', $.function_type)),
+              field('type', $._type),
+            ),
+          ),
+        ),
+        optional(seq('=', field('default', $._default))),
       ),
+
+    // a word before a block parameter's type, and nowhere else
+    block_mode: (_) => choice('concurrent', 'spawned'),
+
+    // a parameter's default is a literal
+    _default: ($) =>
+      choice(
+        $.number,
+        $.float,
+        $.string,
+        $.boolean,
+        $.negative,
+      ),
+
+    negative: ($) => seq('-', choice($.number, $.float)),
 
     inout: (_) => 'inout',
 
@@ -836,29 +862,43 @@ module.exports = grammar({
         ),
       ),
 
-    // f(x), s.push(x), and with a trailing lambda, twice() fn() => ...
+    // f(x), s.push(x), and with a trailing lambda, twice() fn() => ...;
+    // a call whose one argument is a block may leave out its parentheses,
+    // Async.scope fn(s) => ..., on the line of what it calls
     call_expression: ($) =>
-      prec(
+      // `f(x) fn() => ...` is a trailing block, not `f(x)` called with one
+      prec.right(
         PREC.postfix,
         seq(
           field('function', $._postfix),
-          field('arguments', $.arguments),
-          optional(field('trailing', $.lambda)),
+          choice(
+            seq(
+              field('arguments', $.arguments),
+              optional(field('trailing', $.lambda)),
+            ),
+            field('trailing', $.lambda),
+          ),
         ),
       ),
 
     // s.push(x), x.m(args) meaning Type.m(x, args); `util.double(2)`, a
     // module's function, reads the same, and only Resolve can tell them apart
     method_call_expression: ($) =>
-      prec(
+      prec.right(
         PREC.postfix + 1,
         seq(
           field('receiver', $._postfix),
           '.',
           // `call.fail(e)`, in a handler `over any`
           field('name', choice($.identifier, alias('fail', $.identifier))),
-          field('arguments', $.arguments),
-          optional(field('trailing', $.lambda)),
+          choice(
+            seq(
+              field('arguments', $.arguments),
+              optional(field('trailing', $.lambda)),
+            ),
+            // s.spawn fn() => ..., its block alone
+            field('trailing', $.lambda),
+          ),
         ),
       ),
 

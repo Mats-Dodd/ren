@@ -147,13 +147,17 @@ and closed () = REmpty
    of a dependency's type, `c: Clock`, is transparent: what it needs is
    what its function uses (deps.md, "Implementations"). [named] are the
    rows the signature names. *)
-let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
+let param_type env ~tparams ?(named = []) ?own ?(closed_block = false)
+    (p : Resolved.param) =
+  (* a block that can't fail: a spawned one, or one of `Async.race`'s
+     (Iface.closed_blocks) *)
+  let cant_fail = closed_block || p.pblock = Spawned in
   let t =
     match (p.pty, own) with
     | Some (TyFn (_, _, written_e, _, _) as t), Some (errs, _) -> (
         match convert env ~tvars:tparams ~named ~row:closed t with
         | TFun (ps, ret, e, u) ->
-            TFun (ps, ret, (if written_e = None then errs else e), u)
+            TFun (ps, ret, (if written_e = None && not cant_fail then errs else e), u)
         | _ -> assert false)
     | ( Some
           (TyImpl

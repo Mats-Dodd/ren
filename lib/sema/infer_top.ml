@@ -209,7 +209,7 @@ let check_written sink ~sets ~names (prog : program) =
     | TyName _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ | TyTuple _ -> ()
   in
   let pr =
-    Ty.printer ~names { ty = Error; names = []; reqs = []; row_reqs = [] }
+    Ty.printer ~names { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
   in
   let errors (es : Resolved.errors) =
     let tags = Iface.tags ~sets (Iface.declared_errors ~sets es) in
@@ -689,8 +689,14 @@ let new_env sink ~reachable (r : Resolve.t) =
     any_skolems = Hashtbl.create 4;
     any_call = None;
     params_of = Hashtbl.create 16;
+    defaults_of = Hashtbl.create 16;
     test_reported = Hashtbl.create 4;
   }
+
+(* A function's parameters with defaults, by their places among the
+   arguments a call gives: after `self`, for a method. *)
+let given_defaults ~method_ ds =
+  if method_ then List.map (fun (i, n, l) -> (i - 1, n, l)) ds else ds
 
 (* The types of what the module can call before any of its own functions
    is checked: the functions of [imports], the interfaces of the modules
@@ -705,7 +711,10 @@ let add_globals env ~imports ~reachable fns =
           Hashtbl.replace env.globals
             (Path.make iface.home v.vname)
             (of_scheme env.st v.scheme);
-          Hashtbl.replace env.params_of (Path.make iface.home v.vname) v.vparams)
+          Hashtbl.replace env.params_of (Path.make iface.home v.vname) v.vparams;
+          Hashtbl.replace env.defaults_of
+            (Path.make iface.home v.vname)
+            v.scheme.defaults)
         (* the test tier too: Resolve lets only tests call it *)
         (iface.values @ iface.tests))
     imports;
@@ -719,6 +728,8 @@ let add_globals env ~imports ~reachable fns =
           Path.Map.iter
             (fun path (o : Iface.op) ->
               let t = of_scheme env.st o.oscheme in
+              Hashtbl.replace env.defaults_of path
+                (given_defaults ~method_:(o.okind = Method) o.oscheme.defaults);
               Hashtbl.replace env.globals path
                 (if o.okind = Value then TFun ([], t, REmpty, REmpty) else t))
             td.members)
@@ -807,7 +818,9 @@ let setup env ~is_value (f : fn_def) =
       List.map
         (fun p ->
           let own = if f.pub then errs else fresh_row env.st in
-          param_type env ~tparams ~named ~own:(own, uses) p)
+          param_type env ~tparams ~named ~own:(own, uses)
+            ~closed_block:(Iface.closed_blocks (Ast.fn_path env.home f))
+            p)
         f.params
     in
     let ret =
@@ -923,6 +936,22 @@ let setup env ~is_value (f : fn_def) =
 let check_body env ~is_value m =
   let f = m.fn in
   bind_params ~own:true m.cx f.params m.ps;
+  (* each default is a literal of its parameter's type, as an argument
+     there would be *)
+  List.iter2
+    (fun (p : Resolved.param) (t : Types.param) ->
+      match p.pdefault with
+      | Some (lit, loc, node) ->
+          let kind : expr_kind =
+            match lit with
+            | LInt k -> Int k
+            | LFloat x -> Float x
+            | LBool b -> Bool b
+            | LStr s -> Str s
+          in
+          check env m.cx { kind; loc; node } t.ty
+      | None -> ())
+    f.params m.ps;
   let why =
     match f.ret with
     | Some _ ->
@@ -1128,6 +1157,8 @@ let check_keeps_rules env so_far (r : Resolve.t) =
                     names = List.mapi (fun i n -> (i, n)) decl.params;
                     reqs = [];
                     row_reqs = [];
+                    modes = [];
+                    defaults = [];
                   }
               in
               let fields =
@@ -1396,6 +1427,8 @@ let canonical env so_far (f : fn_def) =
       names = canon_names c;
       reqs = canon_reqs c;
       row_reqs = canon_row_reqs c;
+      modes = Iface.modes_of f.params;
+      defaults = Iface.defaults_of f.params;
     }
   in
   let cx = Hashtbl.find so_far.tables path in
@@ -1528,7 +1561,8 @@ let canonical env so_far (f : fn_def) =
         | Unwrap -> Unwrap
         | Builtin_op -> Builtin_op
         | Generic_op o -> Generic_op o
-        | Tags_given ts -> Tags_given ts)
+        | Tags_given ts -> Tags_given ts
+        | Args xs -> Args xs)
       (Hashtbl.find_opt cx.found id)
   in
   let nodes =
@@ -1595,6 +1629,22 @@ let rec has_fun (t : Ty.ty) =
       List.exists (fun (l : Ty.label) -> List.exists has_fun l.payload) r.labels
   | Var _ | Impl _ | Error -> false
 
+(* Whether [t] is a scope or a task's handle, blocks too (rule D,
+   compiler.md, "Stage 11a", "The checker"), and whether it has one in
+   it anywhere. *)
+let is_handle (t : Ty.ty) =
+  match t with
+  | Con (p, []) -> p = Path.prelude "Scope"
+  | Con (p, [ _ ]) -> p = Path.prelude "Task"
+  | _ -> false
+
+let rec has_handle (t : Ty.ty) =
+  is_handle t
+  ||
+  match t with
+  | Con (_, args) -> List.exists has_handle args
+  | Fun _ | Errors _ | Var _ | Impl _ | Error -> false
+
 (* Whether a value of type [t] keeps a block: in a type's arguments or
    an error's payload. A function that returns one is reported where
    it's declared. *)
@@ -1651,11 +1701,39 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
             Some (Option.map name (Option.bind callee scheme_of)))
     | None -> None
   in
+  (* how a scope's or a handle's type is written, for a message *)
+  let shown_handle (t : Ty.ty) : Infer_msg.handle =
+    match t with
+    | Con (_, []) -> Scope_of
+    | _ ->
+        Handle
+          (Ty.show
+             (Ty.printer ~names:env.names
+                { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+             t)
+  in
+  let rec handle_in (t : Ty.ty) =
+    if is_handle t then Some t
+    else match t with Con (_, args) -> List.find_map handle_in args | _ -> None
+  in
+  let prelude = env.home = Path.prelude_home in
   let generic_here (e : expr) ~blame =
     match generic_at e with
     | Some tvar ->
         generic := (blame, Infer_msg.generic_block blame ~tvar) :: !generic
-    | None -> ()
+    | None -> (
+        (* nor for a scope or a task's handle *)
+        match Option.bind (Nodes.find_opt e.node nodes) (fun n -> n.targs) with
+        | Some (a : Ty.args) when not prelude -> (
+            match List.find_map handle_in a.tys with
+            | Some h ->
+                generic :=
+                  ( blame,
+                    Infer_msg.handle_kept ~written:false blame (shown_handle h)
+                      In_type_arg )
+                  :: !generic
+            | None -> ())
+        | _ -> ())
   in
   (* the parameters of a dependency's type, which are transparent *)
   let dep_params =
@@ -1742,6 +1820,25 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     | _, Kept place ->
         say e.loc (Infer_msg.block_kept ~written:false e.loc place)
   in
+  (* a scope or a task's handle [h], [e], at [pos]: it can be passed, a
+     callee's receiver, or the value of a `let`; elsewhere it's kept. What
+     an indented block, a `with`, an `if` or a `match` gives is said at
+     the part that gives it *)
+  let here_handle pos (e : expr) =
+    match (handle_in (ty e.node), e.kind, pos) with
+    | None, _, _ -> ()
+    | Some _, _, _ when prelude || is_block e -> ()
+    | Some _, (Block _ | With _ | If _ | Match _), _ -> ()
+    | Some _, _, (Said | Callee | Install | Receiver | Arg | Let_value _) -> ()
+    | Some h, _, Handler_arg ->
+        say e.loc (Infer_msg.handle_kept ~written:false e.loc (shown_handle h) Elsewhere)
+    | Some h, _, Kept place ->
+        let place =
+          (* one inside another type is that type's argument *)
+          if is_handle (ty e.node) then place else Infer_msg.In_type_arg
+        in
+        say e.loc (Infer_msg.handle_kept ~written:false e.loc (shown_handle h) place)
+  in
   (* where the block a `with` or an indented block gives is: a `let`
      binds, and a call is given, one written there, so one that would
      run after the `with` has ended, or its lines' `finally`s have run, is
@@ -1753,7 +1850,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
   in
   let rec walk pos (e : expr) =
     let block = is_block e in
-    if block then here pos e;
+    if block then here pos e else here_handle pos e;
     dep_param pos e;
     if pos <> Callee then generic_here e ~blame:e.loc;
     (* what a part that gives this expression's value is at *)
@@ -1819,7 +1916,14 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         List.iter (walk Said) [ target; value ]
     | Array xs ->
         if List.exists is_block xs then
-          say e.loc (Infer_msg.block_kept ~written:false e.loc In_array);
+          say e.loc (Infer_msg.block_kept ~written:false e.loc In_array)
+        else if (not prelude) && List.exists (fun (x : expr) -> handle_in (ty x.node) <> None) xs
+        then
+          say e.loc
+            (Infer_msg.handle_kept ~written:false e.loc
+               (shown_handle
+                  (List.find_map (fun (x : expr) -> handle_in (ty x.node)) xs |> Option.get))
+               In_array);
         List.iter (walk Said) xs
     | Tuple xs -> all In_tuple xs
     | Con (c, args) -> all (In_payload c.name.name) (List.map snd args)
@@ -1848,6 +1952,13 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         List.iter (walk Arg)
           (List.map (fun (a : handler_arm) -> a.arm_impl) arms)
   and stmt ~state = function
+    | Let { name; value; mut; _ }
+      when (state || mut) && (not prelude) && handle_in (ty value.node) <> None ->
+        say name.ident.loc
+          (Infer_msg.handle_kept ~written:false name.ident.loc
+             (shown_handle (Option.get (handle_in (ty value.node))))
+             (if state then In_state else In_var));
+        walk Said value
     | Let { name; value; mut; _ } when (state || mut) && is_block value ->
         (* at its name: `var f`, or a handler's `let` or `var` *)
         say name.ident.loc
@@ -1929,7 +2040,14 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
       Hashtbl.replace env.written (Ast.fn_path r.home f)
         (List.map (fun (p : Resolved.param) -> p.pty <> None) f.params);
       Hashtbl.replace env.params_of (Ast.fn_path r.home f)
-        (List.map (fun (p : Resolved.param) -> p.pname.ident.name) f.params))
+        (List.map (fun (p : Resolved.param) -> p.pname.ident.name) f.params);
+      Hashtbl.replace env.defaults_of (Ast.fn_path r.home f)
+        (given_defaults
+           ~method_:
+             (match f.params with
+             | p :: _ -> p.pname.ident.name = "self"
+             | [] -> false)
+           (Iface.defaults_of f.params)))
     fns;
   let values =
     List.concat_map

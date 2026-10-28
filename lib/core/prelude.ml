@@ -562,6 +562,88 @@ pub dep Proc =
 handler real_proc() for Proc =
   run(cmd, args) => try proc_checked(proc_run(cmd, args), cmd)
 
+// ---- tasks (async.md; foundations.md, decisions 7 and 9) ----
+//
+// The runtime is a handler of `Async`, installed around `main` as the
+// world is. Its operations are `yield` and `tick`; the functions that
+// take blocks are its members, written over the scheduler's intrinsics,
+// which stage 11a's steps build one by one: until then each panics,
+// saying which step builds it (compiler.md, "Stage 11a").
+
+pub dep Async =
+  // let every other task that can run, run first
+  yield: fn()
+  // return once every task that could run when it was called has run
+  // until it waits: the batching point
+  tick: fn()
+
+  // runs `body` with a scope its tasks are spawned into, and returns
+  // once they've all ended; `spawn` waits while `max` of them run
+  pub fn scope<T>(max: Int = 64, body: fn(s: Scope) -> T) -> T uses Async =
+    unbuilt("`Async.scope` isn't built yet: stage 11a, step 2")
+  // waits until `cond` holds: only in an operation, whose instance it
+  // lets go of meanwhile
+  pub fn until(cond: fn() -> Bool) uses Async =
+    unbuilt("`Async.until` isn't built yet: stage 11a, step 3")
+  // `body`, or `Timeout` if it's still running after `d`
+  pub fn timeout<T>(d: Duration, body: fn() -> T) -> T ! Timeout uses Async =
+    // the error its step makes it fail with
+    let late = false
+    if late then fail Timeout else unbuilt("`Async.timeout` isn't built yet: stage 11a, step 3")
+  // whichever of `a` and `b` finishes first; the other is cancelled.
+  // Neither can fail
+  pub fn race<T>(a: concurrent fn() -> T, b: concurrent fn() -> T) -> T uses Async =
+    unbuilt("`Async.race` isn't built yet: stage 11a, step 3")
+  // `body`, or `Panicked` if it panicked
+  pub fn isolate<T>(body: fn() -> T) -> T ! Panicked(msg: Str) uses Async =
+    let panicked = false
+    if panicked then fail Panicked("") else unbuilt("`Async.isolate` isn't built yet: stage 11a, step 3")
+  // `f` of each element, `max` at once, the results in order
+  pub fn map<T, U>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T) -> U) -> Array<U> uses Async =
+    unbuilt("`Async.map` isn't built yet: stage 11a, step 3")
+  // `f` of each element, `max` at once
+  pub fn each<T>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T)) uses Async =
+    unbuilt("`Async.each` isn't built yet: stage 11a, step 3")
+  // `a` and `b` at once
+  pub fn both<A, B>(a: concurrent fn() -> A, b: concurrent fn() -> B) -> (A, B) uses Async =
+    unbuilt("`Async.both` isn't built yet: stage 11a, step 3")
+  // the runtime on one thread, in real time, with real I/O
+  pub fn single() -> Async = single_runtime()
+  let real: Async = single_runtime()
+
+// One thread. With only the one task, which is all there is until stage
+// 11a's step 2, neither operation has anything to wait for (step 5 makes
+// it the scheduler's policy).
+handler single_runtime() for Async =
+  yield() => ()
+  tick() => ()
+
+// what `Async.scope` gives its body: it's passed and called, never kept
+// (foundations.md, decision 2, rule D)
+pub type Scope = builtin
+  // starts `body` as a task of this scope, waiting first while `max`
+  // of its tasks run
+  pub fn spawn(self, body: spawned fn()) uses Async =
+    unbuilt("`Scope.spawn` isn't built yet: stage 11a, step 2")
+  // the same, giving the task's handle, to join it or cancel it
+  pub fn start<T>(self, body: spawned fn() -> T) -> Task<T> uses Async =
+    unbuilt("`Scope.start` isn't built yet: stage 11a, step 2")
+  // `spawn`, after cancelling the task this scope started under `key`,
+  // if it's still running, and waiting for it to stop
+  pub fn replace<K has hash>(self, key: K, body: spawned fn()) uses Async =
+    unbuilt("`Scope.replace` isn't built yet: stage 11a, step 2")
+
+// a task's handle (rule D, as `Scope`)
+pub type Task<T> = builtin
+  // waits for the task to end: what it gave, or `None` if it was
+  // cancelled first
+  pub fn join(self) -> Option<T> uses Async =
+    unbuilt("`Task.join` isn't built yet: stage 11a, step 2")
+  // asks the task to stop, and returns at once: it stops at its next
+  // dependency call, or now, if it's waiting
+  pub fn cancel(self) uses Async =
+    unbuilt("`Task.cancel` isn't built yet: stage 11a, step 2")
+
 // ---- trying again (handlers.md, "Functions that run a block") ----
 
 // runs `body`, and again while it fails with one of `on`'s errors, up
@@ -720,7 +802,7 @@ pub test fn replay(file: Str) -> Clock & Console & Fs & Os & Proc & Random =
 (* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
    [n]th row variable, numbered by first appearance (ty.ml). *)
 let scheme_of ?(reqs = []) ty : Ty.scheme =
-  Ty.canonical { ty; names = []; reqs; row_reqs = [] }
+  Ty.canonical { ty; names = []; reqs; row_reqs = []; modes = []; defaults = [] }
 
 let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])
@@ -944,6 +1026,10 @@ let scheme (x : Intrinsic.t) =
   | Float_sqrt -> fn [ read float ] float
   (* fn(self: Str) -> Str, with `A` to `Z` made `a` to `z` *)
   | Str_lower -> fn [ read str ] str
+  (* fn<T>(what: Str) -> T: a panic, saying [what] isn't built yet; what
+     stage 11a's members of `Async`, `Scope` and `Task` call until the
+     step that builds each (compiler.md, "Stage 11a", "The surface") *)
+  | Unbuilt -> fn [ read str ] (Var 0)
 
 (* The operation of a built-in dependency that [x] is how the real one
    does, if it reaches the world: `fs_read` is `Fs.read`'s. Each is called
@@ -967,7 +1053,7 @@ let reaches (x : Intrinsic.t) =
   | Proc_run -> Some ("Proc", "run")
   | Seeded_next | Seeded_int | Journal_kept | Journal_gave | Journal_answer
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
-  | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum
+  | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
   | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_index | Str_split
@@ -999,7 +1085,7 @@ let caller (x : Intrinsic.t) =
       | Journal_load ) ) ->
       Journal
   | None, (Map_empty | Set_empty) -> Value
-  | None, (Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum) ->
+  | None, (Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt) ->
       Internal
   | None, _ -> Any
 
@@ -1035,6 +1121,7 @@ let fns : Intrinsic.t list =
     Unsafe_cast;
     Float_lanes;
     Float_sum;
+    Unbuilt;
   ]
 
 (* ---- built-in types ----
@@ -1121,6 +1208,10 @@ let types =
        value, since each function that takes one is made for each set it's
        given (compiler.md, "`over any` and `retry`") *)
     t "Tags";
+    (* a task's scope, and a task's handle (stage 11a): their members are
+       the source's *)
+    t "Scope";
+    t "Task" ~arity:1;
     t "Map" ~arity:2
       ~methods:
         [
@@ -1148,11 +1239,15 @@ let types =
    The dependencies the runtime installs around `main`, if it uses them:
    each is declared in [source], with its real implementation, `real`
    (deps.md, "`main`"). *)
-let runtime_deps = [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
+let world_deps = [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
+
+(* `Async`, the runtime itself, isn't the world: the journal records
+   none of its calls (until journal version 2, stage 11a's step 6) *)
+let runtime_deps = world_deps @ [ "Async" ]
 
 (* The dependencies a `uses` can name that aren't declared anywhere yet:
    their stages give them operations. *)
-let dependencies = [ "Net"; "Alloc"; "Async"; "Unsafe" ]
+let dependencies = [ "Net"; "Alloc"; "Unsafe" ]
 
 (* Every built-in function, by its path. The map is made once, when the
    compiler starts, and never changes. *)

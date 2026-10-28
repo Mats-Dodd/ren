@@ -387,6 +387,32 @@ and declared_errors ~sets (es : Ast.Resolved.errors) =
 (* The same, as a row's labels: named sets expanded. *)
 and of_errors ~sets es = labels ~sets (declared_errors ~sets es)
 
+(* The block parameters of [ps], a named function's, that aren't
+   ordinary, by their place (Ty.scheme's [modes]); and those with
+   defaults ([defaults]). *)
+let modes_of (ps : Ast.Resolved.param list) =
+  List.concat
+    (List.mapi
+       (fun i (p : Ast.Resolved.param) ->
+         if p.pblock = Ordinary then [] else [ (i, p.pblock) ])
+       ps)
+
+let defaults_of (ps : Ast.Resolved.param list) =
+  List.concat
+    (List.mapi
+       (fun i (p : Ast.Resolved.param) ->
+         match p.pdefault with
+         | Some (l, _, _) -> [ (i, p.pname.ident.name, l) ]
+         | None -> [])
+       ps)
+
+(* Whether the block parameters of the function at [p] can't fail, though
+   their types don't say what they fail with: `Async.race`'s, whose
+   branches can't fail, or a failure could leave the race waiting on the
+   other (foundations.md, decision 7). A spawned block can't either, and
+   its mode says so. *)
+let closed_blocks p = p = Path.member (Path.prelude "Async") "race"
+
 (* A public function's type scheme, from its signature alone. Its type
    parameters, parameters and result are all written; a public function
    without `->` returns Unit, and a parameter left without a type (an
@@ -412,7 +438,7 @@ and of_errors ~sets es = labels ~sets (declared_errors ~sets es)
    fails with, `f: fn() ! Bad`, fails with just that, so its errors aren't
    the function's own. The function's own `! ..e` or `uses ..d` names its
    own row. *)
-let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
+let signature ?(closed = false) ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   (* row variables: 0 for the errors, 1 for the dependencies, unless the
      signature names them, and after those each named row, the same
      wherever it's named *)
@@ -453,13 +479,15 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
       tail = Some 1;
     }
   in
+  (* a block that can't fail: a spawned one, and each of [closed]'s *)
+  let cant_fail (p : Ast.Resolved.param) = closed || p.pblock = Spawned in
   let param (p : Ast.Resolved.param) : Ty.param =
     let ty : Ty.ty =
       match p.pty with
       | Some (TyFn (_, _, written_e, _, _) as t) -> (
           match of_written ~rows ~sets t with
           | Fun (ps, r, e, u) ->
-              Fun (ps, r, (if written_e = None then errs else e), u)
+              Fun (ps, r, (if written_e = None && not (cant_fail p) then errs else e), u)
           | _ -> assert false)
       | Some (TyImpl { impl_deps; impl_over; impl_errors; impl_uses = None; _ })
         ->
@@ -485,6 +513,8 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
       reqs = [];
       row_reqs = [];
+      modes = modes_of f.params;
+      defaults = defaults_of f.params;
     }
 
 (* A type declared in module [home]. *)
@@ -514,6 +544,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
         | _ -> (* resolve.ml makes it a dependency *) assert false)
     | Builtin -> Builtin
   in
+  let path = Path.make home td.type_name.name in
   let op onum (o : Ast.Resolved.op) =
     let f = o.op_fn in
     let okind, oscheme =
@@ -521,7 +552,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
       | Op_value, _ when f.ret = None ->
           (* a public one without a type is an error, which inference
              reports with the type it finds *)
-          (Value, { Ty.ty = Error; names = []; reqs = []; row_reqs = [] })
+          (Value, { Ty.ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
       | Op_value, _ -> (
           (* a function of no parameters, whose result is the value *)
           match signature ~sets f with
@@ -530,11 +561,12 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
           | _ -> assert false)
       | Op_fn, p :: _ when p.pname.ident.name = "self" ->
           (Method, signature ~sets f)
-      | Op_fn, _ -> (Function, signature ~sets f)
+      | Op_fn, _ ->
+          ( Function,
+            signature ~closed:(closed_blocks (Path.member path f.name.name)) ~sets f )
     in
     { oname = f.name.name; onum; opub = f.pub; okind; oscheme }
   in
-  let path = Path.make home td.type_name.name in
   {
     path;
     params = List.map (fun (p : Ast.ident) -> p.name) td.type_params;

@@ -255,6 +255,8 @@ let representation ~names (td : Iface.type_decl) =
           names = List.mapi (fun i n -> (i, n)) td.params;
           reqs = [];
           row_reqs = [];
+          modes = [];
+          defaults = [];
         }
       in
       Ty.show (Ty.printer ~names s) rep
@@ -1197,8 +1199,12 @@ type try_hint =
       (** it covers everything to its right: all of that, and the [Result] on
           its left, as written *)
   | All_handled  (** a `try match` whose arms handle every error *)
+  | Installs_only
+      (** a `try with`, which covers only installing its items (compiler.md,
+          "Stage 11a", "`try with`") *)
 
 let hint_help = function
+  | Installs_only -> "installing these can't fail: remove the `try`"
   | Maybe_result x ->
       sprintf
         "if `%s` is a `Result`, say so where it's declared, as in `%s: \
@@ -1677,6 +1683,71 @@ let block_kept ~written loc place =
     ~says:(if written then "a block's type" else "a block")
     ~notes:[ block_lives ] ~help header
 
+(* A scope, or a task's handle: blocks too (foundations.md, decision 2,
+   rule D), good only inside the `Async.scope` call that made the scope.
+   [Handle] is a task's, its type as it's written, `Task<Int>`. *)
+type handle = Scope_of | Handle of string
+
+(* [h], at [loc], in [place], where a block can't be either; [written]
+   says [loc] is a type written there. A dependency's operation's
+   parameter is [Elsewhere], said as one. *)
+let handle_kept ?(op = false) ~written loc h place =
+  let what = match h with Scope_of -> "a scope" | Handle _ -> "a task's handle" in
+  let good =
+    match h with
+    | Scope_of -> "a scope is only good inside its `Async.scope` call"
+    | Handle _ -> "a task's handle is only good inside its scope"
+  in
+  let help =
+    match h with
+    | Scope_of -> "pass it to the functions that spawn into it"
+    | Handle _ -> "keep what the task makes instead: `t.join()`"
+  in
+  let shown = match h with Scope_of -> "Scope" | Handle t -> t in
+  let header, help, notes =
+    match place with
+    | _ when op ->
+        ( sprintf "an operation's parameter can't be %s" what,
+          help,
+          [ "an operation can be called from another task" ] )
+    | In_record -> (sprintf "a record can't hold %s" what, help, [ good ])
+    | In_payload c -> (sprintf "`%s`'s payload can't hold %s" c what, help, [ good ])
+    | In_error -> (sprintf "an error can't hold %s" what, help, [ good ])
+    | In_type_arg | In_array | In_tuple ->
+        ( sprintf "`%s` can't be a type argument: %s" shown good,
+          (match h with
+          | Scope_of -> help
+          | Handle _ ->
+              "keep what the tasks make instead: `Async.map` gives every \
+               result, in order"),
+          [] )
+    | Returned -> (
+        match h with
+        | Handle _ ->
+            ( sprintf "a task's handle can't be returned: %s"
+                "it's only good inside its scope",
+              "return what the task makes: `t.join()`",
+              [] )
+        | Scope_of ->
+            ( "a scope can't be returned: it's only good inside its \
+               `Async.scope` call",
+              help,
+              [] ))
+    | In_var -> (sprintf "a `var` can't hold %s" what, help, [ good ])
+    | In_state -> (sprintf "a handler's state can't hold %s" what, help, [ good ])
+    | In_value _ -> (sprintf "an associated value can't hold %s" what, help, [ good ])
+    | Represented -> (sprintf "a type can't be represented as %s" what, help, [ good ])
+    | Compared -> (sprintf "%s can't be compared" what, help, [ good ])
+    | Branch | Past_with | Past_lines | Elsewhere ->
+        ( sprintf "%s can only be passed, or bound with `let` to a call that \
+                   makes it" what,
+          help,
+          [ good ] )
+  in
+  Diag.make loc
+    ~says:(if written then sprintf "%s's type" what else what)
+    ~notes ~help header
+
 (* What a `let` is given that isn't a block written there: one named,
    or chosen between two by an `if` or a `match`, named if they are. *)
 type not_literal = Let_named of string | Let_chosen of string * string
@@ -1715,6 +1786,19 @@ let let_not_literal loc ~name ~arity how =
 
 (* A handler's parameter [name], at [loc], whose type has a block in it;
    or, without [name], a block given to a handler's parameter. *)
+(* A handler's parameter, [name], that's a scope or a task's handle, [h]
+   (rule D). *)
+let handler_param_handle ~name loc h =
+  Diag.make loc
+    ~says:(sprintf "`%s` is %s" name (match h with Scope_of -> "a scope" | Handle _ -> "a task's handle"))
+    ~notes:
+      [
+        "a handler's description is a value, which can outlive the scope its \
+         tasks are in";
+      ]
+    ~help:"spawn into the scope where it's given, and pass the handler what the tasks make"
+    "a handler's parameters are data"
+
 let handler_param_block ?name loc =
   Diag.make loc
     ~says:
@@ -2718,8 +2802,9 @@ let main_params loc =
 
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
    call that uses it, and [why] why, if it's one of [withheld]. *)
-let undeclared_use ?(why = []) ?alias (f : Ast.Resolved.fn_def) dep call =
-  let why = List.map withheld why in
+let undeclared_use ?(why = []) ?(notes = []) ?alias (f : Ast.Resolved.fn_def) dep
+    call =
+  let why = List.map withheld why @ notes in
   let name = Ast.fn_name f in
   match alias with
   | Some (a, op) ->
@@ -3329,6 +3414,15 @@ let unhandled_call loc ~name_loc callee tags =
     ~help:"pass the errors on with `try`, or handle them with `match`"
     (sprintf "`%s` can fail, and nothing handles it" callee)
 
+(* The same, for installing the items of a `with`, at its keyword [loc],
+   [item] the first that can fail: a `with` is marked as a call that can
+   fail is (compiler.md, "Stage 11a", "`try with`"). *)
+let unhandled_install loc item tags =
+  Diag.make loc
+    ~says:(sprintf "it can fail with %s" (and_list tags))
+    ~help:"write `try with`, or handle its errors with `match`"
+    (sprintf "installing `%s` can fail, and nothing handles it" item)
+
 (* The same, for a call of [callee] whose errors are those of the
    function passed as the parameter [param]. *)
 let unhandled_param loc ~name_loc callee param =
@@ -3666,3 +3760,25 @@ let tags_cant_fail loc ~fn ~param ~tag ~what ~can =
                (String.concat ", " (List.map (sprintf "`%s`") can))))
     (sprintf "`%s` is given `%s: %s`, and %s can't fail with `%s`" fn param tag
        what tag)
+
+(* ---- parameters with defaults (compiler.md, "Stage 11a", "The surface") ---- *)
+
+(* [arg], given by position where only [param], which has a default, is
+   left for it. *)
+let default_by_position loc ~param ~arg =
+  Diag.make loc
+    ~help:(sprintf "write `%s: %s`" param arg)
+    (sprintf "`%s` has a default, so it's given by name" param)
+
+(* An argument given by the name [given], which [fn] has no parameter of
+   that takes one: [names] are those it does. *)
+let no_param_named loc ~fn ~given ~names =
+  Diag.make loc
+    ?help:
+      (match names with
+      | [] -> None
+      | ns ->
+          Some
+            (sprintf "its parameters given by name: %s"
+               (String.concat ", " (List.map (sprintf "`%s`") ns))))
+    (sprintf "`%s` has no parameter named `%s`" fn given)

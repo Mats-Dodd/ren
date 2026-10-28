@@ -37,276 +37,176 @@ open Helpers
 (* ---- s1: the surface the checker needs ---- *)
 
 let%expect_test "[s1 accept] a parameter with a default, given by name or left out" =
-  until "s1"
-    ~want:{|
-20
-6
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn scaled(n: Int, by: Int = 10) -> Int = n * by
 
 fn main() uses Console =
   print(scaled(2))
   print(scaled(2, by: 3))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `=`
-      ┌─ test.ren:1:27
-    1 │ fn scaled(n: Int, by: Int = 10) -> Int = n * by
-      │                           ^
+    20
+    6
+    ()
     |}]
 
 let%expect_test "[s1 reject] a default given by position" =
-  until "s1"
-    ~says:
-      [ "error: `by` has a default, so it's given by name"; "help: write `by: 3`" ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn scaled(n: Int, by: Int = 10) -> Int = n * by
 fn main() uses Console = print(scaled(2, 3))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `=`
-      ┌─ test.ren:1:27
-    1 │ fn scaled(n: Int, by: Int = 10) -> Int = n * by
-      │                           ^
+    error: `by` has a default, so it's given by name
+      ┌─ test.ren:2:42
+    2 │ fn main() uses Console = print(scaled(2, 3))
+      │                                          ^
+      help: write `by: 3`
     |}]
 
 let%expect_test "[s1 reject] a default that isn't a literal" =
-  until "s1"
-    ~says:
-      [
-        "error: a parameter's default is a literal: a number, a `Bool` or a \
-         string";
-        "help: give it where it's called instead";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn scaled(n: Int, by: Int = n) -> Int = n * by
 fn main() uses Console = print(scaled(2))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `=`
-      ┌─ test.ren:1:27
+    error: a parameter's default is a literal: a number, a `Bool` or a string
+      ┌─ test.ren:1:29
     1 │ fn scaled(n: Int, by: Int = n) -> Int = n * by
-      │                           ^
+      │                             ^
+      help: give it where it's called instead
     |}]
 
 let%expect_test "[s1 reject] a default before a parameter without one" =
-  until "s1"
-    ~says:
-      [
-        "error: a parameter with a default comes after those without";
-        "help: move `by` after `n`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn scaled(by: Int = 10, n: Int) -> Int = n * by
 fn main() uses Console = print(scaled(n: 2))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `=`
-      ┌─ test.ren:1:19
+    error: a parameter with a default comes after those without
+      ┌─ test.ren:1:11
     1 │ fn scaled(by: Int = 10, n: Int) -> Int = n * by
-      │                   ^
+      │           ^^
+      help: move `by` after `n`
     |}]
 
 let%expect_test "[s1 reject] a parameter given by a name it doesn't have" =
-  until "s1"
-    ~says:
-      [
-        "error: `scaled` has no parameter named `times`";
-        "help: its parameters given by name: `by`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn scaled(n: Int, by: Int = 10) -> Int = n * by
 fn main() uses Console = print(scaled(2, times: 3))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `=`
-      ┌─ test.ren:1:27
-    1 │ fn scaled(n: Int, by: Int = 10) -> Int = n * by
-      │                           ^
+    error: `scaled` has no parameter named `times`
+      ┌─ test.ren:2:42
+    2 │ fn main() uses Console = print(scaled(2, times: 3))
+      │                                          ^^^^^
+      help: its parameters given by name: `by`
     |}]
 
 let%expect_test "[s1 accept] a block given without parentheses" =
-  until "s1"
-    ~want:{|
-42
-()
-|}
-    (fun () ->
-      run
-        {|
-fn twice(f: fn() -> Int) -> Int = f() + f()
+  run
+    {|
+fn twice(f: fn() -> Int) -> Int = try f() + f()
 
 fn main() uses Console =
   print(twice fn() => 21)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `fn`
-      ┌─ test.ren:4:15
-    4 │   print(twice fn() => 21)
-      │               ^^
+    42
+    ()
     |}]
 
 let%expect_test "[s1 accept] a block parameter's mode is part of its signature" =
   (* written on public functions, inferred on private ones *)
-  until "s1" ~checks:true
-    ~says:
-      [
-        "fn fan_out(xs: Array<Int>, f: concurrent fn(Int) -> Int) -> \
-         Array<Int> uses Async";
-        "fn start(s: Scope, body: spawned fn()) uses Async";
-        "fn doubled(xs: Array<Int>, f: concurrent fn(Int) -> Int) -> \
-         Array<Int> uses Async";
-      ]
-    (fun () ->
-      types
-        {|
+  types
+    {|
 pub fn fan_out(xs: Array<Int>, f: concurrent fn(Int) -> Int) -> Array<Int> uses Async =
-  Async.map(xs, f)
+  try Async.map(xs, f)
 
 pub fn start(s: Scope, body: spawned fn()) uses Async = s.spawn(body)
 
 fn doubled(xs: Array<Int>, f: fn(Int) -> Int) -> Array<Int> uses Async =
-  Async.map(xs, f)
+  try Async.map(xs, f)
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: a type name must start with a capital letter
-      ┌─ test.ren:1:35
-    1 │ pub fn fan_out(xs: Array<Int>, f: concurrent fn(Int) -> Int) -> Array<Int> uses Async =
-      │                                   ^^^^^^^^^^
-      help: write `Concurrent`
-
-    error: a type name must start with a capital letter
-      ┌─ test.ren:4:30
-    4 │ pub fn start(s: Scope, body: spawned fn()) uses Async = s.spawn(body)
-      │                              ^^^^^^^
-      help: write `Spawned`
+    pub fn fan_out(xs: Array<Int>, f: concurrent fn(Int) -> Int) -> Array<Int> uses Async
+    pub fn start(s: Scope, body: spawned fn()) uses Async
+    fn doubled(xs: Array<Int>, f: concurrent fn(Int) -> Int) -> Array<Int> uses Async
+    fn main()
     |}]
 
 let%expect_test "[s1 reject] a mode on what isn't a block parameter" =
-  until "s1"
-    ~says:
-      [
-        "error: `concurrent` marks a block parameter of a function";
-        "help: remove it";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn f(n: concurrent Int) -> Int = n
 fn main() uses Console = print(f(1))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: a type name must start with a capital letter
+    error: `concurrent` marks a block parameter of a function
       ┌─ test.ren:1:9
     1 │ fn f(n: concurrent Int) -> Int = n
       │         ^^^^^^^^^^
-      help: write `Concurrent`
+      help: remove it
     |}]
 
 (* ---- s1: rule B, a parameter's mode ---- *)
 
 let%expect_test "[s1 reject] a block parameter passed on to `Async.map`, unmarked" =
-  until "s1"
-    ~says:
-      [
-        "error: `f` runs on several tasks at once in `Async.map`, but \
-         `fan_out` doesn't say it can";
-        "help: mark the parameter: `f: concurrent fn(Int) -> Int`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 pub fn fan_out(xs: Array<Int>, f: fn(Int) -> Int) -> Array<Int> uses Async =
-  Async.map(xs, f)
+  try Async.map(xs, f)
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: there's no constructor named `Async`
-      ┌─ test.ren:2:3
-    2 │   Async.map(xs, f)
-      │   ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+    error: `f` runs on several tasks at once in `Async.map`, but `fan_out` doesn't say it can
+      ┌─ test.ren:2:21
+    2 │   try Async.map(xs, f)
+      │                     ^
+      = a block that runs on several tasks at once can only read what it captures
+      help: mark the parameter: `f: concurrent fn(Int) -> Int`
     |}]
 
 let%expect_test "[s1 reject] a block parameter spawned, unmarked" =
-  until "s1"
-    ~says:
-      [
-        "error: `body` is spawned as a task here, but `start` doesn't say it \
-         can be";
-        "help: mark the parameter: `body: spawned fn()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 pub fn start(s: Scope, body: fn()) uses Async = s.spawn(body)
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: there's no type named `Scope`
-      ┌─ test.ren:1:17
+    error: `body` is spawned as a task here, but `start` doesn't say it can be
+      ┌─ test.ren:1:57
     1 │ pub fn start(s: Scope, body: fn()) uses Async = s.spawn(body)
-      │                 ^^^^^
+      │                                                         ^^^^
+      = a spawned block runs until its scope ends, and can only read what it captures
+      help: mark the parameter: `body: spawned fn()`
     |}]
 
 let%expect_test "[s1 reject] a concurrent block parameter spawned" =
-  until "s1"
-    ~says:
-      [
-        "error: `body` is concurrent, so it can't be spawned";
-        "help: mark the parameter `spawned` instead";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 pub fn start(s: Scope, body: concurrent fn()) uses Async = s.spawn(body)
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: a type name must start with a capital letter
-      ┌─ test.ren:1:30
+    error: `body` is concurrent, so it can't be spawned
+      ┌─ test.ren:1:68
     1 │ pub fn start(s: Scope, body: concurrent fn()) uses Async = s.spawn(body)
-      │                              ^^^^^^^^^^
-      help: write `Concurrent`
+      │                                                                    ^^^^
+      help: mark the parameter `spawned` instead
     |}]
 
 (* ---- s1: what a task's block can touch ---- *)
 
 let%expect_test "[s1 reject] a variable a spawned task reads, changed in the scope" =
   (* foundations.md, decision 2's own error *)
-  until "s1"
-    ~says:
-      [
-        "error: `n` can't change while a spawned task reads it";
-        "help: copy it for the task, `let m = n`, or change it after the scope";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn log(n: Int) uses Console = print(n)
 
 fn main() uses Console, Async =
@@ -314,206 +214,143 @@ fn main() uses Console, Async =
   Async.scope fn(s) =>
     s.spawn fn() => log(n)
     n += 1
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:5:15
-    5 │   Async.scope fn(s) =>
-      │               ^^
+    error: `n` can't change while a spawned task reads it
+      ┌─ test.ren:7:5
+    6 │     s.spawn fn() => log(n)
+      │                         - read until `Async.scope` ends
+    7 │     n += 1
+      │     ^
+      = a spawned task reads what it captures from the frame that called `Async.scope` where it is, until the scope ends
+      help: copy it for the task, `let m = n`, or change it after the scope
     |}]
 
 let%expect_test "[s1 reject] a block that runs on several tasks at once changes a variable" =
-  until "s1"
-    ~says:
-      [
-        "error: `total` can't change in a block that runs on several tasks at \
-         once";
-        "help: give back what each one makes, and add them up after: \
-         `Async.map(xs) fn(x) => ...`, then `.sum()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Console, Async =
   var total = 0
   let xs = Async.map([1, 2]) fn(x) =>
     total += x
     x
   print(total + xs.len())
-|});
+|};
   [%expect {|
-    (until s1)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:1:25
-    1 │ fn main() uses Console, Async =
-      │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:3:12
-    3 │   let xs = Async.map([1, 2]) fn(x) =>
-      │            ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+    error: `total` can't change in a block that runs on several tasks at once
+      ┌─ test.ren:4:5
+    4 │     total += x
+      │     ^^^^^ changed here
+      = a block that runs on several tasks at once can only read what it captures
+      help: give back what each one makes, and add them up after: `Async.map(xs) fn(x) => ...`, then `.sum()`
     |}]
 
 let%expect_test "[s1 reject] a spawned task changes a variable" =
-  until "s1"
-    ~says:
-      [
-        "error: a spawned task can't change `seen`, which it only reads";
-        "help: change it through a handler's operation, or give it back: \
-         `t.join()` has what the task returned";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Console, Async =
   var seen = 0
   Async.scope fn(s) =>
     s.spawn fn() => seen += 1
   print(seen)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:3:15
-    3 │   Async.scope fn(s) =>
-      │               ^^
+    error: a spawned task can't change `seen`, which it only reads
+      ┌─ test.ren:4:21
+    4 │     s.spawn fn() => seen += 1
+      │                     ^^^^ changed here
+      = a spawned task only reads what it captures, while other tasks run
+      help: change it through a handler's operation, or give it back: `t.join()` has what the task returned
     |}]
 
 (* ---- s1: rule D, a scope and a handle are blocks too ---- *)
 
 let%expect_test "[s1 reject] a task's handle returned" =
-  until "s1"
-    ~says:
-      [
-        "error: a task's handle can't be returned: it's only good inside its \
-         scope";
-        "help: return what the task makes: `t.join()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn first(s: Scope) -> Task<Int> uses Async = s.start fn() => 1
 fn main() uses Async = Async.scope fn(s) => first(s).cancel()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `fn`
-      ┌─ test.ren:1:54
+    error: a task's handle can't be returned: it's only good inside its scope
+      ┌─ test.ren:1:23
     1 │ fn first(s: Scope) -> Task<Int> uses Async = s.start fn() => 1
-      │                                                      ^^
-
-    error: expected a new line, found `fn`
-      ┌─ test.ren:2:36
-    2 │ fn main() uses Async = Async.scope fn(s) => first(s).cancel()
-      │                                    ^^
+      │                       ^^^^ a task's handle's type
+      help: return what the task makes: `t.join()`
     |}]
 
 let%expect_test "[s1 reject] a scope kept in a record" =
-  until "s1"
-    ~says:
-      [
-        "error: a record can't hold a scope";
-        "help: pass it to the functions that spawn into it";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Holder = { s: Scope }
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: there's no type named `Scope`
+    error: a record can't hold a scope
       ┌─ test.ren:1:20
     1 │ type Holder = { s: Scope }
-      │                    ^^^^^
+      │                    ^^^^^ a scope's type
+      = a scope is only good inside its `Async.scope` call
+      help: pass it to the functions that spawn into it
     |}]
 
 let%expect_test "[s1 reject] tasks' handles kept in an array" =
-  until "s1"
-    ~says:
-      [
-        "error: `Task<Int>` can't be a type argument: a task's handle is only \
-         good inside its scope";
-        "help: keep what the tasks make instead: `Async.map` gives every \
-         result, in order";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     let ts = [s.start fn() => 1, s.start fn() => 2]
     print(ts.len())
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
-    2 │   Async.scope fn(s) =>
-      │               ^^
+    error: `Task<Int>` can't be a type argument: a task's handle is only good inside its scope
+      ┌─ test.ren:3:14
+    3 │     let ts = [s.start fn() => 1, s.start fn() => 2]
+      │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a task's handle
+      help: keep what the tasks make instead: `Async.map` gives every result, in order
+
+    error: `Task<Int>` can't be a type argument: a task's handle is only good inside its scope
+      ┌─ test.ren:4:11
+    4 │     print(ts.len())
+      │           ^^^^^^ a task's handle
+      help: keep what the tasks make instead: `Async.map` gives every result, in order
     |}]
 
 (* ---- s1: blocks that can't fail ---- *)
 
 let%expect_test "[s1 reject] a spawned task that can fail" =
-  until "s1"
-    ~says:
-      [
-        "error: a spawned task can't fail, or one task's failure would stop \
-         all the others";
-        "help: handle them in the task: `match attempt handle(1)`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn handle(n: Int) -> Int ! Bad = if n > 0 then n else fail Bad
 
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     s.spawn fn() => print(try handle(1))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:4:15
-    4 │   Async.scope fn(s) =>
-      │               ^^
+    error: a spawned task can't fail, or one task's failure would stop all the others
+      ┌─ test.ren:5:13
+    5 │     s.spawn fn() => print(try handle(1))
+      │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      │                     -------------------- can fail with Bad
+      help: handle them in the task: `match attempt handle(1)`
     |}]
 
 let%expect_test "[s1 reject] a branch of `race` that can fail" =
-  until "s1"
-    ~says:
-      [
-        "error: a branch of `race` can't fail, or a failure could leave the \
-         race waiting on the other";
-        "help: make the failure a value inside it: `attempt get(1)`; to try \
-         again until one succeeds, use `retry`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn get(n: Int) -> Int ! Gone = if n > 0 then n else fail Gone
 
 fn main() uses Console, Async =
   print(Async.race(fn() => try get(1), fn() => 2))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:3:25
-    3 │ fn main() uses Console, Async =
-      │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:4:9
+    error: a branch of `race` can't fail, or a failure could leave the race waiting on the other
+      ┌─ test.ren:4:20
     4 │   print(Async.race(fn() => try get(1), fn() => 2))
-      │         ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+      │                    ^^^^^^^^^^^^^^^^^^
+      │                            ---------- can fail with Gone
+      help: make the failure a value inside it: `attempt get(1)`; to try again until one succeeds, use `retry`
     |}]
 
 (* ---- s1: `try with` ---- *)
@@ -542,110 +379,87 @@ handler plain() over Sql =
 |}
 
 let%expect_test "[s1 reject] a `with` that can fail, unmarked" =
-  until "s1"
-    ~says:
-      [
-        "error: installing `transaction()` can fail, and nothing handles it";
-        "help: write `try with`, or handle its errors with `match`";
-      ]
-    (fun () ->
-      check_error
-        (tx_src
-        ^ {|
+  check_error
+    (tx_src
+      ^ {|
 fn store(k: Int) ! DbDown uses Sql =
   with transaction() over Sql in
     try Sql.set(k)
 
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: installing `transaction()` can fail, and nothing handles it
+       ┌─ test.ren:22:3
+    22 │   with transaction() over Sql in
+       │   ^^^^ it can fail with `DbDown`
+       help: write `try with`, or handle its errors with `match`
     |}]
 
 let%expect_test "[s1 reject] `try with` marks the installation, not the body" =
   (* the body's call is a place the code can stop, so it has a `try` of
      its own *)
-  until "s1"
-    ~says:
-      [
-        "error: `Sql.set` can fail, and nothing handles it";
-        "help: pass the errors on with `try`, or handle them with `match`";
-      ]
-    (fun () ->
-      check_error
-        (tx_src
-        ^ {|
+  check_error
+    (tx_src
+      ^ {|
 fn store(k: Int) ! DbDown uses Sql =
   try with transaction() over Sql in
     Sql.set(k)
 
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: `Sql.set` can fail, and nothing handles it
+       ┌─ test.ren:23:5
+    23 │     Sql.set(k)
+       │     ^^^^^^^^^^
+       │     ------- it can fail with `DbDown`
+       help: pass the errors on with `try`, or handle them with `match`
     |}]
 
 let%expect_test "[s1 reject] `try with` where installing can't fail" =
-  until "s1"
-    ~says:
-      [
-        "error: nothing here can fail";
-        "help: installing these can't fail: remove the `try`";
-      ]
-    (fun () ->
-      check_error
-        (tx_src
-        ^ {|
+  check_error
+    (tx_src
+      ^ {|
 fn store(k: Int) ! DbDown uses Sql =
   try with plain() over Sql in
     try Sql.set(k)
 
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: nothing here can fail
+       ┌─ test.ren:22:3
+    22 │   try with plain() over Sql in
+       │   ^^^
+       = `try` marks the calls that can fail, so a reader can see where the code can stop
+       help: installing these can't fail: remove the `try`
     |}]
 
 (* ---- s1: the two holes, and what's gone ---- *)
 
 let%expect_test "[s1 reject] a function that spawns uses `Async`" =
   (* `s.spawn` waits while its scope is full *)
-  until "s1"
-    ~says:
-      [
-        "error: `start` doesn't declare `Async`";
-        "`s.spawn` waits while its scope is full, so it uses `Async`";
-        "help: add `uses Async`";
-      ]
-    (fun () ->
-      check_error {|
+  check_error {|
 pub fn start(s: Scope) = s.spawn fn() => ()
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `fn`
-      ┌─ test.ren:1:34
+    error: `start` doesn't declare `Async`
+      ┌─ test.ren:1:8
     1 │ pub fn start(s: Scope) = s.spawn fn() => ()
-      │                                  ^^
+      │        ^^^^^
+      │                          ------------------ this call uses `Async`
+      = a public function without `uses` uses nothing, and its body is checked against that
+      = `s.spawn` waits while its scope is full, so it uses `Async`
+      help: add `uses Async`
     |}]
 
 let%expect_test "[s1 reject] a handler's own task" =
   (* async.md's `task =>` is gone: background work is a task beside the
      `with` *)
-  until "s1"
-    ~says:
-      [
-        "error: a handler has no task of its own";
-        "help: spawn one beside the `with`, into an `Async.scope` outside it, \
-         that calls one of the handler's operations";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Metrics =
   record: fn(n: Int)
 
@@ -655,14 +469,13 @@ handler batched() for Metrics uses Clock =
   task =>
     Clock.sleep(Duration.seconds(10))
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: `task => ...` is the arm of a handler `over any`
+    error: a handler has no task of its own
       ┌─ test.ren:7:3
     7 │   task =>
       │   ^^^^
-      help: declare it `handler batched(...) over any`, or implement an operation by its name: `record(...) => ...`
+      help: spawn one beside the `with`, into an `Async.scope` outside it, that calls one of the handler's operations
     |}]
 
 (* ---- s2: scopes and tasks ---- *)
@@ -690,10 +503,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
     2 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 accept] `spawn` waits while `max` tasks run" =
@@ -717,10 +530,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:3:13
-    3 │     s.spawn fn() => print("a")
-      │             ^^
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
+    2 │   Async.scope(max: 1) fn(s) =>
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 accept] a variable bound inside the scope is copied into each task" =
@@ -745,10 +558,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
     2 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 accept] a task's handle joins it" =
@@ -767,10 +580,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
     2 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 accept] a task cancelled before it runs never runs" =
@@ -790,10 +603,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
     2 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 accept] a cancelled task stops at its next call, and `finally` sees it" =
@@ -834,10 +647,12 @@ fn main() uses Console, Async, Clock =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-       ┌─ test.ren:13:15
-    13 │   Async.scope fn(s) =>
-       │               ^^
+    error: `Cancelled` can't be matched here, because the body's errors aren't known
+      ┌─ test.ren:7:11
+    7 │       Err(Cancelled) => print("cancelled")
+      │           ^^^^^^^^^
+      = `finally` is given the body's error to pass on, not to look at: it could be whatever the body fails with
+      help: match it with `Err(_)`, and pass it on with `try r`
     |}]
 
 let%expect_test "[s2 accept] `replace` cancels the task under its key" =
@@ -859,10 +674,10 @@ fn main() uses Console, Async, Clock =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
     2 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 accept] a scope whose body fails cancels its tasks" =
@@ -885,10 +700,10 @@ fn main() uses Console, Async, Clock =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:31
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:19
     2 │   let r = attempt Async.scope fn(s) =>
-      │                               ^^
+      │                   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 accept] a task beside a `with` is cancelled when its body ends" =
@@ -927,10 +742,10 @@ fn main() uses Console, Async, Clock =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-       ┌─ test.ren:12:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+       ┌─ test.ren:12:3
     12 │   Async.scope fn(s) =>
-       │               ^^
+       │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 reject] a panic in a task says which task" =
@@ -951,10 +766,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:4:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:4:3
     4 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 reject] a scope that can start no task" =
@@ -972,10 +787,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s2)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:40
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
     2 │   Async.scope(max: 0) fn(s) => s.spawn fn() => print(1)
-      │                                        ^^
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s2 reject] failing with `Cancelled`" =
@@ -1033,10 +848,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: expected the end of the line, found `fn`
-       ┌─ test.ren:12:17
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+       ┌─ test.ren:12:5
     12 │     Async.scope fn(s) =>
-       │                 ^^
+       │     ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 accept] `tick` and `yield`" =
@@ -1064,10 +879,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
     2 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 accept] a timeout gives `Timeout`, or the body's result" =
@@ -1089,23 +904,10 @@ fn main() uses Console, Async, Clock =
 |});
   [%expect {|
     (until s3)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:1:25
-    1 │ fn main() uses Console, Async, Clock =
-      │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
+    error: panic: `Async.timeout` isn't built yet: stage 11a, step 3
       ┌─ test.ren:2:19
     2 │   let r = attempt Async.timeout(Duration.ms(20)) fn() =>
-      │                   ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:6:17
-    6 │   print(attempt Async.timeout(Duration.seconds(10)) fn() => 2)
-      │                 ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+      │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 accept] a timeout never reports `Timeout` for work that finished" =
@@ -1140,17 +942,10 @@ fn main() uses Console, Async, Clock =
 |});
   [%expect {|
     (until s3)
-    error: nothing installs `Async` before `main`
-       ┌─ test.ren:12:25
-    12 │ fn main() uses Console, Async, Clock =
-       │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-       help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
+    error: panic: `Async.timeout` isn't built yet: stage 11a, step 3
        ┌─ test.ren:13:19
     13 │   let r = attempt Async.timeout(Duration.ms(20)) fn() =>
-       │                   ^^^^^
-       help: check the spelling, or declare it in a type, like `type Shape = | Async`
+       │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 accept] deadlines carry down" =
@@ -1175,23 +970,10 @@ fn main() uses Console, Async, Clock =
 |});
   [%expect {|
     (until s3)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:1:25
-    1 │ fn main() uses Console, Async, Clock =
-      │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
+    error: panic: `Async.timeout` isn't built yet: stage 11a, step 3
       ┌─ test.ren:3:19
     3 │   let r = attempt Async.timeout(Duration.ms(20)) fn() =>
-      │                   ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:4:9
-    4 │     try Async.timeout(Duration.seconds(10)) fn() =>
-      │         ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+      │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 accept] `race` gives the first to finish" =
@@ -1212,17 +994,10 @@ fn main() uses Console, Async, Clock =
 |});
   [%expect {|
     (until s3)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:5:25
-    5 │ fn main() uses Console, Async, Clock =
-      │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
+    error: panic: `Async.race` isn't built yet: stage 11a, step 3
       ┌─ test.ren:6:9
     6 │   print(Async.race(fn() => after(200, "slow"), fn() => after(5, "fast")))
-      │         ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+      │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 accept] `isolate` makes a panic a value" =
@@ -1242,10 +1017,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: expected `,` or `)`, found `fn`
-      ┌─ test.ren:4:31
+    error: panic: `Async.isolate` isn't built yet: stage 11a, step 3
+      ┌─ test.ren:4:17
     4 │   print(attempt Async.isolate fn() => boom([1]))
-      │                               ^^
+      │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 accept] `map` keeps the order, and its first failure wins" =
@@ -1264,23 +1039,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:1:25
-    1 │ fn main() uses Console, Async =
-      │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
+    error: panic: `Async.map` isn't built yet: stage 11a, step 3
       ┌─ test.ren:2:9
     2 │   print(Async.map([3, 1, 2]) fn(x) => x * 10)
-      │         ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:3:17
-    3 │   print(attempt Async.map([1, 2, 3]) fn(x) => if x == 2 then fail Bad(x) else x)
-      │                 ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+      │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 accept] `each` and `both`" =
@@ -1300,23 +1062,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:1:25
-    1 │ fn main() uses Console, Async =
-      │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
+    error: panic: `Async.each` isn't built yet: stage 11a, step 3
       ┌─ test.ren:2:3
     2 │   Async.each([1, 2]) fn(x) => print(x)
-      │   ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:3:9
-    3 │   print(Async.both(fn() => 1, fn() => "two"))
-      │         ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s3 reject] `Async.until` outside an operation" =
@@ -1337,17 +1086,7 @@ fn main() uses Async =
 |});
   [%expect {|
     (until s3)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:1:16
-    1 │ fn main() uses Async =
-      │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:3:3
-    3 │   Async.until(fn() => ready)
-      │   ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
     |}]
 
 let%expect_test "[s3 reject] `Async.until`'s condition uses a dependency" =
@@ -1369,11 +1108,7 @@ fn main() = ()
 |});
   [%expect {|
     (until s3)
-    error: there's no constructor named `Async`
-      ┌─ test.ren:5:13
-    5 │   wait() => Async.until(fn() => Clock.now() > at)
-      │             ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
     |}]
 
 let%expect_test "[s3 reject] an isolated block changes a variable outside it" =
@@ -1394,10 +1129,7 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:3:33
-    3 │   let r = attempt Async.isolate fn() => n += 1
-      │                                 ^^
+    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
     |}]
 
 let%expect_test "[s3 reject] `Async.isolate` of a block parameter" =
@@ -1416,18 +1148,7 @@ fn main() = ()
 |});
   [%expect {|
     (until s3)
-    error: `fn guarded` says it can fail with `Panicked`, but nothing in it can
-      ┌─ test.ren:1:37
-    1 │ fn guarded(f: fn() -> Int) -> Int ! Panicked(msg: Str) uses Async =
-      │                                     ^^^^^^^^
-      = a signature lists exactly what a function can fail with, so its callers handle nothing that can't happen
-      help: remove `Panicked` from after `!`
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:2:7
-    2 │   try Async.isolate(f)
-      │       ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
     |}]
 
 let%expect_test "[s3 reject] `each`'s block gives a value" =
@@ -1446,17 +1167,10 @@ fn main() uses Async =
 |});
   [%expect {|
     (until s3)
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:1:16
-    1 │ fn main() uses Async =
-      │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-      help: remove it: nothing can implement `Async` yet
-
-    error: there's no constructor named `Async`
-      ┌─ test.ren:2:3
+    error: this lambda produces an `Int`, but it has to produce a `Unit`
+      ┌─ test.ren:2:31
     2 │   Async.each([1, 2]) fn(x) => x * 2
-      │   ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
+      │                               ^^^^^
     |}]
 
 let%expect_test "[s3 reject] there's no `par_map`" =
@@ -1504,19 +1218,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: there's no constructor named `Async`
+    error: panic: `Async.until` isn't built yet: stage 11a, step 3
       ┌─ test.ren:5:13
     5 │   wait() => Async.until(fn() => false)
-      │             ^^^^^
-      help: check the spelling, or declare it in a type, like `type Shape = | Async`
-
-    error: nothing installs `Async` before `main`
-      ┌─ test.ren:7:25
-    7 │ fn main() uses Console, Async =
-      │                         ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
-    8 │   with gate() in
-      │        ------ installing this needs `Async`
-      help: remove it: nothing can implement `Async` yet
+      │             ^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 (* ---- s4: operations that don't interleave ---- *)
@@ -1553,10 +1258,14 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s4)
-    error: expected the end of the line, found `fn`
-       ┌─ test.ren:15:17
-    15 │     Async.scope fn(s) =>
-       │                 ^^
+    error: `main` doesn't declare `Clock`
+       ┌─ test.ren:13:4
+    13 │ fn main() uses Console, Async =
+       │    ^^^^
+    14 │   with slow_acct() in
+       │        ----------- installing this needs `Clock`
+       = `main`'s body can only use what its `uses` lists
+       help: add `Clock` to its `uses`
     |}]
 
 let%expect_test "[s4 reject] a block passed to an operation calls back into it" =
@@ -1626,15 +1335,30 @@ test "tasks wake in the order of their deadlines" =
 |});
   [%expect {|
     (until s5)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
-    2 │   Async.scope fn(s) =>
-      │               ^^
+    test.ren
+      ✗ two tasks sleep at once
+      ✗ tasks wake in the order of their deadlines
 
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:8:15
+    ──── two tasks sleep at once ── test.ren:2
+      │
+    2 │   Async.scope fn(s) =>
+      │   ^^^^^^^^^^^^^^^^^^^^
+      │
+      panic: `Async.scope` isn't built yet: stage 11a, step 2
+
+      seed 2542 · rerun: ren test test.ren --only "two tasks" --seed 2542
+
+    ──── tasks wake in the order of their deadlines ── test.ren:8
+      │
     8 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
+      │
+      panic: `Async.scope` isn't built yet: stage 11a, step 2
+
+      seed 9439 · rerun: ren test test.ren --only "tasks wake" --seed 9439
+
+    0 passed, 2 failed
+    [exit 1]
     |}]
 
 let%expect_test "[s5 accept] a runtime installed by hand" =
@@ -1655,10 +1379,12 @@ fn main() uses Console =
 |});
   [%expect {|
     (until s5)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:5:17
-    5 │     Async.scope fn(s) =>
-      │                 ^^
+    error: there's no module `sim`
+      ┌─ test.ren:1:8
+    1 │ import sim
+      │        ^^^
+      = it would be the file `sim.ren`
+      help: check the module's name, or create its file
     |}]
 
 let%expect_test "[s5 reject] a runtime installed while other tasks run" =
@@ -1679,10 +1405,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s5)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:2:15
+    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+      ┌─ test.ren:2:3
     2 │   Async.scope fn(s) =>
-      │               ^^
+      │   ^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s5 reject] a module of a program's own named `sim`" =
@@ -1734,10 +1460,12 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s8)
-    error: expected the end of the line, found `fn`
-      ┌─ test.ren:5:17
-    5 │     Async.scope fn(s) =>
-      │                 ^^
+    error: there's no module `sync`
+      ┌─ test.ren:1:8
+    1 │ import sync.{Chan}
+      │        ^^^^
+      = it would be the file `sync.ren`
+      help: check the module's name, or create its file
     |}]
 
 let%expect_test "[s8 accept] `keyed` sends each call to an instance by its key" =

@@ -30,11 +30,16 @@ type builtin_type = {
 val types : builtin_type list
 
 (* The built-in dependencies the runtime installs around `main`: [Clock],
-   [Random], [Console], [Fs], [Os] and [Proc]. Each one's real
+   [Random], [Console], [Fs], [Os], [Proc] and [Async]. Each one's real
    implementation is its private associated value [real]. *)
 val runtime_deps : string list
 
-(* The dependencies a `uses` can name that aren't declared yet: [Net], ... *)
+(* Those of them that reach the world, which the journal records and
+   replays: all but [Async]. *)
+val world_deps : string list
+
+(* The dependencies a `uses` can name that aren't declared yet: [Net],
+   [Alloc] and [Unsafe]. *)
 val dependencies : string list
 
 (* The built-in functions that aren't a type's members. *)

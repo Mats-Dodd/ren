@@ -39,12 +39,14 @@ val closed : unit -> Types.row
 (* A parameter's type: as written, or a fresh variable. [own] are the rows
    a transparent parameter of a top-level function gets, its function's
    errors and dependencies: a block's errors are its function's, and its
-   dependencies are what its type lists. *)
+   dependencies are what its type lists, unless it can't fail, a spawned
+   block or [closed_block]: then its errors are closed and empty. *)
 val param_type :
   env ->
   tparams:Types.ty list ->
   ?named:(string * Types.row) list ->
   ?own:Types.row * Types.row ->
+  ?closed_block:bool ->
   Ast.Resolved.param ->
   Types.param
 

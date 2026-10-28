@@ -379,7 +379,11 @@ error: `with` installs only handlers
   `Bytes`, `File`, `Command`, `Exit`, `TestClock`, `TestProc` and the
   rest. A program's own `type Time`, `type Command` or `dep Clock` is an
   error: it chooses another name.
-- `Net` comes with `Async` in stage 11a ([async.md](async.md),
+- `Async`, the runtime, is the seventh (stage 11a, [async.md](async.md)):
+  the runtime installs it around `main` and each test, as it does the
+  others, and `Scope` and `Task<T>` come with it. Its tasks come in 11a's
+  steps; until then each of its members panics, saying which step builds
+  it. `Net` comes with it in stage 11a ([async.md](async.md),
   [runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
@@ -398,7 +402,7 @@ error: nothing installs `Users` before `main`
   ┌─ main.ren:1:16
   │
 1 │ fn main() uses Users, Console =
-  │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+  │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
   │
   = help: install one inside `main`: `with mem_users([]) in ...`
 ```

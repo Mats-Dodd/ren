@@ -444,6 +444,10 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Unsafe_cast -> pure (function [ v ] -> v | _ -> bug x)
   (* `sum`'s own: whether its `T` is `Float`, and its lanes if it is *)
   | Float_lanes -> pure (fun _ -> VBool (tys = [ Ty.float ]))
+  | Unbuilt -> (
+      function
+      | [ VStr what ] -> raise (Panic what)
+      | _ -> bug x)
   | Float_sum ->
       pure (function
         | [ VArray xs ] ->

@@ -101,6 +101,16 @@ print(try acme.statement(bob).len())     // covers statement(); len() can't fail
 let n = try parse(read(path)) + 1        // covers read() and parse()
 ```
 
+A `with` whose items' setup or `finally` can fail is marked too, `try
+with transaction() over Sql in ...`, `attempt with` or a `match` of the
+`with` with `fail` arms; the marker covers only installing them, so each
+call in the body that can fail has a marker of its own (stage 11a):
+
+```ren
+try with transaction() over Sql in
+  try Sql.set(k)                         // the body's own call, its own `try`
+```
+
 `attempt` makes a value, a `Result`, which is usually compared next, so
 it covers the calls to its right up to a comparison: `attempt f() == x`
 is `(attempt f()) == x`, and `attempt a() + b()` is `attempt (a() + b())`.

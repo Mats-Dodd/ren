@@ -560,6 +560,10 @@ let unmarked env (c : ecall) unhandled =
         List.find (fun (_, ty) -> List.mem t (row_vars ty)) c.eparams
       in
       report env (unhandled_param c.eloc ~name_loc:c.ename_loc c.ename param)
+  | _ when labels <> [] && c.einstall ->
+      report env
+        (unhandled_install c.ename_loc c.ename
+           (List.map (show_label (printer env)) labels))
   | _ when labels <> [] ->
       report env
         (unhandled_call c.eloc ~name_loc:c.ename_loc c.ename

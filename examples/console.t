@@ -132,7 +132,7 @@ again:
   $ rm log.txt
 
   $ ren console account --real Users
-  error: `--real` names a built-in dependency with a real implementation, and only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` have one, not `Users`
+  error: `--real` names a built-in dependency with a real implementation, and only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async` have one, not `Users`
   [2]
 
 A dependency that isn't a built-in is installed in the line itself:
@@ -146,7 +146,7 @@ A dependency that isn't a built-in is installed in the line itself:
   error: nothing installs `Prices` in the console
     ┌─ <console>:1:1
   1 │ try Prices.price("apple")
-    │ ^^^^^^^^^^^^^^^^^^^^^^^^^ the console gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
+    │ ^^^^^^^^^^^^^^^^^^^^^^^^^ the console gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`, and what controls them
     │     --------------------- this call uses `Prices`
     help: install one in the line: `with counting() in ...`
   cache> 

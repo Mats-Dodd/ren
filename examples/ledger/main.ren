@@ -8,7 +8,7 @@ import sql.{Sql}
 // `to` is credited first, so a transfer that fails part way has
 // something to roll back
 pub fn transfer(from: Str, to: Str, amount: Int) ! DbDown | Short(name: Str) uses Sql =
-  with sql.transaction() over Sql in
+  try with sql.transaction() over Sql in
     try Sql.set(to, try Sql.get(to) + amount)
     let left = try Sql.get(from) - amount
     if left < 0 then fail Short(from)

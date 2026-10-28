@@ -848,7 +848,10 @@ and synth env cx (e : expr) : ty =
               v
           | _ -> t)
       | t ->
-          m.hint <- try_hint env cx a t;
+          m.hint <-
+            (match a.kind with
+            | With _ -> Some Installs_only
+            | _ -> try_hint env cx a t);
           t)
   | Attempt a ->
       (* the calls it covers fail into its [Result] instead, and so does a
@@ -1909,6 +1912,145 @@ and blame_at cx node args =
    which of its parameters have a type written, if the caller knows
    better than [tf] (Infer_written.written_params). *)
 and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
+  let ds =
+    match callee with
+    | Some p -> Option.value (Hashtbl.find_opt env.defaults_of p) ~default:[]
+    | None -> []
+  in
+  match (ds, reveal env.st tf, callee) with
+  | _ :: _, TFun (ps, _, _, _), Some p -> (
+      match with_defaults env cx e ~name ~callee:p ds ps args with
+      | Some args -> applied env cx e ~name ?target ?callee ?written f tf args
+      | None ->
+          List.iter
+            (fun (a : expr) ->
+              match a.kind with
+              | Named (_, v) -> ignore (infer_arg env cx v)
+              | _ -> ignore (infer_arg env cx a))
+            args;
+          TError)
+  | _ -> applied env cx e ~name ?target ?callee ?written f tf args
+
+(* The arguments of [e], a call of [callee], whose parameters [ps] have
+   defaults [ds] (Infer_env.defaults_of), in its parameters' order: the
+   positional ones fill the parameters without defaults, in order, a
+   trailing block the last; one with a default is given by name or left
+   out, when it's its default, a literal at a node of its own; and a
+   parameter of `Tags` keeps its argument by name, which [tags_call]
+   reads. [None] once it's reported that they don't fit (compiler.md,
+   "Stage 11a", "The surface"). *)
+and with_defaults env cx (e : expr) ~name ~callee ds (ps : Types.param list)
+    args =
+  let n = List.length ps in
+  let fn = Path.short callee in
+  let pnames =
+    match Hashtbl.find_opt env.params_of callee with
+    | Some (_ :: rest as all) -> if List.length all = n + 1 then rest else all
+    | Some [] | None -> []
+  in
+  let default_at i = List.find_opt (fun (j, _, _) -> j = i) ds in
+  let tags_at i = is_tags (List.nth ps i).ty in
+  let named =
+    List.filter_map
+      (fun (a : expr) ->
+        match a.kind with Named (nm, v) -> Some (a, nm, v) | _ -> None)
+      args
+  in
+  let positional =
+    List.filter (fun (a : expr) -> match a.kind with Named _ -> false | _ -> true) args
+  in
+  (* the names a call may give, in order *)
+  let by_name =
+    List.concat
+      (List.init n (fun i ->
+           match default_at i with
+           | Some (_, d, _) -> [ d ]
+           | None when tags_at i -> Option.to_list (List.nth_opt pnames i)
+           | None -> []))
+  in
+  let tags_unnamed =
+    pnames = [] && List.exists (fun (p : Types.param) -> is_tags p.ty) ps
+  in
+  let required =
+    List.filter (fun i -> default_at i = None && not (tags_at i)) (List.init n Fun.id)
+  in
+  let src (a : expr) = Option.value (env.source a) ~default:"..." in
+  match
+    List.find_opt
+      (fun (_, (nm : ident), _) ->
+        not (List.mem nm.name by_name || tags_unnamed))
+      named
+  with
+  | Some (_, nm, _) ->
+      report env (no_param_named nm.loc ~fn ~given:nm.name ~names:by_name);
+      None
+  | None when List.length positional > List.length required ->
+      (* the first one past those without a default, before a trailing
+         block, is one given by position *)
+      let block_last =
+        match List.rev required with
+        | i :: _ -> i = n - 1 && (match repr (List.nth ps i).ty with TFun _ -> true | _ -> false)
+        | [] -> false
+      in
+      let k = List.length required - if block_last then 1 else 0 in
+      let extra = List.nth positional k in
+      let left =
+        List.find_opt
+          (fun (_, d, _) -> not (List.exists (fun (_, (nm : ident), _) -> nm.name = d) named))
+          ds
+      in
+      (match left with
+      | Some (_, d, _) ->
+          report env (default_by_position extra.loc ~param:d ~arg:(src extra))
+      | None ->
+          report env
+            (wrong_arity e.loc name (List.length required) (List.length positional)));
+      None
+  | None when List.length positional < List.length required ->
+      report env
+        (wrong_arity e.loc name (List.length required) (List.length positional));
+      None
+  | None ->
+      let rest = ref positional in
+      let args =
+        List.concat
+          (List.init n (fun i ->
+               match default_at i with
+               | Some (_, d, lit) -> (
+                   match
+                     List.find_opt (fun (_, (nm : ident), _) -> nm.name = d) named
+                   with
+                   | Some (_, _, v) -> [ v ]
+                   | None ->
+                       let kind : expr_kind =
+                         match lit with
+                         | LInt k -> Int k
+                         | LFloat x -> Float x
+                         | LBool b -> Bool b
+                         | LStr s -> Str s
+                       in
+                       [ { kind; loc = e.loc; node = default_node e.node i } ])
+               | None when tags_at i ->
+                   List.filter_map
+                     (fun ((a : expr), (nm : ident), _) ->
+                       if
+                         List.nth_opt pnames i = Some nm.name
+                         || (tags_unnamed && not (List.exists (fun (_, d, _) -> d = nm.name) ds))
+                       then Some a
+                       else None)
+                     named
+               | None -> (
+                   match !rest with
+                   | a :: more ->
+                       rest := more;
+                       [ a ]
+                   | [] -> [])))
+      in
+      Hashtbl.replace cx.found e.node (Args args);
+      Some args
+
+(* [apply], once the arguments are in order. *)
+and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
   let ename = Option.value name ~default:"this" in
   let named (a : expr) = match a.kind with Named _ -> true | _ -> false in
   match reveal env.st tf with
@@ -2138,7 +2280,11 @@ and check_args env cx ~name ?callee ~written ps args =
           ignore (infer env cx place);
           report env (arg_not_changed a.loc name)
       | Read, _ -> (
-          let why = forced_why env callee p.ty in
+          let why =
+            match cant_fail_why env callee a p.ty with
+            | Some why -> why
+            | None -> forced_why env callee p.ty
+          in
           (* a parameter whose type is a variable, a generic's `T`, isn't
              written, however it's solved: the argument is unified with
              it *)
@@ -2162,6 +2308,51 @@ and check_args env cx ~name ?callee ~written ps args =
                 ?written:(if written then Some p.ty else None)
                 a p.ty))
     (List.combine ps written) args
+
+(* How to word [a], a block given to a parameter of [callee]'s of type
+   [t] that can't fail, failing: a spawned task's, or a branch of
+   `Async.race` (compiler.md, "Stage 11a", "The checker"). The help writes
+   the first call in it marked with `try` as one marked with `attempt`. *)
+and cant_fail_why env callee (a : expr) t =
+  let spawns =
+    List.map (Path.member (Path.prelude "Scope")) [ "spawn"; "start"; "replace" ]
+  in
+  let rec first_try (e : expr) =
+    match e.kind with
+    | Try x -> env.source x
+    | _ -> List.find_map first_try (Ast.children e)
+  in
+  match (callee, repr t, a.kind) with
+  | Some c, TFun (_, _, REmpty, _), Lambda (_, body)
+    when List.mem c spawns || Iface.closed_blocks c ->
+      let call = Option.value (first_try body) ~default:"..." in
+      let msg, help =
+        if List.mem c spawns then
+          ( "a spawned task can't fail, or one task's failure would stop all \
+             the others",
+            sprintf "handle them in the task: `match attempt %s`" call )
+        else
+          ( "a branch of `race` can't fail, or a failure could leave the race \
+             waiting on the other",
+            sprintf
+              "make the failure a value inside it: `attempt %s`; to try again \
+               until one succeeds, use `retry`"
+              call )
+      in
+      (* what it fails with, after the `!` of its type as it's printed *)
+      let fails found =
+        match String.index_opt found '!' with
+        | Some i ->
+            String.trim (String.sub found (i + 1) (String.length found - i - 1))
+        | None -> "..."
+      in
+      Some
+        (explain
+           ~msg:(fun _ _ -> msg)
+           ~help:(fun _ _ -> help)
+           ~labels:(fun found _ -> [ (body.loc, "can fail with " ^ fails found) ])
+           ~alone:true ())
+  | _ -> None
 
 (* An argument's type, and whether it's passed with `&`. *)
 and infer_arg env cx (a : expr) =

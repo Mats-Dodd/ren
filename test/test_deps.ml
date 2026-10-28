@@ -40,6 +40,8 @@ let run_start files body =
               names = [];
               reqs = [];
               row_reqs = [];
+              modes = [];
+              defaults = [];
             };
         }
       in
@@ -123,6 +125,8 @@ let lint_evidence body =
           names = [];
           reqs = [];
           row_reqs = [];
+          modes = [];
+          defaults = [];
         };
       body = body ~loc ~op ~lambda ~call ~uses_d;
       test = false;
@@ -781,7 +785,7 @@ fn main() uses Console =
     error: nothing installs `N` before `main`
       ┌─ test.ren:7:4
     7 │ fn main() uses Console =
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
     8 │   print(run_two(fn() => N.get()))
       │                         ------- this call uses `N`
       help: install one inside `main`: `with fixed(...) in ...`
@@ -804,7 +808,7 @@ fn main() uses Console =
     error: nothing installs `N` before `main`
        ┌─ test.ren:8:4
      8 │ fn main() uses Console =
-       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
     10 │   print(a.wrap() fn() => N.get())
        │                          ------- this call uses `N`
        help: install one inside `main`: `with fixed(...) in ...`
@@ -1272,7 +1276,7 @@ test "the real file system, and the test clock" uses Fs, Clock =
     error: nothing installs `TestClock` in the test "the real file system, and the test clock"
       ┌─ test.ren:1:6
     1 │ test "the real file system, and the test clock" uses Fs, Clock =
-      │      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this test gets only the real `Fs` and `Clock`, and the test `Random`, `Console`, `Os` and `Proc`, and what controls them
+      │      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this test gets only the real `Fs` and `Clock`, and the test `Random`, `Console`, `Os`, `Proc` and `Async`, and what controls them
     2 │   TestClock.advance(Duration.ms(1))
       │   --------------------------------- this call uses `TestClock`
       = the test asks for the real `Clock`, which `TestClock` can't control
@@ -1309,7 +1313,7 @@ handler no_users() for Users =
     error: nothing installs `Users` before `main`
       ┌─ test.ren:6:16
     6 │ fn main() uses Users, Console =
-      │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+      │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
     7 │   print(Users.get(1))
       │         ------------ this call uses `Users`
       help: install one inside `main`: `with Users.none() in ...`
@@ -1330,7 +1334,7 @@ fn main() = print(find(1))
     error: nothing installs `Users` before `main`
       ┌─ test.ren:8:4
     8 │ fn main() = print(find(1))
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
       │                   ------- this call uses `Users`
       help: install one inside `main`: `with mem_users(...) in ...`
     |}];
@@ -1354,14 +1358,14 @@ fn main() uses Net = print(Users.get(1))
     error: nothing installs `Users` before `main`
       ┌─ test.ren:4:4
     4 │ fn main() uses Net = print(Users.get(1))
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
       │                            ------------ this call uses `Users`
       help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Users`
 
     error: nothing installs `Net` before `main`
       ┌─ test.ren:4:16
     4 │ fn main() uses Net = print(Users.get(1))
-      │                ^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+      │                ^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
       help: remove it: nothing can implement `Net` yet
     |}]
 
@@ -1382,7 +1386,7 @@ fn main() uses Log =
     error: nothing installs `Log` before `main`
       ┌─ test.ren:5:16
     5 │ fn main() uses Log =
-      │                ^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+      │                ^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
     6 │   Log.put(1)
       │   ---------- this call uses `Log`
       help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Log`
@@ -1397,7 +1401,7 @@ fn main() uses Rates, Console = print(convert(1))
     error: nothing installs `Rates` before `main`
        ┌─ test.ren:16:16
     16 │ fn main() uses Rates, Console = print(convert(1))
-       │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+       │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
        │                                       ---------- this call uses `Rates`
        help: install one inside `main`: `with counting_rates(...) in ...`
     |}]
@@ -1424,7 +1428,7 @@ handler no_users() for Users =
     error: nothing installs `Users` in the test "counts users"
       ┌─ test.ren:6:6
     6 │ test "counts users" =
-      │      ^^^^^^^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
+      │      ^^^^^^^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`, and what controls them
     7 │   assert Users.count() == 0
       │          ------------- this call uses `Users`
       help: install one inside the test: `with Users.none() in ...`
@@ -1432,7 +1436,7 @@ handler no_users() for Users =
     error: nothing installs `TestClock` in the test "the system clock"
        ┌─ test.ren:9:6
      9 │ test "the system clock" uses Clock =
-       │      ^^^^^^^^^^^^^^^^^^ this test gets only the real `Clock`, and the test `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
+       │      ^^^^^^^^^^^^^^^^^^ this test gets only the real `Clock`, and the test `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`, and what controls them
     10 │   TestClock.advance(Duration.ms(1))
        │   --------------------------------- this call uses `TestClock`
        = the test asks for the real `Clock`, which `TestClock` can't control
@@ -1448,7 +1452,7 @@ test "users" uses Users, ..d =
 |};
   [%expect
     {|
-    error: a test's `uses` asks for a real implementation, and only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` have one, not `Users`
+    error: a test's `uses` asks for a real implementation, and only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async` have one, not `Users`
       ┌─ test.ren:4:19
     4 │ test "users" uses Users, ..d =
       │                   ^^^^^
@@ -1484,7 +1488,7 @@ handler no_users() for Users =
     error: nothing installs `Users` in the test "frozen / counts users"
        ┌─ test.ren:10:7
     10 │ group "frozen" = counts(Clock.frozen(Time.epoch))
-       │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
+       │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`, and what controls them
        │                  -------------------------------- this call uses `Users`
        help: install one around each of its tests, in the group's `with`: `group counts(...) with Users.none() =`
     |}]
@@ -1513,7 +1517,7 @@ pub group counts() =
     error: nothing installs `conform.Users` in the test "frozen / counts users"
       ┌─ main.ren:3:7
     3 │ group "frozen" = conform.counts()
-      │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`, and what controls them
+      │       ^^^^^^^^ a test gets only the test `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`, and what controls them
       │                  ---------------- this call uses `conform.Users`
       help: `conform.counts` is another module's group, so pass one in: give the group a parameter of type `conform.Users` that its `with` installs, and pass an implementation to it here
     |}]
@@ -2621,7 +2625,7 @@ fn main() uses Console =
     error: nothing installs `RateCalls` before `main`
        ┌─ test.ren:14:4
     14 │ fn main() uses Console =
-       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
     17 │     print(RateCalls.count())
        │           ----------------- this call uses `RateCalls`
        help: install one inside `main`: `with counting_rates(...) in ...`
@@ -5281,9 +5285,9 @@ handler live() for Rates =
 handler fixed() for Rates =
   usd_to(_) => 3
 fn main() uses Console =
-  print(attempt with http(true), live() in Rates.usd_to(5))
-  print(attempt with http(false), live() in Rates.usd_to(5))
-  print(attempt with fixed() in Rates.usd_to(5))
+  print(with http(true), live() in attempt Rates.usd_to(5))
+  print(with http(false), live() in attempt Rates.usd_to(5))
+  print(with fixed() in attempt Rates.usd_to(5))
 |};
   [%expect {|
     Ok(10)
@@ -6120,7 +6124,7 @@ fn main() uses Console = print(run(counting_rates(3)))
     error: nothing installs `RateCalls` before `main`
        ┌─ test.ren:18:4
     18 │ fn main() uses Console = print(run(counting_rates(3)))
-       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
        │                                ---------------------- this call uses `RateCalls`
        help: install one inside `main`: `with counting_rates(...) in ...`
     |}]
@@ -6207,7 +6211,7 @@ fn main() =
     error: nothing installs `TestClock` before `main`
       ┌─ test.ren:3:4
     3 │ fn main() =
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
     6 │     TestClock.advance(Duration.ms(3))
       │     --------------------------------- this call uses `TestClock`
       help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `TestClock`
@@ -6536,7 +6540,7 @@ fn main() uses Console = print(both(three(3)))
     error: nothing installs `Extra` before `main`
        ┌─ test.ren:27:4
     27 │ fn main() uses Console = print(both(three(3)))
-       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc`
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
        │                                -------------- this call uses `Extra`
        help: install one inside `main`: `with three(...) in ...`
     |}]

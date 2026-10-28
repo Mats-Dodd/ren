@@ -4875,11 +4875,94 @@ revisit if a step finds it wrong:
 - **Natively, `Async.until` that doesn't hold** is the deadlock panic,
   as one task under `ren run` is.
 
+### Step 1, as built
+
+What step 1 settled where the text above is silent, or differs from it:
+
+- **Modes and defaults are in the scheme, not in `Ty.param`.**
+  `Ty.scheme` gains `modes`, the block parameters that aren't ordinary,
+  by their place among the parameters (`self` counted), and `defaults`,
+  each parameter with one, by place, name and literal. Both are a named
+  function's signature, never a type's: `fn(Int) -> Int` has no mode, so
+  types still compare with `=` (interfaces, release's specialization) and
+  Lower and Core never see either. The interface keeps the scheme, so
+  another module's Excl reads the modes and its calls leave defaults
+  out; `ren types` prints both, `f: concurrent fn(Int) -> Int`, `max: Int
+  = 64`.
+- **A mode is written only on a named function's parameter whose type
+  is written `fn(...)`.** A lambda's or a handler's is an error, "`spawned`
+  marks a block parameter of a function"; an operation's block parameter
+  has none either, since an operation's parameters are a function type's,
+  which carries no mode: an operation can't pass its block on to
+  `Async.map` (revisit if a program needs it).
+- **`Spawned` stands for `Concurrent`.** Both only read what they capture,
+  and a spawned block runs longer, so a `spawned` parameter may be passed
+  on to a `concurrent` one; only `concurrent` to `spawned` is refused,
+  "`body` is concurrent, so it can't be spawned". That's the order the
+  private inference takes, so an inferred mode never refuses a use. A
+  lambda's block parameter passed to either is refused: it has no mode to
+  write.
+- **A block given to a `concurrent` or `spawned` parameter** reads what it
+  captures, and each block parameter it calls is passed on at that mode.
+  A spawned block's reads of the variables bound outside the
+  `Async.scope` body it's spawned into last until that call ends: into
+  the scope it's given, as receiver or argument, if Excl is walking its
+  body, or, given to a helper's `spawned` parameter with no such scope,
+  into every scope around (conservative). `Async.until`'s condition adds
+  no access in its arm.
+- **Defaults** are checked against their parameter's type where they're
+  written. At a call, Infer puts the arguments in their parameters' order
+  (`Infer.Args` at the call's node), each default left out a literal at a
+  node of its own, `Infer_env.default_node` (negative, so no parsed node
+  has it); Lower and Excl read that order. A default is given only to a
+  function called by its path, a member or a method; a lambda's is an
+  error.
+- **Rule D:** Resolve refuses a written `Scope` or `Task<T>` in a record,
+  a payload, a type argument, a result, an operation's parameter or a
+  handler's; Infer's walk the rest (an array, a tuple, a `var`, a
+  handler's state, a type argument a use picks, a result); Core Lint no
+  handle inside another type or as a type argument, and no function but
+  the prelude's giving one. The prelude's own members are exempt.
+- **What can't fail:** a `spawned` parameter's block, whatever it writes,
+  and `Async.race`'s branches (`Iface.closed_blocks`, by path) have closed,
+  empty error rows; the mismatch is worded by `Infer_expr.cant_fail_why`.
+- **`try with`:** the installation's `ecall`s are covered by the markers
+  around the `with`, and its body is inferred with none, so its calls
+  have their own. `attempt with h() in X` keeps only what installing `h`
+  fails with; what `X` fails with is kept by `with h() in attempt X`
+  (test_deps.ml's one such test is written so now).
+- **The surface's intrinsics** are one, `Unbuilt`, `fn<T>(Str) -> T`,
+  which panics with its message; `Intrinsic.waits` says it can wait, and
+  Core Lint checks only the prelude's functions whose rows have `Async`
+  call one. The steps that build each member replace its `unbuilt` with
+  their own intrinsics (each `waits`).
+- **`Async` is installed around `main` and a test** (it's a runtime
+  dependency and one of `Test_items.defaults`): its `real`, and a test's,
+  are `single_runtime()`, whose `yield` and `tick` return at once. With
+  one task that's what both do; step 5 makes the test's `sim.scheduler`.
+  So every message that lists the built-ins names `Async` too. It isn't
+  the world (`Prelude.world_deps`, the other six): the journal records
+  none of its calls and a journal's header doesn't name it; `ren run
+  --record`, `ren replay` and the console install the real one beside
+  the recorders. Natively, its `real` is built, as `Console`'s is, so a
+  native `yield` and `tick` return at once.
+- **No handler task** is Resolve's, where `task =>` was the arm of an
+  `over any` handler; it's reported only in a handler that isn't one.
+- Test fixes: test_tasks.ml's `twice` and `fan_out` lacked the `try`
+  that a call of a block parameter that can fail needs.
+
 ### Progress log
 
 | step | commit | done | left |
 |---|---|---|---|
-| 0 | this commit | this section; async.md rewritten to foundations.md and the brief; the README's race passage; test/test_tasks.ml, every test behind `until "sN"`; bench/11a/tasks/ (the five programs, the `just`'s part, the milestone, a version 1 journal) and bench/tasks.t, all `not yet`; bench/11a's sequential programs and their section of bench/build.t (`trywith` already as specified) | steps 1 to 9; nothing of the language or runtime is built yet |
+| 0 | b3ba3c7 | this section; async.md rewritten to foundations.md and the brief; the README's race passage; test/test_tasks.ml, every test behind `until "sN"`; bench/11a/tasks/ (the five programs, the `just`'s part, the milestone, a version 1 journal) and bench/tasks.t, all `not yet`; bench/11a's sequential programs and their section of bench/build.t (`trywith` already as specified) | steps 1 to 9; nothing of the language or runtime is built yet |
+| 1 | this commit | parameters with defaults, a block without parentheses, `concurrent` and `spawned` (lexer to tree-sitter and Zed); `Async`, `Scope` and `Task` declared in the prelude, each member panicking until its step; rules B to D (Excl, Resolve, Infer, Core Lint); spawned blocks and `race`'s branches can't fail; `try with`; `s.spawn` uses `Async`, with its note; `Intrinsic.waits`; the `task =>` error; test_tasks.ml's s1 tests on; examples/ledger, handlers.md and errors.md say `try with`; bench/11a/trywith in the native loops | steps 2 to 9 |
+
+Notes for step 2 on: test_tasks.ml's "[s4 accept] an operation keeps
+its instance across its own calls" is missing `Clock` in its `main`'s
+`uses` (it's refused today for that, not for anything step 4 builds):
+step 4 fixes the test. Running `dune build` while THE CHECKS' script
+runs aborts silently ("Another Dune instance"), so wait for it.
 
 Notes for whoever resumes: a stale `_build` (from a cram run killed
 part way) once made examples/just.t fail with "two tests named `replays

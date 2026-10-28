@@ -63,6 +63,8 @@
 (any) @keyword
 (numeric) @keyword
 (break) @keyword
+; how a block parameter's block runs: `concurrent`, `spawned`
+(block_mode) @keyword
 
 ; something changes here
 (reference "&" @keyword.mutation)
@@ -148,6 +150,7 @@
 (assignment operator: _ @operator)
 (unary_expression "-" @operator)
 (negative_number "-" @operator)
+(negative "-" @operator)
 (range ".." @operator)
 ["=" "=>" "->" "|"] @operator
 

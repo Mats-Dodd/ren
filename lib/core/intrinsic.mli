@@ -30,6 +30,7 @@ type t =
   | Unsafe_cast
   | Float_lanes
   | Float_sum
+  | Unbuilt
   | Map_empty
   | Map_of
   | Map_get
@@ -100,3 +101,8 @@ val name : t -> string
 (* Its name among its type's members, [push]; a function that isn't a
    member's is its [name]. *)
 val member_name : t -> string
+
+(* Whether it can wait for another task, a scheduling point: only the
+   prelude's members and handlers whose rows have `Async` call one, which
+   Core Lint checks. *)
+val waits : t -> bool

@@ -94,11 +94,14 @@ type why = Infer_env.why = {
   labels : string -> string -> (Loc.t * string) list;
   type_params : bool;
   inside : string -> string;
+  alone : bool;
+      (** its words are the whole message: what the mismatch itself would add,
+          a note on what can fail, isn't *)
 }
 
 let explain ?msg ?(notes = []) ?help ?narrowed_help ?(labels = fun _ _ -> [])
-    ?(type_params = true) ?(inside = Fun.id) () =
-  { msg; notes; help; narrowed_help; labels; type_params; inside }
+    ?(type_params = true) ?(inside = Fun.id) ?(alone = false) () =
+  { msg; notes; help; narrowed_help; labels; type_params; inside; alone }
 
 let plain = explain ()
 
@@ -375,7 +378,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
       let d =
         mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
           ~type_params:why.type_params ~found ~expected ~f ~x
-          (behind @ needs_more @ errors @ private_ @ several)
+          (if why.alone then [] else behind @ needs_more @ errors @ private_ @ several)
       in
       (* test code using its module's own opaque type as what it's
          represented as: at the first use only, as [report_rep] *)

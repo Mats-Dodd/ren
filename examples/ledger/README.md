@@ -32,9 +32,11 @@ written after `let tx`, so when `begin` fails, the body never runs and
 `finally` isn't called. One written above it would run then too, given
 `begin`'s error (stage 10c).
 
-**`with sql.transaction() over Sql`** puts the transaction over the `Sql`
-installed outside the `with`: `transfer` doesn't say which database, only
-that it uses one.
+**`try with sql.transaction() over Sql`** puts the transaction over the
+`Sql` installed outside the `with`: `transfer` doesn't say which
+database, only that it uses one. Installing it can fail, so the `with`
+is marked with `try`, as a call that can fail is; the `try` covers only
+the installation, and each call in the body has its own.
 
 **Its errors are the body's and the transaction's.** `transfer` fails
 with `Short` from its body and `DbDown` from the `Sql` calls, the start

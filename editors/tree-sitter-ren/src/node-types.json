@@ -547,6 +547,11 @@
     }
   },
   {
+    "type": "block_mode",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "boolean",
     "named": true,
     "fields": {}
@@ -557,7 +562,7 @@
     "fields": {
       "arguments": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "arguments",
@@ -2314,7 +2319,7 @@
     "fields": {
       "arguments": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "arguments",
@@ -2534,6 +2539,25 @@
     }
   },
   {
+    "type": "negative",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "float",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "negative_number",
     "named": true,
     "fields": {},
@@ -2655,6 +2679,42 @@
     "type": "parameter",
     "named": true,
     "fields": {
+      "default": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "float",
+            "named": true
+          },
+          {
+            "type": "negative",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          }
+        ]
+      },
+      "mode": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "block_mode",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
@@ -3608,6 +3668,10 @@
     "named": true
   },
   {
+    "type": "concurrent",
+    "named": false
+  },
+  {
     "type": "dep",
     "named": false
   },
@@ -3710,6 +3774,10 @@
   {
     "type": "self",
     "named": true
+  },
+  {
+    "type": "spawned",
+    "named": false
   },
   {
     "type": "test",

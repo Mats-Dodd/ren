@@ -178,8 +178,28 @@ and ('b, 't) pattern_kind =
    updates the caller's value. *)
 type mode = Read | Inout
 
-(* A parameter of a function or lambda; its type may be left out. *)
-type ('b, 't) param = { pname : 'b; pty : 't ty option; pmode : mode }
+(* How a block parameter's block may run (foundations.md, decision 2,
+   rule B): only during the call, on the caller's task, the default;
+   [Concurrent], on several tasks at once during the call, `f: concurrent
+   fn(T) -> U`; or [Spawned], as a task until its scope ends, `body:
+   spawned fn()`. Written only on a named function's block parameter. *)
+type block_mode = Ordinary | Concurrent | Spawned
+
+(* A parameter's default, `max: Int = 64`: a literal, a negative number
+   among them (compiler.md, "Stage 11a", "The surface"). A call may leave
+   the parameter out, and Lower fills it in. *)
+type literal = LInt of Int64.t | LFloat of float | LBool of bool | LStr of string
+
+(* A parameter of a function or lambda; its type may be left out. Its
+   default, if it has one, is the literal, where it's written, and a node
+   of its own (an [expr]'s [node]), at which its type is checked. *)
+type ('b, 't) param = {
+  pname : 'b;
+  pty : 't ty option;
+  pmode : mode;
+  pblock : block_mode;
+  pdefault : (literal * Loc.t * int) option;
+}
 
 (* [node] numbers the expressions and patterns of one top-level function,
    so later passes can say things about a particular expression. *)
@@ -803,6 +823,21 @@ let show_ctor_ref (c : ctor_ref) =
   | Some t -> show_tyname t ^ "." ^ c.name.name
   | None -> c.name.name
 
+(* A literal, as it's written. *)
+let show_literal = function
+  | LInt n -> Int64.to_string n
+  | LFloat f ->
+      (* the shortest spelling that reads back as [f], with a point *)
+      let short = Printf.sprintf "%g" f in
+      let s =
+        if float_of_string short = f then short else Printf.sprintf "%.17g" f
+      in
+      if String.exists (fun c -> c = '.' || c = 'e' || c = 'n' || c = 'i') s
+      then s
+      else s ^ ".0"
+  | LBool b -> string_of_bool b
+  | LStr s -> Printf.sprintf "%S" s
+
 let rec show_ty : ty -> string = function
   | TyName (name, []) -> show_tyname name
   | TyName (name, args) ->
@@ -1016,7 +1051,20 @@ and show_param (p : param) =
   let name =
     match p.pmode with Inout -> "inout " ^ p.pname.name | Read -> p.pname.name
   in
-  match p.pty with Some t -> name ^ ":" ^ show_ty t | None -> name
+  let block =
+    match p.pblock with
+    | Ordinary -> ""
+    | Concurrent -> "concurrent "
+    | Spawned -> "spawned "
+  in
+  let default =
+    match p.pdefault with
+    | Some (l, _, _) -> "=" ^ show_literal l
+    | None -> ""
+  in
+  match p.pty with
+  | Some t -> name ^ ":" ^ block ^ show_ty t ^ default
+  | None -> name ^ default
 
 and show_stmt : stmt -> string = function
   | Let { name; value; mut; _ } ->

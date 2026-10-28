@@ -1167,7 +1167,7 @@ and add_lifted cx fb (writer : Path.t) (l : lifted) (ev : C.var) body loc =
       ev;
       tys = [];
       dicts = [];
-      scheme = { ty = l.lty; names = []; reqs = []; row_reqs = [] };
+      scheme = { ty = l.lty; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] };
       body;
       test = false;
       loc;
@@ -1584,7 +1584,7 @@ and make_copy cx key (src : C.fn_def) blocks slots shape =
     let body = rw cx fb env src.body in
     let scheme : Ty.scheme =
       match sub with
-      | Some _ -> { ty = sty; names = []; reqs = []; row_reqs = [] }
+      | Some _ -> { ty = sty; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
       | None -> { src.scheme with ty = sty }
     in
     add_fn cx
@@ -1807,7 +1807,7 @@ and make_spec cx h (a : Ty.args) dep =
                               tys = [];
                               dicts = [];
                               scheme =
-                                { ty = t; names = []; reqs = []; row_reqs = [] };
+                                { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] };
                               body;
                               test = false;
                               loc = o.loc;
@@ -1960,7 +1960,7 @@ let program ?budget (modules : C.program list) =
       tys = [];
       dicts = [];
       scheme =
-        { ty = ty env start.scheme.ty; names = []; reqs = []; row_reqs = [] };
+        { ty = ty env start.scheme.ty; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] };
       known = known_in fb.kn start.ev body;
     }
   in

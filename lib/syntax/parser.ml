@@ -116,9 +116,10 @@
               |  "attempt" add                      (stops at a comparison)
               |  "assert" expr
      postfix  := primary { "." IDENT | "[" expr "]"
-                         | "(" expr, ... ")" [lambda] }
+                         | "(" expr, ... ")" [lambda] | lambda }
                                                     (a trailing lambda is
-                                                     the call's last argument)
+                                                     the call's last argument;
+                                                     alone, it's the only one)
      primary  := INT | STR | "true" | "false" | "(" ")" | IDENT | "self"
               |  "break"
               |  lambda | "handler" lambda      (an inline handler)
@@ -168,6 +169,7 @@ let peek p = fst p.toks.(p.i)
 let peek2 p = fst p.toks.(min (p.i + 1) (Array.length p.toks - 1))
 let peek3 p = fst p.toks.(min (p.i + 2) (Array.length p.toks - 1))
 let loc p = snd p.toks.(p.i)
+let loc2 p = snd p.toks.(min (p.i + 1) (Array.length p.toks - 1))
 let advance p = if p.i < Array.length p.toks - 1 then p.i <- p.i + 1
 
 (* The tokens from [i] to [j], as they're written: a space between two
@@ -625,13 +627,59 @@ let parse_param p : param =
           "only a lambda's parameter can take a tuple apart"
     | _ -> ident p
   in
+  (* a block parameter's mode, `f: concurrent fn(T) -> U`: a word there
+     and nowhere else, so neither is reserved (compiler.md, "Stage 11a",
+     "The surface") *)
+  let pblock =
+    match (peek p, peek2 p, peek3 p) with
+    | COLON, IDENT (("concurrent" | "spawned") as m), next -> (
+        match next with
+        | FN ->
+            advance p;
+            advance p;
+            if m = "concurrent" then Concurrent else Spawned
+        | IDENT _ | LPAREN | AMP | INOUT ->
+            Diag.error (loc2 p) ~help:"remove it"
+              (Printf.sprintf "`%s` marks a block parameter of a function" m)
+        | _ -> Ordinary)
+    | _ -> Ordinary
+  in
   let pty =
-    if peek p = COLON then (
+    if pblock <> Ordinary then Some (parse_ty p)
+    else if peek p = COLON then (
       advance p;
       Some (parse_ty p))
     else None
   in
-  { pname; pty; pmode }
+  (* a default, `max: Int = 64`, is a literal (Resolve checks where it
+     may be) *)
+  let pdefault =
+    if peek p = EQ && pty <> None then (
+      advance p;
+      let at = loc p in
+      let neg = peek p = MINUS in
+      if neg then advance p;
+      let lit =
+        match (peek p, neg) with
+        | INT n, _ when n <> Int64.min_int ->
+            Some (LInt (if neg then Int64.neg n else n))
+        | FLOAT f, _ -> Some (LFloat (if neg then -.f else f))
+        | TRUE, false -> Some (LBool true)
+        | FALSE, false -> Some (LBool false)
+        | STR s, false -> Some (LStr s)
+        | _ -> None
+      in
+      match lit with
+      | Some l ->
+          advance p;
+          p.node <- p.node + 1;
+          Some (l, Loc.span at (last_loc p), p.node)
+      | None ->
+          Diag.error at ~help:"give it where it's called instead"
+            "a parameter's default is a literal: a number, a `Bool` or a string")
+    else None
+  in
+  { pname; pty; pmode; pblock; pdefault }
 
 let parse_field_decl p =
   let field_name = ident p in
@@ -1245,6 +1293,12 @@ and parse_postfix p =
            multi-line lambda doesn't have to sit inside the parentheses *)
         let args = if peek p = FN then args @ [ parse_lambda p ] else args in
         loop (mk (Call (e, args)) start p)
+    | FN ->
+        (* `Async.scope fn(s) => ...`: a call whose one argument is a block
+           may leave out its parentheses, when the `fn` is on the line of
+           what it calls (compiler.md, "Stage 11a", "The surface") *)
+        let lambda = parse_lambda p in
+        loop (mk (Call (e, [ lambda ])) start p)
     | _ -> e
   in
   loop (parse_primary p)
@@ -1489,7 +1543,8 @@ and parse_lambda_param p =
          its own, so no two parameters share a name *)
       let pname = { name = Printf.sprintf "$%d" pat.pnode; loc = pat.ploc } in
       let value = node p (Var (Bare pname.name)) pat.ploc in
-      ({ pname; pty; pmode = Read }, Some (Let_tuple { pat; value }))
+      ({ pname; pty; pmode = Read; pblock = Ordinary; pdefault = None },
+       Some (Let_tuple { pat; value }))
   | AMP ->
       (* `fn(&lo, &hi) => ...`: one the block changes, written as a call
          passes it (compiler.md, "Blocks with `inout` parameters") *)
@@ -2347,7 +2402,9 @@ let parse_handler p ~pub =
         let arm_name = ident p in
         expect p FATARROW;
         let body = parse_body p in
-        let param = { pname = arm_name; pty = None; pmode = Read } in
+        let param =
+          { pname = arm_name; pty = None; pmode = Read; pblock = Ordinary; pdefault = None }
+        in
         {
           arm_op = Bare arm_name.name;
           arm_name;

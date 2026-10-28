@@ -291,10 +291,19 @@ pub handler transaction() over Sql ! DbDown =
         try r
 
 fn transfer(t: Transfer) ! DbDown | Short uses Sql =
-  with transaction() over Sql in
+  try with transaction() over Sql in
     try debit(t.from, t.amount)
     try credit(t.to, t.amount)
 ```
+
+- **A `with` whose setup or `finally` can fail is written `try with`,**
+  as a call that can fail is marked, or `attempt with`, or handled with a
+  `match` of the `with` that has `fail` arms. The marker covers only the
+  installation: what `begin` and `commit` fail with. Each call in the
+  body is a place the code can stop, so it has a marker of its own. A
+  `with` that can fail and has no marker is an error, "installing
+  `transaction()` can fail, and nothing handles it"; a `try with` whose
+  items can't fail is "nothing here can fail".
 
 - **`r` is the body's result,** a `Result` as `attempt` would keep it,
   and `try r` passes the body's error on. What `finally` produces is what

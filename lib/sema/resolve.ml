@@ -949,7 +949,31 @@ let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
   let pty = ty_opt env ~params:sc.tparams ~rows ~tags:top p.pty in
   let b, sc = bind env sc p.pname bound in
   note_type sc b pty;
-  ({ pname = b; pty; pmode = p.pmode }, sc)
+  (* a mode, and a default, are a named function's (compiler.md, "Stage
+     11a", "The surface") *)
+  let pblock =
+    match p.pblock with
+    | Ordinary -> Ast.Ordinary
+    | m when top -> m
+    | m ->
+        report env p.pname.loc ~help:"remove it"
+          (sprintf "`%s` marks a block parameter of a function"
+             (if m = Concurrent then "concurrent" else "spawned"));
+        Ordinary
+  in
+  (match p.pdefault with
+  | Some (_, at, _) when not top ->
+      report env at ~help:"remove it, and give it where it's called"
+        "only a named function's parameter has a default"
+  | _ -> ());
+  ( {
+      pname = b;
+      pty;
+      pmode = p.pmode;
+      pblock;
+      pdefault = (if top then p.pdefault else None);
+    },
+    sc )
 
 (* The type of [r], the receiver of a dot call, if it's written where [r]
    is: a local whose type is written, `self` included, or a record
@@ -2190,7 +2214,15 @@ let rec handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
         else (
           List.iter
             (fun (a : Parsed.handler_arm) ->
-              if any_arm a then
+              if any_arm a && a.arm_name.name = "task" then
+                (* async.md's `task =>` is gone: a handler's background work
+                   is a task beside its `with` (foundations.md, decision 7) *)
+                report env a.arm_name.loc
+                  ~help:
+                    "spawn one beside the `with`, into an `Async.scope` \
+                     outside it, that calls one of the handler's operations"
+                  "a handler has no task of its own"
+              else if any_arm a then
                 report env a.arm_name.loc
                   ~help:
                     (sprintf
@@ -2610,6 +2642,31 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
                  td.type_name.name)
         | _ -> ()))
     f.params;
+  (* a parameter with a default comes after those without, but before a
+     block given last (compiler.md, "Stage 11a", "The surface"), so a
+     call's positional arguments read in order *)
+  (let rec trailing = function
+     | [ (q : Parsed.param) ] -> (
+         match q.pty with Some (TyFn _) -> [] | _ -> [ q ])
+     | q :: rest -> q :: trailing rest
+     | [] -> []
+   in
+   let ps = trailing f.params in
+   let rec check = function
+     | (q : Parsed.param) :: rest when q.pdefault <> None -> (
+         match
+           List.rev
+             (List.filter (fun (r : Parsed.param) -> r.pdefault = None) rest)
+         with
+         | last :: _ ->
+             report env q.pname.loc
+               ~help:(sprintf "move `%s` after `%s`" q.pname.name last.pname.name)
+               "a parameter with a default comes after those without"
+         | [] -> ())
+     | _ :: rest -> check rest
+     | [] -> ()
+   in
+   check ps);
   (* where `self` is written, if it's the first parameter of a member,
      and so has the type *)
   let self =
@@ -3274,14 +3331,47 @@ let written_at : Resolved.ty -> Loc.t = function
       l
   | TyErrors es -> es.eloc
 
+(* Whether a written type is a scope, or a task's handle, which rule D
+   keeps where a block is kept: which, a task's handle as it's written. *)
+let rec written_handle (t : Resolved.ty) =
+  let rec show (t : Resolved.ty) =
+    match t with
+    | TyName ({ tref = Named p; _ }, []) -> p.name
+    | TyName ({ tref = Named p; _ }, args) ->
+        p.name ^ "<" ^ String.concat ", " (List.map show args) ^ ">"
+    | TyName ({ tref = Param _; _ }, _) -> "T"
+    | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show ts) ^ ")"
+    | TyFn _ -> "fn(...)"
+    | TyImpl _ | TyErrors _ -> "..."
+    | TyInout (t, _) -> "&" ^ show t
+  in
+  match t with
+  | TyName ({ tref = Named p; _ }, []) when p = Path.prelude "Scope" ->
+      Some Infer_msg.Scope_of
+  | TyName ({ tref = Named p; _ }, [ _ ]) when p = Path.prelude "Task" ->
+      Some (Infer_msg.Handle (show t))
+  | TyInout (t, _) -> written_handle t
+  | _ -> None
+
 let no_kept_blocks env (items : Resolved.program) =
   let kept loc place =
     Diag.report env.sink (Infer_msg.block_kept ~written:true loc place)
   in
+  (* a scope or a task's handle, written where a block can't be (rule D,
+     compiler.md, "Stage 11a", "The checker"): the prelude's own `start`
+     gives one *)
+  let kept_handle ?op loc h place =
+    if env.home <> Path.prelude_home then
+      Diag.report env.sink (Infer_msg.handle_kept ?op ~written:true loc h place)
+  in
   (* [t], where data goes, [place]: a block in it is reported, the
      outermost one *)
   let rec data place (t : Resolved.ty) =
-    match t with TyFn (_, _, _, _, l) -> kept l place | _ -> inner t
+    match t with
+    | TyFn (_, _, _, _, l) -> kept l place
+    | TyName ({ tloc; _ }, _) when written_handle t <> None ->
+        kept_handle tloc (Option.get (written_handle t)) place
+    | _ -> inner t
   (* the types in [t], which may itself be a block *)
   and inner (t : Resolved.ty) =
     match t with
@@ -3334,6 +3424,12 @@ let no_kept_blocks env (items : Resolved.program) =
             Diag.report env.sink
               (Infer_msg.handler_param_block ~name:name.name
                  (Loc.span name.loc (written_at t)))
+        | Some t when Ast.is_handler f && written_handle t <> None ->
+            let name = p.pname.ident in
+            Diag.report env.sink
+              (Infer_msg.handler_param_handle ~name:name.name
+                 (Loc.span name.loc (written_at t))
+                 (Option.get (written_handle t)))
         | Some t -> inner t
         | None -> ())
       f.params;
@@ -3356,8 +3452,21 @@ let no_kept_blocks env (items : Resolved.program) =
           | Opaque { rep; _ } -> data Represented rep
           | Errors es -> errors es
           | Dep ops ->
-              (* an operation is a function, which may take a block *)
-              List.iter (fun (fd : Resolved.field) -> inner fd.field_ty) ops
+              (* an operation is a function, which may take a block, but
+                 not a scope or a task's handle: another task can call it *)
+              List.iter
+                (fun (fd : Resolved.field) ->
+                  (match fd.field_ty with
+                  | TyFn (ps, _, _, _, _) ->
+                      List.iter
+                        (fun (q : Resolved.ty) ->
+                          match written_handle q with
+                          | Some h -> kept_handle ~op:true (written_at q) h Elsewhere
+                          | None -> ())
+                        ps
+                  | _ -> ());
+                  inner fd.field_ty)
+                ops
           | Dep_alias _ | Builtin -> ());
           List.iter
             (fun (o : Resolved.op) -> fn ~value:(o.op_kind = Op_value) o.op_fn)

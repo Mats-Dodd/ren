@@ -198,7 +198,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
 let ty_name (t : Ty.ty) =
   Ty.show
     (Ty.printer ~names:Path.full
-       { ty = t; names = []; reqs = []; row_reqs = [] })
+       { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
     t
 
 (* A [Struct]'s type, by its number. *)
@@ -1515,7 +1515,11 @@ and expr_at fs env (e : C.expr) : atom =
       List.iter (drop fs env) ds;
       call_block fs env ~result:(lay e.ty) ~fails:(C.fails fty) b ev xs
   | With { dep; impl = { kind = Global_value (real, _); _ }; _ }
-    when real = Path.member dep "real" && dep <> Path.prelude "Console" ->
+    when real = Path.member dep "real"
+         && dep <> Path.prelude "Console"
+         (* the runtime, whose one task's `yield` and `tick` return at
+            once, is Ren code (prelude.ml, `single_runtime`) *)
+         && dep <> Path.prelude "Async" ->
       unsupported_at fs e.loc (sprintf "the real `%s`" (Path.local dep))
   | With { ev; outer; dep; body; _ } when List.mem (ev.id, dep) fs.known ->
       (* a handler a release build knows: its state is in this frame,

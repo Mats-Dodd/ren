@@ -888,28 +888,21 @@ and with_ core env cx (e : expr) (items : with_item list) body =
   | Some order ->
       Hashtbl.replace cx.found e.node
         (Install_order (List.map (fun (idx, _, _, _) -> idx) order));
-      (* what installing each link fails with, the `with` fails with, as a
-       `try` would pass it on *)
-      let m =
-        {
-          mkind = Mtry;
-          mloc = kw;
-          covered = [];
-          unwrapped = [];
-          hint = None;
-          failed = false;
-        }
-      in
+      (* what installing each link fails with is a call's errors, which
+         the markers around the `with` cover: `try with`, `attempt with`,
+         or a `match` of the `with` with `fail` arms (compiler.md, "Stage
+         11a", "`try with`"). Unmarked, it's reported at the keyword *)
       List.iter
         (fun (_, _, links, _) ->
           List.iter
             (fun ((lk : with_link), (i : impl)) ->
-              absorb env
-                { cx with markers = m :: cx.markers }
-                ~call:lk.link ~ename:(src lk.link) ~fn:lk.link ~install:true
-                i.fails REmpty)
+              absorb env cx ~call:lk.link ~ename:(src lk.link)
+                ~fn:{ lk.link with loc = kw } ~install:true i.fails REmpty)
             links)
         order;
+      (* and only that: a call in the body is a place the code can stop,
+         marked where it is *)
+      let cx = { cx with markers = [] } in
       (* each item around the ones after it, each chain's bottom outermost *)
       let rec nest cx = function
         | [] -> core.infer env cx body

@@ -237,7 +237,7 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
         Some
           (Ty.show
              (Ty.printer ~names:env.names
-                { ty = t; names = []; reqs = []; row_reqs = [] })
+                { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
              t)
     | Con (p, _) -> Some (env.names p)
     | Var _ | Fun _ | Errors _ | Impl _ | Error -> None

@@ -1570,6 +1570,13 @@ and value_of cx req (t : Ty.ty) loc =
    A method call's receiver is its first argument, passed `inout` when
    [changed], `&s.push(1)`. *)
 and call cx ?(changed = false) (e : expr) f args =
+  (* a call that gives a default by name, or leaves it out: its arguments
+     in order, each left out its literal (Infer.Args) *)
+  let args =
+    match Infer.Nodes.find_opt e.node cx.nodes with
+    | Some { found = Some (Args xs); _ } -> xs
+    | _ -> args
+  in
   match f.kind with
   | Var (Dep_op (dep, op)) ->
       (* never with `&` (mut.ml), so its arguments are values, evaluated in

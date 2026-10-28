@@ -978,7 +978,7 @@ let%expect_test "a with fails with what its handler's state does" =
     (sql
    ^ {|
 fn work() -> Int ! DbDown uses Sql, Console =
-  with transaction() over Sql in
+  try with transaction() over Sql in
     print("body")
     1
 
@@ -1021,7 +1021,7 @@ let%expect_test "an implementation that can fail to start is written so" =
     (sql
    ^ {|
 fn install(s: over Sql ! DbDown) -> Int ! DbDown uses Sql =
-  with s over Sql in Sql.get()
+  try with s over Sql in Sql.get()
 
 fn main() uses Console =
   with mem(false) in
@@ -1107,7 +1107,7 @@ let%expect_test "finally commits, or rolls back and passes the error on" =
     (sql
    ^ {|
 fn move(n: Int) -> Int ! DbDown | Short uses Sql =
-  with transaction() over Sql in
+  try with transaction() over Sql in
     Sql.set(n)
     if n < 0 then fail Short
     n
@@ -1141,7 +1141,7 @@ let%expect_test "finally runs once, and not when the handler didn't start" =
     (sql
    ^ {|
 fn move(n: Int) -> Int ! DbDown uses Sql, Console =
-  with transaction() over Sql in
+  try with transaction() over Sql in
     print("body")
     n
 
@@ -1258,7 +1258,7 @@ handler checked() over N =
     try r
 
 fn f() uses N =
-  with checked() over N in
+  try with checked() over N in
     if N.get() < 0 then fail Early
     1
 
@@ -1545,7 +1545,7 @@ handler session() over Db =
   get(x) => next.get(t) + x
 
 pub fn use_it() -> Int uses Db =
-  with session() over Db in
+  try with session() over Db in
     Db.get(1)
 
 fn main() = 1
@@ -1556,8 +1556,8 @@ fn main() = 1
        ┌─ test.ren:9:8
      9 │ pub fn use_it() -> Int uses Db =
        │        ^^^^^^
-    10 │   with session() over Db in
-       │        --------- installing this can fail with `Down`
+    10 │   try with session() over Db in
+       │            --------- installing this can fail with `Down`
        = a public function without `!` can't fail, and its body is checked against that
        help: add `! Down` to its signature, or handle it with a `match` around the `with`, `match with ... in ...`, and an arm `fail Down => ...`
     |}]

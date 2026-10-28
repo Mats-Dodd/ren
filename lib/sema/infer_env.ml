@@ -74,6 +74,15 @@ type 'l found_ =
           have of this requirement, `add` *)
   | Tags_given of string list
       (** at `on: A | B`: the tags it gives, sorted (Infer.Tags_given) *)
+  | Args of expr list
+      (** at a call that gives a parameter with a default by name, or leaves
+          it out: its arguments in its parameters' order, each left out its
+          default, a literal at a node of its own ([default_node]), so Lower
+          never sees a default (compiler.md, "Stage 11a", "The surface") *)
+
+(* The node of the default a call [node] leaves out, its parameter [i]'s:
+   one no expression has, since the parser numbers them from 1. *)
+let default_node node i = -((node * 256) + i + 1)
 
 (* What inference keeps of it, while a group is checked: its labels are
    the checker's, whose type arguments it may still learn. *)
@@ -122,6 +131,9 @@ type why = {
   labels : string -> string -> (Loc.t * string) list;
   type_params : bool;
   inside : string -> string;
+  alone : bool;
+      (** its words are the whole message: what the mismatch itself would add,
+          a note on what can fail, isn't *)
 }
 
 type env = {
@@ -199,6 +211,10 @@ type env = {
       (** while an arm `over any` is checked: `call.args`'s type, the
           result's, and the errors' row, `call.forward()`'s *)
   params_of : (Path.t, string list) Hashtbl.t;
+  defaults_of : (Path.t, (int * string * Ast.literal) list) Hashtbl.t;
+      (** each function's parameters with defaults, by its path, each by its
+          place among the arguments a call gives (after `self`, for a
+          method), its name and its literal *)
       (** each top-level function's parameters' names, by its path, which a
           message about an argument passed by name names *)
   test_reported : (Path.t, unit) Hashtbl.t;

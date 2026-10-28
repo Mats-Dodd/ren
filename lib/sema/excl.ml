@@ -43,6 +43,19 @@
    it's given would change it twice at once. A recursive combinator like
    `fix` is written as a named recursive function instead.
 
+   Rule B (stage 11a): a block parameter's mode is part of its type. A
+   block passed to a `concurrent` parameter, `Async.map`'s `f`, may run on
+   several tasks at once during the call, so it only reads what it
+   captures; one passed to a `spawned` one, `Scope.spawn`'s `body`, runs
+   as a task until the `Async.scope` that made its scope ends, so it only
+   reads too, and what it reads by reference (rule C: only the variables
+   of the frame that called `Async.scope`) can't change until then. A
+   block parameter passed on to such a parameter needs a mode at least as
+   strong, `Spawned` over `Concurrent` over `Ordinary`: written on a
+   public function, inferred on a private one, before any body is checked
+   ([infer_modes]). Rule D, that a scope and a task's handle are kept as
+   blocks are, is inference's (Infer_top.check_blocks).
+
    Prior art: this is Swift's static exclusivity for non-escaping
    closures, without the dynamic half, since a block never escapes.
    SE-0176 (/tmp/ren-refs/swift-evolution/proposals/
@@ -131,7 +144,23 @@ type ctx = {
       (** inside a handler's arm or its `finally`: the handler's `var`s *)
   seen : access list ref;
       (** every access made so far, for the block around it *)
+  names : Path.t -> string;  (** how the module writes a type's name *)
+  fn_name : string;  (** the function being checked, as it's written *)
+  own_modes : (int * Ty.block_mode) list;
+      (** the mode of each of its block parameters that isn't ordinary, by
+          binder *)
+  own_tys : (int * Ty.ty) list;  (** its parameters' types, by binder *)
+  tasks : frame list;
+      (** the `Async.scope` calls whose bodies are being walked, innermost
+          first *)
 }
+
+(* An `Async.scope` call whose body is being walked: its body's parameter,
+   the scope, by binder; how deep its body is, so that the variables of
+   the frame that called it are those bound less deep (rule C); and the
+   places the tasks spawned into it so far read by reference, until it
+   ends. *)
+and frame = { sid : int; sdepth : int; reads : access list ref }
 
 let ty cx (e : expr) =
   match Infer.Nodes.find_opt e.node cx.nodes with
@@ -162,6 +191,56 @@ let dep_call cx (f : expr) =
       | Some { found = Some (Method_of p); _ } -> uses p
       | _ -> false)
   | _ -> false
+
+(* ---- block parameters' modes (rule B) ---- *)
+
+let rank : Ty.block_mode -> int = function
+  | Ordinary -> 0
+  | Concurrent -> 1
+  | Spawned -> 2
+
+(* The function a call of [f] calls, if it's one whose scheme is known,
+   and the place among its parameters of the call's first argument: 1
+   for a method, whose receiver is `self`. *)
+let callee_of nodes schemes (f : expr) =
+  let known p = if Hashtbl.mem schemes p then Some p else None in
+  match f.kind with
+  | Var (Global p) -> Option.map (fun p -> (p, 0)) (known p)
+  | Field _ -> (
+      match Infer.Nodes.find_opt f.node nodes with
+      | Some { Infer.found = Some (Method_of p); _ } ->
+          Option.map (fun p -> (p, 1)) (known p)
+      | _ -> None)
+  | _ -> None
+
+(* The mode of the [i]th parameter of the function at [p]. *)
+let mode_of schemes p i : Ty.block_mode =
+  match Hashtbl.find_opt schemes p with
+  | Some (s : Ty.scheme) -> Option.value (List.assoc_opt i s.modes) ~default:Ordinary
+  | None -> Ordinary
+
+(* Each of a call [e]'s arguments [args], with the place among the
+   callee's arguments of the parameter it's given to: in order, unless
+   the call gives a default by name or leaves one out (Infer.Args). *)
+let placed nodes (e : expr) args =
+  match Infer.Nodes.find_opt e.node nodes with
+  | Some { Infer.found = Some (Args xs); _ } ->
+      let index (a : expr) =
+        let v = match a.kind with Named (_, v) -> v | _ -> a in
+        let rec go i = function
+          | (x : expr) :: rest ->
+              if x.node = v.node || x.node = a.node then i else go (i + 1) rest
+          | [] -> -1
+        in
+        go 0 xs
+      in
+      List.map (fun a -> (index a, a)) args
+  | _ -> List.mapi (fun i a -> (i, a)) args
+
+let call_is p (f : expr) nodes schemes =
+  match callee_of nodes schemes f with Some (q, _) -> q = p | None -> false
+
+let async_member name = Path.member (Path.prelude "Async") name
 
 (* ---- copied values ---- *)
 
@@ -540,17 +619,107 @@ let rule_a cx (f : binder) (arg : expr) (cap : access option) =
       ]
     ~help:"write it as a named recursive function" msg
 
+(* Rule B: [b], a block parameter of mode [own], is passed to [arg]'s
+   parameter, of mode [wanted], which it isn't as strong as: [callee] is
+   the callee as written. *)
+let rule_b cx (b : binder) (loc : Loc.t) ~own ~(wanted : Ty.block_mode) ~callee
+    =
+  let x = b.ident.name in
+  let param_ty =
+    match Option.value (List.assoc_opt b.id cx.own_tys) ~default:Ty.Error with
+    | Fun (ps, r, _, u) as t ->
+        (* the block's type as its parameter writes it *)
+        let pr =
+          Ty.printer ~names:cx.names
+            { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+        in
+        Ty.show pr (Fun (ps, r, Ty.closed, u))
+    | _ -> "fn(...)"
+  in
+  let mark m = sprintf "mark the parameter: `%s: %s %s`" x m param_ty in
+  match (b.bound, own, wanted) with
+  | By_param, Ty.Concurrent, Ty.Spawned ->
+      report cx loc ~help:"mark the parameter `spawned` instead"
+        (sprintf "`%s` is concurrent, so it can't be spawned" x)
+  | By_param, _, Ty.Concurrent ->
+      report cx loc
+        ~notes:[ "a block that runs on several tasks at once can only read what it captures" ]
+        ~help:(mark "concurrent")
+        (sprintf "`%s` runs on several tasks at once in `%s`, but `%s` doesn't say it can"
+           x callee cx.fn_name)
+  | By_param, _, _ ->
+      report cx loc
+        ~notes:[ "a spawned block runs until its scope ends, and can only read what it captures" ]
+        ~help:(mark "spawned")
+        (sprintf "`%s` is spawned as a task here, but `%s` doesn't say it can be" x cx.fn_name)
+  | _, _, _ ->
+      (* a lambda's parameter, which has no mode to write *)
+      report cx loc
+        ~help:
+          "pass a block written here instead, or make it a parameter of a \
+           named function, marked"
+        (sprintf "`%s` is a block's parameter, so it can't say it can run %s" x
+           (if wanted = Concurrent then "on several tasks at once"
+            else "as a task"))
+
+(* [a], a write in a block given to a parameter of mode [m], of a place
+   it captures. *)
+let task_write cx (a : access) (m : Ty.block_mode) =
+  let x = a.var.ident.name in
+  match m with
+  | Concurrent ->
+      report cx a.loc ~says:"changed here"
+        ~notes:[ "a block that runs on several tasks at once can only read what it captures" ]
+        ~help:
+          "give back what each one makes, and add them up after: \
+           `Async.map(xs) fn(x) => ...`, then `.sum()`"
+        (sprintf "`%s` can't change in a block that runs on several tasks at once" x)
+  | _ ->
+      report cx a.loc ~says:"changed here"
+        ~notes:[ "a spawned task only reads what it captures, while other tasks run" ]
+        ~help:
+          "change it through a handler's operation, or give it back: \
+           `t.join()` has what the task returned"
+        (sprintf "a spawned task can't change `%s`, which it only reads" x)
+
+(* [a] changes a place [r], which a task spawned into a scope that's
+   still open reads (rule C). *)
+let task_read_clash cx (r : access) (a : access) =
+  let x = a.var.ident.name in
+  let m = if x = "m" then "m0" else "m" in
+  report cx a.loc
+    ~labels:[ (r.loc, "read until `Async.scope` ends") ]
+    ~notes:[ "a spawned task reads what it captures from the frame that called `Async.scope` where it is, until the scope ends" ]
+    ~help:
+      (sprintf "copy it for the task, `let %s = %s`, or change it after the scope" m x)
+    (sprintf "`%s` can't change while a spawned task reads it" x)
+
 (* ---- the walk ---- *)
 
 let record cx a = cx.seen := a :: !(cx.seen)
 
+(* [a] keeps clear of what the tasks spawned so far into the scopes
+   around read: reported once a place. *)
+let against_tasks cx (a : access) =
+  if a.kind = Write then
+    List.iter
+      (fun fr ->
+        match List.find_opt (fun r -> clash r a) !(fr.reads) with
+        | Some r ->
+            task_read_clash cx r a;
+            (* once is enough: the place is the task's until the scope ends *)
+            fr.reads := List.filter (fun r' -> r'.var.id <> r.var.id) !(fr.reads)
+        | None -> ())
+      cx.tasks
+
 (* An access that lasts an instant: it only has to keep clear of the
-   loops around. *)
+   loops around, and of what spawned tasks read. *)
 let instant cx (a : access) =
   record cx a;
   List.iter
     (fun l -> if clash l a then conflict cx (l, None) (a, None))
-    cx.loops
+    cx.loops;
+  against_tasks cx a
 
 (* A block parameter, [b], used at [loc]. *)
 let param_use cx (b : binder) loc why =
@@ -629,10 +798,23 @@ and stmt cx = function
 
 (* A block, checked on its own, and what it accesses of the variables
    from outside it, its captures, nested blocks' included. *)
-and block cx (e : expr) =
+and block ?(scope = false) cx (e : expr) =
   match e.kind with
-  | Lambda (_, body) ->
+  | Lambda (ps, body) ->
       let inner = { cx with depth = cx.depth + 1; loops = []; seen = ref [] } in
+      (* the body of an `Async.scope` call: its parameter is the scope its
+         tasks are spawned into *)
+      let inner =
+        match ps with
+        | [ s ] when scope ->
+            {
+              inner with
+              tasks =
+                { sid = s.pname.id; sdepth = inner.depth; reads = ref [] }
+                :: inner.tasks;
+            }
+        | _ -> inner
+      in
       walk inner body;
       List.filter (fun a -> a.var.depth < inner.depth) !(inner.seen)
   | _ -> []
@@ -690,21 +872,90 @@ and call cx (e : expr) (f : expr) args ~changed =
         let held = if dep_call cx f then state_writes why e.loc else [] in
         ({ none with held }, None)
   in
-  (* an argument passed to a parameter that only reads it *)
-  let plain (a : expr) ~code =
+  (* the callee's parameters' modes (rule B), the scope a spawn's receiver
+     is, if its `Async.scope` is being walked, and how the callee is
+     written *)
+  let callee_p = callee_of cx.nodes cx.schemes f in
+  let mode_at i =
+    match callee_p with
+    | Some (p, off) when i >= 0 -> mode_of cx.schemes p (i + off)
+    | _ -> Ty.Ordinary
+  in
+  let scope_call = call_is (async_member "scope") f cx.nodes cx.schemes in
+  let until_call = call_is (async_member "until") f cx.nodes cx.schemes in
+  let callee_name = Option.value (cx.source f) ~default:"this" in
+  (* the scopes a block given to a spawned parameter may be spawned into:
+     the one the call is given, as its receiver or an argument, if it's
+     one being walked; otherwise, since a helper may spawn it into any it
+     can reach, every one around *)
+  let frames =
+    let given =
+      List.filter_map
+        (fun (a : expr) ->
+          match a.kind with
+          | Var (Local s) -> List.find_opt (fun fr -> fr.sid = s.id) cx.tasks
+          | _ -> None)
+        (Option.to_list receiver @ args)
+    in
+    if given <> [] then given else cx.tasks
+  in
+  (* [b], a block parameter, passed on where it runs as [m] says *)
+  let passed_on (b : binder) loc (m : Ty.block_mode) =
+    let own = Option.value (List.assoc_opt b.id cx.own_modes) ~default:Ty.Ordinary in
+    if rank own < rank m then
+      rule_b cx b loc ~own ~wanted:m ~callee:callee_name
+  in
+  (* an argument passed to a parameter that only reads it, or a block
+     passed to a parameter of mode [m] *)
+  let plain ?(m = Ty.Ordinary) (a : expr) ~code =
     if is_block cx a then (
-      (* every block parameter runs its block during the call, on the
-         caller's task, so blocks passed to one call are siblings. Stage
-         11a adds concurrent and spawned parameters, whose blocks aren't
-         (foundations.md, rules B to D) *)
-      let sibling = true in
+      (* a block passed to an ordinary parameter runs during the call, on
+         the caller's task, so blocks passed to one call are siblings; a
+         concurrent or spawned one isn't (foundations.md, rules B to D) *)
+      let sibling = m = Ordinary in
+      (* what a block that runs as [m] says captures: it only reads them,
+         and passes on each block parameter it calls *)
+      let as_task caps =
+        if m = Ordinary then caps
+        else
+          let changed = ref [] in
+          List.iter
+            (fun c ->
+              if c.block_param && c.why = Called then passed_on c.var c.loc m
+              else if
+                c.kind = Write && (not (state_write c))
+                && not (List.mem c.var.id !changed)
+              then (
+                changed := c.var.id :: !changed;
+                task_write cx c m))
+            caps;
+          let reads = List.filter (fun c -> c.kind = Read && not c.block_param) caps in
+          (* a spawned task reads the variables of the frame that called
+             `Async.scope` where they are, until it ends (rule C); the
+             others are copied when it's spawned *)
+          if m = Spawned then
+            List.iter
+              (fun fr ->
+                fr.reads :=
+                  List.filter (fun c -> c.var.depth < fr.sdepth) reads
+                  @ !(fr.reads))
+              frames;
+          reads
+      in
       match a.kind with
-      | Lambda _ -> { held = block cx a; via = Some a.loc; sibling }
+      | Lambda _ when until_call ->
+          (* `Async.until`'s condition is checked only while the instance
+             is free, so it conflicts with nothing in its arm *)
+          ignore (block cx a);
+          none
+      | Lambda _ ->
+          { held = as_task (block ~scope:scope_call cx a); via = Some a.loc; sibling }
       | Var (Local b) -> (
           match Hashtbl.find_opt cx.blocks b.id with
-          | Some caps -> { held = caps; via = Some a.loc; sibling }
+          | Some caps -> { held = as_task caps; via = Some a.loc; sibling }
           | None ->
               param_use cx b a.loc (Used None);
+              if m <> Ordinary then passed_on b a.loc m;
               none)
       | Var (Dep_op _ | Next_op _) ->
           {
@@ -741,11 +992,11 @@ and call cx (e : expr) (f : expr) args ~changed =
   in
   let args_held =
     List.map
-      (fun (a : expr) ->
+      (fun (i, (a : expr)) ->
         match a.kind with
         | Ref p when changed_receiver a = None -> passed p ~loc:a.loc
-        | _ -> plain a ~code:(hoist cx a))
-      args
+        | _ -> plain ~m:(mode_at i) a ~code:(hoist cx a))
+      (placed cx.nodes e args)
   in
   (* rule A *)
   Option.iter
@@ -794,9 +1045,88 @@ and call cx (e : expr) (f : expr) args ~changed =
           List.iter
             (fun l -> if clash l a then once (l, None) (a, g.via))
             cx.loops;
+          against_tasks cx a;
           record cx a)
         g.held)
     groups
+
+(* Rule B for the module's private functions, whose modes aren't written:
+   each block parameter takes the strongest mode of the parameters it's
+   passed to, itself or in a block it's used in, `Spawned` over
+   `Concurrent` over `Ordinary`, to a fixpoint over the module's private
+   functions. Modes only go up, and there are three, so it ends. The
+   schemes in [schemes] are updated with what's found. *)
+let infer_modes (r : Resolve.t) (inferred : Infer.t) schemes =
+  let privates =
+    List.filter (fun (f : fn_def) -> not f.pub) (Ast.functions r.prog)
+  in
+  (* what each of [f]'s block parameters is passed to: its place among
+     [f]'s parameters, the callee, and the place there *)
+  let passes (f : fn_def) =
+    let nodes = Path.Map.find (Ast.fn_path r.home f) inferred.nodes in
+    let index (b : binder) =
+      let rec go i = function
+        | (p : param) :: rest -> if p.pname.id = b.id then Some i else go (i + 1) rest
+        | [] -> None
+      in
+      if b.bound = By_param then go 0 f.params else None
+    in
+    let rec params_in (e : expr) =
+      match e.kind with
+      | Var (Local b) -> Option.to_list (index b)
+      | _ -> List.concat_map params_in (children e)
+    in
+    let found = ref [] in
+    let rec go (e : expr) =
+      (match e.kind with
+      | Call (g, args) -> (
+          match callee_of nodes schemes g with
+          | Some (p, off) ->
+              List.iter
+                (fun (i, (a : expr)) ->
+                  let ks =
+                    match a.kind with
+                    | Var (Local b) -> Option.to_list (index b)
+                    | Lambda _ -> params_in a
+                    | _ -> []
+                  in
+                  if i >= 0 then
+                    List.iter (fun k -> found := (k, p, i + off) :: !found) ks)
+                (placed nodes e args)
+          | None -> ())
+      | _ -> ());
+      List.iter go (children e)
+    in
+    go f.body;
+    (Ast.fn_path r.home f, !found)
+  in
+  let all = List.map passes privates in
+  let set path k (m : Ty.block_mode) =
+    let s : Ty.scheme = Hashtbl.find schemes path in
+    Hashtbl.replace schemes path
+      { s with modes = List.sort compare ((k, m) :: List.remove_assoc k s.modes) }
+  in
+  let rec fix () =
+    let changed = ref false in
+    List.iter
+      (fun (path, edges) ->
+        List.iter
+          (fun (k, p, j) ->
+            let m = mode_of schemes p j in
+            if rank m > rank (mode_of schemes path k) then (
+              set path k m;
+              changed := true))
+          edges)
+      all;
+    if !changed then fix ()
+  in
+  fix ();
+  Path.Map.mapi
+    (fun path (s : Ty.scheme) ->
+      match Hashtbl.find_opt schemes path with
+      | Some found -> { s with modes = found.modes }
+      | None -> s)
+    inferred.schemes
 
 let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
   let types = Hashtbl.create 16 and schemes = Hashtbl.create 64 in
@@ -815,13 +1145,23 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
         i.values)
     reachable;
   Path.Map.iter (Hashtbl.replace schemes) inferred.schemes;
+  let found = infer_modes r inferred schemes in
   let source =
     Ast.source ~type_name:(Resolve.type_name r)
       ~value_name:(Resolve.value_name r)
   in
   List.iter
     (fun (f : fn_def) ->
-      let nodes = Path.Map.find (Ast.fn_path r.home f) inferred.nodes in
+      let path = Ast.fn_path r.home f in
+      let nodes = Path.Map.find path inferred.nodes in
+      let s : Ty.scheme = Hashtbl.find schemes path in
+      let ids = List.map (fun (p : param) -> p.pname.id) f.params in
+      let own_tys =
+        match s.ty with
+        | Fun (ps, _, _, _) when List.length ps = List.length ids ->
+            List.combine ids (List.map (fun (q : Ty.param) -> q.ty) ps)
+        | _ -> []
+      in
       walk
         {
           nodes;
@@ -834,6 +1174,15 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
           blocks = Hashtbl.create 8;
           state = None;
           seen = ref [];
+          names = Resolve.type_name r;
+          fn_name = Ast.fn_name f;
+          own_modes =
+            List.filter_map
+              (fun (i, m) -> Option.map (fun id -> (id, m)) (List.nth_opt ids i))
+              s.modes;
+          own_tys;
+          tasks = [];
         }
         f.body)
-    (Ast.functions r.prog)
+    (Ast.functions r.prog);
+  found

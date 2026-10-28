@@ -1,0 +1,222 @@
+================================================================================
+parameters with defaults, and block parameters' modes
+================================================================================
+
+pub fn map<T, U>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T) -> U) -> Array<U> uses Async = go(xs)
+fn start(s: Scope, body: spawned fn(), by: Float = -1.5, name: Str = "n", on: Bool = true) uses Async =
+  let spawned = 1
+  s.spawn(body)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (visibility)
+    (identifier)
+    (type_parameters
+      (type_identifier)
+      (type_identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (number))
+      (parameter
+        (identifier)
+        (block_mode)
+        (function_type
+          (function_type_parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))))
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (named_type
+      (type_name
+        (type_identifier))
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (block_mode)
+        (function_type))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (negative
+          (float)))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (string))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (boolean)))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (let_statement
+        (identifier)
+        (number))
+      (method_call_expression
+        (identifier)
+        (identifier)
+        (arguments
+          (identifier))))))
+
+================================================================================
+a block given without parentheses
+================================================================================
+
+fn main() uses Async =
+  Async.scope fn(s) =>
+    s.spawn fn() => handle(conn)
+    let t = s.start fn() => 1
+  print(twice fn() => 21)
+  twice() fn() => 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (call_expression
+        (item_expression
+          (type_name
+            (type_identifier))
+          (identifier))
+        (lambda
+          (parameters
+            (parameter
+              (identifier)))
+          (block
+            (method_call_expression
+              (identifier)
+              (identifier)
+              (lambda
+                (parameters)
+                (call_expression
+                  (identifier)
+                  (arguments
+                    (identifier)))))
+            (let_statement
+              (identifier)
+              (method_call_expression
+                (identifier)
+                (identifier)
+                (lambda
+                  (parameters)
+                  (number)))))))
+      (call_expression
+        (identifier)
+        (arguments
+          (call_expression
+            (identifier)
+            (lambda
+              (parameters)
+              (number)))))
+      (call_expression
+        (identifier)
+        (arguments)
+        (lambda
+          (parameters)
+          (number))))))
+
+================================================================================
+a with whose installation can fail is marked
+================================================================================
+
+fn store(k: Int) ! DbDown uses Sql =
+  try with transaction() over Sql in
+    try Sql.set(k)
+  let r = attempt with transaction() over Sql in 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (error_set
+      (error_tag
+        (type_identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (try_expression
+        (with_expression
+          (with_chain
+            (call_expression
+              (identifier)
+              (arguments))
+            (dependency
+              (type_identifier)))
+          (block
+            (try_expression
+              (call_expression
+                (item_expression
+                  (type_name
+                    (type_identifier))
+                  (identifier))
+                (arguments
+                  (identifier)))))))
+      (let_statement
+        (identifier)
+        (attempt_expression
+          (with_expression
+            (with_chain
+              (call_expression
+                (identifier)
+                (arguments))
+              (dependency
+                (type_identifier)))
+            (number)))))))

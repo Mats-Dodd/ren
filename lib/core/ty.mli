@@ -4,6 +4,10 @@
 
 type mode = Ast.mode = Read | Inout
 
+(* How a named function's block parameter's block may run: during the
+   call only, on several tasks at once, or as a task (Ast.block_mode). *)
+type block_mode = Ast.block_mode = Ordinary | Concurrent | Spawned
+
 type ty =
   | Con of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
   | Fun of param list * ty * row * row  (** params, result, errors, uses *)
@@ -58,6 +62,13 @@ type scheme = {
   names : (int * string) list;
   reqs : (int * string) list;
   row_reqs : (int * string) list;
+  modes : (int * block_mode) list;
+      (** a named function's block parameters that aren't [Ordinary], by
+          their place among its parameters, `self` counted: what Excl reads
+          of a callee (rule B, compiler.md, "Stage 11a") *)
+  defaults : (int * string * Ast.literal) list;
+      (** its parameters with defaults, by place, name and literal, which a
+          call gives by name or leaves out, and Lower fills in *)
 }
 
 (* What one use of a scheme picks for its variables, its type arguments:

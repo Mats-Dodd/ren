@@ -54,6 +54,7 @@ type why = Infer_env.why = {
   labels : string -> string -> (Loc.t * string) list;
   type_params : bool;
   inside : string -> string;
+  alone : bool;
 }
 
 val explain :
@@ -64,6 +65,7 @@ val explain :
   ?labels:(string -> string -> (Loc.t * string) list) ->
   ?type_params:bool ->
   ?inside:(string -> string) ->
+  ?alone:bool ->
   unit ->
   why
 

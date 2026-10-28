@@ -75,14 +75,14 @@ let show t =
     (Ty.printer
        ~show_tail:(fun _ -> true)
        ~names:Path.full
-       { ty = t; names = []; reqs = []; row_reqs = [] })
+       { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
     t
 
 (* A dependency's label, as its type is written, `Log<Int>`. *)
 let show_dep (l : Ty.label) =
   Ty.show_dep
     (Ty.printer ~names:Path.full
-       { ty = Error; names = []; reqs = []; row_reqs = [] })
+       { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
     (Ty.of_label l)
 
 let fail env (loc : Loc.t) msg =
@@ -1528,8 +1528,85 @@ let rec no_fun_args env (e : expr) =
     fail env e.loc (sprintf "a block inside the type `%s`" (show e.ty));
   List.iter (no_fun_args env) (children e)
 
+(* A scope and a task's handle are blocks too (foundations.md, decision
+   2, rule D): never inside another type, a type argument a use picked
+   among them, so never in a constructor, a record, a tuple or an array;
+   and never a function's result but the prelude's `Scope.start`, which
+   makes one. Inference checked it (Infer_top.check_blocks). *)
+let is_handle (t : Ty.ty) =
+  match t with
+  | Con (p, []) -> p = Path.prelude "Scope"
+  | Con (p, [ _ ]) -> p = Path.prelude "Task"
+  | _ -> false
+
+let rec has_handle (t : Ty.ty) =
+  is_handle t
+  ||
+  match t with
+  | Con (_, ts) -> List.exists has_handle ts
+  | Fun (ps, ret, _, _) ->
+      List.exists (fun (p : Ty.param) -> has_handle p.ty) ps || has_handle ret
+  | Errors _ | Var _ | Impl _ | Error -> false
+
+(* a handle somewhere other than where one can be: a function type's
+   parameter, or what it gives, which [fn_def] checks *)
+let rec handle_inside (t : Ty.ty) =
+  match t with
+  | Con (_, ts) -> List.exists has_handle ts
+  | Fun (ps, ret, _, _) ->
+      List.exists (fun (p : Ty.param) -> handle_inside p.ty) ps || handle_inside ret
+  | Errors _ | Var _ | Impl _ | Error -> false
+
+let rec no_kept_handles env ~prelude (e : expr) =
+  let args what (a : Ty.args) =
+    (* the prelude's own members make and take them, through intrinsics *)
+    if (not prelude) && List.exists has_handle a.tys then
+      fail env e.loc
+        (sprintf "`%s` is given a scope's or a task's type as a type argument"
+           what)
+  in
+  (match e.kind with
+  | Global (p, a, _, _) | Global_value (p, a) -> args (Path.local p) a
+  | Intrinsic (i, a, _, _) -> args (Intrinsic.name i) a
+  | _ -> ());
+  if handle_inside e.ty then
+    fail env e.loc (sprintf "a scope or a task's handle inside `%s`" (show e.ty));
+  List.iter (no_kept_handles env ~prelude) (children e)
+
+(* No code reached from a call with an empty row runs a scheduling point
+   (compiler.md, "Stage 11a", "The two holes"): each intrinsic that can
+   wait for another task is called only by the prelude's own functions
+   whose rows have `Async`, so a call that can reach one has `Async` in
+   its row too. *)
+let waits_only_with_async env (f : fn_def) =
+  let async = Ty.dep_label (Path.prelude "Async") in
+  let has_async =
+    match f.scheme.ty with
+    | Fun (_, _, _, uses) ->
+        List.exists (fun (l : Ty.label) -> l.name = async) uses.labels
+    | _ -> false
+  in
+  let rec go (e : expr) =
+    (match e.kind with
+    | Intrinsic (x, _, _, _)
+      when Intrinsic.waits x
+           && not (f.path.home = Path.prelude_home && has_async) ->
+        fail env e.loc
+          (sprintf "`%s` can wait, and is called where `Async` isn't used"
+             (Intrinsic.name x))
+    | _ -> ());
+    List.iter go (children e)
+  in
+  go f.body
+
 let fn_def env (f : fn_def) =
   let env = { env with fn = Path.local f.path; ntys = List.length f.tys } in
+  no_kept_handles env ~prelude:(f.path.home = Path.prelude_home) f.body;
+  waits_only_with_async env f;
+  (match f.scheme.ty with
+  | Fun (_, ret, _, _) when is_handle ret && f.path.home <> Path.prelude_home ->
+      fail env f.loc "a function gives a scope or a task's handle"
+  | _ -> ());
   instances env f.body;
   (* each index marked in bounds is, by what its loop shows (bounds.ml) *)
   Option.iter

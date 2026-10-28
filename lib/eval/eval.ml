@@ -1020,7 +1020,7 @@ and answered cx (j : Journal.t) (tr : Ty.ty) (e : Journal.call) =
     Ty.show
       (Ty.printer
          ~names:(fun (p : Path.t) -> p.name)
-         { ty = tr; names = []; reqs = []; row_reqs = [] })
+         { ty = tr; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
       tr
   in
   match e.gave with
@@ -1377,15 +1377,19 @@ let run ?(start = Real) ?trace (modules : program list) =
   let entry = List.nth modules (List.length modules - 1) in
   let cx = { (load modules) with trace } in
   let what = "starting the program" in
+  (* recording or replaying, the runtime itself, `Async`, is the real one,
+     outermost: the journal holds only the world's calls *)
+  let runtime () = reals cx [ Path.prelude "Async" ] what in
   let fn, installed =
     match start with
     | Real -> (Path.make entry.home Lower.start_name, [])
     | Record j ->
         let h = Journal.register j in
         ( Path.make entry.home "main",
-          List.map
-            (fun r -> recorded cx h r what)
-            (reals cx (List.map Path.prelude j.header.deps) what) )
+          runtime ()
+          @ List.map
+              (fun r -> recorded cx h r what)
+              (reals cx (List.map Path.prelude j.header.deps) what) )
     | Replay j ->
         let h = Journal.register j in
         let deps = List.map Path.prelude j.header.deps in
@@ -1393,12 +1397,13 @@ let run ?(start = Real) ?trace (modules : program list) =
           prelude_instance cx "replaying" [ VInt (Int64.of_int h) ] [] what
         in
         ( Path.make entry.home "main",
-          List.map
-            (fun dep ->
-              match List.assoc_opt dep impls with
-              | Some impl -> { dep; args = []; impl; outer = [] }
-              | None -> bug (what ^ " with a replayer that hasn't a dependency"))
-            deps )
+          runtime ()
+          @ List.map
+              (fun dep ->
+                match List.assoc_opt dep impls with
+                | Some impl -> { dep; args = []; impl; outer = [] }
+                | None -> bug (what ^ " with a replayer that hasn't a dependency"))
+              deps )
   in
   if not (Hashtbl.mem cx.fns fn) then bug "a program with no `main`";
   match fst (apply cx (from_outside cx fn) [] (VEvidence installed)) with
@@ -1451,6 +1456,8 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
         ("Fs", "mem_fs", [ array [||] ]);
         ("Os", "test_os", [ array [||] ]);
         ("Proc", "test_proc", [ array [||] ]);
+        (* one task, until stage 11a's step 5 makes this `sim`'s *)
+        ("Async", "single_runtime", []);
       ]
   in
   (* a session's recorder over each built-in dependency, not over what
@@ -1462,7 +1469,7 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
         let h = Journal.register j in
         List.map
           (fun (i : installed) ->
-            if List.mem i.dep.name Prelude.runtime_deps then
+            if List.mem i.dep.name Prelude.world_deps then
               recorded cx h i what
             else i)
           installed

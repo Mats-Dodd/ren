@@ -76,6 +76,21 @@ let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
           | None -> first (fun c -> has_label c.row dep)
         in
         let why = withheld_notes withheld dep call in
+        (* a spawn uses `Async`, which a reader may not expect: it waits
+           while its scope is full (compiler.md, "Stage 11a", "The two
+           holes") *)
+        let notes =
+          match call with
+          | Some { callee = Some p; _ }
+            when p.home = Path.prelude_home && p.name = "Scope"
+                 && dep.name = Ty.dep_label (Path.prelude "Async") ->
+              [
+                Printf.sprintf
+                  "`s.%s` waits while its scope is full, so it uses `Async`"
+                  (Path.short p);
+              ]
+          | _ -> []
+        in
         let op = Option.bind call (fun c -> c.op) in
         let call =
           Option.map
@@ -109,7 +124,7 @@ let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
         let shown = shown_dep env dep in
         report env
           (if is_value f then value_uses f shown call
-           else undeclared_use ~why ?alias f shown call))
+           else undeclared_use ~why ~notes ?alias f shown call))
     (sorted_labels cx.uses)
 
 (* What the handler [f] needs, [n]: never a dependency it implements,

@@ -187,7 +187,19 @@ val of_errors : sets:sets -> Ast.Resolved.errors -> Ty.label list
    it too. A parameter written `fn(...)`, a block, fails with what the
    function does, and uses just what its type lists; one of a dependency's
    type is transparent: its rows are the function's own. *)
-val signature : sets:sets -> Ast.Resolved.fn_def -> Ty.scheme
+val signature : ?closed:bool -> sets:sets -> Ast.Resolved.fn_def -> Ty.scheme
+
+(* Whether the block parameters of the function at a path can't fail, as
+   a spawned one can't, though their types don't say: `Async.race`'s.
+   [signature] closes them with [closed]. *)
+val closed_blocks : Path.t -> bool
+
+(* A named function's block parameters that aren't ordinary, and its
+   parameters with defaults, by their place among [ps], as a scheme keeps
+   them (Ty.scheme's [modes] and [defaults]). *)
+val modes_of : Ast.Resolved.param list -> (int * Ty.block_mode) list
+
+val defaults_of : Ast.Resolved.param list -> (int * string * Ast.literal) list
 
 (* A type declared in module [home], with all its members. *)
 val of_type_def : home:string -> sets:sets -> Ast.Resolved.type_def -> type_decl

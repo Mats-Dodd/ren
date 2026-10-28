@@ -38,6 +38,7 @@ type t =
   | Unsafe_cast
   | Float_lanes
   | Float_sum
+  | Unbuilt
   | Map_empty
   | Map_of
   | Map_get
@@ -129,6 +130,7 @@ let path x =
   | Unsafe_cast -> fn "unsafe_cast"
   | Float_lanes -> fn "float_lanes"
   | Float_sum -> fn "float_sum"
+  | Unbuilt -> fn "unbuilt"
   | Map_empty -> fn "map_empty"
   | Map_of -> member "Map" "of"
   | Map_get -> member "Map" "get"
@@ -190,3 +192,10 @@ let path x =
 
 let name x = Path.local (path x)
 let member_name x = Path.short (path x)
+
+(* Whether it can wait for another task: a scheduling point, which only
+   code that uses `Async` reaches (compiler.md, "Stage 11a", "The two
+   holes"). [Unbuilt] stands for the scheduler's intrinsics, which stage
+   11a's later steps build in its place. The world's waits, `Clock.sleep`
+   and `Proc.run`, aren't these: only the runtime installs the world. *)
+let waits = function Unbuilt -> true | _ -> false

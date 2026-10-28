@@ -1273,6 +1273,7 @@ fn main() = print(Some(true))
       | Some Builtin_op -> print_endline "a built-in operator"
       | Some (Generic_op r) -> print_endline ("an operator, by its " ^ r)
       | Some (Tags_given ts) -> print_endline ("tags " ^ String.concat " | " ts)
+      | Some (Args _) -> print_endline "arguments in order"
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect
@@ -1797,6 +1798,8 @@ let%expect_test "instantiate gives its fresh variables in variable order" =
         names = [];
         reqs = [];
         row_reqs = [];
+        modes = [];
+        defaults = [];
       }
   in
   let st = Types.new_state () in

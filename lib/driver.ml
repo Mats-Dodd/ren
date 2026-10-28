@@ -87,7 +87,8 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
   in
   (* exclusivity needs types: which values are copied, which arguments
      are blocks *)
-  checked "excl" (fun sink -> Excl.program sink ~reachable r inferred);
+  let schemes = checked "excl" (fun sink -> Excl.program sink ~reachable r inferred) in
+  let inferred = { inferred with schemes } in
   (* only now is it known whether every import is used: a type imported
      by name can be used just by writing one of its constructors bare *)
   checked "imports" (fun sink ->
@@ -215,7 +216,7 @@ let link_lowered ?(lint = false) ~imports modules =
 let recorders =
   List.map
     (fun d -> Lower.Any_for (Path.prelude "recorder", Path.prelude d))
-    [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
+    Prelude.world_deps
 
 (* The prelude, as a module: its source, parsed and checked against the
    intrinsics (prelude.ml) and lowered, and its whole interface. It's
@@ -790,6 +791,8 @@ let types ?(lint = false) ?load ~file src =
                                 names = List.mapi (fun i n -> (i, n)) params;
                                 reqs = [];
                                 row_reqs = [];
+                                modes = [];
+                                defaults = [];
                               }
                           in
                           sprintf "  %s: %s" o.fname (Ty.show pr o.fty))
@@ -808,7 +811,7 @@ let types ?(lint = false) ?load ~file src =
                 (* an alias: the instance it names *)
                 let pr =
                   Ty.printer ~names
-                    { ty = Error; names = []; reqs = []; row_reqs = [] }
+                    { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
                 in
                 [
                   sprintf "%sdep %s = %s"
@@ -845,7 +848,7 @@ let types ?(lint = false) ?load ~file src =
                    payload's types *)
                 let pr =
                   Ty.printer ~names
-                    { ty = Error; names = []; reqs = []; row_reqs = [] }
+                    { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
                 in
                 let errors =
                   match (decl td).body with
@@ -891,7 +894,8 @@ let ended ~dir run : Journal.ending * (Value.t, exn) result =
   | exception (Eval.Uncaught { written; _ } as e) -> (Errored written, Error e)
 
 (* The built-in dependencies the entry's `main` uses, by name, as a
-   journal's header has them (Lower.main_uses). *)
+   journal's header has them (Lower.main_uses): those that reach the
+   world, so not `Async`, which the runtime installs anyway. *)
 let main_uses (modules : Core.program list) =
   let entry = List.nth modules (List.length modules - 1) in
   match
@@ -899,7 +903,10 @@ let main_uses (modules : Core.program list) =
       (fun (f : Core.fn_def) -> f.path = Path.make entry.home "main")
       entry.fns
   with
-  | Some main -> List.map (fun (p : Path.t) -> p.name) (Lower.main_uses main)
+  | Some main ->
+      List.filter
+        (fun d -> List.mem d Prelude.world_deps)
+        (List.map (fun (p : Path.t) -> p.name) (Lower.main_uses main))
   | None -> failwith "bug: a program with no `main`"
 
 (* Check every module, lower each to Core, and run them as one program:

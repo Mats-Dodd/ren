@@ -86,6 +86,7 @@ let defaults =
     ("Fs", None);
     ("Os", None);
     ("Proc", Some "TestProc");
+    ("Async", None);
   ]
 
 (* A test's name, after its group run's label if it's in one, as
