@@ -1,9 +1,10 @@
 (* The interpreter's interface (see eval.ml). *)
 
 (* What a panic's help suggests for an `Int` operation that overflowed:
-   the wrapping method [meth] instead, `wrapping_add`, called on what's
-   at [recv] with what's at [arg], as the source writes them (driver.ml
-   makes the help, from the source). *)
+   the wrapping method [meth] instead, `wrapping_add`, on what's at
+   [recv] and what's at [arg], as the source writes them; driver.ml
+   makes the help from the source, with the method's operator, `n +% 1`,
+   where it has one. *)
 type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
 
 (* A running program failed: division by zero, an index out of bounds, an

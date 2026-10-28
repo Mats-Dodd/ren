@@ -30,8 +30,6 @@ static void ren_repeat(int c, uint64_t n) {
 }
 
 _Noreturn void ren_panic(const ren_site *site, const char *msg) {
-  /* an overflow a loop kept is reported before any other panic */
-  ren_late_check();
   fflush(stdout);
   const unsigned char *p = site->ops;
   for (;;) {
@@ -84,7 +82,6 @@ void ren_count_alloc(int64_t bytes) {
 
 _Noreturn static void ren_out_of_memory(void) {
   fflush(stdout);
-  ren_late_check();
   fputs("error: out of memory\n", stderr);
   exit(1);
 }
@@ -207,7 +204,6 @@ static void ren_todo_push(ren_todo_t *t, ren_obj *o) {
     t->objs = realloc(t->objs, t->cap * sizeof(ren_obj *));
     if (t->objs == NULL) {
       fflush(stdout);
-      ren_late_check();
       fputs("error: out of memory\n", stderr);
       exit(1);
     }
@@ -483,8 +479,12 @@ ren_obj *ren_array_unshare(ren_obj *a) {
 }
 
 /* Room for one element more in a unique array: its buffer doubled if
-   it's full. */
-static void ren_array_grow(ren_array *arr) {
+   it's full. Out of line: inlined into [ren_array_push_taking], which
+   it was once the out-of-memory path's extra call stopped, it made
+   blocks 24% slower in cycles on fewer instructions, and splitting off
+   only the doubling didn't help (RESULTS.md, "Frames and late overflow
+   cut"). */
+__attribute__((noinline)) static void ren_array_grow(ren_array *arr) {
   if (arr->len < arr->cap)
     return;
   size_t k = ren_elem_bytes(&arr->h);
@@ -492,7 +492,6 @@ static void ren_array_grow(ren_array *arr) {
   ren_val *data = realloc(arr->data, (size_t)cap * k);
   if (data == NULL) {
     fflush(stdout);
-    ren_late_check();
     fputs("error: out of memory\n", stderr);
     exit(1);
   }
@@ -747,22 +746,6 @@ _Noreturn void ren_int_overflowed(const ren_site *site, const char *op,
   ren_panic(site, msg);
 }
 
-/* ---- late overflow ---- */
-
-ren_late_t ren_late;
-
-void ren_late_overflowed(const ren_site *site, const char *op, int64_t a,
-                         int64_t b) {
-  if (ren_late.site == NULL)
-    ren_late = (ren_late_t){site, op, a, b};
-}
-
-_Noreturn void ren_late_report(void) {
-  ren_late_t f = ren_late;
-  ren_late.site = NULL;
-  ren_int_overflowed(f.site, f.op, f.a, f.b);
-}
-
 /* ---- NaN ---- */
 
 const char *const *ren_nan_where;
@@ -932,7 +915,6 @@ static void ren_put(ren_buf *b, const char *s, size_t n) {
     b->data = realloc(b->data, b->cap);
     if (b->data == NULL) {
       fflush(stdout);
-      ren_late_check();
       fputs("error: out of memory\n", stderr);
       exit(1);
     }
@@ -1206,10 +1188,21 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
   }
 }
 
+static void ren_nan_val(const ren_desc *d, const ren_tenv *env, ren_val v,
+                        const ren_walk *w);
+
+/* walk.ml's [equal]: a comparison that ends early, unequal, hasn't met
+   every leaf, so it looks through both values for a NaN, [a]'s first;
+   comparing a value with one in it panics, met or not. */
 bool ren_equal_any(ren_obj *d, ren_val a, ren_val b, const char *what,
                    const ren_site *site) {
   ren_walk w = {site, what};
-  return ren_equal_in((ren_desc *)d, NULL, a, b, &w);
+  bool same = ren_equal_in((ren_desc *)d, NULL, a, b, &w);
+  if (!same) {
+    ren_nan_val((ren_desc *)d, NULL, a, &w);
+    ren_nan_val((ren_desc *)d, NULL, b, &w);
+  }
+  return same;
 }
 
 #define REN_CMP(x, y) ((x) < (y) ? -1 : (x) > (y) ? 1 : 0)
@@ -1257,7 +1250,13 @@ static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
 int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b, const char *what,
                         const ren_site *site) {
   ren_walk w = {site, what};
-  return ren_compare_in((ren_desc *)d, NULL, a, b, &w);
+  int64_t c = ren_compare_in((ren_desc *)d, NULL, a, b, &w);
+  /* as [ren_equal_any]: an order decided early looks for a NaN */
+  if (c != 0) {
+    ren_nan_val((ren_desc *)d, NULL, a, &w);
+    ren_nan_val((ren_desc *)d, NULL, b, &w);
+  }
+  return c;
 }
 
 /* walk.ml's [nan_in]: the first NaN in [v], in the order its parts are
@@ -1469,9 +1468,6 @@ static void ren_print_stats(void) {
           ren_stats.reuses, ren_stats.grows, ren_stats.peak_bytes,
           ren_stats.block_calls,
           ren_stats.allocs - ren_stats.frees);
-  if (ren_stats.stack_allocs > 0)
-    fprintf(stderr, "ren stats: objects kept in a frame %" PRId64 "\n",
-            ren_stats.stack_allocs);
 }
 #endif
 

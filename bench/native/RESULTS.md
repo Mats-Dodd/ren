@@ -9,6 +9,52 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Frames and late overflow cut (foundations.md, decisions 14 and 15)
+
+stack.ml's frames (H8) and late.ml's late overflow removed, against
+3f15998, the commit before, release builds at main.ren's size, one
+hyperfine invocation per program (`-N --warmup 2 --runs 10`), cycles
+the median of hyperfine's per-run counts. Apple M4 Max, load average
+4.5 to 5.4 of 16 cores during the run. Every binary prints what the
+other prints.
+
+Each program's C is the same as before but for the panic texts (the
+overflow help now writes `n +% 1`) and the runtime: stack.ml promoted
+nothing in any of them once small values were built, and late.ml was
+off. So any difference is the runtime's.
+
+| program | 3f15998 (s) | now (s) | now / 3f15998, cycles | cycles 10⁹, 3f15998 / now |
+|---|---|---|---|---|
+| rbtree | 0.576 ± 0.003 | 0.575 ± 0.002 | 1.00× | 2.26 / 2.25 |
+| deriv | 0.495 ± 0.010 | 0.489 ± 0.007 | 0.99× | 1.90 / 1.89 |
+| nqueens | 0.490 ± 0.006 | 0.488 ± 0.007 | 1.00× | 1.91 / 1.91 |
+| cfold | 0.054 ± 0.001 | 0.054 ± 0.001 | 1.00× | 0.21 / 0.21 |
+| binary-trees | 5.089 ± 0.091 | 5.199 ± 0.091 | 1.00× | 20.37 / 20.35 |
+| nbody | 1.824 ± 0.005 | 1.826 ± 0.004 | 1.00× | 7.09 / 7.10 |
+| fannkuch | 1.782 ± 0.008 | 1.792 ± 0.009 | 1.01× | 6.96 / 7.01 |
+| inout | 1.509 ± 0.004 | 1.509 ± 0.007 | 1.00× | 5.83 / 5.83 |
+| stack (H8) | 0.656 ± 0.002 | 0.657 ± 0.002 | 1.00× | 2.58 / 2.59 |
+| blocks | 1.156 ± 0.011 | 1.154 ± 0.008 | 1.00× | 4.54 / 4.55 |
+| nested | 0.728 ± 0.010 | 0.723 ± 0.007 | 0.99× | 2.86 / 2.84 |
+| vec | 1.120 ± 0.002 | 1.123 ± 0.002 | 1.00× | 4.41 / 4.43 |
+| bytes | 0.541 ± 0.002 | 0.540 ± 0.001 | 1.00× | 2.13 / 2.13 |
+
+binary-trees' cycles are a second invocation's: the first's 1.02×
+didn't repeat (20.37 against 20.35 billion), its instructions the same
+in both (102.17 billion). bench/frames.ren, H8's cases as a program,
+runs in 3 ms either way.
+
+- **One runtime change moved a benchmark, not the cut.** Taking
+  `ren_late_check()` out of `ren_array_grow`'s out-of-memory path let
+  clang inline the whole function into `ren_array_push_taking`, and
+  blocks went from 4.54 to 5.63 billion cycles (1.24×) on fewer
+  instructions (26.4 to 24.6 billion); sampling put the time in
+  `ren_array_push_taking`. Splitting off only the doubling, with the
+  length test inline, didn't recover it (1.19× in wall time); keeping
+  `ren_array_grow` out of line (`noinline`, as the extra call had kept
+  it) did, and that's what's built. Why the inlined push is slower on
+  the M4 isn't known.
+
 ## Follow-ups (compiler.md, step 14: loops without indices)
 
 Where every program stands after the follow-ups to foundations.md, and

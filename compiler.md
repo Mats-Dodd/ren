@@ -892,7 +892,8 @@ differed from its plan:
   the interpreter as in both native builds: arithmetic carries it
   (arith.ml), and comparing it (`ordered`, and the walk's
   `same_leaf`, raising `Nan.Seen`, which the caller turns into its own
-  panic), `show`, `round` and `truncate`, hashing, and a dependency's
+  panic; a value with one in it, even where the comparison ends before
+  reaching it, walk.ml's `equal` and `compare`), `show`, `round` and `truncate`, hashing, and a dependency's
   operation given one (Core's `Nan_check`, which lowering puts on each
   argument whose type could hold a `Float`) panic. The operation that
   made it tags it with where it is, in bits 29 to 50 of the payload,
@@ -2117,8 +2118,9 @@ Five experiments on the native backend, each built apart from step 6
 and merged after step 7; RESULTS.md's "Combined" section measures them
 together. A release build's passes are now: specialize; memory
 lowering; Perceus (`Rc.prepare`, borrow.ml, `Rc.program`), then
-**stack.ml**, then reuse.ml; **inline.ml**, and Perceus and the rest
-again on what it inlined; hoist.ml; Mem Lint.
+reuse.ml; **inline.ml**, and Perceus and the rest again on what it
+inlined; hoist.ml; Mem Lint. (stack.ml ran between Perceus and reuse
+until it was cut: "What was cut", in the runtime model.)
 
 - **Reuse goes deeper** (rc.ml, reuse.ml). A dying object's fields
   whose own fields the program reads are kept by its free and dropped
@@ -2137,20 +2139,10 @@ again on what it inlined; hoist.ml; Mem Lint.
   cells or recursion) of Koka's cost of 20 at most. rbtree's
   `balance_left` and `balance_right` go into `ins`, so the node `ins`
   took apart is the node `balance` builds.
-- **stack.ml** (H8) keeps in the frame an object that never outlives
-  the call that builds it: its class (it and its other names) is used
-  only by field reads, `unique?`, the drop Perceus placed, the
-  runtime's reads, and borrowed parameters that, by a fixpoint over
-  the program, let nothing escape; one built in a loop only if nothing
-  of its class lives across iterations. A function whose result is
-  such an object gets a second version, `f_frame`, that builds it in
-  memory its caller gives. A framed object's count is 1 for life; its
-  drop releases its fields and leaves the memory. Reuse leaves framed
-  objects alone both ways. A loop hoist.ml indexes that builds a
-  framed object stays in its function, without `restrict`, since the
-  outlined loop couldn't name the frame. `REN_NO_STACK`, `REN_NO_SLOT`
-  and `REN_STACK_REPORT` (env) turn it off, turn the second versions
-  off, and say why each site stays on the heap.
+- **stack.ml** (H8), since cut (foundations.md, decision 14), kept in
+  the frame an object that never outlived the call that built it, and
+  gave a function whose result was such an object a second version,
+  `f_frame`, that built it in memory its caller gave.
 - **`map` in place.** The prelude's `Array.map` writes into its input
   when that's unique and the element layouts match (`map_into`,
   `unsafe_cast`, Lean's `mapMUnsafe`), which hoist.ml then hoists like
@@ -2176,10 +2168,10 @@ again on what it inlined; hoist.ml; Mem Lint.
   local in the threaded counting modes, and `-DREN_SYSTEM_MALLOC`,
   which every AddressSanitizer build sets, sends everything to malloc.
 
-bench/frames.ren (under the sanitizers in build.t) has where stack
-promotion meets the rest: a framed record of more than eight fields, one
-that dies where one as big is built after it, and one built in a
-hoisted loop; bench/tokens.ren a token crossing a failing call. Core
+bench/frames.ren (under the sanitizers in build.t) has H8's cases,
+which stay as programs after stack.ml's cut: a record of more than
+eight fields, one that dies where one as big is built after it, and one
+built in a hoisted loop; bench/tokens.ren a token crossing a failing call. Core
 Lint checks a specialized module with every module's interface in
 scope, since a copy can be at a type its module never imports.
 
@@ -2371,7 +2363,7 @@ struct lives; and where a struct dies with parts still used, it's
 freed keeping them, so `let (s, k) = pick(xs, i)` counts nothing. Mem
 Lint checks it the same way, path by path, and that a struct is
 counted if and only if a slot holds an object. Reuse never resets a
-struct, and stack.ml treats an object put in one as stored.
+struct.
 
 A struct is never a field of another, nor a word, nor what a
 descriptor describes, nor, if counted, an array's element, whose
@@ -2607,7 +2599,9 @@ each panic says. The runtime does the same in C (ren_rt.h, "NaN").
   release build makes no tags, so its message stops before " made".
 - **It's checked where it's observed:** before a `Float` comparison and
   `==` (Mem's `Nan_check`), in the walks of `==`, order and `show`
-  (`ren_walk_float`, given what's walking and its site), in `show` of a
+  (`ren_walk_float`, given what's walking and its site; a `==` or an
+  order that ends early, `Some(nan) == None`, looks through both values
+  after, the left's first, as walk.ml does), in `show` of a
   `Float` and in `round` and `truncate`, and on each argument of a
   dependency's operation whose type could hold one (Core's `Nan_check`
   prim, put there by lowering, `nan_checked`; a value of a generic
@@ -2637,37 +2631,26 @@ long ones, of numbers of every size and a few infinities, through
 `sum` and through a generic function's, and every build prints what
 `ren run` prints.
 
-**Late overflow** (late.ml) is built, linted and tested, and off: a
-release build does it only with REN_LATE set. In a loop with an `Int`
-`+`, `-` or `*`, the outermost, each is a `Late`, which keeps its first
-fault (`ren_late`, its site and operands) and gives the wrapped result;
-a `Late_check` reports it before every call and every way out of the
-loop, after the loop, and every 1,024 turns of each loop in it
-(`Late_tick`), and `ren_panic` reports it before any other panic, so
-the panic is the interpreter's. Mem Lint checks each `Late` is in such
-a loop and each call and way out has its check before it. It's stricter
-than decision 15, which lets a loop whose calls use nothing report when
-it leaves. Measured, it made no loop vectorize and the loops it changed
-slower: inout 18% more cycles, a running sum of squares 29% more. Clang
-won't vectorize a loop with a branch to a call that records the fault,
-an overflow flag alone can't say which operation it was or with what
-operands, and a running sum's overflow can't be checked in lanes at
-all; what's left is the count each loop keeps and a call that returns
-in place of one that doesn't. So it stays off until a loop it would
-help is found; build.t runs its programs with it on.
+**Late overflow** (late.ml) was built, linted and tested, behind
+REN_LATE, and cut (foundations.md, decision 15): in a loop with an
+`Int` `+`, `-` or `*`, each kept its first fault and gave the wrapped
+result, and a check reported it before every call and way out of the
+loop, every 1,024 turns, and before any other panic. Measured, it made
+no loop vectorize and the loops it changed slower: inout 18% more
+cycles, a running sum of squares 29% more. Clang won't vectorize a loop
+with a branch to a call that records the fault, an overflow flag alone
+can't say which operation it was or with what operands, and a running
+sum's overflow can't be checked in lanes at all. late.ml, its Mem
+forms (`Late`, `Late_check`, `Late_tick`) and the runtime's
+`ren_late` are gone; its programs stay in build.t, overflowing where
+they happen in every build.
 
 **Soundness.** A NaN is never observed unchecked: every observation
 point the interpreter checks has its check in Mem (Mem Lint requires a
 site on each), and the C arithmetic in between can't observe anything.
 Tags only add payload bits a NaN already has room for; a value that
 isn't a NaN is never changed. `Float` sums are one tree in all three,
-so their bits agree. Late overflow, when on: between a fault and its
-report only the loop's own code runs, calling nothing, and the report
-ends the program, so nothing it wrote after the fault is seen; the
-first fault is the one kept, computed from what `ren run` computed.
-Async.isolate, whose block's panic could be caught, isn't built (11a);
-decision 8 says such a block can't change outer variables, which is
-what keeps a late report unobservable there too.
+so their bits agree.
 
 Measured (bench/native/RESULTS.md, "NaN where observed, Float sums"):
 nbody release 3.99 s to 2.73 s, 31.6% fewer cycles and 55% fewer
@@ -3018,9 +3001,13 @@ heap object points into its chunks.
   cycles on every benchmark and on H8's kernels, and 0.3% of
   binary-trees' instructions. Frames were also the one memory state Mem
   Lint didn't check, which is how a leak shipped (a frame version
-  building its result in a reuse token's memory). stack.ml and the
-  `_frame` versions go; the analysis stays in git, in case records of
-  more than four fields, built and lent, show up in a measured program.
+  building its result in a reuse token's memory). stack.ml, the
+  `_frame` versions, `Mem.fn`'s `stack` and `slot`, and the runtime's
+  `ren_stack_ctor` and `ren_stack_drop` are gone: every benchmark's C
+  is the same without them but for the panic texts, and runs in the
+  same cycles (RESULTS.md, "Frames and late overflow cut"). The analysis
+  stays in git, in case records of more than four fields, built and
+  lent, show up in a measured program.
 - **Handler operations compiled to atomics.** Uncontended, an atomic
   gains nothing over the instance's lock on an M4 (2.7 against 2.4 ns),
   and contended, the standard library's striped counter beats it (34

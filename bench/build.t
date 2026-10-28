@@ -757,7 +757,7 @@ held (foundations.md, decision 8), which the counts at exit show.
       ┌─ p_far.ren:104:5
   104 │     n += i
       │     ^^^^^^
-      help: if wrapping is what you mean, write `n = n.wrapping_add(i)`
+      help: if wrapping is what you mean, write `n +%= i`
   [1]
 
 The texts are each once in the C, and a site is a few bytes of pieces:
@@ -822,6 +822,29 @@ prints what `ren run` prints.
   ren specialized: 3 copies, 1 blocks lifted, 0 handlers known, 1 calls past the size budget
   note: specialization reached its size budget, so 1 call is compiled as written, its arguments boxed:
     budget.ren:3:9: a call of `budget.apply`
+
+A generic function called with a type built of its own parameter,
+`c0((x, x))`, is given a descriptor built at run time (to_mem.ml,
+`desc`, Mem's `New_desc`), of the descriptors of the type's arguments,
+which Mem Lint checks as such: in a debug build, and in a release build
+past the budget, where the call isn't specialized.
+
+  $ cat > derived.ren <<'EOF'
+  > fn c0<T>(x: T) -> Str = show([x])
+  > fn c1<T>(x: T) -> Str = c0(([x], Some(x), (x, 1)))
+  > fn main() uses Console =
+  >   print(c1(1))
+  >   print(c1(true))
+  >   print(c1("s"))
+  > EOF
+  $ same derived.ren; REN_SPEC_BUDGET=1 release derived.ren
+  derived.ren, perceus: the same, exit 0, objects live at exit 0
+  derived.ren, naive: the same, exit 0, objects live at exit 0
+  derived.ren, release: the same, exit 0, objects live at exit 0
+  $ ren run derived.ren
+  [([1], Some(1), (1, 1))]
+  [([true], Some(true), (true, 1))]
+  [(["s"], Some("s"), ("s", 1))]
 
 A NaN (foundations.md, decision 15; nan.ml) is carried by arithmetic
 and stores, and panics where it's observed: a comparison, `==`, `show`,
@@ -934,17 +957,93 @@ of the calls of `print` that is.
      │                               ^^^^^
   [1]
 
-With REN_LATE set, a release build's `Int` `+`, `-` or `*` in a loop
-that overflows doesn't leave the loop (late.ml): its first fault is
-kept and reported when the loop ends, before its next call or way out,
-every 1,024 turns, or before any other panic, with the message `ren
-run` gives where it happened. (It's off otherwise: measured, it made no
-loop vectorize and the loops it changed slower, RESULTS.md.) So each of
-these prints what `ren run` prints: an overflow
-whose wrapped number would index out of bounds, print, run a loop on,
-or keep a loop going; two overflows, the first reported; a `break`
-after one; one in a loop an array is hoisted out of; and one in a
-function a loop calls.
+Comparing a value with a NaN in it panics whether or not the walk
+meets the NaN (operators.md, "`Int` and `Float`"): a comparison that
+ends early, unequal or ordered, looks through both values, the left's
+first (walk.ml, `equal`; ren_rt.c, `ren_equal_any`). So `Some(nan) ==
+None`, a constructor against another, arrays of different lengths, a
+tuple ordered by its first part, and the same through a generic
+function, each panic, in `ren run` and every build alike; and with a
+NaN in each, the left's is the one said.
+
+  $ cat > nan_ctor.ren <<'EOF'
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   let a: Option<Float> = Some(1.0)
+  >   print(a == None)
+  >   let b: Option<Float> = Some(z / z)
+  >   print(None != b)
+  > EOF
+  $ cat > nan_shape.ren <<'EOF'
+  > type Shape =
+  >   | Dot
+  >   | Circle(r: Float)
+  > fn same<T>(a: T, b: T) -> Bool = a == b
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   print(same(Circle(1.0), Dot))
+  >   print([1.0] == [1.0, 2.0])
+  >   print(same(Dot, Circle(z / z)))
+  > EOF
+  $ cat > nan_len.ren <<'EOF'
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   print([1.0, z / z] == [1.0])
+  > EOF
+  $ cat > nan_order.ren <<'EOF'
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   print((1, 2.0) < (2, 0.0))
+  >   print((1, z / z) < (2, 0.0))
+  > EOF
+  $ cat > nan_left.ren <<'EOF'
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   let x = -1.0
+  >   let b = (2, Some(z / z))
+  >   let a = (1, Some(x.sqrt()))
+  >   print(a == b)
+  > EOF
+  $ for f in nan_ctor nan_shape nan_len nan_order nan_left; do same $f.ren; nan_release $f.ren; done
+  nan_ctor.ren, perceus: the same, exit 1, objects live at exit 2
+  nan_ctor.ren, naive: the same, exit 1, objects live at exit 3
+  nan_ctor.ren, release: the same, exit 1
+  nan_shape.ren, perceus: the same, exit 1, objects live at exit 2
+  nan_shape.ren, naive: the same, exit 1, objects live at exit 2
+  nan_shape.ren, release: the same, exit 1
+  nan_len.ren, perceus: the same, exit 1, objects live at exit 3
+  nan_len.ren, naive: the same, exit 1, objects live at exit 3
+  nan_len.ren, release: the same, exit 1
+  nan_order.ren, perceus: the same, exit 1, objects live at exit 3
+  nan_order.ren, naive: the same, exit 1, objects live at exit 3
+  nan_order.ren, release: the same, exit 1
+  nan_left.ren, perceus: the same, exit 1, objects live at exit 5
+  nan_left.ren, naive: the same, exit 1, objects live at exit 5
+  nan_left.ren, release: the same, exit 1
+  $ ren run nan_ctor.ren; ren run nan_order.ren; ren run nan_left.ren
+  false
+  error: panic: `!=` compared a NaN made at nan_ctor.ren:5:31
+    ┌─ nan_ctor.ren:6:9
+  6 │   print(None != b)
+    │         ^^^^^^^^^
+  true
+  error: panic: `<` compared a NaN made at nan_order.ren:4:13
+    ┌─ nan_order.ren:4:9
+  4 │   print((1, z / z) < (2, 0.0))
+    │         ^^^^^^^^^^^^^^^^^^^^^
+  error: panic: `==` compared a NaN made at nan_left.ren:5:20
+    ┌─ nan_left.ren:6:9
+  6 │   print(a == b)
+    │         ^^^^^^
+  [1]
+
+An `Int` `+`, `-` or `*` that overflows in a loop panics where it
+happens, in every build, as `ren run` does (foundations.md, decision 15;
+reporting it late, when the loop ends, was built and dropped). So each
+of these prints what `ren run` prints: an overflow whose wrapped number
+would index out of bounds, print, run a loop on, or keep a loop going;
+two overflows, the first reported; a `break` after one; one in a loop an
+array is hoisted out of; and one in a function a loop calls.
 
   $ cat > late_sum.ren <<'EOF'
   > fn main() uses Console =
@@ -1038,7 +1137,6 @@ function a loop calls.
   >     j = j + 1
   >   print(k)
   > EOF
-  $ export REN_LATE=1
   $ for f in late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call; do same $f.ren; release $f.ren; done
   late_sum.ren, perceus: the same, exit 1, objects live at exit 1
   late_sum.ren, naive: the same, exit 1, objects live at exit 1
@@ -1072,16 +1170,13 @@ function a loop calls.
     ┌─ late_index.ren:6:9
   6 │     k = k + k
     │         ^^^^^
-    help: if wrapping is what you mean, write `k.wrapping_add(k)`
+    help: if wrapping is what you mean, write `k +% k`
   error: panic: `-` overflowed: -9223372036854775807 - 5
     ┌─ late_two.ren:6:9
   6 │     b = b - 5
     │         ^^^^^
-    help: if wrapping is what you mean, write `b.wrapping_sub(5)`
+    help: if wrapping is what you mean, write `b -% 5`
   [1]
-  $ ren build --release --emit-mem late_sum.ren | grep -c -e 'late+' -e 'late\*' -e 'late-check' -e 'late-tick'
-  5
-  $ unset REN_LATE
 
 `sum` of `Float`s adds in eight lanes, each from 0.0, element i into
 lane i mod 8, then the lanes pairwise (prelude.ml, `sum`), in `ren run`
@@ -1175,7 +1270,7 @@ same objects alive at the end as clang's build above.
   >    fi)
   >   done
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert nan_cmp nan_show nan_eq nan_round nan_sum nan_dep late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum; do tcc_same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum; do tcc_same $f.ren; done
   fib.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   fib.ren, naive, tcc: the same, exit 0, objects live at exit 0
   deep.ren, perceus, tcc: the same, exit 0, objects live at exit 0
@@ -1236,6 +1331,8 @@ same objects alive at the end as clang's build above.
   p_index.ren, naive, tcc: the same, exit 1, objects live at exit 2
   p_assert.ren, perceus, tcc: the same, exit 1, objects live at exit 1
   p_assert.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  derived.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  derived.ren, naive, tcc: the same, exit 0, objects live at exit 0
   nan_cmp.ren, perceus, tcc: the same, exit 1, objects live at exit 1
   nan_cmp.ren, naive, tcc: the same, exit 1, objects live at exit 2
   nan_show.ren, perceus, tcc: the same, exit 1, objects live at exit 2
@@ -1248,6 +1345,16 @@ same objects alive at the end as clang's build above.
   nan_sum.ren, naive, tcc: the same, exit 1, objects live at exit 2
   nan_dep.ren, perceus, tcc: the same, exit 1, objects live at exit 2
   nan_dep.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  nan_ctor.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  nan_ctor.ren, naive, tcc: the same, exit 1, objects live at exit 3
+  nan_shape.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  nan_shape.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  nan_len.ren, perceus, tcc: the same, exit 1, objects live at exit 3
+  nan_len.ren, naive, tcc: the same, exit 1, objects live at exit 3
+  nan_order.ren, perceus, tcc: the same, exit 1, objects live at exit 3
+  nan_order.ren, naive, tcc: the same, exit 1, objects live at exit 3
+  nan_left.ren, perceus, tcc: the same, exit 1, objects live at exit 5
+  nan_left.ren, naive, tcc: the same, exit 1, objects live at exit 5
   late_sum.ren, perceus, tcc: the same, exit 1, objects live at exit 1
   late_sum.ren, naive, tcc: the same, exit 1, objects live at exit 1
   late_index.ren, perceus, tcc: the same, exit 1, objects live at exit 2

@@ -250,11 +250,6 @@ type rt =
           a panic at a [Caller] site is said to be *)
   | Here_get  (** a [Ptr]: where [Here_set] last said, to put back *)
   | Here_put  (** a [Ptr] [Here_get] gave: where it was again *)
-  | Late_check
-      (** report an `Int` overflow a [Late] kept, if there is one (late.ml) *)
-  | Late_tick
-      (** a loop's count of turns till its next [Late_check], an [Int]: the
-          next, after checking if it's run out *)
   | Value_any of bool  (** a descriptor: `zero`, or `one` if [true] *)
   | New_desc of new_desc
       (** a descriptor built of the descriptors given: a named type's, from its
@@ -269,11 +264,6 @@ type rhs =
   | Arith of Ast.binop * atom * atom * site
       (** [+], [-], [*], [/] or [%] on two [Int]s or two [Float]s, which panics
           at [site] if it overflows or has no answer *)
-  | Late of Ast.binop * atom * atom * site
-      (** an [Int] [+], [-] or [*] in a release build's loop, which if it
-          overflows gives the wrapped result and keeps the fault, the first
-          one, to report at the next [Late_check] or before any other panic
-          (late.ml) *)
   | Neg of atom * site
   | Compare of cmp * atom * atom
       (** two scalars of one layout, [Int], [Float], [Bool], [Unit] or [Enum] *)
@@ -452,14 +442,6 @@ type fn = {
   inout : var list;
       (** its `inout` parameters, which nothing else points to what they point
           to: a release build tells C so, with `restrict` *)
-  stack : int list;
-      (** the variables whose objects a release build keeps in the function's
-          frame instead of on the heap (stack.ml): each an [Alloc] that never
-          escapes the call, or another name for one *)
-  slot : (int list * int list) option;
-      (** if it has a second version that builds its result in memory its caller
-          gives (stack.ml): the variables whose [Alloc]s are built there, no two
-          in one run, and the other names of them *)
   words : (int * var) list;
       (** the descriptor of each type variable whose values are words here, a
           parameter or a variable its body defines first *)

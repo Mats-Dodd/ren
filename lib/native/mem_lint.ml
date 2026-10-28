@@ -142,10 +142,9 @@ let rt_sig (rt : rt) : layout list * layout =
   | Nan_check_any _ -> ([ Desc; Word 0 ], Unit)
   | Float_lanes -> ([ Desc ], Bool)
   | Float_sum -> ([ Boxed ], Float)
-  | Late_check | Here_set -> ([], Unit)
+  | Here_set -> ([], Unit)
   | Here_get -> ([], Ptr)
   | Here_put -> ([ Ptr ], Unit)
-  | Late_tick -> ([ Int ], Int)
   | Op_any (Some _) -> ([ Desc; Word 0; Word 0 ], Word 0)
   | Op_any None -> ([ Desc; Word 0 ], Word 0)
   | Value_any _ -> ([ Desc ], Word 0)
@@ -193,13 +192,6 @@ let rhs env (r : rhs) : layout =
         fail env (sprintf "`%s` on %s" (Ast.binop_to_string op) (show_layout l));
       operand env "the right operand" l y;
       l
-  (* late.ml's, which [late] checks are where it may be *)
-  | Late (op, x, y, _) ->
-      if not (List.mem op [ Ast.Add; Sub; Mul ]) then
-        fail env (sprintf "a late `%s`" (Ast.binop_to_string op));
-      operand env "a late operation's left operand" Int x;
-      operand env "a late operation's right operand" Int y;
-      Int
   | Neg (x, _) ->
       let l = atom env x in
       if l <> Int && l <> Float then fail env "`-` on what isn't a number";
@@ -296,6 +288,15 @@ let rhs env (r : rhs) : layout =
       fail env (sprintf "a wrap into %s with a site" (Sized.name k))
   | Runtime (Wrap_to k, _, _) when not (Sized.wraps k) ->
       fail env (sprintf "a wrap into %s" (Sized.name k))
+  (* a descriptor built of others, one for each of the type's arguments,
+     however many it has: an array's one *)
+  | Runtime (New_desc how, xs, _) ->
+      if how = Of_array && List.length xs <> 1 then
+        fail env
+          (sprintf "an array's descriptor built of %d descriptors"
+             (List.length xs));
+      List.iter (operand env "a descriptor's argument" Desc) xs;
+      Desc
   | Runtime (r, xs, _) ->
       let want, gives = rt_sig r in
       args env (show_rt r) want xs;
@@ -1489,7 +1490,6 @@ let program (p : program) =
   let ndescs = List.length p.descs in
   List.iter (fn fns values ndescs (Array.of_list p.structs)) p.fns;
   List.iter (counting fns) p.fns;
-  List.iter Late.check p.fns;
   if p.start_desc < 0 || p.start_desc >= ndescs then
     failwith "Mem Lint: `main`'s descriptor isn't in the program";
   match Hashtbl.find_opt fns p.start with

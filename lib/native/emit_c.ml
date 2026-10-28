@@ -231,36 +231,6 @@ let struct_objects ?(kept = []) (l : layout) c =
 let is_struct (x : atom) =
   match atom_layout x with Struct _ -> true | _ -> false
 
-(* The variables of the function being written whose objects are in its
-   frame (stack.ml, [Mem.fn.stack]): set by [fn]. *)
-let in_frame : int list ref = ref []
-
-let framed (x : atom) =
-  match x with Var v -> List.mem v.id !in_frame | _ -> false
-
-(* In a function's version that builds its result in its caller's frame,
-   the variables whose [Alloc]s are built there, through [ren_slot]. *)
-let in_slot : int list ref = ref []
-
-(* The functions that have such a version, with how many fields what
-   they build there has: set by [program]. *)
-let slot_sizes : (string, int) Hashtbl.t = Hashtbl.create 16
-
-(* The C name of a function's version that builds its result in its
-   caller's frame. *)
-let slot_fn name = name ^ "_frame"
-
-(* The words after the header an object of [n] fields takes in a frame:
-   its fields, and the mask's word past eight (ren_rt.h, [ren_ctor_size]). *)
-let frame_words n = n + if n > 8 then 1 else 0
-
-(* A call of [fn] whose result [r] is in this frame: to the version of
-   [fn] that builds it there, given the memory. *)
-let into_frame (r : var) fn =
-  if List.mem r.id !in_frame && Hashtbl.mem slot_sizes fn then
-    Some (slot_fn fn, sprintf "&%s_frame.h" (var r))
-  else None
-
 let binop_fn (op : Ast.binop) (l : layout) =
   let name =
     match op with
@@ -481,11 +451,9 @@ let runtime rt args site_arg =
   | Float_sum ->
       let t = match site_arg with Some s -> tag s | None -> "0" in
       sprintf "ren_float_sum(%s, %s)" (a 0) t
-  | Late_check -> "ren_late_check()"
   | Here_set -> sprintf "(void)(ren_here = %s)" (site ())
   | Here_get -> "(void *)ren_here"
   | Here_put -> sprintf "(void)(ren_here = (const ren_site *)%s)" (a 0)
-  | Late_tick -> sprintf "ren_late_tick(%s)" (a 0)
   | Op_any op ->
       let code =
         match op with
@@ -508,7 +476,7 @@ let runtime rt args site_arg =
 let gives_nothing = function
   | Array_push _ | Array_push_taking _ | Console_write | Console_error
   | Array_check | Buf_set _ | Buf_set_field _ | Buf_check | Nan_check _
-  | Nan_check_any _ | Late_check | Here_set | Here_put ->
+  | Nan_check_any _ | Here_set | Here_put ->
       true
   | _ -> false
 
@@ -548,8 +516,6 @@ let rhs (r : rhs) =
       sprintf "%s(%s, %s, %s)"
         (binop_fn op (atom_layout x))
         (atom x) (atom y) (site s)
-  | Late (op, x, y, s) ->
-      sprintf "%s_late(%s, %s, %s)" (binop_fn op Int) (atom x) (atom y) (site s)
   | Neg (x, s) -> (
       match atom_layout x with
       | Float -> sprintf "(-%s)" (atom x)
@@ -645,7 +611,7 @@ let site_line (s : site) =
 (* The Ren line [s] is at, 0 if it doesn't say. *)
 let stmt_line (s : stmt) =
   let of_rhs = function
-    | Arith (_, _, _, s) | Late (_, _, _, s) | Neg (_, s) -> site_line s
+    | Arith (_, _, _, s) | Neg (_, s) -> site_line s
     | Runtime (_, _, Some s) -> site_line s
     | _ -> 0
   in
@@ -766,29 +732,13 @@ let rec stmt o d (s : stmt) =
          and a field count is a byte *)
       if tag >= 0xFFFD then bug "a constructor's tag past 65,532";
       if n > 64 then bug "a constructor of more than 64 fields";
-      let alloc =
-        if at = None && List.mem v.id !in_slot then
-          sprintf "ren_stack_ctor(ren_slot, %d, %d, %s)" tag n objs
-        else if at = None && List.mem v.id !in_frame then
-          sprintf "ren_stack_ctor(&%s_frame.h, %d, %d, %s)" (var v) tag n objs
-        else sprintf "ren_alloc_ctor(%d, %d, %s)" tag n objs
-      in
+      let alloc = sprintf "ren_alloc_ctor(%d, %d, %s)" tag n objs in
       let set i x =
         line (sprintf "ren_fields(%s)[%d] = %s;" (var v) i (to_val x))
       in
       match at with
       | None ->
           line (sprintf "ren_obj* %s = %s;" (var v) alloc);
-          List.iteri set fields
-      | Some (t, _) when List.mem v.id !in_slot ->
-          (* the version that builds its result in its caller's frame
-             builds it there, as its caller drops it: the token's memory,
-             which reuse gave the version that builds on the heap, is
-             given back *)
-          line (sprintf "ren_free_token(%s);" (atom t));
-          line
-            (sprintf "ren_obj* %s = ren_stack_ctor(ren_slot, %d, %d, %s);"
-               (var v) tag n objs);
           List.iteri set fields
       | Some (t, same) ->
           (* in the token's memory, the slots in [same] already hold their
@@ -912,13 +862,8 @@ let rec stmt o d (s : stmt) =
       line
         (sprintf "const ren_ev* %s = ren_given(%s_nodes, %s, %s, %s_deps, %d);"
            (var v) (var v) (atom outer) (atom caller) (var v) n)
-  | Let (v, Call (f, xs)) when into_frame v f <> None ->
-      let f, mem = Option.get (into_frame v f) in
-      line
-        (sprintf "%s %s = %s(%s);" (ctype v.layout) (var v) f
-           (String.concat ", " (List.map atom xs @ [ mem ])))
   (* a buffer hoist.ml read: its elements, which a loop not moved out
-     ([builds_framed]) indexes where it is *)
+     indexes where it is *)
   | Let (v, (Runtime (Array_data, _, _) as r)) ->
       line (sprintf "ren_val* %s = %s;" (var v) (rhs r))
   | Let (v, r) -> line (sprintf "%s %s = %s;" (ctype v.layout) (var v) (rhs r))
@@ -938,14 +883,11 @@ let rec stmt o d (s : stmt) =
         (fun o -> line (sprintf "%s(%s);" what o))
         (struct_objects ~kept (atom_layout x) (atom x))
   | Dup x -> line (sprintf "ren_dup(%s);" (atom x))
-  | Drop x when framed x -> line (sprintf "ren_stack_drop(%s, 0u);" (atom x))
   | Drop x -> line (sprintf "ren_drop(%s);" (atom x))
   | Dup_word (x, dsc) ->
       line (sprintf "ren_dup_val(%s, %s);" (atom x) (atom dsc))
   | Drop_word (x, dsc) ->
       line (sprintf "ren_drop_val(%s, %s);" (atom x) (atom dsc))
-  | Free (x, kept) when framed x ->
-      line (sprintf "ren_stack_drop(%s, %s);" (atom x) (mask kept))
   | Free (x, kept) ->
       line (sprintf "ren_free_keeping(%s, %s);" (atom x) (mask kept))
   | Free_token x -> line (sprintf "ren_free_token(%s);" (atom x))
@@ -956,15 +898,10 @@ let rec stmt o d (s : stmt) =
       line
         (sprintf "%s %s = %s;" (ctype result.layout) (var result)
            (zero result.layout));
-      let fn, mem =
-        match into_frame result fn with
-        | Some (f, mem) -> (f, [ mem ])
-        | None -> (fn, [])
-      in
       line
         (sprintf "ren_obj* %s = %s(%s);" (var error) fn
            (String.concat ", "
-              (List.map atom args @ mem @ [ "&" ^ var result ])));
+              (List.map atom args @ [ "&" ^ var result ])));
       line (sprintf "if (%s != NULL) {" (var error));
       block o (d + 1) on_error;
       line "}"
@@ -1008,8 +945,7 @@ let rec stmt o d (s : stmt) =
       block o (d + 1) default;
       line "}";
       line "}"
-  | Loop (l, b) when (not o.inside) && uses_buffer o b && not (builds_framed b)
-    ->
+  | Loop (l, b) when (not o.inside) && uses_buffer o b ->
       outline o d l b
   | Loop (l, b) ->
       line "for (;;) {";
@@ -1060,23 +996,6 @@ let rec stmt o d (s : stmt) =
       line (sprintf "ren_panic(%s, %s);" (site s) (c_string msg))
 
 and block o d b = List.iter (stmt o d) b
-
-(* Whether a loop builds an object in the frame (stack.ml): its memory is
-   the function's, which a loop moved out of it can't name, so such a
-   loop stays where it is, without `restrict`. *)
-and builds_framed b =
-  let found = ref false in
-  Rc.iter_stmts
-    (function
-      | Let (v, Alloc { at = None; _ })
-        when List.mem v.id !in_frame || List.mem v.id !in_slot ->
-          found := true
-      | (Let (v, Call (g, _)) | Call_fails { result = v; fn = g; _ })
-        when into_frame v g <> None ->
-          found := true
-      | _ -> ())
-    b;
-  !found
 
 (* Whether a loop indexes a buffer hoist.ml read before it. *)
 and uses_buffer o b =
@@ -1153,17 +1072,15 @@ and on_failure o d error on_error =
       line o d "}"
   | None -> line o d (sprintf "(void)%s;" (var error))
 
-(* With [restrict], an `inout` parameter is a `restrict` pointer: the
-   only way to what it points to, which exclusivity (excl.ml) makes
-   true, so C may keep what it points to in a register.
-   With [slot], it's the version that builds its result in memory its
-   caller gives, [ren_slot] (stack.ml). *)
 (* "static " in one file; nothing in a debug build's units, whose
    functions and data are called and read from other units: set by
    [program] and [units]. *)
 let linkage = ref "static "
 
-let signature ?(slot = false) ~restrict (f : fn) =
+(* With [restrict], an `inout` parameter is a `restrict` pointer: the
+   only way to what it points to, which exclusivity (excl.ml) makes
+   true, so C may keep what it points to in a register. *)
+let signature ~restrict (f : fn) =
   let params =
     List.map
       (fun v ->
@@ -1171,14 +1088,12 @@ let signature ?(slot = false) ~restrict (f : fn) =
           ctype v.layout ^ " restrict " ^ var v
         else ctype v.layout ^ " " ^ var v)
       f.params
-    @ if slot then [ "ren_obj* ren_slot" ] else []
   in
-  let name = if slot then slot_fn f.name else f.name in
   if f.fails then
-    sprintf "%sren_obj* %s(%s)" !linkage name
+    sprintf "%sren_obj* %s(%s)" !linkage f.name
       (String.concat ", " (params @ [ ctype f.result ^ "* ren_out" ]))
   else
-    sprintf "%s%s %s(%s)" !linkage (ctype f.result) name
+    sprintf "%s%s %s(%s)" !linkage (ctype f.result) f.name
       (match params with [] -> "void" | ps -> String.concat ", " ps)
 
 (* ---- where the stack is checked ----
@@ -1255,7 +1170,7 @@ let unchecked (fns : fn list) =
   go ();
   depth
 
-let fn ?(slot = false) ~restrict ~checks b (f : fn) =
+let fn ~restrict ~checks b (f : fn) =
   let bufs = Hashtbl.create 8 in
   Rc.iter_stmts
     (function
@@ -1267,7 +1182,7 @@ let fn ?(slot = false) ~restrict ~checks b (f : fn) =
       b = Buffer.create 4096;
       fails = f.fails;
       catches = [];
-      fname = (if slot then slot_fn f.name else f.name);
+      fname = f.name;
       bufs;
       outlined = Buffer.create 0;
       inside = false;
@@ -1284,39 +1199,13 @@ let fn ?(slot = false) ~restrict ~checks b (f : fn) =
   next_line := if ren then f.loc.start.line + 1 else 0;
   open_line := 0;
   if checks f.name then line o 1 "REN_STACK_CHECK();";
-  (match f.slot with
-  | Some (v, names) when slot ->
-      in_slot := v;
-      in_frame := names @ f.stack
-  | _ ->
-      in_slot := [];
-      in_frame := f.stack);
-  (* each object kept in the frame: its memory, for the whole call, so
-     a name declared before the block it's built in still points at it;
-     one built in a loop is built over its last, which stack.ml makes
-     sure is dead by then *)
-  let frame (v : var) n =
-    line o 1
-      (sprintf "struct { ren_obj h; ren_val f[%d]; } %s_frame;" (frame_words n)
-         (var v))
-  in
-  Rc.iter_stmts
-    (function
-      | Let (v, Alloc { fields; at = None; _ })
-        when List.mem v.id !in_frame && not (List.mem v.id !in_slot) ->
-          frame v (List.length fields)
-      | (Let (v, Call (g, _)) | Call_fails { result = v; fn = g; _ })
-        when into_frame v g <> None ->
-          frame v (Hashtbl.find slot_sizes g)
-      | _ -> ())
-    f.body;
   block o 1 f.body;
   Buffer.add_buffer b o.outlined;
   (* the signature on its name's line, the body's lines on theirs *)
   if ren then
     Buffer.add_string b
       (sprintf "#line %d %s\n" f.loc.start.line (c_string (source_path f.loc.file)));
-  Buffer.add_string b (signature ~slot ~restrict f ^ " {\n");
+  Buffer.add_string b (signature ~restrict f ^ " {\n");
   Buffer.add_buffer b o.b;
   Buffer.add_string b "}\n\n";
   cur_line := 0;
@@ -1540,7 +1429,7 @@ type parts = {
   externs : (string * string) list;
       (** each associated value's name, and what declares it in another
           unit than the one [data] is in *)
-  fns : (fn * string) list;  (** each function and its C, its slot's too *)
+  fns : (fn * string) list;  (** each function and its C *)
   run : string;  (** [ren_program] and [main] *)
 }
 
@@ -1585,33 +1474,8 @@ let parts ~restrict ~release ~site_pieces (p : program) =
       add (sprintf "%s%s %s;\n" !linkage (ctype v.vlayout) v.vname))
     p.values;
   let data = Buffer.contents b in
-  Hashtbl.reset slot_sizes;
-  List.iter
-    (fun (f : fn) ->
-      match f.slot with
-      | Some (v, _) ->
-          (* as big as the biggest object built there *)
-          Rc.iter_stmts
-            (function
-              | Let (w, Alloc { fields; _ }) when List.mem w.id v ->
-                  let n = List.length fields in
-                  let m =
-                    Option.value (Hashtbl.find_opt slot_sizes f.name) ~default:0
-                  in
-                  Hashtbl.replace slot_sizes f.name (max n m)
-              | _ -> ())
-            f.body
-      | None -> ())
-    p.fns;
   let protos =
-    List.concat_map
-      (fun (f : fn) ->
-        (f.name, signature ~restrict f ^ ";\n")
-        ::
-        (if f.slot <> None then
-           [ (slot_fn f.name, signature ~slot:true ~restrict f ^ ";\n") ]
-         else []))
-      p.fns
+    List.map (fun (f : fn) -> (f.name, signature ~restrict f ^ ";\n")) p.fns
   in
   let unchecked = unchecked p.fns in
   let checks name = not (Hashtbl.mem unchecked name) in
@@ -1620,7 +1484,6 @@ let parts ~restrict ~release ~site_pieces (p : program) =
       (fun (f : fn) ->
         let b = Buffer.create 4096 in
         fn ~restrict ~checks b f;
-        if f.slot <> None then fn ~slot:true ~restrict ~checks b f;
         (f, Buffer.contents b))
       p.fns
   in

@@ -283,8 +283,10 @@ let rec by_shape a b =
 
 (* [a] and [b], of type [t], equal: by their keys, if their type has one,
    and otherwise part by part. A [Float]'s `-0.0` and `0.0` are equal, as
-   OCaml's [=] on floats has them; a NaN is seen (nan.ml). *)
-let rec equal cx (t : Ty.ty) a b =
+   OCaml's [=] on floats has them; a NaN met on the way is seen
+   (nan.ml). [equal], below, sees one it didn't meet too. *)
+let rec equal_in cx (t : Ty.ty) a b =
+  let equal = equal_in in
   match (keyed cx t a, keyed cx t b) with
   | Some (k, x), Some (_, y) -> equal cx k x y
   | _ -> (
@@ -325,7 +327,7 @@ let rec equal cx (t : Ty.ty) a b =
       | _ -> by_shape a b)
 
 (* The `hash` dictionary of [t]'s values, which a table finds a key by. *)
-and by_hash cx t = Hash { hash = hash cx t; equal = equal cx t }
+and by_hash cx t = Hash { hash = hash cx t; equal = equal_in cx t }
 
 (* ---- ordering ---- *)
 
@@ -336,8 +338,10 @@ and by_hash cx t = Hash { hash = hash cx t; equal = equal cx t }
    `Bool`, `false` first; a sum type with no fields, by the order of its
    variants; a tuple, part by part, the first that differs deciding;
    anything with a key, by its key; and an opaque type in its own module,
-   as what it's represented as. *)
-let rec compare cx (t : Ty.ty) a b =
+   as what it's represented as. [compare], below, sees a NaN it didn't
+   meet. *)
+let rec compare_in cx (t : Ty.ty) a b =
+  let compare = compare_in in
   match (keyed cx t a, keyed cx t b) with
   | Some (k, x), Some (_, y) -> compare cx k x y
   | _ -> (
@@ -364,26 +368,32 @@ let rec compare cx (t : Ty.ty) a b =
 
 (* Raise [Nan.Seen] of the first NaN in [v], of type [t], in the order
    its parts are declared, as the runtime's walk finds it
-   ([ren_nan_in]): what's given to a dependency's operation (nan.ml).
-   Through what it's made of, not its key. *)
-let rec nan_in (types : types) (t : Ty.ty) v =
-  match (view types t v, v) with
-  | Leaf, VFloat f when Float.is_nan f -> raise (Nan.Seen f)
-  | Leaf, _ -> ()
-  | Record { fields; _ }, _ -> List.iter (fun (_, t, x) -> nan_in types t x) fields
-  | Ctor c, _ -> List.iter (fun (t, x) -> nan_in types t x) c.fields
-  | Opaque (_, rep), _ -> nan_in types rep v
-  | Elems (t, xs), _ -> Array.iter (nan_in types t) xs
-  | (Tag (_, parts) | Parts parts), _ ->
-      List.iter (fun (t, x) -> nan_in types t x) parts
-  | Entries (kt, vt, tb), _ ->
-      List.iter
-        (fun (k, x) ->
-          nan_in types kt k;
-          nan_in types vt x)
-        (Table.to_list tb)
-  | Members (t, tb), _ -> List.iter (fun (k, _) -> nan_in types t k) (Table.to_list tb)
-  | (Hidden _ | Shape), _ -> nan_shape v
+   ([ren_nan_val]). [through] says what a value is seen through, if not
+   what it's made of: its key, for what's compared. *)
+let rec nan_walk ~through (types : types) (t : Ty.ty) v =
+  let nan_in = nan_walk ~through in
+  match through t v with
+  | Some (k, x) -> nan_in types k x
+  | None -> (
+      match (view types t v, v) with
+      | Leaf, VFloat f when Float.is_nan f -> raise (Nan.Seen f)
+      | Leaf, _ -> ()
+      | Record { fields; _ }, _ ->
+          List.iter (fun (_, t, x) -> nan_in types t x) fields
+      | Ctor c, _ -> List.iter (fun (t, x) -> nan_in types t x) c.fields
+      | Opaque (_, rep), _ -> nan_in types rep v
+      | Elems (t, xs), _ -> Array.iter (nan_in types t) xs
+      | (Tag (_, parts) | Parts parts), _ ->
+          List.iter (fun (t, x) -> nan_in types t x) parts
+      | Entries (kt, vt, tb), _ ->
+          List.iter
+            (fun (k, x) ->
+              nan_in types kt k;
+              nan_in types vt x)
+            (Table.to_list tb)
+      | Members (t, tb), _ ->
+          List.iter (fun (k, _) -> nan_in types t k) (Table.to_list tb)
+      | (Hidden _ | Shape), _ -> nan_shape v)
 
 (* The same, by its shape alone. *)
 and nan_shape v =
@@ -399,3 +409,32 @@ and nan_shape v =
           nan_shape x)
         (Table.to_list t)
   | _ -> ()
+
+(* What's given to a dependency's operation (nan.ml): through what it's
+   made of, not its key. *)
+let nan_in types t v = nan_walk ~through:(fun _ _ -> None) types t v
+
+(* ---- `==` and ordering, a NaN in what's compared seen ----
+
+   Comparing a value with a NaN in it panics (operators.md, "`Int` and
+   `Float`"), whether or not the walk met it: `Some(nan) == None` stops
+   at the constructors and `(1, nan) < (2, 0.0)` at the first part, but
+   each compares a value a NaN is in. So a comparison that ends early,
+   unequal or ordered, looks through both values for one, [a]'s first,
+   in the order their parts are declared, as the runtime does
+   ([ren_equal_any], [ren_compare_any]). One that doesn't end early met
+   every leaf, so it has seen any NaN already. *)
+
+let nan_compared cx t a b =
+  nan_walk ~through:(keyed cx) cx.types t a;
+  nan_walk ~through:(keyed cx) cx.types t b
+
+let equal cx (t : Ty.ty) a b =
+  let same = equal_in cx t a b in
+  if not same then nan_compared cx t a b;
+  same
+
+let compare cx (t : Ty.ty) a b =
+  let c = compare_in cx t a b in
+  if c <> 0 then nan_compared cx t a b;
+  c

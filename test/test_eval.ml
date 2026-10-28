@@ -862,7 +862,7 @@ fn main() =
       ┌─ test.ren:5:9
     5 │   print(n + 1)
       │         ^^^^^
-      help: if wrapping is what you mean, write `n.wrapping_add(1)`
+      help: if wrapping is what you mean, write `n +% 1`
     |}];
   run {|
 fn main() = print(-(-9223372036854775808))
@@ -887,7 +887,7 @@ fn main() =
       ┌─ test.ren:3:3
     3 │   n *= 2
       │   ^^^^^^
-      help: if wrapping is what you mean, write `n = n.wrapping_mul(2)`
+      help: if wrapping is what you mean, write `n *%= 2`
     |}];
   run {|
 fn main() = print(-9223372036854775808 / -1)

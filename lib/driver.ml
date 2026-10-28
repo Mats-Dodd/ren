@@ -1314,11 +1314,12 @@ let dump_tokens toks =
   |> String.concat " "
 
 (* The help a panic gives for an `Int` that overflowed (Eval.wrap): the
-   wrapping method, called on its operands as the source writes them,
-   `n.wrapping_add(1)`. The receiver is put in parentheses unless it's a
-   name, a literal, a call or a field, which a `.` can follow; and for
-   `n += 1`, where what's between the operands ends in `=`, it's put back,
-   `n = n.wrapping_add(1)`, since a call on its own line does nothing.
+   wrapping operator, between its operands as the source writes them,
+   `n +% 1` (operators.md, "The wrapping operators"), or, for `-x`, which
+   has no operator, the method, `x.wrapping_neg()`. An operand is put in
+   parentheses unless it's a name, a literal, a call or a field, so the
+   operator binds as the one it replaces did; and for `n += 1`, where
+   what's between the operands ends in `=`, it's `n +%= 1`.
    [None] if an operand isn't on one line of a file [lines_of] has. *)
 let wrap_help_in ~lines_of (w : Eval.wrap) =
   let text (l : Loc.t) =
@@ -1370,16 +1371,27 @@ let wrap_help_in ~lines_of (w : Eval.wrap) =
         op <> "" && op.[String.length op - 1] = '='
     | None -> false
   in
-  let call ~assign recv arg =
-    let target = if postfix recv then recv else "(" ^ recv ^ ")" in
-    let made = Printf.sprintf "%s.%s(%s)" target w.meth arg in
-    let made = if assign then recv ^ " = " ^ made else made in
+  let operand s = if postfix s then s else "(" ^ s ^ ")" in
+  let help made =
     Some (Printf.sprintf "if wrapping is what you mean, write `%s`" made)
   in
-  match (text w.recv, w.arg) with
-  | Some recv, None -> call ~assign:false recv ""
-  | Some recv, Some a -> Option.bind (text a) (call ~assign:(assigns a) recv)
-  | None, _ -> None
+  let op =
+    match w.meth with
+    | "wrapping_add" -> Some "+%"
+    | "wrapping_sub" -> Some "-%"
+    | "wrapping_mul" -> Some "*%"
+    | _ -> None
+  in
+  match (text w.recv, w.arg, op) with
+  | Some recv, None, _ -> help (Printf.sprintf "%s.%s()" (operand recv) w.meth)
+  | Some recv, Some a, Some op ->
+      Option.bind (text a) (fun arg ->
+          if assigns a then help (Printf.sprintf "%s %s= %s" recv op arg)
+          else help (Printf.sprintf "%s %s %s" (operand recv) op (operand arg)))
+  | Some recv, Some a, None ->
+      Option.bind (text a) (fun arg ->
+          help (Printf.sprintf "%s.%s(%s)" (operand recv) w.meth arg))
+  | None, _, _ -> None
 
 (* The same, with the files of the source map [sources] split into lines
    here, or by [lines_of] ([Diag.indexed]), which a caller with many
@@ -1572,9 +1584,6 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
                  then counts as anything else *)
               |> Trmc.program
               |> Borrow.infer |> Rc.program
-              (* objects that never escape kept in the frame (stack.ml),
-                 before reuse, which then leaves them alone *)
-              |> (if release then Stack.program else Fun.id)
               |> Reuse.program
             in
             let placed = perceus p in
@@ -1592,13 +1601,6 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
   (* a loop's arrays indexed directly, which needs Perceus's taking writes *)
   let p =
     if release && rc = Perceus then pass "hoisting" (fun () -> Hoist.program p)
-    else p
-  in
-  (* a release build's loops report an overflow late (late.ml), if
-     REN_LATE is set: measured, it costs more than it gives, so it's off *)
-  let p =
-    if release && Sys.getenv_opt "REN_LATE" <> None then
-      pass "late overflow" (fun () -> Late.program p)
     else p
   in
   pass "Mem Lint" (fun () -> Mem_lint.program p);

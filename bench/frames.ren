@@ -1,13 +1,12 @@
-// H8: the objects a release build keeps in a frame (lib/native/stack.ml),
-// in the cases its rules are about: a record lent down a recursion, one
-// whose field outlives it, one alive across a loop's iterations (kept on
-// the heap), an Option from an `if`, an error raised while one is alive,
-// one stored in another, and functions that build their result in their
-// caller's frame, one of which fails. And where stack promotion meets
-// the other passes: a record of more than eight fields (its mask's word
-// is in the frame too), one that dies where one as big is built after it
-// (reuse mustn't take the frame's memory), and one built in a loop
-// hoist.ml indexes an array in. build.t runs it under the sanitizers.
+// H8's cases, the objects a release build once kept in a frame
+// (stack.ml, cut by foundations.md, decision 14; now all on the heap or
+// small values): a record lent down a recursion, one whose field
+// outlives it, one alive across a loop's iterations, an Option from an
+// `if`, an error raised while one is alive, one stored in another, and
+// functions that build and return one, one of which fails; a record of
+// more than eight fields, one that dies where one as big is built after
+// it, which reuse takes, and one built in a loop hoist.ml indexes an
+// array in. build.t runs it under the sanitizers.
 
 type Item = { name: Str, tags: Array<Str>, qty: Int }
 type Pair = { a: Item, b: Int }
@@ -50,7 +49,7 @@ fn opt(n: Int) -> Int =
 fn checked(it: Item) -> Int ! TooBig(n: Int) =
   if it.qty > 50 then fail TooBig(it.qty) else weigh(it)
 
-// an error raised while an object in the frame is alive
+// an error raised while a record built here is alive
 fn errs(n: Int) -> Int ! TooBig(n: Int) =
   var t = 0
   for i in 0..n

@@ -4,10 +4,7 @@
 // than eight `Bool`s, two packed words; a record changed a field at a
 // time; and each walked by `show`, `==` and a generic function, which
 // find a packed field through its declaration (ren_rt.h,
-// [ren_ctor_field]). `print(blacken(ins(...)))` builds its tree in
-// `main`'s frame through `ins`'s second version (stack.ml), whose node
-// reuse had given a token: the token's memory goes back to the heap, not
-// leaked. build.t runs it under the sanitizers.
+// [ren_ctor_field]). build.t runs it under the sanitizers.
 
 type Color =
   | Red

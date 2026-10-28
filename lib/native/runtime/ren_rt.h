@@ -259,7 +259,7 @@ extern const char *const *ren_texts;
    object. */
 typedef struct {
   int64_t allocs, frees, dups, drops, reuses, grows, live_bytes, peak_bytes,
-      block_calls, stack_allocs;
+      block_calls;
 } ren_stats_t;
 extern ren_stats_t ren_stats;
 #define REN_STAT(field) (ren_stats.field++)
@@ -332,9 +332,7 @@ void ren_free(ren_obj *o);
 
    Either of the last two also makes the heap and the list [ren_free]
    keeps thread local, unless -DREN_RC_NO_TLS, which is only sound with
-   one thread and measures the counting alone. An object in a frame
-   (stack.ml) is never handed to another thread, since that would be an
-   escape, so it's never marked. */
+   one thread and measures the counting alone. */
 
 #if defined(REN_RC_SHARED) && defined(REN_RC_ATOMIC)
 #error "REN_RC_SHARED and REN_RC_ATOMIC are two modes: give one"
@@ -603,38 +601,6 @@ static inline ren_obj *ren_reuse(ren_obj *tok, uint16_t tag, uint32_t nfields,
   tok->tag = tag;
   ren_set_objs(tok, nfields, objs);
   return tok;
-}
-
-/* ---- objects in a frame ----
-
-   A release build keeps an object that never outlives the call that
-   builds it in that call's frame (stack.ml, after Swift's
-   StackPromotion.swift). Its count is 1 and stays 1, since nothing
-   counts it again, so it's unique as one on the heap is. Where Perceus
-   would free it, its fields that hold objects are dropped, but those in
-   [kept], and its memory, the frame's, is left alone. */
-
-/* [h], the frame's memory for a constructor of [nfields] fields, as one
-   with a count of 1: the header, the fields, and past eight the mask's
-   word (emit_c.ml sizes the frame so). The caller fills in the fields. */
-static inline ren_obj *ren_stack_ctor(ren_obj *h, uint16_t tag,
-                                      uint32_t nfields, uint64_t objs) {
-  REN_STAT(stack_allocs);
-  h->rc = 1;
-  h->tag = tag;
-  h->nfields = (uint8_t)nfields;
-  ren_set_objs(h, nfields, objs);
-  return h;
-}
-
-/* Where an object in a frame dies: its fields dropped, but those in
-   [kept]. It may be a constructor without fields, a scalar. */
-static inline void ren_stack_drop(ren_obj *o, uint64_t kept) {
-  if (ren_is_scalar(o))
-    return;
-  ren_val *fs = ren_fields(o);
-  for (uint64_t m = ren_ctor_objs(o) & ~kept; m != 0; m &= m - 1)
-    ren_drop(fs[__builtin_ctzll(m)].o);
 }
 
 /* A token nothing was built in: its memory, if it has some, given back. */
@@ -1022,8 +988,8 @@ void ren_print_quoted(FILE *out, ren_obj *s);
 /* ---- arithmetic ----
 
    An `Int` that overflows panics, with the interpreter's message
-   (lib/eval/arith.ml); in a release build's loop, it may say so late
-   ("Late overflow", below). A `Float` operation that has no answer
+   (lib/eval/arith.ml), where it happens (foundations.md, decision 15).
+   A `Float` operation that has no answer
    gives a NaN, which panics where it's observed ("NaN", below). */
 
 _Noreturn void ren_int_overflowed(const ren_site *site, const char *op,
@@ -1117,66 +1083,6 @@ static inline int64_t ren_mul(int64_t a, int64_t b, const ren_site *site) {
 int64_t ren_div(int64_t a, int64_t b, const ren_site *site);
 int64_t ren_rem(int64_t a, int64_t b, const ren_site *site);
 int64_t ren_neg(int64_t a, const ren_site *site);
-
-/* ---- late overflow (late.ml) ----
-
-   In a release build's loop, an `Int` `+`, `-` or `*` that overflows
-   gives its wrapped result and goes on, the first such fault kept in
-   [ren_late]: its site and operands, so the panic says what `ren run`'s
-   does. It's reported by [ren_late_check], which the loop runs before
-   anything outside the code it makes can see what it did: before each
-   call, each way out of the loop, and once every 1,024 turns of it
-   ([ren_late_tick]); and by any other panic, before its own
-   (foundations.md, decision 15). [ren_late] is clear everywhere else.
-   One per program, while it runs on one thread (11b gives each thread
-   its own). */
-typedef struct {
-  const ren_site *site;
-  const char *op;
-  int64_t a, b;
-} ren_late_t;
-extern ren_late_t ren_late;
-
-/* [a op b] overflowed at [site]: kept, unless a fault is kept already. */
-__attribute__((cold, noinline)) void ren_late_overflowed(const ren_site *site,
-                                                         const char *op,
-                                                         int64_t a, int64_t b);
-_Noreturn void ren_late_report(void);
-
-static inline void ren_late_check(void) {
-  if (__builtin_expect(ren_late.site != NULL, 0))
-    ren_late_report();
-}
-
-/* A loop's count of turns till its next check, [n]: the next. */
-static inline int64_t ren_late_tick(int64_t n) {
-  if (__builtin_expect(n <= 1, 0)) {
-    ren_late_check();
-    return 1024;
-  }
-  return n - 1;
-}
-
-static inline int64_t ren_add_late(int64_t a, int64_t b, const ren_site *site) {
-  int64_t r;
-  if (__builtin_expect(ren_add_overflow(a, b, &r), 0))
-    ren_late_overflowed(site, "+", a, b);
-  return r;
-}
-
-static inline int64_t ren_sub_late(int64_t a, int64_t b, const ren_site *site) {
-  int64_t r;
-  if (__builtin_expect(ren_sub_overflow(a, b, &r), 0))
-    ren_late_overflowed(site, "-", a, b);
-  return r;
-}
-
-static inline int64_t ren_mul_late(int64_t a, int64_t b, const ren_site *site) {
-  int64_t r;
-  if (__builtin_expect(ren_mul_overflow(a, b, &r), 0))
-    ren_late_overflowed(site, "*", a, b);
-  return r;
-}
 
 /* `Float`'s methods that can panic: a rounding that isn't an `Int`, a
    NaN's or one too big (lib/eval/builtins.ml). */

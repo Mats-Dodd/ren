@@ -75,8 +75,7 @@ let rt h (r : rt) : rt =
     | Bits _ | Widen | Narrow _ | Wrap_to _
     | Console_write | Console_error | Show_any | Equal_any _ | Compare_any _
     | Op_any _ | Value_any _ | New_desc _ | Nan_check _ | Nan_check_any _
-    | Float_lanes | Float_sum | Late_check | Late_tick | Here_set | Here_get
-    | Here_put ) as r ->
+    | Float_lanes | Float_sum | Here_set | Here_get | Here_put ) as r ->
       r
 
 let kept h = List.map (fun (i, a) -> (i, atom h a))
@@ -86,7 +85,6 @@ let rhs h (r : rhs) : rhs =
   match r with
   | Atom x -> Atom (a x)
   | Arith (op, x, y, s) -> Arith (op, a x, a y, h.site s)
-  | Late (op, x, y, s) -> Late (op, a x, a y, h.site s)
   | Neg (x, s) -> Neg (a x, h.site s)
   | Compare (c, x, y) -> Compare (c, a x, a y)
   | Not x -> Not (a x)
@@ -218,8 +216,6 @@ let key canon (f : fn) =
     ( f.params,
       f.modes,
       f.inout,
-      f.stack,
-      f.slot,
       f.words,
       f.result,
       f.fails,

@@ -195,8 +195,8 @@ val dump_tokens : (Token.t * Loc.t) array -> string
 val render_error : sources:(string -> string option) -> exn -> string option
 
 (* The help a panic gives for an `Int` that overflowed: the wrapping
-   method instead, called as the source writes the operands,
-   `n.wrapping_add(1)`, or [None] if they can't be shown. *)
+   operator instead, between the operands as the source writes them,
+   `n +% 1`, or [None] if they can't be shown. *)
 val wrap_help : sources:(string -> string option) -> Eval.wrap -> string option
 
 (* ---- `ren build` (compiler.md, "Native slice") ---- *)

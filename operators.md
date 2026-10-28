@@ -295,7 +295,8 @@ error: `fn(Int) -> Int` has no `==`, which `same` needs
   `(-1.0).sqrt()`, makes a `NaN`, and arithmetic and stores carry it:
   every `+`, `-`, `*` and `/` given one gives it back. Comparing one
   (`<` and the others, `==`, `!=`, an order or `==` through a value with
-  one in it, `sort`), converting one to an `Int` (`round`, `truncate`)
+  one in it, even where the comparison is decided before it, as
+  `Some(nan) == None` is, `sort`), converting one to an `Int` (`round`, `truncate`)
   or a `Str` (`show`, `print`), hashing one, or passing one to a
   dependency's operation panics. So no program acts on a `NaN`, and none
   reaches a handler, the world or the journal; it can't surface three
@@ -335,7 +336,7 @@ panic: `+` overflowed: 9223372036854775807 + 1
 7 │     n + 1
   │     ^^^^^
   │
-  = help: if wrapping is what you mean, write `n.wrapping_add(1)`
+  = help: if wrapping is what you mean, write `n +% 1`
 ```
 
 ## Sized integers
