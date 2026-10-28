@@ -1,0 +1,246 @@
+// Found in the stage-10d review: descriptions, dispatch, generic
+// dependencies, `retry` and `over any` adversarially, checked native
+// against `ren run`. A description changed in a loop (not copied per
+// handler), through a record and an array; `uses` as an upper bound with
+// a handler that keeps state called as a method; arguments evaluated
+// before the call; a generic dependency at three types and two aliases;
+// `retry` nested, with `n` 0 and an error set; `over any` stacked.
+
+dep Op =
+  run: fn(x: Int) -> Int
+
+handler o_add(k: Int) for Op =
+  run(x) => x + k
+handler o_mul(k: Int) for Op =
+  run(x) => x * k % 1009
+handler o_neg() for Op =
+  run(x) => 0 - x
+
+type R = { o: Op, n: Int }
+
+fn flip(inout r: R) =
+  r.o = if r.n % 2 == 0 then o_mul(3) else o_neg()
+  r.n += 1
+
+fn rotate(inout ops: Array<Op>) =
+  let first = ops[0]
+  for i in 0..ops.len() - 1
+    ops[i] = ops[i + 1]
+  ops[ops.len() - 1] = first
+
+fn dispatch() uses Console =
+  var r = R { o: o_add(1), n: 0 }
+  var acc = 1
+  for i in 0..6
+    acc = r.o.run(acc)
+    flip(&r)
+  print(acc)
+  var ops: Array<Op> = [o_add(2), o_mul(5), o_neg(), o_add(7)]
+  let d = ops[0]
+  for i in 0..8
+    acc = d.run(acc) + ops[0].run(i)
+    rotate(&ops)
+  print(acc)
+  let part = ops[1..3]
+  for o in part
+    acc = o.run(acc)
+  print(acc)
+  var ops2 = ops
+  &ops2.split_at(2) fn(&lo, &hi) =>
+    lo[0] = hi[1]
+    for o in hi
+      acc = o.run(acc)
+  print(acc)
+  for o in ops2
+    acc = o.run(acc)
+  print(acc)
+  var e: Op = o_add(1)
+  for i in 0..5
+    acc = e.run(acc)
+    &ops.split_at(1) fn(&lo, &hi) =>
+      e = hi[0]
+  print(acc)
+
+dep Api =
+  handle: fn(x: Int) -> Str
+
+dep Db =
+  q: fn(x: Int) -> Int
+
+handler fake_db(k: Int) for Db =
+  q(x) => x * k
+
+handler health() for Api =
+  handle(x) => "ok"
+
+handler users(prefix: Str) for Api uses Db =
+  handle(x) => prefix.concat(show(Db.q(x)))
+
+handler timed() for Api uses Clock, Db =
+  handle(x) => show(Clock.now()).concat(show(Db.q(x)))
+
+handler counted() for Api uses Console =
+  var n = 0
+  finally(r) =>
+    print("done")
+    try r
+  handle(x) =>
+    n += 1
+    print(n)
+    show(x)
+
+fn make(i: Int) -> (Api uses Db) =
+  if i == 0 then health()
+  else
+    let p = "u".concat(show(i))
+    handler fn(x) => p.concat(show(Db.q(x + i)))
+
+fn next_id(inout i: Int) -> Int =
+  i += 1
+  i
+
+fn descriptions() uses Console =
+  let routes: Array<(Api uses Clock, Console, Db)> = [health(), users("a".concat("b")), timed(), counted(), make(0), make(3)]
+  with fake_db(2), Clock.frozen(Time.epoch) in
+    for r in routes
+      print(r.handle(5))
+    var cap = 1
+    let h: Api = handler fn(x) => show(x + cap)
+    cap = 100
+    print(h.handle(1))
+    var i = 0
+    let r2 = routes[1]
+    print(r2.handle(next_id(&i)))
+    print(routes[3].handle(next_id(&i)))
+    print(make(next_id(&i)).handle(next_id(&i)))
+
+dep Box<T> =
+  get: fn() -> T
+  set: fn(v: T)
+
+handler cell<T>(init: T) for Box<T> =
+  var v = init
+  get() => v
+  set(x) => v = x
+
+handler loud<T>() over Box<T> uses Console =
+  get() =>
+    let x = next.get()
+    print(x)
+    x
+  set(x) => next.set(x)
+
+dep Ints = Box<Int>
+dep Other = Box<Int>
+
+fn swap<A, B>(a2: A, b2: B) -> (A, B) uses Box<A>, Box<B> =
+  let a: A = Box.get()
+  let b: B = Box.get()
+  Box.set(a2)
+  Box.set(b2)
+  (a, b)
+
+fn generic_twice<T>(x: T) -> T uses Box<T> =
+  Box.set(x)
+  Box.get()
+
+fn generic() uses Console =
+  with cell(1), cell("s".concat("t")), cell([1, 2]) in
+    print(swap(10, "u"))
+    let i: Int = Box.get()
+    let s: Str = Box.get()
+    print(i)
+    print(s)
+    print(generic_twice([3]))
+  with cell((1, "p")) in
+    print(generic_twice((2, "q")))
+  with cell(5) as Ints, cell(6) as Other, cell(7) in
+    Ints.set(Other.get() + Box.get())
+    print(Ints.get())
+  with loud() over cell(Some("v".concat("w"))) in
+    let o: Option<Str> = Box.get()
+    print(o)
+  let ds: Array<Box<Int>> = [cell(1), cell(2)]
+  for d in ds
+    with d in
+      Box.set(Box.get() * 10)
+      print(Box.get())
+
+type Flaky = ! A | B(n: Int)
+
+fn step(i: Int) -> Int ! A | B(n: Int) | C =
+  if i % 4 == 0 then fail A
+  else if i % 4 == 1 then fail B(i)
+  else if i == 7 then fail C
+  else i
+
+fn retries() uses Console =
+  var i = 0
+  let r = attempt retry(10, on: A | B) fn() =>
+    i += 1
+    try step(i)
+  print(r)
+  print(i)
+  i = 3
+  let r2 = attempt retry(3, on: Flaky) fn() =>
+    i += 1
+    try step(i)
+  print(r2)
+  i = 0
+  let r3 = attempt retry(0, on: A) fn() =>
+    i += 1
+    try step(i - 1)
+  print(r3)
+  print(i)
+  i = 0
+  var outer = 0
+  let r4 = attempt retry(3, on: C) fn() =>
+    outer += 1
+    try retry(2, on: A | B) fn() =>
+      i += 1
+      try step(i + 4)
+  print(r4)
+  print(outer)
+  print(i)
+  var names: Array<Str> = []
+  let r5 = attempt retry(4, on: B) fn() =>
+    &names.push("try".concat(show(names.len())))
+    try step(5)
+  print(r5)
+  print(names)
+
+dep Tally =
+  change: fn(k: Int, d: Int)
+  get: fn(k: Int) -> Int
+  name: fn(s: Str, xs: Array<Str>) -> Str
+
+handler counts() for Tally =
+  var c = 0
+  change(k, d) => c = c + k * d
+  get(k) => c + k
+  name(s, xs) => s.concat(xs[0])
+
+handler logged(tag: Str) over any uses Console =
+  var n = 0
+  call =>
+    n += 1
+    Console.write(tag.concat(call.name).concat(show(call.args)))
+    let r = call.forward()
+    Console.write(tag.concat(show(n)).concat(show(r)))
+    print(r == r)
+    r
+
+fn any() uses Console =
+  with logged("a ") over logged("b ") over counts() in
+    Tally.change(1, 5)
+    print(Tally.get(1))
+    print(Tally.name("x".concat("y"), ["z".concat("w")]))
+  with logged("c ") over Clock.frozen(Time.epoch) in
+    print(Clock.now())
+
+fn main() uses Console =
+  dispatch()
+  descriptions()
+  generic()
+  retries()
+  any()

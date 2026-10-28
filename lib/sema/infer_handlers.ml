@@ -980,6 +980,95 @@ and any_links env cx (it : with_item) impls ~src ~laters =
              ~dep:(env.names d.dpath)
              ~missing:(List.map (fun (o : Iface.field) -> o.fname) missing))
   in
+  (* no operation of [d] takes a block: `call.args` holds an operation's
+     arguments as a value, and a block is never held in one (foundations.md,
+     decision 1) *)
+  let no_blocks (lk : with_link) (d : dep) =
+    let ops =
+      Option.value ~default:[]
+        (Iface.dep_fields (Hashtbl.find_opt env.types)
+           {
+             Ty.dpath = d.dpath;
+             dargs = List.mapi (fun i _ -> Ty.Var i) d.dargs;
+           })
+    in
+    let takes_block (op : Iface.field) =
+      match field_type ~tvars:d.dargs op with
+      | TFun (params, _, _, _) ->
+          List.exists
+            (fun (p : param) ->
+              match repr p.ty with TFun _ -> true | _ -> false)
+            params
+      | _ -> false
+    in
+    match List.find_opt takes_block ops with
+    | None -> ()
+    | Some op ->
+        fail ();
+        report env
+          (any_block_arg lk.link.loc ~link:(link lk)
+             ~dep:(env.names d.dpath) ~op:op.fname)
+  in
+  (* what the arm needs of `call.args` or of what `call.forward()` gives,
+     `==`, which every operation of [d] has to allow of its arguments or
+     its result (found in the stage-10d review: `==` on a description,
+     which has none, reached the interpreter, and over a generic
+     dependency, lowering). Only a handler of this module's is known
+     here (Infer_env, [anys]); one imported isn't checked. *)
+  let compared (lk : with_link) (d : dep) =
+    let hidden =
+      match lk.link.kind with
+      | Call ({ kind = Var (Global h); _ }, _) -> (
+          match Hashtbl.find_opt env.anys h with
+          | Some (_, aid, rid, _) ->
+              List.map (fun r -> ("takes", r)) (needs env.st aid)
+              @ List.map (fun r -> ("gives", r)) (needs env.st rid)
+          | None -> [])
+      | _ -> []
+    in
+    if hidden <> [] then
+      if d.dargs <> [] then (
+        fail ();
+        report env
+          (any_compared_generic lk.link.loc ~link:(link lk)
+             ~dep:(env.names d.dpath)))
+      else
+        let ops =
+          Option.value ~default:[]
+            (Iface.dep_fields (Hashtbl.find_opt env.types)
+               { Ty.dpath = d.dpath; dargs = [] })
+        in
+        let lacking =
+          List.find_map
+            (fun (op : Iface.field) ->
+              match field_type ~tvars:[] op with
+              | TFun (ps, r, _, _) ->
+                  let parts =
+                    List.map (fun (p : param) -> ("takes", p.ty)) ps
+                    @ [ ("gives", r) ]
+                  in
+                  List.find_map
+                    (fun (what, req) ->
+                      List.find_map
+                        (fun (w, t) ->
+                          if w = what && Infer_reqs.lacks env req t then
+                            Some (op.fname, req, what, t)
+                          else None)
+                        parts)
+                    (List.sort_uniq compare hidden)
+              | _ -> None)
+            ops
+        in
+        match lacking with
+        | None -> ()
+        | Some (op, req, what, t) ->
+            fail ();
+            report env
+              (any_lacks lk.link.loc ~link:(link lk)
+                 ~op:(env.names d.dpath ^ "." ^ op)
+                 ~what ~req
+                 ~ty:(show (printer env) t))
+  in
   let rec go below = function
     | [] -> []
     | ((lk : with_link), (i : impl)) :: above -> (
@@ -1039,6 +1128,8 @@ and any_links env cx (it : with_item) impls ~src ~laters =
                     fail ();
                     report env (any_not_made_here lk.link.loc ~link:(link lk)));
                 declared lk tags d;
+                no_blocks lk d;
+                compared lk d;
                 let i =
                   { i with deps = [ d ]; needs = extend [ dep_of d ] i.needs }
                 in

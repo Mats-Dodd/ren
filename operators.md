@@ -543,7 +543,7 @@ bytes, from `a` up to, but not including, `b`, a value of the same type
 every build at the same point, if `b` comes before `a` (`slice 3 to 1
 ends before it starts`), if the range isn't all in `xs` (`slice 2 to 5
 is out of bounds for an array of length 3`), or, on a `Str`, if it cuts
-a character (`slice 0 to 2 starts inside a character`); `Bytes` never
+a character (`slice 2 to 3 starts inside a character` on `"héllo"`); `Bytes` never
 checks. `Str.slice(a, b)` is gone: `s[a..b]`.
 
 ```ren

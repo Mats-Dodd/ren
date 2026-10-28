@@ -487,3 +487,5 @@ let decide env cs =
     if List.fold_left (fun did r -> pass env r || did) false rs then round ()
   in
   round ()
+
+let lacks env req t = match has env req t with Lacks _ -> true | Has _ -> false

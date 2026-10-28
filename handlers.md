@@ -222,7 +222,14 @@ Users`, and installs that one dependency. It's made where it's installed,
 `with logged() over ...`: a function can't return one, since what it is
 depends on what it goes over. The compiler makes a copy of the arm for
 each operation of each dependency it's installed over (compiler.md,
-"`over any` and `retry`").
+"`over any` and `retry`"). It can't go over a dependency an operation
+of which takes a block, `change: fn(k: Int, f: fn(&Int))`: `call.args`
+holds the arguments as a value, and a block is never held in one, so
+that's an error at the `with`, whose help says to write a handler `over`
+that dependency. One that compares `call.args`, or what
+`call.forward()` gives, is checked at the `with` against each
+operation's: a result that's a description has no `==`. Comparing them
+over a generic dependency isn't built yet.
 
 ### Functions that run a block
 

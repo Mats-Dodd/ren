@@ -66,6 +66,9 @@ let extra_flags () =
 
 exception Failed of string list
 
+(* The C compiler, which couldn't be run, and why. *)
+exception Missing of string * string
+
 (* Run each command, a program and its arguments, at most [jobs] at a
    time; the commands that failed, if any did, once all have ended. *)
 let run_all ~jobs (cmds : (string * string list) list) =
@@ -86,12 +89,19 @@ let run_all ~jobs (cmds : (string * string list) list) =
   List.iter
     (fun (prog, args) ->
       if Hashtbl.length running >= jobs then wait ();
-      let pid =
+      (* a compiler that isn't there, `REN_TCC=/no/such/tcc`, is reported
+         as that, not as a bug *)
+      match
         Unix.create_process prog
           (Array.of_list (prog :: args))
           Unix.stdin Unix.stdout Unix.stderr
-      in
-      Hashtbl.replace running pid (Filename.quote_command prog args))
+      with
+      | pid -> Hashtbl.replace running pid (Filename.quote_command prog args)
+      | exception Unix.Unix_error (e, _, _) ->
+          while Hashtbl.length running > 0 do
+            wait ()
+          done;
+          raise (Missing (prog, Unix.error_message e)))
     cmds;
   while Hashtbl.length running > 0 do
     wait ()

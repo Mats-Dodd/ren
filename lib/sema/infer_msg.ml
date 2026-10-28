@@ -3507,6 +3507,52 @@ let any_undeclared loc ~link ~tag ~dep ~missing =
        (and_list (List.map (fun op -> dep ^ "." ^ op) missing))
        (if List.length missing = 1 then "doesn't declare" else "don't declare"))
 
+(* [link], a handler `over any`, installed over [dep], whose operation
+   [op] takes a block, which `call.args` can't hold. *)
+let any_block_arg loc ~link ~dep ~op =
+  Diag.make loc
+    ~notes:
+      [
+        "`call.args` holds an operation's arguments as a value, and a block \
+         is never held in one";
+      ]
+    ~help:(sprintf "write a handler `over %s`" dep)
+    (sprintf "`%s` can't go over `%s`: `%s.%s` takes a block" link dep dep op)
+
+(* [link], a handler `over any`, which compares, hashes or orders what
+   an operation takes or gives, installed over [dep], a generic dependency,
+   for which that isn't built. *)
+let any_compared_generic loc ~link ~dep =
+  Diag.make loc
+    ~notes:
+      [
+        "a handler `over any` that compares `call.args` or what \
+         `call.forward()` gives isn't built yet over a generic dependency";
+      ]
+    ~help:(sprintf "show them instead, `show(call.args)`, or write a handler `over %s`" dep)
+    (sprintf "`%s` compares what `%s`'s operations take or give" link dep)
+
+(* [link], a handler `over any`, which needs [req] of what an operation
+   takes or gives, installed over a dependency whose operation [op] [what]
+   (takes or gives) a [ty], which hasn't it. *)
+let any_lacks loc ~link ~op ~what ~req ~ty =
+  let does, op_sym =
+    match req with
+    | "eq" -> ("compares", "`==`")
+    | "hash" -> ("hashes", "hash")
+    | "ord" -> ("orders", "order")
+    | r -> ("uses `" ^ r ^ "` on", "`" ^ r ^ "`")
+  in
+  let thing, its =
+    if what = "takes" then ("`call.args`", "arguments")
+    else ("what `call.forward()` gives", "result")
+  in
+  Diag.make loc
+    ~notes:[ sprintf "`%s` %s `%s`, which has no %s" op what ty op_sym ]
+    ~help:(sprintf "show it instead, `show(%s)`"
+             (if what = "takes" then "call.args" else "r"))
+    (sprintf "`%s` %s %s, and `%s`'s %s can't be" link does thing op its)
+
 (* A handler `over any`, [link], made somewhere other than where it's
    installed: it's specialized for what it's installed over, which is
    known only there. *)

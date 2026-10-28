@@ -3663,6 +3663,20 @@ Where it differed from its plan:
   as a call does, `(5)`; the journal writes it as it did, without the
   parentheses, and writes what an operation that can't fail gave as its
   value, though the recorder keeps it as `attempt` does, an `Ok`.
+- **An operation that takes a block can't be gone over by `any`.**
+  `call.args` would hold the block in a tuple, which Core Lint refuses
+  and native code has no descriptor for, so the `with` that installs a
+  handler `over any` over such a dependency is an error, found in the
+  stage-10d review (infer_handlers.ml, `any_links`); a handler `over D`
+  is written instead.
+- **`==` on `call.args` or on what `call.forward()` gives is checked
+  where it's installed,** against each operation's arguments and result,
+  since lowering derives it from them: one that gives a description,
+  which has no `==`, is an error at the `with`. Over a generic
+  dependency it's an error too, not built yet: the function made for
+  `Box` would need `==` of its `T`, which nothing passes it. Only a
+  handler of the module doing the installing is checked so; an imported
+  one that compares isn't, and still stops lowering (review, open).
 - **`Tags` is only the type of a named function's parameter,** not a
   handler's, and `fail on` is an arm's whole pattern, never beside
   another in `|`.

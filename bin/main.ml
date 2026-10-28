@@ -783,6 +783,11 @@ let build args =
       in
       match built () with
       | () -> ( try Sys.rmdir dir with Sys_error _ -> ())
+      | exception Cc.Missing (cc, why) ->
+          prerr_endline
+            (Printf.sprintf "error: can't run the C compiler `%s`: %s" cc why);
+          (try Sys.rmdir dir with Sys_error _ -> ());
+          exit 1
       | exception Cc.Failed _ ->
           prerr_endline
             (Printf.sprintf

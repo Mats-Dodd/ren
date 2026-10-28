@@ -1107,6 +1107,110 @@ fn main() uses Console =
        help: install it over a dependency whose every operation can fail with `Down`, or write a handler `over Users`
     |}]
 
+let%expect_test "[s5 reject] over any over an operation that takes a block" =
+  (* `call.args` would hold the block in a tuple, and a block is never
+     held (found in the stage-10d review: Core Lint and native lowering
+     failed on it) *)
+  check_error
+    {|
+dep Tally =
+  change: fn(k: Int, f: fn(&Int))
+  get: fn(k: Int) -> Int
+
+handler counts() for Tally =
+  var c = 0
+  change(k, f) =>
+    var x = c
+    f(&x)
+    c = x + k
+  get(k) => c + k
+
+handler logged() over any uses Console =
+  call =>
+    Console.write(call.name.concat(show(call.args)))
+    try call.forward()
+
+fn main() uses Console =
+  with logged() over counts() in
+    print(Tally.get(1))
+|};
+  [%expect {|
+    error: `logged()` can't go over `Tally`: `Tally.change` takes a block
+       ┌─ test.ren:19:8
+    19 │   with logged() over counts() in
+       │        ^^^^^^^^
+       = `call.args` holds an operation's arguments as a value, and a block is never held in one
+       help: write a handler `over Tally`
+    |}]
+
+let%expect_test "[s5 reject] over any comparing a result that has no ==" =
+  (* the arm's `==` on what `call.forward()` gives is checked against
+     each operation's result where it's installed (found in the stage-10d
+     review: the interpreter compared two descriptions and stopped) *)
+  check_error
+    {|
+dep Op =
+  run: fn(x: Int) -> Int
+
+handler o_add(k: Int) for Op =
+  run(x) => x + k
+
+dep Maker =
+  make: fn() -> Op
+
+handler mk() for Maker =
+  make() => o_add(1)
+
+handler same() over any uses Console =
+  call =>
+    let r = call.forward()
+    print(r == r)
+    r
+
+fn main() uses Console =
+  with same() over mk() in
+    print(Maker.make().run(1))
+|};
+  [%expect {|
+    error: `same()` compares what `call.forward()` gives, and `Maker.make`'s result can't be
+       ┌─ test.ren:20:8
+    20 │   with same() over mk() in
+       │        ^^^^^^
+       = `Maker.make` gives `Op`, which has no `==`
+       help: show it instead, `show(r)`
+    |}]
+
+let%expect_test "[s5 reject] over any comparing over a generic dependency" =
+  (* not built: the function made for `Box` would need `==` of its `T`
+     (found in the stage-10d review: lowering stopped) *)
+  check_error
+    {|
+dep Box<T> =
+  get: fn() -> T
+
+handler cell<T>(v: T) for Box<T> =
+  get() => v
+
+handler same() over any uses Console =
+  call =>
+    let r = call.forward()
+    print(r == r)
+    r
+
+fn main() uses Console =
+  with same() over cell(1) in
+    let v: Int = Box.get()
+    print(v)
+|};
+  [%expect {|
+    error: `same()` compares what `Box`'s operations take or give
+       ┌─ test.ren:14:8
+    14 │   with same() over cell(1) in
+       │        ^^^^^^
+       = a handler `over any` that compares `call.args` or what `call.forward()` gives isn't built yet over a generic dependency
+       help: show them instead, `show(call.args)`, or write a handler `over Box`
+    |}]
+
 let%expect_test "[s5 reject] call.forward() at most once" =
   check_error
     {|

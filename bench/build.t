@@ -44,7 +44,7 @@ checked, and `loops_short` in the checked one of a loop bounds.ml made
 twice. `review_shrink` panics indexing an array a call
 shrank under its loop's count, which bounds.ml leaves checked.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -121,6 +121,10 @@ shrank under its loop's count, which bounds.ml leaves checked.
   10d/slices_panic.ren, naive: the same, exit 1, objects live at exit 1
   10d/slices_lent.ren, perceus: the same, exit 0, objects live at exit 0
   10d/slices_lent.ren, naive: the same, exit 0, objects live at exit 0
+  10d/review_slices.ren, perceus: the same, exit 0, objects live at exit 0
+  10d/review_slices.ren, naive: the same, exit 0, objects live at exit 0
+  10d/review_deps.ren, perceus: the same, exit 0, objects live at exit 0
+  10d/review_deps.ren, naive: the same, exit 0, objects live at exit 0
 
 Every native benchmark, at its small size:
 
@@ -271,7 +275,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -310,6 +314,8 @@ prints what `ren run` prints, and ends with no object alive; so does
   10d/slices.ren, release: the same, exit 0, objects live at exit 0
   10d/slices_panic.ren, release: the same, exit 1, objects live at exit 1
   10d/slices_lent.ren, release: the same, exit 0, objects live at exit 0
+  10d/review_slices.ren, release: the same, exit 0, objects live at exit 0
+  10d/review_deps.ren, release: the same, exit 0, objects live at exit 0
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
@@ -1318,7 +1324,7 @@ same objects alive at the end as clang's build above.
   >    fi)
   >   done
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent; do tcc_same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps; do tcc_same $f.ren; done
   fib.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   fib.ren, naive, tcc: the same, exit 0, objects live at exit 0
   deep.ren, perceus, tcc: the same, exit 0, objects live at exit 0
@@ -1453,6 +1459,10 @@ same objects alive at the end as clang's build above.
   10d/slices_panic.ren, naive, tcc: the same, exit 1, objects live at exit 1
   10d/slices_lent.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   10d/slices_lent.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  10d/review_slices.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  10d/review_slices.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  10d/review_deps.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  10d/review_deps.ren, naive, tcc: the same, exit 0, objects live at exit 0
   $ for f in native/*/small.ren ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do tcc_same $f; done
   native/binary-trees/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/binary-trees/small.ren, naive, tcc: the same, exit 0, objects live at exit 0

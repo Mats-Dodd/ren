@@ -1,0 +1,96 @@
+// Found in the stage-10d review: slices adversarially, checked native
+// against `ren run`. Kept slices of lent halves see them as they were;
+// halves swapped, emptied, grown and split again; a split of a slice;
+// `Bytes` and `Str` halves; `&` on a field's range.
+
+fn fill(inout xs: Array<Int>, v: Int) =
+  for i in 0..xs.len()
+    xs[i] = v
+
+fn part_a() uses Console =
+  var ws = [1, 2, 3, 4, 5, 6, 7, 8]
+  var k1: Array<Int> = []
+  var k2: Array<Int> = []
+  var k3: Array<Int> = []
+  &ws.split_at(4) fn(&lo, &hi) =>
+    k1 = lo[1..3]
+    fill(&lo, 7)
+    k2 = hi
+    &hi.split_at(2) fn(&a, &b) =>
+      k3 = a[0..1]
+      fill(&a, 0)
+      fill(&b, 1)
+      a = b[0..1]
+    fill(&lo, 8)
+  print(ws)
+  print(k1)
+  print(k2)
+  print(k3)
+  var bs = "abcdef".bytes()
+  var kb = bs[0..2]
+  &bs.split_at(3) fn(&x, &y) =>
+    kb = x
+    x = y[0..1]
+    y = kb
+  print(bs.len())
+  print(bs.at(0))
+  print(bs.at(3))
+  print(kb.at(0))
+  var s = "hello world"
+  var ks = s[0..5]
+  &s.split_at(5) fn(&a, &b) =>
+    a = a.concat("!")
+    ks = b
+  print(s)
+  print(ks)
+  // write range via & then keep
+  var zs = [1, 2, 3, 4, 5]
+  let keep = zs
+  fill(&zs[1..4], 0)
+  print(zs)
+  print(keep)
+  var ys = [[1], [2], [3], [4]]
+  &ys.split_at(2) fn(&lo, &hi) =>
+    &lo[0].push(10)
+    hi[1] = lo[0]
+  print(ys)
+
+fn part_b() uses Console =
+  let big = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  var w = big[2..8]
+  &w.split_at(3) fn(&a, &b) =>
+    fill(&a, 1)
+    &b.split_at(1) fn(&c, &d) =>
+      fill(&d, 2)
+      let e = c
+      c = d
+      d = e
+  print(w)
+  print(big)
+  var v = [0, 1, 2, 3, 4, 5]
+  var keep2: Array<Int> = []
+  &v.split_at(3) fn(&a, &b) =>
+    &a.split_at(1) fn(&c, &d) =>
+      keep2 = d
+      fill(&d, 7)
+      fill(&c, 8)
+    for x in a
+      &keep2.push(x)
+    fill(&b, 9)
+  print(v)
+  print(keep2)
+  var t = v
+  &t.split_at(2) fn(&a, &b) => fill(&a, 5)
+  print(t)
+  print(v)
+  var u = [1, 2, 3]
+  for k in 0..3
+    &u.split_at(k) fn(&a, &b) =>
+      &a.push(k)
+      for x in a
+        &b.push(x)
+  print(u)
+
+fn main() uses Console =
+  part_a()
+  part_b()

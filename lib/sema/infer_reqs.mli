@@ -28,3 +28,7 @@ val opaque_has_eq : Infer_env.env -> Path.t -> bool
    the type in it, or one whose key does, and so on. Such a key is an
    error, and is otherwise treated as though it weren't there. *)
 val key_loops : Infer_env.env -> Path.t -> bool
+
+(* Whether a type can't have a requirement, whatever its type variables
+   stand for: a function, or a type declared with one, has no `eq`. *)
+val lacks : Infer_env.env -> string -> Types.ty -> bool
