@@ -331,6 +331,18 @@ let table x = function VTable t -> t | _ -> bug x
 (* The pair a `Map.of` is given, `(k, v)`. *)
 let pair x = function VTuple [ k; v ] -> (k, v) | _ -> bug x
 
+(* The state after [state] of the test `Random`, a linear congruential
+   generator's, which never goes negative. *)
+let seeded_next state =
+  let state = Int64.to_int state in
+  Int64.of_int (((abs state * 1103515245) + 12345) land 0x7fffffff)
+
+(* A number from 0 below [below], from that state's high bits, which vary
+   more than its low ones. *)
+let seeded_int state below =
+  if below <= 0L then raise (Panic (not_above_0 below));
+  Int64.rem (Int64.shift_right_logical state 16) below
+
 let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
     ~made =
   match x with
@@ -342,7 +354,9 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   (* and the scheduler's, which run blocks, and wait (eval.ml, [tasks]) *)
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
-  | Task_each | Task_both | Task_race | Async_yield | Async_tick ->
+  | Task_each | Task_both | Task_race | Async_yield | Async_tick
+  | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
+  | Sim_advance | Task_random ->
       fun _ ->
         failwith ("bug: `" ^ Intrinsic.name x ^ "` is run by the interpreter")
   (* the real `Clock.now` and `Clock.instant` *)
@@ -360,23 +374,11 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
             let state = Random.State.make_self_init () in
             VInt (Random.State.int64 state below)
         | _ -> bug x)
-  (* the state after [state] of the test `Random`, a linear congruential
-     generator's, which never goes negative *)
   | Seeded_next ->
-      pure (function
-        | [ VInt state ] ->
-            let state = Int64.to_int state in
-            VInt
-              (Int64.of_int
-                 (((abs state * 1103515245) + 12345) land 0x7fffffff))
-        | _ -> bug x)
-  (* a number from 0 below [below], from that state's high bits, which
-     vary more than its low ones *)
+      pure (function [ VInt state ] -> VInt (seeded_next state) | _ -> bug x)
   | Seeded_int ->
       pure (function
-        | [ VInt state; VInt below ] ->
-            if below <= 0L then raise (Panic (not_above_0 below));
-            VInt (Int64.rem (Int64.shift_right_logical state 16) below)
+        | [ VInt state; VInt below ] -> VInt (seeded_int state below)
         | _ -> bug x)
   | Console_write ->
       pure (function

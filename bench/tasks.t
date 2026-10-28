@@ -17,12 +17,21 @@ too.
   >    fi
   >    rm -f spec.out)
   > }
-  $ for d in server crawler just transfer refresh; do spec 11a/tasks/$d; done
+  $ for d in server crawler just; do spec 11a/tasks/$d; done
   11a/tasks/server: not yet
   11a/tasks/crawler: not yet
   11a/tasks/just: not yet
-  11a/tasks/transfer: not yet
-  11a/tasks/refresh: not yet
+  $ for d in transfer refresh; do spec ../examples/$d; done
+  ../examples/transfer: as specified
+  ../examples/refresh: as specified
+
+Each that has landed passes under a thousand seeds too, its tests' own
+and the next 999 (step 5 landed `transfer` and `refresh`, which need
+only `sim`'s virtual time):
+
+  $ for d in transfer refresh; do (cd ../examples/$d && ren test --seeds 1000 | tail -n 1); done
+  4 passed, each under 1000 seeds
+  4 passed, each under 1000 seeds
 
 The milestone (README, "Roadmap", 11a): in 11a/tasks/lost_update, `ren test
 --sim --seeds 200` finds a seed under which one of two deposits is
@@ -48,7 +57,7 @@ under a thousand seeds.
   >    rm -f seeds.out again.out)
   > }
   $ milestone
-  the milestone: not yet
+  the milestone holds
 
 A version 1 journal is refused once journals are version 2 (step 6),
 with a help that says how to record it again. 11a/tasks/journal/v1.journal

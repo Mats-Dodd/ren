@@ -18,6 +18,11 @@ val split_halves : Value.t -> int64 -> Value.t * Value.t
 val splice : Value.t -> int64 -> int64 -> Value.t -> Value.t
 val join : Value.t -> Value.t -> Value.t
 
+(* The test `Random`'s generator: the state after a state, and a number
+   from 0 below [below] from one, panicking if [below] isn't above 0. *)
+val seeded_next : int64 -> int64
+val seeded_int : int64 -> int64 -> int64
+
 (* What `ren run file.ren -- args` was given after the `--`: what the
    real [Os.args] gives back. *)
 val args : string list ref

@@ -46,6 +46,13 @@ type t =
   | Task_race
   | Async_yield
   | Async_tick
+  | Runtime_single
+  | Runtime_sim
+  | Runtime_leave
+  | Sim_time
+  | Sim_sleep
+  | Sim_advance
+  | Task_random
   | Map_empty
   | Map_of
   | Map_get

@@ -368,11 +368,19 @@ real time.
 
 ```
 $ ren test --seeds 200
-lost_update.ren
-  ✗ two deposits both land, with seed 3815
+main.ren
+  ✗ two deposits both land
 ...
-  seed 3815 · rerun: ren test --only "two deposits" --seed 3815
+   left:  10
+   right: 20
+...
+   seed 3815 · rerun: ren test . --only "two deposits" --seed 3815
 ```
+
+A test that passes under all of them is counted so: `4 passed, each
+under 1000 seeds`. `sim` is the standard library's module, found by
+`import sim`: `sim.scheduler(seed)` is the runtime, and `sim.clock()`
+the clock in its virtual time, which `ren test` installs for `Clock`.
 
 This brings forward the first part of the simulation scheduler from stage
 15. The rest of it (simulated networks and disks that fail, crashes, and
@@ -496,6 +504,8 @@ test "a timeout during commit still reports the commit" =
     assert try balance(t.to) == t.amount
 ```
 
+It runs, with its tests, in [examples/transfer](examples/transfer).
+
 A request that reached the database but whose answer was lost is a
 different problem, and every language has it. The answer is an
 idempotency key, the way TigerBeetle's transfers carry ids.
@@ -529,7 +539,8 @@ while it asks the supplier and swaps the table in. The refresher is a
 task beside the `with`, so it stops when the shop's work is done. A
 refresh that fails keeps the stale table here; one that should stop the
 shop would make the failure the body's, say through an operation the
-body waits on.
+body waits on. It runs, with its tests, in
+[examples/refresh](examples/refresh).
 
 ## How it runs
 

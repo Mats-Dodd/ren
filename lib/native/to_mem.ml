@@ -2567,6 +2567,15 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
      nothing else to change it, is the deadlock (compiler.md, "Stage 11a",
      "Native"), at the program's call of it *)
   | (Async_yield | Async_tick), _, _ -> Unit
+  (* and its policy, which natively is always `single`'s: there's nothing
+     to set, and nothing to put back *)
+  | Runtime_single, _, _ -> Int 0L
+  | Runtime_leave, _, _ ->
+      List.iter (drop fs env) (values ());
+      Unit
+  (* `sim.scheduler` and `sim.clock()` are the interpreter's, for tests *)
+  | (Runtime_sim | Sim_time | Sim_sleep | Sim_advance), _, _ ->
+      unsupported_at fs e.loc "`sim`"
   | Task_until, _, _ ->
       List.iter (drop fs env) (values ());
       emit fs (Panic (here_site fs, "every task is waiting, and nothing can wake one"));

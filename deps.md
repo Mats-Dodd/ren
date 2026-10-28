@@ -334,7 +334,7 @@ error: `with` installs only handlers
 
 | Dependency | Operations | Real | Test default | Test controls |
 |---|---|---|---|---|
-| `Clock` | `now`, `instant`, `sleep` | the system clock | `test_clock(Time.epoch)`: stopped until moved | `TestClock.advance(d)` |
+| `Clock` | `now`, `instant`, `sleep` | the system clock | `sim.clock()`: from `Time.epoch`, in virtual time, which moves only when every task waits | `TestClock.advance(d)` |
 | `Random` | `int(below)` | the OS | seeded from the test's name | `TestRandom.seed()` |
 | `Console` | `write(line: Str)`, `error(line: Str)` | stdout, and stderr for `error` | captured | `TestConsole.output() -> Array<Str>`, `TestConsole.errors() -> Array<Str>` |
 | `Fs` | `read(p) -> Bytes ! FsError`, `write(p, b) ! FsError`, `exists(p)` | files, through `Unix` | `mem_fs([])`: no files | none: read back through `Fs` |
@@ -381,9 +381,14 @@ error: `with` installs only handlers
   error: it chooses another name.
 - `Async`, the runtime, is the seventh (stage 11a, [async.md](async.md)):
   the runtime installs it around `main` and each test, as it does the
-  others, and `Scope` and `Task<T>` come with it. Its tasks come in 11a's
-  steps; until then each of its members panics, saying which step builds
-  it. `Net` comes with it in stage 11a ([async.md](async.md),
+  others, and `Scope` and `Task<T>` come with it. `ren run` installs
+  `Async.single()`, one thread in real time; a test gets
+  `sim.scheduler(seed)`, which draws the order its tasks run in from its
+  seed, in the virtual time `sim.clock()` reads, so a test that sleeps
+  for an hour finishes at once. A runtime is a handler like any other,
+  `with sim.scheduler(7) in ...`, installed where no other task runs.
+  `sim` is the standard library's module, found by `import sim`, never
+  from a file. `Net` comes with it in stage 11a ([async.md](async.md),
   [runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
@@ -531,8 +536,13 @@ main.ren
   all of it, with the batch's failure and `main`'s.
 - `--only <text>` runs the tests whose name contains it (`--exact`: whose
   name it is, or whose group run it labels). `--seed N` sets
-  every test's seed. `--list` lists tests, and flags the ones that use a
-  real dependency.
+  every test's seed: the order its tasks run in, and its `Random`.
+  `--seeds N` runs each test under N seeds, its own (or `--seed`'s) and
+  the next ones, stopping at the first that fails, whose seed the
+  failure names; a run that passes says `4 passed, each under 1000
+  seeds`. `--sim` is accepted, and changes nothing: tests always run on
+  `sim`. `--list` lists tests, and flags the ones that use a real
+  dependency.
 - It exits with status 1 if anything failed.
 - `--keep bug.journal` moves a journal `ren run --record` wrote to the
   `tests/` folder next to its program, and adds a test that replays it
@@ -778,11 +788,19 @@ error: `with` can't tell what `c` installs
 - **A test in a group's run is named after the run's label,** `frozen /
   instant never goes backwards`: that's the name `--only` looks in and
   its seed comes from, and what a failure is headed with.
-- **The test `Clock` moves on when it's slept on,** as `advance` moves
-  it, so sleeping in a test takes no time.
+- **The test `Clock` is in virtual time,** `sim.clock()`: sleeping waits
+  until the test's scheduler has moved time on, which it does only when
+  every task waits, straight to the earliest wake, and `advance` moves
+  it on at once. So two tasks that sleep an hour each, at once, take an
+  hour of it, and no time of the test's. `test_clock(at)` is still there,
+  a clock that moves only when it's slept on or advanced, and never
+  waits.
 - **The test `Random`'s numbers come from its seed alone,** by a linear
-  congruential generator, the same on every machine. A test's own seed
-  is a hash of its name, from 0 to 9999.
+  congruential generator, the same on every machine; a spawned task's
+  come from a stream of its own, from the seed and its task's path, so
+  what it draws doesn't depend on the order tasks ran in. A test's own
+  seed is a hash of its name, from 0 to 9999, and it's the seed of the
+  test's `sim.scheduler` too.
 - **A failure's rerun names the shortest start of the test's name, of at
   least two words, that no other test's name has,** or all of it, with
   `--exact` if another test's name has all of it inside, `panics` in

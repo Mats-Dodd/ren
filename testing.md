@@ -85,6 +85,33 @@ error: `stamp` is private, and a test sees what an importer sees
   tool for poking at internals. Ren gives exploring its own tool, so tests
   don't need the hole.
 
+### A test's tasks run on `sim`
+
+A test runs on `sim.scheduler(seed)`, the deterministic runtime
+([async.md](async.md#tests-are-deterministic)): at each point where
+the order of two tasks can be seen, a wait or a call of an operation
+another task can reach, the next task is drawn from a tape of numbers
+from the test's seed. Its `Clock` is `sim.clock()`, in virtual time,
+which moves only when every task waits, so a test that sleeps for an
+hour finishes in milliseconds. The same seed runs the same way every
+time:
+
+```
+$ ren test --seeds 200
+  ✗ two deposits both land
+  ...
+  seed 3815 · rerun: ren test --only "two deposits" --seed 3815
+$ ren test --only "two deposits" --seed 3815     # the same failure, exactly
+```
+
+- **`--seeds N`** runs each test under its own seed and the next `N - 1`,
+  stopping at the first that fails, which its failure names; one that
+  passes them all is counted `each under N seeds`.
+- **`--seed S`** runs every test under `S`: its schedule and its
+  `Random`. `--sim` is accepted, and changes nothing.
+- **A test whose `uses` names `Async`** gets `Async.single()`, in real
+  time, as one that names `Clock` gets the real clock.
+
 ### Test items
 
 Tests need helpers: a handler that keeps accounts in memory, a builder for
@@ -497,7 +524,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **9c** | tests see what an importer sees; test items; a type that keeps rules is opaque ([module-build.md](module-build.md#private-unless-pub)); `ren console` with types, private items and the choice of world |
 | **10** | the journal: effects shown in the console, `:reload`, `:spec`, journals as tests (done, stage 10b) |
 | **native slice** | every binary `ren build` makes compared with `ren run`, under ASan and UBSan, with no object left alive, in both counting modes and the release build, and H1's allocations and H3's counts; `ren run --release` against `ren run` on the whole test suite (done; the timings in bench/native/RESULTS.md) |
-| **11a** | `ren test --sim --seeds` on the `sim` runtime; journals as tests with a schedule prefix |
+| **11a** | `ren test --sim --seeds` on the `sim` runtime (done, step 5: `sim.scheduler`, `sim.clock()`, `--seeds` and `--seed`); journals as tests with a schedule prefix |
 | **12** | property tests: derived generation, generation through constructors, `arbitrary`, shaped parameters, shrinking by replay, saved failures, the report, `ren fuzz`; schedules from 11a's `sim` in the choice sequence |
 | **Later** | generated call sequences, programs as properties, swarm testing, attaching the console |
 

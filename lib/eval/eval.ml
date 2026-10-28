@@ -620,6 +620,10 @@ let rec eval cx env (e : expr) =
                 if e.loc.file = Prelude.file then at_call cx else Some (where e.loc)
               in
               let call () =
+                (* under `sim`, where two tasks' calls of a shared,
+                   exclusive instance can be seen in either order, a
+                   scheduling point *)
+                if Sched.locked inst then Sched.point ?at ();
                 Sched.holding ?at
                   ~what:(Printf.sprintf "waits for `%s`, which another task is in" dep.name)
                   ~reentered inst cx.site
@@ -646,7 +650,7 @@ let rec eval cx env (e : expr) =
       let impl, finally, excl =
         match impl with
         | VHandler h -> (
-            let impls, finally, excl = instance cx h outer what in
+            let impls, finally, excl = installing e.loc (fun () -> instance cx h outer what) in
             match (List.assoc_opt from impls, impls) with
             | Some impl, _ | None, [ (_, impl) ] -> (impl, finally, excl)
             | None, _ ->
@@ -683,7 +687,7 @@ let rec eval cx env (e : expr) =
       | VHandler h ->
           (* of what the instance implements, only [deps]: it may have
              been narrowed to them (Core.Narrowed) *)
-          let impls, finally, excl = instance cx h outer what in
+          let impls, finally, excl = installing e.loc (fun () -> instance cx h outer what) in
           if not (List.for_all (fun (_, p) -> List.mem_assoc p impls) deps) then
             bug (what ^ " whose instance doesn't implement its dependencies");
           (* in the order the instance has them, each at its key, with
@@ -1079,6 +1083,14 @@ and eval_all cx env = function
       let v = eval cx env e in
       v :: eval_all cx env rest
 
+(* [f ()], making the instance a `with` at [loc] installs: a panic in the
+   prelude's handler, or the standard library's, `Async.single()`'s, is
+   said at the `with`, as one in a call of it is said at the call. *)
+and installing (loc : Loc.t) f =
+  try f () with
+  | Panic { loc = l; _ } as p when l.file = Prelude.file && loc.file <> Prelude.file ->
+      raise (moved loc p)
+
 (* [apply], from a call at [loc]. *)
 and call_at cx loc f args ev =
   try apply ~loc cx f args ev with
@@ -1245,7 +1257,9 @@ and builtin ?loc cx f args =
   | VBuiltin
       ( (( Scope_run | Task_spawn | Task_start | Task_replace | Task_join
          | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
-         | Task_each | Task_both | Task_race | Async_yield | Async_tick ) as x),
+         | Task_each | Task_both | Task_race | Async_yield | Async_tick
+         | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
+         | Sim_advance | Task_random ) as x),
         tys,
         dicts ) ->
       tasks ?loc cx x tys dicts args
@@ -1445,6 +1459,56 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
   | Async_tick, [] ->
       Sched.tick ?at ();
       (Ok VUnit, args)
+  (* a runtime's handler sets the scheduler's policy for its `with`'s
+     body, and puts back the one before when it ends *)
+  | (Runtime_single | Runtime_sim), _ ->
+      let policy, name =
+        match (x, args) with
+        | Runtime_sim, [ VInt seed ] ->
+            (Sched.sim (Int64.to_int seed), "`sim.scheduler(seed)`")
+        | _ -> (Sched.Single, "`Async.single()`")
+      in
+      let busy () =
+        panic_at loc
+          ~notes:
+            [
+              "a runtime runs every task of its `with`, so it's installed \
+               where no other task runs yet";
+            ]
+          ~help:
+            "install it once, around `main`'s body: `ren run` installs \
+             `Async.single()` itself, and `ren test` a `sim.scheduler`"
+          (sprintf "%s is installed while other tasks run" name)
+      in
+      (Ok (VInt (Int64.of_int (Sched.install policy ~busy))), args)
+  | Runtime_leave, [ VInt n ] ->
+      Sched.leave (Int64.to_int n);
+      (Ok VUnit, args)
+  (* `sim.clock()`'s: the scheduler's time, virtual under `sim` *)
+  | Sim_time, [] -> (Ok (VInt (Sched.time_ms ())), args)
+  | Sim_sleep, [ VInt ms ] ->
+      Sched.sleep ?at ms;
+      (Ok VUnit, args)
+  | Sim_advance, [ VInt ms ] ->
+      Sched.advance ms;
+      (Ok VUnit, args)
+  (* the test `Random` in a spawned task: a stream of the task's own, for
+     each instance, from the seed and its path, so what it draws doesn't
+     depend on the order tasks ran in (compiler.md, "The tape"). The root
+     task draws from the instance's state, as before tasks *)
+  | Task_random, [ VInt seed; VInt below ] -> (
+      match Sched.current () with
+      | Some t when not t.root ->
+          let inst = match t.holding with (i, _) :: _ -> i | [] -> -1 in
+          let state =
+            match Hashtbl.find_opt t.randoms inst with
+            | Some st -> st
+            | None -> Hashtbl.hash (seed, t.path) land 0x7fffffff
+          in
+          let state = Builtins.seeded_next (Int64.of_int state) in
+          Hashtbl.replace t.randoms inst (Int64.to_int state);
+          (Ok (some (VInt (Builtins.seeded_int state below))), args)
+      | _ -> (Ok none, args))
   | Task_until, [ cond ] ->
       (* the condition can't fail, and uses nothing (excl.ml) *)
       let holds () =
@@ -1884,15 +1948,19 @@ let made_value cx what p =
   | Some v -> v
   | None -> bug (what ^ " with `" ^ Path.local p ^ "` not made")
 
-(* The instance of the prelude's handler [name], given [args], made with
-   [outer], what's installed where it's installed: its implementation of
-   each of its dependencies, and whether it's exclusive. *)
-let prelude_instance cx name args outer what =
-  match apply cx (from_outside cx (Path.prelude name)) args (VEvidence []) with
+(* The instance of the handler [path], given [args], made with [outer],
+   what's installed where it's installed: its implementation of each of
+   its dependencies, and whether it's exclusive. *)
+let instance_of cx (path : Path.t) args outer what =
+  match apply cx (from_outside cx path) args (VEvidence []) with
   | Ok (VHandler h), _ ->
       let impls, _, excl = instance cx h outer what in
       (impls, excl)
-  | _ -> bug (what ^ " with `" ^ name ^ "`, which isn't a handler")
+  | _ -> bug (what ^ " with `" ^ Path.local path ^ "`, which isn't a handler")
+
+(* The same, of the prelude's handler [name]. *)
+let prelude_instance cx name args outer what =
+  instance_of cx (Path.prelude name) args outer what
 
 (* The recorder of the built-in dependency [dep] (prelude.ml, "the
    journal") with the journal [h], over [under], installed for it: a
@@ -1983,34 +2051,42 @@ let run ?(start = Real) ?trace (modules : program list) =
   (* recording or replaying, the runtime itself, `Async`, is the real one,
      outermost: the journal holds only the world's calls *)
   let runtime () = reals cx [ Path.prelude "Async" ] what in
+  (* what's installed is made in the root task, since making the runtime's
+     instance sets the scheduler's policy *)
   let fn, installed =
     match start with
-    | Real -> (Path.make entry.home Lower.start_name, [])
+    | Real -> (Path.make entry.home Lower.start_name, fun () -> [])
     | Record j ->
         let h = Journal.register j in
         ( Path.make entry.home "main",
-          runtime ()
-          @ List.map
-              (fun r -> recorded cx h r what)
-              (reals cx (List.map Path.prelude j.header.deps) what) )
+          fun () ->
+            runtime ()
+            @ List.map
+                (fun r -> recorded cx h r what)
+                (reals cx (List.map Path.prelude j.header.deps) what) )
     | Replay j ->
         let h = Journal.register j in
         let deps = List.map Path.prelude j.header.deps in
-        let impls, excl =
-          prelude_instance cx "replaying" [ VInt (Int64.of_int h) ] [] what
-        in
-        let inst = Value.instance () in
         ( Path.make entry.home "main",
-          runtime ()
-          @ List.map
-              (fun dep ->
-                match List.assoc_opt dep impls with
-                | Some impl -> { dep; args = []; impl; outer = []; inst; excl }
-                | None -> bug (what ^ " with a replayer that hasn't a dependency"))
-              deps )
+          fun () ->
+            let runtime = runtime () in
+            let impls, excl =
+              prelude_instance cx "replaying" [ VInt (Int64.of_int h) ] [] what
+            in
+            let inst = Value.instance () in
+            runtime
+            @ List.map
+                (fun dep ->
+                  match List.assoc_opt dep impls with
+                  | Some impl -> { dep; args = []; impl; outer = []; inst; excl }
+                  | None -> bug (what ^ " with a replayer that hasn't a dependency"))
+                deps )
   in
   if not (Hashtbl.mem cx.fns fn) then bug "a program with no `main`";
-  match rooted ~root:"main" (fun () -> apply cx (from_outside cx fn) [] (VEvidence installed)) with
+  match
+    rooted ~root:"main" (fun () ->
+        apply cx (from_outside cx fn) [] (VEvidence (installed ())))
+  with
   | Ok v -> v
   | Error err -> raise (uncaught ?from:(Sched.origin err) cx fn err)
   | exception Sched.Cancelled -> raise cancelled_main
@@ -2042,36 +2118,45 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
     ~real ~seed =
   let cx = { cx with dir; entry = Some fn; site = "test" } in
   let what = "installing a test's implementations" in
-  let value = made_value cx what in
-  let installed =
-    List.concat_map
-      (fun (dep, handler, args) ->
-        let dep = Path.prelude dep in
-        if List.mem dep.name real then reals cx [ dep ] what
-        else
-          let inst = Value.instance () in
-          let impls, excl = prelude_instance cx handler args [] what in
-          List.map
-            (fun (dep, impl) -> { dep; args = []; impl; outer = []; inst; excl })
-            impls)
-      [
-        ( "Clock",
-          "test_clock",
-          [ value (Path.member (Path.prelude "Time") "epoch") ] );
-        ("Random", "test_random", [ VInt (Int64.of_int seed) ]);
-        ("Console", "test_console", []);
-        ("Fs", "mem_fs", [ array [||] ]);
-        ("Os", "test_os", [ array [||] ]);
-        ("Proc", "test_proc", [ array [||] ]);
-        (* one task, until stage 11a's step 5 makes this `sim`'s *)
-        ("Async", "single_runtime", []);
-      ]
+  (* each built-in dependency's test implementation, the handler [path]
+     given [args] and made with [outer], or its real one if the test asks
+     for it *)
+  let made dep path args outer =
+    let dep = Path.prelude dep in
+    if List.mem dep.name real then reals cx [ dep ] what
+    else
+      let inst = Value.instance () in
+      let impls, excl = instance_of cx path args outer what in
+      List.map
+        (fun (dep, impl) -> { dep; args = []; impl; outer; inst; excl })
+        impls
   in
-  (* a session's recorder over each built-in dependency, not over what
-     controls a test one, `TestClock` *)
-  let recorded =
+  let sim name = Path.make "sim" name in
+  (* made in the test's root task, since making the runtime's instance
+     sets the scheduler's policy: the runtime first, `sim.scheduler(seed)`,
+     so `sim.clock()` starts from its virtual time (compiler.md, "What the
+     runtime installs") *)
+  let installed = ref [] in
+  let install () =
+    let runtime = made "Async" (sim "sim_runtime") [ VInt (Int64.of_int seed) ] [] in
+    let world =
+      (* `sim.clock()` uses `Async`, the runtime's *)
+      made "Clock" (sim "sim_clock") [] runtime
+      @ List.concat_map
+        (fun (dep, path, args) -> made dep path args [])
+        [
+          ("Random", Path.prelude "test_random", [ VInt (Int64.of_int seed) ]);
+          ("Console", Path.prelude "test_console", []);
+          ("Fs", Path.prelude "mem_fs", [ array [||] ]);
+          ("Os", Path.prelude "test_os", [ array [||] ]);
+          ("Proc", Path.prelude "test_proc", [ array [||] ]);
+        ]
+    in
+    installed := world @ runtime;
+    (* a session's recorder over each built-in dependency, not over what
+       controls a test one, `TestClock` *)
     match journal with
-    | None -> installed
+    | None -> !installed
     | Some j ->
         let h = Journal.register j in
         List.map
@@ -2079,13 +2164,13 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
             if List.mem i.dep.name Prelude.world_deps then
               recorded cx h i what
             else i)
-          installed
+          !installed
   in
   let outcome =
     try
       match
         rooted ~root:"test" (fun () ->
-            apply cx (from_outside cx fn) [] (VEvidence recorded))
+            apply cx (from_outside cx fn) [] (VEvidence (install ())))
       with
       | Ok v -> Ok v
       | Error err -> Error (Failed (error_of cx fn err))
@@ -2114,7 +2199,7 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
                         (items lines)))
             | _ -> bug "a test `Console` whose output isn't an array")
         | _ -> None)
-      installed
+      !installed
   in
   (outcome, Option.value console ~default:[])
 

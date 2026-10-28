@@ -22,8 +22,11 @@
    finishes; then each failure, and a count. Each test runs on its own,
    with fresh test implementations (eval.ml, [run_test]), so the order
    they run in changes nothing, and a test that uses no real dependency
-   gives the same output on every run. Only the time it all took can
-   differ, which [timings] leaves out. *)
+   gives the same output on every run: its tasks are scheduled by
+   `sim.scheduler(seed)`, its seed's tape. Only the time it all took can
+   differ, which [timings] leaves out. With `--seeds N`, each test runs
+   under N seeds in turn, its own and the next ones, stopping at the
+   first that fails, which its report names. *)
 
 let sprintf = Printf.sprintf
 
@@ -35,6 +38,9 @@ type options = {
       (** [only] is a whole name, or a group run's label, not part of one: what
           an editor's button beside a test runs *)
   seed : int option;  (** every test's seed, instead of its own *)
+  seeds : int;
+      (** how many seeds each test runs under: its own, or [seed], and the
+          next [seeds - 1], until one fails *)
   list : bool;  (** list the tests, without running them *)
   timings : bool;  (** say how long running them took *)
 }
@@ -293,13 +299,20 @@ let run ~opts ~sources (suite : Driver.suite) =
       (fun i f ->
         if i > 0 then print_newline ();
         each_line f ~line:(fun indent (file, home) t ->
-            let seed =
+            let first =
               match opts.seed with Some s -> s | None -> seed_of (full_name t)
             in
-            let how, console =
-              Eval.run_test ~dir:(Filename.dirname file) cx
-                ~fn:(Path.make home t.fn) ~real:t.real ~seed
+            (* under each seed in turn, until one fails *)
+            let rec under seed =
+              let how, console =
+                Eval.run_test ~dir:(Filename.dirname file) cx
+                  ~fn:(Path.make home t.fn) ~real:t.real ~seed
+              in
+              match how with
+              | Passed when seed + 1 < first + opts.seeds -> under (seed + 1)
+              | _ -> (seed, how, console)
             in
+            let seed, how, console = under first in
             (match how with
             | Passed ->
                 incr passed;
@@ -319,6 +332,8 @@ let run ~opts ~sources (suite : Driver.suite) =
           match opts.only with
           | Some text -> sprintf "no test's name has %s in it" (quoted text)
           | None -> "no tests")
+      | p, 0 when opts.seeds > 1 ->
+          sprintf "%d passed, each under %d seeds" p opts.seeds
       | p, 0 -> sprintf "%d passed" p
       | p, f -> sprintf "%d passed, %d failed" p f
     in

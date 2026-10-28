@@ -13,11 +13,16 @@
    resumed, as if [Effect.perform] had returned. There's no preemption: a
    task that never waits runs to its end.
 
-   This is `single`'s order (compiler.md, "`single`'s order"), which `ren
-   run`'s output follows exactly: one run queue, first in first out, a
-   task woken or started going on its end in the order that happens; and
-   when no task can run, the scheduler sleeps until the earliest timer,
-   real time, and wakes what it was for.
+   How the next task is chosen is the runtime's policy, which the
+   runtime's handler sets for its `with`'s body ([install]): `single`'s
+   order (compiler.md, "`single`'s order"), which `ren run`'s output
+   follows exactly, is one run queue, first in first out, a task woken or
+   started going on its end in the order that happens; and when no task
+   can run, the scheduler sleeps until the earliest timer, real time, and
+   wakes what it was for. `sim`'s, which `ren test` runs each test under,
+   draws the next task from the queue by a tape of numbers from its seed,
+   and its time is virtual: when no task can run it moves straight to the
+   earliest timer ("`sim`'s choices").
 
    **Cancellation** is the exception [Cancelled], raised in a task asked
    to stop at its next dependency call ([check]), or at once if it's
@@ -55,7 +60,7 @@ type state =
    deadline after [due]; a `finally` around the timeout doesn't, so a
    timeout written in a `finally` bounds its own body (compiler.md, "The
    rest of `Async`"). *)
-type deadline = { due : float; dshield : int }
+type deadline = { mutable due : float; dshield : int }
 
 (* An `Async.isolate` a task is running the body of: [base], the number
    of the last instance made before it began (Value.instance), so one
@@ -103,6 +108,13 @@ type task = {
   mutable withs : int;  (** how many `with`s it has entered, ever *)
   mutable frames : frame list;
       (** the `with`s whose bodies it's running, the innermost first *)
+  mutable pointed : bool;
+      (** it's suspended at a scheduling point ([point]), where it hasn't
+          waited, only let the tape choose what runs next *)
+  randoms : (int, int) Hashtbl.t;
+      (** the state of its own stream of each test `Random` it has drawn
+          from, by the instance's number, if it isn't a root (eval.ml,
+          [task_random]) *)
 }
 
 (* A scope: what `Async.scope` gives its body. [running] are its tasks
@@ -168,10 +180,29 @@ type lock = {
   callers : (task * (unit -> bool)) Queue.t;
 }
 
+(* The runtime's policy (compiler.md, "Runtimes" and "Scheduling"):
+   `single`'s, first in first out in real time; or `sim`'s, each next
+   task drawn by [tape], a splitmix64 stream from its seed, in the virtual
+   time [clock], in seconds. *)
+type policy = Single | Sim of { mutable tape : int64; mutable clock : float }
+
+(* A task waiting in `Async.tick` under `sim`, until each of [pending],
+   the tasks in the queue when it was called, has run until it waited,
+   or ended. *)
+type ticker = { mutable pending : task list; woken : unit -> bool }
+
 (* The scheduler of a run: its queue, its timers, the task running, and
    the root, whose end is the run's. *)
 type t = {
   queue : (task * action) Queue.t;
+  mutable policy : policy;
+  mutable before : policy list;
+      (** the policies the runtimes installed around this one put back,
+          the latest first ([install], [leave]) *)
+  mutable skew : float;
+      (** how far `TestClock.advance` has moved time on under `single`,
+          whose time is otherwise the system's *)
+  mutable ticks : ticker list;
   mutable timers : timer list;  (** sorted by [at], then [seq] *)
   mutable current : task;
   root_task : task;
@@ -191,8 +222,16 @@ type t = {
    at a time, and [run] puts back the one before when it ends. *)
 let running : t option ref = ref None
 
-let now () = Unix.gettimeofday ()
 let bug what = failwith ("bug: the scheduler: " ^ what)
+
+(* The scheduler's time, in seconds: the system's under `single` (moved
+   on by `TestClock.advance`, [advance]), virtual under `sim`. Every
+   deadline, timer and cancel is in it. *)
+let now () =
+  match !running with
+  | Some { policy = Sim v; _ } -> v.clock
+  | Some s -> Unix.gettimeofday () +. s.skew
+  | None -> Unix.gettimeofday ()
 
 let sched () =
   match !running with Some s -> s | None -> bug "no scheduler is running"
@@ -323,10 +362,28 @@ let cancel t =
     interrupt_when s t
   end
 
+(* [t] has run until it waited, or ended: a task waiting in `Async.tick`
+   under `sim` for it, and for nothing else now, is woken. *)
+let waited s t =
+  match s.ticks with
+  | [] -> ()
+  | ticks ->
+      s.ticks <-
+        List.filter
+          (fun tk ->
+            tk.pending <- List.filter (fun u -> u != t) tk.pending;
+            match tk.pending with
+            | [] ->
+                ignore (tk.woken ());
+                false
+            | _ -> true)
+          ticks
+
 (* [t] has ended, giving [result]: what waits for it is woken, and its
    scope has room for one more. *)
 let ended t result =
   let s = sched () in
+  waited s t;
   s.alive <- List.filter (fun u -> u != t) s.alive;
   t.state <- Ended;
   t.result <- result;
@@ -360,9 +417,38 @@ let start s t thunk =
               Some
                 (fun (k : (a, unit) Effect.Deep.continuation) ->
                   t.k <- Some k;
-                  t.state <- Waiting)
+                  t.state <- Waiting;
+                  if t.pointed then t.pointed <- false else waited s t)
           | _ -> None);
     }
+
+(* The next number of [sim]'s tape: splitmix64 (Steele, Lea and Flood,
+   "Fast splittable pseudorandom number generators"), which is the same
+   on every machine. *)
+let draw = function
+  | Sim v ->
+      v.tape <- Int64.add v.tape 0x9E3779B97F4A7C15L;
+      let z = v.tape in
+      let z = Int64.(mul (logxor z (shift_right_logical z 30)) 0xBF58476D1CE4E5B9L) in
+      let z = Int64.(mul (logxor z (shift_right_logical z 27)) 0x94D049BB133111EBL) in
+      Int64.(logxor z (shift_right_logical z 31))
+  | Single -> bug "a draw from `single`'s tape"
+
+(* What runs next, if anything can: under `single` the queue's first;
+   under `sim` the one the tape picks among all that can, each the same
+   odds ("`sim`'s choices"). *)
+let take s =
+  match s.policy with
+    | Single -> Queue.take_opt s.queue
+    | Sim _ when Queue.length s.queue <= 1 -> Queue.take_opt s.queue
+    | Sim _ ->
+        let n = Queue.length s.queue in
+        let i = Int64.to_int (Int64.unsigned_rem (draw s.policy) (Int64.of_int n)) in
+        let all = List.of_seq (Queue.to_seq s.queue) in
+        Queue.clear s.queue;
+        List.iteri (fun j e -> if j <> i then Queue.push e s.queue) all;
+        Some (List.nth all i)
+
 
 (* Run what the queue holds next. *)
 let step s (t, action) =
@@ -405,6 +491,8 @@ let task ~path ~root scope =
     ordinals = Hashtbl.create 4;
     withs = 0;
     frames = [];
+    pointed = false;
+    randoms = Hashtbl.create 1;
   }
 
 (* ---- errors from tasks ---- *)
@@ -423,16 +511,29 @@ let came_from err path =
 
 let origin err = List.find_map (fun (e, p) -> if e == err then Some p else None) !origins
 
+(* Fire each timer that's due now, in the order they're due. *)
+let fire_due s =
+  let at = now () in
+  let due, later = List.partition (fun tm -> tm.at <= at) s.timers in
+  s.timers <- later;
+  List.iter (fun tm -> if tm.live () then tm.fire ()) due
+
 (* Run [f] as the root task of a scheduler, its path [root], `main` or
    `test`: what it gives, or what it raises, once it has ended, which it
-   does only once every task it started has. When no task can run and no
-   timer is due to wake one, it's a deadlock: [deadlock] makes the panic
-   raised in the root, where it waits, given what each task waits for. *)
+   does only once every task it started has. It starts under `single`'s
+   policy, until a runtime's handler installs one ([install]). When no
+   task can run and no timer is due to wake one, it's a deadlock:
+   [deadlock] makes the panic raised in the root, where it waits, given
+   what each task waits for. *)
 let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
   let t = task ~path:root ~root:true None in
   let s =
     {
       queue = Queue.create ();
+      policy = Single;
+      before = [];
+      skew = 0.;
+      ticks = [];
       timers = [];
       current = t;
       root_task = t;
@@ -444,7 +545,7 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
   in
   let rec loop () =
     if t.state <> Ended then
-      match Queue.take_opt s.queue with
+      match take s with
       | Some next ->
           step s next;
           loop ()
@@ -452,14 +553,15 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
           s.timers <- List.filter (fun tm -> tm.live ()) s.timers;
           match s.timers with
           | first :: _ ->
-              let dt = first.at -. now () in
-              (if dt > 0. then
-                 try Unix.sleepf dt with Unix.Unix_error (EINTR, _, _) -> ());
-              (* each timer due, in the order they're due *)
-              let at = now () in
-              let due, later = List.partition (fun tm -> tm.at <= at) s.timers in
-              s.timers <- later;
-              List.iter (fun tm -> if tm.live () then tm.fire ()) due;
+              (match s.policy with
+              | Sim v ->
+                  (* virtual time moves only now, straight to the timer *)
+                  v.clock <- Float.max v.clock first.at
+              | Single -> (
+                  let dt = first.at -. now () in
+                  if dt > 0. then
+                    try Unix.sleepf dt with Unix.Unix_error (EINTR, _, _) -> ()));
+              fire_due s;
               loop ()
           | [] ->
               (* every task waits, and nothing can wake one: the root
@@ -606,6 +708,76 @@ let sleep ?at ms =
               ~live:(fun () -> t.wait = id)
               (fun () -> ignore (wake ())))
 
+(* ---- runtimes ---- *)
+
+(* Move the times the task running keeps on by [d] seconds, and every
+   timer's, when the scheduler's time is changed under it: what a new
+   policy's time is from what the old one's was. Only it is running,
+   so nothing else keeps a time. *)
+let rebase s d =
+  if d <> 0. then begin
+    let t = s.current in
+    t.asked_at <- t.asked_at +. d;
+    t.cleanup_by <- t.cleanup_by +. d;
+    List.iter (fun dl -> dl.due <- dl.due +. d) t.deadlines;
+    s.timers <-
+      List.map (fun tm -> { tm with at = tm.at +. d }) (List.filter (fun tm -> tm.live ()) s.timers)
+  end
+
+(* Install [p], the policy of a runtime's handler being installed, for
+   its `with`'s body: what [leave] is given to put back the one before.
+   Policies never mix, so it's [busy ()], a panic, if any task but the one
+   installing it is alive (compiler.md, "A runtime installed while any
+   task but the one installing it is running is a panic"). `sim`'s time
+   starts at 0, whatever the time was, so a seed's run is the same
+   whenever it's run. *)
+let install p ~busy =
+  match !running with
+  | None -> 0
+  | Some s ->
+      if List.exists (fun u -> u != s.current) s.alive then raise (busy ());
+      let was = now () in
+      s.before <- s.policy :: s.before;
+      s.policy <- p;
+      rebase s (now () -. was);
+      List.length s.before
+
+(* The `with` of the runtime that [install] gave [n] ends: the policy
+   before it is put back. Its tasks have all ended (a task spawned in its
+   body into a scope outside it is its background task, cancelled and
+   waited for first), so again only the task running keeps a time. *)
+let leave n =
+  match !running with
+  | Some s when n > 0 ->
+      let was = now () in
+      while List.length s.before >= n do
+        match s.before with
+        | p :: rest ->
+            s.policy <- p;
+            s.before <- rest
+        | [] -> ()
+      done;
+      rebase s (now () -. was)
+  | _ -> ()
+
+(* `sim`'s policy, its tape from [seed]. *)
+let sim seed = Sim { tape = Int64.of_int seed; clock = 0. }
+
+(* The scheduler's time in milliseconds, what `sim.clock()` reads. *)
+let time_ms () = Int64.of_float (Float.round (now () *. 1000.))
+
+(* `TestClock.advance(d)` of `sim.clock()`: the scheduler's time moves on
+   by [ms] milliseconds at once, and what it passes wakes. *)
+let advance ms =
+  match !running with
+  | Some s when ms > 0L ->
+      let d = Int64.to_float ms /. 1000. in
+      (match s.policy with
+      | Sim v -> v.clock <- v.clock +. d
+      | Single -> s.skew <- s.skew +. d);
+      fire_due s
+  | _ -> ()
+
 (* ---- `yield`, `tick` and `Async.until` ---- *)
 
 (* `Async.yield()`: the task running goes to the end of the queue, so
@@ -615,10 +787,33 @@ let yield_ ?at () = wait ?at "yields" (fun wake -> ignore (wake ()))
 (* `Async.tick()`: the task running waits until each task in the queue
    now has run until it waits, or ended. In `single`'s order, one queue
    first in first out, that's the queue's end, as for [yield_]: what was
-   in the queue runs first, and what it wakes goes behind. (Under `sim`,
-   step 5, the next task is drawn from the queue, so there the two
-   differ.) *)
-let tick ?at () = wait ?at "waits in `Async.tick`" (fun wake -> ignore (wake ()))
+   in the queue runs first, and what it wakes goes behind. Under `sim`,
+   where the next task is drawn from the queue, the task waits until
+   each of those has run until it waited, or ended ([waited]): a
+   scheduling point isn't a wait, since under `single` there's none. *)
+let tick ?at () =
+  let s = sched () in
+  match s.policy with
+  | Single -> wait ?at "waits in `Async.tick`" (fun wake -> ignore (wake ()))
+  | Sim _ ->
+      let pending = List.of_seq (Seq.map fst (Queue.to_seq s.queue)) in
+      wait ?at "waits in `Async.tick`" (fun wake ->
+          match pending with
+          | [] -> ignore (wake ())
+          | _ -> s.ticks <- { pending; woken = wake } :: s.ticks)
+
+(* A scheduling point before a call of an operation of a shared,
+   exclusive instance ([locked]), where the order of two tasks' calls can
+   be seen: under `sim` the task running goes back on the queue, and the
+   tape picks what runs next, itself among them; under `single`, nothing
+   happens ("`sim`'s choices"). *)
+let point ?at () =
+  match !running with
+  | Some ({ policy = Sim _; _ } as s) ->
+      wait ?at "yields" (fun wake ->
+          s.current.pointed <- true;
+          ignore (wake ()))
+  | _ -> ()
 
 (* ---- operations that don't interleave ---- *)
 
@@ -650,7 +845,7 @@ let share inst ~excl =
   | _ -> ()
 
 (* Whether the instance numbered [inst] is shared and exclusive: what
-   `sim` will make a scheduling point of each call of (step 5). *)
+   `sim` makes a scheduling point of each call of ([point]). *)
 let locked inst =
   match !running with Some s -> Hashtbl.mem s.locks inst | None -> false
 

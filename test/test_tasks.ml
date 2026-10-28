@@ -822,10 +822,12 @@ fn main() uses Console, Async =
 let%expect_test "[s2 accept] a `finally` runs past a cancel, until the cleanup deadline" =
   (* the handler's `finally` is shielded, so its sleep isn't cancelled
      at once; 5 seconds after the cancel, the deadline, it is, and the
-     rest of the `finally` never runs. (This takes 5 seconds: the clock
-     is the real one, until stage 11a's step 5.) *)
+     rest of the `finally` never runs. Under `sim`, in virtual time, which
+     takes none of the test's: the cancel at 5 ms, the deadline at 5005 *)
   run
     {|
+import sim
+
 dep Log =
   note: fn(s: Str)
 
@@ -837,7 +839,12 @@ handler slow() for Log uses Clock, Console =
     try r
   note(s) => print(s)
 
-fn main() uses Console, Async, Clock =
+fn main() uses Console =
+  with sim.scheduler(1) in
+    with sim.clock() in
+      cancelled()
+
+fn cancelled() uses Console, Async, Clock =
   let began = Clock.instant()
   Async.scope fn(s) =>
     let t = s.start fn() =>
@@ -847,8 +854,7 @@ fn main() uses Console, Async, Clock =
     Clock.sleep(Duration.ms(5))
     t.cancel()
     print(t.join())
-  let took = Clock.instant() - began
-  print(took >= Duration.seconds(5) && took < Duration.seconds(30))
+  print(Clock.instant() - began == Duration.ms(5005))
 |};
   [%expect {|
     working
@@ -2100,19 +2106,8 @@ fn main() uses Console, Async =
 (* ---- s5: the runtime as a handler, and virtual time ---- *)
 
 let%expect_test "[s5 accept] tasks sleep at once, in virtual time" =
-  until "s5"
-    ~want:
-      {|
-test.ren
-  ✓ two tasks sleep at once
-  ✓ tasks wake in the order of their deadlines
-
-2 passed
-[exit 0]
-|}
-    (fun () ->
-      test
-        {|
+  test
+    {|
 test "two tasks sleep at once" =
   Async.scope fn(s) =>
     s.spawn fn() => Clock.sleep(Duration.minutes(60))
@@ -2128,111 +2123,263 @@ test "tasks wake in the order of their deadlines" =
       Clock.sleep(Duration.seconds(1))
       print("one")
   assert TestConsole.output() == ["one", "three"]
-|});
+|};
   [%expect {|
-    (until s5)
     test.ren
-      ✗ two tasks sleep at once
-      ✗ tasks wake in the order of their deadlines
+      ✓ two tasks sleep at once
+      ✓ tasks wake in the order of their deadlines
 
-    ──── two tasks sleep at once ── test.ren:5
-      │
-    5 │   assert Clock.now() == Time.epoch + Duration.minutes(60)
-      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-      │
-      left:  Time(5400000)
-      right: Time(3600000)
-                  ^ differs here
-
-      seed 2542 · rerun: ren test test.ren --only "two tasks" --seed 2542
-
-    ──── tasks wake in the order of their deadlines ── test.ren:15
-       │
-    15 │   assert TestConsole.output() == ["one", "three"]
-       │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       │
-       left:  ["three", ...]
-       right: ["one", ...]
-                ^ differs here
-
-       seed 9439 · rerun: ren test test.ren --only "tasks wake" --seed 9439
-
-       printed:
-         three
-         one
-
-    0 passed, 2 failed
-    [exit 1]
+    2 passed
+    [exit 0]
     |}]
 
 let%expect_test "[s5 accept] a runtime installed by hand" =
-  until "s5"
-    ~want:{|
-in a task
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 import sim
 
 fn main() uses Console =
   with sim.scheduler(7) in
     Async.scope fn(s) =>
       s.spawn fn() => print("in a task")
-|});
+|};
   [%expect {|
-    (until s5)
-    error: there's no module `sim`
-      ┌─ test.ren:1:8
-    1 │ import sim
-      │        ^^^
-      = it would be the file `sim.ren`
-      help: check the module's name, or create its file
+    in a task
+    ()
     |}]
 
 let%expect_test "[s5 reject] a runtime installed while other tasks run" =
-  until "s5"
-    ~says:
-      [
-        "error: panic: `Async.single()` is installed while other tasks run";
-        "help: install it once, around `main`'s body: `ren run` installs \
-         `Async.single()` itself, and `ren test` a `sim.scheduler`";
-      ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     s.spawn fn() => print("a")
     with Async.single() in print("b")
-|});
+|};
   [%expect {|
-    (until s5)
-    b
-    a
-    ()
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: panic: `Async.single()` is installed while other tasks run
+      ┌─ test.ren:4:5
+    4 │     with Async.single() in print("b")
+      │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = a runtime runs every task of its `with`, so it's installed where no other task runs yet
+      help: install it once, around `main`'s body: `ren run` installs `Async.single()` itself, and `ren test` a `sim.scheduler`
     |}]
 
 let%expect_test "[s5 reject] a module of a program's own named `sim`" =
-  until "s5"
-    ~says:[ "error: `sim` is the standard library's" ]
-    (fun () ->
-      check_error_files
-        [
-          ("main.ren", {|
+  check_error_files
+    [
+      ("main.ren", {|
 import sim
 
 fn main() = sim.go()
 |});
-          ("sim.ren", {|
+      ("sim.ren", {|
 pub fn go() = ()
 |});
-        ]);
+    ];
   [%expect {|
-    (until s5)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: `sim` is the standard library's
+      ┌─ main.ren:1:8
+    1 │ import sim
+      │        ^^^
+      = `import sim` finds the standard library's, not a file
+      help: rename the file `sim.ren`, and the imports of it
+    |}]
+
+let%expect_test "[s5 accept] `sim`'s order is drawn from its seed, the same each time" =
+  (* two seeds, two orders; the same seed again, the same order *)
+  run
+    {|
+import sim
+
+fn three() uses Console, Async =
+  Async.scope fn(s) =>
+    s.spawn fn() => print("a")
+    s.spawn fn() => print("b")
+    s.spawn fn() => print("c")
+
+fn main() uses Console =
+  with sim.scheduler(1) in three()
+  print("-")
+  with sim.scheduler(2) in three()
+  print("-")
+  with sim.scheduler(1) in three()
+|};
+  [%expect {|
+    c
+    b
+    a
+    -
+    b
+    a
+    c
+    -
+    c
+    b
+    a
+    ()
+    |}]
+
+let%expect_test "[s5 accept] `--seeds` finds the lost update, and `--seed` replays it" =
+  (* a read with one operation and a write with another: another task's
+     deposit can come in between under some schedules, which `--seeds`
+     tries one after another, stopping at the first that fails *)
+  let src =
+    {|
+pub dep Account =
+  balance: fn() -> Int
+  set: fn(b: Int)
+
+pub handler account() for Account =
+  var b = 0
+  balance() => b
+  set(n) => b = n
+
+pub fn deposit(n: Int) uses Account =
+  let b = Account.balance()
+  Account.set(b + n)
+
+test "two deposits both land" =
+  with account() in
+    Async.scope fn(s) =>
+      s.spawn fn() => deposit(10)
+      s.spawn fn() => deposit(10)
+    assert Account.balance() == 20
+|}
+  in
+  (* seeds 5 to 8 pass; 9 is the first that loses one *)
+  test ~seed:5 ~seeds:100 src;
+  [%expect {|
+    test.ren
+      ✗ two deposits both land
+
+    ──── two deposits both land ── test.ren:19
+       │
+    19 │     assert Account.balance() == 20
+       │            ^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  10
+       right: 20
+              ^ differs here
+
+       seed 9 · rerun: ren test test.ren --only "two deposits" --seed 9
+
+    0 passed, 1 failed
+    [exit 1]
+    |}];
+  (* the same again, from its seed alone *)
+  test ~seed:9 src;
+  [%expect {|
+    test.ren
+      ✗ two deposits both land
+
+    ──── two deposits both land ── test.ren:19
+       │
+    19 │     assert Account.balance() == 20
+       │            ^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  10
+       right: 20
+              ^ differs here
+
+       seed 9 · rerun: ren test test.ren --only "two deposits" --seed 9
+
+    0 passed, 1 failed
+    [exit 1]
+    |}]
+
+let%expect_test "[s5 accept] a test passes under every seed it's run with" =
+  test ~seeds:200
+    {|
+pub dep Ledger =
+  balance: fn() -> Int
+  add: fn(n: Int)
+
+pub handler ledger() for Ledger =
+  var b = 0
+  balance() => b
+  add(n) => b = b + n
+
+test "two adds both land" =
+  with ledger() in
+    Async.scope fn(s) =>
+      s.spawn fn() => Ledger.add(10)
+      s.spawn fn() => Ledger.add(10)
+    assert Ledger.balance() == 20
+
+test "a tick lets every task that could run, run first" =
+  Async.scope fn(s) =>
+    s.spawn fn() => print("a")
+    s.spawn fn() => print("b")
+    Async.tick()
+    assert TestConsole.output().len() == 2
+
+test "advancing the clock wakes a sleeper it passes" =
+  Async.scope fn(s) =>
+    s.spawn fn() =>
+      Clock.sleep(Duration.seconds(10))
+      print("woke")
+    // the task runs, and sleeps, while this one waits
+    Clock.sleep(Duration.ms(1))
+    TestClock.advance(Duration.seconds(10))
+  assert Clock.now() == Time.epoch + Duration.ms(10001)
+  assert TestConsole.output() == ["woke"]
+
+test "a timeout's deadline is virtual too" =
+  let r = attempt Async.timeout(Duration.seconds(30)) fn() =>
+    Clock.sleep(Duration.minutes(60))
+  assert r == Err(Timeout)
+  assert Clock.instant() == Instant.zero + Duration.seconds(30)
+|};
+  [%expect {|
+    test.ren
+      ✓ two adds both land
+      ✓ a tick lets every task that could run, run first
+      ✓ advancing the clock wakes a sleeper it passes
+      ✓ a timeout's deadline is virtual too
+
+    4 passed, each under 200 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s5 accept] a task's numbers don't depend on the order tasks ran in" =
+  (* the same test `Random` seed, two schedules: each task draws from a
+     stream of its own, from the seed and its path *)
+  test ~seed:7
+    {|
+import sim
+
+pub dep Log =
+  put: fn(name: Str, n: Int)
+  get: fn(name: Str) -> Int
+
+pub handler log() for Log =
+  var m: Map<Str, Int> = Map.of([])
+  put(name, n) => &m.set(name, n)
+  get(name) => m.get(name).unwrap_or(-1)
+
+pub fn draws() -> (Int, Int) uses Async, Random =
+  with log() in
+    Async.scope fn(s) =>
+      s.spawn fn() => Log.put("a", Random.int(1000) * 1000 + Random.int(1000))
+      s.spawn fn() => Log.put("b", Random.int(1000) * 1000 + Random.int(1000))
+    (Log.get("a"), Log.get("b"))
+
+test "under one schedule" =
+  let d = with sim.scheduler(1) in draws()
+  assert d == (28871, 22289)
+
+test "under another" =
+  let d = with sim.scheduler(2) in draws()
+  assert d == (28871, 22289)
+|};
+  [%expect {|
+    test.ren
+      ✓ under one schedule
+      ✓ under another
+
+    2 passed
+    [exit 0]
     |}]
 
 (* ---- s8: the standard library ---- *)

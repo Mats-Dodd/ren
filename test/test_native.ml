@@ -968,3 +968,19 @@ fn main() -> Unit uses Clock =
       │    ^^^^ `ren build` can't compile this yet
       help: run it with `ren run test.ren`
     |}]
+
+let%expect_test "`sim`, the tests' runtime and clock, isn't in the native slice" =
+  (* stage 11a's step 5: the interpreter's, which `ren test` runs on *)
+  mem {|
+import sim
+
+fn main() uses Console =
+  with sim.scheduler(1) in print(1)
+|};
+  [%expect {|
+    error: `sim` isn't in the native slice yet
+      ┌─ test.ren:4:8
+    4 │   with sim.scheduler(1) in print(1)
+      │        ^^^^^^^^^^^^^^^^ `ren build` can't compile this yet
+      help: run it with `ren run test.ren`
+    |}]

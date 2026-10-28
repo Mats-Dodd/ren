@@ -15,7 +15,7 @@ let usage =
                  [--rc naive | --rc perceus] [--explain-dispatch <D>]
        ren core [--types] [--release] <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
-                [--list]
+                [--seeds <n>] [--sim] [--list]
        ren test --keep <file.journal>
        ren console <module> [--real <dependency>,...]
        ren --help | --version
@@ -89,7 +89,13 @@ commands:
             --only <text>  only the tests whose name has <text> in it
             --exact        <text> is a test's whole name, or a group
                            run's label
-            --seed <n>     start every test's `Random` from <n>
+            --seed <n>     run every test under the seed <n>, instead of
+                           its own: its tasks' order, and its `Random`
+            --seeds <n>    run each test under <n> seeds, its own (or
+                           --seed's) and the next ones, stopping at the
+                           first that fails
+            --sim          run on `sim.scheduler`, which `ren test`
+                           always does
             --list         list the tests, without running them, saying
                            which use a real dependency
             --keep <file.journal>
@@ -444,6 +450,14 @@ let test args =
         | _ ->
             prerr_endline ("error: a seed is a number from 0 up, not " ^ n);
             exit 2)
+    | "--seeds" :: n :: rest -> (
+        match int_of_string_opt n with
+        | Some n when n >= 1 -> parse { opts with seeds = n } rest
+        | _ ->
+            prerr_endline ("error: --seeds is a number from 1 up, not " ^ n);
+            exit 2)
+    (* `ren test` runs on `sim` anyway (compiler.md, "The tape") *)
+    | "--sim" :: rest -> parse opts rest
     | "--list" :: rest -> parse { opts with list = true } rest
     | "--exact" :: rest -> parse { opts with exact = true } rest
     | [ "--only" ] ->
@@ -453,6 +467,9 @@ let test args =
         exit 2
     | [ "--seed" ] ->
         prerr_endline "error: --seed needs a number, like --seed 42";
+        exit 2
+    | [ "--seeds" ] ->
+        prerr_endline "error: --seeds needs a number, like --seeds 1000";
         exit 2
     | flag :: _ when String.starts_with ~prefix:"-" flag ->
         prerr_endline ("error: `ren test` has no option " ^ flag);
@@ -471,6 +488,7 @@ let test args =
         only = None;
         exact = false;
         seed = None;
+        seeds = 1;
         list = false;
         timings = Sys.getenv_opt "REN_NO_TIMINGS" = None;
       }
@@ -896,13 +914,16 @@ let () =
                 List.iter print_endline sigs)
               (Driver.types ~load ~file:path src)
         | "core" ->
-            (* every module but the prelude, which comes first *)
+            (* every module but the prelude and the standard library's,
+               which come first *)
             List.iteri
               (fun i (m : Core.program) ->
                 if i > 0 then print_newline ();
                 print_endline ("-- " ^ m.home);
                 List.iter (fun f -> print_endline (Core.show_fn ~types f)) m.fns)
-              (List.tl
+              (List.filter
+                 (fun (m : Core.program) ->
+                   m.home <> Path.prelude_home && not (Std_lib.is_home m.home))
                  (if release then fst (Driver.specialized ~load ~file:path src)
                   else Driver.linked ~load ~file:path src))
         | "tokens" ->

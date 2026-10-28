@@ -195,8 +195,8 @@ let core ?types src =
         (fun f -> print_endline (show_fn ?types f))
         (Driver.core ~lint:true ~file src).fns)
 
-(* Every module of the program in Core, but the prelude, each after its
-   name. *)
+(* Every module of the program in Core, but the prelude and the standard
+   library's, each after its name. *)
 let core_files files =
   let files, file, src, load = program files in
   report_files files (fun () ->
@@ -205,7 +205,10 @@ let core_files files =
           if i > 0 then print_newline ();
           print_endline ("-- " ^ m.home);
           List.iter (fun f -> print_endline (show_fn f)) m.fns)
-        (List.tl (Driver.linked ~lint:true ~load ~file src)))
+        (List.filter
+           (fun (m : Core.program) ->
+             m.home <> Path.prelude_home && not (Std_lib.is_home m.home))
+           (Driver.linked ~lint:true ~load ~file src)))
 
 (* ---- tests ----
 
@@ -213,23 +216,24 @@ let core_files files =
    as if they were the files of a folder: what it prints, without how long
    it took, and the status it exits with. [path] is what `ren test` was
    given, which a rerun command repeats. *)
-let test_files ?(path = ".") ?only ?(exact = false) ?seed ?(list = false) files
-    =
+let test_files ?(path = ".") ?only ?(exact = false) ?seed ?(seeds = 1)
+    ?(list = false) files =
   let files = List.map (fun (f, src) -> (f, clean src)) files in
   let load m = List.assoc_opt (Driver.file_in ~dir:"." m) files in
   report_files files (fun () ->
       let suite = Driver.suite ~lint:true ~load ~dir:"." files in
       let status =
         Test_runner.run
-          ~opts:{ path; dir = "."; only; exact; seed; list; timings = false }
+          ~opts:
+            { path; dir = "."; only; exact; seed; seeds; list; timings = false }
           ~sources:(fun f -> List.assoc_opt f files)
           suite
       in
       Printf.printf "[exit %d]\n" status)
 
 (* The same, for a program that is the one file [src]. *)
-let test ?only ?exact ?seed ?list src =
-  test_files ~path:file ?only ?exact ?seed ?list [ (file, src) ]
+let test ?only ?exact ?seed ?seeds ?list src =
+  test_files ~path:file ?only ?exact ?seed ?seeds ?list [ (file, src) ]
 
 (* ---- negative tests ----
 

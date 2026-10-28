@@ -617,10 +617,15 @@ pub dep Async =
   pub fn single() -> Async = single_runtime()
   let real: Async = single_runtime()
 
-// One thread, in `single`'s order (eval/sched.ml); natively, where
-// nothing else runs, both operations return at once. Step 5 makes the
-// handler the scheduler's policy.
+// One thread, in `single`'s order, in real time (eval/sched.ml): the
+// scheduler's policy for its `with`'s body, and the one before once it
+// ends. Natively, where nothing else runs, both operations return at
+// once. `sim.scheduler(seed)` is the same over `runtime_sim` (std_lib.ml)
 handler single_runtime() for Async =
+  let was = runtime_single()
+  finally(r) =>
+    runtime_leave(was)
+    try r
   yield() => async_yield()
   tick() => async_tick()
 
@@ -689,8 +694,13 @@ pub dep TestRandom =
 pub handler test_random(seed: Int) for Random, TestRandom =
   var state = seed
   int(below) =>
-    state = seeded_next(state)
-    seeded_int(state, below)
+    // a spawned task draws from a stream of its own, from the seed and
+    // its path, so what it draws doesn't depend on the order tasks ran in
+    match task_random(seed, below)
+      Some(n) => n
+      None =>
+        state = seeded_next(state)
+        seeded_int(state, below)
   seed() => seed
 
 pub dep TestConsole =
@@ -1113,6 +1123,25 @@ let scheme (x : Intrinsic.t) =
         (Var 0)
   (* fn(): `single`'s `yield` and `tick` (sched.ml) *)
   | Async_yield | Async_tick -> fn [] unit
+  (* The runtime's policy, which its handler sets for its `with`'s body
+     (compiler.md, "Runtimes"). fn() -> Int: `single`'s, from now on,
+     giving what [runtime_leave] puts back; fn(seed: Int) -> Int: `sim`'s,
+     its tape from [seed], in virtual time from 0 *)
+  | Runtime_single -> fn [] int
+  | Runtime_sim -> fn [ read int ] int
+  (* fn(was: Int): the policy before, which [was] says *)
+  | Runtime_leave -> fn [ read int ] unit
+  (* `sim.clock()`'s (std_lib.ml). fn() -> Int: the scheduler's time, in
+     milliseconds, virtual under `sim` *)
+  | Sim_time -> fn [] int
+  (* fn(ms: Int): waits until the scheduler's time has moved on by
+     [ms]; and moves it on by [ms] at once, waking what it passes *)
+  | Sim_sleep | Sim_advance -> fn [ read int ] unit
+  (* fn(seed: Int, below: Int) -> Option<Int>: in a spawned task, a
+     number from 0 below [below] from the task's own stream of the test
+     `Random` seeded with [seed]; [None] in a root task, which draws from
+     the instance's own (compiler.md, "The tape") *)
+  | Task_random -> fn [ read int; read int ] (option int)
 
 (* The operation of a built-in dependency that [x] is how the real one
    does, if it reaches the world: `fs_read` is `Fs.read`'s. Each is called
@@ -1139,7 +1168,8 @@ let reaches (x : Intrinsic.t) =
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join | Task_cancel
   | Task_until | Task_timeout | Task_isolate | Task_map | Task_each | Task_both
-  | Task_race | Async_yield | Async_tick
+  | Task_race | Async_yield | Async_tick | Runtime_single | Runtime_sim
+  | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Task_random
   | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_index | Str_split
@@ -1165,7 +1195,7 @@ type caller = Any | World | Test | Journal | Value | Internal
 let caller (x : Intrinsic.t) =
   match (reaches x, x) with
   | Some _, _ -> World
-  | None, (Seeded_next | Seeded_int) -> Test
+  | None, (Seeded_next | Seeded_int | Task_random) -> Test
   | ( None,
       ( Journal_kept | Journal_gave | Journal_answer | Journal_outputs
       | Journal_load ) ) ->
@@ -1175,7 +1205,9 @@ let caller (x : Intrinsic.t) =
       ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
       | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
       | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
-      | Task_each | Task_both | Task_race | Async_yield | Async_tick ) ) ->
+      | Task_each | Task_both | Task_race | Async_yield | Async_tick
+      | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
+      | Sim_advance ) ) ->
       Internal
   | None, _ -> Any
 
@@ -1227,6 +1259,13 @@ let fns : Intrinsic.t list =
     Task_race;
     Async_yield;
     Async_tick;
+    Runtime_single;
+    Runtime_sim;
+    Runtime_leave;
+    Sim_time;
+    Sim_sleep;
+    Sim_advance;
+    Task_random;
   ]
 
 (* ---- built-in types ----

@@ -1598,11 +1598,13 @@ let rec no_kept_handles env ~prelude (e : expr) =
 
 (* No code reached from a call with an empty row runs a scheduling point
    (compiler.md, "Stage 11a", "The two holes"): each intrinsic that can
-   wait for another task is called only by the prelude's own functions
-   whose rows have `Async`, so a call that can reach one has `Async` in
-   its row too; or by the prelude's handlers of `Async`, the runtime,
-   whose arms run only when an operation of `Async` is called, which
-   needs it in the caller's row. *)
+   wait for another task is called only by the prelude's own functions,
+   or the standard library's, whose rows have `Async`, so a call that can
+   reach one has `Async` in its row too; or by their handlers of `Async`,
+   the runtimes, whose arms run only when an operation of `Async` is
+   called, which needs it in the caller's row, and their handlers that
+   use `Async`, `sim.clock()`, which only a `with` with `Async` in its row
+   installs. *)
 let waits_only_with_async env (f : fn_def) =
   let async = Path.prelude "Async" in
   let has_async =
@@ -1613,17 +1615,24 @@ let waits_only_with_async env (f : fn_def) =
           uses.labels
     | _ -> false
   in
+  let is_async (l : Ty.label) = l.name = Ty.dep_label async in
   let runtime =
     match f.scheme.ty with
-    | Fun (_, Impl i, _, _) -> List.mem async (Ty.dep_paths i.deps)
+    | Fun (_, Impl i, _, _) ->
+        List.mem async (Ty.dep_paths i.deps) || List.exists is_async i.needs.labels
     | _ -> false
   in
   let has_async = has_async || runtime in
+  (* the prelude's, or the standard library's, which is the runtime's too
+     (std_lib.ml) *)
+  let runtime_code =
+    f.path.home = Path.prelude_home || Std_lib.is_home f.path.home
+  in
   let rec go (e : expr) =
     (match e.kind with
     | Intrinsic (x, _, _, _)
       when Intrinsic.waits x
-           && not (f.path.home = Path.prelude_home && has_async) ->
+           && not (runtime_code && has_async) ->
         fail env e.loc
           (sprintf "`%s` can wait, and is called where `Async` isn't used"
              (Intrinsic.name x))

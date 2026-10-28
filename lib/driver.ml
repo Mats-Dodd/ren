@@ -236,7 +236,10 @@ let prelude =
      in
      let core, _ = lower r inferred in
      ignore (link_lowered ~lint:true ~imports:[ imports ] [ core ]);
-     (core, Iface.union Prelude.public iface, r, inferred))
+     (* what the standard library's modules see: the whole prelude, the
+        runtime's intrinsics among it (std_lib.ml) *)
+     let whole = Iface.union Prelude.intrinsics iface in
+     (core, Iface.union Prelude.public iface, r, inferred, whole))
 
 (* ---- loading a program's modules ----
 
@@ -326,6 +329,9 @@ let load_all ~(load : loader) ~dir roots =
         else
           let ifile = file_in ~dir i.path in
           match load i.path with
+          | Some _ when Std_lib.is_home i.path -> mine_is_std i.path_loc i.path
+          (* the standard library's, which isn't a file *)
+          | None when Option.is_some (Std_lib.source i.path) -> ()
           | None ->
               report i.path_loc
                 ~help:"check the module's name, or create its file"
@@ -335,6 +341,13 @@ let load_all ~(load : loader) ~dir roots =
       imports;
     loaded := { home; file; parsed } :: !loaded;
     homes := Homes.add home !homes
+  (* a module of the program's own, its file at [loc], has the name of one
+     of the standard library's *)
+  and mine_is_std loc name =
+    report loc
+      ~notes:[ sprintf "`import %s` finds the standard library's, not a file" name ]
+      ~help:(sprintf "rename the file `%s.ren`, and the imports of it" name)
+      (sprintf "`%s` is the standard library's" name)
   (* [i], in module [home], imports a module on the way here: the modules
      from that one to [home] import each other in a circle *)
   and cycle ~path home (i : Ast.import) =
@@ -373,7 +386,8 @@ let load_all ~(load : loader) ~dir roots =
                  "a file can't be named `prelude.ren`: that's the name of the \
                   module every program imports";
              ]);
-      if not (is_loaded home) then visit ~path:[] home file src)
+      if Std_lib.is_home home then mine_is_std (Loc.point ~file 1 1) home
+      else if not (is_loaded home) then visit ~path:[] home file src)
     roots;
   if Diag.has_errors sink then raise (Diag.Errors (Diag.reported sink));
   List.rev !loaded
@@ -401,6 +415,36 @@ type checked = {
       *)
 }
 
+(* The standard library's modules (std_lib.ml), each checked the first
+   time it's needed, against the whole prelude, as the prelude's own
+   source is checked against the intrinsics, and then shared, as the
+   prelude is. Another module sees one as it sees any it imports, through
+   its interface, which reaches only the prelude's public part. *)
+let std_modules : (string * checked Lazy.t) list =
+  List.map
+    (fun (home, src) ->
+      ( home,
+        lazy
+          (let _, prelude_iface, _, _, whole = Lazy.force prelude in
+           let parsed = parse ~file:Prelude.file (String.trim src) in
+           let resolved, iface, inferred, items =
+             check_module ~home ~imports:[ whole ] ~reachable:[ whole ] parsed
+           in
+           let core = lazy (lower resolved inferred) in
+           {
+             home;
+             file = Prelude.file;
+             prog = parsed;
+             resolved;
+             iface;
+             inferred;
+             reachable = [ prelude_iface ];
+             items;
+             core;
+             impl = lazy (Impl.of_module iface (fst (Lazy.force core)));
+           }) ))
+    Std_lib.sources
+
 (* Load the program from its [roots] (see [load_all]), then check each of
    its modules in dependency order, each against the interfaces of what it
    imports, never their source. Returns them in that order. [entry] says
@@ -411,13 +455,15 @@ type checked = {
    module whole, so a test that reaches past an interface, which the
    console is the place to explore, doesn't keep it shut. *)
 let check_roots ?console ~load ~dir ~entry roots =
-  let _, prelude_iface, _, _ = Lazy.force prelude in
+  let _, prelude_iface, _, _, _ = Lazy.force prelude in
   let sources = pass "load" (fun () -> load_all ~load ~dir roots) in
   List.rev
     (List.fold_left
        (fun (done_ : checked list) (m : source) ->
          let checked_ path =
-           List.find (fun (c : checked) -> c.home = path) done_
+           match List.find_opt (fun (c : checked) -> c.home = path) done_ with
+           | Some c -> c
+           | None -> Lazy.force (List.assoc path std_modules)
          in
          let direct =
            List.map
@@ -510,7 +556,12 @@ let implementation ?load ~file src =
    items and the functions its tests were made, is left out, unless it's
    [for_tests]: nothing else calls it (Core Lint checks that). *)
 let link ?lint ?(for_tests = false) (modules : checked list) =
-  let prelude, _, pr, pinf = Lazy.force prelude in
+  let prelude, _, pr, pinf, whole = Lazy.force prelude in
+  (* the standard library's modules, linked into every program after the
+     prelude: `ren test` installs `sim`'s around each test, whether the
+     program imports it or not, and a native build compiles only what
+     `$start` reaches *)
+  let std = List.map (fun (_, m) -> Lazy.force m) std_modules in
   let lowered c =
     let core, requests = Lazy.force c.core in
     if for_tests then (core, requests)
@@ -525,7 +576,7 @@ let link ?lint ?(for_tests = false) (modules : checked list) =
      lowered, with what it asked to be made *)
   let all =
     (pr, pinf, (prelude, recorders))
-    :: List.map (fun c -> (c.resolved, c.inferred, lowered c)) modules
+    :: List.map (fun c -> (c.resolved, c.inferred, lowered c)) (std @ modules)
   in
   (* every type of the program, which a dependency's operations are
      found in *)
@@ -559,7 +610,10 @@ let link ?lint ?(for_tests = false) (modules : checked list) =
   in
   make (List.concat_map (fun (_, _, (_, reqs)) -> reqs) all);
   link_lowered ?lint
-    ~imports:([ Prelude.intrinsics ] :: List.map (fun c -> c.reachable) modules)
+    ~imports:
+      ([ Prelude.intrinsics ]
+      :: List.map (fun _ -> [ whole ]) std
+      @ List.map (fun c -> c.reachable) modules)
     (List.map
        (fun (_, _, ((core : Core.program), _)) ->
          {
@@ -585,8 +639,11 @@ let specialize ?lint ?budget (modules : checked list) =
     | Some _ -> budget
     | None -> Option.bind (Sys.getenv_opt "REN_SPEC_BUDGET") int_of_string_opt
   in
+  let _, _, _, _, whole = Lazy.force prelude in
   let imports =
-    [ Prelude.intrinsics ] :: List.map (fun c -> c.reachable) modules
+    [ Prelude.intrinsics ]
+    :: List.map (fun _ -> [ whole ]) std_modules
+    @ List.map (fun c -> c.reachable) modules
   in
   let specialized, stats =
     pass "specialize" (fun () -> Specialize.program ?budget linked)

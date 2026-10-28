@@ -3969,9 +3969,9 @@ tests are meant to fail.
 | `server` | the server that shuts down gracefully, with `sim.net` | 7 |
 | `crawler` | the crawler, its `Seen` set and `limit` over its `Web` | 8 |
 | `just` | `run_all`, independent recipes at once, a failure killing the rest | 8 (then folded into examples/just) |
-| `transfer` | a transfer under a timeout, commit in `finally` | 5 (needs virtual time: see "Step 3, as built") |
-| `refresh` | prices refreshed by a task beside the `with` | 8 |
-| `lost_update` | the milestone: a lost update between two operations, found by `--seeds` and replayed by `--seed`; and the README's `cached`, which can't race any more | 8 |
+| `transfer` | a transfer under a timeout, commit in `finally` | 5 (needs virtual time: see "Step 3, as built"); landed |
+| `refresh` | prices refreshed by a task beside the `with` | 8; landed in 5, since it needed only virtual time |
+| `lost_update` | the milestone: a lost update between two operations, found by `--seeds` and replayed by `--seed`; and the README's `cached`, which can't race any more | 8; holds since 5 |
 | `journal` | a version 1 journal, recorded before 11a, which `ren replay` refuses with a help | 6 |
 
 `lost_update`'s first test fails on purpose under some seeds, so it has
@@ -4879,6 +4879,15 @@ revisit if a step finds it wrong:
   would make the calls it records wait for each other.
 - **A call back into the instance its own task holds** is a panic (step
   4), for what reaches one past Infer's rule, through a block parameter.
+- **The standard library is lib/core/std_lib.ml** (step 5), since a
+  module named `Stdlib` would hide OCaml's own; its modules are linked
+  into every program, since `ren test` installs `sim`'s whether the
+  program imports it or not.
+- **`sim.clock()` is `Clock & TestClock uses Async`** (step 5): it waits,
+  so its type says what installing it needs, as "The two holes" asks.
+- **`sim`'s virtual time starts at 0** (step 5), so a seed runs the same
+  whenever it's run; and **a scheduling point isn't a wait** for `tick`,
+  so `tick` under `sim` means what it does under `single`.
 
 ### Step 1, as built
 
@@ -5235,6 +5244,108 @@ What step 4 settled where the text above is silent, or differs from it:
   (and the handler uses it); test_deps.ml's and test_lower.ml's hand-made
   `Instance`s say `exclusive = false`.
 
+### Step 5, as built
+
+What step 5 settled where the text above is silent, or differs from it:
+
+- **The policy is the scheduler's** (sched.ml, `policy`): `Single`, or
+  `Sim` with its tape and its virtual clock. `Sched.run` starts every
+  run under `Single`; a runtime's handler sets one for its `with`'s body
+  with `runtime_single()` or `runtime_sim(seed)` (`Sched.install`), which
+  gives a number `runtime_leave` is given in its `finally` to put back
+  the one before (`Sched.leave`). Installing one while any task but the
+  installer is alive is the panic above, said at the `with`
+  (`Eval.installing` moves a panic in the prelude's code that makes an
+  instance there). The real `Async`, `single_runtime()`, is that handler
+  over `runtime_single`; natively `runtime_single` is `0` and
+  `runtime_leave` nothing, since a native program is always on `single`.
+- **`sim`'s time starts at 0,** whatever the time was, so a seed's run is
+  the same whenever it's run: a deadline compared with time that started
+  at the system's would make ties between timers depend on the clock.
+  The task installing it is the only one alive, so `Sched.rebase` moves
+  the few times it keeps (its cancel's, its cleanup deadline, its
+  timeouts' deadlines, and any timer) by the jump, both ways. Every
+  deadline, timer and cancel reads `Sched.now`, so the cleanup deadline
+  and `Async.timeout` are virtual under `sim` without more.
+- **`sim`'s choices:** `Sched.take` draws the next entry of the queue by
+  the tape, splitmix64 from the seed, uniformly among all that can run;
+  with one, it draws nothing. A call of an operation of an instance that
+  `Sched.locked` says is shared and exclusive is a scheduling point
+  first, `Sched.point` (eval.ml's `Dep_call`, before `Sched.holding`):
+  the task goes back on the queue and the tape picks. Under `single`,
+  `point` does nothing, so `ren run`'s order is unchanged. Time moves
+  only when the queue is empty, straight to the earliest timer.
+- **`Async.tick` under `sim`** waits until each task that was on the queue
+  when it was called has run until it waited, or ended (`Sched.waited`,
+  from the fiber's handler when it suspends, and from `ended`). A
+  scheduling point isn't a wait: a task at one has only let the tape
+  choose, and under `single` there's none (a task's `pointed`). Under
+  `single`, `tick` stays the queue's end, as step 3 built it.
+- **The standard library is lib/core/std_lib.ml,** not stdlib.ml, which
+  would hide OCaml's own `Stdlib` in every module of the library. `sim`
+  is its one module so far; `sync` is a reserved name without a source
+  until step 8, so `import sync` is still "there's no module `sync`",
+  and a program's own sync.ren is "`sync` is the standard library's".
+  The driver checks each module once (`Driver.std_modules`, lazily, as
+  the prelude), against the whole prelude, the runtime's intrinsics among
+  it, and **links it into every program, after the prelude:** `ren test`
+  installs `sim`'s handlers around each test whether the program imports
+  `sim` or not, and a native build compiles only what `$start` reaches.
+  An importer sees it through its interface, as any module; `ren core`
+  and test_*'s `core_files` leave it out, as they leave out the prelude.
+  Its source is said to be in the prelude's file, `Prelude.file`: it's the
+  runtime's code, so a panic in it is said at the program's call, and the
+  checks that look for the prelude's code by its file (where a wait is,
+  a `Dep_call`'s site) treat it alike. Core Lint lets it call the
+  intrinsics that wait where `Async` is in the row, as the prelude may,
+  and lets a handler whose needs have `Async`, `sim.clock()`, call one.
+  An import of `sim` where the program has a sim.ren, or a sim.ren among
+  `ren test`'s roots, is "`sim` is the standard library's", with a note
+  and a help to rename the file.
+- **`sim`'s source:** `scheduler(seed: Int) -> Async`, over the private
+  `sim_runtime(seed)`, `single_runtime` with `runtime_sim`; and `clock()
+  -> (Clock & TestClock uses Async)`, over `sim_clock()`, which keeps
+  nothing but the time it was installed at, `let start = sim_time()`, so
+  it has no `var` and takes no lock: two tasks' sleeps never wait for
+  each other's (step 4's note). `now` is `Time.epoch` and `instant`
+  `Instant.zero` plus the time since; `sleep(d)` is `sim_sleep`, the
+  scheduler's sleep (the real `Clock.sleep`'s), and `advance(d)` is
+  `sim_advance`, which moves the scheduler's time on, `sim`'s clock or,
+  under `single`, a skew on the system's, and fires the timers it
+  passes. A negative or zero `d` does nothing. The new intrinsics
+  (`runtime_single`, `runtime_sim`, `runtime_leave`, `sim_time`,
+  `sim_sleep`, `sim_advance`) are the runtime's (`Prelude.caller`
+  `Internal`), and only `sim_sleep` waits. Natively, a call of the `sim`
+  ones is "`sim` isn't in the native slice yet", with its help.
+- **What a test is run on** (eval.ml, `run_installed`): its instances are
+  made in its root task, since making the runtime's sets the policy;
+  `sim.scheduler(seed)` first, the test's seed, then `sim.clock()` over
+  it, then the rest as before. A test whose `uses` names `Async` gets
+  `Async.single()`, as one naming `Clock` gets the real clock. `ren run
+  --record` and `ren replay` make what they install in the root task too.
+- **`Random` per task:** `test_random`'s `int` asks `task_random(seed,
+  below)` first, which in a task that isn't a root gives the next number
+  of the task's own stream for that instance (`task.randoms`, by the
+  instance's number), from `hash(seed, path)`, by the same generator; a
+  root gets `None` and draws from the instance's state as before, so no
+  test that ran before changes. A spawned task's draws so don't depend on
+  the order tasks ran in, which test_tasks.ml checks under two
+  schedules.
+- **`ren test --seeds N`** (test_runner.ml) runs each test under its seed,
+  its own or `--seed`'s, and the next `N - 1`, stopping at the first that
+  fails, whose failure says its seed; a run with no failure says
+  `N passed, each under M seeds`. `--sim` is accepted and does nothing.
+- **Landed:** `transfer` and `refresh`, now examples/transfer and
+  examples/refresh (`refresh` was step 8's, but needed only virtual
+  time), each `as specified` in bench/tasks.t and passing `--seeds 1000`
+  in its new loop; and bench/tasks.t's `milestone` holds: `lost_update`'s
+  first test fails under `--sim --seeds 200`, `--seed` replays it with
+  the same sides, and `fixed.ren` and `cached.ren` pass under a thousand
+  seeds. It stays in bench/11a/tasks, since its test fails on purpose.
+- Test fixes: test_tasks.ml's cleanup-deadline test took 5 real seconds;
+  it now runs under `with sim.scheduler(1)` and `sim.clock()`, and checks
+  the deadline exactly, 5005 ms of virtual time.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -5244,6 +5355,18 @@ What step 4 settled where the text above is silent, or differs from it:
 | 2 | 30b520b | the scheduler (lib/eval/sched.ml), `main` and each test its root task, in `single`'s order with real timers; `Async.scope(max:)`, `spawn`, `start`, `replace`, `join` and `cancel`; rule C's copies at the spawn; cancellation at dependency calls and waits, seen only by `finally`s as `Err(Cancelled)`, shielded until the 5 s cleanup deadline, `fail Cancelled` refused outside a `finally`; Core's `Covered` for an arm's `finally`; a scope's failure or cancel cancelling its tasks; tasks beside a `with` cancelled when its body ends; task paths in panics, the deadlock panic's notes and `--trace`; `ren build` refusing tasks; test_tasks.ml's s2 tests on, and more; bench/11a/spawns as specified | steps 3 to 9 |
 | 3 | 7766c4a | `until`, `tick`, `yield`, `timeout`, `race`, `isolate`, `map`, `each` and `both` in the interpreter; instances numbered and released at each operation's end; `until` letting go of the arm's copy of the state (Lower); the checks on where `until` is written, its condition and `isolate`'s block; `each`'s block giving a value; `par_map`'s help; `= from the task` and the "failed too" warning; release builds knowing no handler that uses `Async`; natively `yield`, `tick` and the deadlock of `until`; test_tasks.ml's s3 tests on, and more; bench/11a/alone and alone_panic as specified and in the native loops | `transfer` (step 5, virtual time); steps 4 to 9 |
 | 4 | 1d05a68 | operations that don't interleave: Core's `Instance` says whether its handler is `exclusive` (a `var`, or a resource of an opaque type of the program's); spawns, `map`, `each`, `both` and `race` share what their block can reach; a shared, exclusive instance's callers queue, first in first out, a waiter whose condition holds first; `Async.until` lets go of it and has it back, before its `finally` too; a call back into the instance a task holds is a panic; Infer's no-deadlock rule for a block passed to an operation; release builds know no handler in a program that starts tasks; test_tasks.ml's s4 tests on, and more | `transfer` (step 5); steps 5 to 9 |
+| 5 | this commit | the runtime as a handler: the scheduler's policy, `single` or `sim`, set by `Async.single()` and `sim.scheduler(seed)` for their `with`'s body, a panic if other tasks run; `sim`'s seeded tape (splitmix64) at every wait and at each call of a shared, exclusive instance, its virtual time from 0, and `tick` under it; the standard library (lib/core/std_lib.ml) and its `sim` module, `scheduler` and `clock()`, linked into every program, `import sim`, and a program's own `sim` refused; a test on `sim.scheduler(seed)` and `sim.clock()`; `Random` per task; `ren test --seeds N` and `--sim`; `transfer` and `refresh` landed in examples/, and the milestone holds; test_tasks.ml's s5 tests on, and more | steps 6 to 9 |
+
+Notes for step 6 on: a test's runtime is `sim.scheduler(seed)`, whose
+policy is `Sched.policy` (`Sim`'s tape and clock), and its choices are
+`Sched.take`'s; a journal's schedule prefix goes there, choosing the
+journal's next entry's task while it can run, then the tape. The poll
+lines are `single`'s timers firing (`Sched.fire_due`, from the loop when
+the queue is empty). The standard library is lib/core/std_lib.ml: `sync`
+(step 8) is a source to add to its `sources`, and its handlers that wait
+use `Async`, as `sim_clock` does, so Core Lint lets them. A runtime is
+installed in a test's root task (eval.ml, `run_installed`), so whatever
+the replay installs for a test goes in `install` there.
 
 Notes for step 5 on: each call of an operation of an instance that
 `Sched.locked` says is shared and exclusive is a scheduling point under

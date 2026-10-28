@@ -54,6 +54,13 @@ type t =
   | Task_race
   | Async_yield
   | Async_tick
+  | Runtime_single
+  | Runtime_sim
+  | Runtime_leave
+  | Sim_time
+  | Sim_sleep
+  | Sim_advance
+  | Task_random
   | Map_empty
   | Map_of
   | Map_get
@@ -161,6 +168,13 @@ let path x =
   | Task_race -> fn "task_race"
   | Async_yield -> fn "async_yield"
   | Async_tick -> fn "async_tick"
+  | Runtime_single -> fn "runtime_single"
+  | Runtime_sim -> fn "runtime_sim"
+  | Runtime_leave -> fn "runtime_leave"
+  | Sim_time -> fn "sim_time"
+  | Sim_sleep -> fn "sim_sleep"
+  | Sim_advance -> fn "sim_advance"
+  | Task_random -> fn "task_random"
   | Map_empty -> fn "map_empty"
   | Map_of -> member "Map" "of"
   | Map_get -> member "Map" "get"
@@ -227,11 +241,11 @@ let member_name x = Path.short (path x)
    code that uses `Async` reaches (compiler.md, "Stage 11a", "The two
    holes"). [Unbuilt] stands for the scheduler's intrinsics that later
    steps of stage 11a build. `task_cancel` returns at once, but asks the
-   scheduler, as the rest do. The world's waits, `Clock.sleep` and
-   `Proc.run`, aren't these: only the runtime installs the world. *)
+   scheduler, as the rest do. The world's waits, `Clock.sleep` and `Proc.run`,
+   aren't these: only the runtime installs the world. *)
 let waits = function
   | Unbuilt | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
-  | Task_each | Task_both | Task_race | Async_yield | Async_tick ->
+  | Task_each | Task_both | Task_race | Async_yield | Async_tick | Sim_sleep ->
       true
   | _ -> false

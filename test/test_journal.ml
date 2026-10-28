@@ -65,6 +65,7 @@ let test () =
              exact = false;
              seed = Some 1;
              list = false;
+             seeds = 1;
              timings = false;
            }
          ~sources suite)
