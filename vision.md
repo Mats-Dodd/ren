@@ -15,16 +15,22 @@ The native slice measured the first two for the first time
 ([bench/native/RESULTS.md](bench/native/RESULTS.md)), on its sequential
 subset:
 
-- **Within 2× of Rust:** on all seven, after the experiments that
-  followed the first measurement. Five run faster than Rust (cfold
-  0.24×, deriv 0.42×, binary-trees 0.58×, rbtree 0.73×, nqueens
-  0.75×), fannkuch ties it, and nbody is 1.62×, since a NaN is checked
-  where it's observed ([foundations.md](foundations.md#15-arithmetic))
-  instead of after every operation, which was 2.39×. Peak memory is
-  within 1.5× on all seven. The first measurement had three over 2×, nbody at 15.5×.
-- **Debug builds faster than Go:** no. A clean build of 500k lines
-  takes 57 s against Go's 13, 77% of it clang -O0, and a one-line edit
-  rebuilds everything, since there's no build cache yet.
+- **Within 2× of Rust:** on all seven, after the experiments and
+  follow-ups that came after the first measurement. Five run faster
+  than Rust (cfold 0.13×, deriv 0.41×, binary-trees 0.59×, rbtree
+  0.61×, nqueens 0.69×), fannkuch ties it (1.01×), and nbody is 1.61×,
+  since a NaN is checked where it's observed
+  ([foundations.md](foundations.md#15-arithmetic)) instead of after
+  every operation, which was 2.37×. Peak memory is within 1.5× on all
+  seven. The first measurement had three over 2×, nbody at 15.5×.
+- **Debug builds faster than Go:** not yet. A clean build of 500k lines
+  takes 57 s, 77% of it clang -O0, and a one-line edit rebuilds
+  everything, since there's no build cache yet. Measured with tcc in
+  place of clang -O0, it would take 16 s against Go's 15, and the C
+  compiler would be a tenth of it. What's left is Ren's front half,
+  which runs on one core and already needs a sixth of Go's CPU, so
+  running it per module in parallel, with a build cache and a fast
+  link, is what passes.
 - **Replay byte for byte:** in the interpreter, where the journal
   runs; a native binary has no journal yet.
 
@@ -32,6 +38,16 @@ They were written down before any of it ran, so the stages that get
 there are judged by them.
 
 ## What Ren is for
+
+Ren is a systems language for infrastructure: the programs other
+programs run on, on an operating system.
+
+| Kind | For example | What it asks of Ren |
+|---|---|---|
+| A command-line tool | a task runner, a build or migration tool | starts at once, typed errors, the world as dependencies |
+| A server | an HTTP API, a proxy, a queue | tasks on every core, injected dependencies, replay from production |
+| A storage engine | a key-value store, an LSM tree or a B-tree | buffers changed in place, formats on disk, reads without locks, simulation |
+| Not | kernels, drivers, firmware, code with no OS or no allocator | |
 
 One language for three kinds of program, each harder on it than the
 last. They're also the order Ren proves itself in: each is built when
@@ -52,11 +68,12 @@ judged by the bars above.
    and FoundationDB are: every disk and clock behind a dependency,
    faults injected by handlers, a crash replayed from its journal. It
    uses every decision at once: buffers changed in place under
-   exclusivity, sized integers for formats, snapshots read from frozen
-   regions, vectorized checksums, hot paths that allocate nothing. It
-   also needs four designs that don't exist yet: views into buffers,
-   explicit layouts for formats on disk, control over allocation, and
-   reads that take no lock ([foundations.md](foundations.md#open-questions)).
+   exclusivity, sized integers for formats, slices of pages kept as
+   values, snapshots read without a lock, vectorized checksums, hot
+   paths that allocate nothing. Of the four designs it needed, views
+   into buffers and reads that take no lock are decided; explicit
+   layouts for formats on disk and control over allocation are still
+   open ([foundations.md](foundations.md#open-questions)).
    If Ren can host a credible one in idiomatic code, the ambition is
    earned.
 
@@ -120,21 +137,25 @@ one-line change, it rebuilds faster too.
     computed once.
   - **Modules compile separately, and a change that doesn't touch a
     module's interface doesn't rebuild what imports it.**
-  - **The debug backend can't be clang.** `clang -O0` alone is slower
-    than Go's whole compiler on big programs. Debug builds need a C
-    compiler built for speed, like tcc, or later a direct backend of
-    Ren's own. This is the bar most likely to change the backend plan.
-- **What gets it there:** the module system, the naive C backend with a
-  fast C compiler, then separate compilation and caching.
+  - **The debug backend isn't clang.** `clang -O0` alone is slower
+    than Go's whole compiler on big programs. Debug builds use tcc,
+    which compiles Ren's C 12 to 24 times faster
+    ([foundations.md](foundations.md#13-two-builds)), and later a
+    backend of Ren's own, for a fast link and better debug code.
+  - **The front half runs per module, in parallel.** With tcc, it's 80
+    to 90% of a debug build, on one core.
+- **What gets it there:** the module system, the C backend with tcc,
+  then the front half in parallel, separate compilation and caching.
 - **The goal past it: release by default.** Debug and release builds
   have one semantics ([foundations.md](foundations.md#15-arithmetic)):
   the same panics at the same points, the same `Float` results. So
   which build runs is only a question of speed, and if release builds
-  are fast enough, by caching each specialization by content and
-  generating code with a fast backend of Ren's own (blocks and handlers
-  are already specialized away before it runs), the edit loop can use
-  them and there's one kind of build. Measured, specializing costs 1.1
-  to 1.2× the debug front half; the cost is clang -O2.
+  are fast enough, the edit loop can use them and there's one kind of
+  build. Measured, specializing costs 1.1 to 1.2× the debug front half;
+  the cost is clang -O2. No fast backend's code comes within 3 times of
+  -O2, but -O2 per module in parallel builds 13 to 16 times faster than
+  on one file (base-500k in 19.7 s on 16 cores), and with each
+  specialization cached by content an edit recompiles one module.
 
 ## Replay byte for byte
 

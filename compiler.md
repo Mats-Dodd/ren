@@ -2748,3 +2748,146 @@ a check against the length the loop counts to; the new forms keep that
 without depending on it. Every other program is unchanged. What still
 stops a loop vectorizing is an `Int` overflow check, a branch out of
 it: a running `Int` sum is 4.45× Rust.
+
+## The runtime model
+
+Every object the runtime makes is in one of four states, which its
+count says, and every value the compiler emits is a reference to one,
+counted or borrowed. Every pass that changes how a value is
+represented, where it lives, or when it's freed keeps the rules below,
+and Mem Lint checks them. It's the design for tasks on many cores
+(foundations.md, decision 10, and Staging, item 5), checked against
+every memory mechanism decided so far for the pairs nobody had checked
+(research/runtime-model.md). The native slice builds local, immortal
+(statics) and the shared mark, behind `-DREN_RC_SHARED`; the rest
+arrives with 11b.
+
+**States.** The count is the 32-bit field of the 8-byte header,
+Lean's encoding plus one band for arenas:
+
+| count | state | unique | freed by |
+|---|---|---|---|
+| 1 and up | local: one thread writes it, exact | at 1 | the last drop, to the heap its chunk names |
+| -1 to -2^30 | shared: atomic, one way | never | the last drop, on any thread, to its owner's heap |
+| 0 | immortal: statics, sealed arena objects, counts that overflowed | never | never, or its arena's end |
+| below -2^30 | arena: counted by the one task that can see it while its chunk is open | at one, if open | the last drop, or its arena's end |
+
+The inline paths are today's: they test for a positive count and exit
+inline on 0, so statics and sealed arena data cost two compares and no
+call. The rest goes to a cold path, which tells shared from arena by
+the band, and an arena's object from an overflowed count by its
+address, since arena chunks come from one reserved range. A count that
+overflows its band sticks, so overflow costs the fast path nothing. A
+sealed object's count becomes 0 on its first cold count, so it costs
+what a static does from then on. A chunk of small objects is aligned
+and names its owner heap; an arena's chunk also names its arena and
+whether it's sealed.
+
+**What the compiler keeps out of the header.** Borrowed references (a
+borrowed parameter, a part, which a slice is of its root, a task's
+borrow of what its block captures, a read block's borrow), reuse
+tokens, holes that tail recursion modulo cons fills, slots swap-out
+took, buffers a hoisted loop indexes, and small values, which are no
+object. Each lives in one function or one interval of it, and Perceus
+and Mem Lint follow it path by path.
+
+**Rules.** Seven, which replace the arena research's eight, the frame
+rules, adoption, and the freeze rules:
+
+- **U, uniqueness.** `ren_is_unique` decides every change in place:
+  reuse, `Array_own`, swap-out's take, `map_into`, a fill's chain. It's
+  true only for a local count of 1, or an arena count of one in an open
+  chunk.
+- **B, borrows.** A reference that isn't counted has a counted holder
+  upstream that outlives it and doesn't change it meanwhile; a part is
+  counted before what it's part of is consumed. Perceus gives this in a
+  thread, and exclusivity and the scope frame's liveness across tasks.
+- **H, heap of origin.** Freed memory goes back to the heap its chunk
+  names; across threads, through the owner's delayed-free list, as
+  mimalloc's `mi_free` does. Arena chunks go back only to their arena,
+  at its end.
+- **M, marking.** Before an object is reachable from another thread by
+  anything but a borrow or a join, it's marked shared: what a spawned
+  block keeps of its captures, what's stored in a handler instance tasks
+  share, a published version, a value sent on a channel. An arena is
+  sealed instead, and its first seal marks its captures.
+- **X, crossing.** Values cross a region's edge by copy: out of an arena
+  (its result, and what an outer operation keeps of its arguments), into
+  one (an operation's result), and out of a read block, up to a budget,
+  past which it's counted as shared. One traversal does it, forwarding
+  in place where the source dies right after, and through a side table
+  where others still read it. Only arenas and read blocks copy; scopes
+  and `with` bodies don't.
+- **D, deferral.** A free that waits for a grace period finishes before
+  the region that owns its memory ends: a snapshot instance frees what
+  it retired when it ends.
+- **J, joins.** A task's result transfers at its join, with release and
+  acquire. Nothing else moves between tasks without M or X.
+
+**One current heap a task.** Each task holds a pointer to the heap it
+allocates on, swapped at every task switch and at an arena's boundary:
+two stores. Per-thread heaps, arenas, a task's own part of an arena,
+re-handling and reclamation are all that one pointer, and every free
+goes to the heap its chunk names, not the current one.
+
+**Arenas re-handle what their body uses.** An arena's `with` installs a
+stateless handler for each dependency in its body's row that was
+installed outside it. Each operation switches the task's current heap
+to the one the outer handler was installed with, copies out the
+arguments that handler keeps, calls it, switches back, and copies the
+result in. A block passed to such an operation is wrapped the other way.
+It holds no state, so it takes no lock and makes no journal entry. In
+release builds it's a known handler and inlines; in debug builds it's
+one more evidence node. Measured with hand-written C, copy-in costs 113
+to 152 cycles an operation that returns objects, about 7% of a
+4,000-cycle request, and the heap switch as a pointer is two stores.
+
+**Under `single()` and `sim`** there are no marks, seals, deferred frees
+or locks, and the shared paths aren't compiled. What's left is local,
+immortal and arena-open, and the compiler's states.
+
+**What Mem Lint checks,** beyond what it checks today:
+
+- every operation that writes in place consumes a bundle Lint knows
+  holds one reference;
+- a part, a slice included, is never read after its parent is consumed
+  unless it was counted first;
+- each marking point is preceded by `Mark_shared`, or is a join's
+  result;
+- in an arena's body, every operation of an outer handler goes through
+  the re-handler, the leave copies out every object slot of its result,
+  and no token, view or part crosses the `with`;
+- a value leaving a read block is copied out, or counted only as
+  shared;
+- the fields an object may have, 64, is one constant shared by to_mem,
+  Mem Lint and the runtime (today Lint says 32).
+
+A debug runtime asserts H on every free, and at an arena's end that no
+heap object points into its chunks.
+
+**What was cut.**
+
+- **Frames (stack.ml, H8).** After small values (step 10), keeping an
+  object in its function's frame added nothing measurable: 1.00× the
+  cycles on every benchmark and on H8's kernels, and 0.3% of
+  binary-trees' instructions. Frames were also the one memory state Mem
+  Lint didn't check, which is how a leak shipped (a frame version
+  building its result in a reuse token's memory). stack.ml and the
+  `_frame` versions go; the analysis stays in git, in case records of
+  more than four fields, built and lent, show up in a measured program.
+- **Handler operations compiled to atomics.** Uncontended, an atomic
+  gains nothing over the instance's lock on an M4 (2.7 against 2.4 ns),
+  and contended, the standard library's striped counter beats it (34
+  against 13 million operations a second at 8 threads), with no compiler
+  rule.
+- **Adoption,** which held an outer operation's result until its arena
+  ended: copy-in replaces it, which removes a state and bounds memory
+  (1.7 MB against 150 MB after a million requests in one arena).
+- **Sealed and static as two states:** both are immortal.
+
+**How big it is.** About 2,050 lines of C for the memory model: today's
+1,100, the arena 440, the shared paths 120, reclamation 250 and delayed
+frees 150, the unbuilt parts estimated. That's about Koka's runtime
+plus Lean's regions, made safe: Lean's compacted regions are `unsafe`,
+and an arena's seal and rules replace that. Its count states are Lean's
+three plus one.

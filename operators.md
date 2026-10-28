@@ -396,7 +396,9 @@ exactly what wrapping at the narrow width would, since 2^32 divides
 2^64: the low 32 bits of a product don't depend on the bits above
 them. It applies to the operator at the top of what's stored, `a *% b`,
 `a +% b * c`'s `+%`, or a `wrapping_*` method's call, and nothing
-else: `h = h.xor(b)` is checked as any store is. Storing a wrapping
+else: `h = h.xor(b)` is checked as any store is. Where the result isn't
+stored into a sized integer, it wraps at 64 bits: `let x = h *% k` is
+an `Int`, wrapped at 64, even when `h` is a `UInt32`. Storing a wrapping
 result into a `UInt64` is an error, since half of what wrapping at 64
 bits makes is negative; keep a 64-bit hash in an `Int`:
 
@@ -408,8 +410,11 @@ fn fnv64(bytes: Array<UInt8>) -> Int =
   h
 ```
 
-`Int`'s `xor`, `bit_and` and `bit_or` are what such code needs besides;
-shifts aren't there yet.
+`Int`'s `xor`, `bit_and` and `bit_or` are what such code needs besides.
+Shifts, `shl` and `shr`, which lose the bits shifted out and panic on
+an amount outside 0 to 63, and literals in hex, binary and with
+underscores, `0x82F63B78`, `0b1010` and `1_000_000`, are decided
+(foundations.md, decision 15) and not built yet.
 
 ### How they're kept
 
@@ -629,12 +634,14 @@ Named here so they aren't forgotten:
   price is an error whose help says `0.08d`.
 - **Shapes and build time,** for `json` and SQL rows, in
   [shapes.md](shapes.md) rather than `comptime`.
-- **Shifts,** `shl` and `shr`, beside `xor`, `bit_and` and `bit_or`.
+- **Shifts,** `shl` and `shr`, beside `xor`, `bit_and` and `bit_or`;
+  and hex, binary and underscored literals.
 - **Narrow lanes:** a loop over sized elements computed at their width
   where the compiler proves the values fit (foundations.md, decision 15).
 - **`Decimal`,** in std ([stdlib.md](stdlib.md)).
 - **A sorted map,** in std, on a type's order.
-- **Slices,** `xs[1..3]`, once there's a view that doesn't copy.
+- **Slices,** `xs[1..3]`, as values that share their root's buffer
+  (foundations.md, decision 17).
 - **`ren fmt`,** one format with no options, as `gofmt`, by the C
   backend.
 - **`ren api diff`,** to flag a public function whose requirements grew.

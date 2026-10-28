@@ -5,7 +5,9 @@ call finds its code, how tasks run on many cores, and what that gives the
 compiler. It was decided on 2026-10-26, after the research and design
 rounds summarized at the end, and amended on 2026-10-27 with what the
 native slice measured: decisions 14 to 16 are new, and 2, 4, 8, 10 and
-13 changed. It reverses parts of [deps.md](deps.md),
+13 changed. It was amended again the same day from nine research spikes
+and three programs written against it: decision 17 is new, and 3, 4,
+7, 8, 10, 13, 14 and 15 changed. It reverses parts of [deps.md](deps.md),
 [handlers.md](handlers.md), [async.md](async.md) and
 [compiler.md](compiler.md). Those documents keep describing what's built
 today, and each is updated by the stage that implements its part of this
@@ -38,6 +40,14 @@ compile time, the split between `dyn` and generics, and colored functions
 with their split between Rayon and Tokio. And it keeps what Effect gives a
 program, typed errors and requirements, dependency injection, structured
 concurrency, in direct style.
+
+**The programmer never holds an address, so representation is the
+compiler's choice.** Values have no identity a program can see, and
+nothing hands out a pointer into one. So the compiler may keep a value
+unboxed or boxed, pack its fields, keep a slice as a root and a range,
+lay an array out by field, or build data in an arena's chunks, and no
+program can tell. The rule that keeps this true: **no feature exposes
+an address or an identity outside `trust`.**
 
 ## Decisions
 
@@ -156,6 +166,14 @@ that carry code, and they carry it by name.
   copy: `handler fn(req) => respond(req, body)` is a `Route`.
 - A chain, `a over b`, isn't a value in v1. Store the parts and write
   `with a over b`.
+- **A stored description's `uses` is an upper bound.** A handler that
+  needs fewer dependencies fits a slot whose type lists more:
+  `Router<(Api uses Db, Cache)>` holds `health()`, which uses nothing.
+  Dispatch over the closed set still knows each handler's exact row.
+  Without it, every route in a table has to declare every dependency any
+  route uses. Decided for 10d; today's error says the opposite of what's
+  happening ("one that needs more can't stand in for one that needs
+  less"), and its direction is fixed now.
 
 A **stateless handler**, with no `var`, no `finally`, no setup that can
 fail and no `next`, can also be called as a method, without a `with`.
@@ -179,36 +197,57 @@ all the variants, and a dependency when others add them.
 ### 4. Static dispatch, in a closed world
 
 Release builds see the whole program, so the handlers `for D` are a known
-set. A call to an operation of `D` is one of two things:
+set, and a call to an operation of `D` can only reach that set.
 
-- **Direct**, where the handler is known: almost every `with`, after
-  specialization. It inlines.
-- **A switch over that set**, where the handler was chosen at run time,
-  in an `Array<Shape>`, a router, or from config. Every arm is visible,
-  so arms inline and the compiler can prove some can't happen. A
-  dependency with one handler in the program has no tag at all.
+**The promise: a closed, listed set, lowered to the fastest code.**
+Every dispatch goes to handlers the compiler knows and
+`ren build --explain-dispatch D` lists, site by site, with the lowering
+it chose and why. Which lowering depends on how many handlers reach the
+call, after release narrows them:
 
-A description is a tag and up to three words of captured data, with
-anything larger or recursive boxed, in every build. Debug builds make the
-tag a pointer to a record of the handler's functions, so each module
-compiles alone. That's a vtable, but debug evidence already is one.
-Release builds number the tags and narrow the layout to what the program
-has.
+- **One handler: a direct call,** which inlines. That's almost every
+  `with`, after specialization. A dependency with one handler in the
+  program has no tag at all.
+- **Two to four: the arms inline,** as compare-and-branch, not a jump
+  table.
+- **More than four: a call through a static table** of the set's arms,
+  indexed by the description's tag. For a dependency with one operation,
+  the tag is the arm's code pointer. That's an indirect call, but to a
+  closed, listed set.
 
-**The promise:** release has no hidden or open-ended indirect calls.
-Every dispatch is direct or a switch the compiler can see through, and
-anything else is named in a build note. A switch with many arms compiles
-to a jump table, which costs a branch like a vtable call. The wins are
-the inlined arms, no allocation, and the single-handler case.
+Measured on an M4 (research/dispatch.md): one handler costs 0.88 ns a
+call against Rust's `dyn` at 1.15; two to four handlers, shuffled, 2.8
+to 4.8 ns against `dyn`'s 5.5 to 7.5 and Go's interfaces' 6 to 8.2; a
+handler chosen from config and called in a loop, 0.77 ns, or 0.29 when
+the loop vectorizes. Above four, an inline jump table was 5 to 15%
+slower than a vtable call, and up to 53% slower in a recursive
+interpreter, and an out-of-line switch function was slower everywhere;
+the table call tied or beat the vtable (8.26 against 9.03 ns at 32
+handlers). Rust's enum loses where the switch does, so it's the
+lowering, not the closed world.
 
-- Release may clone a `with`'s body for each handler a runtime value
-  could be, when there are four or fewer and the code fits a budget, and
-  never across a suspension. Otherwise it switches on each call.
+- **Ren clones loops per handler itself.** Release clones a `with`'s
+  body, or a loop over a description that doesn't change, once for each
+  handler a runtime value could be, when there are four or fewer and the
+  code fits a budget, and never across a suspension. clang at -O2,
+  Ren's release level, never unswitches: the switch stays in the loop,
+  2.7× slower in one that would vectorize. A description is immutable,
+  so its tag can't change in the loop; Ren knows that and clang doesn't.
+- **Dispatch that recurses through its own dependency** calls through the
+  table, never one switch function holding every arm.
+- **A description's size depends on the build.** Debug builds make it a
+  tag and up to three words of captured data, anything larger or
+  recursive boxed, and the tag a pointer to a record of the handler's
+  functions, so each module compiles alone. That's a vtable, but debug
+  evidence already is one. Release numbers the tags and sizes a
+  description to its dependency's largest handler, up to about eight
+  words, before boxing anything: Rust's layout cost nothing measured in
+  streaming loops, where boxing a five-word payload cost 6 to 12% when a
+  tenth of the elements had one, and 30 to 90% when half did.
 - An optional release-only analysis narrows which handlers reach a
   parameter or field. It's invisible to typing and never runs in debug.
 - Polymorphic recursion that makes descriptions without bound is an
   error, as in Embedded Swift.
-- `ren build --explain-dispatch D` lists the handlers and every switch.
 
 **How far specialization goes.** Measured, it grows code linearly, a
 constant 1.25× the debug build's C, and shrinks machine code to 0.55×
@@ -221,11 +260,27 @@ was larger than what it saved. Instead:
 - A generic function whose body only moves its values, with no `==`,
   `show`, hashing or other operation that depends on the type, is
   specialized per layout, not per type, as Go and Swift share code. One
-  that uses such an operation is specialized per type, since sharing it
-  would need a dictionary of indirect calls.
+  that uses such an operation is shared per layout too, with the type's
+  descriptor as a parameter, as release `==` already walks it; it's
+  specialized per type only where release emits code specialized for
+  the operation.
 - A whole-program size budget may make a call box its arguments
   instead; that's a dispatch, so it's reported as a build note, never
   silent.
+
+**Combinations of types.** On generic code that makes generic code at
+new types, the shape that makes Rust's builds explode, copies grow as
+Rust's instances do, polynomially or exponentially as the program's
+types do, at 0.2 to 0.75× of rustc's count (research/combinatorial.md).
+Blocks are a constant factor: a block never enters a type, so generic
+code downstream of one is shared across call sites (5 copies a site
+against Rust's 20 on adapter chains), but code that wraps a block at
+each layer makes a copy per literal, as Rust makes one per closure type
+(4,082 against 4,080). **Representation is the lever.** Everything that
+isn't a small value is one boxed word, so sharing per layout collapses
+the copies that types multiply: 1,030 functions to 18, and 1,475 to 22,
+which Rust's by-value layouts can't do. Copies made per block don't
+fold, and only the budget bounds them.
 
 There are no dynamically loaded Ren plugins. C function pointers, inside
 `trust`, are the one indirect call left.
@@ -269,15 +324,33 @@ Async.scope fn(s) =>
   called has run until it waits. That's the batching point.
 - **`Async.yield()`** lets others run. There's no preemption.
 - **Wrappers are calls:** `retry(n, on: Tags)`, `timeout(d)`, and
-  `race(a, b)`, which returns the first success. `with` installs only
-  handlers.
+  `race(a, b)`. `with` installs only handlers.
+- **`retry` names what it retries.** `on:` is required and takes one or
+  more error tags, `on: DbDown` or `on: DbDown | Timeout`, checked
+  against the block's errors when compiling. Any other error leaves at
+  once; after `n` tries, the last error leaves.
+- **`race`'s branches can't fail.** So the first to finish is the first
+  to succeed, and a branch that fails can't leave the race waiting on
+  the other: a server's `race(read_request, wait_for_shutdown)` would
+  otherwise hold a closed connection until shutdown. A branch that can
+  fail is an error whose help says to write `attempt` inside it, which
+  makes the failure a value. Retrying until success is `retry`'s job.
+- **A `with` whose setup or `finally` can fail is written `try with`,**
+  as every other call that can fail is written with `try`, with the
+  same fix-it. `with db.transaction() in ...` can fail with `DbDown` or
+  `Conflict`, and inside a `retry(3, on: Conflict)` it's the error the
+  retry exists for.
 - **`Async.map` over a block that uses no dependencies runs on every
   core.** There's no `par_map`.
 - **`handler ... over any`** intercepts every operation of a dependency:
   `call.forward()` at most once and never stored, `call.args` and
   `call.result` for recording, `call.fail(e)` with only the operation's
   declared errors. `limit`, the recorder, replay and fault injection are
-  Ren code.
+  Ren code. There's no reflection: `call.args` and `call.result` are
+  opaque, and can only be shown, compared and encoded to and from the
+  journal, by functions the compiler derives for each dependency. An
+  `over any` handler is specialized per dependency it wraps, so it's
+  static dispatch like any other.
 - **A `finally` covers everything after the point it's written,**
   including inside an operation, so a cancelled caller gives back what it
   took.
@@ -294,7 +367,7 @@ with the leak logged. So no landing pads constrain the optimizer.
 An isolated block can't change a variable from outside it: it returns
 its result, and anything else it changes, it changes through a
 dependency operation. So nothing the block wrote after the fault can be
-seen, which is what lets arithmetic report its panic late (decision 15).
+seen. An arena's body keeps the same rule (decision 10).
 
 ### 9. The runtime is a handler
 
@@ -327,48 +400,147 @@ Tasks share mutable state only through handlers, spawned blocks read
 what they capture, and values have value semantics. So data races can't
 happen, with nothing to annotate.
 
-- **A handler operation runs alone until it suspends.** Across threads
-  that's a lock per handler instance. A thread never holds one while its
-  task is parked, so a plain lock does, about 5 to 20 ns uncontended.
-- **The lock is skipped unless the instance is shared.** Spawning a task
-  marks the handlers it can reach. A handler with no `var` and no
-  `let` of a C or opaque type needs none. The real world handlers lock
-  per file.
+**Handler operations don't interleave.**
+
+- **An operation keeps its instance until it returns.** It holds it
+  across its own calls to handlers installed outside it, and lets go
+  early only at `Async.until`, which is a condition variable. Other
+  callers queue for the instance as tasks: a thread never blocks while
+  its task is parked, so across threads it costs what a plain lock does
+  uncontended, about 5 to 20 ns. So state read before a dependency call
+  is still the state after it, and an invariant that spans the call
+  needs no flag.
+- **Why.** Letting other operations in at every dependency call, as
+  Swift's reentrant actors do, made handler code read like JavaScript
+  `async` code, with bugs the source doesn't show. A key-value store's
+  writer, written against the earlier rule (research/paper-programs.md),
+  needed three fixes: two puts claimed one offset, a record written
+  during an fsync was published as durable, and two overlapping syncs
+  published out of order.
+- **What it costs:** one slow call, an fsync, serializes that handler's
+  operations. For the writer that's what's wanted. A handler that wants
+  its calls to overlap splits an operation in two, "reserve" and
+  "complete".
 - **No deadlock.** An operation can only call handlers installed outside
-  it, so locks are always taken inner to outer. That holds with two
-  rules: a block passed to an operation gets dependencies only from its
-  parameter's type, and handlers in one `with` can't use each other in a
-  cycle.
-- **Counts are atomic only on shared objects.** An object a task keeps
-  from its capture, the state of a shared handler, or a value written
-  into it, is marked shared, as Lean does. Borrows across tasks touch no
-  counts.
-- **The scope is the region.** What a spawned block captures lives in
-  the frame that called `Async.scope`, and a handler's `let`s and
+  it, so a task takes instances inner to outer, and waits can't form a
+  cycle. That holds with two rules: a block passed to an operation gets
+  dependencies only from its parameter's type, and handlers in one
+  `with` can't use each other in a cycle.
+- **The exclusion is skipped unless the instance is shared.** Spawning a
+  task marks the handlers it can reach. A handler with no `var` and no
+  `let` of a C or opaque type needs none. The real world handlers queue
+  per file.
+
+**Memory crosses tasks four ways, and only two are free.**
+
+- **Borrows of captures are free.** What a spawned block captures lives
+  in the frame that called `Async.scope`, and a handler's `let`s and
   parameters live as long as its `with`; no task outlives either. So
-  tasks read them as borrows, which count nothing, and that state is
-  **frozen** for the region's lifetime: its counts are set to a value
-  nothing changes (Lean's persistent objects), so a copy inside a task
-  costs nothing either. When the region ends its counts are restored.
-  What leaves it, a task's result or a value stored somewhere that
-  outlives it, is **copied out**, deep, where it points into frozen
-  state.
-- **Freezing is the runtime's job, and costs a walk.** Marking and
-  restoring walk the frozen data, so it happens only where data really
-  crosses cores: never under `single()` or `sim`, for what crosses cores
-  under `per_core()`, and when a task is stolen under `work_stealing()`,
-  not when it's spawned. Most tasks are never stolen.
+  tasks read them as borrows, which count nothing.
+- **A task's result moves free at its join.** The task has finished, so
+  nothing else holds what it made, and the join costs a release and an
+  acquire. Moving any other unique value isn't free: the objects inside
+  it may still be the sender's, so it's marked. Measured, marking costs
+  about 3 ns an object, and a marked list then copies on every change (a
+  `map` over it 4.6× slower).
+- **Otherwise an object is marked shared, one way, as Lean does.** What a
+  spawned block keeps of its captures, the state of a shared handler and
+  a value written into it, a published version, a value sent on a
+  channel: each is marked once and for good, and counted atomically from
+  then on. A shared object costs what Rust's `Arc` costs, and one counted
+  from every core at once doesn't scale.
+- **Or it's built in an arena** (below), the explicit tool for big data
+  read from every core.
+
+**Nothing that exists is frozen.** An earlier version of this decision
+froze a scope's state for its lifetime, counts set to a value nothing
+changes, and restored them after. Measured (research/freeze.md), the
+walk costs about a read of the data, 5 to 66 cycles an object; it can't
+wait for a steal, since every region with two tasks on two workers was
+stolen from; and freezing late loses counts, so it isn't sound. Whether
+data is cheap to share is decided when it's born.
+
+**Arenas: `with Mem.arena() in body`.** The body allocates in chunks
+that belong to the arena.
+
+- **An arena changes cost, never meaning.** Values leave it only by
+  copy: its result, and the arguments a handler installed outside it
+  keeps. What such a handler's operation returns is copied in. The body
+  can't change a variable from outside it, as with `Async.isolate`.
+  Inside, objects are counted as usual, so a build changes them in
+  place.
+- **It's sealed when it's shared.** When a task scope opens inside it, or
+  a value is stored into a shared handler installed in it, every chunk
+  made since the last seal is sealed: one store per chunk. After that its
+  objects are never counted again and a write copies them, so every core
+  reads it as it reads borrowed data. Its first seal marks shared what
+  the body captured from outside. It stays sealed until it ends, since
+  copies taken while sealed weren't counted.
+- **Tasks allocate in their own part of it,** and it ends all at once,
+  with one pass over its chunks that releases what they hold outside.
+- **Copy-in, not adoption.** An outer operation's result is copied in,
+  not held by the arena until it ends. Holding it cost 150 MB after a
+  million requests in one arena, against 1.7 MB copied in, which costs
+  about 7% of a 4,000-cycle request.
+- **It's a tool for sharing, not an allocator.** At 8 threads, a server
+  whose requests copy config strings ran at 0.82 to 0.99× of pure
+  borrowing in an arena, against 0.02 to 0.08× with the strings marked
+  shared and 0.03 to 0.12× for Rust's `Arc`. Sealing a 1M-entry map
+  costs 0.008 ms where marking it shared costs 83, and ending it 11 ms
+  where dropping it costs 108. On one thread a per-request arena was 4
+  to 13% slower than the heap, since Perceus with free lists already
+  frees promptly.
+- **A server's hot config is an arena the program builds,** with
+  `with Mem.arena()` in its own code. The runtime never moves data into
+  one by itself.
+- The runtime's rules for arenas, marking and crossing are in
+  [compiler.md](compiler.md#the-runtime-model).
+
+**Hot state is sharded, and reads can take no lock.**
+
+- **A hot handler with state is a queue.** `keyed(n, h) over any`, a
+  standard-library handler, keeps `n` instances of `h` and sends each
+  operation to one by its first parameter's `key`; an operation with no
+  key goes to every instance. A hot counter is the standard library's
+  striped counter, a line per worker.
+- **Handler operations aren't compiled to atomics.** Uncontended, an
+  atomic gains nothing (2.4 ns for a spin lock against 2.7 for an atomic
+  add on an M4), and contended, the striped counter beats it (34 against
+  13 million operations a second at 8 threads). Its rules would have
+  been the most special-cased in the model.
+- **Reads that take no lock: `snapshot(v)`,** a standard-library
+  handler. `read` lends the current version to a block whose row is
+  closed and empty, so it can't suspend and can't keep what it borrowed;
+  `publish` and `update` swap in a new version, writers serialized
+  against each other only. A read is one load: no lock, no count. The
+  runtime frees an old version once every worker has passed a
+  scheduling point, which no read block contains (QSBR, as Linux's RCU
+  and BEAM's schedulers do it). What leaves a read block is copied out,
+  up to a budget past which it's counted as shared; returning a hot
+  entry by count instead was 37× slower. Measured at 8 readers, 80 to
+  99% of borrowed reads, 13 to 20× reads under the handler's lock, and near
+  Rust's arc-swap and crossbeam-epoch. Two rules make it sound: `s.spawn`
+  carries `Async` in its row, since it can wait, and no code reached from
+  a call with an empty row runs a scheduling point.
+- **Atomics are fields of a lock-free handler.** A `lockfree handler`
+  whose state is only `Atomic` fields of `Int`, `Bool`, `Float` or an
+  enum, and `let`s, runs its arms without the instance's exclusion. Its
+  operations, `load`, `store`, `swap`, `cas` and the `fetch_` family,
+  are all sequentially consistent, as Go's are, so a run is still some
+  order of operations, and under `sim` every access is a scheduling
+  point. Weaker orderings, fences, and anything that hands out an
+  address are `trust`: they're where `sim`'s guarantee stops.
 
 The native slice measured why this matters: an object counted from 8
 threads at once scales as Rust's `Arc` does, which on data hot in cache
-falls to 2 to 12% of one thread's throughput; borrowed or frozen, the
-same data scales to the machine's limit. Marking objects shared costs 1
-to 4% on one thread. What still collapses, and the documentation names
-as traps: many tasks updating one shared map by copying its path, a
-small value copied per request from state that isn't frozen, and values
-read out of a shared handler's `var` state.
-- A hot handler with state is a queue. Keyed handlers, one instance per
-  key, shard it.
+falls to 2 to 12% of one thread's throughput; borrowed, or in a sealed
+arena, the same data scales to the machine's limit. Marking objects
+shared costs 1 to 4% on one thread. What still collapses, and the
+documentation names as traps: many tasks updating one shared map by
+copying its path, a small value copied per request from shared data
+that isn't in a sealed arena, values read out of a shared handler's
+`var` state, and many tasks keeping slices of one shared buffer, each
+of which counts its root.
 
 ### 11. Determinism
 
@@ -419,12 +591,35 @@ thread can reach every behaviour.
   content per function and specialization.
 - Nothing in the front half is whole-program. That's the rule that keeps
   the edit loop fast, and why lambda sets leave the type checker.
-- **The debug backend isn't clang.** Measured, Ren's front half runs at
-  about 40,000 lines a second on one core, and clang -O0 on the one C
-  file it writes is 77% of a debug build. So debug builds get tcc or a
-  backend of Ren's own, C (or code) per module compiled in parallel, and
-  a cache keyed by each module's content, so an edit rebuilds what it
-  touched. Release keeps clang, per module or partition, in parallel.
+- **Debug builds use tcc, now.** clang -O0 on the one C file Ren writes
+  was 77% of a debug build. tcc compiles the same C 12 to 24 times
+  faster, its code runs at clang -O0's speed or up to 1.8 times slower,
+  and lldb steps through it (research/backend.md). It needs four things
+  of the emitter: fallbacks for clang's overflow builtins; C in
+  translation units of moderate size, a module or a partition, never one
+  file, since tcc's `-g` is superlinear in a unit's size; no system
+  headers in a module's unit (they were 6.7 of tcc's 8.1 ms a unit); and
+  `#line` directives, so a debugger steps through Ren, not C. Units
+  compile in parallel, cached by each module's content.
+- **cproc with QBE was rejected.** Its code is about twice tcc's speed,
+  but it compiles 2.1 to 2.4 times slower than clang -O0 and writes no
+  line information.
+- **Release by default comes from clang -O2 in parallel, not from a fast
+  backend.** No small backend's code comes near -O2's (3.4 to 54 times
+  slower). -O2 per module or partition, in parallel, with a cache, builds
+  the same code: base-500k in 19.7 s as 32 units on 16 cores, against
+  about 321 s as one file. An edit recompiles one module's partition.
+- **Ren's own backend comes later,** for what tcc can't give: Mach-O
+  objects, so ld64 links an edit in about 0.2 s against tcc's 1.6 to
+  4.1 s; debug code without -O0's spills; and debug information about
+  Ren rather than its C. Sized against Roc's dev backend, it's about 8 to
+  12k lines of OCaml a target.
+- **What's left for debug builds faster than Go is the front half.**
+  With tcc, the backend is 10 to 20% of a debug build and the front
+  half, on one core, 80 to 90%. Ren already uses 2.5 to 6 times less CPU
+  than `go build` (base-500k: 19 CPU-seconds against 117); Go wins on
+  wall clock by running on many cores. So the front half runs per
+  module, in parallel, which the rule above already allows.
 
 ### 14. Koka's memory model, Rust's generics
 
@@ -448,67 +643,104 @@ a `T` field is an `Int`, not a pointer.
   nothing and count nothing but the objects inside them. `Option` of an
   object is a pointer that may be null. Recursive types and anything
   larger are boxed.
-- **What never escapes lives in the frame.** In release builds, an
-  object that isn't returned, stored or raised, and is only lent to
-  parameters that keep nothing, lives in its function's frame, and a
-  function that returns one object it builds can build it in its
-  caller's. Second-class blocks make a call through a block as clear to
-  this analysis as a direct one, which Go can't see through. Measured,
-  this applies where a program has temporaries, and rarely in code that
-  builds structures, which keeps what it builds; small values as values
-  cover more.
+- **Small values cover what frames did.** Keeping an object that never
+  escapes in its function's frame (H8, stack.ml) was how release builds
+  made temporaries allocate nothing. After small values, it added
+  nothing measurable: 1.00× the cycles on every benchmark and on H8's
+  kernels. It was also the one memory state Mem Lint didn't check,
+  which let a leak through. So it goes.
 - **Reuse goes deep.** Reuse follows Koka: a node that dies drops and
   reuses the nodes inside it too, a small builder (`balance`) is inlined
   where a freed node can go into what it builds, and a rebuild writes
   only the fields that changed. A persistent red-black tree allocates
   one node an insertion, as a mutable one does. It's an optimization,
   not a guarantee.
-- **Taken from Lean and Koka, still to build.** An element taken out of
-  an array while it's changed, so `grid[i][j] = x` and a `map` over
-  arrays of arrays change the inner arrays in place (Lean's swap-out);
-  scalar fields packed together after the object fields (Lean); and
-  recursion that builds a structure after its call compiled to a loop
-  (Koka's tail recursion modulo cons).
-- **The runtime:** an 8-byte header (a 32-bit count, its sign the
-  shared mark, a tag and the field mask) and an allocator with free
-  lists per size, which made every allocating benchmark faster than
-  Rust's.
+- **Taken from Lean and Koka, and built.** An element taken out of an
+  array while it's changed, so `grid[i][j] = x` and a `map` over arrays
+  of arrays change the inner arrays in place (Lean's swap-out: a grid's
+  100 million allocations became 103); scalar fields packed together
+  after the object fields (Lean's: rbtree's peak memory 203.2 to
+  169.6 MB); and recursion that builds a structure after its call
+  compiled to a loop (Koka's tail recursion modulo cons: building a
+  list by recursion, peak memory 97.4 to 25.5 MB, with no stack).
+- **Indices are a library.** `Id<T>` and `Pool<T>`, opaque types over an
+  `Int` and an array of small records, give Roc's and Zig's
+  arrays-and-indices pattern, with an id that can't be used on another
+  kind of pool, and a pool of plain records saves and loads as arrays (a
+  1M-entry map loads in 3 ms, against 120 to 180 ms to rebuild it).
+  Arenas indexed this way were rejected: they'd need two versions of
+  every function an arena's body reaches, or a test on every field
+  access, and indices can't name the outside objects an arena's records
+  hold.
+- **The runtime:** an 8-byte header (a 32-bit count, a tag, a field
+  count and a mask of which fields hold objects) and an allocator with
+  free lists per size, which made every allocating benchmark faster than
+  Rust's. The count says the object's state: positive for one thread's,
+  negative for shared, zero for never counted (statics, sealed arena
+  data), and a band below shared for arena objects, so the inline paths
+  test one sign and every other state costs code that never meets it
+  nothing. References are 8 bytes; 32-bit ones are an open question.
+  The whole model, four states and seven rules, is in
+  [compiler.md](compiler.md#the-runtime-model).
 
 ### 15. Arithmetic
 
 `Int` and `Float` are the only types arithmetic is done in. A fault
-still panics; the rules say where it may be reported, so loops can
-vectorize.
+panics, at the same point in every build: an `Int` overflow where it
+happens, a NaN where it's observed.
 
-- **Overflow is reported late, in loops with no effects.** In a loop
-  whose calls all have an empty `uses` row, an `Int` overflow may be
-  reported when the loop leaves, or at the end of each run of 1,024
-  iterations, instead of where it happens. A pending overflow is
-  reported before any other panic, so the panic is the same. Nothing
-  the loop wrote after the overflow can be seen: it made no dependency
-  calls, the program then ends, and an isolated block can't change outer
-  variables (decision 8).
-- **Wrapping operators** `+%`, `-%`, `*%` wrap at their operands'
-  width, for hashes, checksums and random number generators.
+- **Overflow is checked at each operation.** Reporting it late, when a
+  loop with no effects leaves, was built (late.ml, behind REN_LATE),
+  measured, and dropped: it made no loop vectorize, and it slowed the
+  loops it changed, inout by 18% and a running sum of squares by 29%. A
+  panic that says which operation overflowed, with what operands, needs
+  a call that records them at each site, and a branch to a call keeps
+  clang from vectorizing; a flag alone can't say which, and a checked
+  running sum can't be vectorized at all, since whether a prefix
+  overflowed isn't known from the lanes' sums. So a loop that wants
+  lanes uses the wrapping operators, which vectorize, or, later, narrow
+  lanes where the compiler proves the values fit. The cost stays: a
+  running `Int` sum is 4.45× Rust's, whose release build wraps, and it's
+  the largest cost left in the benchmarks.
+- **Wrapping operators** `+%`, `-%`, `*%` are for hashes, checksums and
+  random number generators. They wrap at the width of the sized integer
+  their result is stored into, and otherwise at 64 bits: `h = h *%
+  16777619` into a `UInt32` keeps 32 bits, and `let x = h *% k` is an
+  `Int`, wrapped at 64, whatever `h` is. Storing a wrapping result into
+  a `UInt64` is an error, since half of what wrapping at 64 bits makes
+  is negative; a 64-bit hash stays an `Int`.
+- **Bits:** `xor`, `bit_and` and `bit_or`, and the shifts `x.shl(k)`
+  and `x.shr(k)`; and literals in hex, binary and with underscores,
+  `0x82F63B78`, `0b1010`, `1_000_000`. A CRC written today divides by
+  256 for a shift. Bits shifted out are lost, as in Rust and Go, so
+  there's no separate wrapping form: `shl` wraps by the rule `*%`
+  follows, and a shift amount outside 0 to 63 panics. `shr` is
+  arithmetic on signed types and logical on unsigned ones. The shifts
+  and literals are decided, not built.
 - **A NaN is checked where it's observed, not where it's made.**
   Arithmetic and stores carry it; comparing it, `match`ing on it,
   converting it to an `Int` or a `Str`, hashing it, or passing it to a
   dependency operation panics. So no program acts on a NaN, and none
   reaches the journal. Debug and release builds check at the same points;
   a debug build's message also says where the NaN was made. Measured,
-  checking every operation was 31% of nbody's cycles.
+  checking every operation was 31% of nbody's cycles; checked where
+  observed, nbody went from 2.37× Rust's time to 1.62×.
 - **Sized integers are for storage.** `Int8`, `Int16`, `Int32`, `UInt8`,
   `UInt16`, `UInt32`, `UInt64` and `Float32` are types of fields and
   array elements. Reading one gives an `Int` (or `Float`); storing into
-  one checks that it fits. The wrapping operators work at their width:
-  `h *% 16777619` on a `UInt32` wraps at 32 bits. Where the compiler
-  proves values fit, a loop computes in narrow lanes.
+  one checks that it fits. Later, where the compiler proves values fit,
+  a loop computes in narrow lanes.
 - **`Float` arithmetic keeps its order.** A sum of `Float`s that a
   vector unit adds in lanes would depend on the machine's width, and a
   journal recorded on one machine has to replay on another. So
   `xs.sum()` on `Float`s is defined as a fixed tree, eight lanes added
   pairwise, the same on every machine, which also vectorizes and is
-  more accurate than adding left to right.
+  more accurate than adding left to right. Measured, a million-`Float`
+  sum ran 35× faster than the checked chain it replaced.
+- **Tables are computed while building.** A top-level `let` is a value
+  fixed into the binary ([shapes.md](shapes.md)), so a CRC table or a
+  parser's tables cost nothing when the program runs. It's on the list
+  of performance work, as `comptime` is for Zig, with no keyword.
 
 ### 16. Loops
 
@@ -519,9 +751,54 @@ vectorize.
 - **The compiler may choose an array's layout.** Arrays are values, and
   nothing hands out a pointer into one's elements, so an array of
   records could be stored as one array per field, which vectorizes. Not
-  built; no feature may give out such a pointer.
+  built; no feature may give out such a pointer ([the
+  principle](#the-bet)).
 - Explicit vector types, as Zig's `@Vector`, come later if loops need
   them.
+
+### 17. Slices are values
+
+A slice of a `Str`, `Bytes` or `Array`, `xs[a..b]`, is an ordinary
+value of the same type, as Roc's seamless slices are; there's no
+`Slice` type. It's a root, the counted owner of the
+buffer, and a range. It can be stored, returned and kept in records,
+and it has value semantics; writing to it copies its range first, as
+writing to any shared value does. A slice of a slice has the first
+one's root. A cursor is a value holding a slice, so a cursor that
+borrows its input needs no lifetime.
+
+- **What doesn't escape costs nothing.** A slice of a parameter the
+  function borrows doesn't count its root: it's a part of its root, as a
+  field read is, counted only if the root is consumed while it lives.
+  So the second-class view this record once asked for is there, but the
+  compiler derives it and nobody writes it. Measured (research/slices.md),
+  a parser that split log lines into fields, 24M slices in all,
+  allocated and counted nothing, at 0.96× the cycles of the same parser
+  written with offsets.
+- **What's kept costs one count.** A slice is a small value (decision
+  14), kept inline in records and arrays, and each kept slice is one
+  count on its root. Tokens and page records that kept their slices
+  cost 1.09× to 1.17× of offsets inline, against 1.5× to 2.5× with each
+  slice a heap object, about what copying costs. Offsets into a buffer
+  remain the fastest way to keep many.
+- **A slice keeps its whole root alive.** `copy()` gives one its own
+  buffer, and is free on an owner. Debug builds report roots kept alive
+  mostly by small slices, and where those were made: eight 8 MiB files
+  of which 80 KB of keys were kept held 67 MB.
+- **A mutable view is `&` on a range,** `f(&xs[a..b])`: a write of `xs`
+  for the call, as `&xs[i]` is. Two ranges of one array in one call
+  overlap, as two indices do, so no exclusivity rule changes.
+  `xs.split_at(n, fn(&lo, &hi) => ...)` and
+  `Async.chunks(&xs, k) fn(&c) => ...` give a block disjoint ranges as
+  places of its own, changed in place. They need blocks that take
+  `inout` parameters (10d).
+- **A `Str` slice panics if it cuts a character.** The slices `split`,
+  `index`, `trim` and `lines` make are at boundaries they found, and
+  don't check; `Bytes` never checks.
+- **Across tasks,** a task's slices of what it borrowed from its
+  captures are free. A slice it keeps counts its root, which is then
+  shared, so many tasks keeping slices of one buffer is the hot-root
+  trap of decision 10: keep offsets, or `copy()`.
 
 ## What's given up
 
@@ -529,21 +806,36 @@ vectorize.
   become enums with an interpreter, or handler descriptions. A pull
   adapter can't carry user code, and turning a recursive producer into a
   pull sequence needs a task.
+- **Generic lazy pipelines.** An adapter over any cursor needs a trait,
+  and a `map(f)` cursor needs a stored block, so `xs.map(f).select(p)`
+  is eager, and a pull pipeline is a `gen fn` written for its element
+  types. It's also why Rust's nested adapter types, which drive its
+  build times, have no counterpart.
 - **Multishot continuations.** No backtracking or probabilistic
   programming as a library. `gen` and async are built in.
 - **An open world.** No Ren code loaded after compiling.
 - **Some `both(fn() => a += 1, fn() => b += 1)`.** It's safe, but needs a
   "runs once" marker, deferred.
 - **Free sharing of changing data across cores.** A shared handler with
-  state costs atomics and a lock; immutable handler state doesn't.
+  state queues its callers, and one slow operation serializes the rest;
+  a value shared outside an arena costs atomic counts. Immutable handler
+  state and sealed arenas don't.
 - **Release build time.** Specializing costs what it costs in Rust, paid
-  only in release. Measured, the code grows linearly and the time is
-  clang's; what grows like Rust's, generic code making generic code at
-  new types, wasn't measured yet.
+  only in release. Measured, copies grow like Rust's instances on
+  generic code that makes generic code at new types, polynomially or
+  exponentially as the program's types do, at a fifth to three quarters
+  of Rust's count, since a block is never part of a type; sharing per
+  layout collapses the copies types make, and code that wraps blocks at
+  each layer is bounded only by the budget, as a closure-heavy Rust
+  program is.
 - **Arithmetic in sized types.** Sized integers are for storage; wrapping
   operators are the only arithmetic at a width.
-- **Pointers into arrays,** and outer variables changed by an isolated
-  block.
+- **Vectorized checked sums.** An `Int` overflow panics where it happens,
+  so a loop whose sum is checked runs one lane at a time; `+%` is the
+  way to ask for lanes.
+- **Addresses:** pointers into arrays, a value's identity, and anything
+  else that would fix a representation, outside `trust`; and outer
+  variables changed by an isolated block or an arena's body.
 
 ## What it isn't
 
@@ -560,7 +852,11 @@ vectorize.
 Rejected after research: preemption, a heap per task, linear and unique
 types, `atomic` blocks, wakeups that carry values, a `map` that goes
 parallel when its block happens to be pure, and finding a block's
-dependencies where it's called.
+dependencies where it's called. And after the native slice: freezing
+data that already exists, keeping objects in frames, overflow reported
+late, handler operations compiled to atomics, arenas that hold outer
+results by adoption, arenas of indices, cproc and QBE for debug builds,
+and 32-bit references as the default.
 
 ## What it reverses
 
@@ -577,9 +873,10 @@ dependencies where it's called.
 | `Async.limit` and the recorder are built in | `over any` handlers in Ren |
 | `par_map` | `Async.map` over a block with no dependencies |
 | Preemption at loop back-edges (async.md) | None |
-| `race` takes the first to finish; `retry(n)` retries any error | First success; `retry(n, on: Tags)` |
+| `race` takes the first to finish; `retry(n)` retries any error | `race`'s branches can't fail, so the first to finish succeeded; `retry(n, on: Tags)` |
+| Another task's operation can run on a handler at each dependency call, and a warning catches state read across one (async.md) | An operation keeps its instance until it returns or waits in `Async.until` |
+| A `with` whose setup can fail is written `with` | `try with` |
 | The journal has no task column | A task path column, answers keyed by task |
-| An `Int` overflow panics where it happens | In a loop with no effects, it may be reported when the loop leaves |
 | A `Float` operation that makes a NaN panics | A NaN panics where it's observed |
 
 ## Staging
@@ -627,73 +924,110 @@ dependencies where it's called.
    memory is within 1.5× of Rust's everywhere; and debug builds are
    slower than `go build`, most of it clang at -O0. Decisions 2, 4, 10,
    13 to 16 were amended from these numbers.
-   **Follow-ups, next:** the release build's four quadratic costs;
-   panic messages interned; specialization without the per-function cap
-   (decision 4); small values as values, packed scalar fields, swap-out
-   and tail recursion modulo cons (decision 14); late overflow, wrapping
-   operators, NaN where observed, sized storage integers and `Float`
-   sums (decision 15); `for i, x in &xs` and `zip` (decision 16); and
-   the loops that then vectorize, measured.
+   **Follow-ups, done:** the release build in linear time; panic
+   messages interned; specialization without the per-function cap and
+   identical functions folded (decision 4); small values as values,
+   packed scalar fields, swap-out and tail recursion modulo cons
+   (decision 14); wrapping operators, NaN where observed, sized storage
+   integers and `Float` sums (decision 15); `for i, x in &xs` and `zip`
+   (decision 16). Late overflow was built and is off (decision 15).
+   Every benchmark is now within 2× of Rust's time, inout at 1.67× and
+   nbody at 1.61× the furthest. **Next:** tcc for debug builds, per
+   partition (decision 13); frames (stack.ml) removed (decision 14).
 3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
-   `over any`; `retry(n, on:)`.
+   a stored description's `uses` as an upper bound, and the error's
+   direction fixed; `over any`; `retry(n, on:)`; blocks that take
+   `inout` parameters, which `split_at` and `Async.chunks` need.
 4. **11a, tasks.** Rules B to D; `Async.scope`, `spawn` and its handle,
-   keyed spawn, `until`, `tick`, `yield`, `timeout`, `race`, `isolate`;
-   the runtime as a handler with `single` and `sim`; the tape, poll
-   points, task paths, journal version 2, journals as tests with a
-   schedule prefix; the standard library's channel, semaphore and
-   `Batcher`.
-5. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; handler
-   locks and the shared mark; atomic counts on shared objects; scopes and
-   `with`s as frozen regions, frozen by the runtime, with copy-out;
-   a heap per thread.
+   keyed spawn, `until`, `tick`, `yield`, `timeout`, `race` with branches
+   that can't fail, `isolate`; handler operations that don't interleave;
+   `try with`; the runtime as a handler with `single` and `sim`; the
+   tape, poll points, task paths, journal version 2, journals as tests
+   with a schedule prefix; the standard library's channel, semaphore,
+   `Batcher` and `keyed(n, h) over any`. Two holes in the spec to close
+   here: `s.spawn` carries `Async` in its caller's row, since it can
+   wait; and no code reached from a call with an empty row runs a
+   scheduling point.
+5. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; the
+   runtime model of [compiler.md](compiler.md#the-runtime-model): the
+   shared mark and atomic counts on shared objects, a heap per thread
+   with frees returned to the heap they came from, the current heap a
+   pointer each task holds; arenas, sealed when shared, with copy-in;
+   `snapshot` and its reclamation; lock-free handlers with `Atomic`
+   fields; the striped counter.
 6. **11c, generators** and the stream library on them.
-7. **Native, stages 13 and 14.** The task frame allocator, the dispatch
-   switches over descriptions and the build notes; the debug backend
-   that isn't clang, and modules compiled in parallel and cached by
-   content. Specialization per block and per handler is built (item 2).
+7. **Native, stages 13 and 14.** The task frame allocator; dispatch
+   lowered as decision 4 says, with `--explain-dispatch` and the build
+   notes; the front half run per module in parallel; release built with
+   clang -O2 per module in parallel, cached by content. Specialization
+   per block and per handler, and most of the memory work, are built
+   (item 2).
 
 The interpreter runs tasks on OCaml effects throughout, so 10c to 11c
 need no native code.
 
 ## Open questions
 
-- How a cursor that borrows its input would work without lifetimes, if
-  owning turns out too costly.
 - The size budget for cloning a `with` body per handler.
 - Whether `both` gets a "runs once" marker.
 - What a runtime written by users looks like.
-- What freezing's walks cost on a realistic shared structure, against
-  how often tasks are stolen.
-- How specialization grows on generic code that makes generic code at
-  new types, which is what makes Rust's grow.
+- Where folding and sharing per layout run (on Mem IR before C, or on
+  the C), and whether the size budget counts copies, C, or machine code.
 - Whether choosing an array's layout (decision 16) pays, and when.
-- **Allocation the compiler guarantees.** Reuse and frames are
-  optimizations (decision 14): `ren build --explain-alloc` to show
-  which allocations were reused, framed or kept, and a Koka-style `fip`
-  marker that makes a function that would allocate an error, for hot
-  paths.
+- **Allocation the compiler guarantees.** Reuse is an optimization
+  (decision 14): `ren build --explain-alloc` to show which allocations
+  were reused or kept, and which values were copied crossing an arena
+  or a read block, and a Koka-style `fip` marker that makes a function
+  that would allocate an error, for hot paths.
+- **Compressed references.** Object fields as 32-bit offsets from one
+  reserved range, as the JVM, V8 and Koka's `c64c` target do, bring
+  trees to Rust's memory (a binary-trees node 24 bytes to 16; rbtree
+  and binary-trees peak memory 1.24× and 1.47× Rust's to 1.00× and
+  0.98×). Measured on an M4 they cost 3 to 17% of cycles, and 2.2× on
+  rbtree, whose hot pointer chasing loses the processor's load
+  prediction to the one-instruction decode. They also cap every
+  object, strings included, at 16 or 32 GB, which a storage engine
+  can outgrow, and an ahead-of-time compiler can't choose at startup.
+  So the default stays 64-bit. A whole-program build flag is the form
+  if a program needs it; x86-64 is unmeasured.
+- **How an arena's data outlives its `with`.** A server's config built
+  in an arena is read while the server runs, but its handlers, which
+  change, live outside the arena and are sized by the config. Whether
+  `let cfg = with Mem.arena() in build()` keeps the arena alive, sealed,
+  as long as `cfg` is (research/paper-programs.md), or the serving loop
+  runs inside the arena, isn't decided.
+- **Ending an arena without its pass.** The pass that releases what an
+  arena holds outside it costs about 15 cycles an object; an arena that
+  provably holds nothing outside could skip it.
+- **Arrays of small values that hold objects,** which slices kept in
+  records need: an array's elements counted by a mask, as a
+  constructor's fields are, which every runtime walk has to learn.
+- **The cost of returning memory to its owner** on every free across
+  threads (one load, as mimalloc's), unmeasured.
+- **Whether a slice is two words or three.** Two (a root, a 32-bit
+  offset and length) keeps a record of a slice and a field a small
+  value; three (Roc's and Go's) saves a load a read.
+- **Snapshots under load.** How a CPU-bound task that never suspends
+  reports quiescence (counted poll points), and whether a publish can
+  avoid writing counts that readers read: counted versions fall to 80%
+  of borrowed reads at a publish every 10 µs, as `Arc` does.
 
 A storage engine, the flagship in [vision.md](vision.md#what-ren-is-for),
-needs four designs that don't exist yet:
+needed four designs. Two are now decided, and two are open:
 
-- **Views into buffers.** Parsing a record out of a page without
-  copying it is where Rust's lifetimes pay. Ren's likely answer is the
-  trick blocks use, applied to data: a view (an array, an offset and a
-  length) is second-class, lent to a call and never stored or returned,
-  so it needs no lifetime. It's the same question as a cursor that
-  borrows its input, and it may touch the exclusivity rule, so it's
-  the first of the four to settle.
-- **Explicit layout** for formats on disk and on the wire: field order,
-  alignment, byte order. A type that declares one opts out of the
+- **Views into buffers: decided,** as slices that are values (decision
+  17). The view that needs no lifetime is one the compiler finds.
+- **Reads that take no lock: decided,** at three levels (decision 10):
+  `snapshot`'s reads, measured near Rust's arc-swap; sharded and striped
+  state; and `Atomic` fields, sequentially consistent, with weaker
+  orderings in `trust`.
+- **Explicit layout,** open, for formats on disk and on the wire: field
+  order, alignment, byte order. A type that declares one opts out of the
   layout the compiler may choose (decision 16).
-- **Control over allocation:** arenas, memory allocated up front, and
-  the guarantee above.
-- **Reads that take no lock.** Storage engines read hot structures with
-  RCU, seqlocks and atomics. A frozen region is close to RCU's read
-  side, and publishing a new snapshot is a handler operation; whether
-  that's fast enough for a hot index is unmeasured. `trust` and C are
-  the fallback.
+- **Control over allocation,** open: memory allocated up front, and the
+  guarantee above. Arenas are decided (decision 10), as a tool for
+  sharing, not an allocator.
 
 ## Where it came from
 
@@ -709,10 +1043,18 @@ Effect v4's modules. Then stage 10c built the blocks decisions, and the
 native slice measured the memory and dispatch bet against Rust and Go;
 six experiments on it (arrays in loops, `map`, reuse, frames, the header
 and allocator, counting across cores) and one on release builds gave
-the numbers decisions 2, 4, 10 and 13 to 16 were amended from.
+the numbers decisions 2, 4, 10 and 13 to 16 were amended from. Nine
+research spikes followed, on freezing, arenas, one runtime model, reads
+that take no lock, slices, dispatch over descriptions, combinations of
+types, compressed references and the debug backend, and three programs,
+a task runner, a bank's HTTP API and a key-value store, were written
+against the whole record; decisions 3, 4, 7, 10, 13, 14, 15 and 17 come
+from them.
 
 It leans on Effect, Koka, Effekt (second-class blocks), Roc (lambda sets
-and their split between builds), Swift (exclusivity, task allocation,
-actor reentrancy), Hylo, Lean (counts marked shared), Verona (lock
-ordering), Zig (`Io` passed in, `inline else`), TigerBeetle and
-FoundationDB (simulation).
+and their split between builds, seamless slices), Swift (exclusivity,
+task allocation, and actor reentrancy, as what not to do), Hylo, Lean
+(counts marked shared), Verona (lock ordering), Zig (`Io` passed in,
+`inline else`), Linux's RCU and BEAM (quiescent-state reclamation),
+mimalloc (frees returned to their heap), TigerBeetle and FoundationDB
+(simulation).
