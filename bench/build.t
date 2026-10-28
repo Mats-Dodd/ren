@@ -1418,3 +1418,41 @@ same objects alive at the end as clang's build above.
   ../examples/shop/main.ren, naive, tcc: the same, exit 0, objects live at exit 0
   ../examples/two/main.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   ../examples/two/main.ren, naive, tcc: the same, exit 0, objects live at exit 0
+
+Stage 10d's programs (compiler.md, "Stage 10d"), in 10d/, one or two
+for each step that builds what they use: each `.expected` holds what
+`ren run` prints, then how it exits, then the first line it writes to
+stderr, if any. Until its step lands a program isn't as specified; the
+step that lands it changes its line here to say so, and adds it to the
+loops above, `same`, `release` and `tcc_same`, which check its native
+builds against `ren run` under the sanitizers.
+
+  $ spec() {
+  >   (cd "$(dirname "$1")" && f=$(basename "$1") &&
+  >    { ren run "$f" > spec.out 2> spec.err; echo "exit $?" >> spec.out; } &&
+  >    head -n 1 spec.err >> spec.out &&
+  >    if cmp -s spec.out "${f%.ren}.expected"
+  >    then echo "$1: as specified"
+  >    else echo "$1: not yet"
+  >    fi)
+  > }
+  $ for f in bits bits_panic generic shapes router dispatch overany slices slices_panic; do spec 10d/$f.ren; done
+  10d/bits.ren: not yet
+  10d/bits_panic.ren: not yet
+  10d/generic.ren: not yet
+  10d/shapes.ren: not yet
+  10d/router.ren: not yet
+  10d/dispatch.ren: not yet
+  10d/overany.ren: not yet
+  10d/slices.ren: not yet
+  10d/slices_panic.ren: not yet
+
+Step 4's listing of how each dispatch site is lowered, for each
+dependency of 10d/dispatch.ren (compiler.md, "Stage 10d", "Dispatch"):
+`Seed` a direct call, `Step` inline arms and the loop in `run` cloned
+per handler, `Shape` and `Expr` a call through the table.
+
+  $ (cd 10d && ren build --release --explain-dispatch Shape dispatch.ren -o ./dispatch.bin 2>&1 | head -n 3)
+  error: `ren build` has no option --explain-dispatch
+  usage: ren <command> <file.ren>
+         ren run [--record <file.journal>] [--trace] [--release] <file.ren>

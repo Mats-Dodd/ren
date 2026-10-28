@@ -1,0 +1,65 @@
+// Stage 10d, step 3: the router of research/paper-programs.md
+// (server/api.ren), cut to what a test can hold. Each route is a
+// handler description of `Api`, kept in a generic router whose slot
+// says what any route may use, `(Api uses Cache, Db)`, and called as a
+// method. A route that needs less fits: `health()` needs nothing, and
+// the inline handler for `/version` neither.
+
+dep Api =
+  handle: fn(path: Str) -> Str ! NotFound
+
+dep Db =
+  balance: fn(id: Int) -> Int ! NotFound
+
+dep Cache =
+  hits: fn() -> Int
+
+handler health() for Api =
+  handle(_) => "ok"
+
+handler account(id: Int) for Api uses Db =
+  handle(_) => show(try Db.balance(id))
+
+handler stats() for Api uses Db, Cache =
+  handle(_) => show(try Db.balance(1) + Cache.hits())
+
+type Entry<R> = { path: Str, route: R }
+
+type Router<R> = opaque { entries: Array<Entry<R>> }
+  pub fn empty() -> Router<R> = Router { entries: [] }
+  pub fn on(inout self, path: Str, route: R) =
+    &self.entries.push(Entry { path: path, route: route })
+  pub fn find(self, path: Str) -> Option<R> =
+    var found = None
+    for e in self.entries
+      if e.path == path then found = Some(e.route)
+    found
+
+fn routes() -> Router<(Api uses Cache, Db)> =
+  var r: Router<(Api uses Cache, Db)> = Router.empty()
+  &r.on("/health", health())
+  &r.on("/version", handler fn(_) => "10d")
+  &r.on("/accounts/1", account(1))
+  &r.on("/accounts/9", account(9))
+  &r.on("/stats", stats())
+  r
+
+handler mem_db() for Db =
+  balance(id) => if id < 5 then id * 100 else fail NotFound
+
+handler counter(n: Int) for Cache =
+  hits() => n
+
+fn respond(rs: Router<(Api uses Cache, Db)>, path: Str) -> Str uses Cache, Db =
+  match rs.find(path)
+    None => "404"
+    Some(r) =>
+      match r.handle(path)
+        s => s
+        fail NotFound => "404"
+
+fn main() uses Console =
+  let rs = routes()
+  with mem_db(), counter(7) in
+    for p in ["/health", "/version", "/accounts/1", "/accounts/9", "/stats", "/nope"]
+      print(respond(rs, p))

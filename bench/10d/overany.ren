@@ -1,0 +1,71 @@
+// Stage 10d, step 5: `over any` and `retry(n, on: Tags)` (foundations.md,
+// decision 7; compiler.md, "Stage 10d"). One logger written once for
+// every dependency, one handler that injects a fault every few calls,
+// and `retry` from the prelude, which is Ren, retrying only what it's
+// told to.
+
+dep Users =
+  get: fn(id: Int) -> Str ! NoUser(id: Int)
+  count: fn() -> Int
+
+handler mem_users() for Users =
+  get(id) => if id == 1 then "ann" else fail NoUser(id)
+  count() => 1
+
+dep Store =
+  get: fn(k: Str) -> Int ! Down
+  put: fn(k: Str, v: Int) ! Down
+
+handler mem_store() for Store =
+  var keys: Array<Str> = []
+  var vals: Array<Int> = []
+  get(k) =>
+    var v = 0
+    for i in 0..keys.len()
+      if keys[i] == k then v = vals[i]
+    v
+  put(k, v) =>
+    &keys.push(k)
+    &vals.push(v)
+
+// every operation of whatever it goes over: its name and arguments, then
+// what it gave
+handler logged() over any uses Console =
+  call =>
+    Console.write("> ".concat(call.name).concat(show(call.args)))
+    let r = attempt call.forward()
+    Console.write("< ".concat(show(r)))
+    try r
+
+// every `every`th call fails with `Down`, which every operation of what
+// it goes over has to declare
+handler down_every(every: Int) over any =
+  var n = 0
+  call =>
+    n += 1
+    if n % every == 0 then call.fail(Down) else try call.forward()
+
+fn fetch(tries: Int) -> Int ! Down uses Store =
+  try retry(tries, on: Down) fn() => try Store.get("a")
+
+fn main() uses Console =
+  with logged() over mem_users() in
+    print(Users.count())
+    print(attempt Users.get(1))
+    print(attempt Users.get(2))
+  with logged() over Clock.frozen(Time.epoch) in
+    print(Clock.now())
+  with down_every(3) over mem_store() in
+    print(attempt Store.put("a", 7))
+    print(attempt Store.get("a"))
+    print(attempt fetch(2))
+    print(attempt Store.get("a"))
+    print(attempt fetch(1))
+  var tries = 0
+  with down_every(2) over logged() over mem_store() in
+    let _ = attempt Store.put("b", 3)
+    let r = attempt retry(5, on: Down) fn() =>
+      tries += 1
+      try Store.get("b")
+    print(r)
+  print(tries)

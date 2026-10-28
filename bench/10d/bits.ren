@@ -1,0 +1,60 @@
+// Stage 10d, step 1: shifts and literals (foundations.md, decision 15;
+// compiler.md, "Stage 10d"). A CRC-32C written with them, as every log
+// format checks its records, and what a shift does at its edges.
+
+// the table a byte at a time reads: entry n is n's remainder, reflected
+fn table() -> Array<UInt32> =
+  var t: Array<UInt32> = []
+  for n in 0..256
+    var c = n
+    for _ in 0..8
+      c = if c.bit_and(1) == 1 then c.shr(1).xor(0x82F6_3B78) else c.shr(1)
+    &t.push(c)
+  t
+
+fn crc32c(t: Array<UInt32>, data: Array<Int>) -> Int =
+  var c: UInt32 = 0xFFFF_FFFF
+  for x in data
+    c = t[c.xor(x).bit_and(0xFF)].xor(c.shr(8))
+  c.xor(0xFFFF_FFFF)
+
+fn main() uses Console =
+  let t = table()
+  print(t[1])
+  print(t[255])
+  // the check value from the CRC catalogue
+  print(crc32c(t, [49, 50, 51, 52, 53, 54, 55, 56, 57]) == 0xE306_9283)
+  print(crc32c(t, [49, 50, 51, 52, 53, 54, 55, 56, 57]))
+  print(crc32c(t, []))
+  // literals
+  print(0xFF + 0b1010 + 1_000)
+  print(-0x10)
+  print(0x7FFF_FFFF_FFFF_FFFF)
+  // shifts: the bits shifted out are lost, `shl` wraps at 64 bits, and
+  // `shr` keeps a negative number's sign
+  print(1.shl(62))
+  print(3.shl(62))
+  print(1.shl(63))
+  print((-8).shr(1))
+  print((-1).shr(63))
+  print(0xF0.shr(4))
+  var k = 0
+  var total = 0
+  while k < 64
+    total = total +% 1.shl(k).shr(k)
+    k += 1
+  print(total)
+  // stored into a sized integer, `shl` wraps at its width, as `*%` does
+  var w: UInt32 = 0x8000_0001
+  w = w.shl(1)
+  print(w)
+  var b: UInt8 = 0b1100_0001
+  b = b.shl(2)
+  print(b)
+  var i: Int32 = 1
+  i = i.shl(31)
+  print(i)
+  // a value read from an unsigned type is never negative, so `shr` on
+  // it is logical
+  var u: UInt32 = 0xFFFF_FFFF
+  print(u.shr(28))

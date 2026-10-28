@@ -1,0 +1,8 @@
+// Stage 10d, step 1: a shift by an amount outside 0 to 63 panics, at the
+// same point in every build (foundations.md, decision 15).
+
+fn main() uses Console =
+  var k = 60
+  while k < 70
+    print(1.shl(k))
+    k += 2

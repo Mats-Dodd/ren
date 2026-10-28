@@ -2878,6 +2878,708 @@ What later steps need to know:
   build, under tcc as under clang -O0 (research/backend.md, 2): their
   frames are bigger than -O2's.
 
+## Stage 10d
+
+Descriptions (foundations.md, decisions 3 to 7, 13, 15 and 17, and
+Staging, item 3), built in the interpreter and natively: `ren run`,
+`ren run --release`, and `ren build` debug (tcc or clang) and release
+agree on every program's output, and on whether and where it panics.
+Seven steps, each green on its own, as 10c's were:
+
+0. **This specification,** and its tests (The tests, below).
+1. **Shifts and literals.**
+2. **Generic dependencies.**
+3. **Descriptions as the only stored code:** a stored description's
+   `uses` as an upper bound, inline handlers, handlers called as
+   methods.
+4. **Dispatch lowered as decision 4 says,** and `--explain-dispatch`.
+5. **`over any` and `retry(n, on: Tags)`,** the journal's recorder an
+   `over any` handler in Ren. The README's milestone for 10d is this
+   step's: `retry(3, on: DbDown)` works for any block, and the recorder
+   is Ren.
+6. **Blocks with `inout` parameters, and slices.**
+
+Each step takes its feature through the whole pipeline: lexer and
+parser, Resolve, inference, Core and Core Lint, the interpreter, Mem IR
+and Mem Lint, the C it emits in both builds, the tree-sitter grammar
+and its corpus, the Zed queries, the error messages with their help,
+and the documents that describe it (operators.md, deps.md, handlers.md,
+stdlib.md, the README). What follows settles what each step builds; a
+step that finds something here unsound or unworkable says so instead of
+building something else.
+
+### The tests
+
+**test/test_descriptions.ml is the specification,** as test_blocks.ml
+was 10c's. Each test is tagged `[sN accept]` or `[sN reject]` by the
+step that lands it. One still to land runs through `until "sN"`
+(test/helpers.ml), which holds its target: `~want`, everything a
+program that runs prints, or `~says`, the lines an error or a panic has
+to hold, its headline and its help, since where the carets go is the
+step's to settle (`~checks:true` adds that the program checks, for a
+`types` test, whose lines an error today could echo as source). Its
+`[%expect]` holds today's output after `(until sN)`. When the program
+prints its target, the test fails, saying the step has landed: **the
+step turns it on** by writing it plainly, `run src` in place of `until
+"sN" ... (fun () -> run src)`, and promoting, so its `[%expect]` is the
+target, the whole message for a `says`. A step leaves no `until` of its
+own number behind, and doesn't promote one that's still `until` over a
+changed output without reading the change.
+
+**bench/10d/ holds a program or two for each step,** each with a
+`.expected` of what `ren run` prints, then `exit N`, then the first line
+it writes to stderr, a panic's headline. bench/build.t's last section
+runs each through `spec`, which prints `as specified` or `not yet`. The
+step that lands one changes its line to `as specified`, and adds it to
+the loops above that check native builds against `ren run`: `same`
+(debug, Perceus and naive, under the sanitizers), `release`, and
+`tcc_same`. Step 4 replaces the `--explain-dispatch` line's output,
+today the CLI refusing the flag, with the listing.
+
+| step | expect tests | bench/10d |
+|---|---|---|
+| 1 | literals; `shl` and `shr`; sized stores; a CRC-32C; panics and errors | bits, bits_panic |
+| 2 | two instances; a `with`'s type from its body; aliases with `as`; signatures; requirements; six errors | generic |
+| 3 | methods; inline handlers; the router; maps and records; nine errors | shapes, router |
+| 4 | (dispatch changes no output) | dispatch, and `--explain-dispatch` |
+| 5 | a logger; fault injection; `retry`; `Tags`; ten errors | overany |
+| 6 | `inout` blocks; slices; `&` on ranges; `split_at`; `Str` and `Bytes`; panics and errors | slices, slices_panic |
+
+**Existing tests that change,** each by the step named, because what
+they pin is what 10d changes:
+
+- step 2: test_deps.ml's "a dependency can't take type parameters"
+  (an `ast` test; `dep Box<T>` parses), and its "a handler can't take
+  type parameters" (the error becomes test_descriptions.ml's).
+- step 3: test_deps.ml's "an operation isn't read from an
+  implementation" (`c.now()` is a call; `c.now`, unapplied, stays an
+  error, "an operation is called, not read"), "an operation read from a
+  value holding a handler of several" (it runs), and the three that
+  show the `Needs_more` note, "what an implementation needs is part of
+  its type", "an implementation that needs more, inside another type"
+  and the one near "`self` is kept where it can't need anything"
+  (their note and help become the new ones; they're still errors).
+- step 5: every local function named `retry`, which the prelude's now
+  takes (test_blocks.ml's two, test_deps.ml's two, with their
+  messages); examples/ledger, whose `retry` becomes the prelude's,
+  `try retry(3, on: DbDown) fn() => ...`, with its README; the help of
+  "`with` installs only handlers", whose `try retry(3) fn() => ...`
+  becomes `try retry(3, on: ...) fn() => ...` when the function is the
+  prelude's. Every journal test passes unchanged.
+- step 6: test_mut.ml's two "blocks can't take inout parameters"
+  tests; test_infer.ml's `fn(inout Int)` (written `fn(&Int)`, and its
+  messages); test_collections.ml's range help; examples/just and
+  test_eval.ml's `.slice(a, b)` (written `[a..b]`); and every printed
+  function type with an `inout` parameter, which prints `&T`
+  (examples/console.t, testing.md).
+
+**research/paper-programs.md's friction that 10d answers** is in the
+tests, named by its label: F2 (a description that needs less where one
+that needs more is expected: the router), M3 (blocks with `inout`
+parameters, an operation lending one its value), M4 (shifts and hex
+literals: the CRC), M6 (slices, and `copy()`), and the routes of
+server/api.ren called as methods. What 10d doesn't answer, and where it
+goes: F1 and F3 (11a, decided), F4 (an open question), F5 (`try with`,
+11a), M1 (`keyed(n, h) over any` needs the key of an operation's first
+parameter, which `over any` doesn't expose: 11a's standard library),
+M2 (handler-private functions), M5 (type aliases, `type Routes =
+Router<...>`), M7 and the papercuts.
+
+### Shifts and literals (step 1)
+
+**Literals.** A number may be written in hex, `0x82F6_3B78`, or binary,
+`0b1010`, besides decimal, with underscores anywhere after its first
+digit, as decimal allows today (`1_000_000`, `1__0`, `1_`). The prefix
+is `0x` or `0b`, in lower case; the digits are `0`-`9` and `a`-`f` or
+`A`-`F`, or `0` and `1`. It's an `Int`, never a `Float`: there are no
+hex floats. **It's a number, not a pattern of bits,** so it has to fit
+an `Int` as a decimal one does: `0xFFFF_FFFF_FFFF_FFFF` is too big, and
+`-0x8000_0000_0000_0000` is the smallest `Int`, as `-9223372036854775808`
+is. Stored into a sized type it's checked as any literal is (sized.ml).
+The lexer reads it into `Token.Int` with its value, so nothing after
+lexing knows its base; the formatter, when there is one, keeps the
+spelling from the source.
+
+**Shifts** are two methods of `Int`, intrinsics `Int_shl` and `Int_shr`:
+
+- `x.shl(k)` is the low 64 bits of `x` times 2^k, read as an `Int`: the
+  bits shifted out are lost, so it never overflows. Stored into a sized
+  integer, it wraps at that width instead, by the rule `*%` follows
+  (operators.md, "The wrapping operators"): `shl` at the top of what's
+  stored is one of the wrapping operations sized.ml lists. So `w =
+  w.shl(1)` with `w: UInt32` keeps 32 bits, and stored into a `UInt64`
+  it's an error, as a wrapping operator's result is.
+- `x.shr(k)` is `x` divided by 2^k, rounded down: arithmetic, so a
+  negative number keeps its sign, `(-8).shr(1)` is `-4`. It can't
+  overflow, and isn't a wrapping operation: storing it is checked as any
+  store. "Logical on unsigned types" needs nothing more: a value read
+  from a `UInt8` to `UInt64` is never negative (operators.md, "Sized
+  integers"), and on a number that isn't negative the two shifts agree.
+- `k` outside 0 to 63 panics, `` `shl` by 64: a shift is by 0 to 63 ``,
+  in every build at the call. A literal `k` outside that range is an
+  error where it's written.
+- Natively, `shl` is a shift of the `uint64_t`, cast back; `shr` is
+  written so it's arithmetic whatever the C compiler does with a
+  negative signed shift (C leaves it to the implementation), `x < 0 ?
+  ~(~x >> k) : x >> k`, which clang folds to one instruction; the range
+  check is one unsigned compare, `(uint64_t)k > 63`, gone when `k` is a
+  constant.
+
+Errors:
+
+```
+error: `shl` by 64 always panics
+  help: a shift is by 0 to 63; to make 0, write `0`
+
+error: a `shl`'s result can't be stored in a `UInt64`
+  = `shl` wraps at `Int`'s 64 bits, and half of what it makes is negative
+  = a `UInt64` holds what an `Int` can that isn't negative
+  help: keep a 64-bit hash or checksum in an `Int`
+
+error: a hex number needs a digit after `0x`
+  help: write its digits, `0xFF`
+
+error: `2` isn't a binary digit
+  help: a binary number is written with `0` and `1`, `0b1010`
+
+error: a hex number starts with `0x`, in lower case
+  help: write `0xFF`
+
+error: this number is too big to fit in an `Int`
+  help: the largest `Int` is `0x7FFF_FFFF_FFFF_FFFF`; for all 64 bits set, write `-1`
+```
+
+The last is today's headline, with a help for a hex or binary literal.
+The step also rewrites a CRC or hash in bench or the examples that
+divides for a shift (bench/10d/bits.ren is one, written new), and
+operators.md loses "not built yet".
+
+### Generic dependencies (step 2)
+
+**Declaring one.** `dep Chan<T> =` takes type parameters as a type
+does; its operations and members can use them. A handler takes type
+parameters too, with requirements as a function's do, `handler
+seen<T has eq>() for Seen<T>`, and each one has to be a type argument
+of a dependency it's `for` or `over`: a description's type is the
+dependency's, so a parameter it doesn't name couldn't be known where
+the description is used. A member of a generic dependency is called
+with its type arguments inferred, `Chan.make()`, as a generic function's
+are.
+
+**An alias is a dependency of its own.** `dep Jobs = Chan<Job>` declares
+`Jobs`, with `Chan<Job>`'s operations, and nothing else: no type
+parameters (an alias names one instance) and no body. It's found by its
+own name, so `Jobs` and `Done`, both `Chan<Job>`, are two dependencies
+that a `with` installs side by side, and `uses Jobs` doesn't give
+`Chan<Job>`. An alias of a dependency that isn't generic is allowed,
+`dep Replica = Db`, for the same reason: two of one installed at once.
+This is the reading of decision 6 that gives `as` its use, which
+research/paper-programs.md's `with snapshot(r.index) as Snap` needs,
+since `snapshot(r.index)` already fixes its type: an alias is how two
+instances of one type are told apart.
+
+**Found by its full type.** A dependency's identity, wherever a row
+holds one, is its path and its type arguments: `Chan<Int>` and
+`Chan<Str>` are two labels of a row, and two uses of `Chan<Int>` are
+one. An alias's identity is its path. So:
+
+- `uses Chan<Job>` and `uses Jobs` are written as any `uses` is.
+- An operation is called through the dependency's name without its
+  arguments, `Chan.send(x)`; inference gives the call a fresh instance
+  `Chan<α>` and fixes `α` from the call, as a generic function's call
+  fixes its type arguments. An alias's operations are called by the
+  alias, `Jobs.send(j)`.
+- When a function is generalized, an instance whose arguments are still
+  open is fixed by the function's declared `uses` if exactly one
+  instance of that dependency is there; if several are, it's an error
+  that names them; if the function has no declared `uses`, an open
+  argument that nothing the function is given fixes is an error too. A
+  function's type parameter that only its `uses` names is the same
+  error: nothing a caller passes could fix it.
+- **A `with`'s item** has the type of a description of `Chan<α>`. If the
+  item fixes `α` (`let l: Log<Int> = log()`, `with l`), that's what it
+  installs. If not, `α` is unified with the body's one use of `Chan`;
+  two uses at different types are an error that says to write the type.
+  `with h as A` installs `h` as `A`, an alias of an instance of what `h`
+  implements, or that instance written out, `as Chan<Int>`; anything
+  else is an error. `as` follows the whole item, so `with h over Jobs
+  as Jobs` hasn't a use, and a chain `with a over b as Jobs` installs
+  the chain as `Jobs`.
+- A `with` is a set of labels, so installing `Chan<Int>` twice in one
+  is the existing error, and `Chan<Int>` beside `Chan<Str>` isn't.
+- A description's written type can be an alias, `let q: Jobs =
+  queue()`, which `with q` installs as `Jobs`.
+
+**How it runs.** Evidence is found by a dependency's identity (deps.md,
+"How it runs"), and that now includes type arguments. Where they're
+known when compiling, the key is a constant. In a function generic in
+`T` that uses `Log<T>`, a debug build and the interpreter build the key
+from the descriptor of `T` the function was given (core.ml, `desc`), so
+the search compares a path and descriptors; a release build specializes
+the function, and the key is a constant again. Core's dependency
+references carry their type arguments, and Core Lint checks that every
+evidence lookup's label is an instance its function's row holds, and
+that a `With` installs the label its item's type says. Module
+interfaces keep a dependency's type parameters and an alias's target,
+and `ren types` prints them:
+
+```
+pub dep Chan<T>
+  send: fn(T)
+pub dep Jobs = Chan<Job>
+pub handler queue<T>() for Chan<T>
+```
+
+Errors:
+
+```
+error: `send_one` doesn't declare `Chan<Job>`
+  help: `Jobs` is a dependency of its own, with `Chan<Job>`'s operations: call `Jobs.send`, or add `uses Chan<Job>`
+
+error: which `Log` `Log.all()` calls isn't known: `Log<Int>` or `Log<Str>`
+  help: say what its result is: `let xs: Array<Int> = Log.all()`
+
+error: nothing `peek` is given fixes `T`
+  help: make `T` a parameter's or the result's type, or name the dependency at one type: `uses Log<Int>`
+
+error: which `Log` `log()` installs isn't known: the body uses `Log<Int>` and `Log<Str>`
+  help: say which, with a written type: `let l: Log<Int> = log()`, then `with l in`
+
+error: `T` isn't a type parameter of `N`
+  help: a handler's type parameters are its dependencies': remove `<T>`
+
+error: an alias can't take type parameters
+  help: use `Chan<T>` itself where it's generic, or fix the alias's types: `dep Ints = Chan<Int>`
+
+error: `queue()` can't be installed as `Users`
+  help: `queue()` implements `Chan<T>`: install it as `Chan<...>` or as an alias of it
+```
+
+The step writes an example, a generic dependency installed at two
+types (a cache or a pool), beside bench/10d/generic.ren.
+
+### Descriptions (step 3)
+
+A handler's description is already a value (deps.md,
+"Implementations"): `circle(1.0)` is a `Shape`, and arrays, maps,
+records and generic types hold them today. Step 3 makes them the stored
+code decision 3 says, in four parts. A description's `show` stays
+`<handler>`, and it has no `==` or `hash`, as now: it holds code.
+
+**A stored description's `uses` is an upper bound.** A description
+whose handler needs `R` fits wherever its dependency's type is written
+with a `uses` that lists at least `R`: `health()`, which needs nothing,
+goes in `Router<(Api uses Cache, Db)>`. Inference gets this from
+unification alone: the type a description is made with has an open
+row, `Api uses R, ..ρ`, at a handler's call and at an inline handler,
+so it unifies with any written row that holds `R`, under any type
+constructor, and with none that lacks part of it. That's sound because
+a description's type says what it may need at most: needing less is
+always safe, and every place that installs or calls one provides the
+whole row its type says (the slot's, not the handler's). Release
+dispatch still knows each handler's exact row, since it knows the
+handler. `!`, what a description can fail to start with, stays exact:
+decision 3 makes only `uses` a bound. The message for one that needs
+more than its slot names what's beyond it, and its help writes the slot
+with that added; today's said the opposite of what was happening, and
+its help wrote the found type, `(Api)`:
+
+```
+error: expected `Api uses Db`, found `Api uses Clock, Db`
+  = a stored description's `uses` is the most it may need, and this one needs `Clock` too
+  help: add it where the type is written: `Array<(Api uses Clock, Db)>`
+```
+
+**Inline handlers.** `handler fn(p, ...) => body` is an expression: a
+handler for a dependency with one operation, whose parameters are the
+operation's, written as a block's are, with a body that's one line or an
+indented block. Which dependency is known only from where it's written:
+the type of a `let`, a parameter, a field, an element, a result, an
+`if`'s or `match`'s other branches, or a generic slot whose type
+argument is fixed. Its parameters take the operation's types, its
+result is checked against the operation's, and it fails with at most
+the operation's declared errors, as any handler. **What it uses is its
+handler's, found where it's installed or called** (rule 5), not where
+it's written, so `fn stamper() -> (Stamp uses Clock) = handler fn() =>
+Clock.now()` uses nothing, and the description it makes needs `Clock`.
+**What it captures is copied,** when the description is made: each local
+of the scope it's written in that its body reads, at its value then.
+A block sees a `var` change later; an inline handler doesn't. Its
+captures are data, as a handler's parameters are: a block, `next`, a
+`call` or an instance is an error. It has no state, `finally` or
+`next`, so a capture can't be assigned. Lowering lifts it to a handler
+declared at the top of its module, named for where it's written
+(`main$handler1`), whose parameters are its captures, and the
+expression becomes the call that makes its description, so every pass
+after lowering, and native code, sees an ordinary handler.
+
+**Handlers called as methods.** `d.op(args)`, where `d` is a
+description of `D` (or of several, `A & B`, the operation found as an
+arm finds it), is a call of `D.op` with `d` installed for the call: it
+means `with d in D.op(args)`, the arguments evaluated first, outside.
+So the call needs what `d`'s type says it needs, and fails with what
+`D.op` declares. A description whose type can fail to start (`!`) or
+goes `over` another isn't called this way: each is an error saying to
+install it. For a stateless handler, with no `var`, no `finally` and no
+`next` (decision 3), the call makes no instance: it's a direct call of
+the arm with the description's data, which is what makes it Ren's `dyn
+Trait`, and every build lowers it so. **A handler with state, called as
+a method, starts fresh at each call,** its `finally` run when the call
+ends, since that's what `with d in` means. Decision 3 names only
+stateless handlers; a description's type doesn't say whether its
+handler keeps state, so the type can't refuse the others, and this is
+their meaning rather than a check that can't be made where the
+description is used. A dependency's members and operations never share
+a name, so `d.x` is one or the other; an operation read without being
+called, `d.op`, stays an error.
+
+**A chain isn't a value.** `a over b` written anywhere but a `with`'s
+item is an error; its help says to keep the parts and write the chain
+where it's installed.
+
+**How it runs.** The interpreter already has descriptions as values; a
+method call installs and calls. A debug build makes a description a tag
+and up to three words of what it holds, anything larger, or recursive,
+boxed, the tag a pointer to a static record of the handler's functions
+and its layout, so a module compiles alone; a method call loads the
+arm from it. A release build numbers the tags. Step 3's native dispatch
+may be a switch on the tag at every site; step 4 lowers it as decision
+4 says. A description held in an array, a map or a record needs a
+descriptor today's native lowering lacks (`ren build` on an array of
+descriptions stops with "a descriptor of what has none"); step 3 adds
+it, a description's descriptor walking what its handler holds.
+
+Errors, besides the upper bound's:
+
+```
+error: an inline handler implements a dependency of one operation, and `Users` has 2
+  help: declare a handler with an arm for each: `handler name() for Users`
+
+error: which dependency this inline handler implements isn't known here
+  help: write the type it's kept as: `let h: D = handler fn(...) => ...`
+
+error: an inline handler's captures are data, and `f` is a block
+  help: pass the data it needs, or make the behaviour a dependency
+
+error: an inline handler doesn't go over another, so it has no `next`
+  help: declare a handler `over Get` to call the one under it
+
+error: a chain of handlers isn't a value
+  help: keep the parts, and write the chain where it's installed: `with cached() over mem() in ...`
+
+error: `s` can fail to start, so it isn't called as a method
+  help: install it: `with s in Store.get()`
+
+error: `c` goes over another `Users`, so it isn't called as a method
+  help: install it over one: `with c over Users in Users.get(...)`
+```
+
+bench/10d/router.ren is research/paper-programs.md's router, and the
+tests hold it across three modules, where today's error shows.
+
+### Dispatch (step 4)
+
+Release builds lower every dispatch over descriptions as decision 4
+says, and `ren build --release --explain-dispatch D file.ren` lists
+each site. A **site** is a method call on a description, an operation
+call inside a `with` that installs one whose handler isn't known, or
+an arm's call through a description it holds. How many handlers reach
+it is the number of handlers `for` or `over` its dependency in the
+whole program (an analysis that narrows them is optional and release
+only), and decides the lowering:
+
+- **One:** a direct call, which clang may inline, and the description
+  has no tag.
+- **Two to four:** the arms inline, as compare-and-branch on the tag,
+  not a jump table.
+- **More than four:** a call through a static table of the set's arms,
+  indexed by the tag. For a dependency with one operation, the tag is
+  the arm's code pointer, and the call goes through it.
+- **Recursion through its own dependency** (an arm of `D` calling a
+  description of `D`, as an expression tree's `eval` does) calls
+  through the table, never one switch function holding every arm.
+- **Cloned per handler:** a `with`'s body, or a loop whose description
+  doesn't change in it, when four or fewer handlers reach it and the
+  copy fits a budget; never across a suspension (none exists before
+  11a). The budget is foundations.md's open question: the step picks
+  one, a number of Mem IR nodes per copy, and states it.
+- **Layout:** release sizes a description to its dependency's largest
+  handler, up to eight words, before boxing anything; debug keeps a tag
+  and three words.
+
+The listing, one block per dependency named:
+
+```
+$ ren build --release --explain-dispatch Shape dispatch.ren
+Shape: 6 handlers (sq_shape dispatch.ren:41, rect :43, tri :45, ring :47, frame :49, main$handler1 :65), 1 operation (area)
+  description: tag = code pointer (one operation), 3 words inline; nothing boxed
+  dispatch.ren:75  main(): s.area()  6 handlers reach → table call  [more than 4]
+```
+
+Each line is a site, how many handlers reach it, the lowering, and why;
+a clone says what it copied and its size. Nothing is left out. The step
+ports research/dispatch.md's kernels into bench/native with their Rust
+(`dyn` and enum) and Go twins, and measures against them, cycles and
+time, against the commit before it.
+
+### `over any` and `retry` (step 5)
+
+**`over any`.** `handler name(params) over any uses ... =` goes over any
+one dependency: its state, as any handler's, then one arm, `call =>
+body`, which runs for every operation of what it's installed over,
+whatever its name binds. In the arm:
+
+- `call.forward()` calls the operation under this one with the same
+  arguments. Its value is the operation's result, and it fails with the
+  operation's declared errors, so it's written with `try` or `attempt`.
+  It's called **once at most** on any path through the arm: not in a
+  loop, not in a block, and in each branch at most once.
+- `call.fail(t)` fails the operation with the tag `t`, as `fail t`
+  does, without `try`. Every operation of what the handler is installed
+  over has to declare `t`, with its shape: that's checked at each `with`
+  that installs it, since only there is the dependency known.
+- `call.name` is the operation's dependency and name as the journal
+  writes them, `"Users.get"`, a `Str`.
+- `call.args` is the arguments; what `call.forward()` gives is the
+  result. **Both are opaque:** inside the arm their types are type
+  parameters of the arm, one per operation, so they can be shown, compared
+  with `==`, and passed to generic functions, the journal's intrinsics
+  among them, and nothing else; no pattern takes them apart. This is
+  foundations' `call.result`: the value `call.forward()` gives, or
+  `attempt call.forward()`'s `Result` of it. `show(call.args)` writes
+  the arguments as a call does, in parentheses, `("b", 3)`, `()` for
+  none, so `call.name.concat(show(call.args))` is the journal's call.
+- `call` is only used through, as `next` is: it can't be kept, passed
+  or returned. `next` isn't there: `call.forward()` is.
+- The arm's value is the operation's result, and it fails with at most
+  the operation's errors. The handler's own `uses` are its own, met
+  where it's installed.
+
+It's installed with `over`, as any handler that goes over another is,
+`with logged() over mem_users()` or `over Users`; without one it's
+today's error. It installs the one dependency it's over, and counts
+once in its `with`'s set.
+
+**What the compiler derives per dependency.** Inference checks the arm
+once, for an operation in general: the result and arguments as skolems,
+the errors as a closed row it can't name. Each `with` that installs it
+over `D` checks `call.fail`'s tags against each of `D`'s operations.
+Everything that depends on the operation is derived from its signature:
+its name, the descriptors of its arguments' tuple and its result (for
+`show`, `==` and the journal), and its declared errors. The interpreter
+gives the arm a call value holding those and a closure that forwards.
+A debug build compiles the arm once, given a call record: the name,
+the descriptors, a pointer to the arguments, and the forward function
+with its environment. A release build specializes the arm per
+dependency and operation it's installed over, so `call.args` is the
+arguments, `call.forward()` a direct call, and it's static dispatch
+like any other handler.
+
+**The recorder is Ren.** prelude.ml's six `recording_*` handlers become
+one, `handler recorder(j: Journal) over any`, which the runtime installs
+over each built-in dependency `main` uses, as it installs those now;
+journals stay byte for byte as they are, and every journal test passes
+unchanged. The journal writes an operation that can't fail as its value
+and one that can as its `Ok` or `Err`, as now: what decides it is the
+operation's declared errors, which the derived encoding has.
+`replaying` stays a handler `for` the six, since it answers in place of
+them rather than going over them. If the recorder can't be finished
+soundly, the step says exactly what's missing.
+
+**Tags, and `retry`.** A parameter of type `Tags`, a prelude type, takes
+a set of error tags. At a call it's written with its name, `on: DbDown |
+Timeout`: tag names, without payloads (`on: Short` for `Short(name:
+Str)`), or the name of an error set, `on: TransferError`. It's the only
+parameter passed by name. Inside the function it isn't a value: it's
+matched, `fail on => ...`, an arm that takes an error whose tag is in
+it, binding nothing, with a guard if wanted; and passed on, `on: on`. A
+`match` with such an arm handles nothing it can name, so it's a `try
+match`. **At each call, every tag it's given has to be one the call can
+fail with,** after inference: the block's errors, for `retry`, whose
+errors are its block's. One the call can't fail with, or one a row only
+a type variable holds, is an error. The interpreter gives it as a list
+of tag names; a debug build as a static array of them; a release build
+specializes the function per set. The prelude's `retry`:
+
+```ren
+// runs `body`, and again while it fails with one of `on`'s errors, up
+// to `n` tries in all: any other error leaves at once, after the last
+// try its error leaves, and `body` runs at least once
+pub fn retry<T>(n: Int, on: Tags, body: fn() -> T) -> T =
+  try match body()
+    fail on if n > 1 => try retry(n - 1, on: on, body)
+    v => v
+```
+
+Errors:
+
+```
+error: `retry` takes `on:`, the errors it tries again
+  help: name them: `retry(3, on: Broken | Flaky)`
+
+error: `retry` is given `on: Timeout`, and the block can't fail with `Timeout`
+  help: name what it can fail with: `Broken`, `Flaky`
+
+error: `on`, the errors `retry` tries again, is written with its name
+  help: write `on: Flaky`
+
+error: `n` isn't passed by name
+  help: a name goes only before a parameter of `Tags`: write `3`
+
+error: `down_every(2)` can fail with `Down`, which `Users.get` and `Users.count` don't declare
+  help: install it over a dependency whose every operation can fail with `Down`, or write a handler `over Users`
+
+error: `call.forward()` runs the operation under this one, so it's called once at most
+  help: keep what it gave: `let r = attempt call.forward()`, and `try r` where it's needed
+
+error: `call` can only be used through
+  help: use `call.forward()`, `call.fail(e)`, `call.name` or `call.args` where they're needed
+
+error: `call.args` can only be shown, compared and recorded
+  help: write a handler `over` the dependency to read its arguments
+
+error: `quiet()` goes over another implementation, so it's installed with `over`
+  help: say what it goes over: `quiet() over Users` for the one installed outside this `with`, or another implementation after `over`
+```
+
+The first lists what the block can fail with, sorted. Fault injection
+that targets some operations, or `keyed(n, h) over any` (11a), which
+needs an operation's first parameter's key, are handlers `over D` until
+something exposes more than this.
+
+### Blocks with `inout` parameters, and slices (step 6)
+
+**Blocks with `inout` parameters.** A block's parameter that it changes
+is written `&x`, `fn(&lo, &hi) => ...`, and a function type writes one
+`&T`, `fn(&Array<T>, &Array<T>) -> R`: the form a call writes. That
+replaces `fn(inout T)` in a function type, which is an error with a
+fix-it, and so is `fn(inout x) =>`; a named function's parameters keep
+`inout x: T`. Printed types change to match. A block's parameter modes
+have to be its expected type's, as they do now; it's called as any
+function with `inout` parameters is, `f(&a, &b)`, and a `let` of one is
+called the same. Exclusivity doesn't change: a block's parameters are
+variables, places of their own, so a block changes them freely, and
+what it captures is checked as every block's captures are. Natively a
+block's `inout` parameter is passed as a function's is.
+
+**Slices.** `e[a..b]`, where `e` is an `Array<T>`, a `Str` or `Bytes`,
+is the elements, or bytes, from `a` up to, but not including, `b`, of
+the same type: a range is now written after a `for`'s `in` and inside
+an index, and nowhere else. It panics, at the same point in every build:
+
+- `slice 2 to 5 is out of bounds for an array of length 3` (`for a
+  string of length`, `for bytes of length`), when `a < 0` or `b` is past
+  the end;
+- `slice 3 to 1 ends before it starts`;
+- for a `Str`, `slice 0 to 2 starts inside a character` or `ends inside
+  a character`, today's `Str.slice` messages. `Bytes` never checks.
+
+`Str.slice(a, b)` goes, an error whose help writes `s[a..b]`. `split`
+and `trim` return slices of what they're given, at boundaries they
+found, so they don't check. `xs.copy()`, on each of the three, is a
+value equal to `xs` that holds its own buffer, and costs nothing on one
+that already does. A slice is a value like any other: it's compared,
+shown, stored and returned as its type is, and nothing can tell a slice
+from a copy, but its cost.
+
+**`&` on a range.** `f(&xs[a..b])` passes the range as an `inout`
+argument: a write of `xs` for the call, as `&xs[i]` is. What the callee
+leaves in its parameter replaces the range, so a callee that pushes
+lengthens `xs` there: `grow(&zs[0..2])` with `zs = [1, 4, 6, 4, 5]`
+makes `[1, 4, 0, 6, 4, 5]`. `for x in &xs[a..b]` changes that range in
+place. Two ranges of one array in one call overlap as two indices do,
+so `f(&xs[0..2], &xs[2..4])` is today's error, with a help that splits
+it. Assigning to a range, `xs[a..b] = ys`, is an error, "a range of an
+array is changed through `&`", whose help is a call or a loop.
+
+**`split_at`.** `&xs.split_at(n) fn(&lo, &hi) => ...`, on `Array`,
+`Bytes` and `Str`, gives a block the two halves, `xs[0..n]` and
+`xs[n..len]`, each a place of its own, and its result is the block's.
+When the block returns, or fails, `xs` is `lo` followed by `hi`, so a
+half that grew moves what follows. `n` outside 0 to the length panics,
+`` `split_at` 5 is out of bounds for an array of length 3 ``; on a
+`Str`, an `n` inside a character panics as a slice does. The block
+can't touch `xs`: the call writes it, and a block passed to the same
+call reading it is today's error. Its signature, on `Array<T>`:
+
+```ren
+pub fn split_at<R>(inout self, n: Int, body: fn(&Array<T>, &Array<T>) -> R) -> R
+```
+
+**What a slice is** (decision 17). A seamless slice, Roc's: a root, the
+counted owner of the buffer, and a range. An owner is a slice of all of
+its root. A slice of a slice has the first one's root. Writing to a
+slice, or to an owner that isn't unique, copies the range first; so
+`ren_array_own`'s test becomes "unique and an owner". Whether it's two
+words (a root, a 32-bit offset and length, with a fallback past 4 GiB)
+or three is the step's choice, by measurement, and it says which and
+why. Counting:
+
+- **A slice of a parameter the function borrows, that doesn't leave the
+  call, doesn't count its root:** it's a part of its root, as a field
+  read is, counted only if the root is consumed while it lives. That's
+  sound because the borrowed parameter outlives the call and the slice
+  dies in it; Mem Lint learns the state, and checks it (The runtime
+  model, below, gains the rule).
+- **Any other slice counts its root once,** and is a small value
+  (decision 14), kept inline in records and arrays.
+- **`split_at` changes the halves in place:** it makes `xs` unique and
+  an owner once, lends the halves as slices flagged lent, which are
+  written in place since nothing else can reach `xs` for the call, and
+  on return splices back only a half that's no longer the same lent
+  slice. A lent slice is the one slice written in place.
+- The interpreter copies (`String.sub`, `Array.sub`): value semantics
+  make the two indistinguishable, so its output is the specification.
+
+The step ports research/slices.md's benchmarks (logs, json, pages) with
+their Rust twins into bench/native and measures them, retention
+included; a debug report of roots kept alive by small slices is
+optional. stdlib.md and the README say `split` and `trim` return
+slices.
+
+Errors:
+
+```
+error: a block's parameter that it changes is written `&n`
+  help: write `fn(&n) => ...`
+
+error: `xs` is passed with `&` twice in this call
+  = an argument passed with `&` has to be the only way the call can reach that value
+  = `xs[0..2]` and `xs[2..4]` may overlap
+  help: to change two parts of one array, split it: `&xs.split_at(2) fn(&lo, &hi) => ...`
+
+error: `Str` has no method named `slice`
+  help: slice it: `s[0..2]`
+
+error: a range, `a..b`, is written only after a `for`'s `in`, or in an index: it isn't a value
+  help: a range is for counting, `for i in 0..n`, and for slicing, `xs[a..b]`
+```
+
+### Where 10d may differ from foundations.md
+
+Choices this specification made where the record is silent, each to
+revisit if a step finds it wrong:
+
+- **An alias is nominal** (decision 6): `dep Jobs = Chan<Job>` is a
+  dependency of its own, so two instances of one type can be installed
+  at once, which is what `as` is for.
+- **A handler with state can be called as a method** (decision 3 names
+  stateless ones), starting fresh each call, since a description's type
+  doesn't say whether its handler keeps state.
+- **`call.result` is the value `call.forward()` gives** (decision 7),
+  and `call.name` is added, the operation's name, which the recorder
+  needs and which says nothing about arguments or results.
+- **`call.fail(t)` is checked per installation** against every
+  operation of the dependency, since the arm is checked once for all
+  of them.
+- **`on:` is a parameter of a new prelude type, `Tags`,** passed by
+  name, matched with `fail on`: the one named argument in the language,
+  and the one way to write `retry` in Ren.
+- **`retry`'s `n` below 1 tries once.**
+- **`!` stays exact** where `uses` becomes an upper bound.
+- **A function type's `inout` parameter is written `&T`,** replacing
+  `inout T` there, as the brief's `fn(&Array<T>, &Array<T>) -> R` says.
+
 ## The runtime model
 
 Every object the runtime makes is in one of four states, which its

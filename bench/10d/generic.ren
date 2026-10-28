@@ -1,0 +1,74 @@
+// Stage 10d, step 2: generic dependencies (foundations.md, decisions 5
+// and 6; compiler.md, "Stage 10d"). One `Log<T>` handler installed at
+// two types, found by the full type; and one queue installed twice under
+// two aliases of `Chan<Job>`.
+
+dep Log<T> =
+  add: fn(x: T)
+  all: fn() -> Array<T>
+
+handler log<T>() for Log<T> =
+  var xs: Array<T> = []
+  add(x) => &xs.push(x)
+  all() => xs
+
+fn note(n: Int) uses Log<Int> = Log.add(n * 10)
+
+// generic in what it logs, so a debug build finds `Log<T>` by the type
+// it's given
+fn add_all<T>(xs: Array<T>) uses Log<T> =
+  for x in xs
+    Log.add(x)
+
+type Job = { id: Int, size: Int }
+
+dep Chan<T> =
+  send: fn(x: T)
+  take: fn() -> Option<T>
+
+dep Jobs = Chan<Job>
+dep Done = Chan<Job>
+
+handler queue<T>() for Chan<T> =
+  var xs: Array<T> = []
+  var at = 0
+  send(x) => &xs.push(x)
+  take() =>
+    if at == xs.len() then None
+    else
+      at += 1
+      Some(xs[at - 1])
+
+// takes every job, and sends each on, done, at twice its size
+fn work() -> Int uses Jobs, Done =
+  var n = 0
+  var going = true
+  while going
+    match Jobs.take()
+      Some(j) =>
+        Done.send(Job { id: j.id, size: j.size * 2 })
+        n += 1
+      None => going = false
+  n
+
+fn main() uses Console =
+  let ints: Log<Int> = log()
+  let strs: Log<Str> = log()
+  with ints, strs in
+    note(1)
+    Log.add("a")
+    note(2)
+    add_all(["b", "c"])
+    add_all([3])
+    let is: Array<Int> = Log.all()
+    let ss: Array<Str> = Log.all()
+    print(is)
+    print(ss)
+  with queue() as Jobs, queue() as Done in
+    Jobs.send(Job { id: 1, size: 5 })
+    Jobs.send(Job { id: 2, size: 7 })
+    print(work())
+    print(Done.take())
+    print(Done.take())
+    print(Done.take())
+    print(Jobs.take())

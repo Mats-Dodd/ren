@@ -1,0 +1,4 @@
+1152921504606846976
+4611686018427387904
+exit 1
+error: panic: `shl` by 64: a shift is by 0 to 63

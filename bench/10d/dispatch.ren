@@ -1,0 +1,96 @@
+// Stage 10d, step 4: dispatch over descriptions, lowered as decision 4
+// says (foundations.md; compiler.md, "Stage 10d"). Each kind of site is
+// here once, and `ren build --release --explain-dispatch D` lists them:
+// a dependency with one handler (`Seed`: a direct call, no tag), a site
+// two to four handlers reach (`Step`: inline arms, and the loop in
+// `run` cloned per handler), one more than four reach (`Shape`: a call
+// through the set's table), and dispatch that recurses through its own
+// dependency (`Expr`: through the table, its descriptions boxed).
+
+dep Seed =
+  next: fn(x: Int) -> Int
+
+handler lcg() for Seed =
+  next(x) => (x *% 6364136223846793005 +% 1442695040888963407).bit_and(1023)
+
+dep Step =
+  apply: fn(x: Int) -> Int
+
+handler inc(k: Int) for Step =
+  apply(x) => x + k
+
+handler dbl() for Step =
+  apply(x) => x * 2 % 100003
+
+handler sq() for Step =
+  apply(x) => x * x % 100003
+
+// the description doesn't change in the loop, so its tag doesn't either
+fn run(s: Step, n: Int) -> Int =
+  var x = 2
+  for _ in 0..n
+    x = s.apply(x)
+  x
+
+dep Shape =
+  area: fn() -> Int
+
+handler sq_shape(s: Int) for Shape =
+  area() => s * s
+handler rect(w: Int, h: Int) for Shape =
+  area() => w * h
+handler tri(b: Int, h: Int) for Shape =
+  area() => b * h / 2
+handler ring(r: Int) for Shape =
+  area() => 3 * r * r
+handler frame(w: Int, h: Int, t: Int) for Shape =
+  area() => w * h - (w - 2 * t) * (h - 2 * t)
+
+fn shapes(n: Int) -> Array<Shape> =
+  var out: Array<Shape> = []
+  var x = 7
+  for i in 0..n
+    let s = lcg()
+    x = s.next(x)
+    let k = x % 6
+    let d = x % 13 + 3
+    let shape: Shape =
+      if k == 0 then sq_shape(d)
+      else if k == 1 then rect(d, d + 1)
+      else if k == 2 then tri(d, d + 2)
+      else if k == 3 then ring(d)
+      else if k == 4 then frame(d + 4, d + 4, 1)
+      else handler fn() => d + i
+    &out.push(shape)
+  out
+
+dep Expr =
+  eval: fn() -> Int
+
+handler num(n: Int) for Expr =
+  eval() => n
+handler add(a: Expr, b: Expr) for Expr =
+  eval() => a.eval() + b.eval()
+handler mul(a: Expr, b: Expr) for Expr =
+  eval() => a.eval() * b.eval() % 1000003
+handler neg(a: Expr) for Expr =
+  eval() => 0 - a.eval()
+
+// a tree of depth `d`, its kinds chosen by `seed`
+fn tree(d: Int, seed: Int) -> Expr =
+  if d == 0 then num(seed % 10)
+  else
+    let k = seed % 3
+    if k == 0 then add(tree(d - 1, seed * 7 % 1009), tree(d - 1, seed * 11 % 1013))
+    else if k == 1 then mul(tree(d - 1, seed * 13 % 1019), num(seed % 5 + 1))
+    else neg(tree(d - 1, seed * 17 % 1021))
+
+fn main() uses Console =
+  print(run(inc(3), 1000))
+  print(run(dbl(), 1000))
+  print(run(sq(), 1000))
+  var t = 0
+  for s in shapes(1000)
+    t += s.area()
+  print(t)
+  print(tree(12, 5).eval())

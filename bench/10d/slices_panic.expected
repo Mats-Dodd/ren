@@ -1,0 +1,4 @@
+
+h
+exit 1
+error: panic: slice 0 to 2 ends inside a character

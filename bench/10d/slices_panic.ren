@@ -1,0 +1,7 @@
+// Stage 10d, step 6: a `Str` slice that cuts a character panics, at the
+// same point in every build (foundations.md, decision 17).
+
+fn main() uses Console =
+  let s = "héllo"
+  for i in 0..4
+    print(s[0..i])

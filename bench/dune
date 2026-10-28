@@ -36,6 +36,8 @@
   (glob_files native/rbtree/*.ren)
   (glob_files native/stack/*.ren)
   (glob_files native/vec/*.ren)
+  (glob_files 10d/*.ren)
+  (glob_files 10d/*.expected)
   (glob_files %{project_root}/examples/*.ren)
   (glob_files %{project_root}/examples/shop/*.ren)
   (glob_files %{project_root}/examples/shop/billing/*.ren)

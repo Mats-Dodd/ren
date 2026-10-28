@@ -277,3 +277,47 @@ let run_error ?args src =
         (fun () ->
           print_endline
             (Value.show (Driver.run ~lint:true ~release ?args ~file src))))
+
+(* ---- stage 10d's specification (test_descriptions.ml) ----
+
+   A test of what a step of 10d is still to build runs as
+   [until "sN" ~want (fun () -> run src)]. [want] is what the program
+   prints once step N lands, all of it, as an [%expect] block would hold
+   it; for a program that should be refused, or panic, [says] are lines
+   its message has to hold instead, its headline and its help, since
+   where the carets go is the step's to settle. [~checks:true] says the
+   program has to check as well, for [says] that are what a program that
+   checks prints, its signatures, which an error today can show as its
+   source. Until then the test
+   prints what the program prints today, after `(until sN)`, and its
+   [%expect] holds that. Once the program prints what's wanted, the test
+   fails, saying so: the step turns it on by writing it plainly,
+   [run src] with [want], or the whole message, in its [%expect]
+   (compiler.md, "Stage 10d", "The tests"). *)
+
+exception Landed of string
+
+let until step ?want ?(says = []) ?(checks = false) f =
+  let out, raised = captured f in
+  let out =
+    match raised with
+    | None -> out
+    | Some e -> out ^ "raised: " ^ Printexc.to_string e ^ "\n"
+  in
+  (* whether [line] is in what was printed *)
+  let has line =
+    let n = String.length line and m = String.length out in
+    let rec at i = i + n <= m && (String.sub out i n = line || at (i + 1)) in
+    at 0
+  in
+  let landed =
+    match want with
+    | Some w -> String.trim (clean w) = String.trim out
+    | None ->
+        says <> [] && List.for_all has says && not (checks && has "error:")
+  in
+  if landed then
+    raise
+      (Landed
+         (step ^ " has landed: this test prints what it wants, so turn it on"))
+  else print_string ("(until " ^ step ^ ")\n" ^ out)

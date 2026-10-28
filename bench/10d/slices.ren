@@ -1,0 +1,111 @@
+// Stage 10d, step 6: blocks that take `inout` parameters, and slices
+// (foundations.md, decision 17; compiler.md, "Stage 10d"). A slice is a
+// value of the type it slices; writing to one copies it first; `&` on a
+// range changes that range of the array; and `split_at` gives a block
+// two halves, each a place of its own.
+
+fn sum(xs: Array<Int>) -> Int =
+  var t = 0
+  for x in xs
+    t += x
+  t
+
+fn double(inout ys: Array<Int>) =
+  for i in 0..ys.len()
+    ys[i] = ys[i] * 2
+
+fn grow(inout ys: Array<Int>) = &ys.push(0)
+
+fn add(inout dst: Array<Int>, src: Array<Int>) =
+  for i in 0..dst.len()
+    dst[i] = dst[i] + src[i]
+
+fn both(inout a: Int, inout b: Int, f: fn(&Int, &Int)) = try f(&a, &b)
+
+// the fields of a line, `name=value;name=value`, as slices of it
+fn fields(line: Str) -> Array<Str> =
+  var out: Array<Str> = []
+  var start = 0
+  for i in 0..line.len()
+    if line[i..i + 1] == ";" then
+      &out.push(line[start..i])
+      start = i + 1
+  &out.push(line[start..line.len()])
+  out
+
+dep Tally =
+  change: fn(k: Int, f: fn(&Int))
+  get: fn(k: Int) -> Int
+
+fn zeros(n: Int) -> Array<Int> =
+  var out: Array<Int> = []
+  for _ in 0..n
+    &out.push(0)
+  out
+
+// a dependency's operation that lends a block one of its counts, as
+// `Snapshot.update` lends its value (research/paper-programs.md, M3)
+handler counts(n: Int) for Tally =
+  var cs = zeros(n)
+  change(k, f) =>
+    var c = cs[k]
+    f(&c)
+    cs[k] = c
+  get(k) => cs[k]
+
+fn main() uses Console =
+  let xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  let mid = xs[2..6]
+  print(mid)
+  print(sum(mid))
+  print(mid[1..3])
+  print(mid == [2, 3, 4, 5])
+  print(xs[4..4].len())
+  // writing to a slice copies it: `xs` keeps its own
+  var ys = xs[7..10]
+  ys[0] = 70
+  &ys.push(10)
+  print(ys)
+  print(xs[7..10])
+  print(ys.copy() == ys)
+  // `&` on a range changes that range of the array, and a change of
+  // its length moves what comes after
+  var zs = [1, 2, 3, 4, 5]
+  double(&zs[1..3])
+  print(zs)
+  grow(&zs[0..2])
+  print(zs)
+  for z in &zs[3..6]
+    z = z + 100
+  print(zs)
+  // a split gives a block two places of its own, changed in place
+  var ws = [1, 2, 3, 4, 5, 6, 7, 8]
+  &ws.split_at(4) fn(&lo, &hi) =>
+    add(&lo, hi)
+    hi[0] = 100
+  print(ws)
+  let n = &ws.split_at(2) fn(&lo, &hi) =>
+    &lo.push(0)
+    hi.len()
+  print(n)
+  print(ws)
+  // blocks with `inout` parameters
+  var a = 1
+  var b = 10
+  both(&a, &b) fn(&x, &y) =>
+    x += y
+    y = 0
+  print(a)
+  print(b)
+  with counts(3) in
+    Tally.change(1) fn(&c) => c += 5
+    Tally.change(1) fn(&c) => c = c * 3
+    print(Tally.get(1))
+  // strings: a slice is at byte offsets, and can't cut a character
+  let s = "héllo, wörld"
+  print(s[0..6])
+  print(s[8..14])
+  print(s[8..14].len())
+  print(s[0..1] == "h")
+  print(fields("a=1;bb=22;c=3"))
+  print(fields("a=1;bb=22;c=3")[1].len())
