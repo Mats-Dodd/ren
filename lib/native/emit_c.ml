@@ -421,6 +421,14 @@ let runtime rt args site_arg =
         | _ -> bug "a bitwise operation that isn't one"
       in
       sprintf "(%s %s %s)" (a 0) o (a 1)
+  | Shift x ->
+      let f =
+        match x with
+        | Int_shl -> "ren_shl"
+        | Int_shr -> "ren_shr"
+        | _ -> bug "a shift that isn't one"
+      in
+      sprintf "%s(%s, %s, %s)" f (a 0) (a 1) (site ())
   | Widen -> (
       match atom_layout (List.hd args) with
       | Sized F32 -> sprintf "((double)%s)" (a 0)

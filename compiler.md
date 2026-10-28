@@ -3019,11 +3019,16 @@ spelling from the source.
   in every build at the call. A literal `k` outside that range is an
   error where it's written.
 - Natively, `shl` is a shift of the `uint64_t`, cast back; `shr` is
-  written so it's arithmetic whatever the C compiler does with a
-  negative signed shift (C leaves it to the implementation), `x < 0 ?
-  ~(~x >> k) : x >> k`, which clang folds to one instruction; the range
-  check is one unsigned compare, `(uint64_t)k > 63`, gone when `k` is a
-  constant.
+  C's `>>` of the `int64_t`, which C leaves to the implementation for a
+  negative number (C11 6.5.7p5) and clang, GCC and tcc define as
+  arithmetic: ren_rt.h asserts it of whichever compiler builds it
+  (`_Static_assert(((int64_t)-1 >> 1) == -1, ...)`), so a compiler that
+  didn't would refuse the program rather than shift wrongly. (As built:
+  the portable `x < 0 ? ~(~x >> k) : x >> k` this specified, clang 16
+  compiles to five instructions, not one `asr`.) The range check is one
+  unsigned compare, `(uint64_t)k > 63`, gone when `k` is a constant;
+  both are `static inline` in ren_rt.h, `ren_shl` and `ren_shr`, given
+  the call's site, which Mem has as `Shift` of the intrinsic.
 
 Errors:
 
@@ -3053,6 +3058,23 @@ The last is today's headline, with a help for a hex or binary literal.
 The step also rewrites a CRC or hash in bench or the examples that
 divides for a shift (bench/10d/bits.ren is one, written new), and
 operators.md loses "not built yet".
+
+As built, beside the above: a digit or letter run on into a hex number
+is `` `g` isn't a hex digit ``, as binary's is; `0B` is binary's
+lower-case error; `0b` and `0x` with no digit, or `0x_1`, need a digit.
+A literal `shr` by 64 or more helps with `` `shr(63)` makes 0, or -1
+if it's negative ``, and a negative literal amount with `to shift the
+other way, use `shr`` (or `shl`). 2^63 written in hex, `0x8000_0000_0000_0000`,
+is let through the lexer as decimal's is, for the parser to allow only
+after a `-`; anywhere else its error has decimal's help, "the smallest
+`Int` is `-9223372036854775808`", since the parser doesn't know the
+base. The rewrite is bench/native/bytes: its generator took its high 32
+bits as `s / 4294967296`, which rounds toward zero, and now takes
+`s.shr(32)`, with its constants in hex (the Rust and Go twins `>>`, and
+wide.ren, which has to build with 82ed3d1's compiler, rounds down by
+hand, so all four print the same new checksums). Measured, release, the
+same: 474.8 ms ± 1.9 before, 474.3 ± 1.3 after, 2.124 and 2.126
+billion cycles.
 
 ### Generic dependencies (step 2)
 

@@ -831,7 +831,10 @@ module.exports = grammar({
     // leaves the innermost `while` or `for`
     break: (_) => 'break',
 
-    number: (_) => /[0-9][0-9_]*/,
+    // 1_000_000, hex 0x82F6_3B78 or binary 0b1010: the prefix in lower
+    // case, underscores anywhere after the first digit. Always an `Int`
+    number: (_) =>
+      token(choice(/0x[0-9a-fA-F][0-9a-fA-F_]*/, /0b[01][01_]*/, /[0-9][0-9_]*/)),
 
     // 1.5: a digit after the `.`, so `1..3` and `1.show()` are an `Int`
     // and what follows it. Never a pattern

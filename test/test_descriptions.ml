@@ -30,23 +30,8 @@ open Helpers
 (* ---- s1: shifts and literals (decision 15) ---- *)
 
 let%expect_test "[s1 accept] hex, binary and underscored literals" =
-  until "s1"
-    ~want:
-      {|
-255
-2197175160
-10
-240
-1000000
-true
--16
-9223372036854775807
--9223372036854775808
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   print(0xFF)
   print(0x82F6_3B78)
@@ -57,36 +42,25 @@ fn main() uses Console =
   print(-0x10)
   print(0x7FFF_FFFF_FFFF_FFFF)
   print(-0x8000_0000_0000_0000)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `xFF`
-      ┌─ test.ren:2:10
-    2 │   print(0xFF)
-      │          ^^^
+    255
+    2197175160
+    10
+    240
+    1000000
+    true
+    -16
+    9223372036854775807
+    -9223372036854775808
+    ()
     |}]
 
 let%expect_test "[s1 accept] shl and shr lose the bits shifted out" =
   (* `shl` wraps at 64 bits, as `*%` does; `shr` is arithmetic on an
      `Int`, so it keeps a negative number's sign *)
-  until "s1"
-    ~want:
-      {|
-16
-5
-15
--4
--1
-4611686018427387904
--4611686018427387904
--9223372036854775808
-0
-62
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   print(1.shl(4))
   print(5.shl(0))
@@ -103,32 +77,27 @@ fn main() uses Console =
     total = total +% 1.shl(k).shr(k)
     k += 1
   print(total)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `xFF`
-      ┌─ test.ren:4:10
-    4 │   print(0xFF.shr(4))
-      │          ^^^
+    16
+    5
+    15
+    -4
+    -1
+    4611686018427387904
+    -4611686018427387904
+    -9223372036854775808
+    0
+    62
+    ()
     |}]
 
 let%expect_test "[s1 accept] shl stored into a sized integer wraps at its width" =
   (* the rule `*%` follows: at the top of what's stored into a sized
      integer, it keeps that many bits, and elsewhere 64; and a value read
      from an unsigned type is never negative, so `shr` on it is logical *)
-  until "s1"
-    ~want:
-      {|
-2
-4
--2147483648
-2199023255552
-15
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   var w: UInt32 = 0x8000_0001
   w = w.shl(1)
@@ -143,28 +112,21 @@ fn main() uses Console =
   print(x)
   var u: UInt32 = 0xFFFF_FFFF
   print(u.shr(28))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `x8000_0001`
-      ┌─ test.ren:2:20
-    2 │   var w: UInt32 = 0x8000_0001
-      │                    ^^^^^^^^^^
+    2
+    4
+    -2147483648
+    2199023255552
+    15
+    ()
     |}]
 
 let%expect_test "[s1 accept] a CRC-32C with shifts and hex (M4)" =
   (* kv/crc.ren of the paper programs, which divided by 256 for `shr(8)`;
      the check value from the CRC catalogue *)
-  until "s1"
-    ~want:
-      {|
-true
-3808858755
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn table() -> Array<UInt32> =
   var t: Array<UInt32> = []
   for n in 0..256
@@ -185,179 +147,118 @@ fn main() uses Console =
   let digits = [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39]
   print(crc32c(digits) == 0xE306_9283)
   print(crc32c(digits))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `x82F6_3B78`
-      ┌─ test.ren:6:51
-    6 │       c = if c.bit_and(1) == 1 then c.shr(1).xor(0x82F6_3B78) else c.shr(1)
-      │                                                   ^^^^^^^^^^
-
-    error: expected the end of the line, found `xFFFF_FFFF`
-       ┌─ test.ren:12:20
-    12 │   var c: UInt32 = 0xFFFF_FFFF
-       │                    ^^^^^^^^^^
-
-    error: expected `,` or `]`, found `x31`
-       ┌─ test.ren:18:18
-    18 │   let digits = [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39]
-       │                  ^^^
+    true
+    3808858755
+    ()
     |}]
 
 let%expect_test "[s1 reject] a shift by an amount outside 0 to 63 panics" =
-  until "s1"
-    ~says:[ "panic: `shl` by 64: a shift is by 0 to 63" ]
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let k = 64
   print(1.shl(k))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: `Int` has no method named `shl`
-      ┌─ test.ren:3:11
+    error: panic: `shl` by 64: a shift is by 0 to 63
+      ┌─ test.ren:3:9
     3 │   print(1.shl(k))
-      │           ^^^
-      help: its methods: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`, `xor`, `bit_and`, `bit_or`
+      │         ^^^^^^^^
     |}];
-  until "s1"
-    ~says:[ "panic: `shr` by -1: a shift is by 0 to 63" ]
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let k = -1
   print(16.shr(k))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: `Int` has no method named `shr`
-      ┌─ test.ren:3:12
+    error: panic: `shr` by -1: a shift is by 0 to 63
+      ┌─ test.ren:3:9
     3 │   print(16.shr(k))
-      │            ^^^
-      help: its methods: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`, `xor`, `bit_and`, `bit_or`
+      │         ^^^^^^^^^
     |}]
 
 let%expect_test "[s1 reject] a literal shift amount outside 0 to 63" =
   (* an error where it's written, as a literal that doesn't fit is *)
-  until "s1"
-    ~says:
-      [
-        "error: `shl` by 64 always panics";
-        "help: a shift is by 0 to 63; to make 0, write `0`";
-      ]
-    (fun () -> run {|
+  run {|
 fn main() uses Console =
   print(1.shl(64))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: `Int` has no method named `shl`
-      ┌─ test.ren:2:11
+    error: `shl` by 64 always panics
+      ┌─ test.ren:2:15
     2 │   print(1.shl(64))
-      │           ^^^
-      help: its methods: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`, `xor`, `bit_and`, `bit_or`
+      │               ^^
+      help: a shift is by 0 to 63; to make 0, write `0`
     |}]
 
 let%expect_test "[s1 reject] shl's result stored into a UInt64" =
   (* as a wrapping operator's: `shl` wraps at 64 bits, and half of what
      it makes is negative *)
-  until "s1"
-    ~says:
-      [
-        "error: a `shl`'s result can't be stored in a `UInt64`";
-        "help: keep a 64-bit hash or checksum in an `Int`";
-      ]
-    (fun () ->
-      run {|
+  run {|
 fn main() =
   var h: UInt64 = 1
   h = h.shl(3)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: `Int` has no method named `shl`
-      ┌─ test.ren:3:9
+    error: a `shl`'s result can't be stored in a `UInt64`
+      ┌─ test.ren:3:7
     3 │   h = h.shl(3)
-      │         ^^^
-      help: its methods: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`, `xor`, `bit_and`, `bit_or`
+      │       ^^^^^^^^
+      = `shl` wraps at `Int`'s 64 bits, and half of what it makes is negative
+      = a `UInt64` holds what an `Int` can that isn't negative
+      help: keep a 64-bit hash or checksum in an `Int`
     |}]
 
 let%expect_test "[s1 reject] literals that aren't numbers" =
-  until "s1"
-    ~says:
-      [
-        "error: a hex number needs a digit after `0x`";
-        "help: write its digits, `0xFF`";
-      ]
-    (fun () -> run {|
+  run {|
 fn main() uses Console =
   print(0x)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `x`
-      ┌─ test.ren:2:10
+    error: a hex number needs a digit after `0x`
+      ┌─ test.ren:2:9
     2 │   print(0x)
-      │          ^
+      │         ^^
+      help: write its digits, `0xFF`
     |}];
-  until "s1"
-    ~says:
-      [
-        "error: `2` isn't a binary digit";
-        "help: a binary number is written with `0` and `1`, `0b1010`";
-      ]
-    (fun () -> run {|
+  run {|
 fn main() uses Console =
   print(0b102)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `b102`
-      ┌─ test.ren:2:10
+    error: `2` isn't a binary digit
+      ┌─ test.ren:2:13
     2 │   print(0b102)
-      │          ^^^^
+      │             ^
+      help: a binary number is written with `0` and `1`, `0b1010`
     |}];
-  until "s1"
-    ~says:
-      [
-        "error: a hex number starts with `0x`, in lower case";
-        "help: write `0xFF`";
-      ]
-    (fun () -> run {|
+  run {|
 fn main() uses Console =
   print(0XFF)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `XFF`
-      ┌─ test.ren:2:10
+    error: a hex number starts with `0x`, in lower case
+      ┌─ test.ren:2:9
     2 │   print(0XFF)
-      │          ^^^
+      │         ^^
+      help: write `0xFF`
     |}]
 
 let%expect_test "[s1 reject] a hex literal past the largest Int" =
   (* a literal is a number, whatever its base, not a pattern of bits *)
-  until "s1"
-    ~says:
-      [
-        "error: this number is too big to fit in an `Int`";
-        "help: the largest `Int` is `0x7FFF_FFFF_FFFF_FFFF`; for all 64 bits \
-         set, write `-1`";
-      ]
-    (fun () ->
-      run {|
+  run {|
 fn main() uses Console =
   print(0xFFFF_FFFF_FFFF_FFFF)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `xFFFF_FFFF_FFFF_FFFF`
-      ┌─ test.ren:2:10
+    error: this number is too big to fit in an `Int`
+      ┌─ test.ren:2:9
     2 │   print(0xFFFF_FFFF_FFFF_FFFF)
-      │          ^^^^^^^^^^^^^^^^^^^^
+      │         ^^^^^^^^^^^^^^^^^^^^^
+      help: the largest `Int` is `0x7FFF_FFFF_FFFF_FFFF`; for all 64 bits set, write `-1`
     |}]
 
 (* ---- s2: generic dependencies (decisions 5 and 6) ---- *)

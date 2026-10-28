@@ -130,7 +130,7 @@ let rt_sig (rt : rt) : layout list * layout =
   | Float_round | Float_truncate -> ([ Float ], Int)
   | Wrapping _ -> ([ Int; Int ], Int)
   | Wrapping_neg -> ([ Int ], Int)
-  | Bits _ -> ([ Int; Int ], Int)
+  | Bits _ | Shift _ -> ([ Int; Int ], Int)
   | Narrow k -> ([ (if Sized.is_float k then Float else Int) ], Sized k)
   | Wrap_to k -> ([ Int ], Sized k)
   | Widen -> ([], Unit) (* its operand's, which [rhs] checks *)

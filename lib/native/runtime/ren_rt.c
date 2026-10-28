@@ -746,6 +746,14 @@ _Noreturn void ren_int_overflowed(const ren_site *site, const char *op,
   ren_panic(site, msg);
 }
 
+_Noreturn void ren_shift_panic(const ren_site *site, const char *op,
+                               int64_t k) {
+  char msg[96];
+  snprintf(msg, sizeof msg, "`%s` by %" PRId64 ": a shift is by 0 to 63", op,
+           k);
+  ren_panic(site, msg);
+}
+
 /* ---- NaN ---- */
 
 const char *const *ren_nan_where;

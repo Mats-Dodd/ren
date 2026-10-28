@@ -9,12 +9,17 @@ fn next(s: Int) -> Int =
 
 fn low_byte(x: Int) -> Int = (x % 256 + 256) % 256
 
+// [s] divided by 2^32, rounded down, as main.ren's `s.shr(32)` is: `/`
+// rounds toward zero
+fn high(s: Int) -> Int =
+  if s >= 0 then s / 4294967296 else (s + 1) / 4294967296 - 1
+
 fn bytes(n: Int) -> Array<Int> =
   var xs: Array<Int> = []
   var s = 42
   for _ in 0..n
     s = next(s)
-    &xs.push(low_byte(s / 4294967296))
+    &xs.push(low_byte(high(s)))
   xs
 
 fn ints(n: Int) -> Array<Int> =
@@ -22,7 +27,7 @@ fn ints(n: Int) -> Array<Int> =
   var s = 7
   for _ in 0..n
     s = next(s)
-    &xs.push((s / 4294967296) % 1000003)
+    &xs.push(high(s) % 1000003)
   xs
 
 fn smooth(inout xs: Array<Int>, rounds: Int) =

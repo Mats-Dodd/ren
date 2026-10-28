@@ -918,6 +918,10 @@ let scheme (x : Intrinsic.t) =
      each, combined, for hashes and checksums (operators.md, "Sized
      integers") *)
   | Int_xor | Int_bit_and | Int_bit_or -> fn [ read int; read int ] int
+  (* fn(self: Int, k: Int) -> Int: shifted left, losing the bits shifted
+     out, or right, keeping the sign; `k` outside 0 to 63 panics
+     (operators.md, "Bits") *)
+  | Int_shl | Int_shr -> fn [ read int; read int ] int
   (* fn(self: Int, b: Int) -> Int: the operators, as methods, `n.add(2)`
      is `n + 2` (operators.md, "Operators are methods"); and `-n` *)
   | Int_add | Int_sub | Int_mul | Int_div | Int_rem ->
@@ -965,7 +969,7 @@ let reaches (x : Intrinsic.t) =
   | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
   | Bytes_len | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
-  | Int_wrapping_neg | Int_xor | Int_bit_and | Int_bit_or | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
+  | Int_wrapping_neg | Int_xor | Int_bit_and | Int_bit_or | Int_shl | Int_shr | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
   | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
   | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower ->
       None
@@ -1063,6 +1067,8 @@ let types =
           Int_xor;
           Int_bit_and;
           Int_bit_or;
+          Int_shl;
+          Int_shr;
         ];
     t "Float"
       ~methods:

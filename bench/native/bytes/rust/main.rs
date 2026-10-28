@@ -16,7 +16,7 @@ fn bytes(n: i64) -> Vec<u8> {
     let mut s: i64 = 42;
     for _ in 0..n {
         s = next(s);
-        xs.push(u8::try_from((s / 4294967296) & 255).unwrap());
+        xs.push(u8::try_from((s >> 32) & 255).unwrap());
     }
     xs
 }
@@ -26,7 +26,7 @@ fn ints(n: i64) -> Vec<i32> {
     let mut s: i64 = 7;
     for _ in 0..n {
         s = next(s);
-        xs.push(i32::try_from((s / 4294967296) % 1000003).unwrap());
+        xs.push(i32::try_from((s >> 32) % 1000003).unwrap());
     }
     xs
 }

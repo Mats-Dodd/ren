@@ -72,7 +72,7 @@ let rt h (r : rt) : rt =
   | ( Array_len | Array_check | Array_own | Array_data | Buf_check | Str_len
     | Str_concat | Str_eq | Show_int | Show_float | Show_bool | Float_of_int
     | Float_sqrt | Float_round | Float_truncate | Wrapping _ | Wrapping_neg
-    | Bits _ | Widen | Narrow _ | Wrap_to _
+    | Bits _ | Shift _ | Widen | Narrow _ | Wrap_to _
     | Console_write | Console_error | Show_any | Equal_any _ | Compare_any _
     | Op_any _ | Value_any _ | New_desc _ | Nan_check _ | Nan_check_any _
     | Float_lanes | Float_sum | Here_set | Here_get | Here_put ) as r ->

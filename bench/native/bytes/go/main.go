@@ -26,7 +26,7 @@ func bytes(n int64) []uint8 {
 	s := int64(42)
 	for i := int64(0); i < n; i++ {
 		s = next(s)
-		xs = append(xs, uint8(fit((s/4294967296)&255, 0, 255)))
+		xs = append(xs, uint8(fit((s>>32)&255, 0, 255)))
 	}
 	return xs
 }
@@ -36,7 +36,7 @@ func ints(n int64) []int32 {
 	s := int64(7)
 	for i := int64(0); i < n; i++ {
 		s = next(s)
-		xs = append(xs, int32(fit((s/4294967296)%1000003, -2147483648, 2147483647)))
+		xs = append(xs, int32(fit((s>>32)%1000003, -2147483648, 2147483647)))
 	}
 	return xs
 }

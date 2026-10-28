@@ -216,6 +216,9 @@ type rt =
   | Wrapping of Ast.binop  (** `Int`'s `wrapping_add`, `_sub` or `_mul` *)
   | Wrapping_neg
   | Bits of Intrinsic.t  (** `Int`'s `xor`, `bit_and` or `bit_or` *)
+  | Shift of Intrinsic.t
+      (** `Int`'s `shl` or `shr`, which panics at its site if the amount isn't
+          0 to 63 *)
   | Widen  (** a [Sized] as its wide type, the variable's, the same number *)
   | Narrow of Sized.t
       (** an [Int] or a [Float] as a [Sized] of this type: panics if it doesn't

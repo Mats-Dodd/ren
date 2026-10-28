@@ -62,6 +62,8 @@ type t =
   | Int_xor
   | Int_bit_and
   | Int_bit_or
+  | Int_shl
+  | Int_shr
   | Int_add
   | Int_sub
   | Int_mul

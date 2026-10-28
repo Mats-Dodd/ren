@@ -273,12 +273,93 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
     emit (STR (Buffer.contents b)) start
   in
 
+  (* A number in hex, `0x82F6_3B78`, or binary, `0b1010` (foundations.md,
+     decision 15). It's a number, not a pattern of bits, so it has to fit
+     an `Int` as a decimal one does: `0xFFFF_FFFF_FFFF_FFFF` is too big,
+     and 2^63 is let through only for the parser to allow after a `-`, as
+     a decimal one is. Its value is all that's kept: nothing after the
+     lexer knows its base. *)
+  let lex_based start =
+    let prefix = peek 1 in
+    let hex = prefix = 'x' || prefix = 'X' in
+    let base, name, example =
+      if hex then (16, "hex", "0xFF") else (2, "binary", "0b1010")
+    in
+    (* the bits a digit is *)
+    let bits = if hex then 4 else 1 in
+    let digit c =
+      match c with
+      | '0' .. '9' when Char.code c - Char.code '0' < base ->
+          Some (Char.code c - Char.code '0')
+      | 'a' .. 'f' when hex -> Some (Char.code c - Char.code 'a' + 10)
+      | 'A' .. 'F' when hex -> Some (Char.code c - Char.code 'A' + 10)
+      | _ -> None
+    in
+    i := !i + 2;
+    if prefix = 'X' || prefix = 'B' then
+      error
+        ~help:(Printf.sprintf "write `%s`" example)
+        start
+        (Printf.sprintf "a %s number starts with `0%c`, in lower case" name
+           (Char.lowercase_ascii prefix));
+    if digit (peek 0) = None then
+      error
+        ~help:(Printf.sprintf "write its digits, `%s`" example)
+        start
+        (Printf.sprintf "a %s number needs a digit after `0%c`" name prefix);
+    (* the value, as long as it's at most 2^63, which [Int64] holds as
+       [Int64.min_int]; past that it's too big, whatever follows *)
+    let n = ref 0L and too_big = ref false in
+    let rec go () =
+      match digit (peek 0) with
+      | Some d ->
+          (if !too_big then ()
+           else if !n = Int64.min_int then too_big := true
+           else if Int64.compare !n (Int64.shift_left 1L (63 - bits)) > 0 then
+             too_big := true
+           else
+             (* [m] is at most 2^63, and a multiple of [base]: below 2^63,
+                [m + d] is at most [Int64.max_int]; at it, only a 0 keeps
+                it there *)
+             let m = Int64.shift_left !n bits in
+             if m <> Int64.min_int then n := Int64.add m (Int64.of_int d)
+             else if d = 0 then n := m
+             else too_big := true);
+          incr i;
+          go ()
+      | None when peek 0 = '_' ->
+          incr i;
+          go ()
+      | None -> ()
+    in
+    go ();
+    (* a digit or letter run on into it isn't a digit of its base: `0b102` *)
+    if is_ident_char (peek 0) then (
+      let at = pos () in
+      let bad = peek 0 in
+      incr i;
+      error
+        ~help:
+          (if hex then "a hex number is written with `0` to `9` and `a` to `f`, `0xFF`"
+           else "a binary number is written with `0` and `1`, `0b1010`")
+        at
+        (Printf.sprintf "`%c` isn't a %s digit" bad name));
+    if !too_big then
+      error
+        ~help:
+          "the largest `Int` is `0x7FFF_FFFF_FFFF_FFFF`; for all 64 bits set, \
+           write `-1`"
+        start "this number is too big to fit in an `Int`";
+    emit (INT !n) start
+  in
+
   let lex_token c start =
     let advance_by n tok =
       i := !i + n;
       emit tok start
     in
-    if is_digit c then (
+    if c = '0' && List.mem (peek 1) [ 'x'; 'X'; 'b'; 'B' ] then lex_based start
+    else if is_digit c then (
       let s = !i in
       while is_digit (peek 0) || peek 0 = '_' do
         incr i

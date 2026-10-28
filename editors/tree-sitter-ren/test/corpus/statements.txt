@@ -401,6 +401,59 @@ fn main() =
               (identifier))))))))
 
 ================================================================================
+hex, binary and underscored numbers, and shifts
+================================================================================
+
+fn crc(c: Int) -> Int =
+  var w: UInt32 = 0xFFFF_ffff
+  w = w.shl(0b10).xor(0x82F6_3B78)
+  c.shr(8) + 1_000 - 0x10 + 0b1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (let_statement
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (number))
+      (assignment
+        (identifier)
+        (method_call_expression
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (number)))
+          (identifier)
+          (arguments
+            (number))))
+      (binary_expression
+        (binary_expression
+          (binary_expression
+            (method_call_expression
+              (identifier)
+              (identifier)
+              (arguments
+                (number)))
+            (number))
+          (number))
+        (number)))))
+
+================================================================================
 sized types and the wrapping operators
 ================================================================================
 

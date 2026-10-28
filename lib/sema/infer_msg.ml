@@ -2374,7 +2374,20 @@ let wrapped_into_uint64 loc ~op =
         "a `UInt64` holds what an `Int` can that isn't negative";
       ]
     ~help:"keep a 64-bit hash or checksum in an `Int`"
-    "a wrapping operator's result can't be stored in a `UInt64`"
+    (if op = "shl" then "a `shl`'s result can't be stored in a `UInt64`"
+     else "a wrapping operator's result can't be stored in a `UInt64`")
+
+(* `x.shl(k)` or `x.shr(k)`, [op], with a literal [k] outside 0 to 63,
+   which would panic every time (foundations.md, decision 15). *)
+let shift_out_of_range loc ~op ~k =
+  let help =
+    if Int64.compare k 0L < 0 then
+      sprintf "a shift is by 0 to 63; to shift the other way, use `%s`"
+        (if op = "shl" then "shr" else "shl")
+    else if op = "shl" then "a shift is by 0 to 63; to make 0, write `0`"
+    else "a shift is by 0 to 63; `shr(63)` makes 0, or -1 if it's negative"
+  in
+  Diag.make loc ~help (sprintf "`%s` by %Ld always panics" op k)
 
 (* `a op b` where [left], [a]'s type, has no [op] taking [right], [b]'s:
    an operator is found on its left side's type, chosen by its right

@@ -233,4 +233,8 @@ fn hash(b: UInt8) -> Int =
 //             ^ operator
   h +%= 1
 //  ^ operator
+  h = h.shl(0x1F) + 0b1010
+//        ^ function.method
+//            ^ number
+//                   ^ number
   h

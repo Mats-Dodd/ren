@@ -2287,6 +2287,7 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   | Int_wrapping_mul, _, _ -> runtime (Wrapping Mul)
   | Int_wrapping_neg, _, _ -> runtime Wrapping_neg
   | (Int_xor | Int_bit_and | Int_bit_or), _, _ -> runtime (Bits x)
+  | (Int_shl | Int_shr), _, _ -> runtime ~site:(site ()) (Shift x)
   (* `map`'s own (prelude.ml) *)
   | Array_reserve, [ t ], [ d ] -> (
       match values () with

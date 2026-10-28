@@ -6,15 +6,17 @@
 // `Array<Int>`s, as it was written before sized types; the checksums
 // are the same.
 
-// a 64-bit linear congruential generator's next state (Knuth's MMIX)
-fn next(s: Int) -> Int = s *% 6364136223846793005 +% 1442695040888963407
+// a 64-bit linear congruential generator's next state (Knuth's MMIX),
+// whose high bits are its random ones: [high] is the 32 above the low 32
+fn next(s: Int) -> Int = s *% 0x5851_F42D_4C95_7F2D +% 0x1405_7B7E_F767_814F
+fn high(s: Int) -> Int = s.shr(32)
 
 fn bytes(n: Int) -> Array<UInt8> =
   var xs: Array<UInt8> = []
   var s = 42
   for _ in 0..n
     s = next(s)
-    &xs.push((s / 4294967296).bit_and(255))
+    &xs.push(high(s).bit_and(0xFF))
   xs
 
 fn ints(n: Int) -> Array<Int32> =
@@ -22,7 +24,7 @@ fn ints(n: Int) -> Array<Int32> =
   var s = 7
   for _ in 0..n
     s = next(s)
-    &xs.push((s / 4294967296) % 1000003)
+    &xs.push(high(s) % 1_000_003)
   xs
 
 // each byte the average of itself and the one before, as it now is
@@ -35,13 +37,13 @@ fn smooth(inout xs: Array<UInt8>, rounds: Int) =
 fn mix(inout xs: Array<Int32>, rounds: Int) =
   for _ in 0..rounds
     for i in 1..xs.len()
-      xs[i] = (xs[i] * 3 + xs[i - 1]) % 1000003
+      xs[i] = (xs[i] * 3 + xs[i - 1]) % 1_000_003
 
 fn fnv(xs: Array<UInt8>, seed: Int) -> Int =
-  var h: UInt32 = 2166136261 + seed
+  var h: UInt32 = 0x811C_9DC5 + seed
   for b in xs
     h = h.xor(b)
-    h = h *% 16777619
+    h = h *% 0x0100_0193
   h
 
 pub fn run(n: Int, rounds: Int) uses Console =

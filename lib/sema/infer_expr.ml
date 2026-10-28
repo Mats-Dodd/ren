@@ -104,12 +104,13 @@ let read_wide cx (e : expr) t =
   | None -> t
 
 (* The wrapping operator [e] is, by name, if it's one: `a +% b`, or the
-   method it is, `a.wrapping_add(b)` (operators are methods). *)
+   method it is, `a.wrapping_add(b)` (operators are methods), or `a.shl(k)`,
+   which wraps by the same rule (foundations.md, decision 15). *)
 let wrapping_op cx (e : expr) =
   match e.kind with
   | Binop (op, _, _, _) when is_wrapping op -> Some (binop_to_string op)
   | Call ({ kind = Field (_, m); node; _ }, _)
-    when String.starts_with ~prefix:"wrapping_" m.name -> (
+    when String.starts_with ~prefix:"wrapping_" m.name || m.name = "shl" -> (
       match Hashtbl.find_opt cx.found node with
       | Some (Method_of p) when p = Path.member (Path.prelude "Int") m.name ->
           Some m.name
@@ -1702,6 +1703,25 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
             else []
           in
           blame_args cx f (given @ [ (self.ty, r.loc) ]);
+          (* a shift by a literal amount it can't be by panics every
+             time: an error where it's written, as a literal that
+             doesn't fit is *)
+          (if
+             path = Path.member (Path.prelude "Int") "shl"
+             || path = Path.member (Path.prelude "Int") "shr"
+           then
+             match args with
+             | [ ({ kind = Int _ | Unop (Neg, { kind = Int _; _ }, _); _ } as a) ]
+               ->
+                 let k =
+                   match a.kind with
+                   | Unop (_, { kind = Int k; _ }, _) -> Int64.neg k
+                   | Int k -> k
+                   | _ -> 0L
+                 in
+                 if Int64.compare k 0L < 0 || Int64.compare k 63L > 0 then
+                   report env (shift_out_of_range a.loc ~op:o.oname ~k)
+             | _ -> ());
           (* a dependency's method takes an implementation that needs less
              than its `self` allows, as an argument does *)
           unify_at env r.loc ~found:(widen env ~loc:r.loc tr) ~expected:self.ty;

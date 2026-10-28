@@ -238,6 +238,14 @@ let number f =
       raise (Panic (Arith.overflow_message ~op ~shown))
   | Arith.Undefined msg -> raise (Panic msg)
 
+(* [k], the amount of the shift [op], `shl` or `shr`, if it's one: 0 to
+   63, or a panic. *)
+let shift op k =
+  if Int64.compare k 0L < 0 || Int64.compare k 63L > 0 then
+    raise
+      (Panic (Printf.sprintf "`%s` by %Ld: a shift is by 0 to 63" op k));
+  Int64.to_int k
+
 (* The operator [op], as the method of [x]'s two operands, a NaN it
    makes tagged by [made]. *)
 let arith ~made x op = function
@@ -492,6 +500,17 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
       pure (function [ VInt a; VInt b ] -> VInt (Int64.logand a b) | _ -> bug x)
   | Int_bit_or ->
       pure (function [ VInt a; VInt b ] -> VInt (Int64.logor a b) | _ -> bug x)
+  (* the shifts: [Int64]'s, whose [shift_left] loses the bits shifted out
+     and whose [shift_right] is arithmetic; by an amount outside 0 to 63
+     it panics, as every build does at the call *)
+  | Int_shl ->
+      pure (function
+        | [ VInt a; VInt k ] -> VInt (Int64.shift_left a (shift "shl" k))
+        | _ -> bug x)
+  | Int_shr ->
+      pure (function
+        | [ VInt a; VInt k ] -> VInt (Int64.shift_right a (shift "shr" k))
+        | _ -> bug x)
   (* the operators, as methods, `n.add(2)`: Arith's, as `n + 2` is, with
      the panic said at the call *)
   | Int_add | Float_add -> pure (arith ~made x Add)

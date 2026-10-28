@@ -411,11 +411,51 @@ fn fnv64(bytes: Array<UInt8>) -> Int =
   h
 ```
 
-`Int`'s `xor`, `bit_and` and `bit_or` are what such code needs besides.
-Shifts, `shl` and `shr`, which lose the bits shifted out and panic on
-an amount outside 0 to 63, and literals in hex, binary and with
-underscores, `0x82F63B78`, `0b1010` and `1_000_000`, are decided
-(foundations.md, decision 15) and not built yet.
+### Bits
+
+`Int`'s `xor`, `bit_and` and `bit_or`, its shifts `shl` and `shr`, and
+numbers written in hex and binary are what such code needs besides
+(foundations.md, decision 15). A CRC-32C:
+
+```ren
+fn table() -> Array<UInt32> =
+  var t: Array<UInt32> = []
+  for n in 0..256
+    var c = n
+    for _ in 0..8
+      c = if c.bit_and(1) == 1 then c.shr(1).xor(0x82F6_3B78) else c.shr(1)
+    &t.push(c)
+  t
+
+fn crc32c(t: Array<UInt32>, data: Array<Int>) -> Int =
+  var c: UInt32 = 0xFFFF_FFFF
+  for x in data
+    c = t[c.xor(x).bit_and(0xFF)].xor(c.shr(8))
+  c.xor(0xFFFF_FFFF)
+```
+
+- **A number can be written in hex or binary,** `0x82F6_3B78`, `0b1010`,
+  with the prefix in lower case and its digits in either, and any number
+  with underscores after its first digit, `1_000_000`. It's an `Int`,
+  never a `Float`, and **a number, not a pattern of bits:** it has to
+  fit an `Int` as a decimal one does, so `0xFFFF_FFFF_FFFF_FFFF` is an
+  error whose help says the largest is `0x7FFF_FFFF_FFFF_FFFF`, and all
+  64 bits set is `-1`. Stored into a sized type, it's checked as any
+  literal is.
+- **`x.shl(k)` loses the bits shifted out:** it's the low 64 bits of `x`
+  times 2^k, so it never overflows, `1.shl(63)` is the smallest `Int`.
+  It's a wrapping operation, by the rule above: stored into a sized
+  integer it keeps that type's width, `w = w.shl(1)` with `w: UInt32`
+  keeps 32 bits, and stored into a `UInt64` it's an error.
+- **`x.shr(k)` is `x` divided by 2^k, rounded down:** arithmetic, so a
+  negative number keeps its sign, `(-8).shr(1)` is `-4`. It's logical on
+  an unsigned type with nothing more, since a value read from one is
+  never negative. It can't overflow, and storing it is checked as any
+  store is.
+- **A shift is by 0 to 63:** any other amount panics, `` `shl` by 64: a
+  shift is by 0 to 63 ``, in every build at the call; a literal one is
+  an error where it's written. A native build checks with one unsigned
+  compare, gone when the amount is a constant.
 
 ### How they're kept
 
@@ -635,8 +675,6 @@ Named here so they aren't forgotten:
   price is an error whose help says `0.08d`.
 - **Shapes and build time,** for `json` and SQL rows, in
   [shapes.md](shapes.md) rather than `comptime`.
-- **Shifts,** `shl` and `shr`, beside `xor`, `bit_and` and `bit_or`;
-  and hex, binary and underscored literals.
 - **Narrow lanes:** a loop over sized elements computed at their width
   where the compiler proves the values fit (foundations.md, decision 15).
 - **`Decimal`,** in std ([stdlib.md](stdlib.md)).

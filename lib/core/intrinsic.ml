@@ -70,6 +70,8 @@ type t =
   | Int_xor
   | Int_bit_and
   | Int_bit_or
+  | Int_shl
+  | Int_shr
   | Int_add
   | Int_sub
   | Int_mul
@@ -152,6 +154,8 @@ let path x =
   | Int_xor -> member "Int" "xor"
   | Int_bit_and -> member "Int" "bit_and"
   | Int_bit_or -> member "Int" "bit_or"
+  | Int_shl -> member "Int" "shl"
+  | Int_shr -> member "Int" "shr"
   | Int_add -> member "Int" "add"
   | Int_sub -> member "Int" "sub"
   | Int_mul -> member "Int" "mul"

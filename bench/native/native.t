@@ -16,9 +16,9 @@ change here is a change in what the program computes.
   fold 6493500 6493500
   attempt 29999 29999
   == bytes
-  124680
-  25152545
-  247678360
+  124394
+  29366541
+  3499174900
   == cfold
   2386
   2386

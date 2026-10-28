@@ -1080,6 +1080,31 @@ static inline int64_t ren_mul(int64_t a, int64_t b, const ren_site *site) {
   return r;
 }
 
+/* `Int`'s shifts (foundations.md, decision 15): `shl` loses the bits
+   shifted out, as a shift of the `uint64_t` does, and `shr` is
+   arithmetic. C leaves a negative signed `>>` to the implementation
+   (C11 6.5.7p5); clang, GCC and tcc each define it as arithmetic, which
+   the assertion below checks of whichever compiles this, so `>>` is one
+   `asr`. Written without it, `x < 0 ? ~(~x >> k) : x >> k`, clang 16
+   doesn't fold it back to one: five instructions. An amount outside 0
+   to 63 panics with the interpreter's message (lib/eval/builtins.ml,
+   [shift]): one unsigned compare, gone when [k] is a constant. */
+_Static_assert(((int64_t)-1 >> 1) == -1, "`shr` needs an arithmetic `>>`");
+_Noreturn void ren_shift_panic(const ren_site *site, const char *op,
+                               int64_t k);
+
+static inline int64_t ren_shl(int64_t x, int64_t k, const ren_site *site) {
+  if (__builtin_expect((uint64_t)k > 63, 0))
+    ren_shift_panic(site, "shl", k);
+  return (int64_t)((uint64_t)x << k);
+}
+
+static inline int64_t ren_shr(int64_t x, int64_t k, const ren_site *site) {
+  if (__builtin_expect((uint64_t)k > 63, 0))
+    ren_shift_panic(site, "shr", k);
+  return x >> k;
+}
+
 int64_t ren_div(int64_t a, int64_t b, const ren_site *site);
 int64_t ren_rem(int64_t a, int64_t b, const ren_site *site);
 int64_t ren_neg(int64_t a, const ren_site *site);
