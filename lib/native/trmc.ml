@@ -337,9 +337,11 @@ let rename ~next ~label (also : var list) (b : block) : block * var list =
     | Env_new xs -> Env_new (atoms xs)
     | Env_get (x, n) -> Env_get (atom x, n)
     | Arg (x, n) -> Arg (atom x, n)
+    | Arg_borrowed (x, n) -> Arg_borrowed (atom x, n)
     | Block_of (g, x) -> Block_of (g, atom x)
-    | Method_of (x, d, n) -> Method_of (atom x, d, n)
+    | Method_of m -> Method_of { m with mdesc = atom m.mdesc }
     | Has_code x -> Has_code (atom x)
+    | Tag_is (x, h) -> Tag_is (atom x, h)
     | Impl (n, xs) -> Impl (n, atoms xs)
     | Install i ->
         Install
@@ -399,6 +401,7 @@ let rename ~next ~label (also : var list) (b : block) : block * var list =
             args = atoms c.args;
             error = var c.error;
             on_error = Option.map block c.on_error;
+            borrowed = c.borrowed;
           }
     | Call_handler c ->
         Call_handler
@@ -414,6 +417,7 @@ let rename ~next ~label (also : var list) (b : block) : block * var list =
                 c.deps;
             error = var c.error;
             on_error = Option.map block c.on_error;
+            hsite = c.hsite;
           }
     | If (c, t, e) -> If (atom c, block t, block e)
     | Switch (x, cases, d) ->

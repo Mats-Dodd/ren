@@ -44,7 +44,7 @@ checked, and `loops_short` in the checked one of a loop bounds.ml made
 twice. `review_shrink` panics indexing an array a call
 shrank under its loop's count, which bounds.ml leaves checked.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -107,6 +107,12 @@ shrank under its loop's count, which bounds.ml leaves checked.
   10d/router.ren, naive: the same, exit 0, objects live at exit 0
   10d/methods.ren, perceus: the same, exit 0, objects live at exit 0
   10d/methods.ren, naive: the same, exit 0, objects live at exit 0
+  10d/dispatch.ren, perceus: the same, exit 0, objects live at exit 0
+  10d/dispatch.ren, naive: the same, exit 0, objects live at exit 0
+  10d/dispatch_mix.ren, perceus: the same, exit 0, objects live at exit 0
+  10d/dispatch_mix.ren, naive: the same, exit 0, objects live at exit 0
+  10d/dispatch_panic.ren, perceus: the same, exit 1, objects live at exit 2
+  10d/dispatch_panic.ren, naive: the same, exit 1, objects live at exit 2
 
 Every native benchmark, at its small size:
 
@@ -255,7 +261,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -287,6 +293,9 @@ prints what `ren run` prints, and ends with no object alive; so does
   10d/shapes.ren, release: the same, exit 0, objects live at exit 0
   10d/router.ren, release: the same, exit 0, objects live at exit 0
   10d/methods.ren, release: the same, exit 0, objects live at exit 0
+  10d/dispatch.ren, release: the same, exit 0, objects live at exit 0
+  10d/dispatch_mix.ren, release: the same, exit 0, objects live at exit 0
+  10d/dispatch_panic.ren, release: the same, exit 1, objects live at exit 2
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
@@ -1294,7 +1303,7 @@ same objects alive at the end as clang's build above.
   >    fi)
   >   done
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods; do tcc_same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic; do tcc_same $f.ren; done
   fib.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   fib.ren, naive, tcc: the same, exit 0, objects live at exit 0
   deep.ren, perceus, tcc: the same, exit 0, objects live at exit 0
@@ -1415,6 +1424,12 @@ same objects alive at the end as clang's build above.
   10d/router.ren, naive, tcc: the same, exit 0, objects live at exit 0
   10d/methods.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   10d/methods.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  10d/dispatch.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  10d/dispatch.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  10d/dispatch_mix.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  10d/dispatch_mix.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  10d/dispatch_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  10d/dispatch_panic.ren, naive, tcc: the same, exit 1, objects live at exit 2
   $ for f in native/*/small.ren ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do tcc_same $f; done
   native/binary-trees/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/binary-trees/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
@@ -1489,10 +1504,62 @@ builds against `ren run` under the sanitizers.
 
 Step 4's listing of how each dispatch site is lowered, for each
 dependency of 10d/dispatch.ren (compiler.md, "Stage 10d", "Dispatch"):
-`Seed` a direct call, `Step` inline arms and the loop in `run` cloned
-per handler, `Shape` and `Expr` a call through the table.
+`Seed` a direct call; `Step` the loop in `run` copied per handler;
+`Shape` a call through the tag, which is the arm's code; `Expr`, which
+recurses, a call through the table in its arms, and `main`'s call
+compare-and-branch.
 
-  $ (cd 10d && ren build --release --explain-dispatch Shape dispatch.ren -o ./dispatch.bin 2>&1 | head -n 3)
-  error: `ren build` has no option --explain-dispatch
-  usage: ren <command> <file.ren>
-         ren run [--record <file.journal>] [--trace] [--release] <file.ren>
+  $ for d in Seed Step Shape Expr; do (cd 10d && ren build --release --explain-dispatch $d dispatch.ren -o ./dispatch.bin 2>&1); done
+  Seed: 1 handler (lcg dispatch.ren:13), 1 operation (next)
+    description: one handler, so no site reads its tag; boxed, the tag then 0 words at most
+    dispatch.ren:54  shapes(): s.next(x)  1 handler reaches → direct call  [one handler]
+  Step: 3 handlers (inc dispatch.ren:19, dbl :22, sq :25), 1 operation (apply)
+    description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 1 word at most
+    dispatch.ren:32  run(): s.apply(x)  3 handlers reach → loop copied per handler (inc, dbl, sq; 20 statements a copy), a direct call in each  [the description doesn't change in the loop]
+  Shape: 6 handlers (sq_shape dispatch.ren:38, rect :40, tri :42, ring :44, frame :46, shapes$handler1 :63), 1 operation (area)
+    description: tag = code pointer (one operation); boxed, the tag then 3 words at most
+    dispatch.ren:94  main(): s.area()  6 handlers reach → table call (tag = code pointer)  [more than 4]
+  Expr: 4 handlers (num dispatch.ren:70, add :72, mul :74, neg :76), 1 operation (eval)
+    description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 2 words at most
+    dispatch.ren:73  add(): a.eval()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:73  add(): b.eval()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:75  mul(): a.eval()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:75  mul(): b.eval()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:77  neg(): a.eval()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:96  main(): tree(12, 5).eval()  4 handlers reach → arms inline, compare-and-branch  [4 handlers, at most 4]
+
+And 10d/dispatch_mix.ren's: a set with a handler with state in it,
+which the table has no method for and a call installs; a loop copied
+inside another, and one whose copy for a handler with state installs
+it; a dependency whose tags are code, installed by a `with`; and a
+handler of two dependencies. The listing is a release build's, and
+names a dependency the program has.
+
+  $ for d in Op Tally Area Size Label; do (cd 10d && ren build --release --explain-dispatch $d dispatch_mix.ren -o ./dispatch.bin 2>&1); done
+  Op: 6 handlers (o_add dispatch_mix.ren:14, o_sub :16, o_mul :18, o_neg :20, o_id :22, o_seen :25), 1 operation (run)
+    description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 1 word at most
+    dispatch_mix.ren:84  main(): o.run(acc)  6 handlers reach → table call  [more than 4]
+    dispatch_mix.ren:89  main(): o.run(i)  6 handlers reach → table call  [more than 4]
+    dispatch_mix.ren:113  main(): p.left.run(p.right.run(10))  6 handlers reach → table call  [more than 4]
+    dispatch_mix.ren:113  main(): p.right.run(10)  6 handlers reach → table call  [more than 4]
+  Tally: 3 handlers (t_twice dispatch_mix.ren:34, t_plus :36, t_count :38), 1 operation (add)
+    description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 1 word at most
+    dispatch_mix.ren:75  total(): t.add(x + i)  3 handlers reach → loop copied per handler (t_twice, t_plus, t_count; 35 statements a copy), a direct call in each  [the description doesn't change in the loop]
+    dispatch_mix.ren:97  main(): t.add(i)  3 handlers reach → loop copied per handler (t_twice, t_plus, t_count; 34 statements a copy), a direct call in each  [the description doesn't change in the loop]
+  Area: 5 handlers (a_sq dispatch_mix.ren:47, a_rect :49, a_tri :51, a_line :53, a_zero :55), 1 operation (area)
+    description: tag = code pointer (one operation); boxed, the tag then 2 words at most
+    dispatch_mix.ren:78  both(): with a in Area.area() + Area.area()  5 handlers reach → installed through its handler's record  [a `with`'s body isn't copied per handler yet]
+    dispatch_mix.ren:105  main(): a.area()  5 handlers reach → table call (tag = code pointer)  [more than 4]
+  Size: 2 handlers (boxed dispatch_mix.ren:64, small :67), 1 operation (size)
+    description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 1 word at most
+    dispatch_mix.ren:108  main(): b.size()  2 handlers reach → arms inline, compare-and-branch  [2 handlers, at most 4]
+    dispatch_mix.ren:111  main(): s.size()  2 handlers reach → arms inline, compare-and-branch  [2 handlers, at most 4]
+  Label: 1 handler (boxed dispatch_mix.ren:64), 1 operation (label)
+    description: one handler, so no site reads its tag; boxed, the tag then 1 word at most
+    dispatch_mix.ren:109  main(): b.label()  1 handler reaches → direct call  [one handler]
+  $ (cd 10d && ren build --explain-dispatch Op dispatch_mix.ren -o ./dispatch.bin)
+  error: `--explain-dispatch` lists a release build's dispatch
+    help: add `--release`
+  [2]
+  $ (cd 10d && ren build --release --explain-dispatch Nope dispatch_mix.ren -o ./dispatch.bin)
+  Nope: no dependency of this name is dispatched over in the release build

@@ -29,6 +29,14 @@ change here is a change in what the program computes.
   4 count: 420
   5 count: 2202
   done
+  == dispatch
+  1796853846
+  1836285161
+  783651312
+  241444348
+  206923200
+  514636
+  105
   == fannkuch
   228
   Pfannkuchen(7) = 16

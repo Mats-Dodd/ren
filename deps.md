@@ -263,6 +263,17 @@ error: expected `Api uses Db`, found `Api uses Clock, Db`
   called this way: each is an error whose help installs it, `with s in
   Store.get()`. `s.area`, not called, is an error, "an operation is
   called, not read".
+- **How a method call runs depends on how many handlers can be behind
+  it** (foundations.md, decision 4): every handler `for` its dependency
+  in the program, the world being closed. A release build makes a call
+  one handler can reach a direct call, one two to four can reach a
+  compare of the tag and a direct call in each branch, and one more can
+  reach a call through a table indexed by the tag, or, for a dependency
+  of one operation, through the tag itself, the arm's code. A loop over
+  a description it doesn't change is copied for each of two to four
+  handlers, so each copy's calls are direct. `ren build --release
+  --explain-dispatch Shape main.ren` lists every call on a `Shape`, how
+  it's lowered and why ([compiler.md](compiler.md#dispatch-step-4)).
 - **An inline handler,** `handler fn(req) => respond(req, body)`, is a
   handler for a dependency of one operation, written where a description
   of it is wanted: a `let`'s type, a parameter, a field, an element, a

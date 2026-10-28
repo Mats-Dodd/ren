@@ -9,6 +9,31 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Dispatch (foundations.md, decision 4; compiler.md, "Dispatch (step 4)")
+
+`dispatch`'s kernels, each alone at main.ren's size (build.sh's
+`dispatch-<kernel>`), release, against 678bbf7 in the same run, and
+against Rust's `dyn` and enum twins and Go's. Hyperfine, 10 runs, in ms;
+cycles from `/usr/bin/time -l`.
+
+| kernel | 678bbf7 | after | Rust dyn | Rust enum | Go | after / Rust dyn | cycles 10⁶, before / after |
+|---|---|---|---|---|---|---|---|
+| shapes2 | 49.1 ± 0.6 | **30.2 ± 0.5** | 29.5 | 19.3 | 33.4 | 1.02× | 188 / 117 |
+| shapes4 | 62.8 ± 0.7 | **38.2 ± 1.0** | 38.4 | 28.2 | 43.5 | 0.99× | 239 / 149 |
+| shapes8 | 70.1 ± 0.8 | **46.4 ± 0.3** | 42.4 | 40.7 | 48.7 | 1.09× | 271 / 178 |
+| shapes32 | 74.5 ± 1.0 | **50.4 ± 0.3** | 45.0 | 48.6 | 53.0 | 1.12× | 291 / 195 |
+| db | 230.9 ± 0.7 | **87.3 ± 4.2** | 84.3 | 57.1 | 125.5 | 1.04× | 906 / 346 |
+| router | 81.6 ± 0.8 | **56.6 ± 0.4** | 56.2 | 62.4 | 64.8 | 1.01× | 317 / 221 |
+| interp | 127.3 ± 0.6 | **60.2 ± 0.7** | 39.4 | 60.0 | 57.5 | 1.53× | 496 / 237 |
+
+shapes2 and shapes4 copy no loop (the array's element changes each
+step) and compare the tag; shapes8, shapes32 and router call through
+the tag, the method's address; db's loop is copied for each of its four
+handlers; interp's `eval` calls through the tag too, recursion through
+`Node`. The other programs
+didn't move: handlers, blocks, rbtree, deriv, nbody and stack are within
+1% in cycles.
+
 ## Frames and late overflow cut (foundations.md, decisions 14 and 15)
 
 stack.ml's frames (H8) and late.ml's late overflow removed, against

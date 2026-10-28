@@ -38,7 +38,26 @@ type env = {
   loops : int list;
   joins : int list;
   catches : int list;
+  known : known;
+  facts : (int * fact) list;
+      (** what the [Tag_is] tests around here say of each description, by
+          the variable it's a copy of *)
 }
+
+(* What a site known to be one handler's ([meth]'s [known]) is checked
+   against: each dependency's handlers, the [Tag_is] tests, by the
+   variable that holds one, and the copies of variables, by the copy,
+   in the function being checked; and the variables it changes, whose
+   tags a test can't speak for. *)
+and known = {
+  reach : int -> int list;
+  ndsites : int;
+  tests : (int, int * int) Hashtbl.t;
+  copies : (int, int) Hashtbl.t;
+  changed : (int, unit) Hashtbl.t;
+}
+
+and fact = Is of int | Isnt of int
 
 let fail env msg = failwith (sprintf "Mem Lint, in %s: %s" env.fn.name msg)
 
@@ -342,7 +361,7 @@ let rhs env (r : rhs) : layout =
       operand env "an environment" Ptr x;
       (* the cell's layout is the variable's, as a field's is *)
       Unit
-  | Arg (x, _) ->
+  | Arg (x, _) | Arg_borrowed (x, _) ->
       operand env "a block's arguments" Ptr x;
       Unit
   | Block_of (name, x) ->
@@ -356,11 +375,14 @@ let rhs env (r : rhs) : layout =
           (sprintf "a block of %s, which hasn't a block's signature" name);
       operand env "a block's environment" Ptr x;
       Block
-  | Method_of (x, _, _) ->
+  | Method_of { mdesc = x; _ } ->
       operand env "a description called as a method" Boxed x;
       Block
   | Has_code x ->
       operand env "a method's block" Block x;
+      Bool
+  | Tag_is (x, _) ->
+      operand env "a description whose handler is tested" Boxed x;
       Bool
   | Impl (_, ops) ->
       List.iter (operand env "an operation" Block) ops;
@@ -432,8 +454,9 @@ let rec stmt env (s : stmt) : env =
   match s with
   | Let (v, r) ->
       let l = rhs env r in
+      known_handler env v r;
       (match r with
-      | Field _ | Arg _ ->
+      | Field _ | Arg _ | Arg_borrowed _ ->
           if not (wordable v.layout) then
             fail env
               (sprintf "%s, %s, read from words" (show_var v)
@@ -528,8 +551,11 @@ let rec stmt env (s : stmt) : env =
       expect env (show_var error) Boxed error.layout;
       block (define env error) on_error;
       define env result
-  | Call_block { result; block = b; ev; args = xs; error; on_error } ->
+  | Call_block { result; block = b; ev; args = xs; error; on_error; borrowed }
+    ->
       operand env "what's called" Block b;
+      if borrowed < 0 || borrowed > List.length xs then
+        fail env (sprintf "a block call borrowing %d of its arguments" borrowed);
       operand env "the caller's evidence" Ev ev;
       List.iter (word env "an argument") xs;
       if not (wordable result.layout) then
@@ -537,7 +563,8 @@ let rec stmt env (s : stmt) : env =
       expect env (show_var error) Boxed error.layout;
       Option.iter (block (define env error)) on_error;
       define env result
-  | Call_handler { result; handler; outer; body; desc; deps; error; on_error }
+  | Call_handler
+      { result; handler; outer; body; desc; deps; error; on_error; hsite = _ }
     ->
       operand env "a handler's description" Boxed handler;
       operand env "the evidence it's installed on" Ev outer;
@@ -554,8 +581,16 @@ let rec stmt env (s : stmt) : env =
       define env result
   | If (c, t, f) ->
       operand env "a condition" Bool c;
-      block env t;
-      block env f;
+      let facts b =
+        match c with
+        | Var c -> (
+            match Hashtbl.find_opt env.known.tests c.id with
+            | Some (x, h) -> (x, if b then Is h else Isnt h) :: env.facts
+            | None -> env.facts)
+        | _ -> env.facts
+      in
+      block { env with facts = facts true } t;
+      block { env with facts = facts false } f;
       env
   | Switch (x, cases, default) ->
       operand env "what's switched on" Int x;
@@ -604,7 +639,53 @@ let rec stmt env (s : stmt) : env =
 (* A block's own definitions end with it. *)
 and block env b = ignore (List.fold_left stmt env b)
 
-let fn fns values ndescs structs (f : fn) =
+(* ---- known handlers ----
+
+   A copy of a loop clone.ml made for one handler calls each method on
+   the description it was made for directly ([meth]'s [known]), so the
+   description has to have that handler wherever such a site is: it's
+   under a [Tag_is] of it that held, or under ones that failed for each
+   of the other handlers of the site's dependency, the description
+   being a copy of the one tested, never changed. *)
+and known_handler env (v : var) (r : rhs) =
+  let k = env.known in
+  let rec root id =
+    match Hashtbl.find_opt k.copies id with Some w -> root w | None -> id
+  in
+  match r with
+  | Atom (Var w) -> Hashtbl.replace k.copies v.id w.id
+  | Tag_is (Var x, h) -> Hashtbl.replace k.tests v.id (root x.id, h)
+  | Method_of m -> (
+      if m.msite < 0 || m.msite >= k.ndsites then
+        fail env (sprintf "a method called at a site %d the program hasn't" m.msite);
+      match (m.known, m.mdesc) with
+      | None, _ -> ()
+      | Some h, Var x ->
+          let x = root x.id in
+          let hs = k.reach m.mdep in
+          if Hashtbl.mem k.changed x then
+            fail env "a site known to be one handler's, on a description that changes";
+          if not (List.mem h hs) then
+            fail env
+              (sprintf "a site known to be handler %d's, which isn't one of its dependency's" h);
+          let holds f = List.mem (x, f) env.facts in
+          if
+            not
+              (holds (Is h)
+              || List.for_all (fun h' -> h' = h || holds (Isnt h')) hs)
+          then
+            fail env
+              (sprintf "a site known to be handler %d's where nothing tested it is" h)
+      | Some _, _ -> fail env "a site known to be one handler's, on a constant")
+  | _ -> ()
+
+let fn fns values ndescs structs ~reach ~ndsites (f : fn) =
+  let changed = Hashtbl.create 8 in
+  Rc.iter_stmts
+    (function
+      | Set (v, _) | Store (v, _) | Let (_, Addr v) -> Hashtbl.replace changed v.id ()
+      | _ -> ())
+    f.body;
   let env =
     {
       fns;
@@ -617,6 +698,15 @@ let fn fns values ndescs structs (f : fn) =
       loops = [];
       joins = [];
       catches = [];
+      known =
+        {
+          reach;
+          ndsites;
+          tests = Hashtbl.create 8;
+          copies = Hashtbl.create 32;
+          changed;
+        };
+      facts = [];
     }
   in
   block (List.fold_left define env f.params) f.body;
@@ -1228,6 +1318,7 @@ let rc_let env st (v : var) (r : rhs) =
       let st = List.fold_left (fun st (_, k) -> keep_part env st x k) st kept in
       { st with tokens = Ids.add v.id st.tokens }
   | Arg _ -> fresh_var env st v B_owned
+  | Arg_borrowed _ -> fresh_var env st v ~count:0 B_borrowed
   | r ->
       List.iter (read env st)
         (match r with
@@ -1292,10 +1383,18 @@ let rec rc_stmt env (st : rc_state option) (s : stmt) : rc_state option =
             on_error
           |> ignore;
           Some (fresh_var env st result B_owned)
-      | Call_block { result; block; ev = _; args; error; on_error } ->
+      | Call_block { result; block; ev = _; args; error; on_error; borrowed } ->
           read env st block;
+          (* a method borrows its description, and takes the rest *)
           let st =
-            List.fold_left (fun st x -> take env st "given away" x) st args
+            List.fold_left
+              (fun st (i, x) ->
+                if i < borrowed then (
+                  read env st x;
+                  st)
+                else take env st "given away" x)
+              st
+              (List.mapi (fun i x -> (i, x)) args)
           in
           let st = call_changes env st in
           Option.iter
@@ -1528,7 +1627,15 @@ let program (p : program) =
         h.methods)
     p.handlers;
   let ndescs = List.length p.descs in
-  List.iter (fn fns values ndescs (Array.of_list p.structs)) p.fns;
+  let reach dep =
+    List.filter_map
+      (fun (h : handler) -> if List.mem dep h.hdeps then Some h.hid else None)
+      p.handlers
+  in
+  List.iter
+    (fn fns values ndescs (Array.of_list p.structs) ~reach
+       ~ndsites:(List.length p.dsites))
+    p.fns;
   List.iter (counting fns) p.fns;
   if p.start_desc < 0 || p.start_desc >= ndescs then
     failwith "Mem Lint: `main`'s descriptor isn't in the program";

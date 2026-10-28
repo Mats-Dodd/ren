@@ -115,4 +115,15 @@ kernel handlers function "fn main() uses Console = print(count_with_function(1_0
 for k in with function; do
   REN_CFLAGS="$REN_CFLAGS -O2" build "$out/kernels/handlers-$k" "$out/handlers-$k-debug-O2" --debug
 done
+# decision 4's dispatch (research/dispatch.md): each of `dispatch`'s
+# kernels alone, at main.ren's size; its Rust and Go twins run one
+# kernel given its name (measure.sh)
+dk() { kernel dispatch "$1" "fn main() uses Console = print($2)"; }
+dk shapes2 "shapes2(65_536, 100)"
+dk shapes4 "shapes4(65_536, 100)"
+dk shapes8 "shapes8(65_536, 100)"
+dk shapes32 "shapes32(65_536, 100)"
+dk db "db(100, 104_857_600)"
+dk router "router(65_536, 100)"
+dk interp "interp(25_600)"
 echo "built in $out"

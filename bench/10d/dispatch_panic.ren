@@ -1,0 +1,21 @@
+// Stage 10d, step 4: a panic in an arm a copied loop calls directly
+// (clone.ml) is where `ren run` says it is, in every build.
+
+dep Grow =
+  grow: fn(x: Int) -> Int
+
+handler doubling() for Grow =
+  grow(x) => x * 2
+handler adding(k: Int) for Grow =
+  grow(x) => x + k
+
+fn run(g: Grow, n: Int) -> Int =
+  var x = 1
+  for _ in 0..n
+    x = g.grow(x)
+  x
+
+fn main() uses Console =
+  print(run(adding(5), 10))
+  print(run(doubling(), 10))
+  print(run(doubling(), 100))

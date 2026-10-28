@@ -3427,6 +3427,96 @@ ports research/dispatch.md's kernels into bench/native with their Rust
 (`dyn` and enum) and Go twins, and measures against them, cycles and
 time, against the commit before it.
 
+bench/10d/dispatch.ren and dispatch_mix.ren hold a site of each
+lowering, and dispatch_panic.ren a panic inside a copied loop;
+bench/build.t runs all three native builds of each against `ren run`
+and holds the listing of every dependency in them.
+
+How it's built (lib/native/dispatch.ml, clone.ml):
+
+- **Each method call is a site** (`Mem.Method_of`, with its dependency,
+  operation and a number into the program's `dsites`), and an install
+  through a description's record is one too (`Call_handler`'s `hsite`).
+  Which handlers reach it is every handler implementing its dependency
+  (`handler.hdeps`, from the handler's type), so the analysis is the
+  closed set, nothing narrower; specialize.ml already makes a call on a
+  handler known where it's written direct, before any of this.
+- **The lowering is chosen in emit_c.ml from the set,** release only:
+  one stateless handler, a direct call `f(NULL, ev, args, out)`; two to
+  four, a chain of `tag == k ? f_k(...) : ...`, the last unconditional;
+  more, `ren_mtab_<dep>_<op>[tag](...)`, a static table of each
+  handler's method, or, for a dependency of one operation whose handlers
+  are all stateless and implement only it, `((ren_code)tag)(...)`, the
+  tag being the method's address (`with` finds its record back by
+  `ren_handler_by_code`). A site in an arm of its own dependency calls
+  through the table, as the specification says. A handler with state has
+  no method; a site it reaches tests for one first (`Has_code`, a
+  compare, or `tab[tag] != NULL`) and installs if not, as step 3 did.
+  `Dispatch.prune` folds that test where the set decides it, so a call
+  no stateful handler reaches has no install path left to count.
+- **Loops are copied per handler** (clone.ml) before Perceus, when two to
+  four handlers reach the loop's sites on one description no statement
+  of the function changes: `if (tag == k1) { copy, known k1 } else if
+  ... else { copy, known the last }`. Each copy's sites are marked
+  `known`, so each is one direct call clang inlines. Mem Lint checks that
+  every `known` site is under a `Tag_is` test of its description, that
+  says it's that handler or none of the others, and that the description
+  never changes. The budget is 200 Mem statements a copy (`clone_budget`):
+  every loop bench/10d and bench/native has fits under 40, and 200 keeps
+  a function at most four times a loop of a fair size; a loop over it is
+  listed as not copied.
+- **A method borrows its description and its arguments** (`Arg_borrowed`,
+  and `Call_block.borrowed`): the caller keeps them alive across the call,
+  as Rust's `&self` does, so a call in a loop does no dup and no drop of
+  the description. A method that keeps one, in a field or a result, dups
+  it there (rc.ml, `borrowed_def`).
+
+Measured same-run against 678bbf7, release, on an M-series Mac, hyperfine
+10 runs each (ms) and `/usr/bin/time -l`'s cycles, beside the Rust (`dyn`
+and enum) and Go twins (bench/native/dispatch, measure.sh's `time`):
+
+| kernel | before | after | Rust dyn | Rust enum | Go | cycles 10⁶, before / after |
+|---|---|---|---|---|---|---|
+| shapes2 | 49.1 | **30.2** | 29.5 | 19.3 | 33.4 | 188 / 117 |
+| shapes4 | 62.8 | **38.2** | 38.4 | 28.2 | 43.5 | 239 / 149 |
+| shapes8 | 70.1 | **46.4** | 42.4 | 40.7 | 48.7 | 271 / 178 |
+| shapes32 | 74.5 | **50.4** | 45.0 | 48.6 | 53.0 | 291 / 195 |
+| db | 230.9 | **87.3** | 84.3 | 57.1 | 125.5 | 906 / 346 |
+| router | 81.6 | **56.6** | 56.2 | 62.4 | 64.8 | 317 / 221 |
+| interp | 127.3 | **60.2** | 39.4 | 60.0 | 57.5 | 496 / 237 |
+
+Every kernel is 1.3 to 2.6 times faster, within 1.12× of Rust's `dyn`
+but interp (1.53×), and ahead of Go in all but interp (1.05×). What's left is counting:
+`for x in xs` dups and drops each element it reads (an element read of a
+borrowed array not counted is later work), and the checked arithmetic
+Rust's release build doesn't do. Rust's enum wins the small sets, where
+it inlines the match into the loop and Ren still has a description
+boxed. The other benchmarks are unchanged (handlers, blocks, rbtree,
+deriv, nbody, stack: within 1%).
+
+Where it differed from its plan:
+
+- **No layout change: a description is still boxed,** a tag and then
+  what its handler holds, in both builds. The listing says how many words
+  its largest handler holds, which is what the layout would size it to.
+  Inline descriptions need every place that holds one (records, arrays,
+  closures, the descriptor walk) to know their size, and they wait for a
+  step that changes value layout.
+- **A one-handler description keeps its tag word,** never read in
+  release, for the same reason.
+- **A `with`'s body isn't copied per handler,** only loops are; a site
+  in a `with` installs through the record, and the listing says so.
+- **fnp, the tag as code pointer, is used only over four handlers,**
+  where the call would go through a table, and only when every handler
+  of the dependency is stateless and implements only it, so the tag is
+  free to be its one method's address.
+- **Methods borrow their arguments,** a calling convention this step
+  chose: db with the description's dup and drop taken out of its C by
+  hand had gone from 733M cycles to 336M, which is what decided it.
+- **The listing differs from the example above** in its description line
+  (`tag = the handler's number ...; boxed, the tag then N words at most`)
+  and in naming each copied loop with its size.
+
 ### `over any` and `retry` (step 5)
 
 **`over any`.** `handler name(params) over any uses ... =` goes over any

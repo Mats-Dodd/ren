@@ -68,9 +68,9 @@ let simple (f : fn) =
       | Let (_, r) | Do r -> (
           match r with
           | Call (name, _) when name = f.name -> ok := false
-          | Load _ | Addr _ | Env_new _ | Env_get _ | Arg _ | Block_of _
+          | Load _ | Addr _ | Env_new _ | Env_get _ | Arg _ | Arg_borrowed _ | Block_of _
           | Impl _ | Install _ | Given _ | Op_block _ | To_word _ | Of_word _
-          | Reset _ | Method_of _ | Has_code _ ->
+          | Reset _ | Method_of _ | Has_code _ | Tag_is _ ->
               ok := false
           | _ -> ())
       | _ -> ())
@@ -181,8 +181,8 @@ let body ~next ~label (f : fn) (args : atom list) (res : var) exit : block =
     | Pack ps -> Pack (List.map (fun (x, at, n) -> (atom x, at, n)) ps)
     | Unpack (x, at, n) -> Unpack (atom x, at, n)
     | Load _ | Addr _ | To_word _ | Of_word _ | Env_new _ | Env_get _ | Arg _
-    | Block_of _ | Impl _ | Install _ | Given _ | Op_block _ | Reset _ | Hole _
-    | Method_of _ | Has_code _ ->
+    | Arg_borrowed _ | Block_of _ | Impl _ | Install _ | Given _ | Op_block _ | Reset _ | Hole _
+    | Method_of _ | Has_code _ | Tag_is _ ->
         failwith "bug: inline: a statement [simple] doesn't allow"
   in
   let rec block (b : block) = List.concat_map stmt b

@@ -128,6 +128,11 @@ let atom_layout (x : atom) : layout =
    a pointer to its record (ren_rt.h, [ren_handler]). *)
 let numbered_tags = ref false
 
+(* A release build's dispatch over the program's handlers (dispatch.ml),
+   and its sites, by number: set by [parts]. *)
+let dispatch : Dispatch.t option ref = ref None
+let dsites : dsite array ref = ref [||]
+
 let atom (x : atom) =
   match x with
   | Var v -> var v
@@ -146,7 +151,12 @@ let atom (x : atom) =
   | Lit n -> sprintf "((ren_obj*)&ren_lit_%d)" n
   | Desc_lit n -> sprintf "((ren_obj*)&ren_desc_%d)" n
   | Fn_ptr f -> sprintf "((void*)%s)" f
-  | Handler_tag n when !numbered_tags -> sprintf "((void*)(intptr_t)%d)" n
+  | Handler_tag n when !numbered_tags -> (
+      (* a handler whose tag is its method's code (dispatch.ml) *)
+      match !dispatch with
+      | Some t when Hashtbl.mem t.code n ->
+          sprintf "((void*)%s)" (Hashtbl.find t.code n)
+      | _ -> sprintf "((void*)(intptr_t)%d)" n)
   | Handler_tag n -> sprintf "((void*)&ren_handler_%d)" n
   | No_ev -> "((const ren_ev*)NULL)"
 
@@ -154,10 +164,30 @@ let bug what = failwith ("bug: emit_c: " ^ what)
 
 (* The record of the handler whose description is [x], found from its
    tag, the description's first word. *)
-let handler_of x =
-  if !numbered_tags then
+let handler_of ?(code = false) x =
+  if code then sprintf "ren_handler_by_code(ren_fields(%s)[0].p)" x
+  else if !numbered_tags then
     sprintf "(&ren_handlers[(intptr_t)ren_fields(%s)[0].p])" x
   else sprintf "((const ren_handler *)ren_fields(%s)[0].p)" x
+
+(* The tag of the description [x], and the tag of the handler [h]. *)
+let tag_of x = sprintf "ren_fields(%s)[0].p" x
+let htag (h : handler) = atom (Handler_tag h.hid)
+
+(* The table of the methods for [op] of [dep] of the program's handlers,
+   by tag, NULL for a handler with none (dispatch.ml). *)
+let method_table dep op = sprintf "ren_mtab_%d_%d" dep op
+
+(* The [Method_of]s of the function being written, by variable. *)
+let methods : (int, meth) Hashtbl.t = Hashtbl.create 8
+
+(* How the call of [m] is lowered in this build: a release build's
+   dispatch, or [None] in a debug build, which finds the method in the
+   handler's record. *)
+let lowering (m : meth) =
+  match !dispatch with
+  | Some t -> Some (t, fst (Dispatch.lowering t !dsites.(m.msite) m))
+  | None -> None
 
 (* [c], a C expression of a value of [l], as a [ren_val], a word. *)
 let word_of (l : layout) c =
@@ -583,10 +613,45 @@ let rhs (r : rhs) =
   | Of_word (x, l) -> of_val l (atom x)
   | Global name -> name
   | Block_of (f, env) -> sprintf "((ren_block){%s, %s})" f (atom env)
-  | Method_of (x, dep, op) ->
-      sprintf "((ren_block){ren_method_of(%s, %d, %d), NULL})"
-        (handler_of (atom x)) dep op
+  | Method_of m -> (
+      let x = atom m.mdesc in
+      match lowering m with
+      | None ->
+          sprintf "((ren_block){ren_method_of(%s, %d, %d), NULL})"
+            (handler_of x) m.mdep m.mop
+      | Some (_, Direct h) ->
+          sprintf "((ren_block){%s, NULL})"
+            (match Dispatch.method_of h m.mdep m.mop with
+            | Some f -> "(ren_code)" ^ f
+            | None -> "NULL")
+      | Some (_, Code) -> sprintf "((ren_block){(ren_code)%s, NULL})" (tag_of x)
+      | Some (_, (Arms _ | Table)) ->
+          sprintf "((ren_block){%s[(intptr_t)%s], NULL})"
+            (method_table m.mdep m.mop) (tag_of x)
+      | Some (_, Installed) -> "((ren_block){NULL, NULL})")
+  | Has_code (Var v as x) when Hashtbl.mem methods v.id -> (
+      let m = Hashtbl.find methods v.id in
+      match !dispatch with
+      | None -> sprintf "(%s.code != NULL)" (atom x)
+      | Some t -> (
+          match Dispatch.has_code t !dsites.(m.msite) m with
+          | Some b -> if b then "true" else "false"
+          | None -> (
+              let d = atom m.mdesc in
+              match lowering m with
+              | Some (_, Arms hs) ->
+                  "("
+                  ^ String.concat " || "
+                      (List.map
+                         (fun h -> sprintf "%s == %s" (tag_of d) (htag h))
+                         hs)
+                  ^ ")"
+              | _ ->
+                  sprintf "(%s[(intptr_t)%s] != NULL)"
+                    (method_table m.mdep m.mop) (tag_of d))))
   | Has_code x -> sprintf "(%s.code != NULL)" (atom x)
+  | Tag_is (x, h) ->
+      sprintf "(%s == %s)" (tag_of (atom x)) (atom (Handler_tag h))
   | Op_block (ev, dep, [], op) ->
       sprintf "ren_find(%s, %d)->ops[%d]" (atom ev) dep op
   | Op_block (ev, dep, args, op) ->
@@ -595,8 +660,8 @@ let rhs (r : rhs) =
         (atom ev) dep
         (String.concat ", " (List.map atom args))
         (List.length args) op
-  | Alloc _ | Alloc_array _ | Env_new _ | Env_get _ | Arg _ | Impl _ | Install _
-  | Given _ ->
+  | Alloc _ | Alloc_array _ | Env_new _ | Env_get _ | Arg _ | Arg_borrowed _
+  | Impl _ | Install _ | Given _ ->
       bug "an allocation on the heap or the stack outside a Let"
 
 type out = {
@@ -886,7 +951,7 @@ let rec stmt o d (s : stmt) =
       line
         (sprintf "%s %s = (%s)((void**)%s)[%d];" (ctype v.layout) (var v)
            (ctype v.layout) (atom x) n)
-  | Let (v, Arg (x, n)) ->
+  | Let (v, (Arg (x, n) | Arg_borrowed (x, n))) ->
       line
         (sprintf "%s %s = %s;" (ctype v.layout) (var v)
            (of_val v.layout (sprintf "((ren_val*)%s)[%d]" (atom x) n)))
@@ -960,21 +1025,57 @@ let rec stmt o d (s : stmt) =
       line (sprintf "if (%s != NULL) {" (var error));
       block o (d + 1) on_error;
       line "}"
-  | Call_block { result; block = b; ev; args; error; on_error } ->
+  | Call_block { result; block = Var m; ev; args; error; on_error; _ }
+    when !dispatch <> None && Hashtbl.mem methods m.id ->
+      (* a method, lowered as dispatch.ml says *)
+      let meth = Hashtbl.find methods m.id in
+      let args = args_array o d (var result ^ "_args") args in
+      let call f out = sprintf "%s(NULL, %s, %s, %s)" f (atom ev) args out in
+      let desc = tag_of (atom meth.mdesc) in
+      indirect o d ~result ~error (fun out ->
+          match lowering meth with
+          | Some (_, Direct h) | Some (_, Arms [ h ]) ->
+              call (Option.get (Dispatch.method_of h meth.mdep meth.mop)) out
+          | Some (_, Arms hs) ->
+              (* compare-and-branch, the last arm the one left *)
+              let rec arms = function
+                | [ h ] -> call (Option.get (Dispatch.method_of h meth.mdep meth.mop)) out
+                | h :: rest ->
+                    sprintf "(%s == %s ? %s : %s)" desc (htag h)
+                      (call (Option.get (Dispatch.method_of h meth.mdep meth.mop)) out)
+                      (arms rest)
+                | [] -> "NULL"
+              in
+              arms hs
+          | Some (_, Code) -> call (sprintf "((ren_code)%s)" desc) out
+          | Some (_, Table) ->
+              call (sprintf "%s[(intptr_t)%s]" (method_table meth.mdep meth.mop) desc) out
+          | Some (_, Installed) | None ->
+              sprintf "%s.code(%s.env, %s, %s, %s)" (var m) (var m) (atom ev)
+                args out);
+      on_failure o d error on_error
+  | Call_block { result; block = b; ev; args; error; on_error; _ } ->
       line "REN_STAT(block_calls);";
       let args = args_array o d (var result ^ "_args") args in
       indirect o d ~result ~error (fun out ->
           sprintf "%s.code(%s.env, %s, %s, %s)" (atom b) (atom b) (atom ev) args
             out);
       on_failure o d error on_error
-  | Call_handler { result; handler; outer; body; desc; deps; error; on_error }
+  | Call_handler
+      { result; handler; outer; body; desc; deps; error; on_error; hsite = _ }
     ->
       let n = List.length deps in
       keys line (var result) deps;
+      (* a handler whose tag is its method's code finds its record by it *)
+      let code =
+        match (!dispatch, deps) with
+        | Some t, k :: _ -> Hashtbl.mem t.code_deps k.kfrom
+        | _ -> false
+      in
       indirect o d ~result ~error (fun out ->
           sprintf
             "%s->install(%s, %s, %s, %s, (void*)%s_keys, %d, %s)"
-            (handler_of (atom handler)) (atom handler) (atom outer) (atom body) (atom desc)
+            (handler_of ~code (atom handler)) (atom handler) (atom outer) (atom body) (atom desc)
             (var result) n out);
       on_failure o d error on_error
   | If (c, t, f) ->
@@ -1224,9 +1325,11 @@ let unchecked (fns : fn list) =
 
 let fn ~restrict ~checks b (f : fn) =
   let bufs = Hashtbl.create 8 in
+  Hashtbl.reset methods;
   Rc.iter_stmts
     (function
       | Let (v, Runtime (Array_data, _, _)) -> Hashtbl.replace bufs v.id ()
+      | Let (v, Method_of m) -> Hashtbl.replace methods v.id m
       | _ -> ())
     f.body;
   let o =
@@ -1486,9 +1589,19 @@ type parts = {
   run : string;  (** [ren_program] and [main] *)
 }
 
+(* The operations, each a dependency's number and its own, that some
+   handler of [hs] has a method for. *)
+let method_ops (hs : handler list) =
+  List.sort_uniq compare
+    (List.concat_map
+       (fun (h : handler) -> List.map (fun (d, o, _) -> (d, o)) h.methods)
+       hs)
+
 let parts ~restrict ~release ~site_pieces (p : program) =
   is_release := release;
   numbered_tags := release;
+  dispatch := if release then Some (Dispatch.make p) else None;
+  dsites := Array.of_list p.dsites;
   Hashtbl.reset made_tags;
   let b = Buffer.create 65536 in
   let add = Buffer.add_string b in
@@ -1517,7 +1630,17 @@ let parts ~restrict ~release ~site_pieces (p : program) =
   (match p.handlers with
   | [] -> ()
   | hs when release ->
-      add (sprintf "static const ren_handler ren_handlers[%d];\n" (List.length hs))
+      add (sprintf "static const ren_handler ren_handlers[%d];\n" (List.length hs));
+      (* each operation's table of methods, by tag, and how a tag that's
+         code finds its record (dispatch.ml) *)
+      List.iter
+        (fun (dep, op) ->
+          add
+            (sprintf "static const ren_code %s[%d];\n" (method_table dep op)
+               (List.length hs)))
+        (method_ops hs);
+      if Hashtbl.length (Option.get !dispatch).code > 0 then
+        add "static const ren_handler *ren_handler_by_code(void *code);\n"
   | hs ->
       List.iter
         (fun (h : handler) ->
@@ -1576,7 +1699,30 @@ let parts ~restrict ~release ~site_pieces (p : program) =
   | hs when release ->
       add
         (sprintf "static const ren_handler ren_handlers[%d] = %s;\n"
-           (List.length hs) (braces (List.map record hs)))
+           (List.length hs) (braces (List.map record hs)));
+      List.iter
+        (fun (dep, op) ->
+          add
+            (sprintf "static const ren_code %s[%d] = %s;\n" (method_table dep op)
+               (List.length hs)
+               (braces
+                  (List.map
+                     (fun h ->
+                       match Dispatch.method_of h dep op with
+                       | Some f -> "(ren_code)" ^ f
+                       | None -> "NULL")
+                     hs))))
+        (method_ops hs);
+      if Hashtbl.length (Option.get !dispatch).code > 0 then
+        add
+          (sprintf
+             "static const ren_handler *ren_handler_by_code(void *code) {\n\
+             \  for (int i = 0; i < %d; i++)\n\
+             \    if (ren_handlers[i].nmethods == 1 && (void*)ren_handlers[i].methods[0].code == code)\n\
+             \      return &ren_handlers[i];\n\
+             \  return NULL;\n\
+              }\n"
+             (List.length hs))
   | hs ->
       List.iter
         (fun (h : handler) ->

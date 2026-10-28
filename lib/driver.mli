@@ -225,7 +225,8 @@ val mem :
 (* The same, as one C file, the runtime in it. [sources] gives the text
    of each file a panic's message can show, by name (diag.ml). In a
    [release] build, each `inout` parameter is a `restrict` pointer, but
-   with [~restrict:false] (`--no-restrict`). *)
+   with [~restrict:false] (`--no-restrict`). [explain] is given the
+   program before it's written as C (`--explain-dispatch`). *)
 val native :
   ?lint:bool ->
   ?load:loader ->
@@ -233,6 +234,7 @@ val native :
   ?made:(Specialize.stats -> unit) ->
   ?restrict:bool ->
   ?rc:rc ->
+  ?explain:(Mem.program -> unit) ->
   sources:(string -> string option) ->
   file:string ->
   string ->

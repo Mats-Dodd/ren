@@ -41,6 +41,7 @@ The twins take the size as their first argument and default to
 | `nested` | 10,000 rounds, lists of 1,000,000 | 20 rounds, lists of 2,000 | an array of arrays changed by index and mapped in place (swap-out), and lists built and mapped by recursion that takes no stack (tail recursion modulo cons) |
 | `bytes` | 1,000,000 elements, 100 rounds | 1,000, 3 | an `Array<UInt8>` and an `Array<Int32>` changed in place, each store checked, and an FNV-1a hash with `*%` into a `UInt32`: sized storage |
 | `vec` | arrays of 1,000, 1,000,000 rounds | 100, 10 | **decision 16**: loops by `for x in &xs`, `for i, x in &ys` and `zip`, each a kernel a vector unit could do (a dot product, a Float sum, scaling, axpy, an LCG with `*%`, a checked Int sum, a `UInt8` blend); which vectorize is RESULTS.md's "Follow-ups" |
+| `dispatch` | 65,536 descriptions, 100 rounds | 1,000, 1 | **decision 4**: research/dispatch.md's kernels, calls on descriptions chosen at run time: 2, 4, 8 and 32 shapes in an array, a `Db` of four handlers called in a loop, a router of 50 inline handlers, and an expression tree's `eval`, recursion through its own dependency; Rust is run `dyn` and enum, Go through an interface |
 
 The first four are the Perceus set, ported from Koka's
 `test/bench/koka/*.kk` with the same algorithms and outputs. The next

@@ -65,6 +65,16 @@ type ctx = {
   mutable lifted : Mem.fn list;  (** most recent first *)
   mutable handler_list : Mem.handler list;
       (** the handlers whose descriptions it makes, most recent first *)
+  mutable dsite_list : Mem.dsite list;
+      (** the dispatch sites, most recent first, each by its number *)
+  mutable arm_deps : int list;
+      (** the dependencies the handler whose arms are being compiled
+          implements, which a site of one of them recurses through *)
+  mutable root : C.expr option;
+      (** the body of the function being compiled, which is a declared
+          handler's [Handler] *)
+  inlines : (string, int) Hashtbl.t;
+      (** how many inline handlers each function has, by its Ren name *)
   strings : (string, int) Hashtbl.t;
   mutable string_list : string list;  (** most recent first *)
   mutable sites : site list;  (** most recent first *)
@@ -1519,7 +1529,8 @@ and expr_at fs env (e : C.expr) : atom =
     when at.id = ev.id && called = dep && from = dep
          && List.for_all plain_arg args ->
       method_call fs env e ~outer ~impl ~dep ~op ~fty ~args ~installed:(fun () ->
-          install fs env e ~ev ~outer
+          (* the method call's site is the [Method_of]'s *)
+          install fs env e ~site:false ~ev ~outer
             ~deps:[ ({ C.kpath = dep; kargs = dargs }, from) ]
             ~handler:impl ~body_desc:d body)
   | With { ev; outer; dep; dargs; from; impl; desc = d; body } ->
@@ -2196,7 +2207,7 @@ and take_word fs env (r : atom) (l : layout) : atom =
 (* Call the block [b] with the caller's evidence [ev] and the arguments
    [xs], which it takes; its value is of layout [result]. If its type
    says it can fail, its error is raised here. *)
-and call_block fs env ~result ~fails b ev xs =
+and call_block ?(borrowed = 0) fs env ~result ~fails b ev xs =
   List.iter (fun x -> word_only fs.cx (atom_layout x)) xs;
   word_only fs.cx result;
   let r = fresh fs "$result" result in
@@ -2205,7 +2216,8 @@ and call_block fs env ~result ~fails b ev xs =
     if fails then Some (block fs (fun () -> raise_error fs env (Var error)))
     else None
   in
-  emit fs (Call_block { result = r; block = b; ev; args = xs; error; on_error });
+  emit fs
+    (Call_block { result = r; block = b; ev; args = xs; error; on_error; borrowed });
   put_here fs;
   own env r;
   Var r
@@ -2521,6 +2533,34 @@ and lambda fs env ~name ~(params : C.param list) ~ev ~outer ~given ~captures
   let go () = lift fs env ~name ~captures ~enter body in
   if typed then with_words cx (n + 1) go else go ()
 
+(* The Ren name of the function whose C name's source is [fname],
+   `billing.charge$2`: `charge`, without its module or the number of the
+   copy specializing made. *)
+and ren_name fname =
+  let local =
+    match String.index_opt fname '.' with
+    | Some i -> String.sub fname (i + 1) (String.length fname - i - 1)
+    | None -> fname
+  in
+  match String.index_opt local '$' with
+  | Some i when i > 0 -> String.sub local 0 i
+  | _ -> local
+
+(* A new dispatch site of [dep] at [loc] (Mem's [dsite]): its number. *)
+and dsite fs loc dep ~dwith =
+  let cx = fs.cx in
+  let n = List.length cx.dsite_list in
+  cx.dsite_list <-
+    {
+      dloc = at fs loc;
+      ddep = dep;
+      dfn = ren_name fs.fname;
+      drec = List.mem dep cx.arm_deps;
+      dwith;
+    }
+    :: cx.dsite_list;
+  n
+
 (* An argument of an operation called as a method that's evaluated the
    same before installing the description as after: a local, or one
    checked for a NaN, which reads nothing the `with` installs. *)
@@ -2542,12 +2582,19 @@ and method_call fs env (e : C.expr) ~outer ~impl ~dep ~op ~fty ~args
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
   let h = expr fs env impl in
-  (* each branch disposes of it: the method takes it, and installing
-     reads its own *)
-  consume env h;
+  (* each branch disposes of it: the method borrows it for the call, so
+     a failure drops it with the rest, and installing reads its own *)
+  let mdep = dep_id cx dep in
   let m =
     borrowed fs "$method" Block
-      (Method_of (h, dep_id cx dep, op_index fs e.loc dep op))
+      (Method_of
+         {
+           mdesc = h;
+           mdep;
+           mop = op_index fs e.loc dep op;
+           msite = dsite fs e.loc mdep ~dwith:false;
+           known = None;
+         })
   in
   let stateless = borrowed fs "$stateless" Bool (Has_code m) in
   let r = fresh fs "$called" (lay e.ty) in
@@ -2556,30 +2603,34 @@ and method_call fs env (e : C.expr) ~outer ~impl ~dep ~op ~fty ~args
     block fs (fun () ->
         branch env (fun () ->
             let xs = List.map (expr fs env) args in
-            List.iter (consume env) xs;
             let v =
-              call_block fs env ~result:(lay e.ty) ~fails:(C.fails fty) m
-                (borrow fs env outer) (h :: xs)
+              call_block fs env
+                ~borrowed:(1 + List.length xs)
+                ~result:(lay e.ty) ~fails:(C.fails fty) m (borrow fs env outer)
+                (h :: xs)
             in
             consume env v;
+            List.iter (drop fs env) (h :: xs);
             emit fs (Set (r, v))))
   in
   let installed =
     block fs (fun () ->
         branch env (fun () ->
-            drop_now fs h;
+            drop fs env h;
             let v = installed () in
             consume env v;
             emit fs (Set (r, v))))
   in
   emit fs (If (stateless, direct, installed));
+  consume env h;
   own env r;
   Var r
 
 (* A `with`: the code of [handler]'s description, called with the
    evidence here, the body lifted as a block that captures what it uses
    from here, and the dependencies to install it for. *)
-and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
+and install ?(site = true) fs env (e : C.expr) ~ev ~outer ~deps ~handler
+    ~body_desc body =
   let cx = fs.cx in
   let h = expr fs env handler in
   let seen = Hashtbl.create 16 in
@@ -2619,6 +2670,11 @@ and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
       Some (block fs (fun () -> raise_error fs env (Var error)))
     else None
   in
+  let hsite =
+    match keys with
+    | k :: _ when site -> Some (dsite fs e.loc k.kdep ~dwith:true)
+    | _ -> None
+  in
   emit fs
     (Call_handler
        {
@@ -2630,6 +2686,7 @@ and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
          deps = keys;
          error;
          on_error;
+         hsite;
        });
   List.iter (fun k -> List.iter (drop fs env) k.kargs) keys;
   drop fs env d;
@@ -2643,6 +2700,14 @@ and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
 and handler fs env (e : C.expr) ~ev ~captures body =
   let cx = fs.cx in
   let values = List.map (read fs env) captures in
+  let hdeps =
+    match e.ty with
+    | Impl { deps; _ } -> List.map (fun (d : Ty.dep) -> dep_id cx d.dpath) deps
+    | _ -> bug "a handler whose type isn't an implementation's"
+  in
+  (* a site in its arms of a dependency it implements recurses *)
+  let arm_deps = cx.arm_deps in
+  cx.arm_deps <- hdeps;
   (* a generic handler's code needs the descriptors of its function's
      type variables, `log<T>`'s `T`, which it keeps after what it
      captures *)
@@ -2759,8 +2824,29 @@ and handler fs env (e : C.expr) ~ev ~captures body =
         else []
     | _ -> []
   in
+  cx.arm_deps <- arm_deps;
+  (* a declared handler is its function's body; an inline one is named
+     for the function it's written in, `main$handler1` *)
+  let hshow =
+    let f = ren_name fs.fname in
+    match cx.root with
+    | Some r when r == e -> f
+    | _ ->
+        let n = 1 + Option.value ~default:0 (Hashtbl.find_opt cx.inlines fs.fname) in
+        Hashtbl.replace cx.inlines fs.fname n;
+        sprintf "%s$handler%d" f n
+  in
   cx.handler_list <-
-    { hid; hname = fs.fname; hwords = size - 1; install = name; methods }
+    {
+      hid;
+      hname = fs.fname;
+      hwords = size - 1;
+      install = name;
+      methods;
+      hdeps;
+      hshow;
+      hloc = at fs e.loc;
+    }
     :: cx.handler_list;
   cx.lifted <-
     {
@@ -2819,9 +2905,11 @@ and method_code fs ~ev ~captures ~values ~size ~name (arm : C.expr) =
       let body_block =
         block code (fun () ->
             let cenv = { vars = Vars.empty; frames = [ frame ] } in
-            (* the description, which the call gave it *)
-            let self = let_var code "$self" Boxed (Arg (Var args, 0)) in
-            own cenv self;
+            (* the description, which the call lends it: a method borrows
+               it, as Rust's `&self` does, and its arguments, so a call
+               counts nothing; Perceus counts one again where the arm
+               keeps it *)
+            let self = let_var code "$self" Boxed (Arg_borrowed (Var args, 0)) in
             let cenv =
               List.fold_left
                 (fun cenv (i, ((v : C.var), x)) ->
@@ -2839,8 +2927,9 @@ and method_code fs ~ev ~captures ~values ~size ~name (arm : C.expr) =
                    (fun (cenv, i) (p : C.param) ->
                      let l = layout_at code arm.loc p.var.ty in
                      word_only cx l;
-                     let x = let_var code p.var.name l (Arg (Var args, i)) in
-                     own cenv x;
+                     let x =
+                       let_var code p.var.name l (Arg_borrowed (Var args, i))
+                     in
                      (bind cenv p.var x, i + 1))
                    (cenv, 1) params)
             in
@@ -3245,6 +3334,7 @@ let fn cx here (f : C.fn_def) : Mem.fn =
         | Fun (_, r, _, _) -> lay r
         | _ -> bug "a function without a function type"
       in
+      cx.root <- Some f.body;
       let body =
         block fs (fun () ->
             let r = expr fs env f.body in
@@ -3286,6 +3376,10 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       todo = [];
       lifted = [];
       handler_list = [];
+      dsite_list = [];
+      arm_deps = [];
+      root = None;
+      inlines = Hashtbl.create 8;
       strings = Hashtbl.create 16;
       string_list = [];
       sites = [];
@@ -3389,6 +3483,20 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
     structs = List.rev cx.struct_list;
     overflow;
     handlers = List.rev cx.handler_list;
+    dep_infos =
+      List.map
+        (fun dep ->
+          let rec ops dep =
+            match Hashtbl.find_opt cx.types dep with
+            | Some { body = Dep_alias t; _ } -> ops t.Ty.dpath
+            | Some { body = Dep fs; _ } ->
+                List.map (fun (f : Iface.field) -> f.fname) fs
+            | _ -> []
+          in
+          { dname = Path.local dep; dops = ops dep })
+        (by_index cx.deps);
+    dsites = List.rev cx.dsite_list;
+    clones = [];
   }
 
 (* In a release build, a small value's type a value of which turns out

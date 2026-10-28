@@ -638,6 +638,9 @@ let lint ?(structs = []) fns =
       sites = [];
       structs;
       handlers = [];
+      dep_infos = [];
+      dsites = [];
+      clones = [];
       overflow =
         { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics; made = None };
     }

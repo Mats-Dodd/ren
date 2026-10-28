@@ -111,9 +111,11 @@ let rhs h (r : rhs) : rhs =
   | Env_new cells -> Env_new (xs cells)
   | Env_get (x, n) -> Env_get (a x, n)
   | Arg (x, n) -> Arg (a x, n)
+  | Arg_borrowed (x, n) -> Arg_borrowed (a x, n)
   | Block_of (f, env) -> Block_of (h.name f, a env)
-  | Method_of (x, d, n) -> Method_of (a x, d, n)
+  | Method_of m -> Method_of { m with mdesc = a m.mdesc }
   | Has_code x -> Has_code (a x)
+  | Tag_is (x, h) -> Tag_is (a x, h)
   | Impl (d, blocks) -> Impl (d, xs blocks)
   | Install { outer; impls; deps; ndeps } ->
       Install
@@ -158,7 +160,7 @@ let rec stmt h (s : stmt) : stmt =
           error = v error;
           on_error = b on_error;
         }
-  | Call_block { result; block = blk; ev; args; error; on_error } ->
+  | Call_block { result; block = blk; ev; args; error; on_error; borrowed } ->
       Call_block
         {
           result = v result;
@@ -167,8 +169,10 @@ let rec stmt h (s : stmt) : stmt =
           args = atoms h args;
           error = v error;
           on_error = Option.map b on_error;
+          borrowed;
         }
-  | Call_handler { result; handler; outer; body; desc; deps; error; on_error }
+  | Call_handler
+      { result; handler; outer; body; desc; deps; error; on_error; hsite }
     ->
       Call_handler
         {
@@ -180,6 +184,7 @@ let rec stmt h (s : stmt) : stmt =
           deps = List.map (fun k -> { k with kargs = atoms h k.kargs }) deps;
           error = v error;
           on_error = Option.map b on_error;
+          hsite;
         }
   | If (c, t, e) -> If (a c, b t, b e)
   | Switch (x, cases, other) ->

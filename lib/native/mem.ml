@@ -324,6 +324,9 @@ type rhs =
   | Arg of atom * int
       (** the [n]-th of the words a block's code is given, as a value of the
           variable's layout *)
+  | Arg_borrowed of atom * int
+      (** the same, borrowed: its caller keeps it alive for the call, as a
+          method's description is ([Call_block]'s [borrowed]) *)
   | Block_of of string * atom
       (** a block: the code of the function named, which has a block's
           signature, and an environment *)
@@ -338,13 +341,16 @@ type rhs =
   | Given of { outer : atom; caller : atom; deps : (int * atom list) list }
       (** [outer] with the implementations of [deps] that [caller] has on top: a
           block's evidence, when its parameter's type lists them *)
-  | Method_of of atom * int * int
-      (** the [Block] that runs the operation, its dependency's [n]-th, of the
-          dependency with this number, of the description given, called as a
-          method: the code its handler's record has for it, if the handler
-          is stateless, which takes the description as its first word, or a
-          block with no code, if not ([Has_code]) *)
+  | Method_of of meth
+      (** the [Block] that runs an operation of the description [mdesc] called
+          as a method: the code its handler has for it, if the handler is
+          stateless, which takes the description as its first word, or a block
+          with no code, if not ([Has_code]). A release build lowers the call
+          of it as dispatch.ml decides *)
   | Has_code of atom  (** whether a [Method_of] block has code *)
+  | Tag_is of atom * int
+      (** whether the description's handler is the program's [handlers]'s
+          n-th: a [Bool], which a loop cloned per handler tests (clone.ml) *)
   | Op_block of atom * int * atom list * int
       (** the [Block] of an operation, its dependency's [n]-th, of the innermost
           implementation of the dependency with this number, at the type
@@ -374,6 +380,18 @@ type rhs =
       (** a unique object's memory, as a [Token]: the fields at the slots listed
           are the variables after them, which keep their references, and the
           others are dropped (Koka's drop-reuse, Lean's [reset]) *)
+
+(* An operation of a description called as a method ([Method_of]): the
+   description, the dependency's number, the operation's, its [dsites]
+   number, and the handler it's known to have, in a loop cloned per
+   handler (clone.ml), under the [Tag_is] that says so. *)
+and meth = {
+  mdesc : atom;
+  mdep : int;
+  mop : int;
+  msite : int;
+  known : int option;
+}
 
 type stmt =
   | Let of var * rhs
@@ -413,6 +431,9 @@ type stmt =
       args : atom list;
       error : var;
       on_error : block option;
+      borrowed : int;
+          (** how many of its first arguments it only borrows: 1 for a
+              method, which borrows its description, else 0 *)
     }
       (** call a block, which takes its arguments, with the caller's evidence:
           an indirect call, whose arguments and value go as words. A block's
@@ -427,6 +448,9 @@ type stmt =
       deps : key list;
       error : var;
       on_error : block option;
+      hsite : int option;
+          (** its [dsites] number, if [handler] is a description made at run
+              time, which a release build's `--explain-dispatch` lists *)
     }
       (** install a handler: call the code of the description [handler], with
           the evidence [outer], the [Block] [body] to run with the evidence it
@@ -536,7 +560,34 @@ type handler = {
   hwords : int;
   install : string;
   methods : (int * int * string) list;
+  hdeps : int list;  (** the dependencies it implements, by number *)
+  hshow : string;
+      (** its name in Ren: a declared handler's, or an inline one's,
+          `main$handler1`, the first written in `main` *)
+  hloc : Loc.t;
 }
+
+(* A dependency, by its number: its name and its operations' names. *)
+type dep_info = { dname : string; dops : string list }
+
+(* A dispatch site (compiler.md, "Dispatch (step 4)"): an operation of a
+   description called as a method ([Method_of]), or a `with` installing a
+   description made at run time ([Call_handler]); its dependency, the Ren
+   function it's in, and whether it's in an arm of a handler of that
+   dependency, recursion through it, which a release build never lowers
+   as arms inline. *)
+type dsite = {
+  dloc : Loc.t;
+  ddep : int;
+  dfn : string;
+  drec : bool;
+  dwith : bool;  (** a [Call_handler]'s *)
+}
+
+(* A loop clone.ml copied, or didn't, once for each handler of the
+   description the [dsites] [csite] calls: those handlers, how many
+   statements a copy has, and whether it did. *)
+type clone = { csite : int; chandlers : int list; csize : int; cdone : bool }
 
 type program = {
   fns : fn list;
@@ -556,6 +607,9 @@ type program = {
   structs : strukt list;  (** each [Struct], by its n *)
   overflow : site;  (** where the stack overflowing is said to be *)
   handlers : handler list;  (** by [Handler_tag]'s number *)
+  dep_infos : dep_info list;  (** by the dependency's number *)
+  dsites : dsite list;  (** by number *)
+  clones : clone list;  (** what clone.ml did, which a release build lists *)
 }
 
 (* Whether the runtime's [rt] takes its [n]-th argument's reference: the
@@ -734,6 +788,8 @@ let rhs_sexp = function
   | Env_get (x, n) ->
       Core.List [ a "env-get"; a (show_atom x); a (string_of_int n) ]
   | Arg (x, n) -> Core.List [ a "arg"; a (show_atom x); a (string_of_int n) ]
+  | Arg_borrowed (x, n) ->
+      Core.List [ a "arg-borrowed"; a (show_atom x); a (string_of_int n) ]
   | Block_of (f, env) -> Core.List [ a "block"; a f; a (show_atom env) ]
   | Impl (dep, ops) ->
       Core.List (a "impl" :: a ("dep" ^ string_of_int dep) :: atoms ops)
@@ -743,13 +799,17 @@ let rhs_sexp = function
       Core.List
         ((a "given" :: atoms [ outer; caller ])
         @ List.map (fun (d, args) -> key_sexp d d args) deps)
-  | Method_of (x, dep, op) ->
+  | Method_of { mdesc; mdep; mop; msite; known } ->
       Core.List
-        [
-          a "method"; a (show_atom x); a ("dep" ^ string_of_int dep);
-          a (string_of_int op);
-        ]
+        ([
+           a "method"; a (show_atom mdesc); a ("dep" ^ string_of_int mdep);
+           a (string_of_int mop); a ("site" ^ string_of_int msite);
+         ]
+        @ match known with
+          | Some h -> [ a ("handler" ^ string_of_int h) ]
+          | None -> [])
   | Has_code x -> Core.List [ a "has-code?"; a (show_atom x) ]
+  | Tag_is (x, h) -> Core.List [ a "tag-is?"; a (show_atom x); a ("handler" ^ string_of_int h) ]
   | Op_block (ev, dep, args, op) ->
       Core.List
         [
@@ -793,15 +853,19 @@ let rec stmt_sexp = function
           Core.List (a fn :: atoms args);
           Core.List (a "error" :: typed error :: List.map stmt_sexp on_error);
         ]
-  | Call_block { result; block; ev; args; error; on_error } ->
+  | Call_block { result; block; ev; args; error; on_error; borrowed } ->
       Core.List
         ([
-           a "call-block";
+           a
+             (if borrowed > 0 then
+                Printf.sprintf "call-block, borrowing %d" borrowed
+              else "call-block");
            typed result;
            Core.List (a (show_atom block) :: atoms (ev :: args));
          ]
         @ error_sexp error on_error)
-  | Call_handler { result; handler; outer; body; desc; deps; error; on_error }
+  | Call_handler
+      { result; handler; outer; body; desc; deps; error; on_error; hsite = _ }
     ->
       Core.List
         ([

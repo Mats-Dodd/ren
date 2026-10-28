@@ -93,9 +93,11 @@ let rhs_atoms (r : rhs) : atom list =
   | Of_word (x, _)
   | Env_get (x, _)
   | Arg (x, _)
+  | Arg_borrowed (x, _)
   | Block_of (_, x)
-  | Method_of (x, _, _)
+  | Method_of { mdesc = x; _ }
   | Has_code x
+  | Tag_is (x, _)
   | Is_unique x
   | Unpack (x, _, _)
   | Hole (x, _) ->
@@ -528,6 +530,8 @@ let analyze fns (f : fn) : info =
                 | Cell Desc -> define v Borrowed_param
                 | _ -> define v (Cell_view c))
             | Global _ -> define v (if changes v then Owned else Borrowed_param)
+            (* a method's description, which its caller keeps alive *)
+            | Arg_borrowed _ when not (changes v) -> define v Borrowed_param
             | Call _ ->
                 define v Owned;
                 Hashtbl.replace results v.id ()
@@ -687,7 +691,10 @@ let operands fi (s : stmt) : atom list * atom list =
   | Store (_, x) -> ([ x ], [])
   | Fill (_, x) -> ([ x ], [])
   | Call_fails { fn; args; _ } -> call fn args
-  | Call_block { args; _ } -> (args, [])
+  | Call_block { args; borrowed; _ } ->
+      (* a method only borrows its description *)
+      (List.filteri (fun i _ -> i >= borrowed) args,
+       List.filteri (fun i _ -> i < borrowed) args)
   | Call_handler { handler; desc; deps; _ } ->
       ([], handler :: desc :: List.concat_map (fun (k : key) -> k.kargs) deps)
   | Return x | Raise (x, _) -> ([ x ], [])
@@ -1199,7 +1206,10 @@ and place_stmt pl cx (s : stmt) (after : Ids.t) : stmt list * Ids.t =
      the program only borrows, a field say, owns a reference of its own *)
   let borrowed_def =
     match s with
-    | Let (v, (Field _ | Struct_get _ | Load _ | Global _ | Env_get _)) -> (
+    | Let
+        ( v,
+          (Field _ | Struct_get _ | Load _ | Global _ | Env_get _ | Arg_borrowed _)
+        ) -> (
         match Hashtbl.find_opt fi.group_of v.id with
         | Some ({ kind = Owned; _ } as g) when g.gid = v.id -> Some g
         | _ -> None)

@@ -1595,6 +1595,21 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
       pass "folding" (fun () -> Fold.program p)
     else p
   in
+  (* dispatch over descriptions, as decision 4 says (dispatch.ml): a loop
+     over a description that doesn't change copied for each handler it
+     can have (clone.ml), and what the closed set decides of each call
+     made, before and after, all before counting is placed, so each
+     copy, and each call, is counted for what it can do. `REN_NO_CLONE` (env) leaves loops whole,
+     to measure *)
+  let p =
+    if release then
+      pass "dispatch" (fun () ->
+          let p = Dispatch.prune p in
+          if Sys.getenv_opt "REN_NO_CLONE" = None then
+            Dispatch.prune (Clone.program p)
+          else p)
+    else p
+  in
   let p =
     match rc with
     | Naive -> p
@@ -1643,9 +1658,10 @@ let site_pieces_of sources =
   in
   site_pieces ~lines_of:(Diag.indexed sources) ~sources
 
-let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc ~sources
-    ~file src =
+let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc
+    ?(explain = ignore) ~sources ~file src =
   let p = mem ?lint ?load ~release ?made ?rc ~file src in
+  explain p;
   pass "C" (fun () ->
       Emit_c.program ~restrict:(release && restrict) ~release
         ~site_pieces:(site_pieces_of sources) p)

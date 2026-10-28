@@ -509,7 +509,12 @@ submission and its completion:
   them. A stateless handler's record has a method for each operation,
   which a method call runs with the caller's evidence and the
   description, making no instance; one with state has none, and the call
-  installs it. An inline handler is a handler like any other there.
+  installs it. An inline handler is a handler like any other there. A
+  release build reads the record only for a call it can't decide: one
+  that one handler reaches is a direct call, two to four a compare of
+  the tag, more a table of each operation's methods, and a loop over an
+  unchanging description is copied per handler (compiler.md, "Dispatch
+  (step 4)", and `ren build --release --explain-dispatch D`).
 - **Nothing reaches the world but through an operation:** Core Lint
   checks that each intrinsic that does is called only by its
   dependency's real implementation, `fs_read` by `real_fs`, the prelude

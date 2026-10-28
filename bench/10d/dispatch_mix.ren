@@ -1,0 +1,113 @@
+// Stage 10d, step 4: what bench/10d/dispatch.ren leaves out, checked
+// native against `ren run`. A set with state in it (`Op`: six handlers,
+// one keeping state, which a call installs, so the table has no method
+// for it; `Tally`: three, one keeping state, the loop over it copied
+// for each, the stateful copy installing); a dependency whose tags are
+// code installed with `with` (`Area`, found back from its code); a
+// handler of two dependencies (`Size` and `Label`, two handlers and
+// one); a loop copied inside another, over a description the outer one
+// gives it; and descriptions held in a record and an array.
+
+dep Op =
+  run: fn(x: Int) -> Int
+
+handler o_add(k: Int) for Op =
+  run(x) => x + k
+handler o_sub(k: Int) for Op =
+  run(x) => x - k
+handler o_mul(k: Int) for Op =
+  run(x) => x * k % 1009
+handler o_neg() for Op =
+  run(x) => 0 - x
+handler o_id() for Op =
+  run(x) => x
+// each call of it as a method starts it fresh, so `seen` is 1
+handler o_seen(k: Int) for Op =
+  var seen = 0
+  run(x) =>
+    seen += 1
+    x + k * seen
+
+dep Tally =
+  add: fn(x: Int) -> Int
+
+handler t_twice() for Tally =
+  add(x) => 2 * x
+handler t_plus(k: Int) for Tally =
+  add(x) => x + k
+handler t_count() for Tally =
+  var n = 10
+  add(x) =>
+    n += 1
+    x + n
+
+dep Area =
+  area: fn() -> Int
+
+handler a_sq(s: Int) for Area =
+  area() => s * s
+handler a_rect(w: Int, h: Int) for Area =
+  area() => w * h
+handler a_tri(b: Int, h: Int) for Area =
+  area() => b * h / 2
+handler a_line(n: Int) for Area =
+  area() => n
+handler a_zero() for Area =
+  area() => 0
+
+dep Size =
+  size: fn() -> Int
+
+dep Label =
+  label: fn() -> Str
+
+handler boxed(n: Int) for Size, Label =
+  size() => n * 10
+  label() => "box"
+handler small() for Size =
+  size() => 1
+
+type Pair = { left: Op, right: Op }
+
+fn total(t: Tally, n: Int) -> Int =
+  var x = 0
+  for i in 0..n
+    x = t.add(x + i) % 100003
+  x
+
+fn both(a: Area) -> Int = with a in Area.area() + Area.area()
+
+fn main() uses Console =
+  let ops: Array<Op> = [o_add(3), o_sub(2), o_mul(7), o_neg(), o_id(), o_seen(5)]
+  var acc = 1
+  for o in ops
+    acc = o.run(acc)
+  print(acc)
+  var inner = 0
+  for o in ops
+    for i in 0..4
+      inner += o.run(i)
+  print(inner)
+  // a loop in a loop: each `t` doesn't change in the inner one, which
+  // is copied for each handler it can be
+  let ts: Array<Tally> = [t_twice(), t_plus(1), t_count()]
+  var nested = 0
+  for t in ts
+    for i in 0..4
+      nested += t.add(i)
+  print(nested)
+  print(total(t_twice(), 50))
+  print(total(t_plus(9), 50))
+  print(total(t_count(), 50))
+  let areas: Array<Area> = [a_sq(4), a_rect(2, 3), a_tri(5, 4), a_line(7), a_zero()]
+  var sum = 0
+  for a in areas
+    sum += a.area() + both(a)
+  print(sum)
+  let b = boxed(4)
+  print(b.size())
+  print(b.label())
+  let sizes: Array<Size> = [boxed(2), small()]
+  print(sizes.map(fn(s) => s.size()))
+  let p = Pair { left: o_mul(3), right: o_seen(1) }
+  print(p.left.run(p.right.run(10)))

@@ -12,7 +12,7 @@ let usage =
        ren replay <file.journal> [--trace]
        ren build <file.ren> [-o <out>] [--debug | --release] [--emit-c]
                  [--emit-mem] [--stats] [--no-restrict]
-                 [--rc naive | --rc perceus]
+                 [--rc naive | --rc perceus] [--explain-dispatch <D>]
        ren core [--types] [--release] <file.ren>
        ren test [<folder or file.ren>] [--only <text> [--exact]] [--seed <n>]
                 [--list]
@@ -64,6 +64,12 @@ commands:
             --no-restrict
                        with --release, don't promise C that an `inout`
                        parameter is the only way to what it points to
+            --explain-dispatch <D>
+                       with --release, list each place that calls an
+                       operation of the dependency D on a description,
+                       or installs one, and how it's compiled: a direct
+                       call, arms inline, a call through a table, or a
+                       loop copied for each handler, and why
             --rc perceus
                        place the counting precisely, borrowing what's
                        only read and changing what's unique in place,
@@ -135,6 +141,40 @@ let sources ~known file =
   | None -> (
       try Some (In_channel.with_open_bin file In_channel.input_all)
       with Sys_error _ -> None)
+
+(* The source at [loc], on one line: what's written there, or its first
+   line and `...` if it's longer. *)
+let source_text ~known (loc : Loc.t) =
+  match sources ~known loc.file with
+  | None -> "?"
+  | Some src -> (
+      let lines = String.split_on_char '\n' src in
+      match List.nth_opt lines (loc.start.line - 1) with
+      | None -> "?"
+      | Some l ->
+          let from = max 0 (loc.start.col - 1) in
+          let upto =
+            if loc.stop.line = loc.start.line then min (String.length l) loc.stop.col
+            else String.length l
+          in
+          let s =
+            String.trim
+              (if upto > from then String.sub l from (upto - from) else l)
+          in
+          (* a call's location may take in the `)` that closes what it's
+             in, or the `.` of a method called on its result *)
+          let count c = String.fold_left (fun n d -> if c = d then n + 1 else n) 0 in
+          let rec balanced s =
+            if
+              String.ends_with ~suffix:")" s
+              && count ')' s > count '(' s
+            then balanced (String.sub s 0 (String.length s - 1))
+            else if String.ends_with ~suffix:"." s then
+              balanced (String.sub s 0 (String.length s - 1))
+            else s
+          in
+          let s = balanced s in
+          if loc.stop.line > loc.start.line then s ^ " ..." else s)
 
 (* Print the error a pass raised, and stop. *)
 let fail ~known e =
@@ -632,7 +672,7 @@ let replay args =
    (cc.ml): a debug build's in units, by tcc in parallel, a release
    build's as one file, by $REN_CC, or cc. `--emit-c` prints one file. *)
 let build args =
-  let rc = ref Driver.Perceus and restrict = ref true in
+  let rc = ref Driver.Perceus and restrict = ref true and explain = ref None in
   let rec parse ((out, release, emit, stats, path) as o) = function
     | "-o" :: file :: rest -> parse (Some file, release, emit, stats, path) rest
     | "--debug" :: rest -> parse (out, false, emit, stats, path) rest
@@ -643,6 +683,12 @@ let build args =
     | "--no-restrict" :: rest ->
         restrict := false;
         parse o rest
+    | "--explain-dispatch" :: name :: rest when not (String.starts_with ~prefix:"-" name) ->
+        explain := Some name;
+        parse o rest
+    | "--explain-dispatch" :: _ ->
+        prerr_endline "error: `--explain-dispatch` takes a dependency's name";
+        exit 2
     | "--rc" :: "naive" :: rest ->
         rc := Driver.Naive;
         parse o rest
@@ -673,6 +719,11 @@ let build args =
         prerr_endline usage;
         exit 2
   in
+  if !explain <> None && not release then (
+    prerr_endline
+      "error: `--explain-dispatch` lists a release build's dispatch\n\
+      \  help: add `--release`";
+    exit 2);
   let src = read path in
   let known = [ (path, src) ] in
   (* what specializing made, which `--stats` prints, and the calls past
@@ -694,9 +745,18 @@ let build args =
     in
     List.iter (fun f -> print_endline (Mem.show_fn f)) p.fns
   else
+    (* the listing of each dispatch site, printed before the build *)
+    let explain =
+      Option.map
+        (fun name p ->
+          print_string
+            (Dispatch.explain p ~text:(source_text ~known) name);
+          flush stdout)
+        !explain
+    in
     let native () =
       Driver.native ~load:(loader path) ~release ~made ~restrict:!restrict
-        ~rc:!rc ~sources:(sources ~known) ~file:path src
+        ~rc:!rc ?explain ~sources:(sources ~known) ~file:path src
     in
     if emit = `C then print_string (try native () with e -> fail ~known e)
     else

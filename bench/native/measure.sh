@@ -148,6 +148,14 @@ for part in $parts; do
       # release build, the debug build, and the debug build at -O2
       hyper h2 handlers with-perceus function-perceus with-debug \
         function-debug with-debug-O2 function-debug-O2
+      # decision 4: each dispatch kernel, release, against Rust's dyn
+      # and enum twins and Go's interface one, run with the kernel's name
+      for k in shapes2 shapes4 shapes8 shapes32 db router interp; do
+        hf "dispatch-$k" -n perceus "$bin/dispatch-$k-perceus" \
+          -n rust-dyn "$bin/dispatch-rust 100 $k dyn" \
+          -n rust-enum "$bin/dispatch-rust 100 $k enum" \
+          -n go "$bin/dispatch-go 100 $k"
+      done
       ;;
 
     compile)

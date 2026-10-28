@@ -1,0 +1,4 @@
+import bench
+
+// research/dispatch.md's kernels at their size: 100 rounds
+fn main() uses Console = bench.run(100)
