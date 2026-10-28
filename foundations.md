@@ -932,13 +932,39 @@ and 32-bit references as the default.
    integers and `Float` sums (decision 15); `for i, x in &xs` and `zip`
    (decision 16). Late overflow was built and is off (decision 15).
    Every benchmark is now within 2× of Rust's time, inout at 1.67× and
-   nbody at 1.61× the furthest. **Next:** tcc for debug builds, per
-   partition (decision 13); frames (stack.ml) removed (decision 14).
+   nbody at 1.61× the furthest. **Close-out, done:** debug builds
+   compile with tcc in parallel units with `#line` (decision 13): 500k
+   lines in 18 s against `go build`'s 15.2 s, so H6 still misses by
+   1.18×, in the single-core front half; frames (stack.ml) and late
+   overflow removed (decisions 14 and 15).
 3. **10d, descriptions.** Generic dependencies; handler descriptions as
    the only stored code, inline handlers, stateless handlers as methods;
    a stored description's `uses` as an upper bound, and the error's
    direction fixed; `over any`; `retry(n, on:)`; blocks that take
    `inout` parameters, which `split_at` and `Async.chunks` need.
+   **Done**, in the interpreter and natively, with dispatch lowered as
+   decision 4 says (at Rust's `dyn` on six of seven kernels, the
+   interpreter kernel at 1.53×) and `--explain-dispatch`. **Gaps, not
+   built yet:**
+   - Slices are a heap object each, 2.1 to 2.6× Rust's slices.
+     Decision 17's inline slice (two or three words in records and
+     arrays) and the uncounted view of a borrowed parameter's slice
+     need a representation change across the backend. They land with
+     strings, when the `just` builds natively, where the cost shows.
+   - Descriptions are always boxed: release doesn't size one to its
+     dependency's largest handler, and a one-handler description still
+     carries a tag (decision 4).
+   - Only loops are cloned per handler; a `with` body over an unchanging
+     description isn't (decision 4).
+   - Inline handlers are lowered where they're written, not lifted.
+   - Debug builds compile an `over any` handler once per dependency it
+     wraps, rather than once.
+   - `==` on `call.args` over a generic dependency is an error, not
+     built; an imported `over any` handler that compares args can still
+     crash the compiler.
+   - `as` on a chain (`with a over b as Jobs`) is an error.
+   - An `over any` handler over an operation that takes a block is
+     refused.
 4. **11a, tasks.** Rules B to D; `Async.scope`, `spawn` and its handle,
    keyed spawn, `until`, `tick`, `yield`, `timeout`, `race` with branches
    that can't fail, `isolate`; handler operations that don't interleave;
@@ -957,12 +983,11 @@ and 32-bit references as the default.
    `snapshot` and its reclamation; lock-free handlers with `Atomic`
    fields; the striped counter.
 6. **11c, generators** and the stream library on them.
-7. **Native, stages 13 and 14.** The task frame allocator; dispatch
-   lowered as decision 4 says, with `--explain-dispatch` and the build
+7. **Native, stages 13 and 14.** The task frame allocator; the build
    notes; the front half run per module in parallel; release built with
    clang -O2 per module in parallel, cached by content. Specialization
    per block and per handler, and most of the memory work, are built
-   (item 2).
+   (item 2), and dispatch with `--explain-dispatch` (item 3).
 
 The interpreter runs tasks on OCaml effects throughout, so 10c to 11c
 need no native code.
