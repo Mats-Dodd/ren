@@ -946,7 +946,9 @@ and 32-bit references as the default.
    decision 4 says (at Rust's `dyn` on six of seven kernels, the
    interpreter kernel at 1.53×) and `--explain-dispatch`. **Gaps, not
    built yet:**
-   - Slices are a heap object each, 2.1 to 2.6× Rust's slices.
+   - Slices are a heap object each, 2.2 to 5.6× Rust's slices (pages
+     the furthest), and Ren's byte and string handling is 2.6 to 2.8×
+     Rust's even with offsets (bench/native/RESULTS.md, "Slices").
      Decision 17's inline slice (two or three words in records and
      arrays) and the uncounted view of a borrowed parameter's slice
      need a representation change across the backend. They land with

@@ -133,13 +133,14 @@ dk interp "interp(25_600)"
 # decision 17's slices (research/slices.md): each of `slices`' parsers
 # alone, at main.ren's size, with slices and with offsets; the twins run
 # one given its name, `slices-rust 200000 20 logs_r`
-for k in logs json pages; do
+# (not `k`: kernel() sets it)
+for parser in logs json pages; do
   for v in "" _r; do
-    kernel slices "$k$v" "fn main() uses Console =
-  let b = ${k}_input(200_000)
+    kernel slices "$parser$v" "fn main() uses Console =
+  let b = ${parser}_input(200_000)
   var x = 0
   for _ in 0..20
-    x += $k$v(b)
+    x += $parser$v(b)
   print(b.len())
   print(x)"
   done

@@ -89,6 +89,14 @@ Go's `[]byte`; `_r` is offsets in each language.
 | json | 224.6 | 210.3 | 105.7 | 72.3 | 496.3 | 104.0 | 2.12× |
 | pages | 19.7 | 10.2 | 7.5 | 4.3 | 39.1 | 5.5 | 2.64× |
 
+Measured again on 2026-10-28 (the same binaries, cycles the median of
+5, each kernel's 0-round run subtracted), logs and json hold: 2.43×
+and 2.20×. pages doesn't: Rust's twins ran 3.2 Mcyc a pass with slices
+and 2.4 with offsets, not 7.5 and 4.3, so Ren's slices are **5.6×**
+Rust's there (Ren 18.1). Ren's offsets are 2.6× Rust's on pages and
+2.8× on json too, so not all of the gap is slices: Ren's byte and
+string handling is slower than Rust's before a slice is made.
+
 | kernel | allocations a pass | dups a pass | instructions 10⁶ a pass, slices / offsets |
 |---|---|---|---|
 | logs | 1.2M (one a field) | 1.2M | 387 / 271 |
