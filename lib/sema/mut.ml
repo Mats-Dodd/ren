@@ -90,6 +90,11 @@ let kind (b : binder) =
       Fixed
         ( "a loop variable",
           sprintf "loop with `for %s in &...` to change the elements" x )
+  | By_index ->
+      Fixed
+        ( "the loop's index",
+          "it says where the element is: keep a count you change in a `var` \
+           of its own" )
 
 (* Check that [e] is a place this code may change. [what] words the error
    when it isn't a place at all, and [help] says what to do. *)

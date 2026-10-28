@@ -1154,6 +1154,20 @@
           }
         ]
       },
+      "index": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "wildcard",
+            "named": true
+          }
+        ]
+      },
       "iterable": {
         "multiple": false,
         "required": true,
@@ -1178,6 +1192,10 @@
           },
           {
             "type": "tuple_pattern",
+            "named": true
+          },
+          {
+            "type": "wildcard",
             "named": true
           }
         ]

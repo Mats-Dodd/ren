@@ -88,8 +88,11 @@
      stmt     := ("let" | "var") IDENT [":" type] "=" body
               |  "let" "(" pattern, ... ")" "=" body (a tuple taken apart:
                                                      names, `_` and tuples)
-              |  "for" (IDENT | tuple_pat) "in" (expr | expr ".." expr)
-                 INDENT block                       (a range only here)
+              |  "for" [IDENT ","] (IDENT | tuple_pat) "in"
+                 (expr | expr ".." expr) INDENT block
+                                                    (a range only here; the
+                                                     IDENT before "," is
+                                                     the index, `for i, x`)
               |  "while" expr INDENT block
               |  "finally" "(" param ")" "=>" body  (only in a handler's
                                                      state or an arm, which
@@ -932,13 +935,29 @@ and parse_stmt p =
 and parse_for p =
   let start = loc p in
   expect p FOR;
-  let pat =
+  let one () =
     match peek p with
     | LPAREN -> binding_pattern p ~what:"a `for`"
     | _ ->
         let l = loc p in
         let x = ident p in
         mk_pattern p l (PVar x)
+  in
+  let first = one () in
+  (* `for i, x in xs`: the index, then the element *)
+  let index, pat =
+    if peek p = COMMA then (
+      advance p;
+      (match first.pkind with
+      | PTuple _ ->
+          Diag.error first.ploc
+            ~help:
+              (Printf.sprintf "write `for i, %s in ...`, the index first"
+                 (show_pattern first))
+            "the index before the `,` in a `for` is a name, or `_`"
+      | _ -> ());
+      (Some first, one ()))
+    else (None, first)
   in
   expect p IN;
   let iter = parse_orelse p in
@@ -958,7 +977,16 @@ and parse_for p =
               "a range is written with two dots, `a..b`, from the first number \
                up to, but not including, the second"
         | _ -> ());
-        Range (iter, parse_orelse p)
+        let range = Range (iter, parse_orelse p) in
+        (match index with
+        | Some i ->
+            Diag.error i.ploc
+              ~help:
+                (Printf.sprintf "write `for %s in ...`: the number is its own index"
+                   (show_pattern pat))
+              "a range gives only its numbers, with no index beside them"
+        | None -> ());
+        range
     | _ -> Each iter
   in
   if peek p <> INDENT then
@@ -967,7 +995,7 @@ and parse_for p =
          (describe (peek p)));
   advance p;
   let body = parse_block p in
-  mk (For { pat; over; body }) start p
+  mk (For { index; pat; over; body }) start p
 
 (* `while c`, then its body, indented below *)
 and parse_while p =

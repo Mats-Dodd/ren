@@ -95,7 +95,7 @@ for line in &r                             // and this loop goes on from there
   &body.push(line)
 ```
 
-`for x in c`, without `&`, steps a copy, so `c` stays at the start. A cursor reads one item at a time, so it can zip two streams or read exactly *n* bytes for a framed protocol, and `break` leaves the loop with the cursor where it stopped. Lines, SQL rows, HTTP bodies and byte chunks all use the same shape:
+`for x in c`, without `&`, steps a copy, so `c` stays at the start. `xs.zip(ys)` over two arrays is a cursor too, of their pairs, which a `for` compiles to one counted loop. A cursor reads one item at a time, so it can zip two streams or read exactly *n* bytes for a framed protocol, and `break` leaves the loop with the cursor where it stopped. Lines, SQL rows, HTTP bodies and byte chunks all use the same shape:
 
 ```ren
 var chunks = Net.chunks(conn)              // chunk: Bytes, leased from the runtime's pool

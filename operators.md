@@ -514,7 +514,7 @@ is.
 | `partition(f)` | `(the ones f is true of, the rest)` |
 | `tally()` | a `Map` from each element to how many times it's there |
 | `uniq()` | without repeats, first ones kept |
-| `zip(ys)`, `with_index()` | pairs of `(x, y)`; and of `(i, x)` |
+| `zip(ys)`, `with_index()` | a cursor of `(x, y)` pairs, as long as the shorter, whose `zip(zs)` gives triples; an array of `(i, x)` |
 | `first()`, `last()` | `Option<T>` |
 | `take(n)`, `drop(n)`, `reverse()` | |
 

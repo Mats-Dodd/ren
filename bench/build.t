@@ -33,9 +33,12 @@ deep, which is left out. `values_panic` panics where objects are alive,
 which a panic leaves as they are, and so do `swap_panic`, after a row
 was moved out of its grid, `swap_order`, and `trmc_panic`, with the
 cells a loop built where a recursion would have built none yet.
-`sized_panic` panics storing a number too big for a `UInt8`.
+`sized_panic` panics storing a number too big for a `UInt8`, and
+`loops_panic` indexing an array a block shrank, which bounds.ml leaves
+checked, and `loops_short` in the checked one of a loop bounds.ml made
+twice.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -68,6 +71,12 @@ cells a loop built where a recursion would have built none yet.
   sized.ren, naive: the same, exit 0, objects live at exit 0
   sized_panic.ren, perceus: the same, exit 1, objects live at exit 2
   sized_panic.ren, naive: the same, exit 1, objects live at exit 2
+  loops.ren, perceus: the same, exit 0, objects live at exit 0
+  loops.ren, naive: the same, exit 0, objects live at exit 0
+  loops_panic.ren, perceus: the same, exit 1, objects live at exit 3
+  loops_panic.ren, naive: the same, exit 1, objects live at exit 4
+  loops_short.ren, perceus: the same, exit 1, objects live at exit 6
+  loops_short.ren, naive: the same, exit 1, objects live at exit 6
 
 Every native benchmark, at its small size:
 
@@ -98,6 +107,8 @@ Every native benchmark, at its small size:
   native/rbtree/small.ren, naive: the same, exit 0, objects live at exit 0
   native/stack/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/stack/small.ren, naive: the same, exit 0, objects live at exit 0
+  native/vec/small.ren, perceus: the same, exit 0, objects live at exit 0
+  native/vec/small.ren, naive: the same, exit 0, objects live at exit 0
 
 And the examples in the subset, the single files and two of the
 folders:
@@ -214,7 +225,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -231,6 +242,9 @@ prints what `ren run` prints, and ends with no object alive; so does
   trmc_panic.ren, release: the same, exit 1, objects live at exit 11
   sized.ren, release: the same, exit 0, objects live at exit 0
   sized_panic.ren, release: the same, exit 1, objects live at exit 2
+  loops.ren, release: the same, exit 0, objects live at exit 0
+  loops_panic.ren, release: the same, exit 1, objects live at exit 3
+  loops_short.ren, release: the same, exit 1, objects live at exit 6
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
@@ -245,6 +259,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   native/nqueens/small.ren, release: the same, exit 0, objects live at exit 0
   native/rbtree/small.ren, release: the same, exit 0, objects live at exit 0
   native/stack/small.ren, release: the same, exit 0, objects live at exit 0
+  native/vec/small.ren, release: the same, exit 0, objects live at exit 0
   $ for f in ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do release $f; done
   ../examples/blocks.ren, release: the same, exit 0, objects live at exit 0
   ../examples/fib.ren, release: the same, exit 0, objects live at exit 0
@@ -532,8 +547,9 @@ in a hoisted loop panics as it would anywhere:
     │     ^^^^
   $ ren build --release --emit-c hoist.ren | grep '^static inline.*_loop_'
   static inline __attribute__((always_inline)) void ren_hoist_shout_1_loop_1(int64_t* v3_i, int64_t v6_stop, int64_t v27_len, ren_val* restrict v30_buf) {
-  static inline __attribute__((always_inline)) void ren_hoist_nudge_1_loop_1(int64_t* v3_i, int64_t v6_stop, int64_t v34_len, ren_val* restrict v37_buf) {
-  static inline __attribute__((always_inline)) void ren_hoist_mix_1_loop_1(int64_t* v5_i, int64_t v8_stop, int64_t v51_len, ren_val* restrict v54_buf, int64_t v56_len, ren_val* restrict v59_buf, int64_t v61_len, ren_val* restrict v63_buf) {
+  static inline __attribute__((always_inline)) void ren_hoist_nudge_1_loop_1(int64_t* v3_i, int64_t v6_stop, int64_t v32_len, ren_val* restrict v35_buf) {
+  static inline __attribute__((always_inline)) void ren_hoist_mix_1_loop_1(int64_t* v5_i, int64_t v8_stop, int64_t v116_len, ren_val* restrict v119_buf, int64_t v121_len, ren_val* restrict v124_buf, int64_t v126_len, ren_val* restrict v128_buf) {
+  static inline __attribute__((always_inline)) void ren_hoist_mix_1_loop_2(int64_t* v5_i, int64_t v8_stop, int64_t v102_len, ren_val* restrict v105_buf, int64_t v107_len, ren_val* restrict v110_buf, int64_t v112_len, ren_val* restrict v114_buf) {
   static inline __attribute__((always_inline)) void ren_hoist_scale_1_loop_1(int64_t v3_k, int64_t* v4_i, int64_t v7_stop, int64_t v29_len, ren_val* restrict v32_buf) {
   $ ren build --release --no-restrict --emit-c hoist.ren | grep -c ' restrict v'
   0

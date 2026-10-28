@@ -1,0 +1,16 @@
+// An index a loop can't prove in bounds, since a block changes the array
+// (bounds.ml, [unsteady]), stays checked, and panics where `ren run`
+// does, with strings alive in the arrays it holds.
+
+fn main() uses Console =
+  var ys = ["a", "b", "c"]
+  var zs = ["x", "y", "z"]
+  var out = ""
+  for (y, z) in ys.zip(zs)
+    out = out.concat(y).concat(z)
+  print(out)
+  for i in 0..ys.len()
+    let f = fn() => ys = ["only"]
+    if i == 1 then f()
+    out = out.concat(ys[i])
+  print(out)

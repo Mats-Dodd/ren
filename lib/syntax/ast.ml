@@ -222,15 +222,19 @@ and ('v, 'b, 't) expr_kind =
       onode : int;  (** the method [op] uses, as [Binop]'s *)
     }  (** [x = 1], [user.plan = Free], [xs[i] += 1]; the target is a place *)
   | For of {
+      index : ('b, 't) pattern option;
+          (** [i] in [for i, x in xs]: where each element is, counting from 0,
+              a name or [_] *)
       pat : ('b, 't) pattern;
           (** a name, [x], or a tuple taken apart, [(k, v)] *)
       over : ('v, 'b, 't) over;
       body : ('v, 'b, 't) expr;
     }
       (** [for x in xs], [for (k, v) in m], [for i in 0..n], or [for p in &ps]
-          to change each element; or [for x in &c] over a cursor, a value whose
-          type has [next(inout self) -> Option<T>], which advances [c] itself,
-          and [for x in c], which advances a copy *)
+          to change each element, and [for i, x in xs] or [for i, p in &ps]
+          with each one's index too; or [for x in &c] over a cursor, a value
+          whose type has [next(inout self) -> Option<T>], which advances [c]
+          itself, and [for x in c], which advances a copy *)
   | While of { cond : ('v, 'b, 't) expr; body : ('v, 'b, 't) expr }
       (** [while c] and its body, indented below: the body runs again while [c]
           holds *)
@@ -592,6 +596,7 @@ and bound =
   | By_inout  (** an [inout] parameter *)
   | By_lambda  (** a lambda's parameter *)
   | By_loop  (** [x] in [for x in xs] *)
+  | By_index  (** [i] in [for i, x in xs], where each element is *)
   | By_ref_loop  (** [p] in [for p in &ps], which changes each element *)
   | By_pattern
 
@@ -864,9 +869,12 @@ let rec show_expr (e : expr) =
         match op with Some o -> binop_to_string o ^ "=" | None -> "="
       in
       parens [ op; show_expr target; show_expr value ]
-  | For { pat; over = Each iter; body } ->
-      parens [ "for"; show_pattern pat; show_expr iter; show_expr body ]
-  | For { pat; over = Range (lo, hi); body } ->
+  | For { index; pat; over = Each iter; body } ->
+      parens
+        ([ "for" ]
+        @ Option.to_list (Option.map show_pattern index)
+        @ [ show_pattern pat; show_expr iter; show_expr body ])
+  | For { pat; over = Range (lo, hi); body; _ } ->
       parens
         [
           "for";

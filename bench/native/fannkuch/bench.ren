@@ -34,8 +34,8 @@ pub fn run(n: Int) uses Console =
       count[r - 1] = r
       r -= 1
     // copied an element at a time, so `perm` keeps its own buffer
-    for i in 0..n
-      perm[i] = perm1[i]
+    for i, x in perm1
+      perm[i] = x
     var flips = 0
     var k = perm[0]
     while k != 0

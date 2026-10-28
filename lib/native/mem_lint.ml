@@ -285,6 +285,11 @@ let rhs env (r : rhs) : layout =
   | Runtime ((Nan_check _ as r), xs, _) when List.length xs = 2 ->
       args env (show_rt r) [ Float; Float ] xs;
       Unit
+  (* an index with no site is one Core proved in bounds (bounds.ml, which
+     Core Lint checks), so it isn't checked; a check alone with none
+     would check nothing, so there's none *)
+  | Runtime ((Array_check | Buf_check), _, None) ->
+      fail env "a bounds check with no site"
   | Runtime (Narrow k, _, None) ->
       fail env (sprintf "a narrowing into %s with no site" (Sized.name k))
   | Runtime (Wrap_to k, _, Some _) ->

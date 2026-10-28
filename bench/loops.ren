@@ -1,0 +1,93 @@
+// Loops that don't index (foundations.md, decision 16): `for i, x in xs`
+// and `&xs`, `zip` of two and three arrays, of numbers, strings and
+// records, and ranges bounded by a length, each index of which bounds.ml
+// proves in bounds and a native build doesn't check, `xs[i - 1]` too; a
+// loop made twice, whose copy runs when another array is long enough
+// and whose checked original runs when it isn't; a zip kept as a cursor
+// and stepped with `&`; and loops it can't prove, which keep their
+// checks. build.t runs it under the sanitizers.
+
+type Body = { x: Float, v: Float }
+
+fn weighted(xs: Array<Int>) -> Int =
+  var t = 0
+  for i, x in xs
+    t += i * x
+  t
+
+// each element moved by the one at its place in `by`, and its index
+fn bump(inout xs: Array<Int>, by: Array<Int>) =
+  for i, x in &xs
+    x += by[i] + i
+
+fn dot(xs: Array<Float>, ys: Array<Float>) -> Float =
+  var t = 0.0
+  for (x, y) in xs.zip(ys)
+    t += x * y
+  t
+
+fn names(ids: Array<Int>, first: Array<Str>, last: Array<Str>) -> Array<Str> =
+  var out: Array<Str> = []
+  for (id, f, l) in ids.zip(first).zip(last)
+    &out.push(show(id).concat(f).concat(l))
+  out
+
+// nbody's shape: each pair, the second after the first
+fn pull(inout bodies: Array<Body>) =
+  for i in 0..bodies.len()
+    for j in (i + 1)..bodies.len()
+      let d = bodies[j].x - bodies[i].x
+      bodies[i].v += d * 0.5
+      bodies[j].v -= d * 0.5
+  for b in &bodies
+    b.x += b.v
+
+// grows as it goes: `xs[i]` stays checked, and is in bounds
+fn grows(xs: Array<Int>) -> Int =
+  var ys = xs
+  var t = 0
+  for i in 0..ys.len()
+    &ys.push(i)
+    t += ys[i]
+  t + ys.len()
+
+// made twice: `by[i]` is proved where `by` is as long as `xs`
+fn guarded(inout xs: Array<Str>, by: Array<Str>) =
+  for i, x in &xs
+    if i < by.len() then x = x.concat(by[i])
+
+fn behind(xs: Array<Int>) -> Int =
+  var t = 0
+  for i in 1..xs.len()
+    t += xs[i] - xs[i - 1]
+  t
+
+fn main() uses Console =
+  var xs: Array<Int> = []
+  for i in 0..20
+    &xs.push(i * 3 % 7)
+  print(weighted(xs))
+  bump(&xs, [5, 4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+  print(xs)
+  let shared = xs
+  bump(&xs, shared)
+  print((xs, shared))
+  print(dot([1.5, 2.0, 3.0, 4.0], [2.0, 4.0, 8.0]))
+  print(dot([], [1.0]))
+  print(names([1, 2, 3], ["a", "b", "c", "d"], ["x", "y", "z"]))
+  var bodies = [Body { x: 0.0, v: 0.0 }, Body { x: 1.0, v: 0.0 }, Body { x: 4.0, v: 1.0 }]
+  for _ in 0..3
+    pull(&bodies)
+  print(bodies)
+  var z = ["p", "q", "r"].zip([10, 20, 30])
+  for (s, n) in &z
+    print(s.concat(show(n)))
+    if n == 10 then break
+  for (s, _) in &z
+    print(s)
+  print(grows([1, 2, 3]))
+  print(behind([3, 5, 9, 2]))
+  var words = ["a", "b", "c"]
+  guarded(&words, ["x", "y", "z", "w"])
+  guarded(&words, ["1"])
+  print(words)

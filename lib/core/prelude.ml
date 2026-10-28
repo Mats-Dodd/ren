@@ -230,12 +230,9 @@ pub type Array<T> = builtin
         &out.push(x)
     out
   // each element with the one at its place in `ys`, as long as both have
-  // one
-  pub fn zip<U>(self, ys: Array<U>) -> Array<(T, U)> =
-    var out: Array<(T, U)> = []
-    for i in 0..(if self.len() < ys.len() then self.len() else ys.len())
-      &out.push((self[i], ys[i]))
-    out
+  // one: a cursor, `for (x, y) in xs.zip(ys)`, which makes no array of
+  // the pairs (`Zip`)
+  pub fn zip<U>(self, ys: Array<U>) -> Zip<T, U> = Zip { xs: self, ys: ys, at: 0 }
   // each element with where it is, counting from 0
   pub fn with_index(self) -> Array<(Int, T)> =
     var out: Array<(Int, T)> = []
@@ -305,11 +302,36 @@ pub type Map<K, V> = builtin
   pub fn partition(self, f: fn((K, V)) -> Bool) -> (Map<K, V>, Map<K, V>) =
     let (yes, no) = try self.pairs().partition(f)
     (Map.of(yes), Map.of(no))
-  pub fn zip<U>(self, ys: Array<U>) -> Array<((K, V), U)> = self.pairs().zip(ys)
+  pub fn zip<U>(self, ys: Array<U>) -> Zip<(K, V), U> = self.pairs().zip(ys)
   pub fn with_index(self) -> Array<(Int, (K, V))> = self.pairs().with_index()
   pub fn take(self, n: Int) -> Map<K, V> = Map.of(self.pairs().take(n))
   pub fn drop(self, n: Int) -> Map<K, V> = Map.of(self.pairs().drop(n))
   pub fn reverse(self) -> Map<K, V> = Map.of(self.pairs().reverse())
+
+// Two arrays gone over together, a pair of elements at a time, from `at`,
+// as long as both have one: what `xs.zip(ys)` gives, a cursor (stdlib.md,
+// "Streams: cursors first"). A `for` over `xs.zip(ys)` itself counts
+// along both arrays at once, with no `Zip` made and one bounds check for
+// the loop, the shorter length (lower.ml, `zip_loop`)
+pub type Zip<T, U> = opaque { xs: Array<T>, ys: Array<U>, at: Int }
+  pub fn next(inout self) -> Option<(T, U)> =
+    let i = self.at
+    if i >= 0 && i < self.xs.len() && i < self.ys.len() then
+      self.at += 1
+      Some((self.xs[i], self.ys[i]))
+    else None
+  // and a third array's elements: `xs.zip(ys).zip(zs)` gives `(x, y, z)`s
+  pub fn zip<V>(self, zs: Array<V>) -> Zip3<T, U, V> =
+    Zip3 { xs: self.xs, ys: self.ys, zs: zs, at: self.at }
+
+// Three arrays gone over together, as `Zip` goes over two
+pub type Zip3<T, U, V> = opaque { xs: Array<T>, ys: Array<U>, zs: Array<V>, at: Int }
+  pub fn next(inout self) -> Option<(T, U, V)> =
+    let i = self.at
+    if i >= 0 && i < self.xs.len() && i < self.ys.len() && i < self.zs.len() then
+      self.at += 1
+      Some((self.xs[i], self.ys[i], self.zs[i]))
+    else None
 
 // Each value once, found by its hash, in the order each was first added.
 // Besides what's built in, `add`, `remove`, `includes` and `len`, it has
@@ -349,7 +371,7 @@ pub type Set<T> = builtin
   pub fn partition(self, f: fn(T) -> Bool) -> (Set<T>, Set<T>) =
     let (yes, no) = try self.members().partition(f)
     (Set.of(yes), Set.of(no))
-  pub fn zip<U>(self, ys: Array<U>) -> Array<(T, U)> = self.members().zip(ys)
+  pub fn zip<U>(self, ys: Array<U>) -> Zip<T, U> = self.members().zip(ys)
   pub fn with_index(self) -> Array<(Int, T)> = self.members().with_index()
   pub fn take(self, n: Int) -> Set<T> = Set.of(self.members().take(n))
   pub fn drop(self, n: Int) -> Set<T> = Set.of(self.members().drop(n))

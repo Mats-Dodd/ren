@@ -264,7 +264,7 @@ let rec read_from (base : C.expr) steps =
   | SField (p, f, ty, loc) :: rest ->
       read_from (mk (Field (base, p, f)) ty loc) rest
   | SIndex (i, ty, loc) :: rest ->
-      read_from (mk (Prim (Get_index, [ base; i ])) ty loc) rest
+      read_from (mk (Prim (Get_index Checked, [ base; i ])) ty loc) rest
 
 let read pl loc = read_from (local pl.root loc) pl.steps
 
@@ -277,8 +277,8 @@ let rec update (base : C.expr) steps (v : C.expr) =
       let inner = update (mk (Field (base, p, f)) ty loc) rest v in
       mk (Update (base, f, inner)) base.ty loc
   | SIndex (i, ty, loc) :: rest ->
-      let inner = update (mk (Prim (Get_index, [ base; i ])) ty loc) rest v in
-      mk (Prim (Set_index, [ base; i; inner ])) base.ty loc
+      let inner = update (mk (Prim (Get_index Checked, [ base; i ])) ty loc) rest v in
+      mk (Prim (Set_index Checked, [ base; i; inner ])) base.ty loc
 
 (* Write [v] to the place. *)
 let write pl (v : C.expr) loc =
@@ -525,12 +525,13 @@ and expr_of cx (e : expr) : C.expr =
   | Tuple xs -> here (Tuple (List.map (expr cx) xs))
   | Index (a, i) ->
       let a = expr cx a in
-      here (Prim (Get_index, [ a; expr cx i ]))
+      here (Prim (Get_index Checked, [ a; expr cx i ]))
   | Ref ({ kind = Call (f, args); _ } as c) -> call cx ~changed:true c f args
   | Ref _ -> bug "`&` outside a call or a `for` loop"
   | Assign { target; op; value; onode } -> assign cx e ~onode target op value
-  | For { pat; over = Each iter; body } -> for_loop cx e pat iter body
-  | For { pat; over = Range (lo, hi); body } -> range_loop cx e pat lo hi body
+  | For { index; pat; over = Each iter; body } ->
+      for_loop cx e index pat iter body
+  | For { pat; over = Range (lo, hi); body; _ } -> range_loop cx e pat lo hi body
   | While { cond; body } ->
       let cond = expr cx cond in
       here (While (cond, expr cx body))
@@ -1292,12 +1293,97 @@ and range_loop cx (e : expr) (pat : pattern) lo hi body =
    `break`s. mut.ml makes sure the body can't change the array itself, so
    its length can't change. A cursor's is a loop of its own
    ([cursor_loop]). *)
-and for_loop cx (e : expr) (pat : pattern) (iter : expr) body =
+and for_loop cx (e : expr) index (pat : pattern) (iter : expr) body =
   match (node cx iter.node).found with
-  | Some (Method_of next) -> cursor_loop cx e pat iter next body
-  | _ -> array_loop cx e pat iter body
+  | Some (Method_of next) -> (
+      match zipped cx iter with
+      | Some arrays -> zip_loop cx e pat arrays body
+      | None -> cursor_loop cx e pat iter next body)
+  | _ -> array_loop cx e index pat iter body
 
-and array_loop cx (e : expr) (pat : pattern) (iter : expr) body =
+(* The arrays of `xs.zip(ys)` or `xs.zip(ys).zip(zs)`, if [iter] is one
+   of those calls of the prelude's, in the order they're evaluated. *)
+and zipped cx (iter : expr) =
+  let method_ (f : expr) =
+    match (node cx f.node).found with Some (Method_of p) -> Some p | _ -> None
+  in
+  let zip_of owner = Some (Path.member (Path.prelude owner) "zip") in
+  match iter.kind with
+  | Call (({ kind = Field (xs, _); _ } as f), [ ys ])
+    when method_ f = zip_of "Array" ->
+      Some [ xs; ys ]
+  | Call (({ kind = Field (pair, _); _ } as f), [ zs ])
+    when method_ f = zip_of "Zip" -> (
+      match zipped cx pair with
+      | Some [ xs; ys ] -> Some [ xs; ys; zs ]
+      | _ -> None)
+  | _ -> None
+
+(* `for (x, y) in xs.zip(ys)`, and three arrays' the same way: what the
+   cursor `Zip` would give, without making one. Each array is held, as
+   `zip` would hold it, in the order written; the loop counts up to the
+   shortest length, which is each array's bound at once, and each pass
+   takes the element at the count from each (bounds.ml finds the reads in
+   bounds). A pattern of as many names as arrays binds the elements
+   directly, with no tuple made. *)
+and zip_loop cx (e : expr) (pat : pattern) (arrays : expr list) body =
+  let loc = e.loc in
+  let held =
+    List.map
+      (fun (a : expr) ->
+        let v = expr cx a in
+        (temp cx "xs" v.ty, v))
+      arrays
+  in
+  let lens =
+    List.map
+      (fun ((xs : C.var), _) ->
+        (temp cx "len" Ty.int, mk (Prim (Length, [ local xs loc ])) Ty.int loc))
+      held
+  in
+  let binop op a b ty = mk (Prim (Binop op, [ a; b ])) ty loc in
+  (* the least of the lengths, a pair at a time *)
+  let n, mins =
+    match lens with
+    | [] -> bug "a zip of no arrays"
+    | (first, _) :: rest ->
+        List.fold_left
+          (fun ((least : C.var), binds) ((l : C.var), _) ->
+            let m = temp cx "n" Ty.int in
+            let a = local least loc and b = local l loc in
+            ( m,
+              binds
+              @ [ (m, mk (If (binop Lt a b Ty.bool, a, b)) Ty.int loc) ] ))
+          (first, []) rest
+  in
+  let i = temp cx "i" Ty.int in
+  let index = local i loc in
+  let step =
+    mk (Assign (i, binop Add index (int_lit 1L loc) Ty.int)) Ty.unit loc
+  in
+  let elements =
+    List.map
+      (fun ((xs : C.var), _) ->
+        mk (Prim (Get_index Checked, [ local xs loc; index ]))
+          (C.elem_ty xs.ty) loc)
+      held
+  in
+  let rest () = seq (expr cx body) step in
+  let pass =
+    match pat.pkind with
+    | PTuple ps when List.length ps = List.length elements ->
+        List.fold_right2
+          (fun p el k () -> take_apart cx p el k)
+          ps elements rest ()
+    | _ ->
+        let tuple = Ty.tuple (List.map (fun (el : C.expr) -> el.ty) elements) in
+        take_apart cx pat (mk (Tuple elements) tuple loc) rest
+  in
+  lets
+    (held @ lens @ mins @ [ (i, int_lit 0L loc) ])
+    (mk (While (binop Lt index (local n loc) Ty.bool, pass)) Ty.unit loc)
+
+and array_loop cx (e : expr) idx (pat : pattern) (iter : expr) body =
   let loc = e.loc in
   let iter_ty = ty_of cx iter.node in
   (* what's gone over, as an array, from the value of [iter] *)
@@ -1314,9 +1400,16 @@ and array_loop cx (e : expr) (pat : pattern) (iter : expr) body =
   let elem = C.elem_ty array_ty in
   let n = temp cx "n" Ty.int and i = temp cx "i" Ty.int in
   let index = local i iter.loc in
+  let index_e = index in
   let binop op a b ty = mk (Prim (Binop op, [ a; b ])) ty loc in
   let step =
     mk (Assign (i, binop Add index (int_lit 1L loc) Ty.int)) Ty.unit loc
+  in
+  (* `for i, x in xs`: [pass ()], with the index bound first *)
+  let numbered pass =
+    match idx with
+    | Some ip -> take_apart cx ip index_e pass
+    | None -> pass ()
   in
   (* [pass] makes each pass, given each element *)
   let loop ~start ~pass =
@@ -1331,26 +1424,29 @@ and array_loop cx (e : expr) (pat : pattern) (iter : expr) body =
         { pl with steps = pl.steps @ [ SIndex (index, elem, iter.loc) ] }
       in
       let x = bind cx b elem in
-      let body = expr cx body in
-      (* the element is written back after the body, even if it fails *)
-      let write = write at (local x loc) loc in
-      let rest =
-        if C.can_fail body || breaks body then
-          seq (mk (Finally (body, write)) body.ty loc) step
-        else seq body (seq write step)
+      let pass () =
+        let body = expr cx body in
+        (* the element is written back after the body, even if it fails *)
+        let write = write at (local x loc) loc in
+        let rest =
+          if C.can_fail body || breaks body then
+            seq (mk (Finally (body, write)) body.ty loc) step
+          else seq body (seq write step)
+        in
+        mk (Let (x, read at iter.loc, rest)) Ty.unit loc
       in
-      lets binds
-        (loop ~start:(read pl iter.loc)
-           ~pass:(mk (Let (x, read at iter.loc, rest)) Ty.unit loc))
+      lets binds (loop ~start:(read pl iter.loc) ~pass:(numbered pass))
   | Ref _, _ -> bug "a `for` with `&` that takes its element apart"
   | _ ->
       let xs = temp cx "xs" array_ty in
       let xs_e = local xs iter.loc in
-      let element = mk (Prim (Get_index, [ xs_e; index ])) elem iter.loc in
+      let element = mk (Prim (Get_index Checked, [ xs_e; index ])) elem iter.loc in
       lets
         [ (xs, elements (expr cx iter)) ]
         (loop ~start:xs_e
-           ~pass:(take_apart cx pat element (fun () -> seq (expr cx body) step)))
+           ~pass:
+             (numbered (fun () ->
+                  take_apart cx pat element (fun () -> seq (expr cx body) step))))
 
 (* `for x in &c` over a cursor (Infer_expr.cursor), whose method [next]
    is called each time round, with `&` of the place, until it gives
@@ -1590,7 +1686,8 @@ let max_binder (f : fn_def) =
             go a.arm_body)
           arms
     | Array xs | Tuple xs -> List.iter go xs
-    | For { pat = p; _ } ->
+    | For { index; pat = p; _ } ->
+        Option.iter pat index;
         pat p;
         List.iter go (Ast.children e)
     | With { items; body } ->
@@ -1710,6 +1807,10 @@ let ops (types : Iface.type_decl list) =
 
 let program (r : Resolve.t) (inferred : Infer.t) : C.program =
   let fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog) in
+  (* the indices its loops keep in bounds, marked so (bounds.ml) *)
+  let fns =
+    List.map Bounds.mark fns
+  in
   {
     home = r.home;
     types = r.types;

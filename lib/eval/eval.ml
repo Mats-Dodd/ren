@@ -183,6 +183,13 @@ let stored loc ~wrap k v =
       | None -> panic loc (Sized.doesnt_fit k (Ast.show_float f)))
   | _ -> bug "a sized value that isn't a number"
 
+(* An index bounds.ml proved in bounds is: a native build doesn't check
+   it, so its being out of bounds here is a bug in the compiler, not a
+   panic of the program's. *)
+let proved (b : bounds) (xs : vec) i =
+  if b = In_bounds && (i < 0L || i >= Int64.of_int xs.len) then
+    bug "an index proved in bounds is out of them"
+
 (* [op] on [args], whose expressions are [at]. *)
 let prim loc op args (at : expr list) =
   match (op, args) with
@@ -190,11 +197,14 @@ let prim loc op args (at : expr list) =
   | Not, [ VBool b ] -> VBool (not b)
   | Binop op, [ x; y ] -> binop ~at loc op x y
   | Length, [ VArray xs ] -> VInt (Int64.of_int xs.len)
-  | Get_index, [ VArray xs; VInt i ] -> element loc xs i
+  | Get_index b, [ VArray xs; VInt i ] ->
+      proved b xs i;
+      element loc xs i
   | Entries, [ VTable t ] ->
       array_of_list (List.map (fun (k, v) -> VTuple [ k; v ]) (Table.to_list t))
   | Members, [ VTable t ] -> array_of_list (List.map fst (Table.to_list t))
-  | Set_index, [ VArray xs; VInt i; x ] ->
+  | Set_index b, [ VArray xs; VInt i; x ] ->
+      proved b xs i;
       ignore (element loc xs i);
       let ys = items xs in
       ys.(Int64.to_int i) <- x;

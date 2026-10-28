@@ -271,6 +271,71 @@ fn f(p, m) =
       (identifier))))
 
 ================================================================================
+for with an index, and over a zip
+================================================================================
+
+fn f(xs, ys, zs) =
+  for i, x in &xs
+    x += ys[i]
+  for _, y in ys
+    print(y)
+  for (x, y, z) in xs.zip(ys).zip(zs)
+    print(x)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier))
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)))
+    (block
+      (for_statement
+        (identifier)
+        (identifier)
+        (reference
+          (identifier))
+        (block
+          (assignment
+            (identifier)
+            (index_expression
+              (identifier)
+              (identifier)))))
+      (for_statement
+        (wildcard)
+        (identifier)
+        (identifier)
+        (block
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))))
+      (for_statement
+        (tuple_pattern
+          (identifier)
+          (identifier)
+          (identifier))
+        (method_call_expression
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (identifier)))
+          (identifier)
+          (arguments
+            (identifier)))
+        (block
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier))))))))
+
+================================================================================
 while, and break
 ================================================================================
 

@@ -1,0 +1,96 @@
+// Loops over arrays, written the ways foundations.md's decision 16 makes
+// cheap: `for x in &xs`, `for i, x in &xs` and `zip`, each a loop with
+// one bounds check (bounds.ml). Each kernel goes over arrays of `n`
+// elements, `rounds` times, and is what a vector unit could do; which
+// of them clang vectorizes, and what stops the rest, is RESULTS.md's
+// "Follow-ups". The checksums are what the Rust and Go twins print.
+
+// the dot product of two arrays of Floats, by `zip`, added up in order
+pub fn dot(xs: Array<Float>, ys: Array<Float>) -> Float =
+  var t = 0.0
+  for (x, y) in xs.zip(ys)
+    t += x * y
+  t
+
+// every element added up in eight lanes, the same on every machine
+// (decision 15)
+pub fn fsum(xs: Array<Float>) -> Float = xs.sum()
+
+// each element times `k`, in place
+pub fn scale(inout xs: Array<Float>, k: Float) =
+  for x in &xs
+    x = x * k
+
+// `a` times each element of `xs` added to the one at its place in `ys`
+pub fn axpy(inout ys: Array<Float>, a: Float, xs: Array<Float>) =
+  for i, y in &ys
+    y += a * xs[i]
+
+// each element a step of a linear congruential generator, which wraps
+pub fn churn(inout xs: Array<Int>) =
+  for x in &xs
+    x = x *% 6364136223846793005 +% 1442695040888963407
+
+// every element added up, each addition checked for overflow
+pub fn total(xs: Array<Int>) -> Int =
+  var t = 0
+  for x in xs
+    t += x
+  t
+
+// each byte the average of itself and the one at its place in `ys`,
+// stored back as a byte, which is checked to fit
+pub fn blend(inout xs: Array<UInt8>, ys: Array<UInt8>) =
+  for i, x in &xs
+    x = (x + ys[i]) / 2
+
+// a Float to three places, as a whole number of thousandths
+fn milli(x: Float) -> Int = (x * 1000.0).round()
+
+// [only] 0 runs every kernel, and 1 to 7 only that one
+pub fn run(n: Int, rounds: Int, only: Int) uses Console =
+  var fs: Array<Float> = []
+  var gs: Array<Float> = []
+  var is: Array<Int> = []
+  var bs: Array<UInt8> = []
+  var cs: Array<UInt8> = []
+  for i in 0..n
+    &fs.push(Float.of(i % 100) / 64.0)
+    &gs.push(Float.of(i % 7) / 4.0)
+    &is.push(i)
+    &bs.push(i % 256)
+    &cs.push(i * 7 % 256)
+  if only == 0 || only == 1 then
+    var d = 0.0
+    for _ in 0..rounds
+      d += dot(fs, gs)
+    print(milli(d))
+  if only == 0 || only == 2 then
+    var s = 0.0
+    for _ in 0..rounds
+      s += fsum(fs)
+    print(milli(s))
+  if only == 0 || only == 3 then
+    for r in 0..rounds
+      scale(&gs, if r % 2 == 0 then 2.0 else 0.5)
+    print(milli(fsum(gs)))
+  if only == 0 || only == 4 then
+    var ys = gs
+    for r in 0..rounds
+      axpy(&ys, if r % 2 == 0 then 0.25 else -0.25, fs)
+    print(milli(fsum(ys)))
+  if only == 0 || only == 5 then
+    var xs = is
+    for _ in 0..rounds
+      churn(&xs)
+    print(xs[n - 1] % 1000003)
+  if only == 0 || only == 6 then
+    var t = 0
+    for _ in 0..rounds
+      t = (t + total(is)) % 1000003
+    print(t)
+  if only == 0 || only == 7 then
+    var xs = bs
+    for _ in 0..rounds
+      blend(&xs, cs)
+    print(xs.reduce(0, fn(acc, x) => acc + x))

@@ -9,6 +9,104 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Follow-ups (compiler.md, step 14: loops without indices)
+
+Where every program stands after the follow-ups to foundations.md, and
+what this one, decision 16's loops, did. 7f8822f is the commit
+that amended foundations.md from the native slice's measurements, before
+any follow-up (steps 10 to 14) was built; d5a2381 is the commit
+before this step; after is this commit's. One hyperfine invocation per
+program (`-N --warmup 3 --runs 10`, main.ren's size, release builds),
+with CPU cycles and instructions retired as hyperfine records them, and
+the Rust (`rustc -C opt-level=3 -C codegen-units=1`) and Go twins in the
+same invocation. Load average 2.0 to 5.4 of 16 cores (5.4 only during
+binary-trees, whose spread shows it). Every binary prints what the Rust
+twin prints, except 7f8822f's vec, which can't build the two kernels
+with sized `Int`s and leaves their lines out. bytes and nested are newer
+than 7f8822f.
+
+| program | 7f8822f (s) | d5a2381 (s) | after (s) | Rust (s) | Go (s) | after / Rust | after / Go | cycles, after / 7f8822f | cycles, after / d5a2381 |
+|---|---|---|---|---|---|---|---|---|---|
+| binary-trees | 8.10 ± 1.08 | 7.94 ± 0.88 | 7.65 ± 0.13 | 13.03 | 6.44 | 0.59× | 1.19× | 1.00× | 0.99× |
+| blocks | 2.239 | 1.744 | 1.737 | 1.457 | 1.808 | 1.19× | 0.96× | 0.78× | 1.00× |
+| bytes | | 0.814 | 0.814 | 0.663 | 1.129 | 1.23× | 0.72× | | 1.00× |
+| cfold | 0.165 | 0.087 | 0.088 | 0.695 | 0.477 | 0.13× | 0.18× | 0.52× | 1.01× |
+| deriv | 0.750 | 0.749 | 0.762 | 1.881 | 1.328 | 0.41× | 0.57× | 1.02× | 1.01× |
+| fannkuch | 2.671 | 2.651 | 2.681 | 2.644 | 2.467 | 1.01× | 1.09× | 1.00× | 1.01× |
+| handlers | 1.402 | 1.404 | 1.402 | 1.331 | 1.943 | 1.05× | 0.72× | 1.00× | 1.00× |
+| inout | 2.512 | 2.526 | **2.269** | 1.358 | 2.407 | **1.67×** (was 1.86×) | 0.94× | 0.90× | **0.90×** |
+| nbody | 4.078 | 2.732 | 2.714 | 1.682 | 2.702 | 1.61× | 1.00× | 0.67× | 0.99× |
+| nested | | 1.098 | 1.101 | 2.631 | 2.836 | 0.42× | 0.39× | | 1.00× |
+| nqueens | 0.744 | 0.747 | 0.745 | 1.086 | 0.773 | 0.69× | 0.96× | 1.00× | 1.00× |
+| rbtree | 0.964 | 0.880 | 0.878 | 1.440 | 0.606 | 0.61× | 1.45× | 0.91× | 1.00× |
+| stack | 0.991 | 0.987 | 0.987 | 0.910 | 0.886 | 1.08× | 1.11× | 1.00× | 1.00× |
+| vec | 8.104 | 1.705 | 1.694 | 1.377 | 4.242 | 1.23× | 0.40× | 0.21× | 0.99× |
+
+Standard deviations are under 2% except where shown. Every program is
+within vision.md's 2× of Rust; inout, at 1.67×, and nbody, at 1.61×,
+are the furthest.
+
+**vec's kernels, one at a time** (bench/native/vec, `run(1000,
+1_000_000, k)`; `--runs 5`; "old forms" is this commit's compiler on
+the kernels written with `for i in 0..xs.len()` and `xs[i]`, as before
+this step, which is what d5a2381 built):
+
+| kernel | written | clang, after | 7f8822f | d5a2381 | old forms | after | Rust | after / Rust, cycles |
+|---|---|---|---|---|---|---|---|---|
+| dot | `for (x, y) in xs.zip(ys)` | vectorized, 2 × 4, in order | 1.870 | 0.747 | 0.750 | 0.750 | 0.747 | 1.00× |
+| fsum | `xs.sum()` | vectorized (ren_float_sum, step 13) | 4.820 | 0.109 | 0.109 | 0.109 | 0.108 | 1.01× |
+| scale | `for x in &xs` | vectorized, 2 × 4 | 0.414 | 0.105 | 0.104 | 0.104 | 0.106 | 0.99× |
+| axpy | `for i, y in &ys`, `xs[i]` | vectorized, 2 × 4, versioned on `xs` | 0.634 | 0.156 | 0.154 | 0.153 | 0.153 | 1.00× |
+| churn | `for x in &xs`, `*%` and `+%` | interleaved, not vectorized: "not beneficial" | | 0.171 | 0.171 | 0.171 | 0.176 | 0.97× |
+| total | `for x in xs`, `t += x` | not vectorized: the overflow check's exit | 0.402 | 0.402 | 0.402 | 0.401 | 0.091 | **4.45×** |
+| blend | `for i, x in &xs`, `ys[i]`, `UInt8` | vectorized, 16 × 4, versioned on `ys` | | 0.032 | **0.021** | **0.022** | 0.022 | **0.99×** (was 1.49×) |
+
+- **What this step bought is the loops over two arrays, and inout.**
+  blend, which reads `ys[i]` while it writes `xs`, didn't vectorize at
+  d5a2381: `ys[i]` was checked, so the loop had a second way out.
+  Versioned (`if n <= length ys`), its fast copy has no check, and clang
+  vectorizes it sixteen bytes at a time: 0.66× the cycles, Rust's time.
+  inout's `step` reads `b[i]` and `c[i]` in a loop over `a`; versioned,
+  those are unchecked, and it's 0.90× the cycles and 14% fewer
+  instructions, 1.67× Rust where it was 1.86×.
+- **The single-array loops were already Rust's speed at d5a2381.**
+  dot, scale and axpy written the old way were 1.00× Rust before this
+  step: clang removes a check of `xs[i]` against the length a `for i in
+  0..xs.len()` counts to by itself (it sees the bound and the check are
+  the same load), and the hoisted loops of step 7 gave it the length
+  once. So writing them `for x in &xs` or `zip` changes their code very
+  little (2% fewer instructions in axpy): the new forms say what the
+  loop does, and are what keeps it cheap where clang's own reasoning
+  doesn't reach, as in blend.
+- **What still blocks vectorizing, by loop:**
+  - *An `Int` overflow check* (total, inout, bytes' loops, fannkuch's
+    flips): a checked `+` or `*` is a branch out of the loop, so clang
+    won't vectorize it ("could not determine number of loop
+    iterations", or no candidate at all). total is 4.45× Rust, whose
+    release build wraps. This is now the largest cost left in the
+    benchmarks, and step 13's late overflow didn't remove it (RESULTS,
+    step 13). The wrapping operators do vectorize, where they're what's
+    meant (churn: interleaved; 64-bit multiplies aren't worth vectorizing
+    on arm64, for Rust either).
+  - *Reading and writing two elements of one array* (nbody's pairs
+    loop, `bodies[i]` and `bodies[j]`): "unsafe dependent memory
+    operations". Its indices are all proved now (`(i + 1)..n` counts
+    from a count in bounds), 9% fewer instructions, but the cycles are
+    the same, 1.61× Rust; Rust's is the same scalar loop over a fixed
+    array of five.
+  - *A loop that isn't counted* (blocks' `attempt`, a `while` on a
+    condition; the recursive walks of the tree programs): nothing to
+    vectorize, and nothing this step changes.
+  - *A floating point sum in order* (dot) vectorizes as an in-order
+    reduction, which is no faster than scalar: it's Rust's speed, and
+    Rust's is the same. A sum that may be reassociated is `sum()`'s
+    fixed tree (decision 15).
+- **fannkuch** writes its copy loop `for i, x in perm1` now, which
+  vectorizes; it's a small part of the run, so its time is unchanged,
+  at Rust's.
+- No program got slower: deriv's 1% is its run-to-run spread (0.762 ±
+  0.006 against 0.749 ± 0.007, and the same instructions).
+
 ## NaN where observed, Float sums, late overflow (compiler.md, step 13)
 
 Decision 15's rules for arithmetic. Before is 1563352, the commit

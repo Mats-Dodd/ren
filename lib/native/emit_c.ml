@@ -302,34 +302,37 @@ let runtime rt args site_arg =
     | Some s -> site s
     | None -> bug "a runtime call that panics without a site"
   in
+  (* an index's: none for one bounds.ml proved in bounds, which the
+     runtime then doesn't check ([ren_array_check]) *)
+  let isite () = if site_arg = None then "REN_IN_BOUNDS" else site () in
   match rt with
   | Array_len -> sprintf "ren_array_len(%s)" (a 0)
   (* an array of structs: each element its words, a stride the C knows *)
   | Array_get (Struct (n, _)) ->
       sprintf "(*(ren_struct_%d*)ren_array_slots_k(%s, %s, %d, %s))" n (a 0)
-        (a 1) (struct_words n) (site ())
+        (a 1) (struct_words n) (isite ())
   | Array_set (Struct _) ->
       sprintf "ren_array_set_slots(%s, %s, %s.s, %s)" (a 0) (a 1) (a 2)
-        (site ())
+        (isite ())
   | Array_push (Struct _) ->
       sprintf "ren_array_push_slots(%s, %s.s)" (a 0) (a 1)
   | Array_set_taking (Struct (n, _)) ->
       sprintf "ren_array_set_slots_taking_k(%s, %s, %s.s, %d, %s)" (a 0) (a 1)
-        (a 2) (struct_words n) (site ())
+        (a 2) (struct_words n) (isite ())
   | Array_push_taking (Struct _) ->
       sprintf "ren_array_push_slots_taking(%s, %s.s)" (a 0) (a 1)
   (* an array of a sized type's elements, at its width: read and written
      in place directly, and copied, which is rarer, through the words *)
   | Array_get (Sized k) | Array_take (Sized k) ->
       sprintf "ren_array_get_%s(%s, %s, %s)" (sized_suffix k) (a 0) (a 1)
-        (site ())
+        (isite ())
   | Array_set_taking (Sized k) ->
       sprintf "ren_array_set_taking_%s(%s, %s, %s, %s)" (sized_suffix k) (a 0)
-        (a 1) (a 2) (site ())
+        (a 1) (a 2) (isite ())
   | Array_set (Sized _) ->
       sprintf "ren_array_set_w(%s, %s, %s, %s)" (a 0) (a 1)
         (to_val (List.nth args 2))
-        (site ())
+        (isite ())
   | Array_push (Sized _) ->
       sprintf "ren_array_push_w(%s, %s)" (a 0) (to_val (List.nth args 1))
   | Array_push_taking (Sized _) ->
@@ -339,79 +342,79 @@ let runtime rt args site_arg =
   | Array_set (Word _) ->
       sprintf "ren_array_set_w(%s, %s, %s, %s)" (a 0) (a 1)
         (to_val (List.nth args 2))
-        (site ())
+        (isite ())
   | Array_push (Word _) ->
       sprintf "ren_array_push_w(%s, %s)" (a 0) (to_val (List.nth args 1))
   | Array_push_taking (Word _) ->
       sprintf "ren_array_push_taking_w(%s, %s)" (a 0) (to_val (List.nth args 1))
   | Array_take (Word _ as l) ->
-      of_val l (sprintf "ren_array_take_w(%s, %s, %s)" (a 0) (a 1) (site ()))
+      of_val l (sprintf "ren_array_take_w(%s, %s, %s)" (a 0) (a 1) (isite ()))
   (* elements never counted skip the check of whether they are *)
   | Array_get l ->
       of_val l
         (sprintf "ren_array_get%s(%s, %s, %s)" (uncounted l) (a 0) (a 1)
-           (site ()))
+           (isite ()))
   | Array_set _ ->
       sprintf "ren_array_set(%s, %s, %s, %s)" (a 0) (a 1)
         (to_val (List.nth args 2))
-        (site ())
+        (isite ())
   | Array_push _ ->
       sprintf "ren_array_push(%s, %s)" (a 0) (to_val (List.nth args 1))
   | Array_set_taking l ->
       sprintf "ren_array_set_taking%s(%s, %s, %s, %s)" (uncounted l) (a 0) (a 1)
         (to_val (List.nth args 2))
-        (site ())
+        (isite ())
   | Array_push_taking _ ->
       sprintf "ren_array_push_taking(%s, %s)" (a 0) (to_val (List.nth args 1))
   (* an element moved out, if the array is unique (swap.ml): of objects
      or a [Word]'s, whose array says whether they're counted *)
   | Array_take l ->
       of_val l
-        (sprintf "ren_array_take(%s, %s, %s)" (a 0) (a 1) (site ()))
+        (sprintf "ren_array_take(%s, %s, %s)" (a 0) (a 1) (isite ()))
   | Array_check -> sprintf "ren_array_check(%s, %s, %s)" (a 0) (a 1) (site ())
   | Array_set_field (n, k, _) ->
       sprintf "ren_array_set_field(%s, %s, %d, %d, %s, %s)" (a 0) (a 1) k
         (struct_words n)
         (to_val (List.nth args 2))
-        (site ())
+        (isite ())
   | Array_set_field_taking (n, k, _) ->
       sprintf "ren_array_set_field_taking(%s, %s, %d, %d, %s, %s)" (a 0) (a 1) k
         (struct_words n)
         (to_val (List.nth args 2))
-        (site ())
+        (isite ())
   | Array_own -> sprintf "ren_array_own(%s)" (a 0)
   | Array_data -> sprintf "((void*)ren_elems(%s))" (a 0)
   (* a buffer hoist.ml found: never of [Word]s, so whether its elements
      are counted is the layout's *)
   | Buf_get (Struct (n, _)) ->
       sprintf "(*(ren_struct_%d*)ren_buf_slots(%s, %s, %s, %d, %s))" n (a 0)
-        (a 1) (a 2) (struct_words n) (site ())
+        (a 1) (a 2) (struct_words n) (isite ())
   | Buf_get (Sized k) ->
       sprintf "ren_buf_get_n(%s, %s, %s, %s, %s)" (sized_ctype k) (a 0) (a 1)
-        (a 2) (site ())
+        (a 2) (isite ())
   | Buf_set (Sized k) ->
       sprintf "ren_buf_set_n(%s, %s, %s, %s, %s, %s)" (sized_ctype k) (a 0)
-        (a 1) (a 2) (a 3) (site ())
+        (a 1) (a 2) (a 3) (isite ())
   | Buf_get l ->
       of_val l
         (sprintf "ren_buf_get%s(%s, %s, %s, %s)" (buf_suffix l) (a 0) (a 1)
-           (a 2) (site ()))
+           (a 2) (isite ()))
   | Buf_set (Struct (n, _)) ->
       sprintf "ren_buf_set_slots(%s, %s, %s, %s.s, %d, %s)" (a 0) (a 1) (a 2)
-        (a 3) (struct_words n) (site ())
+        (a 3) (struct_words n) (isite ())
   | Buf_set l ->
       sprintf "ren_buf_set%s(%s, %s, %s, %s, %s)" (buf_suffix l) (a 0) (a 1)
         (a 2)
         (to_val (List.nth args 3))
-        (site ())
+        (isite ())
   | Buf_set_field (n, k, _) ->
       sprintf "ren_buf_set_field(%s, %s, %s, %d, %d, %s, %s)" (a 0) (a 1) (a 2)
         k (struct_words n)
         (to_val (List.nth args 3))
-        (site ())
+        (isite ())
   | Buf_take l ->
       of_val l
-        (sprintf "ren_buf_take_o(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (site ()))
+        (sprintf "ren_buf_take_o(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (isite ()))
   | Buf_check -> sprintf "ren_buf_check(%s, %s, %s)" (a 0) (a 1) (site ())
   | Array_reserve (Struct (n, _)) ->
       sprintf "ren_array_reserve(%s, false, %d)" (a 0) (struct_words n)

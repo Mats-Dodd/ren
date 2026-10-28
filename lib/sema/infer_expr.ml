@@ -662,7 +662,7 @@ and synth env cx (e : expr) : ty =
             ?written:(if written_place cx target then Some tt else None)
             ~why:(explain ~msg:assigned ?narrowed_help ()));
       unit
-  | For { pat; over; body } ->
+  | For { index; pat; over; body } ->
       let elem =
         match over with
         | Range (lo, hi) ->
@@ -708,6 +708,21 @@ and synth env cx (e : expr) : ty =
                 | _ -> if ok then elem else TError))
       in
       bind_pattern env cx elem pat;
+      (* the index is an `Int`, where the element is; a cursor has none *)
+      Option.iter
+        (fun (i : pattern) ->
+          bind_pattern env cx int i;
+          match over with
+          | Each iter
+            when match Hashtbl.find_opt cx.found iter.node with
+                 | Some (Method_of _) -> true
+                 | _ -> false ->
+              report env
+                (cursor_index i.ploc
+                   ~index:
+                     (match i.pkind with PVar b -> b.ident.name | _ -> "i"))
+          | _ -> ())
+        index;
       (match over with
       | Each ({ kind = Ref _; _ } as iter)
         when match Hashtbl.find_opt cx.found iter.node with

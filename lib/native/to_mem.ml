@@ -1322,7 +1322,7 @@ let rec pure (e : C.expr) =
 let rec calm (e : C.expr) =
   match e.kind with
   | Int _ | Float _ | Bool _ | Unit | Str _ | Local _ -> true
-  | Prim ((Neg | Not | Binop _ | Length | Get_index), args) ->
+  | Prim ((Neg | Not | Binop _ | Length | Get_index _), args) ->
       List.for_all calm args
   | Field (r, _, _) -> calm r
   | _ -> false
@@ -1333,7 +1333,8 @@ let rec same (a : C.expr) (b : C.expr) =
   match (a.kind, b.kind) with
   | Local x, Local y -> x.id = y.id
   | Int m, Int n -> Int64.equal m n
-  | Prim (Get_index, [ p; i ]), Prim (Get_index, [ q; j ]) -> same p q && same i j
+  | Prim (Get_index _, [ p; i ]), Prim (Get_index _, [ q; j ]) ->
+      same p q && same i j
   | _ -> false
 
 (* What's written at the end of a spine: [Put (j, v)], [v] at [j] in the
@@ -1346,11 +1347,11 @@ type leaf = Put of C.expr * C.expr | Change of C.expr
 let rec spine (path : C.expr) (i : C.expr) (value : C.expr) =
   let get_of (g : C.expr) =
     match g.kind with
-    | Prim (Get_index, [ p; i' ]) -> same p path && same i' i
+    | Prim (Get_index _, [ p; i' ]) -> same p path && same i' i
     | _ -> false
   in
   match value.kind with
-  | Prim (Set_index, [ g; j; v ]) when get_of g && is_index j ->
+  | Prim (Set_index _, [ g; j; v ]) when get_of g && is_index j ->
       let gets, leaf = spine g j v in
       (g :: gets, leaf)
   | Update (g, _, w) when get_of g -> ([ g ], Change w)
@@ -1715,6 +1716,12 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
   let site ?wrap ?made () = new_site cx ?wrap ?made e.loc in
+  (* an index's site, which panics if it's out of bounds; none for one
+     bounds.ml proved in bounds, which isn't checked (ren_rt.h,
+     [ren_array_check]) *)
+  let checked (b : C.bounds) =
+    match b with Checked -> Some (site ()) | In_bounds -> None
+  in
   (* where a NaN an operation here makes is said to be made (nan.ml) *)
   let made = Nan.where e.loc in
   (* a comparison of `Float`s panics on a NaN *)
@@ -1802,18 +1809,18 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let n = owned fs env "$len" Int (Runtime (Array_len, [ x ], None)) in
       drop fs env x;
       n
-  | Get_index, [ a; i ] ->
+  | Get_index b, [ a; i ] ->
       let x = expr fs env a in
       let i = expr fs env i in
       let l = element cx (lay e.ty) in
       let v =
-        owned fs env "$elem" l (Runtime (Array_get l, [ x; i ], Some (site ())))
+        owned fs env "$elem" l (Runtime (Array_get l, [ x; i ], checked b))
       in
       drop fs env x;
       v
   (* a write into an element of an element, its value first (above,
      [spine]) *)
-  | Set_index, [ ({ kind = Local _; _ } as a); i; v ]
+  | Set_index sb, [ ({ kind = Local _; _ } as a); i; v ]
     when is_index i
          &&
          match spine a i v with
@@ -1828,7 +1835,8 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       List.iter
         (fun (g : C.expr) ->
           match g.kind with
-          | Prim (Get_index, [ p; j ]) ->
+          | Prim (Get_index In_bounds, _) -> ()
+          | Prim (Get_index Checked, [ p; j ]) ->
               let x = expr fs env p in
               let at_get = new_site cx g.loc in
               emit fs
@@ -1857,22 +1865,22 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       in
       let reread (g : C.expr) : C.expr =
         match g.kind with
-        | Prim (Get_index, [ p; j ]) ->
-            { g with kind = Prim (Get_index, [ local_of p; j ]) }
+        | Prim (Get_index gb, [ p; j ]) ->
+            { g with kind = Prim (Get_index gb, [ local_of p; j ]) }
         | _ -> bug "a spine's read"
       in
       (* [value] with each read replaced by its local, and the leaf's
          value by [t] *)
       let rec swap_in (value : C.expr) : C.expr =
         match value.kind with
-        | Prim (Set_index, [ g; j; v ]) when List.mem_assq g locals ->
-            { value with kind = Prim (Set_index, [ local_of g; j; swap_in v ]) }
+        | Prim (Set_index b, [ g; j; v ]) when List.mem_assq g locals ->
+            { value with kind = Prim (Set_index b, [ local_of g; j; swap_in v ]) }
         | Update (g, f, _) ->
             let r = if List.mem_assq g locals then local_of g else reread g in
             { value with kind = Update (r, f, local t) }
         | _ -> local t
       in
-      let body = { e with kind = Prim (Set_index, [ a; i; swap_in v ]) } in
+      let body = { e with kind = Prim (Set_index sb, [ a; i; swap_in v ]) } in
       let body =
         List.fold_right
           (fun (g, x) (body : C.expr) ->
@@ -1885,7 +1893,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
      Perceus takes the array, rather than the element built again and
      copied in. [i]'s check runs where `get`'s would, before [w]; [w]
      changes nothing, so [a] is read again after it as before it. *)
-  | ( Set_index,
+  | ( Set_index sb,
       [
         ({ kind = Local av; _ } as a);
         ({ kind = Local iv; _ } as i);
@@ -1895,7 +1903,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
               ( ({
                    kind =
                      Prim
-                       ( Get_index,
+                       ( Get_index gb,
                          [ { kind = Local av'; _ }; { kind = Local iv'; _ } ] );
                    _;
                  } as get),
@@ -1925,27 +1933,30 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
         | Bits _, _ -> bug "a struct's field packed"
       in
       let at_get = new_site cx get.loc in
-      let x = expr fs env a in
-      emit fs (Do (Runtime (Array_check, [ x; expr fs env i ], Some at_get)));
-      drop fs env x;
+      (* an index bounds.ml proved is checked by neither *)
+      if gb = Checked then (
+        let x = expr fs env a in
+        emit fs (Do (Runtime (Array_check, [ x; expr fs env i ], Some at_get)));
+        drop fs env x);
       let y = expr fs env w in
       let x = expr fs env a in
       let r =
         owned fs env "$set" Boxed
           (Runtime
-             (Array_set_field (n, k, l), [ x; expr fs env i; y ], Some at_get))
+             ( Array_set_field (n, k, l),
+               [ x; expr fs env i; y ],
+               if sb = In_bounds then None else Some at_get ))
       in
       drop fs env x;
       drop fs env y;
       r
-  | Set_index, [ a; i; v ] ->
+  | Set_index b, [ a; i; v ] ->
       let x = expr fs env a in
       let i = expr fs env i in
       let y = expr fs env v in
       let l = element cx (lay v.ty) in
       let r =
-        owned fs env "$set" Boxed
-          (Runtime (Array_set l, [ x; i; y ], Some (site ())))
+        owned fs env "$set" Boxed (Runtime (Array_set l, [ x; i; y ], checked b))
       in
       drop fs env x;
       drop fs env y;

@@ -53,3 +53,11 @@ change here is a change in what the program computes.
   33334
   504000
   34530
+  == vec
+  576172
+  773438
+  73750
+  73750
+  -967413
+  49500
+  11785

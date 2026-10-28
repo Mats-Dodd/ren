@@ -1581,7 +1581,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Assign { target; op; value; onode } ->
         let target = go target in
         Assign { target; op; value = go value; onode }
-    | For { pat; over; body } ->
+    | For { index; pat; over; body } ->
         let bound =
           match over with
           | Each { kind = Ref _; _ } -> By_ref_loop
@@ -1594,9 +1594,20 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
               let lo = go lo in
               Range (lo, go hi)
         in
-        no_duplicates env "loop variables" (pattern_vars pat);
+        no_duplicates env "loop variables"
+          (List.concat_map pattern_vars (Option.to_list index @ [ pat ]));
+        (* the index is never changed, even with `&`: it's where the
+           element is (mut.ml) *)
+        let index, sc =
+          match index with
+          | Some i ->
+              let i, sc = binding env sc By_index i in
+              (Some i, sc)
+          | None -> (None, sc)
+        in
         let pat, inner = binding env sc bound pat in
-        For { pat; over; body = expr env { inner with loop = In_loop } body }
+        For
+          { index; pat; over; body = expr env { inner with loop = In_loop } body }
     | While { cond; body } ->
         let inner = { sc with loop = In_loop } in
         let cond = expr env inner cond in

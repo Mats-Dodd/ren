@@ -551,7 +551,11 @@ fn main() uses Console =
   print(xs.partition(fn(x) => x % 2 == 0))
   print(xs.tally())
   print(xs.uniq())
-  print(xs.zip(["a", "b"]))
+  // a cursor, which a `for` goes over
+  var zipped: Array<(Int, Str)> = []
+  for p in xs.zip(["a", "b"])
+    &zipped.push(p)
+  print(zipped)
   print(["a", "b"].with_index())
   print((xs.first(), xs.last()))
   print((xs.get(2), xs.get(8), xs.get(-1)))

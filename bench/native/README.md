@@ -40,6 +40,7 @@ The twins take the size as their first argument and default to
 | `inout` | 2,000,000 rounds | 10 | **H5**: an `&` parameter aliases nothing |
 | `nested` | 10,000 rounds, lists of 1,000,000 | 20 rounds, lists of 2,000 | an array of arrays changed by index and mapped in place (swap-out), and lists built and mapped by recursion that takes no stack (tail recursion modulo cons) |
 | `bytes` | 1,000,000 elements, 100 rounds | 1,000, 3 | an `Array<UInt8>` and an `Array<Int32>` changed in place, each store checked, and an FNV-1a hash with `*%` into a `UInt32`: sized storage |
+| `vec` | arrays of 1,000, 1,000,000 rounds | 100, 10 | **decision 16**: loops by `for x in &xs`, `for i, x in &ys` and `zip`, each a kernel a vector unit could do (a dot product, a Float sum, scaling, axpy, an LCG with `*%`, a checked Int sum, a `UInt8` blend); which vectorize is RESULTS.md's "Follow-ups" |
 
 The first four are the Perceus set, ported from Koka's
 `test/bench/koka/*.kk` with the same algorithms and outputs. The next

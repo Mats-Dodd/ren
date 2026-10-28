@@ -169,6 +169,14 @@ fn pairs(xs: Array<Int>) -> Array<(Int, Int)> =
     &out.push((a, b))
   out
 
+fn dot(xs: Array<Int>, ys: Array<Int>) -> Int =
+  var t = 0
+  for i, x in xs
+//^ keyword
+//         ^ keyword
+    t += x * ys[i]
+  t
+
 fn big(m: Map<Str, (Int, Bool)>) -> Map<Str, (Int, Bool)> =
   m.select(fn((k, (v, _))) => v > 1)
 //             ^ variable.parameter

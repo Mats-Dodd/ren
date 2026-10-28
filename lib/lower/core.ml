@@ -106,6 +106,13 @@ type dict =
 
 (* Operations built into the language. Each one's operands are listed in
    the order they're evaluated. *)
+(* Whether an index into an array is checked, or proved in bounds
+   (bounds.ml): [In_bounds] only where the loop it's in counts [i] up from
+   0 or more to below the array's length, which nothing in the loop
+   changes. Core Lint checks each one again (Bounds.verify); the
+   interpreter checks it anyway, and a native build doesn't. *)
+type bounds = Checked | In_bounds
+
 type prim =
   | Neg
   | Not  (** on a [Bool] *)
@@ -130,12 +137,14 @@ type prim =
       (** `zero` or `one` of a type, through that requirement's dictionary: no
           operands *)
   | Length  (** an array's length *)
-  | Get_index  (** [xs[i]]: panics if [i] is out of bounds *)
+  | Get_index of bounds  (** [xs[i]]: panics if [i] is out of bounds *)
   | Entries
       (** a [Map]'s keys and values, as an array of pairs, in the order each key
           was first set: what a `for` goes over *)
   | Members  (** a [Set]'s members, as an array, in order *)
-  | Set_index  (** [xs] with element [i] replaced: a new array *)
+  | Set_index of bounds
+      (** [xs] with element [i] replaced: a new array; panics if [i] is out of
+          bounds *)
   | New_cell
       (** a new cell holding a value: a `var` of a handler's state, which its
           instance's operations share (see [Handler]). Nothing else holds a
@@ -704,10 +713,12 @@ let show_prim = function
       | r -> r)
   | Value_of (r, _) -> r
   | Length -> "length"
-  | Get_index -> "get"
+  | Get_index Checked -> "get"
+  | Get_index In_bounds -> "get-in"
   | Entries -> "entries"
   | Members -> "members"
-  | Set_index -> "set"
+  | Set_index Checked -> "set"
+  | Set_index In_bounds -> "set-in"
   | New_cell -> "cell"
   | Get_cell -> "get-cell"
   | Set_cell -> "set-cell"

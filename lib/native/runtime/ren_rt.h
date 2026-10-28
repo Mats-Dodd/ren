@@ -617,10 +617,19 @@ static inline int64_t ren_array_len(ren_obj *a) { return ((ren_array *)a)->len; 
 _Noreturn void ren_index_panic(ren_obj *a, int64_t i, const ren_site *site);
 _Noreturn void ren_index_panic_len(int64_t len, int64_t i, const ren_site *site);
 
+/* The site of an index the compiler proved in bounds (bounds.ml): a
+   loop's count, below the length of every array it indexes, which
+   nothing in the loop changes. Each check below is skipped for it, and
+   with it constant, C drops the compare. It's a site of its own, not
+   NULL, so no site the program computes can be it. */
+static const ren_site ren_in_bounds_site;
+#define REN_IN_BOUNDS (&ren_in_bounds_site)
+
 /* Panics, as `xs[i]` does, if [i] is out of bounds; one unsigned
    compare, since a length is never below 0. */
 static inline void ren_array_check(ren_obj *a, int64_t i, const ren_site *site) {
-  if (__builtin_expect((uint64_t)i >= (uint64_t)((ren_array *)a)->len, 0))
+  if (site != REN_IN_BOUNDS &&
+      __builtin_expect((uint64_t)i >= (uint64_t)((ren_array *)a)->len, 0))
     ren_index_panic(a, i, site);
 }
 
@@ -885,7 +894,7 @@ static inline ren_obj *ren_array_set_field_taking(ren_obj *a, int64_t i,
    the runtime's it hasn't inlined yet would get none of it. Their
    arguments are variables and constants, so each is read once. */
 static inline void ren_buf_check(int64_t len, int64_t i, const ren_site *site) {
-  if (__builtin_expect((uint64_t)i >= (uint64_t)len, 0))
+  if (site != REN_IN_BOUNDS && __builtin_expect((uint64_t)i >= (uint64_t)len, 0))
     ren_index_panic_len(len, i, site);
 }
 static inline ren_val ren_dup_elem(ren_val v) {

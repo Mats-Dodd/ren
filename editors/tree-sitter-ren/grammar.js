@@ -636,11 +636,15 @@ module.exports = grammar({
         ),
       ),
 
-    // for x in xs, for (k, v) in m, for i in 0..n
+    // for x in xs, for (k, v) in m, for i in 0..n, and for i, x in &xs
+    // with each element's index first
     for_statement: ($) =>
       seq(
         'for',
-        field('variable', choice($.identifier, $.tuple_pattern)),
+        optional(
+          seq(field('index', choice($.identifier, $.wildcard)), ','),
+        ),
+        field('variable', choice($.identifier, $.wildcard, $.tuple_pattern)),
         'in',
         field('iterable', choice($._expression, $.range)),
         field('body', $.block),

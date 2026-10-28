@@ -552,7 +552,7 @@ let rec walk cx (e : expr) =
       match place_of cx target with
       | Some p -> instant cx (access p Write (Used None))
       | None -> ())
-  | For { pat; over = Each { kind = Ref a; loc = iter_loc; _ }; body } -> (
+  | For { pat; over = Each { kind = Ref a; loc = iter_loc; _ }; body; _ } -> (
       walk_indices cx a;
       match place_of cx a with
       | Some p ->

@@ -1,0 +1,4 @@
+import bench
+
+// arrays of a thousand, a million rounds of each kernel
+fn main() uses Console = bench.run(1000, 1_000_000, 0)

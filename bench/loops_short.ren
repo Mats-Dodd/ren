@@ -1,0 +1,14 @@
+// A loop bounds.ml makes twice, whose checked original runs since `by`
+// is shorter than `xs`, panics where `ren run` does, with the strings it
+// built alive.
+
+fn join(inout xs: Array<Str>, by: Array<Str>) =
+  for i, x in &xs
+    x = x.concat(by[i])
+
+fn main() uses Console =
+  var xs = ["a", "b", "c"]
+  join(&xs, ["x", "y", "z"])
+  print(xs)
+  join(&xs, ["1", "2"])
+  print(xs)

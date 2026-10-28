@@ -74,14 +74,14 @@ fn main() =
           (let $n/3 (length xs/2)
             (let $i/4 0
               (while (< $i/4 $n/3)
-                (let x/5 (get xs/2 $i/4)
+                (let x/5 (get-in xs/2 $i/4)
                   (seq (= x/5 (* x/5 2))
-                    (seq (= xs/2 (set xs/2 $i/4 x/5)) (= $i/4 (+ $i/4 1))))))))
+                    (seq (= xs/2 (set-in xs/2 $i/4 x/5)) (= $i/4 (+ $i/4 1))))))))
           (let $xs/6 xs/2
             (let $n/7 (length $xs/6)
               (let $i/8 0
                 (while (< $i/8 $n/7)
-                  (let x/9 (get $xs/6 $i/8)
+                  (let x/9 (get-in $xs/6 $i/8)
                     (seq (if (> x/9 2) (call ev/1 print x/9) ())
                       (= $i/8 (+ $i/8 1)))))))))))
     (fn $start () ev/1
@@ -826,10 +826,10 @@ fn each(inout grid: Array<Array<Int>>) =
       (let $n/3 (length grid/1)
         (let $i/4 0
           (while (< $i/4 $n/3)
-            (let row/5 (get grid/1 $i/4)
+            (let row/5 (get-in grid/1 $i/4)
               (seq
                 (finally (call ev/2 add &row/5 (neg 1))
-                  (= grid/1 (set grid/1 $i/4 row/5)))
+                  (= grid/1 (set-in grid/1 $i/4 row/5)))
                 (= $i/4 (+ $i/4 1))))))))
     (fn $start () ev/1 (call ev/1 main))
     |}]

@@ -133,7 +133,8 @@ let walk ~ty ~errors ~pattern (prog : program) =
             expr a.arm_body)
           arms
     | Array xs | Tuple xs -> go xs
-    | For { pat; _ } ->
+    | For { index; pat; _ } ->
+        Option.iter pattern_ index;
         pattern_ pat;
         go (Ast.children e)
     | With { items; body } -> go (with_links items @ [ body ])

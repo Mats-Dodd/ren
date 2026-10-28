@@ -148,6 +148,20 @@ for line in &lines                     // goes on after the `---`
 
 `for x in c`, without `&`, steps a copy. A `break` can't leave a block for the loop around it, since the block runs during the call it's passed to, nor a `with`, whose handlers are given what its body ends in.
 
+Over an array, `for i, x in xs` gives each element with where it is, and `for i, x in &xs` lets the body change `x`, which goes back at `i`. To go over two arrays together, `xs.zip(ys)` is a cursor of their pairs, as long as the shorter, and `xs.zip(ys).zip(zs)` one of triples. A range's numbers are their own index, and a cursor has none: count in a `var`. None of these can index past an end, so a release build checks each loop's length once, not each element, and the same goes for `xs[i]` in `for i in 0..xs.len()`, and for another array's `ys[i]` once it has checked, before the loop, that `ys` is long enough:
+
+```ren
+fn dot(xs: Array<Float>, ys: Array<Float>) -> Float =
+  var t = 0.0
+  for (x, y) in xs.zip(ys)
+    t += x * y
+  t
+
+fn axpy(inout ys: Array<Float>, a: Float, xs: Array<Float>) =
+  for i, y in &ys
+    y += a * xs[i]                     // `xs[i]` panics if `xs` is shorter
+```
+
 ### 3. Functions
 
 ```

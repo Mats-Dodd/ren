@@ -1136,7 +1136,7 @@ and prim env sc (e : expr) op args =
   | Length, [ a ] ->
       ignore (elem a);
       is "a length" Ty.int
-  | Get_index, [ a; i ] ->
+  | Get_index _, [ a; i ] ->
       int i;
       is "an element" (elem a)
   | Entries, [ m ] -> (
@@ -1149,7 +1149,7 @@ and prim env sc (e : expr) op args =
       | Con (p, [ t ]) when p = Path.prelude "Set" ->
           is "a set's members" (Ty.array t)
       | t -> fail env loc (sprintf "a set's members of a `%s`" (show t)))
-  | Set_index, [ a; i; v ] ->
+  | Set_index _, [ a; i; v ] ->
       int i;
       same env v.loc "a new element" v.ty (elem a);
       is "an updated array" a.ty
@@ -1389,6 +1389,11 @@ let rec no_fun_args env (e : expr) =
 let fn_def env (f : fn_def) =
   let env = { env with fn = Path.local f.path; ntys = List.length f.tys } in
   instances env f.body;
+  (* each index marked in bounds is, by what its loop shows (bounds.ml) *)
+  Option.iter
+    (fun (e : expr) ->
+      fail env e.loc "an index marked in bounds that its loop doesn't keep so")
+    (Bounds.verify f.body);
   blocks env false f.body;
   no_fun_args env f.body;
   if f.tys <> type_params f.scheme then

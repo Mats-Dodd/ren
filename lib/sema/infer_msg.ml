@@ -840,6 +840,20 @@ let cursor_elem_changed loc x =
     ~help:(sprintf "change a copy: `var y = %s`" x)
     (sprintf "changing `%s` changes nothing the loop goes over" x)
 
+(* `for i, x in c` over a cursor, which has no places to number. *)
+let cursor_index loc ~index =
+  Diag.make loc
+    ~notes:
+      [
+        "an index is where an element is in an array, a map or a set, and a \
+         cursor gives each element without one";
+      ]
+    ~help:
+      (sprintf "count them with a `var %s = 0`, and `%s += 1` at the end of \
+                the body"
+         index index)
+    "a `for` over a cursor has no index"
+
 (* `for x in c`, where [c]'s type has a `next`, [item], that isn't a
    cursor's. *)
 let not_a_cursor loc ~item =

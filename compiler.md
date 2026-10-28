@@ -2671,3 +2671,80 @@ Measured (bench/native/RESULTS.md, "NaN where observed, Float sums"):
 nbody release 3.99 s to 2.73 s, 31.6% fewer cycles and 55% fewer
 instructions, 1.62× the Rust's time where it was 2.37×; inout
 unchanged; a million-`Float` `sum` 35× faster.
+
+### Step 14: loops without indices
+
+Decision 16: the loops that don't index don't check bounds, and a
+release build checks each loop's length once.
+
+**The forms.** `for i, x in xs` and `for i, x in &xs` give the index
+beside the element (parser.ml, `parse_for`; the AST's `For` has an
+`index` pattern, a name or `_`). The index is an `Int`, bound before
+the element, and can't be assigned (mut.ml, "the loop's index"). A
+range's numbers are their own index and a cursor has none, so `for i,
+x in 0..n` is a parse error and `for i, x in c` of a cursor a type
+error, each with a help saying what to write. `Array.zip` gives a
+cursor now, the prelude's opaque `Zip<T, U>`, whose `zip(zs)` gives a
+`Zip3`; `Map` and `Set`'s `zip` give one too. A `for` over
+`xs.zip(ys)` or `xs.zip(ys).zip(zs)` makes no cursor (lower.ml,
+`zip_loop`): it holds each array, counts to the least length, and binds
+a pattern of names to the elements directly. The tree-sitter grammar
+has the index, with a corpus test and a highlight test.
+
+**What's proved** (bounds.ml). Core's `Get_index` and `Set_index`
+carry a `bounds`, `Checked` or `In_bounds` (printed `get` and `get-in`).
+Lowering makes each `Checked`; `Bounds.mark` runs on every function
+lowering makes and marks `In_bounds` the indices it proves: a count let
+to 0 or more, stepped only by `i = i + 1` as the last thing a pass of
+`while i < n` does, where `n` is let to an array's length or the least
+of several and never assigned, and the arrays keep their lengths over
+the loop (no assignment but `a = set a j v`, no `&a`, nothing changed
+in a block or handler). Copies `let j = i` and `i - k` of a count let
+to at least `k` are proved too. Over the loops lowering writes, that's
+every index of `for x in xs`, `for i, x in &xs` and `zip`, and `xs[i]`
+in `for i in 0..xs.len()` or a range over another such count (nbody's
+`(i + 1)..n`). The proof is of Core's shapes, not of what lowering
+meant, so a hand-written `while` gets it as well.
+
+**Another array, by versioning.** `ys[i]` in a loop over `xs` isn't
+proved by `xs`'s length. An innermost loop that indexes, at its count,
+an array it doesn't change and its bound doesn't cover becomes `if n <=
+length ys then (the loop, binders renamed) else (the loop)`: the first
+copy has `ys`'s indices proved by the test, the second checks them and
+panics where it always did. It's LLVM's LoopVersioning, and the
+range-check elimination of HotSpot and LLVM's IRCE (Würthinger et al.,
+"Array bounds check elimination in the context of deoptimization",
+2009), done on Core where the arrays are values and can't change under
+the loop.
+
+**Native.** An `In_bounds` index has no site (to_mem.ml), emit_c passes
+`REN_IN_BOUNDS`, and `ren_array_check` and `ren_buf_check` (ren_rt.h)
+are nothing for it, so clang sees no exit from the loop but its
+condition. Mem Lint still requires a site of every other check.
+
+**Soundness.** `Bounds.verify` runs in Core Lint after lowering and
+again after specializing, walking the same facts, and rejects an
+`In_bounds` they don't prove ("an index marked in bounds that its loop
+doesn't keep so"), so a later pass that moved one out of its loop is
+caught; test_loops.ml forges one and checks Lint rejects it. The
+interpreter checks every `In_bounds` index anyway and treats one out
+of bounds as a compiler bug (eval.ml, `proved`), and every test that
+runs a program runs both. The facts are sound because an array changes
+only by assignment to its local or `&` to a call (decision 2), both of
+which the walk sees and forgets at; a block's changes happen where it's
+called, so a local a block changes is never trusted; `i + 1` can't
+overflow below a length. build.t's loops.ren, loops_panic.ren and
+loops_short.ren check, in every build, the forms' results, a panic
+from an index into an array a block changes in the loop, which stays
+checked, and one from an array shorter than the one counted, in the
+versioned loop's checked copy, each where `ren run` panics.
+
+Measured (bench/native/RESULTS.md, "Follow-ups"): blend, which writes
+one `UInt8` array while reading another at the same index, vectorizes
+sixteen lanes now, 0.66× the cycles, Rust's time; inout's `b[i]` and
+`c[i]`, versioned, 0.90× the cycles, 1.67× Rust where it was 1.86×.
+The loops over one array were already Rust's speed, since clang drops
+a check against the length the loop counts to; the new forms keep that
+without depending on it. Every other program is unchanged. What still
+stops a loop vectorizing is an `Int` overflow check, a branch out of
+it: a running `Int` sum is 4.45× Rust.

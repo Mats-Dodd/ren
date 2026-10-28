@@ -33,6 +33,7 @@
   (glob_files native/nqueens/*.ren)
   (glob_files native/rbtree/*.ren)
   (glob_files native/stack/*.ren)
+  (glob_files native/vec/*.ren)
   (glob_files %{project_root}/examples/*.ren)
   (glob_files %{project_root}/examples/shop/*.ren)
   (glob_files %{project_root}/examples/shop/billing/*.ren)
