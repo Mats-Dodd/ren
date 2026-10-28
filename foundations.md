@@ -316,6 +316,16 @@ Async.scope fn(s) =>
   scope. `s.replace(key) fn() => ...` cancels the task already under that
   key.
 - A spawned task can't fail with an unhandled error.
+- **A scope has a limit.** `Async.scope(max: n)`: `spawn` waits while
+  `n` of the scope's tasks run, which is a server's backpressure. The
+  default is 64, as `Async.map`'s is, so a server writes
+  `max: 10_000`.
+- **A handler has no task of its own.** Background work, a cache's
+  refresh or a metrics flush, is a task spawned beside the `with` that
+  calls one of the handler's operations (`Metrics.flush()`), and the
+  scope cancels it when the body ends. So every piece of handler code
+  is an operation, and an operation keeps its instance until it
+  returns (decision 10).
 - **One way to wait: `Async.until(cond)`.** The condition reads only the
   handler's own state, and is checked again when the handler is released.
   The runtime resumes the first waiter whose condition holds. No wakeup
@@ -871,6 +881,8 @@ and 32-bit references as the default.
 | Lambda sets in function types (stage 10.0) | Gone from the type checker. Release may narrow switches |
 | A dependency can't take type parameters | Generic dependencies |
 | `Async.limit` and the recorder are built in | `over any` handlers in Ren |
+| `Async.group(max:)` | `Async.scope(max:)` |
+| A handler can run a `task =>` that lives as long as its `with` (async.md) | A task spawned beside the `with`, calling an operation |
 | `par_map` | `Async.map` over a block with no dependencies |
 | Preemption at loop back-edges (async.md) | None |
 | `race` takes the first to finish; `retry(n)` retries any error | `race`'s branches can't fail, so the first to finish succeeded; `retry(n, on: Tags)` |
@@ -973,7 +985,9 @@ and 32-bit references as the default.
    `try with`; the runtime as a handler with `single` and `sim`; the
    tape, poll points, task paths, journal version 2, journals as tests
    with a schedule prefix; the standard library's channel, semaphore,
-   `Batcher` and `keyed(n, h) over any`. Two holes in the spec to close
+   `Batcher` and `keyed(n, h) over any`; `Net` as a thin TCP layer
+   (listen, accept, read, write, close) with `sim.net` for tests, no
+   HTTP. Two holes in the spec to close
    here: `s.spawn` carries `Async` in its caller's row, since it can
    wait; and no code reached from a call with an empty row runs a
    scheduling point.
