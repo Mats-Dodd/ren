@@ -50,13 +50,14 @@ let through_type env ~known ~fits =
    type. In its own module, an opaque type's is its representation's. *)
 let known_decl env t =
   match reveal env.st t with
-  | TCon (p, _) | TImpl { deps = [ p ]; _ } -> Hashtbl.find_opt env.types p
+  | TCon (p, _) | TImpl { deps = [ { dpath = p; _ } ]; _ } ->
+      Hashtbl.find_opt env.types p
   | _ -> None
 
 let ctor_in (c : ident) (td : Iface.type_decl) =
   match td.body with
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
-  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
+  | Record _ | Builtin | Opaque _ | Errors _ | Dep _ | Dep_alias _ -> None
 
 (* The constructor [c], where a value of type [expected] is wanted. One
    written after its type, `Light.Red`, is looked for there and nowhere
@@ -155,13 +156,18 @@ let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
 let record_fields (td : Iface.type_decl) =
   match td.body with
   | Record fs -> Some fs
-  | Sum _ | Builtin | Opaque _ | Errors _ | Dep _ -> None
+  | Sum _ | Builtin | Opaque _ | Errors _ | Dep _ | Dep_alias _ -> None
 
-(* The operation [name] of the dependency [td], if it's one. *)
-let dep_op_in name (td : Iface.type_decl) =
-  match td.body with
-  | Dep ops -> List.find_opt (fun (o : Iface.field) -> o.fname = name) ops
-  | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> None
+(* The operation [name] of the dependency [td], if it's one: an alias's
+   are those of the one it names, at its types. *)
+let dep_op_in env name (td : Iface.type_decl) =
+  match
+    Iface.dep_fields
+      (Hashtbl.find_opt env.types)
+      { Ty.dpath = td.path; dargs = List.mapi (fun i _ -> Ty.Var i) td.params }
+  with
+  | Some ops -> List.find_opt (fun (o : Iface.field) -> o.fname = name) ops
+  | None -> None
 
 let op_in name (td : Iface.type_decl) = Iface.find_member td name
 
@@ -195,7 +201,7 @@ let rec op_of env t name =
                 (of_ty ~vars:(List.nth args) ~tails:(fun _ -> REmpty) rep)
                 name
           | None, None -> None))
-  | TImpl { deps = [ p ]; _ } -> (
+  | TImpl { deps = [ { dpath = p; _ } ]; _ } -> (
       (* a dependency's method *)
       match Hashtbl.find_opt env.types p with
       | Some td -> (
@@ -240,20 +246,19 @@ let member_of_several env cx (r : expr) tr (name : ident) =
                  into a value of several *)
               let recv = Option.value (env.source r) ~default:"h" in
               report env
-                (changes_one_of_several name.loc ~recv
-                   ~all:(String.concat " & " (List.map env.names ds))
-                   ~name:name.name ~dep:(env.names d));
+                (changes_one_of_several name.loc ~recv ~all:(shown_deps env ds)
+                   ~name:name.name ~dep:(shown_deps env [ d ]));
               TError
           | _ ->
-              Hashtbl.replace cx.narrowed r.node [ d ];
+              Hashtbl.replace cx.narrowed r.node [ d.dpath ];
               one d)
       | [] -> tr
       | have ->
           report env
             (member_of_several_deps name.loc
                ~recv:(Option.value (env.source r) ~default:"h")
-               ~all:(String.concat " & " (List.map env.names ds))
-               ~name:name.name ~deps:(List.map env.names have));
+               ~all:(shown_deps env ds) ~name:name.name
+               ~deps:(List.map (fun d -> shown_deps env [ d ]) have));
           TError)
   | _ -> tr
 
@@ -320,13 +325,21 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
       let tr = member_of_several env cx r tr f in
       match reveal env.st tr with
       | TError -> TError
-      | TImpl { deps = [ p ]; _ } -> (
+      | TImpl { deps = [ { dpath = p; _ } ]; _ } -> (
           (* an implementation's operations aren't read from it *)
-          match (Hashtbl.find env.types p).body with
-          | Dep ops ->
+          match
+            Iface.dep_fields
+              (Hashtbl.find_opt env.types)
+              {
+                Ty.dpath = p;
+                dargs =
+                  List.map (fun _ -> Ty.Error) (Hashtbl.find env.types p).params;
+              }
+          with
+          | Some ops ->
               report env (op_of_value ~names:env.names f p ops);
               TError
-          | _ -> needs_record tr)
+          | None -> needs_record tr)
       | TCon (p, args) as t -> (
           let td = Hashtbl.find env.types p in
           (* another module's opaque type, whose fields are hidden *)
@@ -514,15 +527,46 @@ let rec lookup env cx ~node loc = function
       TCon (p, [])
   | Dep_op (p, op) -> (
       (* the operation as declared, which uses its dependency: a call
-         adds it to the caller's `uses` *)
-      match Option.bind (Hashtbl.find_opt env.types p) (dep_op_in op) with
-      | Some o -> (
-          match field_type ~tvars:[] o with
-          | TFun (ps, ret, errs, _) ->
-              (* used as a value, it's a lambda that calls it (Lower) *)
-              TFun
-                (ps, ret, errs, RExtend (dep (Ty.dep_label p), fresh_row env.st))
-          | _ -> TError)
+         adds it to the caller's `uses`. A generic one's is at a fresh
+         instance, `Chan<α>`, which the call fixes, as a generic
+         function's call fixes its type arguments; an alias's is at the
+         types it names (compiler.md, "Generic dependencies") *)
+      match Hashtbl.find_opt env.types p with
+      | Some td -> (
+          match dep_op_in env op td with
+          | Some o -> (
+              let tvars = List.map (fun _ -> fresh_var env.st) td.params in
+              (* the instance's types are its type arguments, which say
+                 which implementation the call finds (Lower) *)
+              if tvars <> [] then
+                Hashtbl.replace cx.targs node
+                  {
+                    tcallee = p;
+                    tvalue = false;
+                    tpicked =
+                      Fresh
+                        {
+                          tys =
+                            List.map
+                              (fun t ->
+                                match t with
+                                | TVar { contents = Unbound (id, _) } -> (id, t)
+                                | _ -> failwith "a fresh variable")
+                              tvars;
+                          rows = [];
+                        };
+                  };
+              match field_type ~tvars o with
+              | TFun (ps, ret, errs, _) ->
+                  (* used as a value, it's a lambda that calls it (Lower) *)
+                  TFun
+                    ( ps,
+                      ret,
+                      errs,
+                      RExtend
+                        (dep ~args:tvars (Ty.dep_label p), fresh_row env.st) )
+              | _ -> TError)
+          | None -> TError)
       | None -> TError)
   | Next_op (p, op) -> (
       (* the operation of the implementation under the handler, `next.get`:
@@ -531,9 +575,15 @@ let rec lookup env cx ~node loc = function
          [p] is the handler's need, which it has already. A block in the
          handler can call it too: its evidence is found where it's
          written. *)
-      match Option.bind (Hashtbl.find_opt env.types p) (dep_op_in op) with
-      | Some o -> (
-          match field_type ~tvars:[] o with
-          | TFun (ps, ret, errs, _) -> TFun (ps, ret, errs, fresh_row env.st)
-          | _ -> TError)
+      match Hashtbl.find_opt env.types p with
+      | Some td -> (
+          match dep_op_in env op td with
+          | Some o -> (
+              (* a generic one's type arguments are the handler's: fresh here,
+             fixed by what it's given and what its result is used as *)
+              let tvars = List.map (fun _ -> fresh_var env.st) td.params in
+              match field_type ~tvars o with
+              | TFun (ps, ret, errs, _) -> TFun (ps, ret, errs, fresh_row env.st)
+              | _ -> TError)
+          | None -> TError)
       | None -> TError)

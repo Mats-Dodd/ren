@@ -9,6 +9,20 @@ open Infer_env
 val error_labels :
   env -> tvars:Types.ty list -> Ast.Resolved.errors -> Types.label list
 
+(* The dependencies a `uses` lists, or an implementation's type joins, with
+   their type arguments as checker types. *)
+val written_deps :
+  env -> tvars:Types.ty list -> Ast.tname Ast.dep_ref list -> Types.dep list
+
+(* The row a written `uses` lists, each dependency once, ending in the row
+   it names, if it names one of [named]. *)
+val written_uses :
+  env ->
+  tvars:Types.ty list ->
+  named:(string * Types.row) list ->
+  Ast.Resolved.uses ->
+  Types.row
+
 (* A written type, as a checker type. [row] makes the rows of written
    function types and implementations that aren't written: fresh in a
    parameter, [closed] in a declaration or a return type. *)

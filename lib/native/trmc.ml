@@ -347,8 +347,14 @@ let rename ~next ~label (also : var list) (b : block) : block * var list =
             deps = atom i.deps;
             ndeps = atom i.ndeps;
           }
-    | Given g -> Given { g with outer = atom g.outer; caller = atom g.caller }
-    | Op_block (x, d, n) -> Op_block (atom x, d, n)
+    | Given g ->
+        Given
+          {
+            outer = atom g.outer;
+            caller = atom g.caller;
+            deps = List.map (fun (d, args) -> (d, atoms args)) g.deps;
+          }
+    | Op_block (x, d, args, n) -> Op_block (atom x, d, atoms args, n)
     | Is_unique x -> Is_unique (atom x)
     | Make_struct xs -> Make_struct (atoms xs)
     | Struct_get (x, i) -> Struct_get (atom x, i)
@@ -395,12 +401,15 @@ let rename ~next ~label (also : var list) (b : block) : block * var list =
     | Call_handler c ->
         Call_handler
           {
-            c with
             result = var c.result;
             handler = atom c.handler;
             outer = atom c.outer;
             body = atom c.body;
             desc = atom c.desc;
+            deps =
+              List.map
+                (fun (k : key) -> { k with kargs = atoms k.kargs })
+                c.deps;
             error = var c.error;
             on_error = Option.map block c.on_error;
           }

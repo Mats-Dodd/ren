@@ -26,7 +26,10 @@ type body =
   | Dep of field list
       (** a dependency, [dep Clock = ...]: its operations, each a function type
           that fails with exactly what it's written to fail with, and uses
-          nothing *)
+          nothing; a generic one's name its parameters as [Var]s *)
+  | Dep_alias of Ty.dep
+      (** an alias, [dep Jobs = Chan<Job>]: a dependency of its own, with the
+          operations of the one it names, at those types *)
 
 (* An opaque type's representation in its own module's view of it, or
    in its interface, hidden but for whether it has `==`: it hasn't if what
@@ -138,14 +141,33 @@ val sets_of : type_decl list -> sets
    included twice, and never inside itself. *)
 val tags : sets:sets -> error list -> (Ty.label * Path.t option) list
 
+(* ---- dependencies ---- *)
+
+(* The operations of a dependency at its type arguments: a generic one's,
+   its [Var]s replaced by them, and an alias's, those of the one it names.
+   The function finds a type's declaration. [None] if it isn't a
+   dependency, or is given the wrong number of type arguments. *)
+val dep_fields : (Path.t -> type_decl option) -> Ty.dep -> field list option
+
+(* What the alias at a path names, if it's one. *)
+val alias_of : (Path.t -> type_decl option) -> Path.t -> Ty.dep option
+
+(* Whether a path is a dependency's, generic or an alias. *)
+val is_dep : (Path.t -> type_decl option) -> Path.t -> bool
+
 (* ---- from a module's declarations ---- *)
 
-(* The labels of the dependencies a `uses` lists, sorted, each once. *)
-val dep_labels : Ast.tname list -> Ty.label list
+(* The labels of the dependencies a `uses` lists, sorted, each once, with
+   their type arguments. [sets] says what a named error set in one stands
+   for. *)
+val dep_labels : ?sets:sets -> Ast.tname Ast.dep_ref list -> Ty.label list
 
 (* The dependencies a `uses` lists, or an implementation's type joins with
-   `&`, as written. *)
-val dep_paths : Ast.tname list -> Path.t list
+   `&`, as written, with their type arguments. *)
+val deps_of : sets:sets -> Ast.tname Ast.dep_ref list -> Ty.dep list
+
+(* Just their paths. *)
+val dep_paths : Ast.tname Ast.dep_ref list -> Path.t list
 
 (* An error set as written, as declared errors: each tag with its
    payload's types, its fields' names dropped. *)
@@ -167,7 +189,7 @@ val of_type_def : home:string -> sets:sets -> Ast.Resolved.type_def -> type_decl
 (* The dependencies a function implements, if it's a `handler`: calling
    it gives an implementation of each, of the type that lists them
    (Ty.impl). *)
-val handler_deps : Ast.Resolved.fn_def -> Path.t list option
+val handler_deps : Ast.Resolved.fn_def -> Ty.dep list option
 
 (* The interface of module [home], from its declarations: every public
    type, with its public members and an opaque type's representation left

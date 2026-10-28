@@ -1,0 +1,70 @@
+// Stage 10d, step 2: a generic cache, installed at two types at once and
+// once more under an alias (foundations.md, decisions 5 and 6). Each
+// call finds its cache by its full type, `Cache<Int, Str>` or
+// `Cache<Str, Int>`; a debug build compares the descriptors of the type
+// arguments, a release build knows which.
+
+dep Cache<K, V> =
+  get: fn(k: K) -> Option<V>
+  put: fn(k: K, v: V)
+  size: fn() -> Int
+
+handler cache<K has eq, V>() for Cache<K, V> =
+  var keys: Array<K> = []
+  var values: Array<V> = []
+  get(k) =>
+    var found = None
+    for i in 0..keys.len()
+      if keys[i] == k then found = Some(values[i])
+    found
+  put(k, v) =>
+    var i = 0
+    while i < keys.len() && keys[i] != k
+      i += 1
+    if i == keys.len() then
+      &keys.push(k)
+      &values.push(v)
+    else values[i] = v
+  size() => keys.len()
+
+dep Names = Cache<Int, Str>
+
+// generic in the cache it uses: a debug build finds `Cache<K, V>` by
+// the descriptors it's given for `K` and `V`
+fn remember<K has eq, V>(k: K, v: V) -> V uses Cache<K, V> =
+  match Cache.get(k)
+    Some(old) => old
+    None =>
+      Cache.put(k, v)
+      v
+
+fn name_of(id: Int) -> Str uses Names =
+  match Names.get(id)
+    Some(n) => n
+    None => "nobody"
+
+// `size` gives the same type at any instance: what the function declares
+// says which
+fn ids() -> Int uses Cache<Int, Str> = Cache.size()
+
+fn main() uses Console =
+  let by_id: Cache<Int, Str> = cache()
+  let by_name: Cache<Str, Int> = cache()
+  with by_id, by_name in
+    Cache.put(1, "one")
+    Cache.put("one", 1)
+    print(remember(2, "two"))
+    print(remember(2, "deux"))
+    print(remember("two", 2))
+    let a: Option<Str> = Cache.get(1)
+    let b: Option<Int> = Cache.get("two")
+    let c: Option<Int> = Cache.get("three")
+    print(a)
+    print(b)
+    print(c)
+    print(ids())
+  with cache() as Names in
+    Names.put(7, "seven")
+    print(name_of(7))
+    print(name_of(8))
+    print(Names.size())

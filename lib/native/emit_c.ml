@@ -570,8 +570,14 @@ let rhs (r : rhs) =
   | Of_word (x, l) -> of_val l (atom x)
   | Global name -> name
   | Block_of (f, env) -> sprintf "((ren_block){%s, %s})" f (atom env)
-  | Op_block (ev, dep, op) ->
+  | Op_block (ev, dep, [], op) ->
       sprintf "ren_find(%s, %d)->ops[%d]" (atom ev) dep op
+  | Op_block (ev, dep, args, op) ->
+      (* a generic dependency's, found by its type arguments too *)
+      sprintf "ren_find_args(%s, %d, (ren_obj*const[]){%s}, %d)->ops[%d]"
+        (atom ev) dep
+        (String.concat ", " (List.map atom args))
+        (List.length args) op
   | Alloc _ | Alloc_array _ | Env_new _ | Env_get _ | Arg _ | Impl _ | Install _
   | Given _ ->
       bug "an allocation on the heap or the stack outside a Let"
@@ -685,6 +691,31 @@ let indirect o d ~result ~error call =
   line
     (sprintf "%s %s = %s;" (ctype result.layout) (var result)
        (of_val result.layout out))
+
+(* The keys [deps] of what a `with` installs, or a block is given, as
+   [name_keys]: static unless one is generic, whose type arguments' array,
+   [name_args3], is the frame's, as long-lived as the evidence that
+   points at it. *)
+let keys line name (deps : key list) =
+  let n = List.length deps in
+  List.iteri
+    (fun i k ->
+      if k.kargs <> [] then
+        line
+          (sprintf "ren_obj* %s_args%d[%d] = %s;" name i (List.length k.kargs)
+             (braces (List.map atom k.kargs))))
+    deps;
+  let static = List.for_all (fun k -> k.kargs = []) deps in
+  line
+    (sprintf "%sren_key %s_keys[%d] = %s;"
+       (if static then "static const " else "")
+       name (max 1 n)
+       (braces
+          (List.mapi
+             (fun i k ->
+               sprintf "{%d, %d, %d, %s}" k.kdep k.kfrom (List.length k.kargs)
+                 (if k.kargs = [] then "NULL" else sprintf "%s_args%d" name i))
+             deps)))
 
 let rec stmt o d (s : stmt) =
   if !line_dirs then (
@@ -864,11 +895,10 @@ let rec stmt o d (s : stmt) =
   | Let (v, Given { outer; caller; deps }) ->
       let n = List.length deps in
       line (sprintf "ren_ev %s_nodes[%d];" (var v) n);
+      keys line (var v)
+        (List.map (fun (d, args) -> { kdep = d; kfrom = d; kargs = args }) deps);
       line
-        (sprintf "static const int32_t %s_deps[%d] = %s;" (var v) n
-           (braces (List.map string_of_int deps)));
-      line
-        (sprintf "const ren_ev* %s = ren_given(%s_nodes, %s, %s, %s_deps, %d);"
+        (sprintf "const ren_ev* %s = ren_given(%s_nodes, %s, %s, %s_keys, %d);"
            (var v) (var v) (atom outer) (atom caller) (var v) n)
   (* a buffer hoist.ml read: its elements, which a loop not moved out
      indexes where it is *)
@@ -923,12 +953,10 @@ let rec stmt o d (s : stmt) =
   | Call_handler { result; handler; outer; body; desc; deps; error; on_error }
     ->
       let n = List.length deps in
-      line
-        (sprintf "static const int32_t %s_deps[%d] = %s;" (var result) (max 1 n)
-           (braces (List.map string_of_int deps)));
+      keys line (var result) deps;
       indirect o d ~result ~error (fun out ->
           sprintf
-            "((ren_hcode)ren_fields(%s)[0].p)(%s, %s, %s, %s, (void*)%s_deps, \
+            "((ren_hcode)ren_fields(%s)[0].p)(%s, %s, %s, %s, (void*)%s_keys, \
              %d, %s)"
             (atom handler) (atom handler) (atom outer) (atom body) (atom desc)
             (var result) n out);

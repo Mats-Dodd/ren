@@ -278,17 +278,9 @@ handler log<T>() for Log<T> =
 let%expect_test "[s2 accept] one generic handler, installed at two types" =
   (* `Log<Int>` and `Log<Str>` are two dependencies: a call is found by
      its full type, from what it's given or what its result is used as *)
-  until "s2"
-    ~want:
-      {|
-[10, 20, 3]
-["a", "b", "c"]
-()
-|}
-    (fun () ->
-      run
-        (log_dep
-       ^ {|
+  run
+    (log_dep
+    ^ {|
 fn note(n: Int) uses Log<Int> = Log.add(n * 10)
 
 fn add_all<T>(xs: Array<T>) uses Log<T> =
@@ -308,65 +300,28 @@ fn main() uses Console =
     let ss: Array<Str> = Log.all()
     print(is)
     print(ss)
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:1:8
-    1 │ dep Log<T> =
-      │        ^
-      help: remove them
-
-    error: a handler can't take type parameters
-      ┌─ test.ren:5:12
-    5 │ handler log<T>() for Log<T> =
-      │            ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
-
-    error: expected `=`, found `<`
-       ┌─ test.ren:10:25
-    10 │ fn note(n: Int) uses Log<Int> = Log.add(n * 10)
-       │                         ^
-
-    error: expected `=`, found `<`
-       ┌─ test.ren:12:37
-    12 │ fn add_all<T>(xs: Array<T>) uses Log<T> =
-       │                                     ^
+    [10, 20, 3]
+    ["a", "b", "c"]
+    ()
     |}]
 
 let%expect_test "[s2 accept] a with finds a generic handler's type from its body" =
   (* the body uses one `Log`, at `Int`, so that's the one installed *)
-  until "s2"
-    ~want:{|
-[1, 2]
-()
-|}
-    (fun () ->
-      run
-        (log_dep
-       ^ {|
+  run
+    (log_dep
+    ^ {|
 fn main() uses Console =
   with log() in
     Log.add(1)
     Log.add(2)
     let xs: Array<Int> = Log.all()
     print(xs)
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:1:8
-    1 │ dep Log<T> =
-      │        ^
-      help: remove them
-
-    error: a handler can't take type parameters
-      ┌─ test.ren:5:12
-    5 │ handler log<T>() for Log<T> =
-      │            ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
+    [1, 2]
+    ()
     |}]
 
 let chan_dep =
@@ -394,20 +349,9 @@ handler queue<T>() for Chan<T> =
 let%expect_test "[s2 accept] two aliases of one generic, installed with as" =
   (* `Jobs` and `Done` are each `Chan<Job>`'s operations, and each a
      dependency of its own, so one handler is installed as both *)
-  until "s2"
-    ~want:
-      {|
-2
-Some(Job { id: 1, size: 10 })
-Some(Job { id: 2, size: 14 })
-None
-None
-()
-|}
-    (fun () ->
-      run
-        (chan_dep
-       ^ {|
+  run
+    (chan_dep
+    ^ {|
 fn work() -> Int uses Jobs, Done =
   var n = 0
   var going = true
@@ -428,53 +372,19 @@ fn main() uses Console =
     print(Done.take())
     print(Done.take())
     print(Jobs.take())
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:3:9
-    3 │ dep Chan<T> =
-      │         ^
-      help: remove them
-
-    error: expected the operations of `Jobs`, found `Chan`
-      ┌─ test.ren:7:12
-    7 │ dep Jobs = Chan<Job>
-      │            ^^^^
-      help: put each of its operations on a line of its own, indented under it, like `now: fn() -> Time`
-
-    error: expected the operations of `Done`, found `Chan`
-      ┌─ test.ren:8:12
-    8 │ dep Done = Chan<Job>
-      │            ^^^^
-      help: put each of its operations on a line of its own, indented under it, like `now: fn() -> Time`
-
-    error: a handler can't take type parameters
-       ┌─ test.ren:10:14
-    10 │ handler queue<T>() for Chan<T> =
-       │              ^
-       = a handler's operations have the types its dependencies declare, which can't take type parameters either
-       help: remove them
-
-    error: expected `,`, `over` or `in` after what `with` installs, found `as`
-       ┌─ test.ren:32:16
-    32 │   with queue() as Jobs, queue() as Done in
-       │                ^^
-       help: write what it installs, then `in`, then the code it's installed around
+    2
+    Some(Job { id: 1, size: 10 })
+    Some(Job { id: 2, size: 14 })
+    None
+    None
+    ()
     |}]
 
 let%expect_test "[s2 accept] the signatures of generic dependencies" =
-  until "s2" ~checks:true
-    ~says:
-      [
-        "pub dep Chan<T>";
-        "pub dep Jobs = Chan<Job>";
-        "pub handler queue<T>() for Chan<T>";
-        "pub fn work() uses Jobs";
-      ]
-    (fun () ->
-      types
-        {|
+  types
+    {|
 pub type Job = { id: Int }
 
 pub dep Chan<T> =
@@ -487,40 +397,20 @@ pub handler queue<T>() for Chan<T> =
   send(x) => &xs.push(x)
 
 pub fn work() uses Jobs = Jobs.send(Job { id: 1 })
-|});
+fn main() = 1
+|};
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:3:13
-    3 │ pub dep Chan<T> =
-      │             ^
-      help: remove them
-
-    error: expected the operations of `Jobs`, found `Chan`
-      ┌─ test.ren:6:16
-    6 │ pub dep Jobs = Chan<Job>
-      │                ^^^^
-      help: put each of its operations on a line of its own, indented under it, like `now: fn() -> Time`
-
-    error: a handler can't take type parameters
-      ┌─ test.ren:8:18
-    8 │ pub handler queue<T>() for Chan<T> =
-      │                  ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
+    pub dep Chan<T>
+      send: fn(T)
+    pub dep Jobs = Chan<Job>
+    pub handler queue<T>() for Chan<T>
+    pub fn work() uses Jobs
+    fn main() -> Int
     |}]
 
 let%expect_test "[s2 accept] a generic handler whose type needs ==" =
-  until "s2"
-    ~want:{|
-false
-true
-false
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Seen<T> =
   saw: fn(x: T) -> Bool
 
@@ -537,35 +427,18 @@ fn main() uses Console =
     print(Seen.saw("a"))
     print(Seen.saw("a"))
     print(Seen.saw("b"))
-|});
+|};
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:1:9
-    1 │ dep Seen<T> =
-      │         ^
-      help: remove them
-
-    error: a handler can't take type parameters
-      ┌─ test.ren:4:13
-    4 │ handler seen<T has eq>() for Seen<T> =
-      │             ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
+    false
+    true
+    false
+    ()
     |}]
 
 let%expect_test "[s2 reject] an alias is a dependency of its own" =
   (* `uses Jobs` doesn't give `Chan<Job>`: the help says which to call *)
-  until "s2"
-    ~says:
-      [
-        "error: `send_one` doesn't declare `Chan<Job>`";
-        "help: `Jobs` is a dependency of its own, with `Chan<Job>`'s \
-         operations: call `Jobs.send`, or add `uses Chan<Job>`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 pub type Job = { id: Int }
 
 pub dep Chan<T> =
@@ -575,244 +448,120 @@ pub dep Jobs = Chan<Job>
 
 pub fn send_one() uses Jobs = Chan.send(Job { id: 1 })
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:3:13
-    3 │ pub dep Chan<T> =
-      │             ^
-      help: remove them
-
-    error: expected the operations of `Jobs`, found `Chan`
-      ┌─ test.ren:6:16
-    6 │ pub dep Jobs = Chan<Job>
-      │                ^^^^
-      help: put each of its operations on a line of its own, indented under it, like `now: fn() -> Time`
+    error: `send_one` doesn't declare `Chan<Job>`
+      ┌─ test.ren:8:8
+    8 │ pub fn send_one() uses Jobs = Chan.send(Job { id: 1 })
+      │        ^^^^^^^^
+      │                               ------------------------ this call uses `Chan<Job>`
+      help: `Jobs` is a dependency of its own, with `Chan<Job>`'s operations: call `Jobs.send`, or add `uses Chan<Job>`
     |}]
 
 let%expect_test "[s2 reject] a call that could be either of two instances" =
-  until "s2"
-    ~says:
-      [
-        "error: which `Log` `Log.all()` calls isn't known: `Log<Int>` or \
-         `Log<Str>`";
-        "help: say what its result is: `let xs: Array<Int> = Log.all()`";
-      ]
-    (fun () ->
-      check_error
-        (log_dep
-       ^ {|
+  check_error
+    (log_dep
+    ^ {|
 fn count() -> Int uses Log<Int>, Log<Str> = Log.all().len()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:1:8
-    1 │ dep Log<T> =
-      │        ^
-      help: remove them
-
-    error: a handler can't take type parameters
-      ┌─ test.ren:5:12
-    5 │ handler log<T>() for Log<T> =
-      │            ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
-
-    error: expected `=`, found `<`
-       ┌─ test.ren:10:27
+    error: which `Log` `Log.all()` calls isn't known: `Log<Int>` or `Log<Str>`
+       ┌─ test.ren:10:45
     10 │ fn count() -> Int uses Log<Int>, Log<Str> = Log.all().len()
-       │                           ^
+       │                                             ^^^^^^^^^
+       help: say what its result is: `let xs: Array<Int> = Log.all()`
     |}]
 
 let%expect_test "[s2 reject] a type parameter only a function's uses names" =
-  until "s2"
-    ~says:
-      [
-        "error: nothing `peek` is given fixes `T`";
-        "help: make `T` a parameter's or the result's type, or name the \
-         dependency at one type: `uses Log<Int>`";
-      ]
-    (fun () ->
-      check_error
-        (log_dep
-       ^ {|
+  check_error
+    (log_dep
+    ^ {|
 fn peek<T>() -> Int uses Log<T> =
   let xs: Array<T> = Log.all()
   xs.len()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:1:8
-    1 │ dep Log<T> =
-      │        ^
-      help: remove them
-
-    error: a handler can't take type parameters
-      ┌─ test.ren:5:12
-    5 │ handler log<T>() for Log<T> =
-      │            ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
-
-    error: expected `=`, found `<`
-       ┌─ test.ren:10:29
+    error: nothing `peek` is given fixes `T`
+       ┌─ test.ren:10:9
     10 │ fn peek<T>() -> Int uses Log<T> =
-       │                             ^
+       │         ^
+       help: make `T` a parameter's or the result's type, or name the dependency at one type: `uses Log<Int>`
     |}]
 
 let%expect_test "[s2 reject] a with that installs a generic at two types" =
   (* the body uses `Log<Int>` and `Log<Str>`, and `log()` is one of
      them *)
-  until "s2"
-    ~says:
-      [
-        "error: which `Log` `log()` installs isn't known: the body uses \
-         `Log<Int>` and `Log<Str>`";
-        "help: say which, with a written type: `let l: Log<Int> = log()`, \
-         then `with l in`";
-      ]
-    (fun () ->
-      check_error
-        (log_dep
-       ^ {|
+  check_error
+    (log_dep
+    ^ {|
 fn main() =
   with log() in
     Log.add(1)
     Log.add("a")
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:1:8
-    1 │ dep Log<T> =
-      │        ^
-      help: remove them
-
-    error: a handler can't take type parameters
-      ┌─ test.ren:5:12
-    5 │ handler log<T>() for Log<T> =
-      │            ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
+    error: which `Log` `log()` installs isn't known: the body uses `Log<Int>` and `Log<Str>`
+       ┌─ test.ren:11:8
+    11 │   with log() in
+       │        ^^^^^
+       help: say which, with a written type: `let l: Log<Int> = log()`, then `with l in`
     |}]
 
 let%expect_test "[s2 reject] a handler's type parameter its dependency doesn't take" =
   (* test_deps.ml's "a handler can't take type parameters" becomes this *)
-  until "s2"
-    ~says:
-      [
-        "error: `T` isn't a type parameter of `N`";
-        "help: a handler's type parameters are its dependencies': remove \
-         `<T>`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep N =
   get: fn() -> Int
 
 handler poly<T>(x: T) for N =
   get() => 1
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s2)
-    error: a handler can't take type parameters
-      ┌─ test.ren:4:13
+    error: `T` isn't a type parameter of `N`
+      ┌─ test.ren:4:14
     4 │ handler poly<T>(x: T) for N =
-      │             ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
+      │              ^
+      help: a handler's type parameters are its dependencies': remove `<T>`
     |}]
 
 let%expect_test "[s2 reject] an alias names one instance" =
-  until "s2"
-    ~says:
-      [
-        "error: an alias can't take type parameters";
-        "help: use `Chan<T>` itself where it's generic, or fix the alias's \
-         types: `dep Ints = Chan<Int>`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Chan<T> =
   send: fn(x: T)
 
 dep Pipe<T> = Chan<T>
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:1:9
-    1 │ dep Chan<T> =
-      │         ^
-      help: remove them
-
-    error: a dependency can't take type parameters
+    error: an alias can't take type parameters
       ┌─ test.ren:4:9
     4 │ dep Pipe<T> = Chan<T>
       │         ^
-      help: remove them
+      help: use `Chan<T>` itself where it's generic, or fix the alias's types: `dep Ints = Chan<Int>`
     |}]
 
 let%expect_test "[s2 reject] as names what the handler implements" =
-  until "s2"
-    ~says:
-      [
-        "error: `queue()` can't be installed as `Users`";
-        "help: `queue()` implements `Chan<T>`: install it as `Chan<...>` or \
-         as an alias of it";
-      ]
-    (fun () ->
-      check_error
-        (chan_dep
-       ^ {|
+  check_error
+    (chan_dep
+    ^ {|
 dep Users =
   get: fn(id: Int) -> Int
 
 fn main() =
   with queue() as Users in
     Users.get(1)
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: a dependency can't take type parameters
-      ┌─ test.ren:3:9
-    3 │ dep Chan<T> =
-      │         ^
-      help: remove them
-
-    error: expected the operations of `Jobs`, found `Chan`
-      ┌─ test.ren:7:12
-    7 │ dep Jobs = Chan<Job>
-      │            ^^^^
-      help: put each of its operations on a line of its own, indented under it, like `now: fn() -> Time`
-
-    error: expected the operations of `Done`, found `Chan`
-      ┌─ test.ren:8:12
-    8 │ dep Done = Chan<Job>
-      │            ^^^^
-      help: put each of its operations on a line of its own, indented under it, like `now: fn() -> Time`
-
-    error: a handler can't take type parameters
-       ┌─ test.ren:10:14
-    10 │ handler queue<T>() for Chan<T> =
-       │              ^
-       = a handler's operations have the types its dependencies declare, which can't take type parameters either
-       help: remove them
-
-    error: expected `,`, `over` or `in` after what `with` installs, found `as`
-       ┌─ test.ren:24:16
+    error: `queue()` can't be installed as `Users`
+       ┌─ test.ren:24:8
     24 │   with queue() as Users in
-       │                ^^
-       help: write what it installs, then `in`, then the code it's installed around
+       │        ^^^^^^^^^^^^^^^^
+       help: `queue()` implements `Chan<T>`: install it as `Chan<...>` or as an alias of it
     |}]
 
 (* ---- s3: descriptions as the only stored code (decision 3) ---- *)

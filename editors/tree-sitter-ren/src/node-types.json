@@ -634,6 +634,32 @@
     }
   },
   {
+    "type": "constrained_type_parameter",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      },
+      "requirement": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "constructor_arguments",
     "named": true,
     "fields": {},
@@ -734,6 +760,16 @@
     "type": "dependency",
     "named": true,
     "fields": {
+      "arguments": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_arguments",
+            "named": true
+          }
+        ]
+      },
       "module": {
         "multiple": false,
         "required": false,
@@ -784,12 +820,32 @@
           }
         ]
       },
+      "names": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "dependency",
+            "named": true
+          }
+        ]
+      },
       "operation": {
         "multiple": true,
         "required": false,
         "types": [
           {
             "type": "operation",
+            "named": true
+          }
+        ]
+      },
+      "type_parameters": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_parameters",
             "named": true
           }
         ]
@@ -1441,6 +1497,10 @@
             "named": true
           },
           {
+            "type": "with_as",
+            "named": true
+          },
+          {
             "type": "with_chain",
             "named": true
           }
@@ -1652,6 +1712,16 @@
           }
         ]
       },
+      "type_parameters": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_parameters",
+            "named": true
+          }
+        ]
+      },
       "uses": {
         "multiple": false,
         "required": false,
@@ -1730,6 +1800,16 @@
     "type": "implementation_type",
     "named": true,
     "fields": {
+      "arguments": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "type_arguments",
+            "named": true
+          }
+        ]
+      },
       "errors": {
         "multiple": false,
         "required": false,
@@ -1742,7 +1822,7 @@
       },
       "name": {
         "multiple": true,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "type_name",
@@ -2999,6 +3079,10 @@
       "required": false,
       "types": [
         {
+          "type": "constrained_type_parameter",
+          "named": true
+        },
+        {
           "type": "type_identifier",
           "named": true
         }
@@ -3105,6 +3189,42 @@
     }
   },
   {
+    "type": "with_as",
+    "named": true,
+    "fields": {
+      "as": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "dependency",
+            "named": true
+          }
+        ]
+      },
+      "link": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "with_chain",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "with_chain",
     "named": true,
     "fields": {
@@ -3158,6 +3278,10 @@
         "types": [
           {
             "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "with_as",
             "named": true
           },
           {
@@ -3370,6 +3494,10 @@
   },
   {
     "type": "handler",
+    "named": false
+  },
+  {
+    "type": "has",
     "named": false
   },
   {

@@ -46,6 +46,6 @@ let rec is ~(types : Path.t -> Iface.type_decl option) ?(seen = []) (t : Ty.ty)
                      cs)
             | Opaque (Rep r) -> all [ r ]
             | Opaque (Hidden _) -> td.numeric <> None
-            | Errors _ | Dep _ -> false))
+            | Errors _ | Dep _ | Dep_alias _ -> false))
   | Error -> true
   | Fun _ | Var _ | Errors _ | Impl _ -> false

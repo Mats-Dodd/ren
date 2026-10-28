@@ -37,7 +37,7 @@ type 't ty =
           [fn(Int) -> Bool ! Bad uses Clock]; with no [->] the function returns
           [Unit] *)
   | TyImpl of {
-      impl_deps : 't list;
+      impl_deps : 't dep_ref list;
       impl_over : bool;
       impl_errors : 't errors option;
       impl_uses : 't uses option;
@@ -97,7 +97,13 @@ and 't payload = { payload_name : ident option; payload_ty : 't ty }
    "Implementations"). An error set names one the same way, `! ..e`. A
    block's type never names one: a block is only called, so what it does
    is what the call it's passed to does (resolve.ml). *)
-and 't uses = { deps : 't list; dtail : ident option; uloc : Loc.t }
+and 't uses = { deps : 't dep_ref list; dtail : ident option; uloc : Loc.t }
+
+(* A dependency where one is named, in a `uses`, an implementation's type,
+   after a handler's `for` or a `with`'s `as`: [Clock], [store.Users], or
+   an instance of a generic one, its type arguments written, [Chan<Int>]
+   (foundations.md, decision 6). *)
+and 't dep_ref = { dep : 't; dargs : 't ty list }
 
 (* [And] and [Or] are `&&` and `||`, which evaluate their right side only
    when the left doesn't already decide the answer (lower.ml makes them
@@ -257,7 +263,7 @@ and ('v, 'b, 't) expr_kind =
           wrapper, like `retry(3)`, is called instead, `try retry(3) fn() =>
           body` *)
   | Handler of {
-      deps : 't list;
+      deps : 't dep_ref list;
           (** the dependencies after `for`, or after `over`, in order *)
       over : bool;
           (** declared `over` them, in front of another implementation of them,
@@ -288,7 +294,11 @@ and ('v, 'b, 't) expr_kind =
    (handlers.md, "Installing one"); otherwise []. *)
 and ('v, 'b, 't) with_item = {
   chain : ('v, 'b, 't) with_link list;
-  under : 't list;
+  under : 't dep_ref list;
+  alias : 't dep_ref option;
+      (** what it's installed as, after `as`: an alias of the dependency it
+          implements, `with queue() as Jobs`, or that dependency written out,
+          `as Chan<Int>` (compiler.md, "Generic dependencies") *)
   iloc : Loc.t;  (** the whole item *)
 }
 
@@ -361,6 +371,10 @@ type 't type_body =
       (** a dependency's operations, [now: fn() -> Time], each a function type
           (deps.md, "Declaring one"). A value of the type is an implementation,
           a record of them *)
+  | Dep_alias of 't dep_ref
+      (** [dep Jobs = Chan<Job>]: a dependency of its own, with the operations
+          of the one it names, at the types it gives (compiler.md, "Generic
+          dependencies"). It takes no type parameters *)
   | Builtin
       (** [builtin]: a type built into the compiler, [Array<T>], whose members
           written here join its built-in ones. Only the prelude's source can
@@ -370,6 +384,11 @@ type ('v, 'b, 't) fn_def = {
   pub : bool;
   name : ident;
   tparams : ident list;  (** the [T] in [fn id<T>(x: T) -> T] *)
+  tneeds : (string * ident) list;
+      (** what's written that a type parameter needs, after its name,
+          [T has eq]: the parameter's name, and each requirement. A function's
+          are found in its body, so they needn't be written; a handler's of a
+          generic dependency say so where they're declared *)
   params : ('b, 't) param list;
   ret : 't ty option;
   errors : 't errors option;  (** what it can fail with, after `!` *)
@@ -784,12 +803,19 @@ let rec show_ty : ty -> string = function
   | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show_ty ts) ^ ")"
 
 (* `Clock & TestClock` *)
-and show_joined names = String.concat " & " (List.map show_tyname names)
+and show_joined deps = String.concat " & " (List.map show_dep deps)
+
+(* `Clock`, or `Chan<Int>` *)
+and show_dep (d : tyname dep_ref) =
+  match d.dargs with
+  | [] -> show_tyname d.dep
+  | args ->
+      show_tyname d.dep ^ "<" ^ String.concat ", " (List.map show_ty args) ^ ">"
 
 (* `uses Clock, ..d` *)
 and show_uses (u : uses) =
   let tail = match u.dtail with Some t -> [ ".." ^ t.name ] | None -> [] in
-  "uses " ^ String.concat ", " (List.map show_tyname u.deps @ tail)
+  "uses " ^ String.concat ", " (List.map show_dep u.deps @ tail)
 
 (* An error set as it's written: `! Short(by: Money) | Frozen`. *)
 and show_errors (es : errors) =
@@ -907,8 +933,7 @@ let rec show_expr (e : expr) =
       in
       parens
         ("handler"
-         :: parens
-              ((if over then "over" else "for") :: List.map show_tyname deps)
+         :: parens ((if over then "over" else "for") :: List.map show_dep deps)
          :: fails
         @ needs @ List.map show_stmt state
         @ List.map
@@ -929,9 +954,14 @@ and show_with_item (i : with_item) =
   let under =
     match i.under with
     | [] -> []
-    | ds -> [ parens ("deps" :: List.map show_tyname ds) ]
+    | ds -> [ parens ("deps" :: List.map show_dep ds) ]
   in
-  match links @ under with [ one ] -> one | all -> parens ("over" :: all)
+  let item =
+    match links @ under with [ one ] -> one | all -> parens ("over" :: all)
+  in
+  match i.alias with
+  | Some d -> parens [ "as"; item; show_dep d ]
+  | None -> item
 
 and show_arm (a : arm) =
   let guard =
@@ -964,7 +994,7 @@ let show_fn (f : fn_def) =
         let tail =
           match u.dtail with Some t -> [ ".." ^ t.name ] | None -> []
         in
-        [ parens (("uses" :: List.map show_tyname u.deps) @ tail) ]
+        [ parens (("uses" :: List.map show_dep u.deps) @ tail) ]
     | None -> []
   in
   (* a test item, `test fn` *)
@@ -998,6 +1028,7 @@ let show_type_def (td : type_def) =
         [ parens [ "opaque"; parens ("fields" :: List.map show_field fs) ] ]
     | Errors es -> [ parens [ show_errors es ] ]
     | Dep ops -> [ parens ("ops" :: List.map show_field ops) ]
+    | Dep_alias d -> [ parens [ "alias"; show_dep d ] ]
     | Builtin -> [ "builtin" ]
   in
   let show_op (o : op) =
@@ -1012,7 +1043,9 @@ let show_type_def (td : type_def) =
     | [] -> []
     | os -> [ parens ("members" :: List.map show_op os) ]
   in
-  let keyword = match td.type_body with Dep _ -> "dep" | _ -> "type" in
+  let keyword =
+    match td.type_body with Dep _ | Dep_alias _ -> "dep" | _ -> "type"
+  in
   parens
     ((if td.type_pub then [ "pub" ] else [])
     @ (keyword :: name :: body) @ members)

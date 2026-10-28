@@ -40,7 +40,12 @@ type body =
   | Dep of field list
       (** a dependency, [dep Clock = ...]: its operations, each a function type
           that fails with exactly what it's written to fail with, and uses
-          nothing. A value of it is an implementation, a record of them *)
+          nothing. A value of it is an implementation, a record of them. A
+          generic one's operations name its parameters as [Var]s *)
+  | Dep_alias of Ty.dep
+      (** an alias, [dep Jobs = Chan<Job>]: a dependency of its own, with the
+          operations of the one it names, at those types (compiler.md, "Generic
+          dependencies") *)
 
 (* An opaque type's representation, [Rep], in its own module's view of
    it, or in its interface, [Hidden]: all another module learns of it is
@@ -183,6 +188,35 @@ let members_of path ops =
   in
   Path.Map.of_list (go [] ops)
 
+(* ---- dependencies ---- *)
+
+(* The operations of the dependency [d], at its type arguments: a generic
+   one's, with its [Var]s replaced by them, and an alias's, those of the
+   one it names (compiler.md, "Generic dependencies"). [find] finds a
+   type's declaration. [None] if [d] isn't a dependency, or is given the
+   wrong number of type arguments. *)
+let rec dep_fields find (d : Ty.dep) =
+  match find d.dpath with
+  | Some { body = Dep fs; params; _ }
+    when List.length params = List.length d.dargs ->
+      Some
+        (List.map
+           (fun f ->
+             { f with fty = Ty.apply { tys = d.dargs; rows = [] } f.fty })
+           fs)
+  | Some { body = Dep_alias t; _ } when d.dargs = [] -> dep_fields find t
+  | _ -> None
+
+(* What the alias at [p] names, if it's one. *)
+let alias_of find p =
+  match find p with Some { body = Dep_alias t; _ } -> Some t | _ -> None
+
+(* Whether [p] is a dependency, generic or an alias. *)
+let is_dep find p =
+  match find p with
+  | Some { body = Dep _ | Dep_alias _; _ } -> true
+  | _ -> false
+
 (* ---- named error sets ---- *)
 
 (* Where to find each named error set's errors, as it declares them, by its
@@ -236,12 +270,11 @@ let labels ~sets errs =
 let over_needs ~over deps (needs : Ty.row) : Ty.row =
   if not over then needs
   else
-    let have = List.map (fun (l : Ty.label) -> l.name) needs.labels in
     let extra =
       List.filter_map
         (fun d ->
-          let l = Ty.dep_label d in
-          if List.mem l have then None else Some (Ty.label l))
+          let l = Ty.dep_of d in
+          if List.exists (Ty.same_label l) needs.labels then None else Some l)
         deps
     in
     { needs with labels = Ty.sort_labels (needs.labels @ extra) }
@@ -259,18 +292,18 @@ let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
   | TyName ({ tref = Param i; _ }, _) -> Var i
   | TyName ({ tref = Named path; _ }, args) -> Con (path, List.map go args)
   | TyImpl { impl_deps; impl_over; impl_errors; impl_uses; _ } ->
-      let deps = dep_paths impl_deps in
+      let deps = deps_of ~sets impl_deps in
       Ty.impl ~over:impl_over
         ~fails:(written_errors ~rows ~sets impl_errors)
         deps
-        (over_needs ~over:impl_over deps (written_uses ~rows impl_uses))
+        (over_needs ~over:impl_over deps (written_uses ~rows ~sets impl_uses))
   | TyFn (ps, ret, errs, u, _) ->
       let ret = match ret with Some r -> go r | None -> Ty.unit in
       Fun
         ( List.map (of_written_param ~rows ~sets) ps,
           ret,
           written_errors ~rows ~sets errs,
-          written_uses ~rows u )
+          written_uses ~rows ~sets u )
   | TyInout _ ->
       (* the parser only writes `inout` on a function type's parameter *)
       assert false
@@ -289,28 +322,43 @@ and written_errors ~rows ~sets (es : Ast.Resolved.errors option) : Ty.row =
       { labels = of_errors ~sets es; tail = Option.bind es.etail (named rows) }
   | None -> Ty.closed
 
-and written_uses ~rows (u : Ast.Resolved.uses option) : Ty.row =
+and written_uses ~rows ~sets (u : Ast.Resolved.uses option) : Ty.row =
   match u with
   | Some u ->
-      { labels = dep_labels u.deps; tail = Option.bind u.dtail (named rows) }
+      {
+        labels = dep_labels ~sets u.deps;
+        tail = Option.bind u.dtail (named rows);
+      }
   | None -> Ty.closed
 
 and named rows (n : Ast.ident) = rows n.name
 
 (* The dependencies a `uses` lists, or that an implementation's type
-   joins with `&`. *)
-and dep_paths (ds : Ast.tname list) =
+   joins with `&`, with their type arguments. *)
+and deps_of ~sets (ds : Ast.tname Ast.dep_ref list) : Ty.dep list =
   List.filter_map
-    (fun (d : Ast.tname) ->
-      match d.tref with
-      | Named p -> Some p
+    (fun (d : Ast.tname Ast.dep_ref) ->
+      match d.dep.tref with
+      | Named p ->
+          Some { Ty.dpath = p; dargs = List.map (of_written ~sets) d.dargs }
       | Param _ -> (* resolve.ml only makes a dependency a [Named] *) None)
     ds
 
-(* The labels of the dependencies a `uses` lists, sorted. *)
-and dep_labels (ds : Ast.tname list) =
-  List.map Ty.label
-    (List.sort_uniq String.compare (List.map Ty.dep_label (dep_paths ds)))
+(* The labels of the dependencies a `uses` lists, sorted, each once. *)
+and dep_labels ?(sets = fun _ -> None) (ds : Ast.tname Ast.dep_ref list) =
+  let rec once = function
+    | [] -> []
+    | l :: rest ->
+        l :: once (List.filter (fun k -> not (Ty.same_label k l)) rest)
+  in
+  Ty.sort_labels (once (List.map Ty.dep_of (deps_of ~sets ds)))
+
+(* Just their paths. *)
+and dep_paths (ds : Ast.tname Ast.dep_ref list) =
+  List.filter_map
+    (fun (d : Ast.tname Ast.dep_ref) ->
+      match d.dep.tref with Named p -> Some p | Param _ -> None)
+    ds
 
 (* An error set as written, as declared errors: each tag with its
    payload's types, its fields' names dropped. *)
@@ -394,7 +442,7 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
     {
       labels =
         (match f.uses with
-        | Some (u : Ast.Resolved.uses) -> dep_labels u.deps
+        | Some (u : Ast.Resolved.uses) -> dep_labels ~sets u.deps
         | None -> []);
       tail = Some 1;
     }
@@ -411,7 +459,7 @@ let signature ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
         ->
           (* transparent: it needs what the function uses; it can fail to
              be installed only with what's written *)
-          let ds = dep_paths impl_deps in
+          let ds = deps_of ~sets impl_deps in
           Ty.impl ~over:impl_over
             ~fails:(written_errors ~rows ~sets impl_errors)
             ds
@@ -454,6 +502,10 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
     | Opaque { rep; _ } -> Opaque (Rep (of_written ~sets rep))
     | Errors es -> Errors (declared_errors ~sets es)
     | Dep ops -> Dep (List.map field ops)
+    | Dep_alias d -> (
+        match deps_of ~sets [ d ] with
+        | [ d ] -> Dep_alias d
+        | _ -> (* resolve.ml makes it a dependency *) assert false)
     | Builtin -> Builtin
   in
   let op onum (o : Ast.Resolved.op) =
@@ -489,7 +541,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
     opaque =
       (match td.type_body with
       | Opaque _ | Opaque_fields _ -> true
-      | Fields _ | Ctors _ | Errors _ | Dep _ | Builtin -> false);
+      | Fields _ | Ctors _ | Errors _ | Dep _ | Dep_alias _ | Builtin -> false);
     loc = Some td.type_name.loc;
   }
 
@@ -499,7 +551,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
    (deps.md, "Implementations"). *)
 let handler_deps (f : Ast.Resolved.fn_def) =
   match f.body.kind with
-  | Handler { deps; _ } -> Some (dep_paths deps)
+  | Handler { deps; _ } -> Some (deps_of ~sets:(fun _ -> None) deps)
   | _ -> None
 
 (* The interface of module [home] (module-build.md, "Interface

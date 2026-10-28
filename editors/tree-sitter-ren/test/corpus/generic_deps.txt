@@ -1,0 +1,263 @@
+================================================================================
+generic dependencies: a generic one, and an alias of one at its types
+================================================================================
+
+pub dep Chan<T> =
+  send: fn(x: T)
+  take: fn() -> Option<T>
+dep Jobs = Chan<Job>
+pub dep Users = store.Cache<Int, User>
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (dependency_definition
+    (visibility)
+    (type_identifier)
+    (type_parameters
+      (type_identifier))
+    (operation
+      (identifier)
+      (function_type
+        (function_type_parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (operation
+      (identifier)
+      (function_type
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))))
+  (dependency_definition
+    (type_identifier)
+    (dependency
+      (type_identifier)
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier))))))
+  (dependency_definition
+    (visibility)
+    (type_identifier)
+    (dependency
+      (identifier)
+      (type_identifier)
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))
+        (named_type
+          (type_name
+            (type_identifier)))))))
+
+================================================================================
+generic dependencies: what a function uses, and a handler's type parameters
+================================================================================
+
+fn note(n: Int) uses Log<Int>, store.Cache<Str, Int> = Log.add(n)
+fn add_all<T has eq, ord, U>(xs: Array<T>) uses Log<T> = 1
+handler queue<T>() for Chan<T> =
+  send(x) => ()
+handler tally<T>() over Chan<T> =
+  send(x) => next.send(x)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (uses_clause
+      (dependency
+        (type_identifier)
+        (type_arguments
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (dependency
+        (identifier)
+        (type_identifier)
+        (type_arguments
+          (named_type
+            (type_name
+              (type_identifier)))
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (call_expression
+      (item_expression
+        (type_name
+          (type_identifier))
+        (identifier))
+      (arguments
+        (identifier))))
+  (function_definition
+    (identifier)
+    (type_parameters
+      (constrained_type_parameter
+        (type_identifier)
+        (identifier)
+        (identifier))
+      (type_identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (uses_clause
+      (dependency
+        (type_identifier)
+        (type_arguments
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (number))
+  (handler_definition
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (parameters)
+    (dependency
+      (type_identifier)
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (handler_arm
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)))
+      (unit)))
+  (handler_definition
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (parameters)
+    (dependency
+      (type_identifier)
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (handler_arm
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)))
+      (method_call_expression
+        (identifier)
+        (identifier)
+        (arguments
+          (identifier))))))
+
+================================================================================
+generic dependencies: installed as an alias, and implementations at types
+================================================================================
+
+fn main() =
+  with queue() as Jobs, queue() as Done in
+    work()
+  with cached() over limited() as Chan<Int> in 1
+  let q: Chan<Job> = queue()
+  let both: Chan<Int> & Log<Str> = pair()
+  let o: over Chan<Int> = tally()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (with_expression
+        (with_as
+          (call_expression
+            (identifier)
+            (arguments))
+          (dependency
+            (type_identifier)))
+        (with_as
+          (call_expression
+            (identifier)
+            (arguments))
+          (dependency
+            (type_identifier)))
+        (block
+          (call_expression
+            (identifier)
+            (arguments))))
+      (with_expression
+        (with_as
+          (with_chain
+            (call_expression
+              (identifier)
+              (arguments))
+            (call_expression
+              (identifier)
+              (arguments)))
+          (dependency
+            (type_identifier)
+            (type_arguments
+              (named_type
+                (type_name
+                  (type_identifier))))))
+        (number))
+      (let_statement
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (call_expression
+          (identifier)
+          (arguments)))
+      (let_statement
+        (identifier)
+        (implementation_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (call_expression
+          (identifier)
+          (arguments)))
+      (let_statement
+        (identifier)
+        (implementation_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (call_expression
+          (identifier)
+          (arguments))))))

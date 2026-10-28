@@ -58,13 +58,13 @@
 (* [type found = Infer_env.found = ...] re-exports a type along with its
    constructors (or fields), so they can be written [Infer.Field_of] as well
    as [Infer_env.Field_of]. *)
-type found = Infer_env.found =
+type 'l found_ = 'l Infer_env.found_ =
   | Field_of of Path.t
   | Ctor_of of Path.t * string
   | Error_tag
   | Method_of of Path.t
-  | Installs of Path.t
-  | Installs_handler of Path.t list
+  | Installs of { key : 'l; from : Path.t }
+  | Installs_handler of 'l list
   | Install_order of int list
   | Handler_facts of {
       forwards : (Path.t * string * Ty.ty) list;
@@ -73,9 +73,11 @@ type found = Infer_env.found =
   | Handles
   | Fail_arm
   | Unwrap
-  | Block of { name : string; given : Path.t list }
+  | Block of { name : string; given : 'l list }
   | Builtin_op
   | Generic_op of string
+
+type found = Ty.label found_
 
 module Nodes = Infer_top.Nodes
 

@@ -71,6 +71,59 @@ it, and a call to a function that uses `Clock` indirectly is covered by that
 function's signature, as `&` marks only the thing changed. It never takes
 `&` either: a handler's state isn't a value the caller holds.
 
+## Generic dependencies
+
+A dependency can take type parameters, as a type does, and a handler
+of one takes them too, with what each needs written as a function's
+are:
+
+```ren
+dep Log<T> =
+  add: fn(x: T)
+  all: fn() -> Array<T>
+
+handler log<T>() for Log<T> =
+  var xs: Array<T> = []
+  add(x) => &xs.push(x)
+  all() => xs
+
+handler seen<T has eq>() for Seen<T> = ...
+```
+
+- **It's found by its full type.** `Log<Int>` and `Log<Str>` are two
+  dependencies, which a `with` installs side by side, and a function
+  says which it uses: `uses Log<Int>`, or `uses Log<T>` in one generic
+  in `T`.
+- **A call is written without the type arguments,** `Log.add(x)`: what
+  it's given, or what its result is used as, says which instance it
+  calls, as a generic function's call says its type arguments. Where
+  nothing does, `let n = Log.all().len()` in a function that uses both,
+  it's an error that says to write the type.
+- **A `with` installs the instance its item's type says.** `let ints:
+  Log<Int> = log()`, then `with ints in`. An item at no particular type,
+  `with log() in`, is at the type of the body's one use of `Log`.
+- **A handler's type parameters are its dependencies'.** Each is a type
+  argument of what it's `for` or `over`, since nothing else could say
+  what it is where the handler is installed.
+- **An alias is a dependency of its own.** `dep Jobs = Chan<Job>`
+  declares `Jobs`, with `Chan<Job>`'s operations, called as `Jobs.send(j)`.
+  `uses Jobs` doesn't give `Chan<Job>`, so `Jobs` and `Done`, both
+  `Chan<Job>`, are two dependencies, installed side by side with `as`:
+
+```ren
+with queue() as Jobs, queue() as Done in
+  work()
+```
+
+  A description written as an alias's, `let q: Jobs = queue()`, is
+  installed as it, `with q in`. An alias of a dependency that isn't
+  generic, `dep Replica = Db`, is how two of one are installed at once.
+
+A debug build finds a generic dependency's implementation by its type
+arguments' descriptors, those a generic function is given; a release
+build specializes the function, and the key is a constant again
+(compiler.md, "Generic dependencies").
+
 ## Implementations
 
 An implementation is a value of the dependency's type, made by a

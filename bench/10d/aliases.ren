@@ -1,0 +1,49 @@
+// Stage 10d, step 2: the rest of generic dependencies (compiler.md,
+// "Generic dependencies"): an alias of a dependency that isn't generic,
+// installed beside it; a description whose written type is an alias; a
+// member of a generic dependency, its type arguments inferred; and a
+// generic handler over another, each at the other's types.
+
+dep Db =
+  get: fn() -> Int
+
+handler fixed(n: Int) for Db =
+  get() => n
+
+dep Replica = Db
+
+dep Chan<T> =
+  send: fn(x: T)
+  take: fn() -> Option<T>
+
+  pub fn make() -> Chan<T> = queue()
+
+handler queue<T>() for Chan<T> =
+  var xs: Array<T> = []
+  send(x) => &xs.push(x)
+  take() => if xs.len() == 0 then None else Some(xs[0])
+
+dep Jobs = Chan<Int>
+
+handler limit<T>() over Chan<T> =
+  send(x) => next.send(x)
+  take() => next.take()
+
+fn both() -> Int uses Db, Replica = Db.get() * 10 + Replica.get()
+
+fn main() uses Console =
+  with fixed(1), fixed(2) as Replica in
+    print(both())
+  let q: Jobs = queue()
+  with q in
+    Jobs.send(3)
+    print(Jobs.take())
+  let m: Chan<Str> = Chan.make()
+  with m in
+    Chan.send("s")
+    let s: Option<Str> = Chan.take()
+    print(s)
+  with limit() over queue() in
+    Chan.send(4)
+    let f: Option<Int> = Chan.take()
+    print(f)

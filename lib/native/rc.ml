@@ -94,7 +94,6 @@ let rhs_atoms (r : rhs) : atom list =
   | Env_get (x, _)
   | Arg (x, _)
   | Block_of (_, x)
-  | Op_block (x, _, _)
   | Is_unique x
   | Unpack (x, _, _)
   | Hole (x, _) ->
@@ -113,7 +112,8 @@ let rhs_atoms (r : rhs) : atom list =
   | Load v | Addr v -> [ Var v ]
   | Global _ -> []
   | Install { outer; impls; deps; ndeps } -> (outer :: impls) @ [ deps; ndeps ]
-  | Given { outer; caller; _ } -> [ outer; caller ]
+  | Op_block (x, _, args, _) -> x :: args
+  | Given { outer; caller; deps } -> outer :: caller :: List.concat_map snd deps
   | Reset (x, kept) -> x :: List.map snd kept
 
 (* What [s] itself reads, not in its blocks: a [Set]'s variable is what
@@ -130,8 +130,9 @@ let stmt_atoms (s : stmt) : atom list =
   | Free (x, kept) -> x :: List.map snd kept
   | Call_fails { args; _ } -> args
   | Call_block { block; ev; args; _ } -> block :: ev :: args
-  | Call_handler { handler; outer; body; desc; _ } ->
+  | Call_handler { handler; outer; body; desc; deps; _ } ->
       [ handler; outer; body; desc ]
+      @ List.concat_map (fun (k : key) -> k.kargs) deps
   | If (c, _, _) | Switch (c, _, _) | Raise (c, _) | Return c | Assert (c, _) ->
       [ c ]
   | Loop _ | Break _ | Joins _ | Jump _ | Catch _ | Panic _ -> []
@@ -685,7 +686,8 @@ let operands fi (s : stmt) : atom list * atom list =
   | Fill (_, x) -> ([ x ], [])
   | Call_fails { fn; args; _ } -> call fn args
   | Call_block { args; _ } -> (args, [])
-  | Call_handler { handler; desc; _ } -> ([], [ handler; desc ])
+  | Call_handler { handler; desc; deps; _ } ->
+      ([], handler :: desc :: List.concat_map (fun (k : key) -> k.kargs) deps)
   | Return x | Raise (x, _) -> ([ x ], [])
   | _ -> ([], [])
 

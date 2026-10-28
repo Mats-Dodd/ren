@@ -365,12 +365,17 @@ let rhs env (r : rhs) : layout =
       operand env "the dependencies installed" Ptr deps;
       operand env "how many are installed" Int ndeps;
       Ev
-  | Given { outer; caller; _ } ->
+  | Given { outer; caller; deps } ->
       operand env "a block's evidence" Ev outer;
       operand env "its caller's" Ev caller;
+      List.iter
+        (fun (_, args) ->
+          List.iter (operand env "a dependency's type argument" Desc) args)
+        deps;
       Ev
-  | Op_block (ev, _, _) ->
+  | Op_block (ev, _, args, _) ->
       operand env "the evidence an operation is found in" Ev ev;
+      List.iter (operand env "a dependency's type argument" Desc) args;
       Block
   | Is_unique x ->
       operand env "what's asked if it's unique" Boxed x;
@@ -526,11 +531,16 @@ let rec stmt env (s : stmt) : env =
       expect env (show_var error) Boxed error.layout;
       Option.iter (block (define env error)) on_error;
       define env result
-  | Call_handler { result; handler; outer; body; desc; error; on_error; _ } ->
+  | Call_handler { result; handler; outer; body; desc; deps; error; on_error }
+    ->
       operand env "a handler's description" Boxed handler;
       operand env "the evidence it's installed on" Ev outer;
       operand env "the body it runs" Block body;
       operand env "the body's descriptor" Desc desc;
+      List.iter
+        (fun k ->
+          List.iter (operand env "a dependency's type argument" Desc) k.kargs)
+        deps;
       if not (wordable result.layout) then
         fail env (sprintf "a `with` giving %s" (show_layout result.layout));
       expect env (show_var error) Boxed error.layout;
@@ -1290,9 +1300,10 @@ let rec rc_stmt env (st : rc_state option) (s : stmt) : rc_state option =
                    b))
             on_error;
           Some (fresh_var env st result B_owned)
-      | Call_handler { result; handler; desc; error; on_error; _ } ->
+      | Call_handler { result; handler; desc; deps; error; on_error; _ } ->
           read env st handler;
           read env st desc;
+          List.iter (fun k -> List.iter (read env st) k.kargs) deps;
           let st = call_changes env st in
           Option.iter
             (fun b ->

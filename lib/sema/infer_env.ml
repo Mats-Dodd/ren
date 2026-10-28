@@ -13,7 +13,7 @@ open Types
 (* What a lookup through a type found, or what else inference decided
    about an expression or pattern that a later pass needs, so it never
    decides it again (compiler.md, "What it has to do"). *)
-type found =
+type 'l found_ =
   | Field_of of Path.t  (** a field access: the record type the field is in *)
   | Ctor_of of Path.t * string  (** a constructor: its type, and its name *)
   | Error_tag
@@ -22,10 +22,12 @@ type found =
   | Method_of of Path.t
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
-  | Installs of Path.t
-      (** a link of a `with`'s item that's an implementation of this dependency
-      *)
-  | Installs_handler of Path.t list
+  | Installs of { key : 'l; from : Path.t }
+      (** a link of a `with`'s item that's an implementation of this dependency:
+          what it's installed as, [key], its type arguments as inference found
+          them, and the dependency it implements, [from], which differs from
+          [key]'s for one installed as an alias, `with queue() as Jobs` *)
+  | Installs_handler of 'l list
       (** a link that describes a handler of these dependencies, which it makes
           an instance of *)
   | Install_order of int list
@@ -46,7 +48,7 @@ type found =
   | Unwrap
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
-  | Block of { name : string; given : Path.t list }
+  | Block of { name : string; given : 'l list }
       (** a block: a lambda, or a named function or an operation used as a
           value, which lowering makes a lambda written where it's used. Its name
           (Ty.lambda_id), and [given], the dependencies the type of the
@@ -62,6 +64,10 @@ type found =
       (** at an operator's own node, `a + b` on a type variable, or at an
           associated value's, `T.zero`: done by whatever its type turns out to
           have of this requirement, `add` *)
+
+(* What inference keeps of it, while a group is checked: its labels are
+   the checker's, whose type arguments it may still learn. *)
+type found = label found_
 
 (* The type arguments a use of a top-level function, a member, an
    associated value or an intrinsic picked, by the generic variables of
@@ -88,7 +94,7 @@ and picked =
    says it's a `with`. *)
 type call = {
   cloc : Loc.t;
-  own : string list;
+  own : label list;
   row : row;
   needs : bool;
   callee : Path.t option;  (** the top-level function called, if it's one *)
@@ -246,11 +252,33 @@ and impl_op = {
    what it uses. *)
 and install = {
   wloc : Loc.t;
-  wdeps : string list;
+  wdeps : label list;
   wbody : row;
   wouter : row;
   wself : Path.t;  (** the function the `with` or the block is in *)
   wblock : bool;  (** whether it's a block's, for a message *)
+  wsrc : string;
+      (** what installs it, as it's written, `log()`, for a message about
+          which instance of a generic dependency it installs *)
+}
+
+(* A call of a generic dependency's operation, `Log.all()` at [xloc],
+   whose instance, [xlabel], `Log<α>`, still had open type arguments when
+   it was made: it's joined to [xinto], what the function or lambda it's
+   in uses, once the group's other uses are joined and what each value is
+   used as is known, by the solver. If it's open still, the function's
+   declared `uses`, [xdeclared], says which, if it lists exactly one of
+   that dependency; otherwise it's an error, unless the function is given
+   what fixes it, a generic function's parameter (compiler.md, "Generic
+   dependencies"). [xcall] is the call as it's written, for a message. *)
+and instance = {
+  xloc : Loc.t;
+  xlabel : label;
+  xinto : row;
+  xcall : string;
+  xdeclared : label list option;
+  xself : Path.t;
+  xwhat : Infer_msg.user;
 }
 
 (* A place an implementation is used: a `with` installs it, or it's passed
@@ -268,7 +296,7 @@ and copy = {
   ksrc : row;
   kdst : row;
   kwhat : Infer_msg.user;  (** what needs it, for a message: a `with` *)
-  mutable kpassed : string list;
+  mutable kpassed : label list;
 }
 
 (* A handler: [nrow] is what its state and arms use, and [ncalls] the
@@ -281,11 +309,11 @@ and copy = {
    solver, and then a written row is closed. *)
 and handler_needs = {
   nself : Path.t;
-  nover : string list;
+  nover : label list;
   nfails : row;
       (** what its state and `finally` fail with, which is all it can fail to
           start with once the group is done *)
-  ndeclared : string list option;
+  ndeclared : label list option;
   nrow : row;
   ncalls : call list ref;
 }
@@ -294,7 +322,7 @@ and handler_needs = {
    still gets from outside, and why ([hnote]), which the solver finds as
    it decides what each `with` installs: a message that says its callers
    have to install it explains with this (infer_declared.ml). *)
-and withheld = { hfn : Path.t; hdep : string; hnote : Infer_msg.withheld }
+and withheld = { hfn : Path.t; hdep : label; hnote : Infer_msg.withheld }
 
 (* Something that has to hold of the group's types and rows, which can be
    decided only once every body of the group is checked: a constraint. Each
@@ -329,6 +357,9 @@ and constr =
   | Install of install
       (** a `with` that installs: its body uses no more than what it installs
           and what's installed outside it *)
+  | Instance of instance
+      (** a call of a generic dependency's operation whose type arguments the
+          call didn't fix: which instance it uses *)
   | Impl_op of impl_op
       (** an implementation's operation fails with no more than its dependency
           declares *)
@@ -562,6 +593,9 @@ and ctx = {
   tparams : ty list;  (** what the type parameters in scope stand for *)
   named : (string * row) list;
       (** the rows the function's signature names, `..d`, by name (ast.ml) *)
+  declares : label list option;
+      (** the dependencies the top-level function declares it uses, if it
+          declares them (Infer_declared.declared_uses) *)
 }
 
 (* A dot call that turned out to call [callee], a method of the module
@@ -589,13 +623,24 @@ let in_params params tail =
 let rec row_end r =
   match repr_row r with RExtend (_, rest) -> row_end rest | r -> r
 
+(* A dependency's label as the module writes its type, `Chan<Int>`. *)
+let shown_dep env (l : label) =
+  show_dep (Types.printer ~names:env.names env.st) l
+
+(* Dependencies an implementation implements, joined as its type joins
+   them, `Clock & Chan<Int>`. *)
+let shown_deps env ds =
+  String.concat " & " (List.map (fun d -> shown_dep env (dep_of d)) ds)
+
 (* The dependencies of the row [r], as the module names them. *)
-let dep_names env r =
-  List.map (fun n -> env.names (Ty.dep_path n)) (row_names r)
+let dep_names env r = List.map (shown_dep env) (sorted_labels r)
+
+(* Whether [l] is one of [ls]. *)
+let has_dep ls l = List.exists (same_label l) ls
 
 (* Whether the call [c] brings in [dep] itself: it had it before the
    join, and no `with` around it installs it. *)
-let brings c dep = List.mem dep c.own
+let brings c dep = has_dep c.own dep
 
 (* Name the block at [node]: the next of the function it's in
    (Ty.lambda_id), recorded at [node] for lowering, which gives the

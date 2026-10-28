@@ -49,7 +49,9 @@ type item =
       idx : int;
       it : with_item;
       links : (with_link * impl) list;
-      installs : Path.t list;
+      installs : (label * Path.t) list;
+          (** what it's installed as, each with the dependency it implements
+              ([Infer_env.Installs]) *)
     }
   | Bad_item of int
 
@@ -58,10 +60,8 @@ let sprintf = Printf.sprintf
 (* The dependencies a handler of [deps] implements, whose type its body
    gives (Types.impl_type): the dependency's, if it implements one, or the
    type that lists them. *)
-let handler_deps (deps : tname list) =
-  List.filter_map
-    (fun (d : tname) -> match d.tref with Named p -> Some p | Param _ -> None)
-    deps
+let handler_deps env cx (deps : tname dep_ref list) =
+  written_deps env ~tvars:cx.tparams deps
 
 (* A handler's body (ast.ml, [Handler]), the body of its function,
    [cx.self], whose result is the handler's type ([handler_deps]). Its
@@ -85,7 +85,8 @@ let rec handler core env cx (h : expr) ~needs ~fails ~declared =
 
 and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
     ~declared =
-  let own = handler_deps deps in
+  let own = handler_deps env cx deps in
+  let paths = List.map (fun d -> d.dpath) own in
   (* the operations one over its dependencies leaves out, which lowering
      makes calls of the one under it *)
   let forwards =
@@ -105,7 +106,7 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
                   else Some (p, f.fname, f.fty))
                 fields
           | _ -> [])
-        own
+        paths
   in
   Hashtbl.replace cx.found node (Handler_facts { forwards; body_ty = None });
   (* its state, arms and `finally` run while an operation does, or as
@@ -118,8 +119,10 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
     Some
       ( (if List.mem cx.self env.spelled then sprintf "`pub handler %s`" name
          else sprintf "`handler %s`" name),
-        if over then "over " ^ String.concat " & " (List.map env.names own)
-        else "for " ^ String.concat ", " (List.map env.names own) )
+        if over then "over " ^ shown_deps env own
+        else
+          "for "
+          ^ String.concat ", " (List.map (fun d -> shown_deps env [ d ]) own) )
   in
   List.iter
     (fun (s : stmt) ->
@@ -134,9 +137,16 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
       let op =
         match a.arm_op with
         | Dep_op (p, op) -> (
-            match dep_op_in op (Hashtbl.find env.types p) with
+            match dep_op_in env op (Hashtbl.find env.types p) with
             | Some fd -> (
-                match field_type ~tvars:[] fd with
+                (* a generic one's operation at the handler's types, `T`
+                   in `for Log<T>` *)
+                let tvars =
+                  match List.find_opt (fun d -> d.dpath = p) own with
+                  | Some d -> d.dargs
+                  | None -> []
+                in
+                match field_type ~tvars fd with
                 | TFun (ps, r, errs, _) -> Some (p, op, ps, r, errs)
                 | _ -> None)
             | None -> None)
@@ -200,13 +210,13 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
      from sharing the handler's row *)
   if over then
     join_uses env ~loc ~what:Installing
-      (extend (List.map (fun p -> dep (Ty.dep_label p)) own) (fresh_row env.st))
+      (extend (List.map dep_of own) (fresh_row env.st))
       needs;
   defer env
     (Needs
        {
          nself = cx.self;
-         nover = (if over then List.map Ty.dep_label own else []);
+         nover = (if over then List.map dep_of own else []);
          nfails = fails;
          ndeclared = declared;
          nrow = needs;
@@ -289,6 +299,7 @@ and classify core env cx (lk : with_link) : link =
                    which are more likely what it implements, if there are
                    any, since what it implements isn't known *)
                 let used = List.map Ty.dep_path (row_names uses) in
+                let used = List.sort_uniq compare used in
                 let ty =
                   match
                     List.filter
@@ -442,11 +453,12 @@ and replayed cx (item : expr) link =
       match Journal.header_at path with
       | Some h ->
           let want =
-            List.filter (fun (d : Path.t) -> List.mem d.name h.deps) i.deps
+            List.filter (fun (d : dep) -> List.mem d.dpath.name h.deps) i.deps
           in
           if want = [] || List.length want = List.length i.deps then link
           else (
-            Hashtbl.replace cx.narrowed item.node want;
+            Hashtbl.replace cx.narrowed item.node
+              (List.map (fun d -> d.dpath) want);
             Implementation (lk, { i with deps = want }))
       | None -> link)
   | _ -> link
@@ -465,7 +477,8 @@ and replayed cx (item : expr) link =
 and with_ core env cx (e : expr) (items : with_item list) body =
   let kw = keyword e.loc 4 in
   let src (x : expr) = Option.value (env.source x) ~default:"this" in
-  let shown deps = String.concat " & " (List.map env.names deps) in
+  let shown deps = shown_deps env deps in
+  let paths (ds : dep list) = List.map (fun d -> d.dpath) ds in
   let checked =
     List.mapi
       (fun idx (it : with_item) ->
@@ -475,9 +488,11 @@ and with_ core env cx (e : expr) (items : with_item list) body =
   let under_loc (it : with_item) =
     match it.under with
     | [] -> it.iloc
-    | (d : tname) :: rest ->
-        Loc.span d.tloc
-          (List.fold_left (fun _ (d : tname) -> d.tloc) d.tloc rest)
+    | (d : tname dep_ref) :: rest ->
+        Loc.span d.dep.tloc
+          (List.fold_left
+             (fun _ (d : tname dep_ref) -> d.dep.tloc)
+             d.dep.tloc rest)
   in
   (* each item, checked as a chain: what it installs, or nothing, if
      something's wrong *)
@@ -511,6 +526,24 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                 && Hashtbl.find_opt cx.binders b.id <> Some Let_bound
             | _ -> false
           in
+          (* a generic link goes over one at its own types: `limit()`
+             over `queue()` makes them both `Chan<α>`, or over the
+             installed `Chan<Int>` *)
+          let same_args (ai : impl) (deps : dep list) =
+            List.for_all
+              (fun (d : dep) ->
+                match
+                  List.find_opt (fun (e : dep) -> e.dpath = d.dpath) deps
+                with
+                | Some e when List.length e.dargs = List.length d.dargs -> (
+                    try
+                      List.iter2 (Unify.unify env.st) d.dargs e.dargs;
+                      true
+                    with Unify.Mismatch | Unify.Infinite -> false)
+                | Some _ -> false
+                | None -> true)
+              ai.deps
+          in
           let rec fits = function
             | ((a : with_link), (ai : impl)) :: ((b, bi) :: _ as rest) ->
                 if not ai.over then (
@@ -518,8 +551,17 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                     (not_over ~param:(param a) a.link.loc ~link:(src a.link)
                        ~name:(name a) ~deps:(shown ai.deps) ~uloc:b.link.loc);
                   false)
-                else if not (List.for_all (fun d -> List.mem d bi.deps) ai.deps)
+                else if
+                  not
+                    (List.for_all
+                       (fun d -> List.mem d (paths bi.deps))
+                       (paths ai.deps))
                 then (
+                  report env
+                    (not_one_under b.link.loc ~link:(src a.link)
+                       ~deps:(shown ai.deps) ~under:(src b.link));
+                  false)
+                else if not (same_args ai bi.deps) then (
                   report env
                     (not_one_under b.link.loc ~link:(src a.link)
                        ~deps:(shown ai.deps) ~under:(src b.link));
@@ -527,6 +569,7 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                 else fits rest
             | [ (b, bi) ] -> (
                 let under = List.sort_uniq compare (Iface.dep_paths it.under) in
+                let bdeps = paths bi.deps in
                 match under with
                 | [] when bi.over ->
                     report env
@@ -541,27 +584,62 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                          ~uloc:(under_loc it));
                     false
                 | under
-                  when List.for_all (fun d -> List.mem d bi.deps) under
-                       && under <> bi.deps ->
-                    (* `h() over A`, for an `h` over `A & B` *)
-                    report env
-                      (over_some (under_loc it) ~link:(src b.link)
-                         ~deps:(List.map env.names bi.deps)
-                         ~named:(List.map env.names under));
-                    false
-                | under when under <> bi.deps ->
+                  when under = bdeps
+                       && not
+                            (same_args bi
+                               (Infer_written.written_deps env ~tvars:cx.tparams
+                                  it.under)) ->
                     report env
                       (not_one_under (under_loc it) ~link:(src b.link)
                          ~deps:(shown bi.deps)
-                         ~under:("over " ^ shown under));
+                         ~under:
+                           ("over "
+                           ^ String.concat " & "
+                               (List.map
+                                  (fun (d : dep) -> shown [ d ])
+                                  (Infer_written.written_deps env
+                                     ~tvars:cx.tparams it.under))));
+                    false
+                | under
+                  when List.for_all (fun d -> List.mem d bdeps) under
+                       && under <> bdeps ->
+                    (* `h() over A`, for an `h` over `A & B` *)
+                    report env
+                      (over_some (under_loc it) ~link:(src b.link)
+                         ~deps:(List.map env.names bdeps)
+                         ~named:(List.map env.names under));
+                    false
+                | under when under <> bdeps ->
+                    report env
+                      (not_one_under (under_loc it) ~link:(src b.link)
+                         ~deps:(shown bi.deps)
+                         ~under:
+                           ("over "
+                           ^ String.concat " & " (List.map env.names under)));
                     false
                 | _ -> true)
             | [] -> false
           in
           if fits impls then
             let bottom = snd (List.nth impls (List.length impls - 1)) in
-            Some
-              (Installs_item { idx; it; links = impls; installs = bottom.deps })
+            match it.alias with
+            | None ->
+                Some
+                  (Installs_item
+                     {
+                       idx;
+                       it;
+                       links = impls;
+                       installs =
+                         List.map (fun d -> (dep_of d, d.dpath)) bottom.deps;
+                     })
+            | Some a -> (
+                match installed_as env cx it impls a with
+                | Some key ->
+                    Some
+                      (Installs_item
+                         { idx; it; links = impls; installs = [ key ] })
+                | None -> Some (Bad_item idx))
           else Some (Bad_item idx))
       checked
   in
@@ -569,19 +647,23 @@ and with_ core env cx (e : expr) (items : with_item list) body =
   let ok =
     ref (not (List.exists (function Bad_item _ -> true | _ -> false) sorted))
   in
-  let seen = Hashtbl.create 8 in
+  let seen = ref [] in
   List.iter
     (function
       | Installs_item { it; installs; _ } -> (
+          let installs = List.map fst installs in
           (* the first item each of its dependencies is installed by, if
-             one is; reported once, at the first such item *)
+             one is; reported once, at the first such item. A `with` is a
+             set of labels: `Log<Int>` beside `Log<Str>` is two *)
           let twice =
             List.filter_map
               (fun d ->
-                Option.map (fun first -> (d, first)) (Hashtbl.find_opt seen d))
+                Option.map
+                  (fun (_, first) -> (d, first))
+                  (List.find_opt (fun (l, _) -> same_label l d) !seen))
               installs
           in
-          List.iter (fun d -> Hashtbl.replace seen d (it, installs)) installs;
+          List.iter (fun d -> seen := (d, (it, installs)) :: !seen) installs;
           match twice with
           | (_, ((first : with_item), all)) :: _ ->
               ok := false;
@@ -599,17 +681,30 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                   @
                   match bottom.under with
                   | [] -> []
-                  | u -> [ shown (Iface.dep_paths u) ])
+                  | u ->
+                      [
+                        String.concat " & "
+                          (List.map
+                             (fun (d : tname dep_ref) ->
+                               match d.dep.tref with
+                               | Named p -> env.names p
+                               | Param _ -> "")
+                             u);
+                      ])
               in
               let chain =
                 if first.under <> [] then Some (written first it)
                 else if it.under <> [] then Some (written it first)
                 else None
               in
+              let names ls = List.map (shown_dep env) ls in
               report env
-                (installed_twice it.iloc ~deps:(List.map env.names deps)
-                   ~first:first.iloc ~chain
-                   ~all:(if List.length all > 1 then Some (shown all) else None))
+                (installed_twice it.iloc ~deps:(names deps) ~first:first.iloc
+                   ~chain
+                   ~all:
+                     (if List.length all > 1 then
+                        Some (String.concat " & " (names all))
+                      else None))
           | [] -> ())
       | _ -> ())
     sorted;
@@ -658,11 +753,11 @@ and with_ core env cx (e : expr) (items : with_item list) body =
       (* each item around the ones after it, each chain's bottom outermost *)
       let rec nest cx = function
         | [] -> core.infer env cx body
-        | (_, _, links, _) :: rest ->
+        | (_, _, links, keys) :: rest ->
             let rec chain cx = function
               | [] -> nest cx rest
               | ((lk : with_link), (i : impl)) :: above ->
-                  install env cx lk i (fun cx -> chain cx above)
+                  install env cx lk i ~keys (fun cx -> chain cx above)
             in
             chain cx (List.rev links)
       in
@@ -674,7 +769,11 @@ and with_ core env cx (e : expr) (items : with_item list) body =
    never how they're written. Two that each need the other are reported,
    and there's no order. *)
 and install_order env ~src items =
-  let labels deps = List.sort compare (List.map Ty.dep_label deps) in
+  (* by name: an item's needs are met by whatever installs a dependency
+     of that name *)
+  let labels deps =
+    List.sort_uniq compare (List.map (fun ((l : label), _) -> l.name) deps)
+  in
   let needs_of (_, _, links, installs) =
     let own = labels installs in
     List.sort_uniq compare
@@ -741,18 +840,26 @@ and install_order env ~src items =
    run with what's installed where it's installed. What's installed is
    each dependency [i] lists, sharing one state, or the one it is
    (deps.md, "Implementations"). *)
-and install env cx (lk : with_link) (i : impl) inner =
+and install env cx (lk : with_link) (i : impl) ~keys inner =
   let loc = lk.link.loc in
+  let src = Option.value (env.source lk.link) ~default:"this" in
   use_row env cx ~loc ~needs:true (copy_needs env ~loc ~what:Installing i.needs);
   (* its kind is recorded at a node of its own, which needs a type *)
   Hashtbl.replace cx.nodes lk.knode (TImpl i);
+  (* a link above the bottom of a chain is installed as what it goes
+     over, the bottom's keys, which an alias names only at the bottom *)
+  let keys =
+    if List.length keys = List.length i.deps then keys
+    else List.map (fun d -> (dep_of d, d.dpath)) i.deps
+  in
   Hashtbl.replace cx.found lk.knode
-    (match i.deps with [ d ] -> Installs d | deps -> Installs_handler deps);
+    (match keys with
+    | [ (key, from) ] -> Installs { key; from }
+    | keys -> Installs_handler (List.map fst keys));
   (* [inner], with each of [deps] installed around it, the first outermost *)
   let rec around cx = function
     | [] -> inner cx
-    | d :: rest ->
-        let label = Ty.dep_label d in
+    | (label, _) :: rest ->
         (* the body's own row, which the solver relates to the outer one
            once the group is done *)
         let inside = { cx with uses = fresh_row env.st; calls = ref [] } in
@@ -766,13 +873,77 @@ and install env cx (lk : with_link) (i : impl) inner =
                wouter = cx.uses;
                wself = cx.self;
                wblock = false;
+               wsrc = src;
              });
         (* the body's calls bring in what they bring in, but [d] *)
         cx.calls :=
           List.map
-            (fun c -> { c with own = List.filter (( <> ) label) c.own })
+            (fun c -> { c with own = without_labels [ label ] c.own })
             !(inside.calls)
           @ !(cx.calls);
         tb
   in
-  around cx i.deps
+  around cx keys
+
+(* What the item [it], a chain of [links], is installed as, written after
+   `as`, [a]: an alias of an instance of the dependency it implements,
+   `with queue() as Jobs`, or that instance written out, `as Chan<Int>`,
+   whose type arguments its own are unified with; with the dependency it
+   implements. Anything else is reported, and gives [None] (compiler.md,
+   "Generic dependencies"). *)
+and installed_as env cx (it : with_item) links (a : tname dep_ref) =
+  let lk, bottom = List.nth links (List.length links - 1) in
+  let src = Option.value (env.source lk.link) ~default:"this" in
+  let declared (p : Path.t) =
+    match Hashtbl.find_opt env.types p with
+    | Some td when td.params <> [] ->
+        env.names p ^ "<" ^ String.concat ", " td.params ^ ">"
+    | _ -> env.names p
+  in
+  let as_ = shown_deps env (written_deps env ~tvars:cx.tparams [ a ]) in
+  let wanted =
+    match a.dep.tref with
+    | Named p -> (
+        match Iface.alias_of (Hashtbl.find_opt env.types) p with
+        | Some t ->
+            (* an alias: what it names, as a checker type *)
+            Some
+              ( dep (Ty.dep_label p),
+                {
+                  dpath = t.dpath;
+                  dargs =
+                    List.map
+                      (of_ty ~vars:(fun _ -> TError) ~tails:(fun _ -> REmpty))
+                      t.dargs;
+                } )
+        | None -> (
+            match written_deps env ~tvars:cx.tparams [ a ] with
+            | [ d ] -> Some (dep_of d, d)
+            | _ -> None))
+    | Param _ -> None
+  in
+  match (bottom.deps, wanted) with
+  | _, _ when List.length links > 1 || it.under <> [] ->
+      report env (as_on_chain it.iloc ~link:src);
+      None
+  | [ d ], Some (key, target)
+    when d.dpath = target.dpath
+         && List.length d.dargs = List.length target.dargs -> (
+      match
+        Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
+            List.iter2
+              (fun x y -> Unify.unify st (c.ty x) (c.ty y))
+              d.dargs target.dargs)
+      with
+      | Ok () -> Some (key, d.dpath)
+      | Error _ ->
+          report env
+            (installed_as_wrong it.iloc ~link:src ~as_
+               ~implements:(declared d.dpath));
+          None)
+  | ds, _ ->
+      report env
+        (installed_as_wrong it.iloc ~link:src ~as_
+           ~implements:
+             (String.concat " & " (List.map (fun d -> declared d.dpath) ds)));
+      None

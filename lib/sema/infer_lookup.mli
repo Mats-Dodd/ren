@@ -37,7 +37,7 @@ val ctor_shape :
 
 (* By name, in a type declaration: a dependency's operation, a member, and
    a record's field. *)
-val dep_op_in : string -> Iface.type_decl -> Iface.field option
+val dep_op_in : env -> string -> Iface.type_decl -> Iface.field option
 val op_in : string -> Iface.type_decl -> Iface.op option
 val field_in : string -> Iface.type_decl -> Iface.field option
 

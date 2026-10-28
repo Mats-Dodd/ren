@@ -703,8 +703,8 @@ let types ?(lint = false) ?load ~file src =
                            f.params)
                       ~deps:
                         (List.filter_map
-                           (fun (d : Ast.tname) ->
-                             match d.tref with
+                           (fun (d : Ast.tname Ast.dep_ref) ->
+                             match d.dep.tref with
                              | Named p -> Some p
                              | Param _ -> None)
                            deps)
@@ -715,16 +715,21 @@ let types ?(lint = false) ?load ~file src =
             | Type ({ type_body = Dep _; _ } as td) ->
                 (* a dependency: its operations, each with its type, then
                    its members *)
+                let params =
+                  List.map (fun (p : Ast.ident) -> p.name) td.type_params
+                in
                 let ops =
                   match (decl td).body with
                   | Dep ops ->
                       List.map
                         (fun (o : Iface.field) ->
+                          (* a generic one's operations name its parameters
+                             as it declares them *)
                           let pr =
                             Ty.printer ~names
                               {
                                 ty = o.fty;
-                                names = [];
+                                names = List.mapi (fun i n -> (i, n)) params;
                                 reqs = [];
                                 row_reqs = [];
                               }
@@ -733,11 +738,28 @@ let types ?(lint = false) ?load ~file src =
                         ops
                   | _ -> []
                 in
-                sprintf "%sdep %s"
+                sprintf "%sdep %s%s"
                   (if td.type_pub then "pub " else "")
                   td.type_name.name
+                  (match params with
+                  | [] -> ""
+                  | ps -> "<" ^ String.concat ", " ps ^ ">")
                 :: ops
-                @ List.map (member ~outer:[]) td.type_ops
+                @ List.map (member ~outer:params) td.type_ops
+            | Type ({ type_body = Dep_alias _; _ } as td) ->
+                (* an alias: the instance it names *)
+                let pr =
+                  Ty.printer ~names
+                    { ty = Error; names = []; reqs = []; row_reqs = [] }
+                in
+                [
+                  sprintf "%sdep %s = %s"
+                    (if td.type_pub then "pub " else "")
+                    td.type_name.name
+                    (match (decl td).body with
+                    | Dep_alias d -> Ty.show_dep pr d
+                    | _ -> "?");
+                ]
             | Type
                 (( { type_ops = _ :: _; _ }
                  | { type_body = Opaque { numeric = Some _; _ }; _ } ) as td) ->
@@ -993,6 +1015,7 @@ let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
       pub = false;
       name = { name = console_fn; loc };
       tparams = [];
+      tneeds = [];
       params = [];
       ret = None;
       errors = None;

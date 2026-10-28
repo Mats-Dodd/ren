@@ -290,7 +290,7 @@ let not_in_type ~names ?(expected = false) ?(test = false) loc (c : Ast.ident)
     | Record _ ->
         ( sprintf "`%s` is a record, so it has no constructors" t,
           Some (sprintf "make one with `%s { ... }`" t) )
-    | Dep _ ->
+    | Dep _ | Dep_alias _ ->
         ( sprintf "`%s` is a dependency, so it has no constructors" t,
           Some
             (sprintf
@@ -1291,6 +1291,51 @@ let needs_each_other loc ~a ~a_needs ~bloc ~b ~b_needs =
 
 (* [link], an implementation of [deps] declared `over` them, installed with
    nothing under it. *)
+(* `with h as A`, where [h] doesn't implement what [A] names
+   (compiler.md, "Generic dependencies"). *)
+let installed_as_wrong loc ~link ~as_ ~implements =
+  Diag.make loc
+    ~help:
+      (sprintf "`%s` implements `%s`: install it as `%s` or as an alias of it"
+         link implements
+         (match String.index_opt implements '<' with
+         | Some i -> String.sub implements 0 i ^ "<...>"
+         | None -> implements))
+    (sprintf "`%s` can't be installed as `%s`" link as_)
+
+(* `as` after a chain, or after an item that goes over what's outside:
+   only one implementation is installed as an alias. *)
+let as_on_chain loc ~link =
+  Diag.make loc
+    ~help:
+      "install the chain without `as`, or make its top the one implementation \
+       of the item"
+    (sprintf "`as` follows one implementation, and `%s` is part of a chain" link)
+
+(* A call of a generic dependency's operation, [call], whose instance
+   isn't known: [candidates] are the instances it could be, shown, if
+   any. *)
+let which_instance loc ~dep ~call ~candidates =
+  Diag.make loc
+    ~help:(sprintf "say what its result is: `let xs: Array<Int> = %s`" call)
+    (match candidates with
+    | [] -> sprintf "which `%s` `%s` calls isn't known" dep call
+    | cs ->
+        sprintf "which `%s` `%s` calls isn't known: %s" dep call
+          (String.concat " or " (List.map (sprintf "`%s`") cs)))
+
+(* A `with`'s item [src], a description of a generic dependency at open
+   types, whose body uses two or more instances of it. *)
+let which_installed loc ~dep ~src ~uses =
+  let first = match uses with u :: _ -> u | [] -> dep in
+  Diag.make loc
+    ~help:
+      (sprintf
+         "say which, with a written type: `let l: %s = %s`, then `with l in`"
+         first src)
+    (sprintf "which `%s` `%s` installs isn't known: the body uses %s" dep src
+       (and_list uses))
+
 let over_nothing loc ~link ~deps =
   Diag.make loc
     ~help:
@@ -2598,24 +2643,44 @@ let main_params loc =
 
 (* [f]'s body uses [dep], which it doesn't declare; [call] is the first
    call that uses it, and [why] why, if it's one of [withheld]. *)
-let undeclared_use ?(why = []) (f : Ast.Resolved.fn_def) dep call =
+let undeclared_use ?(why = []) ?alias (f : Ast.Resolved.fn_def) dep call =
   let why = List.map withheld why in
   let name = Ast.fn_name f in
-  Diag.make f.name.loc
-    ~labels:
-      (match call with
-      | Some (l, what) -> [ (l, sprintf "%s `%s`" (user what) dep) ]
-      | None -> [])
-    ~notes:
-      ((if f.uses = None then
-          "a public function without `uses` uses nothing, and its body is \
-           checked against that"
-        else sprintf "`%s`'s body can only use what its `uses` lists" name)
-      :: why)
-    ~help:
-      (if f.uses = None then sprintf "add `uses %s`" dep
-       else sprintf "add `%s` to its `uses`" dep)
-    (sprintf "`%s` doesn't declare `%s`" name dep)
+  match alias with
+  | Some (a, op) ->
+      (* it declares an alias of this instance, a dependency of its own
+         (compiler.md, "Generic dependencies") *)
+      Diag.make f.name.loc
+        ~labels:
+          (match call with
+          | Some (l, what) -> [ (l, sprintf "%s `%s`" (user what) dep) ]
+          | None -> [])
+        ~help:
+          (sprintf
+             "`%s` is a dependency of its own, with `%s`'s operations: %sadd \
+              `uses %s`"
+             a dep
+             (match op with
+             | Some op -> sprintf "call `%s.%s`, or " a op
+             | None -> "")
+             dep)
+        (sprintf "`%s` doesn't declare `%s`" name dep)
+  | None ->
+      Diag.make f.name.loc
+        ~labels:
+          (match call with
+          | Some (l, what) -> [ (l, sprintf "%s `%s`" (user what) dep) ]
+          | None -> [])
+        ~notes:
+          ((if f.uses = None then
+              "a public function without `uses` uses nothing, and its body is \
+               checked against that"
+            else sprintf "`%s`'s body can only use what its `uses` lists" name)
+          :: why)
+        ~help:
+          (if f.uses = None then sprintf "add `uses %s`" dep
+           else sprintf "add `%s` to its `uses`" dep)
+        (sprintf "`%s` doesn't declare `%s`" name dep)
 
 (* A handler whose operations or state use [dep], which its `uses`
    doesn't list ([written] says whether it has one). *)

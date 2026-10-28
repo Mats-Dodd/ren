@@ -8,7 +8,16 @@ open Infer_env
 (* The dependencies a function declares, sorted, or [None] if it's a
    private function that leaves them to inference. [is_value] says
    whether a function is an associated value, which uses nothing. *)
-val declared_uses : is_value:(fn_def -> bool) -> fn_def -> string list option
+val declared_uses :
+  env ->
+  is_value:(fn_def -> bool) ->
+  tparams:Types.ty list ->
+  fn_def ->
+  Types.label list option
+
+(* Whether a function declares what it uses: [declared_uses] isn't
+   [None]. *)
+val declares_uses : is_value:(fn_def -> bool) -> fn_def -> bool
 
 (* The errors a function declares, as labels, or [None] if it's a private
    function that leaves them to inference; [tparams] are what its type
@@ -26,7 +35,7 @@ val runtime_dep : Path.t -> bool
 (* Why a call, which brings in a dependency, does: what [withheld] says of
    the function it calls and that dependency. *)
 val withheld_notes :
-  withheld list -> string -> call option -> Infer_msg.withheld list
+  withheld list -> Types.label -> call option -> Infer_msg.withheld list
 
 (* A function that names its own errors' row, `! ..e`, fails with it. *)
 val own_errors : env -> checked -> unit

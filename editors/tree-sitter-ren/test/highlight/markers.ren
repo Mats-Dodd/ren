@@ -238,3 +238,25 @@ fn hash(b: UInt8) -> Int =
 //            ^ number
 //                   ^ number
   h
+
+pub dep Chan<T> =
+//      ^ type.dependency
+//           ^ type
+  send: fn(x: T)
+dep Jobs = Chan<Job>
+//  ^ type.dependency
+//         ^ type.dependency
+//              ^ type
+
+handler seen<T has eq, ord>() for Chan<T> =
+//           ^ type
+//             ^ keyword
+//                 ^ type
+//                     ^ type
+//                                ^ type.dependency
+  send(x) => ()
+
+fn work() uses Chan<Int> = with queue() as Jobs in 1
+//             ^ type.dependency
+//                                      ^ keyword
+//                                         ^ type.dependency

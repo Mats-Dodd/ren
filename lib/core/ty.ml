@@ -39,7 +39,13 @@ and param = { mode : mode; ty : ty }
    whose [needs] then has them too; what it needs where it's installed,
    [Clock uses Os]; and what installing it can fail with, what its state
    and its `finally` fail with, [Sql ! DbDown]. *)
-and impl = { deps : Path.t list; over : bool; needs : row; fails : row }
+and impl = { deps : dep list; over : bool; needs : row; fails : row }
+
+(* One dependency an implementation implements, as a row holds it: its
+   path and its type arguments, `Chan<Int>` (foundations.md, decision 6).
+   An alias, `dep Jobs = Chan<Job>`, is a dependency of its own, which
+   takes none. *)
+and dep = { dpath : Path.t; dargs : ty list }
 
 and row = {
   labels : label list;  (** sorted by name *)
@@ -49,11 +55,15 @@ and row = {
 }
 
 (* A row's label: an error's tag and its payload's types, `Short(Int)`, or
-   a dependency, whose payload is always empty. A tag is its name and its
-   payload's types, in order, so one row never has two labels of the same
-   name (module-build.md, "Error tags have no home"). A dependency is a
-   type, so its label is its path, written in full ([dep_label]): two
-   modules' `Users` are two dependencies. *)
+   a dependency and its type arguments, `Chan<Int>`. A tag is its name and
+   its payload's types, in order, so one row never has two tags of the
+   same name (module-build.md, "Error tags have no home"). A dependency is
+   a type, so its label is its path, written in full ([dep_label]): two
+   modules' `Users` are two dependencies; and a generic one is found by
+   its full type (compiler.md, "Generic dependencies"), so `Chan<Int>` and
+   `Chan<Str>` are two labels of one row, of one name. In a row of either
+   kind, a label is told apart from the others by its name and payload
+   together ([same_label]): two tags of one name have one payload. *)
 and label = { name : string; payload : ty list }
 
 (* A function's type, for every choice of its variables. [names] are the
@@ -107,6 +117,13 @@ let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
 let label name = { name; payload = [] }
 
+(* Whether two labels are one: the same name and payload. *)
+let same_label (a : label) (b : label) =
+  a.name = b.name && a.payload = b.payload
+
+(* The dependency at [p], with no type arguments: one that takes none. *)
+let plain p = { dpath = p; dargs = [] }
+
 (* The type of an implementation of [deps], needing [needs]: one
    dependency's, or for several, the type that lists them, sorted, each
    once, since which order they're written in doesn't matter. [over] says
@@ -118,6 +135,9 @@ let impl ?(over = false) ?(fails = closed) deps needs =
 (* If [t] is an implementation, of one dependency or several: which, and
    what it needs. *)
 let impl_parts t = match t with Impl i -> Some (i.deps, i.needs) | _ -> None
+
+(* The paths of [ds]. *)
+let dep_paths ds = List.map (fun d -> d.dpath) ds
 
 (* The name of the [n]-th lambda of the top-level function [p], counting
    from 1 in the order inference meets them, `main.main#2`: its
@@ -137,8 +157,19 @@ let dep_path label =
         (String.sub label (i + 1) (String.length label - i - 1))
   | None -> Path.prelude label
 
-(* Labels sorted by name, as a row keeps them. *)
-let sort_labels ls = List.sort (fun a b -> String.compare a.name b.name) ls
+(* A dependency as a row's label, and back. *)
+let dep_of d = { name = dep_label d.dpath; payload = d.dargs }
+let of_label l = { dpath = dep_path l.name; dargs = l.payload }
+
+(* Labels sorted by name, as a row keeps them, and two of one name, two
+   instances of a generic dependency, by their type arguments. *)
+let sort_labels ls =
+  List.sort
+    (fun a b ->
+      match String.compare a.name b.name with
+      | 0 -> compare a.payload b.payload
+      | c -> c)
+    ls
 
 (* The row variables inside a type. *)
 let rec tails t =
@@ -146,7 +177,9 @@ let rec tails t =
   | Var _ | Error -> []
   | Con (_, args) -> List.concat_map tails args
   | Errors e -> row_tails e
-  | Impl i -> row_tails i.needs @ row_tails i.fails
+  | Impl i ->
+      List.concat_map (fun d -> List.concat_map tails d.dargs) i.deps
+      @ row_tails i.needs @ row_tails i.fails
   | Fun (ps, r, e, u) ->
       List.concat_map (fun (p : param) -> tails p.ty) ps
       @ tails r @ row_tails e @ row_tails u
@@ -167,7 +200,9 @@ let own_args t =
     | Error -> []
     | Con (_, args) -> List.concat_map vars args
     | Errors e -> row_vars e
-    | Impl i -> row_vars i.needs @ row_vars i.fails
+    | Impl i ->
+        List.concat_map (fun d -> List.concat_map vars d.dargs) i.deps
+        @ row_vars i.needs @ row_vars i.fails
     | Fun (ps, r, e, u) ->
         List.concat_map (fun (p : param) -> vars p.ty) ps
         @ vars r @ row_vars e @ row_vars u
@@ -192,9 +227,12 @@ let rec apply (a : args) (s : ty) : ty =
   | Con (p, args) -> Con (p, List.map (apply a) args)
   | Errors e -> Errors (apply_row a e)
   | Impl i ->
+      let deps =
+        List.map (fun d -> { d with dargs = List.map (apply a) d.dargs }) i.deps
+      in
       let needs = apply_row a i.needs in
       let fails = apply_row a i.fails in
-      Impl { i with needs; fails }
+      Impl { i with deps; needs; fails }
   | Fun (ps, r, e, u) ->
       Fun
         ( List.map (fun (p : param) -> { p with ty = apply a p.ty }) ps,
@@ -212,9 +250,7 @@ and apply_row a (r : row) : row =
   | None -> { labels; tail = None }
   | Some n ->
       let more : row = List.nth a.rows n in
-      let has (l : label) =
-        List.exists (fun (k : label) -> k.name = l.name) labels
-      in
+      let has (l : label) = List.exists (same_label l) labels in
       {
         labels =
           sort_labels (labels @ List.filter (fun l -> not (has l)) more.labels);
@@ -241,9 +277,12 @@ let canonical (s : scheme) =
     | Con (p, args) -> Con (p, List.map go args)
     | Errors e -> Errors (row e)
     | Impl i ->
+        let deps =
+          List.map (fun d -> { d with dargs = List.map go d.dargs }) i.deps
+        in
         let needs = row i.needs in
         let fails = row i.fails in
-        Impl { i with needs; fails }
+        Impl { i with deps; needs; fails }
     | Fun (ps, r, e, u) ->
         (* `let`s fix the order of first appearance: OCaml evaluates a
            constructor's arguments right to left *)
@@ -386,7 +425,7 @@ let rec show_row pr ~prefix ~sep ~kind r =
   in
   (* a dependency is written as its type is *)
   let label l =
-    if kind = "d" then pr.type_name (dep_path l.name) else show_label pr l
+    if kind = "d" then show_dep pr (of_label l) else show_label pr l
   in
   match List.map label r.labels @ tail with
   | [] -> ""
@@ -397,6 +436,12 @@ and show_label pr l =
   | [] -> l.name
   | ps -> l.name ^ "(" ^ String.concat ", " (List.map (show pr) ps) ^ ")"
 
+(* A dependency, as its type is written, `Chan<Int>`. *)
+and show_dep pr d =
+  match d.dargs with
+  | [] -> pr.type_name d.dpath
+  | args -> pr.type_name d.dpath ^ "<" ^ show_list pr args ^ ">"
+
 and show pr t =
   match t with
   | Impl i ->
@@ -404,7 +449,7 @@ and show pr t =
          TestClock`; one that goes over another, `over Users uses Clock`;
          and what installing it can fail with, `Sql ! DbDown` *)
       (if i.over then "over " else "")
-      ^ String.concat " & " (List.map pr.type_name i.deps)
+      ^ String.concat " & " (List.map (show_dep pr) i.deps)
       ^ show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" i.fails
       ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" (shown_needs i)
   | Con (p, args) when is_tuple p -> "(" ^ show_list pr args ^ ")"
@@ -460,10 +505,13 @@ and show_list pr ts =
 and shown_needs (i : impl) =
   if not i.over then i.needs
   else
-    let over = List.map dep_label i.deps in
+    let over = List.map dep_of i.deps in
     {
       i.needs with
-      labels = List.filter (fun l -> not (List.mem l.name over)) i.needs.labels;
+      labels =
+        List.filter
+          (fun l -> not (List.exists (same_label l) over))
+          i.needs.labels;
     }
 
 and show_param pr p =
@@ -679,6 +727,16 @@ let value_signature ~names ~pub ~name (s : scheme) =
    dependency's, or the one that lists them. A row tail is printed where
    it links two places, a parameter's type and what it needs, say. *)
 let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
+  (* each of [deps], in the order written, with its type arguments, as
+     the handler's type has them *)
+  let shown_deps pr deps (i : impl) =
+    List.map
+      (fun p ->
+        match List.find_opt (fun d -> d.dpath = p) i.deps with
+        | Some d -> show_dep pr d
+        | None -> names p)
+      deps
+  in
   match s.ty with
   | Fun (ps, (Impl i as ret), _, _) ->
       let all =
@@ -690,12 +748,42 @@ let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
       let params =
         List.map2 (fun n (p : param) -> n ^ ": " ^ show pr p.ty) params ps
       in
-      Printf.sprintf "%shandler %s(%s) %s%s%s"
+      (* `let`s fix the order variables are named in *)
+      let deps =
+        if i.over then "over " ^ String.concat " & " (shown_deps pr deps i)
+        else "for " ^ String.concat ", " (shown_deps pr deps i)
+      in
+      let fails = show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" i.fails in
+      let needs =
+        show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" (shown_needs i)
+      in
+      (* its type parameters, a generic dependency's, each with what the
+         handler needs of it, `queue<T has eq>` *)
+      let tparams =
+        let needs n =
+          match
+            Hashtbl.fold
+              (fun id m found -> if m = n then Some id else found)
+              pr.names None
+          with
+          | None -> []
+          | Some id ->
+              List.filter_map
+                (fun (v, r) -> if v = id then Some r else None)
+                s.reqs
+        in
+        let param n =
+          match needs n with
+          | [] -> n
+          | rs -> n ^ " has " ^ String.concat ", " rs
+        in
+        match List.rev pr.order with
+        | [] -> ""
+        | ns -> "<" ^ String.concat ", " (List.map param ns) ^ ">"
+      in
+      Printf.sprintf "%shandler %s%s(%s) %s%s%s"
         (if pub then "pub " else "")
-        name
+        name tparams
         (String.concat ", " params)
-        (if i.over then "over " ^ String.concat " & " (List.map names deps)
-         else "for " ^ String.concat ", " (List.map names deps))
-        (show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" i.fails)
-        (show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" (shown_needs i))
+        deps fails needs
   | _ -> invalid_arg "Ty.handler_signature: not a handler's function"

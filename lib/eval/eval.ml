@@ -389,14 +389,17 @@ let rec eval cx env (e : expr) =
         ( x,
           List.map (type_of env) ds,
           List.map (fun d -> VDict (dict cx env d)) dicts )
-  | Dep_call { dep; op; ev; args; next; fty } -> (
-      (* the innermost implementation of [dep]: a record of functions, the
-         operation's run with what was installed where it was *)
+  | Dep_call { dep; dargs; op; ev; args; next; fty } -> (
+      (* the innermost implementation of [dep] at [dargs]: a record of
+         functions, the operation's run with what was installed where it
+         was. A generic one's instance is found by its path and the types
+         its descriptors stand for (compiler.md, "Generic dependencies") *)
       let args = eval_all cx env args in
       let what = Printf.sprintf "a call of `%s.%s`" dep.name op in
+      let tys = List.map (type_of env) dargs in
       match
         List.find_opt
-          (fun (i : installed) -> i.dep = dep)
+          (fun (i : installed) -> i.dep = dep && i.args = tys)
           (evidence_in env ev what)
       with
       | Some { impl = VRecord ops; outer; _ } -> (
@@ -412,22 +415,27 @@ let rec eval cx env (e : expr) =
           | None -> bug (what ^ " on an implementation without it"))
       | Some _ -> bug (what ^ " on an implementation that isn't a record")
       | None -> bug (what ^ " where nothing installs `" ^ dep.name ^ "`"))
-  | With { ev; outer; dep; impl; desc; body } ->
+  | With { ev; outer; dep; dargs; from; impl; desc; body } ->
       let what = "installing `" ^ dep.name ^ "`" in
       let impl = eval cx env impl in
       let outer = evidence_in env outer what in
       (* a handler's description, as a fresh instance's implementation
-         of [dep] *)
+         of [from], installed as [dep]: they differ for an alias. A
+         description of one dependency has one implementation, which is
+         it whichever it was made for: `let q: Jobs = queue()` made a
+         `Chan<Job>`'s a `Jobs`'s *)
       let impl, finally =
         match impl with
         | VHandler h -> (
             let impls, finally = instance cx h outer what in
-            match List.assoc_opt dep impls with
-            | Some impl -> (impl, finally)
-            | None -> bug (what ^ " from a handler that doesn't implement it"))
+            match (List.assoc_opt from impls, impls) with
+            | Some impl, _ | None, [ (_, impl) ] -> (impl, finally)
+            | None, _ ->
+                bug (what ^ " from a handler that doesn't implement it"))
         | _ -> bug (what ^ " with something that isn't a handler")
       in
-      let installed = VEvidence ({ dep; impl; outer } :: outer) in
+      let args = List.map (type_of env) dargs in
+      let installed = VEvidence ({ dep; args; impl; outer } :: outer) in
       ending cx env e.loc finally desc outer (fun () ->
           eval cx (Env.add ev.id (ref installed) env) body)
   | Narrowed (_, h) -> eval cx env h
@@ -455,12 +463,22 @@ let rec eval cx env (e : expr) =
           (* of what the instance implements, only [deps]: it may have
              been narrowed to them (Core.Narrowed) *)
           let impls, finally = instance cx h outer what in
-          if not (List.for_all (fun d -> List.mem_assoc d impls) deps) then
+          if not (List.for_all (fun (_, p) -> List.mem_assoc p impls) deps) then
             bug (what ^ " whose instance doesn't implement its dependencies");
+          (* in the order the instance has them, each at its key *)
           let installed =
             List.fold_left
-              (fun acc (dep, impl) ->
-                if List.mem dep deps then { dep; impl; outer } :: acc else acc)
+              (fun acc (p, impl) ->
+                match List.find_opt (fun (_, q) -> q = p) deps with
+                | Some ((k : dkey), _) ->
+                    {
+                      dep = k.kpath;
+                      args = List.map (type_of env) k.kargs;
+                      impl;
+                      outer;
+                    }
+                    :: acc
+                | None -> acc)
               outer impls
           in
           ending cx env e.loc finally desc outer (fun () ->
@@ -563,7 +581,10 @@ let rec eval cx env (e : expr) =
           params = List.map (fun (p : param) -> p.var.id) params;
           ev = ev.id;
           outer = outer.id;
-          given;
+          given =
+            List.map
+              (fun (k : dkey) -> (k.kpath, List.map (type_of env) k.kargs))
+              given;
           body;
           env;
         }
@@ -860,8 +881,12 @@ and start cx f cells ev =
       in
       let installed =
         List.fold_left
-          (fun acc dep ->
-            match List.find_opt (fun (i : installed) -> i.dep = dep) passed with
+          (fun acc ((dep : Path.t), args) ->
+            match
+              List.find_opt
+                (fun (i : installed) -> i.dep = dep && i.args = args)
+                passed
+            with
             | Some i -> i :: acc
             | None ->
                 bug
@@ -1298,7 +1323,7 @@ let recorded cx h (under : installed) what =
     prelude_instance cx name [ VInt (Int64.of_int h) ] [ under ] what
   in
   match List.assoc_opt under.dep impls with
-  | Some impl -> { dep = under.dep; impl; outer = [ under ] }
+  | Some impl -> { dep = under.dep; args = under.args; impl; outer = [ under ] }
   | None -> bug (what ^ " with a recorder that doesn't implement its dependency")
 
 (* The real implementation of each built-in dependency in [deps], as
@@ -1310,7 +1335,7 @@ let reals cx deps what =
       match made_value cx what (Path.member dep "real") with
       | VHandler h -> (
           match List.assoc_opt dep (fst (instance cx h [] what)) with
-          | Some impl -> { dep; impl; outer = [] }
+          | Some impl -> { dep; args = []; impl; outer = [] }
           | None -> bug (what ^ " with a `real` that doesn't implement it"))
       | _ -> bug (what ^ " with a `real` that isn't a handler"))
     deps
@@ -1354,7 +1379,7 @@ let run ?(start = Real) ?trace (modules : program list) =
           List.map
             (fun dep ->
               match List.assoc_opt dep impls with
-              | Some impl -> { dep; impl; outer = [] }
+              | Some impl -> { dep; args = []; impl; outer = [] }
               | None -> bug (what ^ " with a replayer that hasn't a dependency"))
             deps )
   in
@@ -1398,7 +1423,7 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
         if List.mem dep.name real then reals cx [ dep ] what
         else
           List.map
-            (fun (dep, impl) -> { dep; impl; outer = [] })
+            (fun (dep, impl) -> { dep; args = []; impl; outer = [] })
             (prelude_instance cx handler args [] what))
       [
         ( "Clock",

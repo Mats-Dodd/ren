@@ -119,6 +119,7 @@ let value_tag env ~kept t =
         {
           name = t.ttag.name;
           payload = t.tpayload;
+          dep = false;
           written = ref (Mark (Some t.ttag.loc));
         }
       in
@@ -203,7 +204,7 @@ let include_ env i =
    since it last added them. *)
 let copy_awake k =
   List.exists
-    (fun (l : label) -> not (List.mem l.name k.kpassed))
+    (fun (l : label) -> not (has_dep k.kpassed l))
     (fst (row_parts k.ksrc))
 
 (* Add to the copy [k] the labels its source has learned since, or say
@@ -211,12 +212,12 @@ let copy_awake k =
 let copy env k =
   match
     List.filter
-      (fun (l : label) -> not (List.mem l.name k.kpassed))
+      (fun (l : label) -> not (has_dep k.kpassed l))
       (fst (row_parts k.ksrc))
   with
   | [] -> false
   | fresh ->
-      k.kpassed <- k.kpassed @ List.map (fun (l : label) -> l.name) fresh;
+      k.kpassed <- k.kpassed @ fresh;
       let joined = extend fresh (fresh_row env.st) in
       (match
          Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
@@ -247,9 +248,47 @@ let copy env k =
    from outside, if it does, and the uses of a named row it makes, which
    are decided with the others, last. *)
 let install env w =
+  (* an item at open types, `with log() in`, is the body's one use of
+     its dependency (compiler.md, "Generic dependencies"). One the body
+     uses at several is reported, and then the body's uses of it aren't
+     reported again as uses nothing installs. *)
+  let unknown = ref [] in
+  List.iter
+    (fun (d : label) ->
+      if Unify.open_args d then
+        let uses =
+          List.filter
+            (fun (l : label) -> l.name = d.name && not (same_label l d))
+            (fst (row_parts w.wbody))
+        in
+        let fix (l : label) =
+          ignore
+            (Unify.atomically env.st (Unify.copier ())
+               (fun st (c : Unify.copy) ->
+                 List.iter2
+                   (fun a b -> Unify.unify st (c.ty a) (c.ty b))
+                   d.payload l.payload))
+        in
+        match uses with
+        | [ l ] -> fix l
+        | [] ->
+            (* nothing uses it: it's installed at `Unit`, which nothing
+               can tell from another type *)
+            fix { d with payload = List.map (fun _ -> unit) d.payload }
+        | ls ->
+            unknown := d.name :: !unknown;
+            report env
+              (which_installed w.wloc
+                 ~dep:(env.names (Ty.dep_path d.name))
+                 ~src:w.wsrc
+                 ~uses:
+                   (List.map (shown_dep env) (sorted_labels (extend ls REmpty)))))
+    w.wdeps;
   let labels, tail = row_parts w.wbody in
   let rest =
-    List.filter (fun (l : label) -> not (List.mem l.name w.wdeps)) labels
+    List.filter
+      (fun (l : label) -> not (List.mem l.name !unknown))
+      (without_labels w.wdeps labels)
   in
   (* add [r] to what's outside: whether it could *)
   let into r =
@@ -263,16 +302,12 @@ let install env w =
     | _ when same_row ->
         (* the same row: everything it uses but [wdeps] is outside too, which
            for a `with` is worth a note *)
-        let outer = row_names w.wouter in
         ( List.map
             (fun d ->
-              ( d,
-                Same_row
-                  { fn = Path.local w.wself; dep = env.names (Ty.dep_path d) }
-              ))
+              (d, Same_row { fn = Path.local w.wself; dep = shown_dep env d }))
             (if w.wblock then [] else w.wdeps),
           None,
-          List.for_all (fun (l : label) -> List.mem l.name outer) rest )
+          List.for_all (fun (l : label) -> has_label w.wouter l) rest )
     | RSkol (id, n) ->
         (* a named row: what's outside ends in it too *)
         let due =
@@ -290,8 +325,74 @@ let install env w =
   if not ok then
     report env
       (with_body_uses w.wloc ~block:w.wblock ~same_row
-         (List.map (fun (l : label) -> env.names (Ty.dep_path l.name)) rest));
+         (List.map (shown_dep env) rest));
   (List.map (fun (hdep, hnote) -> { hfn = w.wself; hdep; hnote }) withheld, due)
+
+(* A call of a generic dependency's operation whose instance was open when
+   it was made (see [Infer_env.instance]): joined to what the function or
+   lambda it's in uses, once it's known which instance it is. If it's
+   open still, the function's declared `uses` says, if it lists exactly
+   one of that dependency; a function that declares none can leave it to
+   its callers only if what it's given fixes it, a generic one's
+   parameter. Otherwise, which it is isn't known, and that's reported. *)
+let instance env x =
+  let l = x.xlabel in
+  let fixed_by_params () =
+    match Option.map repr (Hashtbl.find_opt env.globals x.xself) with
+    | Some (TFun (ps, ret, _, _)) ->
+        let rec vars t =
+          match repr t with
+          | TVar { contents = Unbound (id, _) } -> [ id ]
+          | TCon (_, args) -> List.concat_map vars args
+          | _ -> []
+        in
+        let given =
+          List.concat_map (fun (p : Types.param) -> vars p.ty) ps @ vars ret
+        in
+        List.for_all
+          (fun id -> List.mem id given)
+          (List.concat_map vars l.payload)
+    | _ -> false
+  in
+  let unknown candidates =
+    report env
+      (which_instance x.xloc
+         ~dep:(env.names (Ty.dep_path l.name))
+         ~call:x.xcall
+         ~candidates:(List.map (shown_dep env) candidates));
+    false
+  in
+  let joins =
+    if not (Unify.open_args l) then true
+    else
+      match x.xdeclared with
+      | Some declared -> (
+          match List.filter (fun (d : label) -> d.name = l.name) declared with
+          | [ d ] ->
+              Result.is_ok
+                (Unify.atomically env.st (Unify.copier ())
+                   (fun st (c : Unify.copy) ->
+                     List.iter2
+                       (fun a b -> Unify.unify st (c.ty a) (c.ty b))
+                       l.payload d.payload))
+          | [] -> true (* reported as a use it doesn't declare *)
+          | several -> unknown several)
+      | None -> (
+          (* the one instance of its name already used where it's called,
+             if there's one, as unification would pick ([Unify.unify_row]) *)
+          match
+            List.filter
+              (fun (k : label) -> k.name = l.name && not (Unify.open_args k))
+              (fst (row_parts x.xinto))
+          with
+          | [ _ ] -> true
+          | _ when fixed_by_params () -> true
+          | several -> unknown several)
+  in
+  if joins then
+    Infer_rows.join_uses env ~loc:x.xloc ~what:x.xwhat
+      (extend [ l ] (fresh_row env.st))
+      x.xinto
 
 (* ---- the rules of markers ----
 
@@ -599,8 +700,10 @@ let uses_with env (f : Ast.Resolved.fn_def) n =
     match f.uses with
     | Some u ->
         List.filter_map
-          (fun (d : Ast.tname) ->
-            match d.tref with Named p -> Some (env.names p) | Param _ -> None)
+          (fun (d : Ast.tname Ast.dep_ref) ->
+            match d.dep.tref with
+            | Named p -> Some (env.names p)
+            | Param _ -> None)
           u.deps
     | None -> []
   in
@@ -706,7 +809,7 @@ let installs env ~copies cs =
             (fun h ->
               not
                 (List.exists
-                   (fun h' -> h'.hfn = h.hfn && h'.hdep = h.hdep)
+                   (fun h' -> h'.hfn = h.hfn && same_label h'.hdep h.hdep)
                    withheld))
             held
         in
@@ -751,6 +854,7 @@ let solve env ~is_value ~withheld =
   in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) cs;
   List.iter (function Drop d -> drop env d | _ -> ()) cs;
+  List.iter (function Instance x -> instance env x | _ -> ()) cs;
   let ks = copies cs in
   let held, dues = installs env ~copies:ks cs in
   copies_of env ks;
@@ -810,8 +914,8 @@ let solve env ~is_value ~withheld =
     ~declaring:
       (List.filter_map
          (fun c ->
-           if Infer_declared.declared_uses ~is_value:is_fn_value c.ffn <> None
-           then Option.map (fun t -> (t, c.ffn)) (row_tail c.fcx.uses)
+           if Infer_declared.declares_uses ~is_value:is_fn_value c.ffn then
+             Option.map (fun t -> (t, c.ffn)) (row_tail c.fcx.uses)
            else None)
          checked)
     (List.filter_map (function Row_due d -> Some d | _ -> None) cs @ dues);

@@ -27,7 +27,11 @@ and param = { mode : mode; ty : ty }
    whose [needs] then has them too; what it needs where it's installed,
    [Clock uses Os]; and what installing it can fail with, what its state
    and its `finally` fail with, [Sql ! DbDown]. *)
-and impl = { deps : Path.t list; over : bool; needs : row; fails : row }
+and impl = { deps : dep list; over : bool; needs : row; fails : row }
+
+(* A dependency an implementation implements: its path and its type
+   arguments, `Chan<Int>` (foundations.md, decision 6). *)
+and dep = { dpath : Path.t; dargs : ty list }
 
 and row = {
   labels : label list;  (** sorted by name *)
@@ -37,8 +41,9 @@ and row = {
 }
 
 (* A row's label: an error's tag and its payload's types, `Short(Int)`, or
-   a dependency, whose payload is always empty and whose name is its
-   path written in full ([dep_label]). *)
+   a dependency, whose name is its path written in full ([dep_label]) and
+   whose payload is its type arguments, `Chan<Int>`. A label is its name
+   and payload together ([same_label]). *)
 and label = { name : string; payload : ty list }
 
 (* A function's type, for every choice of its variables. [names] are the
@@ -86,14 +91,23 @@ val closed : row
 (* A label with no payload: an error tag like `Frozen`, or a dependency. *)
 val label : string -> label
 
+(* Whether two labels are one: the same name and payload. *)
+val same_label : label -> label -> bool
+
+(* The dependency at a path, with no type arguments. *)
+val plain : Path.t -> dep
+
+(* The paths of some dependencies. *)
+val dep_paths : dep list -> Path.t list
+
 (* The type of an implementation of these dependencies, sorted and each
    once, needing the row; [over] another implementation of them, and
    failing to be installed with [fails] (nothing, unless it's said). *)
-val impl : ?over:bool -> ?fails:row -> Path.t list -> row -> ty
+val impl : ?over:bool -> ?fails:row -> dep list -> row -> ty
 
 (* If a type is an implementation's, of one dependency or several: which,
    and what it needs. *)
-val impl_parts : ty -> (Path.t list * row) option
+val impl_parts : ty -> (dep list * row) option
 
 (* The name of the n-th lambda of a top-level function, counting from 1,
    `main.main#2`, which Lower gives its code. *)
@@ -104,7 +118,13 @@ val lambda_id : Path.t -> int -> string
 val dep_label : Path.t -> string
 val dep_path : string -> Path.t
 
-(* Labels sorted by name, as a row keeps them. *)
+(* A dependency as a row's label, its type arguments its payload, and
+   back. *)
+val dep_of : dep -> label
+val of_label : label -> dep
+
+(* Labels sorted by name, as a row keeps them, and by payload among
+   those of one name. *)
 val sort_labels : label list -> label list
 
 (* The type arguments that give back a canonical type itself, the ones
@@ -167,6 +187,9 @@ val show_row :
 
 (* An error tag and its payload's types, `Short(Int, Money)`. *)
 val show_label : printer -> label -> string
+
+(* A dependency, as its type is written, `Chan<Int>`. *)
+val show_dep : printer -> dep -> string
 
 (* A function's `! errors` and `uses deps`, each with a leading space, or
    nothing for an empty row. *)

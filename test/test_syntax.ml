@@ -898,14 +898,7 @@ fn g(n: Int) = bump(&n, &xs[0])
   ast {|
 fn f(h: Rates & Box<Int>) = h
 |};
-  [%expect
-    {|
-    error: a type joined with `&` is a dependency's, which takes no type arguments
-      ┌─ test.ren:1:20
-    1 │ fn f(h: Rates & Box<Int>) = h
-      │                    ^
-      help: only a dependency's type is joined with `&`
-    |}];
+  [%expect {| (fn f (h) h) |}];
   ast {|
 fn f() uses Rates & RateCalls = 1
 |};

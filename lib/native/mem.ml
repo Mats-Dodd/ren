@@ -137,6 +137,11 @@ type atom =
    as `ren run` says (eval.ml, [call_at]): the runtime's [ren_here], which
    a [Here_set] sets before each call of the prelude from the program's
    code. *)
+(* A dependency as evidence holds it: its number and, if it's generic, the
+   descriptors of its type arguments, [Chan<Job>]'s [Job]. [kfrom] is the
+   number of the dependency a handler implements that it's installed as:
+   [kdep] itself, or the one an alias names (`with queue() as Jobs`). *)
+type key = { kdep : int; kfrom : int; kargs : atom list }
 type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
 type site_kind = Panics | Asserts | Caller
 type site = {
@@ -325,12 +330,14 @@ type rhs =
       (** [outer] with an implementation from [impls] installed for each of the
           dependency numbers [deps] points at, [ndeps] of them: new evidence,
           whose nodes are on the stack *)
-  | Given of { outer : atom; caller : atom; deps : int list }
+  | Given of { outer : atom; caller : atom; deps : (int * atom list) list }
       (** [outer] with the implementations of [deps] that [caller] has on top: a
           block's evidence, when its parameter's type lists them *)
-  | Op_block of atom * int * int
+  | Op_block of atom * int * atom list * int
       (** the [Block] of an operation, its dependency's [n]-th, of the innermost
-          implementation of the dependency with this number in the evidence *)
+          implementation of the dependency with this number, at the type
+          arguments these descriptors describe if it's generic, in the evidence
+      *)
   | Is_unique of atom
       (** whether an object's count is 1 (lean.h, [lean_is_exclusive]) *)
   | Make_struct of atom list
@@ -405,7 +412,7 @@ type stmt =
       outer : atom;
       body : atom;
       desc : atom;
-      deps : int list;
+      deps : key list;
       error : var;
       on_error : block option;
     }
@@ -637,6 +644,17 @@ let show_rt = function
 let atoms xs = List.map (fun a -> Core.Atom (show_atom a)) xs
 let a x = Core.Atom x
 
+(* A key as a printed program shows it: [dep3], [dep3<$d>], or
+   [dep3<$d>:dep2] when it's installed as an alias of what the handler
+   implements. *)
+let key_sexp dep from args =
+  let args =
+    if args = [] then ""
+    else "<" ^ String.concat ", " (List.map show_atom args) ^ ">"
+  in
+  let from = if from = dep then "" else ":dep" ^ string_of_int from in
+  a ("dep" ^ string_of_int dep ^ args ^ from)
+
 (* The fields a [Free] or a [Reset] keeps: [slot=var]. *)
 let kept_sexp kept =
   List.map (fun (n, x) -> a (string_of_int n ^ "=" ^ show_atom x)) kept
@@ -694,14 +712,11 @@ let rhs_sexp = function
   | Given { outer; caller; deps } ->
       Core.List
         ((a "given" :: atoms [ outer; caller ])
-        @ List.map (fun d -> a ("dep" ^ string_of_int d)) deps)
-  | Op_block (ev, dep, op) ->
+        @ List.map (fun (d, args) -> key_sexp d d args) deps)
+  | Op_block (ev, dep, args, op) ->
       Core.List
         [
-          a "op";
-          a (show_atom ev);
-          a ("dep" ^ string_of_int dep);
-          a (string_of_int op);
+          a "op"; a (show_atom ev); key_sexp dep dep args; a (string_of_int op);
         ]
   | Is_unique x -> Core.List [ a "unique?"; a (show_atom x) ]
   | Reset (x, kept) -> Core.List (a "reset" :: a (show_atom x) :: kept_sexp kept)
@@ -757,7 +772,7 @@ let rec stmt_sexp = function
            typed result;
            Core.List
              (atoms [ handler; outer; body; desc ]
-             @ List.map (fun d -> a ("dep" ^ string_of_int d)) deps);
+             @ List.map (fun k -> key_sexp k.kdep k.kfrom k.kargs) deps);
          ]
         @ error_sexp error on_error)
   | If (c, t, f) ->

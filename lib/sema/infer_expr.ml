@@ -194,8 +194,10 @@ let narrow env cx (e : expr) t expected =
   match (impl_parts t, impl_parts (reveal env.st expected)) with
   | Some (have, needs), Some (want, _)
     when List.length want < List.length have
-         && List.for_all (fun d -> List.mem d have) want ->
-      Hashtbl.replace cx.narrowed e.node want;
+         && List.for_all
+              (fun d -> List.exists (fun h -> h.dpath = d.dpath) have)
+              want ->
+      Hashtbl.replace cx.narrowed e.node (List.map (fun d -> d.dpath) want);
       impl_type want needs
   | _ -> t
 
@@ -212,7 +214,7 @@ let unknown_call cx = List.iter (fun m -> m.failed <- true) cx.markers
 
 (* The row of a block's type that lists [listed], the dependencies its
    callee provides, and no more. *)
-let listed_row listed = extend (List.map dep listed) REmpty
+let listed_row listed = extend listed REmpty
 
 (* A block written in [cx] at [loc], whose body [bcx] has been checked:
    what its body uses but [listed], what its parameter's type lists, is
@@ -229,11 +231,11 @@ let block_uses env cx loc ~listed (bcx : ctx) =
          wouter = cx.uses;
          wself = cx.self;
          wblock = true;
+         wsrc = "";
        });
   cx.calls :=
     List.map
-      (fun c ->
-        { c with own = List.filter (fun d -> not (List.mem d listed)) c.own })
+      (fun c -> { c with own = without_labels listed c.own })
       !(bcx.calls)
     @ !(cx.calls)
 
@@ -353,9 +355,7 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
          &&
          match Option.map (reveal env.st) (Hashtbl.find_opt cx.locals b.id) with
          | Some (TFun (_, _, _, u)) ->
-             List.exists
-               (fun n -> not (List.mem n (row_names u)))
-               (row_names eu)
+             List.exists (fun l -> not (has_label u l)) (fst (row_parts eu))
          | _ -> false ->
       (* a block whose type lists less than its callee gives, which it
          can't take, since what it uses was found where it's written *)
@@ -388,10 +388,10 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
             else param_type env ~tparams:cx.tparams ~named:cx.named p)
           params eps
       in
-      let listed = List.sort_uniq String.compare (row_names eu) in
+      let listed = sorted_labels eu in
       let errs = fresh_row env.st and uses = fresh_row env.st in
       (* numbered before the lambdas in its body, as when it's inferred *)
-      name_lambda ~given:(List.map Ty.dep_path listed) cx e.node;
+      name_lambda ~given:listed cx e.node;
       bind_params cx params ps;
       let bcx = lambda_cx cx params ps ~errs ~uses in
       check env bcx body eret
@@ -410,7 +410,9 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
   | Handler { deps; over; _ }, t
     when match impl_of t with
          | Some i ->
-             i.deps = List.sort_uniq compare (handler_deps deps)
+             List.map (fun d -> d.dpath) i.deps
+             = List.sort_uniq compare
+                 (List.map (fun d -> d.dpath) (handler_deps env cx deps))
              && i.over = over
          | None -> false ->
       (* what it's written to need, and more, which is reported once the
@@ -419,16 +421,13 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
       let i = Option.get (impl_of t) in
       let labels = fst (row_parts i.needs) in
       (* what it goes over is added once its body is checked (Handler) *)
-      let own = List.map Ty.dep_label (handler_deps deps) in
+      let own = List.map dep_of (handler_deps env cx deps) in
       let needs =
         extend
-          (List.filter
-             (fun (l : label) -> not (over && List.mem l.name own))
-             labels)
+          (List.filter (fun (l : label) -> not (over && has_dep own l)) labels)
           (fresh_row env.st)
       in
-      handler core env cx e ~needs ~fails:i.fails
-        ~declared:(Some (List.map (fun (l : label) -> l.name) labels))
+      handler core env cx e ~needs ~fails:i.fails ~declared:(Some labels)
   | Tuple xs, TCon (p, parts)
     when p = Ty.tuple_path (List.length xs)
          && List.length parts = List.length xs ->
@@ -461,8 +460,8 @@ and named_block env cx ~why (e : expr) eu expected =
   let t = infer env cx e in
   match reveal env.st t with
   | TFun (ps, ret, errs, uses) ->
-      let listed = List.sort_uniq String.compare (row_names eu) in
-      name_lambda ~given:(List.map Ty.dep_path listed) cx e.node;
+      let listed = sorted_labels eu in
+      name_lambda ~given:listed cx e.node;
       let callee = match e.kind with Var (Global p) -> Some p | _ -> None in
       let op = match e.kind with Var (Dep_op (_, o)) -> Some o | _ -> None in
       let calls =
@@ -470,7 +469,7 @@ and named_block env cx ~why (e : expr) eu expected =
           [
             {
               cloc = e.loc;
-              own = row_names uses;
+              own = fst (row_parts uses);
               row = uses;
               needs = false;
               callee;
@@ -750,7 +749,9 @@ and synth env cx (e : expr) : ty =
          a call's do, so the solver knows what an `attempt` around it
          fails with; a field's name in the payload only documents it *)
       let payload = List.map (fun (_, a) -> infer env cx a) args in
-      let l = { name = tag.name; payload; written = unmarked () } in
+      let l =
+        { name = tag.name; payload; dep = false; written = unmarked () }
+      in
       include_errors env cx ~loc:e.loc ~here:(This "fail")
         ~sources:(fun () -> sources_of cx)
         ~fix:rename_fail (extend [ l ] REmpty) cx.handler;
@@ -829,7 +830,7 @@ and synth env cx (e : expr) : ty =
   | Handler { deps; over; _ } ->
       let needs = fresh_row env.st and fails = fresh_row env.st in
       handler core env cx e ~needs ~fails ~declared:None;
-      impl_type ~over ~fails (handler_deps deps) needs
+      impl_type ~over ~fails (handler_deps env cx deps) needs
 
 (* `for x in &c` or `for x in c` over a cursor (foundations.md, decision
    12), [iter], of type [tc]: a value whose type has a method
@@ -926,7 +927,8 @@ and infer_array env cx ?(name = "xs") xs =
   | first :: rest ->
       let t1 = infer env cx first in
       ignore (unifies env plain (result_loc first) ~found:t1 ~expected:elem);
-      let joined ds = String.concat " & " (List.map env.names ds) in
+      let joined ds = shown_deps env ds in
+      let mem d ds = List.exists (same_dep d) ds in
       List.iter
         (fun (x : expr) ->
           let why = explain ~msg:element_before () in
@@ -936,8 +938,9 @@ and infer_array env cx ?(name = "xs") xs =
               let t = infer env cx x in
               match impl_parts t with
               | Some (ds, _)
-                when ds <> es && List.exists (fun d -> List.mem d es) ds ->
-                  let part = List.filter (fun d -> List.mem d es) ds in
+                when (not (List.equal same_dep ds es))
+                     && List.exists (fun d -> mem d es) ds ->
+                  let part = List.filter (fun d -> mem d es) ds in
                   report env
                     (items_differ (result_loc x) ~this_ty:(joined ds)
                        ~first_loc:(result_loc first) ~first_ty:(joined es) ~name

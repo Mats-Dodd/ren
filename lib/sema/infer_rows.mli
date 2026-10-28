@@ -83,6 +83,7 @@ val use_row :
   ?needs:bool ->
   ?callee:Path.t ->
   ?op:string ->
+  ?shown:string ->
   Types.row ->
   unit
 

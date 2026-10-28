@@ -145,13 +145,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
                | _ -> false ->
             (* what differs is whether it goes over another *)
             let i = Option.get (impl_of t) in
-            [
-              Over_differs
-                {
-                  deps = String.concat " & " (List.map (type_name env) i.deps);
-                  over = i.over;
-                };
-            ]
+            [ Over_differs { deps = shown_deps env i.deps; over = i.over } ]
         | Some t ->
             (* it's what they fail to start with that differs, if that
                does, either way round: then the help writes the one that
@@ -271,10 +265,10 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
         in
         match (f, x, impl_parts f, impl_parts x) with
         | TImpl { deps = ds; _ }, _, _, Some (es, _)
-          when List.length ds > 1 && ds <> es ->
+          when List.length ds > 1 && not (List.equal same_dep ds es) ->
             Some (ds, es, true, solved)
         | _, TImpl { deps = ds; _ }, Some (es, _), _
-          when List.length ds > 1 && ds <> es ->
+          when List.length ds > 1 && not (List.equal same_dep ds es) ->
             Some (ds, es, false, solved)
         | TCon (p, fs), TCon (q, xs), _, _ when p = q -> pairs fs xs
         | TFun (ps, r, _, _), TFun (qs, r', _, _), _, _ ->
@@ -283,8 +277,8 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
               (r' :: List.map (fun p -> p.ty) qs)
         | _ -> None
       in
-      let joined ds = String.concat " & " (List.map (type_name env) ds) in
-      let within a b = List.for_all (fun d -> List.mem d b) a in
+      let joined ds = shown_deps env ds in
+      let within a b = List.for_all (fun d -> List.exists (same_dep d) b) a in
       let several =
         match all_pair found expected with
         | Some (ds, es, here, solved) when within es ds || within ds es ->
@@ -314,7 +308,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
               Other_handler
                 {
                   all = joined ds;
-                  deps = List.map (type_name env) ds;
+                  deps = List.map (fun d -> shown_deps env [ d ]) ds;
                   dep = joined es;
                   here;
                 };

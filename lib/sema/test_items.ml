@@ -131,9 +131,10 @@ let real_of sink (t : test_def) =
                 real implementation of"))
         u.dtail;
       List.filter_map
-        (fun (d : tyname) ->
+        (fun ({ dep = d; dargs } : tyname dep_ref) ->
           match d.tmod with
-          | None when List.mem_assoc d.tid.name defaults -> Some d.tid.name
+          | None when dargs = [] && List.mem_assoc d.tid.name defaults ->
+              Some d.tid.name
           | _ ->
               Diag.report sink
                 (Diag.make d.tid.loc
@@ -161,6 +162,7 @@ let fn_of ~name ~loc ?(params = []) body =
       pub = false;
       name = { name; loc };
       tparams = [];
+      tneeds = [];
       params;
       ret = None;
       errors = None;

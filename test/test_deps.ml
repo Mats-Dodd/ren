@@ -85,6 +85,7 @@ let lint_evidence body =
       (Dep_call
          {
            dep = d;
+           dargs = [];
            op = "op";
            fty = Fun ([], Ty.int, Ty.closed, uses_d);
            ev = Core.evidence ev;
@@ -376,18 +377,12 @@ dep Timer = now: fn() -> Int
       │             ^^^
       help: put each of its operations on a line of its own, indented under it, like `now: fn() -> Time`
     |}];
+  (* a generic dependency (foundations.md, decision 6) *)
   ast {|
 dep Box<T> =
   get: fn() -> T
 |};
-  [%expect
-    {|
-    error: a dependency can't take type parameters
-      ┌─ test.ren:1:8
-    1 │ dep Box<T> =
-      │        ^
-      help: remove them
-    |}]
+  [%expect {| (dep Box<T> (ops get:fn() -> T)) |}]
 
 let%expect_test "uses names a dependency" =
   types {|
@@ -1548,7 +1543,7 @@ fn main() = with a b in 1
 |};
   [%expect
     {|
-    error: expected `,`, `over` or `in` after what `with` installs, found `b`
+    error: expected `,`, `over`, `as` or `in` after what `with` installs, found `b`
       ┌─ test.ren:1:20
     1 │ fn main() = with a b in 1
       │                    ^
@@ -3734,6 +3729,7 @@ fn main() = 1
       │    ^^^
       help: rename one of them
     |}];
+  (* a handler's type parameters are its dependencies' *)
   types
     {|
 dep N =
@@ -3744,12 +3740,11 @@ handler poly<T>(x: T) for N =
 |};
   [%expect
     {|
-    error: a handler can't take type parameters
-      ┌─ test.ren:4:13
+    error: `T` isn't a type parameter of `N`
+      ┌─ test.ren:4:14
     4 │ handler poly<T>(x: T) for N =
-      │             ^
-      = a handler's operations have the types its dependencies declare, which can't take type parameters either
-      help: remove them
+      │              ^
+      help: a handler's type parameters are its dependencies': remove `<T>`
     |}]
 
 let%expect_test "the prelude's test implementations, installed by hand" =
@@ -5934,7 +5929,11 @@ let%expect_test "Core Lint checks evidence is threaded" =
       call (lambda 2 (op 2)) 1);
   [%expect {||}];
   lint_evidence (fun ~loc:_ ~op ~lambda ~call ~uses_d ->
-      call (lambda ~uses:uses_d ~given:[ Ren.Path.make "test" "D" ] 2 (op 2)) 1);
+      call
+        (lambda ~uses:uses_d
+           ~given:[ { kpath = Ren.Path.make "test" "D"; kargs = [] } ]
+           2 (op 2))
+        1);
   [%expect {||}];
   (* evidence that isn't in scope *)
   lint_evidence (fun ~loc:_ ~op ~lambda:_ ~call:_ ~uses_d:_ -> op 2);
@@ -5961,7 +5960,11 @@ let%expect_test "Core Lint checks evidence is threaded" =
     |}];
   (* a block given a dependency its type doesn't list *)
   lint_evidence (fun ~loc:_ ~op ~lambda ~call ~uses_d:_ ->
-      call (lambda ~given:[ Ren.Path.make "test" "D" ] 2 (op 2)) 1);
+      call
+        (lambda
+           ~given:[ { kpath = Ren.Path.make "test" "D"; kargs = [] } ]
+           2 (op 2))
+        1);
   [%expect
     {|
     internal compiler error in lint: Failure("Core Lint: in `main`, at test.ren:1:1: a block is given `test.D`, which its type doesn't list")
@@ -5988,7 +5991,7 @@ let%expect_test "Core Lint checks evidence is threaded" =
       let d = Ren.Path.make "test" "D" in
       (* a handler, with no state, whose instance is a record of its
          one operation *)
-      let ty = Ren.Ty.impl [ d ] Ren.Ty.closed in
+      let ty = Ren.Ty.impl [ Ren.Ty.plain d ] Ren.Ty.closed in
       let record =
         Ren.Core.mk
           (Record
@@ -6014,6 +6017,8 @@ let%expect_test "Core Lint checks evidence is threaded" =
              ev = Ren.Core.evidence 2;
              outer = Ren.Core.evidence 1;
              dep = d;
+             dargs = [];
+             from = d;
              impl;
              desc = Known Ren.Ty.int;
              body = op 1;
@@ -6597,11 +6602,11 @@ fn main() = ()
 |};
   [%expect
     {|
-    error: a type joined with `&` is a dependency's, which takes no type arguments
-      ┌─ test.ren:3:20
+    error: only a dependency's type can be joined with `&`
+      ┌─ test.ren:3:17
     3 │ fn f(c: Clock & Box<Int>) = ()
-      │                    ^
-      help: only a dependency's type is joined with `&`
+      │                 ^^^
+      help: `Box` isn't one: an implementation of several dependencies is the one value of this type
     |}];
   check_error {|
 fn f() uses Clock & TestClock = ()
@@ -7695,4 +7700,121 @@ test fn peek(a: Account) -> Int = a.log.len()
        │                                     ^^^
        = a test is a specification of `test`'s interface
        help: explore it in the console: `ren console test`
+    |}]
+
+
+(* ---- generic dependencies (compiler.md, "Generic dependencies") ---- *)
+
+let%expect_test "an alias, a written alias type, a member and a chain" =
+  (* `Replica` is a `Db` of its own, installed beside it; `let q: Jobs`
+     makes `queue()`'s description a `Jobs`'s; `Chan.make()` is called at
+     the types its result is used as; and `limit()` goes over `queue()`
+     at its types *)
+  run {|
+dep Db =
+  get: fn() -> Int
+
+handler fixed(n: Int) for Db =
+  get() => n
+
+dep Replica = Db
+
+dep Chan<T> =
+  send: fn(x: T)
+  take: fn() -> Option<T>
+
+  pub fn make() -> Chan<T> = queue()
+
+handler queue<T>() for Chan<T> =
+  var xs: Array<T> = []
+  send(x) => &xs.push(x)
+  take() => if xs.len() == 0 then None else Some(xs[0])
+
+dep Jobs = Chan<Int>
+
+handler limit<T>() over Chan<T> =
+  send(x) => next.send(x)
+  take() => next.take()
+
+fn both() -> Int uses Db, Replica = Db.get() * 10 + Replica.get()
+
+fn main() uses Console =
+  with fixed(1), fixed(2) as Replica in
+    print(both())
+  let q: Jobs = queue()
+  with q in
+    Jobs.send(3)
+    print(Jobs.take())
+  let m: Chan<Str> = Chan.make()
+  with m in
+    Chan.send("s")
+    let s: Option<Str> = Chan.take()
+    print(s)
+  with limit() over queue() in
+    Chan.send(4)
+    let f: Option<Int> = Chan.take()
+    print(f)
+|};
+  [%expect {|
+    12
+    Some(3)
+    Some("s")
+    Some(4)
+    ()
+    |}]
+
+let%expect_test "a generic link goes over one at its own types" =
+  check_error {|
+dep Chan<T> =
+  send: fn(x: T)
+  take: fn() -> Option<T>
+
+handler queue<T>() for Chan<T> =
+  var xs: Array<T> = []
+  send(x) => &xs.push(x)
+  take() => if xs.len() == 0 then None else Some(xs[0])
+
+handler limit<T>() over Chan<T> =
+  send(x) => next.send(x)
+  take() => next.take()
+
+fn main() =
+  let q: Chan<Str> = queue()
+  let l: over Chan<Int> = limit()
+  with l over q in 1
+|};
+  [%expect {|
+    error: `l` goes over a `Chan<Int>`, and `q` isn't one
+       ┌─ test.ren:17:15
+    17 │   with l over q in 1
+       │               ^
+       help: put a `Chan<Int>` under it
+    |}];
+  (* `as` follows one implementation: a chain installed as an alias is
+     a later step's *)
+  check_error {|
+dep Chan<T> =
+  send: fn(x: T)
+  take: fn() -> Option<T>
+
+handler queue<T>() for Chan<T> =
+  var xs: Array<T> = []
+  send(x) => &xs.push(x)
+  take() => if xs.len() == 0 then None else Some(xs[0])
+
+handler limit<T>() over Chan<T> =
+  send(x) => next.send(x)
+  take() => next.take()
+
+dep Jobs = Chan<Int>
+
+fn main() =
+  with limit() over queue() as Jobs in 1
+|};
+  [%expect {|
+    error: `as` follows one implementation, and `queue()` is part of a chain
+       ┌─ test.ren:17:8
+    17 │   with limit() over queue() as Jobs in 1
+       │        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       help: install the chain without `as`, or make its top the one implementation of the item
     |}]

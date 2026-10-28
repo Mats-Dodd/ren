@@ -36,9 +36,10 @@ type t =
       ev : int;  (** the id of the evidence its body runs with *)
       outer : int;
           (** the id of the evidence where it was written, which it captured *)
-      given : Path.t list;
+      given : (Path.t * Ty.ty list) list;
           (** what it takes from the evidence it's passed where it's called, on
-              top of [outer]'s (Core.Lambda) *)
+              top of [outer]'s (Core.Lambda), each dependency with its type
+              arguments *)
       body : Core.expr;
       env : t ref Env.t;
     }
@@ -117,9 +118,15 @@ and store = { mutable items : t array; mutable used : int }
    evidence [ev] where it's installed, with the variables it captured. *)
 and handler = { ev : int; body : Core.expr; env : t ref Env.t }
 
-(* An implementation of the dependency [dep], installed: it runs with the
-   evidence [outer], what was installed where it was. *)
-and installed = { dep : Path.t; impl : t; outer : installed list }
+(* An implementation of the dependency [dep] at the type arguments
+   [args], a generic one's instance, installed: it runs with the evidence
+   [outer], what was installed where it was. *)
+and installed = {
+  dep : Path.t;
+  args : Ty.ty list;
+  impl : t;
+  outer : installed list;
+}
 
 (* An array of [xs], which it takes: nothing else may change [xs]. *)
 let array xs =

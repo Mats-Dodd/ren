@@ -97,6 +97,9 @@ module.exports = grammar({
     // and `Prices.fixed(1)` a link: the token after the name decides
     [$.dependency, $.constructor_ref],
     [$.dependency, $.type_name, $._primary],
+    // in `<T has eq, ord, U>`, the token after a comma decides whether it
+    // goes on with a requirement or starts the next type parameter
+    [$.constrained_type_parameter],
   ],
 
   supertypes: ($) => [$._expression, $._pattern, $._type],
@@ -155,7 +158,21 @@ module.exports = grammar({
 
     visibility: (_) => 'pub',
 
-    type_parameters: ($) => seq('<', commaSep($.type_identifier), '>'),
+    // <T, U>, and what each needs, <T has eq, ord, U>: a comma goes on
+    // with another requirement, unless a type parameter's name follows it
+    type_parameters: ($) =>
+      seq(
+        '<',
+        commaSep(choice($.type_identifier, $.constrained_type_parameter)),
+        '>',
+      ),
+
+    constrained_type_parameter: ($) =>
+      seq(
+        field('name', $.type_identifier),
+        'has',
+        sep1(field('requirement', $.identifier), ','),
+      ),
 
     parameters: ($) => seq('(', commaSep($.parameter), ')'),
 
@@ -188,10 +205,15 @@ module.exports = grammar({
     // fails with, the same wherever the signature names it
     named_row: ($) => seq('..', field('name', $.identifier)),
 
+    // Clock, store.Users, and a generic one at its types, Chan<Job>
+    // (deps.md, "Generic dependencies")
     dependency: ($) =>
-      choice(
-        $.type_identifier,
-        seq(field('module', $.identifier), '.', $.type_identifier),
+      seq(
+        choice(
+          $.type_identifier,
+          seq(field('module', $.identifier), '.', $.type_identifier),
+        ),
+        optional(field('arguments', $.type_arguments)),
       ),
 
     // ! Short(account: AccountId, by: Money) | Frozen | bank.Refusal: what
@@ -308,19 +330,30 @@ module.exports = grammar({
     // ---- dependencies ----
 
     // pub dep Clock = now: fn() -> Time ..., then its members: its
-    // operations, indented under it, come first, which the compiler checks
+    // operations, indented under it, come first, which the compiler checks.
+    // A generic one, dep Chan<T> = ...; or an alias of one at its types,
+    // dep Jobs = Chan<Job>, a dependency of its own with its operations
     dependency_definition: ($) =>
       seq(
         optional($.visibility),
         'dep',
         field('name', $.type_identifier),
+        optional(field('type_parameters', $.type_parameters)),
         '=',
-        $._indent,
-        sep1(
-          choice(field('operation', $.operation), field('member', $._member)),
-          $._newline,
+        choice(
+          seq(
+            $._indent,
+            sep1(
+              choice(
+                field('operation', $.operation),
+                field('member', $._member),
+              ),
+              $._newline,
+            ),
+            $._dedent,
+          ),
+          field('names', $.dependency),
         ),
-        $._dedent,
       ),
 
     // now: fn() -> Time
@@ -340,6 +373,7 @@ module.exports = grammar({
         optional(field('test', 'test')),
         'handler',
         field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
         field('parameters', $.parameters),
         choice(
           seq('for', sep1(field('implements', $.dependency), ',')),
@@ -465,7 +499,7 @@ module.exports = grammar({
     // installed, Sql ! DbDown; and one that goes over another, over Users
     implementation_type: ($) =>
       choice(
-        seq(field('name', $.type_name), $._implementation_rest),
+        seq($._implemented, $._implementation_rest),
         seq($._joined, $._implementation_rest),
         seq($._over, $._implementation_rest),
       ),
@@ -480,16 +514,19 @@ module.exports = grammar({
       ),
 
     // over Users, over A & B: an implementation that goes over another
-    _over: ($) =>
-      seq('over', sep1(field('name', $.type_name), '&')),
+    _over: ($) => seq('over', sep1($._implemented, '&')),
+
+    // a dependency an implementation implements, at its types if it's
+    // generic, Chan<Int>
+    _implemented: ($) =>
+      seq(
+        field('name', $.type_name),
+        optional(field('arguments', $.type_arguments)),
+      ),
 
     // Clock & TestClock: an implementation of each, sharing one state. As
     // a function's result its `uses` is the function's, as above
-    _joined: ($) =>
-      seq(
-        field('name', $.type_name),
-        repeat1(seq('&', field('name', $.type_name))),
-      ),
+    _joined: ($) => seq($._implemented, repeat1(seq('&', $._implemented))),
 
     parenthesized_type: ($) => seq('(', $._type, ')'),
 
@@ -535,7 +572,7 @@ module.exports = grammar({
 
     _argument_implementation_type: ($) =>
       choice(
-        seq(field('name', $.type_name), $._argument_implementation_rest),
+        seq($._implemented, $._argument_implementation_rest),
         seq($._joined, $._argument_implementation_rest),
         seq($._over, $._argument_implementation_rest),
       ),
@@ -970,7 +1007,16 @@ module.exports = grammar({
         ),
       ),
 
-    _with_item: ($) => choice($._expression, $.with_chain),
+    _with_item: ($) => choice($._expression, $.with_chain, $.with_as),
+
+    // queue() as Jobs: installed as an alias of what it implements, or at
+    // the types it names
+    with_as: ($) =>
+      seq(
+        choice(field('link', $._expression), $.with_chain),
+        'as',
+        field('as', $.dependency),
+      ),
 
     // cached(ttl) over limited() over catalogue(), or over Prices, the one
     // installed outside the `with`: each link goes over the one after it

@@ -1404,15 +1404,32 @@ _Noreturn void ren_uncaught(ren_obj *e) {
 
 /* ---- evidence ---- */
 
+bool ren_desc_same(const ren_desc *a, const ren_desc *b) {
+  if (a == b)
+    return true;
+  if (a->kind != b->kind || a->var != b->var || a->decl != b->decl ||
+      a->nargs != b->nargs)
+    return false;
+  for (int i = 0; i < a->nargs; i++)
+    if (!ren_desc_same(a->args[i], b->args[i]))
+      return false;
+  return true;
+}
+
 const ren_ev *ren_install(ren_ev *nodes, const ren_ev *outer, void *deps,
                           int64_t ndeps, const ren_impl *const *impls,
                           int nimpls) {
-  const int32_t *wanted = deps;
+  const ren_key *wanted = deps;
   const ren_ev *ev = outer;
   for (int64_t i = 0; i < ndeps; i++)
     for (int j = 0; j < nimpls; j++)
-      if (impls[j]->dep == wanted[i]) {
-        nodes[i].dep = wanted[i];
+      /* a description of one dependency has one implementation, which
+         is it whichever it was made for: `let q: Jobs = queue()` made a
+         `Chan<Job>`'s a `Jobs`'s */
+      if (impls[j]->dep == wanted[i].from || (nimpls == 1 && ndeps == 1)) {
+        nodes[i].dep = wanted[i].dep;
+        nodes[i].nargs = wanted[i].nargs;
+        nodes[i].args = wanted[i].args;
         nodes[i].impl = impls[j];
         nodes[i].next = ev;
         ev = &nodes[i];
@@ -1421,11 +1438,16 @@ const ren_ev *ren_install(ren_ev *nodes, const ren_ev *outer, void *deps,
 }
 
 const ren_ev *ren_given(ren_ev *nodes, const ren_ev *outer, const ren_ev *from,
-                        const int32_t *deps, int n) {
+                        const ren_key *deps, int n) {
   const ren_ev *ev = outer;
   for (int i = 0; i < n; i++) {
-    nodes[i].dep = deps[i];
-    nodes[i].impl = ren_find(from, deps[i]);
+    nodes[i].dep = deps[i].dep;
+    nodes[i].nargs = deps[i].nargs;
+    nodes[i].args = deps[i].args;
+    nodes[i].impl =
+        deps[i].nargs == 0
+            ? ren_find(from, deps[i].dep)
+            : ren_find_args(from, deps[i].dep, deps[i].args, deps[i].nargs);
     nodes[i].next = ev;
     ev = &nodes[i];
   }

@@ -104,6 +104,14 @@ type dict =
           derived from. A type variable inference left undecided has no
           dictionary: no value of its type is ever made *)
 
+(* A dependency as evidence finds it (deps.md, "How it runs"): its path
+   and the descriptors of its type arguments, a generic one's instance,
+   `Log<T>` (compiler.md, "Generic dependencies"). An installed
+   implementation is found by both: the interpreter and a debug build
+   compare what the descriptors describe, and a release build, which
+   knows every type, a constant. One that isn't generic has none. *)
+type dkey = { kpath : Path.t; kargs : desc list }
+
 (* Operations built into the language. Each one's operands are listed in
    the order they're evaluated. *)
 (* Whether an index into an array is checked, or proved in bounds
@@ -200,6 +208,8 @@ and kind =
           `hash` of its keys' type *)
   | Dep_call of {
       dep : Path.t;
+      dargs : desc list;
+          (** [dep]'s type arguments, if it's generic: which instance it is *)
       op : string;
       fty : Ty.ty;  (** the operation's type, at this call *)
       ev : var;  (** the evidence it finds [dep]'s implementation in *)
@@ -218,6 +228,10 @@ and kind =
       ev : var;
       outer : var;
       dep : Path.t;
+      dargs : desc list;  (** [dep]'s type arguments, if it's generic *)
+      from : Path.t;
+          (** the dependency of [impl]'s that's installed: [dep], or for an
+              alias, `with queue() as Jobs`, the one it's an alias of *)
       impl : expr;
       desc : desc;
       body : expr;
@@ -231,7 +245,8 @@ and kind =
           the instance has a `finally`, it's given [body]'s outcome, `Ok` of its
           value or `Err` of its error, and [desc], which describes [body]'s
           type, and what it gives is the [With]'s. The runtime's installs around
-          `main` are these *)
+          `main` are these. A handler's instance gives its implementation of
+          [from], installed as [dep] at [dargs] *)
   | Handler of { ev : var; captures : var list; body : expr }
       (** a handler, described: what calling a `handler` declaration gives. Like
           a lambda of no parameters it keeps [captures], and its [body] runs
@@ -259,17 +274,17 @@ and kind =
       ev : var;
       outer : var;
       handler : expr;
-      deps : Path.t list;
+      deps : (dkey * Path.t) list;
       desc : desc;
       body : expr;
     }
       (** [body], with the evidence [ev]: [outer] with a fresh instance of
-          [handler], made with [outer], installed on top, for each of [deps].
-          Those are what [handler]'s type lists, sorted: the instance may
-          implement more, if it was narrowed ([Narrowed]), which aren't
-          installed. The instance's implementations all keep [outer], which
-          their operations run with. Its `finally`, if it has one, runs as a
-          [With]'s does *)
+          [handler], made with [outer], installed on top, for each of [deps]:
+          the instance's implementation of the path, installed as the key. Those
+          are what [handler]'s type lists, sorted: the instance may implement
+          more, if it was narrowed ([Narrowed]), which aren't installed. The
+          instance's implementations all keep [outer], which their operations
+          run with. Its `finally`, if it has one, runs as a [With]'s does *)
   | Prim of prim * expr list
   | Let of var * expr * expr  (** [let x = value in body] *)
   | Assign of var * expr  (** the only way anything changes *)
@@ -290,7 +305,7 @@ and kind =
       params : param list;
       ev : var;
       outer : var;
-      given : Path.t list;
+      given : dkey list;
       captures : var list;
       body : expr;
     }
@@ -382,8 +397,8 @@ type origin =
           the operation's own. Called directly where that handler is known to be
           installed ([known]) *)
 
-(* At the evidence [kev], the implementation of [kdep] is known: an
-   instance of the handler [khandler], whose state is in the frame of
+(* At the evidence [kev], the implementation of [kdep], a dependency that isn't generic, is
+   known: an instance of the handler [khandler], whose state is in the frame of
    the [With] that installed it, so a call of one of its operations is a
    direct call of the operation, lifted ([Lifted_op]), and the [With]
    installs nothing in a native build. *)
@@ -500,7 +515,9 @@ let rec has_param n (t : Ty.ty) =
       List.exists (fun (p : Ty.param) -> has_param n p.ty) ps
       || has_param n r || row e || row u
   | Errors r -> row r
-  | Impl i -> row i.needs || row i.fails
+  | Impl i ->
+      List.exists (fun (d : Ty.dep) -> List.exists (has_param n) d.dargs) i.deps
+      || row i.needs || row i.fails
   | Error -> false
 
 (* The descriptor of [t], a type written in the type variables of a
@@ -528,6 +545,11 @@ let rec describe tys (t : Ty.ty) =
   | Errors e -> Errs (row e)
   | Impl _ | Error -> Known t
 
+(* The key of [d], a dependency of a type written in the type variables
+   of a function whose hidden type parameters are [tys]. *)
+let key_of tys (d : Ty.dep) =
+  { kpath = d.dpath; kargs = List.map (describe tys) d.dargs }
+
 (* The type variables among [Var 0] to [Var (n - 1)] that [t] has in it,
    each once, in order. *)
 let params_in n (t : Ty.ty) =
@@ -550,7 +572,13 @@ let params_in n (t : Ty.ty) =
              e)
           u
     | Errors r -> row acc r
-    | Impl i -> row (row acc i.needs) i.fails
+    | Impl i ->
+        let acc =
+          List.fold_left
+            (fun acc (d : Ty.dep) -> List.fold_left go acc d.dargs)
+            acc i.deps
+        in
+        row (row acc i.needs) i.fails
   in
   List.sort_uniq compare (go [] t)
 
@@ -582,6 +610,9 @@ let rec desc_vars = function
 
 and desc_row_vars r =
   List.concat_map (fun (_, ds) -> List.concat_map desc_vars ds) r.dlabels
+
+(* The hidden type parameters a dependency's key uses. *)
+let key_vars (k : dkey) = List.concat_map desc_vars k.kargs
 
 (* The hidden dictionary parameters a dictionary uses, and the hidden type
    parameters its descriptor does. *)
@@ -768,6 +799,31 @@ let rec pattern_sexp p =
   | PTuple ps -> List (atom "tuple" :: List.map pattern_sexp ps)
   | POr ps -> List (atom "or" :: List.map pattern_sexp ps)
 
+(* A descriptor, as a print shows it: a type, or a hidden type
+   parameter. *)
+let rec show_desc = function
+  | Known t ->
+      Ty.show
+        (Ty.printer ~names:Path.full
+           { ty = t; names = []; reqs = []; row_reqs = [] })
+        t
+  | Param v -> show_var v
+  | Applied (p, []) -> Path.full p
+  | Applied (p, ds) ->
+      Path.full p ^ "<" ^ String.concat ", " (List.map show_desc ds) ^ ">"
+  | Errs _ -> "!"
+
+(* A dependency's key, `Log<Int>`, or one that isn't generic, its path. *)
+let show_key p = function
+  | [] -> Path.full p
+  | ds -> Path.full p ^ "<" ^ String.concat ", " (List.map show_desc ds) ^ ">"
+
+(* What a [With_handler] installs, or a [With]: the key, and the
+   dependency of the instance's it installs, where they differ, an
+   alias's, `Jobs=Chan`. *)
+let show_install k from =
+  show_key k.kpath k.kargs ^ if from = k.kpath then "" else "=" ^ Path.full from
+
 (* A use of a top-level function, [name], printed bare; or, by a typed
    print [t], with the type arguments [a] if it has any, as
    [(inst first_or Int)], and the dictionaries [ds] it's given, if any,
@@ -804,18 +860,24 @@ let rec sexp_with t e =
   | Global (p, a, _, ds) -> used t (Path.local p) a ds
   | Global_value (p, a) -> used t (Path.local p) a []
   | Intrinsic (x, a, _, ds) -> used t (Intrinsic.name x) a ds
-  | Dep_call { dep; op; ev; next; args; _ } ->
+  | Dep_call { dep; dargs; op; ev; next; args; _ } ->
       List
         (atom (if next then "next-call" else "dep-call")
         :: var ev
-        :: Atom (Path.full dep ^ "." ^ op)
+        :: Atom (show_key dep dargs ^ "." ^ op)
         :: List.map sexp args)
-  | With { ev; outer; dep; impl; body; _ } ->
+  | With { ev; outer; dep; dargs; from; impl; body; _ } ->
       List
         [
           atom "with";
           var ev;
-          List [ atom "extend"; var outer; Atom (Path.full dep); sexp impl ];
+          List
+            [
+              atom "extend";
+              var outer;
+              Atom (show_install { kpath = dep; kargs = dargs } from);
+              sexp impl;
+            ];
           sexp body;
         ]
   | Handler { ev; captures; body } ->
@@ -848,7 +910,7 @@ let rec sexp_with t e =
             [
               atom "extend";
               var outer;
-              List (List.map (fun d -> Atom (Path.full d)) deps);
+              List (List.map (fun (k, from) -> Atom (show_install k from)) deps);
               sexp handler;
             ];
           sexp body;
@@ -892,7 +954,7 @@ let rec sexp_with t e =
           var ev;
           List
             (atom "extend" :: var outer
-            :: List.map (fun d -> Atom (Path.full d)) given);
+            :: List.map (fun k -> Atom (show_key k.kpath k.kargs)) given);
           sexp body;
         ]
   | Con (_, c, args) -> List (atom "con" :: atom c :: List.map sexp args)

@@ -1228,9 +1228,11 @@ let read fs env (v : C.var) : atom =
 let borrow fs env (v : C.var) : atom = Var (borrow_var fs env v)
 
 (* The number of the operation [op] among its dependency's, in the order
-   it declares them, which an implementation keeps them in. *)
-let op_index fs loc dep op =
+   it declares them, which an implementation keeps them in: an alias's
+   are those of the dependency it names. *)
+let rec op_index fs loc dep op =
   match Hashtbl.find_opt fs.cx.types dep with
+  | Some { body = Dep_alias t; _ } -> op_index fs loc t.dpath op
   | Some { body = Dep ops; _ } ->
       let rec find i = function
         | [] -> bug ("no operation " ^ op)
@@ -1472,14 +1474,18 @@ and expr_at fs env (e : C.expr) : atom =
       break_out fs env;
       dummy fs env (lay e.ty)
   | Call (f, args, ev) -> call fs env e f args ev
-  | Dep_call { dep; op; fty; ev; args; _ } ->
+  | Dep_call { dep; dargs; op; fty; ev; args; _ } ->
       let xs = List.map (expr fs env) args in
       List.iter (consume env) xs;
       let ev = borrow fs env ev in
+      (* a generic dependency's implementation is found by its type
+         arguments too, whose descriptors are needed only to find it *)
+      let ds = List.map (desc fs env) dargs in
       let b =
         borrowed fs ("$" ^ op) Block
-          (Op_block (ev, dep_id cx dep, op_index fs e.loc dep op))
+          (Op_block (ev, dep_id cx dep, ds, op_index fs e.loc dep op))
       in
+      List.iter (drop fs env) ds;
       call_block fs env ~result:(lay e.ty) ~fails:(C.fails fty) b ev xs
   | With { dep; impl = { kind = Global_value (real, _); _ }; _ }
     when real = Path.member dep "real" && dep <> Path.prelude "Console" ->
@@ -1489,8 +1495,10 @@ and expr_at fs env (e : C.expr) : atom =
          made before the `with`, and each call of one of its operations
          is a direct call already, so it installs nothing *)
       expr fs (bind env ev (borrow_var fs env outer)) body
-  | With { ev; outer; dep; impl; desc = d; body } ->
-      install fs env e ~ev ~outer ~deps:[ dep ] ~handler:impl ~body_desc:d body
+  | With { ev; outer; dep; dargs; from; impl; desc = d; body } ->
+      install fs env e ~ev ~outer
+        ~deps:[ ({ C.kpath = dep; kargs = dargs }, from) ]
+        ~handler:impl ~body_desc:d body
   | With_handler { ev; outer; handler; deps; desc = d; body } ->
       install fs env e ~ev ~outer ~deps ~handler ~body_desc:d body
   (* which of a handler's dependencies are installed is the `with`'s *)
@@ -2455,10 +2463,17 @@ and lambda fs env ~name ~(params : C.param list) ~ev ~outer ~given ~captures
     let ev_var =
       match given with
       | [] -> ( match outer_ev with Var v -> v | _ -> bug "evidence")
-      | deps ->
-          let_var code "ev" Ev
-            (Given
-               { outer = outer_ev; caller; deps = List.map (dep_id cx) deps })
+      | keys ->
+          (* a generic dependency's type arguments' descriptors are kept
+             until the block returns, as long as the evidence that points
+             at them *)
+          let deps =
+            List.map
+              (fun (k : C.dkey) ->
+                (dep_id cx k.kpath, List.map (desc code cenv) k.kargs))
+              keys
+          in
+          let_var code "ev" Ev (Given { outer = outer_ev; caller; deps })
     in
     let cenv = bind cenv ev ev_var in
     fst
@@ -2503,6 +2518,16 @@ and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
       body
   in
   let d = desc fs env body_desc in
+  let keys =
+    List.map
+      (fun ((k : C.dkey), from) ->
+        {
+          kdep = dep_id cx k.kpath;
+          kfrom = dep_id cx from;
+          kargs = List.map (desc fs env) k.kargs;
+        })
+      deps
+  in
   let outer = borrow fs env outer in
   let result = fresh fs "$with" (layout_at fs e.loc e.ty) in
   word_only cx result.layout;
@@ -2520,10 +2545,11 @@ and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
          outer;
          body = b;
          desc = d;
-         deps = List.map (dep_id cx) deps;
+         deps = keys;
          error;
          on_error;
        });
+  List.iter (fun k -> List.iter (drop fs env) k.kargs) keys;
   drop fs env d;
   drop fs env h;
   own env result;
@@ -2534,6 +2560,21 @@ and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
 and handler fs env (e : C.expr) ~ev ~captures body =
   let cx = fs.cx in
   let values = List.map (read fs env) captures in
+  (* a generic handler's code needs the descriptors of its function's
+     type variables, `log<T>`'s `T`, which it keeps after what it
+     captures *)
+  let words = List.filter (fun (n, _) -> n >= 0) fs.words in
+  let descs =
+    List.map
+      (fun (_, (d : var)) ->
+        let t = fresh fs d.name Desc in
+        emit fs (Let (t, Atom (Var d)));
+        dup fs (Var t);
+        own env t;
+        Var t)
+      words
+  in
+  let size = List.length captures + List.length words + 1 in
   let code =
     {
       cx;
@@ -2562,6 +2603,7 @@ and handler fs env (e : C.expr) ~ev ~captures body =
   code.handler <- Some { outer; body = body_p; body_desc; deps; ndeps };
   (* the `with`'s body gives a word described by [body_desc] *)
   code.words <- [ (-1, body_desc) ];
+  let ncaps = List.length captures in
   let frame = { kind = Fn_frame; live = [] } in
   let body_block =
     block code (fun () ->
@@ -2571,10 +2613,18 @@ and handler fs env (e : C.expr) ~ev ~captures body =
             (fun cenv (i, ((v : C.var), x)) ->
               bind cenv v
                 (let_var code v.name (atom_layout x)
-                   (Field (Var self, i + 1, List.length captures + 1))))
+                   (Field (Var self, i + 1, size))))
             cenv
             (List.mapi (fun i c -> (i, c)) (List.combine captures values))
         in
+        code.words <-
+          (-1, body_desc)
+          :: List.mapi
+               (fun i (k, (d : var)) ->
+                 ( k,
+                   let_var code d.name Desc
+                     (Field (Var self, ncaps + i + 1, size)) ))
+               words;
         let cenv = bind cenv ev outer in
         let r = expr code cenv body in
         consume cenv r;
@@ -2599,8 +2649,8 @@ and handler fs env (e : C.expr) ~ev ~captures body =
     }
     :: cx.lifted;
   alloc fs env
-    (shape 0 (Ptr :: List.map atom_layout values))
-    (Fn_ptr name :: values)
+    (shape 0 (Ptr :: List.map atom_layout (values @ descs)))
+    (Fn_ptr name :: (values @ descs))
 
 (* A handler's instance, at the end of its code: each implementation a
    record of its operations' blocks, installed on the evidence the

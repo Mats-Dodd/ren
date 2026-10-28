@@ -47,7 +47,7 @@ let copy_needs env ~loc ~what needs =
              ksrc = needs;
              kdst = copy;
              kwhat = what;
-             kpassed = List.map (fun (l : label) -> l.name) labels;
+             kpassed = labels;
            });
       copy
 
@@ -204,11 +204,37 @@ let in_own_body env cx =
    it uses (see [copy]): joined as it is, the function's own row would be
    the `with`'s body's, and what the `with` installs would end up in the
    function's `uses`. *)
-let rec use_row env cx ~loc ?(needs = false) ?callee ?op uses =
-  cx.calls :=
-    { cloc = loc; own = row_names uses; row = uses; needs; callee; op }
-    :: !(cx.calls);
+let rec use_row env cx ~loc ?(needs = false) ?callee ?op ?shown uses =
   let what = if needs then Installing else Call_uses in
+  (* an instance of a generic dependency whose type arguments are still
+     open is joined once they're known (see [Infer_env.instance]) *)
+  let uses =
+    match fst (row_parts uses) with
+    | labels when List.exists Unify.open_args labels ->
+        let rec strip r =
+          match repr_row r with
+          | RExtend (l, rest) when Unify.open_args l ->
+              defer env
+                (Instance
+                   {
+                     xloc = loc;
+                     xlabel = l;
+                     xinto = cx.uses;
+                     xcall = Option.value shown ~default:"this";
+                     xdeclared = cx.declares;
+                     xself = cx.self;
+                     xwhat = what;
+                   });
+              strip rest
+          | RExtend (l, rest) -> RExtend (l, strip rest)
+          | r -> r
+        in
+        strip uses
+    | _ -> uses
+  in
+  cx.calls :=
+    { cloc = loc; own = fst (row_parts uses); row = uses; needs; callee; op }
+    :: !(cx.calls);
   let joined =
     match row_skolem uses with
     | Some named ->
@@ -245,9 +271,8 @@ and join_uses env ~loc ~what joined into =
   let labels, tail = row_parts joined in
   match row_end joined with
   | RVar _ as t when tail = row_tail into ->
-      let have = row_names into in
       let missing =
-        List.filter (fun (l : label) -> not (List.mem l.name have)) labels
+        List.filter (fun (l : label) -> not (has_label into l)) labels
       in
       (* a variable still unbound takes any row, so this can't fail *)
       if missing <> [] then
@@ -272,7 +297,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?(install = false) ?target
     ?callee errs uses =
   let name_loc = fn.loc in
   let op = match fn.kind with Var (Dep_op (_, o)) -> Some o | _ -> None in
-  use_row env cx ~loc:call.loc ?callee ?op uses;
+  use_row env cx ~loc:call.loc ?callee ?op ?shown:(env.source call) uses;
   let ewritten =
     match call.kind with
     | Call (f, _) | Ref { kind = Call (f, _); _ } ->

@@ -46,7 +46,7 @@ type core = {
 
 (* The dependencies a handler of these implements, whose type its body
    gives (Types.impl_type). *)
-val handler_deps : Ast.tname list -> Path.t list
+val handler_deps : env -> ctx -> Ast.tname Ast.dep_ref list -> Types.dep list
 
 (* A handler's body, the expression given: its state, arms and `finally`,
    which use [needs] and fail with [fails], checked once the group is done
@@ -58,7 +58,7 @@ val handler :
   Ast.Resolved.expr ->
   needs:Types.row ->
   fails:Types.row ->
-  declared:string list option ->
+  declared:Types.label list option ->
   unit
 
 (* `with a, b over c in body`, the first expression, given its items and

@@ -1397,7 +1397,12 @@ ren_val ren_value_any(ren_obj *d, bool one);
    (std/core/hnd.kk, the `Ev` record), kept on the stack of whatever
    installed it. An implementation is a record of blocks, one for each
    operation, whose environments hold the evidence the handler was
-   installed with, so `next` and the handler's own calls find theirs. */
+   installed with, so `next` and the handler's own calls find theirs.
+
+   A generic dependency's node keeps the descriptors of its type
+   arguments too, `Chan<Job>`'s `Job`, so `Chan<Job>` and `Chan<Int>`,
+   installed together, are found apart (foundations.md, decisions 5 and
+   6); a dependency that isn't generic has none. */
 
 typedef struct ren_ev ren_ev;
 typedef ren_obj *(*ren_code)(void *env, const ren_ev *ev, void *args,
@@ -1415,28 +1420,62 @@ typedef struct {
 
 struct ren_ev {
   int32_t dep;
+  int32_t nargs;
+  ren_obj *const *args; /* its type arguments' descriptors */
   const ren_impl *impl;
   const ren_ev *next;
 };
 
-/* The innermost implementation of [dep]: typing makes sure there's one. */
+/* A dependency a `with` installs, or a block is given: its number and
+   its type arguments' descriptors. [from] is the number of the
+   dependency the implementation installed for it implements: [dep]
+   itself, or the one an alias names (`with queue() as Jobs`). */
+typedef struct {
+  int32_t dep;
+  int32_t from;
+  int32_t nargs;
+  ren_obj *const *args;
+} ren_key;
+
+/* The innermost implementation of [dep], one that isn't generic: typing
+   makes sure there's one. */
 static inline const ren_impl *ren_find(const ren_ev *ev, int32_t dep) {
   while (ev->dep != dep)
     ev = ev->next;
   return ev->impl;
 }
 
-/* [outer] with each of [deps] installed on top, its implementation one
-   of [impls], in [nodes]: a `with` installing a handler's instance. */
+/* Whether two descriptors describe the same type. */
+bool ren_desc_same(const ren_desc *a, const ren_desc *b);
+
+/* The innermost implementation of the generic [dep] at the type
+   arguments [args] describe. */
+static inline const ren_impl *ren_find_args(const ren_ev *ev, int32_t dep,
+                                            ren_obj *const *args, int nargs) {
+  for (;; ev = ev->next) {
+    if (ev->dep != dep || ev->nargs != nargs)
+      continue;
+    int i = 0;
+    while (i < nargs && ren_desc_same((const ren_desc *)ev->args[i],
+                                      (const ren_desc *)args[i]))
+      i++;
+    if (i == nargs)
+      return ev->impl;
+  }
+}
+
+/* [outer] with each of the keys [deps] installed on top, its
+   implementation the one of [impls] for its [from], in [nodes]: a
+   `with` installing a handler's instance. */
 const ren_ev *ren_install(ren_ev *nodes, const ren_ev *outer, void *deps,
                           int64_t ndeps, const ren_impl *const *impls,
                           int nimpls);
 
-/* [outer] with the implementations of [deps] its caller has, in [from],
-   on top, in [nodes]: what a block's parameter's type lists, which its
-   callee provides (foundations.md, decision 5). */
+/* [outer] with the implementations of the keys [deps] its caller has, in
+   [from], on top, in [nodes]: what a block's parameter's type lists,
+   which its callee provides (foundations.md, decision 5). */
 const ren_ev *ren_given(ren_ev *nodes, const ren_ev *outer, const ren_ev *from,
-                        const int32_t *deps, int n);
+                        const ren_key *deps, int n);
 
 /* A handler's description is an object: its code, then what it
    captured. Its code makes the handler's state as its own locals, makes

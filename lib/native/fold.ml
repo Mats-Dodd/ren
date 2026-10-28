@@ -117,8 +117,13 @@ let rhs h (r : rhs) : rhs =
       Install
         { outer = a outer; impls = xs impls; deps = a deps; ndeps = a ndeps }
   | Given { outer; caller; deps } ->
-      Given { outer = a outer; caller = a caller; deps }
-  | Op_block (x, d, n) -> Op_block (a x, d, n)
+      Given
+        {
+          outer = a outer;
+          caller = a caller;
+          deps = List.map (fun (d, args) -> (d, xs args)) deps;
+        }
+  | Op_block (x, d, args, n) -> Op_block (a x, d, xs args, n)
   | Is_unique x -> Is_unique (a x)
   | Make_struct fields -> Make_struct (xs fields)
   | Struct_get (x, n) -> Struct_get (a x, n)
@@ -170,7 +175,7 @@ let rec stmt h (s : stmt) : stmt =
           outer = a outer;
           body = a body;
           desc = a desc;
-          deps;
+          deps = List.map (fun k -> { k with kargs = atoms h k.kargs }) deps;
           error = v error;
           on_error = Option.map b on_error;
         }

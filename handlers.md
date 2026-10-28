@@ -67,6 +67,14 @@ error: this `with` installs `Users` twice
   = help: to put one in front of another, use a handler declared `over Users`
 ```
 
+**A generic dependency's instances are each a dependency.**
+`Log<Int>` beside `Log<Str>` is two, so a `with` can install both; `Log<Int>`
+twice is the error above. `with h as Jobs` installs `h` as an alias of
+what it implements (deps.md, "Generic dependencies"). A generic handler
+over another goes over one at its own types: `with limit() over queue()`
+makes them both `Chan<α>`, and `with limit() over Chan<Int>` goes over the
+`Chan<Int>` installed outside.
+
 A `with` nested inside another can still install a dependency the outer
 one did. The inner one is in effect inside it, as now. That's shadowing
 you can see, one level of indentation in.

@@ -18,6 +18,7 @@ let error_labels env ~tvars (es : Resolved.errors) =
           List.map
             (of_ty ~vars:(List.nth tvars) ~tails:(fun _ -> REmpty))
             l.payload;
+        dep = false;
         written = unmarked ();
       })
     (Iface.of_errors ~sets:env.sets es)
@@ -32,10 +33,27 @@ let named_row ~named (n : ident option) =
       | None -> REmpty (* resolve.ml reported it *))
   | None -> REmpty
 
-let written_uses ~named (u : Resolved.uses) =
+(* The dependencies a `uses` lists or an implementation's type joins, with
+   their type arguments as checker types. *)
+let written_deps env ~tvars (ds : tname dep_ref list) =
+  List.map
+    (fun (d : Ty.dep) ->
+      {
+        dpath = d.dpath;
+        dargs =
+          List.map
+            (of_ty ~vars:(List.nth tvars) ~tails:(fun _ -> REmpty))
+            d.dargs;
+      })
+    (Iface.deps_of ~sets:env.sets ds)
+
+let written_uses env ~tvars ~named (u : Resolved.uses) =
+  let rec once = function
+    | [] -> []
+    | l :: rest -> l :: once (List.filter (fun k -> not (same_label k l)) rest)
+  in
   extend
-    (List.map dep
-       (List.map (fun (l : Ty.label) -> l.name) (Iface.dep_labels u.deps)))
+    (once (List.map dep_of (written_deps env ~tvars u.deps)))
     (named_row ~named u.dtail)
 
 (* Turn a written type into a checker type. [tvars] are what the type
@@ -53,7 +71,7 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
   | TyName ({ tref = Param i; _ }, _) -> List.nth tvars i
   | TyName ({ tref = Named p; _ }, args) -> TCon (p, List.map go args)
   | TyImpl { impl_deps = ds; impl_over = over; impl_errors; impl_uses; _ } ->
-      let deps = Iface.dep_paths ds in
+      let deps = written_deps env ~tvars ds in
       (* what it can fail to start with is what's written, or nothing *)
       let fails =
         match impl_errors with
@@ -68,17 +86,19 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
             let extra =
               if over then
                 List.filter
-                  (fun (d : tname) ->
+                  (fun (d : tname dep_ref) ->
                     not
-                      (List.mem d.tref
-                         (List.map (fun (u : tname) -> u.tref) u.deps)))
+                      (List.mem d.dep.tref
+                         (List.map
+                            (fun (u : tname dep_ref) -> u.dep.tref)
+                            u.deps)))
                   ds
               else []
             in
-            written_uses ~named { u with deps = u.deps @ extra }
+            written_uses env ~tvars ~named { u with deps = u.deps @ extra }
         | None when over ->
             (* it needs the one under it *)
-            extend (List.map (fun p -> dep (Ty.dep_label p)) deps) (row ())
+            extend (List.map dep_of deps) (row ())
         | None -> row ())
   | TyFn (ps, ret, errs, u, _) ->
       let ret = match ret with Some r -> go r | None -> unit in
@@ -89,7 +109,9 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
         | None -> row ()
       in
       let uses =
-        match u with Some u -> written_uses ~named u | None -> REmpty
+        match u with
+        | Some u -> written_uses env ~tvars ~named u
+        | None -> REmpty
       in
       TFun (List.map (convert_param env ~tvars ~named ~row) ps, ret, errs, uses)
   | TyInout _ ->
@@ -147,7 +169,7 @@ let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
            to start with what's written, if anything. One that goes over
            its dependencies needs them too, as Iface.over_needs says, met
            by what it's installed over, not by its function's caller *)
-        let deps = Iface.dep_paths ds in
+        let deps = written_deps env ~tvars:tparams ds in
         let fails =
           match impl_errors with
           | Some _ -> (
@@ -158,11 +180,7 @@ let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
               | _ -> REmpty)
           | None -> REmpty
         in
-        let needs =
-          if over then
-            extend (List.map (fun d -> dep (Ty.dep_label d)) deps) uses
-          else uses
-        in
+        let needs = if over then extend (List.map dep_of deps) uses else uses in
         impl_type ~over ~fails deps needs
     | Some t, Some _ -> convert env ~tvars:tparams ~named ~row:closed t
     | Some t, None ->
@@ -187,9 +205,10 @@ let instance env (td : Iface.type_decl) =
     else tvars
   in
   match td.body with
-  | Dep _ ->
+  | Dep _ | Dep_alias _ ->
       (* an implementation, which needs whatever its operations use *)
-      (impl_type [ td.path ] (fresh_row env.st), tvars)
+      ( impl_type [ { dpath = td.path; dargs = tvars } ] (fresh_row env.st),
+        tvars )
   | Record _ | Sum _ | Builtin | Opaque _ | Errors _ ->
       (TCon (td.path, tvars), tvars)
 

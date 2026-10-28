@@ -373,11 +373,7 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
       let start = loc p in
       advance p;
       let rec joined acc =
-        let d = parse_tyname ~what:"a dependency's name" p in
-        if peek p = LT then
-          Diag.error (loc p) ~help:"only a dependency's type goes after `over`"
-            "what goes after `over` is a dependency's type, which takes no \
-             type arguments";
+        let d = parse_dep_ref p in
         if peek p = AMP then (
           advance p;
           joined (d :: acc))
@@ -404,40 +400,37 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
           sep_list p ~close:GT (parse_ty ~arg:true))
         else []
       in
-      if peek p = AMP then (
+      if peek p = AMP then
         (* several dependencies, an implementation of each sharing one
            state: `Clock & TestClock`, and what it needs, `uses Os` *)
-        let no_args l =
-          Diag.error l ~help:"only a dependency's type is joined with `&`"
-            "a type joined with `&` is a dependency's, which takes no type \
-             arguments"
-        in
-        if args <> [] then no_args (Loc.span start (last_loc p));
         let rec joined acc =
           if peek p = AMP then (
             advance p;
-            let d = parse_tyname ~what:"a dependency's name" p in
-            if peek p = LT then no_args (loc p);
-            joined (d :: acc))
+            joined (parse_dep_ref p :: acc))
           else List.rev acc
         in
-        let names = joined [ name ] in
-        impl_rest p ~uses ~arg ~start ~over:false names)
-      else if uses && (peek p = USES || peek p = BANG) then (
+        let names = joined [ { dep = name; dargs = args } ] in
+        impl_rest p ~uses ~arg ~start ~over:false names
+      else if uses && (peek p = USES || peek p = BANG) then
         (* an implementation, and what installing it can fail with and it
-           needs: `Sql ! DbDown uses Os` *)
-        if args <> [] then
-          Diag.error (loc p)
-            ~help:
-              (Printf.sprintf "only a dependency's type is followed by `%s`"
-                 (Token.to_string (peek p)))
-            (Printf.sprintf
-               "`%s` takes type arguments, so it isn't a dependency, and %s"
-               (show_tyname name)
-               (if peek p = USES then "needs nothing"
-                else "can't fail to be installed"));
-        impl_rest p ~uses ~arg ~start ~over:false [ name ])
+           needs: `Sql ! DbDown uses Os`, `Log<Int> uses Clock`. A type
+           that isn't a dependency's is refused by Resolve *)
+        impl_rest p ~uses ~arg ~start ~over:false
+          [ { dep = name; dargs = args } ]
       else TyName (name, args)
+
+(* A dependency where one is named: its name, `Clock` or `store.Users`,
+   and its type arguments, if it's an instance of a generic one,
+   `Chan<Int>`. *)
+and parse_dep_ref p : tyname dep_ref =
+  let dep = parse_tyname ~what:"a dependency's name" p in
+  let dargs =
+    if peek p = LT then (
+      advance p;
+      sep_list p ~close:GT (parse_ty ~arg:true))
+    else []
+  in
+  { dep; dargs }
 
 (* The rest of an implementation's type, after its dependencies' names:
    what installing it can fail with, `! DbDown`, and what it needs, `uses
@@ -498,13 +491,14 @@ and parse_uses ?(greedy = false) ?(arg = false) p : uses =
       (List.rev acc, Some tail))
     else
       (* `store.Users`, or bare `Users`: after a module's alias, the error
-         for a lowercase name points at the name *)
-      let d = parse_tyname ~what:"a dependency's name" p in
+         for a lowercase name points at the name; and a generic one's
+         instance, `Log<Int>` *)
+      let d = parse_dep_ref p in
       if peek p = AMP then
         Diag.error (loc p)
           ~help:
             (Printf.sprintf "write `%s, ...`: a function uses each of them"
-               (show_tyname d))
+               (show_dep d))
           "in a `uses` list, dependencies are separated by commas";
       if peek p = COMMA && (greedy || continues ()) then (
         advance p;
@@ -1443,7 +1437,8 @@ and parse_with p =
       ~help:
         "write what it installs, then `in`, then the code it's installed around"
       (Printf.sprintf
-         "expected `,`, `over` or `in` after what `with` installs, found %s"
+         "expected `,`, `over`, `as` or `in` after what `with` installs, found \
+          %s"
          (describe (peek p)));
   advance p;
   let body = parse_body p in
@@ -1451,8 +1446,9 @@ and parse_with p =
 
 (* An item of a `with`, or of a group's (ast.ml, [with_item]):
 
-     witem := expr {"over" expr} ["over" deps]
+     witem := expr {"over" expr} ["over" deps] ["as" dep]
      deps  := tyname {"&" tyname}
+     dep   := tyname ["<" type, ... ">"]
 
    After `over`, a dependency's name with nothing after it that makes it
    an expression, a `.`, `(` or `{`, is what's installed outside the
@@ -1482,7 +1478,7 @@ and parse_with_item p : Parsed.with_item =
       advance p;
       if at_deps () then (
         let rec deps acc =
-          let d = parse_tyname ~what:"a dependency's name" p in
+          let d = parse_dep_ref p in
           if peek p = AMP then (
             advance p;
             deps (d :: acc))
@@ -1501,7 +1497,14 @@ and parse_with_item p : Parsed.with_item =
   in
   let top = link () in
   let chain, under = chain [ top ] in
-  { chain; under; iloc = Loc.span start (last_loc p) }
+  (* what it's installed as: `with queue() as Jobs` *)
+  let alias =
+    if peek p = AS then (
+      advance p;
+      Some (parse_dep_ref p))
+    else None
+  in
+  { chain; under; alias; iloc = Loc.span start (last_loc p) }
 
 and parse_match p =
   let start = loc p in
@@ -1619,16 +1622,40 @@ let parse_import p =
     iloc = Loc.span start (last_loc p);
   }
 
+(* A function's or a handler's type parameters, `<T, U>`, each of which
+   can say what it needs, `<T has eq, ord>` (operators.md, "Generic
+   code"): the parameters, and each one's name with each requirement. *)
+let parse_tparams p =
+  if peek p = LT then (
+    advance p;
+    let needs = ref [] in
+    let param p =
+      let t = upper_ident p "a type parameter" in
+      if peek p = IDENT "has" then (
+        advance p;
+        let rec reqs () =
+          needs :=
+            !needs @ [ (t.name, lower_ident p "a requirement, like `eq`") ];
+          (* a comma goes on with another requirement, unless what's after
+             it is a type parameter's name *)
+          match (peek p, peek2 p) with
+          | COMMA, IDENT n when not (is_upper n) ->
+              advance p;
+              reqs ()
+          | _ -> ()
+        in
+        reqs ());
+      t
+    in
+    let ts = sep_list p ~close:GT param in
+    (ts, !needs))
+  else ([], [])
+
 let parse_fn p ~pub =
   let start = loc p in
   expect p FN;
   let name = lower_ident p "a function's name" in
-  let tparams =
-    if peek p = LT then (
-      advance p;
-      sep_list p ~close:GT (fun p -> upper_ident p "a type parameter"))
-    else []
-  in
+  let tparams, tneeds = parse_tparams p in
   expect p LPAREN;
   let params = sep_list p ~close:RPAREN parse_param in
   let ret =
@@ -1661,6 +1688,7 @@ let parse_fn p ~pub =
     pub;
     name;
     tparams;
+    tneeds;
     params;
     ret;
     errors;
@@ -1715,6 +1743,7 @@ let parse_op ?(dep = false) p ~tname =
               pub;
               name;
               tparams = [];
+              tneeds = [];
               params = [];
               ret;
               errors = None;
@@ -1857,21 +1886,78 @@ let parse_type ~prelude p ~pub =
   }
 
 (* A dependency (deps.md, "Declaring one"): its operations, indented under
-   it, then its members, as a sum type lists its variants first.
+   it, then its members, as a sum type lists its variants first. One can
+   take type parameters, as a type does; and an alias names an instance of
+   another, at its types (compiler.md, "Generic dependencies").
 
      pub dep Clock =
        now: fn() -> Time
        sleep: fn(d: Duration)
 
-       pub fn frozen(at: Time) -> Clock = ... *)
-let parse_dep p ~pub =
+       pub fn frozen(at: Time) -> Clock = ...
+
+     dep Chan<T> =
+       send: fn(x: T)
+
+     dep Jobs = Chan<Job> *)
+let rec parse_dep p ~pub =
   expect p DEP;
   let type_name = upper_ident p "a dependency's name" in
-  let tname = type_name.name in
-  if peek p = LT then
-    Diag.error (loc p) ~help:"remove them"
-      "a dependency can't take type parameters";
+  (* a generic one's type parameters, `dep Chan<T> =` *)
+  let at_params = loc p in
+  let type_params =
+    if peek p = LT then (
+      advance p;
+      sep_list p ~close:GT (fun p -> upper_ident p "a type parameter"))
+    else []
+  in
   expect p EQ;
+  if peek p <> INDENT && at_dep_name p then (
+    (* an alias, `dep Jobs = Chan<Job>`: a dependency of its own, with the
+       operations of the one it names at those types *)
+    let target = parse_dep_ref p in
+    if type_params <> [] then
+      Diag.error at_params
+        ~help:
+          (Printf.sprintf
+             "use `%s` itself where it's generic, or fix the alias's types: \
+              `dep Ints = %s`"
+             (show_dep target)
+             (show_dep
+                {
+                  target with
+                  dargs =
+                    List.map
+                      (fun _ ->
+                        TyName
+                          ( {
+                              tmod = None;
+                              tid = { type_name with name = "Int" };
+                            },
+                            [] ))
+                      target.dargs;
+                }))
+        "an alias can't take type parameters";
+    {
+      type_pub = pub;
+      type_name;
+      type_params = [];
+      type_body = Dep_alias target;
+      type_ops = [];
+    })
+  else parse_dep_ops p ~pub ~type_name ~type_params
+
+(* Whether what's next is a dependency's name, `Chan` or `store.Users`,
+   which an alias names. *)
+and at_dep_name p =
+  match (peek p, peek2 p, peek3 p) with
+  | IDENT t, _, _ when is_upper t -> true
+  | IDENT m, DOT, IDENT t -> (not (is_upper m)) && is_upper t
+  | _ -> false
+
+(* A dependency's operations, indented under it, and its members. *)
+and parse_dep_ops p ~pub ~(type_name : ident) ~type_params =
+  let tname = type_name.name in
   if peek p <> INDENT then
     Diag.error (loc p)
       ~help:
@@ -1924,7 +2010,7 @@ let parse_dep p ~pub =
   {
     type_pub = pub;
     type_name;
-    type_params = [];
+    type_params;
     type_body = Dep ops;
     type_ops = owned_by type_name members;
   }
@@ -1946,14 +2032,9 @@ let parse_handler p ~pub =
   let start = loc p in
   expect p HANDLER;
   let name = lower_ident p "a handler's name" in
-  if peek p = LT then
-    Diag.error (loc p) ~help:"remove them"
-      ~notes:
-        [
-          "a handler's operations have the types its dependencies declare, \
-           which can't take type parameters either";
-        ]
-      "a handler can't take type parameters";
+  (* a generic dependency's, `handler queue<T>() for Chan<T>`, each of
+     which Resolve checks is one *)
+  let tparams, tneeds = parse_tparams p in
   if peek p <> LPAREN then
     Diag.error (loc p)
       ~help:
@@ -1979,7 +2060,7 @@ let parse_handler p ~pub =
   let over = peek p = OVER in
   advance p;
   let rec deps acc =
-    let d = parse_tyname ~what:"a dependency's name" p in
+    let d = parse_dep_ref p in
     match peek p with
     | COMMA when not over ->
         advance p;
@@ -2002,7 +2083,7 @@ let parse_handler p ~pub =
         let all =
           String.concat
             (if over then " & " else ", ")
-            (List.rev_map show_tyname (d :: acc))
+            (List.rev_map show_dep (d :: acc))
         in
         Diag.error (loc p)
           ~notes:
@@ -2024,7 +2105,7 @@ let parse_handler p ~pub =
      wrong separator, if it's a name, joined by [sep] *)
   and written sep acc =
     let after = match peek2 p with IDENT n -> [ n ] | _ -> [] in
-    String.concat sep (List.rev_map show_tyname acc @ after)
+    String.concat sep (List.rev_map show_dep acc @ after)
   in
   let deps = deps [] in
   (* what installing it can fail with, which its state and `finally` can
@@ -2048,7 +2129,7 @@ let parse_handler p ~pub =
              "declare it `handler %s(...) over %s`: the operations it leaves \
               out go to the one under it, which it calls with `next`"
              name.name
-             (String.concat " & " (List.map show_tyname deps)))
+             (String.concat " & " (List.map show_dep deps)))
         "a handler that passes on what it doesn't implement goes `over` it, \
          not `forwards`"
   | _ -> ());
@@ -2143,7 +2224,8 @@ let parse_handler p ~pub =
   {
     pub;
     name;
-    tparams = [];
+    tparams;
+    tneeds;
     params;
     ret = None;
     errors = None;

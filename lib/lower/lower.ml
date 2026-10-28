@@ -73,6 +73,9 @@ type cx = {
   mutable handler_ev : C.var option;
       (** in a handler, its evidence, where it was installed, which `next` finds
           the implementation it's over in *)
+  mutable handler_deps : Ty.dep list;
+      (** in a handler, the dependencies it implements, at its types, which
+          `next` finds the one under it of *)
   mutable tys : C.var list;
       (** the function's hidden type parameters (core.ml), and in a handler's
           `finally`, the one it's given for the type of the `with`'s body *)
@@ -134,19 +137,34 @@ let block_of cx id =
 let block_ty (t : Ty.ty) given : Ty.ty =
   match t with
   | Fun (ps, ret, errs, _) ->
-      Fun
-        ( ps,
-          ret,
-          errs,
-          {
-            labels = List.map (fun p -> Ty.label (Ty.dep_label p)) given;
-            tail = None;
-          } )
+      Fun (ps, ret, errs, { labels = Ty.sort_labels given; tail = None })
   | _ -> bug "a block whose type isn't a function's"
 
 (* The descriptors a use at the type arguments [a] is passed (core.ml,
    [desc]), built from the function's own hidden type parameters. *)
 let descs cx (a : Ty.args) = List.map (C.describe cx.tys) a.tys
+
+(* The type arguments of the dependency [dep] that the operation of type
+   [fty] uses, as descriptors: its type lists the instance, `Log<Int>`, in
+   its row of dependencies (Infer_lookup, [Dep_op]). *)
+let dep_args cx ~node (dep : Path.t) (fty : Ty.ty) =
+  match Infer.Nodes.find_opt node cx.nodes with
+  | Some { targs = Some a; _ } when a.tys <> [] ->
+      List.map (C.describe cx.tys) a.tys
+  | _ -> (
+      match fty with
+      | Fun (_, _, _, u) -> (
+          match
+            List.find_opt
+              (fun (l : Ty.label) -> l.name = Ty.dep_label dep)
+              u.labels
+          with
+          | Some l -> List.map (C.describe cx.tys) l.payload
+          | None -> [])
+      | _ -> [])
+
+(* The key of a dependency's label, a block's [given], as descriptors. *)
+let key_of_label cx (l : Ty.label) = C.key_of cx.tys (Ty.of_label l)
 
 (* The descriptors of an error's payload's types, which the error carries
    (core.ml, [Tag]). *)
@@ -331,7 +349,9 @@ let rec expr cx (e : expr) : C.expr =
   let x = expr_of cx e in
   let x =
     match ((node cx e.node).narrowed, Ty.impl_parts x.ty) with
-    | Some ds, Some (_, needs) -> mk (Narrowed (ds, x)) (Ty.impl ds needs) e.loc
+    | Some ds, Some (all, needs) ->
+        let kept = List.filter (fun (d : Ty.dep) -> List.mem d.dpath ds) all in
+        mk (Narrowed (ds, x)) (Ty.impl kept needs) e.loc
     | Some _, None -> bug "a narrowed implementation isn't one"
     | None, _ -> x
   in
@@ -540,11 +560,17 @@ and expr_of cx (e : expr) : C.expr =
   | Handler { deps; state; arms; _ } ->
       (* it runs where it's installed, with the evidence there *)
       let ev = evidence cx and outer = cx.ev and around = cx.handler_ev in
+      let around_deps = cx.handler_deps in
       cx.ev <- ev;
       cx.handler_ev <- Some ev;
+      cx.handler_deps <-
+        (match Ty.impl_parts (ty_of cx e.node) with
+        | Some (ds, _) -> ds
+        | None -> []);
       let body = handler cx e deps state arms in
       cx.ev <- outer;
       cx.handler_ev <- around;
+      cx.handler_deps <- around_deps;
       (* its own evidence, which `next` uses, is bound, not captured *)
       let captures =
         List.filter (fun (v : C.var) -> v.id <> ev.id) (free body)
@@ -560,18 +586,13 @@ and block_value cx ~name ~given params ty loc body =
   cx.ev <- ev;
   let body = body () in
   cx.ev <- outer;
-  mk
-    (Lambda
-       {
-         name;
-         params;
-         ev;
-         outer;
-         given;
-         captures = captures_of params ev outer body;
-         body;
-       })
-    ty loc
+  let given = List.map (key_of_label cx) given in
+  (* the descriptors its keys are built from are captured too *)
+  let captures =
+    captures_of params ev outer body @ List.concat_map C.key_vars given
+    |> List.sort_uniq (fun (a : C.var) (b : C.var) -> compare a.id b.id)
+  in
+  mk (Lambda { name; params; ev; outer; given; captures; body }) ty loc
 
 (* What a block's [body] captures: the locals from outside it it uses, and
    the evidence where it's written, [outer], but not its [params] or its own
@@ -630,6 +651,7 @@ and named_block cx (e : expr) =
             (Dep_call
                {
                  dep;
+                 dargs = dep_args cx ~node:e.node dep fty;
                  op;
                  fty;
                  ev = cx.ev;
@@ -688,9 +710,29 @@ and with_ cx (e : expr) items body =
     let body = inside () in
     cx.ev <- outer;
     match kind lk with
-    | Some (Installs dep) ->
-        mk (With { ev; outer; dep; impl; desc; body }) ty e.loc
-    | Some (Installs_handler deps) ->
+    | Some (Installs { key; from }) ->
+        let k = key_of_label cx key in
+        mk
+          (With
+             {
+               ev;
+               outer;
+               dep = k.kpath;
+               dargs = k.kargs;
+               from;
+               impl;
+               desc;
+               body;
+             })
+          ty e.loc
+    | Some (Installs_handler keys) ->
+        let deps =
+          List.map
+            (fun l ->
+              let k = key_of_label cx l in
+              (k, k.kpath))
+            keys
+        in
         mk
           (With_handler { ev; outer; handler = impl; deps; desc; body })
           ty e.loc
@@ -798,11 +840,19 @@ and handler cx (e : expr) deps state arms =
           | Let _ | Let_tuple _ | Expr _ | Finally _ -> None)
         state
     in
-    let impl (d : tname) : Path.t * C.expr =
+    let impl (d : tname dep_ref) : Path.t * C.expr =
       let p =
-        match d.tref with
+        match d.dep.tref with
         | Named p -> p
         | Param _ -> bug "a type parameter after `for`"
+      in
+      (* its own type arguments, which the one under it is found at *)
+      let own =
+        match
+          List.find_opt (fun (o : Ty.dep) -> o.dpath = p) cx.handler_deps
+        with
+        | Some o -> o
+        | None -> Ty.plain p
       in
       let ops =
         List.filter_map
@@ -841,6 +891,7 @@ and handler cx (e : expr) deps state arms =
                           (Dep_call
                              {
                                dep = p;
+                               dargs = List.map (C.describe cx.tys) own.dargs;
                                op;
                                fty;
                                ev = cx.ev;
@@ -851,7 +902,7 @@ and handler cx (e : expr) deps state arms =
             | _ -> None)
           forwards
       in
-      (p, mk (Record (p, ops @ forwarded)) (Ty.impl [ p ] needs) e.loc)
+      (p, mk (Record (p, ops @ forwarded)) (Ty.impl [ own ] needs) e.loc)
     in
     (* its `finally`s, as one lambda, which is given the descriptor of
        the `with`'s body's type first, the variable after the function's
@@ -1147,9 +1198,18 @@ and call cx ?(changed = false) (e : expr) f args =
       (* never with `&` (mut.ml), so its arguments are values, evaluated in
          order *)
       let args = nan_checked dep op (List.map (expr cx) args) in
+      let fty = ty_of cx f.node in
       mk
         (Dep_call
-           { dep; op; fty = ty_of cx f.node; ev = cx.ev; next = false; args })
+           {
+             dep;
+             dargs = dep_args cx ~node:f.node dep fty;
+             op;
+             fty;
+             ev = cx.ev;
+             next = false;
+             args;
+           })
         (ty_of cx e.node) e.loc
   | Var (Next_op (dep, op)) ->
       (* `next.get(id)`: the innermost implementation where the handler
@@ -1161,8 +1221,17 @@ and call cx ?(changed = false) (e : expr) f args =
         | None -> bug "`next` outside a handler"
       in
       let args = nan_checked dep op (List.map (expr cx) args) in
+      (* the one under it is at the handler's own types *)
+      let dargs =
+        match
+          List.find_opt (fun (o : Ty.dep) -> o.dpath = dep) cx.handler_deps
+        with
+        | Some o -> List.map (C.describe cx.tys) o.dargs
+        | None -> []
+      in
       mk
-        (Dep_call { dep; op; fty = ty_of cx f.node; ev; next = true; args })
+        (Dep_call
+           { dep; dargs; op; fty = ty_of cx f.node; ev; next = true; args })
         (ty_of cx e.node) e.loc
   | _ -> plain_call cx ~changed e f args
 
@@ -1571,23 +1640,27 @@ and free (e : C.expr) =
     | Tag (_, args, ds) ->
         List.iter use (List.concat_map C.desc_vars ds);
         List.iter go args
-    | Dep_call { ev; args; _ } ->
+    | Dep_call { ev; args; dargs; _ } ->
         (* evidence is a local like any other: a block captures the
-           evidence where it's written, and through `next`, its handler's *)
+           evidence where it's written, and through `next`, its handler's;
+           and so are the descriptors its key is built from *)
         use ev;
+        List.iter use (List.concat_map C.desc_vars dargs);
         List.iter go args
     | Prim (_, args) | Array args | Tuple args | Con (_, _, args) ->
         List.iter go args
-    | With { ev; outer; impl; desc; body; _ } ->
+    | With { ev; outer; impl; desc; dargs; body; _ } ->
         use outer;
         go impl;
         List.iter use (C.desc_vars desc);
+        List.iter use (List.concat_map C.desc_vars dargs);
         bind ev;
         go body
-    | With_handler { ev; outer; handler; desc; body; _ } ->
+    | With_handler { ev; outer; handler; desc; deps; body; _ } ->
         use outer;
         go handler;
         List.iter use (C.desc_vars desc);
+        List.iter use (List.concat_map (fun (k, _) -> C.key_vars k) deps);
         bind ev;
         go body
     | Instance { impls; finally } ->
@@ -1725,6 +1798,7 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
       next = next + 1;
       ev = C.evidence next;
       handler_ev = None;
+      handler_deps = [];
       tys = C.type_params scheme;
       dicts = List.combine scheme.reqs (C.dict_params scheme);
     }
@@ -1873,11 +1947,13 @@ let start (main : C.fn_def) : C.fn_def =
                ev = C.evidence (n + 1);
                outer = C.evidence n;
                dep;
+               dargs = [];
+               from = dep;
                (* of a type with no variables *)
                impl =
                  mk
                    (Global_value (real, { tys = []; rows = [] }))
-                   (Ty.impl [ dep ] Ty.closed)
+                   (Ty.impl [ Ty.plain dep ] Ty.closed)
                    loc;
                desc = C.describe tys ret;
                body = install (n + 1) rest;

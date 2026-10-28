@@ -13,7 +13,7 @@
 (* What a lookup through a type found, or what else inference decided
    about an expression or pattern that a later pass needs, so it never
    decides it again. *)
-type found =
+type 'l found_ =
   | Field_of of Path.t  (** a field access: the record type the field is in *)
   | Ctor_of of Path.t * string
       (** a constructor, in an expression or a pattern: its type, and its name
@@ -24,10 +24,12 @@ type found =
   | Method_of of Path.t
       (** a method called with a dot, at the [x.m] of [x.m(...)]: the method's
           function, [Stack.push] *)
-  | Installs of Path.t
+  | Installs of { key : 'l; from : Path.t }
       (** a link of a `with`'s item that's an implementation of this dependency,
-          a record or a handler's description *)
-  | Installs_handler of Path.t list
+          a record or a handler's description: what it's installed as, [key],
+          with its type arguments, and the dependency it implements, [from],
+          which an alias's differs from, `with queue() as Jobs` *)
+  | Installs_handler of 'l list
       (** a link that describes a handler of these dependencies, all of which it
           installs *)
   | Install_order of int list
@@ -48,7 +50,7 @@ type found =
   | Unwrap
       (** `try r`, where [r] is a [Result]: what's in it if it's `Ok`, and if
           it's `Err`, its error again *)
-  | Block of { name : string; given : Path.t list }
+  | Block of { name : string; given : 'l list }
       (** a block: a lambda, or a named function or an operation used as a
           value, which lowering makes a lambda written where it's used. Its name
           (Ty.lambda_id), and [given], the dependencies the type of the
@@ -63,6 +65,10 @@ type found =
   | Generic_op of string
       (** at an operator's own node, `a + b` on a type variable, or at `T.zero`:
           done by what its type turns out to have of this requirement, `add` *)
+
+(* What lowering reads: the labels are dependencies with their type
+   arguments, in canonical form, numbered as the function's scheme. *)
+type found = Ty.label found_
 
 (* Maps keyed by node id (ast.ml). [Map.Make (Int)] is a functor: a module
    that takes a module (here [Int], which says how to compare keys) and

@@ -54,6 +54,7 @@
   "test"
   "group"
   "assert"
+  "has"
 ] @keyword
 
 (visibility) @keyword
@@ -90,6 +91,9 @@
 (handler_arm dependency: (type_identifier) @type.dependency)
 (group_definition name: (identifier) @function)
 (type_parameters (type_identifier) @type)
+; <T has eq, ord>: what a type parameter needs
+(constrained_type_parameter name: (type_identifier) @type)
+(constrained_type_parameter requirement: (identifier) @type)
 (variant name: (type_identifier) @constructor)
 (payload name: (identifier) @property)
 (field_declaration name: (identifier) @property)

@@ -163,7 +163,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
           | Ctors cs -> List.iter (fun c -> List.iter field c.ctor_fields) cs
           | Opaque { rep; _ } -> ty_ rep
           | Errors es -> errors_ es
-          | Builtin -> ());
+          | Dep_alias _ | Builtin -> ());
           List.iter (fun (o : op) -> fn_ o.op_fn) td.type_ops
       | Import _ | Testing _ -> ())
     prog
@@ -360,7 +360,7 @@ module Nodes = Map.Make (Int)
 
 type node = {
   ty : Ty.ty;
-  found : found option;
+  found : Ty.label found_ option;
   narrowed : Path.t list option;
       (** an implementation of several dependencies, narrowed to some of them,
           these, where a written type asks for those (Infer_expr.narrow) *)
@@ -415,11 +415,19 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
   (* what it lists, if it lists any, and what its body uses: [check_uses]
      leaves a dependency the runtime doesn't install to this *)
   let uses =
-    (match (declared_uses ~is_value:(fun _ -> false) f, repr ty) with
+    (match
+       ( declared_uses env ~is_value:(fun _ -> false) ~tparams:cx.tparams f,
+         repr ty )
+     with
       | Some ds, _ -> ds
-      | None, TFun (_, _, _, u) -> row_names u
+      | None, TFun (_, _, _, u) -> fst (row_parts u)
       | None, _ -> [])
-    @ row_names cx.uses
+    @ fst (row_parts cx.uses)
+  in
+  let uses =
+    List.fold_left
+      (fun acc l -> if has_dep acc l then acc else acc @ [ l ])
+      [] uses
   in
   (* an implementation that needs [p] itself would need one installed
      before it, so it isn't one to suggest; a handler of [p] is one *)
@@ -428,7 +436,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
     | TFun (ps, ret, _, _) -> (
         match impl_parts ret with
         | Some (ds, needs)
-          when List.mem p ds
+          when List.exists (fun d -> d.dpath = p) ds
                && not (List.mem (Ty.dep_label p) (row_names needs)) ->
             Some (List.length ps)
         | _ -> None)
@@ -480,7 +488,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
               let name = env.names p ^ "." ^ o.oname in
               let makes = function
                 | Ty.Impl { deps = [ q ]; needs; _ } ->
-                    q = p
+                    q.dpath = p
                     && not
                          (List.exists
                             (fun (l : Ty.label) -> l.name = Ty.dep_label p)
@@ -501,13 +509,17 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
     List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !(cx.calls)
   in
   List.iter
-    (fun dep ->
-      let p = Ty.dep_path dep in
+    (fun (dep : label) ->
+      let p = Ty.dep_path dep.name in
       if not (run.installs p) then
-        let d = env.names p in
+        let d = shown_dep env dep in
         let written =
           Option.bind f.uses (fun (u : Resolved.uses) ->
-              List.find_opt (fun (t : tname) -> t.tref = Named p) u.deps)
+              Option.map
+                (fun (t : tname dep_ref) -> t.dep)
+                (List.find_opt
+                   (fun (t : tname dep_ref) -> t.dep.tref = Named p)
+                   u.deps))
         in
         (* the call that needs it: the first that brings it in itself, as
            in [check_uses]. Once `main`'s uses are joined every call's row
@@ -518,8 +530,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
           match
             match first (fun c -> brings c dep) with
             | Some c -> Some c
-            | None when written = None ->
-                first (fun c -> List.mem dep (row_names c.row))
+            | None when written = None -> first (fun c -> has_label c.row dep)
             | None -> None
           with
           | Some c ->
@@ -532,7 +543,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
         report env
           (not_installed loc run.kind ~dep:d ~short:p.name ~real:(run.real_of p)
              ~maker:(maker p) ~declared:(Hashtbl.mem env.types p) ~needs ~why))
-    (List.sort_uniq String.compare uses)
+    uses
 
 (* The runtime installs exactly the built-in dependencies `main` uses, as
    the outermost implementations (deps.md, "`main`"). *)
@@ -627,6 +638,13 @@ let new_env sink ~reachable (r : Resolve.t) =
       | Opaque (Rep rep) -> Hashtbl.replace st.reps td.path rep
       | _ -> ())
     r.types;
+  (* and an alias of a dependency's description is one of what it names *)
+  Hashtbl.iter
+    (fun p (td : Iface.type_decl) ->
+      match td.body with
+      | Dep_alias t -> Hashtbl.replace st.aliases p t
+      | _ -> ())
+    types;
   (* the types step 2 of a lookup through a type looks in: those the
      module can name bare. [r.scope] is sorted by name, and two of its
      types never share one. *)
@@ -763,9 +781,8 @@ let setup env ~is_value (f : fn_def) =
         (tail (Option.bind f.errors (fun (es : Resolved.errors) -> es.etail)))
     in
     let uses =
-      List.fold_right
-        (fun d rest -> RExtend (dep d, rest))
-        (Option.value (declared_uses ~is_value f) ~default:[])
+      extend
+        (Option.value (declared_uses env ~is_value ~tparams f) ~default:[])
         (tail (Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail)))
     in
     (* A public function's transparent parameter fails with exactly its
@@ -805,7 +822,9 @@ let setup env ~is_value (f : fn_def) =
               | Handler { over; _ } -> over
               | _ -> false)
             ~fails:(fresh_row env.st)
-            (Option.get (Iface.handler_deps f))
+            (match f.body.kind with
+            | Handler { deps; _ } -> written_deps env ~tvars:tparams deps
+            | _ -> [])
             (fresh_row env.st)
       | None -> fresh_var env.st
     in
@@ -841,6 +860,7 @@ let setup env ~is_value (f : fn_def) =
       selves = errs :: transparent_rows f.params ps;
       sources = Some (ref []);
       named;
+      declares = declared_uses env ~is_value ~tparams f;
     }
   in
   Hashtbl.replace env.globals path (TFun (ps, ret, errs, uses));
@@ -1143,7 +1163,7 @@ let client_view env (r : Resolve.t) =
         match td.body with
         | Record _ | Sum _ | Opaque _ ->
             ({ td with members = Path.Map.empty; body = hidden }, false)
-        | Errors _ | Dep _ | Builtin -> (td, false))
+        | Errors _ | Dep _ | Dep_alias _ | Builtin -> (td, false))
     r.types
 
 (* Run [f] with the module seen through [client] (see [client_view]): its
@@ -1377,6 +1397,30 @@ let canonical env so_far (f : fn_def) =
   let tys =
     List.map (fun id -> canon_ty c ~all:true (Hashtbl.find cx.nodes id)) ids
   in
+  (* what a lookup found, its dependencies' type arguments in canonical
+     form too *)
+  let label (l : label) : Ty.label =
+    { name = l.name; payload = List.map (canon_ty c ~all:true) l.payload }
+  in
+  let found id : Ty.label found_ option =
+    Option.map
+      (function
+        | Installs { key; from } -> Installs { key = label key; from }
+        | Installs_handler ls -> Installs_handler (List.map label ls)
+        | Block { name; given } -> Block { name; given = List.map label given }
+        | Field_of p -> Field_of p
+        | Ctor_of (p, c) -> Ctor_of (p, c)
+        | Error_tag -> Error_tag
+        | Method_of p -> Method_of p
+        | Install_order is -> Install_order is
+        | Handler_facts f -> Handler_facts f
+        | Handles -> Handles
+        | Fail_arm -> Fail_arm
+        | Unwrap -> Unwrap
+        | Builtin_op -> Builtin_op
+        | Generic_op o -> Generic_op o)
+      (Hashtbl.find_opt cx.found id)
+  in
   let nodes =
     List.fold_left2
       (fun acc id ty ->
@@ -1384,7 +1428,7 @@ let canonical env so_far (f : fn_def) =
         Nodes.add id
           {
             ty;
-            found = Hashtbl.find_opt cx.found id;
+            found = found id;
             narrowed = Hashtbl.find_opt cx.narrowed id;
             coerce = Hashtbl.find_opt cx.coerced id;
             targs = Option.map fst used;
@@ -1523,8 +1567,8 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     | Handler { deps; _ } ->
         Some
           (List.filter_map
-             (fun (d : tname) ->
-               match d.tref with Named p -> Some p.name | _ -> None)
+             (fun (d : tname dep_ref) ->
+               match d.dep.tref with Named p -> Some p.name | _ -> None)
              deps)
     | _ -> None
   in

@@ -60,7 +60,11 @@ and param = { mode : mode; ty : ty }
    implementation of them (handlers.md, "`over`"); what it needs where
    it's installed; and what installing it can fail with, what its state
    and its `finally` fail with. *)
-and impl = { deps : Path.t list; over : bool; needs : row; fails : row }
+and impl = { deps : dep list; over : bool; needs : row; fails : row }
+
+(* A dependency an implementation implements: its path and type arguments,
+   `Chan<Int>` (ty.ml, [dep]). *)
+and dep = { dpath : Path.t; dargs : ty list }
 and tvar = Unbound of int * int  (** id, level *) | Link of ty
 
 and row =
@@ -74,11 +78,16 @@ and row =
 
 and rvar = RUnbound of int * int  (** id, level *) | RLink of row
 
-(* A row's label: an error's tag and its payload's types, or a dependency,
-   whose payload is empty (ty.ml). *)
+(* A row's label: an error's tag and its payload's types, or a dependency
+   and its type arguments (ty.ml). *)
 and label = {
   name : string;
   payload : ty list;
+  dep : bool;
+      (** a dependency's label, which is told apart from another of its name by
+          its payload, its type arguments: `Chan<Int>` and `Chan<Str>` are two
+          dependencies, where a tag of one name has one payload ([same_label])
+      *)
   written : mark;
       (** where the tag was written inside `Err(...)`, if it's in a set of its
           own, made of tags written so (solve.ml, [value_tag]). Such a set holds
@@ -126,6 +135,9 @@ type state = {
       (** what each opaque type of the module being checked is represented as:
           in its own module, an opaque type is its representation (see [reveal])
       *)
+  aliases : (Path.t, Ty.dep) Hashtbl.t;
+      (** what each alias of a dependency names, `Jobs` `Chan<Job>`: a
+          description of one is a description of the other (Unify) *)
 }
 
 let new_state () =
@@ -138,6 +150,7 @@ let new_state () =
     needs = Hashtbl.create 8;
     need_at = Hashtbl.create 8;
     reps = Hashtbl.create 4;
+    aliases = Hashtbl.create 4;
   }
 
 let enter_level st = st.level <- st.level + 1
@@ -167,12 +180,28 @@ let param_tys ps = List.map (fun p -> p.ty) ps
    goes over another implementation of them, and [fails] is what
    installing it can fail with: nothing, unless it's said. *)
 let impl_type ?(over = false) ?(fails = REmpty) deps needs =
-  TImpl { deps = List.sort_uniq compare deps; over; needs; fails }
+  TImpl
+    {
+      deps = List.sort_uniq (fun a b -> compare a.dpath b.dpath) deps;
+      over;
+      needs;
+      fails;
+    }
+
+(* The dependency at [p], with no type arguments. *)
+let plain p = { dpath = p; dargs = [] }
 
 (* A label's mark when it isn't written inside `Err`: one of its own,
    since a mark is changed when it's joined with another. *)
 let unmarked () = ref (Mark None)
-let dep name = { name; payload = []; written = unmarked () }
+
+(* The label of a dependency, [name] its path in full (Ty.dep_label), with
+   its type arguments, if it takes some. *)
+let dep ?(args = []) name =
+  { name; payload = args; dep = true; written = unmarked () }
+
+(* The label of the dependency [d]. *)
+let dep_of d = dep ~args:d.dargs (Ty.dep_label d.dpath)
 
 (* Follow links to the type a variable currently stands for, shortening the
    chain as it goes so later lookups are quick. *)
@@ -192,6 +221,53 @@ let rec repr_row r =
       r''
   | r -> r
 
+(* Whether [a] and [b] are the same type now: a variable only itself, a
+   type parameter only itself. It's what tells two instances of a generic
+   dependency apart, where inference doesn't unify them ([same_label]). *)
+let rec same_ty a b =
+  match (repr a, repr b) with
+  | TVar r1, TVar r2 -> r1 == r2
+  | TSkol (i, _), TSkol (j, _) -> i = j
+  | TError, TError -> true
+  | TCon (p, xs), TCon (q, ys) ->
+      p = q && List.length xs = List.length ys && List.for_all2 same_ty xs ys
+  | TFun (ps, r, e, u), TFun (qs, r', e', u') ->
+      List.length ps = List.length qs
+      && List.for_all2 (fun p q -> p.mode = q.mode && same_ty p.ty q.ty) ps qs
+      && same_ty r r' && same_row e e' && same_row u u'
+  | TErrors e, TErrors e' -> same_row e e'
+  | TImpl i, TImpl j ->
+      List.length i.deps = List.length j.deps
+      && List.for_all2 same_dep i.deps j.deps
+      && i.over = j.over && same_row i.needs j.needs && same_row i.fails j.fails
+  | _ -> false
+
+and same_dep a b =
+  a.dpath = b.dpath
+  && List.length a.dargs = List.length b.dargs
+  && List.for_all2 same_ty a.dargs b.dargs
+
+and same_row a b =
+  match (repr_row a, repr_row b) with
+  | REmpty, REmpty -> true
+  | RVar c1, RVar c2 -> c1 == c2
+  | RSkol (i, _), RSkol (j, _) -> i = j
+  | RExtend (l, r), RExtend (l', r') ->
+      l.name = l'.name
+      && List.length l.payload = List.length l'.payload
+      && List.for_all2 same_ty l.payload l'.payload
+      && same_row r r'
+  | _ -> false
+
+(* Whether two labels are one: the same name, and for a dependency, the
+   same type arguments. Two tags of one name are one tag, whose payloads
+   unification makes the same (unify.ml). *)
+let same_label (a : label) (b : label) =
+  a.name = b.name
+  && ((not (a.dep || b.dep))
+     || List.length a.payload = List.length b.payload
+        && List.for_all2 same_ty a.payload b.payload)
+
 (* If [t] is an implementation, of one dependency or several: which, sorted,
    and what it needs. *)
 let impl_parts t =
@@ -207,11 +283,14 @@ let impl_of t = match repr t with TImpl i -> Some i | _ -> None
    is. *)
 let rec row_parts r =
   (* [seen] are the names in [acc], so a row of many labels is listed in
-     time proportional to them *)
+     time proportional to them; a dependency's of the same name is looked
+     for among them only then *)
   let rec go acc seen r =
     match repr_row r with
     | REmpty -> (List.rev acc, None)
-    | RExtend (l, rest) when Names.mem l.name seen -> go acc seen rest
+    | RExtend (l, rest)
+      when Names.mem l.name seen && List.exists (same_label l) acc ->
+        go acc seen rest
     | RExtend (l, rest) -> go (l :: acc) (Names.add l.name seen) rest
     | RVar { contents = RUnbound (id, _) } | RSkol (id, _) ->
         (List.rev acc, Some id)
@@ -221,6 +300,36 @@ let rec row_parts r =
 
 (* Just the labels' names. *)
 and row_names r = List.map (fun l -> l.name) (fst (row_parts r))
+
+(* Whether [r] has the label [l] among those it lists. *)
+let has_label r l = List.exists (same_label l) (fst (row_parts r))
+
+(* [r]'s labels, sorted by name, each once, as canonical form lists them
+   (Ty.sort_labels): two of one name, two instances of a generic
+   dependency, by their type arguments as they are now. *)
+let sorted_labels r =
+  let canon (t : ty) =
+    (* enough of a type to sort by: a variable by its id *)
+    let rec go t =
+      match repr t with
+      | TCon (p, args) ->
+          Path.full p ^ "<" ^ String.concat "," (List.map go args) ^ ">"
+      | TVar { contents = Unbound (id, _) } -> "'" ^ string_of_int id
+      | TSkol (id, _) -> "!" ^ string_of_int id
+      | _ -> "?"
+    in
+    go t
+  in
+  List.stable_sort
+    (fun (a : label) (b : label) ->
+      match String.compare a.name b.name with
+      | 0 -> compare (List.map canon a.payload) (List.map canon b.payload)
+      | c -> c)
+    (fst (row_parts r))
+
+(* Labels without those of [drop]. *)
+let without_labels drop ls =
+  List.filter (fun l -> not (List.exists (same_label l) drop)) ls
 
 (* The row variable a row ends in, if it's open. *)
 let row_tail r = snd (row_parts r)
@@ -331,7 +440,11 @@ let generalize st ~skolems ?(row_skolems = []) t =
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TErrors e -> TErrors (row e)
-    | TImpl i -> TImpl { i with needs = row i.needs; fails = row i.fails }
+    | TImpl i ->
+        let deps =
+          List.map (fun d -> { d with dargs = List.map go d.dargs }) i.deps
+        in
+        TImpl { i with deps; needs = row i.needs; fails = row i.fails }
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
     | TError -> TError
   and param p = { p with ty = copy_param go p.ty }
@@ -389,6 +502,7 @@ let generics t =
     | TCon (_, args) -> List.iter walk args
     | TErrors e -> walk_row e
     | TImpl i ->
+        List.iter (fun d -> List.iter walk d.dargs) i.deps;
         walk_row i.needs;
         walk_row i.fails
     | TFun (ps, r, e, u) ->
@@ -397,11 +511,7 @@ let generics t =
         walk_row e;
         walk_row u
   and walk_row r =
-    List.iter
-      (fun l -> List.iter walk l.payload)
-      (List.sort_uniq
-         (fun (a : label) b -> String.compare a.name b.name)
-         (fst (row_parts r)));
+    List.iter (fun l -> List.iter walk l.payload) (sorted_labels r);
     walk_tail r
   and walk_tail r =
     match repr_row r with
@@ -440,9 +550,12 @@ let instantiate st t =
     | TImpl i ->
         (* `let`s fix the order: OCaml evaluates a record's fields in no
            order it promises *)
+        let deps =
+          List.map (fun d -> { d with dargs = List.map go d.dargs }) i.deps
+        in
         let needs = row i.needs in
         let fails = row i.fails in
-        TImpl { i with needs; fails }
+        TImpl { i with deps; needs; fails }
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
   and param p = { p with ty = copy_param go p.ty }
   and row r =
@@ -493,9 +606,12 @@ let replace (s : subst) t =
     | TImpl i ->
         (* `let`s fix the order: OCaml evaluates a record's fields in no
            order it promises *)
+        let deps =
+          List.map (fun d -> { d with dargs = List.map go d.dargs }) i.deps
+        in
         let needs = row i.needs in
         let fails = row i.fails in
-        TImpl { i with needs; fails }
+        TImpl { i with deps; needs; fails }
     | TFun (ps, r, e, u) -> TFun (List.map param ps, go r, row e, row u)
   and param p = { p with ty = go p.ty }
   and row r =
@@ -581,9 +697,15 @@ let rec canon_ty c ~all t : Ty.ty =
   | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
   | TErrors e -> Errors (canon_row c ~all e)
   | TImpl i ->
+      let deps =
+        List.map
+          (fun d ->
+            { Ty.dpath = d.dpath; dargs = List.map (canon_ty c ~all) d.dargs })
+          i.deps
+      in
       let needs = canon_row c ~all i.needs in
       let fails = canon_row c ~all i.fails in
-      Impl { deps = i.deps; over = i.over; needs; fails }
+      Impl { deps; over = i.over; needs; fails }
   | TFun (ps, r, e, u) ->
       (* `let`s fix the order of first appearance: OCaml evaluates a
          constructor's arguments right to left *)
@@ -620,15 +742,10 @@ and canon_row c ~all r : Ty.row =
     | RVar { contents = RLink _ } -> assert false
   in
   let labels =
-    List.sort_uniq
-      (fun (a : label) b -> String.compare a.name b.name)
-      (fst (row_parts r))
-  in
-  let labels =
     List.map
       (fun (l : label) ->
         { Ty.name = l.name; payload = List.map (canon_ty c ~all) l.payload })
-      labels
+      (sorted_labels r)
   in
   { labels; tail = tail r }
 
@@ -665,21 +782,27 @@ let rec of_ty ~vars ~tails (t : Ty.ty) =
   let go = of_ty ~vars ~tails in
   match t with
   | Con (p, args) -> TCon (p, List.map go args)
-  | Errors e -> TErrors (of_row ~vars ~tails e)
+  | Errors e -> TErrors (of_row ~vars ~tails ~dep:false e)
   | Impl i ->
-      let needs = of_row ~vars ~tails i.needs in
-      let fails = of_row ~vars ~tails i.fails in
-      TImpl { deps = i.deps; over = i.over; needs; fails }
+      let deps =
+        List.map
+          (fun (d : Ty.dep) -> { dpath = d.dpath; dargs = List.map go d.dargs })
+          i.deps
+      in
+      let needs = of_row ~vars ~tails ~dep:true i.needs in
+      let fails = of_row ~vars ~tails ~dep:false i.fails in
+      TImpl { deps; over = i.over; needs; fails }
   | Fun (ps, r, e, u) ->
       TFun
         ( List.map (fun (p : Ty.param) -> { mode = p.mode; ty = go p.ty }) ps,
           go r,
-          of_row ~vars ~tails e,
-          of_row ~vars ~tails u )
+          of_row ~vars ~tails ~dep:false e,
+          of_row ~vars ~tails ~dep:true u )
   | Var n -> vars n
   | Error -> TError
 
-and of_row ~vars ~tails (r : Ty.row) =
+(* [dep] says it's a row of dependencies, not of errors. *)
+and of_row ~vars ~tails ~dep (r : Ty.row) =
   let tail = match r.tail with Some n -> tails n | None -> REmpty in
   extend
     (List.map
@@ -687,6 +810,7 @@ and of_row ~vars ~tails (r : Ty.row) =
          {
            name = l.name;
            payload = List.map (of_ty ~vars ~tails) l.payload;
+           dep;
            written = unmarked ();
          })
        r.labels)
@@ -736,7 +860,10 @@ let matching st s t =
         row rows e e';
         row rows u u'
     | TErrors e, TErrors e' -> row rows e e'
-    | TImpl i, TImpl j when i.deps = j.deps ->
+    | TImpl i, TImpl j
+      when List.map (fun d -> d.dpath) i.deps
+           = List.map (fun d -> d.dpath) j.deps ->
+        List.iter2 (fun a b -> List.iter2 go a.dargs b.dargs) i.deps j.deps;
         row rows i.needs j.needs;
         row rows i.fails j.fails
     | (TCon _ as s), (TCon _ as t) ->
@@ -747,8 +874,15 @@ let matching st s t =
     | _ -> ()
   and row table s t =
     let ls, s_end = split [] s and lt, t_end = split [] t in
-    let named (l : label) =
-      List.find_opt (fun (k : label) -> k.name = l.name)
+    (* a dependency's label of the same type arguments, where a generic
+       one's are, or else the only one of its name *)
+    let named (l : label) ks =
+      match List.find_opt (fun (k : label) -> same_label k l) ks with
+      | Some k -> Some k
+      | None -> (
+          match List.filter (fun (k : label) -> k.name = l.name) ks with
+          | [ k ] -> Some k
+          | _ -> None)
     in
     List.iter
       (fun (l : label) ->
@@ -870,6 +1004,11 @@ let show_label pr (l : label) =
   let payload = List.map (to_ty pr) l.payload in
   Ty.show_label pr.ty_printer { name = l.name; payload }
 
+(* A dependency's label as its type is written, `Chan<Int>`. *)
+let show_dep pr (l : label) =
+  let payload = List.map (to_ty pr) l.payload in
+  Ty.show_dep pr.ty_printer (Ty.of_label { name = l.name; payload })
+
 let show_effects pr e u =
   let e = canon_row pr.canon ~all:false e in
   let u = canon_row pr.canon ~all:false u in
@@ -889,7 +1028,9 @@ let rec row_vars t =
   | TVar _ | TSkol _ | TError -> []
   | TCon (_, args) -> List.concat_map row_vars args
   | TErrors e -> row e
-  | TImpl i -> row i.needs @ row i.fails
+  | TImpl i ->
+      List.concat_map (fun d -> List.concat_map row_vars d.dargs) i.deps
+      @ row i.needs @ row i.fails
   | TFun (ps, r, e, u) ->
       List.concat_map row_vars (r :: param_tys ps) @ row e @ row u
 
@@ -912,7 +1053,9 @@ let mentions v t =
         | TVar _ | TSkol _ | TError -> false
         | TCon (_, args) -> List.exists go args
         | TErrors e -> row e
-        | TImpl i -> row i.needs || row i.fails
+        | TImpl i ->
+            List.exists (fun d -> List.exists go d.dargs) i.deps
+            || row i.needs || row i.fails
         | TFun (ps, r, e, u) ->
             List.exists go (r :: param_tys ps) || row e || row u
       and row r =

@@ -68,6 +68,10 @@ type dict =
           derived from. A type variable inference left undecided has no
           dictionary: no value of its type is ever made *)
 
+(* A dependency as evidence finds it: its path and the descriptors of its
+   type arguments, a generic one's instance, `Log<T>`. *)
+type dkey = { kpath : Path.t; kargs : desc list }
+
 (* Operations built into the language. Each one's operands are listed in
    the order they're evaluated. *)
 (* Whether an index into an array is checked, or proved in bounds
@@ -164,6 +168,7 @@ and kind =
           `hash` of its keys' type *)
   | Dep_call of {
       dep : Path.t;
+      dargs : desc list;  (** [dep]'s type arguments, if it's generic *)
       op : string;
       fty : Ty.ty;  (** the operation's type, at this call *)
       ev : var;  (** the evidence it finds [dep]'s implementation in *)
@@ -182,6 +187,10 @@ and kind =
       ev : var;
       outer : var;
       dep : Path.t;
+      dargs : desc list;  (** [dep]'s type arguments, if it's generic *)
+      from : Path.t;
+          (** the dependency of [impl]'s that's installed: [dep], or for an
+              alias, the one it's an alias of *)
       impl : expr;
       desc : desc;
       body : expr;
@@ -222,7 +231,9 @@ and kind =
       ev : var;
       outer : var;
       handler : expr;
-      deps : Path.t list;
+      deps : (dkey * Path.t) list;
+          (** each key installed, with the instance's implementation of the path
+          *)
       desc : desc;
       body : expr;
     }
@@ -253,7 +264,7 @@ and kind =
       params : param list;
       ev : var;
       outer : var;
-      given : Path.t list;
+      given : dkey list;
       captures : var list;
       body : expr;
     }
@@ -345,7 +356,8 @@ type origin =
           the operation's own. Called directly where that handler is known to be
           installed ([known]) *)
 
-(* At the evidence [kev], the implementation of [kdep] is known: an
+(* At the evidence [kev], the implementation of [kdep], a dependency that
+   isn't generic, is known: an
    instance of the handler [khandler], whose state is in the frame of
    the [With] that installed it, so a call of one of its operations is a
    direct call of the operation, lifted ([Lifted_op]), and the [With]
@@ -440,6 +452,17 @@ val describe : var list -> Ty.ty -> desc
 
 (* The hidden type parameters a descriptor uses. *)
 val desc_vars : desc -> var list
+
+(* The key of a dependency of a type written in the type variables of a
+   function whose hidden type parameters are given, and the hidden type
+   parameters a key uses. *)
+val key_of : var list -> Ty.dep -> dkey
+val key_vars : dkey -> var list
+
+(* A descriptor, and a dependency's key, as a print shows them: `Log<Int>`,
+   or for one that isn't generic, its path. *)
+val show_desc : desc -> string
+val show_key : Path.t -> desc list -> string
 
 (* The type of a requirement's dictionary ([dict]), which no type in Ren
    source can name either. *)

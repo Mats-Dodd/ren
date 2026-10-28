@@ -1247,10 +1247,14 @@ fn main() = print(Some(true))
       | Some (Ctor_of (p, c)) ->
           print_endline ("constructor " ^ c ^ " of " ^ path p)
       | Some (Method_of p) -> print_endline ("method " ^ path p)
-      | Some (Installs p) -> print_endline ("installs " ^ path p)
-      | Some (Installs_handler ps) ->
+      | Some (Installs { key; _ }) ->
+          print_endline ("installs " ^ path (Ty.dep_path key.name))
+      | Some (Installs_handler ls) ->
           print_endline
-            ("installs a handler of " ^ String.concat ", " (List.map path ps))
+            ("installs a handler of "
+            ^ String.concat ", "
+                (List.map (fun (l : Ty.label) -> path (Ty.dep_path l.name)) ls)
+            )
       | Some (Install_order o) ->
           print_endline
             ("installs in the order "

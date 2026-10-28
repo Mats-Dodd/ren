@@ -73,7 +73,17 @@ let close_ty ~fin (s : sub) (t : Ty.ty) : Ty.ty =
             errs e,
             uses u )
     | Errors r -> Errors (errs r)
-    | Impl i -> Impl { i with needs = uses i.needs; fails = errs i.fails }
+    | Impl i ->
+        Impl
+          {
+            i with
+            deps =
+              List.map
+                (fun (d : Ty.dep) -> { d with dargs = List.map ty d.dargs })
+                i.deps;
+            needs = uses i.needs;
+            fails = errs i.fails;
+          }
     | Error -> Error
   and labels ls =
     List.map
@@ -112,7 +122,9 @@ let rec closed (t : Ty.ty) =
   | Errors r -> row r
   (* what a handler needs past what it lists is the caller's row, a
      variable of another function's *)
-  | Impl i -> row i.needs && i.needs.tail = None && row i.fails
+  | Impl i ->
+      List.for_all (fun (d : Ty.dep) -> List.for_all closed d.dargs) i.deps
+      && row i.needs && i.needs.tail = None && row i.fails
   | Error -> true
 
 (* The variables of a scheme's rows of errors, which a copy closes, as
@@ -130,6 +142,7 @@ let error_vars (t : Ty.ty) =
         row false u
     | Errors r -> row true r
     | Impl i ->
+        List.iter (fun (d : Ty.dep) -> List.iter ty d.dargs) i.deps;
         row false i.needs;
         row true i.fails
   and row is_errs (r : Ty.row) =
@@ -156,13 +169,21 @@ let rec map_vars f (e : C.expr) : C.expr =
         Global (p, a, List.map desc ds, List.map dict dicts)
     | Intrinsic (x, a, ds, dicts) ->
         Intrinsic (x, a, List.map desc ds, List.map dict dicts)
-    | Dep_call d -> Dep_call { d with ev = f d.ev; args = List.map go d.args }
+    | Dep_call d ->
+        Dep_call
+          {
+            d with
+            ev = f d.ev;
+            dargs = List.map desc d.dargs;
+            args = List.map go d.args;
+          }
     | With w ->
         With
           {
             w with
             ev = f w.ev;
             outer = f w.outer;
+            dargs = List.map desc w.dargs;
             impl = go w.impl;
             desc = desc w.desc;
             body = go w.body;
@@ -179,9 +200,13 @@ let rec map_vars f (e : C.expr) : C.expr =
     | With_handler w ->
         With_handler
           {
-            w with
             ev = f w.ev;
             outer = f w.outer;
+            deps =
+              List.map
+                (fun ((k : C.dkey), p) ->
+                  ({ k with kargs = List.map desc k.kargs }, p))
+                w.deps;
             handler = go w.handler;
             desc = desc w.desc;
             body = go w.body;
@@ -312,9 +337,14 @@ let rec uses_of (e : C.expr) acc =
     | Call (_, args, ev) ->
         (ev :: List.filter_map (function C.Ref v -> Some v | _ -> None) args)
         @ acc
-    | Dep_call { ev; _ } -> ev :: acc
-    | With { outer; desc = d; _ } | With_handler { outer; desc = d; _ } ->
-        desc d (outer :: acc)
+    | Dep_call { ev; dargs; _ } -> List.fold_right desc dargs (ev :: acc)
+    | With { outer; desc = d; dargs; _ } ->
+        List.fold_right desc dargs (desc d (outer :: acc))
+    | With_handler { outer; desc = d; deps; _ } ->
+        List.fold_right
+          (fun ((k : C.dkey), _) acc -> List.fold_right desc k.kargs acc)
+          deps
+          (desc d (outer :: acc))
     | Lambda { captures; _ } | Handler { captures; _ } -> captures @ acc
     | Global (_, _, ds, dicts) | Intrinsic (_, _, ds, dicts) ->
         List.fold_left
@@ -579,6 +609,17 @@ let args_ty env (scheme : Ty.ty) (a : Ty.args) : Ty.args =
 let scheme_of cx (p : Path.t) =
   Option.map (fun (f : C.fn_def) -> f.scheme.ty) (Hashtbl.find_opt cx.fns p)
 
+(* The label a dependency's key stands for, as a row of what a block uses
+   holds it: its type arguments where they're known, closed. *)
+let key_label (k : C.dkey) : Ty.label =
+  let rec ty (d : C.desc) : Ty.ty =
+    match d with
+    | Known t -> t
+    | Applied (p, ds) -> Con (p, List.map ty ds)
+    | Param _ | Errs _ -> Error
+  in
+  { name = Ty.dep_label k.kpath; payload = List.map ty k.kargs }
+
 (* A descriptor in a copy: known, if its type is closed. *)
 let rec desc env (d : C.desc) : C.desc =
   match env.sub with
@@ -784,8 +825,11 @@ let rec rw cx fb env (e : C.expr) : C.expr =
       }
   | Dep_call d -> (
       let args = List.map r d.args in
+      let dargs = List.map (desc env) d.dargs in
+      (* a generic dependency's handler is never known: its instance is
+         found by its type arguments, through evidence *)
       match List.assoc_opt d.dep (known_at env d.ev) with
-      | Some (spec, state) when not d.next ->
+      | Some (spec, state) when (not d.next) && d.dargs = [] ->
           let p, t = List.assoc d.op spec.ops in
           mk
             (Call
@@ -794,20 +838,28 @@ let rec rw cx fb env (e : C.expr) : C.expr =
                  @ List.map (fun a -> C.Value a) args,
                  cvar env d.ev ))
       | _ ->
-          mk (Dep_call { d with fty = ty env d.fty; ev = cvar env d.ev; args }))
-  | With { ev; outer; dep; impl; desc = d; body } -> (
+          mk
+            (Dep_call
+               { d with fty = ty env d.fty; ev = cvar env d.ev; dargs; args }))
+  | With { ev; outer; dep; dargs; from; impl; desc = d; body } -> (
       let ev' = cvar env ev and outer' = cvar env outer in
+      let dargs = List.map (desc env) dargs in
       let around = List.remove_assoc dep (known_at env outer) in
       let inner known =
         note fb ev' known;
         {
           (in_scope env ev') with
           known = Ids.add ev.id known env.known;
-          uses = Ty.label (Ty.dep_label dep) :: env.uses;
+          uses = key_label { kpath = dep; kargs = dargs } :: env.uses;
           cur = ev';
         }
       in
-      match known_handler cx fb env dep impl with
+      (* only a dependency that isn't generic, installed as itself, has
+         its handler known *)
+      match
+        if dargs = [] && from = dep then known_handler cx fb env dep impl
+        else None
+      with
       | Some (spec, lets, handler, state) ->
           fb.kn <- { kev = ev'; kdep = dep; khandler = spec.hpath } :: fb.kn;
           let env_b =
@@ -823,6 +875,8 @@ let rec rw cx fb env (e : C.expr) : C.expr =
                    ev = ev';
                    outer = outer';
                    dep;
+                   dargs;
+                   from;
                    impl = handler;
                    desc = desc env d;
                    body = rw cx fb env_b body;
@@ -839,15 +893,24 @@ let rec rw cx fb env (e : C.expr) : C.expr =
                  ev = ev';
                  outer = outer';
                  dep;
+                 dargs;
+                 from;
                  impl = r impl;
                  desc = desc env d;
                  body = rw cx fb (inner around) body;
                }))
   | With_handler w ->
       let ev' = cvar env w.ev in
+      let deps =
+        List.map
+          (fun ((k : C.dkey), p) ->
+            ({ k with kargs = List.map (desc env) k.kargs }, p))
+          w.deps
+      in
       let around =
         List.filter
-          (fun (d, _) -> not (List.mem d w.deps))
+          (fun (d, _) ->
+            not (List.exists (fun ((k : C.dkey), _) -> k.kpath = d) deps))
           (known_at env w.outer)
       in
       note fb ev' around;
@@ -855,14 +918,14 @@ let rec rw cx fb env (e : C.expr) : C.expr =
         {
           (in_scope env ev') with
           known = Ids.add w.ev.id around env.known;
-          uses = List.map (fun d -> Ty.label (Ty.dep_label d)) w.deps @ env.uses;
+          uses = List.map (fun (k, _) -> key_label k) deps @ env.uses;
           cur = ev';
         }
       in
       mk
         (With_handler
            {
-             w with
+             deps;
              ev = ev';
              outer = cvar env w.outer;
              handler = r w.handler;
@@ -980,8 +1043,16 @@ and lambda cx fb env (e : C.expr) : C.expr * (unit -> lifted) option =
       let params =
         List.map (fun (p : C.param) -> { p with var = cvar env p.var }) params
       in
+      let given =
+        List.map
+          (fun (k : C.dkey) -> { k with kargs = List.map (desc env) k.kargs })
+          given
+      in
       let around =
-        List.filter (fun (d, _) -> not (List.mem d given)) (known_at env outer)
+        List.filter
+          (fun (d, _) ->
+            not (List.exists (fun (k : C.dkey) -> k.kpath = d) given))
+          (known_at env outer)
       in
       note fb ev' around;
       let env_in =
@@ -991,7 +1062,7 @@ and lambda cx fb env (e : C.expr) : C.expr * (unit -> lifted) option =
              (in_scope env ev') params)
           with
           known = Ids.add ev.id around env.known;
-          uses = List.map (fun d -> Ty.label (Ty.dep_label d)) given @ env.uses;
+          uses = List.map key_label given @ env.uses;
           cur = ev';
         }
       in
@@ -1776,7 +1847,8 @@ let eligible (modules : C.program list) =
   let deps = Hashtbl.create 16 and out = Hashtbl.create 16 in
   let rec walk (e : C.expr) =
     (match e.kind with
-    | Lambda { given; _ } -> List.iter (fun d -> Hashtbl.replace out d ()) given
+    | Lambda { given; _ } ->
+        List.iter (fun (k : C.dkey) -> Hashtbl.replace out k.kpath ()) given
     | Handler _ -> (
         match Ty.impl_parts e.ty with
         | Some (_, needs) ->
@@ -1792,7 +1864,10 @@ let eligible (modules : C.program list) =
     (fun (m : C.program) ->
       List.iter
         (fun (d : Iface.type_decl) ->
-          match d.body with Dep _ -> Hashtbl.replace deps d.path () | _ -> ())
+          (* a generic one's handler is never known ([rw]) *)
+          match d.body with
+          | Dep _ when d.params = [] -> Hashtbl.replace deps d.path ()
+          | _ -> ())
         m.types;
       List.iter (fun (f : C.fn_def) -> walk f.body) m.fns)
     modules;

@@ -30,6 +30,7 @@ let rec occurs id level t =
   | TCon (_, args) -> List.iter (occurs id level) args
   | TErrors e -> occurs_row ~ty:id (-1) level e
   | TImpl i ->
+      List.iter (fun d -> List.iter (occurs id level) d.dargs) i.deps;
       occurs_row ~ty:id (-1) level i.needs;
       occurs_row ~ty:id (-1) level i.fails
   | TFun (ps, r, e, u) ->
@@ -50,6 +51,15 @@ and occurs_row ?(ty = -1) id level r =
   | RExtend (label, rest) ->
       List.iter (occurs ty level) label.payload;
       occurs_row ~ty id level rest
+
+(* The instance the alias [a] names, `Chan<Job>` for `Jobs`: closed, since
+   an alias takes no type parameters. *)
+let aliased st (a : dep) : dep =
+  let t : Ty.dep = Hashtbl.find st.aliases a.dpath in
+  {
+    dpath = t.dpath;
+    dargs = List.map (of_ty ~vars:(fun _ -> TError) ~tails:(fun _ -> REmpty)) t.dargs;
+  }
 
 let rec unify st a b =
   match (repr a, repr b) with
@@ -83,9 +93,25 @@ let rec unify st a b =
      where a written type asks for fewer, it's narrowed before it gets
      here (Infer_expr.narrow). One that goes over another is never one
      that doesn't *)
-  | TImpl i, TImpl j when i.deps = j.deps && i.over = j.over ->
+  | TImpl i, TImpl j
+    when List.map (fun d -> d.dpath) i.deps = List.map (fun d -> d.dpath) j.deps
+         && i.over = j.over ->
+      List.iter2
+        (fun a b ->
+          if List.length a.dargs <> List.length b.dargs then raise Mismatch;
+          List.iter2 (unify st) a.dargs b.dargs)
+        i.deps j.deps;
       unify_row st i.needs j.needs;
       unify_row st i.fails j.fails
+  (* a description of an alias is one of the instance it names, so
+     `let q: Jobs = queue()` makes a `Chan<Job>`'s a `Jobs`'s; its one
+     implementation is installed for whichever it's installed as *)
+  | TImpl ({ deps = [ a ]; _ } as i), TImpl ({ deps = [ _ ]; _ } as j)
+    when Hashtbl.mem st.aliases a.dpath ->
+      unify st (TImpl { i with deps = [ aliased st a ] }) (TImpl j)
+  | TImpl ({ deps = [ _ ]; _ } as i), TImpl ({ deps = [ b ]; _ } as j)
+    when Hashtbl.mem st.aliases b.dpath ->
+      unify st (TImpl i) (TImpl { j with deps = [ aliased st b ] })
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 
@@ -94,7 +120,16 @@ let rec unify st a b =
    unify what remains. An open tail can always grow to supply a missing
    label; a closed row can't. A row can hold a label twice, which means
    what holding it once does (Infer_rows.join_uses), so once `l` is
-   matched, what remains of either row has it no more. *)
+   matched, what remains of either row has it no more.
+
+   A tag matches the label of its name, whose payload it unifies with. A
+   dependency matches one of its name and the same type arguments, as
+   they are now ([Types.same_label]); failing that, the only one of its
+   name, whose type arguments it unifies with, as a tag's: `Log<α>` and
+   `Log<Int>`. Two of its name, neither the same, would be a guess, so
+   that's a mismatch: an instance whose arguments are still open is
+   joined to a function's row only once they're known (Infer_rows,
+   [use_row]). *)
 and unify_row st a b =
   match (repr_row a, repr_row b) with
   | REmpty, REmpty -> ()
@@ -119,26 +154,63 @@ and unify_row st a b =
   | RVar { contents = RLink _ }, _ | _, RVar { contents = RLink _ } ->
       assert false
 
+(* Whether [l], a label of [row], is the one [label] matches there (see
+   [unify_row]). *)
+and matches row (l : label) (label : label) =
+  l.name = label.name
+  && ((not label.dep) || same_label l label
+     ||
+     let ls = fst (row_parts row) in
+     (open_args l || open_args label)
+     && (not (List.exists (same_label label) ls))
+     && List.length (List.filter (fun (k : label) -> k.name = label.name) ls)
+        = 1)
+
 (* [row] with [label] removed, extending an open tail if the label isn't
    there yet. A label of the same name has to have the same payload. *)
 and rewrite st row (label : label) =
-  match repr_row row with
-  | REmpty | RSkol _ -> raise Mismatch
-  | RExtend (l, rest) when l.name = label.name ->
-      same_shape st l label;
-      rest
-  | RExtend (l, rest) -> RExtend (l, rewrite st rest label)
-  | RVar ({ contents = RUnbound (_, level) } as cell) ->
-      let rest = RVar (ref (RUnbound (fresh_id st, level))) in
-      cell := RLink (RExtend (label, rest));
-      rest
-  | RVar { contents = RLink _ } -> assert false
+  let whole = row in
+  let rec go row =
+    match repr_row row with
+    | REmpty | RSkol _ -> raise Mismatch
+    | RExtend (l, rest) when matches whole l label ->
+        same_shape st l label;
+        rest
+    | RExtend (l, rest) -> RExtend (l, go rest)
+    | RVar ({ contents = RUnbound (_, level) } as cell) ->
+        if
+          label.dep && open_args label
+          && List.exists
+               (fun (k : label) -> k.name = label.name)
+               (fst (row_parts whole))
+        then
+          (* an instance whose type arguments are open, and two or more of
+             its name, none the same: which it is isn't known *)
+          raise Mismatch;
+        let rest = RVar (ref (RUnbound (fresh_id st, level))) in
+        cell := RLink (RExtend (label, rest));
+        rest
+    | RVar { contents = RLink _ } -> assert false
+  in
+  go row
+
+(* Whether a dependency's label has a variable in its type arguments that
+   nothing has solved yet. *)
+and open_args (l : label) =
+  let rec go t =
+    match repr t with
+    | TVar { contents = Unbound _ } -> true
+    | TCon (_, args) -> List.exists go args
+    | _ -> false
+  in
+  l.dep && List.exists go l.payload
 
 (* [row] with no more of [label] among the labels it has now: a row that
    holds it twice, matched once. *)
 and strip st row (label : label) =
   match repr_row row with
-  | RExtend (l, rest) when l.name = label.name ->
+  | RExtend (l, rest)
+    when l.name = label.name && ((not label.dep) || same_label l label) ->
       same_shape st l label;
       strip st rest label
   | RExtend (l, rest) -> RExtend (l, strip st rest label)
@@ -151,7 +223,9 @@ and same_shape st (l : label) (label : label) =
     if List.length l.payload <> List.length label.payload then raise Mismatch;
     List.iter2 (unify st) l.payload label.payload;
     join_marks l.written label.written
-  with Mismatch | Infinite -> raise (Two_shapes label.name)
+  with Mismatch | Infinite ->
+    (* a dependency's type arguments that differ are another instance's *)
+    if label.dep then raise Mismatch else raise (Two_shapes label.name)
 
 (* ---- trying a unification first ----
 
@@ -189,9 +263,14 @@ let copier () =
             row u )
     | TErrors r -> TErrors (row r)
     | TImpl i ->
+        let deps =
+          List.map
+            (fun (d : dep) -> { d with dargs = List.map ty d.dargs })
+            i.deps
+        in
         let needs = row i.needs in
         let fails = row i.fails in
-        TImpl { i with needs; fails }
+        TImpl { i with deps; needs; fails }
     | (TSkol _ | TError) as t -> t
   and row r =
     match repr_row r with

@@ -3180,6 +3180,41 @@ error: `queue()` can't be installed as `Users`
 The step writes an example, a generic dependency installed at two
 types (a cache or a pool), beside bench/10d/generic.ren.
 
+It's bench/10d/cache.ren, a `Cache<K, V>` installed as `Cache<Int, Str>`
+and `Cache<Str, Int>` at once and as an alias, and bench/10d/aliases.ren
+has the rest: an alias of a dependency that isn't generic, a written
+alias type, a member, and a generic chain. bench/build.t runs all three
+native builds against `ren run`.
+
+Where it differed from its plan:
+
+- **A key carries what it's installed from.** Core's `With` keeps the
+  dependency the handler implements beside the one it's installed as,
+  and the runtime's key (ren_rt.h, `ren_key`) both numbers, so `with
+  queue() as Jobs` installs `queue()`'s `Chan` implementation as `Jobs`.
+  A description of one dependency has one implementation, installed
+  whatever it was made for, so a `Chan<Job>`'s written as a `Jobs`'s
+  needs nothing at run time.
+- **An evidence node keeps its type arguments' descriptors,** compared
+  structurally (`ren_desc_same`), a pointer first; a dependency that
+  isn't generic is found as before. A release build knows a handler
+  only when its dependency isn't generic and it's installed as itself;
+  a generic one's calls go through evidence, by constant keys.
+- **A generic handler's description keeps its type variables'
+  descriptors** after what it captures, which its code and the blocks it
+  lifts read.
+- **A description of an alias unifies with one of what it names,** both
+  ways, so `Jobs` and `Done` descriptions are one type.
+- **`as` follows one implementation.** A chain installed as an alias,
+  `with a over b as Jobs`, is an error that says so: `next` in a generic
+  handler finds what's under it by the handler's own dependency, which an
+  alias would hide. It's left for when `next` is keyed as its `with`
+  installed it.
+- **A call at an open instance waits** (Infer_env, `Instance`) until the
+  function's other constraints are solved, then is fixed by its declared
+  `uses`, by the one instance of that name its row has, or by what it's
+  given, else reported.
+
 ### Descriptions (step 3)
 
 A handler's description is already a value (deps.md,

@@ -16,13 +16,16 @@ open Infer_written
    for a public function without one, or an associated value, which uses
    nothing. A private function without `uses` declares nothing, and
    inference works out what it uses. *)
-let declared_uses ~is_value (f : fn_def) =
+let declared_uses env ~is_value ~tparams (f : fn_def) =
   match f.uses with
   | _ when is_value f -> Some []
   | Some (u : Resolved.uses) ->
-      Some (List.map (fun (l : Ty.label) -> l.name) (Iface.dep_labels u.deps))
+      Some (fst (row_parts (written_uses env ~tvars:tparams ~named:[] u)))
   | None when f.pub -> Some []
   | None -> None
+
+(* Whether [f] declares what it uses ([declared_uses]). *)
+let declares_uses ~is_value (f : fn_def) = is_value f || f.uses <> None || f.pub
 
 (* Whether the runtime installs the dependency [p] around `main`: one of
    the prelude's built-ins (deps.md, "`main`"). *)
@@ -39,7 +42,8 @@ let withheld_notes withheld dep (c : call option) =
   match c with
   | Some { callee = Some p; _ } ->
       List.filter_map
-        (fun w -> if w.hfn = p && w.hdep = dep then Some w.hnote else None)
+        (fun w ->
+          if w.hfn = p && same_label w.hdep dep then Some w.hnote else None)
         withheld
   | _ -> []
 
@@ -60,28 +64,53 @@ let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
   (* where it's first used, and what that is *)
   let first has = List.find_opt has calls in
   List.iter
-    (fun dep ->
+    (fun (dep : label) ->
       if
         not
-          (List.mem dep declared
-          || (main && not (runtime_dep (Ty.dep_path dep))))
+          (has_dep declared dep
+          || (main && not (runtime_dep (Ty.dep_path dep.name))))
       then
         let call =
           match first (fun c -> brings c dep) with
           | Some c -> Some c
-          | None -> first (fun c -> List.mem dep (row_names c.row))
+          | None -> first (fun c -> has_label c.row dep)
         in
         let why = withheld_notes withheld dep call in
+        let op = Option.bind call (fun c -> c.op) in
         let call =
           Option.map
             (fun c -> (c.cloc, if c.needs then Installing else Call_uses))
             call
         in
-        let dep = env.names (Ty.dep_path dep) in
+        (* an alias it declares of this very instance, which is a
+           dependency of its own: `uses Jobs` isn't `uses Chan<Job>` *)
+        let alias =
+          List.find_map
+            (fun (d : label) ->
+              match
+                Iface.alias_of (Hashtbl.find_opt env.types) (Ty.dep_path d.name)
+              with
+              | Some t
+                when Ty.dep_label t.dpath = dep.name
+                     && List.length t.dargs = List.length dep.payload
+                     && List.for_all2
+                          (fun a b ->
+                            same_ty
+                              (of_ty
+                                 ~vars:(fun _ -> TError)
+                                 ~tails:(fun _ -> REmpty)
+                                 a)
+                              b)
+                          t.dargs dep.payload ->
+                  Some (shown_dep env d, op)
+              | _ -> None)
+            declared
+        in
+        let shown = shown_dep env dep in
         report env
-          (if is_value f then value_uses f dep call
-           else undeclared_use ~why f dep call))
-    (List.sort_uniq String.compare (row_names cx.uses))
+          (if is_value f then value_uses f shown call
+           else undeclared_use ~why ?alias f shown call))
+    (sorted_labels cx.uses)
 
 (* What the handler [f] needs, [n]: never a dependency it implements,
    and, if its needs are written (or it's public), only what its `uses`
@@ -97,22 +126,27 @@ let check_needs env (f : fn_def) n =
     let call =
       match List.find_opt (fun c -> brings c dep) calls with
       | Some c -> Some c
-      | None -> List.find_opt (fun c -> List.mem dep (row_names c.row)) calls
+      | None -> List.find_opt (fun c -> has_label c.row dep) calls
     in
     Option.map
       (fun c -> (c.cloc, if c.needs then Installing else Call_uses))
       call
   in
+  (* what it implements, by name: a handler for `Log<T>` can't use any
+     `Log` itself *)
   let own =
-    List.map Ty.dep_label (Option.value (Iface.handler_deps f) ~default:[])
+    List.map
+      (fun (d : Ty.dep) -> Ty.dep_label d.dpath)
+      (Option.value (Iface.handler_deps f) ~default:[])
   in
   let written =
     match f.body.kind with Handler { needs; _ } -> needs <> None | _ -> false
   in
   List.iter
-    (fun dep ->
-      let shown = env.names (Ty.dep_path dep) in
-      if List.mem dep n.nover then
+    (fun (dep : label) ->
+      let shown = shown_dep env dep in
+      let over = List.exists (fun (l : label) -> l.name = dep.name) n.nover in
+      if over then
         (* what it goes over it needs, and reaches with `next`: a call of
            the dependency itself would reach this handler *)
         match List.find_opt (fun c -> brings c dep) calls with
@@ -128,7 +162,10 @@ let check_needs env (f : fn_def) n =
                         List.exists (fun (d : Iface.field) -> d.fname = op) fs
                     | _ -> false
                   in
-                  let deps = Option.value (Iface.handler_deps f) ~default:[] in
+                  let deps =
+                    Ty.dep_paths
+                      (Option.value (Iface.handler_deps f) ~default:[])
+                  in
                   ( (if List.length (List.filter has deps) > 1 then
                        sprintf "next(%s).%s" shown op
                      else "next." ^ op),
@@ -139,14 +176,14 @@ let check_needs env (f : fn_def) n =
               (handler_uses_itself f shown ~over:true ?next
                  (Some (c.cloc, if c.needs then Installing else Call_uses)))
         | None -> ()
-      else if List.mem dep own then
+      else if List.mem dep.name own then
         report env (handler_uses_itself f shown ~over:false (call_of dep))
       else
         match n.ndeclared with
-        | Some declared when not (List.mem dep declared) ->
+        | Some declared when not (has_dep declared dep) ->
             report env (undeclared_need ~written f shown (call_of dep))
         | _ -> ())
-    (List.sort_uniq String.compare (row_names n.nrow));
+    (sorted_labels n.nrow);
   if n.ndeclared <> None then close_row n.nrow;
   (* what its state and `finally` fail with is all it fails to start with *)
   if row_skolem n.nfails = None then close_row n.nfails
@@ -297,7 +334,12 @@ let check_open_rows env (f : fn_def) cx =
         match p.pty with
         | Some (TyImpl { impl_deps = ds; impl_uses = None; _ }) when uses_closed
           ->
-            let written = List.map env.names (Iface.dep_paths ds) in
+            let written =
+              List.map
+                (fun (d : tname dep_ref) ->
+                  match d.dep.tref with Named p -> env.names p | Param _ -> "")
+                ds
+            in
             Some (p, String.concat " & " written)
         | _ -> None)
       f.params
@@ -387,7 +429,7 @@ let check_declared env ~is_value ~withheld ~needs c =
   let path = Ast.fn_path env.home f in
   Option.iter
     (check_uses env ~is_value ~withheld ~main:c.fmain f cx)
-    (declared_uses ~is_value f);
+    (declared_uses env ~is_value ~tparams:cx.tparams f);
   if f.pub && not (is_value f) then check_open_rows env f cx;
   List.iter (fun n -> if n.nself = path then check_needs env f n) needs;
   Option.iter
