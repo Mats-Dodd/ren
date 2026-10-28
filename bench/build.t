@@ -12,8 +12,15 @@ The sanitizers are clang's, so these builds compile with cc, not tcc,
 which a debug build uses when it's found ("Debug builds with tcc",
 below, compares those).
 
+On Linux, AddressSanitizer moves frames to a stack of its own to catch
+a use after return, which runs out before `overflow` reaches the
+overflow panic, and checks for leaks, which a panic leaves alive on
+purpose (the statistics count them); on macOS it does neither, and here
+neither is asked for.
+
   $ export REN_CC=cc
   $ export REN_CFLAGS='-fsanitize=address,undefined'
+  $ export ASAN_OPTIONS=detect_stack_use_after_return=0:detect_leaks=0
   $ same() {
   >   for rc in perceus naive; do
   >   (cd "$(dirname "$1")" && f=$(basename "$1") &&
@@ -853,11 +860,11 @@ its value, so depends on its type, is still two.
   9
   C { c: 5 }
   D { d: 6 }
-  $ release fold.ren; ren build --release --emit-mem fold.ren | grep -o -e '^(fn ren_fold_pick.*' -e '^(fn ren_fold_keep.*' -e '^(fn ren_fold_show_it' | sed 's/_[0-9] (/ (/' | sort | uniq -c
+  $ release fold.ren; ren build --release --emit-mem fold.ren | grep -o -e '^(fn ren_fold_pick.*' -e '^(fn ren_fold_keep.*' -e '^(fn ren_fold_show_it' | sed 's/_[0-9] (/ (/' | sort | uniq -c | sed 's/^ *//'
   fold.ren, release: the same, exit 0, objects live at exit 0
-     1 (fn ren_fold_keep (ev/1:Ev xs/2:Boxed x/3:Struct0) -> Boxed
-     1 (fn ren_fold_pick (ev/1:Ev c/2:Bool a/3:Struct0 b/4:Struct0) -> Struct0
-     2 (fn ren_fold_show_it
+  1 (fn ren_fold_keep (ev/1:Ev xs/2:Boxed x/3:Struct0) -> Boxed
+  1 (fn ren_fold_pick (ev/1:Ev c/2:Bool a/3:Struct0 b/4:Struct0) -> Struct0
+  2 (fn ren_fold_show_it
 
 Specialization has no cap on the copies of one function, but a size
 budget for the whole program (specialize.ml), which `REN_SPEC_BUDGET`

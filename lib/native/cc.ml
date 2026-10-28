@@ -118,11 +118,18 @@ let timed name f =
     Printf.eprintf "ren pass %s: %.3f s\n%!" name (Unix.gettimeofday () -. t0);
     r
 
+(* Whether the binary [f] is Mach-O, by its first four bytes: a 64-bit
+   Mach-O file starts with 0xfeedfacf, written little-endian. *)
+let mach_o f =
+  In_channel.with_open_bin f (fun ic ->
+      In_channel.really_input_string ic 4 = Some "\xcf\xfa\xed\xfe")
+
 (* A debug build of [units], written to [dir], to the binary [out], by
    [c]: each unit compiled to an object, [jobs] at once, then linked. A
    binary clang links from objects has no debug information of its own:
    dsymutil gathers it from them, as clang does when it compiles and
-   links at once. *)
+   links at once. That's macOS's Mach-O: an ELF binary, on Linux, carries
+   its debug information itself, and dsymutil can't read it. *)
 let debug ~(c : compiler) ~jobs ~stats ~dir ~out (u : Emit_c.units) =
   let write name text =
     let f = Filename.concat dir name in
@@ -152,7 +159,7 @@ let debug ~(c : compiler) ~jobs ~stats ~dir ~out (u : Emit_c.units) =
   timed "link" (fun () ->
       run_all ~jobs:1
         [ (c.cc, flags @ [ "-o"; out ] @ objects @ [ "-lm"; "-lpthread" ]) ]);
-  if (not c.tcc) && Sys.file_exists "/usr/bin/dsymutil" then
+  if (not c.tcc) && Sys.file_exists "/usr/bin/dsymutil" && mach_o out then
     timed "dsymutil" (fun () -> run_all ~jobs:1 [ ("/usr/bin/dsymutil", [ out ]) ]);
   List.iter Sys.remove (sources @ objects);
   Sys.remove (Filename.concat dir "ren_rt.h")

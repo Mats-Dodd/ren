@@ -186,8 +186,7 @@ A program that doesn't check runs nothing, so nothing is recorded:
   $ echo 'fn main() = 1 + "a"' > wrong.ren
   $ ren run --record wrong.journal wrong.ren 2>/dev/null
   [1]
-  $ ls wrong.journal
-  ls: wrong.journal: No such file or directory
+  $ test -e wrong.journal
   [1]
 
 `--trace` shows the calls to the program's own dependencies too, each
