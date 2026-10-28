@@ -190,11 +190,12 @@ let rec map_vars f (e : C.expr) : C.expr =
           }
     | Handler { ev; captures; body } ->
         Handler { ev = f ev; captures = List.map f captures; body = go body }
-    | Instance { impls; finally } ->
+    | Instance { impls; finally; exclusive } ->
         Instance
           {
             impls = List.map (fun (d, i) -> (d, go i)) impls;
             finally = Option.map go finally;
+            exclusive;
           }
     | Narrowed (ds, h) -> Narrowed (ds, go h)
     | With_handler w ->
@@ -967,12 +968,13 @@ let rec rw cx fb env (e : C.expr) : C.expr =
         }
       in
       mk (Handler { ev = ev'; captures; body = rw cx fb env_h body })
-  | Instance { impls; finally } ->
+  | Instance { impls; finally; exclusive } ->
       mk
         (Instance
            {
              impls = List.map (fun (d, i) -> (d, r i)) impls;
              finally = Option.map (rw cx fb { env with fin = true }) finally;
+             exclusive;
            })
   | Prim (p, args) -> mk (Prim (prim env p, List.map r args))
   | Let (v, a, b) ->
@@ -1741,7 +1743,7 @@ and make_spec cx h (a : Ty.args) dep =
         | Let (v, value, rest) when simple value ->
             split rest ((v, value) :: acc)
         | Instance
-            { impls = [ (d, { kind = Record (_, ops); _ }) ]; finally = None }
+            { impls = [ (d, { kind = Record (_, ops); _ }) ]; finally = None; _ }
           when d = dep ->
             Some (List.rev acc, x, ops)
         | _ -> None
@@ -1862,11 +1864,14 @@ and make_spec cx h (a : Ty.args) dep =
    the interpreter finds by the [Dep_call] (eval.ml); and none at all in
    a program that calls `Async.isolate`, which tells an operation of an
    instance installed inside it from one outside by the same means
-   (compiler.md, "Step 3, as built"). Both are about tasks, which only
+   (compiler.md, "Step 3, as built"); nor in one that starts tasks, with
+   `Async.scope`, `map`, `each`, `both` or `race`, whose operations of a
+   shared instance don't interleave by the same means, and are where `sim`
+   chooses which task runs next (step 4). All are about tasks, which only
    the interpreter runs, so a native build loses nothing it has. *)
 let eligible (modules : C.program list) =
   let deps = Hashtbl.create 16 and out = Hashtbl.create 16 in
-  let isolates = ref false in
+  let tasks = ref false in
   let async = Ty.dep_label (Path.prelude "Async") in
   let rec walk (e : C.expr) =
     (match e.kind with
@@ -1883,8 +1888,11 @@ let eligible (modules : C.program list) =
             then
               List.iter (fun p -> Hashtbl.replace out p ()) (Ty.dep_paths own)
         | None -> ())
-    | Global (p, _, _, _) when p = Path.member (Path.prelude "Async") "isolate" ->
-        isolates := true
+    | Global (p, _, _, _)
+      when List.exists
+             (fun m -> p = Path.member (Path.prelude "Async") m)
+             [ "isolate"; "scope"; "map"; "each"; "both"; "race" ] ->
+        tasks := true
     | _ -> ());
     List.iter walk (C.children e)
   in
@@ -1900,7 +1908,7 @@ let eligible (modules : C.program list) =
       List.iter (fun (f : C.fn_def) -> walk f.body) m.fns)
     modules;
   Hashtbl.iter (fun d () -> Hashtbl.remove deps d) out;
-  if !isolates then Hashtbl.reset deps;
+  if !tasks then Hashtbl.reset deps;
   deps
 
 (* The size budget, unless one is given: [budget_factor] times the

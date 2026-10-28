@@ -396,6 +396,10 @@ type t = {
       (** the module's opaque types that have `==`, whatever their type
           arguments, in the order they're declared: what each is represented as
           has no function in it *)
+  opaque : Path.t list;
+      (** the opaque types the module sees, its own and those of the modules it
+          imports, but the prelude's, sorted: what a handler keeps a resource
+          of, which makes it exclusive (Core's [Instance]) *)
 }
 
 (* ---- what's installed around `main`, and around a test ---- *)
@@ -2167,6 +2171,16 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
           if td.opaque && Infer_reqs.opaque_has_eq env td.path then Some td.path
           else None)
         r.types;
+    opaque =
+      List.sort compare
+        (Hashtbl.fold
+           (fun (p : Path.t) (td : Iface.type_decl) acc ->
+             match td.body with
+             | _ when p.home = Path.prelude_home -> acc
+             | Opaque _ -> p :: acc
+             | _ when td.opaque -> p :: acc
+             | _ -> acc)
+           env.types []);
   }
 
 (* Which method a dot call like `s.size()` calls is found only by checking

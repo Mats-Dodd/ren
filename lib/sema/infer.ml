@@ -101,6 +101,7 @@ type t = Infer_top.t = {
   nodes : node Nodes.t Path.Map.t;
   in_scope : Path.t list;
   opaque_eq : Path.t list;
+  opaque : Path.t list;
 }
 
 let program = Infer_top.program

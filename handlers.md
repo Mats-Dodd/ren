@@ -261,6 +261,28 @@ A chain is installed, never kept: `let x = cached() over mem()` is an
 error, "a chain of handlers isn't a value", whose help keeps the parts
 and writes the chain where it's installed.
 
+### Operations and tasks
+
+An operation keeps its instance until it returns (stage 11a,
+[async.md](async.md#shared-state-is-a-handler)): once a spawned task
+can reach a handler that keeps a `var`, or a value of an opaque type of
+the program's, another task's call of one of its operations waits while
+one runs, first come first served, and `Async.until` in an operation
+lets go of it while it waits. So a block passed to an operation can't
+call back into it, and gets its dependencies only from its parameter's
+type:
+
+```
+error: a block passed to `Tally.change` can't use `Tally`, which it would wait for while `Tally.change` runs it
+  = a block passed to an operation gets its dependencies only from its parameter's type
+  help: call it before `Tally.change`, outside the block
+```
+
+For another dependency the help is to list it, `f: fn(&Int) uses
+Console`, which the handler then has to use itself. A handler with no
+such state takes no lock, and neither does one no spawned task can
+reach, so a program with no tasks runs as it did.
+
 ### Called as a method
 
 A description called as a method, `d.op(x)`, is `with d in D.op(x)`,

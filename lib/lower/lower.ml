@@ -182,6 +182,8 @@ type cx = {
   types : Path.t -> Iface.type_decl option;
       (** every type of the program, by path, which a dependency's operations
           are found in *)
+  opaque : Path.t list;
+      (** the opaque types the module sees, but the prelude's (Infer.t) *)
   vars : (int, C.var) Hashtbl.t;  (** each local, by binder id *)
   mutable next : int;  (** the id of the next temporary *)
   mutable ev : C.var;
@@ -785,7 +787,16 @@ and expr_of cx (e : expr) : C.expr =
       cx.handler_deps <- around_deps;
       let impl = mk (Record (dep, [ (op, arm) ])) (Ty.impl [ own ] needs) e.loc in
       let body =
-        mk (Instance { impls = [ (dep, impl) ]; finally = None }) (ty ()) e.loc
+        let kind = C.Instance { impls = [ (dep, impl) ]; finally = None; exclusive = false } in
+        mk
+          (Instance
+             {
+               impls = [ (dep, impl) ];
+               finally = None;
+               (* it has no state, but what it captures *)
+               exclusive = opaque_state cx e.loc kind;
+             })
+          (ty ()) e.loc
       in
       let captures =
         List.filter (fun (v : C.var) -> v.id <> ev.id) (free body)
@@ -1218,9 +1229,32 @@ and handler cx (e : expr) deps state arms =
       | Some vars -> [ any_impl cx e ~cells ~needs ~vars arms ]
       | None -> List.map impl deps
     in
-    lets made (mk (Instance { impls; finally }) (ty_of cx e.node) e.loc)
+    let exclusive =
+      cells <> [] || opaque_state cx e.loc (Instance { impls; finally; exclusive = false })
+    in
+    lets made
+      (mk (Instance { impls; finally; exclusive }) (ty_of cx e.node) e.loc)
   in
   state_lets state
+
+(* Whether what an instance [kind] keeps, the state's `let`s and its
+   handler's parameters, the variables it uses from outside, has a value
+   of an opaque type of the program's: a resource it keeps, which its
+   operations, like a `var`'s, need to keep from each other's tasks
+   (compiler.md, "Operations that don't interleave"). The prelude's own,
+   the journal a recorder keeps, are the runtime's, whose intrinsics never
+   wait with one half changed, and a recorder mustn't make the calls it
+   records wait for each other ([cx.opaque] leaves them out). *)
+and opaque_state cx loc kind =
+  let rec opaque (t : Ty.ty) =
+    match t with
+    | Con (p, args) -> List.mem p cx.opaque || List.exists opaque args
+    | Fun (ps, r, _, _) -> List.exists (fun (q : Ty.param) -> opaque q.ty) ps || opaque r
+    | Var _ | Errors _ | Impl _ | Error -> false
+  in
+  List.exists
+    (fun (v : C.var) -> opaque v.ty)
+    (free (mk kind Ty.Error loc))
 
 (* The implementation a handler `over any` [e] makes, in a function made
    for the dependency it's installed over, the one [cx.handler_deps]
@@ -2303,7 +2337,7 @@ and free (e : C.expr) =
         List.iter use (List.concat_map (fun (k, _) -> C.key_vars k) deps);
         bind ev;
         go body
-    | Instance { impls; finally } ->
+    | Instance { impls; finally; _ } ->
         List.iter (fun (_, i) -> go i) impls;
         Option.iter go finally
     | Handler { captures; _ } -> List.iter use captures
@@ -2511,6 +2545,7 @@ let fn_def ~home ~types ~requests ?made (inferred : Infer.t) (f : fn_def) :
       suffix;
       requests;
       types;
+      opaque = inferred.opaque;
       vars = Hashtbl.create 16;
       next = next + 1;
       ev = C.evidence next;

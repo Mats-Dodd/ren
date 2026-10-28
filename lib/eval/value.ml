@@ -73,9 +73,14 @@ type t =
   | VHandler of handler
       (** a handler, described (core.ml, [Handler]): a value of its dependency's
           type, or of the handler's own *)
-  | VInstance of { impls : (Path.t * t) list; finally : t option }
+  | VInstance of {
+      impls : (Path.t * t) list;
+      finally : t option;
+      exclusive : bool;
+    }
       (** a handler's instance: an implementation of each of its dependencies,
-          and its `finally`, a closure, if it has one *)
+          and its `finally`, a closure, if it has one; [exclusive] as
+          Core's [Instance] *)
   | VCell of t ref
       (** a `var` of a handler's state, shared by its instance's operations *)
   | VEvidence of installed list
@@ -135,13 +140,16 @@ and handler = { ev : int; body : Core.expr; env : t ref Env.t }
    [outer], what was installed where it was. [inst] numbers the instance
    it's an implementation of ([instance]): a handler of several
    dependencies installs one of these for each, with one number, since
-   they share one state. *)
+   they share one state. [excl] says its operations don't interleave
+   once a spawned task can reach it (Core's [Instance]'s [exclusive];
+   sched.ml, [holding]). *)
 and installed = {
   dep : Path.t;
   args : Ty.ty list;
   impl : t;
   outer : installed list;
   inst : int;
+  excl : bool;
 }
 
 (* A new instance's number, each one more than the last: so an instance

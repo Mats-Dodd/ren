@@ -823,6 +823,33 @@ let block_lists_less_help ~name ~param expected =
     sprintf "write its type where it's written: `let %s: %s = fn ...`" name
       expected
 
+(* A block passed to the operation [op], `Tally.change`, that uses [dep],
+   which its parameter's type, [param], doesn't list: the operation holds
+   its instance while it runs the block, so a call back into it would wait
+   for itself, and one of something installed inside it would take
+   instances out of order (compiler.md, "Operations that don't
+   interleave", "No deadlock"). [own] says [dep] is the operation's own,
+   and [param] is the parameter's type with [dep] listed. *)
+let op_block_uses loc ~op ~dep ~own ~param =
+  let note =
+    "a block passed to an operation gets its dependencies only from its \
+     parameter's type"
+  in
+  let outside = sprintf "call it before `%s`, outside the block" op in
+  if own then
+    Diag.make loc ~notes:[ note ] ~help:outside
+      (sprintf
+         "a block passed to `%s` can't use `%s`, which it would wait for \
+          while `%s` runs it"
+         op dep op)
+  else
+    Diag.make loc ~notes:[ note ]
+      ~help:
+        (sprintf "list it in the parameter's type, `%s`, or %s" param outside)
+      (sprintf "a block passed to `%s` can't use `%s`, which its parameter's \
+                type doesn't list"
+         op dep)
+
 let lambda_produces f x =
   sprintf "this lambda produces %s, but it has to produce %s" (article f)
     (article x)

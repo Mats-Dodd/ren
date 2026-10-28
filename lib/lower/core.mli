@@ -244,7 +244,11 @@ and kind =
           in a cell, and ends in an [Instance]. Its type is its dependency's, if
           it implements one, or else the type that lists them, either needing
           what its operations use *)
-  | Instance of { impls : (Path.t * expr) list; finally : expr option }
+  | Instance of {
+      impls : (Path.t * expr) list;
+      finally : expr option;
+      exclusive : bool;
+    }
       (** a handler's instance: an implementation of each of its dependencies,
           in the order they're written, records of lambdas that share the cells
           of one state, and its `finally`, a lambda that shares them too. Of its
@@ -252,7 +256,10 @@ and kind =
           descriptor of the body's type of the `with` that installs it, then its
           outcome, a [Result] of that type, whose variable is the one after its
           handler's function's own, [Var n] (Handler_facts.body_ty), and gives
-          what the [With] gives *)
+          what the [With] gives. [exclusive] says its operations need to
+          keep it from each other's tasks, once a spawned task can reach it:
+          its state has a `var`, or a `let` or parameter of an opaque type of
+          the program's (compiler.md, "Operations that don't interleave") *)
   | Narrowed of Path.t list * expr
       (** a description of a handler of several dependencies, narrowed to some
           of them, where a written type asks for those: a [With] or a

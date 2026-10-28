@@ -4874,6 +4874,11 @@ revisit if a step finds it wrong:
   what's in flight; a cancelled `main` exits with 143.
 - **Natively, `Async.until` that doesn't hold** is the deadlock panic,
   as one task under `ren run` is.
+- **The prelude's opaque types don't make a handler exclusive** (step
+  4): a recorder's `Journal` is the runtime's, and a recorder that locked
+  would make the calls it records wait for each other.
+- **A call back into the instance its own task holds** is a panic (step
+  4), for what reaches one past Infer's rule, through a block parameter.
 
 ### Step 1, as built
 
@@ -5143,6 +5148,93 @@ What step 3 settled where the text above is silent, or differs from it:
   `sim.clock()`'s virtual time (step 5) they do. Step 5 lands it.
 - Test fixes: none.
 
+### Step 4, as built
+
+What step 4 settled where the text above is silent, or differs from it:
+
+- **`exclusive` is Core's.** `Instance` has a field `exclusive`, which
+  Lower sets (`opaque_state`): the handler's state has a `var`, or what
+  its operations use from outside them, a `let` of its state or one of
+  its handler's parameters, has a value of an opaque type the module sees
+  (`Infer.t`'s new `opaque`, its own and its imports'). A `let` no
+  operation uses keeps nothing an operation could lose, so it doesn't
+  count. **The prelude's opaque types don't count,** which departs from
+  the text above ("a `Journal`"): the journal a recorder keeps is the
+  runtime's, whose intrinsics never wait with it half written, and a
+  recorder that took a lock would make the calls it records wait for each
+  other, which journal version 2's two-line waits (step 6) rule out. An
+  inline handler is exclusive by the same test on what it captures. The
+  interpreter carries it on `Value.installed` (`excl`).
+- **Shared:** a spawn, `start`, `replace`, and `map`, `each`, `both` and
+  `race` share every instance their block can reach (`Eval.share_reach`):
+  its evidence, that of each block it holds, and what each of those runs
+  with (`outer`), transitively. `Sched.share` gives each exclusive one a
+  lock (`Sched.locks`, by number), for good; one that a task is in the
+  operations of when it's shared, which it reached before, is that task's
+  already. An instance with no lock is called as before: no queue, no
+  bookkeeping.
+- **The lock** (`Sched.holding`) is its holder, how many of its
+  operations the holder is in, and the callers waiting, first in first
+  out. A call while another task holds it waits (cancellably: a cancelled
+  caller never gets in). When the holder leaves its last operation the
+  instance is released, and handed on at once (`released`): first to the
+  first `Async.until` waiter whose condition holds, back in as many
+  operations as it was, then to the first caller still waiting. Handing it
+  on when it's woken, rather than when it runs, is what keeps a task woken
+  later from cutting in.
+- **`Async.until` lets go of a locked instance** while it waits, which
+  is a release: the other waiters are checked and a caller may get in. A
+  waiter that's cancelled, or whose condition panics, is still in the
+  operation, so it has the instance back before its arm's `finally` runs,
+  waiting (not cancellably) for its turn if another task has it. With the
+  lock the woken waiter's condition still holds when it runs, so
+  `Task_until`'s loop that checks again is only a guard.
+- **A panic that leaves an operation** leaves its lock taken for good:
+  what it was changing may be half changed. Only an `Async.isolate`
+  around its `with` can go on, whose tasks are all cancelled, and a caller
+  queued for it is one of those.
+- **A call back into the instance its own task holds** can never go on,
+  so it's a panic, "`Tally.get` calls back into the instance its own task
+  is in, so it would wait for itself", with the no-deadlock rule as its
+  help. Infer's rule catches the blocks written at an operation's call;
+  this is what reaches one through a block parameter (`fn bump(f:
+  fn(&Int)) uses Tally = Tally.change(f)`), which Infer can't see. With
+  no tasks, the instance isn't locked and such a call runs as it did.
+- **The no-deadlock rule (Infer).** While `applied` checks an operation's
+  arguments (`Dep_op`, or a description's method, `Calls_op`) it marks
+  their nodes (`Infer_expr.op_args`); a lambda or a named function checked
+  at one defers a `Later` check: what its calls brought in themselves
+  (each call's `own`), less what its parameter's type lists, is empty, or
+  it's reported at the first call that brings one in. Its own row can't
+  say, since a block's row is joined to the one where it's written. The
+  dependency's own is "can't use `Tally`, which it would wait for while
+  `Tally.change` runs it"; another's is "can't use `Console`, which its
+  parameter's type doesn't list", whose help writes the parameter's type
+  with it listed, `fn(&Int) uses Console`, not the parameter's name,
+  which an operation's type doesn't keep (`Iface.Dep` fields). Limits: a
+  block bound by a `let`, or a block parameter, passed to an operation
+  isn't checked (the panic above covers its call back into the same
+  instance); and a call of a function of the same recursive group, whose
+  row is still being learned when the call is met, may be missed. Low:
+  either is caught at run time, as that panic or the deadlock panic.
+- **Release builds** (specialize.ml) know no handler in a program that
+  starts tasks (calls `Async.scope`, `map`, `each`, `both` or `race`), as
+  for `isolate`. A known handler's operations are direct calls with no
+  `Dep_call`, which the lock is taken at; they can't wait (a known handler
+  needs nothing, so it calls nothing and can't use `Async.until`), so they
+  couldn't interleave anyway, but step 5's `sim` makes each call of a
+  locked instance a scheduling point, and a release build must make the
+  same ones. Natively nothing starts tasks, so this costs nothing.
+- **For step 5:** `Sched.locked inst` says whether an instance is shared
+  and exclusive, which is where `sim` makes a call a scheduling point,
+  before `Sched.holding` takes the lock.
+- Test fixes: test_tasks.ml's s4 accept test gained the `Clock` its
+  `main` needs; test_blocks.ml's "a block in a handler's arm calls its
+  own parameter" passes an operation a block that prints, which the
+  no-deadlock rule refuses now, so its parameter's type lists `Console`
+  (and the handler uses it); test_deps.ml's and test_lower.ml's hand-made
+  `Instance`s say `exclusive = false`.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -5151,6 +5243,17 @@ What step 3 settled where the text above is silent, or differs from it:
 | 1 | f887b16 | parameters with defaults, a block without parentheses, `concurrent` and `spawned` (lexer to tree-sitter and Zed); `Async`, `Scope` and `Task` declared in the prelude, each member panicking until its step; rules B to D (Excl, Resolve, Infer, Core Lint); spawned blocks and `race`'s branches can't fail; `try with`; `s.spawn` uses `Async`, with its note; `Intrinsic.waits`; the `task =>` error; test_tasks.ml's s1 tests on; examples/ledger, handlers.md and errors.md say `try with`; bench/11a/trywith in the native loops | steps 2 to 9 |
 | 2 | 30b520b | the scheduler (lib/eval/sched.ml), `main` and each test its root task, in `single`'s order with real timers; `Async.scope(max:)`, `spawn`, `start`, `replace`, `join` and `cancel`; rule C's copies at the spawn; cancellation at dependency calls and waits, seen only by `finally`s as `Err(Cancelled)`, shielded until the 5 s cleanup deadline, `fail Cancelled` refused outside a `finally`; Core's `Covered` for an arm's `finally`; a scope's failure or cancel cancelling its tasks; tasks beside a `with` cancelled when its body ends; task paths in panics, the deadlock panic's notes and `--trace`; `ren build` refusing tasks; test_tasks.ml's s2 tests on, and more; bench/11a/spawns as specified | steps 3 to 9 |
 | 3 | 7766c4a | `until`, `tick`, `yield`, `timeout`, `race`, `isolate`, `map`, `each` and `both` in the interpreter; instances numbered and released at each operation's end; `until` letting go of the arm's copy of the state (Lower); the checks on where `until` is written, its condition and `isolate`'s block; `each`'s block giving a value; `par_map`'s help; `= from the task` and the "failed too" warning; release builds knowing no handler that uses `Async`; natively `yield`, `tick` and the deadlock of `until`; test_tasks.ml's s3 tests on, and more; bench/11a/alone and alone_panic as specified and in the native loops | `transfer` (step 5, virtual time); steps 4 to 9 |
+| 4 | this commit | operations that don't interleave: Core's `Instance` says whether its handler is `exclusive` (a `var`, or a resource of an opaque type of the program's); spawns, `map`, `each`, `both` and `race` share what their block can reach; a shared, exclusive instance's callers queue, first in first out, a waiter whose condition holds first; `Async.until` lets go of it and has it back, before its `finally` too; a call back into the instance a task holds is a panic; Infer's no-deadlock rule for a block passed to an operation; release builds know no handler in a program that starts tasks; test_tasks.ml's s4 tests on, and more | `transfer` (step 5); steps 5 to 9 |
+
+Notes for step 5 on: each call of an operation of an instance that
+`Sched.locked` says is shared and exclusive is a scheduling point under
+`sim`, before `Sched.holding` takes its lock (eval.ml's `Dep_call`). A
+test handler with a `var` that waits in an operation, as `sim.clock()`'s
+`sleep` will, holds its instance while it waits once a task can reach it,
+so every task's sleep would wait for the one before: `sim.clock()` has to
+keep its time where no lock is taken (no `var`, or the scheduler's own
+state), or wait in `Async.until`. `test_clock`'s `sleep` doesn't wait, so
+it's unaffected.
 
 Notes for step 4 on: an operation's call is already bracketed,
 `Sched.holding inst label`, and its end is `Sched.released inst`, which

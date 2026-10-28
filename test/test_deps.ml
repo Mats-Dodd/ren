@@ -5999,7 +5999,7 @@ let%expect_test "Core Lint checks evidence is threaded" =
       in
       let instance =
         Ren.Core.mk
-          (Instance { impls = [ (d, record) ]; finally = None })
+          (Instance { impls = [ (d, record) ]; finally = None; exclusive = false })
           ty loc
       in
       let impl =

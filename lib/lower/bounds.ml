@@ -292,11 +292,12 @@ let map f (e : expr) =
   | Dep_call d -> Dep_call { d with args = List.map f d.args }
   | With w -> With { w with impl = f w.impl; body = f w.body }
   | With_handler w -> With_handler { w with handler = f w.handler; body = f w.body }
-  | Instance { impls; finally } ->
+  | Instance { impls; finally; exclusive } ->
       Instance
         {
           impls = List.map (fun (d, i) -> (d, f i)) impls;
           finally = Option.map f finally;
+          exclusive;
         }
   | Let (v, a, b) -> Let (v, f a, f b)
   | Covered c -> Covered { c with body = f c.body; after = f c.after }

@@ -1610,7 +1610,7 @@ and expr_at fs env (e : C.expr) : atom =
   (* which of a handler's dependencies are installed is the `with`'s *)
   | Narrowed (_, h) -> expr fs env h
   | Handler { ev; captures; body } -> handler fs env e ~ev ~captures body
-  | Instance { impls; finally } -> instance fs env e impls finally
+  | Instance { impls; finally; _ } -> instance fs env e impls finally
   | Lambda { name; params; ev; outer; given; captures; body } ->
       lambda fs env ~name ~params ~ev ~outer ~given ~captures body
   | Global (p, _, _, _) ->
@@ -2999,7 +2999,7 @@ and handler fs env (e : C.expr) ~ev ~captures body =
   in
   let methods =
     match body.kind with
-    | Instance { impls; finally = None } when words = [] && not (next_in body)
+    | Instance { impls; finally = None; _ } when words = [] && not (next_in body)
       ->
         let arms =
           List.concat_map

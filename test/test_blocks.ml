@@ -2081,13 +2081,15 @@ fn main() uses Console =
 let%expect_test "[s5 accept] a block in a handler's arm calls its own parameter"
     =
   (* rule A is about the arm's block parameter `f`, not the block's own
-     `g`, which is bound inside it *)
+     `g`, which is bound inside it. A block passed to an operation gets its
+     dependencies only from its parameter's type (stage 11a, step 4), so
+     `f`'s lists the `Console` its block prints with *)
   run
     {|
 dep Runner =
-  run: fn(f: fn(fn(fn())))
+  run: fn(f: fn(fn(fn())) uses Console)
 
-handler direct() for Runner =
+handler direct() for Runner uses Console =
   run(f) => f(fn(g) => g())
 
 fn main() uses Console =

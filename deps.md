@@ -574,6 +574,9 @@ and the block puts the caller's implementations of those dependencies
 on top of what it captured, as Koka's `evv-insert` does. So `fn
 twice(f: fn())` gives `f` nothing, and a `with` around a call of a block
 reaches it only when the block's type lists what the `with` installs.
+A block passed to an operation uses nothing but what its type lists,
+since the operation holds its instance while it runs it (stage 11a,
+[handlers.md](handlers.md#operations-and-tasks)).
 A block never outlives the call it's passed to, so what it captured is
 still installed whenever it runs. A named function or an operation
 passed as a value, `each(xs, show)`, is a block written there, `fn(x)

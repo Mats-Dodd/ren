@@ -772,7 +772,7 @@ let rec expr env sc (e : expr) =
             (add ev inner) body;
           same env body.loc "a handler's body" body.ty e.ty
       | None -> fail env loc (sprintf "a handler has type `%s`" (show e.ty)))
-  | Instance { impls; finally } -> (
+  | Instance { impls; finally; _ } -> (
       Option.iter (finally_ env sc) finally;
       match Ty.impl_parts e.ty with
       | Some (ds, needs)
@@ -1470,7 +1470,7 @@ and handler_end env (e : expr) =
          start with (lower.ml), and then fails with it *)
       handler_end env body;
       instances env on_error
-  | Instance { impls; finally } ->
+  | Instance { impls; finally; _ } ->
       List.iter (fun (_, i) -> instances env i) impls;
       Option.iter (instances env) finally
   | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
@@ -1501,7 +1501,7 @@ let rec blocks env allowed (e : expr) =
   | Covered { body; after; _ } ->
       blocks env false body;
       blocks env false after
-  | Instance { impls; finally } ->
+  | Instance { impls; finally; _ } ->
       List.iter
         (fun (_, (i : expr)) ->
           match i.kind with
@@ -1691,7 +1691,7 @@ let rec globals (e : expr) =
       List.concat_map globals es
   | With { impl; body; _ } -> globals impl @ globals body
   | With_handler { handler; body; _ } -> globals handler @ globals body
-  | Instance { impls; finally } ->
+  | Instance { impls; finally; _ } ->
       List.concat_map (fun (_, i) -> globals i) impls
       @ Option.fold ~none:[] ~some:globals finally
   | Handler { body; _ } -> globals body

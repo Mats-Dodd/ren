@@ -35,11 +35,12 @@ let rec unplaced (e : Core.expr) : Core.expr =
     | Dep_call d -> Dep_call { d with args = List.map go d.args }
     | With w -> With { w with impl = go w.impl; body = go w.body }
     | Handler h -> Handler { h with body = go h.body }
-    | Instance { impls; finally } ->
+    | Instance { impls; finally; exclusive } ->
         Instance
           {
             impls = List.map (fun (d, e) -> (d, go e)) impls;
             finally = Option.map go finally;
+            exclusive;
           }
     | Narrowed (d, e) -> Narrowed (d, go e)
     | With_handler w ->

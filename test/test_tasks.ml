@@ -1691,15 +1691,10 @@ fn main() uses Console, Async =
 
 let%expect_test "[s4 accept] an operation keeps its instance across its own calls" =
   (* each deposit reads the balance, sleeps, and writes it: the second
-     waits for the first to return, so neither is lost *)
-  until "s4"
-    ~want:{|
-20
-()
-|}
-    (fun () ->
-      run
-        {|
+     waits for the first to return, so neither is lost. (Step 0 left
+     `Clock` out of `main`'s `uses`, which this needs.) *)
+  run
+    {|
 dep Acct =
   deposit: fn(n: Int)
   balance: fn() -> Int
@@ -1712,36 +1707,21 @@ handler slow_acct() for Acct uses Clock =
     b = old + n
   balance() => b
 
-fn main() uses Console, Async =
+fn main() uses Console, Async, Clock =
   with slow_acct() in
     Async.scope fn(s) =>
       s.spawn fn() => Acct.deposit(10)
       s.spawn fn() => Acct.deposit(10)
     print(Acct.balance())
-|});
+|};
   [%expect {|
-    (until s4)
-    error: `main` doesn't declare `Clock`
-       ┌─ test.ren:13:4
-    13 │ fn main() uses Console, Async =
-       │    ^^^^
-    14 │   with slow_acct() in
-       │        ----------- installing this needs `Clock`
-       = `main`'s body can only use what its `uses` lists
-       help: add `Clock` to its `uses`
+    20
+    ()
     |}]
 
 let%expect_test "[s4 reject] a block passed to an operation calls back into it" =
-  until "s4"
-    ~says:
-      [
-        "error: a block passed to `Tally.change` can't use `Tally`, which it \
-         would wait for while `Tally.change` runs it";
-        "help: call it before `Tally.change`, outside the block";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Tally =
   change: fn(f: fn(&Int))
   get: fn() -> Int
@@ -1758,10 +1738,363 @@ fn main() uses Console =
   with counts() in
     Tally.change(fn(&x) => x = Tally.get() + 1)
     print(Tally.get())
-|});
+|};
   [%expect {|
-    (until s4)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: a block passed to `Tally.change` can't use `Tally`, which it would wait for while `Tally.change` runs it
+       ┌─ test.ren:15:32
+    15 │     Tally.change(fn(&x) => x = Tally.get() + 1)
+       │                                ^^^^^^^^^^^
+       = a block passed to an operation gets its dependencies only from its parameter's type
+       help: call it before `Tally.change`, outside the block
+    |}]
+
+let%expect_test "[s4 reject] a block passed to an operation uses what its type doesn't list" =
+  (* the operation holds its instance while it runs the block, so the
+     block gets only what the operation gives it, its parameter's type *)
+  check_error
+    {|
+dep Tally =
+  change: fn(f: fn(&Int))
+  get: fn() -> Int
+
+handler counts() for Tally =
+  var c = 0
+  change(f) =>
+    var x = c
+    f(&x)
+    c = x
+  get() => c
+
+fn shown(inout x: Int) uses Console = print(x)
+
+fn main() uses Console =
+  with counts() in
+    Tally.change(fn(&x) =>
+      x += 1
+      print(x))
+    Tally.change(shown)
+|};
+  [%expect {|
+    error: a block passed to `Tally.change` can't use `Console`, which its parameter's type doesn't list
+       ┌─ test.ren:19:7
+    19 │       print(x))
+       │       ^^^^^^^^
+       = a block passed to an operation gets its dependencies only from its parameter's type
+       help: list it in the parameter's type, `fn(&Int) uses Console`, or call it before `Tally.change`, outside the block
+
+    error: a block passed to `Tally.change` can't use `Console`, which its parameter's type doesn't list
+       ┌─ test.ren:20:18
+    20 │     Tally.change(shown)
+       │                  ^^^^^
+       = a block passed to an operation gets its dependencies only from its parameter's type
+       help: list it in the parameter's type, `fn(&Int) uses Console`, or call it before `Tally.change`, outside the block
+    |}]
+
+let%expect_test "[s4 accept] a block passed to an operation uses what its type lists" =
+  run
+    {|
+dep Tally =
+  change: fn(f: fn(&Int) uses Console)
+  get: fn() -> Int
+
+handler counts() for Tally uses Console =
+  var c = 0
+  change(f) =>
+    var x = c
+    f(&x)
+    c = x
+  get() => c
+
+fn main() uses Console =
+  with counts() in
+    Tally.change(fn(&x) =>
+      x += 1
+      print(x))
+    print(Tally.get())
+|};
+  [%expect {|
+    1
+    1
+    ()
+    |}]
+
+let%expect_test "[s4 accept] callers wait for an instance in use, first come first" =
+  (* each `note` prints, sleeps and prints: they don't interleave, and
+     they go in the order they were called *)
+  run
+    {|
+dep Log =
+  note: fn(who: Str)
+  lines: fn() -> Array<Str>
+
+handler slow_log() for Log uses Clock, Console =
+  var seen: Array<Str> = []
+  note(who) =>
+    print(who)
+    Clock.sleep(Duration.ms(2))
+    &seen.push(who)
+    print("done")
+  lines() => seen
+
+fn main() uses Console, Async, Clock =
+  with slow_log() in
+    Async.scope fn(s) =>
+      s.spawn fn() => Log.note("a")
+      s.spawn fn() => Log.note("b")
+      Log.note("main")
+      s.spawn fn() => Log.note("c")
+    print(Log.lines())
+|};
+  [%expect {|
+    main
+    done
+    a
+    done
+    b
+    done
+    c
+    done
+    ["main", "a", "b", "c"]
+    ()
+    |}]
+
+let%expect_test "[s4 accept] a handler with no state takes no lock" =
+  (* `echo` keeps nothing, so its operations interleave, as they always
+     could: nothing it keeps can be lost *)
+  run
+    {|
+dep Echo =
+  say: fn(who: Str)
+
+handler echo() for Echo uses Clock, Console =
+  say(who) =>
+    print(who)
+    Clock.sleep(Duration.ms(2))
+    print("done")
+
+fn main() uses Console, Async, Clock =
+  with echo() in
+    Async.scope fn(s) =>
+      s.spawn fn() => Echo.say("a")
+      s.spawn fn() => Echo.say("b")
+|};
+  [%expect {|
+    a
+    b
+    done
+    done
+    ()
+    |}]
+
+let%expect_test "[s4 accept] a handler that keeps a resource takes a lock" =
+  (* no `var`, but its operations use a value of an opaque type, a
+     resource, which they keep from each other's tasks *)
+  run
+    {|
+type Conn = opaque Int
+
+fn connect() -> Conn = 1
+
+dep Db =
+  query: fn(who: Str)
+
+handler db(c: Conn) for Db uses Clock, Console =
+  query(who) =>
+    print(who)
+    print(c)
+    Clock.sleep(Duration.ms(2))
+    print("done")
+
+fn main() uses Console, Async, Clock =
+  with db(connect()) in
+    Async.scope fn(s) =>
+      s.spawn fn() => Db.query("a")
+      s.spawn fn() => Db.query("b")
+|};
+  [%expect {|
+    a
+    Conn(1)
+    done
+    b
+    Conn(1)
+    done
+    ()
+    |}]
+
+let%expect_test "[s4 accept] `Async.until` lets go of the instance while it waits" =
+  (* `take` waits in `Async.until` holding nothing, so the `put`s get in;
+     each release checks its condition *)
+  run
+    {|
+dep Box =
+  put: fn(x: Int)
+  take: fn() -> Int
+
+handler slot() for Box uses Async, Console =
+  var items: Array<Int> = []
+  put(x) =>
+    &items.push(x)
+    print(x)
+  take() =>
+    Async.until(fn() => items.len() > 0)
+    let x = items[0]
+    items = items[1..items.len()]
+    x
+
+fn main() uses Console, Async =
+  with slot() in
+    Async.scope fn(s) =>
+      s.spawn fn() => print(Box.take() + Box.take())
+      s.spawn fn() => Box.put(1)
+      s.spawn fn() => Box.put(2)
+|};
+  [%expect {|
+    1
+    2
+    3
+    ()
+    |}]
+
+let%expect_test "[s4 accept] a waiter whose condition holds comes before the callers queued" =
+  (* `take` waits; the first `put` sleeps holding the instance, and the
+     second queues for it; when the first returns, `take`'s condition
+     holds, so it goes on first *)
+  run
+    {|
+dep Box =
+  put: fn(x: Int)
+  take: fn() -> Int
+
+handler slot() for Box uses Async, Clock, Console =
+  var items: Array<Int> = []
+  put(x) =>
+    print(x)
+    Clock.sleep(Duration.ms(2))
+    &items.push(x)
+  take() =>
+    Async.until(fn() => items.len() > 0)
+    print("take goes on")
+    items[0]
+
+fn main() uses Console, Async, Clock =
+  with slot() in
+    Async.scope fn(s) =>
+      s.spawn fn() => print(Box.take())
+      s.spawn fn() => Box.put(1)
+      s.spawn fn() => Box.put(2)
+|};
+  [%expect {|
+    1
+    take goes on
+    1
+    2
+    ()
+    |}]
+
+let%expect_test "[s4 accept] a caller cancelled while it waits for the instance never gets in" =
+  run
+    {|
+dep Gate =
+  hold: fn()
+  pass: fn(who: Str)
+
+handler gate() for Gate uses Clock, Console =
+  var n = 0
+  hold() =>
+    Clock.sleep(Duration.ms(5))
+    n += 1
+  pass(who) =>
+    n += 1
+    print(who)
+
+fn main() uses Console, Async, Clock =
+  with gate() in
+    Async.scope fn(s) =>
+      s.spawn fn() => Gate.hold()
+      let t = s.start fn() => Gate.pass("cancelled, so never")
+      s.spawn fn() => Gate.pass("second in line")
+      Async.yield()
+      t.cancel()
+|};
+  [%expect {|
+    second in line
+    ()
+    |}]
+
+let%expect_test "[s4 accept] a waiter cancelled in `Async.until` has the instance back for its `finally`" =
+  (* `take` is cancelled while `slow` holds the instance: its arm's
+     `finally` waits until `slow` has returned, so it never runs inside
+     another operation *)
+  run
+    {|
+dep Box =
+  take: fn() -> Int
+  slow: fn()
+
+handler slot() for Box uses Async, Clock, Console =
+  var items: Array<Int> = []
+  take() =>
+    finally(r) =>
+      print("take's finally")
+      match r
+        Ok(v) => v
+        Err(_) => 0
+    Async.until(fn() => items.len() > 0)
+    items[0]
+  slow() =>
+    print("slow starts")
+    Clock.sleep(Duration.ms(5))
+    print("slow ends")
+
+fn main() uses Console, Async, Clock =
+  with slot() in
+    Async.scope fn(s) =>
+      let t = s.start fn() => print(Box.take())
+      s.spawn fn() => Box.slow()
+      s.spawn fn() => t.cancel()
+  print("done")
+|};
+  [%expect {|
+    slow starts
+    slow ends
+    take's finally
+    done
+    ()
+    |}]
+
+let%expect_test "[s4 reject] a block parameter calls back into the operation running it" =
+  (* Infer sees only a block written at the operation's call; one passed
+     on through `bump` reaches it at run time, where a shared instance's
+     operation calling back into itself could never go on *)
+  run_error
+    {|
+dep Tally =
+  change: fn(f: fn(&Int))
+  get: fn() -> Int
+
+handler counts() for Tally =
+  var c = 0
+  change(f) =>
+    var x = c
+    f(&x)
+    c = x
+  get() => c
+
+fn bump(f: fn(&Int)) uses Tally = Tally.change(f)
+
+fn main() uses Console, Async =
+  with counts() in
+    Async.scope fn(s) =>
+      s.spawn fn() => print(Tally.get())
+      bump(fn(&x) => x = Tally.get() + 1)
+|};
+  [%expect {|
+    error: panic: `Tally.get` calls back into the instance its own task is in, so it would wait for itself
+       ┌─ test.ren:19:26
+    19 │       bump(fn(&x) => x = Tally.get() + 1)
+       │                          ^^^^^^^^^^^
+       = an operation keeps its instance until it returns, and this task is in one of its operations
+       help: a block passed to an operation gets its dependencies only from its parameter's type: call it before the operation, outside the block
     |}]
 
 (* ---- s5: the runtime as a handler, and virtual time ---- *)

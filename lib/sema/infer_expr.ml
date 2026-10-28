@@ -239,6 +239,60 @@ let block_uses env cx loc ~listed (bcx : ctx) =
       !(bcx.calls)
     @ !(cx.calls)
 
+(* The arguments of the operation calls being checked, by node: each the
+   operation, as it's written, `Tally.change`, and its dependency's path.
+   A block written as one gets its dependencies only from its parameter's
+   type ([op_block]); [applied] adds a call's arguments while it checks
+   them. *)
+let op_args : (int, string * Path.t) Hashtbl.t = Hashtbl.create 16
+
+(* [e], a block passed to an operation if [op_args] says so, which lists
+   [listed], what its parameter's type, [expected], lists: once the
+   group's rows are decided, its [calls] bring in nothing else
+   (compiler.md, "Operations that don't interleave", "No deadlock"). The
+   operation holds its instance while it runs the block, so the block
+   can't call back into it, nor into anything installed inside it, which
+   an operation of that would wait for in the other order. Reported at the
+   first call that brings one in. What each call brings in is what its
+   callee's row had when it was met ([call]'s [own]); the block's own row
+   can't say, since a block's row is joined to where it's written. *)
+let op_block env (e : expr) ~listed ~expected ~calls =
+  match Hashtbl.find_opt op_args e.node with
+  | None -> ()
+  | Some (op, dpath) ->
+      defer env
+        (Later
+           (fun () ->
+             let extra =
+               without_labels listed (List.concat_map (fun c -> c.own) !calls)
+             in
+             if extra <> [] then
+               let pos (l : Loc.t) = (l.start.line, l.start.col) in
+               let calls =
+                 List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !calls
+               in
+               let at, l =
+                 match
+                   List.find_map
+                     (fun c ->
+                       Option.map (fun l -> (c.cloc, l))
+                         (List.find_opt (brings c) extra))
+                     calls
+                 with
+                 | Some found -> found
+                 | None -> (e.loc, List.hd extra)
+               in
+               let param =
+                 match reveal env.st expected with
+                 | TFun (ps, ret, errs, _) ->
+                     show (printer env)
+                       (TFun (ps, ret, errs, extend (listed @ [ l ]) REmpty))
+                 | t -> show (printer env) t
+               in
+               report env
+                 (op_block_uses at ~op ~dep:(shown_dep env l)
+                    ~own:(l.name = Ty.dep_label dpath) ~param)))
+
 (* [e]'s type, from [e] alone, as it's used: a sized type's value is read
    as its wide type ([read_wide]). *)
 let rec infer env cx (e : expr) : ty = read_wide cx e (infer_raw env cx e)
@@ -409,6 +463,7 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
              ?narrowed_help:why.narrowed_help ~labels:why.labels
              ~msg:(Option.value why.produces ~default:lambda_produces) ());
       block_uses env cx e.loc ~listed bcx;
+      op_block env e ~listed ~expected ~calls:bcx.calls;
       let t = TFun (ps, eret, errs, listed_row listed) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
@@ -489,6 +544,7 @@ and named_block env cx ~why (e : expr) eu expected =
           ]
       in
       block_uses env cx e.loc ~listed { cx with uses; calls };
+      op_block env e ~listed ~expected ~calls;
       ignore
         (unifies env why (result_loc e)
            ~found:(TFun (ps, ret, errs, listed_row listed))
@@ -2089,7 +2145,22 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
           | Some w -> w
           | None -> written_params env ?callee tf ps
         in
-        check_args env cx ~name ?callee ~written ps args;
+        (* a block passed to an operation gets its dependencies only from
+           its parameter's type ([op_block]) *)
+        let op =
+          match (f.kind, Hashtbl.find_opt cx.found f.node) with
+          | Var (Dep_op (p, o)), _ | _, Some (Calls_op { from = p; op = o; _ }) ->
+              Some (Option.value name ~default:o, p)
+          | _ -> None
+        in
+        Option.iter
+          (fun op -> List.iter (fun (a : expr) -> Hashtbl.replace op_args a.node op) args)
+          op;
+        Fun.protect
+          ~finally:(fun () ->
+            if op <> None then
+              List.iter (fun (a : expr) -> Hashtbl.remove op_args a.node) args)
+          (fun () -> check_args env cx ~name ?callee ~written ps args);
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
         made env ret)
   | TVar _ ->

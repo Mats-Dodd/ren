@@ -584,7 +584,7 @@ let%expect_test "Core Lint reports an instance that is a value" =
   let body =
     Ren.Core.mk
       (Seq
-         ( Ren.Core.mk (Instance { impls = []; finally = None }) Ren.Ty.unit loc,
+         ( Ren.Core.mk (Instance { impls = []; finally = None; exclusive = false }) Ren.Ty.unit loc,
            Ren.Core.unit loc ))
       Ren.Ty.unit loc
   in

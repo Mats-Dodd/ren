@@ -480,6 +480,29 @@ let rec copied v =
       VClosure { c with env = Env.map (fun r -> ref (copied !r)) c.env }
   | v -> v
 
+(* [v], a block about to run as a task of its own, can reach the instances
+   installed where it was written, its evidence, and where each block it
+   holds was, and those each of them runs with, installed outside it: each
+   is shared from now on, for good (compiler.md, "The exclusion is skipped
+   for instances no spawned task can reach"), so an exclusive one's
+   operations don't interleave (Sched.share). *)
+let share_reach v =
+  let seen = Hashtbl.create 8 in
+  let rec installed (i : installed) =
+    if not (Hashtbl.mem seen i.inst) then begin
+      Hashtbl.replace seen i.inst ();
+      Sched.share i.inst ~excl:i.excl;
+      List.iter installed i.outer
+    end
+  in
+  let rec value = function
+    | VEvidence is -> List.iter installed is
+    | VClosure { env; _ } | VHandler { env; _ } ->
+        Env.iter (fun _ r -> value !r) env
+    | _ -> ()
+  in
+  value v
+
 (* Where [loc] is, `server.ren:9:3`, as the deadlock panic says a task
    waits there (Sched.wait). *)
 let where (loc : Loc.t) = sprintf "%s:%d:%d" loc.file loc.start.line loc.start.col
@@ -570,10 +593,37 @@ let rec eval cx env (e : expr) =
                 | _ -> cx
               in
               (* the task is in the operation until it returns, and then
-                 the instance is released, which `Async.until` waits for *)
+                 the instance is released, which `Async.until` waits for;
+                 a shared, exclusive one's operations don't interleave, so
+                 the call waits while another task is in one (sched.ml,
+                 [holding]). A call back into the one its own task is in,
+                 by a block passed there that Infer couldn't see, a block
+                 parameter, could never go on *)
+              let name = Printf.sprintf "`%s.%s`" dep.name op in
+              let reentered () =
+                panic_at e.loc
+                  ~notes:
+                    [
+                      "an operation keeps its instance until it returns, and \
+                       this task is in one of its operations";
+                    ]
+                  ~help:
+                    "a block passed to an operation gets its dependencies \
+                     only from its parameter's type: call it before the \
+                     operation, outside the block"
+                  (Printf.sprintf
+                     "%s calls back into the instance its own task is in, so \
+                      it would wait for itself"
+                     name)
+              in
+              let at =
+                if e.loc.file = Prelude.file then at_call cx else Some (where e.loc)
+              in
               let call () =
-                Sched.holding inst cx.site (fun () ->
-                    fst (call_at cx e.loc f args (VEvidence outer)))
+                Sched.holding ?at
+                  ~what:(Printf.sprintf "waits for `%s`, which another task is in" dep.name)
+                  ~reentered inst cx.site
+                  (fun () -> fst (call_at cx e.loc f args (VEvidence outer)))
               in
               match cx.trace with
               (* the recorder's own call of what it's over isn't one the
@@ -593,18 +643,18 @@ let rec eval cx env (e : expr) =
          description of one dependency has one implementation, which is
          it whichever it was made for: `let q: Jobs = queue()` made a
          `Chan<Job>`'s a `Jobs`'s *)
-      let impl, finally =
+      let impl, finally, excl =
         match impl with
         | VHandler h -> (
-            let impls, finally = instance cx h outer what in
+            let impls, finally, excl = instance cx h outer what in
             match (List.assoc_opt from impls, impls) with
-            | Some impl, _ | None, [ (_, impl) ] -> (impl, finally)
+            | Some impl, _ | None, [ (_, impl) ] -> (impl, finally, excl)
             | None, _ ->
                 bug (what ^ " from a handler that doesn't implement it"))
         | _ -> bug (what ^ " with something that isn't a handler")
       in
       let args = List.map (type_of env) dargs in
-      let top = { dep; args; impl; outer; inst = Value.instance () } in
+      let top = { dep; args; impl; outer; inst = Value.instance (); excl } in
       let installed = VEvidence (top :: outer) in
       ending cx env e.loc finally desc outer [ top ] (fun () ->
           eval cx (Env.add ev.id (ref installed) env) body)
@@ -617,12 +667,13 @@ let rec eval cx env (e : expr) =
           Env.empty captures
       in
       VHandler { ev = ev.id; body; env }
-  | Instance { impls; finally } ->
+  | Instance { impls; finally; exclusive } ->
       let values = eval_all cx env (List.map snd impls) in
       VInstance
         {
           impls = List.combine (List.map fst impls) values;
           finally = Option.map (eval cx env) finally;
+          exclusive;
         }
   | With_handler { ev; outer; handler; deps; desc; body } -> (
       let what = "installing a handler" in
@@ -632,7 +683,7 @@ let rec eval cx env (e : expr) =
       | VHandler h ->
           (* of what the instance implements, only [deps]: it may have
              been narrowed to them (Core.Narrowed) *)
-          let impls, finally = instance cx h outer what in
+          let impls, finally, excl = instance cx h outer what in
           if not (List.for_all (fun (_, p) -> List.mem_assoc p impls) deps) then
             bug (what ^ " whose instance doesn't implement its dependencies");
           (* in the order the instance has them, each at its key, with
@@ -649,6 +700,7 @@ let rec eval cx env (e : expr) =
                       impl;
                       outer;
                       inst;
+                      excl;
                     }
                     :: acc
                 | None -> acc)
@@ -953,10 +1005,11 @@ and ok = function Ok v -> v | Error err -> raise (Failed err)
 
 (* A fresh instance of the handler [h], made with [outer], what's
    installed where it's installed, which its operations then run with: its
-   implementation of each of its dependencies. *)
+   implementation of each of its dependencies, its `finally`, and whether
+   it's exclusive. *)
 and instance cx (h : handler) outer what =
   match eval cx (Env.add h.ev (ref (VEvidence outer)) h.env) h.body with
-  | VInstance { impls; finally } -> (impls, finally)
+  | VInstance { impls; finally; exclusive } -> (impls, finally, exclusive)
   | _ -> bug (what ^ " whose description doesn't make an instance")
 
 (* Run [body], the body of a `with` that installed [installed], an
@@ -1231,6 +1284,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
      count of calls of its own. A spawned block can't fail (infer), so
      it never gives an error *)
   let spawn ?key sc body =
+    share_reach body;
     let body = copied body in
     let evidence =
       match body with
@@ -1399,9 +1453,10 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         | Error _ -> bug "a condition of `Async.until` that failed"
       in
       (* it's written in an operation, whose instance it waits on; the
-         checker makes sure there's one. It's checked again once woken,
-         since until operations don't interleave (step 4) another task
-         may have changed the state since *)
+         checker makes sure there's one. It's checked again once woken: a
+         locked instance is handed to the waiter with its condition
+         holding, so there it's only a guard, but an instance no spawned
+         task reaches has no lock to keep another call out *)
       let inst = Option.value (Sched.op_instance cx.site) ~default:(-1) in
       Sched.until ?at inst ~holds;
       while not (holds ()) do
@@ -1432,6 +1487,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         panic ~help:"`max:` is at least 1" loc
           (sprintf "`Async.%s`'s `max` is %Ld, so it couldn't start a task" name max);
       let items = match xs with VArray v -> Array.to_list (Value.items v) | _ -> bug "a map over what isn't an array" in
+      share_reach f;
       let calls = List.map (fun v () -> fst (call_at { cx with depth = ref 0 } loc f [ v ] (VEvidence []))) items in
       let r =
         all_of ~what:(sprintf "waits for `Async.%s`'s tasks" name) ~max:(Int64.to_int max) calls
@@ -1444,6 +1500,8 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
       in
       (r, args)
   | Task_both, [ a; b ] ->
+      share_reach a;
+      share_reach b;
       let call body () = fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) in
       let r =
         match all_of ~what:"waits for `Async.both`'s tasks" ~max:2 [ call a; call b ] with
@@ -1452,6 +1510,8 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
       in
       (r, args)
   | Task_race, [ a; b ] ->
+      share_reach a;
+      share_reach b;
       let call body () = fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) in
       (Ok (race [ call a; call b ]), args)
   | _ -> bug ("`" ^ Intrinsic.name x ^ "` with the wrong values")
@@ -1826,10 +1886,12 @@ let made_value cx what p =
 
 (* The instance of the prelude's handler [name], given [args], made with
    [outer], what's installed where it's installed: its implementation of
-   each of its dependencies. *)
+   each of its dependencies, and whether it's exclusive. *)
 let prelude_instance cx name args outer what =
   match apply cx (from_outside cx (Path.prelude name)) args (VEvidence []) with
-  | Ok (VHandler h), _ -> fst (instance cx h outer what)
+  | Ok (VHandler h), _ ->
+      let impls, _, excl = instance cx h outer what in
+      (impls, excl)
   | _ -> bug (what ^ " with `" ^ name ^ "`, which isn't a handler")
 
 (* The recorder of the built-in dependency [dep] (prelude.ml, "the
@@ -1839,12 +1901,19 @@ let recorded cx h (under : installed) what =
   let name =
     Path.local (Lower.made_path (Any_for (Path.prelude "recorder", under.dep)))
   in
-  let impls =
+  let impls, excl =
     prelude_instance cx name [ VInt (Int64.of_int h) ] [ under ] what
   in
   match List.assoc_opt under.dep impls with
   | Some impl ->
-      { dep = under.dep; args = under.args; impl; outer = [ under ]; inst = Value.instance () }
+      {
+        dep = under.dep;
+        args = under.args;
+        impl;
+        outer = [ under ];
+        inst = Value.instance ();
+        excl;
+      }
   | None -> bug (what ^ " with a recorder that doesn't implement its dependency")
 
 (* The real implementation of each built-in dependency in [deps], as
@@ -1855,8 +1924,10 @@ let reals cx deps what =
     (fun (dep : Path.t) ->
       match made_value cx what (Path.member dep "real") with
       | VHandler h -> (
-          match List.assoc_opt dep (fst (instance cx h [] what)) with
-          | Some impl -> { dep; args = []; impl; outer = []; inst = Value.instance () }
+          let impls, _, excl = instance cx h [] what in
+          match List.assoc_opt dep impls with
+          | Some impl ->
+              { dep; args = []; impl; outer = []; inst = Value.instance (); excl }
           | None -> bug (what ^ " with a `real` that doesn't implement it"))
       | _ -> bug (what ^ " with a `real` that isn't a handler"))
     deps
@@ -1925,7 +1996,7 @@ let run ?(start = Real) ?trace (modules : program list) =
     | Replay j ->
         let h = Journal.register j in
         let deps = List.map Path.prelude j.header.deps in
-        let impls =
+        let impls, excl =
           prelude_instance cx "replaying" [ VInt (Int64.of_int h) ] [] what
         in
         let inst = Value.instance () in
@@ -1934,7 +2005,7 @@ let run ?(start = Real) ?trace (modules : program list) =
           @ List.map
               (fun dep ->
                 match List.assoc_opt dep impls with
-                | Some impl -> { dep; args = []; impl; outer = []; inst }
+                | Some impl -> { dep; args = []; impl; outer = []; inst; excl }
                 | None -> bug (what ^ " with a replayer that hasn't a dependency"))
               deps )
   in
@@ -1979,9 +2050,10 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
         if List.mem dep.name real then reals cx [ dep ] what
         else
           let inst = Value.instance () in
+          let impls, excl = prelude_instance cx handler args [] what in
           List.map
-            (fun (dep, impl) -> { dep; args = []; impl; outer = []; inst })
-            (prelude_instance cx handler args [] what))
+            (fun (dep, impl) -> { dep; args = []; impl; outer = []; inst; excl })
+            impls)
       [
         ( "Clock",
           "test_clock",

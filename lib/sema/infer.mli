@@ -136,6 +136,10 @@ type t = {
       (** the module's opaque types that have `==` whatever their type
           arguments, since what each is represented as has no function in it:
           its interface says so, since it hides the representation *)
+  opaque : Path.t list;
+      (** the opaque types the module sees, its own and those of the modules it
+          imports, but the prelude's, sorted: what a handler keeps a resource
+          of, which makes it exclusive (Core's [Instance]) *)
 }
 
 (* Infer the module [r]'s types, checked against the interfaces [imports]
