@@ -394,6 +394,15 @@ and kind =
           which goes on once [after] has run. Lowering writes a place passed
           with `&` back to it in [after], so a call that fails still changes it
       *)
+  | Covered of { body : expr; result : var; after : expr }
+      (** an arm's `finally` (handlers.md, "`finally`"): [body], what it covers,
+          as `attempt` keeps it, a [Result] of what it ends in, bound to
+          [result], then [after], whose value is the node's. It's [Let] but
+          for a task that's cancelled in [body] (compiler.md, "Stage 11a",
+          "Cancellation"): then [result] is `Err(Cancelled)`, [after] runs
+          shielded, and the cancel goes on once it has, what it gave thrown
+          away. So [result]'s errors have `Cancelled` too. Natively, where
+          nothing is cancelled, it's that [Let] *)
 
 (* A call's argument. An [inout] argument is always a plain local: the call
    reads it, and writes the parameter's final value back to it. *)
@@ -688,6 +697,7 @@ let children (e : expr) =
   | With_handler { handler; body; _ } -> [ handler; body ]
   | Instance { impls; finally } -> List.map snd impls @ Option.to_list finally
   | Let (_, a, b)
+  | Covered { body = a; after = b; _ }
   | While (a, b)
   | Seq (a, b)
   | Update (a, _, b)
@@ -965,6 +975,8 @@ let rec sexp_with t e =
       List (Atom (show_prim op) :: dict d (List.map sexp args))
   | Prim (op, args) -> List (Atom (show_prim op) :: List.map sexp args)
   | Let (v, value, body) -> List [ atom "let"; var v; sexp value; sexp body ]
+  | Covered { body; result; after } ->
+      List [ atom "covered"; var result; sexp body; sexp after ]
   | Assign (v, value) -> List [ atom "="; var v; sexp value ]
   | If (c, t, f) -> List [ atom "if"; sexp c; sexp t; sexp f ]
   | Match (s, arms) -> List (atom "match" :: sexp s :: List.map arm_sexp arms)

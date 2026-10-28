@@ -195,6 +195,22 @@ let plain p = { dpath = p; dargs = [] }
    since a mark is changed when it's joined with another. *)
 let unmarked () = ref (Mark None)
 
+(* `Cancelled`, which a `finally`'s result can hold, and no other row
+   (compiler.md, "Stage 11a", "Cancellation"). *)
+let cancelled_tag = "Cancelled"
+
+let cancelled () =
+  { name = cancelled_tag; payload = []; dep = false; written = unmarked () }
+
+(* [r] without `Cancelled`: what `try r` passes on of a `finally`'s [r],
+   since the cancel goes on by itself. *)
+let rec without_cancelled r =
+  match r with
+  | RExtend (l, rest) when l.name = cancelled_tag && l.payload = [] -> rest
+  | RExtend (l, rest) -> RExtend (l, without_cancelled rest)
+  | RVar { contents = RLink r } -> without_cancelled r
+  | r -> r
+
 (* The label of a dependency, [name] its path in full (Ty.dep_label), with
    its type arguments, if it takes some. *)
 let dep ?(args = []) name =

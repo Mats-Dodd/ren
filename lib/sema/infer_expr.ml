@@ -782,7 +782,14 @@ and synth env cx (e : expr) : ty =
   | Break ->
       (* it never produces a value, as `fail` doesn't *)
       fresh_var env.st
+  | Fail ({ name = "Cancelled"; _ }, []) when env.in_finally > 0 ->
+      (* in a `finally`: the cancel goes on, which no row has *)
+      List.iter (fun m -> if m.mkind <> Mtry then m.failed <- true) cx.markers;
+      fresh_var env.st
   | Fail (tag, args) ->
+      (* anywhere else, it's refused, and checked as any other `fail`, so
+         nothing else is said of it *)
+      if tag.name = cancelled_tag then report env (fail_cancelled e.loc);
       (* the error joins whatever handles the code here, by inclusion, as
          a call's do, so the solver knows what an `attempt` around it
          fails with; a field's name in the payload only documents it *)
@@ -834,6 +841,9 @@ and synth env cx (e : expr) : ty =
               m.unwrapped <- errs :: m.unwrapped;
               v
           | TErrors errs ->
+              (* a `finally`'s `try r` of a cancelled body goes on with the
+                 cancel, which isn't an error *)
+              let errs = without_cancelled errs in
               Hashtbl.replace cx.found e.node Unwrap;
               include_errors env cx ~loc:a.loc ~here:(This "Result")
                 ~sources:
@@ -1059,11 +1069,15 @@ and finally_stmt env cx (f : expr) rest =
       let kept = fresh_row env.st in
       defer env (Kept (kept, cx.params, None));
       let t = rest { cx with handler = kept; sources = None } in
-      let rt = TCon (result_path, [ t; TErrors kept ]) in
+      (* what it covers ends in, or `Err(Cancelled)` if that was
+         cancelled *)
+      let rt = TCon (result_path, [ t; TErrors (RExtend (cancelled (), kept)) ]) in
       let qs = [ { mode = Read; ty = rt } ] in
       name_lambda cx f.node;
       bind_params cx [ p ] qs;
+      env.in_finally <- env.in_finally + 1;
       check env cx body t ~why:(explain ~msg:finally_gives ());
+      env.in_finally <- env.in_finally - 1;
       Hashtbl.replace cx.nodes f.node (TFun (qs, t, cx.handler, REmpty));
       t
   | Lambda (ps, _) ->

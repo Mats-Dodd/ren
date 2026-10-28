@@ -338,7 +338,10 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   (* the journal's need the types of what they're given, as `show` does,
      and the program's types, to write and read values through *)
   | Journal_kept | Journal_gave | Journal_answer | Journal_outputs
-  | Journal_load ->
+  | Journal_load
+  (* and the scheduler's, which run blocks, and wait (eval.ml, [tasks]) *)
+  | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
+  | Task_cancel ->
       fun _ ->
         failwith ("bug: `" ^ Intrinsic.name x ^ "` is run by the interpreter")
   (* the real `Clock.now` and `Clock.instant` *)

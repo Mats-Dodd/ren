@@ -184,6 +184,10 @@ type env = {
       (** each handler's `finally`, by its handler's function: the handler's
           node, and the skolems of the body's type and its errors' row, which
           become variables of the function's when it's put in canonical form *)
+  mutable in_finally : int;
+      (** how many `finally`s deep the code being checked is: only in one
+          can `fail Cancelled` be written, which goes on with a cancel
+          (compiler.md, "Stage 11a", "Cancellation") *)
   mutable finally_rows : int list;
       (** the skolems of the rows a `finally`'s body's errors are: `try r`
           passes those on, but they're the `with`'s body's already *)

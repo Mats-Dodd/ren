@@ -44,6 +44,35 @@ exception Unsupported of Loc.t * string
 
 let unsupported loc what = raise (Unsupported (loc, what))
 
+(* Whether [p] is one of `Async`'s members that start tasks, which a
+   native build refuses (compiler.md, "Stage 11a", "Native"): only the
+   interpreter has a scheduler yet. *)
+let rec starts_tasks fns (p : Path.t) =
+  (p.home = Path.prelude_home
+  && p.name = "Async"
+  &&
+  match p.member with
+  | Some { mname; _ } ->
+      List.mem mname [ "scope"; "map"; "each"; "both"; "race"; "timeout"; "isolate" ]
+  | None -> false)
+  ||
+  (* or a release build's copy of one *)
+  match Hashtbl.find_opt fns p with
+  | Some ({ origin = Copy q; _ } : C.fn_def) -> starts_tasks fns q
+  | _ -> false
+
+(* The member of `Async` [p] is, or a copy of, as it's written. *)
+let rec written_as fns (p : Path.t) =
+  match Hashtbl.find_opt fns p with
+  | Some ({ origin = Copy q; _ } : C.fn_def) -> written_as fns q
+  | _ -> Path.local p
+
+(* What a native build says of a call [p] that starts tasks, at [loc]. *)
+let tasks_not_native fns loc p =
+  Diag.Error
+    (Diag.make loc ~help:"run it with `ren run`, which runs tasks"
+       (sprintf "`%s` runs tasks, and tasks aren't native yet" (written_as fns p)))
+
 (* ---- the program ---- *)
 
 (* What compiling the whole program shares: every type declared and
@@ -1440,6 +1469,10 @@ and expr_at fs env (e : C.expr) : atom =
   | Unit -> Unit
   | Str s -> literal cx s
   | Local v -> read fs env v
+  (* an arm's `finally`: natively, nothing is cancelled, so it's a `let`
+     of what it covers *)
+  | Covered { body; result; after } ->
+      expr fs env { e with kind = Let (result, body, after) }
   | Let (v, value, body) ->
       let x = expr fs env value in
       let m = fresh fs v.name (lay v.ty) in
@@ -2206,6 +2239,9 @@ and call fs env (e : C.expr) (f : C.expr) args ev =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
   match f.kind with
+  | Global (p, _, _, _) when starts_tasks cx.fns p ->
+      (* said before its blocks are compiled, which hold a `Scope` *)
+      raise (tasks_not_native cx.fns (at fs e.loc) p)
   | Global (p, _, descs, dicts) ->
       let callee =
         match Hashtbl.find_opt cx.fns p with

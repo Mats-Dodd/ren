@@ -566,9 +566,10 @@ handler real_proc() for Proc =
 //
 // The runtime is a handler of `Async`, installed around `main` as the
 // world is. Its operations are `yield` and `tick`; the functions that
-// take blocks are its members, written over the scheduler's intrinsics,
-// which stage 11a's steps build one by one: until then each panics,
-// saying which step builds it (compiler.md, "Stage 11a").
+// take blocks are its members, written over the scheduler's intrinsics
+// (eval/sched.ml), which stage 11a's steps build one by one: until then
+// each panics, saying which step builds it (compiler.md, "Stage 11a").
+// `scope` and the members of `Scope` and `Task` are built (step 2).
 
 pub dep Async =
   // let every other task that can run, run first
@@ -580,7 +581,7 @@ pub dep Async =
   // runs `body` with a scope its tasks are spawned into, and returns
   // once they've all ended; `spawn` waits while `max` of them run
   pub fn scope<T>(max: Int = 64, body: fn(s: Scope) -> T) -> T uses Async =
-    unbuilt("`Async.scope` isn't built yet: stage 11a, step 2")
+    try scope_run(max, body)
   // waits until `cond` holds: only in an operation, whose instance it
   // lets go of meanwhile
   pub fn until(cond: fn() -> Bool) uses Async =
@@ -611,9 +612,9 @@ pub dep Async =
   pub fn single() -> Async = single_runtime()
   let real: Async = single_runtime()
 
-// One thread. With only the one task, which is all there is until stage
-// 11a's step 2, neither operation has anything to wait for (step 5 makes
-// it the scheduler's policy).
+// One thread. Both operations return at once until stage 11a's step 3
+// builds them over the scheduler (step 5 makes the handler the
+// scheduler's policy).
 handler single_runtime() for Async =
   yield() => ()
   tick() => ()
@@ -623,26 +624,23 @@ handler single_runtime() for Async =
 pub type Scope = builtin
   // starts `body` as a task of this scope, waiting first while `max`
   // of its tasks run
-  pub fn spawn(self, body: spawned fn()) uses Async =
-    unbuilt("`Scope.spawn` isn't built yet: stage 11a, step 2")
+  pub fn spawn(self, body: spawned fn()) uses Async = task_spawn(self, body)
   // the same, giving the task's handle, to join it or cancel it
   pub fn start<T>(self, body: spawned fn() -> T) -> Task<T> uses Async =
-    unbuilt("`Scope.start` isn't built yet: stage 11a, step 2")
+    task_start(self, body)
   // `spawn`, after cancelling the task this scope started under `key`,
   // if it's still running, and waiting for it to stop
   pub fn replace<K has hash>(self, key: K, body: spawned fn()) uses Async =
-    unbuilt("`Scope.replace` isn't built yet: stage 11a, step 2")
+    task_replace(self, key, body)
 
 // a task's handle (rule D, as `Scope`)
 pub type Task<T> = builtin
   // waits for the task to end: what it gave, or `None` if it was
   // cancelled first
-  pub fn join(self) -> Option<T> uses Async =
-    unbuilt("`Task.join` isn't built yet: stage 11a, step 2")
+  pub fn join(self) -> Option<T> uses Async = task_join(self)
   // asks the task to stop, and returns at once: it stops at its next
   // dependency call, or now, if it's waiting
-  pub fn cancel(self) uses Async =
-    unbuilt("`Task.cancel` isn't built yet: stage 11a, step 2")
+  pub fn cancel(self) uses Async = task_cancel(self)
 
 // ---- trying again (handlers.md, "Functions that run a block") ----
 
@@ -1030,6 +1028,40 @@ let scheme (x : Intrinsic.t) =
      stage 11a's members of `Async`, `Scope` and `Task` call until the
      step that builds each (compiler.md, "Stage 11a", "The surface") *)
   | Unbuilt -> fn [ read str ] (Var 0)
+  (* the scheduler's (sched.ml), what `Async.scope`, `Scope` and `Task`'s
+     members are written over (compiler.md, "Stage 11a", "Structured
+     tasks"). fn<T>(max: Int, body: fn(Scope) -> T) -> T: [body], with a
+     new scope, once its tasks have all ended; what [body] fails with and
+     uses, the call does *)
+  | Scope_run ->
+      let scope = Con (Path.prelude "Scope", []) in
+      fn
+        [ read int; read (Fun ([ read scope ], Var 0, open_row 0, open_row 1)) ]
+        (Var 0)
+  (* fn(s: Scope, body: fn()): starts [body] as a task of [s] *)
+  | Task_spawn ->
+      let scope = Con (Path.prelude "Scope", []) in
+      fn [ read scope; read (Fun ([], unit, open_row 2, open_row 3)) ] unit
+  (* fn<T>(s: Scope, body: fn() -> T) -> Task<T>: the same, giving its
+     handle *)
+  | Task_start ->
+      let scope = Con (Path.prelude "Scope", []) in
+      fn
+        [ read scope; read (Fun ([], Var 0, open_row 2, open_row 3)) ]
+        (Con (Path.prelude "Task", [ Var 0 ]))
+  (* fn<K has hash>(s: Scope, key: K, body: fn()): [body] as a task of
+     [s] under [key], once the one under it has been cancelled and has
+     ended *)
+  | Task_replace ->
+      let scope = Con (Path.prelude "Scope", []) in
+      fn ~reqs:[ (0, "hash") ]
+        [ read scope; read (Var 0); read (Fun ([], unit, open_row 2, open_row 3)) ]
+        unit
+  (* fn<T>(t: Task<T>) -> Option<T>: what it gave, once it has ended *)
+  | Task_join ->
+      fn [ read (Con (Path.prelude "Task", [ Var 0 ])) ] (option (Var 0))
+  (* fn<T>(t: Task<T>): asks it to stop *)
+  | Task_cancel -> fn [ read (Con (Path.prelude "Task", [ Var 0 ])) ] unit
 
 (* The operation of a built-in dependency that [x] is how the real one
    does, if it reaches the world: `fs_read` is `Fs.read`'s. Each is called
@@ -1054,6 +1086,7 @@ let reaches (x : Intrinsic.t) =
   | Seeded_next | Seeded_int | Journal_kept | Journal_gave | Journal_answer
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
+  | Scope_run | Task_spawn | Task_start | Task_replace | Task_join | Task_cancel
   | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_index | Str_split
@@ -1085,7 +1118,10 @@ let caller (x : Intrinsic.t) =
       | Journal_load ) ) ->
       Journal
   | None, (Map_empty | Set_empty) -> Value
-  | None, (Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt) ->
+  | ( None,
+      ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
+      | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
+      | Task_cancel ) ) ->
       Internal
   | None, _ -> Any
 
@@ -1122,6 +1158,12 @@ let fns : Intrinsic.t list =
     Float_lanes;
     Float_sum;
     Unbuilt;
+    Scope_run;
+    Task_spawn;
+    Task_start;
+    Task_replace;
+    Task_join;
+    Task_cancel;
   ]
 
 (* ---- built-in types ----

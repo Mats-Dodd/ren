@@ -483,146 +483,93 @@ fn main() = ()
 let%expect_test "[s2 accept] a scope waits for its tasks" =
   (* the body runs until it waits, at its end, then each task in the
      order it was spawned *)
-  until "s2"
-    ~want:{|
-body
-a
-b
-after
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     s.spawn fn() => print("a")
     s.spawn fn() => print("b")
     print("body")
   print("after")
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:3
-    2 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    body
+    a
+    b
+    after
+    ()
     |}]
 
 let%expect_test "[s2 accept] `spawn` waits while `max` tasks run" =
-  until "s2"
-    ~want:{|
-between
-a
-body
-b
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   Async.scope(max: 1) fn(s) =>
     s.spawn fn() => print("a")
     print("between")
     s.spawn fn() => print("b")
     print("body")
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:3
-    2 │   Async.scope(max: 1) fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    between
+    a
+    body
+    b
+    ()
     |}]
 
 let%expect_test "[s2 accept] a variable bound inside the scope is copied into each task" =
   (* rule C: `i` isn't the frame's that calls `Async.scope`, so each task
      gets it as it was when it was spawned, and it can change after *)
-  until "s2"
-    ~want:{|
-0
-1
-2
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     var i = 0
     while i < 3
       s.spawn fn() => print(i)
       i += 1
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:3
-    2 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    0
+    1
+    2
+    ()
     |}]
 
 let%expect_test "[s2 accept] a task's handle joins it" =
-  until "s2"
-    ~want:{|
-Some(42)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     let t = s.start fn() => 6 * 7
     print(t.join())
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:3
-    2 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    Some(42)
+    ()
     |}]
 
 let%expect_test "[s2 accept] a task cancelled before it runs never runs" =
-  until "s2"
-    ~want:{|
-None
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     let t = s.start fn() => print("never")
     t.cancel()
     print(t.join())
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:3
-    2 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    None
+    ()
     |}]
 
 let%expect_test "[s2 accept] a cancelled task stops at its next call, and `finally` sees it" =
   (* the task is asleep when it's cancelled, so its wait ends; the
      handler's `finally` is given `Err(Cancelled)`, and `try r` goes on
      cancelling *)
-  until "s2"
-    ~want:{|
-started
-cancelled
-after
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Log =
   note: fn(s: Str)
 
@@ -644,26 +591,17 @@ fn main() uses Console, Async, Clock =
     Clock.sleep(Duration.ms(5))
     t.cancel()
   print("after")
-|});
+|};
   [%expect {|
-    (until s2)
-    error: `Cancelled` can't be matched here, because the body's errors aren't known
-      ┌─ test.ren:7:11
-    7 │       Err(Cancelled) => print("cancelled")
-      │           ^^^^^^^^^
-      = `finally` is given the body's error to pass on, not to look at: it could be whatever the body fails with
-      help: match it with `Err(_)`, and pass it on with `try r`
+    started
+    cancelled
+    after
+    ()
     |}]
 
 let%expect_test "[s2 accept] `replace` cancels the task under its key" =
-  until "s2"
-    ~want:{|
-second
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async, Clock =
   Async.scope fn(s) =>
     s.replace("k") fn() =>
@@ -671,24 +609,15 @@ fn main() uses Console, Async, Clock =
       print("first")
     Clock.sleep(Duration.ms(5))
     s.replace("k") fn() => print("second")
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:3
-    2 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    second
+    ()
     |}]
 
 let%expect_test "[s2 accept] a scope whose body fails cancels its tasks" =
-  until "s2"
-    ~want:{|
-Err(Stop)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async, Clock =
   let r = attempt Async.scope fn(s) =>
     s.spawn fn() =>
@@ -697,13 +626,10 @@ fn main() uses Console, Async, Clock =
     Clock.sleep(Duration.ms(5))
     fail Stop
   print(r)
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:19
-    2 │   let r = attempt Async.scope fn(s) =>
-      │                   ^^^^^^^^^^^^^^^^^^^^
+    Err(Stop)
+    ()
     |}]
 
 let%expect_test "[s2 accept] a task beside a `with` is cancelled when its body ends" =
@@ -711,15 +637,8 @@ let%expect_test "[s2 accept] a task beside a `with` is cancelled when its body e
      body into the scope outside it, so when the body ends the `with`
      cancels it, then runs its `finally`: three ticks, at 100, 200 and
      300 ms, then the body ends at 350 *)
-  until "s2"
-    ~want:{|
-ticks: 3
-after
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Ticks =
   tick: fn()
 
@@ -739,75 +658,369 @@ fn main() uses Console, Async, Clock =
           Ticks.tick()
       Clock.sleep(Duration.ms(350))
   print("after")
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-       ┌─ test.ren:12:3
-    12 │   Async.scope fn(s) =>
-       │   ^^^^^^^^^^^^^^^^^^^^
+    ticks: 3
+    after
+    ()
     |}]
 
 let%expect_test "[s2 reject] a panic in a task says which task" =
-  until "s2"
-    ~says:
-      [
-        "error: panic: index 3 is out of bounds for an array of length 1";
-        "= in the task main/main:0";
-      ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn boom(xs: Array<Int>) -> Int = xs[3]
 
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     s.spawn fn() => print(boom([1]))
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:4:3
-    4 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    error: panic: index 3 is out of bounds for an array of length 1
+      ┌─ test.ren:1:34
+    1 │ fn boom(xs: Array<Int>) -> Int = xs[3]
+      │                                  ^^^^^
+      = in the task main/main:0
     |}]
 
 let%expect_test "[s2 reject] a scope that can start no task" =
-  until "s2"
-    ~says:
-      [
-        "error: panic: `Async.scope`'s `max` is 0, so it couldn't start a task";
-        "help: `max:` is at least 1";
-      ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn main() uses Console, Async =
   Async.scope(max: 0) fn(s) => s.spawn fn() => print(1)
-|});
+|};
   [%expect {|
-    (until s2)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
+    error: panic: `Async.scope`'s `max` is 0, so it couldn't start a task
       ┌─ test.ren:2:3
     2 │   Async.scope(max: 0) fn(s) => s.spawn fn() => print(1)
       │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      help: `max:` is at least 1
     |}]
 
 let%expect_test "[s2 reject] failing with `Cancelled`" =
-  until "s2"
-    ~says:
-      [
-        "error: `Cancelled` isn't an error a program can fail with";
-        "help: a cancelled task stops by itself; to stop early, return";
-      ]
-    (fun () ->
-      check_error {|
+  check_error
+    {|
 fn stop() ! Cancelled = fail Cancelled
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s2)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: `Cancelled` isn't an error a program can fail with
+      ┌─ test.ren:1:25
+    1 │ fn stop() ! Cancelled = fail Cancelled
+      │                         ^^^^^^^^^^^^^^
+      = a task is cancelled from outside it, and only a `finally` sees it: it isn't an error, so `attempt` can't keep it
+      help: a cancelled task stops by itself; to stop early, return
+    |}]
+
+(* What step 2 settled beyond the specification's tests (compiler.md,
+   "Stage 11a", "Step 2, as built"). *)
+
+let%expect_test "[s2 accept] an arm's `finally` sees a cancel, as `Err(Cancelled)`" =
+  (* the task is cancelled while the arm waits in the clock under it:
+     the arm's `finally` runs (Core's `Covered`), and the cancel goes on *)
+  run
+    {|
+dep Store =
+  save: fn(n: Int)
+
+handler slow() for Store uses Clock =
+  save(n) => Clock.sleep(Duration.seconds(60))
+
+handler logged() over Store uses Console =
+  save(n) =>
+    finally(r) =>
+      match r
+        Ok(_) => print("saved")
+        Err(Cancelled) => print("cancelled while saving")
+    next.save(n)
+
+fn main() uses Console, Async, Clock =
+  with logged() over slow() in
+    Async.scope fn(s) =>
+      let t = s.start fn() => Store.save(1)
+      Clock.sleep(Duration.ms(5))
+      t.cancel()
+      print(t.join())
+|};
+  [%expect {|
+    cancelled while saving
+    None
+    ()
+    |}]
+
+let%expect_test "[s2 accept] cancelling a task cancels the tasks of its scopes" =
+  run
+    {|
+fn main() uses Console, Async, Clock =
+  Async.scope fn(s) =>
+    let t = s.start fn() =>
+      Async.scope fn(inner) =>
+        inner.spawn fn() =>
+          Clock.sleep(Duration.seconds(60))
+          print("never: the inner task")
+        Clock.sleep(Duration.seconds(60))
+        print("never: the outer task")
+    Clock.sleep(Duration.ms(5))
+    t.cancel()
+    print(t.join())
+  print("after")
+|};
+  [%expect {|
+    None
+    after
+    ()
+    |}]
+
+let%expect_test "[s2 accept] a cancelled task runs until its next dependency call" =
+  (* no preemption: `main` and `t` both wait for `u`, and are woken in
+     that order when it ends, so `t` is asked to stop after its wait has
+     ended, while it waits for its turn. It isn't stopped then, since its
+     wait gave what it waited for: it runs on, and stops at its next
+     call, `print`, which never happens *)
+  run
+    {|
+fn main() uses Console, Async, Clock =
+  Async.scope fn(s) =>
+    let u = s.start fn() => Clock.sleep(Duration.ms(5))
+    let t = s.start fn() =>
+      let _ = u.join()
+      let n = 6 * 7
+      print(n)
+      n
+    let _ = u.join()
+    t.cancel()
+    print(t.join())
+  print("after")
+|};
+  [%expect {|
+    None
+    after
+    ()
+    |}]
+
+let%expect_test "[s2 accept] a cancel after a task has ended changes nothing" =
+  (* `t` was spawned first, so it runs first, to its end *)
+  run
+    {|
+fn main() uses Console, Async =
+  Async.scope fn(s) =>
+    let t = s.start fn() =>
+      print("t")
+      6 * 7
+    s.spawn fn() => t.cancel()
+    print("body")
+    print(t.join())
+  print("after")
+|};
+  [%expect {|
+    body
+    t
+    Some(42)
+    after
+    ()
+    |}]
+
+let%expect_test "[s2 accept] a `finally` runs past a cancel, until the cleanup deadline" =
+  (* the handler's `finally` is shielded, so its sleep isn't cancelled
+     at once; 5 seconds after the cancel, the deadline, it is, and the
+     rest of the `finally` never runs. (This takes 5 seconds: the clock
+     is the real one, until stage 11a's step 5.) *)
+  run
+    {|
+dep Log =
+  note: fn(s: Str)
+
+handler slow() for Log uses Clock, Console =
+  finally(r) =>
+    print("cleaning")
+    Clock.sleep(Duration.seconds(60))
+    print("never: the cleanup ran past its deadline")
+    try r
+  note(s) => print(s)
+
+fn main() uses Console, Async, Clock =
+  let began = Clock.instant()
+  Async.scope fn(s) =>
+    let t = s.start fn() =>
+      with slow() in
+        Log.note("working")
+        Clock.sleep(Duration.seconds(60))
+    Clock.sleep(Duration.ms(5))
+    t.cancel()
+    print(t.join())
+  let took = Clock.instant() - began
+  print(took >= Duration.seconds(5) && took < Duration.seconds(30))
+|};
+  [%expect {|
+    working
+    cleaning
+    None
+    true
+    ()
+    |}]
+
+let%expect_test "[s2 accept] `replace` waits for the task it cancels" =
+  (* the first task is cancelled while it sleeps, and its `finally` runs
+     to its end before the second task starts; the second's `finally`
+     sleeps too, while the task under the string's key runs *)
+  run
+    {|
+dep Log =
+  note: fn(s: Str)
+
+handler logs(name: Str) for Log uses Clock, Console =
+  finally(r) =>
+    Clock.sleep(Duration.ms(5))
+    print(name.concat(" cleaned up"))
+    try r
+  note(s) => print(name.concat(": ").concat(s))
+
+fn main() uses Console, Async, Clock =
+  Async.scope fn(s) =>
+    s.replace(1) fn() =>
+      with logs("first") in
+        Log.note("working")
+        Clock.sleep(Duration.seconds(60))
+    Clock.sleep(Duration.ms(5))
+    s.replace(1) fn() =>
+      with logs("second") in
+        Log.note("working")
+    // a key of another type is another key
+    s.replace("1") fn() => print("a string's")
+|};
+  [%expect {|
+    first: working
+    first cleaned up
+    second: working
+    a string's
+    second cleaned up
+    ()
+    |}]
+
+let%expect_test "[s2 accept] `fail Cancelled` in a `finally` goes on cancelling" =
+  (* nothing asked the task to stop, but its `finally` goes on as if
+     something had: the task ends as a cancelled one does *)
+  run
+    {|
+dep Log =
+  note: fn(s: Str)
+
+handler stopping() for Log uses Console =
+  finally(r) =>
+    print("stopping")
+    fail Cancelled
+  note(s) => print(s)
+
+fn main() uses Console, Async =
+  Async.scope fn(s) =>
+    let t = s.start fn() =>
+      with stopping() in
+        Log.note("working")
+        1
+    print(t.join())
+|};
+  [%expect {|
+    working
+    stopping
+    None
+    ()
+    |}]
+
+let%expect_test "[s2 accept] a task spawned in a handler's arm is labelled by it" =
+  run_error
+    {|
+dep Pool =
+  run: fn(n: Int)
+
+handler pool() for Pool uses Async, Console =
+  run(n) =>
+    Async.scope fn(s) =>
+      s.spawn fn() =>
+        let xs = [1]
+        print(xs[n])
+
+fn main() uses Console, Async =
+  with pool() in
+    Pool.run(3)
+|};
+  [%expect {|
+    error: panic: index 3 is out of bounds for an array of length 1
+      ┌─ test.ren:9:15
+    9 │         print(xs[n])
+      │               ^^^^^
+      = in the task main/pool.run:0
+    |}]
+
+let%expect_test "[s2 reject] a task a test spawns is the test's" =
+  (* a test is the root task `test`, and the label of its code too *)
+  test
+    {|
+fn main() = ()
+
+test "a task panics" =
+  Async.scope fn(s) =>
+    s.spawn fn() =>
+      let xs = [1]
+      print(xs[2])
+|};
+  [%expect {|
+    test.ren
+      ✗ a task panics
+
+    ──── a task panics ── test.ren:7
+      │
+    7 │       print(xs[2])
+      │             ^^^^^
+      │
+      panic: index 2 is out of bounds for an array of length 1
+      = in the task test/test:0
+
+      seed 5919 · rerun: ren test test.ren --only "a task" --seed 5919
+
+    0 passed, 1 failed
+    [exit 1]
+    |}]
+
+let%expect_test "[s2 reject] every task waits for room in a full scope" =
+  run_error
+    {|
+fn main() uses Console, Async =
+  Async.scope(max: 1) fn(s) =>
+    s.spawn fn() =>
+      s.spawn fn() => print("never")
+|};
+  [%expect {|
+    error: panic: every task is waiting, and nothing can wake one
+      ┌─ test.ren:2:3
+    2 │   Async.scope(max: 1) fn(s) =>
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = main waits for its scope's tasks at test.ren:2:3
+      = main/main:0 waits for room in its scope at test.ren:4:7
+    |}]
+
+let%expect_test "[s2 reject] a `finally` that names each error names `Cancelled` too" =
+  check_error
+    {|
+dep Store =
+  save: fn(n: Int) ! Short
+
+handler counted() over Store uses Console =
+  save(n) =>
+    finally(r) =>
+      match r
+        Ok(_) => print("saved")
+        Err(Short) => print("short")
+      try r
+    try next.save(n)
+
+fn main() = ()
+|};
+  [%expect {|
+    error: this `match` doesn't handle every `Result`
+      ┌─ test.ren:7:7
+    7 │       match r
+      │       ^^^^^
+      = missing: Err(Cancelled)
+      help: add an arm for `Err(Cancelled)`, or a `_ =>` arm for the rest
     |}]
 
 (* ---- s3: the rest of `Async` ---- *)
@@ -848,10 +1061,11 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-       ┌─ test.ren:12:5
-    12 │     Async.scope fn(s) =>
-       │     ^^^^^^^^^^^^^^^^^^^^
+    error: panic: `Async.until` isn't built yet: stage 11a, step 3
+      ┌─ test.ren:7:13
+    7 │   wait() => Async.until(fn() => opened)
+      │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = in the task main/main:0
     |}]
 
 let%expect_test "[s3 accept] `tick` and `yield`" =
@@ -879,10 +1093,12 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s3)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:3
-    2 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    body
+    after the tick
+    a
+    b
+    c
+    ()
     |}]
 
 let%expect_test "[s3 accept] a timeout gives `Timeout`, or the body's result" =
@@ -1339,23 +1555,31 @@ test "tasks wake in the order of their deadlines" =
       ✗ two tasks sleep at once
       ✗ tasks wake in the order of their deadlines
 
-    ──── two tasks sleep at once ── test.ren:2
+    ──── two tasks sleep at once ── test.ren:5
       │
-    2 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    5 │   assert Clock.now() == Time.epoch + Duration.minutes(60)
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       │
-      panic: `Async.scope` isn't built yet: stage 11a, step 2
+      left:  Time(5400000)
+      right: Time(3600000)
+                  ^ differs here
 
       seed 2542 · rerun: ren test test.ren --only "two tasks" --seed 2542
 
-    ──── tasks wake in the order of their deadlines ── test.ren:8
-      │
-    8 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
-      │
-      panic: `Async.scope` isn't built yet: stage 11a, step 2
+    ──── tasks wake in the order of their deadlines ── test.ren:15
+       │
+    15 │   assert TestConsole.output() == ["one", "three"]
+       │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  ["three", ...]
+       right: ["one", ...]
+                ^ differs here
 
-      seed 9439 · rerun: ren test test.ren --only "tasks wake" --seed 9439
+       seed 9439 · rerun: ren test test.ren --only "tasks wake" --seed 9439
+
+       printed:
+         three
+         one
 
     0 passed, 2 failed
     [exit 1]
@@ -1405,10 +1629,10 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s5)
-    error: panic: `Async.scope` isn't built yet: stage 11a, step 2
-      ┌─ test.ren:2:3
-    2 │   Async.scope fn(s) =>
-      │   ^^^^^^^^^^^^^^^^^^^^
+    b
+    a
+    ()
+    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
     |}]
 
 let%expect_test "[s5 reject] a module of a program's own named `sim`" =

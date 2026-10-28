@@ -309,6 +309,13 @@ fn transfer(t: Transfer) ! DbDown | Short uses Sql =
   and `try r` passes the body's error on. What `finally` produces is what
   the `with` produces. It's given a value of any type, so it can give it
   back or show it, never compare it.
+- **A cancelled body gives `Err(Cancelled)`** ([async.md](async.md#cancellation)):
+  `r`'s type is `Result<T, ! E | Cancelled>`, so a `match r` that names
+  each error names `Cancelled` too, or has an `Err(_)`. The `finally`
+  runs shielded, its own calls not cancelled until the cleanup deadline,
+  5 seconds; then the cancel goes on, `try r` with it, and what the
+  `finally` gave is thrown away. `Cancelled` is in no other row, so `try
+  r` never adds it to the `with`'s errors.
 - **When both the body and the cleanup fail, the handler's author says
   what happens.** Here a failed body rolls back and passes its own error
   on, and a failed commit fails the `with` with the commit's error.

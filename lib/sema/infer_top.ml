@@ -680,6 +680,7 @@ let new_env sink ~reachable (r : Resolve.t) =
     forced = [];
     written = Hashtbl.create 16;
     in_state = None;
+    in_finally = 0;
     finallies = Hashtbl.create 4;
     finally_rows = [];
     in_scope = [];

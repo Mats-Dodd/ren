@@ -49,19 +49,45 @@ let sprintf = Printf.sprintf
 
 type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
 
-exception Panic of { loc : Loc.t; msg : string; wrap : wrap option }
+(* A panic: where, what it says, the wrapping method its help suggests
+   for an overflow, its notes, the task it was in first among them, and
+   a help of its own. *)
+exception Panic of {
+  loc : Loc.t;
+  msg : string;
+  wrap : wrap option;
+  notes : string list;
+  help : string option;
+}
 exception Uncaught of { shown : string; written : string }
 exception Assert_failed of { loc : Loc.t; sides : (string * string) option }
 exception Went_differently of { loc : Loc.t; differs : Journal.differs }
 
-let panic ?wrap loc msg = raise (Panic { loc; msg; wrap })
+(* A panic at [loc], in the task running, which a note says if it isn't
+   a root (compiler.md, "Errors and panics show the task path"). *)
+let panic_at ?wrap ?(notes = []) ?help loc msg =
+  let task =
+    match Sched.task_path () with
+    | Some p -> [ "in the task " ^ p ]
+    | None -> []
+  in
+  Panic { loc; msg; wrap; notes = task @ notes; help }
+
+let panic ?wrap ?notes ?help loc msg =
+  raise (panic_at ?wrap ?notes ?help loc msg)
+
+(* The panic [p], said at [loc] instead: a panic in the prelude, whose
+   source can't be shown, is said at the program's call that reached it. *)
+let moved loc = function
+  | Panic p -> Panic { p with loc }
+  | e -> e
 
 (* A call the program made at [loc], past the end of a recording that
    ended in a panic at [at] (Journal.Recorded_panic): the panic, if it
    was here, and otherwise what [instead] gives, the replay having gone
    differently here, or a test having gone past the bug's end. *)
 let recorded_panic loc ~at ~msg ~instead =
-  if Journal.at_place ~at loc then Panic { loc; msg; wrap = None }
+  if Journal.at_place ~at loc then panic_at loc msg
   else
     match instead () with
     | Journal.Differs differs -> Went_differently { loc; differs }
@@ -103,6 +129,15 @@ type ctx = {
   outputs : (string * string, unit) Hashtbl.t;
       (** the operations of the built-in dependencies that give nothing, `()`,
           by their dependency and name: a journal's outputs ([gives_nothing]) *)
+  site : string;
+      (** the label of the code running, the function it's written in, `serve`,
+          or `handler.op` in a handler's arm, which a task it spawns is
+          labelled by ([site_of]); the prelude's code keeps its caller's *)
+  entry : Path.t option;
+      (** the test running, whose code's label is `test` *)
+  call : Loc.t option;
+      (** the program's call the prelude's code running was reached from,
+          which a task waiting in it is said to wait at ([at_call]) *)
 }
 
 (* How many calls deep a program can go before it's stopped with a panic.
@@ -128,6 +163,8 @@ type step =
       f : Value.t;
       args : Value.t list;
       ev : Value.t;  (** the evidence it's passed *)
+      site : string;  (** the label of the code it's in ([ctx]'s) *)
+      call : Loc.t option;  (** and the program's call it's under ([ctx]'s) *)
     }
 
 (* ---- numbers ----
@@ -377,6 +414,97 @@ let number_op req loc (_ : Loc.t list) vs =
   | _, [ x; y ] -> binop ~at:[] loc (binop_of_req req) x y
   | _ -> bug ("`" ^ req ^ "` on the wrong number of values")
 
+(* ---- task labels ----
+
+   A task's path labels it by the code its spawn is written in
+   (compiler.md, "Structured tasks"): the function's name, or a handler's
+   and its operation's, `ticks.tick`, for an arm; and a test's, `test`.
+   It's kept in [cx.site] as the code runs, set where a function or a
+   block of the program's starts, and kept as it is by the prelude's,
+   which isn't anyone's code. *)
+
+(* The label of the function a block is written in, from its name
+   (Ty.lambda_id), `main.serve#2`: the function's path, without its
+   module, which has no `.` in it. *)
+let block_label name =
+  let fn =
+    match String.index_opt name '#' with
+    | Some i -> String.sub name 0 i
+    | None -> name
+  in
+  match String.index_opt fn '.' with
+  | Some i -> String.sub fn (i + 1) (String.length fn - i - 1)
+  | None -> fn
+
+(* [label], a function's, for the code running where [cx.site] is: a
+   block written in a handler's arm runs as that arm's, `ticks.tick`,
+   whose handler's label is [label]. *)
+let site_in cx label =
+  if cx.site = label || String.starts_with ~prefix:(label ^ ".") cx.site then
+    cx.site
+  else label
+
+(* The label of a block named [name], for the code running where
+   [cx.site] is: a test's own is `test`. *)
+let block_site cx name =
+  let label = block_label name in
+  match cx.entry with
+  | Some p when Path.local p = label -> "test"
+  | _ -> site_in cx label
+
+(* The label of [f], a function of the program, or of what a release
+   build made it from (Core.origin). *)
+let rec fn_label cx (f : fn_def) =
+  if Some f.path = cx.entry then "test"
+  else
+    match f.origin with
+    | Written -> Path.local f.path
+    | Copy p -> (
+        match Hashtbl.find_opt cx.fns p with
+        | Some g -> fn_label cx g
+        | None -> Path.local p)
+    | Lifted_block name -> block_site cx name
+    | Lifted_op { handler; op; _ } -> Path.local handler ^ "." ^ op
+
+(* [v], copied for a task it's spawned as: each variable it captured, a
+   cell of its own, and each block it holds, the same. A spawned block
+   only reads what it captures (excl.ml, rule C), and what it reads from
+   the frame that called `Async.scope` can't change until the scope ends,
+   so a copy reads just what the variable would have; and one bound
+   inside the scope, a loop's, is read as it was when the task was
+   spawned, as rule C says (async.md, "What a task can touch"). A handler
+   state's cell is a value ([VCell]), so the task still shares it. *)
+let rec copied v =
+  match v with
+  | VClosure c ->
+      VClosure { c with env = Env.map (fun r -> ref (copied !r)) c.env }
+  | v -> v
+
+(* Where [loc] is, `server.ren:9:3`, as the deadlock panic says a task
+   waits there (Sched.wait). *)
+let where (loc : Loc.t) = sprintf "%s:%d:%d" loc.file loc.start.line loc.start.col
+
+(* The program's call the prelude's code running was reached from, if
+   it's known ([ctx]'s [call]). *)
+let at_call cx = Option.map where cx.call
+
+(* The tag a `finally` is given for a body that was cancelled,
+   `Err(Cancelled)`'s. *)
+let cancelled_tag = VTag { name = "Cancelled"; args = []; tys = [] }
+
+let is_cancelled_tag = function
+  | VTag { name = "Cancelled"; args = []; _ } -> true
+  | _ -> false
+
+(* The scope or the task a value of `Scope` or `Task<T>` is. *)
+let scope_of = function
+  | VSched (Sched.Scope sc) -> sc
+  | _ -> bug "a scope that isn't one"
+
+let task_of = function
+  | VSched (Sched.Handle t) -> t
+  | _ -> bug "a task's handle that isn't one"
+
 let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
@@ -405,6 +533,9 @@ let rec eval cx env (e : expr) =
          was. A generic one's instance is found by its path and the types
          its descriptors stand for (compiler.md, "Generic dependencies") *)
       let args = eval_all cx env args in
+      (* a task asked to stop stops here, before the call (async.md,
+         "Cancellation") *)
+      Sched.check ();
       let what = Printf.sprintf "a call of `%s.%s`" dep.name op in
       let tys = List.map (type_of env) dargs in
       match
@@ -415,6 +546,16 @@ let rec eval cx env (e : expr) =
       | Some { impl = VRecord ops; outer; _ } -> (
           match List.assoc_opt op ops with
           | Some f -> (
+              (* a handler's arm of the program's runs as `handler.op` *)
+              let cx =
+                match f with
+                | VClosure { site; _ } when site <> "" ->
+                    { cx with site = site ^ "." ^ op }
+                (* the prelude's, `Clock.sleep`'s, waits at this call *)
+                | VClosure _ when e.loc.file <> Prelude.file ->
+                    { cx with call = Some e.loc }
+                | _ -> cx
+              in
               let call () = fst (call_at cx e.loc f args (VEvidence outer)) in
               match cx.trace with
               (* the recorder's own call of what it's over isn't one the
@@ -445,8 +586,9 @@ let rec eval cx env (e : expr) =
         | _ -> bug (what ^ " with something that isn't a handler")
       in
       let args = List.map (type_of env) dargs in
-      let installed = VEvidence ({ dep; args; impl; outer } :: outer) in
-      ending cx env e.loc finally desc outer (fun () ->
+      let top = { dep; args; impl; outer } in
+      let installed = VEvidence (top :: outer) in
+      ending cx env e.loc finally desc outer [ top ] (fun () ->
           eval cx (Env.add ev.id (ref installed) env) body)
   | Narrowed (_, h) -> eval cx env h
   | Handler { ev; captures; body } ->
@@ -491,7 +633,8 @@ let rec eval cx env (e : expr) =
                 | None -> acc)
               outer impls
           in
-          ending cx env e.loc finally desc outer (fun () ->
+          let top = List.filter (fun i -> not (List.memq i outer)) installed in
+          ending cx env e.loc finally desc outer top (fun () ->
               eval cx (Env.add ev.id (ref (VEvidence installed)) env) body)
       | _ -> bug (what ^ " with something that isn't a handler"))
   | Prim (((Equal d | Not_equal d) as op), [ a; b ]) ->
@@ -580,7 +723,7 @@ let rec eval cx env (e : expr) =
         (fun a v -> match a with Ref x -> cell env x := v | Value _ -> ())
         args finals;
       ok result
-  | Lambda { params; ev; outer; given; captures; body; _ } ->
+  | Lambda { name; params; ev; outer; given; captures; body } ->
       (* share the captured variables' cells: a block captures by
          reference, so it reads a variable when it runs, and what it
          assigns is seen outside it. Exclusivity (excl.ml) makes sure
@@ -593,6 +736,9 @@ let rec eval cx env (e : expr) =
       in
       VClosure
         {
+          site =
+            (if body.loc.file = Prelude.file then ""
+             else block_site cx name);
           params = List.map (fun (p : param) -> p.var.id) params;
           ev = ev.id;
           outer = outer.id;
@@ -632,7 +778,13 @@ let rec eval cx env (e : expr) =
           args = eval_all cx env args;
           tys = List.map (type_of env) ds;
         }
-  | Fail a -> raise (Failed (eval cx env a))
+  | Fail a -> (
+      match eval cx env a with
+      (* `fail Cancelled`, and `try r` of a cancelled body's `r`, in a
+         `finally`: the task goes on being cancelled, which no `attempt`
+         can catch (compiler.md, "Cancellation") *)
+      | err when is_cancelled_tag err -> raise Sched.Cancelled
+      | err -> raise (Failed err))
   | Handle { body; value; on_value; error; on_error } -> (
       (* [match ... with exception] runs one branch for a value and another
          for an exception that evaluating it raised *)
@@ -666,18 +818,41 @@ let rec eval cx env (e : expr) =
              });
       VUnit
   | Finally (body, after) -> (
+      let after () = ignore (Sched.shielded (fun () -> eval cx env after)) in
       match eval cx env body with
       | v ->
-          ignore (eval cx env after);
+          after ();
           v
       | exception Failed err ->
-          ignore (eval cx env after);
+          after ();
           raise (Failed err)
       | exception Broke ->
           (* a `break` leaves the loop, but writes back what was changed,
              a `for &`'s element *)
-          ignore (eval cx env after);
-          raise Broke)
+          after ();
+          raise Broke
+      | exception Sched.Cancelled ->
+          after ();
+          raise Sched.Cancelled)
+  | Covered { body; result; after } -> (
+      (* an arm's `finally`: [body] is what it covers, as `attempt`
+         keeps it, which a cancel goes through *)
+      match eval cx env body with
+      | outcome ->
+          Sched.shielded (fun () ->
+              eval cx (Env.add result.id (ref outcome) env) after)
+      | exception Sched.Cancelled ->
+          let outcome =
+            VCon { ty = Path.prelude "Result"; name = "Err"; args = [ cancelled_tag ] }
+          in
+          (* what it gives, or fails with, is thrown away: the task goes
+             on being cancelled *)
+          (try
+             ignore
+               (Sched.shielded (fun () ->
+                    eval cx (Env.add result.id (ref outcome) env) after))
+           with Failed _ | Sched.Cancelled -> ());
+          raise Sched.Cancelled)
 
 (* [e], the body of a function or a part of one in tail position: a
    [Call] there with no `inout` argument, which would have to be written
@@ -705,7 +880,7 @@ and tail cx env (e : expr) =
           (List.filter_map (function Value a -> Some a | Ref _ -> None) args)
       in
       let ev = evidence_in env ev ("a call of " ^ describe f) in
-      Tail { loc = e.loc; f; args; ev = VEvidence ev }
+      Tail { loc = e.loc; f; args; ev = VEvidence ev; site = cx.site; call = cx.call }
   | _ -> Done (eval cx env e)
 
 (* Make the call [step] ends in, then the one that ends in, and so on,
@@ -736,10 +911,10 @@ and finish cx at step =
   | Tail t ->
       let at = if t.loc.file <> Prelude.file then Some t.loc else at in
       let next =
-        try enter ~at:t.loc cx t.f t.args t.ev with
+        try enter ~at:t.loc { cx with site = t.site; call = t.call } t.f t.args t.ev with
         | Builtins.Panic msg -> panic (Option.value at ~default:t.loc) msg
-        | Panic { loc; msg; _ } when loc.file = Prelude.file && at <> None ->
-            panic (Option.get at) msg
+        | Panic { loc; _ } as p when loc.file = Prelude.file && at <> None ->
+            raise (moved (Option.get at) p)
         | Journal.Differs differs ->
             raise
               (Went_differently
@@ -763,28 +938,51 @@ and instance cx (h : handler) outer what =
   | VInstance { impls; finally } -> (impls, finally)
   | _ -> bug (what ^ " whose description doesn't make an instance")
 
-(* Run [body], the body of a `with` that installed an instance whose
-   `finally` is [finally], if it has one: it's given the body's outcome,
-   `Ok` of its value or `Err` of its error, and the descriptor of its
-   type, [desc], and runs with [outer], what was installed where the
-   instance was; what it gives is the `with`'s (handlers.md, "When a `with`
-   ends"). A panic isn't an outcome: it ends the program. *)
-and ending cx env loc finally desc outer body =
+(* Run [body], the body of a `with` that installed [installed], an
+   instance whose `finally` is [finally], if it has one: it's given the
+   body's outcome, `Ok` of its value or `Err` of its error, and the
+   descriptor of its type, [desc], and runs with [outer], what was
+   installed where the instance was; what it gives is the `with`'s
+   (handlers.md, "When a `with` ends"). A panic isn't an outcome: it ends
+   the program. Cancellation is, as `Err(Cancelled)`: then what the
+   `finally` gives is thrown away, and the cancellation goes on. When the
+   body ends, and before the `finally` runs, the tasks spawned beside the
+   `with` are cancelled and waited for (Sched.leave_with). *)
+and ending cx env loc finally desc outer installed body =
+  let frame = Sched.enter_with installed in
+  let at = if loc.file = Prelude.file then at_call cx else Some (where loc) in
+  let body () =
+    match body () with
+    | v ->
+        Sched.leave_with ?at frame;
+        v
+    | exception ((Failed _ | Sched.Cancelled) as e) ->
+        Sched.leave_with ?at frame;
+        raise e
+  in
   match finally with
   | None -> body ()
-  | Some f ->
+  | Some f -> (
       let result = Path.prelude "Result" in
-      let outcome =
-        match body () with
-        | v -> VCon { ty = result; name = "Ok"; args = [ v ] }
-        | exception Failed err ->
-            VCon { ty = result; name = "Err"; args = [ err ] }
+      let given outcome () =
+        ok
+          (fst
+             (call_at cx loc f
+                [ VType (type_of env desc); outcome ]
+                (VEvidence outer)))
       in
-      ok
-        (fst
-           (call_at cx loc f
-              [ VType (type_of env desc); outcome ]
-              (VEvidence outer)))
+      match body () with
+      | v -> Sched.shielded (given (VCon { ty = result; name = "Ok"; args = [ v ] }))
+      | exception Failed err ->
+          Sched.shielded (given (VCon { ty = result; name = "Err"; args = [ err ] }))
+      | exception Sched.Cancelled ->
+          (try
+             ignore
+               (Sched.shielded
+                  (given
+                     (VCon { ty = result; name = "Err"; args = [ cancelled_tag ] })))
+           with Failed _ | Sched.Cancelled -> ());
+          raise Sched.Cancelled)
 
 (* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
 and eval_all cx env = function
@@ -797,11 +995,11 @@ and eval_all cx env = function
 and call_at cx loc f args ev =
   try apply ~loc cx f args ev with
   | Builtins.Panic msg -> panic loc msg
-  | Panic { loc = l; msg; _ }
+  | Panic { loc = l; _ } as p
     when l.file = Prelude.file && loc.file <> Prelude.file ->
       (* the prelude's source can't be shown, so a panic inside it is the
          program's call that reached it *)
-      panic loc msg
+      raise (moved loc p)
   (* and so is a replay that went differently, which the journal says
      where the call was made *)
   | Journal.Differs differs -> raise (Went_differently { loc; differs })
@@ -827,7 +1025,7 @@ and apply ?loc cx f args ev =
       if !(cx.depth) >= max_depth then raise Too_deep;
       incr cx.depth;
       let result =
-        match finish cx None (start cx f cells ev) with
+        match finish cx None (start ?loc cx f cells ev) with
         | v -> Ok v
         | exception Failed err -> Error err
         | exception e ->
@@ -841,7 +1039,7 @@ and apply ?loc cx f args ev =
    [cells]: evaluate its body as far as the call it ends in, if it ends in
    one. A top-level function's hidden type parameters hold what its value
    was given for them where it was used. *)
-and start cx f cells ev =
+and start ?loc cx f cells ev =
   let passed =
     match ev with
     | VEvidence installed -> installed
@@ -881,10 +1079,19 @@ and start cx f cells ev =
           (fun env (v : var) d -> Env.add v.id (ref d) env)
           env f.dicts dicts
       in
+      let cx =
+        if f.loc.file <> Prelude.file then { cx with site = fn_label cx f }
+        else
+          (* the prelude's function, `Async.scope`, called by the program:
+             a wait in it is at this call *)
+          match loc with
+          | Some l when l.file <> Prelude.file -> { cx with call = Some l }
+          | _ -> cx
+      in
       run cx
         (List.map (fun (p : param) -> p.var.id) f.params)
         f.ev.id ev f.body env
-  | VClosure { params; ev = ev_id; outer; given; body; env } ->
+  | VClosure { params; ev = ev_id; outer; given; body; env; site } ->
       (* a block runs with the evidence where it was written, with the
          caller's implementations of what it's given on top, as a
          [With_handler] puts its instance's on top of what's outside it:
@@ -909,6 +1116,8 @@ and start cx f cells ev =
                  ^ dep.name ^ "`"))
           written given
       in
+      (* a handler's arm runs as `handler.op`, which its call set *)
+      let cx = if site = "" then cx else { cx with site = site_in cx site } in
       run cx params ev_id (VEvidence installed) body env
   | _ -> bug "a call to something that isn't a function"
 
@@ -917,7 +1126,7 @@ and start cx f cells ev =
 and enter ~at cx f args ev =
   match f with
   | VBuiltin _ -> Done (ok (fst (builtin ~loc:at cx f args)))
-  | _ -> start cx f (List.map ref args) ev
+  | _ -> start ~loc:at cx f (List.map ref args) ev
 
 (* A call of a built-in function, which [apply] returns, from [loc], where
    a NaN it makes is said to be made. *)
@@ -939,6 +1148,19 @@ and builtin ?loc cx f args =
         tys,
         _ ) ->
       (Ok (journal cx x tys args), args)
+  | VBuiltin
+      ( (( Scope_run | Task_spawn | Task_start | Task_replace | Task_join
+         | Task_cancel ) as x),
+        tys,
+        dicts ) ->
+      tasks ?loc cx x tys dicts args
+  | VBuiltin (Clock_sleep, _, _) -> (
+      (* the real `Clock.sleep`: the task waits, and the others run *)
+      match args with
+      | [ VInt ms ] ->
+          Sched.sleep ?at:(at_call cx) ms;
+          (Ok VUnit, args)
+      | _ -> bug "a call of `clock_sleep` with the wrong values")
   | VBuiltin (x, tys, dicts) -> (
       let dicts =
         List.map (function VDict d -> d | _ -> bug "a dictionary") dicts
@@ -951,6 +1173,85 @@ and builtin ?loc cx f args =
       | exception Nan.Seen v -> raise (Builtins.Panic (Nan.observed Nan.hashed v))
       | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"
+
+(* ---- tasks (sched.ml) ----
+
+   The scheduler's intrinsics, which `Async.scope` and the members of
+   `Scope` and `Task` call (prelude.ml), from [loc], in the prelude. *)
+and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
+  let loc =
+    match loc with Some l -> l | None -> Loc.point ~file:Prelude.file 1 1
+  in
+  let at = at_call cx in
+  let some v = VCon { ty = Path.prelude "Option"; name = "Some"; args = [ v ] }
+  and none = VCon { ty = Path.prelude "Option"; name = "None"; args = [] } in
+  (* [body], a block, started as a task of [sc]: copied, and run with a
+     count of calls of its own. A spawned block can't fail (infer), so
+     it never gives an error *)
+  let spawn ?key sc body =
+    let body = copied body in
+    let evidence =
+      match body with
+      | VClosure { outer; env; _ } -> (
+          match Option.map ( ! ) (Env.find_opt outer env) with
+          | Some (VEvidence installed) -> installed
+          | _ -> [])
+      | _ -> []
+    in
+    Sched.spawn ?key ?at sc ~label:cx.site ~evidence (fun () ->
+        ok (fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence []))))
+  in
+  match (x, args) with
+  | Scope_run, [ VInt max; body ] ->
+      if max < 1L then
+        panic ~help:"`max:` is at least 1" loc
+          (sprintf "`Async.scope`'s `max` is %Ld, so it couldn't start a task"
+             max);
+      let sc = Sched.scope ~max:(Int64.to_int max) in
+      (* the body runs in this task; what it ends in, a value or an
+         error, waits for the scope's tasks to end, after cancelling them
+         if it's an error (async.md, "A failure cancels the tasks beside
+         it"); and so does a cancel, which goes on down to them *)
+      let stop () =
+        Sched.cancel_all ?at sc;
+        raise Sched.Cancelled
+      in
+      let result =
+        match fst (call_at cx loc body [ VSched (Sched.Scope sc) ] (VEvidence [])) with
+        | r -> r
+        | exception Sched.Cancelled -> stop ()
+      in
+      (match result with
+      | Ok _ -> ( try Sched.wait_empty ?at sc with Sched.Cancelled -> stop ())
+      | Error _ -> Sched.cancel_all ?at sc);
+      (result, args)
+  | Task_spawn, [ s; body ] ->
+      ignore (spawn (scope_of s) body);
+      (Ok VUnit, args)
+  | Task_start, [ s; body ] ->
+      (Ok (VSched (Sched.Handle (spawn (scope_of s) body))), args)
+  | Task_replace, [ s; key; body ] ->
+      let sc = scope_of s in
+      let ty, equal =
+        match (tys, dicts) with
+        | [ ty ], [ VDict (Hash { equal; _ }) ] -> (ty, equal)
+        | _ -> bug "a call of `task_replace` without its key's type and `hash`"
+      in
+      (match Sched.keyed sc ty key ~equal with
+      | Some t ->
+          Sched.cancel t;
+          Sched.join ?at t
+      | None -> ());
+      ignore (spawn ~key:(ty, key) sc body);
+      (Ok VUnit, args)
+  | Task_join, [ t ] ->
+      let t = task_of t in
+      Sched.join ?at t;
+      (Ok (match t.result with Some v -> some v | None -> none), args)
+  | Task_cancel, [ t ] ->
+      Sched.cancel (task_of t);
+      (Ok VUnit, args)
+  | _ -> bug ("`" ^ Intrinsic.name x ^ "` with the wrong values")
 
 (* ---- the journal (journal.ml) ----
 
@@ -1075,8 +1376,9 @@ and traced cx t ~dep ~op (fty : Ty.ty) args call =
         sprintf "%d bytes" (String.length b)
     | _ -> Trace.short (Journal.write cx.types t v)
   in
+  let task = Sched.current_path () in
   let node =
-    Trace.enter t
+    Trace.enter t ~task
       (sprintf "%s.%s(%s)" dep op
          (String.concat ", "
             (if List.length ps = List.length args then List.map2 write ps args
@@ -1084,16 +1386,16 @@ and traced cx t ~dep ~op (fty : Ty.ty) args call =
   in
   match call () with
   | Ok VUnit as r ->
-      Trace.leave t node ~gave:"";
+      Trace.leave t ~task node ~gave:"";
       r
   | Ok v as r ->
-      Trace.leave t node ~gave:(write ret v);
+      Trace.leave t ~task node ~gave:(write ret v);
       r
   | Error e as r ->
-      Trace.leave t node ~gave:("fails " ^ write (Errors errs) e);
+      Trace.leave t ~task node ~gave:("fails " ^ write (Errors errs) e);
       r
   | exception ex ->
-      Trace.leave t node ~gave:"";
+      Trace.leave t ~task node ~gave:"";
       raise ex
 
 (* How the type [p], given [args], shows [v] (Shown.own): through the
@@ -1247,12 +1549,7 @@ let from_outside cx (p : Path.t) =
 let overflowed cx (p : Path.t) =
   match Hashtbl.find_opt cx.fns p with
   | Some f ->
-      Panic
-        {
-          loc = f.loc;
-          msg = "the stack overflowed: a function called itself too deeply";
-          wrap = None;
-        }
+      panic_at f.loc "the stack overflowed: a function called itself too deeply"
   | None ->
       bug ("a call too deep from `" ^ Path.local p ^ "`, which isn't there")
 
@@ -1277,6 +1574,9 @@ let load (modules : program list) =
       dir = Filename.current_dir_name;
       trace = None;
       outputs = Hashtbl.create 16;
+      site = "main";
+      entry = None;
+      call = None;
     }
   in
   (* which operations are outputs is decided once, by their types *)
@@ -1357,6 +1657,33 @@ let reals cx deps what =
       | _ -> bug (what ^ " with a `real` that isn't a handler"))
     deps
 
+(* [f ()], a call of `main` or of a test, as the root task of a
+   scheduler of its own (sched.ml), labelled [root]: what the call gave,
+   once it and every task it started have ended. *)
+let rooted ~root f =
+  let result = ref None in
+  let deadlock waits =
+    (* raised in the root, where it waits, which says it's at the
+       program's call that waits *)
+    Panic
+      {
+        loc = Loc.point ~file:Prelude.file 1 1;
+        msg = "every task is waiting, and nothing can wake one";
+        wrap = None;
+        notes = waits;
+        help = None;
+      }
+  in
+  ignore
+    (Sched.run ~root ~deadlock (fun () ->
+         result := Some (fst (f ()));
+         VUnit));
+  match !result with Some r -> r | None -> bug "a root task that gave nothing"
+
+(* What `main` ending by being cancelled is: only a `finally` that goes on
+   with a cancel nothing asked for does that, until stage 11a's signals. *)
+let cancelled_main = Uncaught { shown = "`main` was cancelled"; written = "Cancelled" }
+
 (* How `ren run` starts the program (handlers.md, "The journal"): as
    `$start` does, on the real implementations ([Real]); recording, with
    the journal's recorder over each of them ([Record]); or replaying it,
@@ -1406,9 +1733,10 @@ let run ?(start = Real) ?trace (modules : program list) =
               deps )
   in
   if not (Hashtbl.mem cx.fns fn) then bug "a program with no `main`";
-  match fst (apply cx (from_outside cx fn) [] (VEvidence installed)) with
+  match rooted ~root:"main" (fun () -> apply cx (from_outside cx fn) [] (VEvidence installed)) with
   | Ok v -> v
   | Error err -> raise (uncaught cx fn err)
+  | exception Sched.Cancelled -> raise cancelled_main
   | exception (Stack_overflow | Too_deep) -> raise (overflowed cx fn)
 
 (* ---- tests ---- *)
@@ -1435,7 +1763,7 @@ type outcome =
    runs this way, and so does a `ren console` session (driver.ml). *)
 let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
     ~real ~seed =
-  let cx = { cx with dir } in
+  let cx = { cx with dir; entry = Some fn; site = "test" } in
   let what = "installing a test's implementations" in
   let value = made_value cx what in
   let installed =
@@ -1476,10 +1804,14 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
   in
   let outcome =
     try
-      match fst (apply cx (from_outside cx fn) [] (VEvidence recorded)) with
+      match
+        rooted ~root:"test" (fun () ->
+            apply cx (from_outside cx fn) [] (VEvidence recorded))
+      with
       | Ok v -> Ok v
       | Error err -> Error (Failed (error_of cx fn err))
     with
+    | Sched.Cancelled -> Error (Failed "the test was cancelled")
     | (Panic _ | Assert_failed _ | Went_differently _) as e ->
         Error (Panicked e)
     (* a journal's entry `replay` can't read *)

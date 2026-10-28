@@ -39,6 +39,12 @@ type t =
   | Float_lanes
   | Float_sum
   | Unbuilt
+  | Scope_run
+  | Task_spawn
+  | Task_start
+  | Task_replace
+  | Task_join
+  | Task_cancel
   | Map_empty
   | Map_of
   | Map_get
@@ -131,6 +137,12 @@ let path x =
   | Float_lanes -> fn "float_lanes"
   | Float_sum -> fn "float_sum"
   | Unbuilt -> fn "unbuilt"
+  | Scope_run -> fn "scope_run"
+  | Task_spawn -> fn "task_spawn"
+  | Task_start -> fn "task_start"
+  | Task_replace -> fn "task_replace"
+  | Task_join -> fn "task_join"
+  | Task_cancel -> fn "task_cancel"
   | Map_empty -> fn "map_empty"
   | Map_of -> member "Map" "of"
   | Map_get -> member "Map" "get"
@@ -195,7 +207,12 @@ let member_name x = Path.short (path x)
 
 (* Whether it can wait for another task: a scheduling point, which only
    code that uses `Async` reaches (compiler.md, "Stage 11a", "The two
-   holes"). [Unbuilt] stands for the scheduler's intrinsics, which stage
-   11a's later steps build in its place. The world's waits, `Clock.sleep`
-   and `Proc.run`, aren't these: only the runtime installs the world. *)
-let waits = function Unbuilt -> true | _ -> false
+   holes"). [Unbuilt] stands for the scheduler's intrinsics that later
+   steps of stage 11a build. `task_cancel` returns at once, but asks the
+   scheduler, as the rest do. The world's waits, `Clock.sleep` and
+   `Proc.run`, aren't these: only the runtime installs the world. *)
+let waits = function
+  | Unbuilt | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
+  | Task_cancel ->
+      true
+  | _ -> false

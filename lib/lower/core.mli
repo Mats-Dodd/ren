@@ -353,6 +353,15 @@ and kind =
           which goes on once [after] has run. Lowering writes a place passed
           with `&` back to it in [after], so a call that fails still changes it
       *)
+  | Covered of { body : expr; result : var; after : expr }
+      (** an arm's `finally` (handlers.md, "`finally`"): [body], what it covers,
+          as `attempt` keeps it, a [Result] of what it ends in, bound to
+          [result], then [after], whose value is the node's. It's [Let] but
+          for a task that's cancelled in [body] (compiler.md, "Stage 11a",
+          "Cancellation"): then [result] is `Err(Cancelled)`, [after] runs
+          shielded, and the cancel goes on once it has, what it gave thrown
+          away. So [result]'s errors have `Cancelled` too. Natively, where
+          nothing is cancelled, it's that [Let] *)
 
 (* A call's argument. An [inout] argument is always a plain local: the call
    reads it, and writes the parameter's final value back to it. *)

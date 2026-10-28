@@ -1860,14 +1860,21 @@ and block cx stmts last =
   | Expr e :: rest ->
       let e = expr cx e in
       seq e (block cx rest last)
-  | Finally f :: rest ->
-      (* in an arm: it's given what the rest of it ends in *)
+  | Finally f :: rest -> (
+      (* in an arm: it's given what the rest of it ends in, or
+         `Err(Cancelled)`, if that was cancelled (Core.Covered) *)
       let rt =
         match ty_of cx f.node with
         | Fun ([ r ], _, _, _) -> r.ty
         | _ -> bug "a `finally` whose type isn't a function's"
       in
-      finally_body cx f (attempted cx (block cx rest last) rt)
+      let covered = attempted cx (block cx rest last) rt in
+      match f.kind with
+      | Lambda ([ p ], body) ->
+          let result = bind cx p.pname rt in
+          let after = expr cx body in
+          mk (Covered { body = covered; result; after }) after.ty f.loc
+      | _ -> bug "a `finally` that isn't a lambda of one parameter")
 
 (* [body ()] with [pat], a name or a tuple of them (the parser sees to
    that), bound to [value]: a [Let], or a [match] of one arm, which always
@@ -2253,6 +2260,10 @@ and free (e : C.expr) =
         bind v;
         go value;
         go body
+    | Covered { body; result; after } ->
+        go body;
+        bind result;
+        go after
     | Assign (v, value) ->
         use v;
         go value

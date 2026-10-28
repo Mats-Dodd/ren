@@ -9,8 +9,11 @@
      └─ Proc.run("sh", ["-c", "fmt a.c"])   18ms  → 0
 
    A call is under the call that made it: what a handler's operation
-   calls is under that operation. The interpreter adds each call as it's
-   made (eval.ml, [traced]); this keeps the tree, and draws it. *)
+   calls is under that operation. A task's calls are under a line of its
+   own, its path, under the task that started it (compiler.md, "Stage
+   11a", "Errors and panics show the task path"). The interpreter adds
+   each call as it's made (eval.ml, [traced]); this keeps the tree, and
+   draws it. *)
 
 let sprintf = Printf.sprintf
 
@@ -24,26 +27,50 @@ type node = {
   mutable under : node list;
 }
 
-(* The tree, from `main`, and the calls still running, the innermost
-   first. *)
-type t = { root : node; mutable running : node list }
+(* The tree, from `main`, and the calls each task has still running, the
+   innermost first, by its path: the last of them is its own line. *)
+type t = { root : node; running : (string, node list) Hashtbl.t }
 
 let now = Unix.gettimeofday
 let node call = { call; started = now (); took = 0.; gave = ""; under = [] }
 
 let create () =
   let root = node "main" in
-  { root; running = [ root ] }
+  let running = Hashtbl.create 4 in
+  Hashtbl.replace running "main" [ root ];
+  { root; running }
 
-(* A call [call] is made, under the one running. *)
-let enter t call =
+(* The calls the task [task] has running: at its first, a line of its own,
+   under the line of the task that started it, the one its path is
+   under. *)
+let rec running t task =
+  match Hashtbl.find_opt t.running task with
+  | Some calls -> calls
+  | None ->
+      let parent =
+        match String.rindex_opt task '/' with
+        | Some i -> String.sub task 0 i
+        | None -> "main"
+      in
+      let n = node task in
+      (match List.rev (running t parent) with
+      | own :: _ -> own.under <- n :: own.under
+      | [] -> ());
+      Hashtbl.replace t.running task [ n ];
+      [ n ]
+
+(* A call [call] is made by the task [task], under the one it has
+   running. *)
+let enter t ~task call =
   let n = node call in
-  (match t.running with p :: _ -> p.under <- n :: p.under | [] -> ());
-  t.running <- n :: t.running;
+  let calls = running t task in
+  (match calls with p :: _ -> p.under <- n :: p.under | [] -> ());
+  Hashtbl.replace t.running task (n :: calls);
   n
 
-(* [n] has ended, giving [gave]: nothing for `()`. *)
-let leave t n ~gave =
+(* [n], a call of the task [task]'s, has ended, giving [gave]: nothing
+   for `()`. *)
+let leave t ~task n ~gave =
   n.took <- now () -. n.started;
   n.gave <- gave;
   let rec pop = function
@@ -51,7 +78,12 @@ let leave t n ~gave =
     | _ :: rest -> pop rest
     | [] -> []
   in
-  t.running <- pop t.running
+  let calls = pop (running t task) in
+  Hashtbl.replace t.running task calls;
+  (* a task's own line takes until its last call so far ended *)
+  match List.rev calls with
+  | own :: _ when own != t.root -> own.took <- now () -. own.started
+  | _ -> ()
 
 (* How many characters [s] is: its bytes but those that continue one,
    10xxxxxx, as a terminal shows it. *)

@@ -4951,12 +4951,110 @@ What step 1 settled where the text above is silent, or differs from it:
 - Test fixes: test_tasks.ml's `twice` and `fan_out` lacked the `try`
   that a call of a block parameter that can fail needs.
 
+### Step 2, as built
+
+What step 2 settled where the text above is silent, or differs from it:
+
+- **The scheduler is lib/eval/sched.ml.** `main`, and each test, is the
+  root task of a scheduler of its own (`Eval.rooted`); a task is an
+  `Effect.Deep` fiber, which a wait suspends with the effect `Suspend`.
+  It has `single`'s order (Scheduling, above) and real time: the real
+  `Clock.sleep` is a timer the loop sleeps for (`Unix.sleepf`) when no
+  task can run; `test_clock`'s never waits. Step 5 makes the order a
+  policy and adds `sim`'s.
+- **The intrinsics** are `scope_run`, `task_spawn`, `task_start`,
+  `task_replace`, `task_join` and `task_cancel` (prelude.ml), each
+  `Intrinsic.waits`; `task_cancel` returns at once, but asks the
+  scheduler, as the rest do. eval.ml runs them (`tasks`), since they
+  call blocks and wait.
+- **Rule C's copies are the interpreter's, not Lower's.** A spawn copies
+  its block (`Eval.copied`): each variable it captured gets a cell of its
+  own, and so does each variable of each block it holds. That's sound
+  because a spawned block only reads what it captures (Excl), and what
+  it reads of the frame that called `Async.scope` can't change until the
+  scope ends, so a copy reads what the variable would have; one bound
+  inside the scope, a loop's, is read as it was at the spawn, which is
+  rule C. A handler's state is a cell held as a value (`VCell`), so a
+  task still shares it. Natively nothing spawns, so Lower needn't.
+- **Cancellation** is the OCaml exception `Sched.Cancelled`. A
+  `Dep_call` checks for it after its arguments and before the call; a
+  wait (join, room in a scope, a scope's end, a sleep) ends with it. Core's
+  `Handle` catches only `Failed`, so nothing in Ren can keep it. A
+  `Finally`'s `after`, an arm's `finally` (`Covered`) and a handler's
+  `finally` run `Sched.shielded`; `fail` of the tag `Cancelled`, which
+  only a `finally` can write, and so `try r` of a cancelled body's `r`,
+  raises it again. Infer gives a `finally`'s `r` the row `Cancelled |
+  e`, `try r` passes on the row without it (`Types.without_cancelled`),
+  and `fail Cancelled` outside a `finally` is the error above, with a
+  note: "a task is cancelled from outside it, and only a `finally` sees
+  it: it isn't an error, so `attempt` can't keep it".
+- **The cleanup deadline** is 5 s after the cancel (`Sched.cancel` sets
+  it), real time until step 5. A shielded wait of a task that's been
+  asked to stop has a timer at the deadline, which cancels it then; a
+  dependency call past it is cancelled at once.
+- **A scope's end:** a body that fails cancels the scope's tasks, waits
+  for them (a wait that a cancel doesn't end) and fails with its error;
+  one that returns waits for them, and if the task is cancelled
+  meanwhile, or in the body, it cancels them, waits, and goes on being
+  cancelled. Cancelling a task so reaches every scope it's in the body
+  of, and their tasks, down.
+- **A task beside a `with`:** each task keeps the `with`s whose bodies
+  it's running (`Sched.frame`), numbered by its count of `with`s, which a
+  scope records when it begins. A spawn finds the innermost one begun
+  after the scope (any of them, if the spawner isn't the scope's own
+  task, since it started after the scope did) that installed an instance
+  the block's evidence holds, and registers the task with it; the
+  `with`'s body ending cancels and waits for those still running, before
+  its `finally`.
+- **Paths.** The label is the code a spawn is written in (`ctx.site`):
+  a function's name (through a release build's copies, `Core.origin`),
+  the function a block was lifted from, `handler.op` for a handler's
+  arm, and a block written in an arm runs as that arm; a test's code is
+  `test`. The prelude's code keeps its caller's label.
+- **Panics** carry notes and a help of their own (`Eval.Panic`). One in
+  a task that isn't a root gains `= in the task main/main:0` first, and
+  ends the run at once, the other tasks with it (a panic isn't an
+  outcome, so no `finally` runs). The deadlock panic is raised in the
+  root, where it waits, with a note per task alive, earliest started
+  first, saying what it waits for and at which call of the program
+  (`ctx.call`, the program's call the prelude's code running was
+  reached from): `= main/main:0 waits for room in its scope at
+  server.ren:4:7`.
+- **What isn't reachable yet:** an error a task fails with, and so `=
+  from the task` and the "failed too" warning, need `map`, `each` or
+  `both` (step 3): a spawned task can't fail, and a scope's body is its
+  caller's task.
+- **`main` ending cancelled**, which only a `finally` that writes `fail
+  Cancelled` with nothing asking can do until signals (step 7), is "error:
+  `main` was cancelled"; a test, "the test was cancelled".
+- **`--trace`** puts each task's calls under a line of its own, its
+  path, under the line of the task that started it.
+- **`s.replace`'s keys** are equal when their types are and their
+  `hash`'s `==` says so.
+- **Natively,** `Covered` is the `Let` it is when nothing is cancelled;
+  to_mem refuses the first call of `Async`'s `scope`, `map`, `each`,
+  `both`, `race`, `timeout` or `isolate` (or a release build's copy of
+  one) with the error above; bench/11a/spawns is as specified.
+- **A release build's handler** (specialize.ml) now has its needs in
+  scope while its arms are rewritten, so a block lifted from an arm may
+  use what the handler `uses`, as it may in debug.
+- Test fixes: none of the step 0 tests needed one.
+
 ### Progress log
 
 | step | commit | done | left |
 |---|---|---|---|
 | 0 | b3ba3c7 | this section; async.md rewritten to foundations.md and the brief; the README's race passage; test/test_tasks.ml, every test behind `until "sN"`; bench/11a/tasks/ (the five programs, the `just`'s part, the milestone, a version 1 journal) and bench/tasks.t, all `not yet`; bench/11a's sequential programs and their section of bench/build.t (`trywith` already as specified) | steps 1 to 9; nothing of the language or runtime is built yet |
 | 1 | f887b16 | parameters with defaults, a block without parentheses, `concurrent` and `spawned` (lexer to tree-sitter and Zed); `Async`, `Scope` and `Task` declared in the prelude, each member panicking until its step; rules B to D (Excl, Resolve, Infer, Core Lint); spawned blocks and `race`'s branches can't fail; `try with`; `s.spawn` uses `Async`, with its note; `Intrinsic.waits`; the `task =>` error; test_tasks.ml's s1 tests on; examples/ledger, handlers.md and errors.md say `try with`; bench/11a/trywith in the native loops | steps 2 to 9 |
+| 2 | this commit | the scheduler (lib/eval/sched.ml), `main` and each test its root task, in `single`'s order with real timers; `Async.scope(max:)`, `spawn`, `start`, `replace`, `join` and `cancel`; rule C's copies at the spawn; cancellation at dependency calls and waits, seen only by `finally`s as `Err(Cancelled)`, shielded until the 5 s cleanup deadline, `fail Cancelled` refused outside a `finally`; Core's `Covered` for an arm's `finally`; a scope's failure or cancel cancelling its tasks; tasks beside a `with` cancelled when its body ends; task paths in panics, the deadlock panic's notes and `--trace`; `ren build` refusing tasks; test_tasks.ml's s2 tests on, and more; bench/11a/spawns as specified | steps 3 to 9 |
+
+Notes for step 3 on: `Async.until`, `tick` and `yield` are still
+`unbuilt` (or return at once, in `single_runtime`); each wait is a
+`Sched.wait` given what it waits for and the program's call it's at
+(`Eval.at_call`). An error a task fails with first reaches anyone in
+step 3 (`map`, `each`, `both`): the `= from the task` note and the
+"failed too" warning are to build there. The cleanup-deadline test
+takes 5 real seconds until step 5's virtual time.
 
 Notes for step 2 on: test_tasks.ml's "[s4 accept] an operation keeps
 its instance across its own calls" is missing `Clock` in its `main`'s

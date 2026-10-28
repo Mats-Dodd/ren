@@ -42,6 +42,10 @@ type t =
               arguments *)
       body : Core.expr;
       env : t ref Env.t;
+      site : string;
+          (** the label of the code it's written in, `serve`, or `ticks.tick`
+              for a handler's arm: what a task it spawns is labelled by
+              (compiler.md, "Stage 11a", "Structured tasks") *)
     }
       (** a block, with the variables it captured when it was made, the evidence
           where it was written and the hidden type parameters of the function
@@ -77,6 +81,14 @@ type t =
   | VEvidence of installed list
       (** evidence (core.ml): what's installed, the innermost first. A program
           never sees one *)
+  | VSched of sched
+      (** a scope or a task's handle, which the scheduler made (sched.ml) *)
+
+(* What the scheduler gives a program to hold, `Scope` and `Task<T>`'s
+   values. It's an extensible type, one whose constructors are declared
+   elsewhere, with [+=]: sched.ml declares them, since they hold its own
+   records, which hold values, so neither module can come first. *)
+and sched = ..
 
 (* A dictionary: what a type has that a requirement names, as the
    interpreter's own functions (core.ml, [dict]): `eq`'s `==`, `ord`'s
@@ -190,5 +202,6 @@ let rec show = function
   | VInstance _ -> "<instance>"
   | VCell _ -> "<cell>"
   | VEvidence _ -> "<evidence>"
+  | VSched _ -> "<task>"
   | VType _ -> "<type>"
   | VDict _ -> "<dict>"

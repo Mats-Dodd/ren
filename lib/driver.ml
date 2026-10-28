@@ -1487,12 +1487,16 @@ let wrap_help_in ~lines_of (w : Eval.wrap) =
 let wrap_help ~sources w = wrap_help_in ~lines_of:(Diag.indexed sources) w
 
 (* A panic, as `ren run` reports it. *)
-let panic_diag ?lines_of ~sources loc msg wrap =
+let panic_diag ?lines_of ?(notes = []) ?help ~sources loc msg wrap =
   let lines_of =
     match lines_of with Some f -> f | None -> Diag.indexed sources
   in
-  let help = Option.bind wrap (wrap_help_in ~lines_of) in
-  Diag.make ?help loc ("panic: " ^ msg)
+  let help =
+    match help with
+    | Some _ -> help
+    | None -> Option.bind wrap (wrap_help_in ~lines_of)
+  in
+  Diag.make ~notes ?help loc ("panic: " ^ msg)
 
 (* A replay that went differently from its recording (journal.ml), at
    [loc]: the program's call, or the journal's line; with a test's
@@ -1509,8 +1513,8 @@ let went_differently ~sources loc (d : Journal.differs) =
 let render_error ~sources = function
   | Diag.Error d -> Some (Diag.render ~sources d)
   | Diag.Errors ds -> Some (Diag.render_all ~sources ds)
-  | Eval.Panic { loc; msg; wrap } ->
-      Some (Diag.render ~sources (panic_diag ~sources loc msg wrap))
+  | Eval.Panic { loc; msg; wrap; notes; help } ->
+      Some (Diag.render ~sources (panic_diag ~notes ?help ~sources loc msg wrap))
   | Eval.Assert_failed { loc; sides } ->
       Some (Diag.render ~sources (assert_failed loc sides))
   | Eval.Went_differently { loc; differs } ->

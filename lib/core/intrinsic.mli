@@ -31,6 +31,12 @@ type t =
   | Float_lanes
   | Float_sum
   | Unbuilt
+  | Scope_run
+  | Task_spawn
+  | Task_start
+  | Task_replace
+  | Task_join
+  | Task_cancel
   | Map_empty
   | Map_of
   | Map_get

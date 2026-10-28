@@ -38,6 +38,12 @@ pub fn debit(inout self, m: Money, e: Entry) ! Short(account: AccountId, by: Mon
 
 - `fail X` stops the function with the error `X`. It has the type of
   anything, so `if … then fail X` needs no `else`.
+- `Cancelled` isn't an error: a task is cancelled from outside it, and
+  only a `finally` sees it, as `Err(Cancelled)`
+  ([async.md](async.md#cancellation)). `fail Cancelled` anywhere else is
+  "`Cancelled` isn't an error a program can fail with", whose help says
+  a cancelled task stops by itself; in a `finally`, it goes on with the
+  cancel.
 - A `pub` function writes its errors out in full, exactly as it writes its
   `uses`. A private function's errors are inferred; it writes nothing.
 - A name for a set of tags is declared with `!`, and can include other sets:

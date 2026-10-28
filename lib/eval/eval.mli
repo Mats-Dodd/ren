@@ -8,8 +8,16 @@
 type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
 
 (* A running program failed: division by zero, an index out of bounds, an
-   `Int` that overflowed. *)
-exception Panic of { loc : Loc.t; msg : string; wrap : wrap option }
+   `Int` that overflowed. Its notes say more, the task it was in, if it
+   isn't `main` or a test, first among them; and it can have a help of
+   its own. *)
+exception Panic of {
+  loc : Loc.t;
+  msg : string;
+  wrap : wrap option;
+  notes : string list;
+  help : string option;
+}
 
 (* `main` failed with this error, and nothing handled it: the error, shown
    through its type (shown.ml), and as a journal writes it (journal.ml). *)

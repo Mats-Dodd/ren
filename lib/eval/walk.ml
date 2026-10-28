@@ -203,7 +203,7 @@ let rec hash_shape v =
         (fun h (k, v) -> Int64.add h (mix (hash_shape k) (hash_shape v)))
         12L (Table.to_list t)
   | VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _ | VType _
-  | VDict _ | VCell _ | VEvidence _ ->
+  | VDict _ | VCell _ | VEvidence _ | VSched _ ->
       failwith "bug: a hash of something with no `==`"
 
 (* [v]'s hash, as a value of type [t]: the same for two values [equal]
@@ -278,7 +278,7 @@ let rec by_shape a b =
   | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _), _ ->
       failwith "bug: a comparison of functions"
   | (VCon _ | VTag _ | VRecord _ | VArray _ | VTuple _ | VTable _), _ -> false
-  | (VType _ | VDict _ | VCell _ | VEvidence _), _ ->
+  | (VType _ | VDict _ | VCell _ | VEvidence _ | VSched _), _ ->
       failwith "bug: a comparison of something a program never sees"
 
 (* [a] and [b], of type [t], equal: by their keys, if their type has one,

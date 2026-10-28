@@ -1617,18 +1617,27 @@ tests"), in 11a/, checked as 10d's are: each `.expected` holds what
 stderr. The step that lands one changes its line here to say so, and
 adds it to the loops above that check its native builds against `ren
 run`. `trywith` landed in step 1, which refuses a plain `with` that can
-fail; its native builds are in those loops.
+fail; its native builds are in those loops. `spawns` landed in step 2,
+which runs tasks in `ren run`; it has no native build to check, since
+tasks aren't native yet.
 
   $ for f in trywith alone alone_panic limit spawns; do spec 11a/$f.ren; done
   11a/trywith.ren: as specified
   11a/alone.ren: not yet
   11a/alone_panic.ren: not yet
   11a/limit.ren: not yet
-  11a/spawns.ren: not yet
+  11a/spawns.ren: as specified
 
 A program that spawns runs in `ren run`, and `ren build` refuses it
-with an error that says tasks aren't native yet, and a help (step 2):
+with an error that says tasks aren't native yet, and a help (step 2),
+in debug and release alike:
 
-  $ (cd 11a && ren build spawns.ren -o ./spawns.bin 2>&1 | head -n 2)
-  error: a value of type `Scope` isn't in the native slice yet
-    ┌─ spawns.ren:8:5
+  $ (cd 11a && ren build spawns.ren -o ./spawns.bin 2>&1)
+  error: `Async.scope` runs tasks, and tasks aren't native yet
+    ┌─ spawns.ren:7:3
+  7 │   Async.scope fn(s) =>
+    │   ^^^^^^^^^^^^^^^^^^^^
+    help: run it with `ren run`, which runs tasks
+  [1]
+  $ (cd 11a && ren build --release spawns.ren -o ./spawns.bin 2>&1 | head -n 1)
+  error: `Async.scope` runs tasks, and tasks aren't native yet

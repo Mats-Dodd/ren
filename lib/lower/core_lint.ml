@@ -883,6 +883,26 @@ let rec expr env sc (e : expr) =
       same env loc ("the value of `" ^ v.name ^ "`") value.ty v.ty;
       expr env (add v sc) body;
       is "a `let`" body.ty
+  | Covered { body; result; after } ->
+      (* what an arm's `finally` is given: a [Result] of what it covers,
+         whose errors have `Cancelled`, which a cancelled body gives it *)
+      expr env sc body;
+      same env loc "what a `finally` is given" body.ty result.ty;
+      (match result.ty with
+      | Con (p, [ _; Errors row ])
+        when p = Path.prelude "Result"
+             && List.exists
+                  (fun (l : Ty.label) -> l.name = "Cancelled" && l.payload = [])
+                  row.labels ->
+          ()
+      | t ->
+          fail env loc
+            (sprintf
+               "a `finally` given `%s`, not a `Result` whose errors have \
+                `Cancelled`"
+               (show t)));
+      expr env (add result sc) after;
+      is "a `finally`" after.ty
   | Assign (v, value) ->
       in_scope env sc loc v;
       expr env sc value;
@@ -1441,7 +1461,7 @@ let rec instances env (e : expr) =
 
 and handler_end env (e : expr) =
   match e.kind with
-  | Let (_, a, b) | Seq (a, b) ->
+  | Let (_, a, b) | Covered { body = a; after = b; _ } | Seq (a, b) ->
       instances env a;
       handler_end env b
   | Handle { body; value; on_value = { kind = Local v; _ }; on_error; _ }
@@ -1478,6 +1498,9 @@ let rec blocks env allowed (e : expr) =
   | Let (_, value, body) ->
       blocks env true value;
       blocks env false body
+  | Covered { body; after; _ } ->
+      blocks env false body;
+      blocks env false after
   | Instance { impls; finally } ->
       List.iter
         (fun (_, (i : expr)) ->
@@ -1663,6 +1686,7 @@ let rec globals (e : expr) =
       @ Option.fold ~none:[] ~some:globals finally
   | Handler { body; _ } -> globals body
   | Let (_, a, b)
+  | Covered { body = a; after = b; _ }
   | While (a, b)
   | Seq (a, b)
   | Update (a, _, b)

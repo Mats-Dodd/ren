@@ -3221,6 +3221,18 @@ let bound_body_error loc name ~r =
     ~help:(sprintf "match it with `Err(_)`, and pass it on with `try %s`" r)
     (sprintf "`%s` would hold the body's error, which isn't a value" name)
 
+(* `fail Cancelled` outside a `finally` (compiler.md, "Stage 11a",
+   "Cancellation") *)
+let fail_cancelled loc =
+  Diag.make loc
+    ~notes:
+      [
+        "a task is cancelled from outside it, and only a `finally` sees it: \
+         it isn't an error, so `attempt` can't keep it";
+      ]
+    ~help:"a cancelled task stops by itself; to stop early, return"
+    "`Cancelled` isn't an error a program can fail with"
+
 (* [c] matched in a `finally`'s result [r], which holds the `with`'s body's
    error, whatever that is *)
 let tag_in_body_error (c : Ast.ident) ~arm ~r =

@@ -299,6 +299,7 @@ let map f (e : expr) =
           finally = Option.map f finally;
         }
   | Let (v, a, b) -> Let (v, f a, f b)
+  | Covered c -> Covered { c with body = f c.body; after = f c.after }
   | While (a, b) -> While (f a, f b)
   | Seq (a, b) -> Seq (f a, f b)
   | Update (a, n, b) -> Update (f a, n, f b)
@@ -345,7 +346,7 @@ let map f (e : expr) =
 let rec max_id (e : expr) =
   let own =
     match e.kind with
-    | Local v | Assign (v, _) | Let (v, _, _) -> v.id
+    | Local v | Assign (v, _) | Let (v, _, _) | Covered { result = v; _ } -> v.id
     | Lambda l ->
         List.fold_left (fun m (p : param) -> max m p.var.id) (max l.ev.id l.outer.id) l.params
     | Handle h -> max h.value.id h.error.id
@@ -414,6 +415,10 @@ let rename fresh (e : expr) =
           let a = go a in
           let v = bind v in
           Let (v, a, go b)
+      | Covered { body; result; after } ->
+          let body = go body in
+          let result = bind result in
+          Covered { body; result; after = go after }
       | Assign (v, a) -> Assign (use v, go a)
       | Match (s, arms) ->
           let s = go s in
@@ -480,7 +485,8 @@ let versions fi env (loop : expr) (i : var) (n : var) (body : expr) =
           copies := Ids.add v.id !copies
       | _ -> ());
       (match e.kind with
-      | Let (v, _, _) -> bound_here := Ids.add v.id !bound_here
+      | Let (v, _, _) | Covered { result = v; _ } ->
+          bound_here := Ids.add v.id !bound_here
       | _ -> ());
       List.iter scan (children e)
     in

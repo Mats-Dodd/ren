@@ -381,7 +381,11 @@ and finally_ core env cx hcx ~node ~in_state ~fails ~needs (fin : expr) =
             (tid, eid)
       in
       let t = TSkol (tid, "T") in
-      let rt = TCon (result_path, [ t; TErrors (RSkol (eid, "e")) ]) in
+      (* the body's errors, and `Cancelled`, which a cancelled body gives
+         it (compiler.md, "Stage 11a", "Cancellation") *)
+      let rt =
+        TCon (result_path, [ t; TErrors (RExtend (cancelled (), RSkol (eid, "e"))) ])
+      in
       let qs = [ { mode = Read; ty = rt } ] in
       name_lambda cx fin.node;
       bind_params hcx [ p ] qs;
@@ -392,6 +396,7 @@ and finally_ core env cx hcx ~node ~in_state ~fails ~needs (fin : expr) =
         }
       in
       env.in_state <- in_state;
+      env.in_finally <- env.in_finally + 1;
       let r = p.pname.ident.name in
       core.check env fcx body t
         ~why:
@@ -400,6 +405,7 @@ and finally_ core env cx hcx ~node ~in_state ~fails ~needs (fin : expr) =
              ~help:(fun _ _ -> finally_produces_help r)
              ~msg:(finally_produces ~result:(show (printer env) rt) r)
              ~type_params:false ());
+      env.in_finally <- env.in_finally - 1;
       env.in_state <- None;
       Hashtbl.replace cx.nodes fin.node (TFun (qs, t, fails, needs))
   | Lambda (ps, _) ->

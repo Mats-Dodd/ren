@@ -46,6 +46,7 @@ let rec unplaced (e : Core.expr) : Core.expr =
         With_handler { w with handler = go w.handler; body = go w.body }
     | Prim (p, es) -> Prim (p, List.map go es)
     | Let (v, a, b) -> Let (v, go a, go b)
+    | Covered c -> Covered { c with body = go c.body; after = go c.after }
     | Assign (v, a) -> Assign (v, go a)
     | If (c, t, f) -> If (go c, go t, go f)
     | Match (s, arms) ->

@@ -213,6 +213,8 @@ let rec map_vars f (e : C.expr) : C.expr =
           }
     | Prim (p, args) -> Prim (map_prim f p, List.map go args)
     | Let (v, a, b) -> Let (f v, go a, go b)
+    | Covered { body; result; after } ->
+        Covered { body = go body; result = f result; after = go after }
     | Assign (v, a) -> Assign (f v, go a)
     | If (c, t, e) -> If (go c, go t, go e)
     | Match (s, arms) ->
@@ -944,6 +946,13 @@ let rec rw cx fb env (e : C.expr) : C.expr =
           (fun (v : C.var) -> Ids.find_opt v.id env.scope)
           captures
       in
+      (* its arms run with what it needs, which a block lifted from one
+         may use too *)
+      let needs =
+        match Ty.impl_parts (ty env e.ty) with
+        | Some (_, needs) -> needs.labels
+        | None -> []
+      in
       let env_h =
         {
           env with
@@ -954,6 +963,7 @@ let rec rw cx fb env (e : C.expr) : C.expr =
           blocks = Ids.empty;
           known = Ids.empty;
           cur = ev';
+          uses = needs @ env.uses;
         }
       in
       mk (Handler { ev = ev'; captures; body = rw cx fb env_h body })
@@ -976,6 +986,11 @@ let rec rw cx fb env (e : C.expr) : C.expr =
         | _ -> env
       in
       mk (Let (v', a, rw cx fb env b))
+  | Covered { body; result; after } ->
+      let body = r body in
+      let result = cvar env result in
+      let env = in_scope env result in
+      mk (Covered { body; result; after = rw cx fb env after })
   | Assign (v, a) -> mk (Assign (cvar env v, r a))
   | If (c, t, f) -> mk (If (r c, r t, r f))
   | Match (s, arms) ->
@@ -1712,7 +1727,7 @@ and make_spec cx h (a : Ty.args) dep =
         let rec ok (x : C.expr) =
           (match x.kind with
             | Call _ | Dep_call _ | Lambda _ | Handler _ | With _
-            | With_handler _ | Fail _ | Handle _ | Finally _ | While _
+            | With_handler _ | Fail _ | Handle _ | Finally _ | Covered _ | While _
             | Assign _ | Assert _ | Assert_equal _ | Global_value _ | Instance _
               ->
                 false

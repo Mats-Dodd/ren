@@ -189,9 +189,15 @@ let details b ~opts ~sources ~all f =
         (String.make (String.length "right: " + first_difference l r) ' ')
   | Panicked (Eval.Assert_failed { sides = None; _ }) ->
       Printf.bprintf b "%sthis is false\n" pad
-  | Panicked (Eval.Panic { msg; wrap; _ }) -> (
+  | Panicked (Eval.Panic { msg; wrap; notes; help; _ }) -> (
       Printf.bprintf b "%spanic: %s\n" pad msg;
-      match Option.bind wrap (Driver.wrap_help ~sources) with
+      List.iter (fun n -> Printf.bprintf b "%s= %s\n" pad n) notes;
+      let help =
+        match help with
+        | Some _ -> help
+        | None -> Option.bind wrap (Driver.wrap_help ~sources)
+      in
+      match help with
       | Some h -> Printf.bprintf b "%shelp: %s\n" pad h
       | None -> ())
   | Failed err -> Printf.bprintf b "%serror: %s\n" pad err
