@@ -1,0 +1,187 @@
+// The follow-up review's programs over arrays (bounds.ml, swap.ml):
+// loops bounds.ml must leave checked or prove, and swap-out where it
+// must keep what other holders see. A zip whose array is reassigned in
+// its loop; a counter stepped twice a pass, which isn't a count; a loop
+// over `&xs` around one over `&ys`, and over `&Array<UInt8>`; an element
+// taken in an `inout` function whose call fails part way, so the caller
+// keeps the array it had; writes whose value reads the same array,
+// including the row being written and the index from the array itself;
+// `&g[i]` passed to `inout`, and `for row in &g` with a snapshot kept;
+// and blocks that capture the grid and read or write it in the middle of
+// a write to it. build.t runs it under the sanitizers, in both builds
+// and both countings, and checks each prints what `ren run` prints.
+
+
+// ---- b7
+fn main_b7() uses Console =
+  var xs = [1, 2, 3, 4]
+  let ys = [5, 6, 7, 8]
+  var t = 0
+  for (x, y) in xs.zip(ys)
+    t += x * y
+    xs = []
+  print(t)
+  var k = 0
+  for i in 0..xs.len()
+    k += 1
+  print(k)
+
+// ---- b9
+fn main_b9() uses Console =
+  let xs = [1, 2, 3]
+  var t = 0
+  var i = 0
+  let n = xs.len()
+  var resets = 0
+  while i < n
+    t += xs[i]
+    if i == 2 && resets == 0 then
+      resets = 1
+    i = i + 1
+  print(t)
+  var j = 0
+  while j < n
+    t += xs[j]
+    j = j + 1
+    j = j + 1
+  print(t)
+
+// ---- b12
+fn main_b12() uses Console =
+  var xs = [1, 2, 3]
+  var ys = [10, 20, 30, 40]
+  for i, x in &xs
+    for j, y in &ys
+      y += x + j
+    x += ys[i + 1]
+  print(xs)
+  print(ys)
+  var zs: Array<UInt8> = [250, 1, 2]
+  for i, z in &zs
+    z += i * 3
+  print(zs)
+  for i, z in &zs
+    z += 4
+  print(zs)
+
+// ---- s1
+fn neg(row: Array<Int>) -> Array<Int> ! Negative(at: Int) =
+  var out: Array<Int> = []
+  for x in row
+    if x < 0 then fail Negative(x)
+    &out.push(0 - x)
+  out
+
+fn change(inout g: Array<Array<Int>>, i: Int) ! Negative(at: Int) =
+  g[i] = try neg(g[i])
+
+fn changes(inout g: Array<Array<Str>>, i: Int) ! Bad(at: Int) =
+  g[i] = try strs(g[i])
+
+fn strs(row: Array<Str>) -> Array<Str> ! Bad(at: Int) =
+  var out: Array<Str> = []
+  for x in row
+    if x == "bad" then fail Bad(out.len())
+    &out.push(x.concat("!"))
+  out
+
+fn main_s1() uses Console =
+  var g = [[1, 2], [3, -4], [5]]
+  match attempt change(&g, 1)
+    Ok(_) => print("ok")
+    Err(Negative(x)) => print(x)
+  print(g)
+  match attempt change(&g, 0)
+    Ok(_) => print("ok")
+    Err(Negative(x)) => print(x)
+  print(g)
+  var h = [["a"], ["b", "bad"], ["c"]]
+  match attempt changes(&h, 1)
+    Ok(_) => print("ok")
+    Err(Bad(x)) => print(x)
+  print(h)
+  print(h[1][1])
+
+// ---- s2
+fn main_s2() uses Console =
+  var g = [[1, 2], [3, 4]]
+  g[0][1] = g[0][0] + g[1][1] + g[0].len()
+  print(g)
+  g[1][0] += g[1][1] * g[0][1]
+  print(g)
+  var s = [["a", "b"], ["c"]]
+  s[0][1] = s[0][0].concat(s[1][0]).concat(s[0][1])
+  print(s)
+  var r = [[[1]], [[2, 3]]]
+  r[1][0][1] = r[1][0][0] + r[0][0][0] + r[1][0].len() + r.len()
+  print(r)
+  // index computed from the array itself
+  g[g[0][0] % 2][g[1][0] % 2] = 77
+  print(g)
+
+// ---- s4
+fn add(inout row: Array<Int>, k: Int) =
+  &row.push(k)
+fn addf(inout row: Array<Int>, k: Int) ! Big(n: Int) =
+  if k > 5 then fail Big(k)
+  &row.push(k)
+fn main_s4() uses Console =
+  var g = [[1], [2, 3]]
+  add(&g[1], 9)
+  print(g)
+  for row in &g
+    &row.push(row.len())
+  print(g)
+  let snap = g
+  for row in &g
+    add(&row, 0)
+  print(snap)
+  print(g)
+  match attempt addf(&g[0], 7)
+    Ok(_) => print("ok")
+    Err(Big(n)) => print(n)
+  print(g)
+  for i, row in &g
+    match attempt addf(&row, i * 6)
+      Ok(_) => print("ok")
+      Err(Big(n)) => print(n)
+  print(g)
+
+// ---- s5
+fn total(g: Array<Array<Int>>) -> Int =
+  var s = 0
+  for r in g
+    for x in r
+      s += x
+  s
+fn apply(f: fn() -> Int) -> Int = try f()
+fn twice(f: fn()) =
+  try f()
+  try f()
+fn main_s5() uses Console =
+  var g = [[1, 2], [3, 4]]
+  let peek = fn() => total(g)
+  g[0][1] = peek()
+  print(g)
+  g[1] = g[1].map(fn(x) => x + total(g))
+  print(g)
+  twice(fn() => g[0][0] = g[0][0] + total(g))
+  print(g)
+  twice(fn() => g[1][0] += apply(fn() => total(g)))
+  print(g)
+  var k = 0
+  let bump = fn() => g[0][1] = g[0][1] + k
+  for i in 0..3
+    k = i
+    bump()
+    g[i % 2][i % 2] = apply(fn() => g[0].len() + g[1][0])
+  print(g)
+
+fn main() uses Console =
+  main_b7()
+  main_b9()
+  main_b12()
+  main_s1()
+  main_s2()
+  main_s4()
+  main_s5()

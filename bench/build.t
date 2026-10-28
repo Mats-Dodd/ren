@@ -36,9 +36,10 @@ cells a loop built where a recursion would have built none yet.
 `sized_panic` panics storing a number too big for a `UInt8`, and
 `loops_panic` indexing an array a block shrank, which bounds.ml leaves
 checked, and `loops_short` in the checked one of a loop bounds.ml made
-twice.
+twice. `review_shrink` panics indexing an array a call
+shrank under its loop's count, which bounds.ml leaves checked.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -77,6 +78,14 @@ twice.
   loops_panic.ren, naive: the same, exit 1, objects live at exit 4
   loops_short.ren, perceus: the same, exit 1, objects live at exit 6
   loops_short.ren, naive: the same, exit 1, objects live at exit 6
+  review_arrays.ren, perceus: the same, exit 0, objects live at exit 0
+  review_arrays.ren, naive: the same, exit 0, objects live at exit 0
+  review_values.ren, perceus: the same, exit 0, objects live at exit 0
+  review_values.ren, naive: the same, exit 0, objects live at exit 0
+  review_lists.ren, perceus: the same, exit 0, objects live at exit 0
+  review_lists.ren, naive: the same, exit 0, objects live at exit 0
+  review_shrink.ren, perceus: the same, exit 1, objects live at exit 2
+  review_shrink.ren, naive: the same, exit 1, objects live at exit 3
 
 Every native benchmark, at its small size:
 
@@ -225,7 +234,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -245,6 +254,10 @@ prints what `ren run` prints, and ends with no object alive; so does
   loops.ren, release: the same, exit 0, objects live at exit 0
   loops_panic.ren, release: the same, exit 1, objects live at exit 3
   loops_short.ren, release: the same, exit 1, objects live at exit 6
+  review_arrays.ren, release: the same, exit 0, objects live at exit 0
+  review_values.ren, release: the same, exit 0, objects live at exit 0
+  review_lists.ren, release: the same, exit 0, objects live at exit 0
+  review_shrink.ren, release: the same, exit 1, objects live at exit 2
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0

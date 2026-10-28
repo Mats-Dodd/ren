@@ -1,0 +1,27 @@
+// An index bounds.ml must leave checked: the loop's array shrunk, part
+// way, by a call it's passed to with `&`, and before that directly and in
+// a loop inside, each a length that changed under the count. It panics
+// where `ren run` does.
+
+fn shrink(inout ys: Array<Int>) =
+  ys = [7]
+
+fn main() uses Console =
+  var ws = [1, 2, 3, 4]
+  var t = 0
+  for i in 0..ws.len()
+    if i == 3 then ws = [9, 9, 9, 9, 9]
+    t += ws[i]
+  for i in 0..ws.len()
+    for j in 0..1
+      if i == 4 then ws = [0, 0, 0, 0, 0, 0]
+    t += ws[i]
+  print(t)
+  var xs = [1, 2, 3, 4]
+  let n = xs.len()
+  var i = 0
+  while i < n
+    t += xs[i]
+    if i == 1 then shrink(&xs)
+    i = i + 1
+  print(t)

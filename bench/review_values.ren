@@ -1,0 +1,202 @@
+// The follow-up review's programs over values (to_mem.ml's small values,
+// packed fields, sized storage, fold.ml): a field of a small value read
+// and then the value changed, through `inout`, returned from generic
+// functions, in an option of an option, a `Result` in an array, captured
+// by a block and as a recursive type's field, `==` and `show` on one;
+// sums whose constructors share slots, built in a loop; types laid out
+// alike whose functions fold.ml may fold, each still shown by its own
+// name; and packed `Bool`s, enums and sized fields at their limits,
+// changed in place, in arrays, compared and shown, in a tree, in generic
+// code, with `*%` and `+%` stored into `UInt32`, `Int8` and `UInt16`.
+// build.t runs it under the sanitizers, in both builds and both
+// countings, and checks each prints what `ren run` prints.
+
+
+// ---- v1
+type Pair = { a: Str, b: Str }
+type Mix =
+  | A(s: Str, n: Int)
+  | B(n: Int, s: Str)
+  | C(k: Int)
+  | D
+type Box<T> = { v: T }
+type Node = | Leaf | N(l: Node, p: Pair, r: Node)
+
+fn swap(p: Pair) -> Pair = Pair { a: p.b, b: p.a }
+fn keep<T>(x: T) -> T = x
+fn pick<T>(c: Bool, x: T, y: T) -> T = if c then x else y
+fn mk(i: Int) -> Mix =
+  match i % 4
+    0 => A(show(i), i)
+    1 => B(i, show(i * 10))
+    2 => C(i)
+    _ => D
+fn desc(m: Mix) -> Str =
+  match m
+    A(s, n) => s.concat("a").concat(show(n))
+    B(n, s) => show(n).concat("b").concat(s)
+    C(k) => show(k)
+    D => "d"
+fn edit(inout p: Pair) =
+  p.a = p.a.concat(p.b)
+fn sum(t: Node) -> Str =
+  match t
+    Leaf => ""
+    N(l, p, r) => sum(l).concat(p.a).concat(sum(r))
+
+fn main_v1() uses Console =
+  var p = Pair { a: "x", b: "y" }
+  let a = p.a
+  p.a = "z"
+  print(a.concat(p.a))
+  let q = p
+  p = swap(p)
+  print(q.a.concat(p.a))
+  edit(&p)
+  print(p.a.concat(q.a))
+  var ms: Array<Mix> = []
+  for i in 0..9
+    &ms.push(mk(i))
+  var out = ""
+  for m in ms
+    out = out.concat(desc(m))
+  print(out)
+  let oo: Option<Option<Str>> = Some(Some("deep"))
+  match oo
+    Some(Some(s)) => print(s)
+    _ => print("no")
+  let b = Box { v: Pair { a: "bx", b: "by" } }
+  print(keep(b).v.b)
+  print(pick(false, p, q).a)
+  let rs: Array<Result<Str, ! Odd(n: Int)>> = [Ok("r"), Err(Odd(3))]
+  for r in rs
+    match r
+      Ok(s) => print(s)
+      Err(Odd(n)) => print(n)
+  let f = fn(x: Pair) => x.a.concat(p.b)
+  print(f(q))
+  var t = Leaf
+  for i in 0..3
+    t = N(t, Pair { a: show(i), b: "" }, Leaf)
+  print(sum(t))
+  print(p == q)
+  print(show(q))
+  let tup = (p, 3, q)
+  let (x1, n1, x2) = tup
+  print(x1.a.concat(x2.b).concat(show(n1)))
+  var opt: Option<Pair> = None
+  for i in 0..3
+    opt = match opt
+      None => Some(Pair { a: show(i), b: "o" })
+      Some(pp) => Some(Pair { a: pp.a.concat(show(i)), b: pp.b })
+  match opt
+    Some(pp) => print(pp.a)
+    None => print("none")
+
+// ---- f1
+type A = { x: Int, s: Str }
+type B = { y: Int, t: Str }
+type E1 = | P(n: Int, s: Str) | Q
+type E2 = | R(n: Int, s: Str) | S
+type L1 = | C1(h: Str, t: L1) | N1
+type L2 = | C2(h: Str, t: L2) | N2
+
+fn mka(i: Int) -> A = A { x: i, s: show(i) }
+fn mkb(i: Int) -> B = B { y: i, t: show(i) }
+fn mke1(i: Int) -> E1 = if i > 0 then P(i, "p") else Q
+fn mke2(i: Int) -> E2 = if i > 0 then R(i, "p") else S
+fn l1(n: Int) -> L1 = if n == 0 then N1 else C1(show(n), l1(n - 1))
+fn l2(n: Int) -> L2 = if n == 0 then N2 else C2(show(n), l2(n - 1))
+fn box<T>(x: T) -> Array<T> = [x, x]
+
+fn main_f1() uses Console =
+  print(mka(1))
+  print(mkb(2))
+  print(mke1(1))
+  print(mke2(1))
+  print(mke1(0))
+  print(mke2(0))
+  print(l1(2))
+  print(l2(2))
+  print(box(mka(3)))
+  print(box(mkb(4)))
+  print(box(mke2(5)))
+  print(box(mke1(5)))
+  print(box(l2(1)))
+  print(box(l1(1)))
+  print([mka(1)] == [mka(1)])
+
+// ---- z1
+type Color = | Red | Green | Blue
+type Px = { r: UInt8, g: Int8, on: Bool, c: Color, w: Int16, f: Float32 }
+type Rec = { name: Str, a: Int8, b: Bool, n: Int, c: Color, u: UInt32, big: UInt64 }
+type Wrap<T> = { x: T, flag: Bool }
+type T2 = | Lf | Nd(l: T2, k: Int8, on: Bool, r: T2)
+
+fn total(t: T2) -> Int =
+  match t
+    Lf => 0
+    Nd(l, k, on, r) => total(l) + (if on then k else 0 - k) + total(r)
+
+fn ins(t: T2, k: Int) -> T2 =
+  match t
+    Lf => Nd(Lf, k, k % 2 == 0, Lf)
+    Nd(l, kk, on, r) => if k < kk then Nd(ins(l, k), kk, on, r) else Nd(l, kk, not on, ins(r, k))
+
+fn gen<T>(xs: Array<T>) -> Array<T> =
+  var out: Array<T> = []
+  for x in xs
+    &out.push(x)
+  &out.push(xs[0])
+  out
+
+fn main_z1() uses Console =
+  var px = Px { r: 255, g: -128, on: true, c: Blue, w: -32768, f: 1.5 }
+  print(px)
+  px.g = px.g + 1
+  px.r = px.r - 1
+  px.on = not px.on
+  px.c = Green
+  print(px)
+  var ps = [px, px, Px { r: 0, g: 127, on: false, c: Red, w: 32767, f: -0.25 }]
+  ps[1].g = -7
+  ps[2].c = Blue
+  ps[0].f = ps[0].f * 3.0
+  print(ps)
+  print(ps[0] == ps[1])
+  var r = Rec { name: "n", a: -1, b: true, n: -5, c: Red, u: 4294967295, big: 9223372036854775807 }
+  let r2 = r
+  r.a = 100
+  r.u = r.u - 1
+  print(r)
+  print(r2)
+  print(r == r2)
+  let w = Wrap { x: 3, flag: true }
+  let w2 = Wrap { x: "s", flag: false }
+  print(w.flag && not w2.flag)
+  var t = Lf
+  for k in [5, 3, 8, 1, 4, -7, 120]
+    t = ins(t, k)
+  print(total(t))
+  let bs: Array<UInt8> = [1, 2, 255]
+  print(gen(bs))
+  let is: Array<Int8> = [-1, -128, 127]
+  print(gen(is).map(fn(x) => x * 2))
+  let fs: Array<Float32> = [0.1, 100000000000000000000000000000.0, -3.5]
+  print(gen(fs))
+  var h: UInt32 = 2166136261
+  for b in bs
+    h = h *% 16777619
+    h = h +% b
+  print(h)
+  var i8: Int8 = 100
+  i8 = i8 +% 100
+  print(i8)
+  var u16s: Array<UInt16> = [65535, 0]
+  u16s[1] = u16s[0] +% 2
+  print(u16s)
+
+fn main() uses Console =
+  main_v1()
+  main_f1()
+  main_z1()

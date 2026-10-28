@@ -1,0 +1,66 @@
+// The follow-up review's programs over recursion that builds (trmc.ml):
+// generic `map`, `filter` and `append` whose blocks can fail, over a
+// list of small records; a list shared and appended to itself; a tree
+// built to the left and to the right; a recursive result bound with
+// `let` before it's used; and a 20,000-cell `map`. build.t runs it under
+// the sanitizers, in both builds and both countings, and checks each
+// prints what `ren run` prints.
+
+type L<T> = | Cons(h: T, t: L<T>) | Nil
+type P = { a: Str, n: Int }
+type Tr = | Lf | Nd(l: Tr, v: Int, r: Tr)
+
+fn map<T, U>(l: L<T>, f: fn(T) -> U) -> L<U> =
+  match l
+    Nil => Nil
+    Cons(h, t) => Cons(try f(h), try map(t, f))
+fn filter<T>(l: L<T>, f: fn(T) -> Bool) -> L<T> =
+  match l
+    Nil => Nil
+    Cons(h, t) => if try f(h) then Cons(h, try filter(t, f)) else try filter(t, f)
+fn append<T>(a: L<T>, b: L<T>) -> L<T> =
+  match a
+    Nil => b
+    Cons(h, t) => Cons(h, append(t, b))
+fn len<T>(l: L<T>) -> Int =
+  match l
+    Nil => 0
+    Cons(_, t) => 1 + len(t)
+fn up(n: Int) -> L<Int> = if n == 0 then Nil else Cons(n, up(n - 1))
+fn strs(l: L<P>) -> Str =
+  match l
+    Nil => ""
+    Cons(p, t) => p.a.concat(show(p.n)).concat(strs(t))
+fn grow(t: Tr, k: Int) -> Tr =
+  match t
+    Lf => Nd(Lf, k, Lf)
+    Nd(l, v, r) => if k < v then Nd(grow(l, k), v, r) else Nd(l, v, grow(r, k))
+fn sz(t: Tr) -> Int =
+  match t
+    Lf => 0
+    Nd(l, _, r) => sz(l) + 1 + sz(r)
+fn dup(l: L<Int>) -> L<Int> =
+  match l
+    Nil => Nil
+    Cons(h, t) =>
+      let r = dup(t)
+      Cons(h, r)
+
+fn main() uses Console =
+  let l = up(50)
+  let ps = map(l, fn(n) => P { a: "p", n: n })
+  print(strs(filter(ps, fn(p) => p.n % 7 == 0)))
+  print(len(append(l, l)))
+  let shared = filter(l, fn(n) => n > 25)
+  let more = append(shared, shared)
+  print(len(more) + len(shared))
+  var t = Lf
+  for k in [5, 2, 8, 1, 9, 3, 7]
+    t = grow(t, k)
+  let t2 = grow(t, 4)
+  print(sz(t) * 100 + sz(t2))
+  print(len(dup(l)))
+  let deep = up(20000)
+  print(len(map(deep, fn(x) => x % 3)))
+  let strs2 = map(up(3), fn(n) => show(n))
+  print(len(filter(strs2, fn(s) => s != "2")))
