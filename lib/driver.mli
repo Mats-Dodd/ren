@@ -237,3 +237,15 @@ val native :
   file:string ->
   string ->
   string
+
+(* The same, a debug build's, as units of C to compile apart, in
+   parallel, about four for each of [jobs] (emit_c.ml, [units]). *)
+val native_units :
+  ?lint:bool ->
+  ?load:loader ->
+  ?rc:rc ->
+  jobs:int ->
+  sources:(string -> string option) ->
+  file:string ->
+  string ->
+  Emit_c.units

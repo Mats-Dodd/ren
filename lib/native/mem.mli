@@ -467,6 +467,11 @@ type fn = {
   fails : bool;  (** whether it returns a status, its value through a pointer *)
   body : block;
   loc : Loc.t;
+  lines : (int * int) list;
+      (** the line of its source each variable it defines was made at, by the
+          variable's id, which a debug build tells C with `#line`, so a
+          debugger steps through Ren (foundations.md, decision 13). A line
+          of [loc]'s file; none for code from another, the prelude's *)
 }
 
 (* A descriptor the compiler knows, which the C file holds as static

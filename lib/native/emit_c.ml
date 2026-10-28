@@ -1,5 +1,7 @@
-(* Mem IR to C: one file, the runtime (ren_rt.h and ren_rt.c, embedded
-   as Runtime_c) first, then the program (compiler.md, "Native slice").
+(* Mem IR to C (compiler.md, "Native slice"): for a release build, one
+   file, the runtime (ren_rt.h and ren_rt.c, embedded as Runtime_c)
+   first, then the program; for a debug build, units to compile apart
+   ([units], below).
 
    Each Mem function is a C function, and each variable a C local. A
    function that can fail returns its error, or NULL, and writes its
@@ -612,10 +614,78 @@ type out = {
   restrict : bool;
 }
 
+(* ---- where in the Ren source each line of C is ----
+
+   A debug build's C says, with `#line`, which line of Ren each of its
+   lines comes from, so a debugger sets breakpoints and steps by Ren's
+   lines (foundations.md, decision 13). After `#line n`, C counts on from
+   [n], one a line, so the C of one Ren line is one line of C, and each
+   line of C whose Ren line isn't the next one gets its own `#line`:
+   [line] writes them. A statement's Ren line is its
+   variable's (Mem's [fn.lines]), or its site's; one with neither is on
+   the line before it. *)
+
+(* Whether this C says where its lines are, set by [units]. *)
+let line_dirs = ref false
+
+(* The function being written's Ren lines, by variable, and its file. *)
+let fn_lines : (int, int) Hashtbl.t = Hashtbl.create 64
+let fn_file = ref ""
+
+(* The Ren line of the statement being written, 0 if none is known; the
+   line C would give the next line of C; and the Ren line of the line of
+   C [line] wrote last, 0 if what's next can't go on it. *)
+let cur_line = ref 0
+let next_line = ref 0
+let open_line = ref 0
+
+let site_line (s : site) =
+  if s.loc.file = !fn_file then s.loc.start.line else 0
+
+(* The Ren line [s] is at, 0 if it doesn't say. *)
+let stmt_line (s : stmt) =
+  let of_rhs = function
+    | Arith (_, _, _, s) | Late (_, _, _, s) | Neg (_, s) -> site_line s
+    | Runtime (_, _, Some s) -> site_line s
+    | _ -> 0
+  in
+  let of_var (v : var) r =
+    match Hashtbl.find_opt fn_lines v.id with Some l -> l | None -> r ()
+  in
+  match s with
+  | Let (v, r) -> of_var v (fun () -> of_rhs r)
+  | Decl v
+  | Call_fails { result = v; _ }
+  | Call_block { result = v; _ }
+  | Call_handler { result = v; _ } ->
+      of_var v (fun () -> 0)
+  | Do r -> of_rhs r
+  | Assert (_, s) | Panic (s, _) -> site_line s
+  | _ -> 0
+
+(* A source file's path as a debugger finds it from anywhere. *)
+let source_path file =
+  if Filename.is_relative file then Filename.concat (Sys.getcwd ()) file
+  else file
+
 let line o depth s =
-  Buffer.add_string o.b (String.make (2 * depth) ' ');
-  Buffer.add_string o.b s;
-  Buffer.add_char o.b '\n'
+  if !line_dirs && !cur_line > 0 && !cur_line = !open_line then (
+    (* on the line of C before, which is this one's line of Ren *)
+    Buffer.truncate o.b (Buffer.length o.b - 1);
+    Buffer.add_char o.b ' ';
+    Buffer.add_string o.b s;
+    Buffer.add_char o.b '\n')
+  else (
+    if !line_dirs && !cur_line > 0 then (
+      if !cur_line <> !next_line then (
+        Buffer.add_string o.b "#line ";
+        Buffer.add_string o.b (string_of_int !cur_line);
+        Buffer.add_char o.b '\n');
+      next_line := !cur_line + 1;
+      open_line := !cur_line);
+    Buffer.add_string o.b (String.make (2 * depth) ' ');
+    Buffer.add_string o.b s;
+    Buffer.add_char o.b '\n')
 
 (* A list of C expressions, in braces, for an array's initializer. *)
 let braces xs = "{" ^ String.concat ", " xs ^ "}"
@@ -643,6 +713,9 @@ let indirect o d ~result ~error call =
        (of_val result.layout out))
 
 let rec stmt o d (s : stmt) =
+  if !line_dirs then (
+    let l = stmt_line s in
+    if l > 0 then cur_line := l);
   let line = line o d in
   match s with
   | Let (v, Field (x, n, _)) ->
@@ -1085,6 +1158,11 @@ and on_failure o d error on_error =
    true, so C may keep what it points to in a register.
    With [slot], it's the version that builds its result in memory its
    caller gives, [ren_slot] (stack.ml). *)
+(* "static " in one file; nothing in a debug build's units, whose
+   functions and data are called and read from other units: set by
+   [program] and [units]. *)
+let linkage = ref "static "
+
 let signature ?(slot = false) ~restrict (f : fn) =
   let params =
     List.map
@@ -1097,10 +1175,10 @@ let signature ?(slot = false) ~restrict (f : fn) =
   in
   let name = if slot then slot_fn f.name else f.name in
   if f.fails then
-    sprintf "static ren_obj* %s(%s)" name
+    sprintf "%sren_obj* %s(%s)" !linkage name
       (String.concat ", " (params @ [ ctype f.result ^ "* ren_out" ]))
   else
-    sprintf "static %s %s(%s)" (ctype f.result) name
+    sprintf "%s%s %s(%s)" !linkage (ctype f.result) name
       (match params with [] -> "void" | ps -> String.concat ", " ps)
 
 (* ---- where the stack is checked ----
@@ -1196,6 +1274,15 @@ let fn ?(slot = false) ~restrict ~checks b (f : fn) =
       restrict;
     }
   in
+  (* where its Ren source is, if it has any: its lines, and the line its
+     name is on, which its C function's first line is *)
+  Hashtbl.reset fn_lines;
+  fn_file := f.loc.file;
+  let ren = !line_dirs && Filename.check_suffix f.loc.file ".ren" in
+  if ren then List.iter (fun (v, l) -> Hashtbl.replace fn_lines v l) f.lines;
+  cur_line := if ren then f.loc.start.line else 0;
+  next_line := if ren then f.loc.start.line + 1 else 0;
+  open_line := 0;
   if checks f.name then line o 1 "REN_STACK_CHECK();";
   (match f.slot with
   | Some (v, names) when slot ->
@@ -1225,9 +1312,15 @@ let fn ?(slot = false) ~restrict ~checks b (f : fn) =
     f.body;
   block o 1 f.body;
   Buffer.add_buffer b o.outlined;
+  (* the signature on its name's line, the body's lines on theirs *)
+  if ren then
+    Buffer.add_string b
+      (sprintf "#line %d %s\n" f.loc.start.line (c_string (source_path f.loc.file)));
   Buffer.add_string b (signature ~slot ~restrict f ^ " {\n");
   Buffer.add_buffer b o.b;
-  Buffer.add_string b "}\n\n"
+  Buffer.add_string b "}\n\n";
+  cur_line := 0;
+  open_line := 0
 
 let dkind_c (k : dkind) =
   match k with
@@ -1259,7 +1352,7 @@ let static_types add (descs : desc list) (decls : decl list) =
              (braces (List.map desc_ref xs)));
         name
   in
-  List.iteri (fun i _ -> add (sprintf "static ren_desc ren_desc_%d;\n" i)) descs;
+  List.iteri (fun i _ -> add (sprintf "%sren_desc ren_desc_%d;\n" !linkage i)) descs;
   List.iteri
     (fun i (dc : decl) ->
       let ctor j (name, fields, types) =
@@ -1316,17 +1409,17 @@ let static_types add (descs : desc list) (decls : decl list) =
       in
       add
         (sprintf
-           "static const ren_decl ren_decl_%d = {%s, %s, %b, %b, %d, %s, %s};\n"
-           i (c_string dc.dname) kind dc.dopaque enumlike nctors ctors rep))
+           "%sconst ren_decl ren_decl_%d = {%s, %s, %b, %b, %d, %s, %s};\n"
+           !linkage i (c_string dc.dname) kind dc.dopaque enumlike nctors ctors rep))
     decls;
   List.iteri
     (fun i (d : desc) ->
       let args = table (sprintf "ren_desc_%d_args" i) d.dargs in
       add
         (sprintf
-           "static ren_desc ren_desc_%d = {{0, REN_TAG_DESC, 0, 0}, %s, %b, \
+           "%sren_desc ren_desc_%d = {{0, REN_TAG_DESC, 0, 0}, %s, %b, \
             %d, %s, %s, %s};\n"
-           i (dkind_c d.dkind) d.dcounted (List.length d.dargs)
+           !linkage i (dkind_c d.dkind) d.dcounted (List.length d.dargs)
            (* a variable's number, or a sized type's kind *)
            (match d.dkind with
            | D_var n -> string_of_int n
@@ -1351,8 +1444,9 @@ let leb b n =
   go n
 
 (* The sites' pieces as C (ren_rt.h, [ren_site]): the texts they print,
-   each once, in [ren_text_table], and each site's pieces as bytes, a
-   site for all those whose bytes are the same. Text written next to text
+   each once, in [ren_text_table], which [add] is given, and each site's
+   pieces as bytes, a site for all those whose bytes are the same, which
+   it gives, each defined apart. Text written next to text
    is one piece, but for [Shared] text, which other sites print too. *)
 let sites add ~(site_pieces : site -> Diag.piece list) (all : site list) =
   let texts = Hashtbl.create 1024 and text_list = ref [] in
@@ -1407,53 +1501,68 @@ let sites add ~(site_pieces : site -> Diag.piece list) (all : site list) =
   in
   Hashtbl.reset site_names;
   let named = Hashtbl.create 1024 in
-  let decls = Buffer.create 65536 in
-  List.iter
-    (fun (s : site) ->
-      let bytes = ops (site_pieces s) in
-      match Hashtbl.find_opt named bytes with
-      | Some n -> Hashtbl.replace site_names s.sid n
-      | None ->
-          Hashtbl.replace named bytes s.sid;
-          Hashtbl.replace site_names s.sid s.sid;
-          Buffer.add_string decls
-            (sprintf
-               "static const ren_site ren_site_%d = { (const unsigned char \
-                *)%s };\n"
-               s.sid (c_string bytes)))
-    all;
+  let decls =
+    List.filter_map
+      (fun (s : site) ->
+        let bytes = ops (site_pieces s) in
+        match Hashtbl.find_opt named bytes with
+        | Some n ->
+            Hashtbl.replace site_names s.sid n;
+            None
+        | None ->
+            Hashtbl.replace named bytes s.sid;
+            Hashtbl.replace site_names s.sid s.sid;
+            Some
+              (sprintf
+                 "%sconst ren_site ren_site_%d = { (const unsigned char *)%s \
+                  };\n"
+                 !linkage s.sid (c_string bytes)))
+      all
+  in
   let texts = List.rev !text_list in
   add
     (sprintf "static const char *const ren_text_table[%d] = %s;\n"
        (max 1 (List.length texts))
        (braces
           (match texts with [] -> [ "NULL" ] | ts -> List.map c_string ts)));
-  add (Buffer.contents decls)
+  decls
 
-(* The C file for [p]. [site_pieces] is what a panic at a site prints,
-   with a [Hole] where its message goes. *)
-let program ?(restrict = false) ?(release = false)
-    ~(site_pieces : site -> Diag.piece list) (p : program) =
-  let b = Buffer.create 65536 in
+(* What a program's C is made of, apart: its data, the functions, each
+   as it's written, and [ren_program] and [main], which run it. *)
+type parts = {
+  data : string;
+      (** its string literals, the texts its sites print, descriptors,
+          declarations, structs and associated values *)
+  site_defs : string list;  (** its sites, each defined *)
+  typedefs : string;  (** its structs' C types, which all of it uses *)
+  protos : (string * string) list;
+      (** each function's name, and its prototype *)
+  externs : (string * string) list;
+      (** each associated value's name, and what declares it in another
+          unit than the one [data] is in *)
+  fns : (fn * string) list;  (** each function and its C, its slot's too *)
+  run : string;  (** [ren_program] and [main] *)
+}
+
+let parts ~restrict ~release ~site_pieces (p : program) =
   is_release := release;
   Hashtbl.reset made_tags;
+  let b = Buffer.create 65536 in
   let add = Buffer.add_string b in
-  add Runtime_c.header;
-  add "\n";
-  add Runtime_c.source;
-  add "\n/* ---- the program ---- */\n\n";
   List.iteri
     (fun i s ->
       let n = String.length s in
       add
         (sprintf
-           "static struct { ren_obj h; int64_t len; char data[%d]; } \
+           "%sstruct ren_lit_%d { ren_obj h; int64_t len; char data[%d]; } \
             ren_lit_%d = { { 0, REN_TAG_STR, 0, 0 }, %d, %s };\n"
-           (n + 1) i n (c_string s)))
+           !linkage i (n + 1) i n (c_string s)))
     p.strings;
   (* a [Caller] site is [ren_here], none of its own *)
-  sites add ~site_pieces
-    (List.filter (fun (s : site) -> s.kind <> Caller) p.sites);
+  let site_defs =
+    sites add ~site_pieces
+      (List.filter (fun (s : site) -> s.kind <> Caller) p.sites)
+  in
   add
     (sprintf "static const char *const ren_tag_table[%d] = %s;\n"
        (max 1 (List.length p.tags))
@@ -1462,18 +1571,20 @@ let program ?(restrict = false) ?(release = false)
   static_types add p.descs p.decls;
   structs := Array.of_list p.structs;
   (* each struct, a word for each slot, as an array of structs keeps it *)
-  List.iteri
-    (fun n st ->
-      add
-        (sprintf "typedef struct { ren_val s[%d]; } ren_struct_%d;\n"
-           (max 1 (List.length st.sfields))
-           n))
-    p.structs;
+  let typedefs =
+    String.concat ""
+      (List.mapi
+         (fun n st ->
+           sprintf "typedef struct { ren_val s[%d]; } ren_struct_%d;\n"
+             (max 1 (List.length st.sfields))
+             n)
+         p.structs)
+  in
   List.iter
     (fun (v : value) ->
-      add (sprintf "static %s %s;\n" (ctype v.vlayout) v.vname))
+      add (sprintf "%s%s %s;\n" !linkage (ctype v.vlayout) v.vname))
     p.values;
-  add "\n";
+  let data = Buffer.contents b in
   Hashtbl.reset slot_sizes;
   List.iter
     (fun (f : fn) ->
@@ -1492,19 +1603,29 @@ let program ?(restrict = false) ?(release = false)
             f.body
       | None -> ())
     p.fns;
-  List.iter
-    (fun (f : fn) ->
-      add (signature ~restrict f ^ ";\n");
-      if f.slot <> None then add (signature ~slot:true ~restrict f ^ ";\n"))
-    p.fns;
-  add "\n";
+  let protos =
+    List.concat_map
+      (fun (f : fn) ->
+        (f.name, signature ~restrict f ^ ";\n")
+        ::
+        (if f.slot <> None then
+           [ (slot_fn f.name, signature ~slot:true ~restrict f ^ ";\n") ]
+         else []))
+      p.fns
+  in
   let unchecked = unchecked p.fns in
   let checks name = not (Hashtbl.mem unchecked name) in
-  List.iter
-    (fun (f : fn) ->
-      fn ~restrict ~checks b f;
-      if f.slot <> None then fn ~slot:true ~restrict ~checks b f)
-    p.fns;
+  let fns =
+    List.map
+      (fun (f : fn) ->
+        let b = Buffer.create 4096 in
+        fn ~restrict ~checks b f;
+        if f.slot <> None then fn ~slot:true ~restrict ~checks b f;
+        (f, Buffer.contents b))
+      p.fns
+  in
+  let b = Buffer.create 4096 in
+  let add = Buffer.add_string b in
   add "static void ren_program(void) {\n";
   (* the associated values, made once, in order *)
   List.iter
@@ -1515,14 +1636,12 @@ let program ?(restrict = false) ?(release = false)
     add (sprintf "  ren_obj* e = %s(NULL, &r);\n" p.start);
     add "  if (e != NULL) ren_uncaught(e);\n")
   else add (sprintf "  %s r = %s(NULL);\n" (ctype p.start_result) p.start);
-  if p.start_result <> Unit then (
+  if p.start_result <> Unit then
     add
       (sprintf
-         "  ren_print_value(stdout, (ren_obj*)&ren_desc_%d, %s, \
-          ren_overflow_site);\n"
+         "  ren_print_result((ren_obj*)&ren_desc_%d, %s, ren_overflow_site);\n"
          p.start_desc
          (word_of p.start_result "r"));
-    add "  fputc('\\n', stdout);\n");
   if is_object p.start_result then add "  ren_drop(r);\n";
   List.iter
     (fun (v : value) ->
@@ -1550,4 +1669,219 @@ let program ?(restrict = false) ?(release = false)
   add "  ren_texts = ren_text_table;\n";
   add "  ren_tag_names = ren_tag_table;\n";
   add "  return ren_run(ren_program);\n}\n";
+  let externs =
+    List.map
+      (fun (v : value) ->
+        (v.vname, sprintf "extern %s %s;\n" (ctype v.vlayout) v.vname))
+      p.values
+  in
+  { data; site_defs; typedefs; protos; externs; fns; run = Buffer.contents b }
+
+(* The C file for [p]. [site_pieces] is what a panic at a site prints,
+   with a [Hole] where its message goes. *)
+let program ?(restrict = false) ?(release = false)
+    ~(site_pieces : site -> Diag.piece list) (p : program) =
+  linkage := "static ";
+  line_dirs := false;
+  let ps = parts ~restrict ~release ~site_pieces p in
+  let b = Buffer.create 65536 in
+  let add = Buffer.add_string b in
+  add Runtime_c.header;
+  add "\n";
+  add Runtime_c.source;
+  add "\n/* ---- the program ---- */\n\n";
+  add ps.typedefs;
+  add ps.data;
+  List.iter add ps.site_defs;
+  add "\n";
+  List.iter (fun (_, proto) -> add proto) ps.protos;
+  add "\n";
+  List.iter (fun (_, c) -> add c) ps.fns;
+  add ps.run;
   Buffer.contents b
+
+(* ---- a debug build's units ---- *)
+
+let per_job = 4
+let min_unit = 65536
+
+type units = {
+  header : string;  (** ren_rt.h *)
+  runtime : string;  (** the runtime's unit, ren_rt.c *)
+  program : (string * string) list;
+      (** the program's units, each a name and its C, the first holding its
+          data and [main] *)
+}
+
+(* The C identifiers in [s] that start with [ren_], as every name of the
+   program's does, each once, in the order they're first in it. *)
+let identifiers s =
+  let seen = Hashtbl.create 256 and acc = ref [] in
+  let n = String.length s in
+  let is_part = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '_' | '0' .. '9' -> true
+    | _ -> false
+  in
+  let i = ref 0 in
+  while !i < n do
+    if is_part (String.unsafe_get s !i) then (
+      let j = ref (!i + 1) in
+      while !j < n && is_part (String.unsafe_get s !j) do
+        incr j
+      done;
+      if
+        !j - !i > 4
+        && s.[!i] = 'r'
+        && s.[!i + 1] = 'e'
+        && s.[!i + 2] = 'n'
+        && s.[!i + 3] = '_'
+      then (
+        let id = String.sub s !i (!j - !i) in
+        if not (Hashtbl.mem seen id) then (
+          Hashtbl.replace seen id ();
+          acc := id :: !acc));
+      i := !j)
+    else incr i
+  done;
+  List.rev !acc
+
+(* A debug build's C (foundations.md, decision 13): ren_rt.h, the
+   runtime's unit, and the program in units of a module's functions or a
+   few modules', about [per_job] for each of [jobs] that compile them in
+   parallel. A unit
+   includes no system header (ren_rt.h, REN_UNIT) and declares only what
+   it uses of the others: the functions it calls, and the data it reads,
+   which the first unit defines. Its lines say which Ren lines they come
+   from. *)
+let units ~jobs ~(site_pieces : site -> Diag.piece list) (p : program) =
+  linkage := "";
+  line_dirs := true;
+  let ps = parts ~restrict:false ~release:false ~site_pieces p in
+  line_dirs := false;
+  linkage := "static ";
+  (* what declares each thing a unit may use of the others *)
+  let decls = Hashtbl.create 4096 in
+  List.iter (fun (name, d) -> Hashtbl.replace decls name d) ps.protos;
+  List.iter (fun (name, d) -> Hashtbl.replace decls name d) ps.externs;
+  List.iteri
+    (fun i _ ->
+      let n = sprintf "ren_lit_%d" i in
+      Hashtbl.replace decls n (sprintf "extern struct %s %s;\n" n n))
+    p.strings;
+  List.iter
+    (fun (s : site) ->
+      let n = sprintf "ren_site_%d" s.sid in
+      Hashtbl.replace decls n (sprintf "extern const ren_site %s;\n" n))
+    p.sites;
+  List.iteri
+    (fun i _ ->
+      let n = sprintf "ren_desc_%d" i in
+      Hashtbl.replace decls n (sprintf "extern ren_desc %s;\n" n))
+    p.descs;
+  List.iteri
+    (fun i _ ->
+      let n = sprintf "ren_decl_%d" i in
+      Hashtbl.replace decls n (sprintf "extern const ren_decl %s;\n" n))
+    p.decls;
+  let unit body =
+    let b = Buffer.create (String.length body + 4096) in
+    Buffer.add_string b "#define REN_UNIT\n#include \"ren_rt.h\"\n\n";
+    Buffer.add_string b ps.typedefs;
+    List.iter
+      (fun id ->
+        match Hashtbl.find_opt decls id with
+        | Some d -> Buffer.add_string b d
+        | None -> ())
+      (identifiers body);
+    Buffer.add_string b "\n";
+    Buffer.add_string b body;
+    Buffer.contents b
+  in
+  (* the first unit: the data, then what runs the program *)
+  let first =
+    let b = Buffer.create 65536 in
+    Buffer.add_string b "#define REN_UNIT\n#include \"ren_rt.h\"\n\n";
+    Buffer.add_string b ps.typedefs;
+    Buffer.add_string b ps.data;
+    List.iter
+      (fun id ->
+        match Hashtbl.find_opt decls id with
+        | Some d -> Buffer.add_string b d
+        | None -> ())
+      (identifiers ps.run);
+    Buffer.add_string b "\n";
+    Buffer.add_string b ps.run;
+    Buffer.contents b
+  in
+  (* the functions, a file's together, those without Ren source (the
+     prelude's) first in each unit, so no `#line` is in force over them,
+     cut into units of about [size] bytes of them *)
+  let files = ref [] and by_file = Hashtbl.create 64 in
+  List.iter
+    (fun (((f : fn), _) as x) ->
+      match Hashtbl.find_opt by_file f.loc.file with
+      | Some xs -> Hashtbl.replace by_file f.loc.file (x :: xs)
+      | None ->
+          files := f.loc.file :: !files;
+          Hashtbl.replace by_file f.loc.file [ x ])
+    ps.fns;
+  let ordered =
+    List.concat_map
+      (fun file -> List.rev (Hashtbl.find by_file file))
+      (List.rev !files)
+  in
+  (* [per_job] units for each job that compiles them, so a unit that
+     takes longer than the rest doesn't leave the others waiting, but
+     none so small it's mostly ren_rt.h *)
+  let total = List.fold_left (fun n (_, c) -> n + String.length c) 0 ps.fns in
+  let size = max min_unit (total / (per_job * max 1 jobs)) in
+  let chunks = ref [] and cur = ref [] and bytes = ref 0 in
+  let cut () =
+    if !cur <> [] then chunks := List.rev !cur :: !chunks;
+    cur := [];
+    bytes := 0
+  in
+  List.iter
+    (fun ((f : fn), c) ->
+      cur := (f, c) :: !cur;
+      bytes := !bytes + String.length c;
+      if !bytes >= size then cut ())
+    ordered;
+  cut ();
+  (* the sites, which are most of a program's data, in units of their
+     own, of about [size] bytes too *)
+  let site_units = ref [] and cur = ref [] and bytes = ref 0 in
+  let cut () =
+    if !cur <> [] then site_units := String.concat "" (List.rev !cur) :: !site_units;
+    cur := [];
+    bytes := 0
+  in
+  List.iter
+    (fun d ->
+      cur := d :: !cur;
+      bytes := !bytes + String.length d;
+      if !bytes >= size then cut ())
+    ps.site_defs;
+  cut ();
+  let body chunk =
+    let plain, lined =
+      List.partition
+        (fun ((f : fn), _) -> not (Filename.check_suffix f.loc.file ".ren"))
+        chunk
+    in
+    String.concat "" (List.map snd (plain @ lined))
+  in
+  {
+    header = Runtime_c.header;
+    runtime = "#include \"ren_rt.h\"\n\n" ^ Runtime_c.source;
+    program =
+      ("ren_main", first)
+      :: List.mapi
+           (fun i chunk -> (sprintf "ren_u%d" i, unit (body chunk)))
+           (List.rev !chunks)
+      @ List.mapi
+          (fun i defs ->
+            ( sprintf "ren_s%d" i,
+              "#define REN_UNIT\n#include \"ren_rt.h\"\n\n" ^ defs ))
+          (List.rev !site_units);
+  }

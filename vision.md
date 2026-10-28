@@ -24,13 +24,12 @@ subset:
   every operation, which was 2.37×. Peak memory is within 1.5× on all
   seven. The first measurement had three over 2×, nbody at 15.5×.
 - **Debug builds faster than Go:** not yet. A clean build of 500k lines
-  takes 57 s, 77% of it clang -O0, and a one-line edit rebuilds
-  everything, since there's no build cache yet. Measured with tcc in
-  place of clang -O0, it would take 16 s against Go's 15, and the C
-  compiler would be a tenth of it. What's left is Ren's front half,
-  which runs on one core and already needs a sixth of Go's CPU, so
-  running it per module in parallel, with a build cache and a fast
-  link, is what passes.
+  takes 18 s with tcc against Go's 15 (it was 57 s with clang -O0),
+  and the C compiler is 0.2 s of it; a one-line edit rebuilds
+  everything, since there's no build cache yet. What's left is Ren's
+  front half and writing its C, which run on one core and already need
+  a fifth of Go's CPU, so running them per module in parallel, with a
+  build cache and a fast link, is what passes.
 - **Replay byte for byte:** in the interpreter, where the journal
   runs; a native binary has no journal yet.
 

@@ -13,12 +13,14 @@
 
 ; build.t builds every program here, and the examples, that the native
 ; slice compiles, under the sanitizers, and checks each prints what
-; `ren run` does. It needs a C compiler, cc or $REN_CC.
+; `ren run` does; then again with tcc, as a debug build is. It needs a C
+; compiler, cc or $REN_CC, and tcc, on PATH or $REN_TCC (tools/tcc.sh).
 
 (cram
  (applies_to build)
  (deps
   %{bin:ren}
+  (env_var REN_TCC)
   (glob_files *.ren)
   (glob_files native/binary-trees/*.ren)
   (glob_files native/blocks/*.ren)

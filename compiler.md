@@ -1468,8 +1468,9 @@ the rest of the subset, blocks, generics, handlers, errors, `show` and
 measurements. Then those that act on what they measured: arrays in
 loops, the experiments merged, the release build's costs, small values
 and packed fields, arrays of arrays and recursion that builds, sized
-storage, and floats checked where they're observed. Each step extends
-this section, and says what it changed of the ones before.
+storage, floats checked where they're observed, loops without indices,
+and debug builds with tcc. Each step extends this section, and says
+what it changed of the ones before.
 
 ### Step 2: Mem IR, the runtime, and `ren build`
 
@@ -2015,7 +2016,8 @@ Staging, item 2):
   specialization, unboxed records and `restrict`, so steps 4 and 5
   built them, and `--rc naive` keeps the baseline.
 - **No tcc.** The debug build runs `cc`, clang -O0 here; `REN_CC`
-  picks another, but nothing was measured with tcc.
+  picks another, but nothing was measured with tcc. (Step 15 builds
+  debug builds with tcc.)
 - **One process, one C file, no cache.** The driver links the whole
   program and writes one C file, so a one-line edit rebuilds it all.
 
@@ -2748,6 +2750,150 @@ a check against the length the loop counts to; the new forms keep that
 without depending on it. Every other program is unchanged. What still
 stops a loop vectorizing is an `Int` overflow check, a branch out of
 it: a running `Int` sum is 4.45× Rust.
+
+### Step 15: debug builds with tcc
+
+Decision 13: a debug build compiles its C with tcc, in units of
+moderate size, in parallel, with no system header in the program's
+units and `#line`s, so a debugger steps through Ren
+(research/backend.md has the measurements behind it).
+
+**What `ren build` runs** (cc.ml). A debug build's compiler is `$REN_CC`
+if it's set (bench/build.t's sanitizer builds set it to `cc`), or tcc,
+found as `$REN_TCC` or on PATH, or else `cc` at `-O0`, with a one-line
+note that says tools/tcc.sh installs tcc. tcc is LGPL-2.1, a separate
+program Ren runs, never linked in. tools/tcc.sh fetches tinycc's mob
+branch at the commit research/backend.md measured (e23dabed, which
+builds on arm64 macOS as is), builds it, installs it under
+`~/.local/share/ren/tcc` and links `~/.local/bin/tcc` to it. Each unit
+is compiled to an object by its own process, `$REN_JOBS` at once (one
+a core if unset), then linked: by tcc's own linker, since tcc writes
+ELF objects even on macOS, which ld64 can't read; a binary clang links
+from objects has its debug information left in them, so for clang the
+build runs dsymutil, as clang does when it compiles and links at once.
+tcc's flags are `-g -w` (it warns of functions that might not return,
+which Ren's never do, and never fuses a multiply and add); clang's are
+the old `-O0 -g -ffp-contract=off`. A release build is as it was: one
+C file, `$REN_CC` or `cc` at `-O2`. `--emit-c` prints one file, as
+before, without the `#line`s.
+
+**The units** (emit_c.ml, `units`). ren_rt.h; ren_rt.c, a unit of its
+own, which includes the system headers; ren_main.c, the program's data
+(its string literals, the texts its sites print, its descriptors and
+declarations, its associated values) and `ren_program` and `main`;
+ren_uN.c, its functions, a file's together, cut when a unit passes
+`max(64 KB, total / (4 · jobs))` bytes of them; and ren_sN.c, its
+sites, cut the same way. The sites were most of the data: a 500k-line
+program's are 91 of the 92 MB its data unit was, which took tcc 3.4 s
+alone, the whole compile, before they had units of their own (0.2 s
+after). Functions and data the units share are no longer `static`, and
+each unit declares only the names it uses of the others, found by
+scanning its text for the `ren_` names the program defines: a
+function's prototype, `extern` for the rest. A literal is a struct of
+its own size, so it's declared by an incomplete struct of its tag,
+which C11 6.2.7 makes the same type as the complete one.
+
+**No system headers.** A unit of the program's code defines `REN_UNIT`
+before ren_rt.h, which then includes no system header (they were 6.7
+of tcc's 8.1 ms a module's unit took) and declares what it and the
+program's code use instead: the fixed-width integer types, from the
+compiler's `__INT64_TYPE__`, `__SIZE_TYPE__` and `__UINTPTR_TYPE__`,
+their limits, `bool`, `NULL`, `INFINITY`, `isnan` as `x != x` (nothing
+is built with `-ffast-math`), and `memcpy`, `malloc`, `realloc`,
+`free`, `fabs`, `sqrt` and `fmod`. The two prototypes that take a
+`FILE *` aren't declared there; `main` prints what the program gave
+through `ren_print_result`, which ren_rt.c defines.
+
+**The overflow builtins.** tcc has no `__builtin_{add,sub,mul}_overflow`,
+so ren_rt.h's `ren_*_overflow` are them, or, under `__TINYC__`, tests
+in portable C: a sum or a difference overflowed by the operands' and
+result's signs (Hacker's Delight, 2-13), a product if dividing it by
+`b` doesn't give `a` back, but for `b` of 0 or -1. A check without the
+division, a test for operands of 32 bits and four 32-bit products
+(Hacker's Delight, 8-2), was measured under tcc on the M4: no faster
+on small operands and 1.9 times slower on large ones, since the
+division costs nothing next to tcc's code around it. All three were
+checked against clang's builtins on 60 million pairs, edge values and
+random ones, the same in every result and flag, and clean under UBSan.
+
+**`#line`.** to_mem.ml records the source line each variable a function
+defines was made at (Mem's `fn.lines`), while it compiles an expression
+of the function's own file; emit_c gives a statement its variable's
+line, or its site's, or the line before it. Each function starts with
+`#line n "file.ren"`, the absolute path, at the line its name is on.
+After `#line n`, C counts on from `n` one a line, so the C of one Ren
+line is written as one line of C, and a line whose Ren line isn't the
+next gets its own `#line n`. Code without Ren source, the prelude's,
+goes first in its unit, before any `#line`, so a debugger shows its C.
+Checked with lldb on tcc's binaries and on clang's: `b bench.ren:25`
+resolves to `ren_bench_append_safe` at bench.ren:25, `bt` gives each
+frame's Ren file and line, `frame variable` its variables (C's names,
+`v2_queen`), and `next` steps from line 25 to 26 and round the loop
+TRMC made of the recursion.
+
+**Soundness.** The units are the one file's C, split: each function and
+datum is defined once, with the type it had, and declared elsewhere
+with that type; nothing a unit can't see is assumed. The one `static`
+the units each have a copy of is `ren_in_bounds_site`, whose address
+says an index was proved in bounds (step 14). A unit compares only
+against its own copy; a site passed to ren_rt.c's out-of-line
+functions is compared with that unit's copy and doesn't match, so the
+index is checked there, and passes: a proof can be lost across units,
+never forged, since no site the program computes is any copy's
+address. bench/build.t's sanitizer runs now build these units, under
+ASan and UBSan, with clang; its last part builds every program again
+with tcc, Perceus and naive, 134 builds, and each prints and exits as
+`ren run` does, with the same objects alive at the end as clang's
+build has.
+
+**Measured.** gen.py's base programs, built clean, three runs at 500k,
+five at 100k and ten at 10k, all in one hyperfine run against the
+commit before this step, on the M4 (16 cores) shared with a workflow
+(load 5 to 20); `go build` with only the standard library cached.
+Median wall time in seconds; CPU is user and system time, the
+children's included. The front half is `ren build --emit-c`, which
+writes one file.
+
+| program | before: front + clang -O0, one file | after: front + tcc, units | after, without tcc: clang -O0, units | front half, before / after | go build | after / Go | CPU s, after / before / Go |
+|---|---|---|---|---|---|---|---|
+| base 10k | 1.148 | **0.481** | 0.976 | 0.313 / 0.319 | 0.225 | 2.14× | 1.7 / 1.2 / 1.6 |
+| base 100k | 10.95 | **3.674** | 5.526 | 2.941 / 3.019 | 2.79 ± 0.43 | 1.32× | 5.7 / 11.0 / 20.0 |
+| base 500k | 57.07 | **17.96** | 26.89 | 14.79 / 15.08 | 15.21 | 1.18× | 20.4 / 57.2 / 105.5 |
+
+- **Debug builds are 2.4 to 3.2 times faster,** and the C compiler is
+  no longer most of one. At 500k (`REN_PASS_TIMES`): writing the units
+  takes 6.6 s, against 5.3 s for the one file before, of which about
+  3.7 s is the sites' texts and pieces and the data, there either way,
+  0.6 s the `#line`s and the lines found for them, and 0.7 s cutting
+  the units and finding what each declares; tcc compiles the 116
+  units in 0.22 s; and its linker takes 1.3 s, now the largest part
+  after writing C. The front half before C, on one core, is about
+  9.4 s of it.
+- **Without tcc, units still help:** clang -O0 on 16 cores is 2.1 times
+  faster than on one file at 500k, for twice the CPU.
+- **H6 still fails, by 1.18 to 2.14 times,** while Ren uses a fifth of
+  Go's CPU at 500k. What's left is research/backend.md's list: the
+  front half per module in parallel, units cached by content, and a
+  link faster than tcc's.
+- hyperfine's `cpu_cycles` counts only the process it starts, not its
+  children, so it isn't a measure of these builds, which are mostly
+  child processes; CPU time is.
+
+What later steps need to know:
+
+- **No cache yet.** Decision 13 caches units by content; every build
+  writes and compiles all of them, including ren_rt.c, which is the
+  same each time.
+- **Writing C is the slowest part of the backend now.** The sites'
+  pieces and texts (about 3.7 s at 500k) and the scan for each unit's names
+  could be done per module, in parallel, when the front half is.
+- **Release builds are one file still,** at clang -O2. research/backend.md
+  measured -O2 on 32 partitions at 13 to 16 times faster; it's left for
+  when release builds are cached (decision 13), since a partition
+  loses clang's inlining across it.
+- **cfold still overflows the stack** at its benchmark size in a debug
+  build, under tcc as under clang -O0 (research/backend.md, 2): their
+  frames are bigger than -O2's.
 
 ## The runtime model
 

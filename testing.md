@@ -453,7 +453,9 @@ counts fewer times than with the naive counting, and fannkuch, and
 `map` over an array it builds, allocate nothing per step; and in the
 release build, that H1's kernels call no block and H2's operation is a
 direct call. A program outside the subset is in it too, to show the
-error that says so. It needs a C compiler, `cc` or `$REN_CC`.
+error that says so. It needs a C compiler, `cc` or `$REN_CC`, and tcc
+(tools/tcc.sh installs it), which its last part builds every program
+with again, as a debug build does when tcc is found.
 
 The specializer is checked against the interpreter one step earlier:
 test/helpers.ml runs every program of the test suite with `ren run`

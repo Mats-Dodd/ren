@@ -425,7 +425,7 @@ One line each:
   inout 1.85× and nbody 2.39× in cycles, for the index, overflow and
   NaN checks Rust's release build doesn't make (H5 below).
 - **H6, debug builds faster than `go build`: fails,** unchanged (not
-  run again).
+  run again; see H6's "With tcc" for the later step 15).
 - **H7, within 2× of Rust in time and memory: holds** on six of seven;
   nbody is 2.39×, its NaN checks 31% of its cycles. Memory is within
   1.5× of Rust on all seven, rbtree and binary-trees at 1.49× and
@@ -834,6 +834,24 @@ for debug builds; one C file per module, compiled in parallel and
 cached by the hash of the module's interface and body, which is also
 what makes a leaf edit rebuild one module (stage 13's content-addressed
 cache); then the front half in parallel per module.
+
+**With tcc** (compiler.md, step 15): a debug build writes its C in
+units with no system headers and compiles them with tcc in parallel.
+Measured clean, in one hyperfine run against the commit before
+(median wall seconds; 3 runs at 500k, 5 at 100k, 10 at 10k; load 5
+to 20; `go build` with the standard library cached):
+
+| program | before | after | go build | after / Go |
+|---|---|---|---|---|
+| base 10k | 1.148 | 0.481 | 0.225 | 2.14× |
+| base 100k | 10.95 | 3.674 | 2.79 ± 0.43 | 1.32× |
+| base 500k | 57.07 | 17.96 | 15.21 | 1.18× |
+
+Still fails, but by 1.18× at 500k instead of 3.8×, with a fifth of
+Go's CPU (20.4 s against 105.5). The C compiler is 0.22 s of it at
+500k; writing the C, tcc's link (1.3 s) and the front half on one core
+are the rest. There's no cache yet, so a leaf edit takes what a clean
+build does.
 
 ## Release builds
 

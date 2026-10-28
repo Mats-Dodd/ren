@@ -46,13 +46,17 @@ commands:
           else is an error that says to use `ren run`:
             -o <out>   the binary to write, the file's name without
                        `.ren` if not given
-            --debug    -O0 -g, the default
+            --debug    the default: the C in units, a few modules each,
+                       compiled in parallel by tcc, with lines that say
+                       which line of Ren each comes from, so a debugger
+                       steps through Ren
             --release  -O2, and the program specialized: a copy of each
                        generic function for each type it's used at,
                        each block given lifted into a function, and
                        each call of an operation whose handler is known
                        made directly
-            --emit-c   print the C instead of building it
+            --emit-c   print the C instead of building it, as one
+                       file, without the lines of Ren
             --emit-mem print the Mem IR instead, its counting placed
             --stats    count allocations, frees and reference counting,
                        printed to stderr when the binary exits, and,
@@ -67,7 +71,11 @@ commands:
             --rc naive count a value at every use and drop it where its
                        scope ends, the baseline Perceus is measured
                        against
-          It runs $REN_CC, or cc, with $REN_CFLAGS added
+          A debug build runs $REN_CC if it's set, or tcc, found as
+          $REN_TCC or on PATH (tools/tcc.sh installs it), or else cc
+          -O0, with a note; $REN_JOBS units compile at once, one for
+          each core if it's not set. A release build runs $REN_CC, or
+          cc, -O2. Both add $REN_CFLAGS
   test    run the tests of every module in the folder (the current one if
           none is given) and the folders in it, but those holding a
           program of their own, with a `main`; or of the file and what
@@ -620,8 +628,9 @@ let replay args =
 
 (* `ren build <file.ren> [-o <out>] [--debug | --release] [--emit-c]
    [--emit-mem] [--stats] [--rc naive | --rc perceus]` (compiler.md,
-   "Native slice"): the program as C, compiled in a temporary folder by
-   $REN_CC, or cc. *)
+   "Native slice"): the program as C, compiled in a temporary folder
+   (cc.ml): a debug build's in units, by tcc in parallel, a release
+   build's as one file, by $REN_CC, or cc. `--emit-c` prints one file. *)
 let build args =
   let rc = ref Driver.Perceus and restrict = ref true in
   let rec parse ((out, release, emit, stats, path) as o) = function
@@ -685,13 +694,11 @@ let build args =
     in
     List.iter (fun f -> print_endline (Mem.show_fn f)) p.fns
   else
-    let c =
-      try
-        Driver.native ~load:(loader path) ~release ~made ~restrict:!restrict
-          ~rc:!rc ~sources:(sources ~known) ~file:path src
-      with e -> fail ~known e
+    let native () =
+      Driver.native ~load:(loader path) ~release ~made ~restrict:!restrict
+        ~rc:!rc ~sources:(sources ~known) ~file:path src
     in
-    if emit = `C then print_string c
+    if emit = `C then print_string (try native () with e -> fail ~known e)
     else
       let out =
         match out with
@@ -699,35 +706,30 @@ let build args =
         | None -> Filename.remove_extension (Filename.basename path)
       in
       let dir = Filename.temp_dir "ren-build" "" in
-      let c_file = Filename.concat dir "main.c" in
-      Out_channel.with_open_bin c_file (fun oc -> output_string oc c);
-      let cc = Option.value (Sys.getenv_opt "REN_CC") ~default:"cc" in
-      let extra =
-        match Sys.getenv_opt "REN_CFLAGS" with
-        | Some f -> List.filter (( <> ) "") (String.split_on_char ' ' f)
-        | None -> []
+      let built =
+        if release then
+          let c = try native () with e -> fail ~known e in
+          fun () -> Cc.release ~stats ~dir ~out c
+        else
+          let c = Cc.debug_compiler () and jobs = Cc.jobs () in
+          let units =
+            try
+              Driver.native_units ~load:(loader path) ~rc:!rc ~jobs
+                ~sources:(sources ~known) ~file:path src
+            with e -> fail ~known e
+          in
+          Option.iter prerr_endline c.note;
+          fun () -> Cc.debug ~c ~jobs ~stats ~dir ~out units
       in
-      (* -ffp-contract=off in both, so a `Float` is computed as `ren run`
-       computes it, never with a fused multiply and add *)
-      let flags =
-        (if release then [ "-O2" ] else [ "-O0"; "-g" ])
-        @ [ "-ffp-contract=off" ]
-        @ (if stats then [ "-DREN_STATS" ] else [])
-        @ extra
-      in
-      let cmd =
-        Filename.quote_command cc
-          (flags @ [ "-o"; out; c_file; "-lm"; "-lpthread" ])
-      in
-      if Sys.command cmd <> 0 then (
-        prerr_endline
-          (Printf.sprintf
-             "error: the C compiler failed on the C `ren build` wrote, which \
-              is a bug in the Ren compiler; the C is in %s"
-             c_file);
-        exit 1);
-      Sys.remove c_file;
-      try Sys.rmdir dir with Sys_error _ -> ()
+      match built () with
+      | () -> ( try Sys.rmdir dir with Sys_error _ -> ())
+      | exception Cc.Failed _ ->
+          prerr_endline
+            (Printf.sprintf
+               "error: the C compiler failed on the C `ren build` wrote, which \
+                is a bug in the Ren compiler; the C is in %s"
+               dir);
+          exit 1
 
 (* `ren console <module> [--real Clock,Fs]` (testing.md, "The console"). *)
 let console args =

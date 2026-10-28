@@ -1604,10 +1604,9 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
   pass "Mem Lint" (fun () -> Mem_lint.program p);
   p
 
-let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc ~sources
-    ~file src =
-  let p = mem ?lint ?load ~release ?made ?rc ~file src in
-  (* each file read once, not once for each place in it that can panic *)
+(* What a panic at each site prints, each file read once, not once for
+   each place in it that can panic. *)
+let site_pieces_of sources =
   let read = Hashtbl.create 16 in
   let sources file =
     match Hashtbl.find_opt read file with
@@ -1617,7 +1616,16 @@ let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc ~sources
         Hashtbl.replace read file src;
         src
   in
+  site_pieces ~lines_of:(Diag.indexed sources) ~sources
+
+let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc ~sources
+    ~file src =
+  let p = mem ?lint ?load ~release ?made ?rc ~file src in
   pass "C" (fun () ->
       Emit_c.program ~restrict:(release && restrict) ~release
-        ~site_pieces:(site_pieces ~lines_of:(Diag.indexed sources) ~sources)
-        p)
+        ~site_pieces:(site_pieces_of sources) p)
+
+let native_units ?lint ?load ?rc ~jobs ~sources ~file src =
+  let p = mem ?lint ?load ?rc ~file src in
+  pass "C" (fun () ->
+      Emit_c.units ~jobs ~site_pieces:(site_pieces_of sources) p)

@@ -659,6 +659,7 @@ let fn ?(fails = false) ?(result : Mem.layout = Int) ?(params = [])
     fails;
     body;
     loc = Loc.point ~file:"x" 1 1;
+    lines = [];
   }
 
 let v id name layout : Mem.var = { id; name; layout }

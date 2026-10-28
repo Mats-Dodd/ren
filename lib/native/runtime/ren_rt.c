@@ -1126,6 +1126,11 @@ void ren_print_value(FILE *out, ren_obj *d, ren_val v, const ren_site *site) {
   free(b.data);
 }
 
+void ren_print_result(ren_obj *d, ren_val v, const ren_site *site) {
+  ren_print_value(stdout, d, v, site);
+  fputc('\n', stdout);
+}
+
 static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
                          ren_val b, const ren_walk *w);
 

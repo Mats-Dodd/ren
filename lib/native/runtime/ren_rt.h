@@ -19,10 +19,14 @@
    costs the single-threaded code nothing. Nothing makes a count
    negative yet.
 
-   The C file `ren build` writes holds this header, then ren_rt.c, then
-   the program, so a binary needs nothing installed. Building it with
-   -DREN_STATS adds counters, printed to stderr when it exits. */
+   A release build's C file holds this header, then ren_rt.c, then the
+   program, so a binary needs nothing installed. A debug build writes
+   this header, ren_rt.c as a unit of its own, and the program in units
+   of a few modules each, which it compiles in parallel (foundations.md,
+   decision 13). Building it with -DREN_STATS adds counters, printed to
+   stderr when it exits. */
 
+#ifndef REN_UNIT
 #include <inttypes.h>
 #include <math.h>
 #include <pthread.h>
@@ -31,6 +35,61 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#else
+/* A unit of the program's code (REN_UNIT) includes no system header:
+   they were most of the time tcc took on a unit of one module, 6.7 of
+   8.1 ms (research/backend.md, 4b). What this header and the program's
+   code use of them is declared here instead, as the C library declares
+   it; the runtime's own unit, ren_rt.c, includes the headers. */
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+typedef short int16_t;
+typedef unsigned short uint16_t;
+typedef int int32_t;
+typedef unsigned int uint32_t;
+#ifdef __INT64_TYPE__
+typedef __INT64_TYPE__ int64_t;
+typedef unsigned __INT64_TYPE__ uint64_t;
+#else
+typedef long long int64_t;
+typedef unsigned long long uint64_t;
+#endif
+typedef __SIZE_TYPE__ size_t;
+typedef __UINTPTR_TYPE__ uintptr_t;
+#define bool _Bool
+#define true 1
+#define false 0
+#define NULL ((void *)0)
+#define INT8_MIN (-128)
+#define INT8_MAX 127
+#define UINT8_MAX 255
+#define INT16_MIN (-32768)
+#define INT16_MAX 32767
+#define UINT16_MAX 65535
+#define INT32_MIN (-2147483647 - 1)
+#define INT32_MAX 2147483647
+#define UINT32_MAX 4294967295U
+#define INT64_MAX 9223372036854775807LL
+#define INT64_MIN (-INT64_MAX - 1)
+#define UINT64_MAX 18446744073709551615ULL
+#define INT64_C(c) c##LL
+#define UINT64_C(c) c##ULL
+#ifdef __TINYC__
+#define INFINITY (1.0f / 0.0f)
+#else
+#define INFINITY (__builtin_inff())
+#endif
+/* a NaN is the one value not equal to itself; no unit is compiled with
+   -ffast-math, which would make it equal */
+#define isnan(x) ((x) != (x))
+void *memcpy(void *restrict dst, const void *restrict src, size_t n);
+void *malloc(size_t n);
+void *realloc(void *p, size_t n);
+void free(void *p);
+double fabs(double x);
+double sqrt(double x);
+double fmod(double x, double y);
+#endif
 
 typedef uint8_t ren_unit;
 
@@ -956,7 +1015,9 @@ void ren_format_float(char *buf, double f);
 
 /* A `Str` as it's written in source, in quotes, with its escapes, to
    [out]: how `ren run` prints a `main` that gives one. */
+#ifndef REN_UNIT
 void ren_print_quoted(FILE *out, ren_obj *s);
+#endif
 
 /* ---- arithmetic ----
 
@@ -996,23 +1057,59 @@ static inline float ren_narrow_f32(double x, const ren_site *site) {
   return (float)x;
 }
 
+/* [a op b], wrapped, into [*r], and whether it overflowed: clang's and
+   GCC's builtins, or for tcc, which has none, two's-complement tests
+   that give the same answers. A sum overflowed if both operands' signs
+   differ from its sign, a difference if [a]'s differs from [b]'s and
+   from the difference's (Hacker's Delight, 2-13). A product overflowed
+   if dividing it by [b] doesn't give [a] back, but for the one division
+   that itself overflows. Measured under tcc on an M4, that division
+   costs nothing over a loop's other work; a check without it, of four
+   32-bit products (Hacker's Delight, 8-2, [mulhs]) behind a test for
+   operands that fit in 32 bits, was up to 1.9 times slower. */
+#ifdef __TINYC__
+static inline bool ren_add_overflow(int64_t a, int64_t b, int64_t *r) {
+  int64_t s = (int64_t)((uint64_t)a + (uint64_t)b);
+  *r = s;
+  return ((a ^ s) & (b ^ s)) < 0;
+}
+static inline bool ren_sub_overflow(int64_t a, int64_t b, int64_t *r) {
+  int64_t s = (int64_t)((uint64_t)a - (uint64_t)b);
+  *r = s;
+  return ((a ^ b) & (a ^ s)) < 0;
+}
+static inline bool ren_mul_overflow(int64_t a, int64_t b, int64_t *r) {
+  int64_t s = (int64_t)((uint64_t)a * (uint64_t)b);
+  *r = s;
+  if (b == 0)
+    return false;
+  if (b == -1)
+    return a == INT64_MIN;
+  return s / b != a;
+}
+#else
+#define ren_add_overflow(a, b, r) __builtin_add_overflow(a, b, r)
+#define ren_sub_overflow(a, b, r) __builtin_sub_overflow(a, b, r)
+#define ren_mul_overflow(a, b, r) __builtin_mul_overflow(a, b, r)
+#endif
+
 static inline int64_t ren_add(int64_t a, int64_t b, const ren_site *site) {
   int64_t r;
-  if (__builtin_add_overflow(a, b, &r))
+  if (ren_add_overflow(a, b, &r))
     ren_int_overflowed(site, "+", a, b);
   return r;
 }
 
 static inline int64_t ren_sub(int64_t a, int64_t b, const ren_site *site) {
   int64_t r;
-  if (__builtin_sub_overflow(a, b, &r))
+  if (ren_sub_overflow(a, b, &r))
     ren_int_overflowed(site, "-", a, b);
   return r;
 }
 
 static inline int64_t ren_mul(int64_t a, int64_t b, const ren_site *site) {
   int64_t r;
-  if (__builtin_mul_overflow(a, b, &r))
+  if (ren_mul_overflow(a, b, &r))
     ren_int_overflowed(site, "*", a, b);
   return r;
 }
@@ -1062,21 +1159,21 @@ static inline int64_t ren_late_tick(int64_t n) {
 
 static inline int64_t ren_add_late(int64_t a, int64_t b, const ren_site *site) {
   int64_t r;
-  if (__builtin_expect(__builtin_add_overflow(a, b, &r), 0))
+  if (__builtin_expect(ren_add_overflow(a, b, &r), 0))
     ren_late_overflowed(site, "+", a, b);
   return r;
 }
 
 static inline int64_t ren_sub_late(int64_t a, int64_t b, const ren_site *site) {
   int64_t r;
-  if (__builtin_expect(__builtin_sub_overflow(a, b, &r), 0))
+  if (__builtin_expect(ren_sub_overflow(a, b, &r), 0))
     ren_late_overflowed(site, "-", a, b);
   return r;
 }
 
 static inline int64_t ren_mul_late(int64_t a, int64_t b, const ren_site *site) {
   int64_t r;
-  if (__builtin_expect(__builtin_mul_overflow(a, b, &r), 0))
+  if (__builtin_expect(ren_mul_overflow(a, b, &r), 0))
     ren_late_overflowed(site, "*", a, b);
   return r;
 }
@@ -1322,7 +1419,13 @@ ren_obj *ren_show_any(ren_obj *d, ren_val v, const ren_site *site);
 /* [v] as it's written, a `Str` in quotes: how `ren run` prints what
    `main` gives, or an error nothing handled; a NaN in it panics at
    [site]. */
+#ifndef REN_UNIT
 void ren_print_value(FILE *out, ren_obj *d, ren_val v, const ren_site *site);
+#endif
+
+/* What `main` gave, [v] of [d]'s type, printed to stdout as
+   [ren_print_value] prints it, and a newline. */
+void ren_print_result(ren_obj *d, ren_val v, const ren_site *site);
 
 /* `==` on two values of [d]'s type, and their order: negative if [a]
    comes first (walk.ml, `equal` and `compare`). A NaN in either panics

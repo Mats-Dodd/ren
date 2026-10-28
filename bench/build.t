@@ -8,6 +8,11 @@ and the two print the same. The statistics say no object is still
 alive when either ends. Mem Lint checks every program `ren build`
 compiles, and its counting, path by path.
 
+The sanitizers are clang's, so these builds compile with cc, not tcc,
+which a debug build uses when it's found ("Debug builds with tcc",
+below, compares those).
+
+  $ export REN_CC=cc
   $ export REN_CFLAGS='-fsanitize=address,undefined'
   $ same() {
   >   for rc in perceus naive; do
@@ -583,7 +588,6 @@ like the real `Clock`:
     │    ^^^^ `ren build` can't compile this yet
     help: run it with `ren run clock.ren`
   [1]
-  $ cd ../..
 
 A `var` walked down a list or a tree, by a `match` of it that assigns
 it a field its pattern took out, or a constant: the field the variable
@@ -1142,3 +1146,168 @@ and each build prints what `ren run` prints.
   4204222668004012000.0
   49998555369.54821
   49998555369.54821
+
+Debug builds with tcc (foundations.md, decision 13). A debug build
+writes its C in units, a few modules' functions each, with no system
+header and `#line`s that say which line of Ren each line of C is, and
+compiles them in parallel with tcc when it's on PATH or in $REN_TCC
+(tools/tcc.sh installs it), linking with tcc's linker. tcc has no
+sanitizers. Every program above, built that way, Perceus and naive,
+prints exactly what `ren run` prints and exits as it does, with the
+same objects alive at the end as clang's build above.
+
+  $ unset REN_CC REN_CFLAGS
+  $ command -v tcc > /dev/null || [ -n "$REN_TCC" ] || echo "no tcc: tools/tcc.sh installs it"
+  $ REN_PASS_TIMES=1 ren build fib.ren -o ./fib.bin 2>&1 | grep -o 'C compile (.* units, .*tcc)' | sed 's/([0-9]* units, .*tcc)/(units, tcc)/'
+  C compile (units, tcc)
+  $ tcc_same() {
+  >   for rc in perceus naive; do
+  >   (cd "$(dirname "$1")" && f=$(basename "$1") &&
+  >    rm -f tcc.bin native.out native.err native.code &&
+  >    ren build --stats --rc $rc "$f" -o ./tcc.bin &&
+  >    { ./tcc.bin > native.out 2> native.err; echo "exit $?" > native.code; } &&
+  >    { ren run "$f" > interp.out 2> interp.err; echo "exit $?" > interp.code; } &&
+  >    grep -v -e '^ren stats: ' native.err > native.err2;
+  >    if cmp -s native.out interp.out && cmp -s native.err2 interp.err &&
+  >       cmp -s native.code interp.code
+  >    then echo "$1, $rc, tcc: the same, $(cat native.code), $(grep -o 'objects live at exit [0-9]*' native.err)"
+  >    else echo "$1, $rc, tcc: different"; diff native.out interp.out; diff native.err2 interp.err
+  >    fi)
+  >   done
+  > }
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert nan_cmp nan_show nan_eq nan_round nan_sum nan_dep late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum; do tcc_same $f.ren; done
+  fib.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  fib.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  deep.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  deep.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  loop.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  loop.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  overflow.ren, perceus, tcc: the same, exit 1, objects live at exit 0
+  overflow.ren, naive, tcc: the same, exit 1, objects live at exit 0
+  frames.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  frames.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  tokens.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  tokens.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  packed.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  packed.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  values.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  values.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  values_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 4
+  values_panic.ren, naive, tcc: the same, exit 1, objects live at exit 4
+  swap.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  swap.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  swap_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 4
+  swap_panic.ren, naive, tcc: the same, exit 1, objects live at exit 4
+  swap_order.ren, perceus, tcc: the same, exit 1, objects live at exit 4
+  swap_order.ren, naive, tcc: the same, exit 1, objects live at exit 4
+  trmc.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  trmc.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  trmc_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 11
+  trmc_panic.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  sized.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  sized.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  sized_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  sized_panic.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  loops.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  loops.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  loops_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 3
+  loops_panic.ren, naive, tcc: the same, exit 1, objects live at exit 4
+  loops_short.ren, perceus, tcc: the same, exit 1, objects live at exit 6
+  loops_short.ren, naive, tcc: the same, exit 1, objects live at exit 6
+  review_arrays.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  review_arrays.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  review_values.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  review_values.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  review_lists.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  review_lists.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  review_shrink.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  review_shrink.ren, naive, tcc: the same, exit 1, objects live at exit 3
+  walks.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  walks.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  p_sum.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  p_sum.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  p_paren.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  p_paren.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  p_far.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  p_far.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  p_div.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  p_div.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  p_index.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  p_index.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  p_assert.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  p_assert.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  nan_cmp.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  nan_cmp.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  nan_show.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  nan_show.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  nan_eq.ren, perceus, tcc: the same, exit 1, objects live at exit 3
+  nan_eq.ren, naive, tcc: the same, exit 1, objects live at exit 3
+  nan_round.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  nan_round.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  nan_sum.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  nan_sum.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  nan_dep.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  nan_dep.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  late_sum.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  late_sum.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  late_index.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  late_index.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  late_print.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  late_print.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  late_spin.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  late_spin.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  late_inner.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  late_inner.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  late_two.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  late_two.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  late_break.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  late_break.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  late_hoisted.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  late_hoisted.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  late_call.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  late_call.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  float_sum.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  float_sum.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  $ for f in native/*/small.ren ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do tcc_same $f; done
+  native/binary-trees/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/binary-trees/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/blocks/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/blocks/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/bytes/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/bytes/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/cfold/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/cfold/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/deriv/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/deriv/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/fannkuch/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/fannkuch/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/handlers/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/handlers/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/inout/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/inout/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/nbody/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/nbody/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/nested/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/nested/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/nqueens/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/nqueens/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/rbtree/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/rbtree/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/stack/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/stack/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/vec/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/vec/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  ../examples/blocks.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  ../examples/blocks.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  ../examples/fib.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  ../examples/fib.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  ../examples/infer.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  ../examples/infer.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  ../examples/plans.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  ../examples/plans.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  ../examples/values.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  ../examples/values.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  ../examples/shop/main.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  ../examples/shop/main.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  ../examples/two/main.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  ../examples/two/main.ren, naive, tcc: the same, exit 0, objects live at exit 0

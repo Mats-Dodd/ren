@@ -860,13 +860,35 @@ type fs = {
   known : (int * Path.t) list;
       (** the [With]s whose handler a release build knows (Core's [known]):
           their evidence and dependency. Each installs nothing *)
+  file : string;  (** the file its code is in *)
+  lines : (int, int) Hashtbl.t;
+      (** the line of [file] each variable it defines was made at (Mem's
+          [fn.lines]) *)
+  mutable line : int;
+      (** the line of [file] of the expression being compiled, 0 if none *)
 }
 
 let at fs (loc : Loc.t) = if loc.file = Prelude.file then fs.here else loc
 
 let unsupported_at fs loc what = unsupported (at fs loc) what
 let layout_at fs loc t = layout fs.cx (at fs loc) t
-let emit fs s = fs.out <- s :: fs.out
+(* [s], after what's been compiled: the variable it defines made at the
+   line being compiled, if that's known. *)
+let emit fs s =
+  (if fs.line > 0 then
+     match s with
+     | Let (v, _)
+     | Decl v
+     | Call_fails { result = v; _ }
+     | Call_block { result = v; _ }
+     | Call_handler { result = v; _ } ->
+         Hashtbl.replace fs.lines v.id fs.line
+     | _ -> ());
+  fs.out <- s :: fs.out
+
+(* What [fs] knows of the lines its variables were made at. *)
+let lines_of fs =
+  List.sort compare (Hashtbl.fold (fun v l acc -> (v, l) :: acc) fs.lines [])
 
 let fresh fs name layout =
   fs.next_id <- fs.next_id + 1;
@@ -1369,6 +1391,17 @@ let is_spine_var (e : C.expr) =
   match e.kind with Local v -> v.id <= -1_000_000 | _ -> false
 
 let rec expr fs env (e : C.expr) : atom =
+  (* the line it's at, while it's compiled, if it's in the function's
+     file and not the prelude's *)
+  if e.loc.file = fs.file && e.loc.file <> Prelude.file then (
+    let outer = fs.line in
+    fs.line <- e.loc.start.line;
+    let x = expr_at fs env e in
+    fs.line <- outer;
+    x)
+  else expr_at fs env e
+
+and expr_at fs env (e : C.expr) : atom =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
   match e.kind with
@@ -2344,6 +2377,9 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
       words = [];
       handler = None;
       known = fs.known;
+      file = body.loc.file;
+      lines = Hashtbl.create 64;
+      line = 0;
     }
   in
   let env_p = fresh code "$env" Ptr in
@@ -2397,6 +2433,7 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
       fails = true;
       body = body_block;
       loc = body.loc;
+      lines = lines_of code;
     }
     :: cx.lifted;
   let envv = borrowed fs "$env" Ptr (Env_new cells) in
@@ -2512,6 +2549,9 @@ and handler fs env (e : C.expr) ~ev ~captures body =
       words = [];
       handler = None;
       known = fs.known;
+      file = e.loc.file;
+      lines = Hashtbl.create 64;
+      line = 0;
     }
   in
   let self = fresh code "$self" Boxed in
@@ -2558,6 +2598,7 @@ and handler fs env (e : C.expr) ~ev ~captures body =
       fails = true;
       body = body_block;
       loc = e.loc;
+      lines = lines_of code;
     }
     :: cx.lifted;
   alloc fs env
@@ -2897,6 +2938,9 @@ let fn cx here (f : C.fn_def) : Mem.fn =
           words = [];
           handler = None;
           known = List.map (fun (k : C.known) -> (k.kev.id, k.kdep)) f.known;
+          file = f.loc.file;
+          lines = Hashtbl.create 64;
+          line = 0;
         }
       in
       let lay t = layout_at fs f.loc t in
@@ -2959,6 +3003,7 @@ let fn cx here (f : C.fn_def) : Mem.fn =
         fails = fn_fails f;
         body;
         loc = f.loc;
+        lines = lines_of fs;
       })
 
 (* The program [modules], the prelude first and the entry last, with its
