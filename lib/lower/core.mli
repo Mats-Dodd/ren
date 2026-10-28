@@ -116,6 +116,10 @@ type prim =
   | Wrap
       (** an `Int` as a value of the sized integer type that's this [Prim]'s
           type, its low bits: how a wrapping operator's result is stored *)
+  | Nan_check of string
+      (** its operand, the same, after panicking if a NaN is anywhere in it:
+          what an operation of a dependency, named, `Log.put`, is given
+          (nan.ml). Its type is its operand's *)
 
 type param = { mode : mode; var : var }
 

@@ -62,6 +62,9 @@ let rec value ~own (types : types) (t : Ty.ty) (v : Value.t) =
   | _, Tag (name, (_ :: _ as payload)) ->
       (* an error, through its tag's payload's types in the set *)
       name ^ "(" ^ list (List.map (fun (t, x) -> value t x) payload) ^ ")"
+  (* a NaN can't be shown (nan.ml): what asked says so *)
+  | _, Leaf when (match v with VFloat f -> Float.is_nan f | _ -> false) -> (
+      match v with VFloat f -> raise (Nan.Seen f) | _ -> assert false)
   | _, (Leaf | Ctor _ | Tag _ | Shape) -> Value.show v
 
 (* What `show` makes of [v]: a string is itself, and anything else, a

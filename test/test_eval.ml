@@ -82,7 +82,7 @@ fn main() uses Console =
       │         ^^^^^^^^^^^^
     |}]
 
-let%expect_test "infinity stays, but what has no answer panics" =
+let%expect_test "infinity stays, and a NaN panics where it is shown, saying where it was made" =
   run
     {|
 fn main() uses Console =
@@ -95,10 +95,10 @@ fn main() uses Console =
     {|
     true
     -inf
-    error: panic: `-` has no answer here: inf - inf
-      ┌─ test.ren:5:9
+    error: panic: `show` of a NaN made at test.ren:5:9
+      ┌─ test.ren:5:3
     5 │   print(inf - inf)
-      │         ^^^^^^^^^
+      │   ^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "wrapping is a method" =
@@ -663,7 +663,8 @@ let%expect_test "from_utf8 fails with InvalidUtf8" =
   List.iter
     (fun b ->
       match
-        Ren.Builtins.run Ren.Intrinsic.Str_from_utf8 ~dicts:[]
+        Ren.Builtins.run Ren.Intrinsic.Str_from_utf8 ~dicts:[] ~tys:[]
+          ~made:(fun () -> 0)
           [ Ren.Value.VBytes b ]
       with
       | v, _ -> print_endline (Ren.Value.show v)
@@ -950,7 +951,7 @@ fn main() =
     ()
     |}]
 
-let%expect_test "a Float has no NaN" =
+let%expect_test "a NaN is carried and panics where it is observed" =
   run
     {|
 fn main() =
@@ -974,20 +975,20 @@ fn main() =
     1.5
     3
     -2
-    error: panic: `/` has no answer here: 0.0 / 0.0
-       ┌─ test.ren:10:9
+    error: panic: `show` of a NaN made at test.ren:10:9
+       ┌─ test.ren:10:3
     10 │   print(0.0 / 0.0)
-       │         ^^^^^^^^^
+       │   ^^^^^^^^^^^^^^^^
     |}];
   run {|
 fn main() = print((0.0 - 1.0).sqrt())
 |};
   [%expect
     {|
-    error: panic: `sqrt` of a negative number: -1.0
-      ┌─ test.ren:1:19
+    error: panic: `show` of a NaN made at test.ren:1:19
+      ┌─ test.ren:1:13
     1 │ fn main() = print((0.0 - 1.0).sqrt())
-      │                   ^^^^^^^^^^^^^^^^^^
+      │             ^^^^^^^^^^^^^^^^^^^^^^^^^
     |}];
   run {|
 fn main() = print((1.0 / 0.0).round())

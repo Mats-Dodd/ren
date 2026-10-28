@@ -1446,6 +1446,7 @@ let find_sub sub s =
 
 let site_pieces ~lines_of ~sources (s : Mem.site) : Diag.piece list =
   match s.kind with
+  | Caller -> [] (* it's [ren_here], whose pieces are its call's *)
   | Asserts -> Diag.pieces_indexed ~lines_of (assert_failed s.loc None)
   | Panics ->
       let wrap =
@@ -1593,6 +1594,13 @@ let mem ?lint ?load ?(release = false) ?(made = ignore) ?(rc = Perceus) ~file
     if release && rc = Perceus then pass "hoisting" (fun () -> Hoist.program p)
     else p
   in
+  (* a release build's loops report an overflow late (late.ml), if
+     REN_LATE is set: measured, it costs more than it gives, so it's off *)
+  let p =
+    if release && Sys.getenv_opt "REN_LATE" <> None then
+      pass "late overflow" (fun () -> Late.program p)
+    else p
+  in
   pass "Mem Lint" (fun () -> Mem_lint.program p);
   p
 
@@ -1610,6 +1618,6 @@ let native ?lint ?load ?(release = false) ?made ?(restrict = true) ?rc ~sources
         src
   in
   pass "C" (fun () ->
-      Emit_c.program ~restrict:(release && restrict)
+      Emit_c.program ~restrict:(release && restrict) ~release
         ~site_pieces:(site_pieces ~lines_of:(Diag.indexed sources) ~sources)
         p)

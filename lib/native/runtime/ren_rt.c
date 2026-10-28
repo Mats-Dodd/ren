@@ -6,6 +6,7 @@ ren_stats_t ren_stats;
 
 char *ren_stack_limit;
 const ren_site *ren_overflow_site;
+const ren_site *ren_here;
 
 /* ---- panics ---- */
 
@@ -29,6 +30,8 @@ static void ren_repeat(int c, uint64_t n) {
 }
 
 _Noreturn void ren_panic(const ren_site *site, const char *msg) {
+  /* an overflow a loop kept is reported before any other panic */
+  ren_late_check();
   fflush(stdout);
   const unsigned char *p = site->ops;
   for (;;) {
@@ -81,6 +84,7 @@ void ren_count_alloc(int64_t bytes) {
 
 _Noreturn static void ren_out_of_memory(void) {
   fflush(stdout);
+  ren_late_check();
   fputs("error: out of memory\n", stderr);
   exit(1);
 }
@@ -203,6 +207,7 @@ static void ren_todo_push(ren_todo_t *t, ren_obj *o) {
     t->objs = realloc(t->objs, t->cap * sizeof(ren_obj *));
     if (t->objs == NULL) {
       fflush(stdout);
+      ren_late_check();
       fputs("error: out of memory\n", stderr);
       exit(1);
     }
@@ -487,6 +492,7 @@ static void ren_array_grow(ren_array *arr) {
   ren_val *data = realloc(arr->data, (size_t)cap * k);
   if (data == NULL) {
     fflush(stdout);
+    ren_late_check();
     fputs("error: out of memory\n", stderr);
     exit(1);
   }
@@ -699,7 +705,9 @@ void ren_format_float(char *buf, double f) {
   }
 }
 
-ren_obj *ren_show_float(double f) {
+ren_obj *ren_show_float(double f, const ren_site *site) {
+  if (isnan(f))
+    ren_nan_panic(site, "`show` of a NaN", f);
   char buf[400];
   ren_format_float(buf, f);
   return ren_str_of(buf, (int64_t)strlen(buf));
@@ -739,13 +747,38 @@ _Noreturn void ren_int_overflowed(const ren_site *site, const char *op,
   ren_panic(site, msg);
 }
 
-_Noreturn void ren_float_undefined(const ren_site *site, const char *op,
-                                   double a, double b) {
-  char x[400], y[400], msg[900];
-  ren_format_float(x, a);
-  ren_format_float(y, b);
-  snprintf(msg, sizeof msg, "`%s` has no answer here: %s %s %s", op, x, op, y);
-  ren_panic(site, msg);
+/* ---- late overflow ---- */
+
+ren_late_t ren_late;
+
+void ren_late_overflowed(const ren_site *site, const char *op, int64_t a,
+                         int64_t b) {
+  if (ren_late.site == NULL)
+    ren_late = (ren_late_t){site, op, a, b};
+}
+
+_Noreturn void ren_late_report(void) {
+  ren_late_t f = ren_late;
+  ren_late.site = NULL;
+  ren_int_overflowed(f.site, f.op, f.a, f.b);
+}
+
+/* ---- NaN ---- */
+
+const char *const *ren_nan_where;
+int32_t ren_nan_nwhere;
+
+_Noreturn void ren_nan_panic(const ren_site *site, const char *what, double f) {
+  uint64_t bits;
+  memcpy(&bits, &f, sizeof bits);
+  uint32_t tag = (uint32_t)((bits >> 29) & 0x3FFFFF);
+  if (ren_nan_where != NULL && tag > 0 && (int32_t)tag < ren_nan_nwhere &&
+      ren_nan_where[tag] != NULL) {
+    char msg[600];
+    snprintf(msg, sizeof msg, "%s made %s", what, ren_nan_where[tag]);
+    ren_panic(site, msg);
+  }
+  ren_panic(site, what);
 }
 
 _Noreturn void ren_narrow_panic(const ren_site *site, uint8_t kind, ren_val v) {
@@ -802,19 +835,14 @@ int64_t ren_neg(int64_t a, const ren_site *site) {
   return -a;
 }
 
-double ren_fsqrt(double a, const ren_site *site) {
-  if (a < 0) {
-    char x[400], msg[500];
-    ren_format_float(x, a);
-    snprintf(msg, sizeof msg, "`sqrt` of a negative number: %s", x);
-    ren_panic(site, msg);
-  }
-  return sqrt(a);
-}
-
 /* [r], [f] rounded by [how], if it's an `Int`: builtins.ml's `to_int`. */
 static int64_t ren_to_int(double r, double f, const char *how,
                           const ren_site *site) {
+  if (isnan(f)) {
+    char what[64];
+    snprintf(what, sizeof what, "`%s` of a NaN", how);
+    ren_nan_panic(site, what, f);
+  }
   if (isfinite(r) && r >= -9.223372036854775808e18 &&
       r < 9.223372036854775808e18)
     return (int64_t)r;
@@ -904,6 +932,7 @@ static void ren_put(ren_buf *b, const char *s, size_t n) {
     b->data = realloc(b->data, b->cap);
     if (b->data == NULL) {
       fflush(stdout);
+      ren_late_check();
       fputs("error: out of memory\n", stderr);
       exit(1);
     }
@@ -945,15 +974,28 @@ static int64_t ren_ctor_tag(const ren_decl *decl, ren_val v) {
   return decl->enumlike ? v.i : ren_tag(v.o);
 }
 
+/* A walk's site: where a NaN it finds panics, and what it says. */
+typedef struct {
+  const ren_site *site;
+  const char *what;
+} ren_walk;
+
+/* [f], unless it's a NaN, which panics as [w] says. */
+static inline void ren_walk_float(const ren_walk *w, double f) {
+  if (__builtin_expect(isnan(f), 0))
+    ren_nan_panic(w->site, w->what, f);
+}
+
 static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
-                         ren_val v);
+                         ren_val v, const ren_walk *w);
 
 /* Each of [n] fields of [o], of the types [types] read under [env], with
    [names] before them if there are any; where they are is [c]'s, if
    there's one. */
 static void ren_show_fields(ren_buf *b, ren_obj *o, const ren_ctor_info *c,
                             int32_t n, const char *const *names,
-                            ren_desc *const *types, const ren_tenv *env) {
+                            ren_desc *const *types, const ren_tenv *env,
+                            const ren_walk *w) {
   for (int32_t i = 0; i < n; i++) {
     if (i > 0)
       ren_puts(b, ", ");
@@ -961,13 +1003,13 @@ static void ren_show_fields(ren_buf *b, ren_obj *o, const ren_ctor_info *c,
       ren_puts(b, names[i]);
       ren_puts(b, ": ");
     }
-    ren_show_val(b, types[i], env, ren_ctor_field(o, c, i));
+    ren_show_val(b, types[i], env, ren_ctor_field(o, c, i), w);
   }
 }
 
 /* An error: its tag, and its payload, through the descriptors it keeps
    after it. */
-static void ren_show_error(ren_buf *b, ren_obj *e) {
+static void ren_show_error(ren_buf *b, ren_obj *e, const ren_walk *w) {
   ren_puts(b, ren_tag_names[ren_tag(e)]);
   if (ren_is_scalar(e))
     return;
@@ -977,14 +1019,14 @@ static void ren_show_error(ren_buf *b, ren_obj *e) {
     if (i > 0)
       ren_puts(b, ", ");
     ren_show_val(b, (ren_desc *)ren_fields(e)[n + i].o, NULL,
-                 ren_fields(e)[i]);
+                 ren_fields(e)[i], w);
   }
   ren_puts(b, ")");
 }
 
 /* [v] as it's written: shown.ml's `value`. */
 static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
-                         ren_val v) {
+                         ren_val v, const ren_walk *w) {
   char num[400];
   d = ren_resolve(d, &env);
   switch (d->kind) {
@@ -993,14 +1035,16 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
     ren_puts(b, num);
     break;
   case REN_D_FLOAT:
+    ren_walk_float(w, v.f);
     ren_format_float(num, v.f);
     ren_puts(b, num);
     break;
   /* a sized type's value, as a word, is the number it holds */
   case REN_D_SIZED:
-    if (d->var == REN_ELEM_F32)
+    if (d->var == REN_ELEM_F32) {
+      ren_walk_float(w, v.f);
       ren_format_float(num, v.f);
-    else
+    } else
       snprintf(num, sizeof num, "%" PRId64, v.i);
     ren_puts(b, num);
     break;
@@ -1020,18 +1064,18 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
     for (int64_t i = 0; i < a->len; i++) {
       if (i > 0)
         ren_puts(b, ", ");
-      ren_show_val(b, d->args[0], env, ren_array_load(v.o, i));
+      ren_show_val(b, d->args[0], env, ren_array_load(v.o, i), w);
     }
     ren_puts(b, "]");
     break;
   }
   case REN_D_TUPLE:
     ren_puts(b, "(");
-    ren_show_fields(b, v.o, NULL, d->nargs, NULL, d->args, env);
+    ren_show_fields(b, v.o, NULL, d->nargs, NULL, d->args, env, w);
     ren_puts(b, ")");
     break;
   case REN_D_ERRORS:
-    ren_show_error(b, v.o);
+    ren_show_error(b, v.o, w);
     break;
   case REN_D_NAMED: {
     const ren_decl *decl = d->decl;
@@ -1039,20 +1083,20 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
     if (decl->kind == REN_DECL_REP) {
       ren_puts(b, decl->name);
       ren_puts(b, "(");
-      ren_show_val(b, decl->rep, &inner, v);
+      ren_show_val(b, decl->rep, &inner, v, w);
       ren_puts(b, ")");
     } else if (decl->kind == REN_DECL_RECORD) {
       const ren_ctor_info *c = &decl->ctors[0];
       ren_puts(b, decl->name);
       ren_puts(b, decl->opaque ? "(" : " { ");
-      ren_show_fields(b, v.o, c, c->nfields, c->fields, c->types, &inner);
+      ren_show_fields(b, v.o, c, c->nfields, c->fields, c->types, &inner, w);
       ren_puts(b, decl->opaque ? ")" : " }");
     } else {
       const ren_ctor_info *c = &decl->ctors[ren_ctor_tag(decl, v)];
       ren_puts(b, c->name);
       if (c->nfields > 0) {
         ren_puts(b, "(");
-        ren_show_fields(b, v.o, c, c->nfields, NULL, c->types, &inner);
+        ren_show_fields(b, v.o, c, c->nfields, NULL, c->types, &inner, w);
         ren_puts(b, ")");
       }
     }
@@ -1061,47 +1105,55 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
   }
 }
 
-ren_obj *ren_show_any(ren_obj *d, ren_val v) {
+ren_obj *ren_show_any(ren_obj *d, ren_val v, const ren_site *site) {
   if (((ren_desc *)d)->kind == REN_D_STR) {
     ren_dup(v.o);
     return v.o;
   }
+  ren_walk w = {site, "`show` of a NaN"};
   ren_buf b = {NULL, 0, 0};
-  ren_show_val(&b, (ren_desc *)d, NULL, v);
+  ren_show_val(&b, (ren_desc *)d, NULL, v, &w);
   ren_obj *s = ren_str_of(b.data, (int64_t)b.len);
   free(b.data);
   return s;
 }
 
-void ren_print_value(FILE *out, ren_obj *d, ren_val v) {
+void ren_print_value(FILE *out, ren_obj *d, ren_val v, const ren_site *site) {
+  ren_walk w = {site, "`show` of a NaN"};
   ren_buf b = {NULL, 0, 0};
-  ren_show_val(&b, (ren_desc *)d, NULL, v);
+  ren_show_val(&b, (ren_desc *)d, NULL, v, &w);
   fwrite(b.data, 1, b.len, out);
   free(b.data);
 }
 
 static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
-                         ren_val b);
+                         ren_val b, const ren_walk *w);
 
 static bool ren_equal_fields(ren_obj *a, ren_obj *b, const ren_ctor_info *c,
                              int32_t n, ren_desc *const *types,
-                             const ren_tenv *env) {
+                             const ren_tenv *env, const ren_walk *w) {
   for (int32_t i = 0; i < n; i++)
     if (!ren_equal_in(types[i], env, ren_ctor_field(a, c, i),
-                      ren_ctor_field(b, c, i)))
+                      ren_ctor_field(b, c, i), w))
       return false;
   return true;
 }
 
 /* walk.ml's `equal`, part by part. */
 static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
-                         ren_val b) {
+                         ren_val b, const ren_walk *w) {
   d = ren_resolve(d, &env);
   switch (d->kind) {
   case REN_D_FLOAT:
+    ren_walk_float(w, a.f);
+    ren_walk_float(w, b.f);
     return a.f == b.f;
   case REN_D_SIZED:
-    return d->var == REN_ELEM_F32 ? a.f == b.f : a.i == b.i;
+    if (d->var != REN_ELEM_F32)
+      return a.i == b.i;
+    ren_walk_float(w, a.f);
+    ren_walk_float(w, b.f);
+    return a.f == b.f;
   case REN_D_STR:
     return ren_str_eq(a.o, b.o);
   case REN_D_ARRAY: {
@@ -1110,12 +1162,12 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
       return false;
     for (int64_t i = 0; i < x->len; i++)
       if (!ren_equal_in(d->args[0], env, ren_array_load(a.o, i),
-                        ren_array_load(b.o, i)))
+                        ren_array_load(b.o, i), w))
         return false;
     return true;
   }
   case REN_D_TUPLE:
-    return ren_equal_fields(a.o, b.o, NULL, d->nargs, d->args, env);
+    return ren_equal_fields(a.o, b.o, NULL, d->nargs, d->args, env, w);
   case REN_D_ERRORS: {
     if (ren_tag(a.o) != ren_tag(b.o))
       return false;
@@ -1124,7 +1176,7 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
     int32_t n = (int32_t)a.o->nfields / 2;
     for (int32_t i = 0; i < n; i++)
       if (!ren_equal_in((ren_desc *)ren_fields(a.o)[n + i].o, NULL,
-                        ren_fields(a.o)[i], ren_fields(b.o)[i]))
+                        ren_fields(a.o)[i], ren_fields(b.o)[i], w))
         return false;
     return true;
   }
@@ -1132,38 +1184,46 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
     const ren_decl *decl = d->decl;
     ren_tenv inner = {d->args, env};
     if (decl->kind == REN_DECL_REP)
-      return ren_equal_in(decl->rep, &inner, a, b);
+      return ren_equal_in(decl->rep, &inner, a, b, w);
     if (decl->kind == REN_DECL_RECORD)
       return ren_equal_fields(a.o, b.o, &decl->ctors[0],
                               decl->ctors[0].nfields, decl->ctors[0].types,
-                              &inner);
+                              &inner, w);
     int64_t tag = ren_ctor_tag(decl, a);
     if (tag != ren_ctor_tag(decl, b))
       return false;
     const ren_ctor_info *c = &decl->ctors[tag];
     return c->nfields == 0 ||
-           ren_equal_fields(a.o, b.o, c, c->nfields, c->types, &inner);
+           ren_equal_fields(a.o, b.o, c, c->nfields, c->types, &inner, w);
   }
   default: /* an `Int`, a `Bool` or `Unit` */
     return a.i == b.i;
   }
 }
 
-bool ren_equal_any(ren_obj *d, ren_val a, ren_val b) {
-  return ren_equal_in((ren_desc *)d, NULL, a, b);
+bool ren_equal_any(ren_obj *d, ren_val a, ren_val b, const char *what,
+                   const ren_site *site) {
+  ren_walk w = {site, what};
+  return ren_equal_in((ren_desc *)d, NULL, a, b, &w);
 }
 
 #define REN_CMP(x, y) ((x) < (y) ? -1 : (x) > (y) ? 1 : 0)
 
 /* walk.ml's `compare`: what inference allows an order on. */
 static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
-                              ren_val a, ren_val b) {
+                              ren_val a, ren_val b, const ren_walk *w) {
   d = ren_resolve(d, &env);
   switch (d->kind) {
   case REN_D_FLOAT:
+    ren_walk_float(w, a.f);
+    ren_walk_float(w, b.f);
     return REN_CMP(a.f, b.f);
   case REN_D_SIZED:
-    return d->var == REN_ELEM_F32 ? REN_CMP(a.f, b.f) : REN_CMP(a.i, b.i);
+    if (d->var != REN_ELEM_F32)
+      return REN_CMP(a.i, b.i);
+    ren_walk_float(w, a.f);
+    ren_walk_float(w, b.f);
+    return REN_CMP(a.f, b.f);
   case REN_D_STR: {
     int64_t la = ren_str_len(a.o), lb = ren_str_len(b.o);
     int c = memcmp(ren_str_data(a.o), ren_str_data(b.o),
@@ -1173,7 +1233,7 @@ static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
   case REN_D_TUPLE:
     for (uint16_t i = 0; i < d->nargs; i++) {
       int64_t c = ren_compare_in(d->args[i], env, ren_fields(a.o)[i],
-                                 ren_fields(b.o)[i]);
+                                 ren_fields(b.o)[i], w);
       if (c != 0)
         return c;
     }
@@ -1181,7 +1241,7 @@ static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
   case REN_D_NAMED: {
     ren_tenv inner = {d->args, env};
     if (d->decl->kind == REN_DECL_REP)
-      return ren_compare_in(d->decl->rep, &inner, a, b);
+      return ren_compare_in(d->decl->rep, &inner, a, b, w);
     return REN_CMP(ren_ctor_tag(d->decl, a), ren_ctor_tag(d->decl, b));
   }
   default: /* an `Int` or a `Bool` */
@@ -1189,8 +1249,65 @@ static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
   }
 }
 
-int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b) {
-  return ren_compare_in((ren_desc *)d, NULL, a, b);
+int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b, const char *what,
+                        const ren_site *site) {
+  ren_walk w = {site, what};
+  return ren_compare_in((ren_desc *)d, NULL, a, b, &w);
+}
+
+/* walk.ml's [nan_in]: the first NaN in [v], in the order its parts are
+   declared. */
+static void ren_nan_val(const ren_desc *d, const ren_tenv *env, ren_val v,
+                        const ren_walk *w) {
+  d = ren_resolve(d, &env);
+  switch (d->kind) {
+  case REN_D_FLOAT:
+    ren_walk_float(w, v.f);
+    break;
+  case REN_D_SIZED:
+    if (d->var == REN_ELEM_F32)
+      ren_walk_float(w, v.f);
+    break;
+  case REN_D_ARRAY: {
+    ren_array *a = (ren_array *)v.o;
+    for (int64_t i = 0; i < a->len; i++)
+      ren_nan_val(d->args[0], env, ren_array_load(v.o, i), w);
+    break;
+  }
+  case REN_D_TUPLE:
+    for (uint16_t i = 0; i < d->nargs; i++)
+      ren_nan_val(d->args[i], env, ren_fields(v.o)[i], w);
+    break;
+  case REN_D_ERRORS:
+    if (!ren_is_scalar(v.o)) {
+      int32_t n = (int32_t)v.o->nfields / 2;
+      for (int32_t i = 0; i < n; i++)
+        ren_nan_val((ren_desc *)ren_fields(v.o)[n + i].o, NULL,
+                    ren_fields(v.o)[i], w);
+    }
+    break;
+  case REN_D_NAMED: {
+    const ren_decl *decl = d->decl;
+    ren_tenv inner = {d->args, env};
+    if (decl->kind == REN_DECL_REP) {
+      ren_nan_val(decl->rep, &inner, v, w);
+      break;
+    }
+    const ren_ctor_info *c =
+        decl->kind == REN_DECL_RECORD ? &decl->ctors[0]
+                                      : &decl->ctors[ren_ctor_tag(decl, v)];
+    for (int32_t i = 0; i < c->nfields; i++)
+      ren_nan_val(c->types[i], &inner, ren_ctor_field(v.o, c, i), w);
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+void ren_nan_in(ren_obj *d, ren_val v, const char *what, const ren_site *site) {
+  ren_walk w = {site, what};
+  ren_nan_val((ren_desc *)d, NULL, v, &w);
 }
 
 /* Whether a number type is a `Float`, or represented as one, rather
@@ -1205,24 +1322,24 @@ static bool ren_is_float(const ren_desc *d, const ren_tenv *env) {
 }
 
 ren_val ren_op_any(ren_obj *d, int op, ren_val a, ren_val b,
-                   const ren_site *site) {
+                   const ren_site *site, uint32_t tag) {
   ren_val r;
   if (ren_is_float((ren_desc *)d, NULL)) {
     switch (op) {
     case REN_OP_ADD:
-      r.f = ren_fadd(a.f, b.f, site);
+      r.f = ren_fadd_d(a.f, b.f, tag);
       break;
     case REN_OP_SUB:
-      r.f = ren_fsub(a.f, b.f, site);
+      r.f = ren_fsub_d(a.f, b.f, tag);
       break;
     case REN_OP_MUL:
-      r.f = ren_fmul(a.f, b.f, site);
+      r.f = ren_fmul_d(a.f, b.f, tag);
       break;
     case REN_OP_DIV:
-      r.f = ren_fdiv(a.f, b.f, site);
+      r.f = ren_fdiv_d(a.f, b.f, tag);
       break;
     case REN_OP_REM:
-      r.f = ren_frem(a.f, b.f, site);
+      r.f = ren_frem_d(a.f, b.f, tag);
       break;
     default:
       r.f = -a.f;
@@ -1267,7 +1384,8 @@ static ren_desc ren_errors_desc = {
 _Noreturn void ren_uncaught(ren_obj *e) {
   fflush(stdout);
   fputs("error: ", stderr);
-  ren_print_value(stderr, &ren_errors_desc.h, (ren_val){.o = e});
+  ren_print_value(stderr, &ren_errors_desc.h, (ren_val){.o = e},
+                  ren_overflow_site);
   fputc('\n', stderr);
   exit(1);
 }

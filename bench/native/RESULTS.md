@@ -9,6 +9,61 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## NaN where observed, Float sums, late overflow (compiler.md, step 13)
+
+Decision 15's rules for arithmetic. Before is 1563352, the commit
+before this step, whose release build checked every `Float` operation
+for a NaN (`ren_fcheck`) and added a `Float` array's `sum` left to
+right; after is this commit's, which checks a NaN where it's observed
+and sums in eight lanes; "late" is this commit's with REN_LATE set,
+which reports an `Int` overflow in a loop late (late.ml). One hyperfine
+invocation per program (`-N --warmup 3 --runs 10`, main.ren's size),
+with CPU cycles and instructions retired as hyperfine records them,
+the Rust twin (`rustc -C opt-level=3 -C codegen-units=1`) in the same
+invocation. Load average 3.2 to 4.1 of 16 cores. Every binary prints
+what the Rust twin prints.
+
+| program, release | 1563352 (s) | after (s) | late (s) | Rust (s) | after / before, cycles | instructions 10⁹, before / after / late | after / Rust |
+|---|---|---|---|---|---|---|---|
+| nbody | 3.986 ± 0.053 | **2.727 ± 0.002** | 2.743 ± 0.018 | 1.679 ± 0.001 | **0.68×** | 64.7 / 28.8 / 33.1 | **1.62×** (was 2.37×) |
+| inout | 2.533 ± 0.036 | 2.514 ± 0.020 | 2.977 ± 0.043 | 1.356 ± 0.000 | 0.99× | 56.1 / 56.1 / 64.1 | 1.85× |
+| `sum` of a million `Float`s, 2,000 times | 9.965 ± 0.001 | **0.286 ± 0.002** | | | **0.029×** | 22.1 / 2.3 | |
+| a running `Int` sum of squares, late against not | 1.070 ± 0.037 | 1.072 ± 0.047 | 1.373 ± 0.117 | | 1.0× (late 1.29×) | 20.0 / 20.0 / 24.1 | |
+
+- **nbody is 1.62× Rust,** where it was 2.37×: its arithmetic is C's
+  own, with no check after each operation, and a NaN would be checked
+  where it's compared or shown, which nbody's loops never do. Less than
+  half the instructions. What's left is the loop over pairs, which
+  clang doesn't vectorize: it reads and writes `bodies[i]` and
+  `bodies[j]` in the same turn ("unsafe dependent memory operations in
+  loop"), and every index is checked.
+- **A `Float` array's `sum` is 35× faster,** since it was a chain of
+  dependent additions each checked for a NaN and is now eight
+  accumulators, which clang vectorizes: two `fadd.2d` on 128-bit
+  registers for each pair of lanes, four an iteration
+  (`-Rpass=loop-vectorize` and the assembly). Its result is the fixed
+  tree's, the same in `ren run` and both builds, which differs in the
+  last place from adding left to right (999000000.0 against
+  999000000.0000001 here).
+- **Late overflow makes no loop vectorize, and the loops it changes
+  slower,** so it's off. inout's loop still checks every index, so it
+  has exits either way (clang: "could not determine number of loop
+  iterations" with it, and with it off the loop isn't a candidate at
+  all); its `*` and `+` aren't the only way out. And it costs: 18% more
+  cycles on inout, 29% on a running sum of squares, which has no other
+  check. Each late operation still branches to a call that records its
+  site and operands, which the panic needs to be `ren run`'s; that call
+  returns, unlike a panic, so clang keeps what a panic would let it drop
+  (the check on `i + 1`), and each loop counts its turns to check every
+  1,024. Taking the count out gives inout back its time (2.55 s), so
+  it's the count and the returning call. A flag alone, `ovf |=
+  overflowed`, which clang could vectorize, can't say which operation
+  faulted or with what operands, and a running sum's overflow can't be
+  checked in lanes at all, since whether a prefix overflowed isn't known
+  from the lanes' sums: clang says "value that could not be identified
+  as reduction is used outside the loop" even for the flag. So no
+  design keeps `ren run`'s message and vectorizes these loops.
+
 ## Sized storage (compiler.md, step 12)
 
 `bytes` ([README.md](README.md)): a million bytes as an `Array<UInt8>`

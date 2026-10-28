@@ -148,7 +148,7 @@ error: `Sub` has no `==`
 `<` and the others come from a type's order, which is derived only where
 it's obvious:
 
-- `Int`, `Float` (a total order, since there's no `NaN`), `Str` (by bytes, which is code point order) and
+- `Int`, `Float` (a total order, since comparing a `NaN` panics), `Str` (by bytes, which is code point order) and
   `Bool`;
 - a sum type with no fields, by the order of its variants;
 - tuples, element by element;
@@ -290,20 +290,32 @@ error: `fn(Int) -> Int` has no `==`, which `same` needs
   error whose help says so.
 - **Numbers never convert by themselves:** `Float.of(n)`, `f.round()`,
   `f.truncate()`.
-- **There's no `NaN`.** An operation that would make one, `0.0 / 0.0`,
-  `inf - inf`, `(-1.0).sqrt()`, panics, as an `Int` overflow does. A
-  `NaN` doesn't stop anything: it spreads through what comes after and
-  surfaces three functions later as a wrong answer, which is a failure
-  nobody sees. Infinity stays, since it's ordered and means something.
+- **A `NaN` panics where it's observed** (foundations.md, decision 15).
+  An operation that has no answer, `0.0 / 0.0`, `inf - inf`,
+  `(-1.0).sqrt()`, makes a `NaN`, and arithmetic and stores carry it:
+  every `+`, `-`, `*` and `/` given one gives it back. Comparing one
+  (`<` and the others, `==`, `!=`, an order or `==` through a value with
+  one in it, `sort`), converting one to an `Int` (`round`, `truncate`)
+  or a `Str` (`show`, `print`), hashing one, or passing one to a
+  dependency's operation panics. So no program acts on a `NaN`, and none
+  reaches a handler, the world or the journal; it can't surface three
+  functions later as a wrong answer. A `match` can't see one, since
+  there are no `Float` patterns. Infinity stays, since it's ordered and
+  means something.
+- **The panic says where the `NaN` was made:** `` `<` compared a NaN made
+  at stats.ren:3:14 ``, in `ren run` and a debug build, which keep that
+  in the `NaN`'s payload; a release build says the rest. The checks are
+  at the same points in every build.
 - **So `Float` has a total order and `hash`.** `sort()`, `min()`,
   `max()`, `Set<Float>` and float map keys just work, and `-0.0 == 0.0`,
   hashed as one.
-- **The check is cheap.** `NaN` is sticky: once made, every `+`, `-`, `*`
-  and `/` after it gives `NaN`. So a float is checked only where it
-  leaves arithmetic, when it's stored, compared, passed, returned or
-  converted, never inside an expression. A float from C is checked where
-  it comes in. Code that used `NaN` for "missing" writes
-  `Option<Float>`.
+- **The check is cheap.** Arithmetic isn't checked at all, only where a
+  float is observed; checking every operation was 31% of nbody's
+  cycles. Code that used `NaN` for "missing" writes `Option<Float>`.
+- **`sum` of `Float`s is a fixed tree:** element i into lane i mod 8,
+  each lane from 0.0, then the lanes pairwise, ((0 + 1) + (2 + 3)) +
+  ((4 + 5) + (6 + 7)). It's the same on every machine and in every
+  build, so a journal replays anywhere, and a vector unit adds it.
 
 ```
 error: `Int` has no `/` that takes a `Float`
@@ -554,7 +566,7 @@ which adds members to a built-in type.
 - `where T has add` goes: it's inferred.
 - Map iteration order is insertion order, not seeded, and the hash seed
   is the runtime's own, which nothing can observe.
-- There's no `NaN`, so `Float` is ordered and hashed.
+- A `NaN` panics where it's observed, so `Float` is ordered and hashed.
 - Ranges, `a..b`, half-open only.
 - Conditions are `Bool`, stated as a rule.
 - `Array` and `Map` use `Enumerable`'s names, and `Str.find` becomes
@@ -565,7 +577,7 @@ which adds members to a built-in type.
 **9a:** `Money` in the bank is `opaque Int with numeric`, and `Time`,
 `Instant` and `Duration` use operators, so `plus`, `covers`, `before` and
 `not_before` are gone. `Email` is equal by its lowercase. `==` on a
-function is an error, `0.0 / 0.0` panics, `Int` overflow panics at
+function is an error, `0.0 / 0.0` panics where it's shown, `Int` overflow panics at
 2^63, and a generic `sum` runs on `Int`, `Float` and `Money`.
 
 **9b:** `Map<Email, User>` works, with `Email` an opaque `Str` keyed by its
@@ -584,8 +596,9 @@ accounts in a `Map`; the prices cache is a `Map`; `Time`, `Instant` and
   unboxed, for `Array<UInt8>`. **C and Java:** a narrow integer is
   widened before arithmetic, here to 64 bits, with no conversions.
 - **Swift:** overflow panics in every build.
-- **Rust's `ordered_float::NotNan`:** floats with no `NaN`, as a library
-  type. Ren makes it the only `Float`.
+- **Rust's `ordered_float::NotNan`:** floats with no `NaN` observed, as a
+  library type. Ren makes it the only `Float`, checked where a `NaN`
+  would be observed rather than where it's made.
 - **Roc:** every type has `==` except one with a function in it.
 - **Go:** a struct is a map key when its fields can be; numbers convert
   only when asked; `5 * time.Second`.

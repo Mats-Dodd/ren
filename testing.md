@@ -178,8 +178,8 @@ each optional.
   tried in the order they're written, and the ones that don't recur come
   first, so generating always ends.
 - **Generation leans toward what breaks code:** `0`, `1`, `-1`, the
-  largest and smallest `Int`, `-0.0` and infinity (there's no `NaN` to
-  generate), `""`, text with combining characters, an empty array, one
+  largest and smallest `Int`, `-0.0` and infinity (not a `NaN`, which
+  panics where a test would observe it), `""`, text with combining characters, an empty array, one
   element, and **two elements with the same key**, since a map is wrong
   exactly where keys collide.
 - **Sizes grow over a run,** small first, so the first failure is already

@@ -215,6 +215,13 @@ extern ren_stats_t ren_stats;
    (foundations.md, decision 8). */
 _Noreturn void ren_panic(const ren_site *site, const char *msg);
 
+/* Where a panic in the prelude is said to be: the program's call that
+   reached it, as `ren run` says, since the prelude's source isn't shown.
+   Set before each call of the prelude from the program's code (Mem's
+   [Here_set]), and put back by prelude code after a block it called
+   returns. */
+extern const ren_site *ren_here;
+
 /* The stack overflowed: [ren_stack_limit] is the lowest address a frame
    may start below, a margin above the end of the stack the program runs
    on, which [ren_run] sets. Every function checks it when it starts, as
@@ -927,9 +934,10 @@ static inline const char *ren_str_data(ren_obj *s) { return ((ren_str *)s)->data
 ren_obj *ren_str_concat(ren_obj *a, ren_obj *b);
 bool ren_str_eq(ren_obj *a, ren_obj *b);
 
-/* What `show` makes of a scalar, as Ren writes it. */
+/* What `show` makes of a scalar, as Ren writes it; a NaN can't be shown,
+   and panics at [site] (nan.ml). */
 ren_obj *ren_show_int(int64_t n);
-ren_obj *ren_show_float(double f);
+ren_obj *ren_show_float(double f, const ren_site *site);
 ren_obj *ren_show_bool(bool b);
 
 /* [f] as Ren writes it, into [buf] (at least 400 bytes): the fewest
@@ -943,14 +951,13 @@ void ren_print_quoted(FILE *out, ren_obj *s);
 
 /* ---- arithmetic ----
 
-   An `Int` that overflows panics, and so does a `Float` operation that
-   would make a NaN (operators.md, "`Int` and `Float`"), with the
-   interpreter's messages (lib/eval/arith.ml). */
+   An `Int` that overflows panics, with the interpreter's message
+   (lib/eval/arith.ml); in a release build's loop, it may say so late
+   ("Late overflow", below). A `Float` operation that has no answer
+   gives a NaN, which panics where it's observed ("NaN", below). */
 
 _Noreturn void ren_int_overflowed(const ren_site *site, const char *op,
                                   int64_t a, int64_t b);
-_Noreturn void ren_float_undefined(const ren_site *site, const char *op,
-                                   double a, double b);
 
 /* An `Int` or a `Float` stored into a sized type (sized.ml): checked
    that it fits, panicking with the interpreter's message (eval.ml,
@@ -1005,34 +1012,158 @@ int64_t ren_div(int64_t a, int64_t b, const ren_site *site);
 int64_t ren_rem(int64_t a, int64_t b, const ren_site *site);
 int64_t ren_neg(int64_t a, const ren_site *site);
 
-static inline double ren_fcheck(double r, const char *op, double a, double b,
-                                const ren_site *site) {
-  if (isnan(r))
-    ren_float_undefined(site, op, a, b);
+/* ---- late overflow (late.ml) ----
+
+   In a release build's loop, an `Int` `+`, `-` or `*` that overflows
+   gives its wrapped result and goes on, the first such fault kept in
+   [ren_late]: its site and operands, so the panic says what `ren run`'s
+   does. It's reported by [ren_late_check], which the loop runs before
+   anything outside the code it makes can see what it did: before each
+   call, each way out of the loop, and once every 1,024 turns of it
+   ([ren_late_tick]); and by any other panic, before its own
+   (foundations.md, decision 15). [ren_late] is clear everywhere else.
+   One per program, while it runs on one thread (11b gives each thread
+   its own). */
+typedef struct {
+  const ren_site *site;
+  const char *op;
+  int64_t a, b;
+} ren_late_t;
+extern ren_late_t ren_late;
+
+/* [a op b] overflowed at [site]: kept, unless a fault is kept already. */
+__attribute__((cold, noinline)) void ren_late_overflowed(const ren_site *site,
+                                                         const char *op,
+                                                         int64_t a, int64_t b);
+_Noreturn void ren_late_report(void);
+
+static inline void ren_late_check(void) {
+  if (__builtin_expect(ren_late.site != NULL, 0))
+    ren_late_report();
+}
+
+/* A loop's count of turns till its next check, [n]: the next. */
+static inline int64_t ren_late_tick(int64_t n) {
+  if (__builtin_expect(n <= 1, 0)) {
+    ren_late_check();
+    return 1024;
+  }
+  return n - 1;
+}
+
+static inline int64_t ren_add_late(int64_t a, int64_t b, const ren_site *site) {
+  int64_t r;
+  if (__builtin_expect(__builtin_add_overflow(a, b, &r), 0))
+    ren_late_overflowed(site, "+", a, b);
   return r;
 }
 
-static inline double ren_fadd(double a, double b, const ren_site *site) {
-  return ren_fcheck(a + b, "+", a, b, site);
-}
-static inline double ren_fsub(double a, double b, const ren_site *site) {
-  return ren_fcheck(a - b, "-", a, b, site);
-}
-static inline double ren_fmul(double a, double b, const ren_site *site) {
-  return ren_fcheck(a * b, "*", a, b, site);
-}
-static inline double ren_fdiv(double a, double b, const ren_site *site) {
-  return ren_fcheck(a / b, "/", a, b, site);
-}
-static inline double ren_frem(double a, double b, const ren_site *site) {
-  return ren_fcheck(fmod(a, b), "%", a, b, site);
+static inline int64_t ren_sub_late(int64_t a, int64_t b, const ren_site *site) {
+  int64_t r;
+  if (__builtin_expect(__builtin_sub_overflow(a, b, &r), 0))
+    ren_late_overflowed(site, "-", a, b);
+  return r;
 }
 
-/* `Float`'s methods that can panic: a square root of a negative number,
-   or a rounding that doesn't fit in an `Int` (lib/eval/builtins.ml). */
-double ren_fsqrt(double a, const ren_site *site);
+static inline int64_t ren_mul_late(int64_t a, int64_t b, const ren_site *site) {
+  int64_t r;
+  if (__builtin_expect(__builtin_mul_overflow(a, b, &r), 0))
+    ren_late_overflowed(site, "*", a, b);
+  return r;
+}
+
+/* `Float`'s methods that can panic: a rounding that isn't an `Int`, a
+   NaN's or one too big (lib/eval/builtins.ml). */
 int64_t ren_fround(double a, const ren_site *site);
 int64_t ren_ftruncate(double a, const ren_site *site);
+
+/* ---- NaN (lib/core/nan.ml) ----
+
+   Arithmetic and stores carry a NaN; comparing one, showing one,
+   rounding one to an `Int` or giving one to a dependency's operation
+   panics, at the same places in every build and in the interpreter. A
+   debug build also says where it was made: an operation that makes one
+   from operands that aren't puts a tag in its payload, bits 29 to 50,
+   which survive a `Float32`, and [ren_nan_where] says where each tag is,
+   "at x.ren:3:9". A release build makes no tags, and its table is NULL,
+   so it says nothing more. Each operation given NaNs gives the first,
+   as nan.ml's [carried] says, not as the machine would. */
+
+extern const char *const *ren_nan_where;
+extern int32_t ren_nan_nwhere;
+
+static inline double ren_nan_tagged(uint32_t tag) {
+  uint64_t bits = UINT64_C(0x7FF8000000000000) | ((uint64_t)tag << 29);
+  double d;
+  memcpy(&d, &bits, sizeof d);
+  return d;
+}
+
+/* [r], what an operation on [a] and [b] gave, as nan.ml's [carried]. */
+static inline double ren_fmade(double r, double a, double b, uint32_t tag) {
+  if (__builtin_expect(isnan(r), 0))
+    return isnan(a) ? a : isnan(b) ? b : ren_nan_tagged(tag);
+  return r;
+}
+
+/* A debug build's `Float` operations, which tag a NaN they make; a
+   release build's are C's own. */
+static inline double ren_fadd_d(double a, double b, uint32_t tag) {
+  return ren_fmade(a + b, a, b, tag);
+}
+static inline double ren_fsub_d(double a, double b, uint32_t tag) {
+  return ren_fmade(a - b, a, b, tag);
+}
+static inline double ren_fmul_d(double a, double b, uint32_t tag) {
+  return ren_fmade(a * b, a, b, tag);
+}
+static inline double ren_fdiv_d(double a, double b, uint32_t tag) {
+  return ren_fmade(a / b, a, b, tag);
+}
+static inline double ren_frem_d(double a, double b, uint32_t tag) {
+  return ren_fmade(fmod(a, b), a, b, tag);
+}
+static inline double ren_fsqrt_d(double a, uint32_t tag) {
+  return ren_fmade(sqrt(a), a, a, tag);
+}
+
+/* [what] observed the NaN [f], at [site]: the panic, with where [f] was
+   made if a debug build's tag says. */
+_Noreturn void ren_nan_panic(const ren_site *site, const char *what, double f);
+
+/* Panics if [a] or [b] is a NaN, the first that is: a comparison's
+   check, or, given one twice, a value's. */
+static inline void ren_nan_check(double a, double b, const char *what,
+                                 const ren_site *site) {
+  if (__builtin_expect(isnan(a) || isnan(b), 0))
+    ren_nan_panic(site, what, isnan(a) ? a : b);
+}
+
+/* `sum` of an array of `Float`s (prelude.ml, [float_sum]): element i
+   into lane i % 8, each from 0.0, then the lanes pairwise,
+   ((0 + 1) + (2 + 3)) + ((4 + 5) + (6 + 7)). A release build's, [tag]
+   0, adds eight at a time, which the compiler makes vector additions;
+   a debug build's carries NaNs one addition at a time, as the
+   interpreter does, and the two give the same number. */
+static inline double ren_float_sum(ren_obj *xs, uint32_t tag) {
+  const ren_val *e = (const ren_val *)ren_elems(xs);
+  int64_t n = ((ren_array *)xs)->len, i = 0;
+  double l[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  if (tag == 0) {
+    for (; i + 8 <= n; i += 8)
+      for (int k = 0; k < 8; k++)
+        l[k] += e[i + k].f;
+    for (int k = 0; i < n; i++, k++)
+      l[k] += e[i].f;
+    return ((l[0] + l[1]) + (l[2] + l[3])) + ((l[4] + l[5]) + (l[6] + l[7]));
+  }
+  for (; i < n; i++)
+    l[i % 8] = ren_fadd_d(l[i % 8], e[i].f, tag);
+  return ren_fadd_d(
+      ren_fadd_d(ren_fadd_d(l[0], l[1], tag), ren_fadd_d(l[2], l[3], tag), tag),
+      ren_fadd_d(ren_fadd_d(l[4], l[5], tag), ren_fadd_d(l[6], l[7], tag), tag),
+      tag);
+}
 
 /* ---- descriptors ----
 
@@ -1177,22 +1308,35 @@ _Noreturn void ren_uncaught(ren_obj *e);
 /* `show` of [v], a value of the type [d] describes, as shown.ml shows
    it: a `Str` is itself. Through a type's own `show` or `key` the walk
    never goes: a type that has one isn't in the native slice yet. */
-ren_obj *ren_show_any(ren_obj *d, ren_val v);
+ren_obj *ren_show_any(ren_obj *d, ren_val v, const ren_site *site);
 
 /* [v] as it's written, a `Str` in quotes: how `ren run` prints what
-   `main` gives, or an error nothing handled. */
-void ren_print_value(FILE *out, ren_obj *d, ren_val v);
+   `main` gives, or an error nothing handled; a NaN in it panics at
+   [site]. */
+void ren_print_value(FILE *out, ren_obj *d, ren_val v, const ren_site *site);
 
 /* `==` on two values of [d]'s type, and their order: negative if [a]
-   comes first (walk.ml, `equal` and `compare`). */
-bool ren_equal_any(ren_obj *d, ren_val a, ren_val b);
-int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b);
+   comes first (walk.ml, `equal` and `compare`). A NaN in either panics
+   at [site], saying [what] compared it. */
+bool ren_equal_any(ren_obj *d, ren_val a, ren_val b, const char *what,
+                   const ren_site *site);
+int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b, const char *what,
+                        const ren_site *site);
+
+/* Panics at [site] if a NaN is anywhere in [v], of [d]'s type, saying
+   [what] was given it (walk.ml, [nan_in]). */
+void ren_nan_in(ren_obj *d, ren_val v, const char *what, const ren_site *site);
+
+/* Whether [d] describes `Float`, whose `sum` adds in lanes. */
+static inline bool ren_desc_is_float(ren_obj *d) {
+  return ((ren_desc *)d)->kind == REN_D_FLOAT;
+}
 
 /* An operator, by its requirement, on values of [d]'s type, an `Int`, a
    `Float` or one represented as either, and `zero` and `one`. */
 enum { REN_OP_ADD, REN_OP_SUB, REN_OP_MUL, REN_OP_DIV, REN_OP_REM, REN_OP_NEG };
 ren_val ren_op_any(ren_obj *d, int op, ren_val a, ren_val b,
-                   const ren_site *site);
+                   const ren_site *site, uint32_t tag);
 ren_val ren_value_any(ren_obj *d, bool one);
 
 /* ---- blocks and evidence ----

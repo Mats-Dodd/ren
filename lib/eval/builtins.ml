@@ -195,9 +195,10 @@ let split s sep =
 let int n = VInt (Int64.of_int n)
 
 (* [f], made an `Int` by [how] (`round` or `truncate`), which panics if
-   it isn't one: infinity, or too big for 64 bits. 2^63 is the first
-   float past the largest `Int`. *)
+   it isn't one: a NaN (nan.ml), infinity, or too big for 64 bits. 2^63
+   is the first float past the largest `Int`. *)
 let to_int how f =
+  if Float.is_nan f then raise (Panic (Nan.observed (Nan.converted how) f));
   let r = if how = "round" then Float.round f else Float.trunc f in
   if
     Float.is_finite r
@@ -237,10 +238,16 @@ let number f =
       raise (Panic (Arith.overflow_message ~op ~shown))
   | Arith.Undefined msg -> raise (Panic msg)
 
-(* The operator [op], as the method of [x]'s two operands. *)
-let arith x op = function
-  | [ a; b ] -> number (fun () -> Arith.binop op a b)
+(* The operator [op], as the method of [x]'s two operands, a NaN it
+   makes tagged by [made]. *)
+let arith ~made x op = function
+  | [ a; b ] -> number (fun () -> Arith.binop ~made op a b)
   | _ -> bug x
+
+(* [f ()], which may walk a value with a NaN in it, as [what] does
+   (nan.ml): a panic, said at the call. *)
+let walking what f =
+  try f () with Nan.Seen v -> raise (Panic (Nan.observed what v))
 
 (* ---- tables ---- *)
 
@@ -249,7 +256,8 @@ let table x = function VTable t -> t | _ -> bug x
 (* The pair a `Map.of` is given, `(k, v)`. *)
 let pair x = function VTuple [ k; v ] -> (k, v) | _ -> bug x
 
-let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
+let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
+    ~made =
   match x with
   | Show -> fun _ -> failwith "bug: `show` is run by the interpreter"
   (* the journal's need the types of what they're given, as `show` does,
@@ -347,8 +355,9 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
         | [ VArray xs ] -> (
             match one_dict x dicts with
             | Ord compare ->
-                array_of_list
-                  (List.stable_sort compare (Array.to_list (items xs)))
+                walking (Nan.compared "sort") (fun () ->
+                    array_of_list
+                      (List.stable_sort compare (Array.to_list (items xs))))
             | _ -> bug x)
         | _ -> bug x)
   (* `map`'s own: an array is a value here, so `map` replacing each
@@ -358,6 +367,17 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
       pure (fun _ ->
           VCon { ty = Path.prelude "MapInto"; name = "InPlace"; args = [] })
   | Unsafe_cast -> pure (function [ v ] -> v | _ -> bug x)
+  (* `sum`'s own: whether its `T` is `Float`, and its lanes if it is *)
+  | Float_lanes -> pure (fun _ -> VBool (tys = [ Ty.float ]))
+  | Float_sum ->
+      pure (function
+        | [ VArray xs ] ->
+            VFloat
+              (Arith.float_sum ~made
+                 (Array.map
+                    (function VFloat f -> f | _ -> bug x)
+                    (items xs)))
+        | _ -> bug x)
   (* ---- `Map` and `Set`, by the `hash` of their keys (table.ml) ---- *)
   | Map_empty | Set_empty -> pure (fun _ -> VTable Table.empty)
   | Map_of ->
@@ -474,11 +494,11 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
       pure (function [ VInt a; VInt b ] -> VInt (Int64.logor a b) | _ -> bug x)
   (* the operators, as methods, `n.add(2)`: Arith's, as `n + 2` is, with
      the panic said at the call *)
-  | Int_add | Float_add -> pure (arith x Add)
-  | Int_sub | Float_sub -> pure (arith x Sub)
-  | Int_mul | Float_mul -> pure (arith x Mul)
-  | Int_div | Float_div -> pure (arith x Div)
-  | Int_rem | Float_rem -> pure (arith x Mod)
+  | Int_add | Float_add -> pure (arith ~made x Add)
+  | Int_sub | Float_sub -> pure (arith ~made x Sub)
+  | Int_mul | Float_mul -> pure (arith ~made x Mul)
+  | Int_div | Float_div -> pure (arith ~made x Div)
+  | Int_rem | Float_rem -> pure (arith ~made x Mod)
   | Int_neg | Float_neg ->
       pure (function [ v ] -> number (fun () -> Arith.neg v) | _ -> bug x)
   | Float_of ->
@@ -487,12 +507,9 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
       pure (function [ VFloat f ] -> to_int "round" f | _ -> bug x)
   | Float_truncate ->
       pure (function [ VFloat f ] -> to_int "truncate" f | _ -> bug x)
-  (* a negative number has no square root that's a `Float`: it would be
-     `NaN`, which there isn't (operators.md, "`Int` and `Float`") *)
+  (* a negative number's square root is a NaN, carried as arithmetic's
+     are (nan.ml) *)
   | Float_sqrt ->
       pure (function
-        | [ VFloat f ] ->
-            if f < 0. then
-              raise (Panic ("`sqrt` of a negative number: " ^ Ast.show_float f));
-            VFloat (Float.sqrt f)
+        | [ VFloat f ] -> VFloat (Nan.carried ~made f f (Float.sqrt f))
         | _ -> bug x)

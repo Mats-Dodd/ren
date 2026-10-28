@@ -136,8 +136,16 @@ let rt_sig (rt : rt) : layout list * layout =
   | Widen -> ([], Unit) (* its operand's, which [rhs] checks *)
   | Console_write | Console_error -> ([ Boxed ], Unit)
   | Show_any -> ([ Desc; Word 0 ], Boxed)
-  | Equal_any -> ([ Desc; Word 0; Word 0 ], Bool)
-  | Compare_any -> ([ Desc; Word 0; Word 0 ], Int)
+  | Equal_any _ -> ([ Desc; Word 0; Word 0 ], Bool)
+  | Compare_any _ -> ([ Desc; Word 0; Word 0 ], Int)
+  | Nan_check _ -> ([ Float ], Unit) (* or two, which [rhs] checks *)
+  | Nan_check_any _ -> ([ Desc; Word 0 ], Unit)
+  | Float_lanes -> ([ Desc ], Bool)
+  | Float_sum -> ([ Boxed ], Float)
+  | Late_check | Here_set -> ([], Unit)
+  | Here_get -> ([], Ptr)
+  | Here_put -> ([ Ptr ], Unit)
+  | Late_tick -> ([ Int ], Int)
   | Op_any (Some _) -> ([ Desc; Word 0; Word 0 ], Word 0)
   | Op_any None -> ([ Desc; Word 0 ], Word 0)
   | Value_any _ -> ([ Desc ], Word 0)
@@ -185,6 +193,13 @@ let rhs env (r : rhs) : layout =
         fail env (sprintf "`%s` on %s" (Ast.binop_to_string op) (show_layout l));
       operand env "the right operand" l y;
       l
+  (* late.ml's, which [late] checks are where it may be *)
+  | Late (op, x, y, _) ->
+      if not (List.mem op [ Ast.Add; Sub; Mul ]) then
+        fail env (sprintf "a late `%s`" (Ast.binop_to_string op));
+      operand env "a late operation's left operand" Int x;
+      operand env "a late operation's right operand" Int y;
+      Int
   | Neg (x, _) ->
       let l = atom env x in
       if l <> Int && l <> Float then fail env "`-` on what isn't a number";
@@ -263,6 +278,13 @@ let rhs env (r : rhs) : layout =
       match atom env x with
       | Sized k -> if Sized.is_float k then Float else Int
       | l -> fail env (sprintf "%s widened" (show_layout l)))
+  (* a check panics, so it needs a site *)
+  | Runtime ((Nan_check _ | Nan_check_any _ | Show_float | Show_any | Equal_any _
+             | Compare_any _), _, None) ->
+      fail env "a check for a NaN with no site"
+  | Runtime ((Nan_check _ as r), xs, _) when List.length xs = 2 ->
+      args env (show_rt r) [ Float; Float ] xs;
+      Unit
   | Runtime (Narrow k, _, None) ->
       fail env (sprintf "a narrowing into %s with no site" (Sized.name k))
   | Runtime (Wrap_to k, _, Some _) ->
@@ -1462,6 +1484,7 @@ let program (p : program) =
   let ndescs = List.length p.descs in
   List.iter (fn fns values ndescs (Array.of_list p.structs)) p.fns;
   List.iter (counting fns) p.fns;
+  List.iter Late.check p.fns;
   if p.start_desc < 0 || p.start_desc >= ndescs then
     failwith "Mem Lint: `main`'s descriptor isn't in the program";
   match Hashtbl.find_opt fns p.start with

@@ -157,7 +157,8 @@ let arith ~at loc f =
   | Arith.Undefined msg -> panic loc msg
 
 let binop ~at loc (op : Ast.binop) a b =
-  arith ~at loc (fun () -> Arith.binop op a b)
+  arith ~at loc (fun () ->
+      Arith.binop ~made:(fun () -> Nan.tag_at loc) op a b)
 
 let neg ~at loc v = arith ~at loc (fun () -> Arith.neg v)
 
@@ -332,6 +333,11 @@ let dict_in env (v : var) =
 let equal_by (d : Value.dict) x y =
   match d with Eq f -> f x y | _ -> bug "`==` through a dictionary not `eq`'s"
 
+(* [f ()], which walks a value as [what] does, `==` or `<`: a NaN it
+   finds panics at [loc] (nan.ml). *)
+let comparing loc what f =
+  try f () with Nan.Seen x -> panic loc (Nan.observed (Nan.compared what) x)
+
 (* The binary operator a requirement is: `add` is `+`. *)
 let binop_of_req req : Ast.binop =
   match req with
@@ -453,14 +459,19 @@ let rec eval cx env (e : expr) =
   | Prim (((Equal d | Not_equal d) as op), [ a; b ]) ->
       let x = eval cx env a in
       let y = eval cx env b in
-      let same = equal_by (dict cx env d) x y in
+      let what = match op with Not_equal _ -> "!=" | _ -> "==" in
+      let same =
+        comparing e.loc what (fun () -> equal_by (dict cx env d) x y)
+      in
       VBool (match op with Not_equal _ -> not same | _ -> same)
   | Prim (Compare (op, d), [ a; b ]) -> (
       let x = eval cx env a in
       let y = eval cx env b in
       match dict cx env d with
       | Ord compare ->
-          let c = compare x y in
+          let c =
+            comparing e.loc (Ast.binop_to_string op) (fun () -> compare x y)
+          in
           VBool
             (match op with
             | Lt -> c < 0
@@ -484,6 +495,12 @@ let rec eval cx env (e : expr) =
       match Sized.of_ty e.ty with
       | Some k -> stored e.loc ~wrap:(op = Wrap) k (eval cx env a)
       | None -> bug "a value stored into a type that isn't sized")
+  (* what a dependency's operation is given has no NaN in it (nan.ml) *)
+  | Prim (Nan_check op, [ a ]) -> (
+      let v = eval cx env a in
+      match Walk.nan_in cx.types a.ty v with
+      | () -> v
+      | exception Nan.Seen x -> panic e.loc (Nan.observed (Nan.passed op) x))
   | Prim (op, args) -> prim e.loc op (eval_all cx env args) args
   | Let (v, value, body) ->
       let x = eval cx env value in
@@ -589,7 +606,8 @@ let rec eval cx env (e : expr) =
   | Assert_equal (a, b, d, eq) ->
       let x = eval cx env a in
       let y = eval cx env b in
-      if not (equal_by (dict cx env eq) x y) then
+      if not (comparing e.loc "==" (fun () -> equal_by (dict cx env eq) x y))
+      then
         raise
           (Assert_failed
              {
@@ -672,7 +690,7 @@ and finish cx at step =
   | Tail t ->
       let at = if t.loc.file <> Prelude.file then Some t.loc else at in
       let next =
-        try enter cx t.f t.args t.ev with
+        try enter ~at:t.loc cx t.f t.args t.ev with
         | Builtins.Panic msg -> panic (Option.value at ~default:t.loc) msg
         | Panic { loc; msg; _ } when loc.file = Prelude.file && at <> None ->
             panic (Option.get at) msg
@@ -731,7 +749,7 @@ and eval_all cx env = function
 
 (* [apply], from a call at [loc]. *)
 and call_at cx loc f args ev =
-  try apply cx f args ev with
+  try apply ~loc cx f args ev with
   | Builtins.Panic msg -> panic loc msg
   | Panic { loc = l; msg; _ }
     when l.file = Prelude.file && loc.file <> Prelude.file ->
@@ -750,9 +768,9 @@ and call_at cx loc f args ev =
 (* Call [f], passing it the evidence [ev]. Returns its result, or the
    error it failed with, and the final value of every parameter, so the
    caller can write back the ones passed `inout`. *)
-and apply cx f args ev =
+and apply ?loc cx f args ev =
   match f with
-  | VBuiltin _ -> builtin cx f args
+  | VBuiltin _ -> builtin ?loc cx f args
   | _ ->
       (* the function's parameters are cells, whose final values are
          returned, to be written back to the arguments passed `inout`. The
@@ -846,20 +864,24 @@ and start cx f cells ev =
 
 (* A call in tail position, which [finish] makes: a built-in's value, or
    its error, or the callee's body as far as the call it ends in. *)
-and enter cx f args ev =
+and enter ~at cx f args ev =
   match f with
-  | VBuiltin _ -> Done (ok (fst (builtin cx f args)))
+  | VBuiltin _ -> Done (ok (fst (builtin ~loc:at cx f args)))
   | _ -> start cx f (List.map ref args) ev
 
-(* A call of a built-in function, which [apply] returns. *)
-and builtin cx f args =
+(* A call of a built-in function, which [apply] returns, from [loc], where
+   a NaN it makes is said to be made. *)
+and builtin ?loc cx f args =
   match f with
   | VBuiltin (Show, tys, _) -> (
       (* the one built-in that needs its argument's type, which is what its
          type variable stands for *)
       match (tys, args) with
-      | [ t ], [ v ] ->
-          (Ok (VStr (Shown.shown ~own:(own_show cx) cx.types t v)), args)
+      | [ t ], [ v ] -> (
+          match Shown.shown ~own:(own_show cx) cx.types t v with
+          | s -> (Ok (VStr s), args)
+          | exception Nan.Seen x ->
+              raise (Builtins.Panic (Nan.observed Nan.shown x)))
       | _ -> bug "a call of `show` with the wrong number of arguments")
   | VBuiltin
       ( (( Journal_kept | Journal_gave | Journal_answer | Journal_outputs
@@ -867,12 +889,16 @@ and builtin cx f args =
         tys,
         _ ) ->
       (Ok (journal cx x tys args), args)
-  | VBuiltin (x, _, dicts) -> (
+  | VBuiltin (x, tys, dicts) -> (
       let dicts =
         List.map (function VDict d -> d | _ -> bug "a dictionary") dicts
       in
-      match Builtins.run x ~dicts args with
+      let made () = match loc with Some l -> Nan.tag_at l | None -> 0 in
+      match Builtins.run x ~dicts ~tys ~made args with
       | v, finals -> (Ok v, finals)
+      (* a `Map`'s or a `Set`'s key with a NaN in it, which hashing it
+         found first (nan.ml) *)
+      | exception Nan.Seen v -> raise (Builtins.Panic (Nan.observed Nan.hashed v))
       | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"
 

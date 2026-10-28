@@ -1338,16 +1338,16 @@ fn main() uses Console =
       │         ^^^^^^^^^^^
     |}]
 
-let%expect_test "a Float's `div` that has no answer panics as `/` does" =
+let%expect_test "a Float's `div` makes a NaN as `/` does, which `show` panics on" =
   run_error {|
 fn main() uses Console = print(0.0.div(0.0))
 |};
   [%expect
     {|
-    error: panic: `/` has no answer here: 0.0 / 0.0
-      ┌─ test.ren:1:32
+    error: panic: `show` of a NaN made at test.ren:1:32
+      ┌─ test.ren:1:26
     1 │ fn main() uses Console = print(0.0.div(0.0))
-      │                                ^^^^^^^^^^^^
+      │                          ^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "an Int's `add` takes an Int" =

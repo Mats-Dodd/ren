@@ -139,12 +139,16 @@ pub type Array<T> = builtin
     for x in self
       acc = try f(acc, x)
     acc
-  // every element added up, from `T.zero`
+  // every element added up, from `T.zero`, in order; but `Float`s, in
+  // eight lanes added pairwise, the same on every machine, which a
+  // vector unit can do (foundations.md, decision 15; `float_sum`)
   pub fn sum(self) -> T =
-    var total = T.zero
-    for x in self
-      total = total + x
-    total
+    if float_lanes(self) then float_sum(self)
+    else
+      var total = T.zero
+      for x in self
+        total = total + x
+      total
   // the least element, the first of those equal
   pub fn min(self) -> Option<T> =
     var best = None
@@ -810,6 +814,15 @@ let scheme (x : Intrinsic.t) =
      an element of an array [map_into] said keeps a [B] as it keeps an
      [A], and on that array: Lean's `unsafeCast` *)
   | Unsafe_cast -> fn [ read (Var 0) ] (Var 1)
+  (* fn<T>(xs: Array<T>) -> Bool: whether `T` is `Float`, whose `sum`
+     adds in lanes (foundations.md, decision 15) *)
+  | Float_lanes -> fn [ read (array (Var 0)) ] bool
+  (* fn<T>(xs: Array<T>) -> T: [xs], whose `T` [float_lanes] said is
+     `Float`, added up in eight lanes, element i into lane i % 8, each
+     from 0.0, and the lanes added pairwise: ((0 + 1) + (2 + 3)) + ((4 +
+     5) + (6 + 7)). The same on every machine, and what a vector unit
+     does (nan.ml says which NaN it carries) *)
+  | Float_sum -> fn [ read (array (Var 0)) ] (Var 0)
   (* A `Map` and a `Set` keep insertion order (operators.md, "`Map` and
      `Set`"), and find a key by its `hash`. *)
   (* fn<K, V>() -> Map<K, V>, which `Map.empty` is *)
@@ -924,7 +937,7 @@ let reaches (x : Intrinsic.t) =
   | Proc_run -> Some ("Proc", "run")
   | Seeded_next | Seeded_int | Journal_kept | Journal_gave | Journal_answer
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
-  | Array_reserve | Map_into | Unsafe_cast
+  | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum
   | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
@@ -955,7 +968,8 @@ let caller (x : Intrinsic.t) =
       | Journal_load ) ) ->
       Journal
   | None, (Map_empty | Set_empty) -> Value
-  | None, (Array_reserve | Map_into | Unsafe_cast) -> Internal
+  | None, (Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum) ->
+      Internal
   | None, _ -> Any
 
 let runtime x = caller x <> Any
@@ -988,6 +1002,8 @@ let fns : Intrinsic.t list =
     Array_reserve;
     Map_into;
     Unsafe_cast;
+    Float_lanes;
+    Float_sum;
   ]
 
 (* ---- built-in types ----

@@ -28,6 +28,8 @@ type t =
   | Array_reserve
   | Map_into
   | Unsafe_cast
+  | Float_lanes
+  | Float_sum
   | Map_empty
   | Map_of
   | Map_get

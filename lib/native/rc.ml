@@ -100,7 +100,7 @@ let rhs_atoms (r : rhs) : atom list =
   | Hole (x, _) ->
       [ x ]
   | Pack ps -> List.map (fun (x, _, _) -> x) ps
-  | Arith (_, x, y, _) | Compare (_, x, y) -> [ x; y ]
+  | Arith (_, x, y, _) | Late (_, x, y, _) | Compare (_, x, y) -> [ x; y ]
   | Alloc { fields; words; at; _ } ->
       fields @ words @ Option.to_list (Option.map fst at)
   | Alloc_array { elems; desc; _ } -> elems @ Option.to_list desc
@@ -1343,7 +1343,7 @@ let find_takes fi (body : block) =
     match s with
     | Let (_, r) -> (
         match r with
-        | Atom _ | Arith _ | Neg _ | Compare _ | Not _ | Tag_of _ | Field _
+        | Atom _ | Arith _ | Late _ | Neg _ | Compare _ | Not _ | Tag_of _ | Field _
         | Alloc _ | Alloc_array _ | To_word _ | Of_word _ | Global _
         | Is_unique _ ->
             true

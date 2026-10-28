@@ -355,7 +355,8 @@ fn main() -> Int =
     (fn ren_Array_map_fresh
       (^$ty0/1:Desc ^$ty1/2:Desc ev/3:Ev ^self/4:Boxed f/5:Block)
       fails -> Boxed
-      (do (let self/6:Boxed self/4) (let $len/7:Int (array-len self/6))
+      (do (let $here/29:Ptr (here-get)) (let self/6:Boxed self/4)
+        (let $len/7:Int (array-len self/6))
         (let $ty1/8:Desc $ty1/2)
         (let $reserved/9:Boxed (array-reserve:Word1 $len/7 $ty1/8))
         (let out/10:Boxed $reserved/9)
@@ -378,12 +379,13 @@ fn main() -> Int =
             (let x/26:Word0 x/23)
             (call-block $result/27:Word1 (f/25 ev/3 x/26)
               (error $error/28:Boxed (drop out/10) (raise $error/28)))
+            (do (here-put $here/29))
             (do (array-push-taking:Word1 &out/24 $result/27))
-            (let $i/29:Int $i/16)
-            (let $arith/30:Int (+ $i/29 1))
-            (set $i/16 $arith/30)))
-        (let out/31:Boxed out/10)
-        (return out/31)))
+            (let $i/30:Int $i/16)
+            (let $arith/31:Int (+ $i/30 1))
+            (set $i/16 $arith/31)))
+        (let out/32:Boxed out/10)
+        (return out/32)))
     Mem Lint: ok
     |}]
 
@@ -636,7 +638,7 @@ let lint ?(structs = []) fns =
       sites = [];
       structs;
       overflow =
-        { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics };
+        { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics; made = None };
     }
   in
   match Mem_lint.program p with

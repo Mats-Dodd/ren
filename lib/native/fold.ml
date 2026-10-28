@@ -73,8 +73,10 @@ let rt h (r : rt) : rt =
     | Str_concat | Str_eq | Show_int | Show_float | Show_bool | Float_of_int
     | Float_sqrt | Float_round | Float_truncate | Wrapping _ | Wrapping_neg
     | Bits _ | Widen | Narrow _ | Wrap_to _
-    | Console_write | Console_error | Show_any | Equal_any | Compare_any
-    | Op_any _ | Value_any _ | New_desc _ ) as r ->
+    | Console_write | Console_error | Show_any | Equal_any _ | Compare_any _
+    | Op_any _ | Value_any _ | New_desc _ | Nan_check _ | Nan_check_any _
+    | Float_lanes | Float_sum | Late_check | Late_tick | Here_set | Here_get
+    | Here_put ) as r ->
       r
 
 let kept h = List.map (fun (i, a) -> (i, atom h a))
@@ -84,6 +86,7 @@ let rhs h (r : rhs) : rhs =
   match r with
   | Atom x -> Atom (a x)
   | Arith (op, x, y, s) -> Arith (op, a x, a y, h.site s)
+  | Late (op, x, y, s) -> Late (op, a x, a y, h.site s)
   | Neg (x, s) -> Neg (a x, h.site s)
   | Compare (c, x, y) -> Compare (c, a x, a y)
   | Not x -> Not (a x)

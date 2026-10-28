@@ -134,8 +134,12 @@ let literal cx s =
       cx.string_list <- s :: cx.string_list;
       Lit n
 
-let new_site cx ?wrap ?(kind = Panics) loc =
-  let s = { sid = cx.nsites; loc; wrap; kind } in
+(* A site at [loc]: a [Caller] one if that's in the prelude. *)
+let new_site cx ?wrap ?(kind = Panics) ?made (loc : Loc.t) =
+  let kind, wrap =
+    if loc.file = Prelude.file then (Caller, None) else (kind, wrap)
+  in
+  let s = { sid = cx.nsites; loc; wrap; kind; made } in
   cx.sites <- s :: cx.sites;
   cx.nsites <- cx.nsites + 1;
   s
@@ -623,6 +627,39 @@ let tuple_shape cx loc (t : Ty.ty) =
 let error_shape cx loc name (payload : Ty.ty list) =
   shape (tag_id cx name) (List.map (slot cx loc) payload)
 
+(* Whether a value of [t] can hold a `Float`, a `Float32`'s included,
+   through its declaration and its type arguments: what a NaN check of
+   it needs to look for (nan.ml). A type variable or a type the program
+   doesn't declare may. *)
+let floaty cx (t : Ty.ty) =
+  let seen = Hashtbl.create 8 in
+  let rec go (t : Ty.ty) =
+    match t with
+    | Con (p, args) when Hashtbl.mem seen (p, args) -> false
+    | Con (p, args) -> (
+        Hashtbl.replace seen (p, args) ();
+        p = Path.prelude "Float"
+        || Sized.of_path p = Some Sized.F32
+        || List.exists go args
+        ||
+        match Hashtbl.find_opt cx.types p with
+        | Some { body = Record fs; _ } ->
+            List.exists (fun (f : Iface.field) -> go (subst args f.fty)) fs
+        | Some { body = Sum cs; _ } ->
+            List.exists
+              (fun (c : Iface.ctor) ->
+                List.exists
+                  (fun (f : Iface.field) -> go (subst args f.fty))
+                  c.cfields)
+              cs
+        | Some { body = Opaque (Rep r); _ } -> go (subst args r)
+        | Some { body = Builtin; _ } -> false
+        | _ -> true)
+    | Errors _ -> true
+    | _ -> true
+  in
+  go t
+
 (* ---- descriptors ---- *)
 
 (* The program's descriptor of [t], static data, by its index: a closed
@@ -810,6 +847,13 @@ type fs = {
   mutable next_id : int;
   mutable next_label : int;
   here : Loc.t;
+  prelude : bool;
+      (** whether it's the prelude's code, whose panics are at [Caller]
+          sites *)
+  mutable saved : var option option;
+      (** a prelude function's [Here_get] when it starts, to put back after
+          a block it calls returns: [Some None] till one's needed, and
+          [None] in code lifted out of one, which doesn't *)
   fails : bool;
   mutable words : (int * var) list;
   mutable handler : handler_args option;
@@ -819,6 +863,7 @@ type fs = {
 }
 
 let at fs (loc : Loc.t) = if loc.file = Prelude.file then fs.here else loc
+
 let unsupported_at fs loc what = unsupported (at fs loc) what
 let layout_at fs loc t = layout fs.cx (at fs loc) t
 let emit fs s = fs.out <- s :: fs.out
@@ -826,6 +871,34 @@ let emit fs s = fs.out <- s :: fs.out
 let fresh fs name layout =
   fs.next_id <- fs.next_id + 1;
   { id = fs.next_id; name; layout }
+
+(* A site where [fs] is, with no place of its own to say: its caller's if
+   it's the prelude's. *)
+let here_site fs =
+  if fs.prelude then new_site fs.cx (Loc.point ~file:Prelude.file 0 0)
+  else new_site fs.cx fs.here
+
+(* Before a call of the prelude's function [callee] from the program's
+   code at [loc], where a panic in it is said to be. *)
+let set_here fs (callee : C.fn_def) (loc : Loc.t) =
+  if (not fs.prelude) && callee.loc.file = Prelude.file then
+    emit fs (Do (Runtime (Here_set, [], Some (new_site fs.cx loc))))
+
+(* After the prelude's code at [fs] called a block, the program's code
+   that may have set [ren_here] again: where it was when [fs] started. *)
+let put_here fs =
+  match fs.saved with
+  | Some saved when fs.prelude ->
+      let v =
+        match saved with
+        | Some v -> v
+        | None ->
+            let v = fresh fs "$here" Ptr in
+            fs.saved <- Some (Some v);
+            v
+      in
+      emit fs (Do (Runtime (Here_put, [ Var v ], None)))
+  | _ -> ()
 
 let label fs =
   fs.next_label <- fs.next_label + 1;
@@ -976,7 +1049,7 @@ let rec dummy fs env (l : layout) : atom =
   | Sized k ->
       let zero : atom = if Sized.is_float k then Float 0. else Int 0L in
       owned fs env "$never" l
-        (Runtime (Narrow k, [ zero ], Some (new_site fs.cx fs.here)))
+        (Runtime (Narrow k, [ zero ], Some (here_site fs)))
   | Boxed -> Scalar_ctor 0
   | Word _ -> owned fs env "$never" l (To_word Unit)
   | Desc -> Desc_lit 0
@@ -1006,7 +1079,7 @@ let raise_error fs env err =
         | Fn_frame ->
             emit fs
               (Panic
-                 ( new_site fs.cx fs.here,
+                 ( here_site fs,
                    "an error where the types say there's none" ))
         | Loop_frame _ | Scope -> go rest)
   in
@@ -1328,8 +1401,12 @@ let rec expr fs env (e : C.expr) : atom =
   | Seq (a, b) ->
       drop fs env (expr fs env a);
       expr fs env b
-  | If (c, t, f) ->
-      let c = expr fs env c in
+  | If (c, t, f) -> (
+      match expr fs env c with
+      (* a condition known here, `float_lanes`'s (prelude.ml, `sum`): only
+         the arm it takes, since the other may not lower for this type *)
+      | Bool b -> expr fs env (if b then t else f)
+      | c ->
       let r = fresh fs "$if" (lay e.ty) in
       emit fs (Decl r);
       let arm x =
@@ -1343,7 +1420,7 @@ let rec expr fs env (e : C.expr) : atom =
       let f = arm f in
       emit fs (If (c, t, f));
       own env r;
-      Var r
+      Var r)
   | While (c, body) ->
       let l = label fs in
       let env' =
@@ -1637,7 +1714,17 @@ and alloc_taking fs env (sh : shape) fields =
 and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
-  let site ?wrap () = new_site cx ?wrap (at fs e.loc) in
+  let site ?wrap ?made () = new_site cx ?wrap ?made e.loc in
+  (* where a NaN an operation here makes is said to be made (nan.ml) *)
+  let made = Nan.where e.loc in
+  (* a comparison of `Float`s panics on a NaN *)
+  let check_nan what x y =
+    match (atom_layout x, atom_layout y) with
+    | Float, Float ->
+        emit fs
+          (Do (Runtime (Nan_check (Nan.compared what), [ x; y ], Some (site ()))))
+    | _ -> ()
+  in
   match (p, args) with
   | Neg, [ a ] ->
       let x = expr fs env a in
@@ -1654,7 +1741,9 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let x = expr fs env a in
       let y = expr fs env b in
       match cmp_of op with
-      | Some c -> owned fs env "$cmp" Bool (Compare (c, x, y))
+      | Some c ->
+          check_nan (Ast.binop_to_string op) x y;
+          owned fs env "$cmp" Bool (Compare (c, x, y))
       | None ->
           let wrap =
             match wrapping_meth op with
@@ -1662,13 +1751,16 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
                 Some { meth; recv = a.loc; arg = Some b.loc }
             | _ -> None
           in
-          owned fs env "$arith" (lay e.ty) (Arith (op, x, y, site ?wrap ())))
+          let made = if lay e.ty = Float then Some made else None in
+          owned fs env "$arith" (lay e.ty) (Arith (op, x, y, site ?wrap ?made ())))
   | (Equal _ | Not_equal _), [ a; b ] -> (
       let c = match p with Equal _ -> Eq | _ -> Ne in
       let x = expr fs env a in
       let y = expr fs env b in
+      let what = if c = Eq then "==" else "!=" in
       match lay a.ty with
       | Int | Float | Bool | Unit | Enum | Sized _ ->
+          check_nan what x y;
           owned fs env "$eq" Bool (Compare (c, x, y))
       | Boxed when a.ty = Ty.str ->
           let same =
@@ -1683,7 +1775,10 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
           let d = dict fs env d in
           let same =
             owned fs env "$eq" Bool
-              (Runtime (Equal_any, [ d; as_word fs x; as_word fs y ], None))
+              (Runtime
+                 ( Equal_any (Nan.compared what),
+                   [ d; as_word fs x; as_word fs y ],
+                   Some (site ()) ))
           in
           List.iter (drop fs env) [ x; y; d ];
           if c = Eq then same else owned fs env "$ne" Bool (Not same))
@@ -1735,7 +1830,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
           match g.kind with
           | Prim (Get_index, [ p; j ]) ->
               let x = expr fs env p in
-              let at_get = new_site cx (at fs g.loc) in
+              let at_get = new_site cx g.loc in
               emit fs
                 (Do (Runtime (Array_check, [ x; expr fs env j ], Some at_get)));
               drop fs env x
@@ -1829,7 +1924,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
         | Slot k, l -> (k, l)
         | Bits _, _ -> bug "a struct's field packed"
       in
-      let at_get = new_site cx (at fs get.loc) in
+      let at_get = new_site cx get.loc in
       let x = expr fs env a in
       emit fs (Do (Runtime (Array_check, [ x; expr fs env i ], Some at_get)));
       drop fs env x;
@@ -1861,7 +1956,10 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let d = dict fs env d in
       let order =
         owned fs env "$order" Int
-          (Runtime (Compare_any, [ d; as_word fs x; as_word fs y ], None))
+          (Runtime
+             ( Compare_any (Nan.compared (Ast.binop_to_string op)),
+               [ d; as_word fs x; as_word fs y ],
+               Some (site ()) ))
       in
       List.iter (drop fs env) [ x; y; d ];
       let c = match cmp_of op with Some c -> c | None -> bug "an order" in
@@ -1874,7 +1972,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
           (Runtime
              ( Op_any (op_of_req req),
                d :: List.map (as_word fs) xs,
-               Some (site ()) ))
+               Some (site ~made ()) ))
           (lay e.ty)
       in
       List.iter (drop fs env) (xs @ [ d ]);
@@ -1889,6 +1987,20 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       drop fs env d;
       r
   | (Entries | Members), _ -> unsupported_at fs e.loc "a `Map` or a `Set`"
+  (* what a dependency's operation is given, checked for a NaN where it
+     could hold one (nan.ml), and given on as it is *)
+  | Nan_check op, [ a ] ->
+      let x = expr fs env a in
+      let what = Nan.passed op in
+      (if floaty cx a.ty then
+         match atom_layout x with
+         | Float ->
+             emit fs (Do (Runtime (Nan_check what, [ x ], Some (site ()))))
+         | _ ->
+             let d = Desc_lit (static_desc cx fs.here ~template:false a.ty) in
+             emit fs
+               (Do (Runtime (Nan_check_any what, [ d; as_word fs x ], Some (site ())))));
+      x
   | New_cell, [ x ] ->
       (* a handler's `var`: a local of its code, whose address its
          operations share *)
@@ -1960,6 +2072,7 @@ and call fs env (e : C.expr) (f : C.expr) args ev =
       let xs = List.map2 (convert fs) xs takes in
       let args = hidden @ [ borrow fs env ev ] @ xs in
       let name = c_name cx p in
+      set_here fs callee e.loc;
       let r =
         if fn_fails callee then (
           let result = fresh fs "$result" gives in
@@ -2014,6 +2127,7 @@ and call_block fs env ~result ~fails b ev xs =
     else None
   in
   emit fs (Call_block { result = r; block = b; ev; args = xs; error; on_error });
+  put_here fs;
   own env r;
   Var r
 
@@ -2036,14 +2150,16 @@ and show fs env loc t (d : C.desc) x =
         | Bool -> Some Show_bool
         | _ -> None
       in
+      let site = if rt = Some Show_float then Some (new_site fs.cx loc) else None in
       let s =
         match rt with
-        | Some rt -> owned fs env "$shown" Boxed (Runtime (rt, [ x ], None))
+        | Some rt -> owned fs env "$shown" Boxed (Runtime (rt, [ x ], site))
         | None ->
             let d = desc fs env d in
             let s =
               owned fs env "$shown" Boxed
-                (Runtime (Show_any, [ d; as_word fs x ], None))
+                (Runtime
+                   (Show_any, [ d; as_word fs x ], Some (new_site fs.cx loc)))
             in
             drop fs env d;
             s
@@ -2054,7 +2170,7 @@ and show fs env loc t (d : C.desc) x =
 and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
-  let site () = new_site cx (at fs e.loc) in
+  let site () = new_site cx e.loc in
   let values () =
     List.map
       (function
@@ -2098,7 +2214,28 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   | Str_len, _, _ -> runtime Str_len
   | Str_concat, _, _ -> runtime Str_concat
   | Float_of, _, _ -> runtime Float_of_int
-  | Float_sqrt, _, _ -> runtime ~site:(site ()) Float_sqrt
+  | Float_sqrt, _, _ ->
+      runtime ~site:(new_site cx ~made:(Nan.where e.loc) e.loc) Float_sqrt
+  (* `sum`'s own (prelude.ml): whether its `T` is `Float`, known in a
+     release build, asked of the descriptor in a debug one; and its lanes *)
+  | Float_lanes, [ t ], [ d ] -> (
+      match lay t with
+      | Word _ ->
+          let d = desc fs env d in
+          let r = owned fs env "$lanes" Bool (Runtime (Float_lanes, [ d ], None)) in
+          drop fs env d;
+          r
+      | _ -> (Bool (t = Ty.float) : atom))
+  | Float_sum, [ t ], _ -> (
+      let s = new_site cx ~made:(Nan.where e.loc) e.loc in
+      match lay t with
+      | Float -> runtime ~site:s Float_sum
+      | Word _ ->
+          let xs = values () in
+          let f = owned fs env "$sum" Float (Runtime (Float_sum, xs, Some s)) in
+          List.iter (drop fs env) xs;
+          owned fs env "$sum" (lay e.ty) (To_word f)
+      | _ -> bug "`float_sum` of what isn't `Float`s")
   | Float_round, _, _ -> runtime ~site:(site ()) Float_round
   | Float_truncate, _, _ -> runtime ~site:(site ()) Float_truncate
   | Int_wrapping_add, _, _ -> runtime (Wrapping Add)
@@ -2151,7 +2288,7 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
           drop fs env x;
           emit fs
             (Panic
-               ( new_site cx (at fs e.loc),
+               ( new_site cx e.loc,
                  "an element cast to a type it isn't kept as" ));
           dummy fs env lb
       | _ -> bug "an `unsafe_cast` of no value")
@@ -2190,6 +2327,8 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
       next_id = 0;
       next_label = 0;
       here = fs.here;
+      prelude = fs.prelude;
+      saved = None;
       fails = true;
       words = [];
       handler = None;
@@ -2356,6 +2495,8 @@ and handler fs env (e : C.expr) ~ev ~captures body =
       next_id = 0;
       next_label = 0;
       here = fs.here;
+      prelude = fs.prelude;
+      saved = None;
       fails = true;
       words = [];
       handler = None;
@@ -2573,7 +2714,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
     (fun (_, vars, _) -> List.iter (fun (_, m) -> emit fs (Decl m)) vars)
     arms;
   let arm_env vars = List.fold_left (fun env (v, m) -> bind env v m) env vars in
-  let no_arm = new_site cx (at fs e.loc) in
+  let no_arm = new_site cx e.loc in
   (* the arm [a] has matched: count what its pattern bound, check its
      guard, and go to its body *)
   let matched ((a : C.arm), vars, l) =
@@ -2739,6 +2880,8 @@ let fn cx here (f : C.fn_def) : Mem.fn =
           next_id = 0;
           next_label = 0;
           here;
+          prelude = f.loc.file = Prelude.file;
+          saved = Some None;
           fails = fn_fails f;
           words = [];
           handler = None;
@@ -2784,6 +2927,11 @@ let fn cx here (f : C.fn_def) : Mem.fn =
             consume env r;
             drop_all fs frame;
             emit fs (Return r))
+      in
+      let body =
+        match fs.saved with
+        | Some (Some v) -> Let (v, Runtime (Here_get, [], None)) :: body
+        | _ -> body
       in
       {
         name = c_name cx f.path;

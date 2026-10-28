@@ -888,11 +888,15 @@ differed from its plan:
   than calling itself. Comparisons aren't revealed: `<` on one is
   through its order, which in its own module is its representation's,
   unless it has a key.
-- **`NaN` is checked after every `Float` operation** in the interpreter
-  (eval.ml), not only where a float leaves arithmetic, as operators.md
-  plans for the C backend. It panics at the operation that made it,
-  which is earlier than the plan's, never later; the message text is
-  built only once there's a panic, so the check costs a comparison.
+- **A `NaN` is checked where it's observed** (decision 15; nan.ml), in
+  the interpreter as in both native builds: arithmetic carries it
+  (arith.ml), and comparing it (`ordered`, and the walk's
+  `same_leaf`, raising `Nan.Seen`, which the caller turns into its own
+  panic), `show`, `round` and `truncate`, hashing, and a dependency's
+  operation given one (Core's `Nan_check`, which lowering puts on each
+  argument whose type could hold a `Float`) panic. The operation that
+  made it tags it with where it is, in bits 29 to 50 of the payload,
+  which a `Float32` keeps, so the panic says where it was made.
 - **A key that leads back to its own type** (its type has the type in
   it, or a type whose key does) is an error (Infer_reqs.key_loops),
   which operators.md doesn't name: comparing two would compare two of
@@ -1461,10 +1465,11 @@ themselves (bench/native); Mem IR, the C runtime and a naive backend
 for the first-order subset, with `ren build`; the debug strategy for
 the rest of the subset, blocks, generics, handlers, errors, `show` and
 `Console`; Perceus over Mem IR; release builds that specialize; and the
-measurements. Then four that act on what they measured: arrays in
-loops, the experiments merged, the release build's costs, and small
-values and packed fields. Each step extends this section, and says what
-it changed of the ones before.
+measurements. Then those that act on what they measured: arrays in
+loops, the experiments merged, the release build's costs, small values
+and packed fields, arrays of arrays and recursion that builds, sized
+storage, and floats checked where they're observed. Each step extends
+this section, and says what it changed of the ones before.
 
 ### Step 2: Mem IR, the runtime, and `ren build`
 
@@ -1537,9 +1542,9 @@ Freeing goes through a list rather than recursing, as
 `lean_dec_ref_cold` does (runtime/object.cpp:311-331), so dropping
 `nqueens`'s long lists won't overflow the stack. Arrays keep their
 length, capacity and whether their elements are counted. `Int`
-arithmetic is checked with `__builtin_*_overflow`, and panics, `Float`
-operations that would make a NaN, `Float`'s `show` and `sqrt`, `round`
-and `truncate` say exactly what lib/eval/arith.ml and builtins.ml say.
+arithmetic is checked with `__builtin_*_overflow`, and panics, a NaN
+where it's observed (step 13), `round` and `truncate`, say exactly what
+lib/eval/arith.ml and builtins.ml say.
 `-DREN_STATS` counts allocations, frees, dups, drops, reuses, the most
 bytes live at once, and the objects still live, printed to stderr when
 the binary exits.
@@ -2581,3 +2586,88 @@ kernels.
 
 Left for later: shifts, and computing in narrow lanes where values are
 proven to fit (decision 15's last sentence).
+
+### Step 13: NaN where it's observed, `Float` sums, late overflow
+
+Decision 15's three rules for arithmetic, in the interpreter and both
+native builds alike.
+
+**NaN.** nan.ml says it once: what an operation given a NaN gives (its
+first operand that's one, chosen here and not by the machine, which may
+swap a `+`'s), how a NaN is tagged with where it was made, and what
+each panic says. The runtime does the same in C (ren_rt.h, "NaN").
+
+- **Arithmetic carries it, unchecked.** A release build's `Float`
+  arithmetic is C's own, `a + b`, so nbody's loops are plain floating
+  point; a debug build's, `ren_fadd_d(a, b, tag)`, tags a NaN it makes
+  with a number for where it is (emit_c.ml, `tag`), which the panic
+  turns back into "made at x.ren:3:9" (`ren_nan_where_table`). A
+  release build makes no tags, so its message stops before " made".
+- **It's checked where it's observed:** before a `Float` comparison and
+  `==` (Mem's `Nan_check`), in the walks of `==`, order and `show`
+  (`ren_walk_float`, given what's walking and its site), in `show` of a
+  `Float` and in `round` and `truncate`, and on each argument of a
+  dependency's operation whose type could hold one (Core's `Nan_check`
+  prim, put there by lowering, `nan_checked`; a value of a generic
+  type is walked by its descriptor, `ren_nan_in`). Hashing is the
+  interpreter's, since the native slice has no `Map` or `Set`. A
+  `match` needs nothing: there are no `Float` patterns.
+- **A panic in the prelude is at the program's call that reached it,**
+  as `ren run` says (eval.ml, `call_at`): such a site is a `Caller`
+  site, which is the runtime's `ren_here`, set before each call of the
+  prelude from the program's code (Mem's `Here_set`) and put back by
+  prelude code after a block it called returns. Before, a prelude
+  function compiled once was given the first call that reached it as
+  its sites' place, so `print` of a NaN, which panics inside `print`,
+  said the first `print`'s line wherever it was.
+
+**`Float` sums.** `Array.sum` asks an internal intrinsic,
+`float_lanes`, whether its `T` is `Float` (known in a release build,
+which then lowers only the arm it takes; a descriptor's in a debug
+build), and if it is, `float_sum` adds in the fixed tree: element i
+into lane i mod 8, each lane from 0.0, then ((0 + 1) + (2 + 3)) + ((4 +
+5) + (6 + 7)). arith.ml's `float_sum` and ren_rt.h's `ren_float_sum`
+are the same tree. A release build's has no tag to keep, so it's eight
+accumulators, which clang vectorizes (two `fadd.2d` pairs an iteration
+on arm64); a debug build's adds with `ren_fadd_d`. build.t's
+float_sum.ren sums a generator's arrays of every length to 100 and two
+long ones, of numbers of every size and a few infinities, through
+`sum` and through a generic function's, and every build prints what
+`ren run` prints.
+
+**Late overflow** (late.ml) is built, linted and tested, and off: a
+release build does it only with REN_LATE set. In a loop with an `Int`
+`+`, `-` or `*`, the outermost, each is a `Late`, which keeps its first
+fault (`ren_late`, its site and operands) and gives the wrapped result;
+a `Late_check` reports it before every call and every way out of the
+loop, after the loop, and every 1,024 turns of each loop in it
+(`Late_tick`), and `ren_panic` reports it before any other panic, so
+the panic is the interpreter's. Mem Lint checks each `Late` is in such
+a loop and each call and way out has its check before it. It's stricter
+than decision 15, which lets a loop whose calls use nothing report when
+it leaves. Measured, it made no loop vectorize and the loops it changed
+slower: inout 18% more cycles, a running sum of squares 29% more. Clang
+won't vectorize a loop with a branch to a call that records the fault,
+an overflow flag alone can't say which operation it was or with what
+operands, and a running sum's overflow can't be checked in lanes at
+all; what's left is the count each loop keeps and a call that returns
+in place of one that doesn't. So it stays off until a loop it would
+help is found; build.t runs its programs with it on.
+
+**Soundness.** A NaN is never observed unchecked: every observation
+point the interpreter checks has its check in Mem (Mem Lint requires a
+site on each), and the C arithmetic in between can't observe anything.
+Tags only add payload bits a NaN already has room for; a value that
+isn't a NaN is never changed. `Float` sums are one tree in all three,
+so their bits agree. Late overflow, when on: between a fault and its
+report only the loop's own code runs, calling nothing, and the report
+ends the program, so nothing it wrote after the fault is seen; the
+first fault is the one kept, computed from what `ren run` computed.
+Async.isolate, whose block's panic could be caught, isn't built (11a);
+decision 8 says such a block can't change outer variables, which is
+what keeps a late report unobservable there too.
+
+Measured (bench/native/RESULTS.md, "NaN where observed, Float sums"):
+nbody release 3.99 s to 2.73 s, 31.6% fewer cycles and 55% fewer
+instructions, 1.62× the Rust's time where it was 2.37×; inout
+unchanged; a million-`Float` `sum` 35× faster.

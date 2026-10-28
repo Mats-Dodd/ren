@@ -14,6 +14,12 @@ val args : string list ref
 (* Run the built-in function [x] on its arguments: its result, and the final value of every
    parameter, which the interpreter writes back for the arguments passed
    with `&`. `show` isn't run here: the interpreter shows a value through
-   its type itself. *)
+   its type itself. [tys] are what its type variables stand for, and
+   [made] the tag of where it's called, for a NaN it makes (nan.ml). *)
 val run :
-  Intrinsic.t -> dicts:Value.dict list -> Value.t list -> Value.t * Value.t list
+  Intrinsic.t ->
+  dicts:Value.dict list ->
+  tys:Ty.ty list ->
+  made:(unit -> int) ->
+  Value.t list ->
+  Value.t * Value.t list

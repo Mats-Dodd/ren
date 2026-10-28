@@ -94,6 +94,34 @@ let targs_of cx id =
   | Some a -> a
   | None -> bug (Printf.sprintf "no type arguments for node %d" id)
 
+(* Whether a value of type [t] can't hold a `Float`: a scalar of the
+   prelude's but `Float`, or one of its collections, tuples, options and
+   results of those. A type of the program's, or a type variable, may. *)
+let rec floatless (t : Ty.ty) =
+  match t with
+  | Con (p, args) ->
+      let prelude n = p = Path.prelude n in
+      (List.exists prelude [ "Int"; "Bool"; "Str"; "Unit"; "Bytes" ]
+      || (match Sized.of_path p with Some k -> not (Sized.is_float k) | None -> false)
+      || Ty.is_tuple p
+      || List.exists prelude [ "Array"; "Option"; "Result"; "Map"; "Set" ])
+      && List.for_all floatless args
+  | _ -> false
+
+(* [args], given to the operation [op] of [dep]: each that could hold a
+   NaN checked first (nan.ml, [Nan_check]), so none reaches a handler,
+   the world or the journal. A block isn't checked: it holds no value, and
+   what it gives is checked where that goes; nor is an implementation. *)
+let nan_checked (dep : Path.t) op (args : C.expr list) =
+  List.map
+    (fun (a : C.expr) ->
+      match a.ty with
+      | Fun _ | Impl _ | Errors _ -> a
+      | _ when floatless a.ty -> a
+      | _ ->
+          C.mk (Prim (Nan_check (dep.name ^ "." ^ op), [ a ])) a.ty a.loc)
+    args
+
 (* The name inference gave the block at node [id] (Ty.lambda_id), and
    the dependencies its callee gives it (Infer.Block). *)
 let block_of cx id =
@@ -598,7 +626,15 @@ and named_block cx (e : expr) =
           mk (Call (f, args, cx.ev)) ret e.loc
       | Var (Dep_op (dep, op)) ->
           mk
-            (Dep_call { dep; op; fty; ev = cx.ev; next = false; args = values })
+            (Dep_call
+               {
+                 dep;
+                 op;
+                 fty;
+                 ev = cx.ev;
+                 next = false;
+                 args = nan_checked dep op values;
+               })
             ret e.loc
       | _ -> bug "a block made of something that isn't a function")
 
@@ -808,7 +844,7 @@ and handler cx (e : expr) deps state arms =
                                fty;
                                ev = cx.ev;
                                next = false;
-                               args;
+                               args = nan_checked p op args;
                              })
                           ret e.loc) )
             | _ -> None)
@@ -1109,7 +1145,7 @@ and call cx ?(changed = false) (e : expr) f args =
   | Var (Dep_op (dep, op)) ->
       (* never with `&` (mut.ml), so its arguments are values, evaluated in
          order *)
-      let args = List.map (expr cx) args in
+      let args = nan_checked dep op (List.map (expr cx) args) in
       mk
         (Dep_call
            { dep; op; fty = ty_of cx f.node; ev = cx.ev; next = false; args })
@@ -1123,7 +1159,7 @@ and call cx ?(changed = false) (e : expr) f args =
         | Some ev -> ev
         | None -> bug "`next` outside a handler"
       in
-      let args = List.map (expr cx) args in
+      let args = nan_checked dep op (List.map (expr cx) args) in
       mk
         (Dep_call { dep; op; fty = ty_of cx f.node; ev; next = true; args })
         (ty_of cx e.node) e.loc

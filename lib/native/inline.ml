@@ -156,6 +156,7 @@ let body ~next ~label (f : fn) (args : atom list) (res : var) exit : block =
     match r with
     | Atom x -> Atom (atom x)
     | Arith (op, x, y, s) -> Arith (op, atom x, atom y, s)
+    | Late (op, x, y, s) -> Late (op, atom x, atom y, s)
     | Neg (x, s) -> Neg (atom x, s)
     | Compare (c, x, y) -> Compare (c, atom x, atom y)
     | Not x -> Not (atom x)

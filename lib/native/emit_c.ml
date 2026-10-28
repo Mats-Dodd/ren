@@ -180,8 +180,31 @@ let of_val l v =
 let site_names : (int, int) Hashtbl.t = Hashtbl.create 64
 
 let site (s : site) =
-  sprintf "&ren_site_%d"
-    (Option.value (Hashtbl.find_opt site_names s.sid) ~default:s.sid)
+  if s.kind = Caller then "ren_here"
+  else
+    sprintf "&ren_site_%d"
+      (Option.value (Hashtbl.find_opt site_names s.sid) ~default:s.sid)
+
+(* Whether this is a release build, set by [program]: it tags no NaN. *)
+let is_release = ref false
+
+(* A debug build's tags of where NaNs are made (nan.ml), each place's
+   number, from 1, which [ren_nan_where] says the place of. *)
+let made_tags : (string, int) Hashtbl.t = Hashtbl.create 16
+
+(* The tag a NaN made at [s] gets: 0, none, in a release build. *)
+let tag (s : site) =
+  match s.made with
+  | Some w when not !is_release -> (
+      match Hashtbl.find_opt made_tags w with
+      | Some n -> string_of_int n
+      | None ->
+          let n = Hashtbl.length made_tags + 1 in
+          if n > Nan.max_tag then "0"
+          else (
+            Hashtbl.replace made_tags w n;
+            string_of_int n))
+  | _ -> "0"
 
 (* The program's structs, by number: set by [program], for the C it
    writes. *)
@@ -401,10 +424,13 @@ let runtime rt args site_arg =
   | Str_concat -> sprintf "ren_str_concat(%s, %s)" (a 0) (a 1)
   | Str_eq -> sprintf "ren_str_eq(%s, %s)" (a 0) (a 1)
   | Show_int -> sprintf "ren_show_int(%s)" (a 0)
-  | Show_float -> sprintf "ren_show_float(%s)" (a 0)
+  | Show_float -> sprintf "ren_show_float(%s, %s)" (a 0) (site ())
   | Show_bool -> sprintf "ren_show_bool(%s)" (a 0)
   | Float_of_int -> sprintf "((double)%s)" (a 0)
-  | Float_sqrt -> sprintf "ren_fsqrt(%s, %s)" (a 0) (site ())
+  | Float_sqrt -> (
+      match site_arg with
+      | Some s when not !is_release -> sprintf "ren_fsqrt_d(%s, %s)" (a 0) (tag s)
+      | _ -> sprintf "sqrt(%s)" (a 0))
   | Float_round -> sprintf "ren_fround(%s, %s)" (a 0) (site ())
   | Float_truncate -> sprintf "ren_ftruncate(%s, %s)" (a 0) (site ())
   | Wrapping op ->
@@ -434,9 +460,27 @@ let runtime rt args site_arg =
         (a 0)
   | Console_write -> sprintf "ren_console_write(%s)" (a 0)
   | Console_error -> sprintf "ren_console_error(%s)" (a 0)
-  | Show_any -> sprintf "ren_show_any(%s, %s)" (a 0) (a 1)
-  | Equal_any -> sprintf "ren_equal_any(%s, %s, %s)" (a 0) (a 1) (a 2)
-  | Compare_any -> sprintf "ren_compare_any(%s, %s, %s)" (a 0) (a 1) (a 2)
+  | Show_any -> sprintf "ren_show_any(%s, %s, %s)" (a 0) (a 1) (site ())
+  | Equal_any what ->
+      sprintf "ren_equal_any(%s, %s, %s, %s, %s)" (a 0) (a 1) (a 2)
+        (c_string what) (site ())
+  | Compare_any what ->
+      sprintf "ren_compare_any(%s, %s, %s, %s, %s)" (a 0) (a 1) (a 2)
+        (c_string what) (site ())
+  | Nan_check what ->
+      let y = if List.length args > 1 then a 1 else a 0 in
+      sprintf "ren_nan_check(%s, %s, %s, %s)" (a 0) y (c_string what) (site ())
+  | Nan_check_any what ->
+      sprintf "ren_nan_in(%s, %s, %s, %s)" (a 0) (a 1) (c_string what) (site ())
+  | Float_lanes -> sprintf "ren_desc_is_float(%s)" (a 0)
+  | Float_sum ->
+      let t = match site_arg with Some s -> tag s | None -> "0" in
+      sprintf "ren_float_sum(%s, %s)" (a 0) t
+  | Late_check -> "ren_late_check()"
+  | Here_set -> sprintf "(void)(ren_here = %s)" (site ())
+  | Here_get -> "(void *)ren_here"
+  | Here_put -> sprintf "(void)(ren_here = (const ren_site *)%s)" (a 0)
+  | Late_tick -> sprintf "ren_late_tick(%s)" (a 0)
   | Op_any op ->
       let code =
         match op with
@@ -449,7 +493,8 @@ let runtime rt args site_arg =
         | Some _ -> bug "an operator through a dictionary that isn't one"
       in
       let b = if op = None then "(ren_val){0}" else a 2 in
-      sprintf "ren_op_any(%s, %s, %s, %s, %s)" (a 0) code (a 1) b (site ())
+      let t = match site_arg with Some s -> tag s | None -> "0" in
+      sprintf "ren_op_any(%s, %s, %s, %s, %s, %s)" (a 0) code (a 1) b (site ()) t
   | Value_any one -> sprintf "ren_value_any(%s, %b)" (a 0) one
   | New_desc _ -> bug "a descriptor built outside a Let"
 
@@ -457,7 +502,8 @@ let runtime rt args site_arg =
    after calling it. *)
 let gives_nothing = function
   | Array_push _ | Array_push_taking _ | Console_write | Console_error
-  | Array_check | Buf_set _ | Buf_set_field _ | Buf_check ->
+  | Array_check | Buf_set _ | Buf_set_field _ | Buf_check | Nan_check _
+  | Nan_check_any _ | Late_check | Here_set | Here_put ->
       true
   | _ -> false
 
@@ -482,10 +528,23 @@ let low_bits bits =
 let rhs (r : rhs) =
   match r with
   | Atom x -> atom x
+  (* a release build's `Float` arithmetic is C's, which carries a NaN; a
+     debug build's tags one it makes (ren_rt.h, "NaN") *)
+  | Arith (op, x, y, _) when atom_layout x = Float && !is_release -> (
+      match op with
+      | Mod -> sprintf "fmod(%s, %s)" (atom x) (atom y)
+      | _ ->
+          sprintf "(%s %s %s)" (atom x) (Ast.binop_to_string op) (atom y))
+  | Arith (op, x, y, s) when atom_layout x = Float ->
+      sprintf "%s_d(%s, %s, %s)"
+        (binop_fn op Float)
+        (atom x) (atom y) (tag s)
   | Arith (op, x, y, s) ->
       sprintf "%s(%s, %s, %s)"
         (binop_fn op (atom_layout x))
         (atom x) (atom y) (site s)
+  | Late (op, x, y, s) ->
+      sprintf "%s_late(%s, %s, %s)" (binop_fn op Int) (atom x) (atom y) (site s)
   | Neg (x, s) -> (
       match atom_layout x with
       | Float -> sprintf "(-%s)" (atom x)
@@ -1370,9 +1429,11 @@ let sites add ~(site_pieces : site -> Diag.piece list) (all : site list) =
 
 (* The C file for [p]. [site_pieces] is what a panic at a site prints,
    with a [Hole] where its message goes. *)
-let program ?(restrict = false) ~(site_pieces : site -> Diag.piece list)
-    (p : program) =
+let program ?(restrict = false) ?(release = false)
+    ~(site_pieces : site -> Diag.piece list) (p : program) =
   let b = Buffer.create 65536 in
+  is_release := release;
+  Hashtbl.reset made_tags;
   let add = Buffer.add_string b in
   add Runtime_c.header;
   add "\n";
@@ -1387,7 +1448,9 @@ let program ?(restrict = false) ~(site_pieces : site -> Diag.piece list)
             ren_lit_%d = { { 0, REN_TAG_STR, 0, 0 }, %d, %s };\n"
            (n + 1) i n (c_string s)))
     p.strings;
-  sites add ~site_pieces p.sites;
+  (* a [Caller] site is [ren_here], none of its own *)
+  sites add ~site_pieces
+    (List.filter (fun (s : site) -> s.kind <> Caller) p.sites);
   add
     (sprintf "static const char *const ren_tag_table[%d] = %s;\n"
        (max 1 (List.length p.tags))
@@ -1451,7 +1514,9 @@ let program ?(restrict = false) ~(site_pieces : site -> Diag.piece list)
   else add (sprintf "  %s r = %s(NULL);\n" (ctype p.start_result) p.start);
   if p.start_result <> Unit then (
     add
-      (sprintf "  ren_print_value(stdout, (ren_obj*)&ren_desc_%d, %s);\n"
+      (sprintf
+         "  ren_print_value(stdout, (ren_obj*)&ren_desc_%d, %s, \
+          ren_overflow_site);\n"
          p.start_desc
          (word_of p.start_result "r"));
     add "  fputc('\\n', stdout);\n");
@@ -1466,8 +1531,19 @@ let program ?(restrict = false) ~(site_pieces : site -> Diag.piece list)
       | l -> if is_object l then add (sprintf "  ren_drop(%s);\n" v.vname))
     (List.rev p.values);
   add "}\n\n";
+  (* where each tag a debug build gives a NaN says it was made *)
+  let wheres = Array.make (Hashtbl.length made_tags + 1) "NULL" in
+  Hashtbl.iter (fun w n -> wheres.(n) <- c_string w) made_tags;
+  if Hashtbl.length made_tags > 0 then
+    add
+      (sprintf "static const char *const ren_nan_where_table[%d] = %s;\n\n"
+         (Array.length wheres)
+         (braces (Array.to_list wheres)));
   add "int main(void) {\n";
   add (sprintf "  ren_overflow_site = %s;\n" (site p.overflow));
+  if Hashtbl.length made_tags > 0 then (
+    add "  ren_nan_where = ren_nan_where_table;\n";
+    add (sprintf "  ren_nan_nwhere = %d;\n" (Array.length wheres)));
   add "  ren_texts = ren_text_table;\n";
   add "  ren_tag_names = ren_tag_table;\n";
   add "  return ren_run(ren_program);\n}\n";

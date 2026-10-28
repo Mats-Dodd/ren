@@ -4,8 +4,10 @@
 
    An `Int` is 64 bits, as it is on every backend, and arithmetic that
    doesn't fit panics, in every build (operators.md, "`Int` and
-   `Float`"). A `Float` is never `NaN`: an operation that would make one
-   panics too. What to say is decided here, and where to say it by the
+   `Float`"). A `Float` operation that has no answer, `0.0 / 0.0`, gives
+   a NaN, which arithmetic carries and comparing panics on (nan.ml):
+   [made] is the tag of where the operation is, asked for only once it
+   makes one. What to say is decided here, and where to say it by the
    caller, which knows where the operation is: so a panic is one of two
    exceptions, which the caller turns into its own. *)
 
@@ -62,35 +64,42 @@ let int_binop (op : Ast.binop) x y =
   | Ge -> VBool (x >= y)
   | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on `Int`s")
 
-(* [r], unless it's `NaN`, which there isn't: a panic that says what made
-   it. *)
-let not_nan (op : Ast.binop) x y r =
-  if Float.is_nan r then
+(* No place, for an operation whose caller doesn't know where it is: a
+   NaN it makes has no tag. *)
+let nowhere () = 0
+
+(* [x op y], comparing, which panics on a NaN: the first that is one,
+   whose tag says where it was made. *)
+let ordered (op : Ast.binop) x y =
+  if Float.is_nan x || Float.is_nan y then
     raise
       (Undefined
-         (Printf.sprintf "`%s` has no answer here: %s %s %s"
-            (Ast.binop_to_string op) (Ast.show_float x) (Ast.binop_to_string op)
-            (Ast.show_float y)))
-  else VFloat r
+         (Nan.observed
+            (Nan.compared (Ast.binop_to_string op))
+            (if Float.is_nan x then x else y)))
 
-let float_binop (op : Ast.binop) x y =
+let float_binop ?(made = nowhere) (op : Ast.binop) x y =
+  let carried r = VFloat (Nan.carried ~made x y r) in
   match op with
-  | Add -> not_nan op x y (x +. y)
-  | Sub -> not_nan op x y (x -. y)
-  | Mul -> not_nan op x y (x *. y)
-  | Div -> not_nan op x y (x /. y)
-  | Mod -> not_nan op x y (Float.rem x y)
-  (* a total order, since there's no `NaN`, with -0.0 and 0.0 equal *)
-  | Lt -> VBool (Float.compare x y < 0)
-  | Le -> VBool (Float.compare x y <= 0)
-  | Gt -> VBool (Float.compare x y > 0)
-  | Ge -> VBool (Float.compare x y >= 0)
+  | Add -> carried (x +. y)
+  | Sub -> carried (x -. y)
+  | Mul -> carried (x *. y)
+  | Div -> carried (x /. y)
+  | Mod -> carried (Float.rem x y)
+  (* a total order, once a NaN has panicked, with -0.0 and 0.0 equal *)
+  | Lt | Le | Gt | Ge -> (
+      ordered op x y;
+      match op with
+      | Lt -> VBool (Float.compare x y < 0)
+      | Le -> VBool (Float.compare x y <= 0)
+      | Gt -> VBool (Float.compare x y > 0)
+      | _ -> VBool (Float.compare x y >= 0))
   | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on `Float`s")
 
-let binop (op : Ast.binop) a b =
+let binop ?made (op : Ast.binop) a b =
   match (a, b) with
   | VInt x, VInt y -> int_binop op x y
-  | VFloat x, VFloat y -> float_binop op x y
+  | VFloat x, VFloat y -> float_binop ?made op x y
   | _ -> bug ("`" ^ Ast.binop_to_string op ^ "` on the wrong types")
 
 let neg = function
@@ -108,3 +117,15 @@ let neg = function
 
 (* What a panic says of an overflow: "`+` overflowed: 1 + 2". *)
 let overflow_message ~op ~shown = Printf.sprintf "`%s` overflowed: %s" op shown
+
+(* [xs], `Float`s, added up as `sum` adds them (prelude.ml, [float_sum]):
+   element i into lane i mod 8, each lane from 0.0, then the lanes
+   pairwise, ((0 + 1) + (2 + 3)) + ((4 + 5) + (6 + 7)). Each addition
+   carries a NaN as [float_binop]'s do, with a NaN made in it tagged by
+   [made]. The runtime's [ren_float_sum] is the same. *)
+let float_sum ?(made = nowhere) (xs : float array) =
+  let add a b = Nan.carried ~made a b (a +. b) in
+  let lanes = Array.make 8 0. in
+  Array.iteri (fun i x -> lanes.(i mod 8) <- add lanes.(i mod 8) x) xs;
+  let l = lanes in
+  add (add (add l.(0) l.(1)) (add l.(2) l.(3))) (add (add l.(4) l.(5)) (add l.(6) l.(7)))

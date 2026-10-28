@@ -168,8 +168,19 @@ let hash_string s =
     (fun h c -> mix h (Int64.of_int (Char.code c)))
     0xcbf29ce484222325L s
 
-(* A float's hash: -0.0 is 0.0, which [=] says it equals. *)
-let hash_float f = mix 2L (Int64.bits_of_float (if f = 0. then 0. else f))
+(* A float's hash: -0.0 is 0.0, which [=] says it equals. A NaN can't be
+   hashed (nan.ml): what asked says so. *)
+let hash_float f =
+  if Float.is_nan f then raise (Nan.Seen f);
+  mix 2L (Int64.bits_of_float (if f = 0. then 0. else f))
+
+(* Two leaves the same, a NaN in either seen (nan.ml), the first's
+   before the second's. *)
+let same_leaf a b =
+  match (a, b) with
+  | VFloat x, _ when Float.is_nan x -> raise (Nan.Seen x)
+  | _, VFloat y when Float.is_nan y -> raise (Nan.Seen y)
+  | _ -> a = b
 
 (* [v]'s hash by its shape alone, which agrees with [by_shape]. *)
 let rec hash_shape v =
@@ -262,7 +273,8 @@ let rec by_shape a b =
       && List.for_all2
            (fun (k, v) (k', v') -> by_shape k k' && by_shape v v')
            xs ys
-  | (VInt _ | VFloat _ | VBool _ | VStr _ | VBytes _ | VUnit), _ -> a = b
+  | (VInt _ | VFloat _ | VBool _ | VStr _ | VBytes _ | VUnit), _ ->
+      same_leaf a b
   | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _), _ ->
       failwith "bug: a comparison of functions"
   | (VCon _ | VTag _ | VRecord _ | VArray _ | VTuple _ | VTable _), _ -> false
@@ -271,13 +283,13 @@ let rec by_shape a b =
 
 (* [a] and [b], of type [t], equal: by their keys, if their type has one,
    and otherwise part by part. A [Float]'s `-0.0` and `0.0` are equal, as
-   OCaml's [=] on floats has them, and there's no `NaN`. *)
+   OCaml's [=] on floats has them; a NaN is seen (nan.ml). *)
 let rec equal cx (t : Ty.ty) a b =
   match (keyed cx t a, keyed cx t b) with
   | Some (k, x), Some (_, y) -> equal cx k x y
   | _ -> (
       match (view cx.types t a, view cx.types t b) with
-      | Leaf, _ -> a = b
+      | Leaf, _ -> same_leaf a b
       | Record { fields = xs; _ }, Record { fields = ys; _ } ->
           List.for_all2 (fun (_, t, x) (_, _, y) -> equal cx t x y) xs ys
       | Ctor x, Ctor y ->
@@ -319,8 +331,8 @@ and by_hash cx t = Hash { hash = hash cx t; equal = equal cx t }
 
 (* [a] against [b], of type [t]: negative if [a] comes first, 0 if
    they're equal, positive if [b] does. Inference allows it only for a
-   type that has an order: an `Int` or a `Float`, a total order since
-   there's no `NaN`; a `Str` by its bytes, which is code point order; a
+   type that has an order: an `Int` or a `Float`, a total order once a
+   NaN is seen (nan.ml); a `Str` by its bytes, which is code point order; a
    `Bool`, `false` first; a sum type with no fields, by the order of its
    variants; a tuple, part by part, the first that differs deciding;
    anything with a key, by its key; and an opaque type in its own module,
@@ -331,7 +343,9 @@ let rec compare cx (t : Ty.ty) a b =
   | _ -> (
       match (view cx.types t a, view cx.types t b, a, b) with
       | Leaf, _, VInt x, VInt y -> Int64.compare x y
-      | Leaf, _, VFloat x, VFloat y -> Float.compare x y
+      | Leaf, _, VFloat x, VFloat y ->
+          ignore (same_leaf a b);
+          Float.compare x y
       | Leaf, _, VStr x, VStr y -> String.compare x y
       | Leaf, _, VBool x, VBool y -> Bool.compare x y
       | Ctor x, Ctor y, _, _ -> Int.compare x.index y.index
@@ -345,3 +359,43 @@ let rec compare cx (t : Ty.ty) a b =
           first (List.combine xs ys)
       | Opaque (_, rep), _, _, _ -> compare cx rep a b
       | _ -> failwith "bug: an order inference didn't allow")
+
+(* ---- NaN ---- *)
+
+(* Raise [Nan.Seen] of the first NaN in [v], of type [t], in the order
+   its parts are declared, as the runtime's walk finds it
+   ([ren_nan_in]): what's given to a dependency's operation (nan.ml).
+   Through what it's made of, not its key. *)
+let rec nan_in (types : types) (t : Ty.ty) v =
+  match (view types t v, v) with
+  | Leaf, VFloat f when Float.is_nan f -> raise (Nan.Seen f)
+  | Leaf, _ -> ()
+  | Record { fields; _ }, _ -> List.iter (fun (_, t, x) -> nan_in types t x) fields
+  | Ctor c, _ -> List.iter (fun (t, x) -> nan_in types t x) c.fields
+  | Opaque (_, rep), _ -> nan_in types rep v
+  | Elems (t, xs), _ -> Array.iter (nan_in types t) xs
+  | (Tag (_, parts) | Parts parts), _ ->
+      List.iter (fun (t, x) -> nan_in types t x) parts
+  | Entries (kt, vt, tb), _ ->
+      List.iter
+        (fun (k, x) ->
+          nan_in types kt k;
+          nan_in types vt x)
+        (Table.to_list tb)
+  | Members (t, tb), _ -> List.iter (fun (k, _) -> nan_in types t k) (Table.to_list tb)
+  | (Hidden _ | Shape), _ -> nan_shape v
+
+(* The same, by its shape alone. *)
+and nan_shape v =
+  match v with
+  | VFloat f when Float.is_nan f -> raise (Nan.Seen f)
+  | VCon { args; _ } | VTag { args; _ } | VTuple args -> List.iter nan_shape args
+  | VRecord xs -> List.iter (fun (_, x) -> nan_shape x) xs
+  | VArray xs -> Array.iter nan_shape (items xs)
+  | VTable t ->
+      List.iter
+        (fun (k, x) ->
+          nan_shape k;
+          nan_shape x)
+        (Table.to_list t)
+  | _ -> ()

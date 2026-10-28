@@ -433,8 +433,7 @@ not known takes and a block not lifted is given.
   $ for f in structs boxed; do release $f.ren; ren build --release --emit-c $f.ren | grep 'typedef struct { ren_val'; done
   structs.ren, release: the same, exit 0, objects live at exit 0
   typedef struct { ren_val s[2]; } ren_struct_0;
-  typedef struct { ren_val s[2]; } ren_struct_1;
-  typedef struct { ren_val s[3]; } ren_struct_2;
+  typedef struct { ren_val s[3]; } ren_struct_1;
   boxed.ren, release: the same, exit 0, objects live at exit 0
   typedef struct { ren_val s[2]; } ren_struct_0;
 
@@ -790,3 +789,327 @@ prints what `ren run` prints.
   ren specialized: 3 copies, 1 blocks lifted, 0 handlers known, 1 calls past the size budget
   note: specialization reached its size budget, so 1 call is compiled as written, its arguments boxed:
     budget.ren:3:9: a call of `budget.apply`
+
+A NaN (foundations.md, decision 15; nan.ml) is carried by arithmetic
+and stores, and panics where it's observed: a comparison, `==`, `show`,
+`round`, a dependency's operation given one (an order through `sort`,
+and hashing, are test_nan.ml's, which the native slice doesn't have). Each
+build panics where `ren run` does, with its message; a debug build says
+where the NaN was made too, and a release build, which tags no NaN,
+says the rest. A panic in the prelude, `show` inside `print` here, is
+at the program's call that reached it (ren_rt.h, `ren_here`), whichever
+of the calls of `print` that is.
+
+  $ unset REN_SPEC_BUDGET
+  $ nan_release() {
+  >   (cd "$(dirname "$1")" && f=$(basename "$1") &&
+  >    ren build --release "$f" -o ./release.bin 2> release.made &&
+  >    { ./release.bin > native.out 2> native.err; echo "exit $?" > native.code; } &&
+  >    { ren run "$f" > interp.out 2> interp.err; echo "exit $?" > interp.code; } &&
+  >    sed -e 's/ made at [^ ]*$//' -e 's/ made in the prelude$//' interp.err > interp.err2 &&
+  >    grep -v -e '^==[0-9]*==WARNING: ASan is ignoring' \
+  >      -e '^False positive error reports may follow' \
+  >      -e '^For details see https://github.com/google/sanitizers/issues/189' \
+  >      native.err > native.err2;
+  >    if cmp -s native.out interp.out && cmp -s native.err2 interp.err2 &&
+  >       cmp -s native.code interp.code
+  >    then echo "$1, release: the same, $(cat native.code)"
+  >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err2
+  >    fi)
+  > }
+  $ cat > nan_cmp.ren <<'EOF'
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   let a = z / z
+  >   let b = a * 2.0 + 1.0
+  >   var fs: Array<Float32> = [0.5, 1.0]
+  >   fs[1] = b
+  >   print(fs.len())
+  >   print(fs[1] < 1.0)
+  > EOF
+  $ cat > nan_show.ren <<'EOF'
+  > fn main() uses Console =
+  >   print(1.5)
+  >   let xs = [1.0, (0.0 - 1.0).sqrt()]
+  >   print(xs.len())
+  >   print(xs)
+  >   print(2.5)
+  > EOF
+  $ cat > nan_eq.ren <<'EOF'
+  > type P = { x: Float, y: Float }
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   print(P { x: 1.0, y: 2.0 } == P { x: 1.0, y: 2.0 })
+  >   print(P { x: 1.0, y: z / z } == P { x: 1.0, y: 2.0 })
+  > EOF
+  $ cat > nan_round.ren <<'EOF'
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   print((z / z + 1.0).round())
+  > EOF
+  $ cat > nan_sum.ren <<'EOF'
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   print([1.0, 2.0, 3.0].sum())
+  >   let xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 1.0 / z, -1.0 / z]
+  >   print(xs.sum() > 0.0)
+  > EOF
+  $ cat > nan_dep.ren <<'EOF'
+  > dep Sink =
+  >   put: fn(x: Float)
+  > 
+  > handler ignoring() for Sink =
+  >   put(_) => ()
+  > 
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   with ignoring() in Sink.put(1.0)
+  >   print("once")
+  >   with ignoring() in Sink.put(z / z)
+  >   print("not reached")
+  > EOF
+  $ for f in nan_cmp nan_show nan_eq nan_round nan_sum nan_dep; do same $f.ren; nan_release $f.ren; done
+  nan_cmp.ren, perceus: the same, exit 1, objects live at exit 1
+  nan_cmp.ren, naive: the same, exit 1, objects live at exit 2
+  nan_cmp.ren, release: the same, exit 1
+  nan_show.ren, perceus: the same, exit 1, objects live at exit 2
+  nan_show.ren, naive: the same, exit 1, objects live at exit 2
+  nan_show.ren, release: the same, exit 1
+  nan_eq.ren, perceus: the same, exit 1, objects live at exit 3
+  nan_eq.ren, naive: the same, exit 1, objects live at exit 3
+  nan_eq.ren, release: the same, exit 1
+  nan_round.ren, perceus: the same, exit 1, objects live at exit 1
+  nan_round.ren, naive: the same, exit 1, objects live at exit 1
+  nan_round.ren, release: the same, exit 1
+  nan_sum.ren, perceus: the same, exit 1, objects live at exit 1
+  nan_sum.ren, naive: the same, exit 1, objects live at exit 2
+  nan_sum.ren, release: the same, exit 1
+  nan_dep.ren, perceus: the same, exit 1, objects live at exit 2
+  nan_dep.ren, naive: the same, exit 1, objects live at exit 2
+  nan_dep.ren, release: the same, exit 1
+  $ ren run nan_show.ren; ren run nan_dep.ren
+  1.5
+  2
+  error: panic: `show` of a NaN made at nan_show.ren:3:18
+    ┌─ nan_show.ren:5:3
+  5 │   print(xs)
+    │   ^^^^^^^^^
+  once
+  error: panic: `Sink.put` was given a NaN made at nan_dep.ren:11:31
+     ┌─ nan_dep.ren:11:31
+  11 │   with ignoring() in Sink.put(z / z)
+     │                               ^^^^^
+  [1]
+
+With REN_LATE set, a release build's `Int` `+`, `-` or `*` in a loop
+that overflows doesn't leave the loop (late.ml): its first fault is
+kept and reported when the loop ends, before its next call or way out,
+every 1,024 turns, or before any other panic, with the message `ren
+run` gives where it happened. (It's off otherwise: measured, it made no
+loop vectorize and the loops it changed slower, RESULTS.md.) So each of
+these prints what `ren run` prints: an overflow
+whose wrapped number would index out of bounds, print, run a loop on,
+or keep a loop going; two overflows, the first reported; a `break`
+after one; one in a loop an array is hoisted out of; and one in a
+function a loop calls.
+
+  $ cat > late_sum.ren <<'EOF'
+  > fn main() uses Console =
+  >   var total = 0
+  >   var i = 0
+  >   while i < 100
+  >     total = total + 9223372036854775000 * i
+  >     i = i + 1
+  >   print(total)
+  > EOF
+  $ cat > late_index.ren <<'EOF'
+  > fn main() uses Console =
+  >   let xs = [10, 20, 30]
+  >   var k = 4611686018427387904
+  >   var i = 0
+  >   while i < 10
+  >     k = k + k
+  >     print(xs[k])
+  >     i = i + 1
+  > EOF
+  $ cat > late_print.ren <<'EOF'
+  > fn main() uses Console =
+  >   var k = 9223372036854775800
+  >   var j = 0
+  >   while j < 50
+  >     k = k + 1
+  >     print(k)
+  >     j = j + 1
+  > EOF
+  $ cat > late_spin.ren <<'EOF'
+  > fn main() uses Console =
+  >   var n = 1
+  >   var steps = 0
+  >   while n != 0
+  >     n = n * 3
+  >     steps = steps + 1
+  >   print(steps)
+  > EOF
+  $ cat > late_inner.ren <<'EOF'
+  > fn main() uses Console =
+  >   var n = 9223372036854775807
+  >   var outer = 0
+  >   while outer < 3
+  >     var inner = 0
+  >     while inner < n
+  >       inner = inner + 4611686018427387904
+  >     n = n + 1
+  >     outer = outer + 1
+  >   print(n)
+  > EOF
+  $ cat > late_two.ren <<'EOF'
+  > fn main() uses Console =
+  >   var a = 9223372036854775807
+  >   var b = -9223372036854775807
+  >   var i = 0
+  >   while i < 3
+  >     b = b - 5
+  >     a = a + 1
+  >     i = i + 1
+  >   print(a)
+  > EOF
+  $ cat > late_break.ren <<'EOF'
+  > fn find(xs: Array<Int>) -> Int =
+  >   var acc = 1
+  >   for x in xs
+  >     acc = acc * x
+  >     if acc < 0 then break
+  >   acc
+  > 
+  > fn main() uses Console =
+  >   print(find([2, 3]))
+  >   print(find([1000000000, 1000000000, 1000000000, 5]))
+  > EOF
+  $ cat > late_hoisted.ren <<'EOF'
+  > fn main() uses Console =
+  >   var xs = [5, 6, 7, 8]
+  >   var i = 0
+  >   while i < 4
+  >     xs[i] = xs[i] * 3074457345618258603
+  >     i = i + 1
+  >   print(xs[0])
+  > EOF
+  $ cat > late_call.ren <<'EOF'
+  > fn grow(n: Int) -> Int = n * 2
+  > 
+  > fn main() uses Console =
+  >   var k = 1
+  >   var j = 0
+  >   while j < 70
+  >     k = grow(k) + 1
+  >     j = j + 1
+  >   print(k)
+  > EOF
+  $ export REN_LATE=1
+  $ for f in late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call; do same $f.ren; release $f.ren; done
+  late_sum.ren, perceus: the same, exit 1, objects live at exit 1
+  late_sum.ren, naive: the same, exit 1, objects live at exit 1
+  late_sum.ren, release: the same, exit 1, objects live at exit 1
+  late_index.ren, perceus: the same, exit 1, objects live at exit 2
+  late_index.ren, naive: the same, exit 1, objects live at exit 2
+  late_index.ren, release: the same, exit 1, objects live at exit 2
+  late_print.ren, perceus: the same, exit 1, objects live at exit 1
+  late_print.ren, naive: the same, exit 1, objects live at exit 1
+  late_print.ren, release: the same, exit 1, objects live at exit 1
+  late_spin.ren, perceus: the same, exit 1, objects live at exit 1
+  late_spin.ren, naive: the same, exit 1, objects live at exit 1
+  late_spin.ren, release: the same, exit 1, objects live at exit 1
+  late_inner.ren, perceus: the same, exit 1, objects live at exit 1
+  late_inner.ren, naive: the same, exit 1, objects live at exit 1
+  late_inner.ren, release: the same, exit 1, objects live at exit 1
+  late_two.ren, perceus: the same, exit 1, objects live at exit 1
+  late_two.ren, naive: the same, exit 1, objects live at exit 1
+  late_two.ren, release: the same, exit 1, objects live at exit 1
+  late_break.ren, perceus: the same, exit 1, objects live at exit 2
+  late_break.ren, naive: the same, exit 1, objects live at exit 2
+  late_break.ren, release: the same, exit 1, objects live at exit 2
+  late_hoisted.ren, perceus: the same, exit 1, objects live at exit 2
+  late_hoisted.ren, naive: the same, exit 1, objects live at exit 2
+  late_hoisted.ren, release: the same, exit 1, objects live at exit 2
+  late_call.ren, perceus: the same, exit 1, objects live at exit 1
+  late_call.ren, naive: the same, exit 1, objects live at exit 1
+  late_call.ren, release: the same, exit 1, objects live at exit 1
+  $ ren run late_index.ren; ren run late_two.ren
+  error: panic: `+` overflowed: 4611686018427387904 + 4611686018427387904
+    ┌─ late_index.ren:6:9
+  6 │     k = k + k
+    │         ^^^^^
+    help: if wrapping is what you mean, write `k.wrapping_add(k)`
+  error: panic: `-` overflowed: -9223372036854775807 - 5
+    ┌─ late_two.ren:6:9
+  6 │     b = b - 5
+    │         ^^^^^
+    help: if wrapping is what you mean, write `b.wrapping_sub(5)`
+  [1]
+  $ ren build --release --emit-mem late_sum.ren | grep -c -e 'late+' -e 'late\*' -e 'late-check' -e 'late-tick'
+  5
+  $ unset REN_LATE
+
+`sum` of `Float`s adds in eight lanes, each from 0.0, element i into
+lane i mod 8, then the lanes pairwise (prelude.ml, `sum`), in `ren run`
+and both builds, which a release build's C compiler can vectorize.
+float_sum.ren sums the arrays a generator makes, of every length to
+100 and two long ones, through `sum` and through a generic function's,
+and each build prints what `ren run` prints.
+
+  $ cat > float_sum.ren <<'EOF'
+  > // `sum` of `Float`s, on arrays a generator makes: every length to 100,
+  > // and two long ones, of numbers of every size, a few infinite. Each
+  > // sum is the same in `ren run` and both builds (prelude.ml, `sum`).
+  > fn next(s: Int) -> Int =
+  >   s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
+  > 
+  > fn float_of(s: Int) -> Float =
+  >   let m = Float.of((s / 1024) % 2000001) / 997.0
+  >   let e = ((s / 7) % 6 + 6) % 6
+  >   if e == 0 then m * 0.00000001
+  >   else if e == 1 then m
+  >   else if e == 2 then m * 100000000.0
+  >   else if e == 3 then m * 10000000000000000.0
+  >   else if e == 4 then m * 0.001
+  >   else if s % 4099 == 17 then 1.0 / 0.0
+  >   else m * 1000.0
+  > 
+  > fn total<T>(xs: Array<T>) -> T = xs.sum()
+  > 
+  > fn main() uses Console =
+  >   var s = 42
+  >   var n = 0
+  >   var lens: Array<Int> = []
+  >   while n <= 100
+  >     &lens.push(n)
+  >     n += 1
+  >   &lens.push(10000)
+  >   &lens.push(100003)
+  >   for len in lens
+  >     var xs: Array<Float> = []
+  >     var i = 0
+  >     while i < len
+  >       s = next(s)
+  >       &xs.push(float_of(s))
+  >       i += 1
+  >     print(xs.sum())
+  >     print(total(xs))
+  > EOF
+  $ same float_sum.ren; release float_sum.ren
+  float_sum.ren, perceus: the same, exit 0, objects live at exit 0
+  float_sum.ren, naive: the same, exit 0, objects live at exit 0
+  float_sum.ren, release: the same, exit 0, objects live at exit 0
+  $ ren run float_sum.ren | head -12
+  0.0
+  0.0
+  -11153229689067203000.0
+  -11153229689067203000.0
+  0.000024576970912738214
+  0.000024576970912738214
+  -15057011033100292000.0
+  -15057011033100292000.0
+  4204222668004012000.0
+  4204222668004012000.0
+  49998555369.54821
+  49998555369.54821

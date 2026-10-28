@@ -85,8 +85,9 @@ let rt_reads (rt : rt) =
   | Show_float | Show_bool | Float_of_int | Float_sqrt | Float_round
   | Float_truncate | Wrapping _ | Wrapping_neg | Console_write | Console_error
   | Bits _ | Widen | Narrow _ | Wrap_to _
-  | Show_any | Equal_any | Compare_any | Array_check | Buf_check | Buf_get _
-  | Array_take _ | Buf_take _ ->
+  | Show_any | Equal_any _ | Compare_any _ | Array_check | Buf_check | Buf_get _
+  | Array_take _ | Buf_take _ | Nan_check _ | Nan_check_any _ | Float_lanes
+  | Float_sum | Late_check | Late_tick | Here_set | Here_get | Here_put ->
       true
   | Array_set _ | Array_push _ | Array_set_taking _ | Array_push_taking _
   | Array_set_field _ | Array_set_field_taking _ | Array_own | Array_data

@@ -130,10 +130,23 @@ type atom =
 (* The parts of a panic's message that are known when the program is
    compiled: where it is, and for an `Int` that overflowed, the operands
    the help suggests the wrapping method for (eval.ml, [wrap]). An
-   [Asserts] site's whole message is known: an `assert` that failed. *)
+   [Asserts] site's whole message is known: an `assert` that failed. A
+   [Caller] site is in the prelude, whose source a program doesn't show,
+   so a panic there is said to be at the program's call that reached it,
+   as `ren run` says (eval.ml, [call_at]): the runtime's [ren_here], which
+   a [Here_set] sets before each call of the prelude from the program's
+   code. *)
 type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
-type site_kind = Panics | Asserts
-type site = { sid : int; loc : Loc.t; wrap : wrap option; kind : site_kind }
+type site_kind = Panics | Asserts | Caller
+type site = {
+  sid : int;
+  loc : Loc.t;
+  wrap : wrap option;
+  kind : site_kind;
+  made : string option;
+      (** where a NaN made here is said to be made, "at x.ren:3:9" (nan.ml):
+          a `Float` operation's, which a debug build tags a NaN it makes with *)
+}
 type cmp = Lt | Le | Gt | Ge | Eq | Ne
 
 (* A function of the runtime's (ren_rt.h). Each borrows its arguments,
@@ -211,14 +224,37 @@ type rt =
   | Console_write
   | Console_error
   | Show_any  (** a descriptor and a [Word]: `show` through the walk *)
-  | Equal_any  (** a descriptor and two [Word]s: `==` through the walk *)
-  | Compare_any
+  | Equal_any of string
+      (** a descriptor and two [Word]s: `==` through the walk, which panics on a
+          NaN saying this operator compared it *)
+  | Compare_any of string
       (** a descriptor and two [Word]s: their order, an [Int] below 0 if the
           first comes first *)
   | Op_any of Ast.binop option
       (** a descriptor and two [Word]s, or one for [None], `-`: an operator
           through a requirement's dictionary, which panics as the operator does
       *)
+  | Nan_check of string
+      (** one or two [Float]s: panics if one is a NaN, the first, saying this,
+          "`<` compared a NaN" (nan.ml) *)
+  | Nan_check_any of string
+      (** a descriptor and a [Word]: panics if a NaN is anywhere in it *)
+  | Float_lanes
+      (** a descriptor: whether it describes `Float`, whose `sum` adds in
+          lanes *)
+  | Float_sum
+      (** an array of [Float]s, or of a [Word] that's one, added up in eight
+          lanes (prelude.ml, [float_sum]) *)
+  | Here_set
+      (** its site, a call of the prelude from the program's code, is where
+          a panic at a [Caller] site is said to be *)
+  | Here_get  (** a [Ptr]: where [Here_set] last said, to put back *)
+  | Here_put  (** a [Ptr] [Here_get] gave: where it was again *)
+  | Late_check
+      (** report an `Int` overflow a [Late] kept, if there is one (late.ml) *)
+  | Late_tick
+      (** a loop's count of turns till its next [Late_check], an [Int]: the
+          next, after checking if it's run out *)
   | Value_any of bool  (** a descriptor: `zero`, or `one` if [true] *)
   | New_desc of new_desc
       (** a descriptor built of the descriptors given: a named type's, from its
@@ -233,6 +269,11 @@ type rhs =
   | Arith of Ast.binop * atom * atom * site
       (** [+], [-], [*], [/] or [%] on two [Int]s or two [Float]s, which panics
           at [site] if it overflows or has no answer *)
+  | Late of Ast.binop * atom * atom * site
+      (** an [Int] [+], [-] or [*] in a release build's loop, which if it
+          overflows gives the wrapped result and keeps the fault, the first
+          one, to report at the next [Late_check] or before any other panic
+          (late.ml) *)
   | Neg of atom * site
   | Compare of cmp * atom * atom
       (** two scalars of one layout, [Int], [Float], [Bool], [Unit] or [Enum] *)

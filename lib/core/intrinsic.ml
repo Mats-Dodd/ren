@@ -36,6 +36,8 @@ type t =
   | Array_reserve
   | Map_into
   | Unsafe_cast
+  | Float_lanes
+  | Float_sum
   | Map_empty
   | Map_of
   | Map_get
@@ -116,6 +118,8 @@ let path x =
   | Array_reserve -> fn "array_reserve"
   | Map_into -> fn "map_into"
   | Unsafe_cast -> fn "unsafe_cast"
+  | Float_lanes -> fn "float_lanes"
+  | Float_sum -> fn "float_sum"
   | Map_empty -> fn "map_empty"
   | Map_of -> member "Map" "of"
   | Map_get -> member "Map" "get"

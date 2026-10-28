@@ -15,13 +15,13 @@ The native slice measured the first two for the first time
 ([bench/native/RESULTS.md](bench/native/RESULTS.md)), on its sequential
 subset:
 
-- **Within 2× of Rust:** on six of the seven, after the experiments
-  that followed the first measurement. Five run faster than Rust
-  (cfold 0.24×, deriv 0.42×, binary-trees 0.58×, rbtree 0.73×, nqueens
-  0.75×), fannkuch ties it, and nbody is 2.39×, for NaN checks on every
-  operation that [foundations.md](foundations.md#15-arithmetic) now
-  moves to where a NaN is observed. Peak memory is within 1.5× on all
-  seven. The first measurement had three over 2×, nbody at 15.5×.
+- **Within 2× of Rust:** on all seven, after the experiments that
+  followed the first measurement. Five run faster than Rust (cfold
+  0.24×, deriv 0.42×, binary-trees 0.58×, rbtree 0.73×, nqueens
+  0.75×), fannkuch ties it, and nbody is 1.62×, since a NaN is checked
+  where it's observed ([foundations.md](foundations.md#15-arithmetic))
+  instead of after every operation, which was 2.39×. Peak memory is
+  within 1.5× on all seven. The first measurement had three over 2×, nbody at 15.5×.
 - **Debug builds faster than Go:** no. A clean build of 500k lines
   takes 57 s against Go's 13, 77% of it clang -O0, and a one-line edit
   rebuilds everything, since there's no build cache yet.
