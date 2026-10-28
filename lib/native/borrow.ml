@@ -24,6 +24,12 @@ let inferred (p : program) =
   let fixed = Hashtbl.create 16 in
   Hashtbl.replace fixed p.start ();
   List.iter (fun (v : value) -> Hashtbl.replace fixed v.vfn ()) p.values;
+  (* a handler's record points at its code *)
+  List.iter
+    (fun (h : handler) ->
+      Hashtbl.replace fixed h.install ();
+      List.iter (fun (_, _, f) -> Hashtbl.replace fixed f ()) h.methods)
+    p.handlers;
   let see (x : atom) =
     match x with Fn_ptr f -> Hashtbl.replace fixed f () | _ -> ()
   in

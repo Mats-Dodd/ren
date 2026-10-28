@@ -260,3 +260,7 @@ fn work() uses Chan<Int> = with queue() as Jobs in 1
 //             ^ type.dependency
 //                                      ^ keyword
 //                                         ^ type.dependency
+
+fn page(body: Str) -> Route = handler fn(path) => path.concat(body)
+//                            ^ keyword
+//                                    ^ keyword

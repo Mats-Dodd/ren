@@ -120,7 +120,7 @@
                                                      the call's last argument)
      primary  := INT | STR | "true" | "false" | "(" ")" | IDENT | "self"
               |  "break"
-              |  lambda
+              |  lambda | "handler" lambda      (an inline handler)
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
               |  tyname "." IDENT               (a member: `Stack.of`)
               |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
@@ -165,6 +165,20 @@ let peek2 p = fst p.toks.(min (p.i + 1) (Array.length p.toks - 1))
 let peek3 p = fst p.toks.(min (p.i + 2) (Array.length p.toks - 1))
 let loc p = snd p.toks.(p.i)
 let advance p = if p.i < Array.length p.toks - 1 then p.i <- p.i + 1
+
+(* The tokens from [i] to [j], as they're written: a space between two
+   only where the source has one. *)
+let spelled p i j =
+  let b = Buffer.create 32 in
+  for k = i to j do
+    let t, (l : Loc.t) = p.toks.(k) in
+    (if k > i then
+       let (pl : Loc.t) = snd p.toks.(k - 1) in
+       if pl.stop.line <> l.start.line || pl.stop.col < l.start.col then
+         Buffer.add_char b ' ');
+    Buffer.add_string b (Token.to_string t)
+  done;
+  Buffer.contents b
 
 (* Location of the last real token consumed, skipping layout tokens, so a
    node's span ends where its code ends rather than at the next line. *)
@@ -1021,7 +1035,9 @@ and parse_finally p =
   Finally (mk (Lambda (params, body)) at p)
 
 and parse_expr p =
+  let first = p.i in
   let e = parse_orelse p in
+  if peek p = OVER then chain_not_value p first;
   if peek p = DOTDOT then
     Diag.error (loc p)
       ~help:
@@ -1029,6 +1045,27 @@ and parse_expr p =
          use `take` and `drop`"
       "a range, `a..b`, is written only after a `for`'s `in`: it isn't a value";
   e
+
+(* `a over b` where it isn't an item of a `with`, whose first link
+   started at token [first]: a chain isn't a value (foundations.md,
+   decision 3), so the help writes it where it's installed. *)
+and chain_not_value p first =
+  let rec links () =
+    if peek p = OVER then (
+      advance p;
+      ignore (parse_orelse p);
+      links ())
+  in
+  links ();
+  let last = p.i - 1 in
+  Diag.error
+    (Loc.span (snd p.toks.(first)) (snd p.toks.(last)))
+    ~help:
+      (Printf.sprintf
+         "keep the parts, and write the chain where it's installed: `with %s \
+          in ...`"
+         (spelled p first last))
+    "a chain of handlers isn't a value"
 
 (* An expression that may be followed by `..`, which only a `for` reads
    ([parse_for]). *)
@@ -1280,6 +1317,13 @@ and parse_primary p =
   | MATCH -> parse_match p
   | WITH -> parse_with p
   | FN -> parse_lambda p
+  | HANDLER when peek2 p = FN ->
+      (* an inline handler, `handler fn(req) => ...` (foundations.md,
+         decision 3) *)
+      let start = loc p in
+      advance p;
+      let lam = parse_lambda p in
+      mk (Inline_handler lam) start p
   | FAIL -> (
       advance p;
       match peek p with
@@ -1458,7 +1502,7 @@ and parse_with p =
 and parse_with_item p : Parsed.with_item =
   let start = loc p in
   let link () =
-    let link = parse_expr p in
+    let link = parse_orelse p in
     p.node <- p.node + 1;
     { link; knode = p.node }
   in

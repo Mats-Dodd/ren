@@ -338,6 +338,8 @@ let rename ~next ~label (also : var list) (b : block) : block * var list =
     | Env_get (x, n) -> Env_get (atom x, n)
     | Arg (x, n) -> Arg (atom x, n)
     | Block_of (g, x) -> Block_of (g, atom x)
+    | Method_of (x, d, n) -> Method_of (atom x, d, n)
+    | Has_code x -> Has_code (atom x)
     | Impl (n, xs) -> Impl (n, atoms xs)
     | Install i ->
         Install

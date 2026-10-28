@@ -121,8 +121,12 @@ let atom_layout (x : atom) : layout =
   | Enum_tag _ -> Enum
   | Scalar_ctor _ | Lit _ -> Boxed
   | Desc_lit _ -> Desc
-  | Fn_ptr _ -> Ptr
+  | Fn_ptr _ | Handler_tag _ -> Ptr
   | No_ev -> Ev
+
+(* Whether a handler's tag is its number, a release build's, rather than
+   a pointer to its record (ren_rt.h, [ren_handler]). *)
+let numbered_tags = ref false
 
 let atom (x : atom) =
   match x with
@@ -142,9 +146,18 @@ let atom (x : atom) =
   | Lit n -> sprintf "((ren_obj*)&ren_lit_%d)" n
   | Desc_lit n -> sprintf "((ren_obj*)&ren_desc_%d)" n
   | Fn_ptr f -> sprintf "((void*)%s)" f
+  | Handler_tag n when !numbered_tags -> sprintf "((void*)(intptr_t)%d)" n
+  | Handler_tag n -> sprintf "((void*)&ren_handler_%d)" n
   | No_ev -> "((const ren_ev*)NULL)"
 
 let bug what = failwith ("bug: emit_c: " ^ what)
+
+(* The record of the handler whose description is [x], found from its
+   tag, the description's first word. *)
+let handler_of x =
+  if !numbered_tags then
+    sprintf "(&ren_handlers[(intptr_t)ren_fields(%s)[0].p])" x
+  else sprintf "((const ren_handler *)ren_fields(%s)[0].p)" x
 
 (* [c], a C expression of a value of [l], as a [ren_val], a word. *)
 let word_of (l : layout) c =
@@ -570,6 +583,10 @@ let rhs (r : rhs) =
   | Of_word (x, l) -> of_val l (atom x)
   | Global name -> name
   | Block_of (f, env) -> sprintf "((ren_block){%s, %s})" f (atom env)
+  | Method_of (x, dep, op) ->
+      sprintf "((ren_block){ren_method_of(%s, %d, %d), NULL})"
+        (handler_of (atom x)) dep op
+  | Has_code x -> sprintf "(%s.code != NULL)" (atom x)
   | Op_block (ev, dep, [], op) ->
       sprintf "ren_find(%s, %d)->ops[%d]" (atom ev) dep op
   | Op_block (ev, dep, args, op) ->
@@ -956,9 +973,8 @@ let rec stmt o d (s : stmt) =
       keys line (var result) deps;
       indirect o d ~result ~error (fun out ->
           sprintf
-            "((ren_hcode)ren_fields(%s)[0].p)(%s, %s, %s, %s, (void*)%s_keys, \
-             %d, %s)"
-            (atom handler) (atom handler) (atom outer) (atom body) (atom desc)
+            "%s->install(%s, %s, %s, %s, (void*)%s_keys, %d, %s)"
+            (handler_of (atom handler)) (atom handler) (atom outer) (atom body) (atom desc)
             (var result) n out);
       on_failure o d error on_error
   | If (c, t, f) ->
@@ -1260,6 +1276,7 @@ let dkind_c (k : dkind) =
   | D_errors -> "REN_D_ERRORS"
   | D_var _ -> "REN_D_VAR"
   | D_unknown -> "REN_D_UNKNOWN"
+  | D_handler -> "REN_D_HANDLER"
   | D_sized _ -> "REN_D_SIZED"
 
 (* The program's descriptors and its types' declarations, as static data
@@ -1471,6 +1488,7 @@ type parts = {
 
 let parts ~restrict ~release ~site_pieces (p : program) =
   is_release := release;
+  numbered_tags := release;
   Hashtbl.reset made_tags;
   let b = Buffer.create 65536 in
   let add = Buffer.add_string b in
@@ -1494,6 +1512,17 @@ let parts ~restrict ~release ~site_pieces (p : program) =
        (braces
           (match p.tags with [] -> [ "NULL" ] | ts -> List.map c_string ts)));
   static_types add p.descs p.decls;
+  (* the handlers' records, declared here, since the functions use their
+     tags, and defined with [run], after the functions they point at *)
+  (match p.handlers with
+  | [] -> ()
+  | hs when release ->
+      add (sprintf "static const ren_handler ren_handlers[%d];\n" (List.length hs))
+  | hs ->
+      List.iter
+        (fun (h : handler) ->
+          add (sprintf "%sconst ren_handler ren_handler_%d;\n" !linkage h.hid))
+        hs);
   structs := Array.of_list p.structs;
   (* each struct, a word for each slot, as an array of structs keeps it *)
   let typedefs =
@@ -1525,6 +1554,36 @@ let parts ~restrict ~release ~site_pieces (p : program) =
   in
   let b = Buffer.create 4096 in
   let add = Buffer.add_string b in
+  let record (h : handler) =
+    sprintf "{%d, %d, %s, %s, %d, %s}" h.hid h.hwords (c_string h.hname)
+      (if h.install = "" then "NULL" else "(ren_hcode)" ^ h.install)
+      (List.length h.methods)
+      (if h.methods = [] then "NULL" else sprintf "ren_methods_%d" h.hid)
+  in
+  List.iter
+    (fun (h : handler) ->
+      if h.methods <> [] then
+        add
+          (sprintf "static const ren_method ren_methods_%d[%d] = %s;\n" h.hid
+             (List.length h.methods)
+             (braces
+                (List.map
+                   (fun (d, op, f) -> sprintf "{%d, %d, (ren_code)%s}" d op f)
+                   h.methods))))
+    p.handlers;
+  (match p.handlers with
+  | [] -> ()
+  | hs when release ->
+      add
+        (sprintf "static const ren_handler ren_handlers[%d] = %s;\n"
+           (List.length hs) (braces (List.map record hs)))
+  | hs ->
+      List.iter
+        (fun (h : handler) ->
+          add
+            (sprintf "%sconst ren_handler ren_handler_%d = %s;\n" !linkage
+               h.hid (record h)))
+        hs);
   add "static void ren_program(void) {\n";
   (* the associated values, made once, in order *)
   List.iter
@@ -1677,6 +1736,11 @@ let units ~jobs ~(site_pieces : site -> Diag.piece list) (p : program) =
       let n = sprintf "ren_desc_%d" i in
       Hashtbl.replace decls n (sprintf "extern ren_desc %s;\n" n))
     p.descs;
+  List.iter
+    (fun (h : handler) ->
+      let n = sprintf "ren_handler_%d" h.hid in
+      Hashtbl.replace decls n (sprintf "extern const ren_handler %s;\n" n))
+    p.handlers;
   List.iteri
     (fun i _ ->
       let n = sprintf "ren_decl_%d" i in

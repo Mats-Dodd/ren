@@ -215,6 +215,71 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
   has to when a handler implements two that both have an operation of
   that name: a bare `write(line) =>` there says which to choose.
 
+### Descriptions, the only stored code
+
+A handler's description is the code Ren keeps (foundations.md, decision
+3): records, arrays, maps and generic types hold them, and a block never.
+
+```ren
+dep Shape =
+  area: fn() -> Float
+
+handler circle(r: Float) for Shape =
+  area() => 3.0 * r * r
+
+fn total(shapes: Array<Shape>) -> Float =
+  var t = 0.0
+  for s in shapes
+    t = t + s.area()
+  t
+```
+
+- **A stored description's `uses` is the most it may need.** One whose
+  handler needs less fits: `health()`, which needs nothing, goes in a
+  `Router<(Api uses Cache, Db)>`, and whoever installs or calls one from
+  there provides the whole row the slot says. One that needs more than
+  its slot is an error that names what's beyond it, with the slot
+  written with that added:
+
+```
+error: expected `Api uses Db`, found `Api uses Clock, Db`
+   ┌─ main.ren:11:35
+11 │   let rs: Array<(Api uses Db)> = [timed()]
+   │                                   ^^^^^^^
+   = a stored description's `uses` is the most it may need, and this one needs `Clock` too
+   help: add it where the type is written: `Array<(Api uses Clock, Db)>`
+```
+
+  Only `uses` is a bound: what a description can fail to start with,
+  its `!`, is exact.
+- **An operation is called on a description as a method,** `s.area()`,
+  which means `with s in Shape.area()`, the arguments evaluated first,
+  outside: the call needs what `s`'s type says it needs, and fails with
+  what `Shape.area` declares. For a stateless handler, with no `var`,
+  `finally` or `next`, it makes no instance: it's a call of the arm with
+  what the description holds. A handler with state, called as a method,
+  starts fresh at each call, its `finally` run when the call ends. One
+  whose type can fail to start (`!`), or that goes `over` another, isn't
+  called this way: each is an error whose help installs it, `with s in
+  Store.get()`. `s.area`, not called, is an error, "an operation is
+  called, not read".
+- **An inline handler,** `handler fn(req) => respond(req, body)`, is a
+  handler for a dependency of one operation, written where a description
+  of it is wanted: a `let`'s type, a parameter, a field, an element, a
+  result, or a generic slot whose type argument is fixed. Its parameters
+  are the operation's, written as a block's are. What it reads from where
+  it's written it copies when it's made, so a `var` changed later isn't
+  seen, and what it captures is data: a block is an error, and so is
+  `next`, since it goes over nothing. What it uses is found where it's
+  installed or called, as any handler's: `fn stamper() -> (Stamp uses
+  Clock) = handler fn() => Clock.now()` uses nothing itself. One for a
+  dependency of several operations, or where which dependency isn't
+  known, is an error whose help is to declare a handler, or write the
+  type it's kept as.
+- **A chain isn't a value.** `cached() over mem()` is written only as a
+  `with`'s item; anywhere else it's an error whose help keeps the parts,
+  `with cached() over mem() in ...`.
+
 ## `with`
 
 ```ren
@@ -647,7 +712,9 @@ stage, or settled something the plan left open:
 - **A method called on it is the one of its dependencies that has it,**
   `h.count()`, and it's an error if more than one does, or if the method
   changes its receiver (`inout self`), since that would make `h` just one
-  of them.
+  of them. An operation is found the same way, `h.usd_to(1)`, and called
+  with `h` installed for the call ([Descriptions, the only stored
+  code](#descriptions-the-only-stored-code)).
 
 ```
 error: the items in this list have different types

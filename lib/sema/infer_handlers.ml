@@ -155,48 +155,8 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
       match (op, a.arm_impl.kind) with
       | Some (p, op, ps, r, errs), Lambda (params, body)
         when List.length params = List.length ps ->
-          let declared = fst (row_parts errs) in
-          (* what it fails with, which is its own until the group is done:
-             one of its parameters' errors passed on with `try` ends in
-             it, and then can fail with what the operation can *)
-          let open_errs = fresh_row env.st in
-          defer env
-            (Impl_op
-               {
-                 idep = p;
-                 iop = op;
-                 ideclared = declared;
-                 ierrs = open_errs;
-                 ivalue = a.arm_impl;
-                 inodes = cx.nodes;
-               });
-          (* checked as a lambda is, against the operation, but what its
-             calls use is what the handler needs, and they're the
-             handler's calls, so a message can point at one *)
-          let notes = [ part_of (type_name env p) "operation" op ] in
-          let why = explain ~notes () in
-          let result_why = explain ~notes ~msg:arm_produces () in
-          let qs =
-            List.map2
-              (fun (q : Resolved.param) eq ->
-                if q.pty = None then eq
-                else param_type env ~tparams:cx.tparams ~named:cx.named q)
-              params ps
-          in
-          name_lambda cx a.arm_impl.node;
-          bind_params hcx params qs;
-          let acx =
-            {
-              (lambda_cx hcx params qs ~errs:open_errs ~uses:needs) with
-              calls = hcx.calls;
-            }
-          in
-          core.check env acx body r ~why:result_why;
-          let t = TFun (qs, r, open_errs, needs) in
-          Hashtbl.replace cx.nodes a.arm_impl.node t;
-          ignore
-            (unifies env why a.arm_impl.loc ~found:t
-               ~expected:(TFun (ps, r, open_errs, needs)))
+          arm core env cx hcx ~needs ~dep:p ~op ~ps ~r ~errs a.arm_impl params
+            body
       | Some (p, op, ps, _, _), Lambda (params, _) ->
           report env
             (arm_arity a.arm_name.loc ~dep:(type_name env p) ~op
@@ -222,6 +182,126 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
          nrow = needs;
          ncalls = hcx.calls;
        })
+
+(* An arm, the lambda [impl] of [params] and [body], of the operation
+   [op] of [dep], whose parameters are [ps], result [r] and errors
+   [errs], at the handler's types, in a handler whose context is [hcx]
+   and whose needs are [needs]. *)
+and arm core env cx hcx ~needs ~dep:p ~op ~ps ~r ~errs (impl : expr) params
+    body =
+  let declared = fst (row_parts errs) in
+  (* what it fails with, which is its own until the group is done:
+     one of its parameters' errors passed on with `try` ends in
+     it, and then can fail with what the operation can *)
+  let open_errs = fresh_row env.st in
+  defer env
+    (Impl_op
+       {
+         idep = p;
+         iop = op;
+         ideclared = declared;
+         ierrs = open_errs;
+         ivalue = impl;
+         inodes = cx.nodes;
+       });
+  (* checked as a lambda is, against the operation, but what its
+     calls use is what the handler needs, and they're the
+     handler's calls, so a message can point at one *)
+  let notes = [ part_of (type_name env p) "operation" op ] in
+  let why = explain ~notes () in
+  let result_why = explain ~notes ~msg:arm_produces () in
+  let qs =
+    List.map2
+      (fun (q : Resolved.param) eq ->
+        if q.pty = None then eq
+        else param_type env ~tparams:cx.tparams ~named:cx.named q)
+      params ps
+  in
+  name_lambda cx impl.node;
+  bind_params hcx params qs;
+  let acx =
+    {
+      (lambda_cx hcx params qs ~errs:open_errs ~uses:needs) with
+      calls = hcx.calls;
+    }
+  in
+  core.check env acx body r ~why:result_why;
+  let t = TFun (qs, r, open_errs, needs) in
+  Hashtbl.replace cx.nodes impl.node t;
+  ignore
+    (unifies env why impl.loc ~found:t
+       ~expected:(TFun (ps, r, open_errs, needs)))
+
+(* An inline handler, [e], `handler fn(...) => ...`, whose arm is the
+   lambda [lam], where a description of [d] is wanted (foundations.md,
+   decision 3): its dependency has one operation, whose parameters it
+   takes and whose result and errors it's checked against, as any arm is.
+   What it uses is its handler's, a row of its own, found where it's
+   installed or called: none of it is the code's around it, so a function
+   that makes one uses nothing. That row is open, as a call's description
+   is (Infer_expr.made), so it fits any slot that needs at least as much.
+   It can't fail to start, and has no `next`. What it reads from around
+   it, it captures, by copy, when it's made: data, never a block. Its
+   type, or [TError] once something's reported. *)
+and inline_handler core env cx (e : expr) (lam : expr) (d : dep) =
+  let shown = shown_deps env [ d ] in
+  let td = Hashtbl.find env.types d.dpath in
+  let ops =
+    Option.value ~default:[]
+      (Iface.dep_fields
+         (Hashtbl.find_opt env.types)
+         {
+           Ty.dpath = d.dpath;
+           dargs = List.mapi (fun i _ -> Ty.Var i) td.params;
+         })
+  in
+  (* `next`, which Resolve left for this to say (Resolve.no_next) *)
+  let rec next_in (x : expr) =
+    match x.kind with
+    | Var (Global p) when p = Path.make env.home "next" -> Some x.loc
+    | _ -> List.find_map next_in (Ast.children x)
+  in
+  match (ops, lam.kind, next_in lam) with
+  | _, _, Some loc ->
+      report env (inline_next loc ~dep:shown);
+      TError
+  | [ o ], Lambda (params, body), None -> (
+      match field_type ~tvars:d.dargs o with
+      | TFun (ps, r, errs, _) when List.length ps = List.length params ->
+          let needs = fresh_row env.st in
+          let hcx = lambda_cx cx [] [] ~errs:REmpty ~uses:needs in
+          arm core env cx hcx ~needs ~dep:d.dpath ~op:o.fname ~ps ~r ~errs lam
+            params body;
+          (* what it captures: the locals it reads that it doesn't bind *)
+          let own = Ast.bound_in lam in
+          let seen = Hashtbl.create 8 in
+          let rec captures (x : expr) =
+            (match x.kind with
+            | Var (Local b)
+              when (not (List.mem b.id own)) && not (Hashtbl.mem seen b.id) ->
+                Hashtbl.replace seen b.id ();
+                (match
+                   Option.map (reveal env.st) (Hashtbl.find_opt cx.locals b.id)
+                 with
+                | Some (TFun _) ->
+                    report env (inline_block x.loc b.ident.name)
+                | _ -> ())
+            | _ -> ());
+            List.iter captures (Ast.children x)
+          in
+          captures body;
+          Hashtbl.replace cx.found e.node
+            (Inline_op { dep = d.dpath; op = o.fname });
+          TImpl { deps = [ d ]; over = false; needs; fails = REmpty }
+      | TFun (ps, _, _, _) ->
+          report env
+            (inline_arity lam.loc ~dep:shown ~op:o.fname (List.length ps)
+               (List.length params));
+          TError
+      | _ -> TError)
+  | ops, _, None ->
+      report env (inline_several e.loc ~dep:shown (List.length ops));
+      TError
 
 (* A `finally(r) => ...` among a handler's state (handlers.md, "When a
    `with` ends"), [fin], checked where it's written, in [hcx]: [r] is what

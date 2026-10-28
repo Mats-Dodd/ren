@@ -63,6 +63,8 @@ type ctx = {
   taken : (string, unit) Hashtbl.t;
   mutable todo : (Path.t * Loc.t) list;
   mutable lifted : Mem.fn list;  (** most recent first *)
+  mutable handler_list : Mem.handler list;
+      (** the handlers whose descriptions it makes, most recent first *)
   strings : (string, int) Hashtbl.t;
   mutable string_list : string list;  (** most recent first *)
   mutable sites : site list;  (** most recent first *)
@@ -688,11 +690,14 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
         | Errors _ -> (D_errors, [])
         | Var i when template -> (D_var i, [])
         | Var _ -> (D_unknown, [])
-        | Fun _ | Impl _ | Error -> bug "a descriptor of what has none"
+        (* a description kept in a record, an array or a generic type's
+           value: which handler it is, and what it captured, it keeps *)
+        | Impl _ -> (D_handler, [])
+        | Fun _ | Error -> bug "a descriptor of what has none"
       in
       let counted =
         match kind with
-        | D_str | D_array | D_tuple | D_errors -> true
+        | D_str | D_array | D_tuple | D_errors | D_handler -> true
         | D_named k -> (
             match (Hashtbl.find cx.decl_bodies k).dbody with
             | Record_decl _ -> true
@@ -936,7 +941,7 @@ let atom_layout (x : atom) : layout =
   | Enum_tag _ -> Enum
   | Scalar_ctor _ | Lit _ -> Boxed
   | Desc_lit _ -> Desc
-  | Fn_ptr _ -> Ptr
+  | Fn_ptr _ | Handler_tag _ -> Ptr
   | No_ev -> Ev
 
 (* Of a record or a tuple [x], the [n]-th of [size] fields, borrowed. *)
@@ -1495,6 +1500,28 @@ and expr_at fs env (e : C.expr) : atom =
          made before the `with`, and each call of one of its operations
          is a direct call already, so it installs nothing *)
       expr fs (bind env ev (borrow_var fs env outer)) body
+  | With
+      {
+        ev;
+        outer;
+        dep;
+        dargs;
+        from;
+        impl;
+        desc = d;
+        body =
+          {
+            kind =
+              Dep_call { dep = called; op; fty; ev = at; args; next = false; _ };
+            _;
+          } as body;
+      }
+    when at.id = ev.id && called = dep && from = dep
+         && List.for_all plain_arg args ->
+      method_call fs env e ~outer ~impl ~dep ~op ~fty ~args ~installed:(fun () ->
+          install fs env e ~ev ~outer
+            ~deps:[ ({ C.kpath = dep; kargs = dargs }, from) ]
+            ~handler:impl ~body_desc:d body)
   | With { ev; outer; dep; dargs; from; impl; desc = d; body } ->
       install fs env e ~ev ~outer
         ~deps:[ ({ C.kpath = dep; kargs = dargs }, from) ]
@@ -2494,6 +2521,61 @@ and lambda fs env ~name ~(params : C.param list) ~ev ~outer ~given ~captures
   let go () = lift fs env ~name ~captures ~enter body in
   if typed then with_words cx (n + 1) go else go ()
 
+(* An argument of an operation called as a method that's evaluated the
+   same before installing the description as after: a local, or one
+   checked for a NaN, which reads nothing the `with` installs. *)
+and plain_arg (a : C.expr) =
+  match a.kind with
+  | Local _ | Int _ | Float _ | Bool _ | Unit -> true
+  | Prim (Nan_check _, [ x ]) -> plain_arg x
+  | _ -> false
+
+(* `d.op(x)`, a description called as a method (compiler.md,
+   "Descriptions (step 3)"), which Core writes `with d in D.op(x)`, its
+   arguments evaluated before, outside ([plain_arg]): the method the
+   description's record has for the operation, if its handler is
+   stateless, called with the evidence here and the description first,
+   making no instance; or else, the handler installed for the call, as
+   the `with` says. *)
+and method_call fs env (e : C.expr) ~outer ~impl ~dep ~op ~fty ~args
+    ~installed =
+  let cx = fs.cx in
+  let lay t = layout_at fs e.loc t in
+  let h = expr fs env impl in
+  (* each branch disposes of it: the method takes it, and installing
+     reads its own *)
+  consume env h;
+  let m =
+    borrowed fs "$method" Block
+      (Method_of (h, dep_id cx dep, op_index fs e.loc dep op))
+  in
+  let stateless = borrowed fs "$stateless" Bool (Has_code m) in
+  let r = fresh fs "$called" (lay e.ty) in
+  emit fs (Decl r);
+  let direct =
+    block fs (fun () ->
+        branch env (fun () ->
+            let xs = List.map (expr fs env) args in
+            List.iter (consume env) xs;
+            let v =
+              call_block fs env ~result:(lay e.ty) ~fails:(C.fails fty) m
+                (borrow fs env outer) (h :: xs)
+            in
+            consume env v;
+            emit fs (Set (r, v))))
+  in
+  let installed =
+    block fs (fun () ->
+        branch env (fun () ->
+            drop_now fs h;
+            let v = installed () in
+            consume env v;
+            emit fs (Set (r, v))))
+  in
+  emit fs (If (stateless, direct, installed));
+  own env r;
+  Var r
+
 (* A `with`: the code of [handler]'s description, called with the
    evidence here, the body lifted as a block that captures what it uses
    from here, and the dependencies to install it for. *)
@@ -2555,8 +2637,9 @@ and install fs env (e : C.expr) ~ev ~outer ~deps ~handler ~body_desc body =
   own env result;
   Var result
 
-(* A handler's description: an object holding its code, lifted, and
-   what it captures, copied. *)
+(* A handler's description: an object holding its tag, which finds its
+   record, of its code, lifted, and what it captures, copied. A stateless
+   handler's record has a method for each operation too ([method_code]). *)
 and handler fs env (e : C.expr) ~ev ~captures body =
   let cx = fs.cx in
   let values = List.map (read fs env) captures in
@@ -2632,6 +2715,53 @@ and handler fs env (e : C.expr) ~ev ~captures body =
         emit code (Return r))
   in
   let name = fresh_name cx (fs.fname ^ ".handler") in
+  let hid = List.length cx.handler_list in
+  (* stateless (decision 3): its body only makes its instance, with no
+     `finally`, and nothing in it calls `next`; a generic one's code
+     needs descriptors, which it's given installed, so it's installed *)
+  let rec next_in (x : C.expr) =
+    (match x.kind with Dep_call { next = true; _ } -> true | _ -> false)
+    || List.exists next_in (C.children x)
+  in
+  let methods =
+    match body.kind with
+    | Instance { impls; finally = None } when words = [] && not (next_in body)
+      ->
+        let arms =
+          List.concat_map
+            (fun (dep, (r : C.expr)) ->
+              match r.kind with
+              | Record (_, arms) ->
+                  List.map (fun (op, (arm : C.expr)) -> (dep, op, arm)) arms
+              | _ ->
+                  bug "an implementation that isn't a record of its operations")
+            impls
+        in
+        (* an arm a method can't run, one given its caller's dependencies
+           or taking `inout` parameters, leaves it installed *)
+        if
+          List.for_all
+            (fun (_, _, (arm : C.expr)) ->
+              match arm.kind with
+              | Lambda { given = []; params; _ } ->
+                  List.for_all (fun (p : C.param) -> p.mode <> Inout) params
+              | _ -> false)
+            arms
+        then
+          List.map
+            (fun (dep, op, (arm : C.expr)) ->
+              ( dep_id cx dep,
+                op_index fs arm.loc dep op,
+                method_code fs ~ev ~captures ~values ~size
+                  ~name:(sprintf "%s.%s" fs.fname op)
+                  arm ))
+            arms
+        else []
+    | _ -> []
+  in
+  cx.handler_list <-
+    { hid; hname = fs.fname; hwords = size - 1; install = name; methods }
+    :: cx.handler_list;
   cx.lifted <-
     {
       name;
@@ -2650,7 +2780,99 @@ and handler fs env (e : C.expr) ~ev ~captures body =
     :: cx.lifted;
   alloc fs env
     (shape 0 (Ptr :: List.map atom_layout (values @ descs)))
-    (Fn_ptr name :: (values @ descs))
+    (Handler_tag hid :: (values @ descs))
+
+(* The code of a stateless handler's arm [arm] called as a method,
+   `d.op(x)` (compiler.md, "Descriptions (step 3)"): a block's code,
+   given the description as its first word and the operation's arguments
+   after it, that runs the arm with the caller's evidence, which is
+   where `with d in` would have installed it, so it makes no instance.
+   What the handler captured it reads from the description, as its
+   installing code does ([handler]). *)
+and method_code fs ~ev ~captures ~values ~size ~name (arm : C.expr) =
+  let cx = fs.cx in
+  match arm.kind with
+  | Lambda { params; ev = own_ev; outer; given = []; body; _ } ->
+      let code =
+        {
+          cx;
+          fname = fs.fname;
+          out = [];
+          next_id = 0;
+          next_label = 0;
+          here = fs.here;
+          prelude = fs.prelude;
+          saved = None;
+          fails = true;
+          words = [];
+          handler = None;
+          known = fs.known;
+          file = arm.loc.file;
+          lines = Hashtbl.create 64;
+          line = 0;
+        }
+      in
+      let env_p = fresh code "$env" Ptr in
+      let caller = fresh code "$caller" Ev in
+      let args = fresh code "$args" Ptr in
+      let frame = { kind = Fn_frame; live = [] } in
+      let body_block =
+        block code (fun () ->
+            let cenv = { vars = Vars.empty; frames = [ frame ] } in
+            (* the description, which the call gave it *)
+            let self = let_var code "$self" Boxed (Arg (Var args, 0)) in
+            own cenv self;
+            let cenv =
+              List.fold_left
+                (fun cenv (i, ((v : C.var), x)) ->
+                  bind cenv v
+                    (let_var code v.name (atom_layout x)
+                       (Field (Var self, i + 1, size))))
+                cenv
+                (List.mapi (fun i c -> (i, c)) (List.combine captures values))
+            in
+            (* the handler's evidence and the arm's are the caller's *)
+            let cenv = bind (bind (bind cenv ev caller) outer caller) own_ev caller in
+            let cenv =
+              fst
+                (List.fold_left
+                   (fun (cenv, i) (p : C.param) ->
+                     let l = layout_at code arm.loc p.var.ty in
+                     word_only cx l;
+                     let x = let_var code p.var.name l (Arg (Var args, i)) in
+                     own cenv x;
+                     (bind cenv p.var x, i + 1))
+                   (cenv, 1) params)
+            in
+            let r = expr code cenv body in
+            consume cenv r;
+            let w =
+              match atom_layout r with
+              | Word _ -> r
+              | l ->
+                  word_only cx l;
+                  borrowed code "$word" (Word 0) (To_word r)
+            in
+            drop_all code frame;
+            emit code (Return w))
+      in
+      let name = fresh_name cx name in
+      cx.lifted <-
+        {
+          name;
+          params = [ env_p; caller; args ];
+          modes = [ Owned; Owned; Owned ];
+          inout = [];
+          words = [];
+          result = Word 0;
+          fails = true;
+          body = body_block;
+          loc = arm.loc;
+          lines = lines_of code;
+        }
+        :: cx.lifted;
+      name
+  | _ -> bug "a handler's arm that isn't a lambda of its own"
 
 (* A handler's instance, at the end of its code: each implementation a
    record of its operations' blocks, installed on the evidence the
@@ -3063,6 +3285,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       taken = Hashtbl.create 64;
       todo = [];
       lifted = [];
+      handler_list = [];
       strings = Hashtbl.create 16;
       string_list = [];
       sites = [];
@@ -3165,6 +3388,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
     sites = List.rev cx.sites;
     structs = List.rev cx.struct_list;
     overflow;
+    handlers = List.rev cx.handler_list;
   }
 
 (* In a release build, a small value's type a value of which turns out

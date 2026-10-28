@@ -852,6 +852,7 @@ module.exports = grammar({
         $.identifier,
         $.self,
         $.lambda,
+        $.inline_handler,
         $.constructor_expression,
         $.record_expression,
         $.item_expression,
@@ -907,6 +908,11 @@ module.exports = grammar({
           ),
         ),
       ),
+
+    // handler fn(req) => respond(req, body): a handler of a dependency
+    // with one operation, written where a description of it is wanted,
+    // its parameters the operation's; what it reads from here is copied
+    inline_handler: ($) => seq('handler', field('lambda', $.lambda)),
 
     // a lambda's parameter can take a tuple apart, fn((k, v)) => ...
     lambda_parameters: ($) =>

@@ -331,3 +331,95 @@ handler pool() for Pool =
             (identifier)
             (arguments
               (identifier))))))))
+
+================================================================================
+Inline handlers
+================================================================================
+
+fn page(body: Str) -> Route = handler fn(path) => path.concat(body)
+
+fn main() =
+  let routes: Array<Route> = [handler fn(p) => p, page("x")]
+  &r.on("/version", handler fn(_) => "10d")
+  let s: Stamp = handler fn() =>
+    let t = Clock.now()
+    t
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (inline_handler
+      (lambda
+        (parameters
+          (parameter
+            (identifier)))
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (identifier))))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (array_expression
+          (inline_handler
+            (lambda
+              (parameters
+                (parameter
+                  (identifier)))
+              (identifier)))
+          (call_expression
+            (identifier)
+            (arguments
+              (string)))))
+      (reference
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (string)
+            (inline_handler
+              (lambda
+                (parameters
+                  (parameter
+                    (identifier)))
+                (string))))))
+      (let_statement
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (inline_handler
+          (lambda
+            (parameters)
+            (block
+              (let_statement
+                (identifier)
+                (call_expression
+                  (item_expression
+                    (type_name
+                      (type_identifier))
+                    (identifier))
+                  (arguments)))
+              (identifier))))))))

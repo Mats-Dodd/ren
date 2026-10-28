@@ -332,6 +332,11 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
      payload of a constructor `Option<Rates>` is written for *)
   | (Block _ | If (_, _, Some _) | Match _), TVar _ when written <> None ->
       branches ()
+  | Inline_handler lam, TImpl { deps = [ d ]; over = false; _ } ->
+      (* where it's written says which dependency it implements *)
+      let found = inline_handler core env cx e lam d in
+      Hashtbl.replace cx.nodes e.node found;
+      ignore (unifies env why e.loc ~found ~expected)
   | Var (Global _ | Intrinsic _ | Dep_op _), TVar _ ->
       (* where it's going isn't written, so it's given nothing *)
       named_block env cx ~why e REmpty expected
@@ -442,7 +447,12 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
       List.iter
         (fun x ->
           check env cx
-            ~why:{ plain with notes = why.notes }
+            ~why:
+              {
+                plain with
+                notes = why.notes;
+                inside = (fun t -> why.inside (sprintf "Array<%s>" t));
+              }
             ?written:
               (match written with
               | Some (TCon (_, [ w ])) when is_written w -> Some w
@@ -831,6 +841,21 @@ and synth env cx (e : expr) : ty =
       let needs = fresh_row env.st and fails = fresh_row env.st in
       handler core env cx e ~needs ~fails ~declared:None;
       impl_type ~over ~fails (handler_deps env cx deps) needs
+  | Inline_handler lam ->
+      (* which dependency it implements isn't known yet: what comes after
+         may say, an element of an array whose first is a description, so
+         it's checked once the function's body is (foundations.md,
+         decision 3) *)
+      let t = fresh_var env.st in
+      cx.later :=
+        (fun () ->
+          match impl_of t with
+          | Some { deps = [ d ]; over = false; _ } ->
+              let found = inline_handler core env cx e lam d in
+              ignore (unifies env plain e.loc ~found ~expected:t)
+          | _ -> report env (inline_unknown e.loc))
+        :: !(cx.later);
+      t
 
 (* `for x in &c` or `for x in c` over a cursor (foundations.md, decision
    12), [iter], of type [tc]: a value whose type has a method
@@ -1530,6 +1555,11 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
         TError
       in
       match (op_of env tr m.name, reveal env.st tr) with
+      | None, TImpl ({ deps = [ d ]; _ } as i)
+        when match Hashtbl.find_opt env.types d.dpath with
+             | Some td -> dep_op_in env m.name td <> None
+             | None -> false ->
+          desc_method env cx e f r m i d args
       | Some (td, o), _ -> method_call env cx ?changed e f r m tr td o args
       | None, TError -> nothing ()
       | None, (TCon (p, _) as t)
@@ -1537,7 +1567,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
           let td = Hashtbl.find env.types p in
           let shown = show (printer env) tr in
           (match td.body with
-          | Dep ops -> report env (op_of_value ~names:env.names m p ops)
+          | Dep ops -> report env (op_of_value ~names:env.names ?recv:(env.source r) m p ops)
           | _
             when Infer_reqs.numeric env p <> None
                  && List.mem_assoc m.name numeric_operators ->
@@ -1628,6 +1658,43 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
               nothing ())
       | None, _ -> field_call ())
   | _ -> call_with env cx e f (infer env cx f) args
+
+(* `d.op(args)`, the call [e] of [f], where [d] is [r], a description of
+   the dependency [dep], whose type is [i], and [op] one of its operations
+   (foundations.md, decision 3): `with d in Dep.op(args)`, the arguments
+   evaluated first, outside. So it fails with what the operation declares,
+   and uses what [d]'s type says it needs, which the `with` would: never
+   [dep] itself, which [d] provides. One whose state can fail to start, or
+   that goes over another, is only installed. *)
+and desc_method env cx (e : expr) (f : expr) (r : expr) (m : ident) (i : impl)
+    (d : dep) args =
+  let recv = Option.value (env.source r) ~default:"it" in
+  let shown = shown_deps env [ d ] in
+  let call = sprintf "%s.%s(%s)" shown m.name (if args = [] then "" else "...") in
+  let refuse diag =
+    report env diag;
+    unknown_call cx;
+    List.iter (fun a -> ignore (infer_arg env cx a)) args;
+    TError
+  in
+  if i.over then refuse (method_over m.loc ~recv ~dep:shown ~call)
+  else if fst (row_parts i.fails) <> [] then
+    refuse (method_fails m.loc ~recv ~call)
+  else
+    (* the operation as declared, at [d]'s type arguments: its node keeps
+       that, as a dependency's call does, for lowering *)
+    match lookup env cx ~node:f.node m.loc (Dep_op (d.dpath, m.name)) with
+    | TFun (ps, ret, errs, (RExtend (l, _) as uses)) ->
+        if List.length l.payload = List.length d.dargs then
+          List.iter2
+            (fun t a -> unify_at env r.loc ~found:a ~expected:t)
+            l.payload d.dargs;
+        Hashtbl.replace cx.nodes f.node (TFun (ps, ret, errs, uses));
+        Hashtbl.replace cx.found f.node
+          (Calls_op { key = dep_of d; from = d.dpath; op = m.name });
+        let needs = copy_needs env ~loc:e.loc ~what:Installing i.needs in
+        apply env cx e ~name:(Some m.name) f (TFun (ps, ret, errs, needs)) args
+    | _ -> refuse (op_of_value ~names:env.names ~recv m d.dpath [])
 
 (* The call [e] of [f], which isn't a method, once [f]'s type [tf] is
    known. *)
@@ -1819,7 +1886,7 @@ and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
         in
         check_args env cx ~name ?callee ~written ps args;
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
-        ret)
+        made env ret)
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
          block, whose errors are the call's. Its type isn't written, so it
@@ -1838,6 +1905,21 @@ and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
       List.iter (fun a -> ignore (infer_arg env cx a)) args;
       report env (not_a_function f.loc name (show (printer env) t));
       TError
+
+(* [t], what a call gives: if it's a handler's description, one whose
+   `uses` is an upper bound (foundations.md, decision 3): what it needs,
+   and a tail of its own, so it fits wherever a type that lists at least
+   that much is written, `Router<(Api uses Cache, Db)>` holding `health()`.
+   Needing less is always safe, since whatever installs or calls it
+   provides the whole row its type says. What it can fail to start with,
+   `!`, stays exact. One whose row is open already, a function's of the
+   group being checked, or one that names a row, stays as it is: it's as
+   open as it can be. *)
+and made env t =
+  match repr t with
+  | TImpl i when row_tail i.needs = None && row_skolem i.needs = None ->
+      TImpl { i with needs = extend (fst (row_parts i.needs)) (fresh_row env.st) }
+  | _ -> t
 
 (* A call's arguments [args], left to right, each against its parameter's
    type, of [ps]; [name] is the callee, for messages, and [callee] the

@@ -199,7 +199,23 @@ A handler keeps no block either. Its description is a value, which can
 outlive the call that made it, so its parameters are data: `handler
 h(f: fn() -> Int) for N` is an error, "a handler's parameters are data",
 with the help `pass the data, or make the behaviour a dependency`, and
-so is a `var` in its state that holds a block.
+so is a `var` in its state that holds a block. An inline handler,
+`handler fn(req) => respond(req, body)`, copies what it reads from where
+it's written, and the same holds of that: a block is an error.
+
+A chain is installed, never kept: `let x = cached() over mem()` is an
+error, "a chain of handlers isn't a value", whose help keeps the parts
+and writes the chain where it's installed.
+
+### Called as a method
+
+A description called as a method, `d.op(x)`, is `with d in D.op(x)`,
+its arguments evaluated first ([deps.md](deps.md#descriptions-the-only-stored-code)).
+A handler with state starts fresh at each such call, and its `finally`
+runs when the call ends, as that `with`'s would. One that goes `over`
+another isn't called this way, since the call would install it over
+whatever is outside: the error's help installs it over one, `with c over
+Users in Users.get(...)`.
 
 ## When a `with` ends: `finally`
 
@@ -485,6 +501,15 @@ submission and its completion:
   the call down, or answers it, through its type; the runtime installs
   them, and journal.ml is the one place that knows the format
   ([compiler.md](compiler.md#stage-10b)).
+- **A description's tag finds its handler's record** (compiler.md,
+  "Descriptions (step 3)"): a native description is an object whose first
+  word is the tag, then what the handler captured. A debug build's tag
+  points at a static record of the handler's code, its name and its
+  size, and a release build's is a number indexing the program's table of
+  them. A stateless handler's record has a method for each operation,
+  which a method call runs with the caller's evidence and the
+  description, making no instance; one with state has none, and the call
+  installs it. An inline handler is a handler like any other there.
 - **Nothing reaches the world but through an operation:** Core Lint
   checks that each intrinsic that does is called only by its
   dependency's real implementation, `fs_read` by `real_fs`, the prelude

@@ -106,7 +106,13 @@ let walk ~ty ~errors ~pattern (prog : program) =
     let go = List.iter expr in
     match e.kind with
     | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
-    | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+    | Unop (_, a, _)
+    | Field (a, _)
+    | Ref a
+    | Try a
+    | Attempt a
+    | Assert a
+    | Inline_handler a ->
         expr a
     | While { cond; body } -> go [ cond; body ]
     | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
@@ -861,6 +867,7 @@ let setup env ~is_value (f : fn_def) =
       sources = Some (ref []);
       named;
       declares = declared_uses env ~is_value ~tparams f;
+      later = ref [];
     }
   in
   Hashtbl.replace env.globals path (TFun (ps, ret, errs, uses));
@@ -916,7 +923,7 @@ let check_body env ~is_value m =
           ()
     | None -> plain
   in
-  match (f.body.kind, m.ret) with
+  (match (f.body.kind, m.ret) with
   | Handler _, t when f.ret = None && impl_of t <> None ->
       (* its needs are what its state and arms use *)
       let i = Option.get (impl_of t) in
@@ -925,7 +932,9 @@ let check_body env ~is_value m =
   | _ ->
       check env m.cx ~why
         ?written:(if f.ret <> None then Some m.ret else None)
-        f.body m.ret
+        f.body m.ret);
+  (* what waited for the body, in the order it was met *)
+  List.iter (fun k -> k ()) (List.rev !(m.cx.later))
 
 (* Generalize each function of the group [ms], once it's solved, into its
    type scheme. A function whose type holds another's type parameter, one
@@ -952,6 +961,7 @@ let generalize_group env so_far ms =
           (function _, RSkol (id, n) -> Some (id, n) | _ -> None)
           m.cx.named
       in
+      close_result_needs mono;
       let scheme = generalize env.st ~skolems:m.skolems ~row_skolems mono in
       Hashtbl.replace env.globals path scheme;
       Hashtbl.replace so_far.schemes path scheme;
@@ -1329,6 +1339,8 @@ let check_runs env r so_far ?entry ?console ~tests fns =
 let canonical env so_far (f : fn_def) =
   let path = Ast.fn_path env.home f in
   let c = canon env.st in
+  Hashtbl.iter (fun _ t -> close_free_needs t)
+    (Hashtbl.find so_far.tables path).nodes;
   (* a use's type arguments (Infer_env.targs), what each variable of the
      callee's scheme stands for, and what the callee needs of them. A
      function of the group being checked is generic now, so what each of
@@ -1407,6 +1419,8 @@ let canonical env so_far (f : fn_def) =
       (function
         | Installs { key; from } -> Installs { key = label key; from }
         | Installs_handler ls -> Installs_handler (List.map label ls)
+        | Calls_op { key; from; op } -> Calls_op { key = label key; from; op }
+        | Inline_op o -> Inline_op o
         | Block { name; given } -> Block { name; given = List.map label given }
         | Field_of p -> Field_of p
         | Ctor_of (p, c) -> Ctor_of (p, c)
@@ -1727,6 +1741,9 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         else all In_record (List.map snd fields)
     | Fail (_, args) -> all In_error (List.map snd args)
     | For _ | While _ -> all Elsewhere (Ast.children e)
+    | Inline_handler l ->
+        (* its arm is a block the handler is made of *)
+        walk Arg l
     | Handler { state; arms; _ } ->
         List.iter (stmt ~state:true) state;
         (* an arm is a block the handler is made of *)

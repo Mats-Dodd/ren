@@ -395,6 +395,7 @@ let rec check_expr env (e : expr) =
   | For _ | While _ -> List.iter (check_expr env) (children e)
   | Call (f, args) -> List.iter (check_expr env) (f :: args)
   | Lambda (_, body) -> check_expr env body
+  | Inline_handler l -> check_expr env l
   | Block _ -> List.iter (check_expr env) (children e)
   | Con (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields

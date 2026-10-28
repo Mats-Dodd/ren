@@ -3334,6 +3334,54 @@ error: `c` goes over another `Users`, so it isn't called as a method
 bench/10d/router.ren is research/paper-programs.md's router, and the
 tests hold it across three modules, where today's error shows.
 
+bench/10d/methods.ren has what shapes.ren and router.ren leave out: an
+inline handler in a generic function and one in a record, a capture
+copied before the `var` it read changes, and a handler with state
+called as a method. bench/build.t runs all three native builds against
+`ren run`.
+
+Where it differed from its plan:
+
+- **The bound is a fresh row at each use, closed where it's kept.** A
+  handler's call, and a call of a function that gives a description,
+  gives one whose `uses` is open (`Infer_expr.made`), so it unifies with
+  any written row that holds it. A row nothing else names is closed
+  when its group is done (`Types.close_free_needs`), and a function's
+  result row that appears nowhere else in its type is closed when it's
+  generalized (`Types.close_result_needs`), so `fn fixed(n: Int) -> N`
+  prints as written and each call opens it again. Core Lint checks a
+  call's result against its callee's, the description it gets needing
+  at most what the callee's says.
+- **An inline handler is lowered where it's written,** a Core `Handler`
+  with no state and one arm, capturing what it reads as a block does,
+  rather than lifted to a `main$handler1`: every pass after lowering
+  already sees a `Handler` node as a handler, and natively it's one
+  with its own record and tag. Lifting it, with the hidden type and
+  dictionary parameters of the function it's in, is left to step 4,
+  whose listing names it.
+- **A description is always boxed,** its tag first, then what its
+  handler captured and its type variables' descriptors: no three words
+  inline yet, which is step 4's layout. Its descriptor is `D_handler`
+  (`REN_D_HANDLER`), an object nothing shows but as `<handler>`,
+  compares or looks into for a NaN.
+- **A method call looks the arm up in the record, in both builds.** A
+  debug build's tag points at the handler's record (ren_rt.h,
+  `ren_handler`), a release build's indexes the program's table of them,
+  and a stateless handler's record has a method for each operation, a
+  block's code given the description first (`To_mem.method_code`). A
+  method call takes the method if its record has one and installs the
+  handler for the call if not (`To_mem.method_call`): stateless means no
+  `var`, no state at all, no `finally`, no `next`, and not generic,
+  since a generic one's code needs its descriptors installed. A `with`
+  written as `with d in D.op(x)`, its arguments locals, is the same
+  call, and runs the same way. Measured against the commit before, in
+  release builds of 20 million calls through an array of three
+  handlers' descriptions: 96.3 ms and 375M cycles before, 61.0 ms and
+  237M after, all stateless; with one of the three keeping state, 29.5
+  ms to 20.5 ms (5 million calls); with all three keeping state, which
+  is installed as before, 31.1 ms to 32.5 ms, 119M cycles to 124M, the
+  record's indirection and the test for a method.
+
 ### Dispatch (step 4)
 
 Release builds lower every dispatch over descriptions as decision 4

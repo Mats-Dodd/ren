@@ -543,6 +543,10 @@ let rec walk cx (e : expr) =
   | Ref _ -> (* mut.ml reported it *) ()
   | Call (f, args) -> call cx e f args ~changed:false
   | Lambda _ -> ignore (block cx e)
+  | Inline_handler l ->
+      (* what it reads is copied when it's made, data that nothing it does
+         can change *)
+      ignore (block cx l)
   | Block (stmts, last) ->
       List.iter (stmt cx) stmts;
       walk cx last

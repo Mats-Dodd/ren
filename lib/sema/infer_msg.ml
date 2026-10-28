@@ -379,24 +379,88 @@ let no_such_field ~names ?(what = "field") (f : Ast.ident) path decl =
    has the operation `now` or not: an implementation's operations are
    called on the dependency, `Clock.now()`, once it's installed, never read
    from it (deps.md, "Calling one"). *)
-let op_of_value ~names (f : Ast.ident) dep (ops : Iface.field list) =
+let op_of_value ~names ?recv (f : Ast.ident) dep (ops : Iface.field list) =
   let d = names dep in
   if List.exists (fun (o : Iface.field) -> o.fname = f.name) ops then
     Diag.make f.loc
       ~notes:
         [
           sprintf
-            "a value of `%s` is an implementation of it: it's used by \
-             installing it, with `with`, and then `%s.%s` calls it"
-            d d f.name;
+            "a description of `%s` is called as a method, `%s.%s(...)`, which \
+             installs it for the call"
+            d
+            (Option.value recv ~default:"h")
+            f.name;
         ]
-      ~help:(sprintf "call the installed one: `%s.%s(...)`" d f.name)
-      (sprintf "`%s` is an operation of `%s`, so it isn't read from a value"
+      ~help:
+        (sprintf "call it: `%s.%s(...)`"
+           (Option.value recv ~default:"h")
+           f.name)
+      (sprintf "`%s` is an operation of `%s`: an operation is called, not read"
          f.name d)
   else
     Diag.make f.loc
       ~help:(sprintf "its operations: %s" (quote (field_names ops)))
       (sprintf "`%s` has no operation named `%s`" d f.name)
+
+(* ---- inline handlers (foundations.md, decision 3) ---- *)
+
+(* `handler fn(...) => ...` where a description of [dep] is wanted, which
+   has [n] operations, not one. *)
+let inline_several loc ~dep n =
+  Diag.make loc
+    ~help:(sprintf "declare a handler with an arm for each: `handler name() for %s`"
+       dep)
+    (sprintf
+       "an inline handler implements a dependency of one operation, and `%s` \
+        has %d"
+       dep n)
+
+(* One where what's wanted isn't known to be a description of one
+   dependency. *)
+let inline_unknown loc =
+  Diag.make loc
+    ~help:"write the type it's kept as: `let h: D = handler fn(...) => ...`"
+    "which dependency this inline handler implements isn't known here"
+
+(* One that reads [name], a block, from where it's written: what it
+   captures is copied into its description, which is data. *)
+let inline_block loc name =
+  Diag.make loc
+    ~help:"pass the data it needs, or make the behaviour a dependency"
+    (sprintf "an inline handler's captures are data, and `%s` is a block" name)
+
+(* One that calls `next`, of [dep]. *)
+let inline_next loc ~dep =
+  Diag.make loc
+    ~help:(sprintf "declare a handler `over %s` to call the one under it" dep)
+    "an inline handler doesn't go over another, so it has no `next`"
+
+(* An inline handler of [dep]'s operation [op], which takes [n]
+   parameters, written with [given]. *)
+let inline_arity loc ~dep ~op n given =
+  Diag.make loc
+    ~help:(sprintf "write one for each: `handler fn(%s) => ...`"
+       (String.concat ", " (List.init n (fun i -> sprintf "x%d" (i + 1)))))
+    (sprintf "`%s.%s` takes %d parameter%s, and this inline handler %d" dep op
+       n (plural n) given)
+
+(* `s.get()`, where `s` is a description whose state can fail to start
+   (handlers.md, "State that can fail to start"): a method call installs it
+   for the call, and one that can fail is installed with `with`, whose
+   errors show. [call] is the operation's call, `Store.get()`. *)
+let method_fails loc ~recv ~call =
+  Diag.make loc
+    ~help:(sprintf "install it: `with %s in %s`" recv call)
+    (sprintf "`%s` can fail to start, so it isn't called as a method" recv)
+
+(* `c.get(1)`, where `c` goes over another implementation of [dep],
+   which only a `with` can put under it. *)
+let method_over loc ~recv ~dep ~call =
+  Diag.make loc
+    ~help:(sprintf "install it over one: `with %s over %s in %s`" recv dep call)
+    (sprintf "`%s` goes over another `%s`, so it isn't called as a method" recv
+       dep)
 
 (* `Users { get: fn(id) => id * 2 }`, a record literal of the dependency
    [dep]: [arms] are its fields as a handler's arms, `get(id) => id * 2`,
@@ -499,11 +563,14 @@ let several_records_have ~names loc ?what (f : Ast.ident) paths =
    a fix, unless something else did first. Types are as the message prints
    them. *)
 type behind =
-  | Needs_more of { ty : string; alone : bool; fails : bool }
-      (** an implementation that needs more than the one wanted, of the type
-          [ty]; [alone] if it's the whole type, not inside another,
-          `Box<Rates>`; [fails] if what's more is what it can fail to start with
-      *)
+  | Needs_more of { extra : string list; slot : string }
+      (** a description that needs [extra] beyond what the type wanted lets it,
+          whose `uses` is the most it may need (foundations.md, decision 3);
+          [slot] is the type wanted with those added, as it's written *)
+  | Can_fail of { ty : string; alone : bool }
+      (** an implementation that can fail to start where one that can't is
+          wanted, of the type [ty]; [alone] if it's the whole type, not inside
+          another, `Box<Rates>` *)
   | Over_differs of { deps : string; over : bool }
       (** an implementation of [deps] that goes over another where one that
           doesn't is wanted, if [over], or the other way round (handlers.md,
@@ -540,22 +607,25 @@ type behind =
           that one, given first, is *)
 
 let behind_note = function
-  | Needs_more { ty; alone; fails } ->
+  | Needs_more { extra; slot } ->
+      ( [
+          sprintf
+            "a stored description's `uses` is the most it may need, and this \
+             one needs %s too"
+            (and_list extra);
+        ],
+        sprintf "add %s where the type is written: `%s`"
+          (match extra with [ _ ] -> "it" | _ -> "them")
+          slot )
+  | Can_fail { ty; alone } ->
       (* `uses` after `->` is the function's, so a dependency's own is
          parenthesized; inside `Box<...>` it needs nothing *)
       let ty = if alone then sprintf "(%s)" ty else ty in
-      if fails then
-        ( [
-            "an implementation's type says what it can fail to start with, so \
-             one that can fail can't stand in for one that can't";
-          ],
-          sprintf "say it can fail where its type is written: `%s`" ty )
-      else
-        ( [
-            "an implementation's type says what it needs, so one that needs \
-             more can't stand in for one that needs less";
-          ],
-          sprintf "say what it needs where its type is written: `%s`" ty )
+      ( [
+          "an implementation's type says what it can fail to start with, so \
+           one that can fail can't stand in for one that can't";
+        ],
+        sprintf "say it can fail where its type is written: `%s`" ty )
   | Over_differs { deps; over = true } ->
       ( [
           sprintf

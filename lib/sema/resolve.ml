@@ -219,6 +219,9 @@ and next_in =
   | No_next
   | In_for of string * Path.t list  (** the handler's name, and its `for` *)
   | In_over of string * Path.t list  (** the handler's name, and its `over` *)
+  | In_inline
+      (** in an inline handler, which has none, and whose dependency is known
+          only to inference, which says so (Infer_expr, [inline_handler]) *)
 
 and fn_state = {
   mutable last_id : int;  (** the last binder id handed out *)
@@ -302,7 +305,7 @@ let bind env sc (id : ident) bound =
   not_an_alias env id;
   (match sc.next with
   | In_over _ when id.name = "next" -> next_bound env id.loc
-  | In_over _ | In_for _ | No_next -> ());
+  | In_over _ | In_for _ | In_inline | No_next -> ());
   sc.fn.last_id <- sc.fn.last_id + 1;
   let b = { id = sc.fn.last_id; ident = id; bound; depth = sc.depth } in
   (* `_`, as in `let _ = ...`, names nothing: the value is dropped *)
@@ -1165,12 +1168,13 @@ let lookup env sc loc ~what x =
                   "make `self` the first parameter of a function declared \
                    under its type"
                 "there's no `self` here: only a method has one"
-          | [] when x = "outer" && sc.next <> No_next ->
+          | [] when x = "outer" && sc.next <> No_next && sc.next <> In_inline
+            ->
               (* the README's early sketch, `outer.get(id)` *)
               let ds =
                 match sc.next with
                 | In_for (_, ds) | In_over (_, ds) -> ds
-                | No_next -> []
+                | In_inline | No_next -> []
               in
               let call =
                 match
@@ -1192,7 +1196,7 @@ let lookup env sc loc ~what x =
                         (String.concat " & "
                            (List.map (fun (p : Path.t) -> p.name) ds))
                         call
-                  | In_over _ | No_next ->
+                  | In_over _ | In_inline | No_next ->
                       sprintf "call the one under it with `next`: %s" call)
                 (sprintf "there's no %s named `outer`" what)
           | [] -> (
@@ -1416,8 +1420,11 @@ let next_kept env loc over ?called () =
     "`next` can only be called through";
   Global (Path.make env.home "next")
 
-(* `next` outside a handler over a dependency, where there isn't one. *)
+(* `next` outside a handler over a dependency, where there isn't one. In
+   an inline handler, inference says so, once it knows the dependency:
+   the placeholder is what it looks for. *)
 let no_next env sc loc =
+  if sc.next <> In_inline then
   report env loc
     ~help:
       (match sc.next with
@@ -1428,7 +1435,7 @@ let no_next env sc loc =
           sprintf
             "declare it `handler %s(...) over %s`, to reach the `%s` under it" h
             ds ds
-      | In_over _ | No_next ->
+      | In_over _ | In_inline | No_next ->
           "only a handler declared `over` another implementation has a `next`")
     "`next` is only in a handler declared `over` a dependency";
   Global (Path.make env.home "next")
@@ -1530,14 +1537,14 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Var (Bare "next") when next_free env sc -> (
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ())
-        | In_for _ | No_next -> Var (no_next env sc e.loc))
+        | In_for _ | In_inline | No_next -> Var (no_next env sc e.loc))
     | Field ({ kind = Var (Bare "next"); _ }, op)
       when next_free env sc
            && match sc.next with In_over _ -> true | _ -> false -> (
         (* `next.get` not called *)
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ~called:op.name ())
-        | In_for _ | No_next -> assert false)
+        | In_for _ | In_inline | No_next -> assert false)
     | Var (Bare x) -> Var (lookup env sc e.loc ~what:"variable" x)
     | Var (Item (t, f)) -> Var (item env sc t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
@@ -1594,6 +1601,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
             ps
         in
         Lambda (ps, expr env inner body)
+    | Inline_handler l ->
+        (* its arm, a lambda, with no `next` *)
+        Inline_handler (expr env { sc with next = In_inline } l)
     | Block (stmts, last) ->
         let stmts, sc = block_stmts env sc stmts in
         Block (stmts, expr env sc last)

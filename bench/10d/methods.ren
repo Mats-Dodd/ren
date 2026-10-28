@@ -1,0 +1,42 @@
+// Stage 10d, step 3: what bench/10d/shapes.ren and router.ren leave
+// out, checked native against `ren run`: an inline handler in a generic
+// function, one kept in a record, what one captures copied, and a
+// handler with state called as a method, which starts fresh each call.
+
+dep Route =
+  handle: fn(path: Str) -> Str
+
+fn page(body: Str) -> Route = handler fn(path) => path.concat(": ").concat(body)
+
+dep Get =
+  get: fn() -> Int
+
+fn keep<T>(x: T, n: Int) -> Get = handler fn() => n + 1
+
+type Calc = { name: Str, op: Op }
+
+dep Op =
+  apply: fn(a: Int, b: Int) -> Int
+
+handler counter() for Get =
+  var n = 0
+  get() =>
+    n += 1
+    n
+
+fn main() uses Console =
+  var body = "first"
+  let r: Route = handler fn(path) => path.concat(" ").concat(body)
+  body = "second"
+  let routes: Array<Route> = [page("x"), handler fn(p) => p, r]
+  print(routes.map(fn(x) => x.handle("/c")))
+  let g = keep("s", 4)
+  print(g.get())
+  let c = Calc { name: "double", op: handler fn(a, b) => (a + b) * 2 }
+  print(c.op.apply(2, 3))
+  let k = counter()
+  print(k.get())
+  print(k.get())
+  with k in
+    print(Get.get())
+    print(Get.get())

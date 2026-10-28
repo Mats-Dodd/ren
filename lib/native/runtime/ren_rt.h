@@ -1232,6 +1232,7 @@ enum {
   REN_D_VAR,     /* in a template: the parameter [var] */
   REN_D_UNKNOWN, /* a type variable nothing decided: no value has it */
   REN_D_SIZED,   /* a sized type's, [var] its kind, [REN_ELEM_U8]... */
+  REN_D_HANDLER, /* a handler's description, an object nothing looks into */
 };
 
 struct ren_decl;
@@ -1477,14 +1478,48 @@ const ren_ev *ren_install(ren_ev *nodes, const ren_ev *outer, void *deps,
 const ren_ev *ren_given(ren_ev *nodes, const ren_ev *outer, const ren_ev *from,
                         const ren_key *deps, int n);
 
-/* A handler's description is an object: its code, then what it
-   captured. Its code makes the handler's state as its own locals, makes
-   its instance, installs it on [outer] for [deps], calls [body] with
-   that evidence, and runs its `finally` with the outcome, given
-   [body_desc], the descriptor of what [body] gives. */
+/* A handler's description is an object: its tag, then what it
+   captured. The tag finds the handler's static record ([ren_handler]),
+   which holds its code: [install] makes the handler's state as its own
+   locals, makes its instance, installs it on [outer] for [deps], calls
+   [body] with that evidence, and runs its `finally` with the outcome,
+   given [body_desc], the descriptor of what [body] gives. */
 typedef ren_obj *(*ren_hcode)(ren_obj *self, const ren_ev *outer,
                               ren_block body, ren_obj *body_desc, void *deps,
                               int64_t ndeps, ren_val *out);
+
+/* An operation of a stateless handler called as a method, `d.op(x)`
+   (compiler.md, "Descriptions (step 3)"): a block's code, which takes the
+   description as its first word, then the operation's arguments, and
+   runs the arm with the caller's evidence, making no instance. */
+typedef struct {
+  int32_t dep;
+  int32_t op;
+  ren_code code;
+} ren_method;
+
+/* A handler's static record, which a debug build's tag points at, and
+   a release build's indexes in the program's table: its number, its
+   name, how many words its description holds after the tag, the code
+   that installs it, and its methods, if it's stateless. */
+typedef struct {
+  int32_t id;
+  int32_t nwords;
+  const char *name;
+  ren_hcode install;
+  int32_t nmethods;
+  const ren_method *methods;
+} ren_handler;
+
+/* The code of [h]'s operation [op] of [dep] called as a method, or NULL
+   if [h] keeps state, so it's installed for the call instead. */
+static inline ren_code ren_method_of(const ren_handler *h, int32_t dep,
+                                     int32_t op) {
+  for (int32_t i = 0; i < h->nmethods; i++)
+    if (h->methods[i].dep == dep && h->methods[i].op == op)
+      return h->methods[i].code;
+  return NULL;
+}
 
 /* ---- the world ---- */
 

@@ -58,7 +58,7 @@ let atom_layout (x : atom) : layout =
   | Enum_tag _ -> Enum
   | Scalar_ctor _ | Lit _ -> Boxed
   | Desc_lit _ -> Desc
-  | Fn_ptr _ -> Ptr
+  | Fn_ptr _ | Handler_tag _ -> Ptr
   | No_ev -> Ev
 
 (* Whether two layouts are held the same way: a type variable's word is
@@ -356,6 +356,12 @@ let rhs env (r : rhs) : layout =
           (sprintf "a block of %s, which hasn't a block's signature" name);
       operand env "a block's environment" Ptr x;
       Block
+  | Method_of (x, _, _) ->
+      operand env "a description called as a method" Boxed x;
+      Block
+  | Has_code x ->
+      operand env "a method's block" Block x;
+      Bool
   | Impl (_, ops) ->
       List.iter (operand env "an operation" Block) ops;
       Ptr
@@ -1498,6 +1504,29 @@ let program (p : program) =
       | _ -> failwith ("Mem Lint: the value " ^ v.vname ^ " isn't made right"));
       Hashtbl.replace values v.vname v.vlayout)
     p.values;
+  (* each handler's record, by its tag's number, pointing at code of the
+     signatures the runtime calls it with (ren_rt.h, [ren_handler]) *)
+  List.iteri
+    (fun i (h : handler) ->
+      let has name layouts =
+        match Hashtbl.find_opt fns name with
+        | Some f ->
+            List.map (fun (v : var) -> v.layout) f.params = layouts
+            && f.fails && f.result = Word 0
+        | None -> false
+      in
+      if h.hid <> i then
+        failwith (sprintf "Mem Lint: the handler %s isn't numbered %d" h.hname i);
+      if not (has h.install [ Boxed; Ev; Block; Desc; Ptr; Int ]) then
+        failwith ("Mem Lint: the handler " ^ h.hname ^ " isn't installed right");
+      List.iter
+        (fun (_, _, f) ->
+          if not (has f [ Ptr; Ev; Ptr ]) then
+            failwith
+              ("Mem Lint: a method of the handler " ^ h.hname
+             ^ " hasn't a block's signature"))
+        h.methods)
+    p.handlers;
   let ndescs = List.length p.descs in
   List.iter (fn fns values ndescs (Array.of_list p.structs)) p.fns;
   List.iter (counting fns) p.fns;

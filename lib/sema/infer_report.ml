@@ -80,7 +80,9 @@ let rec binders (p : pattern) =
    it's narrowed to only where a written type asks for that: it's given
    that type, printed. [type_params] is whether a note says what a type
    parameter in either type is, unless the caller's notes say what they
-   stand for. It's defined in infer_env.ml, since a constraint
+   stand for. [inside] writes a type as the written type it's part of
+   writes it, an element's inside `Array<...>`, for a help that writes
+   the whole. It's defined in infer_env.ml, since a constraint
    can carry one: [= Infer_env.why] says it's that type, not a new one with
    the same fields. *)
 type why = Infer_env.why = {
@@ -90,11 +92,12 @@ type why = Infer_env.why = {
   narrowed_help : (string -> string) option;
   labels : string -> string -> (Loc.t * string) list;
   type_params : bool;
+  inside : string -> string;
 }
 
 let explain ?msg ?(notes = []) ?help ?narrowed_help ?(labels = fun _ _ -> [])
-    ?(type_params = true) () =
-  { msg; notes; help; narrowed_help; labels; type_params }
+    ?(type_params = true) ?(inside = Fun.id) () =
+  { msg; notes; help; narrowed_help; labels; type_params; inside }
 
 let plain = explain ()
 
@@ -155,13 +158,54 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
                 (fun l -> not (List.mem l (row_names j.fails)))
                 (row_names i.fails)
             in
-            let fails, ty =
-              match (t, impls expected found) with
-              | TImpl i, Some (TImpl j) when more i j -> (true, f)
-              | TImpl i, Some (TImpl j) when more j i -> (true, x)
-              | _ -> (false, f)
-            in
-            [ Needs_more { ty; alone = t == repr found; fails } ]
+            let alone = t == repr found in
+            (match (t, impls expected found) with
+            | TImpl i, Some (TImpl j) when more i j ->
+                [ Can_fail { ty = f; alone } ]
+            | TImpl i, Some (TImpl j) when more j i ->
+                [ Can_fail { ty = x; alone } ]
+            | TImpl i, Some (TImpl j) -> (
+                (* what it needs beyond what the slot allows: a stored
+                   description's `uses` is the most it may need
+                   (foundations.md, decision 3), and the help writes the
+                   slot's type with that added *)
+                let have = fst (row_parts j.needs) in
+                match
+                  List.filter
+                    (fun l -> not (List.exists (same_label l) have))
+                    (fst (row_parts i.needs))
+                with
+                | [] -> []
+                | extra ->
+                    let rec widened f x =
+                      match (impl_parts f, impl_parts x, repr f, repr x) with
+                      | Some (ds, _), Some (es, _), _, TImpl j when ds = es ->
+                          TImpl
+                            {
+                              j with
+                              needs =
+                                extend (fst (row_parts j.needs) @ extra) REmpty;
+                            }
+                      | _, _, TCon (p, fs), TCon (q, xs)
+                        when p = q && List.length fs = List.length xs ->
+                          TCon (q, List.map2 widened fs xs)
+                      | _, _, _, x -> x
+                    in
+                    let slot = show pr (widened found expected) in
+                    let slot =
+                      if alone then sprintf "(%s)" slot else slot
+                    in
+                    [
+                      Needs_more
+                        {
+                          extra =
+                            List.map
+                              (fun l -> show_dep pr l)
+                              extra;
+                          slot = why.inside slot;
+                        };
+                    ])
+            | _ -> [])
         | None -> []
       in
       (* what's about errors: one tag with two shapes, or a function that

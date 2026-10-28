@@ -576,6 +576,38 @@ and expr_of cx (e : expr) : C.expr =
         List.filter (fun (v : C.var) -> v.id <> ev.id) (free body)
       in
       here (Handler { ev; captures; body })
+  | Inline_handler lam ->
+      (* `handler fn(req) => ...`: a handler with no state and one arm,
+         [lam], of the only operation of its dependency (foundations.md,
+         decision 3). What it captures it copies, as a block does: nothing
+         changes a local it captures (mut.ml), so a copy is the same. *)
+      let dep, op =
+        match (node cx e.node).found with
+        | Some (Inline_op { dep; op }) -> (dep, op)
+        | _ -> bug "an inline handler without its operation"
+      in
+      let own, needs =
+        match Ty.impl_parts (ty ()) with
+        | Some ([ d ], needs) -> (d, needs)
+        | _ -> bug "an inline handler whose type isn't a handler of one"
+      in
+      let ev = evidence cx and outer = cx.ev and around = cx.handler_ev in
+      let around_deps = cx.handler_deps in
+      cx.ev <- ev;
+      cx.handler_ev <- Some ev;
+      cx.handler_deps <- [ own ];
+      let arm = expr cx lam in
+      cx.ev <- outer;
+      cx.handler_ev <- around;
+      cx.handler_deps <- around_deps;
+      let impl = mk (Record (dep, [ (op, arm) ])) (Ty.impl [ own ] needs) e.loc in
+      let body =
+        mk (Instance { impls = [ (dep, impl) ]; finally = None }) (ty ()) e.loc
+      in
+      let captures =
+        List.filter (fun (v : C.var) -> v.id <> ev.id) (free body)
+      in
+      here (Handler { ev; captures; body })
 
 (* A block of type [ty], named [name], taking [params], whose body [body]
    makes, with the evidence it runs with in scope: the evidence where it's
@@ -1233,7 +1265,60 @@ and call cx ?(changed = false) (e : expr) f args =
         (Dep_call
            { dep; dargs; op; fty = ty_of cx f.node; ev; next = true; args })
         (ty_of cx e.node) e.loc
+  | Field (r, _) -> (
+      match (node cx f.node).found with
+      | Some (Calls_op { key; from; op }) -> desc_method cx e r key from op args
+      | _ -> plain_call cx ~changed e f args)
   | _ -> plain_call cx ~changed e f args
+
+(* `d.op(args)`, [e]: `with d in Dep.op(args)`, the description [r] and
+   the arguments evaluated first, in order, outside (foundations.md,
+   decision 3). [key] is what it's installed as, implementing [from]. *)
+and desc_method cx (e : expr) (r : expr) key from op args =
+  let k = key_of_label cx key in
+  let hold_r, recv = hold ~local:true cx "desc" (expr cx r) in
+  let binds, values =
+    List.fold_left
+      (fun (binds, values) (a : expr) ->
+        let b, v = hold ~local:true cx "arg" (expr cx a) in
+        (binds @ b, values @ [ v ]))
+      ([], []) args
+  in
+  let ty = ty_of cx e.node in
+  let fty =
+    match e.kind with
+    | Call (f, _) -> ty_of cx f.node
+    | _ -> bug "a method call that isn't a call"
+  in
+  let ev = evidence cx and outer = cx.ev in
+  let body =
+    mk
+      (Dep_call
+         {
+           dep = k.kpath;
+           dargs = k.kargs;
+           op;
+           fty;
+           ev;
+           next = false;
+           args = nan_checked k.kpath op values;
+         })
+      ty e.loc
+  in
+  lets (hold_r @ binds)
+    (mk
+       (With
+          {
+            ev;
+            outer;
+            dep = k.kpath;
+            dargs = k.kargs;
+            from;
+            impl = recv;
+            desc = C.describe cx.tys ty;
+            body;
+          })
+       ty e.loc)
 
 and plain_call cx ~changed (e : expr) f args =
   let inout (p : expr) ty =
@@ -1731,7 +1816,13 @@ let max_binder (f : fn_def) =
   let rec go (e : expr) =
     match e.kind with
     | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
-    | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+    | Unop (_, a, _)
+    | Field (a, _)
+    | Ref a
+    | Try a
+    | Attempt a
+    | Assert a
+    | Inline_handler a ->
         go a
     | Binop (_, a, b, _)
     | Index (a, b)

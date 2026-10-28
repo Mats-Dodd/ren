@@ -30,6 +30,13 @@ type 'l found_ =
   | Installs_handler of 'l list
       (** a link that describes a handler of these dependencies, which it makes
           an instance of *)
+  | Calls_op of { key : 'l; from : Path.t; op : string }
+      (** at the [d.op] of [d.op(...)]: an operation called as a method of a
+          description, which installs it for the call, as [key], implementing
+          [from] (foundations.md, decision 3) *)
+  | Inline_op of { dep : Path.t; op : string }
+      (** at an inline handler, `handler fn(...) => ...`: the operation of
+          [dep] it implements, its only one (foundations.md, decision 3) *)
   | Install_order of int list
       (** at a `with`: the items that install, by their place in it, outermost
           first (handlers.md, "A `with` is a set") *)
@@ -111,6 +118,7 @@ type why = {
   narrowed_help : (string -> string) option;
   labels : string -> string -> (Loc.t * string) list;
   type_params : bool;
+  inside : string -> string;
 }
 
 type env = {
@@ -596,6 +604,10 @@ and ctx = {
   declares : label list option;
       (** the dependencies the top-level function declares it uses, if it
           declares them (Infer_declared.declared_uses) *)
+  later : (unit -> unit) list ref;
+      (** what's checked once the function's body is, most recent first: an
+          inline handler whose dependency wasn't known where it was met, which
+          what came after may say (Infer_expr, [inline]) *)
 }
 
 (* A dot call that turned out to call [callee], a method of the module

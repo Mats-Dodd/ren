@@ -349,6 +349,89 @@ let rec close_row r =
   | RVar ({ contents = RUnbound _ } as cell) -> cell := RLink REmpty
   | RVar { contents = RLink _ } | REmpty | RSkol _ -> ()
 
+(* Close what each description in [t] needs, unless a generic row stands
+   for more of it: a call gives a description a tail of its own, so it
+   fits a slot that needs more (Infer_expr.made), and once its function
+   is checked, a tail nothing joined to anything is nothing more. Done
+   before a function's types are made canonical, so every type that
+   shares the tail agrees. *)
+let rec close_free_needs t =
+  let rec row_args r =
+    match repr_row r with
+    | RExtend (l, rest) ->
+        List.iter close_free_needs l.payload;
+        row_args rest
+    | _ -> ()
+  in
+  match repr t with
+  | TImpl i ->
+      List.iter (fun d -> List.iter close_free_needs d.dargs) i.deps;
+      row_args i.needs;
+      row_args i.fails;
+      let rec go r =
+        match repr_row r with
+        | RExtend (_, rest) -> go rest
+        | RVar ({ contents = RUnbound (_, l) } as cell) when l <> generic_level
+          ->
+            cell := RLink REmpty
+        | _ -> ()
+      in
+      go i.needs
+  | TCon (_, args) -> List.iter close_free_needs args
+  | TErrors e -> row_args e
+  | TFun (ps, r, e, u) ->
+      List.iter (fun p -> close_free_needs p.ty) ps;
+      close_free_needs r;
+      row_args e;
+      row_args u
+  | TVar _ | TSkol _ | TError -> ()
+
+(* Close what the description a function gives needs, [t] being its type,
+   if nothing else in [t] has that row: it's exactly what the function's
+   body found. Where it's called, it's opened again (Infer_expr.made). *)
+let close_result_needs t =
+  let seen = Hashtbl.create 8 in
+  let rec ty t =
+    match repr t with
+    | TImpl i ->
+        List.iter (fun d -> List.iter ty d.dargs) i.deps;
+        row i.needs;
+        row i.fails
+    | TCon (_, args) -> List.iter ty args
+    | TErrors e -> row e
+    | TFun (ps, r, e, u) ->
+        List.iter (fun p -> ty p.ty) ps;
+        ty r;
+        row e;
+        row u
+    | TVar _ | TSkol _ | TError -> ()
+  and row r =
+    match repr_row r with
+    | RExtend (l, rest) ->
+        List.iter ty l.payload;
+        row rest
+    | RVar { contents = RUnbound (id, _) } ->
+        Hashtbl.replace seen id
+          (1 + Option.value (Hashtbl.find_opt seen id) ~default:0)
+    | _ -> ()
+  in
+  ty t;
+  match repr t with
+  | TFun (_, r, _, _) -> (
+      match repr r with
+      | TImpl i -> (
+          let rec go r =
+            match repr_row r with
+            | RExtend (_, rest) -> go rest
+            | RVar ({ contents = RUnbound (id, _) } as cell)
+              when Hashtbl.find_opt seen id = Some 1 ->
+                cell := RLink REmpty
+            | _ -> ()
+          in
+          go i.needs)
+      | _ -> ())
+  | _ -> ()
+
 (* [l] as a set gets it by inclusion, from what's failed with: not
    written, wherever it was before. *)
 let unwritten l = { l with written = unmarked () }

@@ -125,7 +125,12 @@ type atom =
       (** the program's [strings]'s n-th, a [Str] made once and never freed *)
   | Desc_lit of int
       (** the program's [descs]'s n-th: a [Desc] made once and never freed *)
-  | Fn_ptr of string  (** a function's code, a [Ptr]: a handler's *)
+  | Fn_ptr of string  (** a function's code, a [Ptr] *)
+  | Handler_tag of int
+      (** the tag of the program's [handlers]'s n-th, a [Ptr], which a
+          description keeps first: a debug build's points at the handler's
+          static record, and a release build's is the number itself
+          (compiler.md, "Descriptions (step 3)") *)
   | No_ev  (** the evidence with nothing installed, `$start`'s *)
 
 (* The parts of a panic's message that are known when the program is
@@ -333,6 +338,13 @@ type rhs =
   | Given of { outer : atom; caller : atom; deps : (int * atom list) list }
       (** [outer] with the implementations of [deps] that [caller] has on top: a
           block's evidence, when its parameter's type lists them *)
+  | Method_of of atom * int * int
+      (** the [Block] that runs the operation, its dependency's [n]-th, of the
+          dependency with this number, of the description given, called as a
+          method: the code its handler's record has for it, if the handler
+          is stateless, which takes the description as its first word, or a
+          block with no code, if not ([Has_code]) *)
+  | Has_code of atom  (** whether a [Method_of] block has code *)
   | Op_block of atom * int * atom list * int
       (** the [Block] of an operation, its dependency's [n]-th, of the innermost
           implementation of the dependency with this number, at the type
@@ -483,6 +495,9 @@ type dkind =
   | D_errors
   | D_var of int
   | D_unknown
+  | D_handler
+      (** a description of a handler (foundations.md, decision 3): an object,
+          which nothing shows, compares or looks into for a NaN *)
   | D_sized of Sized.t
 
 type desc = { dkind : dkind; dargs : int list; dcounted : bool }
@@ -510,6 +525,19 @@ type decl = {
    layout. *)
 type value = { vname : string; vfn : string; vlayout : layout }
 
+(* A handler whose description the program makes: its tag's number, its
+   name, how many words its description holds after the tag, the code
+   that installs it, given its description, and for a stateless one, the
+   code of each operation called as a method ([Method_of]): the
+   dependency's number, the operation's and the function's name. *)
+type handler = {
+  hid : int;
+  hname : string;
+  hwords : int;
+  install : string;
+  methods : (int * int * string) list;
+}
+
 type program = {
   fns : fn list;
   start : string;
@@ -527,6 +555,7 @@ type program = {
   sites : site list;  (** by [sid] *)
   structs : strukt list;  (** each [Struct], by its n *)
   overflow : site;  (** where the stack overflowing is said to be *)
+  handlers : handler list;  (** by [Handler_tag]'s number *)
 }
 
 (* Whether the runtime's [rt] takes its [n]-th argument's reference: the
@@ -575,6 +604,7 @@ let show_atom = function
   | Lit n -> "lit" ^ string_of_int n
   | Desc_lit n -> "desc" ^ string_of_int n
   | Fn_ptr f -> "&" ^ f
+  | Handler_tag n -> "handler" ^ string_of_int n
   | No_ev -> "no-ev"
 
 let show_cmp = function
@@ -713,6 +743,13 @@ let rhs_sexp = function
       Core.List
         ((a "given" :: atoms [ outer; caller ])
         @ List.map (fun (d, args) -> key_sexp d d args) deps)
+  | Method_of (x, dep, op) ->
+      Core.List
+        [
+          a "method"; a (show_atom x); a ("dep" ^ string_of_int dep);
+          a (string_of_int op);
+        ]
+  | Has_code x -> Core.List [ a "has-code?"; a (show_atom x) ]
   | Op_block (ev, dep, args, op) ->
       Core.List
         [

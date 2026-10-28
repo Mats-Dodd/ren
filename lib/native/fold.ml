@@ -112,6 +112,8 @@ let rhs h (r : rhs) : rhs =
   | Env_get (x, n) -> Env_get (a x, n)
   | Arg (x, n) -> Arg (a x, n)
   | Block_of (f, env) -> Block_of (h.name f, a env)
+  | Method_of (x, d, n) -> Method_of (a x, d, n)
+  | Has_code x -> Has_code (a x)
   | Impl (d, blocks) -> Impl (d, xs blocks)
   | Install { outer; impls; deps; ndeps } ->
       Install
@@ -288,6 +290,15 @@ let program (p : program) : program =
     fns;
     start = name p.start;
     values = List.map (fun (v : value) -> { v with vfn = name v.vfn }) p.values;
+    handlers =
+      List.map
+        (fun (hd : handler) ->
+          {
+            hd with
+            install = name hd.install;
+            methods = List.map (fun (d, op, f) -> (d, op, name f)) hd.methods;
+          })
+        p.handlers;
     sites = List.filter (fun (s : site) -> Hashtbl.mem used s.sid) p.sites;
     overflow;
   }

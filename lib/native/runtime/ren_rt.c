@@ -1067,6 +1067,10 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
   case REN_D_ERRORS:
     ren_show_error(b, v.o, w);
     break;
+  /* as value.ml shows one */
+  case REN_D_HANDLER:
+    ren_puts(b, "<handler>");
+    break;
   case REN_D_NAMED: {
     const ren_decl *decl = d->decl;
     ren_tenv inner = {d->args, env};

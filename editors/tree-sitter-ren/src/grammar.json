@@ -4454,6 +4454,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "inline_handler"
+        },
+        {
+          "type": "SYMBOL",
           "name": "constructor_expression"
         },
         {
@@ -4685,6 +4689,23 @@
           }
         ]
       }
+    },
+    "inline_handler": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "handler"
+        },
+        {
+          "type": "FIELD",
+          "name": "lambda",
+          "content": {
+            "type": "SYMBOL",
+            "name": "lambda"
+          }
+        }
+      ]
     },
     "lambda_parameters": {
       "type": "SEQ",

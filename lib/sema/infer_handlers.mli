@@ -61,6 +61,14 @@ val handler :
   declared:Types.label list option ->
   unit
 
+(* An inline handler, the first expression, `handler fn(...) => ...`, of
+   the lambda given, where a description of the dependency given is
+   wanted (foundations.md, decision 3): its type, a description that can
+   need more, or [TError] once something's reported. *)
+val inline_handler :
+  core -> env -> ctx -> Ast.Resolved.expr -> Ast.Resolved.expr -> Types.dep ->
+  Types.ty
+
 (* `with a, b over c in body`, the first expression, given its items and
    body: what each link is, and the order they're installed in, are found
    here, and kept for lowering. *)

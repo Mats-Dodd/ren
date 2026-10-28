@@ -959,7 +959,11 @@ let rec expr env sc (e : expr) =
               | Inout, Value _ ->
                   fail env loc "an `inout` argument isn't a local")
             ps args;
-          is "a call" ret
+          (* what it gives fits the call's type: a handler's description
+             there may say it needs more than its handler does, since a
+             stored description's `uses` is an upper bound (foundations.md,
+             decision 3; Infer_expr.made) *)
+          same env loc "what a call gives" ret e.ty
       | t -> fail env loc (sprintf "a call to a `%s`" (show t)))
   | Lambda { params; ev; outer; given; captures; body; _ } -> (
       (* a block captures the evidence where it's written, as a local *)

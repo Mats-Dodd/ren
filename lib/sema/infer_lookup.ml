@@ -337,7 +337,7 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
               }
           with
           | Some ops ->
-              report env (op_of_value ~names:env.names f p ops);
+              report env (op_of_value ~names:env.names ?recv:(env.source r) f p ops);
               TError
           | None -> needs_record tr)
       | TCon (p, args) as t -> (
@@ -357,7 +357,7 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
           | None, None -> (
               match td.body with
               | Dep ops ->
-                  report env (op_of_value ~names:env.names f p ops);
+                  report env (op_of_value ~names:env.names ?recv:(env.source r) f p ops);
                   TError
               | _ -> needs_record t))
       | TVar _ -> (

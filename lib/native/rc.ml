@@ -94,6 +94,8 @@ let rhs_atoms (r : rhs) : atom list =
   | Env_get (x, _)
   | Arg (x, _)
   | Block_of (_, x)
+  | Method_of (x, _, _)
+  | Has_code x
   | Is_unique x
   | Unpack (x, _, _)
   | Hole (x, _) ->

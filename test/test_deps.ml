@@ -717,8 +717,8 @@ fn main() =
        ┌─ test.ren:14:11
     14 │   let b = loud().same(3)
        │           ^^^^^^
-       = an implementation's type says what it needs, so one that needs more can't stand in for one that needs less
-       help: say what it needs where its type is written: `(N uses Console)`
+       = a stored description's `uses` is the most it may need, and this one needs `Console` too
+       help: add it where the type is written: `(N uses Console)`
     |}]
 
 let%expect_test "a transparent parameter kept where its rows close" =
@@ -811,7 +811,9 @@ fn main() uses Console =
     |}]
 
 let%expect_test "an implementation a function makes can need anything" =
-  (* `ren types` shows its open row, which written back keeps it so *)
+  (* a description a function gives is exactly what its body found, and
+     each call of it opens it again, so it fits wherever more is allowed
+     (foundations.md, decision 3): `fixed` gives an `N` *)
   let src =
     {|
 dep N =
@@ -842,7 +844,7 @@ fn main() uses Console =
     handler loud_n() for N uses Console
     handler fixed_n(n: Int) for N
     fn loud() -> (N uses Console)
-    fn fixed(n: Int) -> (N uses ..d)
+    fn fixed(n: Int) -> N
     fn written(n: Int) -> (N uses ..d)
     fn pick(b: Bool) -> (N uses Console)
     fn main() uses Console
@@ -872,19 +874,12 @@ fn main() = 1
 |};
   [%expect
     {|
-    error: `now` is an operation of `Timer`, so it isn't read from a value
+    error: `now` is an operation of `Timer`: an operation is called, not read
       ┌─ test.ren:4:23
     4 │ fn read(c: Timer) = c.now
       │                       ^^^
-      = a value of `Timer` is an implementation of it: it's used by installing it, with `with`, and then `Timer.now` calls it
-      help: call the installed one: `Timer.now(...)`
-
-    error: `now` is an operation of `Timer`, so it isn't read from a value
-      ┌─ test.ren:5:23
-    5 │ fn call(c: Timer) = c.now()
-      │                       ^^^
-      = a value of `Timer` is an implementation of it: it's used by installing it, with `with`, and then `Timer.now` calls it
-      help: call the installed one: `Timer.now(...)`
+      = a description of `Timer` is called as a method, `c.now(...)`, which installs it for the call
+      help: call it: `c.now(...)`
 
     error: `Timer` has no operation named `later`
       ┌─ test.ren:6:24
@@ -3182,8 +3177,9 @@ let%expect_test "many handlers of several given early check in time" =
 
 let%expect_test "an operation read from a value holding a handler of several" =
   (* only `Rates` has `usd_to`, so that's the one it's looked up in, and
-     the message is the one for any value of `Rates` *)
-  check_error
+     `h.usd_to(1)` is a call of it as a method, installing `h` for the
+     call (compiler.md, "Descriptions (step 3)") *)
+  run
     (rates
    ^ {|
 fn id(x) = x
@@ -3195,12 +3191,8 @@ fn main() uses Console =
     );
   [%expect
     {|
-    error: `usd_to` is an operation of `Rates`, so it isn't read from a value
-       ┌─ test.ren:20:11
-    20 │   print(h.usd_to(1))
-       │           ^^^^^^
-       = a value of `Rates` is an implementation of it: it's used by installing it, with `with`, and then `Rates.usd_to` calls it
-       help: call the installed one: `Rates.usd_to(...)`
+    3
+    ()
     |}]
 
 let%expect_test "a handler of several, then said to be something else" =
@@ -5109,8 +5101,8 @@ fn main() = 1
     7 │ pub fn stored() -> Rates uses Clock = timed()
       │                                       ^^^^^^^
       = `stored` is declared to return `Rates`
-      = an implementation's type says what it needs, so one that needs more can't stand in for one that needs less
-      help: say what it needs where its type is written: `(Rates uses Clock)`
+      = a stored description's `uses` is the most it may need, and this one needs `Clock` too
+      help: add it where the type is written: `(Rates uses Clock)`
 
     error: `public` doesn't declare `Clock`
       ┌─ test.ren:9:8
@@ -5175,8 +5167,8 @@ fn main() = 1
     6 │ fn boxed() -> Box<Rates> = Box { it: timed() }
       │                            ^^^^^^^^^^^^^^^^^^^
       = `boxed` is declared to return `Box<Rates>`
-      = an implementation's type says what it needs, so one that needs more can't stand in for one that needs less
-      help: say what it needs where its type is written: `Box<Rates uses Clock>`
+      = a stored description's `uses` is the most it may need, and this one needs `Clock` too
+      help: add it where the type is written: `Box<Rates uses Clock>`
     |}]
 
 let%expect_test "an implementation's needs are fixed where it's installed" =

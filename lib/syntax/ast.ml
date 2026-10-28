@@ -282,6 +282,12 @@ and ('v, 'b, 't) expr_kind =
           then an arm for each operation of each dependency it implements.
           Calling the function describes the handler, and each `with` that
           installs it makes a fresh instance, running [state] then *)
+  | Inline_handler of ('v, 'b, 't) expr
+      (** [handler fn(req) => respond(req, body)]: a handler for a dependency of
+          one operation, its arm the [Lambda] it holds, which captures what it
+          reads by copy (foundations.md, decision 3). Which dependency is found
+          from where it's written; lowering lifts it to a handler declared at
+          the top of its module (lower.ml) *)
   | Assert of ('v, 'b, 't) expr
       (** [assert e]: a panic if [e] is false, which shows both sides of an
           [a == b] (deps.md, "`assert`") *)
@@ -570,6 +576,7 @@ let children (e : ('v, 'b, 't) expr) =
   | Field (a, _)
   | Ref a
   | Lambda (_, a)
+  | Inline_handler a
   | Try a
   | Attempt a
   | Assert a ->
@@ -919,6 +926,7 @@ let rec show_expr (e : expr) =
   | Try a -> parens [ "try"; show_expr a ]
   | Attempt a -> parens [ "attempt"; show_expr a ]
   | Assert a -> parens [ "assert"; show_expr a ]
+  | Inline_handler a -> parens [ "handler"; show_expr a ]
   | With { items; body } ->
       (* an item of one implementation is itself, and a chain is
          `(over top ... bottom)`, ending in `(deps Clock)` if it goes over
@@ -1115,6 +1123,37 @@ let precedence = function
   | Add | Sub | Wrap_add | Wrap_sub -> 5
   | Mul | Div | Mod | Wrap_mul -> 6
 
+(* The binders [e] binds itself, by id, at any depth: its lambdas'
+   parameters, its `let`s, its loops' variables and its patterns. *)
+let bound_in (e : Resolved.expr) =
+  let ids = ref [] in
+  let see (b : binder) = ids := b.id :: !ids in
+  let rec pat (p : Resolved.pattern) =
+    match p.pkind with
+    | PVar b -> see b
+    | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
+    | PWild | PInt _ | PBool _ | PFail_any -> ()
+  in
+  let rec go (e : Resolved.expr) =
+    (match e.kind with
+    | Lambda (ps, _) -> List.iter (fun (p : Resolved.param) -> see p.pname) ps
+    | Block (stmts, _) ->
+        List.iter
+          (function
+            | Let { name; _ } -> see name
+            | Let_tuple { pat = p; _ } -> pat p
+            | Expr _ | Finally _ -> ())
+          stmts
+    | For { index; pat = p; _ } ->
+        Option.iter pat index;
+        pat p
+    | Match (_, arms) -> List.iter (fun a -> pat a.arm_pat) arms
+    | _ -> ());
+    List.iter go (children e)
+  in
+  go e;
+  !ids
+
 let source ~type_name ~value_name (e : Resolved.expr) =
   (* [exception Exit] is raised by anything that isn't printed, and caught
      once, at the top *)
@@ -1164,7 +1203,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
             (List.map (fun ((f : ident), v) -> f.name ^ ": " ^ go v) fields)
         ^ " }"
     | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | While _ | Break
-    | With _ | Handler _ ->
+    | With _ | Handler _ | Inline_handler _ ->
         raise Exit
   and operand n (a : Resolved.expr) =
     match a.kind with

@@ -40,6 +40,10 @@ type ctx = {
   source : expr -> string option;
       (** code as it's written, for messages (Ast.source) *)
   in_handler : bool;  (** inside a handler's body, whose parameters it keeps *)
+  inline : int list option;
+      (** inside an inline handler: the binders its own code binds, by id. What
+          else it reads, it's copied when it's made (foundations.md, decision
+          3), so it can't change it *)
 }
 
 (* Run a check; if it finds a problem, report it and carry on. *)
@@ -122,7 +126,21 @@ let writable cx (e : expr) ~what
            (name_of p.root))
   | Some ({ root = Local b; _ } as p) -> (
       let x = b.ident.name in
-      match kind b with
+      match (kind b, cx.inline) with
+      | _, Some own when not (List.mem b.id own) ->
+          Diag.error p.rloc
+            ~notes:
+              [
+                "an inline handler copies what it reads from where it's \
+                 written, when its description is made, and keeps no state";
+              ]
+            ~help:
+              "declare a handler with a `var` in its state to keep something \
+               that changes"
+            (sprintf "`%s` is copied into this inline handler, so it can't be \
+                      changed" x)
+      | k, _ ->
+      match k with
       | Fixed _ when b.bound = By_param && cx.in_handler ->
           Diag.error p.rloc
             ~notes:
@@ -229,6 +247,8 @@ let rec walk cx (e : expr) =
   | Lambda (ps, body) ->
       no_inout cx ps;
       walk cx body
+  | Inline_handler l ->
+      walk { cx with inline = Some (bound_in l) } l
   | Handler { state; arms; _ } ->
       let cx = { cx with in_handler = true } in
       List.iter (stmt cx) state;
@@ -309,5 +329,5 @@ let program sink (r : Resolve.t) =
       ~value_name:(Resolve.value_name r)
   in
   List.iter
-    (fun (f : fn_def) -> walk { sink; source; in_handler = false } f.body)
+    (fun (f : fn_def) -> walk { sink; source; in_handler = false; inline = None } f.body)
     (Ast.functions r.prog)

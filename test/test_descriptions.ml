@@ -580,51 +580,26 @@ handler square(s: Float) for Shape =
 
 let%expect_test "[s3 accept] stateless handlers called as methods" =
   (* foundations.md's example: Ren's answer to `dyn Trait` *)
-  until "s3"
-    ~want:{|
-[3.0, 4.0, 12.0]
-19.0
-()
-|}
-    (fun () ->
-      run
-        (shapes
-       ^ {|
+  run
+    (shapes
+   ^ {|
 fn main() uses Console =
   let shapes: Array<Shape> = [circle(1.0), square(2.0), circle(2.0)]
   print(shapes.map(fn(s) => s.area()))
   print(shapes.map(fn(s) => s.area()).sum())
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: `area` is an operation of `Shape`, so it isn't read from a value
-       ┌─ test.ren:12:31
-    12 │   print(shapes.map(fn(s) => s.area()))
-       │                               ^^^^
-       = a value of `Shape` is an implementation of it: it's used by installing it, with `with`, and then `Shape.area` calls it
-       help: call the installed one: `Shape.area(...)`
-
-    error: `area` is an operation of `Shape`, so it isn't read from a value
-       ┌─ test.ren:13:31
-    13 │   print(shapes.map(fn(s) => s.area()).sum())
-       │                               ^^^^
-       = a value of `Shape` is an implementation of it: it's used by installing it, with `with`, and then `Shape.area` calls it
-       help: call the installed one: `Shape.area(...)`
+    [3.0, 4.0, 12.0]
+    19.0
+    ()
     |}]
 
 let%expect_test "[s3 accept] a method call gives the handler what it needs" =
   (* a call `g.greet(...)` installs `g` for the call, as `with g in
      Greeter.greet(...)` does, so its `uses` is the caller's to meet;
      `plain()` needs nothing and fits a slot that may need `Clock` *)
-  until "s3"
-    ~want:{|
-hi ann
-ann at Time(0)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Greeter =
   greet: fn(name: Str) -> Str
 
@@ -639,31 +614,18 @@ fn main() uses Console =
   with Clock.frozen(Time.epoch) in
     for g in gs
       print(g.greet("ann"))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: `greet` is an operation of `Greeter`, so it isn't read from a value
-       ┌─ test.ren:14:15
-    14 │       print(g.greet("ann"))
-       │               ^^^^^
-       = a value of `Greeter` is an implementation of it: it's used by installing it, with `with`, and then `Greeter.greet` calls it
-       help: call the installed one: `Greeter.greet(...)`
+    hi ann
+    ann at Time(0)
+    ()
     |}]
 
 let%expect_test "[s3 accept] a handler with state, called as a method, starts fresh" =
   (* a method call is `with c in Counter.bump()`: its state lives for the
      call (compiler.md, "Stage 10d") *)
-  until "s3"
-    ~want:{|
-1
-1
-1
-2
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Counter =
   bump: fn() -> Int
 
@@ -680,38 +642,20 @@ fn main() uses Console =
   with c in
     print(Counter.bump())
     print(Counter.bump())
-|});
+|};
   [%expect {|
-    (until s3)
-    error: `bump` is an operation of `Counter`, so it isn't read from a value
-       ┌─ test.ren:12:11
-    12 │   print(c.bump())
-       │           ^^^^
-       = a value of `Counter` is an implementation of it: it's used by installing it, with `with`, and then `Counter.bump` calls it
-       help: call the installed one: `Counter.bump(...)`
-
-    error: `bump` is an operation of `Counter`, so it isn't read from a value
-       ┌─ test.ren:13:11
-    13 │   print(c.bump())
-       │           ^^^^
-       = a value of `Counter` is an implementation of it: it's used by installing it, with `with`, and then `Counter.bump` calls it
-       help: call the installed one: `Counter.bump(...)`
+    1
+    1
+    1
+    2
+    ()
     |}]
 
 let%expect_test "[s3 accept] an inline handler copies what it captures" =
   (* `body` is copied in when the handler is made, so the later change
      isn't seen, where a block would see it *)
-  until "s3"
-    ~want:
-      {|
-/a first
-/b: hello
-["/c: x", "/c", "/c first"]
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Route =
   handle: fn(path: Str) -> Str
 
@@ -725,32 +669,20 @@ fn main() uses Console =
   print(page("hello").handle("/b"))
   let routes: Array<Route> = [page("x"), handler fn(p) => p, r]
   print(routes.map(fn(x) => x.handle("/c")))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected an expression, found `handler`
-      ┌─ test.ren:4:31
-    4 │ fn page(body: Str) -> Route = handler fn(path) => path.concat(": ").concat(body)
-      │                               ^^^^^^^
-
-    error: expected an expression, found `handler`
-      ┌─ test.ren:8:18
-    8 │   let r: Route = handler fn(path) => path.concat(" ").concat(body)
-      │                  ^^^^^^^
+    /a first
+    /b: hello
+    ["/c: x", "/c", "/c first"]
+    ()
     |}]
 
 let%expect_test "[s3 accept] an inline handler's dependencies are its caller's" =
   (* a handler, inline or not, uses what's installed where it's installed
      or called, not where it's written; so `stamper` uses nothing, and the
      description it makes needs `Clock` *)
-  until "s3"
-    ~want:{|
-Time(60000)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Stamp =
   stamp: fn() -> Time
 
@@ -760,26 +692,15 @@ fn main() uses Console =
   let s = stamper()
   with Clock.frozen(Time.epoch + Duration.minutes(1)) in
     print(s.stamp())
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected an expression, found `handler`
-      ┌─ test.ren:4:38
-    4 │ fn stamper() -> (Stamp uses Clock) = handler fn() => Clock.now()
-      │                                      ^^^^^^^
+    Time(60000)
+    ()
     |}]
 
 let%expect_test "[s3 accept] descriptions kept in a map and a record" =
-  until "s3"
-    ~want:{|
-5
-15
-10
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Op =
   apply: fn(a: Int, b: Int) -> Int
 
@@ -801,13 +722,12 @@ fn main() uses Console =
       None => ()
   let c = Calc { name: "double", op: handler fn(a, b) => (a + b) * 2 }
   print(c.op.apply(2, 3))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected an expression, found `handler`
-       ┌─ test.ren:20:38
-    20 │   let c = Calc { name: "double", op: handler fn(a, b) => (a + b) * 2 }
-       │                                      ^^^^^^^
+    5
+    15
+    10
+    ()
     |}]
 
 let router_files =
@@ -893,39 +813,21 @@ let%expect_test "[s3 accept] the router: a stored description's uses is an upper
      is called as a method, and the table's slot says what any route may
      use. Today a route that needs less is refused, with the help
      `(Api)`, and the message says the opposite of what's happening *)
-  until "s3"
-    ~want:{|
-ok
-10d
-100
-107
-404
-()
-|}
-    (fun () -> run_files router_files);
+  run_files router_files;
   [%expect {|
-    (until s3)
-    error: expected an expression, found `handler`
-       ┌─ api.ren:26:21
-    26 │   &r.on("/version", handler fn(_) => "10d")
-       │                     ^^^^^^^
+    ok
+    10d
+    100
+    107
+    404
+    ()
     |}]
 
 let%expect_test "[s3 reject] a stored description that needs more than its slot" =
   (* the direction the message says is now the right one, and it names
      what's needed beyond the slot *)
-  until "s3"
-    ~says:
-      [
-        "error: expected `Api uses Db`, found `Api uses Clock, Db`";
-        "= a stored description's `uses` is the most it may need, and this \
-         one needs `Clock` too";
-        "help: add it where the type is written: `Array<(Api uses Clock, \
-         Db)>`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Api =
   handle: fn(x: Int) -> Int
 
@@ -938,29 +840,19 @@ handler timed() for Api uses Clock, Db =
 fn main() uses Console =
   let rs: Array<(Api uses Db)> = [timed()]
   print(rs.len())
-|});
+|};
   [%expect {|
-    (until s3)
     error: expected `Api uses Db`, found `Api uses Clock, Db`
        ┌─ test.ren:11:35
     11 │   let rs: Array<(Api uses Db)> = [timed()]
        │                                   ^^^^^^^
-       = an implementation's type says what it needs, so one that needs more can't stand in for one that needs less
-       help: say what it needs where its type is written: `(Api uses Clock, Db)`
+       = a stored description's `uses` is the most it may need, and this one needs `Clock` too
+       help: add it where the type is written: `Array<(Api uses Clock, Db)>`
     |}]
 
 let%expect_test "[s3 reject] an inline handler for a dependency of several operations" =
-  until "s3"
-    ~says:
-      [
-        "error: an inline handler implements a dependency of one operation, \
-         and `Users` has 2";
-        "help: declare a handler with an arm for each: `handler name() for \
-         Users`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Users =
   get: fn(id: Int) -> Int
   count: fn() -> Int
@@ -968,101 +860,70 @@ dep Users =
 fn main() uses Console =
   let u: Users = handler fn(id) => id
   print(1)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected an expression, found `handler`
+    error: an inline handler implements a dependency of one operation, and `Users` has 2
       ┌─ test.ren:6:18
     6 │   let u: Users = handler fn(id) => id
-      │                  ^^^^^^^
+      │                  ^^^^^^^^^^^^^^^^^^^^
+      help: declare a handler with an arm for each: `handler name() for Users`
     |}]
 
 let%expect_test "[s3 reject] an inline handler whose dependency isn't known" =
-  until "s3"
-    ~says:
-      [
-        "error: which dependency this inline handler implements isn't known \
-         here";
-        "help: write the type it's kept as: `let h: D = handler fn(...) => \
-         ...`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Console =
   let h = handler fn(x) => x
   print(1)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected an expression, found `handler`
+    error: which dependency this inline handler implements isn't known here
       ┌─ test.ren:2:11
     2 │   let h = handler fn(x) => x
-      │           ^^^^^^^
+      │           ^^^^^^^^^^^^^^^^^^
+      help: write the type it's kept as: `let h: D = handler fn(...) => ...`
     |}]
 
 let%expect_test "[s3 reject] an inline handler can't keep a block" =
   (* what it captures is copied into its description, which is data, as a
      handler's parameters are *)
-  until "s3"
-    ~says:
-      [
-        "error: an inline handler's captures are data, and `f` is a block";
-        "help: pass the data it needs, or make the behaviour a dependency";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Get =
   get: fn() -> Int
 
 fn make(f: fn() -> Int) -> Get = handler fn() => try f()
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected an expression, found `handler`
-      ┌─ test.ren:4:34
+    error: an inline handler's captures are data, and `f` is a block
+      ┌─ test.ren:4:54
     4 │ fn make(f: fn() -> Int) -> Get = handler fn() => try f()
-      │                                  ^^^^^^^
+      │                                                      ^
+      help: pass the data it needs, or make the behaviour a dependency
     |}]
 
 let%expect_test "[s3 reject] an inline handler has no next" =
-  until "s3"
-    ~says:
-      [
-        "error: an inline handler doesn't go over another, so it has no `next`";
-        "help: declare a handler `over Get` to call the one under it";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Get =
   get: fn() -> Int
 
 fn main() uses Console =
   let g: Get = handler fn() => next.get() + 1
   print(1)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected an expression, found `handler`
-      ┌─ test.ren:5:16
+    error: an inline handler doesn't go over another, so it has no `next`
+      ┌─ test.ren:5:32
     5 │   let g: Get = handler fn() => next.get() + 1
-      │                ^^^^^^^
+      │                                ^^^^
+      help: declare a handler `over Get` to call the one under it
     |}]
 
 let%expect_test "[s3 reject] a chain isn't a value" =
-  until "s3"
-    ~says:
-      [
-        "error: a chain of handlers isn't a value";
-        "help: keep the parts, and write the chain where it's installed: \
-         `with cached() over mem() in ...`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Users =
   get: fn(id: Int) -> Int
 
@@ -1075,27 +936,20 @@ handler cached() over Users =
 fn main() uses Console =
   let x = cached() over mem()
   with x in print(Users.get(1))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected the end of the line, found `over`
-       ┌─ test.ren:11:20
+    error: a chain of handlers isn't a value
+       ┌─ test.ren:11:11
     11 │   let x = cached() over mem()
-       │                    ^^^^
+       │           ^^^^^^^^^^^^^^^^^^^
+       help: keep the parts, and write the chain where it's installed: `with cached() over mem() in ...`
     |}]
 
 let%expect_test "[s3 reject] a description that can fail to start isn't called" =
   (* a method call installs the description for the call, and one whose
      state can fail to start is installed with `with`, whose errors show *)
-  until "s3"
-    ~says:
-      [
-        "error: `s` can fail to start, so it isn't called as a method";
-        "help: install it: `with s in Store.get()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Store =
   get: fn() -> Int
 
@@ -1107,27 +961,19 @@ handler opened() for Store ! Down =
 
 fn main() =
   let s: Store ! Down = opened()
-  let _ = s.get()
-|});
+  s.get()
+|};
   [%expect {|
-    (until s3)
-    error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:12:7
-    12 │   let _ = s.get()
-       │       ^
-       help: add the value this block should produce as its last line
+    error: `s` can fail to start, so it isn't called as a method
+       ┌─ test.ren:12:5
+    12 │   s.get()
+       │     ^^^
+       help: install it: `with s in Store.get()`
     |}]
 
 let%expect_test "[s3 reject] a description that goes over another isn't called" =
-  until "s3"
-    ~says:
-      [
-        "error: `c` goes over another `Users`, so it isn't called as a method";
-        "help: install it over one: `with c over Users in Users.get(...)`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Users =
   get: fn(id: Int) -> Int
 
@@ -1136,15 +982,14 @@ handler cached() over Users =
 
 fn main() =
   let c: over Users = cached()
-  let _ = c.get(1)
-|});
+  c.get(1)
+|};
   [%expect {|
-    (until s3)
-    error: this block ends with a `let`, so it has no value
-      ┌─ test.ren:9:7
-    9 │   let _ = c.get(1)
-      │       ^
-      help: add the value this block should produce as its last line
+    error: `c` goes over another `Users`, so it isn't called as a method
+      ┌─ test.ren:9:5
+    9 │   c.get(1)
+      │     ^^^
+      help: install it over one: `with c over Users in Users.get(...)`
     |}]
 
 (* ---- s5: `over any` and `retry` (decision 7) ---- *)

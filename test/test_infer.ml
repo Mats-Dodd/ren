@@ -1255,6 +1255,11 @@ fn main() = print(Some(true))
             ^ String.concat ", "
                 (List.map (fun (l : Ty.label) -> path (Ty.dep_path l.name)) ls)
             )
+      | Some (Calls_op { key; op; _ }) ->
+          print_endline
+            ("calls " ^ path (Ty.dep_path key.name) ^ "." ^ op ^ " as a method")
+      | Some (Inline_op { dep; op }) ->
+          print_endline ("an inline handler of " ^ path dep ^ "." ^ op)
       | Some (Install_order o) ->
           print_endline
             ("installs in the order "
