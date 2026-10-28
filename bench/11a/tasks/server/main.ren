@@ -1,0 +1,100 @@
+// A server that shuts down gracefully (async.md, "A server that shuts
+// down gracefully"): each connection is served in a task of its own,
+// and when SIGTERM comes the server stops accepting, and the
+// connections in flight have the cleanup deadline, 5 seconds, to
+// finish.
+
+import sim.{SimNet}
+
+// a connection, closed when its `with` ends, however it ends: a
+// cancelled task closes what it opened too
+dep Line =
+  read: fn() -> Bytes ! NetError
+  write: fn(b: Bytes) ! NetError
+
+handler line(conn: Conn) for Line uses Net =
+  finally(r) =>
+    Net.close(conn)
+    try r
+  read() => try Net.read(conn, 100)
+  write(b) => try Net.write(conn, b)
+
+// answers "done" to every request, after the time it asks for: "slow"
+// takes three seconds, "stuck" a minute
+fn handle(conn: Conn) ! NetError uses Net, Clock =
+  with line(conn) in
+    let req = try Line.read()
+    if req == "slow".bytes() then Clock.sleep(Duration.seconds(3))
+    else if req == "stuck".bytes() then Clock.sleep(Duration.minutes(1))
+    try Line.write("done".bytes())
+
+pub fn serve(addr: Addr) ! NetError uses Net, Clock, Console, Async =
+  let listener = try Net.listen(addr)
+  try Async.scope(max: 10_000) fn(s) =>
+    var open = true
+    while open
+      match try Net.accept_until(listener, Signal.term)
+        Some(conn) =>
+          s.spawn fn() =>
+            match attempt handle(conn)
+              Ok(_) => ()
+              Err(e) => Console.error("request failed: ".concat(show(e)))
+        None => open = false
+
+pub fn main() ! NetError uses Net, Clock, Console, Async =
+  try serve(Addr { host: "127.0.0.1", port: 8080 })
+
+// ---- tests, on `sim.net()`: connections in memory, in virtual time ----
+
+fn here() -> Addr = Addr { host: "127.0.0.1", port: 8080 }
+
+// the server, in a task: one that fails says so
+fn run_server() uses Net, Clock, Console, Async =
+  match attempt serve(here())
+    Ok(_) => ()
+    Err(e) => Console.error("serve failed: ".concat(show(e)))
+
+// connects, and sends `req`
+fn send(req: Str) -> Conn ! NetError uses Net, SimNet =
+  let c = try SimNet.connect(here())
+  try Net.write(c, req.bytes())
+  c
+
+test "a request is answered" =
+  with sim.net() in
+    try Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      let c = try send("hello")
+      assert try Net.read(c, 100) == "done".bytes()
+      SimNet.signal(Signal.term)
+  assert TestConsole.errors() == []
+
+test "shutdown lets a request in flight finish" =
+  with sim.net() in
+    try Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      let c = try send("slow")
+      Clock.sleep(Duration.seconds(1))
+      SimNet.signal(Signal.term)
+      assert try Net.read(c, 100) == "done".bytes()
+      assert Clock.now() == Time.epoch + Duration.seconds(3)
+
+test "a request still running at the deadline is cut off" =
+  // the signal at 1 s, so the deadline is at 6 s: the connection is
+  // closed then, with nothing written
+  with sim.net() in
+    try Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      let c = try send("stuck")
+      Clock.sleep(Duration.seconds(1))
+      SimNet.signal(Signal.term)
+      assert try Net.read(c, 100) == "".bytes()
+      assert Clock.now() == Time.epoch + Duration.seconds(6)
+
+test "after the signal, nothing new is accepted" =
+  with sim.net() in
+    try Async.scope fn(s) =>
+      let server = s.start fn() => run_server()
+      SimNet.signal(Signal.term)
+      assert server.join() == Some(())
+      assert attempt SimNet.connect(here()) == Err(Refused(here()))

@@ -2,24 +2,22 @@
 
 How a Ren program does several things at once: waiting on many calls,
 running a server, working in the background, and computing on every core.
-It's the stage after [handlers.md](handlers.md) on the
-[roadmap](README.md#roadmap), and it builds on `with`, `over`, `next` and
-`finally` from there. How the calls reach the kernel is in
-[runtime-io.md](runtime-io.md).
+It's stage 11a on the [roadmap](README.md#roadmap), and it builds on
+`with`, `over`, `next` and `finally` from [handlers.md](handlers.md) and
+on blocks from [foundations.md](foundations.md). How the calls reach the
+kernel is in [runtime-io.md](runtime-io.md).
 
-[foundations.md](foundations.md) changes this design: lambdas become
-blocks, whose dependencies are found where they're written, wrappers
-become calls, `finally` is written where it starts covering, the one
-wait is `Async.until`, there's no preemption and no `par_map`, and the
-runtime is a handler. Stage 10c built the blocks, the calls and
-`finally`. Where the two disagree, foundations.md is the decision; this
-document is rewritten in stage 11a.
+> **Status:** specified, being built (stage 11a). This document follows
+> foundations.md, decisions 2 and 7 to 11, which replaced the first
+> version of this design ("What changed", below). What each step builds
+> is in [compiler.md](compiler.md#stage-11a).
 
 Ren's concurrency is [Effect](https://effect.website/)'s, written in
 direct style. `T ! E uses R` is already Effect's `Effect<A, E, R>`, so
 there's nothing to wrap: no `async`, no `await`, no generators, and no
-colored functions. Programs behave as if they run on one thread. Where
-more threads help, the runtime adds them where no program can tell.
+colored functions. Code is written as if it runs on one thread, and
+where more threads help, the runtime adds them where no program can
+tell.
 
 ## What it has to do
 
@@ -36,90 +34,125 @@ more threads help, the runtime adds them where no program can tell.
 ## The whole surface
 
 ```ren
+Async.scope fn(s) => s.spawn fn() => ...          // tasks started one at a time
+let t = s.start fn() => ...                       // and its handle: t.join(), t.cancel()
+Async.scope(max: n) fn(s) => ...                  // spawn waits while n run
 Async.map(xs) fn(x) => ...                         // results, in order
-Async.each(xs) fn(x) => ...                        // no results, each freed as it finishes
+Async.each(xs) fn(x) => ...                        // no results
 Async.both(fn() => a, fn() => b)                   // a pair
+Async.race(fn() => a, fn() => b)                   // the first to finish
 Async.timeout(d) fn() => ...                       // ! Timeout
-Async.group(max: n, drain: d) fn(g) => g.spawn fn() => ...   // tasks started one at a time
-with Async.limit(n) over Dep in                    // at most n calls to Dep at once
-xs.par_map(f)                                      // f is pure: runs on every core
+Async.isolate fn() => ...                          // ! Panicked(msg)
+Async.until(fn() => cond)                          // in an operation: wait for its state
+Async.tick()                                       // let what can run, run
+Async.yield()                                      // let others go first
+with sync.semaphore(n), sync.limit() over Dep in   // at most n calls to Dep at once
 ```
 
 | | Results | A failure |
 |---|---|---|
+| `Async.scope` | its body's | its tasks can't fail; the body's cancels them |
 | `Async.map` | a list, in order | cancels the rest |
 | `Async.each` | none | cancels the rest |
 | `Async.both` | a pair | cancels the other |
+| `Async.race` | the first to finish | its branches can't fail |
 | `Async.timeout` | the body's | `! Timeout`, and the body is cancelled |
-| `Async.group` | none | tasks can't fail |
-| `Async.limit(n) over Dep` | a handler, not a task | — |
-| `xs.par_map` | a list, in order | cancels the rest |
+| `Async.isolate` | the body's | a panic becomes `! Panicked(msg)` |
 
-`Async` is a dependency like `Clock`, and these are its operations, so a
-signature says `uses Async` and the code says `Async.map`. The lambdas they
-take are transparent ([README](README.md#3-functions)): their errors and
-dependencies flow into the caller.
+`Async` is a dependency like `Clock`, so a signature says `uses Async`
+and the code says `Async.map`. Its two operations are `yield` and
+`tick`, and the rest are its functions, as `Fs.read_str` is one of
+`Fs`'s. The blocks they take are transparent: their errors and
+dependencies flow into the caller, and their dependencies are found
+where they're written ([foundations.md](foundations.md#5-dependencies-are-found-where-a-block-is-written)).
 
-- **`map` and `each` run 64 at once by default,** and `max:` changes it.
-- **`each`'s function returns `()`.** If it returns a value, that's an
+- **A scope starts tasks one at a time.** `s.spawn` starts one, and
+  `s.start` starts one and gives its handle, `t`, which can `t.join()`
+  it, for what it returned, or `t.cancel()` it. `s.replace(key) fn() => ...` cancels the task already
+  running under that key first: one refresh per user, say.
+- **Everything is bounded.** `spawn` waits while `max` of the scope's
+  tasks run, which is a server's backpressure, and `map` and `each` run
+  `max` at once. The default is 64, so a server writes `max: 10_000`.
+- **`each`'s block returns `()`.** If it returns a value, that's an
   error whose help says `map`, so no result is thrown away without
   being written.
-- **`group` must be given its `max`.** When it's full, `spawn` waits,
-  which is backpressure for free.
-- **A task in a `group` can't fail.** A group's tasks are independent,
-  like a server's connections, and one connection's failure must not stop
-  the others:
+- **There's no `par_map`.** `Async.map` over a block that uses no
+  dependencies may run on every core; it's the same call either way.
+- **Wrappers are calls:** `Async.timeout(d) fn() => ...`, `Async.race`,
+  and `retry(n, on: Tags)`. `with` installs only handlers.
+
+## The rules
+
+1. **No task outlives the call that started it.**
+2. **A failure cancels the tasks beside it, and the first one wins.** If
+   another task fails for real while being cancelled, its error goes to
+   stderr and the journal. It's never dropped silently, and it never
+   joins the error type.
+3. **A handler's state is touched by one operation at a time,** until it
+   returns or waits in `Async.until`.
+4. **Everything has a limit.**
+
+### A spawned task can't fail
+
+A scope's tasks are independent, like a server's connections, and one
+connection's failure must not stop the others. So a task's block can't
+fail with an error, and handles what it can fail with itself:
 
 ```
-error: a task in a group can't fail, or one connection's failure would stop all the others
+error: a spawned task can't fail, or one task's failure would stop all the others
   ┌─ server.ren:7:15
   │
-7 │       g.spawn fn() => try handle(conn)
+7 │       s.spawn fn() => try handle(conn)
   │                       ^^^^^^^^^^^^^^^^ can fail with BadRequest | DbDown
   │
   = help: handle them in the task: `match attempt handle(conn)`
 ```
 
-- **`par_map` is parallelism, not concurrency.** Its function must be
-  pure, so it gives the same answer on 1 core or 64. That's why it's an
-  ordinary list method that needs no `uses Async`, and it works in a
-  script or a test. Using a dependency in it is an error that points at
-  the other word:
+`race`'s branches can't fail either, so the first to finish is the first
+to succeed, and a branch that fails can't leave the race waiting on the
+other: a server's `race(read_request, wait_for_shutdown)` would hold a
+closed connection until shutdown. A branch that can fail is an error
+whose help says to write `attempt` inside it; retrying until one
+succeeds is `retry`'s job.
 
-```
-error: `par_map` runs its function on every core, so the function can't use deps
-  ┌─ build.ren:12:30
-  │
-12│   files.par_map(fn(f) => { Clock.now(); sha256(f) })
-  │                            ^^^^^^^^^^^ uses Clock
-  │
-  = help: to run tasks that use deps at the same time, use `Async.map`
-```
+### What a task can touch
 
-- **`Async.limit(n) over Dep`** is a built-in handler that wraps any
-  dependency, and makes each of its calls wait for one of `n` slots. It's
-  built in because a handler can't make a caller wait for a slot, and it
-  works over any dependency. A limit on each `map` doesn't bound the
-  system (a `map` inside a `map` is 64 × 64), so the bound that matters
-  belongs on the scarce thing: the connections, the requests per second,
-  the database.
+Tasks share mutable state only through handlers, and a block a task
+runs only reads what it captures (foundations.md, decision 2):
 
-## The four rules
+- **A block passed to `s.spawn` reads what it captures until the scope
+  ends,** so a variable it reads can't change meanwhile:
 
-1. **No task outlives the call that started it.**
-2. **A failure cancels the tasks beside it.** The first failure is the
-   result. If another task fails for real while being cancelled, its
-   error goes to the trace and the journal. It's never dropped silently,
-   and it never joins the error type.
-3. **A handler's state is touched by one task at a time between
-   dependency calls.**
-4. **Everything has a limit.**
+  ```
+  error: `n` can't change while a spawned task reads it
+     │ s.spawn fn() => log(n)
+     │                     - read until `Async.scope` ends
+     │ n += 1
+     │ ^^^^^^
+     help: copy it for the task, `let m = n`, or change it after the scope
+  ```
+
+- **It captures by reference only the variables of the frame that
+  called `Async.scope`.** The rest are copied when it's spawned: a
+  loop's variable inside the scope, a helper's locals. So `for conn in
+  ...` gives each task its own `conn`.
+- **A block passed to `map`, `each`, `both` or `race` runs on several
+  tasks at once,** so it reads what it captures and changes nothing; it
+  gives back what it makes instead.
+- **A parameter's mode is part of its type.** A function that passes a
+  block parameter on to `Async.map` marks it, `f: concurrent fn(T) ->
+  U`, and one that spawns it, `body: spawned fn()`. A public signature
+  says it; a private one is inferred.
+- **A scope and a task's handle are blocks too.** They're passed and
+  used, never stored or returned, so nothing can reach a task after its
+  scope.
 
 ### Shared state is a handler
 
 Rule 3 makes every handler an actor. State that tasks share lives in a
-handler, and reading it and updating it with no dependency call in
-between is atomic:
+handler, and **an operation keeps its instance until it returns**, across
+its own calls to handlers installed outside it. Another task that calls
+it meanwhile waits its turn:
 
 ```ren
 dep Seen =
@@ -134,44 +167,75 @@ handler seen_set() for Seen =
       true
 ```
 
-Two tasks can't both claim the same URL, and there's no lock. Races
-between tasks are still possible, but only at a dependency call, because
-that's the only place another task can come in. Those are exactly the
-points the test scheduler varies (below).
+Two tasks can't both claim the same URL, and there's no lock to write.
+**State read before a dependency call is still the state after it,** so
+an invariant that spans the call needs no flag:
 
-### State that changed during a call
-
-That's Swift's actor reentrancy problem: state read before a dependency
-call may have been changed by another task by the time the call returns.
-Swift leaves it to the programmer. Ren's compiler sees every dependency
-call in a handler, so it catches the pattern, where a value read before a
-call is written back after it:
-
-```
-warning: `cache` may have changed during `next.save`
-  ┌─ cache.ren:14:5
-  │
-12│     let old = cache.get(u.id)
-  │               --------------- read here
-13│     try next.save(u)
-  │         ------------ another task can run here
-14│     &cache.set(u.id, merge(old, u))
-  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ and written here, from the old read
-  │
-  = help: read it again after the call
+```ren
+handler cached(ttl: Duration) over Users uses Clock =
+  var cache: Map<UserId, (User, Time)> = Map.empty
+  save(u) =>
+    &cache.remove(u.id)
+    try next.save(u)        // no other operation of `cached` runs meanwhile
 ```
 
-The test scheduler finds the same race at runtime. The warning finds it
-before the code runs.
+Races between tasks are still possible, but only **between
+operations**: a task that reads with one operation, lets another task
+run, and writes with a second has lost the other's update. The fix is
+one operation that does both, and the test scheduler finds the bug
+(below):
 
-### Tasks always run concurrently
+```ren
+dep Account =
+  balance: fn() -> Int
+  set: fn(b: Int)
+  add: fn(n: Int)          // the fix: read and write in one operation
 
-Tasks started together always run concurrently, never one after the
-other. Zig separates code that *may* run concurrently from code that
-*must*, because a producer and a consumer run one after the other
-deadlock. Ren only has the second kind, and the test scheduler keeps the
-guarantee too, so channels can be added later without a new kind of
-task.
+fn deposit(n: Int) uses Account =
+  let b = Account.balance()
+  Account.set(b + n)       // another task's deposit can come in between
+```
+
+- **What it costs:** one slow call, an fsync, serializes that handler's
+  operations. A handler that wants its calls to overlap splits an
+  operation in two, "reserve" and "complete", as `sync.semaphore`'s
+  `acquire` and `release` are.
+- **No deadlock.** An operation can only call handlers installed outside
+  it, so a task takes instances inner to outer and waits can't form a
+  cycle. A block passed to an operation gets its dependencies only from
+  its parameter's type, so it can't call back into the instance running
+  it.
+- **The exclusion is skipped where nothing can race.** An instance no
+  spawned task can reach, or whose handler keeps no state, takes no
+  lock, so a program with no tasks pays nothing.
+
+### Waiting for state: `Async.until`
+
+**`Async.until(cond)` is the one way to wait,** written in an
+operation. The condition reads only the handler's state. If it doesn't
+hold, the operation lets go of the instance and waits, and the condition
+is checked again each time the instance is released; the runtime
+resumes the first waiter whose condition holds. No wakeup can be lost,
+and there's no `if` where a `while` belongs:
+
+```ren
+pub handler channel<T>(cap: Int) for Chan<T> uses Async =
+  var items: Array<T> = []
+  send(x) =>
+    Async.until(fn() => items.len() < cap)
+    &items.push(x)
+  recv() =>
+    Async.until(fn() => items.len() > 0)
+    let x = items[0]
+    items = items[1..items.len()]
+    Some(x)
+```
+
+`Async.tick()` returns once every task that could run when it was called
+has run until it waits. That's the batching point: a batcher's `get`
+adds its key and waits until it's been fetched, and a task beside it
+calls `Batcher.flush()` after each tick, so every key asked for in one
+round goes in one fetch.
 
 ## Cancellation
 
@@ -179,7 +243,8 @@ Cancellation is where structured concurrency breaks in other languages,
 and Ren has a rule for each way.
 
 - **It happens at dependency calls.** A task that's cancelled stops at its
-  next dependency call, and code after it doesn't run.
+  next dependency call, and code after it doesn't run; a task waiting
+  stops waiting. A task cancelled before it starts never runs.
 - **It can't be swallowed.** Cancellation isn't an error. `try`,
   `attempt` and `orelse` can't see it, and it's never in an error row.
   Kotlin's `runCatching` and Python's `except BaseException` catch it by
@@ -192,9 +257,12 @@ and Ren has a rule for each way.
   `select!` can drop a read whose data already arrived.
 - **It never stops cleanup.** `finally` runs shielded, so its own
   dependency calls (a rollback) run even though the task was cancelled.
-  It runs under a cleanup deadline, so cleanup can't hang forever. Trio
-  calls this shielding and Kotlin calls it `NonCancellable`. In both you
-  have to remember it, and in Ren it's always on.
+  It runs under a cleanup deadline, 5 seconds, so cleanup can't hang
+  forever. Trio calls this shielding and Kotlin calls it
+  `NonCancellable`. In both you have to remember it, and in Ren it's
+  always on.
+- **A `finally` covers everything after the point it's written,**
+  inside an operation too, so a cancelled caller gives back what it took.
 - **It waits.** Cancelling a call waits until the kernel lets go of its
   buffer ([runtime-io.md](runtime-io.md#cancelling-waits-for-the-kernel)).
   Cancelling a `Proc.run` kills the program, then waits for it to exit,
@@ -207,89 +275,98 @@ and Ren has a rule for each way.
   It's late, but it never lies.
 - **Deadlines carry down.** A timeout inside a timeout runs to the sooner
   of the two, and the deadline reaches every `Net` call made under it.
-- **On `SIGTERM`, the runtime cancels `main`,** so shutting down is
-  cancellation, and every `finally` runs.
+- **On `SIGTERM`,** a server waiting in `Net.accept_until(l,
+  Signal.term)` stops accepting, and what's in flight has the cleanup
+  deadline to finish. A program that waits for no signal has `main`
+  cancelled, so plain shutdown is cancellation, and every `finally` runs.
 
-## Tasks in handlers
+## A panic ends the program
 
-A handler can run a task that lives exactly as long as the `with` that
-installed it. It's how a cache refreshes, a pool checks its connections
-and metrics are flushed:
+Unless it's inside `Async.isolate fn() => ...`, which gives
+`Err(Panicked(msg))` to an `attempt`. Isolation applies only when no
+handler installed outside the block was in the middle of an operation;
+otherwise the program still ends, since that handler's state is
+half-changed. When a panic is contained, the `finally`s of handlers
+installed inside the block run, given `Err(Cancelled)`. An isolated
+block can't change a variable from outside it: it returns its result,
+and anything else it changes, it changes through an operation, so
+nothing it wrote after the fault can be seen.
+
+## Background work is a task beside the `with`
+
+A handler has no task of its own. A cache's refresh, a pool's checks
+and a metrics flush are a task spawned beside the `with`: in its body,
+into a scope outside it, calling one of the handler's operations. **When
+the body ends, the `with` cancels the tasks that can reach its handler
+and were spawned into a scope outside it, and waits for them,** before
+its `finally` runs. So the task lives exactly as long as the `with`,
+and never calls a handler that's gone:
 
 ```ren
-pub handler batched(every: Duration) over Metrics uses Clock, Async =
+pub dep Metrics =
+  record: fn(s: Sample)
+  flush: fn()
+
+pub handler batched() for Metrics uses Exporter =
   var pending: Array<Sample> = []
-  record(s) => &pending.push(s)
-  task =>
-    loop
-      Clock.sleep(every)
-      let batch = pending
-      pending = []
-      try next.send(batch)
   finally(r) =>
-    try next.send(pending)         // the task has stopped, so this is the last batch
+    Exporter.send(pending)     // the flusher has stopped, so this is the last batch
     try r
+  record(s) => &pending.push(s)
+  flush() =>
+    Exporter.send(pending)     // `record` can't run while this does
+    pending = []
+
+fn serve_with_metrics() uses Exporter, Clock, Async =
+  Async.scope fn(s) =>
+    with batched() in
+      s.spawn fn() =>
+        while true
+          Clock.sleep(Duration.seconds(10))
+          Metrics.flush()
+      serve()
 ```
 
-**What happens, in order:**
-
-1. **Setup:** the `var` lines run, and they may fail.
-2. **Start:** the task starts once *every* item in the `with` has finished
-   setup, and runs alongside the body.
-3. **The body finishes, or fails:** the task is cancelled, and the `with`
-   waits for it to stop.
-4. **`finally(r)`** runs once the task has stopped, which is what makes
-   the last flush above safe.
-
-**The rules:**
-
-- **A task that fails cancels the body** (rule 2: the task and the body
-  are siblings), and `finally` sees the task's error. A lease keeper that
-  loses its lease stops the work this way. A task that should carry on
-  through failures says so with `attempt`.
-- **A task that returns** just ends, and the body carries on.
-- **Its errors and dependencies join the `with`'s,** like setup's. A
-  handler with a task writes `Async` in its `uses`, because concurrency
-  shows in a signature, as errors do.
-- **It returns `()`,** reaches the implementation it's over through
-  `next`, and holds the handler between its dependency calls, like an
-  operation. Here, `record` can't run between `let batch = pending` and
-  `pending = []`, so no sample is lost.
-- **One task per handler.** Two things at once is `Async.both` inside it.
-- **`task` is a contextual keyword.** It means a task only where an
-  operation could go in a handler, so it stays usable as a name
-  everywhere else. An operation is always written with parentheses, so a
-  bare `task =>` can't be mistaken for one.
-
-A loop that makes no dependency call would hold the handler forever:
-
-```
-error: this task never lets the handler's operations run
-  ┌─ metrics.ren:6:5
-  │
-6 │     loop
-  │     ^^^^ this loop makes no dep call
-  │
-  = an operation can only run while the task is waiting on a dep call
-  = help: wait inside the loop, for example `Clock.sleep(every)`
-```
-
-`try r` is the short form of a `finally` that only cleans up: `r` is a
-Result, and `try` passes its error on. It needs no new rule.
+**What happens, in order:** the `with` installs the handler; its body
+starts the flusher in the scope outside, beside the rest of the body;
+when `serve` returns, the `with` cancels the flusher, which stops at its
+next call, and waits for it; then its `finally` sends what's left, and
+the scope ends. A `flush` holds the instance until it returns, so no
+sample is lost between `Exporter.send(pending)` and `pending = []`.
+A task spawned into the scope from outside any `with`, as a server's
+connections are, isn't cancelled when the scope's body ends: the scope
+waits for it.
 
 ## Tests are deterministic
 
-`ren test` runs every test on a deterministic scheduler with virtual time.
+`ren test` runs every test on `sim`, a deterministic scheduler with
+virtual time; `ren run` runs `main` on `Async.single()`, one thread, in
+real time.
 
+- **The runtime is a handler,** installed with `with` as any other:
+  `with Async.single() in run()`, `with sim.scheduler(seed) in
+  serve()`. The runtime installs one around `main` and each test, so
+  programs rarely write it.
 - **`Clock.sleep` advances virtual time instantly.** A test that sleeps
-  for five minutes takes no real time.
-- **The same test always interleaves the same way.** Tasks that wake at
-  the same virtual moment wake in a fixed order, and every world
-  dependency is a test one, so a concurrent test can't be flaky.
+  for an hour takes no real time, and tasks that sleep wake in the order
+  of their deadlines.
+- **The same test always interleaves the same way.** The scheduler
+  chooses which task runs next from a tape seeded by the test's seed,
+  and every world dependency is a test one, so a concurrent test can't
+  be flaky.
 - **`ren test --seeds 1000`** runs each test under 1,000 different
-  schedules. The scheduler changes the order only at dependency calls,
-  the only places the order can matter. A failing seed is printed, and
-  `ren test --seed 7412` replays it exactly.
+  schedules. The scheduler changes the order only at dependency calls
+  on shared state and where tasks wait, the only places the order can
+  matter. A failing seed is printed, and `ren test --seed 7412` replays
+  it exactly.
+
+```
+$ ren test --seeds 200
+lost_update.ren
+  ✗ two deposits both land, with seed 3815
+...
+  seed 3815 · rerun: ren test --only "two deposits" --seed 3815
+```
 
 This brings forward the first part of the simulation scheduler from stage
 15. The rest of it (simulated networks and disks that fail, crashes, and
@@ -298,47 +375,55 @@ exploring every interleaving) stays there.
 ## Five programs
 
 Each one tested a different part of the design. The rules above are what
-they needed.
+they needed. Each is in [bench/11a/tasks](bench/11a/tasks) until its step of stage 11a lands it, then in `examples/`, with its tests.
 
 ### A server that shuts down gracefully
 
 ```ren
 pub fn serve(addr: Addr) ! NetError uses Net, Console, Async =
   let listener = try Net.listen(addr)
-  Async.group(max: 10_000, drain: Duration.seconds(10)) fn(g) =>
-    loop
-      let conn = try listener.accept()
-      g.spawn fn() =>
-        match attempt handle(conn)
-          Ok(_) => ()
-          fail e => Console.error("request failed: " + show(e))
-
-fn main() ! NetError uses Net, Console, Async =
-  serve(Addr.parse("0.0.0.0:8080"))
+  try Async.scope(max: 10_000) fn(s) =>
+    var open = true
+    while open
+      match try Net.accept_until(listener, Signal.term)
+        Some(conn) =>
+          s.spawn fn() =>
+            match attempt handle(conn)
+              Ok(_) => ()
+              Err(e) => Console.error("request failed: ".concat(show(e)))
+        None => open = false
 ```
 
-- **Plain shutdown needs no code.** `SIGTERM` cancels `main`.
-- **`drain:` makes it graceful.** A cancelled group first stops its own
-  body (the accept loop), then lets its tasks run for up to `drain`, and
-  only then cancels them.
+- **Shutting down is the loop's end.** `accept_until` gives `None` once
+  `SIGTERM` comes, the loop ends, and the scope waits for the
+  connections in flight. They have the cleanup deadline to finish, and
+  are cancelled after it.
+- **One connection's failure is its own.** A spawned task can't fail,
+  so `handle`'s errors are handled in the task.
 
 ```ren
+// `here()` is the address the test's server listens on, and
+// `run_server()` runs `serve` there, handling what it fails with
 test "shutdown lets a request in flight finish" =
-  with sim_net([slow_request(Duration.seconds(3))]) in
-    let r = attempt Async.timeout(Duration.seconds(1)) fn() => serve(addr)
-    assert r == fail Timeout
-    assert SimNet.responses_sent() == 1
-    assert TestClock.elapsed() == Duration.seconds(3)
+  with sim.net() in
+    try Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      let c = try SimNet.connect(here())
+      try Net.write(c, "slow".bytes())
+      Clock.sleep(Duration.seconds(1))
+      SimNet.signal(Signal.term)
+      assert try Net.read(c, 100) == "done".bytes()
+      assert Clock.now() == Time.epoch + Duration.seconds(3)
 ```
 
 ### A crawler
 
 ```ren
-fn crawl(url: Url, depth: Int) -> Array<Page> uses Http, Seen, Async =
+fn crawl(url: Str, depth: Int) -> Array<Page> uses Web, Seen, Async =
   if depth == 0 || not Seen.claim(url) then []
   else
-    match attempt Http.get(url)
-      fail _ => []
+    match attempt Web.get(url)
+      Err(_) => []
       Ok(page) =>
         let below = Async.map(page.links) fn(link) => crawl(link, depth - 1)
         var pages = [page]
@@ -346,33 +431,34 @@ fn crawl(url: Url, depth: Int) -> Array<Page> uses Http, Seen, Async =
           &pages.push(p)
         pages
 
-fn main() uses Http, Console, Async =
-  with seen_set(), Async.limit(16) over Http in
-    let pages = crawl(Url.parse("https://example.com"), 3)
-    print(pages.len())
+fn crawl_site(root: Str) -> Int uses Web, Async =
+  with seen_set(), sync.semaphore(16), sync.limit() over Web in
+    crawl(root, 3).len()
 ```
 
 - `Seen.claim` is atomic without a lock (rule 3).
 - Skipping pages that fail is `attempt`, not a separate error policy.
 - The map inside a map is bounded where it matters: 16 requests at once,
-  however deep the crawl goes.
+  however deep the crawl goes. `limit` is an `over any` handler with no
+  state, so it takes no lock, over a semaphore whose `acquire` waits in
+  `Async.until`.
 
 ### The `just`, running independent recipes at once
 
 ```ren
 fn run_all(plan: Array<Array<Recipe>>) ! ProcError | Failed uses Proc, Console, Async =
   for level in plan                    // each level depends only on earlier ones
-    Async.each(level, max: Os.cpus()) fn(r) => try run(r)
+    try Async.each(level, max: 8) fn(r) => try run(r)
 ```
 
 ```ren
 test "a failing recipe stops the others" =
-  with test_proc(["cc": exits(1, after: Duration.seconds(2)),
-                  "fmt": exits(0, after: Duration.seconds(10))]) in
-    let r = attempt run_all([[cc, fmt]])
-    assert r == fail Failed("cc")
-    assert TestProc.killed() == ["fmt"]
-    assert TestClock.elapsed() == Duration.seconds(2)
+  with sim.proc([Run { command: cc, code: 1, takes: Duration.seconds(2) },
+                 Run { command: fmt, code: 0, takes: Duration.seconds(10) }]) in
+    let r = attempt run_all([[recipe("cc"), recipe("fmt")]])
+    assert r == Err(Failed("cc"))
+    assert SimProc.killed() == [fmt]
+    assert Clock.now() == Time.epoch + Duration.seconds(2)
 ```
 
 Virtual time lets the test check when the cancellation happened, not just
@@ -382,8 +468,8 @@ that it did.
 
 ```ren
 fn transfer(t: Transfer) ! DbDown | Short | Timeout uses Sql, Async =
-  Async.timeout(Duration.seconds(2)) fn() =>
-    with transaction() over Sql in
+  try Async.timeout(Duration.seconds(2)) fn() =>
+    try with transaction() over Sql in
       try debit(t.from, t.amount)
       try credit(t.to, t.amount)
 ```
@@ -393,13 +479,15 @@ fn transfer(t: Transfer) ! DbDown | Short | Timeout uses Sql, Async =
   Timeout`, and nothing moved.
 - **A timeout during `commit`:** the commit is in `finally`, so it
   finishes. The timeout waits for it and reports the transfer.
+- **`try with`:** the transaction's setup, `begin`, and its commit can
+  fail, so its `with` is marked as any call that can fail is.
 
 ```ren
 test "a timeout during commit still reports the commit" =
   with mem_sql(commit_takes: Duration.seconds(3)) in
     let r = attempt transfer(t)
     assert r == Ok(())
-    assert MemSql.balance(t.to) == t.amount
+    assert try balance(t.to) == t.amount
 ```
 
 A request that reached the database but whose answer was lost is a
@@ -409,62 +497,60 @@ idempotency key, the way TigerBeetle's transfers carry ids.
 ### Prices, refreshed in the background
 
 ```ren
-pub handler refreshing(every: Duration) over Prices uses Clock, Async =
-  var table = try next.all()
-  task =>
-    loop
-      Clock.sleep(every)
-      table = try next.all()
+pub dep Prices =
+  get: fn(item: Str) -> Option<Int>
+  refresh: fn() ! PricesDown
+
+pub handler refreshing() for Prices ! PricesDown uses Supplier =
+  var table = try Supplier.all()
   get(item) => table.get(item)
+  refresh() => table = try Supplier.all()
+
+fn shop() ! PricesDown uses Supplier, Clock, Async =
+  Async.scope fn(s) =>
+    try with refreshing() in
+      s.spawn fn() =>
+        while true
+          Clock.sleep(Duration.minutes(1))
+          match attempt Prices.refresh()
+            Ok(_) => ()
+            Err(_) => ()       // keep the table we have
+      serve_customers()
 ```
 
-```ren
-test "a failed refresh stops the work" =
-  with refreshing(Duration.minutes(1)) over flaky_prices(fail_after: 1) in
-    let r = attempt { Clock.sleep(Duration.minutes(5)); Prices.get("tea") }
-    assert r == fail PricesDown
-```
-
-`get` never sees a half-updated table: the swap has no dependency call in
-it. A refresh that fails stops the program's work, because a cache that
-can't refresh is serving data no one checked. Keeping the stale table
-instead is `match attempt next.all()`.
+`get` never sees a half-updated table: `refresh` holds the instance
+while it asks the supplier and swaps the table in. The refresher is a
+task beside the `with`, so it stops when the shop's work is done. A
+refresh that fails keeps the stale table here; one that should stop the
+shop would make the failure the body's, say through an operation the
+body waits on.
 
 ## How it runs
 
-- **One loop.** Every task is a fiber on one thread. That's Effect's
-  model, and Node's, and what TigerBeetle does. It's what makes rule 3
-  free and replay cheap: the journal records the order completions
-  arrived, and nothing else is needed.
-- **Preemption.** A long pure computation is paused at loop back-edges so
-  it can't starve the other tasks. Effect's runtime does the same, yielding
-  every 2,048 operations. If a task is paused partway through a handler
-  operation, the handler stays busy until it resumes, so rule 3 holds.
-  The task isn't waiting on anything but CPU time, so this can't
-  deadlock. Pure code can't tell when it was paused, so programs can't
-  tell either. It costs a check at each loop back-edge, about 1–2% in
-  tight loops, as in Go.
-- **`par_map` on every core.** Its pure function runs on worker threads.
-  A value is marked as shared across threads when it's sent to one, and
-  only marked values pay for atomic reference counts. Lean 4 does this.
-- **A loop per core, later.** For the [2× bar](vision.md), servers will
-  run a loop per core, each with its own ring and sockets. A handler
-  lives on the loop that installed it, and a call to it from another core
-  is a message to that loop. A dependency call is already a point where
-  the task waits, so no program changes, and each loop replays from its
-  own journal. That's Seastar's model.
-- **A C call runs on a worker thread.** An `extern` function is assumed to
-  block, the way a C library doing synchronous I/O does, so it runs on a
-  worker and the loop carries on. `extern ... nonblocking` marks the fast
-  ones, like `crc32`, which run inline. Go does this for cgo calls, and
-  Loom's pinned virtual threads show what happens without it.
+- **One scheduler a run, and the runtime is its policy.** Every task is
+  a fiber. `single` runs one thread in real time, first come first
+  served; `sim` runs virtual time, choosing from a seeded tape;
+  `work_stealing` and `per_core` come with many cores (stage 11b). The
+  rules don't change with the runtime, only the cost, so code runs
+  unchanged on any.
+- **No preemption.** A task runs until it waits. A long computation
+  holds its thread; on many cores the others carry on.
 - **Errors and panics show the task path.** In Rust, JavaScript and
   Python, a stack trace from inside a task ends at the scheduler. Ren
-  knows the task tree, so a failure shows how it was reached:
-  `main → serve → group task 4812 → handle → Users.get`. `--trace` and
-  the journal use the same path.
-- **In the interpreter,** fibers use OCaml 5's effect handlers, through Eio
-  as [runtime-io.md](runtime-io.md#the-primitive-layer) planned.
+  knows the task tree, so a failure says which task it was in:
+  `main/serve:4812/handle:0`, the label of each spawn site and its
+  ordinal. `--trace` and the journal use the same path, so a journal
+  survives edits that move lines.
+- **The journal names the task of each call,** and records each poll
+  that brought completions, so a run on `single` replays exactly. A
+  journal as a test follows its recorded order while it can, then the
+  seeded tape takes over ([handlers.md](handlers.md#the-journal)).
+- **Many cores, later.** Values a task shares are marked shared and
+  counted atomically from then on; data for every core is built in an
+  arena; reads that take no lock are `snapshot`
+  ([foundations.md](foundations.md#10-many-cores)).
+- **In the interpreter,** fibers are OCaml 5's effect continuations, and
+  the scheduler is the interpreter's own.
 
 ## Effect, translated
 
@@ -473,54 +559,58 @@ instead is `match attempt next.all()`.
 | `Effect.forEach(xs, f, { concurrency: 64 })` | `Async.map(xs) fn(x) => ...` |
 | `Effect.forEach(..., { discard: true })` | `Async.each` |
 | `Effect.all([a, b], { concurrency: 2 })` | `Async.both` |
+| `Effect.race` | `Async.race`, whose branches can't fail |
 | `Effect.timeout` | `Async.timeout` |
-| `Effect.forkScoped`, `FiberSet` | `Async.group` |
-| `Effect.makeSemaphore`, `withPermits` | `Async.limit(n) over Dep` |
+| `Effect.forkScoped`, `FiberSet` | `Async.scope` and `s.spawn` |
+| `Effect.makeSemaphore`, `withPermits` | `sync.semaphore(n)`, `sync.limit() over Dep` |
+| `Queue.bounded` | `sync.channel(n)` |
 | interruption, `onInterrupt`, `ensuring`, `acquireRelease` | `finally`, which sees `Err(Cancelled)` |
-| `Layer.scoped` with `forkScoped` | a handler's `task` |
+| `Layer.scoped` with `forkScoped` | a task spawned beside the `with` |
 | `Ref`, `SynchronizedRef` | handler state |
 | `Layer`, `provide` | `with`, `over` |
 | `TestClock` | virtual time in every test |
 
 Left out on purpose:
 
-- **Fibers as values** (`fork`, `Fiber.join`). A task is never a value,
-  for structured concurrency and the no-cycles invariant. `group` covers
-  what they're used for.
+- **Fibers as values** (`fork`, `Fiber.join`). A task's handle is a
+  block: it's used inside its scope and never kept, for structured
+  concurrency and the no-cycles invariant.
 - **Daemon fibers** (`forkDaemon`), which aren't structured.
 - **Several variants of each operation.** Ren keeps one of each.
 
 The rest is borrowed from elsewhere:
 
 - **Trio:** structured concurrency's nurseries, and shielded cleanup.
-- **Kotlin:** `SupervisorJob`, which is why group tasks are independent.
-  Its swallowed `CancellationException` is the bug Ren rules out.
+- **Kotlin:** `SupervisorJob`, which is why a scope's tasks are
+  independent. Its swallowed `CancellationException` is the bug Ren
+  rules out.
 - **Java's `StructuredTaskScope`:** failure cancels the rest.
 - **Go's `errgroup.SetLimit`:** bounded fan-out.
 - **Rust's cancellation-safety problems:** the reason a finished call is
   never thrown away.
-- **Seastar:** the loop per core.
-- **Lean 4:** marking values shared across threads.
+- **Swift's actors,** as what not to do: letting other operations in at
+  every call made actor code read like JavaScript `async` code, with bugs
+  the source doesn't show.
 - **Zig's `std.Io`:** I/O chosen by `main` and passed down, which `uses`
-  and `with` already do. Also the line between code that may run
-  concurrently and code that must.
+  and `with` already do.
 - **Koka:** async as a library on effect handlers, and effect
   polymorphism. `uses` is a color, but a polymorphic one, so `map` takes
-  any lambda and libraries never split into sync and async.
+  any block and libraries never split into sync and async.
 - **Eio:** direct style on OCaml 5's effects, with switches as scopes.
   Its catchable `Cancelled` is another bug Ren rules out.
+- **FoundationDB and TigerBeetle:** deterministic simulation.
 
 ## Pitfalls elsewhere
 
 | Language | Pitfall | Ren |
 |---|---|---|
 | JavaScript | colored functions; a floating promise; unhandled rejections; `AbortController` passed by hand; `Promise.all` unbounded | no colors; tasks aren't values; cancellation is automatic; `map` is bounded |
-| Python | sync and async worlds; `create_task` collected if not held; `CancelledError` swallowed; a blocking call freezes the loop | no colors; tasks aren't values; cancellation can't be caught; C calls run on workers |
+| Python | sync and async worlds; `create_task` collected if not held; `CancelledError` swallowed; a blocking call freezes the loop | no colors; tasks aren't values; cancellation can't be caught |
 | Rust | colored; `Pin`; `'static` on spawn; cancellation safety; no async drop; competing runtimes | structured, so no `'static`; every call cancel-safe; `finally` makes calls; one runtime, and it's a handler |
-| Go | goroutine leaks; `ctx` passed by hand; channel deadlocks; data races | structured; deadlines carry down; no channels yet; no data races |
+| Go | goroutine leaks; `ctx` passed by hand; channel deadlocks; data races | structured; deadlines carry down; a deadlock is a panic that names each waiting task; no data races |
 | Kotlin | `CancellationException` swallowed; `GlobalScope` escapes | cancellation can't be caught; nothing escapes |
-| Swift | actor reentrancy; the `Sendable` migration | the reentrancy warning; nothing like `Sendable` to write |
-| Java | virtual threads pinned in `synchronized`; `ThreadLocal`'s cost | C calls run on workers; `with` is a scoped value |
+| Swift | actor reentrancy; the `Sendable` migration | operations don't interleave; nothing like `Sendable` to write |
+| Java | virtual threads pinned in `synchronized`; `ThreadLocal`'s cost | no locks to hold; `with` is a scoped value |
 | C# | `ConfigureAwait`; sync-over-async deadlocks | no colors |
 | Erlang | unbounded mailboxes | everything has a limit |
 
@@ -528,16 +618,29 @@ Almost all of these come from five causes: colored functions, tasks as
 values, cancellation as an exception that can be caught, queues with no
 limit, and cleanup that can't wait. Ren has none of them.
 
-## What changes elsewhere
+## What changed
 
-- **The README:** `async.par_map` becomes `Async.map`, and
-  `async.timeout` becomes `Async.timeout`.
-- **[handlers.md](handlers.md):**
-  - `finally` also runs when the body is cancelled, and sees
-    `Err(Cancelled)`. It runs shielded, under a cleanup deadline.
-  - A `with`'s errors include those of its handlers' tasks.
-- **[runtime-io.md](runtime-io.md):** "Fibers and `Async` on the ring"
-  now means this design.
+This document was first written before foundations.md, which changed it
+(foundations.md, "What it reverses"):
+
+- **`Async.group(max:, drain:)` is `Async.scope(max:)`,** and a drain is
+  the cleanup deadline after `accept_until` stops.
+- **A handler has no task of its own.** `task =>` in a handler is gone;
+  background work is a task spawned beside the `with`, into a scope
+  outside it, which the `with` cancels when its body ends.
+- **Operations don't interleave.** Another task's operation could once
+  run on a handler at each dependency call, and a warning caught state
+  read before a call and written after it. Now an operation keeps its
+  instance until it returns or waits in `Async.until`, so that warning,
+  and the README's `cached` race it caught, are gone.
+- **`Async.limit(n) over Dep` is `sync.limit()` over a
+  `sync.semaphore(n)`,** in Ren.
+- **No `par_map`, and no preemption.**
+- **`race` exists, and its branches can't fail.** `retry` takes the
+  errors it retries, `retry(n, on: DbDown)`.
+- **A `with` whose setup or `finally` can fail is `try with`.**
+- **The runtime is a handler,** `with Async.single()` or `with
+  sim.scheduler(seed)`.
 
 ## Done when
 
@@ -547,29 +650,29 @@ limit, and cleanup that can't wait. Ren has none of them.
   milliseconds.
 - The `just` runs independent recipes at once, kills the rest when one
   fails, and records and replays byte for byte with `ren replay`.
-- Each of the four errors above is a one-line refusal test, and the
-  reentrancy warning catches the README's `cached` race.
+- Each error above is a one-line refusal test.
+- `ren test --sim --seeds` finds a lost update between two operations
+  and replays it by seed, and the README's `cached` passes under every
+  seed.
 - A failure inside a task shows its task path.
 
 ## Later
 
-- **Streams for `each`.** Once lazy sequences exist ([operators.md](operators.md#deferred)),
+- **Streams for `each`.** Once generators exist (stage 11c),
   `Async.each(listener.connections(), max: 10_000)` pulls the next item
-  only when a slot frees. That covers most servers, and leaves `group`
-  for starting different kinds of tasks.
-- **`race`,** for hedged reads, when a real program needs it.
-- **Channels:** bounded, with a send that waits when full.
+  only when a slot frees.
 - **Restart policies,** like Erlang's supervisors. Until then, it's
   `attempt` or `retry` inside a task.
-- **Per-core handlers** (`with per_core(cached(ttl)) over ...`), if a
-  shared handler becomes a bottleneck across loops.
+- **Many cores** (stage 11b): `work_stealing`, `per_core` and `pinned`,
+  arenas, `snapshot` and lock-free handlers.
 - **The rest of the simulation scheduler** (after 11a's `sim`): failing
   networks and disks, crashes, and checking every interleaving.
 
 ## Open questions
 
-- **How long is the cleanup deadline,** and can a `with` set its own?
+- **Can a `with` set its own cleanup deadline?** It's 5 seconds, fixed,
+  for now.
 - **What's `map`'s default limit?** 64 is a starting point, not a
   measurement.
-- **Can the compiler tell a task loop that only calls pure code,**
-  beyond the simple case of a `loop` with no dependency call?
+- **Whether `both` gets a "runs once" marker,** so its blocks can each
+  change a variable of their own.

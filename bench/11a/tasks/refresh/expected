@@ -1,0 +1,8 @@
+main.ren
+  ✓ the table is refreshed every minute
+  ✓ a refresh that fails keeps the table
+  ✓ the refresher stops with the shop
+  ✓ a supplier that's down at the start stops the shop
+
+4 passed
+exit 0

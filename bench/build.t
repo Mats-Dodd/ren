@@ -1605,3 +1605,25 @@ names a dependency the program has.
   [2]
   $ (cd 10d && ren build --release --explain-dispatch Nope dispatch_mix.ren -o ./dispatch.bin)
   Nope: no dependency of this name is dispatched over in the release build
+
+Stage 11a's sequential programs (compiler.md, "Stage 11a", "The
+tests"), in 11a/, checked as 10d's are: each `.expected` holds what
+`ren run` prints, then how it exits, then the first line it writes to
+stderr. The step that lands one changes its line here to say so, and
+adds it to the loops above that check its native builds against `ren
+run`. `trywith` runs already, since `try` already takes a `with`; step
+1 refuses a plain `with` that can fail, and adds it to those loops.
+
+  $ for f in trywith alone alone_panic limit spawns; do spec 11a/$f.ren; done
+  11a/trywith.ren: as specified
+  11a/alone.ren: not yet
+  11a/alone_panic.ren: not yet
+  11a/limit.ren: not yet
+  11a/spawns.ren: not yet
+
+A program that spawns runs in `ren run`, and `ren build` refuses it
+with an error that says tasks aren't native yet, and a help (step 2):
+
+  $ (cd 11a && ren build spawns.ren -o ./spawns.bin 2>&1 | head -n 2)
+  error: expected the end of the line, found `fn`
+    ┌─ spawns.ren:7:15

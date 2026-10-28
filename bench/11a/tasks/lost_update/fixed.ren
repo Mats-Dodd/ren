@@ -1,0 +1,19 @@
+// main.ren's account, with the read and the write in one operation: an
+// operation keeps its instance until it returns, so no other task's
+// deposit can come in between, under any schedule.
+
+pub dep Ledger =
+  balance: fn() -> Int
+  add: fn(n: Int)
+
+pub handler ledger() for Ledger =
+  var b = 0
+  balance() => b
+  add(n) => b = b + n
+
+test "two adds both land" =
+  with ledger() in
+    Async.scope fn(s) =>
+      s.spawn fn() => Ledger.add(10)
+      s.spawn fn() => Ledger.add(10)
+    assert Ledger.balance() == 20

@@ -1,0 +1,46 @@
+// The README's `cached` (README, "Handlers"): its `save` removes the
+// cached user, then saves through the `Users` under it. Before 11a,
+// another task's `get` could run during `next.save`, miss, read the old
+// user and put it back in the cache, and a warning caught the pattern.
+// Now `save` keeps the instance until it returns, so no `get` can run
+// in between, under any schedule.
+
+pub type User = { id: Int, name: Str }
+
+pub dep Users =
+  get: fn(id: Int) -> Option<User>
+  save: fn(u: User)
+
+// users kept in memory; a save takes a moment, during which any other
+// task can run
+pub handler mem_users() for Users uses Clock =
+  var users: Map<Int, User> = Map.of([])
+  get(id) => users.get(id)
+  save(u) =>
+    Clock.sleep(Duration.ms(5))
+    &users.set(u.id, u)
+
+pub handler cached() over Users =
+  var cache: Map<Int, User> = Map.of([])
+  get(id) =>
+    match cache.get(id)
+      Some(u) => Some(u)
+      None =>
+        let found = next.get(id)
+        match found
+          Some(u) => &cache.set(id, u)
+          None => ()
+        found
+  save(u) =>
+    &cache.remove(u.id)
+    next.save(u)
+
+test "a save is never undone by a get" =
+  with cached() over mem_users() in
+    Users.save(User { id: 1, name: "old" })
+    Async.scope fn(s) =>
+      s.spawn fn() => Users.save(User { id: 1, name: "new" })
+      s.spawn fn() =>
+        let _ = Users.get(1)
+        ()
+    assert Users.get(1) == Some(User { id: 1, name: "new" })

@@ -1,0 +1,8 @@
+main.ren
+  ✓ a transfer in time moves the money
+  ✓ a timeout during a query rolls back, and nothing moved
+  ✓ a timeout during the commit still reports the transfer
+  ✓ a transfer that leaves an account short changes nothing
+
+4 passed
+exit 0

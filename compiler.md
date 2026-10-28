@@ -3881,6 +3881,1012 @@ revisit if a step finds it wrong:
 - **A function type's `inout` parameter is written `&T`,** replacing
   `inout T` there, as the brief's `fn(&Array<T>, &Array<T>) -> R` says.
 
+## Stage 11a
+
+Tasks (foundations.md, decisions 2 to 11, and Staging, item 4): rules B
+to D; structured tasks with `Async.scope(max:)`, `spawn` and its
+handle; `until`, `tick`, `yield`, `timeout`, `race`, `isolate`, `map`,
+`each` and `both`; handler operations that don't interleave; `try
+with`; the runtime as a handler, `Async.single()` and
+`sim.scheduler(seed)`; the tape, poll points, task paths and journal
+version 2; the standard library's channel, semaphore, `Batcher`,
+`keyed` and `limit`; and `Net`, a thin TCP layer, with `sim.net`.
+Tasks run in the interpreter, `ren run` and `ren test`, on OCaml 5's
+effects; the sequential parts build natively too, and agree with `ren
+run`. Ten steps, each green on its own, as 10c's and 10d's were:
+
+0. **This specification,** and its tests (The tests, below), with
+   async.md rewritten to match foundations.md and the README's stale
+   race passage fixed.
+1. **Rules B to D, `try with`, and the two holes in the spec,** with
+   what the checker needs of the surface: `Async`'s declarations,
+   parameters with defaults, a block given without parentheses, and
+   `concurrent` and `spawned` parameters.
+2. **`Async.scope(max:)`, `spawn` and its handle, `s.replace(key)`,**
+   cancellation at dependency calls, the cleanup deadline, siblings
+   cancelled by a failure, and task paths in errors and panics.
+3. **The rest of `Async`:** `until`, `tick`, `yield`, `timeout`, `race`,
+   `isolate`, `map`, `each` and `both`.
+4. **Operations that don't interleave.**
+5. **`single` and `sim` as handlers,** virtual time, `ren test --seeds`
+   and `--seed`.
+6. **Journal version 2.**
+7. **`Net` and `sim.net`,** and the server that shuts down gracefully.
+8. **The standard library,** then the five programs, the milestone, and
+   the `just` running recipes at once.
+9. **A review** of the whole stage: soundness, the spec, the docs and
+   tooling.
+
+Each step takes its feature through the whole pipeline: lexer and
+parser, Resolve, inference, Core and Core Lint, the interpreter, Mem IR
+and the C it emits where the feature is sequential, the tree-sitter
+grammar and its corpus, the Zed queries, the error messages with their
+help, and the documents that describe it (async.md, handlers.md,
+deps.md, testing.md, runtime-io.md, the README). What follows settles
+what each step builds; a step that finds something here unsound or
+unworkable says so instead of building something else, and records
+what it chose in "Where 11a may differ from foundations.md", below.
+
+### The tests
+
+**test/test_tasks.ml is the specification,** as test_descriptions.ml
+was 10d's, with the same `until "sN"` (test/helpers.ml): a test still to
+land holds its target, `~want` for a program that runs or `~says` for
+the lines an error or a panic must hold, and its `[%expect]` holds
+today's output after `(until sN)`. When the program prints its target
+the test fails, saying the step has landed, and **the step turns it
+on**: written plainly, `run src` or `check_error src`, its `[%expect]`
+the target, the whole message for a `says`. Each error message below is
+one such refusal test, a headline and its help, but two: the native
+build's is bench/build.t's, and a version 1 journal's is
+bench/tasks.t's. A step leaves no
+`until` of its own number behind.
+
+Programs that run under `ren run` are written against `single`'s
+order (Scheduling, below), which is fixed, so their output is too.
+Programs that run as tests (`test`, in helpers.ml) are written so that
+what they assert holds under every schedule, since `ren test` runs
+them under `sim` with a seed.
+
+**bench/11a/tasks/ holds the five programs of async.md, the `just`'s
+concurrent part, and the milestone,** one folder each, each a program
+with its tests and an `expected` file of what `ren test` prints there
+(with `REN_NO_TIMINGS=1`) and how it exits. bench/tasks.t runs `ren
+test` in each through `spec`, which prints `as specified` or `not yet`
+(as bench/build.t's does for bench/10d). **The step that lands one
+moves its folder to examples/** (`git mv bench/11a/tasks/server
+examples/server`), where THE CHECKS run `ren test` in every folder from
+then on, changes its line in tasks.t to the new path and `as
+specified`, and adds it to tasks.t's loop that runs `ren test --seeds
+1000` there. They wait outside examples/ because THE CHECKS run `ren
+test` in every folder under it, and `ren test` in a folder reads the
+folders under it too, so a program that doesn't parse yet would fail
+them; `lost_update` and `journal` stay in bench/11a/tasks, since their
+tests are meant to fail.
+
+| folder | what | lands in |
+|---|---|---|
+| `server` | the server that shuts down gracefully, with `sim.net` | 7 |
+| `crawler` | the crawler, its `Seen` set and `limit` over its `Web` | 8 |
+| `just` | `run_all`, independent recipes at once, a failure killing the rest | 8 (then folded into examples/just) |
+| `transfer` | a transfer under a timeout, commit in `finally` | 3 |
+| `refresh` | prices refreshed by a task beside the `with` | 8 |
+| `lost_update` | the milestone: a lost update between two operations, found by `--seeds` and replayed by `--seed`; and the README's `cached`, which can't race any more | 8 |
+| `journal` | a version 1 journal, recorded before 11a, which `ren replay` refuses with a help | 6 |
+
+`lost_update`'s first test fails on purpose under some seeds, so it has
+no `expected`: bench/tasks.t's `milestone` runs `ren test --sim --seeds 200`
+there, which has to fail it and print a seed; runs `--seed` with that
+seed, which has to fail it again with the same `left:` and `right:`;
+and runs `fixed.ren`'s test, the same account with one operation,
+`add`, and `cached.ren`'s, the README's `cached`, under `--seeds 1000`,
+which have to pass. It prints `the milestone holds` once all of that
+is so.
+
+**bench/11a/ holds the sequential programs** that build natively, each
+with a `.expected` as bench/10d's (what `ren run` prints, `exit N`, the
+first line of stderr), and bench/build.t's last section runs them
+through `spec`. The step that lands one says `as specified` and adds it
+to `same`, `release` and `tcc_same`:
+
+| program | what | lands in |
+|---|---|---|
+| `trywith` | `try with`, a transaction's setup and commit failing; it runs already, since `try` already takes a `with`, so step 1 refuses a plain one and adds it to the native loops | 1 |
+| `alone` | `Async.until` that holds, `yield` and `tick`, with no other task | 3 |
+| `alone_panic` | `Async.until` that doesn't hold, with no other task: the deadlock panic | 3 |
+| `limit` | `sync.semaphore` and `sync.limit()` over a dependency, with one task | 8 |
+| `spawns` | a program that spawns: `ren run` runs it in `single`'s order; `ren build` refuses it (its own line in build.t) | 2 |
+
+**Existing tests that change,** each by the step named:
+
+- step 1: test_deps.ml's and test_infer.ml's lists of "the
+  dependencies in scope", which gain nothing but lose `Async` from the
+  undeclared ones (it's declared now); examples/ledger's `with
+  sql.transaction() over Sql in`, which becomes `try with`, with its
+  README and handlers.md's example; any test whose `with` can fail,
+  which gains `try`.
+- step 2: every `finally` whose `match r` names each error, which gains
+  a `Cancelled` arm or a `_` (its `r` can be `Err(Cancelled)` now).
+- step 5: deps.md's table of test defaults (the test `Clock` is
+  `sim.clock()`); testing.md's `--seed`.
+- step 6: examples/just/tests/build.journal, re-recorded as version 2;
+  every journal test's expected journal text (test_journal.ml,
+  examples/journal.t, examples/just.t), which gains the task column.
+- step 7: test_blocks.ml's four `dep Net`s, which become `dep Web` (a
+  program can't declare the prelude's `Net`), and test_deps.ml's
+  "nothing can implement `Net` yet" errors, whose help changes.
+
+### The surface
+
+Everything 11a adds a program can name, as the prelude declares it.
+Step 1 declares it all, so the checker can check programs that use it
+(rules B to D are about these parameters); each intrinsic not built yet
+panics, `` `Async.scope` isn't built yet: stage 11a, step 2 ``, which
+its step removes. The functions are members of `Async`, written in the
+prelude in Ren over intrinsics, as `Fs.read_str` is over `Fs.read`:
+
+```ren
+pub dep Async =
+  // let every other task that can run, run first
+  yield: fn()
+  // return once every task that could run when it was called has run
+  // until it waits: the batching point
+  tick: fn()
+
+  // runs `body` with a scope its tasks are spawned into, and returns
+  // once they've all ended; `spawn` waits while `max` of them run
+  pub fn scope<T>(max: Int = 64, body: fn(s: Scope) -> T) -> T uses Async
+  // waits until `cond` holds: only in an operation, whose instance it
+  // lets go of meanwhile
+  pub fn until(cond: fn() -> Bool) uses Async
+  // `body`, or `Timeout` if it's still running after `d`
+  pub fn timeout<T>(d: Duration, body: fn() -> T) -> T ! Timeout uses Async
+  // whichever of `a` and `b` finishes first; the other is cancelled
+  pub fn race<T>(a: concurrent fn() -> T, b: concurrent fn() -> T) -> T uses Async
+  // `body`, or `Panicked` if it panicked
+  pub fn isolate<T>(body: fn() -> T) -> T ! Panicked(msg: Str) uses Async
+  // `f` of each element, `max` at once, the results in order
+  pub fn map<T, U>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T) -> U) -> Array<U> uses Async
+  // `f` of each element, `max` at once
+  pub fn each<T>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T)) uses Async
+  // `a` and `b` at once
+  pub fn both<A, B>(a: concurrent fn() -> A, b: concurrent fn() -> B) -> (A, B) uses Async
+  // the runtime on one thread, in real time, with real I/O
+  pub fn single() -> Async = single_runtime()
+
+// what `Async.scope` gives its body (rule D: it's passed and called,
+// never kept)
+pub type Scope = builtin
+  // starts `body` as a task of this scope, waiting first while `max`
+  // of its tasks run
+  fn spawn(self, body: spawned fn()) uses Async
+  // the same, giving the task's handle, to join it or cancel it
+  fn start<T>(self, body: spawned fn() -> T) -> Task<T> uses Async
+  // `spawn`, after cancelling the task this scope started under `key`,
+  // if it's still running, and waiting for it to stop
+  fn replace<K has hash>(self, key: K, body: spawned fn()) uses Async
+
+// a task's handle (rule D, as `Scope`)
+pub type Task<T> = builtin
+  // waits for the task to end: what it gave, or `None` if it was
+  // cancelled first
+  fn join(self) -> Option<T> uses Async
+  // asks the task to stop, and returns at once: it stops at its next
+  // dependency call, or now, if it's waiting
+  fn cancel(self) uses Async
+```
+
+The blocks' errors and dependencies are transparent, as `retry`'s are:
+`scope`, `timeout`, `isolate`, `map`, `each` and `both` fail with what
+their blocks fail with, after cancelling the rest, and use what they
+use. Two are closed: a spawned block can't fail, and `race`'s branches
+can't; `until`'s condition can't fail and uses nothing (The checker,
+below). `Timeout` and `Panicked(msg: Str)` are tags like any other;
+`Cancelled` is the one a program can't fail with ("Cancellation",
+below).
+
+**Parameters with defaults** (step 1). A function's parameter may end
+in `= literal`, an `Int`, `Float`, `Bool` or `Str` literal, or a
+negative number: `max: Int = 64`. Those with defaults come after those
+without but before a trailing block parameter, and **a parameter with
+a default is given by name or left out**, so a call reads the same
+either way: `Async.map(xs) fn(x) => ...`, `Async.map(xs, max: 8) fn(x)
+=> ...`. Positional arguments fill the parameters without defaults, in order,
+and a trailing block the last. A call fills each one left out with its
+literal, in Lower;
+Core and the interpreter never see a default. A function used as a
+value, `let f = g`, has every parameter in its type, so a call through
+it gives them all. `on:` stays the one parameter of `Tags`. The
+interface keeps each default, so another module's call can leave it
+out. Errors:
+
+```
+error: `max` has a default, so it's given by name
+  help: write `max: 8`
+
+error: a parameter's default is a literal: a number, a `Bool` or a string
+  help: give it where it's called instead
+
+error: a parameter with a default comes after those without
+  help: move `max` after `xs`
+
+error: `scope` has no parameter named `limit`
+  help: its parameters given by name: `max`
+```
+
+**A block without parentheses** (step 1). A call whose arguments are
+one block may leave out its parentheses, `Async.scope fn(s) => ...` and
+`s.spawn fn() => handle(conn)`, as foundations.md writes them: in the
+grammar, `postfix := postfix lambda`, where the `fn` is on the same line
+as what it follows. Today that's "expected the end of the line, found
+`fn`", so nothing that parsed changes.
+
+**`concurrent` and `spawned`** (step 1) mark a block parameter's mode,
+written before its `fn`: `f: concurrent fn(T) -> U` may run on several
+tasks at once, and `body: spawned fn() -> T` runs as a task until its
+scope ends. They're contextual: a word there and nowhere else, so
+neither is reserved. A mode is part of the parameter, `Ty.param`'s new
+`block : Ty.block_mode` (`Ordinary | Concurrent | Spawned`), kept in
+schemes and interfaces and printed by `ren types`; it's written only on
+a parameter of a named function, an operation or a method, whose type
+is a function's, and anywhere else it's an error: "`concurrent` marks
+a block parameter of a function" with "help: remove it". Unification
+ignores modes; Excl reads them.
+
+**`Net`** (step 7), in the prelude:
+
+```ren
+pub type Addr = { host: Str, port: Int }
+// a socket listening, and a connection, as the runtime numbers them
+pub type Listener = opaque Int
+pub type Conn = opaque Int
+// a signal the program is sent
+pub type Signal = opaque Int
+  pub let term: Signal = 15
+  pub let interrupt: Signal = 2
+pub type NetError = ! Refused(addr: Addr) | InUse(addr: Addr) | Closed | NetFailed(reason: Str)
+
+pub dep Net =
+  listen: fn(addr: Addr) -> Listener ! NetError
+  accept: fn(l: Listener) -> Conn ! NetError
+  // a connection, or `None` once `stop` has been sent to this program
+  accept_until: fn(l: Listener, stop: Signal) -> Option<Conn> ! NetError
+  // up to `max` bytes, as soon as there are some; none once the other
+  // side has closed
+  read: fn(c: Conn, max: Int) -> Bytes ! NetError
+  write: fn(c: Conn, b: Bytes) ! NetError
+  close: fn(c: Conn)
+```
+
+No HTTP, DNS or TLS, and no network that fails: the rest of the
+simulator comes later. `Signal.term` is SIGTERM's number.
+
+**Two standard-library modules,** built into the compiler as the
+prelude is (lib/core/stdlib.ml, each a `source` in Ren), are found by
+`import sim` and `import sync`, never from a file: a program's own
+module named `sim` or `sync` is an error, "`sim` is the standard
+library's", as its own `dep Clock` is. They can call the prelude's
+runtime intrinsics, which other modules can't (Prelude's `caller`).
+
+- **`sim`** (steps 5 and 7): `sim.scheduler(seed: Int) -> Async`, the
+  deterministic runtime; `sim.clock() -> Clock & TestClock`, in the
+  scheduler's virtual time; `sim.net() -> Net & SimNet`, in memory,
+  whose `dep SimNet` has `connect: fn(addr: Addr) -> Conn ! NetError`,
+  a client's end, which waits while nothing has listened on `addr` yet
+  and is `Refused` once its listener has closed, and
+  `signal: fn(s: Signal)`, sent to the program; and `sim.proc(runs:
+  Array<Run>) -> Proc & TestProc & SimProc`, programs that take time,
+  with `type Run = { command: Command, code: Int, takes: Duration }`
+  (a command `runs` doesn't name exits with 0 at once, as `test_proc`'s
+  does) and `dep SimProc = killed: fn() -> Array<Command>`, the
+  commands cancelled while they ran.
+- **`sync`** (step 8), in Ren, each over `Async.until`:
+  - `dep Chan<T>` with `send: fn(x: T)`, which waits while it's full,
+    `recv: fn() -> Option<T>`, which waits while it's empty and open,
+    `None` once it's closed and empty, and `close: fn()`; `handler
+    channel<T>(cap: Int) for Chan<T>`;
+  - `dep Semaphore` with `acquire: fn()` and `release: fn()`; `handler
+    semaphore(n: Int) for Semaphore`;
+  - `limit()`, `over any` and `uses Semaphore`: each call takes a
+    permit, is forwarded, and gives it back, in a `finally`, so `with
+    sync.semaphore(16), sync.limit() over Web in` makes at most 16
+    calls to `Web` at once ("Where 11a may differ", below, says why
+    it's two items);
+  - `dep Batcher<K, V>` with `get: fn(k: K) -> V` and `flush: fn()`;
+    `handler batcher<K has hash, V>() for Batcher<K, V> uses Fetch<K,
+    V>`, over `dep Fetch<K, V> = fetch: fn(keys: Array<K>) -> Map<K,
+    V>`: `get` adds its key and waits until a `flush` has fetched it,
+    and a task spawned beside the `with` calls `Batcher.flush()` after
+    each `Async.tick()`;
+  - `keyed<T>(n: Int, h: T) -> T`, `n` instances of the handler `h`
+    describes, each operation sent to one by its first argument's key
+    (its `key` member, or the value itself), one with no parameters to
+    every instance in turn (built in, below).
+
+### The checker (step 1)
+
+**Rule B: a block parameter's mode is part of its type.** Excl (excl.ml)
+already knows, at each call, which arguments are blocks; it now reads
+each parameter's mode from the callee's scheme (Ordinary unless
+written). Passing a block parameter `f` of the function being checked:
+
+- to a `concurrent` parameter needs `f` to be `concurrent`, and to a
+  `spawned` one needs it to be `spawned`: a spawned block runs until
+  its scope ends and a concurrent one only during the call, so neither
+  stands for the other;
+- to an ordinary parameter needs nothing: an ordinary parameter only
+  calls it, during the call.
+
+A `pub` function's modes are as written. A private function's are
+inferred by Excl, once per module before it checks bodies: each
+private function's block parameter takes the strongest mode of the
+parameters it's passed to, `Spawned` over `Concurrent` over
+`Ordinary`, to a fixpoint over the module's private functions (modes
+only go up, and there are three, so it ends). `ren types` prints the
+inferred ones. Errors:
+
+```
+error: `f` runs on several tasks at once in `Async.map`, but `fan_out` doesn't say it can
+  = a block that runs on several tasks at once can only read what it captures
+  help: mark the parameter: `f: concurrent fn(Int) -> Int`
+
+error: `body` is spawned as a task here, but `start` doesn't say it can be
+  = a spawned block runs until its scope ends, and can only read what it captures
+  help: mark the parameter: `body: spawned fn()`
+
+error: `f` is concurrent, so it can't be spawned
+  help: mark the parameter `spawned` instead
+```
+
+**Accesses** (foundations.md, decision 2's table), in Excl:
+
+- a block passed to a `concurrent` parameter reads each place it
+  captures, for the call; a write in it is an error;
+- a block passed to a `spawned` parameter reads each place it captures
+  by reference (rule C) **until the `Async.scope` call that made the
+  scope ends**: a later write in the scope's body, after the spawn, is
+  decision 2's error; places it captures by copy aren't accessed after
+  the spawn at all;
+- blocks passed to one call don't conflict with each other, unless one
+  goes to a concurrent or spawned parameter: then each is checked
+  against the others' accesses as if they were separate calls;
+- `Async.until`'s condition reads what it captures but conflicts with
+  nothing in its own arm: it's evaluated only while the instance is
+  free (Scheduling), which is what the arm's write of the whole state
+  for the `until` call would otherwise forbid.
+
+```
+error: `n` can't change while a spawned task reads it
+   │ s.spawn fn() => log(n)
+   │                     - read until `Async.scope` ends
+   │ n += 1
+   │ ^^^^^^
+   help: copy it for the task, `let m = n`, or change it after the scope
+
+error: `total` can't change in a block that runs on several tasks at once
+  help: give back what each one makes, and add them up after: `Async.map(xs) fn(x) => ...`, then `.sum()`
+
+error: a spawned task can't change `seen`, which it only reads
+  help: change it through a handler's operation, or give it back: `t.join()` has what the task returned
+```
+
+**Rule C: a spawned block captures by reference only the variables of
+the frame that calls `Async.scope`.** That frame is the function, or
+block, whose code has the `Async.scope` call whose scope is spawned
+into, found syntactically: the spawn is `s.spawn` where `s` is the
+scope block's parameter, and the variables bound outside that scope's
+block, in its caller, are the frame's. Everything else the spawned
+block captures is copied when it's spawned: variables bound inside the
+scope's block (a loop's variable, a `let` in the body), and, when `s`
+is a parameter of a helper (`fn start(s: Scope, ...)`), all of the
+helper's locals and parameters. Lower makes the copies (step 2): a
+spawn's block becomes `let c' = c in` the spawn, for each copied
+capture `c`, and the block captures `c'`. Excl treats a copy as a read
+of `c` at the spawn, an instant. A `spawned` block parameter passed on
+to `s.spawn` is captured as it is.
+
+**Rule D: a scope and a task's handle are blocks too.** `Scope` and
+`Task<T>` are second-class, as blocks are since 10c step 3, and
+Infer's same check after inference refuses them where a block is
+refused: in a record, a tuple, an array or any type argument
+(`Option<Task<Int>>`), a handler's parameter or state, a `var`, a
+function's or a block's result, a dependency operation's parameter.
+They may be a function's parameter, captured by a block, and the value
+of a `let` given a call (`let t = s.start ...`). `s.spawn` gives `()`,
+so a server's `s.spawn fn() => handle(conn)` is a statement with no
+handle to drop; `s.start` gives one, for a task to join or cancel. Core Lint checks the same: no `Scope` or
+`Task` in a constructor, a record, a tuple, an array, a function's
+result or a handler's state.
+
+```
+error: a task's handle can't be returned: it's only good inside its scope
+  help: return what the task makes: `t.join()`
+
+error: a record can't hold a scope
+  = a scope lives only as long as its `Async.scope` call
+  help: pass it to the functions that spawn into it
+
+error: `Task<Int>` can't be a type argument: a task's handle is only good inside its scope
+  help: keep what the tasks make instead: `Async.map` gives every result, in order
+```
+
+**A spawned task can't fail.** `spawn`'s block parameter has a closed,
+empty error row, and Infer_msg words the mismatch (async.md's group
+error, renamed):
+
+```
+error: a spawned task can't fail, or one task's failure would stop all the others
+  ┌─ server.ren:7:15
+  │
+7 │       s.spawn fn() => try handle(conn)
+  │                       ^^^^^^^^^^^^^^^^ can fail with BadRequest | DbDown
+  │
+  = help: handle them in the task: `match attempt handle(conn)`
+```
+
+`race`'s branches likewise:
+
+```
+error: a branch of `race` can't fail, or a failure could leave the race waiting on the other
+  help: make the failure a value inside it: `attempt fetch(a)`; to try again until one succeeds, use `retry`
+```
+
+**`try with`.** A `with` whose items' setup or `finally` can fail is
+marked as a call that can fail is (errors.md, "Marking"): `try with`,
+`attempt with` or `with` as a `match`'s subject with `fail` arms.
+Infer makes each `with` whose installation can fail an `ecall` of its
+own, its errors those of its items' setup and those their `finally`s
+add beyond the body's (a `finally` is checked with the body's errors as
+a skolem, so `try r` adds none of its own), and the
+marker in front of it covers only that: **calls in the body still need
+their own markers**, since a reader looks for `try` at each place the
+code can stop, and the body's calls are such places. The body's errors
+pass out of the `with` as before. The parser needs nothing (`try` and
+`attempt` already take a `with`); the tree-sitter grammar's `try`
+already does too, and the corpus gains a case. Lower and Core are
+unchanged, and so is the native build: `try with` only says what was
+already so. Errors, the headline as an unmarked call's:
+
+```
+error: installing `transaction()` can fail, and nothing handles it
+  ┌─ main.ren:9:3
+9 │   with sql.transaction() over Sql in
+  │   ^^^^ it can fail with `DbDown`
+  help: write `try with`, or handle its errors with `match`
+
+error: nothing here can fail
+  = `try` marks the calls that can fail, so a reader can see where the code can stop
+  help: installing these can't fail: remove the `try`
+```
+
+**The two holes.**
+
+- **`s.spawn` carries `Async` in its caller's row:** its scheme says
+  `uses Async` (it waits while the scope is full), as every method of
+  `Scope` and `Task` does, so a helper that spawns lists `Async`, and a
+  private one has it inferred. Nothing else is needed; the message is
+  the ordinary one for a `uses` a signature leaves out, with a note,
+  "`s.spawn` waits while its scope is full, so it uses `Async`".
+- **No code reached from a call with an empty row runs a scheduling
+  point.** A task can switch (Scheduling, below) only at a call of an
+  `Async` operation or member, which needs `Async` in the row; in the
+  operation of an instance that a spawned task can reach, which is
+  installed outside the call, so its dependency is in the row; or in
+  the world's waits, `Clock.sleep`, `Net`'s and `Proc.run`, reached
+  only through the world's dependencies, which only the runtime
+  installs. The handlers that wait and that a program can install,
+  `sim.clock()`, `sim.net()`, `sim.proc` and `sync`'s, use `Async` in their
+  type, so installing one needs it. What's left is a runtime installed
+  inside such a call, which is a closed world: it's a panic if any
+  other task is running then ("Runtimes", below). Core Lint checks the
+  static half: each intrinsic that can wait (Intrinsic's new `waits`)
+  is called only by the prelude's or the standard library's handlers
+  and members whose rows have `Async`.
+
+**No handler task.** A `task =>` among a handler's arms is a parse
+error with a help, async.md's tasks in handlers being gone:
+
+```
+error: a handler has no task of its own
+  help: spawn one beside the `with`, into an `Async.scope` outside it, that calls one of the handler's operations
+```
+
+### Runtimes (steps 2 and 5)
+
+**One scheduler a run.** The interpreter runs `main`, and each test,
+as the root task of a scheduler (lib/eval/sched.ml), whatever the
+program uses: a program with no tasks is a scheduler with one, and
+nothing it does changes. The root task's path is `main`, or `test` for
+a test. A runtime is the scheduler's policy: `single` or `sim`. Its
+handler is a real one for `Async`, in Ren:
+
+```ren
+handler single_runtime() for Async =
+  let rt = runtime_single()       // `sim.scheduler(seed)`'s is `runtime_sim(seed)`
+  finally(r) =>
+    runtime_leave(rt)
+    try r
+  yield() => runtime_yield()
+  tick() => runtime_tick()
+```
+
+`runtime_single` sets the policy for the `with`'s body and
+`runtime_leave` puts back the one before; a scope's functions,
+`spawn` and the rest are intrinsics that ask the scheduler, which has
+the policy. **A runtime installed while any task but the one installing
+it is running is a panic,** so policies never mix:
+
+```
+panic: `Async.single()` is installed while other tasks run
+  = a runtime runs every task of its `with`, so it's installed where no other task runs yet
+  help: install it once, around `main`'s body: `ren run` installs `Async.single()` itself, and `ren test` a `sim.scheduler`
+```
+
+**What the runtime installs.** `Async` and `Net` join the runtime's
+dependencies (Prelude's `runtime_deps`), each installed around `main`
+if it uses it, as `Clock` is: `ren run` installs `Async.single()` and
+the real `Net`; `ren test` installs `sim.scheduler(seed)`, `sim.clock()`
+for `Clock` and `TestClock` (in place of `test_clock(Time.epoch)`,
+which a test can still install by hand, a clock that never waits) and
+`sim.net()` for `Net` and `SimNet`; a test whose `uses` names `Async`
+gets `single`, as one that names `Clock` gets the real clock. Natively,
+`Async`'s real implementation has `yield` and `tick` return at once,
+and is all a native program has (Native, below).
+
+### Scheduling
+
+A task is a fiber: an OCaml 5 effect continuation, run by the
+scheduler's loop, which an intrinsic that waits suspends with an effect
+(`Effect.Deep`; each task's `depth`, for `max_depth`, is its own). The
+scheduler keeps, per task, its path, its scope, whether it's been
+asked to stop, how deep in `finally`s it is (shielded), its deadline
+stack and its result. **A task runs until it waits,** at one of:
+`join`, `spawn` on a full scope, the end of a scope's body while its
+tasks run, `until`, `tick`, `yield`, a sleep, I/O, a `map`, `each`,
+`both` or `race` waiting for its tasks, and an operation's instance
+held by another task (step 4). There's no preemption.
+
+Step 2 builds the scheduler with `single`'s order and real timers,
+which `ren run` uses; step 5 makes `single` and `sim` the handlers
+below, and adds `sim`'s choices and virtual time.
+
+**`single`'s order,** which `ren run`'s output follows exactly:
+
+- one run queue, first in first out; a task that's woken, or spawned,
+  goes on its end, in the order that happens;
+- `s.spawn` starts its task at the queue's end and goes on, unless the
+  scope already has `max` tasks running: then it waits until one ends,
+  and is woken to spawn it;
+- `Async.yield()` goes to the queue's end; `Async.tick()` waits until
+  each task that was in the queue when it was called has run until it
+  waited, or ended;
+- `Async.scope` runs its body in the calling task; once the body has
+  returned, the task waits until every task of the scope has ended,
+  then returns the body's value;
+- `map` and `each` start a task for each of the first `max` elements,
+  in order, and one more each time one ends; `both` and `race` start
+  their two; the caller waits until they've all ended;
+- when no task can run, the scheduler waits for the earliest timer or
+  I/O (`Unix.select`), and wakes the tasks whose waits completed in the
+  order of their deadlines, then of their file descriptors; if nothing
+  is pending and tasks are waiting, it's a deadlock, a panic:
+
+```
+panic: every task is waiting, and nothing can wake one
+  = main/serve:0 waits in `Async.until` at server.ren:14:5
+  = main waits for its scope's tasks at server.ren:9:3
+```
+
+**`sim`'s choices.** The same, but at each scheduling point the next
+task is drawn from the tape among the tasks that can run, the current
+one included. A scheduling point is each place a task can wait, and
+**each call of an operation of a shared, exclusive instance** (one a
+spawned task can reach, whose handler keeps state: step 4), before the
+call, since that's where the order of two tasks can be seen. Wakes are ordered by virtual deadline, then by
+the tape. Time is virtual: it moves only when no task can run, straight
+to the earliest timer.
+
+**The tape** is a stream of numbers from the seed (splitmix64), typed:
+the scheduler's choices draw from one stream, and `Random` from
+another, split per task (step 5): the root task's `Random` is today's
+chain from the seed, so tests that use it don't change, and a spawned
+task's starts from the seed mixed with its path's hash, so what a task
+draws doesn't depend on the order tasks ran in. A test's seed is its
+own, from its name, as today; `--seed S` gives every test `S`; `--seeds
+N` runs each test under its own seed and the next `N - 1`, stopping at
+the first that fails, whose report says `seed S · rerun: ren test ...
+--seed S`, and a run that passes says `10 passed, each under 1000
+seeds`. `--sim` is accepted and changes nothing, since `ren test` runs
+on `sim` anyway (the README's milestone writes it).
+
+**Virtual time** (step 5). `sim.clock()`'s `now` is `Time.epoch` plus the
+virtual time elapsed since its `with`, `instant` likewise from
+`Instant.zero`, `sleep(d)` waits until virtual time has moved on by `d`,
+and `TestClock.advance(d)` moves virtual time on by `d` at once, waking
+whatever it passes. With one task, that's what `test_clock` did, so
+every test today passes unchanged; a test that sleeps an hour finishes
+in milliseconds. The real `Clock.sleep` under `sim` waits in virtual
+time too; its `now` stays the system's, since a test that asks for the
+real clock asked for the world.
+
+### Structured tasks (step 2)
+
+- **`Async.scope(max: n)`** runs its body with a `Scope`; `n` below 1
+  is a panic, "`Async.scope`'s `max` is 0, so it couldn't start a task"
+  with "help: `max:` is at least 1"; `map`'s and `each`'s too.
+- **`s.spawn`** marks the instances its block can reach as shared
+  (step 4) and starts the task; **`s.start`** does the same and gives
+  its handle. A task's path is
+  its parent's, `/`, a label and an ordinal: the label is the name of
+  the function the spawn is written in (`serve`; a handler's arm is
+  `handler.op`; a test is `test`), and the ordinal counts the tasks its
+  parent has started with that label, from 0: `main/serve:7` is the
+  eighth task `main` started from a spawn in `serve`. `map`, `each`,
+  `both` and `race` label theirs the same way, by the function they're
+  called in. So a path depends on the program's functions, not its
+  lines, and a journal survives edits (foundations.md, decision 11).
+- **A task spawned beside a `with` is its background task.** A block
+  spawned into a scope that began before a `with` whose instance the
+  block's evidence holds (one installed after the scope began, in the
+  spawner's task) is registered with that `With`: when the `With`'s
+  body ends, its registered tasks still running are cancelled and
+  waited for, and only then does its `finally` run (foundations.md,
+  decision 7: "the scope cancels it when the body ends"). So a task can
+  never call an instance whose `with` has ended. The interpreter keeps
+  a counter of `With`s per task, which a scope records when it begins
+  and each instance records when it's made, so "installed after the
+  scope began" is one compare. A task spawned with no such `with`
+  between, as a server's connections are, is waited for by its scope.
+- **`t.join()`** waits for the task to end and gives `Some` of what it
+  returned, or `None` if it was cancelled before it returned. **`t.cancel()`**
+  asks it to stop and returns at once. A task cancelled before it first
+  runs never runs.
+- **`s.replace(key) fn() => ...`** cancels the task the scope started
+  under a key equal to `key`, if it's still running, waits for it to
+  end, then spawns the new one under `key`. Keys of different types
+  are never equal.
+
+**Cancellation,** as async.md has it, in the interpreter:
+
+- **It happens at dependency calls.** A task asked to stop raises
+  `Sched.Cancelled`, an OCaml exception, at its next dependency call,
+  before the call, and at once if it's waiting: the wait ends. A call
+  that completed is never thrown away: a cancel that arrives while one
+  runs lands at the next.
+- **It goes down.** Cancelling a task cancels the tasks of every scope
+  whose body it's running, and theirs, and the task waits for them as
+  its scopes do.
+- **It can't be swallowed.** Core's `Handle` doesn't catch it, so
+  `try`, `attempt` and `orelse` can't see it. Only a `finally` sees it,
+  as `Err(Cancelled)`: a handler's `finally(r)` and an arm's are typed
+  with `r: Result<T, ! E | Cancelled>`, where `E` is the errors of what
+  they cover. `Cancelled` is in no other row: `try r` and `fail
+  Cancelled` in a `finally` go on cancelling, so its own errors never
+  have it, and `fail Cancelled` anywhere else is an error, "`Cancelled`
+  isn't an error a program can fail with" with "help: a cancelled task
+  stops by itself; to stop early, return". What a `finally` returns when
+  cancellation was the cause is thrown away.
+- **An arm's `finally`** is lowered to a new Core node, `Covered {
+  body; result; after }`: `body`, then `after` with `result` bound to
+  `Ok` of its value, `Err` of its error, or `Err(Cancelled)`, shielded;
+  if the body was cancelled, the cancellation goes on once `after` has
+  run, and otherwise `after`'s value is the node's. Core Lint checks
+  `result`'s type is `Result` of the body's type and its errors with
+  `Cancelled`. A handler's `finally` is run by `With` the same way.
+- **It never stops cleanup.** While a task is in a `finally` (a
+  `Covered`'s `after`, a handler's `finally`, a Core `Finally`'s
+  `after`) it's shielded: its dependency calls and waits don't see the
+  cancel. **The cleanup deadline is 5 seconds** from when the cancel
+  was seen, real under `single` and virtual under `sim`; once it has
+  passed, the shield is gone, and the cleanup's own calls and waits are
+  cancelled too.
+- **A failure cancels the tasks beside it, and the first one wins.** In
+  `map`, `each`, `both` and a scope's body, the first error is the
+  result; the rest are cancelled and waited for, and an error another
+  task fails with while being cancelled is written to stderr, never
+  dropped and never joined to the error type: "warning: main/crawl:3
+  failed too, with `Down`, while it was being cancelled". `ren run
+  --record` writes it to the journal as a comment.
+- **Errors and panics show the task path.** A panic in a task other
+  than the root gains a note, `= in the task main/serve:3`; an error
+  `main` fails with that came from a task gains `= from the task
+  main/crawl:2`. `--trace` nests each task's calls under the task that
+  started it, by path.
+
+### The rest of `Async` (step 3)
+
+- **`Async.until(cond)`** is written in a handler's arm, inside its
+  operation (lexically, blocks included), and nowhere else; its
+  condition uses no dependency and can't fail:
+
+  ```
+  error: `Async.until` waits for a handler's state to change, so it's only written in one of its operations
+    help: move the wait into an operation of the handler whose state it reads
+
+  error: `Async.until`'s condition can't use `Clock`
+    = it's checked again each time the handler is released, so it can only read the handler's state
+    help: read it in the operation, before the wait
+  ```
+
+  If the condition holds it returns at once. Otherwise the task lets
+  go of the operation's instance and waits; each time the instance is
+  released, the waiters' conditions are checked in the order they
+  began waiting, and the first that holds gets the instance back and
+  is woken, before any caller queued for it (step 4). A panic in a
+  condition is its waiter's. With no other task to change the state,
+  it's the deadlock panic.
+- **`Async.tick()`** and **`Async.yield()`** as in Scheduling.
+- **`Async.timeout(d) fn() => ...`** runs its body in the same task,
+  under a deadline: the sooner of `now + d` and the deadline it's
+  already under, so **deadlines carry down**, and the waits of every
+  call made under it (`Net`'s among them) end at it. When the deadline
+  passes the body is cancelled, from the timeout down, tasks of scopes
+  inside it included, and once the cancellation has reached the
+  timeout it fails with `Timeout`. **It never reports `Timeout` for
+  work that finished:** if the body ends without the cancellation
+  having been seen, because it had returned or failed, or what was left
+  was shielded, its result is the timeout's, late. So a commit in a
+  `finally` that overruns gives the transfer, not `Timeout`.
+- **`Async.race(a, b)`** runs both as tasks; the first to return is the
+  result, the other is cancelled, and race returns once it has ended.
+- **`Async.isolate fn() => ...`** runs its body in the same task; a
+  panic in it ends the program anyway if the task is then in the middle
+  of an operation of an instance installed outside the isolate, and
+  otherwise the `finally`s of the handlers installed inside it run,
+  given `Err(Cancelled)`, the tasks of scopes inside it are cancelled
+  and waited for, and it fails with `Panicked(msg)`, `msg` the panic's
+  message. Its block can't change a variable from outside it, and
+  can't be a block parameter (so no caller's variable can be one it
+  changes):
+
+  ```
+  error: an isolated block can't change `n`, which is outside it
+    = nothing it changed is seen after a panic, so it changes only what it returns, and what it changes through operations
+    help: give it back as the block's result: `let n = try Async.isolate fn() => ...`
+
+  error: `Async.isolate` takes a block written here, not `f`
+    help: write the block: `Async.isolate fn() => f()`
+  ```
+
+- **`map`, `each` and `both`** as in Scheduling and Cancellation; `map`
+  gives its results in the elements' order, whatever order they ended
+  in. `each`'s block gives `()`:
+
+  ```
+  error: `Async.each`'s block gives an `Int`, which `each` would throw away
+    help: use `Async.map` to keep the results, or end the block with `()`
+  ```
+
+- **No `par_map`:** `xs.par_map(f)` is the ordinary missing method's
+  error, with a help: "`Async.map(xs) fn(x) => ...` runs on every core
+  when its block uses no dependencies".
+
+### Operations that don't interleave (step 4)
+
+- **An operation keeps its instance until it returns,** across its own
+  calls to handlers installed outside it, and lets go early only while
+  it waits in `Async.until`. A call of an operation of an instance
+  another task holds waits, queued first in first out; when it's
+  released, a waiter whose condition holds comes first, then the
+  queue's first caller. Lower records on each `Instance` whether it
+  needs this, `exclusive`: its handler has a `var`, or a `let` or a
+  parameter of an opaque type (a resource the runtime keeps, a
+  `Journal`). The interpreter keeps, per instance, its holder, its
+  queue and its waiters.
+- **The exclusion is skipped for instances no spawned task can
+  reach.** `s.spawn` (and `map`, `each`, `both`, `race`) marks shared
+  every instance in its block's evidence, which is every instance
+  installed outside the spawn, for good. An instance that isn't shared,
+  or isn't `exclusive`, is called as today, with no queue and no
+  scheduling point. So a program with no tasks runs as it did.
+- **No deadlock.** A task takes instances inner to outer, since an
+  operation only calls what's installed outside it, given two rules:
+  handlers in one `with` can't use each other in a cycle (already an
+  error), and **a block passed to an operation gets dependencies only
+  from its parameter's type**, so it can't call back into the instance
+  that's running it:
+
+  ```
+  error: a block passed to `Tally.change` can't use `Tally`, which it would wait for while `Tally.change` runs it
+    = a block passed to an operation gets its dependencies only from its parameter's type
+    help: call it before `Tally.change`, outside the block
+  ```
+
+  For a dependency other than the operation's own, the help says to
+  list it in the parameter's type, `f: fn(&Int) uses Clock`, or to call
+  it outside the block.
+
+  The second rule is Infer's: a block argument of a `Dep_call` whose
+  uses, beyond its parameter type's, aren't empty is refused, at the
+  first call in it that uses one.
+- `finally`s run when nothing else can reach the instance (a scope
+  inside the `with` has ended), so they take no lock.
+
+### Journal version 2 (step 6)
+
+```
+# ren journal 2 · main.ren · deps: Console Os Proc
+1 main Os.args() → ["all"]
+2 main/run_all:0 Console.error("echo base")
+3 main/run_all:1 Console.error("echo lint")
+4 main/run_all:0 Proc.run("sh", ["-c", "echo base"])
+5 main/run_all:1 Proc.run("sh", ["-c", "echo lint"])
+6 poll main/run_all:1 main/run_all:0
+7 main/run_all:1 → Ok(0)
+8 main/run_all:0 → Ok(0)
+9 main exit 0
+```
+
+- **Each entry names its task.** A call that waits is written in two
+  lines, its start and, after the poll that completed it, what it gave:
+  a line of only a task and `→`. A call that doesn't wait is one line,
+  as in version 1.
+- **`poll`** lines are the scheduler's polls that woke tasks, under
+  `single`: the tasks whose waits completed, in the order they were
+  woken. That and the program's code fix everything else `single`
+  does, so a replay that follows them runs the same order. A
+  cancellation a task saw is a line too, `12 main/serve:3 cancelled`,
+  and the second failures above are `#` comments.
+- **Answers are keyed by task:** a replay answers each task's calls
+  from that task's entries, in order, so a test's replay doesn't
+  depend on the order its tasks happen to run in.
+- **A journal as a test has a schedule prefix:** under `sim`, while the
+  journal's next entry's task can run, the scheduler runs it; once it
+  can't, or the journal has none left, the seeded tape takes over.
+  `ren replay` is strict, as before: it follows the polls, and stops at
+  the first call, task or order that differs. `ren replay` of the
+  concurrent `just`'s journal prints what the run printed, byte for
+  byte.
+- **Version 1 is refused,** in `ren replay` and `replay(file)`:
+
+  ```
+  error: `tests/build.journal` is a version 1 journal, which this `ren` doesn't read
+    = version 2 names the task that made each call
+    help: record it again: `ren run --record tests/build.journal main.ren`
+  ```
+
+  examples/just/tests/build.journal is re-recorded.
+
+### `Net` (step 7)
+
+- **The real `Net`** is non-blocking sockets through `Unix`, each wait
+  a scheduler wait on its descriptor (`select`). `listen` binds and
+  listens (backlog 128) and fails with `InUse` if the address is taken;
+  `accept` waits for a connection; `read` waits until bytes or the end
+  are there; `write` waits until all its bytes are written; `close`
+  closes. Once `accept_until` has given `None`, its listener is closed,
+  and a connection to its address is `Refused`. `accept_until(l, stop)`
+  waits for a connection or for `stop`:
+  the runtime catches SIGTERM; one that comes while nothing waits on
+  `Signal.term` is kept for the next `accept_until`, or, if the program
+  has none, cancels `main`, so plain shutdown needs no code.
+- **After `accept_until` returns `None`,** the task that called it is
+  under the cleanup deadline: its scope's tasks, the in-flight
+  connections, have 5 seconds to finish, then they're cancelled, and
+  their `finally`s run (shielded, under the cleanup deadline of their
+  own). A second SIGTERM ends the program at once. A `main` that was
+  cancelled by a signal exits with 143 (128 + 15), after its
+  `finally`s.
+- **`sim.net()`** is Ren, in the `sim` module: a handler for `Net` and
+  `SimNet` keeping listeners and connections in maps, each connection
+  two byte buffers, whose waits are `Async.until` in its operations;
+  `SimNet.signal(Signal.term)` makes waiting `accept_until`s return
+  `None` (and starts the cleanup deadline as above).
+- **Journal entries:** `Net`'s calls are world calls, recorded and
+  replayed, each wait a two-line entry.
+
+### The standard library (step 8)
+
+`sync` as in The surface, in Ren. `keyed` can't be: a handler can't
+keep `n` instances of another in its state, so it's built in, the one
+part that isn't, and checked so that its argument is a description: a
+`With` of a `keyed(n, h)` description makes `n` instances of `h`, in
+order, and an operation's call on it picks one by the hash of its first
+argument's key (shown.ml's walk, through the argument's type), or, with
+no parameters, runs on each in turn, giving the last's result. Each
+instance is an instance as any other, with its own exclusion, so the
+operations on two keys in different instances overlap.
+
+```
+error: `keyed` takes a handler's description, and `16` is an `Int`
+  help: describe the handler whose instances it keeps: `keyed(16, accounts())`
+```
+
+Then the five programs and the milestone (The tests), and the `just`
+runs a level's recipes at once (`Async.each(level, max: 8)`), killing
+the rest when one fails: the real `Proc.run` waits for its process as a
+scheduler wait (`SIGCHLD` and `waitpid` with `WNOHANG` at each poll),
+and cancelling it kills the process (SIGTERM, then SIGKILL after the
+cleanup deadline) and waits for it to exit.
+
+### Native
+
+What's sequential builds natively, in debug and release, and agrees
+with `ren run` (bench/11a in bench/build.t):
+
+- `try with` (step 1): nothing new past the checker.
+- `Async`'s real implementation, `yield` and `tick` returning at once,
+  and `Async.until` with no other task (step 3): its condition is
+  evaluated, and if it's false the program panics with the deadlock
+  panic's headline, as `ren run` does with one task.
+- `sync`'s `semaphore` and `limit` (step 8), which need no task.
+- Anything that starts a task is refused by `ren build`, at the first
+  call to Async's `scope`, `map`, `each`, `both`, `race`, `timeout` or
+  `isolate` that to_mem meets:
+
+  ```
+  error: `Async.scope` runs tasks, and tasks aren't native yet
+    help: run it with `ren run`, which runs tasks
+  ```
+
+### Where 11a may differ from foundations.md
+
+Choices this specification made where the record is silent, each to
+revisit if a step finds it wrong:
+
+- **`Async`'s functions are members of the dependency, its operations
+  only `yield` and `tick`.** Decision 9 makes the runtime a handler;
+  the functions that take blocks and are generic can't be operations,
+  which take neither, so they're members in Ren over intrinsics, and
+  the scheduler they ask is the one whose policy the installed runtime
+  set. A runtime installed while other tasks run is a panic, so
+  policies never mix.
+- **A parameter with a default** is new to the language, for `max:`
+  (decision 7 says the default is 64); a default is a literal, given by
+  name.
+- **`concurrent` and `spawned`** are the written modes of rule B, which
+  names no syntax.
+- **The background task of decision 7** is cancelled by the `with` it
+  was spawned beside, when that `with`'s body ends; a scope's own body
+  ending cancels nothing, since a server's scope waits for its
+  connections.
+- **`s.spawn` gives `()`, and `s.start` the handle.** A dropped value is
+  an error in Ren (`let _ = ...` says so), and a `let` can't end a
+  block, so a spawn that gave its handle couldn't be a match arm's
+  statement, as a server's is; most spawns want no handle.
+- **`join` gives an `Option`**, `None` for a task cancelled first; a
+  task cancelled before it runs never runs.
+- **`s.replace` waits for the task it cancels** before starting the new
+  one, so a key never has two.
+- **A task's path's label is the function its spawn is in,** and its
+  ordinal counts what its parent started from there (decision 11's
+  "label of its spawn site").
+- **Seeds:** one seed a test drives its whole tape; `--seeds N` is the
+  test's own seed and the next `N - 1`; `--sim` changes nothing.
+- **`sim` and `sync` are modules,** found by `import`, the first of the
+  standard library's: `sim.scheduler(seed)` and `sim.net` are written
+  as foundations.md and the brief write them, and their names stay out
+  of every module's scope.
+- **The test `Clock` is `sim.clock()`,** virtual time; `test_clock(at)`
+  stays, a clock that never waits.
+- **`limit` is two items, `with sync.semaphore(16), sync.limit() over
+  Web`.** Decision 10 has an operation keep its instance across its own
+  calls, `call.forward()` included, so a `limit(n)` that kept its count
+  in its own state would let one call through at a time. Decision 10's
+  remedy is to split the operation in two, and that's what this is: the
+  semaphore's `acquire` waits in `Async.until`, and `limit()` has no
+  state, so it takes no lock. Two `limit`s in one `with` share one
+  semaphore.
+- **`keyed(n, h)` is built in,** since nothing in Ren can keep `n`
+  instances; its spelling is the brief's.
+- **Signals:** SIGTERM goes to a waiting `accept_until`, or cancels
+  `main`; after `accept_until` says `None`, the cleanup deadline bounds
+  what's in flight; a cancelled `main` exits with 143.
+- **Natively, `Async.until` that doesn't hold** is the deadlock panic,
+  as one task under `ren run` is.
+
+### Progress log
+
+| step | commit | done | left |
+|---|---|---|---|
+| 0 | this commit | this section; async.md rewritten to foundations.md and the brief; the README's race passage; test/test_tasks.ml, every test behind `until "sN"`; bench/11a/tasks/ (the five programs, the `just`'s part, the milestone, a version 1 journal) and bench/tasks.t, all `not yet`; bench/11a's sequential programs and their section of bench/build.t (`trywith` already as specified) | steps 1 to 9; nothing of the language or runtime is built yet |
+
+Notes for whoever resumes: a stale `_build` (from a cram run killed
+part way) once made examples/just.t fail with "two tests named `replays
+bug.journal`"; `rm -rf _build` cleared it. THE CHECKS' script runs `ren
+test` in every folder under examples/, and `ren test` reads the folders
+under one too, which is why stage 11a's programs wait in bench/11a/tasks.
+
 ## The runtime model
 
 Every object the runtime makes is in one of four states, which its

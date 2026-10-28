@@ -1,0 +1,30 @@
+// The milestone of stage 11a (README, "Roadmap"): a lost update between
+// two operations. `deposit` reads the balance with one operation and
+// writes it with a second, and another task's deposit can come in
+// between, so one of two deposits can be lost. `ren test` runs the test
+// under one schedule, which may not show it; `ren test --sim --seeds
+// 200` tries 200, finds one that does, and prints its seed, and `ren
+// test --seed` with it replays it exactly. fixed.ren is the same
+// account with one operation, `add`, which can't lose one, and
+// cached.ren the README's `cached`, which can't race any more.
+
+pub dep Account =
+  balance: fn() -> Int
+  set: fn(b: Int)
+
+pub handler account() for Account =
+  var b = 0
+  balance() => b
+  set(n) => b = n
+
+// the bug: another task can run between the read and the write
+pub fn deposit(n: Int) uses Account =
+  let b = Account.balance()
+  Account.set(b + n)
+
+test "two deposits both land" =
+  with account() in
+    Async.scope fn(s) =>
+      s.spawn fn() => deposit(10)
+      s.spawn fn() => deposit(10)
+    assert Account.balance() == 20

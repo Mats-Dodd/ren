@@ -1,0 +1,8 @@
+Ok(4)
+Ok(8)
+Err(TooBig)
+Ok(8)
+Err(DbDown)
+Err(DbDown)
+Ok(0)
+exit 0

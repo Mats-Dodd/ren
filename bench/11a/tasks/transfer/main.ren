@@ -1,0 +1,87 @@
+// A transfer under a timeout (async.md, "A transfer under a timeout"):
+// the money moves inside a transaction whose commit is in its
+// `finally`. A timeout during a query cancels it, and the `finally`
+// rolls back; a timeout during the commit can't stop it, so the transfer
+// is reported, late, never as `Timeout`.
+
+pub dep Sql =
+  get: fn(name: Str) -> Int ! DbDown
+  set: fn(name: Str, balance: Int) ! DbDown
+  begin: fn() -> Int ! DbDown
+  commit: fn(tx: Int) ! DbDown
+  rollback: fn(tx: Int)
+
+// balances kept in memory, and those when the transaction began, which
+// a rollback puts back. Each query takes `query`, and a commit
+// `commit`, of the clock's time
+pub handler mem_sql(balances: Array<(Str, Int)>, query: Duration, commit: Duration) for Sql uses Clock =
+  var rows = Map.of(balances)
+  var kept = Map.of(balances)
+  get(name) =>
+    Clock.sleep(query)
+    match rows.get(name)
+      Some(b) => b
+      None => 0
+  set(name, balance) =>
+    Clock.sleep(query)
+    &rows.set(name, balance)
+  begin() =>
+    kept = rows
+    1
+  commit(_) => Clock.sleep(commit)
+  rollback(_) => rows = kept
+
+// a transaction around its `with`'s body: what the body leaves is
+// committed, or rolled back if it failed or was cancelled. Its `begin`
+// and its commit can fail, so it's installed with `try with`
+pub handler transaction() over Sql ! DbDown =
+  let tx = try next.begin()
+  finally(r) =>
+    match r
+      Ok(v) =>
+        try next.commit(tx)
+        v
+      Err(_) =>
+        next.rollback(tx)
+        try r
+
+// `to` is credited first, so a transfer stopped part way has something
+// to roll back
+pub fn transfer(from: Str, to: Str, amount: Int) ! DbDown | Short(name: Str) | Timeout uses Sql, Async =
+  try Async.timeout(Duration.seconds(2)) fn() =>
+    try with transaction() over Sql in
+      try Sql.set(to, try Sql.get(to) + amount)
+      let left = try Sql.get(from) - amount
+      if left < 0 then fail Short(from)
+      try Sql.set(from, left)
+
+pub fn balances() -> (Int, Int) ! DbDown uses Sql =
+  (try Sql.get("ann"), try Sql.get("bob"))
+
+// ---- tests ----
+
+test fn start() -> Array<(Str, Int)> = [("ann", 100), ("bob", 20)]
+
+test "a transfer in time moves the money" =
+  with mem_sql(start(), Duration.ms(10), Duration.ms(10)) in
+    assert attempt transfer("ann", "bob", 30) == Ok(())
+    assert try balances() == (70, 50)
+
+test "a timeout during a query rolls back, and nothing moved" =
+  // the queries end at 0.8, 1.6 and 2.4 seconds: the third is cut off
+  with mem_sql(start(), Duration.ms(800), Duration.ms(10)) in
+    assert attempt transfer("ann", "bob", 30) == Err(Timeout)
+    assert Clock.instant() == Instant.zero + Duration.seconds(2)
+    assert try balances() == (100, 20)
+
+test "a timeout during the commit still reports the transfer" =
+  // four queries of 10 ms, then a commit of 3 seconds, past the timeout
+  with mem_sql(start(), Duration.ms(10), Duration.seconds(3)) in
+    assert attempt transfer("ann", "bob", 30) == Ok(())
+    assert Clock.instant() == Instant.zero + Duration.ms(3040)
+    assert try balances() == (70, 50)
+
+test "a transfer that leaves an account short changes nothing" =
+  with mem_sql(start(), Duration.ms(10), Duration.ms(10)) in
+    assert attempt transfer("bob", "ann", 50) == Err(Short("bob"))
+    assert try balances() == (100, 20)

@@ -1,0 +1,57 @@
+// `try with` (compiler.md, "Stage 11a", "The checker"): a transaction
+// whose `begin` and commit can fail is installed with `try with`, and
+// the body's own calls keep their own `try`s. It builds natively too.
+
+dep Sql =
+  get: fn() -> Int ! DbDown
+  set: fn(n: Int) ! DbDown
+  begin: fn() ! DbDown
+  commit: fn() ! DbDown
+  rollback: fn()
+
+// when the database is down: never, when a transaction begins, or when
+// it commits
+type Outage = | Never | AtBegin | AtCommit
+
+handler mem_sql(down: Outage) for Sql =
+  var n = 0
+  var kept = 0
+  get() => n
+  set(m) => n = m
+  begin() =>
+    if down == AtBegin then fail DbDown
+    kept = n
+  commit() =>
+    if down == AtCommit then
+      n = kept
+      fail DbDown
+  rollback() => n = kept
+
+handler transaction() over Sql ! DbDown =
+  let _ = try next.begin()
+  finally(r) =>
+    match r
+      Ok(v) =>
+        try next.commit()
+        v
+      Err(_) =>
+        next.rollback()
+        try r
+
+fn add(k: Int) -> Int ! DbDown | TooBig uses Sql =
+  try with transaction() over Sql in
+    try Sql.set(try Sql.get() + k)
+    if try Sql.get() > 10 then fail TooBig
+    try Sql.get()
+
+fn main() uses Console =
+  with mem_sql(Never) in
+    print(attempt add(4))
+    print(attempt add(4))
+    print(attempt add(4))
+    print(attempt Sql.get())
+  with mem_sql(AtBegin) in
+    print(attempt add(1))
+  with mem_sql(AtCommit) in
+    print(attempt add(1))
+    print(attempt Sql.get())

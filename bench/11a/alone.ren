@@ -1,0 +1,21 @@
+// `Async.until`, `yield` and `tick` with no other task (compiler.md,
+// "Stage 11a", "Native"): a condition that holds returns at once, and
+// with one task `yield` and `tick` have nothing to wait for. It builds
+// natively too.
+
+dep Gate =
+  pass: fn() -> Int
+
+handler gate(open: Bool) for Gate uses Async =
+  var passed = 0
+  pass() =>
+    Async.until(fn() => open)
+    passed += 1
+    passed
+
+fn main() uses Console, Async =
+  with gate(true) in
+    print(Gate.pass())
+    Async.yield()
+    Async.tick()
+    print(Gate.pass())

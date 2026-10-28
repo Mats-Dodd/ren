@@ -1,0 +1,5 @@
+// A program to record, for the test that a version 1 journal is
+// refused once journals are version 2 (bench/tasks.t)
+
+fn main() uses Console, Os =
+  print(Os.args())

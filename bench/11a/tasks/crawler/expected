@@ -1,0 +1,7 @@
+main.ren
+  ✓ each page is found once, three links deep
+  ✓ a page that can't be fetched is skipped
+  ✓ at most 16 requests at once
+
+3 passed
+exit 0

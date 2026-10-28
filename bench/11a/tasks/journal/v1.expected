@@ -1,0 +1,4 @@
+error: `v1.journal` is a version 1 journal, which this `ren` doesn't read
+  = version 2 names the task that made each call
+  help: record it again: `ren run --record v1.journal hello.ren`
+exit 1

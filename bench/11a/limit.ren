@@ -1,0 +1,17 @@
+// `sync.limit()` over a dependency, its permits from `sync.semaphore`,
+// with one task (compiler.md, "Stage 11a", "Native"): each call takes a
+// permit and gives it back, so none ever waits. It builds natively too.
+
+import sync
+
+dep Work =
+  run: fn(n: Int) -> Int
+
+handler double() for Work =
+  run(n) => n * 2
+
+fn main() uses Console, Async =
+  with sync.semaphore(2), sync.limit() over double() in
+    print(Work.run(1))
+    print(Work.run(2))
+    print(Work.run(3))

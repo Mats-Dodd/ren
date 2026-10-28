@@ -1,0 +1,15 @@
+// `Async.until` whose condition doesn't hold, with no other task to
+// change it: the deadlock panic, in `ren run` and natively alike.
+
+dep Gate =
+  pass: fn() -> Int
+
+handler gate(open: Bool) for Gate uses Async =
+  pass() =>
+    Async.until(fn() => open)
+    1
+
+fn main() uses Console, Async =
+  print("waiting")
+  with gate(false) in
+    print(Gate.pass())

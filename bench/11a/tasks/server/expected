@@ -1,0 +1,8 @@
+main.ren
+  ✓ a request is answered
+  ✓ shutdown lets a request in flight finish
+  ✓ a request still running at the deadline is cut off
+  ✓ after the signal, nothing new is accepted
+
+4 passed
+exit 0

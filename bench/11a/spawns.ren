@@ -1,0 +1,11 @@
+// A program that spawns: `ren run` runs it, in `single`'s order (the
+// body first, then each task in the order it was spawned), and `ren
+// build` refuses it, since tasks aren't native yet (compiler.md, "Stage
+// 11a", "Native").
+
+fn main() uses Console, Async =
+  Async.scope fn(s) =>
+    s.spawn fn() => print("a")
+    s.spawn fn() => print("b")
+    print("body")
+  print("after")

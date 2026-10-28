@@ -1,0 +1,47 @@
+// The `just`, running independent recipes at once (async.md, "The
+// `just`, running independent recipes at once"): each level of a plan
+// depends only on the levels before it, so its recipes run together,
+// and the first that fails stops the rest, whose programs are killed.
+// Step 8 of stage 11a folds this into examples/just.
+
+import sim.{Run, SimProc}
+
+pub type Recipe = { name: Str, line: Str }
+
+// what a recipe runs: its line, through `sh`
+pub fn command(r: Recipe) -> Command = Command { cmd: "sh", args: ["-c", r.line] }
+
+// runs a recipe's line, shown first, failing if it exits with anything
+// but 0
+fn run(r: Recipe) ! ProcError | Failed(name: Str) uses Proc, Console =
+  Console.error(r.line)
+  let c = command(r)
+  let code = try Proc.run(c.cmd, c.args)
+  if code != 0 then fail Failed(r.name)
+
+// each level's recipes at once, eight at most, one level after another
+pub fn run_all(plan: Array<Array<Recipe>>) ! ProcError | Failed(name: Str) uses Proc, Console, Async =
+  for level in plan
+    try Async.each(level, max: 8) fn(r) => try run(r)
+
+// ---- tests, on `sim.proc`: programs that take virtual time ----
+
+test fn recipe(name: Str) -> Recipe = Recipe { name: name, line: name }
+
+// `name`'s program, which exits with `code` after `d`
+test fn takes(name: Str, code: Int, d: Duration) -> Run =
+  Run { command: command(recipe(name)), code: code, takes: d }
+
+test "a level's recipes run at once" =
+  // `link` isn't in the list, so it exits with 0 at once
+  with sim.proc([takes("cc", 0, Duration.seconds(2)), takes("fmt", 0, Duration.seconds(3))]) in
+    try run_all([[recipe("cc"), recipe("fmt")], [recipe("link")]])
+    assert TestProc.ran().len() == 3
+  assert Clock.now() == Time.epoch + Duration.seconds(3)
+
+test "a failing recipe stops the others" =
+  with sim.proc([takes("cc", 1, Duration.seconds(2)), takes("fmt", 0, Duration.seconds(10))]) in
+    let r = attempt run_all([[recipe("cc"), recipe("fmt")], [recipe("link")]])
+    assert r == Err(Failed("cc"))
+    assert SimProc.killed() == [command(recipe("fmt"))]
+  assert Clock.now() == Time.epoch + Duration.seconds(2)

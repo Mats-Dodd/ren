@@ -1,0 +1,4 @@
+# ren journal 1 · hello.ren · deps: Console Os
+1 Os.args() → ["a", "b"]
+2 Console.write("[\"a\", \"b\"]")
+3 exit 0

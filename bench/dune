@@ -39,7 +39,32 @@
   (glob_files native/vec/*.ren)
   (glob_files 10d/*.ren)
   (glob_files 10d/*.expected)
+  (glob_files 11a/*.ren)
+  (glob_files 11a/*.expected)
   (glob_files %{project_root}/examples/*.ren)
   (glob_files %{project_root}/examples/shop/*.ren)
   (glob_files %{project_root}/examples/shop/billing/*.ren)
   (glob_files %{project_root}/examples/two/*.ren)))
+
+; tasks.t runs stage 11a's programs, in 11a/tasks/, each `ren test` in
+; its folder, and says which are as specified yet (compiler.md, "Stage
+; 11a", "The tests").
+
+(cram
+ (applies_to tasks)
+ (deps
+  %{bin:ren}
+  (glob_files 11a/tasks/server/*.ren)
+  (glob_files 11a/tasks/crawler/*.ren)
+  (glob_files 11a/tasks/just/*.ren)
+  (glob_files 11a/tasks/transfer/*.ren)
+  (glob_files 11a/tasks/refresh/*.ren)
+  (glob_files 11a/tasks/lost_update/*.ren)
+  (glob_files 11a/tasks/journal/*.ren)
+  11a/tasks/server/expected
+  11a/tasks/crawler/expected
+  11a/tasks/just/expected
+  11a/tasks/transfer/expected
+  11a/tasks/refresh/expected
+  11a/tasks/journal/v1.journal
+  11a/tasks/journal/v1.expected))
