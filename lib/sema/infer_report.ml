@@ -97,11 +97,12 @@ type why = Infer_env.why = {
   alone : bool;
       (** its words are the whole message: what the mismatch itself would add,
           a note on what can fail, isn't *)
+  produces : (string -> string -> string) option;
 }
 
 let explain ?msg ?(notes = []) ?help ?narrowed_help ?(labels = fun _ _ -> [])
-    ?(type_params = true) ?(inside = Fun.id) ?(alone = false) () =
-  { msg; notes; help; narrowed_help; labels; type_params; inside; alone }
+    ?(type_params = true) ?(inside = Fun.id) ?(alone = false) ?produces () =
+  { msg; notes; help; narrowed_help; labels; type_params; inside; alone; produces }
 
 let plain = explain ()
 

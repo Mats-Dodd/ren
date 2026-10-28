@@ -323,7 +323,10 @@ fn transfer(t: Transfer) ! DbDown | Short uses Sql =
 - **The `with`'s errors are the body's, plus `finally`'s,** checked like
   any other.
 - `finally` runs once, whether the body finished or failed. A panic isn't
-  an error, so `finally` doesn't see it: a panic ends the program.
+  an error, so `finally` doesn't see it: a panic ends the program. Unless
+  an `Async.isolate` around the `with` makes it a value
+  ([async.md](async.md#a-panic-ends-the-program)): then the `finally` is
+  given `Err(Cancelled)`, as a cancelled body's is.
 - **Where it's written says what it covers.** This one is after `let tx
   = try next.begin()`, so a failed `begin` never reaches it. One written
   above that line would run then too, given `begin`'s error, and the

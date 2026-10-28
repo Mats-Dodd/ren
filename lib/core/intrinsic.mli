@@ -37,6 +37,15 @@ type t =
   | Task_replace
   | Task_join
   | Task_cancel
+  | Task_until
+  | Task_timeout
+  | Task_isolate
+  | Task_map
+  | Task_each
+  | Task_both
+  | Task_race
+  | Async_yield
+  | Async_tick
   | Map_empty
   | Map_of
   | Map_get

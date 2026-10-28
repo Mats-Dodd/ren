@@ -168,6 +168,10 @@ type cx = {
           the arm, whose locals' ids are theirs plus [shift], so each copy's
           are its own *)
   mutable call : call option;  (** in such a copy, its call *)
+  mutable cells : (C.var * C.var) list;
+      (** in a handler's arm, its state's `var`s and their cells
+          ([with_cells]), which `Async.until` writes back and reads again
+          ([until_released]) *)
   tags : (int * string list) list;
       (** in a function made for the tags it's given, each parameter of
           `Tags`, by its binder's id, with them *)
@@ -673,7 +677,7 @@ and expr_of cx (e : expr) : C.expr =
       let t = expr cx t in
       let f = match f with Some f -> expr cx f | None -> C.unit e.loc in
       here (If (c, t, f))
-  | Call (f, args) -> call cx e f args
+  | Call (f, args) -> until_released cx (call cx e f args)
   | Lambda (params, body) ->
       let ps =
         match ty () with
@@ -1291,7 +1295,11 @@ and any_impl cx (e : expr) ~cells ~needs ~vars:(ka, kr, ke) arms =
         in
         let lam =
           block_value cx ~name ~given params fty impl.loc (fun () ->
-              expr cx body)
+              let around = cx.cells in
+              cx.cells <- cells;
+              let lowered = expr cx body in
+              cx.cells <- around;
+              lowered)
         in
         cx.subst <- around;
         cx.suffix <- suffix;
@@ -1332,7 +1340,65 @@ and attempted cx (e : C.expr) rt =
 
 (* An arm of a handler, the lambda [impl], which keeps [cells], the
    state's `var`s' cells. *)
-and arm_impl cx cells (impl : expr) = with_cells cx cells (expr cx impl)
+and arm_impl cx cells (impl : expr) =
+  let around = cx.cells in
+  cx.cells <- cells;
+  let lowered = expr cx impl in
+  cx.cells <- around;
+  with_cells cx cells lowered
+
+(* [c], a call; if it's of `Async.until` in a handler's arm, which lets
+   go of the instance while it waits (compiler.md, "The rest of
+   `Async`"), the arm's copies of the state are written back to their
+   cells first, so other operations see what it changed, and read again
+   after, since they may have changed it meanwhile; and the condition
+   reads the cells, not the arm's copies, since it's checked each time
+   the instance is released, while the arm waits ([with_cells] keeps
+   the state in the arm's own locals until it ends). Excl makes sure the
+   condition is a block written there. *)
+and until_released cx (c : C.expr) =
+  match (c.kind, cx.cells) with
+  | ( Call (({ kind = Global (p, _, _, _); _ } as f), [ Value cond ], ev),
+      (_ :: _ as cells) )
+    when p = Path.member (Path.prelude "Async") "until" ->
+      let loc = c.loc in
+      let cond =
+        match cond.kind with
+        | Lambda ({ params; ev = lev; outer; captures; body; _ } as l) ->
+            let read =
+              List.filter
+                (fun ((v : C.var), _) ->
+                  List.exists (fun (w : C.var) -> w.id = v.id) captures)
+                cells
+            in
+            let body =
+              lets
+                (List.map
+                   (fun ((v : C.var), (cell : C.var)) ->
+                     (v, mk (Prim (Get_cell, [ local cell loc ])) v.ty loc))
+                   read)
+                body
+            in
+            let captures = captures_of params lev outer body in
+            { cond with kind = Lambda { l with captures; body } }
+        | _ -> cond
+      in
+      let written =
+        List.map
+          (fun ((v : C.var), (cell : C.var)) ->
+            mk (Prim (Set_cell, [ local cell loc; local v loc ])) Ty.unit loc)
+          cells
+      and read_again =
+        List.map
+          (fun ((v : C.var), (cell : C.var)) ->
+            mk
+              (Assign (v, mk (Prim (Get_cell, [ local cell loc ])) v.ty loc))
+              Ty.unit loc)
+          cells
+      in
+      seq_all loc
+        (written @ [ { c with kind = Call (f, [ Value cond ], ev) } ] @ read_again)
+  | _ -> c
 
 (* [lam], a lambda of a handler, an arm or its `finally`s, made to keep
    [cells], the state's `var`s' cells, rather than the `var`s: it reads
@@ -2440,6 +2506,7 @@ let fn_def ~home ~types ~requests ?made (inferred : Infer.t) (f : fn_def) :
       shift = 0;
       shifted = Ids.empty;
       call = None;
+      cells = [];
       tags;
       suffix;
       requests;

@@ -134,6 +134,9 @@ type why = {
   alone : bool;
       (** its words are the whole message: what the mismatch itself would add,
           a note on what can fail, isn't *)
+  produces : (string -> string -> string) option;
+      (** for a lambda: how to word its body giving the wrong type, given what
+          it gives and what it has to, if not as any lambda's is *)
 }
 
 type env = {

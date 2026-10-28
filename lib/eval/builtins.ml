@@ -341,7 +341,8 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Journal_load
   (* and the scheduler's, which run blocks, and wait (eval.ml, [tasks]) *)
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-  | Task_cancel ->
+  | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
+  | Task_each | Task_both | Task_race | Async_yield | Async_tick ->
       fun _ ->
         failwith ("bug: `" ^ Intrinsic.name x ^ "` is run by the interpreter")
   (* the real `Clock.now` and `Clock.instant` *)

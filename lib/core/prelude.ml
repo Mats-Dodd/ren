@@ -567,9 +567,13 @@ handler real_proc() for Proc =
 // The runtime is a handler of `Async`, installed around `main` as the
 // world is. Its operations are `yield` and `tick`; the functions that
 // take blocks are its members, written over the scheduler's intrinsics
-// (eval/sched.ml), which stage 11a's steps build one by one: until then
-// each panics, saying which step builds it (compiler.md, "Stage 11a").
-// `scope` and the members of `Scope` and `Task` are built (step 2).
+// (eval/sched.ml; compiler.md, "Stage 11a").
+
+// what `task_isolate` gives: the body's value, or the message of the
+// panic that was made a value
+type Isolated<T> =
+  | Finished(value: T)
+  | PanickedWith(msg: Str)
 
 pub dep Async =
   // let every other task that can run, run first
@@ -585,39 +589,40 @@ pub dep Async =
   // waits until `cond` holds: only in an operation, whose instance it
   // lets go of meanwhile
   pub fn until(cond: fn() -> Bool) uses Async =
-    unbuilt("`Async.until` isn't built yet: stage 11a, step 3")
+    if not cond() then task_until(cond)
   // `body`, or `Timeout` if it's still running after `d`
   pub fn timeout<T>(d: Duration, body: fn() -> T) -> T ! Timeout uses Async =
-    // the error its step makes it fail with
-    let late = false
-    if late then fail Timeout else unbuilt("`Async.timeout` isn't built yet: stage 11a, step 3")
+    match try task_timeout(d, body)
+      Some(v) => v
+      None => fail Timeout
   // whichever of `a` and `b` finishes first; the other is cancelled.
   // Neither can fail
   pub fn race<T>(a: concurrent fn() -> T, b: concurrent fn() -> T) -> T uses Async =
-    unbuilt("`Async.race` isn't built yet: stage 11a, step 3")
+    task_race(a, b)
   // `body`, or `Panicked` if it panicked
   pub fn isolate<T>(body: fn() -> T) -> T ! Panicked(msg: Str) uses Async =
-    let panicked = false
-    if panicked then fail Panicked("") else unbuilt("`Async.isolate` isn't built yet: stage 11a, step 3")
+    match try task_isolate(body)
+      Finished(v) => v
+      PanickedWith(msg) => fail Panicked(msg)
   // `f` of each element, `max` at once, the results in order
   pub fn map<T, U>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T) -> U) -> Array<U> uses Async =
-    unbuilt("`Async.map` isn't built yet: stage 11a, step 3")
+    try task_map(xs, max, f)
   // `f` of each element, `max` at once
   pub fn each<T>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T)) uses Async =
-    unbuilt("`Async.each` isn't built yet: stage 11a, step 3")
+    try task_each(xs, max, f)
   // `a` and `b` at once
   pub fn both<A, B>(a: concurrent fn() -> A, b: concurrent fn() -> B) -> (A, B) uses Async =
-    unbuilt("`Async.both` isn't built yet: stage 11a, step 3")
+    try task_both(a, b)
   // the runtime on one thread, in real time, with real I/O
   pub fn single() -> Async = single_runtime()
   let real: Async = single_runtime()
 
-// One thread. Both operations return at once until stage 11a's step 3
-// builds them over the scheduler (step 5 makes the handler the
-// scheduler's policy).
+// One thread, in `single`'s order (eval/sched.ml); natively, where
+// nothing else runs, both operations return at once. Step 5 makes the
+// handler the scheduler's policy.
 handler single_runtime() for Async =
-  yield() => ()
-  tick() => ()
+  yield() => async_yield()
+  tick() => async_tick()
 
 // what `Async.scope` gives its body: it's passed and called, never kept
 // (foundations.md, decision 2, rule D)
@@ -1062,6 +1067,52 @@ let scheme (x : Intrinsic.t) =
       fn [ read (Con (Path.prelude "Task", [ Var 0 ])) ] (option (Var 0))
   (* fn<T>(t: Task<T>): asks it to stop *)
   | Task_cancel -> fn [ read (Con (Path.prelude "Task", [ Var 0 ])) ] unit
+  (* fn(cond: fn() -> Bool): waits until the instance whose operation
+     it's in is released with [cond] holding; the caller has checked it
+     doesn't hold now (compiler.md, "The rest of `Async`") *)
+  | Task_until -> fn [ read (Fun ([], bool, open_row 2, open_row 3)) ] unit
+  (* fn<T>(ms: Int, body: fn() -> T) -> Option<T>: [body], under a
+     deadline [ms] from now or the one it's under, if that's sooner;
+     [None] if the deadline cancelled it. What [body] fails with and
+     uses, the call does *)
+  | Task_timeout ->
+      fn [ read int; read (Fun ([], Var 0, open_row 0, open_row 1)) ] (option (Var 0))
+  (* fn<T>(body: fn() -> T) -> Isolated<T>: [body], or the message of a
+     panic in it that's made a value *)
+  | Task_isolate ->
+      fn
+        [ read (Fun ([], Var 0, open_row 0, open_row 1)) ]
+        (Con (Path.prelude "Isolated", [ Var 0 ]))
+  (* fn<T, U>(xs: Array<T>, max: Int, f: fn(T) -> U) -> Array<U>: [f] of
+     each element as a task, [max] at once, the results in order; and
+     the same, giving nothing. The first failure is the call's *)
+  | Task_map ->
+      fn
+        [ read (array (Var 0)); read int; read (Fun ([ read (Var 0) ], Var 1, open_row 0, open_row 1)) ]
+        (array (Var 1))
+  | Task_each ->
+      fn
+        [ read (array (Var 0)); read int; read (Fun ([ read (Var 0) ], unit, open_row 0, open_row 1)) ]
+        unit
+  (* fn<A, B>(a: fn() -> A, b: fn() -> B) -> (A, B): both as tasks *)
+  | Task_both ->
+      fn
+        [
+          read (Fun ([], Var 0, open_row 0, open_row 1));
+          read (Fun ([], Var 1, open_row 0, open_row 1));
+        ]
+        (tuple [ Var 0; Var 1 ])
+  (* fn<T>(a: fn() -> T, b: fn() -> T) -> T: both as tasks, the first to
+     return the result, the other cancelled; neither can fail *)
+  | Task_race ->
+      fn
+        [
+          read (Fun ([], Var 0, open_row 2, open_row 3));
+          read (Fun ([], Var 0, open_row 2, open_row 3));
+        ]
+        (Var 0)
+  (* fn(): `single`'s `yield` and `tick` (sched.ml) *)
+  | Async_yield | Async_tick -> fn [] unit
 
 (* The operation of a built-in dependency that [x] is how the real one
    does, if it reaches the world: `fs_read` is `Fs.read`'s. Each is called
@@ -1087,6 +1138,8 @@ let reaches (x : Intrinsic.t) =
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join | Task_cancel
+  | Task_until | Task_timeout | Task_isolate | Task_map | Task_each | Task_both
+  | Task_race | Async_yield | Async_tick
   | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_index | Str_split
@@ -1121,7 +1174,8 @@ let caller (x : Intrinsic.t) =
   | ( None,
       ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
       | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-      | Task_cancel ) ) ->
+      | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
+      | Task_each | Task_both | Task_race | Async_yield | Async_tick ) ) ->
       Internal
   | None, _ -> Any
 
@@ -1164,6 +1218,15 @@ let fns : Intrinsic.t list =
     Task_replace;
     Task_join;
     Task_cancel;
+    Task_until;
+    Task_timeout;
+    Task_isolate;
+    Task_map;
+    Task_each;
+    Task_both;
+    Task_race;
+    Async_yield;
+    Async_tick;
   ]
 
 (* ---- built-in types ----

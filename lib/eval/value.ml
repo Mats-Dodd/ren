@@ -132,13 +132,27 @@ and handler = { ev : int; body : Core.expr; env : t ref Env.t }
 
 (* An implementation of the dependency [dep] at the type arguments
    [args], a generic one's instance, installed: it runs with the evidence
-   [outer], what was installed where it was. *)
+   [outer], what was installed where it was. [inst] numbers the instance
+   it's an implementation of ([instance]): a handler of several
+   dependencies installs one of these for each, with one number, since
+   they share one state. *)
 and installed = {
   dep : Path.t;
   args : Ty.ty list;
   impl : t;
   outer : installed list;
+  inst : int;
 }
+
+(* A new instance's number, each one more than the last: so an instance
+   made before another has a smaller number, which is how `Async.isolate`
+   tells the instances installed outside it from those inside it
+   (sched.ml, [isolatable]). *)
+let instances = ref 0
+
+let instance () =
+  incr instances;
+  !instances
 
 (* An array of [xs], which it takes: nothing else may change [xs]. *)
 let array xs =

@@ -1600,15 +1600,25 @@ let rec no_kept_handles env ~prelude (e : expr) =
    (compiler.md, "Stage 11a", "The two holes"): each intrinsic that can
    wait for another task is called only by the prelude's own functions
    whose rows have `Async`, so a call that can reach one has `Async` in
-   its row too. *)
+   its row too; or by the prelude's handlers of `Async`, the runtime,
+   whose arms run only when an operation of `Async` is called, which
+   needs it in the caller's row. *)
 let waits_only_with_async env (f : fn_def) =
-  let async = Ty.dep_label (Path.prelude "Async") in
+  let async = Path.prelude "Async" in
   let has_async =
     match f.scheme.ty with
     | Fun (_, _, _, uses) ->
-        List.exists (fun (l : Ty.label) -> l.name = async) uses.labels
+        List.exists
+          (fun (l : Ty.label) -> l.name = Ty.dep_label async)
+          uses.labels
     | _ -> false
   in
+  let runtime =
+    match f.scheme.ty with
+    | Fun (_, Impl i, _, _) -> List.mem async (Ty.dep_paths i.deps)
+    | _ -> false
+  in
+  let has_async = has_async || runtime in
   let rec go (e : expr) =
     (match e.kind with
     | Intrinsic (x, _, _, _)

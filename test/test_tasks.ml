@@ -1029,16 +1029,8 @@ let%expect_test "[s3 accept] `Async.until` waits for an operation's state" =
   (* the first task waits in `Gate.wait`, letting go of the gate; the
      second's `open` releases it with the condition holding, so the first
      goes on *)
-  until "s3"
-    ~want:{|
-opening
-through
-done
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Gate =
   wait: fn()
   open: fn()
@@ -1058,29 +1050,17 @@ fn main() uses Console, Async =
         print("opening")
         Gate.open()
   print("done")
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.until` isn't built yet: stage 11a, step 3
-      ┌─ test.ren:7:13
-    7 │   wait() => Async.until(fn() => opened)
-      │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-      = in the task main/main:0
+    opening
+    through
+    done
+    ()
     |}]
 
 let%expect_test "[s3 accept] `tick` and `yield`" =
-  until "s3"
-    ~want:{|
-a
-body
-b
-c
-after the tick
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     s.spawn fn() => print("a")
@@ -1090,54 +1070,37 @@ fn main() uses Console, Async =
     s.spawn fn() => print("c")
     Async.tick()
     print("after the tick")
-|});
+|};
   [%expect {|
-    (until s3)
-    body
-    after the tick
     a
+    body
     b
     c
+    after the tick
     ()
     |}]
 
 let%expect_test "[s3 accept] a timeout gives `Timeout`, or the body's result" =
-  until "s3"
-    ~want:{|
-Err(Timeout)
-Ok(2)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async, Clock =
   let r = attempt Async.timeout(Duration.ms(20)) fn() =>
     Clock.sleep(Duration.seconds(10))
     1
   print(r)
   print(attempt Async.timeout(Duration.seconds(10)) fn() => 2)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.timeout` isn't built yet: stage 11a, step 3
-      ┌─ test.ren:2:19
-    2 │   let r = attempt Async.timeout(Duration.ms(20)) fn() =>
-      │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    Err(Timeout)
+    Ok(2)
+    ()
     |}]
 
 let%expect_test "[s3 accept] a timeout never reports `Timeout` for work that finished" =
   (* the body has finished when the deadline passes, and its handler's
      `finally`, the commit, runs shielded past it *)
-  until "s3"
-    ~want:{|
-committed
-Ok(7)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Db =
   put: fn(x: Int)
 
@@ -1155,26 +1118,17 @@ fn main() uses Console, Async, Clock =
       Db.put(1)
       7
   print(r)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.timeout` isn't built yet: stage 11a, step 3
-       ┌─ test.ren:13:19
-    13 │   let r = attempt Async.timeout(Duration.ms(20)) fn() =>
-       │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    committed
+    Ok(7)
+    ()
     |}]
 
 let%expect_test "[s3 accept] deadlines carry down" =
   (* the inner timeout runs to the outer's sooner deadline *)
-  until "s3"
-    ~want:{|
-Err(Timeout)
-true
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async, Clock =
   let start = Clock.instant()
   let r = attempt Async.timeout(Duration.ms(20)) fn() =>
@@ -1183,245 +1137,165 @@ fn main() uses Console, Async, Clock =
       1
   print(r)
   print(Clock.instant() - start < Duration.seconds(1))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.timeout` isn't built yet: stage 11a, step 3
-      ┌─ test.ren:3:19
-    3 │   let r = attempt Async.timeout(Duration.ms(20)) fn() =>
-      │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    Err(Timeout)
+    true
+    ()
     |}]
 
 let%expect_test "[s3 accept] `race` gives the first to finish" =
-  until "s3"
-    ~want:{|
-fast
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn after(ms: Int, what: Str) -> Str uses Clock =
   Clock.sleep(Duration.ms(ms))
   what
 
 fn main() uses Console, Async, Clock =
   print(Async.race(fn() => after(200, "slow"), fn() => after(5, "fast")))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.race` isn't built yet: stage 11a, step 3
-      ┌─ test.ren:6:9
-    6 │   print(Async.race(fn() => after(200, "slow"), fn() => after(5, "fast")))
-      │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    fast
+    ()
     |}]
 
 let%expect_test "[s3 accept] `isolate` makes a panic a value" =
-  until "s3"
-    ~want:
-      {|
-Err(Panicked("index 5 is out of bounds for an array of length 1"))
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn boom(xs: Array<Int>) -> Int = xs[5]
 
 fn main() uses Console, Async =
   print(attempt Async.isolate fn() => boom([1]))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.isolate` isn't built yet: stage 11a, step 3
-      ┌─ test.ren:4:17
-    4 │   print(attempt Async.isolate fn() => boom([1]))
-      │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    Err(Panicked("index 5 is out of bounds for an array of length 1"))
+    ()
     |}]
 
 let%expect_test "[s3 accept] `map` keeps the order, and its first failure wins" =
-  until "s3"
-    ~want:{|
-[30, 10, 20]
-Err(Bad(2))
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   print(Async.map([3, 1, 2]) fn(x) => x * 10)
   print(attempt Async.map([1, 2, 3]) fn(x) => if x == 2 then fail Bad(x) else x)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.map` isn't built yet: stage 11a, step 3
-      ┌─ test.ren:2:9
-    2 │   print(Async.map([3, 1, 2]) fn(x) => x * 10)
-      │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    [30, 10, 20]
+    Err(Bad(2))
+    ()
     |}]
 
 let%expect_test "[s3 accept] `each` and `both`" =
-  until "s3"
-    ~want:{|
-1
-2
-(1, "two")
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   Async.each([1, 2]) fn(x) => print(x)
   print(Async.both(fn() => 1, fn() => "two"))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.each` isn't built yet: stage 11a, step 3
-      ┌─ test.ren:2:3
-    2 │   Async.each([1, 2]) fn(x) => print(x)
-      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1
+    2
+    (1, "two")
+    ()
     |}]
 
 let%expect_test "[s3 reject] `Async.until` outside an operation" =
-  until "s3"
-    ~says:
-      [
-        "error: `Async.until` waits for a handler's state to change, so it's \
-         only written in one of its operations";
-        "help: move the wait into an operation of the handler whose state it \
-         reads";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Async =
   let ready = true
   Async.until(fn() => ready)
-|});
+|};
   [%expect {|
-    (until s3)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: `Async.until` waits for a handler's state to change, so it's only written in one of its operations
+      ┌─ test.ren:3:3
+    3 │   Async.until(fn() => ready)
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+      help: move the wait into an operation of the handler whose state it reads
     |}]
 
 let%expect_test "[s3 reject] `Async.until`'s condition uses a dependency" =
-  until "s3"
-    ~says:
-      [
-        "error: `Async.until`'s condition can't use `Clock`";
-        "help: read it in the operation, before the wait";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Gate =
   wait: fn()
 
 handler gate(at: Time) for Gate uses Async, Clock =
   wait() => Async.until(fn() => Clock.now() > at)
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s3)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: `Async.until`'s condition can't use `Clock`
+      ┌─ test.ren:5:33
+    5 │   wait() => Async.until(fn() => Clock.now() > at)
+      │                                 ^^^^^^^^^^^
+      = it's checked again each time the handler is released, so it can only read the handler's state
+      help: read it in the operation, before the wait
     |}]
 
 let%expect_test "[s3 reject] an isolated block changes a variable outside it" =
-  until "s3"
-    ~says:
-      [
-        "error: an isolated block can't change `n`, which is outside it";
-        "help: give it back as the block's result: `let n = try \
-         Async.isolate fn() => ...`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Console, Async =
   var n = 0
   let r = attempt Async.isolate fn() => n += 1
   print(n)
-|});
+|};
   [%expect {|
-    (until s3)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: an isolated block can't change `n`, which is outside it
+      ┌─ test.ren:3:41
+    3 │   let r = attempt Async.isolate fn() => n += 1
+      │                                         ^ changed here
+      = nothing it changed is seen after a panic, so it changes only what it returns, and what it changes through operations
+      help: give it back as the block's result: `let n = try Async.isolate fn() => ...`
     |}]
 
 let%expect_test "[s3 reject] `Async.isolate` of a block parameter" =
-  until "s3"
-    ~says:
-      [
-        "error: `Async.isolate` takes a block written here, not `f`";
-        "help: write the block: `Async.isolate fn() => f()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn guarded(f: fn() -> Int) -> Int ! Panicked(msg: Str) uses Async =
   try Async.isolate(f)
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s3)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: `Async.isolate` takes a block written here, not `f`
+      ┌─ test.ren:2:21
+    2 │   try Async.isolate(f)
+      │                     ^
+      help: write the block: `Async.isolate fn() => f()`
     |}]
 
 let%expect_test "[s3 reject] `each`'s block gives a value" =
-  until "s3"
-    ~says:
-      [
-        "error: `Async.each`'s block gives an `Int`, which `each` would throw \
-         away";
-        "help: use `Async.map` to keep the results, or end the block with `()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Async =
   Async.each([1, 2]) fn(x) => x * 2
-|});
+|};
   [%expect {|
-    (until s3)
-    error: this lambda produces an `Int`, but it has to produce a `Unit`
+    error: `Async.each`'s block gives an `Int`, which `each` would throw away
       ┌─ test.ren:2:31
     2 │   Async.each([1, 2]) fn(x) => x * 2
       │                               ^^^^^
+      help: use `Async.map` to keep the results, or end the block with `()`
     |}]
 
 let%expect_test "[s3 reject] there's no `par_map`" =
-  until "s3"
-    ~says:
-      [
-        "error: `Array<Int>` has no method named `par_map`";
-        "`Async.map(xs) fn(x) => ...` runs on every core when its block uses \
-         no dependencies";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Console =
   print([1, 2].par_map(fn(x) => x * 2))
-|});
+|};
   [%expect {|
-    (until s3)
     error: `Array<Int>` has no method named `par_map`
       ┌─ test.ren:2:16
     2 │   print([1, 2].par_map(fn(x) => x * 2))
       │                ^^^^^^^
-      help: its methods: `len`, `push`, `sort`, `copy`, `split_at`, `get`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `each`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `take`, `drop`, `reverse`
+      help: `Async.map(xs) fn(x) => ...` runs on every core when its block uses no dependencies
     |}]
 
 let%expect_test "[s3 reject] every task waiting, with nothing to wake one" =
-  until "s3"
-    ~says:
-      [
-        "error: panic: every task is waiting, and nothing can wake one";
-        "main waits in `Async.until`";
-      ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 dep Gate =
   wait: fn()
 
@@ -1431,13 +1305,386 @@ handler gate() for Gate uses Async =
 fn main() uses Console, Async =
   with gate() in
     Gate.wait()
-|});
+|};
   [%expect {|
-    (until s3)
-    error: panic: `Async.until` isn't built yet: stage 11a, step 3
+    error: panic: every task is waiting, and nothing can wake one
       ┌─ test.ren:5:13
     5 │   wait() => Async.until(fn() => false)
       │             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = main waits in `Async.until` at test.ren:5:13
+    |}]
+
+(* ---- s3: adversarial cases (compiler.md, "Step 3, as built") ---- *)
+
+let%expect_test "[s3 accept] `Async.until` reads the state as it is, and the arm goes on from it" =
+  (* a semaphore of one: each `acquire` that waited reads `free` again
+     once it's woken, so none takes a permit another already took, and
+     what the arm changed before it waited, `waited`, isn't lost *)
+  run
+    {|
+dep Sem =
+  acquire: fn()
+  release: fn()
+  free: fn() -> Int
+
+handler sem(n: Int) for Sem uses Async =
+  var free = n
+  var waited = 0
+  acquire() =>
+    waited += 1
+    Async.until(fn() => free > 0)
+    free -= 1
+  release() => free += 1
+  free() => free * 100 + waited
+
+fn work(name: Str) uses Sem, Console, Async =
+  Sem.acquire()
+  print((name, "in", Sem.free()))
+  Async.yield()
+  print((name, "out"))
+  Sem.release()
+
+fn main() uses Console, Async =
+  with sem(1) in
+    Async.scope fn(s) =>
+      s.spawn fn() => work("a")
+      s.spawn fn() => work("b")
+      s.spawn fn() => work("c")
+    print(Sem.free())
+|};
+  [%expect {|
+    ("a", "in", 1)
+    ("a", "out")
+    ("b", "in", 3)
+    ("b", "out")
+    ("c", "in", 3)
+    ("c", "out")
+    103
+    ()
+    |}]
+
+let%expect_test "[s3 accept] each release wakes the first waiter whose condition holds" =
+  (* two tickets for three waiters, the third cancelled while it waits *)
+  run
+    {|
+dep Gate =
+  wait: fn(name: Str)
+  open: fn()
+
+handler gate() for Gate uses Async, Console =
+  var tickets = 0
+  wait(name) =>
+    Async.until(fn() => tickets > 0)
+    tickets -= 1
+    print(name)
+  open() => tickets += 1
+
+fn main() uses Console, Async =
+  with gate() in
+    Async.scope fn(s) =>
+      s.spawn fn() => Gate.wait("first")
+      s.spawn fn() => Gate.wait("second")
+      let t = s.start fn() => Gate.wait("third")
+      s.spawn fn() =>
+        Gate.open()
+        Gate.open()
+        t.cancel()
+  print("done")
+|};
+  [%expect {|
+    first
+    second
+    done
+    ()
+    |}]
+
+let%expect_test "[s3 accept] a cancel ends a wait in `Async.until`, and the arm's `finally` runs" =
+  run
+    {|
+dep Gate =
+  wait: fn()
+
+handler gate() for Gate uses Async, Console =
+  wait() =>
+    finally(r) =>
+      print("given back")
+      match r
+        Ok(v) => v
+        Err(_) => ()
+    Async.until(fn() => false)
+
+fn main() uses Console, Async =
+  with gate() in
+    Async.scope fn(s) =>
+      let t = s.start fn() => Gate.wait()
+      s.spawn fn() => t.cancel()
+  print("done")
+|};
+  [%expect {|
+    given back
+    done
+    ()
+    |}]
+
+let%expect_test "[s3 reject] a panic in `Async.until`'s condition is its waiter's" =
+  run_error
+    {|
+dep Gate =
+  wait: fn()
+  open: fn()
+
+handler gate() for Gate uses Async =
+  var n = 0
+  wait() => Async.until(fn() => [1][n] > 1)
+  open() => n = 3
+
+fn main() uses Console, Async =
+  with gate() in
+    Async.scope fn(s) =>
+      s.spawn fn() => Gate.wait()
+      s.spawn fn() => Gate.open()
+|};
+  [%expect {|
+    error: panic: index 3 is out of bounds for an array of length 1
+      ┌─ test.ren:7:33
+    7 │   wait() => Async.until(fn() => [1][n] > 1)
+      │                                 ^^^^^^
+      = in the task main/main:0
+    |}]
+
+let%expect_test "[s3 reject] `Async.until` of a block bound elsewhere" =
+  (* it's checked again as other tasks release the instance, so it has
+     to read the state's cells, which only a block written there does *)
+  check_error
+    {|
+dep Gate =
+  wait: fn()
+
+handler gate() for Gate uses Async =
+  var open = false
+  wait() =>
+    let ready = fn() => open
+    Async.until(ready)
+fn main() = ()
+|};
+  [%expect {|
+    error: `Async.until` takes a block written here, not `ready`
+      ┌─ test.ren:8:17
+    8 │     Async.until(ready)
+      │                 ^^^^^
+      help: write the block: `Async.until fn() => ready()`
+    |}]
+
+let%expect_test "[s3 accept] a timeout in a `finally` bounds its own body" =
+  (* the outer timeout's body has finished, so its `finally`'s wait is
+     shielded from it; the inner timeout began in the `finally`, so it
+     isn't *)
+  run
+    {|
+dep Slow =
+  nothing: fn()
+
+handler slow() for Slow uses Clock, Console, Async =
+  finally(r) =>
+    let inner = attempt Async.timeout(Duration.ms(10)) fn() =>
+      Clock.sleep(Duration.seconds(3))
+    print(inner)
+    try r
+  nothing() => ()
+
+fn main() uses Console, Async, Clock =
+  let start = Clock.instant()
+  let r = attempt Async.timeout(Duration.ms(10)) fn() =>
+    with slow() in
+      1
+  print(r)
+  print(Clock.instant() - start < Duration.seconds(1))
+|};
+  [%expect {|
+    Err(Timeout)
+    Ok(1)
+    true
+    ()
+    |}]
+
+let%expect_test "[s3 accept] a timeout cancels the tasks of a scope inside it" =
+  run
+    {|
+fn main() uses Console, Async, Clock =
+  let r = attempt Async.timeout(Duration.ms(10)) fn() =>
+    Async.scope fn(s) =>
+      s.spawn fn() =>
+        Clock.sleep(Duration.seconds(3))
+        print("never")
+      s.spawn fn() => print("ran")
+  print(r)
+|};
+  [%expect {|
+    ran
+    Err(Timeout)
+    ()
+    |}]
+
+let%expect_test "[s3 accept] `isolate` cleans up what was installed inside it" =
+  (* a handler installed inside sees the panic as a cancel, and a scope
+     inside cancels its tasks *)
+  run
+    {|
+dep Db =
+  put: fn(x: Int)
+
+handler noisy() for Db uses Console =
+  finally(r) =>
+    match r
+      Ok(_) => print("finally: ok")
+      Err(_) => print("finally: err")
+    try r
+  put(x) => print(x)
+
+fn main() uses Console, Async =
+  let r = attempt Async.isolate fn() =>
+    with noisy() in
+      Db.put(1)
+      let xs = [1]
+      xs[4]
+  print(r)
+  let r2 = attempt Async.isolate fn() =>
+    Async.scope fn(s) =>
+      s.spawn fn() =>
+        Async.yield()
+        print("never")
+      let xs = [1]
+      xs[4]
+  print(r2)
+|};
+  [%expect {|
+    1
+    finally: err
+    Err(Panicked("index 4 is out of bounds for an array of length 1"))
+    Err(Panicked("index 4 is out of bounds for an array of length 1"))
+    ()
+    |}]
+
+let%expect_test "[s3 reject] a panic in an operation of an instance installed outside an isolate ends the program" =
+  (* its state could be half changed (foundations.md, decision 8) *)
+  run_error
+    {|
+dep Outer =
+  boom: fn() -> Int
+
+handler outer() for Outer =
+  var n = 0
+  boom() =>
+    n += 1
+    let xs = [1]
+    xs[n + 3]
+
+fn main() uses Console, Async =
+  with outer() in
+    print(attempt Async.isolate fn() => Outer.boom())
+|};
+  [%expect {|
+    error: panic: index 4 is out of bounds for an array of length 1
+      ┌─ test.ren:9:5
+    9 │     xs[n + 3]
+      │     ^^^^^^^^^
+    |}]
+
+let%expect_test "[s3 reject] an isolated block calls a block it was given" =
+  check_error
+    {|
+fn guarded(f: fn() -> Int) -> Int ! Panicked(msg: Str) uses Async =
+  try Async.isolate fn() => (try f()) + 1
+fn main() = ()
+|};
+  [%expect {|
+    error: an isolated block can't call `f`, a block it was given
+      ┌─ test.ren:2:34
+    2 │   try Async.isolate fn() => (try f()) + 1
+      │                                  ^
+      = a block it was given can change its caller's variables
+      help: call it before the isolate, and isolate what uses what it gives
+    |}]
+
+let%expect_test "[s3 reject] an error `main` fails with says the task it came from" =
+  run_error
+    {|
+fn main() ! Bad(n: Int) uses Console, Async =
+  print(try Async.map([1, 2, 3]) fn(x) => if x == 2 then fail Bad(x) else x)
+|};
+  [%expect {|
+    error: Bad(2)
+      = from the task main/main:1
+    |}]
+
+let%expect_test "[s3 accept] the first failure wins, the other is cancelled" =
+  (* `slow` has finished when `get` fails, so its `finally` runs on,
+     shielded, and fails too: that's written to stderr, a warning, and
+     the error is `get`'s *)
+  run
+    {|
+dep Db =
+  get: fn() -> Int ! Down
+  slow: fn() -> Int ! Bad
+
+handler db() for Db uses Clock =
+  get() =>
+    Clock.sleep(Duration.ms(5))
+    fail Down
+  slow() =>
+    finally(r) =>
+      Clock.sleep(Duration.ms(20))
+      match r
+        Ok(_) => fail Bad
+        Err(_) => 0
+    1
+
+fn main() uses Console, Async, Clock =
+  with db() in
+    print(attempt Async.both(fn() => try Db.get(), fn() => try Db.slow()))
+|};
+  [%expect {|
+    warning: main/main:1 failed too, with `Bad`, while it was being cancelled
+    warning: main/main:1 failed too, with `Bad`, while it was being cancelled
+    Err(Down)
+    ()
+    |}]
+
+let%expect_test "[s3 accept] `map` runs `max` at once, and `race` cancels the loser" =
+  run
+    {|
+fn main() uses Console, Async =
+  print(Async.map([1, 2, 3, 4], max: 2) fn(x) =>
+    print(("start", x))
+    Async.yield()
+    x * 2)
+  print(Async.race(fn() => 1, fn() =>
+    Async.yield()
+    print("never")
+    2))
+|};
+  [%expect {|
+    ("start", 1)
+    ("start", 2)
+    ("start", 3)
+    ("start", 4)
+    [2, 4, 6, 8]
+    1
+    ()
+    |}]
+
+let%expect_test "[s3 reject] `map`'s `max` is 0" =
+  run_error
+    {|
+fn main() uses Console, Async =
+  print(Async.map([1], max: 0) fn(x) => x)
+|};
+  [%expect {|
+    error: panic: `Async.map`'s `max` is 0, so it couldn't start a task
+      ┌─ test.ren:2:9
+    2 │   print(Async.map([1], max: 0) fn(x) => x)
+      │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      help: `max:` is at least 1
     |}]
 
 (* ---- s4: operations that don't interleave ---- *)

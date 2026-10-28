@@ -249,6 +249,14 @@ status 1:
 error: Frozen(AccountId(3))
 ```
 
+An error that came from a task, one of `Async.map`'s say, says which,
+by its path ([async.md](async.md#how-it-runs)):
+
+```
+error: Bad(2)
+  = from the task main/main:1
+```
+
 ## Later
 
 - ~~`..e` on a closure that's stored~~ came in stage 7, and went in

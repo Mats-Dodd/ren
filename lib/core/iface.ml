@@ -409,9 +409,12 @@ let defaults_of (ps : Ast.Resolved.param list) =
 (* Whether the block parameters of the function at [p] can't fail, though
    their types don't say what they fail with: `Async.race`'s, whose
    branches can't fail, or a failure could leave the race waiting on the
-   other (foundations.md, decision 7). A spawned block can't either, and
-   its mode says so. *)
-let closed_blocks p = p = Path.member (Path.prelude "Async") "race"
+   other (foundations.md, decision 7); and `Async.until`'s condition,
+   which is checked again each time the handler is released, where
+   nothing could handle its error (compiler.md, "The rest of `Async`").
+   A spawned block can't either, and its mode says so. *)
+let closed_blocks p =
+  List.mem p (List.map (Path.member (Path.prelude "Async")) [ "race"; "until" ])
 
 (* A public function's type scheme, from its signature alone. Its type
    parameters, parameters and result are all written; a public function

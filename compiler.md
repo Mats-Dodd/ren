@@ -3969,7 +3969,7 @@ tests are meant to fail.
 | `server` | the server that shuts down gracefully, with `sim.net` | 7 |
 | `crawler` | the crawler, its `Seen` set and `limit` over its `Web` | 8 |
 | `just` | `run_all`, independent recipes at once, a failure killing the rest | 8 (then folded into examples/just) |
-| `transfer` | a transfer under a timeout, commit in `finally` | 3 |
+| `transfer` | a transfer under a timeout, commit in `finally` | 5 (needs virtual time: see "Step 3, as built") |
 | `refresh` | prices refreshed by a task beside the `with` | 8 |
 | `lost_update` | the milestone: a lost update between two operations, found by `--seeds` and replayed by `--seed`; and the README's `cached`, which can't race any more | 8 |
 | `journal` | a version 1 journal, recorded before 11a, which `ren replay` refuses with a help | 6 |
@@ -5040,6 +5040,109 @@ What step 2 settled where the text above is silent, or differs from it:
   use what the handler `uses`, as it may in debug.
 - Test fixes: none of the step 0 tests needed one.
 
+### Step 3, as built
+
+What step 3 settled where the text above is silent, or differs from it:
+
+- **The members are Ren over intrinsics** (prelude.ml): `task_until`,
+  `task_timeout` (giving `None` for `Timeout`), `task_isolate` (giving the
+  prelude's private `Isolated<T>`, `Finished(v)` or `PanickedWith(msg)`),
+  `task_map`, `task_each`, `task_both`, `task_race`, and `async_yield` and
+  `async_tick`, which `single_runtime`'s arms call. Each is
+  `Intrinsic.waits`; Core Lint lets the prelude's handlers of `Async`, the
+  runtime, call one too, since their arms run only where `Async` is in the
+  row. `Unbuilt` stays for the later steps' members.
+- **An instance has a number** (`Value.installed.inst`, from
+  `Value.instance`, increasing; a handler of several dependencies installs
+  one number for all). A `Dep_call` runs its operation inside
+  `Sched.holding`: the task is in the operation, by number and arm label,
+  until it returns, fails or is cancelled, and then the instance is
+  *released* (`Sched.released`). Step 4 builds its queue on this.
+- **`Async.until`** waits on the instance whose operation it's written in:
+  the innermost the task is in with the arm's label (`Sched.op_instance`).
+  Each release of that instance checks its waiters in the order they began
+  waiting and wakes the first whose condition holds; the condition runs
+  as its waiter's (`Sched.as_task`), so a panic in it is raised where the
+  waiter waits, with its task. Until step 4 nothing keeps another task
+  from changing the state between that wake and the waiter running, so a
+  woken waiter checks again, and waits again if it doesn't hold.
+- **`Async.until` lets go of the arm's copy of the state.** An arm keeps
+  its handler's `var`s in locals for the arm, read from their cells when
+  it starts and written back when it ends (lower.ml, `with_cells`). So
+  Lower (`until_released`) writes each back before a call of `until` in
+  an arm and reads each again after, and makes the condition read the
+  cells: other operations see what the arm changed before it waited, and
+  the arm goes on from what they changed. That needs the condition to be
+  a block written in the call, so a block bound elsewhere is an error,
+  new: "`Async.until` takes a block written here, not `ready`", with help
+  "write the block: `Async.until fn() => ready()`". `until`'s condition
+  can't fail: `Iface.closed_blocks` closes it, as `race`'s branches.
+- **Where `until` may be written** is Excl's (`in_op`: an arm and the
+  blocks in it, not a `finally`); what the condition uses, the first
+  dependency call in it (`first_dep`).
+- **`yield` and `tick`** go to the end of the queue. In `single`'s one
+  queue, first in first out, that's what `tick` asks too: everything in the
+  queue when it was called runs until it waits first. Under `sim` (step 5)
+  they differ, and `Sched.tick` is where.
+- **`Async.timeout`** pushes a deadline on the task (`Sched.deadline`): its
+  `due`, the sooner of now plus `d` and the deadline above it, and how deep
+  in `finally`s the task was then. A task sees a cancel at its next
+  dependency call or wait once a deadline is due (`Sched.cancel_due`),
+  unless it has entered a `finally` since the timeout began: that shields
+  it until the cleanup deadline after `due`. So a `finally` around a
+  timeout doesn't shield its body, and a timeout written in a `finally`
+  bounds what it covers. A wait sets a timer at the soonest of these, so
+  a sleep under a timeout ends at its deadline. When `Cancelled` reaches
+  the timeout and only its deadline caused it, it's `Timeout`; a cancel
+  of the task itself goes on; a body that returned or failed gives what it
+  did, however late.
+- **`Async.isolate`** keeps, per task, the isolates it's in, each with the
+  number of the last instance made before it and how many operations the
+  task was in. A panic leaving an operation notes the instance; it's
+  isolated (`Sched.isolatable`) when no instance it left, or that the task
+  is still in since the isolate began, was installed before the isolate.
+  The `with`s, scopes, `map`s and `race`s it unwinds through ask the same,
+  and when it's so, a `with`'s `finally` is given `Err(Cancelled)` and a
+  scope's tasks are cancelled and waited for, as for a cancel; otherwise
+  nothing runs, as for any panic. Only `Eval.Panic` is made a value: an
+  `assert` that fails in a test, a stack overflow and a replay that went
+  differently aren't. Only a handler's `finally` runs on an isolated
+  panic, as foundations.md says, not a function's `finally` or an arm's.
+  New errors: "an isolated block can't call `f`, a block it was given"
+  (it could change its caller's variables, as the rule against changing
+  what's outside is there to stop). Limits: a panic in a task spawned
+  inside the isolate still ends the program (a task's panic isn't
+  carried to the isolate yet); low, since it's the conservative side.
+- **`map`, `each`, `both` and `race`** run their blocks as tasks of a
+  scope of their own (eval.ml, `all_of` and `race`), labelled by the code
+  they're called from, `map` and `each` starting one more each time one
+  ends, with the `max` panic as `Async.scope`'s. The first failure is the
+  call's: the rest are cancelled and waited for; one that fails after,
+  while being cancelled, is the warning on stderr ("warning:
+  main/main:1 failed too, with `Bad`, while it was being cancelled").
+  `ren run --record`'s journal comment for it is step 6's.
+- **`= from the task`:** an error that came out of such a task is noted
+  with the task's path (`Sched.came_from`, kept by the error value's
+  identity, the deepest task first); `main` failing with it says
+  `= from the task main/main:1` under the error (`Eval.Uncaught`'s
+  `from`). A test's failure doesn't say it yet.
+- **Release builds** (specialize.ml) know no handler that uses `Async`, and
+  none at all in a program that calls `Async.isolate`: a known handler's
+  operation is a direct call, with no `Dep_call` to hold or release its
+  instance, which `until` and `isolate` need. Natively nothing runs tasks,
+  so this costs a native build nothing it has; `isolate` isn't native at
+  all. A direct call of a known operation still checks for a cancel, as a
+  `Dep_call` does (this was missing in step 2).
+- **Natively,** `yield` and `tick` are `()` and `task_until`, reached only
+  when the condition doesn't hold, is the deadlock panic at the program's
+  call of `Async.until`, whose site carries the note `ren run` prints
+  (`Mem.site`'s new `notes`), so bench/11a/alone and alone_panic print the
+  same natively, debug, release and tcc, and are in those loops.
+- **`transfer` waits for step 5.** Its tests run under `test_clock`, whose
+  `sleep` doesn't wait, so no deadline passes during its queries; with
+  `sim.clock()`'s virtual time (step 5) they do. Step 5 lands it.
+- Test fixes: none.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -5047,6 +5150,20 @@ What step 2 settled where the text above is silent, or differs from it:
 | 0 | b3ba3c7 | this section; async.md rewritten to foundations.md and the brief; the README's race passage; test/test_tasks.ml, every test behind `until "sN"`; bench/11a/tasks/ (the five programs, the `just`'s part, the milestone, a version 1 journal) and bench/tasks.t, all `not yet`; bench/11a's sequential programs and their section of bench/build.t (`trywith` already as specified) | steps 1 to 9; nothing of the language or runtime is built yet |
 | 1 | f887b16 | parameters with defaults, a block without parentheses, `concurrent` and `spawned` (lexer to tree-sitter and Zed); `Async`, `Scope` and `Task` declared in the prelude, each member panicking until its step; rules B to D (Excl, Resolve, Infer, Core Lint); spawned blocks and `race`'s branches can't fail; `try with`; `s.spawn` uses `Async`, with its note; `Intrinsic.waits`; the `task =>` error; test_tasks.ml's s1 tests on; examples/ledger, handlers.md and errors.md say `try with`; bench/11a/trywith in the native loops | steps 2 to 9 |
 | 2 | 30b520b | the scheduler (lib/eval/sched.ml), `main` and each test its root task, in `single`'s order with real timers; `Async.scope(max:)`, `spawn`, `start`, `replace`, `join` and `cancel`; rule C's copies at the spawn; cancellation at dependency calls and waits, seen only by `finally`s as `Err(Cancelled)`, shielded until the 5 s cleanup deadline, `fail Cancelled` refused outside a `finally`; Core's `Covered` for an arm's `finally`; a scope's failure or cancel cancelling its tasks; tasks beside a `with` cancelled when its body ends; task paths in panics, the deadlock panic's notes and `--trace`; `ren build` refusing tasks; test_tasks.ml's s2 tests on, and more; bench/11a/spawns as specified | steps 3 to 9 |
+| 3 | this commit | `until`, `tick`, `yield`, `timeout`, `race`, `isolate`, `map`, `each` and `both` in the interpreter; instances numbered and released at each operation's end; `until` letting go of the arm's copy of the state (Lower); the checks on where `until` is written, its condition and `isolate`'s block; `each`'s block giving a value; `par_map`'s help; `= from the task` and the "failed too" warning; release builds knowing no handler that uses `Async`; natively `yield`, `tick` and the deadlock of `until`; test_tasks.ml's s3 tests on, and more; bench/11a/alone and alone_panic as specified and in the native loops | `transfer` (step 5, virtual time); steps 4 to 9 |
+
+Notes for step 4 on: an operation's call is already bracketed,
+`Sched.holding inst label`, and its end is `Sched.released inst`, which
+wakes `until`'s waiters; the queue for an instance in use goes there,
+the woken waiter first, before the callers queued (Scheduling). Once it
+does, `Task_until`'s loop that checks again after a wake (eval.ml) is
+only a guard. A release build's known handlers skip `Dep_call`, so
+specialize.ml's `eligible` already leaves out any handler that uses
+`Async`. A handler it still knows, one with no `Async`, can be reached
+by a spawned task and is called directly there, with no `Dep_call`, so
+step 4's queue has to cover those calls too, or `eligible` has to leave
+out every handler a spawned task can reach. `transfer` lands with step
+5's virtual time.
 
 Notes for step 3 on: `Async.until`, `tick` and `yield` are still
 `unbuilt` (or return at once, in `single_runtime`); each wait is a

@@ -26,6 +26,9 @@
    `finally` seeing it, is eval.ml's; here a task keeps how deep in
    `finally`s it is, [shield]: while it's in one, a cancel isn't seen,
    until the cleanup deadline, 5 seconds after the cancel, has passed.
+   An `Async.timeout` is a cancel too, of the part of the task inside it,
+   from its deadline on ([deadline]): the task sees it as it sees a
+   cancel, and the timeout, where it reaches it, makes it `Timeout`.
 
    A task's path, `main/serve:3`, is its parent's, a label, the code its
    spawn is written in, and an ordinal, counting what its parent started
@@ -45,14 +48,29 @@ type state =
   | Waiting  (** suspended, on the queue or waiting to be woken *)
   | Ended
 
+(* An `Async.timeout` a task is running the body of: when its deadline
+   is, [due], and how deep in `finally`s the task was when it began,
+   [dshield]. Past [due] the task sees a cancel, unless it's in a
+   `finally` it entered since, which shields it until the cleanup
+   deadline after [due]; a `finally` around the timeout doesn't, so a
+   timeout written in a `finally` bounds its own body (compiler.md, "The
+   rest of `Async`"). *)
+type deadline = { due : float; dshield : int }
+
+(* An `Async.isolate` a task is running the body of: [base], the number
+   of the last instance made before it began (Value.instance), so one
+   numbered [base] or less was installed outside it, and [depth], how
+   many operations the task was in then ([holding]). *)
+type isolate = { base : int; depth : int }
+
 (* A task. [k] is its continuation while it's suspended. [wait] numbers
    its current wait, 0 when it isn't waiting, so that a waker of a wait
    that's over, a timer cancelled with it, is a no-op; [what] is what it
    waits for, for the deadlock panic, and [cancellable] whether a cancel
    ends the wait (a scope's end, cancelling its tasks, waits for them
-   regardless). [asked] is whether it's been asked to stop, and
-   [cleanup_by] when its shield is gone if it has. [result] is what it
-   gave, once it's [Ended]: [None] if it was cancelled first. *)
+   regardless). [asked] is whether it's been asked to stop, [asked_at]
+   when, and [cleanup_by] when its shield is gone if it has. [result] is
+   what it gave, once it's [Ended]: [None] if it was cancelled first. *)
 type task = {
   path : string;
   root : bool;
@@ -63,7 +81,20 @@ type task = {
   mutable what : string;
   mutable cancellable : bool;
   mutable asked : bool;
+  mutable asked_at : float;
   mutable cleanup_by : float;
+  mutable deadlines : deadline list;
+      (** the `Async.timeout`s whose bodies it's running, the innermost first *)
+  mutable holding : (int * string) list;
+      (** the instances whose operations it's in, by number, the innermost
+          first, each with the label of the arm that's running, `gate.wait`:
+          what `Async.until` lets go of *)
+  mutable isolates : isolate list;
+      (** the `Async.isolate`s whose bodies it's running, the innermost first *)
+  mutable through : int list;
+      (** the instances whose operations the panic it's raising has left, on
+          its way out: one installed outside an isolate keeps it from being
+          isolated ([isolatable]) *)
   mutable shield : int;
   mutable result : Value.t option;
   mutable joiners : (unit -> bool) list;  (** what to wake when it ends *)
@@ -120,6 +151,9 @@ type action =
    once the wait it was for has ended some other way. *)
 type timer = { at : float; seq : int; fire : unit -> unit; live : unit -> bool }
 
+(* A task waiting in `Async.until`, in its wait [id], until [holds]. *)
+type waiter = { wt : task; id : int; holds : unit -> bool }
+
 (* The scheduler of a run: its queue, its timers, the task running, and
    the root, whose end is the run's. *)
 type t = {
@@ -131,6 +165,9 @@ type t = {
       (** every task that hasn't ended, the latest started first: what the
           deadlock panic lists *)
   mutable count : int;  (** for numbering waits and timers *)
+  waiters : (int, waiter list) Hashtbl.t;
+      (** the tasks waiting in `Async.until` for each instance, by its number,
+          the first to begin waiting first *)
 }
 
 (* The scheduler running, if one is: a run is one program, or one test,
@@ -171,9 +208,25 @@ let add_timer s ~at ~live fire =
   in
   s.timers <- insert s.timers
 
-(* Whether [t] sees a cancel now: it's been asked to, and isn't in a
-   `finally`, or is past its cleanup deadline. *)
-let sees_cancel t = t.asked && (t.shield = 0 || now () >= t.cleanup_by)
+(* When [t] sees a cancel, if anything's to cancel it: when it was asked
+   to stop, if it isn't in a `finally`, and otherwise at its cleanup
+   deadline; and each of its timeouts' deadlines, in the same way, from
+   the `finally`s it has entered since that timeout began. *)
+let cancel_due t =
+  let asked =
+    if not t.asked then None
+    else if t.shield = 0 then Some t.asked_at
+    else Some t.cleanup_by
+  in
+  List.fold_left
+    (fun due d ->
+      let at = if t.shield <= d.dshield then d.due else d.due +. cleanup in
+      match due with Some x -> Some (Float.min x at) | None -> Some at)
+    asked t.deadlines
+
+(* Whether [t] sees a cancel now. *)
+let sees_cancel t =
+  match cancel_due t with Some at -> now () >= at | None -> false
 
 (* End [t]'s wait [id], if it's still the one it's in, to resume it with
    [action]. A waker of a wait that's over gives [false]. *)
@@ -188,13 +241,27 @@ let wake s t id action =
 (* Wake the first of [ws] that's still waiting, and give the rest. *)
 let rec wake_first = function [] -> [] | w :: rest -> if w () then rest else wake_first rest
 
+(* [t], waiting cancellably, stops waiting when it sees a cancel: now, or
+   at a timer, if that's later (a timeout's deadline, a cleanup
+   deadline). *)
+let interrupt_when s t =
+  if t.wait <> 0 && t.cancellable then
+    match cancel_due t with
+    | Some at when at <= now () -> ignore (wake s t t.wait Interrupt)
+    | Some at ->
+        let id = t.wait in
+        add_timer s ~at
+          ~live:(fun () -> t.wait = id)
+          (fun () -> ignore (wake s t id Interrupt))
+    | None -> ()
+
 (* Wait, as the task running, until [register]'s waker is called, which
    [register] keeps where what it waits for will call it. [what] is what
    the deadlock panic says it waits for, and [at] the program's call it
    waits at, `server.ren:9:3`, if it's known. A cancellable wait ends at once
    if the task sees a cancel, and otherwise raises [Cancelled] where it
    waited if it's cancelled meanwhile, or, in a `finally`, once its
-   cleanup deadline passes. *)
+   cleanup deadline passes; and at the deadline of a timeout it's in. *)
 let wait ?(cancellable = true) ?at what register =
   let s = sched () in
   let t = s.current in
@@ -203,11 +270,7 @@ let wait ?(cancellable = true) ?at what register =
   t.wait <- id;
   t.what <- (match at with Some at -> what ^ " at " ^ at | None -> what);
   t.cancellable <- cancellable;
-  if cancellable && t.asked then
-    (* shielded: until the deadline *)
-    add_timer s ~at:t.cleanup_by
-      ~live:(fun () -> t.wait = id)
-      (fun () -> ignore (wake s t id Interrupt));
+  interrupt_when s t;
   register (fun () -> wake s t id Resume);
   Effect.perform Suspend
 
@@ -238,14 +301,9 @@ let cancel t =
   let s = sched () in
   if t.state <> Ended && not t.asked then begin
     t.asked <- true;
-    t.cleanup_by <- now () +. cleanup;
-    if t.wait <> 0 && t.cancellable then
-      let id = t.wait in
-      if t.shield = 0 then ignore (wake s t id Interrupt)
-      else
-        add_timer s ~at:t.cleanup_by
-          ~live:(fun () -> t.wait = id)
-          (fun () -> ignore (wake s t id Interrupt))
+    t.asked_at <- now ();
+    t.cleanup_by <- t.asked_at +. cleanup;
+    interrupt_when s t
   end
 
 (* [t] has ended, giving [result]: what waits for it is woken, and its
@@ -318,7 +376,12 @@ let task ~path ~root scope =
     what = "";
     cancellable = true;
     asked = false;
+    asked_at = 0.;
     cleanup_by = 0.;
+    deadlines = [];
+    holding = [];
+    isolates = [];
+    through = [];
     shield = 0;
     result = None;
     joiners = [];
@@ -326,6 +389,22 @@ let task ~path ~root scope =
     withs = 0;
     frames = [];
   }
+
+(* ---- errors from tasks ---- *)
+
+(* The errors that came from a task, each with its path: what an error
+   `main` fails with that came from one says (compiler.md, "Errors and
+   panics show the task path"). An error is a value no one changes, so
+   it's found by being the same one ([==]). Kept across a run's end,
+   since `main`'s error is seen after it; [run] at the top starts it
+   again. *)
+let origins : (Value.t * string) list ref = ref []
+
+let came_from err path =
+  if not (List.exists (fun (e, _) -> e == err) !origins) then
+    origins := (err, path) :: !origins
+
+let origin err = List.find_map (fun (e, p) -> if e == err then Some p else None) !origins
 
 (* Run [f] as the root task of a scheduler, its path [root], `main` or
    `test`: what it gives, or what it raises, once it has ended, which it
@@ -342,6 +421,7 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
       root_task = t;
       alive = [ t ];
       count = 0;
+      waiters = Hashtbl.create 8;
     }
   in
   let rec loop () =
@@ -374,6 +454,7 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
               loop ())
   in
   let before = !running in
+  if Option.is_none before then origins := [];
   running := Some s;
   Queue.push (t, Start f) s.queue;
   match loop () with
@@ -402,10 +483,9 @@ let scope ~max =
 
 (* Wait until [sc]'s tasks have all ended: cancellable, as the end of a
    scope's body is, or not, as cancelling them is. *)
-let wait_empty ?cancellable ?at sc =
+let wait_empty ?cancellable ?at ?(what = "waits for its scope's tasks") sc =
   if sc.running <> [] then
-    wait ?cancellable ?at "waits for its scope's tasks" (fun wake ->
-        sc.empty <- wake :: sc.empty)
+    wait ?cancellable ?at what (fun wake -> sc.empty <- wake :: sc.empty)
 
 (* Cancel [sc]'s tasks, and wait for them to end: whatever the task
    running is asked meanwhile, it can't leave before they have. *)
@@ -507,3 +587,195 @@ let sleep ?at ms =
             add_timer s ~at:(now () +. secs)
               ~live:(fun () -> t.wait = id)
               (fun () -> ignore (wake ())))
+
+(* ---- `yield`, `tick` and `Async.until` ---- *)
+
+(* `Async.yield()`: the task running goes to the end of the queue, so
+   every other task that can run, runs first. *)
+let yield_ ?at () = wait ?at "yields" (fun wake -> ignore (wake ()))
+
+(* `Async.tick()`: the task running waits until each task in the queue
+   now has run until it waits, or ended. In `single`'s order, one queue
+   first in first out, that's the queue's end, as for [yield_]: what was
+   in the queue runs first, and what it wakes goes behind. (Under `sim`,
+   step 5, the next task is drawn from the queue, so there the two
+   differ.) *)
+let tick ?at () = wait ?at "waits in `Async.tick`" (fun wake -> ignore (wake ()))
+
+(* [f ()], as the operation [label] of the instance numbered [inst]: the
+   task running is in it meanwhile, and once it returns, or fails, or is
+   cancelled, the instance is released ([released]). A panic that leaves
+   it notes that it did, for `Async.isolate` ([isolatable]). Without a
+   scheduler, as when a value is made, it's just [f ()]. *)
+let rec holding inst label f =
+  match current () with
+  | None -> f ()
+  | Some t -> (
+      t.holding <- (inst, label) :: t.holding;
+      let leave () =
+        match t.holding with
+        | (i, _) :: rest when i = inst -> t.holding <- rest
+        | _ -> bug "an operation left out of turn"
+      in
+      match f () with
+      | v ->
+          leave ();
+          released inst;
+          v
+      | exception Cancelled ->
+          leave ();
+          released inst;
+          raise Cancelled
+      | exception e ->
+          leave ();
+          t.through <- inst :: t.through;
+          raise e)
+
+(* The instance numbered [inst] is released: of the tasks waiting in
+   `Async.until` on it, the first whose condition holds now is woken, and
+   the rest go on waiting (compiler.md, "The rest of `Async`"). A
+   condition reads only the instance's state, which only its operations
+   change, so each release is when one can have come to hold. It's
+   evaluated as its waiter's, so a panic in it is the waiter's, raised
+   where it waits. *)
+and released inst =
+  match !running with
+  | None -> ()
+  | Some s -> (
+      match Hashtbl.find_opt s.waiters inst with
+      | None | Some [] -> ()
+      | Some ws ->
+          (* those still waiting: one cancelled meanwhile isn't *)
+          let ws = List.filter (fun w -> w.wt.wait = w.id) ws in
+          let rec first = function
+            | [] -> []
+            | w :: rest -> (
+                match as_task s w.wt w.holds with
+                | true ->
+                    ignore (wake s w.wt w.id Resume);
+                    rest
+                | false -> w :: first rest
+                | exception e ->
+                    ignore (wake s w.wt w.id (Raise e));
+                    rest)
+          in
+          Hashtbl.replace s.waiters inst (first ws))
+
+(* [f ()], as if [t] were running: what a panic says it was in. [f]
+   can't wait, since a condition uses nothing. *)
+and as_task s t f =
+  let was = s.current in
+  s.current <- t;
+  match f () with
+  | v ->
+      s.current <- was;
+      v
+  | exception e ->
+      s.current <- was;
+      raise e
+
+(* The instance whose operation `Async.until` is written in, for the code
+   labelled [label]: the innermost the task running is in with that arm's
+   label, or else the innermost, if it's in one. *)
+let op_instance label =
+  match current () with
+  | None -> None
+  | Some t -> (
+      match List.find_opt (fun (_, l) -> l = label) t.holding with
+      | Some (i, _) -> Some i
+      | None -> Option.map fst (List.nth_opt t.holding 0))
+
+(* Wait, as the task running, in `Async.until` on the instance numbered
+   [inst], until it's released with [holds] holding. *)
+let until ?at inst ~holds =
+  let s = sched () in
+  let t = s.current in
+  wait ?at "waits in `Async.until`" (fun _ ->
+      let w = { wt = t; id = t.wait; holds } in
+      let ws = Option.value (Hashtbl.find_opt s.waiters inst) ~default:[] in
+      Hashtbl.replace s.waiters inst (ws @ [ w ]))
+
+(* ---- `Async.timeout` ---- *)
+
+(* [f ()], under a deadline [ms] milliseconds from now, or the one the
+   task is already under, if that's sooner: deadlines carry down. What
+   [f] gives, or fails with, it gives; [Cancelled] that only the
+   deadline caused, once it has reached here, is [Error ()], the
+   timeout's `Timeout`. So a body that finished, returning or failing,
+   gives what it did however late, and one whose cancel was shielded,
+   in a `finally`, is late too, never `Timeout`. *)
+let timeout ms (f : unit -> 'a) : ('a, unit) result =
+  match current () with
+  | None -> Ok (f ())
+  | Some t -> (
+      let due = now () +. (Int64.to_float ms /. 1000.) in
+      let due =
+        match t.deadlines with d :: _ -> Float.min due d.due | [] -> due
+      in
+      let d = { due; dshield = t.shield } in
+      t.deadlines <- d :: t.deadlines;
+      let leave () = t.deadlines <- List.filter (fun x -> x != d) t.deadlines in
+      match f () with
+      | v ->
+          leave ();
+          Ok v
+      | exception Cancelled ->
+          leave ();
+          (* the task's own cancel, if it sees it, goes on; otherwise it
+             was the deadline's *)
+          let asked = t.asked && (t.shield = 0 || now () >= t.cleanup_by) in
+          if (not asked) && now () >= d.due then Error () else raise Cancelled
+      | exception e ->
+          leave ();
+          raise e)
+
+(* ---- `Async.isolate` ---- *)
+
+(* [f ()], as the body of an `Async.isolate`; or, if it raises an
+   exception [caught] makes a value of, a panic, and [isolatable] says
+   it can be, that value. *)
+let rec isolated ~caught f =
+  match current () with
+  | None -> f ()
+  | Some t -> (
+      let i = { base = !Value.instances; depth = List.length t.holding } in
+      t.isolates <- i :: t.isolates;
+      t.through <- [];
+      let leave () = t.isolates <- List.filter (fun x -> x != i) t.isolates in
+      match f () with
+      | v ->
+          leave ();
+          v
+      | exception e -> (
+          match if isolatable () then caught e else None with
+          | Some v ->
+              leave ();
+              (* it's left nothing behind *)
+              t.through <- [];
+              v
+          | None ->
+              leave ();
+              raise e))
+
+(* Whether the panic the task running is raising, where it's got to, is
+   one the innermost `Async.isolate` it's in will make a value: none of
+   the operations it has left, or is still in since the isolate began,
+   is one of an instance installed outside it, since that instance's
+   state could be half changed (foundations.md, decision 8). Asked as it
+   goes, so the `finally`s and scopes it leaves on the way know to clean
+   up, as they don't for a panic that ends the program. *)
+and isolatable () =
+  match current () with
+  | None -> false
+  | Some t -> (
+      match t.isolates with
+      | [] -> false
+      | i :: _ ->
+          let inside = List.length t.holding - i.depth in
+          let outside n = n <= i.base in
+          (not (List.exists outside t.through))
+          && not
+               (List.exists
+                  (fun (n, _) -> outside n)
+                  (List.filteri (fun k _ -> k < inside) t.holding)))
+

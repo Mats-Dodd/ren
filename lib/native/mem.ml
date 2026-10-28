@@ -157,6 +157,9 @@ type site = {
   made : string option;
       (** where a NaN made here is said to be made, "at x.ren:3:9" (nan.ml):
           a `Float` operation's, which a debug build tags a NaN it makes with *)
+  notes : string list;
+      (** what a panic here says under where it is: a call of `Async.until`'s,
+          the deadlock panic's, what waits there, as `ren run` says *)
 }
 type cmp = Lt | Le | Gt | Ge | Eq | Ne
 

@@ -45,6 +45,15 @@ type t =
   | Task_replace
   | Task_join
   | Task_cancel
+  | Task_until
+  | Task_timeout
+  | Task_isolate
+  | Task_map
+  | Task_each
+  | Task_both
+  | Task_race
+  | Async_yield
+  | Async_tick
   | Map_empty
   | Map_of
   | Map_get
@@ -143,6 +152,15 @@ let path x =
   | Task_replace -> fn "task_replace"
   | Task_join -> fn "task_join"
   | Task_cancel -> fn "task_cancel"
+  | Task_until -> fn "task_until"
+  | Task_timeout -> fn "task_timeout"
+  | Task_isolate -> fn "task_isolate"
+  | Task_map -> fn "task_map"
+  | Task_each -> fn "task_each"
+  | Task_both -> fn "task_both"
+  | Task_race -> fn "task_race"
+  | Async_yield -> fn "async_yield"
+  | Async_tick -> fn "async_tick"
   | Map_empty -> fn "map_empty"
   | Map_of -> member "Map" "of"
   | Map_get -> member "Map" "get"
@@ -213,6 +231,7 @@ let member_name x = Path.short (path x)
    `Proc.run`, aren't these: only the runtime installs the world. *)
 let waits = function
   | Unbuilt | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-  | Task_cancel ->
+  | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
+  | Task_each | Task_both | Task_race | Async_yield | Async_tick ->
       true
   | _ -> false

@@ -59,7 +59,7 @@ exception Panic of {
   notes : string list;
   help : string option;
 }
-exception Uncaught of { shown : string; written : string }
+exception Uncaught of { shown : string; written : string; from : string option }
 exception Assert_failed of { loc : Loc.t; sides : (string * string) option }
 exception Went_differently of { loc : Loc.t; differs : Journal.differs }
 
@@ -505,6 +505,19 @@ let task_of = function
   | VSched (Sched.Handle t) -> t
   | _ -> bug "a task's handle that isn't one"
 
+(* A task at [path] failed with [err] after another task beside it had,
+   while it was being cancelled: what's said of it, on stderr, since the
+   first failure is the one that's given (compiler.md, "A failure cancels
+   the tasks beside it, and the first one wins"). An error carries its
+   payload's types, so it's shown by them. *)
+let failed_too cx path err =
+  let shown = Shown.value ~own:(fun _ _ _ -> Shown.Declared) cx.types Ty.Error err in
+  flush stdout;
+  prerr_string
+    (sprintf "warning: %s failed too, with `%s`, while it was being cancelled\n"
+       path shown);
+  flush stderr
+
 let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
@@ -543,7 +556,7 @@ let rec eval cx env (e : expr) =
           (fun (i : installed) -> i.dep = dep && i.args = tys)
           (evidence_in env ev what)
       with
-      | Some { impl = VRecord ops; outer; _ } -> (
+      | Some { impl = VRecord ops; outer; inst; _ } -> (
           match List.assoc_opt op ops with
           | Some f -> (
               (* a handler's arm of the program's runs as `handler.op` *)
@@ -556,7 +569,12 @@ let rec eval cx env (e : expr) =
                     { cx with call = Some e.loc }
                 | _ -> cx
               in
-              let call () = fst (call_at cx e.loc f args (VEvidence outer)) in
+              (* the task is in the operation until it returns, and then
+                 the instance is released, which `Async.until` waits for *)
+              let call () =
+                Sched.holding inst cx.site (fun () ->
+                    fst (call_at cx e.loc f args (VEvidence outer)))
+              in
               match cx.trace with
               (* the recorder's own call of what it's over isn't one the
                  program made *)
@@ -586,7 +604,7 @@ let rec eval cx env (e : expr) =
         | _ -> bug (what ^ " with something that isn't a handler")
       in
       let args = List.map (type_of env) dargs in
-      let top = { dep; args; impl; outer } in
+      let top = { dep; args; impl; outer; inst = Value.instance () } in
       let installed = VEvidence (top :: outer) in
       ending cx env e.loc finally desc outer [ top ] (fun () ->
           eval cx (Env.add ev.id (ref installed) env) body)
@@ -617,7 +635,9 @@ let rec eval cx env (e : expr) =
           let impls, finally = instance cx h outer what in
           if not (List.for_all (fun (_, p) -> List.mem_assoc p impls) deps) then
             bug (what ^ " whose instance doesn't implement its dependencies");
-          (* in the order the instance has them, each at its key *)
+          (* in the order the instance has them, each at its key, with
+             one number, since they share its state *)
+          let inst = Value.instance () in
           let installed =
             List.fold_left
               (fun acc (p, impl) ->
@@ -628,6 +648,7 @@ let rec eval cx env (e : expr) =
                       args = List.map (type_of env) k.kargs;
                       impl;
                       outer;
+                      inst;
                     }
                     :: acc
                 | None -> acc)
@@ -945,9 +966,12 @@ and instance cx (h : handler) outer what =
    installed where the instance was; what it gives is the `with`'s
    (handlers.md, "When a `with` ends"). A panic isn't an outcome: it ends
    the program. Cancellation is, as `Err(Cancelled)`: then what the
-   `finally` gives is thrown away, and the cancellation goes on. When the
-   body ends, and before the `finally` runs, the tasks spawned beside the
-   `with` are cancelled and waited for (Sched.leave_with). *)
+   `finally` gives is thrown away, and the cancellation goes on. So is a
+   panic an `Async.isolate` around will make a value (Sched.isolatable),
+   which the `finally` sees as `Err(Cancelled)` too, before the panic goes
+   on to the isolate (foundations.md, decision 8). When the body ends,
+   and before the `finally` runs, the tasks spawned beside the `with` are
+   cancelled and waited for (Sched.leave_with). *)
 and ending cx env loc finally desc outer installed body =
   let frame = Sched.enter_with installed in
   let at = if loc.file = Prelude.file then at_call cx else Some (where loc) in
@@ -959,6 +983,9 @@ and ending cx env loc finally desc outer installed body =
     | exception ((Failed _ | Sched.Cancelled) as e) ->
         Sched.leave_with ?at frame;
         raise e
+    | exception (Panic _ as p) when Sched.isolatable () ->
+        Sched.leave_with ?at frame;
+        raise p
   in
   match finally with
   | None -> body ()
@@ -982,7 +1009,15 @@ and ending cx env loc finally desc outer installed body =
                   (given
                      (VCon { ty = result; name = "Err"; args = [ cancelled_tag ] })))
            with Failed _ | Sched.Cancelled -> ());
-          raise Sched.Cancelled)
+          raise Sched.Cancelled
+      | exception (Panic _ as p) when Sched.isolatable () ->
+          (try
+             ignore
+               (Sched.shielded
+                  (given
+                     (VCon { ty = result; name = "Err"; args = [ cancelled_tag ] })))
+           with Failed _ | Sched.Cancelled -> ());
+          raise p)
 
 (* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
 and eval_all cx env = function
@@ -1079,6 +1114,12 @@ and start ?loc cx f cells ev =
           (fun env (v : var) d -> Env.add v.id (ref d) env)
           env f.dicts dicts
       in
+      (* a release build's operation of a known handler, called directly
+         (specialize.ml): it's a dependency call still, where a task asked
+         to stop stops. It's never one that waits in `Async.until`, or
+         runs in an `Async.isolate`, since those keep their handlers
+         unknown *)
+      (match f.origin with Lifted_op _ -> Sched.check () | _ -> ());
       let cx =
         if f.loc.file <> Prelude.file then { cx with site = fn_label cx f }
         else
@@ -1150,7 +1191,8 @@ and builtin ?loc cx f args =
       (Ok (journal cx x tys args), args)
   | VBuiltin
       ( (( Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-         | Task_cancel ) as x),
+         | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
+         | Task_each | Task_both | Task_race | Async_yield | Async_tick ) as x),
         tys,
         dicts ) ->
       tasks ?loc cx x tys dicts args
@@ -1201,6 +1243,93 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
     Sched.spawn ?key ?at sc ~label:cx.site ~evidence (fun () ->
         ok (fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence []))))
   in
+  (* [calls] made by tasks of a scope of their own, which lets [max] of
+     them run at once: started in order, and one more each time one ends,
+     labelled by the code this is called from, as a spawn is
+     (compiler.md, "`single`'s order"). What each gave, in order, once
+     they've all ended; or the first error one failed with, after the rest
+     are cancelled and have ended, which an error `main` fails with says it
+     came from (async.md, "A failure cancels the tasks beside it"). One of
+     the rest failing too is written to stderr, never dropped. [what] is
+     what the deadlock panic says the caller waits for *)
+  let all_of ~what ~max calls =
+    let results = Array.make (List.length calls) VUnit in
+    let first = ref None in
+    let sc = Sched.scope ~max in
+    let failed err =
+      let path = Sched.current_path () in
+      match !first with
+      | None ->
+          first := Some err;
+          Sched.came_from err path;
+          let me = Sched.current () in
+          List.iter
+            (fun (t : Sched.task) -> if Some t != me then Sched.cancel t)
+            sc.running
+      | Some _ -> failed_too cx path err
+    in
+    let run () =
+      List.iteri
+        (fun i call ->
+          if Option.is_none !first then begin
+            let t =
+              Sched.spawn ?at sc ~label:cx.site ~evidence:[] (fun () ->
+                  (match call () with
+                  | Ok v -> results.(i) <- v
+                  | Error err -> failed err);
+                  VUnit)
+            in
+            (* one that failed while this waited for room *)
+            if Option.is_some !first then Sched.cancel t
+          end)
+        calls;
+      Sched.wait_empty ?at ~what sc
+    in
+    (match run () with
+    | () -> ()
+    | exception Sched.Cancelled ->
+        Sched.cancel_all ?at sc;
+        raise Sched.Cancelled
+    | exception (Panic _ as p) when Sched.isolatable () ->
+        Sched.cancel_all ?at sc;
+        raise p);
+    match !first with
+    | Some err -> Error err
+    | None -> Ok (Array.to_list results)
+  in
+  (* [calls], the branches of `Async.race`, each made by a task of a scope
+     of their own: what the first to return gave, once the others, which
+     it cancels, have ended. A branch can't fail (infer) *)
+  let race calls =
+    let winner = ref None in
+    let sc = Sched.scope ~max:(List.length calls) in
+    List.iter
+      (fun call ->
+        ignore
+          (Sched.spawn ?at sc ~label:cx.site ~evidence:[] (fun () ->
+               (match call () with
+               | Ok v when Option.is_none !winner ->
+                   winner := Some v;
+                   let me = Sched.current () in
+                   List.iter
+                     (fun (t : Sched.task) -> if Some t != me then Sched.cancel t)
+                     sc.running
+               | Ok _ -> ()
+               | Error _ -> bug "a branch of `race` that failed");
+               VUnit)))
+      calls;
+    (match Sched.wait_empty ?at ~what:"waits for `Async.race`'s tasks" sc with
+    | () -> ()
+    | exception Sched.Cancelled ->
+        Sched.cancel_all ?at sc;
+        raise Sched.Cancelled
+    | exception (Panic _ as p) when Sched.isolatable () ->
+        Sched.cancel_all ?at sc;
+        raise p);
+    match !winner with
+    | Some v -> v
+    | None -> bug "a race that no branch won"
+  in
   match (x, args) with
   | Scope_run, [ VInt max; body ] ->
       if max < 1L then
@@ -1220,6 +1349,11 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         match fst (call_at cx loc body [ VSched (Sched.Scope sc) ] (VEvidence [])) with
         | r -> r
         | exception Sched.Cancelled -> stop ()
+        | exception (Panic _ as p) when Sched.isolatable () ->
+            (* a panic an `Async.isolate` around makes a value: the
+               scope's tasks are cancelled, and waited for, first *)
+            Sched.cancel_all ?at sc;
+            raise p
       in
       (match result with
       | Ok _ -> ( try Sched.wait_empty ?at sc with Sched.Cancelled -> stop ())
@@ -1251,6 +1385,75 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
   | Task_cancel, [ t ] ->
       Sched.cancel (task_of t);
       (Ok VUnit, args)
+  | Async_yield, [] ->
+      Sched.yield_ ?at ();
+      (Ok VUnit, args)
+  | Async_tick, [] ->
+      Sched.tick ?at ();
+      (Ok VUnit, args)
+  | Task_until, [ cond ] ->
+      (* the condition can't fail, and uses nothing (excl.ml) *)
+      let holds () =
+        match fst (call_at cx loc cond [] (VEvidence [])) with
+        | Ok v -> truth v
+        | Error _ -> bug "a condition of `Async.until` that failed"
+      in
+      (* it's written in an operation, whose instance it waits on; the
+         checker makes sure there's one. It's checked again once woken,
+         since until operations don't interleave (step 4) another task
+         may have changed the state since *)
+      let inst = Option.value (Sched.op_instance cx.site) ~default:(-1) in
+      Sched.until ?at inst ~holds;
+      while not (holds ()) do
+        Sched.until ?at inst ~holds
+      done;
+      (Ok VUnit, args)
+  | Task_timeout, [ VInt ms; body ] -> (
+      match Sched.timeout ms (fun () -> fst (call_at cx loc body [] (VEvidence []))) with
+      | Ok (Ok v) -> (Ok (some v), args)
+      | Ok (Error err) -> (Error err, args)
+      | Error () -> (Ok none, args))
+  | Task_isolate, [ body ] ->
+      let isolated name v = VCon { ty = Path.prelude "Isolated"; name; args = [ v ] } in
+      let r =
+        Sched.isolated
+          ~caught:(function
+            | Panic { msg; _ } -> Some (Ok (isolated "PanickedWith" (VStr msg)))
+            | _ -> None)
+          (fun () ->
+            match fst (call_at cx loc body [] (VEvidence [])) with
+            | Ok v -> Ok (isolated "Finished" v)
+            | Error err -> Error err)
+      in
+      (r, args)
+  | (Task_map | Task_each), [ xs; VInt max; f ] ->
+      let name = if x = Task_map then "map" else "each" in
+      if max < 1L then
+        panic ~help:"`max:` is at least 1" loc
+          (sprintf "`Async.%s`'s `max` is %Ld, so it couldn't start a task" name max);
+      let items = match xs with VArray v -> Array.to_list (Value.items v) | _ -> bug "a map over what isn't an array" in
+      let calls = List.map (fun v () -> fst (call_at { cx with depth = ref 0 } loc f [ v ] (VEvidence []))) items in
+      let r =
+        all_of ~what:(sprintf "waits for `Async.%s`'s tasks" name) ~max:(Int64.to_int max) calls
+      in
+      let r =
+        match r with
+        | Ok vs when x = Task_map -> Ok (array_of_list vs)
+        | Ok _ -> Ok VUnit
+        | Error err -> Error err
+      in
+      (r, args)
+  | Task_both, [ a; b ] ->
+      let call body () = fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) in
+      let r =
+        match all_of ~what:"waits for `Async.both`'s tasks" ~max:2 [ call a; call b ] with
+        | Ok vs -> Ok (VTuple vs)
+        | Error err -> Error err
+      in
+      (r, args)
+  | Task_race, [ a; b ] ->
+      let call body () = fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) in
+      (Ok (race [ call a; call b ]), args)
   | _ -> bug ("`" ^ Intrinsic.name x ^ "` with the wrong values")
 
 (* ---- the journal (journal.ml) ----
@@ -1522,7 +1725,7 @@ let error_of cx p err =
 
 (* The same, unhandled, as [Uncaught] says it: shown, and as a journal
    writes it. *)
-let uncaught cx p err =
+let uncaught ?from cx p err =
   let written =
     match
       Option.map (fun (f : fn_def) -> f.scheme.ty) (Hashtbl.find_opt cx.fns p)
@@ -1530,7 +1733,7 @@ let uncaught cx p err =
     | Some (Fun (_, _, errs, _)) -> Journal.write cx.types (Errors errs) err
     | _ -> Value.show err
   in
-  Uncaught { shown = error_of cx p err; written }
+  Uncaught { shown = error_of cx p err; written; from }
 
 (* The top-level function [p], as the runtime calls it, from outside the
    program: nothing there knows what its type variables stand for, so its
@@ -1640,7 +1843,8 @@ let recorded cx h (under : installed) what =
     prelude_instance cx name [ VInt (Int64.of_int h) ] [ under ] what
   in
   match List.assoc_opt under.dep impls with
-  | Some impl -> { dep = under.dep; args = under.args; impl; outer = [ under ] }
+  | Some impl ->
+      { dep = under.dep; args = under.args; impl; outer = [ under ]; inst = Value.instance () }
   | None -> bug (what ^ " with a recorder that doesn't implement its dependency")
 
 (* The real implementation of each built-in dependency in [deps], as
@@ -1652,7 +1856,7 @@ let reals cx deps what =
       match made_value cx what (Path.member dep "real") with
       | VHandler h -> (
           match List.assoc_opt dep (fst (instance cx h [] what)) with
-          | Some impl -> { dep; args = []; impl; outer = [] }
+          | Some impl -> { dep; args = []; impl; outer = []; inst = Value.instance () }
           | None -> bug (what ^ " with a `real` that doesn't implement it"))
       | _ -> bug (what ^ " with a `real` that isn't a handler"))
     deps
@@ -1682,7 +1886,8 @@ let rooted ~root f =
 
 (* What `main` ending by being cancelled is: only a `finally` that goes on
    with a cancel nothing asked for does that, until stage 11a's signals. *)
-let cancelled_main = Uncaught { shown = "`main` was cancelled"; written = "Cancelled" }
+let cancelled_main =
+  Uncaught { shown = "`main` was cancelled"; written = "Cancelled"; from = None }
 
 (* How `ren run` starts the program (handlers.md, "The journal"): as
    `$start` does, on the real implementations ([Real]); recording, with
@@ -1723,19 +1928,20 @@ let run ?(start = Real) ?trace (modules : program list) =
         let impls =
           prelude_instance cx "replaying" [ VInt (Int64.of_int h) ] [] what
         in
+        let inst = Value.instance () in
         ( Path.make entry.home "main",
           runtime ()
           @ List.map
               (fun dep ->
                 match List.assoc_opt dep impls with
-                | Some impl -> { dep; args = []; impl; outer = [] }
+                | Some impl -> { dep; args = []; impl; outer = []; inst }
                 | None -> bug (what ^ " with a replayer that hasn't a dependency"))
               deps )
   in
   if not (Hashtbl.mem cx.fns fn) then bug "a program with no `main`";
   match rooted ~root:"main" (fun () -> apply cx (from_outside cx fn) [] (VEvidence installed)) with
   | Ok v -> v
-  | Error err -> raise (uncaught cx fn err)
+  | Error err -> raise (uncaught ?from:(Sched.origin err) cx fn err)
   | exception Sched.Cancelled -> raise cancelled_main
   | exception (Stack_overflow | Too_deep) -> raise (overflowed cx fn)
 
@@ -1772,8 +1978,9 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
         let dep = Path.prelude dep in
         if List.mem dep.name real then reals cx [ dep ] what
         else
+          let inst = Value.instance () in
           List.map
-            (fun (dep, impl) -> { dep; args = []; impl; outer = [] })
+            (fun (dep, impl) -> { dep; args = []; impl; outer = []; inst })
             (prelude_instance cx handler args [] what))
       [
         ( "Clock",

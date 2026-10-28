@@ -61,6 +61,14 @@ let rec starts_tasks fns (p : Path.t) =
   | Some ({ origin = Copy q; _ } : C.fn_def) -> starts_tasks fns q
   | _ -> false
 
+(* Whether [p] is `Async.until`, or a release build's copy of it. *)
+let rec waits_until fns (p : Path.t) =
+  p = Path.member (Path.prelude "Async") "until"
+  ||
+  match Hashtbl.find_opt fns p with
+  | Some ({ origin = Copy q; _ } : C.fn_def) -> waits_until fns q
+  | _ -> false
+
 (* The member of `Async` [p] is, or a copy of, as it's written. *)
 let rec written_as fns (p : Path.t) =
   match Hashtbl.find_opt fns p with
@@ -179,11 +187,11 @@ let literal cx s =
       Lit n
 
 (* A site at [loc]: a [Caller] one if that's in the prelude. *)
-let new_site cx ?wrap ?(kind = Panics) ?made (loc : Loc.t) =
+let new_site cx ?wrap ?(kind = Panics) ?made ?(notes = []) (loc : Loc.t) =
   let kind, wrap =
     if loc.file = Prelude.file then (Caller, None) else (kind, wrap)
   in
-  let s = { sid = cx.nsites; loc; wrap; kind; made } in
+  let s = { sid = cx.nsites; loc; wrap; kind; made; notes } in
   cx.sites <- s :: cx.sites;
   cx.nsites <- cx.nsites + 1;
   s
@@ -950,10 +958,21 @@ let here_site fs =
   else new_site fs.cx fs.here
 
 (* Before a call of the prelude's function [callee] from the program's
-   code at [loc], where a panic in it is said to be. *)
+   code at [loc], where a panic in it is said to be. A call of
+   `Async.until`, whose only panic is the deadlock's, says what waits
+   there, as `ren run` does with one task (compiler.md, "Stage 11a",
+   "Native"). *)
 let set_here fs (callee : C.fn_def) (loc : Loc.t) =
   if (not fs.prelude) && callee.loc.file = Prelude.file then
-    emit fs (Do (Runtime (Here_set, [], Some (new_site fs.cx loc))))
+    let notes =
+      if waits_until fs.cx.fns callee.path then
+        [
+          sprintf "main waits in `Async.until` at %s:%d:%d" loc.file
+            loc.start.line loc.start.col;
+        ]
+      else []
+    in
+    emit fs (Do (Runtime (Here_set, [], Some (new_site fs.cx ~notes loc))))
 
 (* After the prelude's code at [fs] called a block, the program's code
    that may have set [ren_here] again: where it was when [fs] started. *)
@@ -2543,6 +2562,15 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
                  "an element cast to a type it isn't kept as" ));
           dummy fs env lb
       | _ -> bug "an `unsafe_cast` of no value")
+  (* the real `Async`'s operations: natively nothing else runs, so they
+     return at once; and `Async.until` whose condition doesn't hold, with
+     nothing else to change it, is the deadlock (compiler.md, "Stage 11a",
+     "Native"), at the program's call of it *)
+  | (Async_yield | Async_tick), _, _ -> Unit
+  | Task_until, _, _ ->
+      List.iter (drop fs env) (values ());
+      emit fs (Panic (here_site fs, "every task is waiting, and nothing can wake one"));
+      Unit
   (* the real `Console`'s operations *)
   | Console_write, _, _ -> runtime Console_write
   | Console_error, _, _ -> runtime Console_error

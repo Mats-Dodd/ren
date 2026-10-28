@@ -1857,21 +1857,34 @@ and make_spec cx h (a : Ty.args) dep =
 (* The dependencies whose handlers can be known: those no block is
    given by its callee and no handler needs, so a call of one of their
    operations is always where a [With] of the program installs one, or
-   in a function called there. *)
+   in a function called there. Nor one whose handler uses `Async`: its
+   operations can wait in `Async.until`, which lets go of the instance
+   the interpreter finds by the [Dep_call] (eval.ml); and none at all in
+   a program that calls `Async.isolate`, which tells an operation of an
+   instance installed inside it from one outside by the same means
+   (compiler.md, "Step 3, as built"). Both are about tasks, which only
+   the interpreter runs, so a native build loses nothing it has. *)
 let eligible (modules : C.program list) =
   let deps = Hashtbl.create 16 and out = Hashtbl.create 16 in
+  let isolates = ref false in
+  let async = Ty.dep_label (Path.prelude "Async") in
   let rec walk (e : C.expr) =
     (match e.kind with
     | Lambda { given; _ } ->
         List.iter (fun (k : C.dkey) -> Hashtbl.replace out k.kpath ()) given
     | Handler _ -> (
         match Ty.impl_parts e.ty with
-        | Some (_, needs) ->
+        | Some (own, needs) ->
             List.iter
               (fun (l : Ty.label) ->
                 Hashtbl.replace out (Ty.dep_path l.name) ())
-              needs.labels
+              needs.labels;
+            if List.exists (fun (l : Ty.label) -> l.name = async) needs.labels
+            then
+              List.iter (fun p -> Hashtbl.replace out p ()) (Ty.dep_paths own)
         | None -> ())
+    | Global (p, _, _, _) when p = Path.member (Path.prelude "Async") "isolate" ->
+        isolates := true
     | _ -> ());
     List.iter walk (C.children e)
   in
@@ -1887,6 +1900,7 @@ let eligible (modules : C.program list) =
       List.iter (fun (f : C.fn_def) -> walk f.body) m.fns)
     modules;
   Hashtbl.iter (fun d () -> Hashtbl.remove deps d) out;
+  if !isolates then Hashtbl.reset deps;
   deps
 
 (* The size budget, unless one is given: [budget_factor] times the

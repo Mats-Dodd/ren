@@ -216,7 +216,9 @@ operation. The condition reads only the handler's state. If it doesn't
 hold, the operation lets go of the instance and waits, and the condition
 is checked again each time the instance is released; the runtime
 resumes the first waiter whose condition holds. No wakeup can be lost,
-and there's no `if` where a `while` belongs:
+and there's no `if` where a `while` belongs. The condition is a block
+written in the call; it uses no dependency, and can't fail, since it's
+checked where the instance is released, by whichever task releases it:
 
 ```ren
 pub handler channel<T>(cap: Int) for Chan<T> uses Async =
@@ -287,10 +289,14 @@ Unless it's inside `Async.isolate fn() => ...`, which gives
 handler installed outside the block was in the middle of an operation;
 otherwise the program still ends, since that handler's state is
 half-changed. When a panic is contained, the `finally`s of handlers
-installed inside the block run, given `Err(Cancelled)`. An isolated
-block can't change a variable from outside it: it returns its result,
-and anything else it changes, it changes through an operation, so
-nothing it wrote after the fault can be seen.
+installed inside the block run, given `Err(Cancelled)`, and the tasks
+of scopes inside it are cancelled and waited for. An isolated block
+can't change a variable from outside it: it returns its result, and
+anything else it changes, it changes through an operation, so nothing
+it wrote after the fault can be seen. For the same reason it's written
+where it's isolated, and can't call a block it was given, which could
+change its caller's variables. (A panic in a task spawned inside it
+still ends the program, for now.)
 
 ## Background work is a task beside the `with`
 

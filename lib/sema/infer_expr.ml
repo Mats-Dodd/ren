@@ -407,7 +407,7 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
         ~why:
           (explain ~notes:why.notes ?help:why.help
              ?narrowed_help:why.narrowed_help ~labels:why.labels
-             ~msg:lambda_produces ());
+             ~msg:(Option.value why.produces ~default:lambda_produces) ());
       block_uses env cx e.loc ~listed bcx;
       let t = TFun (ps, eret, errs, listed_row listed) in
       Hashtbl.replace cx.nodes e.node t;
@@ -2295,9 +2295,19 @@ and check_args env cx ~name ?callee ~written ps args =
           report env (arg_not_changed a.loc name)
       | Read, _ -> (
           let why =
-            match cant_fail_why env callee a p.ty with
-            | Some why -> why
-            | None -> forced_why env callee p.ty
+            match (cant_fail_why env callee a p.ty, callee) with
+            | Some why, _ -> why
+            | None, Some c when c = Path.member (Path.prelude "Async") "each" ->
+                (* what `each`'s block gives is thrown away, so it gives
+                   `()` (compiler.md, "The rest of `Async`") *)
+                explain
+                  ~produces:(fun f _ ->
+                    sprintf "`Async.each`'s block gives %s, which `each` would throw away"
+                      (article f))
+                  ~help:(fun _ _ ->
+                    "use `Async.map` to keep the results, or end the block with `()`")
+                  ()
+            | None, _ -> forced_why env callee p.ty
           in
           (* a parameter whose type is a variable, a generic's `T`, isn't
              written, however it's solved: the argument is unified with

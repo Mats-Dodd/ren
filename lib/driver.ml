@@ -1519,9 +1519,12 @@ let render_error ~sources = function
       Some (Diag.render ~sources (assert_failed loc sides))
   | Eval.Went_differently { loc; differs } ->
       Some (went_differently ~sources loc differs)
-  | Eval.Uncaught { shown; _ } ->
-      (* `main` failed: its error, shown as a value is (errors.md, "`main`") *)
-      Some ("error: " ^ shown ^ "\n")
+  | Eval.Uncaught { shown; from; _ } ->
+      (* `main` failed: its error, shown as a value is (errors.md, "`main`"),
+         and the task it came from, if it wasn't `main` *)
+      Some
+        ("error: " ^ shown ^ "\n"
+        ^ match from with Some p -> "  = from the task " ^ p ^ "\n" | None -> "")
   | Internal_error { pass; message } ->
       Some
         (Printf.sprintf
@@ -1561,7 +1564,7 @@ let site_pieces ~lines_of ~sources (s : Mem.site) : Diag.piece list =
       in
       let pieces =
         Diag.pieces_indexed ~lines_of
-          (panic_diag ~lines_of ~sources s.loc "\000" wrap)
+          (panic_diag ~lines_of ~notes:s.notes ~sources s.loc "\000" wrap)
       in
       (* the message's hole, and nothing else of the kind *)
       let split_at c (p : Diag.piece) : Diag.piece list =

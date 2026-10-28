@@ -190,7 +190,8 @@ val of_errors : sets:sets -> Ast.Resolved.errors -> Ty.label list
 val signature : ?closed:bool -> sets:sets -> Ast.Resolved.fn_def -> Ty.scheme
 
 (* Whether the block parameters of the function at a path can't fail, as
-   a spawned one can't, though their types don't say: `Async.race`'s.
+   a spawned one can't, though their types don't say: `Async.race`'s,
+   and `Async.until`'s condition.
    [signature] closes them with [closed]. *)
 val closed_blocks : Path.t -> bool
 

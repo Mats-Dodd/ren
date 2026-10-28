@@ -20,8 +20,9 @@ exception Panic of {
 }
 
 (* `main` failed with this error, and nothing handled it: the error, shown
-   through its type (shown.ml), and as a journal writes it (journal.ml). *)
-exception Uncaught of { shown : string; written : string }
+   through its type (shown.ml), and as a journal writes it (journal.ml);
+   and the path of the task it came from, if it came from one. *)
+exception Uncaught of { shown : string; written : string; from : string option }
 
 (* An `assert` at [loc] failed: a panic, which shows the two sides of an
    `assert a == b`, each through its type, with what they share left out

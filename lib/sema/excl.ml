@@ -142,6 +142,9 @@ type ctx = {
           of the variables from outside it *)
   state : binder list option;
       (** inside a handler's arm or its `finally`: the handler's `var`s *)
+  in_op : bool;
+      (** inside a handler's arm, blocks included, where `Async.until` is
+          written *)
   seen : access list ref;
       (** every access made so far, for the block around it *)
   names : Path.t -> string;  (** how the module writes a type's name *)
@@ -694,6 +697,100 @@ let task_read_clash cx (r : access) (a : access) =
       (sprintf "copy it for the task, `let %s = %s`, or change it after the scope" m x)
     (sprintf "`%s` can't change while a spawned task reads it" x)
 
+(* ---- `Async.until` and `Async.isolate` (compiler.md, "The rest of
+   `Async`") ---- *)
+
+(* `Async.until` at [e], outside a handler's operation, where there's no
+   instance to let go of while it waits. *)
+let until_outside cx (e : expr) =
+  report cx e.loc
+    ~help:"move the wait into an operation of the handler whose state it reads"
+    "`Async.until` waits for a handler's state to change, so it's only \
+     written in one of its operations"
+
+(* The first call in [e] that uses a dependency, and the dependency, as
+   it's written: what `Async.until`'s condition can't do. *)
+let rec first_dep cx (e : expr) =
+  let named p = Some (e.loc, cx.names p) in
+  let first_use p =
+    match Hashtbl.find_opt cx.schemes p with
+    | Some { Ty.ty = Fun (_, _, _, uses); _ } -> (
+        match uses.labels with
+        | l :: _ -> Some (e.loc, cx.names (Ty.dep_path l.name))
+        | [] -> None)
+    | _ -> None
+  in
+  let here =
+    match e.kind with
+    | Call (f, _) when dep_call cx f -> (
+        match f.kind with
+        | Var (Dep_op (p, _)) -> named p
+        | Var (Next_op (p, _)) -> named p
+        | Var (Global p) -> first_use p
+        | Field _ -> (
+            match Infer.Nodes.find_opt f.node cx.nodes with
+            | Some { found = Some (Method_of p); _ } -> first_use p
+            | _ -> None)
+        | _ -> None)
+    | _ -> None
+  in
+  match here with
+  | Some _ -> here
+  | None -> List.find_map (first_dep cx) (children e)
+
+(* `Async.until`'s condition uses [dep], at [loc]. *)
+let until_uses cx (loc, dep) =
+  report cx loc
+    ~notes:
+      [
+        "it's checked again each time the handler is released, so it can \
+         only read the handler's state";
+      ]
+    ~help:"read it in the operation, before the wait"
+    (sprintf "`Async.until`'s condition can't use `%s`" dep)
+
+(* [a], given to [callee] as a block that isn't written there. *)
+let not_written_here cx (a : expr) ~callee =
+  let name = Option.value (cx.source a) ~default:"f" in
+  report cx a.loc
+    ~help:(sprintf "write the block: `%s fn() => %s()`" callee name)
+    (sprintf "`%s` takes a block written here, not `%s`" callee name)
+
+(* What an isolated block changes of what's outside it, [caps]: nothing,
+   since nothing it changed may be seen after a panic it's isolated from
+   (foundations.md, decision 8). It changes what's outside through
+   operations, which a handler's `finally` sees, so those aren't these;
+   nor can it call a block parameter, which may change its caller's
+   variables. *)
+let isolated_changes cx caps =
+  let reported = ref [] in
+  List.iter
+    (fun c ->
+      if not (List.mem c.var.id !reported) then
+        if c.block_param && c.why = Called then (
+          reported := c.var.id :: !reported;
+          report cx c.loc
+            ~notes:[ "a block it was given can change its caller's variables" ]
+            ~help:"call it before the isolate, and isolate what uses what it gives"
+            (sprintf "an isolated block can't call `%s`, a block it was given"
+               c.var.ident.name))
+        else if c.kind = Write && not (state_write c) then (
+          reported := c.var.id :: !reported;
+          let x = c.var.ident.name in
+          report cx c.loc ~says:"changed here"
+            ~notes:
+              [
+                "nothing it changed is seen after a panic, so it changes only \
+                 what it returns, and what it changes through operations";
+              ]
+            ~help:
+              (sprintf
+                 "give it back as the block's result: `let %s = try \
+                  Async.isolate fn() => ...`"
+                 x)
+            (sprintf "an isolated block can't change `%s`, which is outside it" x)))
+    caps
+
 (* ---- the walk ---- *)
 
 let record cx a = cx.seen := a :: !(cx.seen)
@@ -773,12 +870,14 @@ let rec walk cx (e : expr) =
          and a `finally`, binds its parameters beside the handler's state
          (Resolve.arm_lambda), so its body is walked at this depth, not as
          a block one deeper *)
-      let arm = { cx with state = Some vars } in
-      let body (l : expr) =
-        match l.kind with Lambda (_, b) -> walk arm b | _ -> walk arm l
+      let arm = { cx with state = Some vars; in_op = true } in
+      let body cx (l : expr) =
+        match l.kind with Lambda (_, b) -> walk cx b | _ -> walk cx l
       in
-      List.iter (function Finally f -> body f | _ -> ()) state;
-      List.iter (fun (a : handler_arm) -> body a.arm_impl) arms
+      List.iter
+        (function Finally f -> body { arm with in_op = false } f | _ -> ())
+        state;
+      List.iter (fun (a : handler_arm) -> body arm a.arm_impl) arms
   | Unop _ | Binop _ | If _ | Con _ | Record _ | Match _ | Array _ | Tuple _
   | For _ | While _ | Fail _ | Try _ | Attempt _ | With _ | Assert _
   | Named _ | Tag_set _ ->
@@ -883,6 +982,8 @@ and call cx (e : expr) (f : expr) args ~changed =
   in
   let scope_call = call_is (async_member "scope") f cx.nodes cx.schemes in
   let until_call = call_is (async_member "until") f cx.nodes cx.schemes in
+  let isolate_call = call_is (async_member "isolate") f cx.nodes cx.schemes in
+  if until_call && not cx.in_op then until_outside cx e;
   let callee_name = Option.value (cx.source f) ~default:"this" in
   (* the scopes a block given to a spawned parameter may be spawned into:
      the one the call is given, as its receiver or an argument, if it's
@@ -943,18 +1044,32 @@ and call cx (e : expr) (f : expr) args ~changed =
           reads
       in
       match a.kind with
-      | Lambda _ when until_call ->
+      | Lambda (_, body) when until_call ->
           (* `Async.until`'s condition is checked only while the instance
-             is free, so it conflicts with nothing in its arm *)
+             is free, so it conflicts with nothing in its arm; and it's
+             checked where the instance is released, so it uses nothing *)
           ignore (block cx a);
+          Option.iter (until_uses cx) (first_dep cx body);
+          none
+      | _ when until_call ->
+          (* checked again as other tasks release the instance, so it reads
+             the state's cells (Lower.until_released), which a block bound
+             elsewhere doesn't *)
+          not_written_here cx a ~callee:"Async.until";
+          walk cx a;
           none
       | Lambda _ ->
-          { held = as_task (block ~scope:scope_call cx a); via = Some a.loc; sibling }
+          let caps = block ~scope:scope_call cx a in
+          if isolate_call then isolated_changes cx caps;
+          { held = as_task caps; via = Some a.loc; sibling }
       | Var (Local b) -> (
           match Hashtbl.find_opt cx.blocks b.id with
-          | Some caps -> { held = as_task caps; via = Some a.loc; sibling }
+          | Some caps ->
+              if isolate_call then isolated_changes cx caps;
+              { held = as_task caps; via = Some a.loc; sibling }
           | None ->
               param_use cx b a.loc (Used None);
+              if isolate_call then not_written_here cx a ~callee:"Async.isolate";
               if m <> Ordinary then passed_on b a.loc m;
               none)
       | Var (Dep_op _ | Next_op _) ->
@@ -1173,6 +1288,7 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
           loops = [];
           blocks = Hashtbl.create 8;
           state = None;
+          in_op = false;
           seen = ref [];
           names = Resolve.type_name r;
           fn_name = Ast.fn_name f;

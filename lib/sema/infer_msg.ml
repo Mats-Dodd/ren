@@ -3005,6 +3005,11 @@ let no_method ?slice (m : Ast.ident) ~shown ~own ~type_name methods =
   in
   let help =
     match (renamed, methods) with
+    | _ when m.name = "par_map" ->
+        (* there's no `par_map` (foundations.md, decision 7) *)
+        Some
+          "`Async.map(xs) fn(x) => ...` runs on every core when its block uses \
+           no dependencies"
     | _ when m.name = "slice" && slice <> None ->
         (* `s.slice(a, b)`, which `s[a..b]` replaced (foundations.md,
            decision 17): [slice] is it, as written *)

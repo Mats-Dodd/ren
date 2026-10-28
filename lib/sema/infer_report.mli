@@ -44,8 +44,9 @@ val binders : Ast.Resolved.pattern -> (Ast.binder * Loc.t) list
    the expectation comes from. [narrowed_help], if it's given, is the help
    where the two are an implementation of several dependencies and one of
    some of them, given that one's type, printed. [type_params] is whether a
-   note says what a type parameter in either type is. It's Infer_env's,
-   which a constraint can carry. *)
+   note says what a type parameter in either type is. [produces] words a
+   lambda's body giving the wrong type. It's Infer_env's, which a
+   constraint can carry. *)
 type why = Infer_env.why = {
   msg : (string -> string -> string) option;
   notes : string list;
@@ -55,6 +56,7 @@ type why = Infer_env.why = {
   type_params : bool;
   inside : string -> string;
   alone : bool;
+  produces : (string -> string -> string) option;
 }
 
 val explain :
@@ -66,6 +68,7 @@ val explain :
   ?type_params:bool ->
   ?inside:(string -> string) ->
   ?alone:bool ->
+  ?produces:(string -> string -> string) ->
   unit ->
   why
 
