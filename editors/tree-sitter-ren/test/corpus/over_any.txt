@@ -1,0 +1,157 @@
+================================================================================
+over any: a handler over whichever dependency it's installed over
+================================================================================
+
+handler down_every(every: Int) over any =
+  var n = 0
+  call =>
+    n += 1
+    if n % every == 0 then call.fail(Down) else try call.forward()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (handler_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (any)
+    (let_statement
+      (identifier)
+      (number))
+    (any_arm
+      (identifier)
+      (block
+        (assignment
+          (identifier)
+          (number))
+        (if_expression
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (identifier))
+            (number))
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (constructor_expression
+                (constructor_ref
+                  (type_identifier)))))
+          (try_expression
+            (method_call_expression
+              (identifier)
+              (identifier)
+              (arguments))))))))
+
+================================================================================
+over any: Tags, matched with fail on and passed on by name
+================================================================================
+
+pub fn retry<T>(n: Int, on: Tags, body: fn() -> T) -> T =
+  try match body()
+    fail on if n > 1 => try retry(n - 1, on: on, body)
+    v => v
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (visibility)
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (function_type
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (try_expression
+        (match_expression
+          (call_expression
+            (identifier)
+            (arguments))
+          (match_arm
+            (fail_pattern
+              (identifier))
+            (binary_expression
+              (identifier)
+              (number))
+            (try_expression
+              (call_expression
+                (identifier)
+                (arguments
+                  (binary_expression
+                    (identifier)
+                    (number))
+                  (named_argument
+                    (identifier)
+                    (identifier))
+                  (identifier)))))
+          (match_arm
+            (identifier)
+            (identifier)))))))
+
+================================================================================
+over any: tags given by name, a named error set among them
+================================================================================
+
+fn main() =
+  try retry(3, on: DbDown | bank.Refusal) fn() => 1
+  try retry(3, on: DbDown) fn() => 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (try_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (number)
+            (named_argument
+              (identifier)
+              (tag_set
+                (error_tag)
+                (error_set_name
+                  (identifier)
+                  (type_identifier)))))
+          (lambda
+            (parameters)
+            (number))))
+      (try_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (number)
+            (named_argument
+              (identifier)
+              (constructor_expression
+                (constructor_ref
+                  (type_identifier)))))
+          (lambda
+            (parameters)
+            (number)))))))

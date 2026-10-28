@@ -71,6 +71,7 @@ type 'l found_ = 'l Infer_env.found_ =
   | Handler_facts of {
       forwards : (Path.t * string * Ty.ty) list;
       body_ty : int option;
+      any_vars : (int * int * int) option;
     }
   | Handles
   | Fail_arm
@@ -78,6 +79,7 @@ type 'l found_ = 'l Infer_env.found_ =
   | Block of { name : string; given : 'l list }
   | Builtin_op
   | Generic_op of string
+  | Tags_given of string list
 
 type found = Ty.label found_
 

@@ -14,14 +14,6 @@ pub fn transfer(from: Str, to: Str, amount: Int) ! DbDown | Short(name: Str) use
     if left < 0 then fail Short(from)
     try Sql.set(from, left)
 
-// runs `body`, and again while the database is down, `n` times at
-// most. It names the errors `body` can fail with, to retry one of them;
-// `retry(n, on: DbDown)`, which works for any, comes in stage 10d
-pub fn retry<T>(n: Int, body: fn() -> T ! DbDown | Short(name: Str)) -> T ! DbDown | Short(name: Str) =
-  try match body()
-    fail DbDown if n > 1 => try retry(n - 1, body)
-    v => v
-
 pub fn balances() -> (Int, Int) ! DbDown uses Sql =
   (try Sql.get("ann"), try Sql.get("bob"))
 
@@ -53,7 +45,7 @@ test "a transfer is tried again when its transaction can't begin" =
   // captures by reference
   with sql.mem_sql(start(), AtFirstBegin) in
     var tries = 0
-    try retry(3) fn() =>
+    try retry(3, on: DbDown) fn() =>
       tries += 1
       try transfer("ann", "bob", 30)
     assert tries == 2

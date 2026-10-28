@@ -21,18 +21,18 @@ open Helpers
 (* ---- s2: wrappers are calls, and an implementation is a handler ---- *)
 
 let%expect_test "[s2 reject] a wrapper in a with is called instead" =
-  (* an error at `retry(3)`, "`with` installs only handlers", with the
-     help `call it: try retry(3) fn() => ...` *)
+  (* an error at `again(3)`, "`with` installs only handlers", with the
+     help `call it: try again(3) fn() => ...` *)
   run
     {|
-fn retry(n: Int, body: fn() -> Int ! Flaky) -> Int ! Flaky =
+fn again(n: Int, body: fn() -> Int ! Flaky) -> Int ! Flaky =
   match body()
-    fail Flaky => if n > 1 then try retry(n - 1, body) else fail Flaky
+    fail Flaky => if n > 1 then try again(n - 1, body) else fail Flaky
     v => v
 
 fn main() uses Console =
   let n =
-    with retry(3) in
+    with again(3) in
       1
   print(n)
 |};
@@ -40,10 +40,10 @@ fn main() uses Console =
     {|
     error: `with` installs only handlers
       ┌─ test.ren:8:10
-    8 │     with retry(3) in
+    8 │     with again(3) in
       │          ^^^^^^^^ takes a block
-      = `retry` is a function that runs a block, so it's called with the body as one
-      help: call it: `try retry(3) fn() => ...`
+      = `again` is a function that runs a block, so it's called with the body as one
+      help: call it: `try again(3) fn() => ...`
     |}]
 
 let%expect_test "[s2 reject] a wrapper named in a with beside a handler" =
@@ -116,9 +116,9 @@ fn main() uses Console =
 let%expect_test "[s2 accept] a local retry called with a block" =
   run
     {|
-fn retry(n: Int, body: fn() -> Int ! Flaky) -> Int ! Flaky =
+fn again(n: Int, body: fn() -> Int ! Flaky) -> Int ! Flaky =
   match body()
-    fail Flaky => if n > 1 then try retry(n - 1, body) else fail Flaky
+    fail Flaky => if n > 1 then try again(n - 1, body) else fail Flaky
     v => v
 
 handler flaky(fails: Int) for Source =
@@ -134,9 +134,9 @@ dep Source =
 
 fn main() uses Console =
   with flaky(2) in
-    print(attempt retry(3) fn() => try Source.get())
+    print(attempt again(3) fn() => try Source.get())
   with flaky(3) in
-    print(attempt retry(3) fn() => try Source.get())
+    print(attempt again(3) fn() => try Source.get())
 |};
   [%expect {|
     Ok(42)

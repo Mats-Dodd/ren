@@ -99,13 +99,14 @@ let walk ~ty ~errors ~pattern (prog : program) =
   let rec pattern_ (p : Resolved.pattern) =
     pattern p;
     match p.pkind with
-    | PWild | PVar _ | PInt _ | PBool _ | PFail_any -> ()
+    | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pattern_ ps
   in
   let rec expr (e : expr) =
     let go = List.iter expr in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+    | Named (_, a) -> expr a
     | Unop (_, a, _)
     | Field (a, _)
     | Ref a
@@ -683,6 +684,10 @@ let new_env sink ~reachable (r : Resolve.t) =
     in_scope = [];
     client = false;
     hidden = [];
+    anys = Hashtbl.create 4;
+    any_skolems = Hashtbl.create 4;
+    any_call = None;
+    params_of = Hashtbl.create 16;
     test_reported = Hashtbl.create 4;
   }
 
@@ -698,7 +703,8 @@ let add_globals env ~imports ~reachable fns =
         (fun (v : Iface.value) ->
           Hashtbl.replace env.globals
             (Path.make iface.home v.vname)
-            (of_scheme env.st v.scheme))
+            (of_scheme env.st v.scheme);
+          Hashtbl.replace env.params_of (Path.make iface.home v.vname) v.vparams)
         (* the test tier too: Resolve lets only tests call it *)
         (iface.values @ iface.tests))
     imports;
@@ -814,8 +820,6 @@ let setup env ~is_value (f : fn_def) =
           | TImpl i -> TImpl { i with fails = fresh_row env.st }
           | t -> t)
       | Some t -> convert env ~tvars:tparams ~named ~row:closed t
-      | None when f.pub && not (is_value f) ->
-          unit (* a public function without `->` returns Unit *)
       | None when Ast.is_handler f ->
           (* a handler whose needs aren't written: its type, which lists
              the dependencies it implements (Types.impl_type), needs what
@@ -829,9 +833,20 @@ let setup env ~is_value (f : fn_def) =
               | _ -> false)
             ~fails:(fresh_row env.st)
             (match f.body.kind with
+            | Handler { any = true; _ } ->
+                (* one `over any`, public or not: what its arm fails with
+                   itself is inferred, as its type's (Infer_handlers.own_deps) *)
+                [
+                  {
+                    dpath = Ty.any_path;
+                    dargs = [ TErrors (fresh_row env.st) ];
+                  };
+                ]
             | Handler { deps; _ } -> written_deps env ~tvars:tparams deps
             | _ -> [])
             (fresh_row env.st)
+      | None when f.pub && not (is_value f) ->
+          unit (* a public function without `->` returns Unit *)
       | None -> fresh_var env.st
     in
     (ps, ret, errs, uses)
@@ -927,7 +942,8 @@ let check_body env ~is_value m =
   | Handler _, t when f.ret = None && impl_of t <> None ->
       (* its needs are what its state and arms use *)
       let i = Option.get (impl_of t) in
-      handler core env m.cx f.body ~needs:i.needs ~fails:i.fails ~declared:None;
+      handler core env m.cx f.body ~own:i.deps ~needs:i.needs ~fails:i.fails
+        ~declared:None;
       Hashtbl.replace m.cx.nodes f.body.node m.ret
   | _ ->
       check env m.cx ~why
@@ -1403,6 +1419,84 @@ let canonical env so_far (f : fn_def) =
             (Handler_facts { f with body_ty = Some k })
       | _ -> ())
   | None -> ());
+  (* a handler `over any`: its arm's call's arguments' type and result,
+     and its errors' row, skolems while it was checked, are variables of
+     the function's now, as a `finally`'s are, which lowering puts each
+     operation's in place of (compiler.md, "`over any` and `retry`") *)
+  (match Hashtbl.find_opt env.anys path with
+  | Some (node, aid, rid, eid) -> (
+      (* what's used of them, they can't have but `==`, which lowering
+         finds for each operation's *)
+      List.iter
+        (fun (id, what) ->
+          match List.filter (fun r -> r <> "eq") (needs env.st id) with
+          | req :: _ -> (
+              match need_at env.st id req with
+              | Some loc -> report env (any_opaque loc ~what)
+              | None -> report env (any_opaque f.name.loc ~what))
+          | [] -> ())
+        [ (aid, "call.args"); (rid, "call.forward()") ];
+      (* its state is shared by every operation's arm, so it can't keep
+         either *)
+      let rec mentions id (t : ty) =
+        match repr t with
+        | TSkol (id', _) -> id' = id
+        | TVar _ | TError -> false
+        | TCon (_, ts) -> List.exists (mentions id) ts
+        | TErrors r -> row_mentions id r
+        | TImpl i ->
+            List.exists
+              (fun (d : dep) -> List.exists (mentions id) d.dargs)
+              i.deps
+        | TFun (ps, r, e, _) ->
+            List.exists (fun (p : param) -> mentions id p.ty) ps
+            || mentions id r || row_mentions id e
+      and row_mentions id r =
+        List.exists
+          (fun (l : label) -> List.exists (mentions id) l.payload)
+          (fst (row_parts r))
+      in
+      (match f.body.kind with
+      | Handler { state; _ } ->
+          List.iter
+            (function
+              | Let { name; _ } -> (
+                  match Hashtbl.find_opt cx.locals name.id with
+                  | Some t when mentions aid t ->
+                      report env
+                        (any_kept name.ident.loc ~name:name.ident.name
+                           ~what:"call.args")
+                  | Some t when mentions rid t ->
+                      report env
+                        (any_kept name.ident.loc ~name:name.ident.name
+                           ~what:"call.forward()")
+                  | _ -> ())
+              | _ -> ())
+            state
+      | _ -> ());
+      let a = generic_var env.st and r = generic_var env.st in
+      let e = generic_row env.st in
+      Hashtbl.replace env.st.skolem_vars aid a;
+      Hashtbl.replace env.st.skolem_vars rid r;
+      Hashtbl.replace env.st.skolem_rows eid e;
+      match
+        ( canon_ty c ~all:true a,
+          canon_ty c ~all:true r,
+          (canon_row c ~all:true e).tail,
+          Hashtbl.find_opt cx.found node )
+      with
+      | Var ka, Var kr, Some ke, Some (Handler_facts facts) ->
+          Hashtbl.replace cx.found node
+            (Handler_facts { facts with any_vars = Some (ka, kr, ke) })
+      | _ -> ())
+  | None -> (
+      (* only a handler `over any` makes one: it's made for what it's
+         installed over, so nothing else can give one *)
+      match scheme.ty with
+      | Fun (_, Impl { deps; _ }, _, _)
+        when List.exists Ty.is_any deps ->
+          report env (any_returned f.name.loc ~name:(Ast.fn_name f))
+      | _ -> ()));
   let ids =
     Hashtbl.fold (fun id _ acc -> id :: acc) cx.nodes [] |> List.sort compare
   in
@@ -1432,7 +1526,8 @@ let canonical env so_far (f : fn_def) =
         | Fail_arm -> Fail_arm
         | Unwrap -> Unwrap
         | Builtin_op -> Builtin_op
-        | Generic_op o -> Generic_op o)
+        | Generic_op o -> Generic_op o
+        | Tags_given ts -> Tags_given ts)
       (Hashtbl.find_opt cx.found id)
   in
   let nodes =
@@ -1664,7 +1759,8 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     let carried = if block then Said else Kept Elsewhere in
     let all place = List.iter (walk (Kept place)) in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+    | Named (_, a) -> walk pos a
     | Call (callee, args) ->
         (* a block a type variable of the callee stands for is blamed on
            the argument that gives it *)
@@ -1829,7 +1925,9 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
   List.iter
     (fun (f : fn_def) ->
       Hashtbl.replace env.written (Ast.fn_path r.home f)
-        (List.map (fun (p : Resolved.param) -> p.pty <> None) f.params))
+        (List.map (fun (p : Resolved.param) -> p.pty <> None) f.params);
+      Hashtbl.replace env.params_of (Ast.fn_path r.home f)
+        (List.map (fun (p : Resolved.param) -> p.pname.ident.name) f.params))
     fns;
   let values =
     List.concat_map

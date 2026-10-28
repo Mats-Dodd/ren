@@ -264,3 +264,20 @@ fn work() uses Chan<Int> = with queue() as Jobs in 1
 fn page(body: Str) -> Route = handler fn(path) => path.concat(body)
 //                            ^ keyword
 //                                    ^ keyword
+
+handler logged() over any =
+//                    ^ keyword
+  call =>
+//^ variable.special
+    try call.forward()
+//  ^ keyword.failure
+
+fn fetch(on: Tags) -> Int =
+  try match get()
+    fail on => try retry(3, on: Flaky | Down) fn() => get()
+//  ^ keyword.failure
+//       ^ variable.parameter
+//                          ^ variable.parameter
+//                              ^ constructor
+//                                      ^ constructor
+    v => v

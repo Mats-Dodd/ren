@@ -167,6 +167,11 @@ and ('b, 't) pattern_kind =
           patterns are combined, and each binds the same names *)
   | PTuple of ('b, 't) pattern list
       (** [(k, v)]: a tuple of two or three, taken apart *)
+  | PFail_in of 'b
+      (** [fail on], where [on] is a parameter of type `Tags`: an error whose
+          tag is one of those it was given, binding nothing (compiler.md,
+          "`over any` and `retry`"). The parser reads it as a [PFail] of no
+          payload, which Resolve makes this when [on] is such a parameter *)
 
 (* How a parameter is passed: read-only (the default), or [inout], which
    updates the caller's value. *)
@@ -268,6 +273,10 @@ and ('v, 'b, 't) expr_kind =
       over : bool;
           (** declared `over` them, in front of another implementation of them,
               which it reaches with `next` (handlers.md, "`over`") *)
+      any : bool;
+          (** declared `over any`: [deps] is empty, and its one arm, `call =>
+              body`, runs for every operation of whatever dependency it's
+              installed over (foundations.md, decision 7) *)
       fails : 't errors option;
           (** what installing it is written to fail with, after `!`: what its
               state and its `finally` can fail with *)
@@ -291,6 +300,13 @@ and ('v, 'b, 't) expr_kind =
   | Assert of ('v, 'b, 't) expr
       (** [assert e]: a panic if [e] is false, which shows both sides of an
           [a == b] (deps.md, "`assert`") *)
+  | Named of ident * ('v, 'b, 't) expr
+      (** [on: Flaky], an argument of a call passed by its parameter's name,
+          which only a parameter of type `Tags` is (compiler.md, "`over any`
+          and `retry`"). Only ever an argument of a [Call] *)
+  | Tag_set of 't errors
+      (** [Flaky | Broken], the tags a `Tags` argument is given: tag names,
+          without payloads, or named error sets. Only ever a [Named]'s value *)
 
 (* An item of a `with`: an implementation, or a chain of them joined by
    `over`, [chain], the top first, each over the next:
@@ -571,12 +587,13 @@ let children (e : ('v, 'b, 't) expr) =
     | Expr e | Finally e -> e
   in
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> []
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> []
   | Unop (_, a, _)
   | Field (a, _)
   | Ref a
   | Lambda (_, a)
   | Inline_handler a
+  | Named (_, a)
   | Try a
   | Attempt a
   | Assert a ->
@@ -650,6 +667,11 @@ type name =
       (** inside a handler declared `over` the dependency at the path, an
           operation of the implementation it's over, [next.get]: only ever
           called (handlers.md, "`next`") *)
+  | Call_op of string
+      (** inside the arm of a handler `over any`, what its call is used
+          through: ["forward"], only ever called, `call.forward()`; ["args"]
+          and ["name"], `call.args` and `call.name` (compiler.md, "`over any`
+          and `retry`") *)
   | Assoc_value of tref * string
       (** [zero] or [one] of a type that has it without declaring it: of a type
           parameter, [T.zero], whatever the function's given for [T] has
@@ -857,6 +879,7 @@ let rec show_pattern (p : pattern) =
       ^ String.concat ", " (List.map show_pattern args)
       ^ ")"
   | PFail_any -> "fail _"
+  | PFail_in t -> "fail " ^ t.name
   | POr ps -> String.concat " | " (List.map show_pattern ps)
   | PTuple ps -> "(" ^ String.concat ", " (List.map show_pattern ps) ^ ")"
 
@@ -927,12 +950,14 @@ let rec show_expr (e : expr) =
   | Attempt a -> parens [ "attempt"; show_expr a ]
   | Assert a -> parens [ "assert"; show_expr a ]
   | Inline_handler a -> parens [ "handler"; show_expr a ]
+  | Named (n, a) -> parens [ n.name ^ ":"; show_expr a ]
+  | Tag_set es -> parens [ "tags"; show_errors es ]
   | With { items; body } ->
       (* an item of one implementation is itself, and a chain is
          `(over top ... bottom)`, ending in `(deps Clock)` if it goes over
          what's installed outside *)
       parens (("with" :: List.map show_with_item items) @ [ show_expr body ])
-  | Handler { deps; over; fails; needs; state; arms } ->
+  | Handler { deps; over; any; fails; needs; state; arms } ->
       let fails =
         match fails with Some es -> [ parens [ show_errors es ] ] | None -> []
       in
@@ -941,7 +966,9 @@ let rec show_expr (e : expr) =
       in
       parens
         ("handler"
-         :: parens ((if over then "over" else "for") :: List.map show_dep deps)
+         :: parens
+              ((if over then "over" else "for")
+              :: (if any then [ "any" ] else List.map show_dep deps))
          :: fails
         @ needs @ List.map show_stmt state
         @ List.map
@@ -1132,7 +1159,7 @@ let bound_in (e : Resolved.expr) =
     match p.pkind with
     | PVar b -> see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
-    | PWild | PInt _ | PBool _ | PFail_any -> ()
+    | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
   in
   let rec go (e : Resolved.expr) =
     (match e.kind with
@@ -1169,6 +1196,17 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Var (Intrinsic x) -> Intrinsic.name x
     | Var (Dep_op (p, op)) -> type_name p ^ "." ^ op
     | Var (Next_op (_, op)) -> "next." ^ op
+    | Var (Call_op "forward") -> "call.forward"
+    | Var (Call_op x) -> "call." ^ x
+    | Named (n, a) -> n.name ^ ": " ^ go a
+    | Tag_set es ->
+        String.concat " | "
+          (List.map
+             (function
+               | Tag (t, _) -> t.name
+               | Set { tref = Named p; _ } -> type_name p
+               | Set { tref = Param _; _ } -> raise Exit)
+             es.errs)
     | Var (Assoc_value (Named p, v)) -> type_name p ^ "." ^ v
     | Var (Assoc_value (Param _, _)) -> raise Exit
     | Unop (Neg, a, _) -> "-" ^ operand 7 a

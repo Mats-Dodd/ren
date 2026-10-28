@@ -3642,6 +3642,40 @@ that targets some operations, or `keyed(n, h) over any` (11a), which
 needs an operation's first parameter's key, are handlers `over D` until
 something exposes more than this.
 
+Where it differed from its plan:
+
+- **Every build specializes, the interpreter's too.** Lowering makes a
+  handler `over any` a function per dependency it's installed over,
+  `logged$Users`, with the arm copied per operation, `call.args` the
+  arguments' tuple and `call.forward()` a call through `next`'s
+  evidence; and a function with parameters of `Tags` a function per set
+  of tags it's given, `retry$DbDown`, whose `fail on` arm tests the
+  error's tag against them (Core's `Tag_in`). Neither is lowered as
+  written. Each use asks for what it needs, and the driver makes it in
+  the module that declares the function, once, and what that asks for in
+  turn (lower.ml, `request`; driver.ml, `link`); the recorder's six are
+  always made. So there's no call record, no list of tag names at
+  runtime, and no debug build that compiles the arm once: the
+  interpreter and both native builds run the same Core. A debug build's
+  code grows with the dependencies each `over any` handler goes over,
+  which the plan's call record would have saved.
+- **`call.args` of one argument is a tuple of one,** `(_)`, so it shows
+  as a call does, `(5)`; the journal writes it as it did, without the
+  parentheses, and writes what an operation that can't fail gave as its
+  value, though the recorder keeps it as `attempt` does, an `Ok`.
+- **`Tags` is only the type of a named function's parameter,** not a
+  handler's, and `fail on` is an arm's whole pattern, never beside
+  another in `|`.
+- **A named row is passed on as a parameter's is** where errors are
+  added up (solve.ml, `include_`), so `attempt call.forward()` keeps
+  the operation's errors; before, only a parameter's row was.
+- **The native slice took two of `Time`'s limits off,** to run
+  10d/overany.ren natively: a `key` that's the value itself orders as
+  the representation does, and an operator of a type's own only stops a
+  dictionary for that operator, not a descriptor; and a release build
+  shows an opaque type laid out as its representation with its name,
+  `Time(0)`, as the debug build always did.
+
 ### Blocks with `inout` parameters, and slices (step 6)
 
 **Blocks with `inout` parameters.** A block's parameter that it changes

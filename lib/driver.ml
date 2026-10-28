@@ -105,7 +105,8 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
     (s.reqs, s.row_reqs)
   in
   let has_eq p = List.mem p inferred.opaque_eq in
-  let iface = Iface.of_module ~home ~sets ~needs ~has_eq r.prog in
+  let found path = Path.Map.find path inferred.schemes in
+  let iface = Iface.of_module ~home ~sets ~needs ~has_eq ~found r.prog in
   (* A public function's body was checked against its signature, so the
      type inference found for it is the one its interface states, with
      what it needs of its type parameters. Other modules see only the
@@ -177,6 +178,7 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
               {
                 Iface.vname;
                 scheme = Path.Map.find (Path.make home vname) inferred.schemes;
+                vparams = [];
               })
             g.gtests
         else [])
@@ -207,6 +209,14 @@ let link_lowered ?(lint = false) ~imports modules =
   if lint then pass "lint" (fun () -> Core_lint.programs ~imports linked);
   linked
 
+(* The journal's recorder, made for each built-in dependency, which the
+   runtime installs over each that `main` uses when it records a run
+   (prelude.ml, "the journal"; eval.ml, [recorded]). *)
+let recorders =
+  List.map
+    (fun d -> Lower.Any_for (Path.prelude "recorder", Path.prelude d))
+    [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
+
 (* The prelude, as a module: its source, parsed and checked against the
    intrinsics (prelude.ml) and lowered, and its whole interface. It's
    checked once, the first time it's needed: [lazy] delays a computation
@@ -223,9 +233,9 @@ let prelude =
        check_module ~home:Path.prelude_home ~imports ~reachable:imports
          ~sees_all:true prog
      in
-     let core = lower r inferred in
+     let core, _ = lower r inferred in
      ignore (link_lowered ~lint:true ~imports:[ imports ] [ core ]);
-     (core, Iface.union Prelude.public iface, r.types))
+     (core, Iface.union Prelude.public iface, r, inferred))
 
 (* ---- loading a program's modules ----
 
@@ -382,8 +392,9 @@ type checked = {
       (** the interfaces of every module reachable through its imports, the
           prelude's first, each once *)
   items : Test_items.t;  (** its tests, and the functions they were made *)
-  core : Core.program Lazy.t;
-      (** it lowered to Core, once it's needed, and then only once *)
+  core : (Core.program * Lower.request list) Lazy.t;
+      (** it lowered to Core, once it's needed, and then only once, with what
+          it uses that's made for a request (Lower.request) *)
   impl : Impl.t Lazy.t;
       (** the implementation tier of its summary (impl.ml), beside its interface
       *)
@@ -399,7 +410,7 @@ type checked = {
    module whole, so a test that reaches past an interface, which the
    console is the place to explore, doesn't keep it shut. *)
 let check_roots ?console ~load ~dir ~entry roots =
-  let _, prelude_iface, _ = Lazy.force prelude in
+  let _, prelude_iface, _, _ = Lazy.force prelude in
   let sources = pass "load" (fun () -> load_all ~load ~dir roots) in
   List.rev
     (List.fold_left
@@ -470,7 +481,7 @@ let check_roots ?console ~load ~dir ~entry roots =
            reachable;
            items;
            core;
-           impl = lazy (Impl.of_module iface (Lazy.force core));
+           impl = lazy (Impl.of_module iface (fst (Lazy.force core)));
          }
          :: done_)
        [] sources)
@@ -498,19 +509,66 @@ let implementation ?load ~file src =
    items and the functions its tests were made, is left out, unless it's
    [for_tests]: nothing else calls it (Core Lint checks that). *)
 let link ?lint ?(for_tests = false) (modules : checked list) =
-  let prelude, _, _ = Lazy.force prelude in
+  let prelude, _, pr, pinf = Lazy.force prelude in
   let lowered c =
-    let core = Lazy.force c.core in
-    if for_tests then core
+    let core, requests = Lazy.force c.core in
+    if for_tests then (core, requests)
     else
-      {
-        core with
-        fns = List.filter (fun (f : Core.fn_def) -> not f.test) core.fns;
-      }
+      ( {
+          core with
+          fns = List.filter (fun (f : Core.fn_def) -> not f.test) core.fns;
+        },
+        requests )
   in
+  (* each module, the prelude first: what checking it found, and it
+     lowered, with what it asked to be made *)
+  let all =
+    (pr, pinf, (prelude, recorders))
+    :: List.map (fun c -> (c.resolved, c.inferred, lowered c)) modules
+  in
+  (* every type of the program, which a dependency's operations are
+     found in *)
+  let types = Hashtbl.create 64 in
+  List.iter
+    (fun ((r : Resolve.t), _, _) ->
+      List.iter
+        (fun (d : Iface.type_decl) -> Hashtbl.replace types d.path d)
+        r.types)
+    all;
+  (* what's asked for is made in the module that declares what it's made
+     of, once each, and what that asks for in turn (compiler.md, "`over
+     any` and `retry`") *)
+  let made = Hashtbl.create 16 and extra = Hashtbl.create 4 in
+  let rec make = function
+    | [] -> ()
+    | req :: rest ->
+        let p = Lower.made_path req in
+        if Hashtbl.mem made p then make rest
+        else (
+          Hashtbl.replace made p ();
+          let r, inferred, _ =
+            List.find (fun ((r : Resolve.t), _, _) -> r.home = p.home) all
+          in
+          let fn, more =
+            Lower.made ~types:(Hashtbl.find_opt types) r inferred req
+          in
+          Hashtbl.replace extra p.home
+            (fn :: Option.value ~default:[] (Hashtbl.find_opt extra p.home));
+          make (more @ rest))
+  in
+  make (List.concat_map (fun (_, _, (_, reqs)) -> reqs) all);
   link_lowered ?lint
     ~imports:([ Prelude.intrinsics ] :: List.map (fun c -> c.reachable) modules)
-    (prelude :: List.map lowered modules)
+    (List.map
+       (fun (_, _, ((core : Core.program), _)) ->
+         {
+           core with
+           fns =
+             core.fns
+             @ List.rev
+                 (Option.value ~default:[] (Hashtbl.find_opt extra core.home));
+         })
+       all)
 
 let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
 
@@ -1188,7 +1246,7 @@ let console_spec ~load ~dir ~home ~file ~src ~name lines =
       | PVar b -> [ b.name ]
       | PCon (_, ps) | PFail (_, ps) | PTuple ps | POr ps ->
           List.concat_map names ps
-      | PWild | PInt _ | PBool _ | PFail_any -> []
+      | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
     in
     match parsed text with
     | Some (_, Let { name; _ }) -> [ name.name ]

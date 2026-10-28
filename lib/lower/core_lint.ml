@@ -1081,7 +1081,7 @@ let rec expr env sc (e : expr) =
       List.iter (expr env sc) xs;
       match reveal env e.ty with
       | Con (p, parts)
-        when (List.length xs = 2 || List.length xs = 3)
+        when xs <> []
              && p = Ty.tuple_path (List.length xs)
              && List.length parts = List.length xs ->
           List.iter2
@@ -1279,6 +1279,10 @@ and prim env sc (e : expr) op args =
       | Some k -> same env a.loc "what's stored" a.ty (Sized.wide k)
       | None -> fail env loc (sprintf "`%s` into a `%s`" (show_prim op) (show e.ty)))
   | Nan_check _, [ a ] -> is "a value checked for a NaN" a.ty
+  | Tag_in _, [ a ] -> (
+      match a.ty with
+      | Errors _ -> is "whether an error has a tag" Ty.bool
+      | t -> fail env loc (sprintf "`tag-in` of a `%s`, which isn't an error" (show t)))
   | _ ->
       fail env loc ("`" ^ show_prim op ^ "` with the wrong number of operands")
 

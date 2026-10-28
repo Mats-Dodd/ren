@@ -1026,27 +1026,7 @@ let%expect_test "[s5 accept] one logger over any dependency" =
   (* `call.name` is the operation's, as a journal writes it; `call.args`
      and what `call.forward()` gives are opaque, and shown by what the
      compiler derives for each operation *)
-  until "s5"
-    ~want:
-      {|
-> Users.count()
-< Ok(1)
-1
-> Users.get(1)
-< Ok("ann")
-Ok("ann")
-> Users.get(2)
-< Err(NoUser(2))
-Err(NoUser(2))
-> Clock.now()
-< Ok(Time(0))
-Time(0)
-> Store.put("a", 7)
-< Ok(())
-()
-|}
-    (fun () ->
-      run
+  run
         (users_and_store
        ^ {|
 handler logged() over any uses Console =
@@ -1065,42 +1045,28 @@ fn main() uses Console =
     print(Clock.now())
   with logged() over mem_store() in
     let _ = attempt Store.put("a", 7)
-|}));
+    ()
+|});
   [%expect {|
-    (until s5)
-    error: a dependency's name must start with a capital letter
-       ┌─ test.ren:20:37
-    20 │ handler down_every(every: Int) over any =
-       │                                     ^^^
-       help: write `Any`
-
-    error: a dependency's name must start with a capital letter
-       ┌─ test.ren:26:23
-    26 │ handler logged() over any uses Console =
-       │                       ^^^
-       help: write `Any`
-
-    error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:41:9
-    41 │     let _ = attempt Store.put("a", 7)
-       │         ^
-       help: add the value this block should produce as its last line
+    > Users.count()
+    < Ok(1)
+    1
+    > Users.get(1)
+    < Ok("ann")
+    Ok("ann")
+    > Users.get(2)
+    < Err(NoUser(2))
+    Err(NoUser(2))
+    > Clock.now()
+    < Ok(Time(0))
+    Time(0)
+    > Store.put("a", 7)
+    < Ok(())
+    ()
     |}]
 
 let%expect_test "[s5 accept] call.fail injects a declared error" =
-  until "s5"
-    ~want:
-      {|
-Ok(())
-Ok(1)
-Err(Down)
-Ok(())
-Ok(2)
-Err(Down)
-()
-|}
-    (fun () ->
-      run
+  run
         (users_and_store
        ^ {|
 fn main() uses Console =
@@ -1111,55 +1077,38 @@ fn main() uses Console =
     print(attempt Store.put("a", 2))
     print(attempt Store.get("a"))
     print(attempt Store.get("b"))
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: a dependency's name must start with a capital letter
-       ┌─ test.ren:20:37
-    20 │ handler down_every(every: Int) over any =
-       │                                     ^^^
-       help: write `Any`
+    Ok(())
+    Ok(1)
+    Err(Down)
+    Ok(())
+    Ok(2)
+    Err(Down)
+    ()
     |}]
 
 let%expect_test "[s5 reject] call.fail with an error an operation doesn't declare" =
   (* checked where it's installed, for each operation of what it goes
      over, since it's specialized for each *)
-  until "s5"
-    ~says:
-      [
-        "error: `down_every(2)` can fail with `Down`, which `Users.get` and \
-         `Users.count` don't declare";
-        "help: install it over a dependency whose every operation can fail \
-         with `Down`, or write a handler `over Users`";
-      ]
-    (fun () ->
-      check_error
+  check_error
         (users_and_store
        ^ {|
 fn main() uses Console =
   with down_every(2) over mem_users() in
     print(Users.count())
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: a dependency's name must start with a capital letter
-       ┌─ test.ren:20:37
-    20 │ handler down_every(every: Int) over any =
-       │                                     ^^^
-       help: write `Any`
+    error: `down_every(2)` can fail with `Down`, which `Users.get` and `Users.count` don't declare
+       ┌─ test.ren:27:8
+    27 │   with down_every(2) over mem_users() in
+       │        ^^^^^^^^^^^^^
+       = an operation fails only with the errors its dependency declares, whatever is installed for it
+       help: install it over a dependency whose every operation can fail with `Down`, or write a handler `over Users`
     |}]
 
 let%expect_test "[s5 reject] call.forward() at most once" =
-  until "s5"
-    ~says:
-      [
-        "error: `call.forward()` runs the operation under this one, so it's \
-         called once at most";
-        "help: keep what it gave: `let r = attempt call.forward()`, and \
-         `try r` where it's needed";
-      ]
-    (fun () ->
-      check_error
+  check_error
         {|
 handler twice() over any =
   call =>
@@ -1167,29 +1116,20 @@ handler twice() over any =
     try call.forward()
 
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s5)
-    error: a dependency's name must start with a capital letter
-      ┌─ test.ren:1:22
-    1 │ handler twice() over any =
-      │                      ^^^
-      help: write `Any`
+    error: `call.forward()` runs the operation under this one, so it's called once at most
+      ┌─ test.ren:4:9
+    4 │     try call.forward()
+      │         ^^^^^^^^^^^^^^
+      help: keep what it gave: `let r = attempt call.forward()`, and `try r` where it's needed
     |}]
 
 let%expect_test "[s5 reject] call is only used through" =
   (* as `next` is: it can't be kept, passed or returned, and a block
      can't call `call.forward()`, since that would be a second way to
      call it twice *)
-  until "s5"
-    ~says:
-      [
-        "error: `call` can only be used through";
-        "help: use `call.forward()`, `call.fail(e)`, `call.name` or \
-         `call.args` where they're needed";
-      ]
-    (fun () ->
-      check_error
+  check_error
         {|
 handler kept() over any =
   call =>
@@ -1197,25 +1137,18 @@ handler kept() over any =
     try c.forward()
 
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s5)
-    error: a dependency's name must start with a capital letter
-      ┌─ test.ren:1:21
-    1 │ handler kept() over any =
-      │                     ^^^
-      help: write `Any`
+    error: `call` can only be used through
+      ┌─ test.ren:3:13
+    3 │     let c = call
+      │             ^^^^
+      = `call` is the operation this arm runs for, while it runs, and it can't be kept
+      help: use `call.forward()`, `call.fail(e)`, `call.name` or `call.args` where they're needed
     |}]
 
 let%expect_test "[s5 reject] call.args can't be taken apart" =
-  until "s5"
-    ~says:
-      [
-        "error: `call.args` can only be shown, compared and recorded";
-        "help: write a handler `over` the dependency to read its arguments";
-      ]
-    (fun () ->
-      check_error
+  check_error
         {|
 handler peek() over any =
   call =>
@@ -1223,28 +1156,18 @@ handler peek() over any =
     try call.forward()
 
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s5)
-    error: a dependency's name must start with a capital letter
-      ┌─ test.ren:1:21
-    1 │ handler peek() over any =
-      │                     ^^^
-      help: write `Any`
+    error: `call.args` can only be shown, compared and recorded
+      ┌─ test.ren:3:9
+    3 │     let (a, b) = call.args
+      │         ^^^^^^
+      = the arm runs for every operation of whatever it's installed over, so it's the same arm whatever its arguments and result are
+      help: write a handler `over` the dependency to read its arguments
     |}]
 
 let%expect_test "[s5 reject] an over any handler is installed with over" =
-  until "s5"
-    ~says:
-      [
-        "error: `quiet()` goes over another implementation, so it's \
-         installed with `over`";
-        "help: say what it goes over: `quiet() over Users` for the one \
-         installed outside this `with`, or another implementation after \
-         `over`";
-      ]
-    (fun () ->
-      check_error
+  check_error
         {|
 dep Users =
   get: fn(id: Int) -> Int
@@ -1255,20 +1178,15 @@ handler quiet() over any =
 fn main() =
   with quiet() in
     let _ = Users.get(1)
-|});
+    ()
+|};
   [%expect {|
-    (until s5)
-    error: a dependency's name must start with a capital letter
-      ┌─ test.ren:4:22
-    4 │ handler quiet() over any =
-      │                      ^^^
-      help: write `Any`
-
-    error: this block ends with a `let`, so it has no value
-      ┌─ test.ren:9:9
-    9 │     let _ = Users.get(1)
-      │         ^
-      help: add the value this block should produce as its last line
+    error: `quiet()` goes over another implementation, so it's installed with `over`
+      ┌─ test.ren:8:8
+    8 │   with quiet() in
+      │        ^^^^^^^
+      = it goes over whatever it's installed over, and with nothing after `over`, that's nothing
+      help: say what it goes over: `quiet() over Users` for the one installed outside this `with`, or another implementation after `over`
     |}]
 
 let source =
@@ -1292,20 +1210,7 @@ let%expect_test "[s5 accept] retry tries again only on what it's told" =
   (* the prelude's `retry`, in Ren: after `n` tries the last error
      leaves, any other error leaves at once, and a block is tried once
      however small `n` is *)
-  until "s5"
-    ~want:
-      {|
-Ok(42)
-Err(Flaky)
-Err(Broken)
-Err(Flaky)
-Err(Broken)
-1
-Ok(42)
-()
-|}
-    (fun () ->
-      run
+  run
         (source
        ^ {|
 fn fetch(n: Int) -> Int ! Flaky | Broken uses Source =
@@ -1329,32 +1234,23 @@ fn main() uses Console =
   print(tries)
   with flaky(2) in
     print(attempt retry(3, on: Flaky | Broken) fn() => try Source.get())
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: expected `,` or `)`, found `:`
-       ┌─ test.ren:16:18
-    16 │   try retry(n, on: Flaky) fn() => try Source.get()
-       │                  ^
-
-    error: expected `,` or `)`, found `:`
-       ┌─ test.ren:26:30
-    26 │     print(attempt retry(0, on: Flaky) fn() => try Source.get())
-       │                              ^
+    Ok(42)
+    Err(Flaky)
+    Err(Broken)
+    Err(Flaky)
+    Err(Broken)
+    1
+    Ok(42)
+    ()
     |}]
 
 let%expect_test "[s5 accept] a function of your own that takes Tags" =
   (* `on` is matched with `fail on`, and passed on with `on: on`; a
      `match` that handles it is a `try match`, since which errors it
      names isn't known where it's written *)
-  until "s5"
-    ~want:{|
-Ok(42)
-Err(Flaky)
-()
-|}
-    (fun () ->
-      run
+  run
         (source
        ^ {|
 fn twice<T>(on: Tags, body: fn() -> T) -> T =
@@ -1367,113 +1263,181 @@ fn main() uses Console =
     print(attempt twice(on: Flaky) fn() => try Source.get())
   with flaky(2) in
     print(attempt twice(on: Flaky) fn() => try Source.get())
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: a `fail` pattern can't bind the whole error to a name
-       ┌─ test.ren:17:10
-    17 │     fail on => try body()
-       │          ^^
-       help: match each tag, like `fail NotFound`, or keep the whole outcome as a value with `attempt`, and match `Err(on)`
-
-    error: expected `,` or `)`, found `:`
-       ┌─ test.ren:22:27
-    22 │     print(attempt twice(on: Flaky) fn() => try Source.get())
-       │                           ^
+    Ok(42)
+    Err(Flaky)
+    ()
     |}]
 
 let%expect_test "[s5 reject] retry without on" =
   (* `retry(n)` retried any error; now it says which, and the help lists
      what the block can fail with *)
-  until "s5"
-    ~says:
-      [
-        "error: `retry` takes `on:`, the errors it tries again";
-        "help: name them: `retry(3, on: Broken | Flaky)`";
-      ]
-    (fun () ->
-      check_error
+  check_error
         (source
        ^ {|
 fn main() =
-  let _ = attempt retry(3) fn() => try Source.get()
-|}));
+  with flaky(1) in
+    let _ = attempt retry(3) fn() => try Source.get()
+    ()
+|});
   [%expect {|
-    (until s5)
-    error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:16:7
-    16 │   let _ = attempt retry(3) fn() => try Source.get()
-       │       ^
-       help: add the value this block should produce as its last line
+    error: `retry` takes `on:`, the errors it tries again
+       ┌─ test.ren:17:21
+    17 │     let _ = attempt retry(3) fn() => try Source.get()
+       │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       help: name them: `retry(3, on: Broken | Flaky)`
     |}]
 
 let%expect_test "[s5 reject] on names an error the block can't fail with" =
-  until "s5"
-    ~says:
-      [
-        "error: `retry` is given `on: Timeout`, and the block can't fail with \
-         `Timeout`";
-        "help: name what it can fail with: `Broken`, `Flaky`";
-      ]
-    (fun () ->
-      check_error
+  check_error
         (source
        ^ {|
 fn main() =
-  let _ = attempt retry(3, on: Timeout) fn() => try Source.get()
-|}));
+  with flaky(1) in
+    let _ = attempt retry(3, on: Timeout) fn() => try Source.get()
+    ()
+|});
   [%expect {|
-    (until s5)
-    error: expected `,` or `)`, found `:`
-       ┌─ test.ren:16:30
-    16 │   let _ = attempt retry(3, on: Timeout) fn() => try Source.get()
-       │                              ^
+    error: `retry` is given `on: Timeout`, and the block can't fail with `Timeout`
+       ┌─ test.ren:17:34
+    17 │     let _ = attempt retry(3, on: Timeout) fn() => try Source.get()
+       │                                  ^^^^^^^
+       help: name what it can fail with: `Broken`, `Flaky`
     |}]
 
 let%expect_test "[s5 reject] a Tags argument is written with its name" =
-  until "s5"
-    ~says:
-      [
-        "error: `on`, the errors `retry` tries again, is written with its \
-         name";
-        "help: write `on: Flaky`";
-      ]
-    (fun () ->
-      check_error
+  check_error
         (source
        ^ {|
 fn main() =
-  let _ = attempt retry(3, Flaky) fn() => try Source.get()
-|}));
+  with flaky(1) in
+    let _ = attempt retry(3, Flaky) fn() => try Source.get()
+    ()
+|});
   [%expect {|
-    (until s5)
-    error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:16:7
-    16 │   let _ = attempt retry(3, Flaky) fn() => try Source.get()
-       │       ^
-       help: add the value this block should produce as its last line
+    error: `on`, the errors `retry` tries again, is written with its name
+       ┌─ test.ren:17:30
+    17 │     let _ = attempt retry(3, Flaky) fn() => try Source.get()
+       │                              ^^^^^
+       = a parameter of `Tags` is the only one passed by name
+       help: write `on: Flaky`
     |}]
 
 let%expect_test "[s5 reject] only a Tags parameter is passed by name" =
-  until "s5"
-    ~says:
-      [
-        "error: `n` isn't passed by name";
-        "help: a name goes only before a parameter of `Tags`: write `3`";
-      ]
-    (fun () ->
-      check_error
+  check_error
         (source
        ^ {|
 fn main() =
-  let _ = attempt retry(n: 3, on: Flaky) fn() => try Source.get()
-|}));
+  with flaky(1) in
+    let _ = attempt retry(n: 3, on: Flaky) fn() => try Source.get()
+    ()
+|});
   [%expect {|
-    (until s5)
-    error: expected `,` or `)`, found `:`
-       ┌─ test.ren:16:26
-    16 │   let _ = attempt retry(n: 3, on: Flaky) fn() => try Source.get()
-       │                          ^
+    error: `n` isn't passed by name
+       ┌─ test.ren:17:27
+    17 │     let _ = attempt retry(n: 3, on: Flaky) fn() => try Source.get()
+       │                           ^
+       help: a name goes only before a parameter of `Tags`: write `3`
+    |}]
+
+let%expect_test "[s5 reject] Tags is only a function parameter's type" =
+  (* a set of tags is given by name at a call, and never a value: a
+     block's parameter, a field or a handler's parameter can't be one *)
+  check_error
+    (source
+   ^ {|
+fn each(f: fn(Int, Tags) -> Int) -> Int = 1
+
+handler picky(on: Tags) over any =
+  call => try call.forward()
+
+fn main() = 1
+|});
+  [%expect {|
+    error: `Tags` is only the type of a function's parameter
+       ┌─ test.ren:15:20
+    15 │ fn each(f: fn(Int, Tags) -> Int) -> Int = 1
+       │                    ^^^^
+       = it's a set of error tags, given by name where the function is called, `on: DbDown`, and never a value
+       help: write it as the type of a named function's parameter
+
+    error: `Tags` is only the type of a function's parameter
+       ┌─ test.ren:17:19
+    17 │ handler picky(on: Tags) over any =
+       │                   ^^^^
+       = it's a set of error tags, given by name where the function is called, `on: DbDown`, and never a value
+       help: write it as the type of a named function's parameter
+    |}]
+
+let%expect_test "[s5 reject] fail on is an arm's whole pattern" =
+  check_error
+    (source
+   ^ {|
+fn twice<T>(on: Tags, body: fn() -> T ! Flaky | Broken) -> T ! Flaky | Broken =
+  try match body()
+    fail on | fail Broken => try body()
+    v => v
+
+fn main() = 1
+|});
+  [%expect {|
+    error: `fail on` is an arm's whole pattern
+       ┌─ test.ren:17:5
+    17 │     fail on | fail Broken => try body()
+       │     ^^^^^^^
+       help: give it an arm of its own, `fail on => ...`, and the other errors theirs
+    |}]
+
+let%expect_test "[s5 accept] over any over a generic dependency, and types" =
+  (* made for `Chan`, given `Chan`'s type argument at each `with`; `ren
+     types` says `over any` *)
+  let src =
+    {|
+dep Chan<T> =
+  send: fn(x: T)
+  count: fn() -> Int
+
+handler mem_chan<T>() for Chan<T> =
+  var n = 0
+  send(x) => n += 1
+  count() => n
+
+handler logged() over any uses Console =
+  call =>
+    Console.write(call.name.concat(show(call.args)))
+    try call.forward()
+
+fn go<T>(x: T) uses Chan<T>, Console =
+  Chan.send(x)
+  print(Chan.count())
+
+fn main() uses Console =
+  with logged() over mem_chan() in
+    go(5)
+  with logged() over mem_chan() in
+    go("a")
+|}
+  in
+  types src;
+  [%expect {|
+    dep Chan<T>
+      send: fn(T)
+      count: fn() -> Int
+    handler mem_chan<T>() for Chan<T>
+    handler logged() over any uses Console
+    fn go<T>(x: T) uses Console, Chan<T>
+    fn main() uses Console
+    |}];
+  run src;
+  [%expect {|
+    Chan.send(5)
+    Chan.count()
+    1
+    Chan.send("a")
+    Chan.count()
+    1
+    ()
     |}]
 
 (* ---- s6: blocks with `inout` parameters, and slices (decision 17) ---- *)

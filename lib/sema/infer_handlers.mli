@@ -48,14 +48,23 @@ type core = {
    gives (Types.impl_type). *)
 val handler_deps : env -> ctx -> Ast.tname Ast.dep_ref list -> Types.dep list
 
-(* A handler's body, the expression given: its state, arms and `finally`,
-   which use [needs] and fail with [fails], checked once the group is done
-   against what's [declared], if anything is. *)
+(* The same, for a handler whose type is made where it's written: one
+   `over any` ([any]) lists the dependency that stands for whichever it's
+   installed over, with the tags its arm fails with as a row of its own
+   (compiler.md, "`over any` and `retry`"). *)
+val own_deps :
+  env -> ctx -> any:bool -> Ast.tname Ast.dep_ref list -> Types.dep list
+
+(* A handler's body, the expression given, which implements [own] (as
+   [own_deps] gives them): its state, arms and `finally`, which use [needs]
+   and fail with [fails], checked once the group is done against what's
+   [declared], if anything is. *)
 val handler :
   core ->
   env ->
   ctx ->
   Ast.Resolved.expr ->
+  own:Types.dep list ->
   needs:Types.row ->
   fails:Types.row ->
   declared:Types.label list option ->

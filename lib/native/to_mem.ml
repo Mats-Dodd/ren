@@ -59,6 +59,9 @@ type ctx = {
   types : (Path.t, Iface.type_decl) Hashtbl.t;
   fns : (Path.t, C.fn_def) Hashtbl.t;
   own_members : (Path.t, string) Hashtbl.t;
+  own_ops : (Path.t * string, unit) Hashtbl.t;
+      (** the types with an operator or associated value of their own, by the
+          requirement: a dictionary for it would need the member called *)
   names : (Path.t, string) Hashtbl.t;
   taken : (string, unit) Hashtbl.t;
   mutable todo : (Path.t * Loc.t) list;
@@ -1319,10 +1322,17 @@ let rec desc fs env (d : C.desc) : atom =
       List.iter (drop fs env) args;
       r
 
-(* A requirement's dictionary, owned: the descriptor of its type. *)
+(* A requirement's dictionary, owned: the descriptor of its type. One of
+   a type with that operator of its own, `Instant`'s `sub`, would need its
+   member called from the walk, which the slice doesn't do; the type's
+   values are fine otherwise. *)
 let dict fs env (d : C.dict) : atom =
   match d with
   | Dict_param v -> read fs env v
+  | Derived { req; dty = Con (p, _); _ }
+    when Hashtbl.mem fs.cx.own_ops (p, req) ->
+      unsupported fs.here
+        (sprintf "a value of `%s`, which has an operator of its own" p.name)
   | Derived { ddesc; _ } -> desc fs env ddesc
 
 (* Whether [e] only computes, calling and changing nothing, so whatever
@@ -2091,6 +2101,29 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
              emit fs
                (Do (Runtime (Nan_check_any what, [ d; as_word fs x ], Some (site ())))));
       x
+  (* whether an error's tag is one of [names], a `fail on` arm's: its
+     tag, compared with each in turn *)
+  | Tag_in names, [ a ] ->
+      let x = expr fs env a in
+      let t = borrowed fs "$tag" Int (Tag_of x) in
+      let r = fresh fs "$in" Bool in
+      emit fs (Decl r);
+      let rec test = function
+        | [] -> emit fs (Set (r, Bool false))
+        | n :: rest ->
+            let c =
+              borrowed fs "$is" Bool
+                (Compare (Eq, t, Int (Int64.of_int (tag_id cx n))))
+            in
+            emit fs
+              (If
+                 ( c,
+                   block fs (fun () -> emit fs (Set (r, Bool true))),
+                   block fs (fun () -> test rest) ))
+      in
+      test names;
+      drop fs env x;
+      Var r
   | New_cell, [ x ] ->
       (* a handler's `var`: a local of its code, whose address its
          operations share *)
@@ -2234,11 +2267,13 @@ and show fs env loc t (d : C.desc) x =
         (owned fs env "$wide" (layout_at fs loc (Sized.wide k))
            (Runtime (Widen, [ x ], None)))
   | l ->
+      (* an opaque type laid out as what it's represented as is shown
+         with its name, `Time(0)`, by its descriptor *)
       let rt =
         match l with
-        | Int -> Some Show_int
-        | Float -> Some Show_float
-        | Bool -> Some Show_bool
+        | Int when t = Ty.int -> Some Show_int
+        | Float when t = Ty.float -> Some Show_float
+        | Bool when t = Ty.bool -> Some Show_bool
         | _ -> None
       in
       let site = if rt = Some Show_float then Some (new_site fs.cx loc) else None in
@@ -3371,6 +3406,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       types = Hashtbl.create 64;
       fns = Hashtbl.create 256;
       own_members = Hashtbl.create 16;
+      own_ops = Hashtbl.create 16;
       names = Hashtbl.create 64;
       taken = Hashtbl.create 64;
       todo = [];
@@ -3408,11 +3444,21 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       List.iter
         (fun (t, _) -> Hashtbl.replace cx.own_members t "a `show`")
         m.shows;
+      (* a key that's the value itself, `fn key(self) -> Int = self` of
+         an opaque `Int`, `Time`'s, orders and compares it as what it's
+         represented as does, which its descriptor does already *)
+      let itself k =
+        match Hashtbl.find_opt cx.fns k with
+        | Some { params = [ p ]; body = { kind = Local v; _ }; _ } ->
+            v.id = p.var.id
+        | _ -> false
+      in
       List.iter
-        (fun (t, _) -> Hashtbl.replace cx.own_members t "a `key`")
+        (fun (t, k) ->
+          if not (itself k) then Hashtbl.replace cx.own_members t "a `key`")
         m.keys;
       List.iter
-        (fun ((t, _), _) -> Hashtbl.replace cx.own_members t "an operator")
+        (fun ((t, req), _) -> Hashtbl.replace cx.own_ops (t, req) ())
         m.ops)
     modules;
   let entry =

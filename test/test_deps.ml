@@ -619,24 +619,24 @@ let%expect_test "a public wrapper says what its body fails with" =
     {|
 fn flaky(n: Int) -> Int ! Boom =
   if n < 3 then fail Boom else n
-pub fn retry(n: Int, body: fn() -> Int ! Boom) -> Int ! Boom =
+pub fn again(n: Int, body: fn() -> Int ! Boom) -> Int ! Boom =
   let r = attempt body()
   if n <= 1 then try r
   else
     match r
       Ok(v) => v
-      Err(_) => try retry(n - 1, body)
-pub fn safe() -> Int ! Boom = try retry(3) fn() => try flaky(2)
+      Err(_) => try again(n - 1, body)
+pub fn safe() -> Int ! Boom = try again(3) fn() => try flaky(2)
 fn main() uses Console =
   print(attempt safe())
-  print(attempt retry(2) fn() => 7)
+  print(attempt again(2) fn() => 7)
 |}
   in
   types src;
   [%expect
     {|
     fn flaky(n: Int) -> Int ! Boom
-    pub fn retry(n: Int, body: fn() -> Int ! Boom) -> Int ! Boom
+    pub fn again(n: Int, body: fn() -> Int ! Boom) -> Int ! Boom
     pub fn safe() -> Int ! Boom
     fn main() uses Console
     |}];
@@ -4325,15 +4325,15 @@ group "wrapped" = lib.wrapped()
 |});
       ( "lib.ren",
         {|
-pub fn retry(n: Int, body: fn() ! Boom) ! Boom =
+pub fn again(n: Int, body: fn() ! Boom) ! Boom =
   match attempt body()
     Ok(_) => ()
     Err(_) =>
-      if n <= 1 then try body() else try retry(n - 1, body)
+      if n <= 1 then try body() else try again(n - 1, body)
 
 pub group wrapped() =
   test "always fails" =
-    try retry(5) fn() => fail Boom
+    try again(5) fn() => fail Boom
 |}
       );
     ];

@@ -179,8 +179,11 @@ let include_ env i =
         add env i (extend fresh REmpty);
         true
   in
+  (* a named row, `call.forward()`'s errors in a handler `over any`, is
+     passed on as a parameter's is *)
+  let named = match row_end i.isrc with RSkol _ -> true | _ -> false in
   match src_tail with
-  | Some t when (not i.ilinked) && in_params i.iparams t ->
+  | Some t when (not i.ilinked) && (named || in_params i.iparams t) ->
       (i.ilinked <- true;
        (* an open row takes on the parameter's tail, and stays what it is
          before it; a closed one, a lambda's whose type is written, says
@@ -536,9 +539,12 @@ let tag_pattern env t =
 let can_fail (c : ecall) =
   row_names c.erow <> []
   ||
-  match row_tail c.erow with
-  | Some t -> in_params c.eparams t
-  | None -> false
+  match (row_tail c.erow, row_end c.erow) with
+  (* a named row, `call.forward()`'s in a handler `over any`, is
+     errors it can't name *)
+  | _, RSkol _ -> true
+  | Some t, _ -> in_params c.eparams t
+  | None, _ -> false
 
 (* A call no marker covers can't fail (errors.md, "Marking"): what it
    fails with went to [unhandled], a row of its own, which ends up empty
@@ -579,7 +585,7 @@ let marker env m =
       (match m.mkind with
       | Mtry -> covers_nothing m.mloc ?hint:m.hint "try"
       | Mattempt -> covers_nothing m.mloc ?hint:m.hint "attempt"
-      | Mmatch -> cannot_fail_arm m.mloc)
+      | Mmatch | Mmatch_on -> cannot_fail_arm m.mloc)
 
 (* ---- what an operation fails with (deps.md, "Implementations") ---- *)
 
@@ -904,6 +910,19 @@ let solve env ~is_value ~withheld =
   List.iter (function Unmarked (c, r) -> unmarked env c r | _ -> ()) cs;
   List.iter (function Marker m -> marker env m | _ -> ()) cs;
   List.iter (function Impl_op o -> impl_op env o | _ -> ()) cs;
+  (* the arm of a handler `over any` fails with what it fails with now:
+     its tags are its type's, which a `with` checks *)
+  List.iter
+    (function
+      | Any_arm { aerrs; atags } ->
+          let labels = fst (row_parts aerrs) in
+          ignore
+            (Unify.atomically env.st (Unify.copier ())
+               (fun st (c : Unify.copy) ->
+                 Unify.unify_row st (c.row atags) (extend labels REmpty)));
+          close_row aerrs
+      | _ -> ())
+    cs;
   (* what's compared, and what's given to a function that compares it,
      once every type of the group is known *)
   Infer_reqs.decide env cs;
@@ -924,6 +943,8 @@ let solve env ~is_value ~withheld =
       | Own_rows c -> Infer_declared.own_rows env ~is_value:is_fn_value c
       | _ -> ())
     cs;
+  (* what's checked of the rows as they turned out, in the order met *)
+  List.iter (function Later f -> f () | _ -> ()) (List.rev cs);
   let needs = List.filter_map (function Needs n -> Some n | _ -> None) cs in
   List.iter
     (function

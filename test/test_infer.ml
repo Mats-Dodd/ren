@@ -1272,6 +1272,7 @@ fn main() = print(Some(true))
       | Some (Block { name; _ }) -> print_endline ("block " ^ name)
       | Some Builtin_op -> print_endline "a built-in operator"
       | Some (Generic_op r) -> print_endline ("an operator, by its " ^ r)
+      | Some (Tags_given ts) -> print_endline ("tags " ^ String.concat " | " ts)
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect

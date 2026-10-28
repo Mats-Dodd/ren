@@ -529,6 +529,11 @@ let rec eval cx env (e : expr) =
       match Walk.nan_in cx.types a.ty v with
       | () -> v
       | exception Nan.Seen x -> panic e.loc (Nan.observed (Nan.passed op) x))
+  (* whether an error's tag is one a `fail on` arm was given *)
+  | Prim (Tag_in names, [ a ]) -> (
+      match eval cx env a with
+      | VTag { name; _ } -> VBool (List.mem name names)
+      | _ -> bug "a tag asked of what isn't an error")
   | Prim (op, args) -> prim e.loc op (eval_all cx env args) args
   | Let (v, value, body) ->
       let x = eval cx env value in
@@ -970,7 +975,7 @@ and journal cx (x : Intrinsic.t) tys args =
         }
       in
       Journal.gave (find j) c r ~line:(fun () ->
-          match a with VStr s -> s | v -> Value.show v);
+          match a with VStr s | VTuple [ VStr s ] -> s | v -> Value.show v);
       r
   | Journal_answer, [ ta; tr ], [ j; VStr name; a ] ->
       let j = find j in
@@ -1318,7 +1323,9 @@ let prelude_instance cx name args outer what =
    journal") with the journal [h], over [under], installed for it: a
    test implementation, or the real one. *)
 let recorded cx h (under : installed) what =
-  let name = "recording_" ^ String.lowercase_ascii under.dep.name in
+  let name =
+    Path.local (Lower.made_path (Any_for (Path.prelude "recorder", under.dep)))
+  in
   let impls =
     prelude_instance cx name [ VInt (Int64.of_int h) ] [ under ] what
   in

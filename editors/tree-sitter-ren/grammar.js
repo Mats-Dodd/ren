@@ -80,6 +80,9 @@ module.exports = grammar({
     // `billing.Plan` is a module's type, and `user.plan` a field: the token
     // after the dot decides
     [$._primary, $.type_name],
+    // and after `on:`, `bank.Refusal` may be a named error set among tags,
+    // which the `|` after it decides
+    [$._primary, $.type_name, $.error_set_name],
     // the next line of an indented sum type may start with `|`
     [$.sum_type],
     // so may the next line after an `if`'s indented `then` block, with
@@ -365,8 +368,10 @@ module.exports = grammar({
     // handler counting_rates(rate: Int) for Rates, RateCalls = ...: its
     // state, `var`s, `let`s and `finally`s, indented under it, then an arm
     // for each operation; the compiler checks the order. `over Users` goes
-    // over another implementation, `over A & B` of several, and `! DbDown`
-    // is what its state and `finally`s can fail with
+    // over another implementation, `over A & B` of several, `over any`
+    // over whichever one it's installed over, with one arm, `call => ...`,
+    // for every operation; and `! DbDown` is what its state and
+    // `finally`s can fail with
     handler_definition: ($) =>
       seq(
         optional($.visibility),
@@ -378,6 +383,7 @@ module.exports = grammar({
         choice(
           seq('for', sep1(field('implements', $.dependency), ',')),
           seq('over', sep1(field('implements', $.dependency), '&')),
+          seq('over', field('any', alias('any', $.any))),
         ),
         optional(field('errors', $.error_set)),
         optional(field('uses', $.uses_clause)),
@@ -388,11 +394,18 @@ module.exports = grammar({
             field('state', $.let_statement),
             field('finally', $.finally_statement),
             field('arm', $.handler_arm),
+            field('arm', $.any_arm),
           ),
           $._newline,
         ),
         $._dedent,
       ),
+
+    // call => ...: the one arm of a handler `over any`, which runs for
+    // every operation and names the call it runs for; the compiler checks
+    // it's in one
+    any_arm: ($) =>
+      seq(field('call', $.identifier), '=>', field('body', $._body)),
 
     // usd_to(c) => ...: the implementation of an operation; with its
     // dependency in front, Console.write(line) => ..., when two the
@@ -834,13 +847,34 @@ module.exports = grammar({
         seq(
           field('receiver', $._postfix),
           '.',
-          field('name', $.identifier),
+          // `call.fail(e)`, in a handler `over any`
+          field('name', choice($.identifier, alias('fail', $.identifier))),
           field('arguments', $.arguments),
           optional(field('trailing', $.lambda)),
         ),
       ),
 
-    arguments: ($) => seq('(', commaSep($._expression), ')'),
+    arguments: ($) =>
+      seq('(', commaSep(choice($._expression, $.named_argument)), ')'),
+
+    // on: DbDown | Timeout, on: on: what a parameter of `Tags` is given,
+    // the only one passed by its name; the compiler checks it's one
+    named_argument: ($) =>
+      seq(
+        field('name', $.identifier),
+        ':',
+        field('value', choice($.tag_set, $._expression)),
+      ),
+
+    // DbDown | Timeout, bank.Refusal: tags, without payloads, or named
+    // error sets; one alone reads as an expression
+    tag_set: ($) =>
+      seq(
+        $._tag,
+        repeat1(seq('|', $._tag)),
+      ),
+
+    _tag: ($) => choice(alias($.type_identifier, $.error_tag), $.error_set_name),
 
     _primary: ($) =>
       choice(
@@ -1073,12 +1107,14 @@ module.exports = grammar({
 
     wildcard: (_) => '_',
 
-    // fail Short(_, by), fail _: an error, which only a whole arm matches
+    // fail Short(_, by), fail _: an error, which only a whole arm matches;
+    // fail on, an error whose tag a parameter of `Tags` was given
     fail_pattern: ($) =>
       seq(
         'fail',
         choice(
           $.wildcard,
+          field('tags', $.identifier),
           seq(
             field('tag', $.type_identifier),
             optional(seq('(', commaSep($._pattern), ')')),

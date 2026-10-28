@@ -133,6 +133,11 @@ type prim =
       (** its operand, the same, after panicking if a NaN is anywhere in it:
           what an operation of a dependency, named, `Log.put`, is given
           (nan.ml). Its type is its operand's *)
+  | Tag_in of string list
+      (** whether its operand, an error, has one of these tags: what a `fail
+          on` arm matches, `on` being a parameter of `Tags` (compiler.md,
+          "`over any` and `retry`"), in a function made for the tags it's
+          given. A [Bool] *)
 
 type param = { mode : mode; var : var }
 

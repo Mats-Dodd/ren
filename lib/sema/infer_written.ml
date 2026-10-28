@@ -190,6 +190,10 @@ let param_type env ~tparams ?(named = []) ?own (p : Resolved.param) =
   { mode = p.pmode; ty = t }
 
 let result_path = Path.prelude "Result"
+
+(* The prelude's `Tags`, a set of error tags given by name at a call
+   (compiler.md, "`over any` and `retry`"). *)
+let tags_path = Path.prelude "Tags"
 let option_path = Path.prelude "Option"
 
 (* Fresh variables for a type declaration's parameters: `Option<T>` used

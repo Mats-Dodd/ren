@@ -93,7 +93,7 @@ let rec simplify env (p : pattern) =
   | PTuple ps ->
       let n = List.length ps in
       Ctor ({ name = "(,)"; owner = Tuple n }, List.map (simplify env) ps)
-  | PFail _ | PFail_any | POr _ ->
+  | PFail _ | PFail_any | PFail_in _ | POr _ ->
       (* a whole arm's, which [outcomes] simplifies *)
       invalid_arg "Exhaust.simplify: a `fail` pattern inside another"
 
@@ -112,7 +112,7 @@ let rec outcomes env (p : pattern) =
           ( failed,
             [ Ctor ({ name = t.name; owner }, List.map (simplify env) ps) ] );
       ]
-  | PFail_any -> [ Ctor (failed, [ Any ]) ]
+  | PFail_any | PFail_in _ -> [ Ctor (failed, [ Any ]) ]
   | POr ps -> List.concat_map (outcomes env) ps
   | _ -> [ Ctor (value, [ simplify env p ]) ]
 
@@ -268,7 +268,16 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
           Diag.error a.arm_pat.ploc
             ~help:"the arms above already match everything this one does"
             "this arm can never match";
-        if a.arm_guard = None then rows @ alts else rows)
+        (* `fail on` matches only the tags it's given, which aren't known
+           here, so it counts as a guard does *)
+        let rec tags_in (p : pattern) =
+          match p.pkind with
+          | PFail_in _ -> true
+          | POr ps -> List.exists tags_in ps
+          | _ -> false
+        in
+        if a.arm_guard = None && not (tags_in a.arm_pat) then rows @ alts
+        else rows)
       [] arms
   in
   (* a `try match` passes on any error its arms don't match *)
@@ -371,7 +380,7 @@ let rec no_bound_errors env (p : pattern) =
       | _ -> ())
   | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
       List.iter (no_bound_errors env) ps
-  | PWild | PInt _ | PBool _ | PFail_any -> ()
+  | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
 
 (* ---- walking the program ---- *)
 
@@ -380,7 +389,8 @@ let guard env f = Diag.recover env.sink ~default:() f
 
 let rec check_expr env (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+  | Named (_, a) -> check_expr env a
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms
   | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->

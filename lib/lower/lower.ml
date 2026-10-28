@@ -62,9 +62,122 @@ module Ids = Set.Make (Int)
    compiler bug. *)
 let bug what = failwith ("bug: lowering found " ^ what)
 
+(* A function made for what it's given, which lowering asks for where
+   it's used, and the driver makes in the module that declares it, once
+   each (compiler.md, "`over any` and `retry`"): a handler `over any`,
+   for the dependency at the second path, which a `with` installs it
+   over; or a function with parameters of `Tags`, for the tags each is
+   given, sorted, in order. Neither is lowered as it's written: what it
+   does depends on what it's made for. *)
+type request = Any_for of Path.t * Path.t | Tags_for of Path.t * string list list
+
+(* [p] with [s] after its name, or its member's. *)
+let suffixed (p : Path.t) s =
+  match p.member with
+  | None -> { p with name = p.name ^ s }
+  | Some m -> { p with member = Some { m with mname = m.mname ^ s } }
+
+(* The function a request is made as: `recorder$Clock`, `retry$DbDown`. *)
+let made_path = function
+  | Any_for (h, d) -> suffixed h ("$" ^ Path.full d)
+  | Tags_for (f, sets) ->
+      suffixed f ("$" ^ String.concat ";" (List.map (String.concat "|") sets))
+
+(* What a type of a function being made for a request becomes: each type
+   variable [var] gives, each row variable's row [tail] gives, and with
+   [dep], an implementation of the dependency `any` stands for, which
+   that one is then (compiler.md, "`over any` and `retry`"). *)
+type subst = {
+  var : int -> Ty.ty;
+  tail : int -> Ty.row;
+  dep : Ty.dep option;
+}
+
+let same_subst =
+  { var = (fun n -> Var n); tail = (fun n -> { labels = []; tail = Some n }); dep = None }
+
+let rec subst_ty s (t : Ty.ty) : Ty.ty =
+  match t with
+  | Var n -> s.var n
+  | Error -> Error
+  | Con (p, args) -> Con (p, List.map (subst_ty s) args)
+  | Errors r -> Errors (subst_row s r)
+  | Impl i -> (
+      let needs = subst_row s i.needs and fails = subst_row s i.fails in
+      match s.dep with
+      | Some d when List.exists Ty.is_any i.deps ->
+          (* it needs what it goes over, where it's installed *)
+          let l = Ty.dep_of d in
+          let needs =
+            if List.exists (Ty.same_label l) needs.labels then needs
+            else { needs with labels = Ty.sort_labels (l :: needs.labels) }
+          in
+          Impl { i with deps = [ d ]; needs; fails }
+      | _ ->
+          let deps =
+            List.map
+              (fun (d : Ty.dep) -> { d with dargs = List.map (subst_ty s) d.dargs })
+              i.deps
+          in
+          Impl { i with deps; needs; fails })
+  | Fun (ps, r, e, u) ->
+      Fun
+        ( List.map (fun (p : Ty.param) -> { p with ty = subst_ty s p.ty }) ps,
+          subst_ty s r,
+          subst_row s e,
+          subst_row s u )
+
+(* As [Ty.apply_row]: a row variable's labels are added to the row's. *)
+and subst_row s (r : Ty.row) : Ty.row =
+  let labels =
+    List.map
+      (fun (l : Ty.label) -> { l with payload = List.map (subst_ty s) l.payload })
+      r.labels
+  in
+  match r.tail with
+  | None -> { labels; tail = None }
+  | Some n ->
+      let more = s.tail n in
+      let has (l : Ty.label) = List.exists (Ty.same_label l) labels in
+      {
+        labels =
+          Ty.sort_labels (labels @ List.filter (fun l -> not (has l)) more.labels);
+        tail = more.tail;
+      }
+
+(* In a copy of the arm of a handler `over any`, made for one operation:
+   the dependency, the operation, its parameters' types, result and
+   errors, and the locals its arguments are in. *)
+type call = {
+  cdep : Ty.dep;
+  cop : string;
+  cps : Ty.param list;
+  cret : Ty.ty;
+  cerrs : Ty.row;
+  cargs : C.var list;
+}
+
 (* What lowering one top-level function needs. *)
 type cx = {
   nodes : Infer.node Infer.Nodes.t;  (** what inference found, by node id *)
+  mutable subst : subst;
+      (** what its types become, in a function made for a request *)
+  mutable shift : int;
+  mutable shifted : Ids.t;
+      (** in a copy of an arm `over any` for one operation, the binders in
+          the arm, whose locals' ids are theirs plus [shift], so each copy's
+          are its own *)
+  mutable call : call option;  (** in such a copy, its call *)
+  tags : (int * string list) list;
+      (** in a function made for the tags it's given, each parameter of
+          `Tags`, by its binder's id, with them *)
+  mutable suffix : string;
+      (** what's added to each block's name in a function made for a request,
+          so that each copy's blocks have names of their own *)
+  requests : request list ref;  (** what it uses that's made for a request *)
+  types : Path.t -> Iface.type_decl option;
+      (** every type of the program, by path, which a dependency's operations
+          are found in *)
   vars : (int, C.var) Hashtbl.t;  (** each local, by binder id *)
   mutable next : int;  (** the id of the next temporary *)
   mutable ev : C.var;
@@ -85,7 +198,20 @@ type cx = {
 
 let node cx id =
   match Infer.Nodes.find_opt id cx.nodes with
-  | Some n -> n
+  | Some n when cx.subst == same_subst -> n
+  | Some n ->
+      {
+        n with
+        ty = subst_ty cx.subst n.ty;
+        targs =
+          Option.map
+            (fun (a : Ty.args) : Ty.args ->
+              {
+                tys = List.map (subst_ty cx.subst) a.tys;
+                rows = List.map (subst_row cx.subst) a.rows;
+              })
+            n.targs;
+      }
   | None -> bug (Printf.sprintf "no type for node %d" id)
 
 let ty_of cx id = (node cx id).ty
@@ -129,7 +255,7 @@ let nan_checked (dep : Path.t) op (args : C.expr list) =
    the dependencies its callee gives it (Infer.Block). *)
 let block_of cx id =
   match (node cx id).found with
-  | Some (Block { name; given }) -> (name, given)
+  | Some (Block { name; given }) -> (name ^ cx.suffix, given)
   | _ -> bug (Printf.sprintf "no name for the block at node %d" id)
 
 (* The type of a block that does what a function of type [t] does, given
@@ -185,19 +311,30 @@ let dicts_of cx id =
   let a = targs_of cx id in
   List.map (fun (n, req) -> dict cx req (List.nth a.tys n)) (node cx id).needs
 
+(* Whether [a] is an argument given by name, `on: DbDown`. *)
+let is_named (a : expr) = match a.kind with Named _ -> true | _ -> false
+
+(* Whether [t] is the prelude's `Tags`. *)
+let is_tags (t : Ty.ty) = t = Con (Path.prelude "Tags", [])
+
 (* Whether inference found [id] to be a `match` with `fail` arms, or a
    `fail` arm's pattern (Infer.found). *)
 let handles cx id = (node cx id).found = Some Handles
 let is_fail cx id = (node cx id).found = Some Fail_arm
 
+(* A local's id: its binder's, or in a copy of an arm `over any`, that
+   plus the copy's shift (see [cx]). *)
+let local_id cx (b : binder) =
+  if Ids.mem b.id cx.shifted then b.id + cx.shift else b.id
+
 (* A local, when it's bound: it takes the binder's id and name. *)
 let bind cx (b : binder) ty =
-  let v : C.var = { id = b.id; name = b.ident.name; ty } in
-  Hashtbl.replace cx.vars b.id v;
+  let v : C.var = { id = local_id cx b; name = b.ident.name; ty } in
+  Hashtbl.replace cx.vars v.id v;
   v
 
 let var_of cx (b : binder) =
-  match Hashtbl.find_opt cx.vars b.id with
+  match Hashtbl.find_opt cx.vars (local_id cx b) with
   | Some v -> v
   | None -> bug ("`" ^ b.ident.name ^ "` used outside its scope")
 
@@ -385,6 +522,18 @@ and expr_of cx (e : expr) : C.expr =
          decision 5) *)
       named_block cx e
   | Var (Next_op _) -> bug "`next` used other than by calling through it"
+  (* in a copy of an arm `over any`, made for one operation: its name, as
+     the journal writes it, and its arguments, a tuple of them *)
+  | Var (Call_op "name") ->
+      let c = the_call cx in
+      here (Str (c.cdep.dpath.name ^ "." ^ c.cop))
+  | Var (Call_op "args") -> (
+      let c = the_call cx in
+      match c.cargs with
+      | [] -> here Unit
+      | vs -> here (Tuple (List.map (fun v -> local v e.loc) vs)))
+  | Var (Call_op _) -> bug "`call` used other than through"
+  | Named _ | Tag_set _ -> bug "tags lowered other than as a call's"
   | Var (Assoc_value (_, req)) -> value_of cx req (ty ()) e.loc
   | Unop (Neg, a, onode) ->
       operator cx ~onode ~meth:"neg" C.Neg (ty ()) e.loc [ expr cx a ]
@@ -609,6 +758,12 @@ and expr_of cx (e : expr) : C.expr =
       in
       here (Handler { ev; captures; body })
 
+(* The call of the copy of an arm `over any` being lowered. *)
+and the_call cx =
+  match cx.call with
+  | Some c -> c
+  | None -> bug "`call` outside an arm `over any`"
+
 (* A block of type [ty], named [name], taking [params], whose body [body]
    makes, with the evidence it runs with in scope: the evidence where it's
    written, [cx.ev], which it captures, with what [given] lists from its
@@ -715,6 +870,8 @@ and with_ cx (e : expr) items body =
         List.filter_map
           (fun (lk : with_link) ->
             match kind lk with
+            | Some (Installs { key; _ }) when made_any cx lk ->
+                Some (lk.knode, any_link cx lk (Ty.of_label key))
             | Some (Installs _ | Installs_handler _) ->
                 Some (lk.knode, expr cx lk.link)
             | _ -> None)
@@ -786,6 +943,35 @@ and with_ cx (e : expr) items body =
        made)
     (nest order)
 
+(* Whether the link [lk] makes a handler `over any`, which it installs
+   over one dependency. *)
+and made_any cx (lk : with_link) =
+  match Ty.impl_parts (ty_of cx lk.link.node) with
+  | Some (ds, _) -> List.exists Ty.is_any ds
+  | None -> false
+
+(* The link [lk], `logged() over ...`, which makes a handler `over any`
+   to install over [d]: a call of the function made of it for [d]'s
+   dependency, which is given the descriptors of [d]'s type arguments
+   after its own (compiler.md, "`over any` and `retry`"). Inference made
+   sure it's such a call. *)
+and any_link cx (lk : with_link) (d : Ty.dep) =
+  match lk.link.kind with
+  | Call (({ kind = Var (Global h); _ } as f), args) ->
+      let req = Any_for (h, d.dpath) in
+      cx.requests := req :: !(cx.requests);
+      let a = targs_of cx f.node in
+      let a = { a with tys = a.tys @ d.dargs } in
+      let s = { same_subst with dep = Some d } in
+      let fty = subst_ty s (ty_of cx f.node) in
+      let callee =
+        mk (Global (made_path req, a, descs cx a, dicts_of cx f.node)) fty f.loc
+      in
+      let args = List.map (fun a -> C.Value (expr cx a)) args in
+      let ty = subst_ty s (ty_of cx lk.link.node) in
+      mk (Call (callee, args, cx.ev)) ty lk.link.loc
+  | _ -> bug "a handler `over any` installed other than where it's made"
+
 (* A handler's body, which makes an instance: its state, each `var` then
    put in a cell, and an implementation of each of [deps], a record of its
    arms. An arm is a lambda that keeps the cells, not the `var`s: it reads
@@ -811,10 +997,18 @@ and handler cx (e : expr) deps state arms =
     | Some (_, needs) -> needs
     | None -> bug "a handler whose type isn't a handler's"
   in
-  let forwards, body_ty =
+  let forwards, body_ty, any_vars =
     match (node cx e.node).found with
-    | Some (Handler_facts { forwards; body_ty }) -> (forwards, body_ty)
-    | _ -> ([], None)
+    | Some (Handler_facts { forwards; body_ty; any_vars }) ->
+        (* the variable for the body's type, as what it's made for numbers
+           it *)
+        let body_ty =
+          Option.map
+            (fun k -> match cx.subst.var k with Var k -> k | _ -> k)
+            body_ty
+        in
+        (forwards, body_ty, any_vars)
+    | _ -> ([], None, None)
   in
   let finallies =
     List.filter_map (function Finally f -> Some f | _ -> None) state
@@ -985,12 +1179,99 @@ and handler cx (e : expr) deps state arms =
           (c, mk (Prim (New_cell, [ local v e.loc ])) c.ty e.loc))
         cells
     in
-    lets made
-      (mk
-         (Instance { impls = List.map impl deps; finally })
-         (ty_of cx e.node) e.loc)
+    let impls =
+      match any_vars with
+      | Some vars -> [ any_impl cx e ~cells ~needs ~vars arms ]
+      | None -> List.map impl deps
+    in
+    lets made (mk (Instance { impls; finally }) (ty_of cx e.node) e.loc)
   in
   state_lets state
+
+(* The implementation a handler `over any` [e] makes, in a function made
+   for the dependency it's installed over, the one [cx.handler_deps]
+   lists: its arm, `call => body`, copied for each operation of that one,
+   with the arm's call's arguments' type, result and errors, the
+   variables [vars] (Infer.Handler_facts), that operation's. Each copy
+   takes the operation's arguments, which `call.args` is a tuple of, and
+   `call.forward()` calls the operation under it with (compiler.md,
+   "`over any` and `retry`"). *)
+and any_impl cx (e : expr) ~cells ~needs ~vars:(ka, kr, ke) arms =
+  let d =
+    match cx.handler_deps with
+    | [ d ] -> d
+    | _ -> bug "a handler `over any` not made for one dependency"
+  in
+  let impl, body =
+    match arms with
+    | [ ({ arm_impl = { kind = Lambda ([], body); _ }; _ } : handler_arm) ] ->
+        ((List.hd arms).arm_impl, body)
+    | _ -> bug "a handler `over any` without its one arm"
+  in
+  let ops =
+    match Iface.dep_fields cx.types d with
+    | Some ops -> ops
+    | None -> bug "a handler `over any` over what isn't a dependency"
+  in
+  let inside = Ids.of_list (Ast.bound_in impl) in
+  let most = Ids.fold max inside 0 in
+  let copy (o : Iface.field) =
+    match o.fty with
+    | Fun (ps, ret, errs, _) ->
+        let around = cx.subst and suffix = cx.suffix in
+        let args =
+          match ps with
+          | [] -> Ty.unit
+          | ps -> Ty.tuple (List.map (fun (p : Ty.param) -> p.ty) ps)
+        in
+        cx.subst <-
+          {
+            around with
+            var =
+              (fun k ->
+                if k = ka then args else if k = kr then ret else around.var k);
+            tail = (fun k -> if k = ke then errs else around.tail k);
+          };
+        cx.suffix <- suffix ^ "$" ^ o.fname;
+        cx.shifted <- inside;
+        cx.shift <- cx.next;
+        cx.next <- cx.next + most + 1;
+        let params =
+          List.map
+            (fun (p : Ty.param) : C.param -> { mode = p.mode; var = temp cx "x" p.ty })
+            ps
+        in
+        cx.call <-
+          Some
+            {
+              cdep = d;
+              cop = o.fname;
+              cps = ps;
+              cret = ret;
+              cerrs = errs;
+              cargs = List.map (fun (p : C.param) -> p.var) params;
+            };
+        let name, given = block_of cx impl.node in
+        (* it runs with what the handler needs, the dependency it goes
+           over among it *)
+        let fty : Ty.ty =
+          match ty_of cx impl.node with
+          | Fun (_, r, errs, _) -> Fun (ps, r, errs, needs)
+          | _ -> bug "an arm `over any` whose type isn't a function's"
+        in
+        let lam =
+          block_value cx ~name ~given params fty impl.loc (fun () ->
+              expr cx body)
+        in
+        cx.subst <- around;
+        cx.suffix <- suffix;
+        cx.shifted <- Ids.empty;
+        cx.call <- None;
+        (o.fname, with_cells cx cells lam)
+    | _ -> bug "an operation whose type isn't a function's"
+  in
+  let ops = List.map copy ops in
+  (d.dpath, mk (Record (d.dpath, ops)) (Ty.impl [ d ] needs) e.loc)
 
 (* The body of the `finally` [f], given [given], what it covers ends in,
    as its parameter. *)
@@ -1086,10 +1367,32 @@ and assigned acc (e : C.expr) =
   in
   List.fold_left assigned acc (C.children e)
 
-and arm cx (a : arm) : C.arm =
-  let pat = pattern cx a.arm_pat in
-  let guard = Option.map (expr cx) a.arm_guard in
-  { pat; guard; body = expr cx a.arm_body }
+and arm cx ?error (a : arm) : C.arm =
+  match (a.arm_pat.pkind, error) with
+  | PFail_in b, Some (error : C.expr) ->
+      (* `fail on`: any error, if its tag is one of those `on` was given,
+         and the guard holds *)
+      let names =
+        match List.assoc_opt b.id cx.tags with
+        | Some names -> names
+        | None -> bug "`fail on` in a function not made for its tags"
+      in
+      let loc = a.arm_pat.ploc in
+      let test = mk (Prim (Tag_in names, [ error ])) Ty.bool loc in
+      let guard =
+        match a.arm_guard with
+        | None -> test
+        | Some g -> mk (If (test, expr cx g, mk (Bool false) Ty.bool loc)) Ty.bool loc
+      in
+      {
+        pat = pat PWild (ty_of cx a.arm_pat.pnode) loc;
+        guard = Some guard;
+        body = expr cx a.arm_body;
+      }
+  | _ ->
+      let pat = pattern cx a.arm_pat in
+      let guard = Option.map (expr cx) a.arm_guard in
+      { pat; guard; body = expr cx a.arm_body }
 
 (* A `match` with `fail` arms, of type [ty]: a [Handle] of its subject,
    whose value is matched by the other arms, and its error by the `fail`
@@ -1118,7 +1421,10 @@ and handle_match cx ~passed ty loc subject arms =
     else []
   in
   let on_error =
-    mk (Match (local error loc, List.map (arm cx) fails @ rest)) ty loc
+    mk
+      (Match
+         (local error loc, List.map (arm cx ~error:(local error loc)) fails @ rest))
+      ty loc
   in
   mk (Handle { body; value; on_value; error; on_error }) ty loc
 
@@ -1265,11 +1571,74 @@ and call cx ?(changed = false) (e : expr) f args =
         (Dep_call
            { dep; dargs; op; fty = ty_of cx f.node; ev; next = true; args })
         (ty_of cx e.node) e.loc
+  | Var (Call_op "forward") ->
+      (* `call.forward()`: the operation the copy of the arm is for, given
+         its arguments, through the evidence where the handler was
+         installed, as `next` is *)
+      let c = the_call cx in
+      let ev =
+        match cx.handler_ev with
+        | Some ev -> ev
+        | None -> bug "`call.forward()` outside a handler"
+      in
+      mk
+        (Dep_call
+           {
+             dep = c.cdep.dpath;
+             dargs = List.map (C.describe cx.tys) c.cdep.dargs;
+             op = c.cop;
+             fty = Fun (c.cps, c.cret, c.cerrs, Ty.closed);
+             ev;
+             next = true;
+             args = List.map (fun v -> local v e.loc) c.cargs;
+           })
+        (ty_of cx e.node) e.loc
+  | Var (Global p) when List.exists is_named args ->
+      tags_call cx ~changed e f p args
   | Field (r, _) -> (
       match (node cx f.node).found with
       | Some (Calls_op { key; from; op }) -> desc_method cx e r key from op args
       | _ -> plain_call cx ~changed e f args)
   | _ -> plain_call cx ~changed e f args
+
+(* A call of [p], a function with parameters of `Tags`, each given its
+   tags by name, `on: DbDown`, or passed on, `on: on`: a call of the
+   function made for those tags, which takes the other arguments
+   (compiler.md, "`over any` and `retry`"). *)
+and tags_call cx ~changed (e : expr) (f : expr) p args =
+  let sets =
+    List.filter_map
+      (fun (a : expr) ->
+        match a.kind with
+        | Named (_, v) -> Some (given_tags cx v)
+        | _ -> None)
+      args
+  in
+  let req = Tags_for (p, sets) in
+  cx.requests := req :: !(cx.requests);
+  let fty =
+    match ty_of cx f.node with
+    | Fun (ps, r, errs, uses) ->
+        Ty.Fun (List.filter (fun (q : Ty.param) -> not (is_tags q.ty)) ps, r, errs, uses)
+    | _ -> bug "a call of tags whose callee isn't a function"
+  in
+  let a = targs_of cx f.node in
+  let callee =
+    mk (Global (made_path req, a, descs cx a, dicts_of cx f.node)) fty f.loc
+  in
+  plain_call cx ~changed ~callee e f
+    (List.filter (fun a -> not (is_named a)) args)
+
+(* The tags [v], given to a parameter of `Tags`, stand for: those written,
+   or those the parameter passed on was given. *)
+and given_tags cx (v : expr) =
+  match (v.kind, (node cx v.node).found) with
+  | Tag_set _, Some (Tags_given names) -> names
+  | Var (Local b), _ -> (
+      match List.assoc_opt (local_id cx b) cx.tags with
+      | Some names -> names
+      | None -> bug "a parameter of `Tags` in a function not made for its tags")
+  | _ -> bug "tags inference didn't find"
 
 (* `d.op(args)`, [e]: `with d in Dep.op(args)`, the description [r] and
    the arguments evaluated first, in order, outside (foundations.md,
@@ -1320,13 +1689,14 @@ and desc_method cx (e : expr) (r : expr) key from op args =
           })
        ty e.loc)
 
-and plain_call cx ~changed (e : expr) f args =
+and plain_call cx ~changed ?callee (e : expr) f args =
   let inout (p : expr) ty =
     let binds, pl = place cx p in
     Inout { binds; place = pl; ty; loc = p.loc }
   in
   let f, receiver =
     match (f.kind, (node cx f.node).found) with
+    | _ when callee <> None -> (Option.get callee, [])
     | Field (r, _), Some (Method_of p) ->
         let recv =
           if changed then inout r (ty_of cx r.node) else Read (expr cx r)
@@ -1696,6 +2066,7 @@ and pattern cx (p : pattern) : C.pattern =
         | _ -> bug "a constructor pattern inference didn't find")
     | PFail (t, ps) -> PTag (t.name, List.map (pattern cx) ps)
     | PFail_any -> PWild
+    | PFail_in _ -> bug "`fail on` other than as a whole arm's pattern"
     | POr ps -> POr (List.map (pattern cx) ps)
     | PTuple ps -> PTuple (List.map (pattern cx) ps)
   in
@@ -1815,13 +2186,14 @@ let max_binder (f : fn_def) =
   let see (b : binder) = m := max !m b.id in
   let rec go (e : expr) =
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
     | Unop (_, a, _)
     | Field (a, _)
     | Ref a
     | Try a
     | Attempt a
     | Assert a
+    | Named (_, a)
     | Inline_handler a ->
         go a
     | Binop (_, a, b, _)
@@ -1872,19 +2244,83 @@ let max_binder (f : fn_def) =
     match p.pkind with
     | PVar b -> see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
-    | PWild | PInt _ | PBool _ | PFail_any -> ()
+    | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
   in
   List.iter (fun (p : Resolved.param) -> see p.pname) f.params;
   go f.body;
   !m
 
-let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
+(* [f], lowered; or made for [made], what a use of it asked for. What
+   it uses that's made for a request, it adds to [requests]. *)
+let fn_def ~home ~types ~requests ?made (inferred : Infer.t) (f : fn_def) :
+    C.fn_def =
   let path = Ast.fn_path home f in
   let scheme = Path.Map.find path inferred.schemes in
+  let nodes = Path.Map.find path inferred.nodes in
   let next = max_binder f + 1 in
+  (* what its types become, and its parameters of `Tags` *)
+  let subst, scheme, tags, suffix =
+    match made with
+    | None -> (same_subst, scheme, [], "")
+    | Some (Any_for (_, d)) ->
+        (* the dependency's type parameters are the function's, after
+           its own *)
+        let n = List.length (Ty.own_args scheme.ty).tys in
+        let m =
+          match types d with
+          | Some (decl : Iface.type_decl) -> List.length decl.params
+          | None -> bug "a handler `over any` made for what isn't a type"
+        in
+        let dep : Ty.dep = { dpath = d; dargs = List.init m (fun i -> Ty.Var (n + i)) } in
+        let subst =
+          {
+            same_subst with
+            var = (fun k -> if k < n then Var k else Var (k + m));
+            dep = Some dep;
+          }
+        in
+        ( subst,
+          { scheme with ty = subst_ty subst scheme.ty },
+          [],
+          "$" ^ Path.full d )
+    | Some (Tags_for (_, sets)) ->
+        let ps =
+          match scheme.ty with Fun (ps, _, _, _) -> ps | _ -> []
+        in
+        let given = ref sets in
+        let tags =
+          List.concat
+            (List.map2
+               (fun (p : Resolved.param) (t : Ty.param) ->
+                 if is_tags t.ty then (
+                   let names = List.hd !given in
+                   given := List.tl !given;
+                   [ (p.pname.id, names) ])
+                 else [])
+               f.params ps)
+        in
+        let ty : Ty.ty =
+          match scheme.ty with
+          | Fun (ps, r, e, u) ->
+              Fun (List.filter (fun (p : Ty.param) -> not (is_tags p.ty)) ps, r, e, u)
+          | t -> t
+        in
+        ( same_subst,
+          { scheme with ty },
+          tags,
+          "$" ^ String.concat ";" (List.map (String.concat "|") sets) )
+  in
   let cx =
     {
-      nodes = Path.Map.find path inferred.nodes;
+      nodes;
+      subst;
+      shift = 0;
+      shifted = Ids.empty;
+      call = None;
+      tags;
+      suffix;
+      requests;
+      types;
       vars = Hashtbl.create 16;
       next = next + 1;
       ev = C.evidence next;
@@ -1899,14 +2335,19 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
     | Fun (ps, _, _, _) -> ps
     | _ -> bug "a function whose type isn't a function"
   in
+  let own =
+    List.filter
+      (fun (p : Resolved.param) -> not (List.mem_assoc p.pname.id tags))
+      f.params
+  in
   let params =
     List.map2
       (fun (p : Resolved.param) (t : Ty.param) : C.param ->
         { mode = p.pmode; var = bind cx p.pname t.ty })
-      f.params ps
+      own ps
   in
   {
-    path;
+    path = (match made with Some req -> made_path req | None -> path);
     params;
     ev = cx.ev;
     tys = cx.tys;
@@ -1918,6 +2359,17 @@ let fn_def ~home (inferred : Infer.t) (f : fn_def) : C.fn_def =
     origin = Written;
     known = [];
   }
+
+(* Whether [f] is made for each request rather than lowered as it's
+   written: a handler `over any`, or a function with a parameter of
+   `Tags`. *)
+let made_for_requests (inferred : Infer.t) path (f : fn_def) =
+  (match f.body.kind with Handler { any = true; _ } -> true | _ -> false)
+  ||
+  match Path.Map.find_opt path inferred.schemes with
+  | Some { ty = Fun (ps, _, _, _); _ } ->
+      List.exists (fun (p : Ty.param) -> is_tags p.ty) ps
+  | _ -> false
 
 (* The types among [types] that show their values through their own
    `show` method (shown.ml), each with its function, one of [fns]: a
@@ -1970,21 +2422,47 @@ let ops (types : Iface.type_decl list) =
         Iface.requirements)
     types
 
-let program (r : Resolve.t) (inferred : Infer.t) : C.program =
-  let fns = List.map (fn_def ~home:r.home inferred) (Ast.functions r.prog) in
+let program (r : Resolve.t) (inferred : Infer.t) =
+  let requests = ref [] in
+  (* only a function made for a request looks for a dependency's
+     operations *)
+  let types _ = None in
+  let fns =
+    List.filter_map
+      (fun f ->
+        if made_for_requests inferred (Ast.fn_path r.home f) f then None
+        else Some (fn_def ~home:r.home ~types ~requests inferred f))
+      (Ast.functions r.prog)
+  in
   (* the indices its loops keep in bounds, marked so (bounds.ml) *)
   let fns =
     List.map Bounds.mark fns
   in
-  {
-    home = r.home;
-    types = r.types;
-    fns;
-    values = inferred.values;
-    shows = shows r.types fns;
-    keys = keys r.types fns;
-    ops = ops r.types;
-  }
+  ( ({
+       home = r.home;
+       types = r.types;
+       fns;
+       values = inferred.values;
+       shows = shows r.types fns;
+       keys = keys r.types fns;
+       ops = ops r.types;
+     }
+      : C.program),
+    List.rev !requests )
+
+(* The function [req] asks for, made in the module that declares the
+   function it's made of, [r], and what it uses that's made for a request
+   in turn. *)
+let made ~types (r : Resolve.t) (inferred : Infer.t) req =
+  let p = match req with Any_for (p, _) | Tags_for (p, _) -> p in
+  match
+    List.find_opt (fun f -> Ast.fn_path r.home f = p) (Ast.functions r.prog)
+  with
+  | Some f ->
+      let requests = ref [] in
+      let fn = fn_def ~home:r.home ~types ~requests ~made:req inferred f in
+      (Bounds.mark fn, List.rev !requests)
+  | None -> bug ("a request of `" ^ Path.local p ^ "`, which isn't there")
 
 (* ---- starting ---- *)
 

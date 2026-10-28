@@ -15,7 +15,7 @@ ren test ledger            # every module's tests
 | File | What's in it |
 |---|---|
 | `sql.ren` | `Sql`, a dependency with `get`, `set`, `begin`, `commit` and `rollback`; `Outage`, when the database is down, `AtFirstBegin` only the first time; `mem_sql`, a handler for `Sql` that keeps balances in a `Map`, and those when the last transaction began; `transaction`, a handler over `Sql` |
-| `main.ren` | `transfer`, which credits one account and then debits the other inside a transaction; `retry`, which runs a block again while the database is down; `main`; tests of a commit, a rollback, a failed commit, a transfer retried, and a transaction that can't begin |
+| `main.ren` | `transfer`, which credits one account and then debits the other inside a transaction; `main`; tests of a commit, a rollback, a failed commit, a transfer retried, and a transaction that can't begin |
 
 ## What to look at
 
@@ -40,13 +40,13 @@ that it uses one.
 with `Short` from its body and `DbDown` from the `Sql` calls, the start
 and the commit, and says so: `! DbDown | Short(name: Str)`.
 
-**A block counts the tries.** `retry` is an ordinary function that
-takes a block, and the test of it passes one that changes `tries`, a
-`var` outside it:
+**A block counts the tries.** The prelude's `retry` runs a block again
+while it fails with one of the errors it's given `on:`, and the test of
+it passes one that changes `tries`, a `var` outside it:
 
 ```ren
 var tries = 0
-try retry(3) fn() =>
+try retry(3, on: DbDown) fn() =>
   tries += 1
   try transfer("ann", "bob", 30)
 assert tries == 2
@@ -62,10 +62,12 @@ runs the block (foundations.md, decision 2).
 - **`finally` can't compare the body's value.** It's given a result of
   any type, so it can pass it on or show it, never `==` it. A
   transaction never needs to.
-- **`retry` names the errors it can see.** A block parameter's errors
-  pass through it untouched, so to tell `DbDown` apart `retry` writes
-  out what its block fails with. `retry(n, on: DbDown)`, which works for
-  any block, waits for stage 10d.
+- **`retry` used to name the errors it could see.** A block parameter's
+  errors pass through it untouched, so to tell `DbDown` apart, the
+  ledger's own `retry` wrote out what its block failed with. The
+  prelude's `retry(n, on: DbDown)` works for any block: `on:` names what
+  it tries again, and every other error leaves at once (handlers.md,
+  "Functions that run a block").
 - **A helper the tests call is `pub`.** A test sees what an importer
-  sees, so `transfer`, `retry`, `balances` and `start` are part of `main`'s
+  sees, so `transfer`, `balances` and `start` are part of `main`'s
   interface.

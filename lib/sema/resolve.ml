@@ -222,6 +222,10 @@ and next_in =
   | In_inline
       (** in an inline handler, which has none, and whose dependency is known
           only to inference, which says so (Infer_expr, [inline_handler]) *)
+  | In_any of string * int
+      (** in the arm of a handler `over any`, [h]: it has no `next`, but the
+          call it runs for, the local of this id, `call` in `call => ...`
+          (compiler.md, "`over any` and `retry`") *)
 
 and fn_state = {
   mutable last_id : int;  (** the last binder id handed out *)
@@ -305,7 +309,7 @@ let bind env sc (id : ident) bound =
   not_an_alias env id;
   (match sc.next with
   | In_over _ when id.name = "next" -> next_bound env id.loc
-  | In_over _ | In_for _ | In_inline | No_next -> ());
+  | In_over _ | In_for _ | In_inline | In_any _ | No_next -> ());
   sc.fn.last_id <- sc.fn.last_id + 1;
   let b = { id = sc.fn.last_id; ident = id; bound; depth = sc.depth } in
   (* `_`, as in `let _ = ...`, names nothing: the value is dropped *)
@@ -537,8 +541,8 @@ let row_name env ~rows kind (n : ident) =
    type argument, the one place an error set can be written as a type:
    `Result<T, ! Short | Frozen>`. Which type takes one is for inference to
    say. *)
-let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
-    Resolved.ty =
+let rec ty env ~params ?(rows = Declaration) ?(arg = false) ?(tags = false)
+    (t : Parsed.ty) : Resolved.ty =
   match t with
   | TyFn (ps, ret, errs, u, l) ->
       (* a block's type never names a row: what it fails with and uses is
@@ -684,6 +688,18 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) (t : Parsed.ty) :
       let given = List.length args in
       match find_named env ~params t with
       | None -> TyName (named (Named (Path.make env.home t.tid.name)), [])
+      | Some (Named p, _) when p = Path.prelude "Tags" && not tags ->
+          (* `Tags` is given by name at a call, and is never a value
+             (compiler.md, "`over any` and `retry`") *)
+          report env (tyname_loc t)
+            ~notes:
+              [
+                "it's a set of error tags, given by name where the function \
+                 is called, `on: DbDown`, and never a value";
+              ]
+            ~help:"write it as the type of a named function's parameter"
+            "`Tags` is only the type of a function's parameter";
+          TyName (named (Named p), [])
       | Some (Named p, _) when is_set env p ->
           not_a_type env (tyname_loc t) ~what:"it isn't a type of values" t;
           TyName (named (Named p), [])
@@ -916,7 +932,7 @@ and errors env ~params ?(rows = Declaration) (es : Parsed.errors) :
     es.errs;
   { errs = List.map error es.errs; etail = es.etail; eloc = es.eloc }
 
-let ty_opt env ~params ?rows = Option.map (ty env ~params ?rows)
+let ty_opt env ~params ?rows ?tags = Option.map (ty env ~params ?rows ?tags)
 
 (* The named type [t] is, if it's written, `b: Bag`: then a method called
    on [b] can only be one of [Bag]'s (see [receiver_type]). *)
@@ -926,9 +942,11 @@ let note_type sc (b : binder) (t : Resolved.ty option) =
       sc.fn.typed <- (b.id, p) :: sc.fn.typed
   | _ -> ()
 
-let param env sc ?rows bound (p : Parsed.param) : Resolved.param * scope =
+let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
+    Resolved.param * scope =
   let rows = Option.value rows ~default:(Body sc.rows) in
-  let pty = ty_opt env ~params:sc.tparams ~rows p.pty in
+  (* a named function's parameter may be of `Tags` *)
+  let pty = ty_opt env ~params:sc.tparams ~rows ~tags:top p.pty in
   let b, sc = bind env sc p.pname bound in
   note_type sc b pty;
   ({ pname = b; pty; pmode = p.pmode }, sc)
@@ -942,11 +960,11 @@ let receiver_type sc (r : Resolved.expr) =
   | Record (Some { tref = Named p; _ }, _) -> Some p
   | _ -> None
 
-let params env sc ?rows bound ps =
+let params env sc ?rows ?top bound ps =
   let ps, sc =
     List.fold_left
       (fun (acc, sc) (p : Parsed.param) ->
-        let p, sc = param env sc ?rows (bound p) p in
+        let p, sc = param env sc ?rows ?top (bound p) p in
         (p :: acc, sc))
       ([], sc) ps
   in
@@ -1169,12 +1187,13 @@ let lookup env sc loc ~what x =
                    under its type"
                 "there's no `self` here: only a method has one"
           | [] when x = "outer" && sc.next <> No_next && sc.next <> In_inline
+                    && (match sc.next with In_any _ -> false | _ -> true)
             ->
               (* the README's early sketch, `outer.get(id)` *)
               let ds =
                 match sc.next with
                 | In_for (_, ds) | In_over (_, ds) -> ds
-                | In_inline | No_next -> []
+                | In_inline | In_any _ | No_next -> []
               in
               let call =
                 match
@@ -1196,7 +1215,7 @@ let lookup env sc loc ~what x =
                         (String.concat " & "
                            (List.map (fun (p : Path.t) -> p.name) ds))
                         call
-                  | In_over _ | In_inline | No_next ->
+                  | In_over _ | In_inline | In_any _ | No_next ->
                       sprintf "call the one under it with `next`: %s" call)
                 (sprintf "there's no %s named `outer`" what)
           | [] -> (
@@ -1254,12 +1273,55 @@ let lookup env sc loc ~what x =
    reported: otherwise the second `x` would quietly hide the first. *)
 let rec pattern_vars (p : Parsed.pattern) =
   match p.pkind with
-  | PWild | PInt _ | PBool _ | PFail_any -> []
+  | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
   | PVar x -> [ x ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map pattern_vars ps
   | POr ps ->
       (* each alternative binds the same names (see [pattern]) *)
       Option.fold ~none:[] ~some:pattern_vars (List.nth_opt ps 0)
+
+(* ---- `Tags`, and `call` in a handler `over any` (compiler.md,
+   "`over any` and `retry`") ---- *)
+
+let tags_path = Path.prelude "Tags"
+
+(* Whether the local [b] is a parameter of type `Tags`, which isn't a
+   value: it's matched, `fail on => ...`, or passed on, `on: on`. *)
+let is_tags sc (b : binder) = List.assoc_opt b.id sc.fn.typed = Some tags_path
+
+(* [x], a `Tags` parameter, used as a value. *)
+let tags_used env loc x =
+  report env loc
+    ~notes:[ sprintf "`%s` is a set of error tags, given by name at a call" x ]
+    ~help:
+      (sprintf "match it, `fail %s => ...`, or pass it on, `%s: %s`" x x x)
+    (sprintf "`%s` isn't a value" x)
+
+(* Whether [x], written here, is the call that the arm of a handler `over
+   any` runs for, its own name for it, and not a local bound since. *)
+let is_call sc x =
+  match (sc.next, Env.find_opt x sc.locals) with
+  | In_any (_, id), Some b -> b.id = id
+  | _ -> false
+
+(* [x], the call of a handler `over any`, used some way other than
+   through: as `next` is, it can't be kept, passed or returned. *)
+let call_kept env loc x =
+  report env loc
+    ~notes:
+      [
+        sprintf
+          "`%s` is the operation this arm runs for, while it runs, and it \
+           can't be kept"
+          x;
+      ]
+    ~help:
+      (sprintf
+         "use `%s.forward()`, `%s.fail(e)`, `%s.name` or `%s.args` where \
+          they're needed"
+         x x x x)
+    (sprintf "`%s` can only be used through" x);
+  Global (Path.make env.home x)
 
 (* A constructor: the type it's written after, if any, resolved. A bare one
    is found through a type by inference. *)
@@ -1292,6 +1354,20 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
     | PInt n -> (PInt n, sc)
     | PBool b -> (PBool b, sc)
     | PFail_any -> (PFail_any, sc)
+    | PFail_in x -> (
+        (* `fail on`: [on] is a parameter of type `Tags`, and the pattern
+           binds nothing *)
+        match Env.find_opt x.name sc.locals with
+        | Some b when is_tags sc b -> (PFail_in b, sc)
+        | _ ->
+            report env x.loc
+              ~help:
+                (sprintf
+                   "match each tag, like `fail NotFound`, or keep the whole \
+                    outcome as a value with `attempt`, and match `Err(%s)`"
+                   x.name)
+              "a `fail` pattern can't bind the whole error to a name";
+            (PFail_any, sc))
     | PVar x -> (
         match Env.find_opt x.name same with
         | Some b -> (PVar b, { sc with locals = Env.add x.name b sc.locals })
@@ -1309,6 +1385,21 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
         (PTuple ps, sc)
     | POr [] -> assert false (* the parser makes one of two or more *)
     | POr (first :: rest) ->
+        (* `fail on` takes what its tags are, which an alternative beside
+           it would only repeat or add to *)
+        List.iter
+          (fun (alt : Parsed.pattern) ->
+            match alt.pkind with
+            | PFail_in x ->
+                report env alt.ploc
+                  ~help:
+                    (sprintf
+                       "give it an arm of its own, `fail %s => ...`, and the \
+                        other errors theirs"
+                       x.name)
+                  (sprintf "`fail %s` is an arm's whole pattern" x.name)
+            | _ -> ())
+          (first :: rest);
         let first', inner = pattern env sc first in
         let bound = pattern_vars first in
         let has (vars : ident list) (x : ident) =
@@ -1368,7 +1459,7 @@ let rec binding env sc bound (p : Parsed.pattern) : Resolved.pattern * scope =
         in
         (PTuple (List.rev ps), sc)
     | PWild -> (PWild, sc)
-    | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | POr _ ->
+    | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
         (* the parser lets only names, `_` and tuples through *)
         assert false
   in
@@ -1435,6 +1526,9 @@ let no_next env sc loc =
           sprintf
             "declare it `handler %s(...) over %s`, to reach the `%s` under it" h
             ds ds
+      | In_any _ ->
+          "in a handler `over any`, `call.forward()` calls the operation \
+           under it"
       | In_over _ | In_inline | No_next ->
           "only a handler declared `over` another implementation has a `next`")
     "`next` is only in a handler declared `over` a dependency";
@@ -1537,15 +1631,65 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Var (Bare "next") when next_free env sc -> (
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ())
-        | In_for _ | In_inline | No_next -> Var (no_next env sc e.loc))
+        | In_for _ | In_inline | In_any _ | No_next ->
+            Var (no_next env sc e.loc))
     | Field ({ kind = Var (Bare "next"); _ }, op)
       when next_free env sc
            && match sc.next with In_over _ -> true | _ -> false -> (
         (* `next.get` not called *)
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ~called:op.name ())
-        | In_for _ | In_inline | No_next -> assert false)
-    | Var (Bare x) -> Var (lookup env sc e.loc ~what:"variable" x)
+        | In_for _ | In_inline | In_any _ | No_next -> assert false)
+    | Var (Bare x) when is_call sc x -> Var (call_kept env e.loc x)
+    | Field ({ kind = Var (Bare x); _ }, f) when is_call sc x -> (
+        match f.name with
+        | "args" | "name" -> Var (Call_op f.name)
+        | "forward" | "fail" -> Var (call_kept env e.loc x)
+        | _ ->
+            report env f.loc
+              ~help:
+                (sprintf
+                   "it has `%s.forward()`, `%s.fail(e)`, `%s.name` and \
+                    `%s.args`"
+                   x x x x)
+              (sprintf "`%s` has no `%s`" x f.name);
+            Var (Global (Path.make env.home x)))
+    | Call
+        ( { kind = Field ({ kind = Var (Bare x); _ }, f); loc = floc; node = fnode },
+          args )
+      when is_call sc x && (f.name = "forward" || f.name = "fail") -> (
+        match (f.name, args) with
+        | "forward", [] ->
+            Call ({ kind = Var (Call_op "forward"); loc = floc; node = fnode }, [])
+        | "forward", a :: _ ->
+            report env a.loc
+              ~help:(sprintf "write `%s.forward()`" x)
+              (sprintf
+                 "`%s.forward()` passes the operation's own arguments, so it \
+                  takes none"
+                 x);
+            Unit
+        | _, [ { kind = Con ({ qual = None; name }, cargs); _ } ] ->
+            (* `call.fail(Down)` is `fail Down` *)
+            (go { e with kind = Fail (name, cargs) }).kind
+        | _ ->
+            report env e.loc
+              ~help:(sprintf "name a tag, and its payload: `%s.fail(Down)`" x)
+              (sprintf "`%s.fail(...)` takes the error to fail with" x);
+            Unit)
+    | Var (Bare x) ->
+        let v = lookup env sc e.loc ~what:"variable" x in
+        (match v with Local b when is_tags sc b -> tags_used env e.loc x | _ -> ());
+        Var v
+    | Named (n, ({ kind = Var (Bare x); _ } as a))
+      when match Env.find_opt x sc.locals with
+           | Some b -> is_tags sc b
+           | None -> false ->
+        (* `on: on` passes a `Tags` parameter on *)
+        Named
+          (n, { kind = Var (Local (Env.find x sc.locals)); loc = a.loc; node = a.node })
+    | Named (n, a) -> Named (n, go a)
+    | Tag_set es -> Tag_set (errors env ~params:sc.tparams es)
     | Var (Item (t, f)) -> Var (item env sc t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
     | Binop (op, a, b, n) ->
@@ -1861,10 +2005,10 @@ let or_list = function
    does the rest. The state is bound as deep as the arms' bodies, so an
    arm can change it (mut.ml). In one over a dependency, `next` is the
    implementation under it (handlers.md, "`next`"). *)
-let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
+let rec handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
     Resolved.expr_kind =
   match e.kind with
-  | Handler { deps; over; fails; state; arms; _ } ->
+  | Handler { deps; over; any; fails; state; arms; _ } ->
       let after = if over then "over" else "for" in
       let seen = Hashtbl.create 4 in
       let deps =
@@ -2031,7 +2175,33 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
           arm_impl = arm_lambda env sc a.arm_impl;
         }
       in
-      let arms = List.map arm arms in
+      (* `call => ...`, the arm of a handler `over any` *)
+      let any_arm (a : Parsed.handler_arm) =
+        match a.arm_impl.kind with
+        | Lambda ([ p ], _) -> p.pname.loc = a.arm_name.loc
+        | _ -> false
+      in
+      let arms =
+        if any then any_arms env sc name arms ~any_arm
+        else (
+          List.iter
+            (fun (a : Parsed.handler_arm) ->
+              if any_arm a then
+                report env a.arm_name.loc
+                  ~help:
+                    (sprintf
+                       "declare it `handler %s(...) over any`, or implement \
+                        an operation by its name: `%s(...) => ...`"
+                       name.name
+                       (match List.concat_map (fun (p, _) -> ops p) deps with
+                       | op :: _ -> op
+                       | [] -> "op"))
+                  (sprintf "`%s => ...` is the arm of a handler `over any`"
+                     a.arm_name.name))
+            arms;
+          List.map arm
+            (List.filter (fun a -> not (any_arm a)) arms))
+      in
       (* every operation of every dependency is implemented, unless it goes
          over another implementation, which does the rest *)
       (if not over then
@@ -2065,8 +2235,124 @@ let handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
                      should handle them"
                     ds ds)
                (sprintf "`%s` doesn't implement %s" name.name (or_list missing)));
-      Handler { deps = List.map snd deps; over; fails; needs; state; arms }
+      Handler
+        { deps = List.map snd deps; over; any; fails; needs; state; arms }
   | _ -> assert false
+
+(* The arms of the handler [name] declared `over any`: one, `call =>
+   body`, whose body is a lambda of no parameters, with [call] bound in it
+   as the call it runs for, which is only used through ([is_call]). Its
+   [arm_op] is [Call_op "any"]. `call.forward()` is called once at most on
+   any path through it ([forwards]). *)
+and any_arms env sc (name : ident) arms ~any_arm =
+  let one_arm loc =
+    report env loc
+      ~notes:
+        [
+          "it goes over whatever dependency it's installed over, and its one \
+           arm runs for every operation of it";
+        ]
+      ~help:"write one arm, `call => ...`, and read `call.name` for which it is"
+      (sprintf "`%s` goes over any dependency, so it has one arm, `call => ...`"
+         name.name)
+  in
+  match List.filter any_arm arms with
+  | [] ->
+      List.iter (fun (a : Parsed.handler_arm) -> one_arm a.arm_name.loc) arms;
+      if arms = [] then one_arm name.loc;
+      []
+  | (a : Parsed.handler_arm) :: rest ->
+      List.iter
+        (fun (b : Parsed.handler_arm) ->
+          if b != a then one_arm b.arm_name.loc)
+        (List.filter (fun b -> not (any_arm b)) arms @ rest);
+      let body =
+        match a.arm_impl.kind with Lambda (_, body) -> body | _ -> assert false
+      in
+      let b, inner = bind env sc a.arm_name By_lambda in
+      let inner = { inner with next = In_any (name.name, b.id) } in
+      let body : Resolved.expr =
+        match body.kind with
+        | Block (stmts, last) ->
+            let stmts, inner = block_stmts ~finally:true env inner stmts in
+            {
+              kind = Block (stmts, expr env inner last);
+              loc = body.loc;
+              node = body.node;
+            }
+        | _ -> expr env inner body
+      in
+      forwards env a.arm_name.name body;
+      [
+        {
+          arm_op = Call_op "any";
+          arm_name = a.arm_name;
+          arm_impl = { kind = Lambda ([], body); loc = a.arm_impl.loc; node = a.arm_impl.node };
+        };
+      ]
+
+(* `call.forward()` runs the operation under the handler, so it's called
+   once at most on any path through the arm [body]: never in a loop or a
+   block, which could call it again, and once in a sequence, or in each
+   branch of an `if` or a `match`. The second is reported. *)
+and forwards env x (body : Resolved.expr) =
+  let report_at loc =
+    report env loc
+      ~help:
+        (sprintf
+           "keep what it gave: `let r = attempt %s.forward()`, and `try r` \
+            where it's needed"
+           x)
+      (sprintf
+         "`%s.forward()` runs the operation under this one, so it's called \
+          once at most"
+         x)
+  in
+  (* how many times [e] can call it on one path, given [before] already
+     have; [again] says it's inside a loop or a block, where once is
+     already more than once *)
+  let rec go ~again before (e : Resolved.expr) =
+    match e.kind with
+    | Call ({ kind = Var (Call_op "forward"); _ }, []) ->
+        if before >= 1 || again then report_at e.loc;
+        before + 1
+    | If (c, t, f) ->
+        let n = go ~again before c in
+        max (go ~again n t) (match f with Some f -> go ~again n f | None -> n)
+    | Match (subject, arms) ->
+        let n = go ~again before subject in
+        List.fold_left
+          (fun m (a : Resolved.arm) ->
+            let k =
+              match a.arm_guard with Some g -> go ~again n g | None -> n
+            in
+            max m (go ~again k a.arm_body))
+          n arms
+    | While { cond; body } ->
+        let n = go ~again:true before cond in
+        go ~again:true n body
+    | For { over; body; _ } ->
+        let n =
+          match over with
+          | Each it -> go ~again before it
+          | Range (lo, hi) -> go ~again (go ~again before lo) hi
+        in
+        go ~again:true n body
+    | Lambda (_, b) | Inline_handler b -> go ~again:true before b
+    | Block (stmts, last) ->
+        let n =
+          List.fold_left
+            (fun n (s : Resolved.stmt) ->
+              match s with
+              | Let { value; _ } | Let_tuple { value; _ } | Expr value ->
+                  go ~again n value
+              | Finally f -> go ~again:true n f)
+            before stmts
+        in
+        go ~again n last
+    | _ -> List.fold_left (fun n c -> go ~again n c) before (children e)
+  in
+  ignore (go ~again:false 0 body)
 
 (* ---- declarations ---- *)
 
@@ -2348,7 +2634,10 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     }
   in
   let ps, inner =
+    (* a function's parameter may be of `Tags`, but not a handler's: it's
+       made for the dependency it's installed over, if it's `over any` *)
     params env sc ~rows
+      ~top:(match f.body.kind with Handler _ -> false | _ -> true)
       (fun p -> match p.pmode with Inout -> By_inout | Read -> By_param)
       (* `self`'s type is the owner's, never what's written *)
       (List.map

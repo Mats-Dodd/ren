@@ -36,6 +36,9 @@
 (finally_statement
   "finally" @name) @item
 
+(any_arm
+  call: (identifier) @name) @item
+
 (associated_value
   (visibility)? @context
   "let" @context

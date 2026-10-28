@@ -1073,14 +1073,14 @@ fn mk2<T>(c: Bool) -> Result<T, ! Left(Int) | Right> =
   if c then Err(Left(1)) else Err(Right)
 fn kept(c: Bool) = if c then mk2(c) else attempt util.g()
 fn there(c: Bool) = if c then util.made(c) else attempt util.g()
-fn retry(r: Result<Int, ! Left(Int) | Right>) -> Bool =
+fn worth_trying(r: Result<Int, ! Left(Int) | Right>) -> Bool =
   match r
     Ok(_) => false
     Err(Left(_)) => true
     Err(Right) => false
 fn main() =
   print([kept(true), kept(false), there(false)])
-  print(retry(attempt util.g()))
+  print(worth_trying(attempt util.g()))
 |}
       );
       ( "util.ren",

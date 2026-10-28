@@ -158,6 +158,9 @@ type t = {
   mutable i : int;
   mutable node : int;
   sink : Diag.sink;
+  mutable tags : string list;
+      (** the parameters of the function being parsed written of type `Tags`,
+          which `fail on` can name *)
 }
 
 let peek p = fst p.toks.(p.i)
@@ -761,7 +764,8 @@ let rec irrefutable (pat : pattern) =
   match pat.pkind with
   | PVar _ | PWild -> true
   | PTuple ps -> List.for_all irrefutable ps
-  | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | POr _ -> false
+  | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
+      false
 
 (* A pattern after a `let` or a `for`, or a lambda's parameter ([what],
    "a `let`"), that might not match: a constructor's is taken apart by a
@@ -808,8 +812,12 @@ let parse_arm_pattern p : pattern =
           let args = sep_list p ~close:RPAREN parse_pattern in
           finish (PFail (tag, args)))
         else finish (PFail (tag, []))
+    | IDENT n when peek2 p <> LPAREN && List.mem n p.tags ->
+        (* `fail on`, a parameter written of type `Tags`, which Resolve
+           checks is the prelude's: an error is never a value (errors.md,
+           "Keeping an error"), so any other name is an error *)
+        finish (PFail_in (ident p))
     | IDENT name ->
-        (* an error is never a value (errors.md, "Keeping an error") *)
         Diag.error (loc p)
           ~help:
             (Printf.sprintf
@@ -1197,6 +1205,12 @@ and parse_postfix p =
                 "take it apart with a pattern, `let (a, b) = t`; if its parts \
                  want names, make it a record"
               "a tuple's parts have no names or numbers"
+        | FAIL ->
+            (* `call.fail(Down)`, in a handler `over any`, which Resolve
+               says it's in *)
+            let f : ident = { name = "fail"; loc = loc p } in
+            advance p;
+            loop (mk (Field (e, f)) start p)
         | _ ->
             let f = ident p in
             loop (mk (Field (e, f)) start p))
@@ -1207,7 +1221,7 @@ and parse_postfix p =
         loop (mk (Index (e, i)) start p)
     | LPAREN ->
         advance p;
-        let args = sep_list p ~close:RPAREN parse_expr in
+        let args = sep_list p ~close:RPAREN parse_call_arg in
         (* `twice() fn() =>` passes the lambda as the last argument, so a
            multi-line lambda doesn't have to sit inside the parentheses *)
         let args = if peek p = FN then args @ [ parse_lambda p ] else args in
@@ -1215,6 +1229,50 @@ and parse_postfix p =
     | _ -> e
   in
   loop (parse_primary p)
+
+(* An argument of a call: an expression, or one passed by its
+   parameter's name, `on: Flaky | Broken`, which only a parameter of type
+   `Tags` is (compiler.md, "`over any` and `retry`"). What a name is given
+   is tags, joined by `|`, if it starts with a tag followed by `|`, `,` or
+   `)`; otherwise an expression, `on: on`, which passes one on, or what
+   Resolve or inference says can't be passed by name. *)
+and parse_call_arg p =
+  match (peek p, peek2 p) with
+  | IDENT n, COLON when not (is_upper n) ->
+      let start = loc p in
+      let name = ident p in
+      advance p;
+      let ends k =
+        match fst p.toks.(min (p.i + k) (Array.length p.toks - 1)) with
+        | PIPE | COMMA | RPAREN -> true
+        | _ -> false
+      in
+      let tags =
+        match peek p with
+        | IDENT t when is_upper t -> ends 1
+        | IDENT _ -> at_module_type p && ends 3
+        | _ -> false
+      in
+      let value =
+        if not tags then parse_expr p
+        else
+          let tstart = loc p in
+          let rec errs acc =
+            let e =
+              if at_module_type p then Set (parse_tyname p)
+              else Tag (upper_ident p "an error tag", [])
+            in
+            if peek p = PIPE then (
+              advance p;
+              errs (e :: acc))
+            else List.rev (e :: acc)
+          in
+          let errs = errs [] in
+          let eloc = Loc.span tstart (last_loc p) in
+          mk (Tag_set { errs; etail = None; eloc }) tstart p
+      in
+      mk (Named (name, value)) start p
+  | _ -> parse_expr p
 
 and parse_primary p =
   let start = loc p in
@@ -1702,6 +1760,14 @@ let parse_fn p ~pub =
   let tparams, tneeds = parse_tparams p in
   expect p LPAREN;
   let params = sep_list p ~close:RPAREN parse_param in
+  p.tags <-
+    List.filter_map
+      (fun (q : param) ->
+        match q.pty with
+        | Some (TyName ({ tmod = None; tid = { name = "Tags"; _ } }, [])) ->
+            Some q.pname.name
+        | _ -> None)
+      params;
   let ret =
     if peek p = ARROW then (
       advance p;
@@ -2100,9 +2166,12 @@ let parse_handler p ~pub =
          "expected `for` or `over` and the dependencies it implements, found %s"
          (describe (peek p)));
   (* `for A, B` implements each of them; `over A & B` goes over another
-     implementation of them, as a handler of several's type is written *)
+     implementation of them, as a handler of several's type is written;
+     `over any` goes over any one dependency (foundations.md, decision 7) *)
   let over = peek p = OVER in
   advance p;
+  let any = over && peek p = IDENT "any" in
+  if any then advance p;
   let rec deps acc =
     let d = parse_dep_ref p in
     match peek p with
@@ -2151,7 +2220,7 @@ let parse_handler p ~pub =
     let after = match peek2 p with IDENT n -> [ n ] | _ -> [] in
     String.concat sep (List.rev_map show_dep acc @ after)
   in
-  let deps = deps [] in
+  let deps = if any then [] else deps [] in
   (* what installing it can fail with, which its state and `finally` can
      (handlers.md, "State that can fail to start") *)
   let fails = if peek p = BANG then Some (parse_errors p) else None in
@@ -2233,6 +2302,20 @@ let parse_handler p ~pub =
           arm_name;
           arm_impl = mk (Lambda (params, body)) arm_start p;
         }
+    | IDENT _, FATARROW ->
+        (* `call => ...`, the one arm of a handler `over any`, which runs
+           for every operation, and names what it's given (Resolve checks
+           it's in one) *)
+        let arm_start = loc p in
+        let arm_name = ident p in
+        expect p FATARROW;
+        let body = parse_body p in
+        let param = { pname = arm_name; pty = None; pmode = Read } in
+        {
+          arm_op = Bare arm_name.name;
+          arm_name;
+          arm_impl = mk (Lambda ([ param ], body)) arm_start p;
+        }
     | (LET | VAR), _ ->
         Diag.error (loc p) ~help:"move it above the handler's first operation"
           "a handler's state comes first, before its operations"
@@ -2262,7 +2345,7 @@ let parse_handler p ~pub =
   let arms = if more then arms [] else [] in
   let body =
     node p
-      (Handler { deps; over; fails; needs; state; arms })
+      (Handler { deps; over; any; fails; needs; state; arms })
       (Loc.span body_start (last_loc p))
   in
   {
@@ -2491,7 +2574,7 @@ let skip_to_item p ~start =
     done)
 
 let parse_program ?(prelude = false) sink toks =
-  let p = { toks; i = 0; node = 0; sink } in
+  let p = { toks; i = 0; node = 0; sink; tags = [] } in
   let rec loop acc =
     if peek p = EOF then List.rev acc
     else
@@ -2525,7 +2608,7 @@ let parse_program ?(prelude = false) sink toks =
    so the whole session numbers them once; the last one this line used is
    returned with it. *)
 let parse_session_line sink toks ~node =
-  let p = { toks; i = 0; node; sink } in
+  let p = { toks; i = 0; node; sink; tags = [] } in
   let s = parse_stmt p in
   if peek p = NEWLINE then advance p;
   if peek p <> EOF then fail_expected p "the end of the line";

@@ -186,14 +186,61 @@ with Clock.frozen(t), cached(ttl) over mem_users([ann]) in
   // cached's Clock is the frozen one: it's in the same with
 ```
 
+### `over any`
+
+A handler `over any` goes over whichever one dependency it's installed
+over. Its state comes first, as any handler's, then one arm, `call =>
+...`, which runs for every operation of that dependency:
+
+```ren
+handler logged() over any uses Console =
+  call =>
+    Console.write("> ".concat(call.name).concat(show(call.args)))
+    let r = attempt call.forward()
+    Console.write("< ".concat(show(r)))
+    try r
+
+with logged() over mem_users() in
+  print(Users.count())        // > Users.count()  < Ok(1)  1
+```
+
+In the arm, `call.forward()` calls the operation under it with the same
+arguments, and fails with what the operation declares, so it's written
+with `try` or `attempt`; it's called once at most on any path through
+the arm. `call.fail(Down)` fails the operation with `Down`, which every
+operation of what it's installed over has to declare, checked at the
+`with`. `call.name` is `"Users.count"`, as the journal writes it, and
+`call.args` the arguments, a tuple shown as a call shows them, `("a",
+7)`, `()` for none. The arguments and what `call.forward()` gives are
+opaque: they can be shown, compared with `==` and passed to generic
+functions, and nothing else, and `call` itself is only used through, as
+`next` is.
+
+It's installed with `over`, on an implementation, `with logged() over
+mem_users()`, or on the one installed outside, `with logged() over
+Users`, and installs that one dependency. It's made where it's installed,
+`with logged() over ...`: a function can't return one, since what it is
+depends on what it goes over. The compiler makes a copy of the arm for
+each operation of each dependency it's installed over (compiler.md,
+"`over any` and `retry`").
+
 ### Functions that run a block
 
 A `with` installs only handlers. A function that runs a block, like
-`retry(3)`, is called with it, `try retry(3) fn() => try fetch()`; 10c
-took these wrappers out of `with` ([foundations.md](foundations.md)). One
-written in a `with` is an error, "`with` installs only handlers", whose
-help writes the call: `call it: try retry(3) fn() => ...`, with `try`
-only when the function can fail.
+the prelude's `retry`, is called with it, `try retry(3, on: Flaky) fn()
+=> try fetch()`; 10c took these wrappers out of `with`
+([foundations.md](foundations.md)). One written in a `with` is an error,
+"`with` installs only handlers", whose help writes the call: `call it:
+try retry(3, on: Flaky) fn() => ...`, with `try` only when the function
+can fail.
+
+`retry(n, on: Tags)` runs the block, and again while it fails with one of
+the errors it's given `on:`, `n` tries in all: any other error leaves at
+once, and after the last try its error leaves. `on:` is a parameter of
+type `Tags`, a set of error tags, written by its name at the call, `on:
+DbDown | Timeout`, or a named error set, and each has to be one the block
+can fail with. A function of your own can take one too: it's matched,
+`fail on => ...`, and passed on, `on: on`.
 
 A handler keeps no block either. Its description is a value, which can
 outlive the call that made it, so its parameters are data: `handler
@@ -316,7 +363,8 @@ The just shows each line on stderr before `sh` runs it, and `sh` prints
 the line's output. The replay shows the first, which went through
 `Console`, and not the second, since nothing runs.
 
-- **Recording is a handler over an implementation,** which calls `next`
+- **Recording is a handler over an implementation,** the prelude's
+  `recorder`, a handler `over any` in Ren, which calls `call.forward()`
   and writes down the call and what it gave back. `ren run --record`
   has the runtime install it outermost, over each real implementation:
   `recorder over Fs`, `over Clock`, and the rest. Only the runtime can
@@ -654,8 +702,8 @@ things here:
 
 - **Wrappers left `with`.** `with` installs only handlers; a function
   that runs a block is called with it, and a wrapper written in a `with`
-  is an error whose help writes the call, `try retry(3) fn() => ...`
-  ([Functions that run a block](#functions-that-run-a-block)).
+  is an error whose help writes the call, `try retry(3, on: Flaky) fn()
+  => ...` ([Functions that run a block](#functions-that-run-a-block)).
 - **`next` can be called from a block** written in a handler, since a
   block can't be kept (Where 10a differed).
 - **`finally` is a statement where it's written,** among the handler's

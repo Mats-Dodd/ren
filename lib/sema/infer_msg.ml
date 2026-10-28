@@ -1054,7 +1054,7 @@ let tuple_parts_help (ps : Ast.Resolved.pattern list) n =
     | PCon (c, []) -> c.name.name
     | PCon (c, ps) -> c.name.name ^ args ps
     | PTuple ps -> args ps
-    | PWild | PFail _ | PFail_any | POr _ -> "_"
+    | PWild | PFail _ | PFail_any | PFail_in _ | POr _ -> "_"
   in
   let parts =
     List.init n (fun i ->
@@ -3440,3 +3440,174 @@ let unused_error (f : Ast.Resolved.fn_def) ~tag ~via loc =
       | None -> sprintf "remove `%s` from after `!`" tag)
     (sprintf "`%s` says it can fail with `%s`, but nothing in it can"
        (fn_named f) tag)
+
+(* ---- `over any`, `Tags` and `retry` (compiler.md, "`over any` and
+   `retry`") ---- *)
+
+(* "`a`", "`a` and `b`", "`a`, `b` and `c`" *)
+let and_list xs =
+  match List.rev (List.map (sprintf "`%s`") xs) with
+  | [] -> ""
+  | [ x ] -> x
+  | last :: before -> String.concat ", " (List.rev before) ^ " and " ^ last
+
+(* [link], a handler `over any`, installed over nothing: what the body
+   uses, [deps], says what it's likely to go over. *)
+let any_over_nothing loc ~link ~dep =
+  Diag.make loc
+    ~notes:
+      [
+        "it goes over whatever it's installed over, and with nothing after \
+         `over`, that's nothing";
+      ]
+    ~help:
+      (sprintf
+         "say what it goes over: `%s over %s` for the one installed outside \
+          this `with`, or another implementation after `over`"
+         link dep)
+    (sprintf "`%s` goes over another implementation, so it's installed with \
+              `over`" link)
+
+(* [link], a handler `over any`, installed over [under], which implements
+   [deps], more than one. *)
+let any_over_several loc ~link ~under ~deps =
+  Diag.make loc
+    ~notes:[ sprintf "`%s` implements %s" under (and_list deps) ]
+    ~help:
+      (sprintf "install it over one of them: `%s over %s`" link
+         (List.hd deps))
+    (sprintf "`%s` goes over any one dependency, and `%s` implements %d" link
+       under (List.length deps))
+
+(* [link], a handler `over any`, that can fail with [tag] itself, through
+   `call.fail`, which the operations [missing] of what it's installed over,
+   [dep], don't declare. *)
+let any_undeclared loc ~link ~tag ~dep ~missing =
+  Diag.make loc
+    ~notes:
+      [
+        "an operation fails only with the errors its dependency declares, \
+         whatever is installed for it";
+      ]
+    ~help:
+      (sprintf
+         "install it over a dependency whose every operation can fail with \
+          `%s`, or write a handler `over %s`"
+         tag dep)
+    (sprintf "`%s` can fail with `%s`, which %s %s" link tag
+       (and_list (List.map (fun op -> dep ^ "." ^ op) missing))
+       (if List.length missing = 1 then "doesn't declare" else "don't declare"))
+
+(* A handler `over any`, [link], made somewhere other than where it's
+   installed: it's specialized for what it's installed over, which is
+   known only there. *)
+let any_not_made_here loc ~link =
+  Diag.make loc
+    ~notes:
+      [
+        "a handler `over any` is made for the dependency it's installed over, \
+         which only the `with` says";
+      ]
+    ~help:"call the handler in the `with`: `with logged() over ...`"
+    (sprintf "`%s` is a handler `over any`, made somewhere else" link)
+
+(* A function, [name], that gives a handler `over any` it didn't make
+   itself, as its result. *)
+let any_returned loc ~name =
+  Diag.make loc
+    ~notes:
+      [
+        "a handler `over any` is made for the dependency it's installed over, \
+         which only the `with` that installs it says";
+      ]
+    ~help:"call the handler in the `with` that installs it"
+    (sprintf "`%s` gives a handler `over any`, which only its handler makes"
+       name)
+
+(* [what], `call.args` or what `call.forward()` gives, used as something
+   it isn't known to be. *)
+let any_opaque loc ~what =
+  Diag.make loc
+    ~notes:
+      [
+        "the arm runs for every operation of whatever it's installed over, so \
+         it's the same arm whatever its arguments and result are";
+      ]
+    ~help:"write a handler `over` the dependency to read its arguments"
+    (sprintf "`%s` can only be shown, compared and recorded" what)
+
+(* The arm of a handler `over any` giving something other than what its
+   operation gives. *)
+let any_result loc =
+  Diag.make loc
+    ~notes:
+      [
+        "the arm gives what the operation gives, and only `call.forward()` \
+         has a value of that type";
+      ]
+    ~help:"end it in `try call.forward()`, or fail with `call.fail(e)`"
+    "this arm gives something other than its operation's result"
+
+(* A `var` of a handler `over any`, [name], that keeps [what]: each
+   operation's is a type of its own. *)
+let any_kept loc ~name ~what =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`%s` is a different type for each operation, and the state is \
+           shared by them all"
+          what;
+      ]
+    ~help:"keep something derived from it instead, `show(call.args)`"
+    (sprintf "`%s` keeps `%s`, which only lasts the call" name what)
+
+(* A parameter of `Tags`, [param], of [fn], given without its name. [arg]
+   is what was written. *)
+let tags_unnamed loc ~fn ~param ~arg =
+  Diag.make loc
+    ~notes:[ "a parameter of `Tags` is the only one passed by name" ]
+    ~help:(sprintf "write `%s: %s`" param arg)
+    (if fn = "retry" then
+       sprintf "`%s`, the errors `retry` tries again, is written with its name"
+         param
+     else
+       sprintf "`%s`, the errors `%s` is given, is written with its name" param
+         fn)
+
+(* An argument of [fn] passed by name, [name], to a parameter that isn't
+   of `Tags`. [arg] is the value. *)
+let named_not_tags loc ~name ~arg =
+  Diag.make loc
+    ~help:(sprintf "a name goes only before a parameter of `Tags`: write `%s`" arg)
+    (sprintf "`%s` isn't passed by name" name)
+
+(* An argument passed by the name [given], to the parameter of `Tags`
+   named [param]. *)
+let tags_misnamed loc ~given ~param =
+  Diag.make loc
+    ~help:(sprintf "write `%s: ...`" param)
+    (sprintf "this parameter is `%s`, not `%s`" param given)
+
+(* [fn] called without its parameter of `Tags`, [param]. [call] is the
+   call with it written, naming what it can fail with. *)
+let tags_missing loc ~fn ~param ~call =
+  Diag.make loc
+    ~help:(sprintf "name them: `%s`" call)
+    (if fn = "retry" then
+       sprintf "`retry` takes `%s:`, the errors it tries again" param
+     else sprintf "`%s` takes `%s:`, the errors it's given" fn param)
+
+(* [fn], given [tag] in [param], which [what], the block or the call,
+   can't fail with; it can fail with [can]. *)
+let tags_cant_fail loc ~fn ~param ~tag ~what ~can =
+  Diag.make loc
+    ?help:
+      (match can with
+      | [] -> None
+      | can ->
+          Some
+            (sprintf "name what it can fail with: %s"
+               (String.concat ", " (List.map (sprintf "`%s`") can))))
+    (sprintf "`%s` is given `%s: %s`, and %s can't fail with `%s`" fn param tag
+       what tag)

@@ -45,12 +45,17 @@ type 'l found_ =
   | Handler_facts of {
       forwards : (Path.t * string * Ty.ty) list;
       body_ty : int option;
+      any_vars : (int * int * int) option;
     }
       (** at a handler: the operations it leaves out, which go to the
           implementation under it, each with its dependency's declared type
           (handlers.md, "`over`"); and if it has a `finally`, the variable that
           stands for the type of the body of a `with` that installs it, which
-          its function's own come before, and a [With] passes a descriptor of *)
+          its function's own come before, and a [With] passes a descriptor of.
+          One `over any` has [any_vars]: the variables of its function's that
+          stand for its arm's call's arguments' type and result, and the row
+          variable for its errors, which lowering puts each operation's in
+          the place of (compiler.md, "`over any` and `retry`") *)
   | Handles  (** a `match` that handles errors: one with `fail` arms *)
   | Fail_arm
       (** a `fail` arm's pattern, which matches an error rather than a value *)
@@ -72,6 +77,10 @@ type 'l found_ =
   | Generic_op of string
       (** at an operator's own node, `a + b` on a type variable, or at `T.zero`:
           done by what its type turns out to have of this requirement, `add` *)
+  | Tags_given of string list
+      (** at `on: A | B`, an argument of a parameter of `Tags`: the tags it
+          gives, those of a named error set written out, sorted (compiler.md,
+          "`over any` and `retry`") *)
 
 (* What lowering reads: the labels are dependencies with their type
    arguments, in canonical form, numbered as the function's scheme. *)

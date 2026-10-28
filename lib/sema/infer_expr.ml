@@ -432,7 +432,8 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
           (List.filter (fun (l : label) -> not (over && has_dep own l)) labels)
           (fresh_row env.st)
       in
-      handler core env cx e ~needs ~fails:i.fails ~declared:(Some labels)
+      handler core env cx e ~own:i.deps ~needs ~fails:i.fails
+        ~declared:(Some labels)
   | Tuple xs, TCon (p, parts)
     when p = Ty.tuple_path (List.length xs)
          && List.length parts = List.length xs ->
@@ -503,6 +504,15 @@ and synth env cx (e : expr) : ty =
   | Str _ -> str
   | Unit -> unit
   | Var x -> lookup env cx ~node:e.node e.loc x
+  | Named (_, a) -> infer env cx a
+  | Tag_set es ->
+      (* the tags `on: A | B` gives, those of a named set written out *)
+      let names =
+        List.sort_uniq compare
+          (List.map (fun (l : Ty.label) -> l.name) (Iface.of_errors ~sets:env.sets es))
+      in
+      Hashtbl.replace cx.found e.node (Tags_given names);
+      TCon (tags_path, [])
   | Unop (Neg, a, onode) ->
       operator env cx e ~onode ~meth:"neg" ~name:"-" a (infer env cx a) None
   | Unop (Not, a, _) ->
@@ -837,10 +847,11 @@ and synth env cx (e : expr) : ty =
   | Assert a ->
       want_bool env Asserted a (infer env cx a);
       unit
-  | Handler { deps; over; _ } ->
+  | Handler { deps; over; any; _ } ->
       let needs = fresh_row env.st and fails = fresh_row env.st in
-      handler core env cx e ~needs ~fails ~declared:None;
-      impl_type ~over ~fails (handler_deps env cx deps) needs
+      let own = own_deps env cx ~any deps in
+      handler core env cx e ~own ~needs ~fails ~declared:None;
+      impl_type ~over ~fails own needs
   | Inline_handler lam ->
       (* which dependency it implements isn't known yet: what comes after
          may say, an element of an array whose first is a description, so
@@ -907,7 +918,7 @@ and pattern_binders (p : pattern) =
   | PVar b -> [ b ]
   | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
       List.concat_map pattern_binders ps
-  | PWild | PInt _ | PBool _ | PFail_any -> []
+  | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
 
 (* Where [e] first changes one of [bs], and which: an assignment to it, or
    a `&` of it. *)
@@ -1866,7 +1877,12 @@ and blame_at cx node args =
    better than [tf] (Infer_written.written_params). *)
 and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
   let ename = Option.value name ~default:"this" in
+  let named (a : expr) = match a.kind with Named _ -> true | _ -> false in
   match reveal env.st tf with
+  | TFun (ps, ret, errs, uses)
+    when List.exists (fun (p : Types.param) -> is_tags p.ty) ps
+         || List.exists named args ->
+      tags_call env cx e ~name ?target ?callee f tf (ps, ret, errs, uses) args
   | TFun (ps, ret, errs, uses) ->
       let n = List.length ps and given = List.length args in
       if n <> given then (
@@ -1905,6 +1921,138 @@ and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
       List.iter (fun a -> ignore (infer_arg env cx a)) args;
       report env (not_a_function f.loc name (show (printer env) t));
       TError
+
+(* A call [e] of [f], of type [tf], of parameters [ps], a parameter of
+   `Tags` among them, or given an argument by name (compiler.md, "`over
+   any` and `retry`"): a parameter of `Tags` is given its tags by its
+   name, `on: Flaky | Broken`, or passed one on, `on: on`, and it's the
+   only parameter given by name. The rest are checked as any call's are.
+   Each tag given is one the call can fail with, which is checked once
+   the group's rows are decided. *)
+and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
+    (ps, ret, errs, uses) args =
+  let ename = Option.value name ~default:"this" in
+  let fn =
+    match (callee, name) with
+    | Some p, _ -> Path.short p
+    | None, Some n -> n
+    | None, None -> "this"
+  in
+  let pnames =
+    match callee with
+    | Some p -> Option.value (Hashtbl.find_opt env.params_of p) ~default:[]
+    | None -> []
+  in
+  let pname i = List.nth_opt pnames i in
+  let src (a : expr) = Option.value (env.source a) ~default:"..." in
+  let tags (p : Types.param) = is_tags p.ty in
+  let written = written_params env ?callee tf ps in
+  let n = List.length ps and given = List.length args in
+  let ntags = List.length (List.filter tags ps) in
+  let named (a : expr) = match a.kind with Named _ -> true | _ -> false in
+  (* the parameters and arguments that aren't of `Tags`, checked as any
+     call's *)
+  let rest_checked ps written args =
+    check_args env cx ~name ?callee ~written ps args;
+    absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses
+  in
+  if ntags > 0 && given = n - ntags && not (List.exists named args) then (
+    (* no `on:` at all: the help writes it, with what the call can fail
+       with, once the other arguments say *)
+    let kept = List.filter (fun (p, _) -> not (tags p)) (List.combine ps written) in
+    rest_checked (List.map fst kept) (List.map snd kept) args;
+    let at = ref 0 and parts = ref [] and param = ref "on" in
+    let can = List.sort_uniq compare (row_names errs) in
+    List.iteri
+      (fun i (p : Types.param) ->
+        if tags p then (
+          param := Option.value (pname i) ~default:"on";
+          parts :=
+            !parts
+            @ [
+                sprintf "%s: %s" !param
+                  (match can with [] -> "..." | can -> String.concat " | " can);
+              ])
+        else (
+          (match List.nth_opt args !at with
+          | Some { kind = Lambda _; _ } -> ()
+          | Some a -> parts := !parts @ [ src a ]
+          | None -> ());
+          incr at))
+      ps;
+    report env
+      (tags_missing e.loc ~fn ~param:!param
+         ~call:(fn ^ "(" ^ String.concat ", " !parts ^ ")"));
+    made env ret)
+  else if n <> given then (
+    List.iter
+      (fun (a : expr) ->
+        match a.kind with
+        | Named (_, { kind = Tag_set _; _ }) -> ()
+        | Named (_, v) -> ignore (infer_arg env cx v)
+        | _ -> ignore (infer_arg env cx a))
+      args;
+    report env (wrong_arity e.loc name n given);
+    TError)
+  else
+    let given_tags = ref [] in
+    let kept =
+      List.concat
+        (List.mapi
+           (fun i (((p : Types.param), w), (a : expr)) ->
+             let param = Option.value (pname i) ~default:"on" in
+             match (tags p, a.kind) with
+             | true, Named (nm, v) ->
+                 if pname i <> None && nm.name <> param then
+                   report env (tags_misnamed nm.loc ~given:nm.name ~param);
+                 (match v.kind with
+                 | Tag_set _ -> (
+                     ignore (infer env cx v);
+                     match Hashtbl.find_opt cx.found v.node with
+                     | Some (Tags_given names) ->
+                         given_tags := (v.loc, param, names) :: !given_tags
+                     | _ -> ())
+                 | _ -> check env cx v p.ty);
+                 Hashtbl.replace cx.nodes a.node p.ty;
+                 []
+             | true, _ ->
+                 report env (tags_unnamed a.loc ~fn ~param ~arg:(src a));
+                 []
+             | false, Named (nm, v) ->
+                 report env (named_not_tags nm.loc ~name:nm.name ~arg:(src v));
+                 [ ((p, w), v) ]
+             | false, _ -> [ ((p, w), a) ])
+           (List.combine (List.combine ps written) args))
+    in
+    rest_checked
+      (List.map (fun ((p, _), _) -> p) kept)
+      (List.map (fun ((_, w), _) -> w) kept)
+      (List.map snd kept);
+    (* each tag it's given is one the call can fail with, once the
+       group's rows are decided *)
+    let what =
+      if List.exists (fun (a : expr) -> match a.kind with Lambda _ -> true | _ -> false) args
+      then "the block"
+      else sprintf "`%s(...)`" fn
+    in
+    List.iter
+      (fun (loc, param, names) ->
+        defer env
+          (Later
+             (fun () ->
+               let can = List.sort_uniq compare (row_names errs) in
+               List.iter
+                 (fun t ->
+                   if not (List.mem t can) then
+                     report env
+                       (tags_cant_fail loc ~fn ~param ~tag:t ~what ~can))
+                 names)))
+      (List.rev !given_tags);
+    made env ret
+
+(* Whether [t] is the prelude's `Tags`. *)
+and is_tags t =
+  match repr t with TCon (p, []) -> p = tags_path | _ -> false
 
 (* [t], what a call gives: if it's a handler's description, one whose
    `uses` is an upper bound (foundations.md, decision 3): what it needs,
@@ -2193,7 +2341,23 @@ and infer_match env cx ?passed node subject arms ~want =
     if handles arms then (
       Hashtbl.replace cx.found node Handles;
       let first = List.find (fun a -> is_fail a.arm_pat) arms in
-      let m = marker env Mmatch first.arm_pat.ploc in
+      (* `fail on` handles what it's given, which isn't known here: a
+         `match` of only those handles nothing it can name *)
+      let rec tags_only (p : pattern) =
+        match p.pkind with
+        | PFail_in _ -> true
+        | POr ps -> List.for_all tags_only ps
+        | _ -> false
+      in
+      let kind =
+        if
+          List.for_all
+            (fun a -> (not (is_fail a.arm_pat)) || tags_only a.arm_pat)
+            arms
+        then Mmatch_on
+        else Mmatch
+      in
+      let m = marker env kind first.arm_pat.ploc in
       let errs = fresh_row env.st in
       defer env (Kept (errs, cx.params, None));
       let ts =
@@ -2235,7 +2399,7 @@ and bind_fail env cx errs (p : pattern) =
   Hashtbl.replace cx.nodes p.pnode (TErrors errs);
   match p.pkind with
   | PFail (c, ps) -> tag_pattern env cx ~arm:true p c ps errs
-  | PFail_any -> ()
+  | PFail_any | PFail_in _ -> ()
   | POr [] -> ()
   | POr (first :: rest) ->
       bind_fail env cx errs first;
@@ -2334,7 +2498,7 @@ and bind_pattern env cx t (p : pattern) =
             ~found:(TCon (Ty.tuple_path n, parts))
             ~expected:t ~msg:pattern_for ?help;
           List.iter2 (bind_pattern env cx) parts ps
-      | PFail _ | PFail_any | POr _ ->
+      | PFail _ | PFail_any | PFail_in _ | POr _ ->
           (* a `fail` pattern is a whole arm's (the parser says so), and
              [infer_match] binds it with [bind_fail] *)
           ())

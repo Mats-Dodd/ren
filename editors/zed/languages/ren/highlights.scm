@@ -28,6 +28,8 @@
 ((call_expression
   function: (identifier) @variable.special)
   (#eq? @variable.special "next"))
+; in a handler `over any`, the call its arm runs for: `call => ...`
+(any_arm call: (identifier) @variable.special)
 
 [
   "fn"
@@ -58,6 +60,7 @@
 ] @keyword
 
 (visibility) @keyword
+(any) @keyword
 (numeric) @keyword
 (break) @keyword
 
@@ -122,6 +125,9 @@
 (error_tag name: (type_identifier) @constructor)
 (fail_expression tag: (type_identifier) @constructor)
 (fail_pattern tag: (type_identifier) @constructor)
+; `fail on`, a parameter of `Tags`, and the tags one's given by name
+(fail_pattern tags: (identifier) @variable.parameter)
+(tag_set (error_tag) @constructor)
 (error_set_name module: (identifier) @namespace)
 (error_set_name name: (type_identifier) @type)
 
@@ -134,6 +140,7 @@
 (field_expression field: (identifier) @property)
 (field_initializer name: (identifier) @property)
 (labeled_argument label: (identifier) @property)
+(named_argument name: (identifier) @variable.parameter)
 
 ; ---- operators and punctuation ----
 

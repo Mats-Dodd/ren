@@ -55,6 +55,7 @@ let name_of = function
   | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
   | Next_op (_, op) -> "next." ^ op
+  | Call_op x -> "call." ^ x
   | Assoc_value (Named p, v) -> p.name ^ "." ^ v
   | Assoc_value (Param _, v) -> v
 
@@ -110,6 +111,10 @@ let writable cx (e : expr) ~what
   | Some ({ root = Global _ | Intrinsic _; _ } as p) ->
       Diag.error p.rloc
         (sprintf "`%s` is a function, not a variable" (name_of p.root))
+  | Some ({ root = Call_op x; _ } as p) ->
+      Diag.error p.rloc
+        (sprintf "`call.%s` is part of the call this arm runs for, so it \
+                  can't be changed" x)
   | Some ({ root = Dep_op _ | Next_op _; _ } as p) ->
       Diag.error p.rloc
         ~help:
@@ -171,7 +176,8 @@ let no_inout cx (ps : param list) =
 
 let rec walk cx (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Break -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Break | Tag_set _ -> ()
+  | Named (_, a) -> walk cx a
   | Var _ | Field _ | Index _ -> (
       match place_of e with
       | Some _ -> walk_indices cx e

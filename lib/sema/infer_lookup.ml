@@ -587,3 +587,15 @@ let rec lookup env cx ~node loc = function
               | _ -> TError)
           | None -> TError)
       | None -> TError)
+  | Call_op x -> (
+      (* in the arm of a handler `over any` (Resolve made sure): its
+         call's arguments, its name, a `Str`, and `forward`, which calls
+         the operation under it, as `next` does, on the evidence where the
+         handler is installed (Lower), failing with the operation's
+         errors, a row the arm can't name (compiler.md, "`over any` and
+         `retry`") *)
+      match (env.any_call, x) with
+      | Some (args, _, _), "args" -> args
+      | Some _, "name" -> TCon (Path.prelude "Str", [])
+      | Some (_, res, errs), "forward" -> TFun ([], res, errs, fresh_row env.st)
+      | _ -> TError)

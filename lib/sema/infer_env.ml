@@ -43,6 +43,7 @@ type 'l found_ =
   | Handler_facts of {
       forwards : (Path.t * string * Ty.ty) list;
       body_ty : int option;
+      any_vars : (int * int * int) option;
     }
       (** at a handler: the operations it leaves out, which go to the
           implementation under it, each with its dependency's declared type
@@ -71,6 +72,8 @@ type 'l found_ =
       (** at an operator's own node, `a + b` on a type variable, or at an
           associated value's, `T.zero`: done by whatever its type turns out to
           have of this requirement, `add` *)
+  | Tags_given of string list
+      (** at `on: A | B`: the tags it gives, sorted (Infer.Tags_given) *)
 
 (* What inference keeps of it, while a group is checked: its labels are
    the checker's, whose type arguments it may still learn. *)
@@ -182,6 +185,22 @@ type env = {
   mutable hidden : Iface.type_decl list;
       (** while [client], the module's private types as it declares them, which
           test code can't see: a message names what it reached for *)
+  anys : (Path.t, int * int * int * int) Hashtbl.t;
+      (** each handler `over any`, by its function: its body's node, and the
+          skolems of the arguments' type, the result's and the errors' row of
+          the operation it runs for, which become variables of the function's
+          when it's put in canonical form, as a `finally`'s do, so lowering
+          can put each operation's in their place (compiler.md, "`over any`
+          and `retry`") *)
+  any_skolems : (int, string) Hashtbl.t;
+      (** those skolems, by id, each with what it is as the arm writes it,
+          `call.args`, for a message *)
+  mutable any_call : (ty * ty * row) option;
+      (** while an arm `over any` is checked: `call.args`'s type, the
+          result's, and the errors' row, `call.forward()`'s *)
+  params_of : (Path.t, string list) Hashtbl.t;
+      (** each top-level function's parameters' names, by its path, which a
+          message about an argument passed by name names *)
   test_reported : (Path.t, unit) Hashtbl.t;
       (** what test code has reached for that it can't see, which is reported at
           the first use of each only: the module's own opaque types, whose
@@ -386,6 +405,14 @@ and constr =
   | Required of required
       (** a use of a function that needs something of its type parameters: what
           it puts in their place has it *)
+  | Any_arm of { aerrs : row; atags : row }
+      (** the arm of a handler `over any`, which fails with [aerrs]: what it
+          fails with itself, `call.fail(Down)`, its tags, are [atags], which
+          its type lists, and which each `with` that installs it checks
+          (compiler.md, "`over any` and `retry`") *)
+  | Later of (unit -> unit)
+      (** a check of what the group's rows turned out to be, once they're all
+          decided: the tags a call's `on:` gives *)
 
 (* `a == b`, `a < b`, `a + b` on a type parameter, or `T.zero`, at
    [qloc]: [qty], the type of both sides, has to have the requirement
@@ -501,7 +528,14 @@ and marker = {
       (** for `attempt` and `match`: whether a `fail` is inside it *)
 }
 
-and marker_kind = Mtry | Mattempt | Mmatch
+and marker_kind =
+  | Mtry
+  | Mattempt
+  | Mmatch
+  | Mmatch_on
+      (** a `match` whose `fail` arms are all `fail on`, of a parameter of
+          `Tags`: it handles nothing it can name, so what it's given by a
+          parameter, a public function's own errors, it can still take *)
 
 (* One row of errors added to another: a call's to its marker's handler,
    or a [Result]'s to the handler of the `try` that fails with it again.

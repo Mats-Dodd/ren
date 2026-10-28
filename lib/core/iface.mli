@@ -74,7 +74,13 @@ type type_decl = {
 }
 
 (* A public function, by its name. *)
-type value = { vname : string; scheme : Ty.scheme }
+type value = {
+  vname : string;
+  scheme : Ty.scheme;
+  vparams : string list;
+      (** its parameters' names, which a message about an argument passed by
+          name names *)
+}
 
 type t = {
   home : string;  (** the module this is the interface of *)
@@ -197,12 +203,15 @@ val handler_deps : Ast.Resolved.fn_def -> Ty.dep list option
    sets it can see. What a public function or member needs of its type
    parameters isn't declared, so [needs] gives what inference found, by
    its path, as its scheme's [reqs] and [row_reqs]; and [has_eq] whether
-   each opaque type has `==`, which its hidden representation decides. *)
+   each opaque type has `==`, which its hidden representation decides.
+   A handler `over any`'s type lists what its arm fails with itself,
+   which only inference knows, so [found] gives its scheme. *)
 val of_module :
   home:string ->
   sets:sets ->
   needs:(Path.t -> (int * string) list * (int * string) list) ->
   has_eq:(Path.t -> bool) ->
+  found:(Path.t -> Ty.scheme) ->
   Ast.Resolved.program ->
   t
 

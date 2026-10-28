@@ -314,19 +314,21 @@ with Clock.frozen(t), counting_rates(Decimal.one) in
   items need.
 - An item is an implementation, or a chain of them joined by `over`. A
   function that runs a block, like `retry`, isn't one: it's called with
-  the block, `try retry(3) fn() => try fetch()`, and written in a `with`
-  it's an error whose help writes that call:
+  the block, `try retry(3, on: Flaky) fn() => try fetch()`, and written
+  in a `with` it's an error whose help writes that call:
 
 ```
 error: `with` installs only handlers
   ┌─ main.ren:8:10
-8 │     with retry(3) in
-  │          ^^^^^^^^ takes a block
+8 │     with retry(3, on: Flaky) in
+  │          ^^^^^^^^^^^^^^^^^^^ takes a block
   = `retry` is a function that runs a block, so it's called with the body as one
-  help: call it: `try retry(3) fn() => ...`
+  help: call it: `retry(3, on: Flaky) fn() => ...`
 ```
 
-  The `try` is there only when the function can fail.
+  The `try` is there only when the function's own type says it can
+  fail: `retry` fails with what its block does, so the help leaves it to
+  the block.
 
 ## Built in
 

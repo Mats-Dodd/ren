@@ -562,6 +562,16 @@ pub dep Proc =
 handler real_proc() for Proc =
   run(cmd, args) => try proc_checked(proc_run(cmd, args), cmd)
 
+// ---- trying again (handlers.md, "Functions that run a block") ----
+
+// runs `body`, and again while it fails with one of `on`'s errors, up
+// to `n` tries in all: any other error leaves at once, after the last
+// try its error leaves, and `body` runs at least once
+pub fn retry<T>(n: Int, on: Tags, body: fn() -> T) -> T =
+  try match body()
+    fail on if n > 1 => try retry(n - 1, on: on, body)
+    v => v
+
 // ---- what a test gets (deps.md, "Tests") ----
 //
 // Each test runs with a fresh instance of each of these handlers, unless
@@ -659,41 +669,13 @@ pub handler test_proc(exits: Array<Exit>) for Proc, TestProc =
 // a journal the runtime has open
 type Journal = opaque Int
 
-// A recorder over each built-in dependency: each operation gives back
+// The recorder, over any built-in dependency: each operation gives back
 // what a line the console kept was given, if it's one of those, or else
-// calls the one under it, and writes down what it gave.
-
-handler recording_clock(j: Journal) over Clock =
-  now() => journal_kept(j, "Clock.now", ()) orelse journal_gave(j, "Clock.now", (), next.now())
-  instant() =>
-    journal_kept(j, "Clock.instant", ()) orelse journal_gave(j, "Clock.instant", (), next.instant())
-  sleep(d) => journal_kept(j, "Clock.sleep", d) orelse journal_gave(j, "Clock.sleep", d, next.sleep(d))
-
-handler recording_random(j: Journal) over Random =
-  int(below) =>
-    journal_kept(j, "Random.int", below) orelse journal_gave(j, "Random.int", below, next.int(below))
-
-handler recording_console(j: Journal) over Console =
-  write(line) =>
-    journal_kept(j, "Console.write", line) orelse journal_gave(j, "Console.write", line, next.write(line))
-  error(line) =>
-    journal_kept(j, "Console.error", line) orelse journal_gave(j, "Console.error", line, next.error(line))
-
-handler recording_fs(j: Journal) over Fs =
-  read(p) =>
-    let r = journal_kept(j, "Fs.read", p) orelse journal_gave(j, "Fs.read", p, attempt next.read(p))
-    try r
-  write(p, b) =>
-    let r = journal_kept(j, "Fs.write", (p, b)) orelse journal_gave(j, "Fs.write", (p, b), attempt next.write(p, b))
-    try r
-  exists(p) => journal_kept(j, "Fs.exists", p) orelse journal_gave(j, "Fs.exists", p, next.exists(p))
-
-handler recording_os(j: Journal) over Os =
-  args() => journal_kept(j, "Os.args", ()) orelse journal_gave(j, "Os.args", (), next.args())
-
-handler recording_proc(j: Journal) over Proc =
-  run(cmd, args) =>
-    let r = journal_kept(j, "Proc.run", (cmd, args)) orelse journal_gave(j, "Proc.run", (cmd, args), attempt next.run(cmd, args))
+// calls the one under it, and writes down what it gave. The runtime
+// installs it over each one `main` uses.
+handler recorder(j: Journal) over any =
+  call =>
+    let r = journal_kept(j, call.name, call.args) orelse journal_gave(j, call.name, call.args, attempt call.forward())
     try r
 
 // In place of every built-in dependency: each operation gives back what
@@ -1107,6 +1089,11 @@ let types =
         ]
       ~functions:[ Str_from_utf8 ];
     t "Bytes" ~methods:[ Bytes_len ];
+    (* a set of error tags, given by name at a call, `on: Flaky | Broken`,
+       which the function it's given to matches with `fail on`: never a
+       value, since each function that takes one is made for each set it's
+       given (compiler.md, "`over any` and `retry`") *)
+    t "Tags";
     t "Map" ~arity:2
       ~methods:
         [
@@ -1122,11 +1109,12 @@ let types =
     t "Set" ~arity:1
       ~methods:[ Set_add; Set_remove; Set_includes; Set_len ]
       ~functions:[ Set_of ];
-    (* a tuple's type, of two parts and of three, named by its shape,
-       which no program can write (Ty.tuple) *)
-    t "(,)" ~arity:2;
-    t "(,,)" ~arity:3;
   ]
+  (* a tuple's type, of each size up to eight, named by its shape, which no
+     program can write (Ty.tuple): a program writes two and three, and an
+     operation's arguments, `call.args`, are any of them *)
+  @ List.init 8 (fun i ->
+        t (match Ty.tuple_path (i + 1) with p -> p.name) ~arity:(i + 1))
 
 (* ---- built-in dependencies ----
 
@@ -1183,7 +1171,8 @@ let intrinsics : Iface.t =
         types;
     values =
       List.map
-        (fun x -> { Iface.vname = Intrinsic.name x; scheme = scheme x })
+        (fun x ->
+          { Iface.vname = Intrinsic.name x; scheme = scheme x; vparams = [] })
         fns;
     tests = [];
   }

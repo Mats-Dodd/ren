@@ -168,10 +168,15 @@ let write_args types (ta : Ty.ty) a =
    as an operation that can fail does. Which calls are outputs is
    decided once, by the operation's declared type, by the interpreter
    (eval.ml, [gives_nothing]). *)
-let write_gave types (tr : Ty.ty) r ~output =
-  match r with
-  | VUnit -> None
-  | VCon { name = "Ok"; args = [ VUnit ]; _ } when output -> None
+let rec write_gave types (tr : Ty.ty) r ~output =
+  match (tr, r) with
+  (* what an operation that can't fail gave, which the recorder kept as
+     a `Result` (prelude.ml, `recorder`): its value *)
+  | Con (p, [ t; Errors { labels = []; tail = None } ]), VCon { name = "Ok"; args = [ v ]; _ }
+    when p = Path.prelude "Result" ->
+      write_gave types t v ~output
+  | _, VUnit -> None
+  | _, VCon { name = "Ok"; args = [ VUnit ]; _ } when output -> None
   | _ -> Some (write types tr r)
 
 (* ---- reading values ---- *)

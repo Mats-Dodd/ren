@@ -19,6 +19,7 @@ let name_of = function
   | Intrinsic x -> Intrinsic.name x
   | Dep_op (p, op) -> p.name ^ "." ^ op
   | Next_op (_, op) -> "next." ^ op
+  | Call_op x -> "call." ^ x
   | Assoc_value (Named p, v) -> p.name ^ "." ^ v
   | Assoc_value (Param _, v) -> v
 
@@ -27,7 +28,7 @@ let short_of = function
   | Local b -> b.ident.name
   | Global p | Global_value p -> Path.short p
   | Intrinsic x -> Intrinsic.member_name x
-  | Dep_op (_, op) | Next_op (_, op) | Assoc_value (_, op) -> op
+  | Dep_op (_, op) | Next_op (_, op) | Assoc_value (_, op) | Call_op op -> op
 
 (* The name of the function [f] a call calls, for messages, if it's a
    function's name. *)
@@ -69,7 +70,7 @@ let rec binders (p : pattern) =
   | PVar b -> [ (b, p.ploc) ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map binders ps
   | POr ps -> List.concat_map binders ps
-  | PWild | PInt _ | PBool _ | PFail_any -> []
+  | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
 
 (* How to explain a mismatch with an expected type, passed down along with
    it: [msg] words the error, [help] suggests a fix and [labels] point at
@@ -106,6 +107,18 @@ let plain = explain ()
 (* Report that [found] (what the code has) didn't unify with [expected]
    (what it needs), which failed with [failure], explained with [why]. *)
 let mismatch env why loc ?(behind = []) ~found ~expected failure =
+  (* the arm of a handler `over any`'s call's arguments, or its result,
+     which are the same arm's whatever they are (compiler.md, "`over any`
+     and `retry`") *)
+  let opaque t =
+    match repr t with
+    | TSkol (id, _) -> Hashtbl.find_opt env.any_skolems id
+    | _ -> None
+  in
+  match (opaque found, opaque expected) with
+  | None, Some "call.forward()" -> report env (any_result loc)
+  | Some what, _ | None, Some what -> report env (any_opaque loc ~what)
+  | None, None -> (
   match failure with
   | Unify.Infinite ->
       let pr = printer env in
@@ -368,7 +381,7 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
          represented as: at the first use only, as [report_rep] *)
       match private_ with
       | [ Private (p, true) ] -> report_test_once env p d
-      | _ -> report env d)
+      | _ -> report env d))
 
 (* Unify [found] with [expected], and say whether that worked. *)
 let unifies env why loc ~found ~expected =

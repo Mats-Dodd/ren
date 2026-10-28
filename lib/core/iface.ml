@@ -93,7 +93,13 @@ type type_decl = {
   loc : Loc.t option;  (** where it's declared; [None] for a built-in *)
 }
 
-type value = { vname : string; scheme : Ty.scheme }
+type value = {
+  vname : string;
+  scheme : Ty.scheme;
+  vparams : string list;
+      (** its parameters' names, which a message about an argument passed by
+          name names *)
+}
 
 type t = {
   home : string;  (** the module this is the interface of *)
@@ -567,7 +573,7 @@ let handler_deps (f : Ast.Resolved.fn_def) =
    path, as its scheme's [reqs] and [row_reqs]. And whether an opaque type
    has `==` depends on what it's represented as, which the interface
    hides, so [has_eq] says, by the type's path, as inference found it. *)
-let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
+let of_module ~home ~sets ~needs ~has_eq ~found (prog : Ast.Resolved.program) =
   (* [canonical] keeps a scheme's numbering, and drops what it needs of a
      variable its type hasn't: an associated value's type is its
      function's result, without the rows *)
@@ -582,11 +588,22 @@ let of_module ~home ~sets ~needs ~has_eq (prog : Ast.Resolved.program) =
     List.filter_map
       (function
         | Ast.Fn (f : Ast.Resolved.fn_def) when f.pub && f.test = test ->
-            let scheme = signature ~sets f in
+            (* a handler `over any`'s type lists the tags its arm fails
+               with itself, which only inference finds (compiler.md,
+               "`over any` and `retry`") *)
+            let scheme =
+              match f.body.kind with
+              | Handler { any = true; _ } -> found (Path.make home f.name.name)
+              | _ -> signature ~sets f
+            in
             Some
               {
                 vname = f.name.name;
                 scheme = needed (Path.make home f.name.name) scheme;
+                vparams =
+                  List.map
+                    (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
+                    f.params;
               }
         | _ -> None)
       prog

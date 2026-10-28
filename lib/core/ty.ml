@@ -109,10 +109,33 @@ let option t = Con (Path.prelude "Option", [ t ])
 
 (* A tuple's type is a built-in type of its own for each size, named by
    its shape, which no program can write: `(Str, Int)` is
-   [Con ("(,)", [str; int])] (operators.md, "Tuples"). *)
-let tuple_path n = Path.prelude (if n = 2 then "(,)" else "(,,)")
+   [Con ("(,)", [str; int])] (operators.md, "Tuples"). A program writes
+   tuples of two and three; the compiler makes others, the arguments of an
+   operation of any number, `call.args` in a handler `over any`, whose
+   one-part tuple is ["(_)"] (compiler.md, "`over any` and `retry`"). *)
+let tuple_path n =
+  Path.prelude (if n = 1 then "(_)" else "(" ^ String.make (n - 1) ',' ^ ")")
+
 let tuple ts = Con (tuple_path (List.length ts), ts)
-let is_tuple p = p = tuple_path 2 || p = tuple_path 3
+
+let is_tuple (p : Path.t) =
+  p.home = Path.prelude_home
+  && p.member = None
+  &&
+  let n = String.length p.name in
+  p.name = "(_)"
+  || n >= 3
+     && p.name.[0] = '('
+     && p.name.[n - 1] = ')'
+     && String.for_all (fun c -> c = ',') (String.sub p.name 1 (n - 2))
+
+(* The dependency a handler `over any` goes over, as its type lists it
+   until a `with` installs it over one: its one type argument is the
+   errors its arm fails with itself, `call.fail(Down)`, which every
+   operation of that one has to declare (compiler.md, "`over any` and
+   `retry`"). No program can write it. *)
+let any_path = Path.prelude "any"
+let is_any (d : dep) = d.dpath = any_path
 let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
 let label name = { name; payload = [] }
@@ -439,6 +462,7 @@ and show_label pr l =
 (* A dependency, as its type is written, `Chan<Int>`. *)
 and show_dep pr d =
   match d.dargs with
+  | _ when d.dpath = any_path -> "any"
   | [] -> pr.type_name d.dpath
   | args -> pr.type_name d.dpath ^ "<" ^ show_list pr args ^ ">"
 
@@ -750,7 +774,8 @@ let handler_signature ~names ~pub ~name ~params ~deps (s : scheme) =
       in
       (* `let`s fix the order variables are named in *)
       let deps =
-        if i.over then "over " ^ String.concat " & " (shown_deps pr deps i)
+        if List.exists is_any i.deps then "over any"
+        else if i.over then "over " ^ String.concat " & " (shown_deps pr deps i)
         else "for " ^ String.concat ", " (shown_deps pr deps i)
       in
       let fails = show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" i.fails in

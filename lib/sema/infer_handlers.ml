@@ -63,6 +63,24 @@ let sprintf = Printf.sprintf
 let handler_deps env cx (deps : tname dep_ref list) =
   written_deps env ~tvars:cx.tparams deps
 
+(* The same, for a handler whose type is made here: one `over any` lists
+   the dependency that stands for whichever it's installed over, whose
+   one type argument is the tags its arm fails with itself, a row of its
+   own, which its arm's errors decide once its group is done (Ty.any_path;
+   compiler.md, "`over any` and `retry`"). *)
+let own_deps env cx ~any (deps : tname dep_ref list) =
+  if any then
+    [ { dpath = Ty.any_path; dargs = [ TErrors (fresh_row env.st) ] } ]
+  else handler_deps env cx deps
+
+(* The tags the arm of a handler `over any` fails with itself, if [own],
+   what its type lists, is a handler `over any`'s (see [own_deps]). *)
+let any_tags (own : dep list) =
+  match own with
+  | [ { dpath; dargs = [ t ] } ] when dpath = Ty.any_path -> (
+      match repr t with TErrors r -> Some r | _ -> None)
+  | _ -> None
+
 (* A handler's body (ast.ml, [Handler]), the body of its function,
    [cx.self], whose result is the handler's type ([handler_deps]). Its
    state, `finally`s and arms run where it's installed, not where the
@@ -76,16 +94,18 @@ let handler_deps env cx (deps : tname dep_ref list) =
    handler needs, and can fail with fewer errors than its operation
    declares, never more. What it needs is checked once the group is done,
    against what's [declared], if anything is (see [handler_needs]). *)
-let rec handler core env cx (h : expr) ~needs ~fails ~declared =
+let rec handler core env cx (h : expr) ~own ~needs ~fails ~declared =
   match h.kind with
-  | Handler { deps; over; state; arms; _ } ->
-      handler_parts core env cx ~node:h.node ~loc:h.loc ~deps ~over ~fails state
+  | Handler { over; state; arms; _ } ->
+      handler_parts core env cx ~node:h.node ~loc:h.loc ~own ~over ~fails state
         arms ~needs ~declared
   | _ -> assert false
 
-and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
+(* [own] is what it implements, as its type lists it ([own_deps]). *)
+and handler_parts core env cx ~node ~loc ~own ~over ~fails state arms ~needs
     ~declared =
-  let own = handler_deps env cx deps in
+  let tags = any_tags own in
+  let own = if tags <> None then [] else own in
   let paths = List.map (fun d -> d.dpath) own in
   (* the operations one over its dependencies leaves out, which lowering
      makes calls of the one under it *)
@@ -108,7 +128,7 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
           | _ -> [])
         paths
   in
-  Hashtbl.replace cx.found node (Handler_facts { forwards; body_ty = None });
+  Hashtbl.replace cx.found node (Handler_facts { forwards; body_ty = None; any_vars = None });
   (* its state, arms and `finally` run while an operation does, or as
      one, so they can call `next` *)
   let hcx = lambda_cx cx [] [] ~errs:fails ~uses:needs in
@@ -119,7 +139,8 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
     Some
       ( (if List.mem cx.self env.spelled then sprintf "`pub handler %s`" name
          else sprintf "`handler %s`" name),
-        if over then "over " ^ shown_deps env own
+        if tags <> None then "over any"
+        else if over then "over " ^ shown_deps env own
         else
           "for "
           ^ String.concat ", " (List.map (fun d -> shown_deps env [ d ]) own) )
@@ -152,12 +173,14 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
             | None -> None)
         | _ -> None
       in
-      match (op, a.arm_impl.kind) with
-      | Some (p, op, ps, r, errs), Lambda (params, body)
+      match (op, a.arm_impl.kind, tags) with
+      | _, Lambda ([], body), Some tags when a.arm_op = Call_op "any" ->
+          any_arm core env cx hcx ~node ~needs ~tags a.arm_impl body
+      | Some (p, op, ps, r, errs), Lambda (params, body), _
         when List.length params = List.length ps ->
           arm core env cx hcx ~needs ~dep:p ~op ~ps ~r ~errs a.arm_impl params
             body
-      | Some (p, op, ps, _, _), Lambda (params, _) ->
+      | Some (p, op, ps, _, _), Lambda (params, _), _ ->
           report env
             (arm_arity a.arm_name.loc ~dep:(type_name env p) ~op
                (List.length ps) (List.length params));
@@ -168,7 +191,7 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
      that brings it in, `Users.get` in an arm, names it itself, so
      [check_needs] can tell it from a call that only got it
      from sharing the handler's row *)
-  if over then
+  if over && own <> [] then
     join_uses env ~loc ~what:Installing
       (extend (List.map dep_of own) (fresh_row env.st))
       needs;
@@ -182,6 +205,36 @@ and handler_parts core env cx ~node ~loc ~deps ~over ~fails state arms ~needs
          nrow = needs;
          ncalls = hcx.calls;
        })
+
+(* The arm of a handler `over any`, `call => body`, the lambda [impl] of
+   no parameters, in a handler whose context is [hcx] and whose needs are
+   [needs]: checked once, for an operation in general (compiler.md, "`over
+   any` and `retry`"). The call's arguments' type and its result are
+   skolems, and its errors a row the arm can't name, so it can only pass
+   them on; they become variables of the handler's function's when it's
+   put in canonical form, as a `finally`'s do, and lowering puts each
+   operation's in their place. What the arm fails with itself,
+   `call.fail(Down)`, is [tags], which its type lists, so a `with` that
+   installs it over a dependency can check every operation declares
+   them. *)
+and any_arm core env cx hcx ~node ~needs ~tags (impl : expr) body =
+  let aid = fresh_id env.st and rid = fresh_id env.st in
+  let eid = fresh_id env.st in
+  let args = TSkol (aid, "call.args") and res = TSkol (rid, "call.result") in
+  Hashtbl.replace env.any_skolems aid "call.args";
+  Hashtbl.replace env.any_skolems rid "call.forward()";
+  Hashtbl.replace env.anys cx.self (node, aid, rid, eid);
+  let open_errs = fresh_row env.st in
+  defer env (Any_arm { aerrs = open_errs; atags = tags });
+  name_lambda cx impl.node;
+  let acx =
+    { (lambda_cx hcx [] [] ~errs:open_errs ~uses:needs) with calls = hcx.calls }
+  in
+  let around = env.any_call in
+  env.any_call <- Some (args, res, RSkol (eid, "call.errors"));
+  core.check env acx body res;
+  env.any_call <- around;
+  Hashtbl.replace cx.nodes impl.node (TFun ([], res, open_errs, needs))
 
 (* An arm, the lambda [impl] of [params] and [body], of the operation
    [op] of [dep], whose parameters are [ps], result [r] and errors
@@ -480,7 +533,13 @@ and classify core env cx (lk : with_link) : link =
    argument than it's given, a block: then it's a wrapper, which `with`
    doesn't install. *)
 and takes_block env (ps : Types.param list) args =
-  List.length ps = List.length args + 1
+  (* a parameter of `Tags` is given by name, `on: Flaky`, or not at all *)
+  let tags (p : Types.param) =
+    match repr p.ty with TCon (q, []) -> q = tags_path | _ -> false
+  in
+  let named (a : expr) = match a.kind with Named _ -> true | _ -> false in
+  List.length (List.filter (fun p -> not (tags p)) ps)
+  = List.length (List.filter (fun a -> not (named a)) args) + 1
   &&
   match reveal env.st (List.nth ps (List.length ps - 1)).ty with
   | TFun _ -> true
@@ -494,6 +553,24 @@ and wrapper core env cx (item : expr) args ps errs =
   List.iter (fun a -> ignore (core.infer env cx a)) args;
   let src = Option.value (env.source item) ~default:"f" in
   let call = match item.kind with Call _ -> src | _ -> src ^ "()" in
+  (* a parameter of `Tags` not given is, by name, `retry(3, on: ...)` *)
+  let call =
+    let missing =
+      List.filter
+        (fun (p : Types.param) ->
+          match repr p.ty with TCon (q, []) -> q = tags_path | _ -> false)
+        ps
+    in
+    let named (a : expr) = match a.kind with Named _ -> true | _ -> false in
+    if missing = [] || List.exists named args then call
+    else
+      match String.rindex_opt call ')' with
+      | Some i ->
+          let before = String.sub call 0 i in
+          let sep = if args = [] then "" else ", " in
+          before ^ sep ^ "on: ...)"
+      | None -> call
+  in
   let block =
     match reveal env.st (List.nth ps (List.length ps - 1)).ty with
     | TFun (qs, _, _, _) ->
@@ -591,6 +668,9 @@ and with_ core env cx (e : expr) (items : with_item list) body =
               (function Implementation (lk, i) -> Some (lk, i) | _ -> None)
               links
           in
+          match any_links env cx it impls ~src ~laters with
+          | None -> Some (Bad_item idx)
+          | Some impls ->
           let name (lk : with_link) =
             match lk.link.kind with
             | Call (f, _) -> (
@@ -842,6 +922,130 @@ and with_ core env cx (e : expr) (items : with_item list) body =
             chain cx (List.rev links)
       in
       nest cx order
+
+(* The links [impls] of the item [it], top first, with each handler `over
+   any` among them made an implementation of what it's installed over
+   (compiler.md, "`over any` and `retry`"): the dependency of the link
+   under it, or of the one it's installed over outside, `over Users`,
+   which is one. It's installed where it's made, `with logged() over
+   ...`, since it's made for that dependency, and what it fails with
+   itself, every operation of that one declares. [None] once something's
+   reported, or will be, once the body says what it uses, which the help
+   names ([laters]). *)
+and any_links env cx (it : with_item) impls ~src ~laters =
+  let ok = ref true in
+  let fail () = ok := false in
+  let link (lk : with_link) = src lk.link in
+  (* each of [tags] is declared, with its shape, by every operation of
+     [d] *)
+  let declared (lk : with_link) tags (d : dep) =
+    let ops =
+      Option.value ~default:[]
+        (Iface.dep_fields (Hashtbl.find_opt env.types)
+           {
+             Ty.dpath = d.dpath;
+             dargs = List.mapi (fun i _ -> Ty.Var i) d.dargs;
+           })
+    in
+    let has (op : Iface.field) (l : label) =
+      match field_type ~tvars:d.dargs op with
+      | TFun (_, _, errs, _) -> (
+          match
+            List.find_opt (fun (o : label) -> o.name = l.name)
+              (fst (row_parts errs))
+          with
+          | Some o when List.length o.payload = List.length l.payload ->
+              Result.is_ok
+                (Unify.atomically env.st (Unify.copier ())
+                   (fun st (c : Unify.copy) ->
+                     List.iter2
+                       (fun a b -> Unify.unify st (c.ty a) (c.ty b))
+                       o.payload l.payload))
+          | _ -> false)
+      | _ -> false
+    in
+    match
+      List.find_map
+        (fun (l : label) ->
+          match List.filter (fun op -> not (has op l)) ops with
+          | [] -> None
+          | missing -> Some (l, missing))
+        (sorted_labels tags)
+    with
+    | None -> ()
+    | Some (l, missing) ->
+        fail ();
+        report env
+          (any_undeclared lk.link.loc ~link:(link lk) ~tag:l.name
+             ~dep:(env.names d.dpath)
+             ~missing:(List.map (fun (o : Iface.field) -> o.fname) missing))
+  in
+  let rec go below = function
+    | [] -> []
+    | ((lk : with_link), (i : impl)) :: above -> (
+        match any_tags i.deps with
+        | None -> (lk, i) :: go (Some i.deps) above
+        | Some tags -> (
+            let several under ds =
+              fail ();
+              report env
+                (any_over_several lk.link.loc ~link:(link lk) ~under
+                   ~deps:(List.map (fun d -> env.names d.dpath) ds))
+            in
+            let d =
+              match below with
+              | Some [ d ] -> Some d
+              | Some ds ->
+                  several "the implementation under it" ds;
+                  None
+              | None -> (
+                  match written_deps env ~tvars:cx.tparams it.under with
+                  | [ d ] -> Some d
+                  | [] ->
+                      fail ();
+                      laters :=
+                        (fun uses ->
+                          let used =
+                            List.sort_uniq compare
+                              (List.map Ty.dep_path (row_names uses))
+                          in
+                          let used =
+                            match
+                              List.filter
+                                (fun p -> not (Infer_declared.runtime_dep p))
+                                used
+                            with
+                            | [] -> used
+                            | own -> own
+                          in
+                          report env
+                            (any_over_nothing lk.link.loc ~link:(link lk)
+                               ~dep:
+                                 (match used with
+                                 | p :: _ -> env.names p
+                                 | [] -> "Clock")))
+                        :: !laters;
+                      None
+                  | ds ->
+                      several "what it's installed over" ds;
+                      None)
+            in
+            match d with
+            | None -> (lk, i) :: go None above
+            | Some d ->
+                (match lk.link.kind with
+                | Call ({ kind = Var (Global _); _ }, _) -> ()
+                | _ ->
+                    fail ();
+                    report env (any_not_made_here lk.link.loc ~link:(link lk)));
+                declared lk tags d;
+                let i =
+                  { i with deps = [ d ]; needs = extend [ dep_of d ] i.needs }
+                in
+                (lk, i) :: go (Some [ d ]) above))
+  in
+  let made = List.rev (go None (List.rev impls)) in
+  if !ok then Some made else None
 
 (* The order to install a `with`'s [items] in, outermost first: one that
    installs what another needs goes around it, and otherwise the one whose

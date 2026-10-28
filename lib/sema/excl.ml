@@ -583,7 +583,8 @@ let rec walk cx (e : expr) =
       List.iter (function Finally f -> body f | _ -> ()) state;
       List.iter (fun (a : handler_arm) -> body a.arm_impl) arms
   | Unop _ | Binop _ | If _ | Con _ | Record _ | Match _ | Array _ | Tuple _
-  | For _ | While _ | Fail _ | Try _ | Attempt _ | With _ | Assert _ ->
+  | For _ | While _ | Fail _ | Try _ | Attempt _ | With _ | Assert _
+  | Named _ | Tag_set _ ->
       List.iter (walk cx) (children e)
 
 and stmt cx = function

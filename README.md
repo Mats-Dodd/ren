@@ -212,7 +212,7 @@ A parameter written `fn(...)` takes a block. A block's errors flow out of the ca
 
 ```ren
 pub fn map<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U>
-pub fn retry<T>(n: Int, body: fn() -> T) -> T
+pub fn retry<T>(n: Int, on: Tags, body: fn() -> T) -> T
 ```
 
 `Async.map` and `Async.timeout` take theirs the same way. Calling `Async.map` with a block that can fail with `FeedError` and uses `Net` makes that call fail with `FeedError`, and the function that wrote the block use `Net`. That holds even though it runs `f` on other tasks, because no task outlives the call that started it ([async.md](async.md)).
@@ -329,23 +329,23 @@ fn main() ! StartupError
 
 Production wiring, test fakes, allocators, simulators, and tracers all use the same mechanism. A long list of items can break after a comma, the next line indented further. Any line outside brackets that ends in `,` goes on this way, so a signature's `uses Clock,` can wrap too, with the rest of the list indented on the next line. A `with` is a set: each dependency appears in it once, and the order of its items never matters. An item's needs are met by the other items first, then by what's installed outside, and putting one implementation in front of another is written with `over` ([section 7](#7-handler-stateful-implementations)). A `with` nested inside another can install a dependency again, and the inner one wins inside it. `with` removes what it installs from the body's `uses`, and adds what its items need.
 
-`with` installs only implementations. A function that runs a block, like `retry`, is called with it, the block written last:
+`with` installs only implementations. A function that runs a block, like the prelude's `retry`, is called with it, the block written last:
 
 ```ren
-pub fn retry<T>(n: Int, body: fn() -> T ! Flaky) -> T ! Flaky   // calls body up to n times
+pub fn retry<T>(n: Int, on: Tags, body: fn() -> T) -> T   // calls body up to n times while it fails with one of `on`
 
-let rate = try retry(3) fn() => try Rates.fetch()
+let rate = try retry(3, on: Flaky) fn() => try Rates.fetch()
 ```
 
-Writing one in a `with` is an error whose help writes the call:
+`on:` names the errors it tries again, and is the one kind of argument written with its parameter's name: a parameter of type `Tags` takes error tags, `on: DbDown | Timeout`, each one the block can fail with. Writing `retry` in a `with` is an error whose help writes the call:
 
 ```
 error: `with` installs only handlers
   ┌─ main.ren:8:10
-8 │     with retry(3) in
-  │          ^^^^^^^^ takes a block
+8 │     with retry(3, on: Flaky) in
+  │          ^^^^^^^^^^^^^^^^^^^ takes a block
   = `retry` is a function that runs a block, so it's called with the body as one
-  help: call it: `try retry(3) fn() => ...`
+  help: call it: `retry(3, on: Flaky) fn() => ...`
 ```
 
 `retry` calls the block again from the top. It doesn't resume anything. It also repeats any dependency calls the body made before failing, so wrap only work that's safe to repeat.
@@ -458,6 +458,19 @@ pub handler transaction() over Sql ! DbDown =
 `r` is the body's result, as `attempt` would keep it, and `try r` passes its error on. `! DbDown` says installing it can fail, so the `with` can too ([examples/ledger](examples/ledger)). This `finally` is written after `begin`, so a failed `begin` never reaches it; one written above it would be given that error. A handler can have several, the last written run first, and an operation's arm can have one, covering the rest of the arm ([handlers.md](handlers.md#when-a-with-ends-finally)).
 
 When the body is cancelled, `finally` sees `Err(Cancelled)`, and what it returns is discarded ([async.md](async.md#cancellation)).
+
+A handler `over any` is written once for every dependency: one arm, `call => ...`, runs for each operation of whichever it's installed over, and reaches the one under it through `call.forward()`:
+
+```ren
+handler logged() over any uses Console =
+  call =>
+    Console.write("> ".concat(call.name).concat(show(call.args)))
+    try call.forward()
+
+with logged() over mem_users() in ...
+```
+
+`call.args` and what `call.forward()` gives are opaque, so they can be shown, compared and recorded, and nothing else; `call.fail(Down)` fails the operation with an error every operation of what it's installed over has to declare. The journal's recorder is one ([handlers.md](handlers.md#over-any)).
 
 ### 8. `&`: this call changes it
 

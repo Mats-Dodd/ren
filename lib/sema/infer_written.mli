@@ -50,6 +50,9 @@ val param_type :
 
 (* The prelude's [Result] and [Option]. *)
 val result_path : Path.t
+
+(* The prelude's `Tags` (compiler.md, "`over any` and `retry`"). *)
+val tags_path : Path.t
 val option_path : Path.t
 
 (* A type declaration's type, at fresh variables for its parameters, and

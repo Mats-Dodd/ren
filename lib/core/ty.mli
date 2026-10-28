@@ -76,11 +76,17 @@ val str : ty
 val array : ty -> ty
 val option : ty -> ty
 
-(* A tuple's type, of two parts or three, `(Str, Int)`: a built-in type
-   for each size, named by its shape, ["(,)"] and ["(,,)"]. *)
+(* A tuple's type, `(Str, Int)`: a built-in type for each size, named by
+   its shape, ["(,)"] and ["(,,)"]. A program writes those two; the
+   compiler makes the others, ["(_)"] for one part. *)
 val tuple_path : int -> Path.t
 val tuple : ty list -> ty
 val is_tuple : Path.t -> bool
+
+(* The dependency a handler `over any` lists until it's installed over
+   one, and whether a dependency is it. *)
+val any_path : Path.t
+val is_any : dep -> bool
 
 (* A parameter that isn't `inout`. *)
 val read : ty -> param

@@ -350,7 +350,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?(install = false) ?target
     && List.exists (fun r -> row_tail r = row_tail errs) cx.selves
   in
   match cx.markers with
-  | m :: _ when passed_on && m.mkind <> Mtry ->
+  | m :: _ when passed_on && m.mkind <> Mtry && m.mkind <> Mmatch_on ->
       report env
         (kept_passed_on call.loc ~name_loc ename ~fn:(Path.short cx.self)
            ~handled:(m.mkind = Mmatch));
@@ -401,7 +401,9 @@ let try_hint env cx (a : expr) t =
    "Handling: `match`"). The parser combines only `fail` patterns with
    `|`. *)
 let is_fail (p : pattern) =
-  match p.pkind with PFail _ | PFail_any | POr _ -> true | _ -> false
+  match p.pkind with
+  | PFail _ | PFail_any | PFail_in _ | POr _ -> true
+  | _ -> false
 
 (* Whether a `match` handles errors: whether it has a `fail` arm. *)
 let handles arms = List.exists (fun a -> is_fail a.arm_pat) arms
